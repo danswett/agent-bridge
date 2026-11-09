@@ -31,7 +31,8 @@ const out = (name) => path.join(pwa, 'docs', name);
 // Fixed relative times, so the pictures don't change with the clock.
 async function fixTimes(page) {
   await page.evaluate(() => {
-    for (const t of document.querySelectorAll('.since:not(:empty)')) { t.textContent = 'for 4m'; }
+    for (const t of document.querySelectorAll('.fact-since dd')) { t.textContent = 'for 4m'; }
+    for (const t of document.querySelectorAll('.fact-updated dd')) { t.textContent = '1m ago'; }
     for (const t of document.querySelectorAll('.row-age, .speaker-age')) { t.textContent = '1m ago'; }
   });
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { FleetStatus } from '../../js/fleet.js';
+import { FleetStatus, PROBE_EVERY_MS } from '../../js/fleet.js';
 import { UsageBook } from '../../js/usage.js';
 import { SessionsStore } from '../../js/sessions-store.js';
 import { readUpdateState } from '../../js/update.js';
@@ -81,7 +81,8 @@ function fleetWith(hostsById, { now = () => 0 } = {}) {
   const connection = fakeConnection(hostsById);
   const hosts = fakeHosts();
   const book = new UsageBook();
-  const fleet = new FleetStatus({ connection, hosts, book, me: 'me', now, doc: null, makeClient: fakeClient(connection) });
+  // Looked at every minute, as the app did before #610: what these tests count is the looking.
+  const fleet = new FleetStatus({ connection, hosts, book, me: 'me', now, doc: null, probeEveryMs: 60000, makeClient: fakeClient(connection) });
   return { connection, hosts, book, fleet };
 }
 
@@ -190,7 +191,7 @@ test('a machine left alone is looked at again every minute while the app is in f
   let now = 0;
   const doc = { visibilityState: 'visible', listeners: [], addEventListener(type, fn) { this.listeners.push(fn); } };
   const connection = fakeConnection({ a: { machine: { hostVersion: '0.1.0', sessions: 1 }, capabilities: [] } });
-  const fleet = new FleetStatus({ connection, hosts: fakeHosts(), book: new UsageBook(), me: 'me', now: () => now, doc, makeClient: fakeClient(connection) });
+  const fleet = new FleetStatus({ connection, hosts: fakeHosts(), book: new UsageBook(), me: 'me', now: () => now, doc, probeEveryMs: 60000, makeClient: fakeClient(connection) });
   fleet.start();
   fleet.probe();
   await fleet.idle();
@@ -498,4 +499,85 @@ test("a machine shown whose update subscription failed is subscribed again at it
   assert.equal(tries, 2);
   assert.equal(fleet.update('v').available, '0.5.0');
   fleet.clear();
+});
+
+test('by default a machine not shown is looked at every five minutes, not every minute', async () => {
+  let now = 0;
+  const connection = fakeConnection({ a: { machine: { hostVersion: '0.1.0' }, capabilities: [] } });
+  const fleet = new FleetStatus({ connection, hosts: fakeHosts(), book: new UsageBook(), me: 'me', now: () => now, doc: null, makeClient: fakeClient(connection) });
+  fleet.probe();
+  await fleet.idle();
+  for (now = 60000; now < PROBE_EVERY_MS; now += 60000) {
+    fleet.probe();
+    await fleet.idle();
+  }
+  assert.deepEqual(connection.opened, ['a']);
+  now = PROBE_EVERY_MS;
+  fleet.probe();
+  await fleet.idle();
+  assert.deepEqual(connection.opened, ['a', 'a']);
+  assert.equal(PROBE_EVERY_MS, 5 * 60 * 1000);
+});
+
+test('a machine shown that says when its hello changes is asked for it only every five minutes; one that does not, every minute', async () => {
+  let now = 0;
+  const connection = fakeConnection({});
+  const hosts = fakeHosts();
+  const fleet = new FleetStatus({ connection, hosts, book: new UsageBook(), me: 'me', now: () => now, doc: null, makeClient: fakeClient(connection) });
+  const refreshed = [];
+  hosts.refresh = async (id) => { refreshed.push(id); };
+  const client = { synced: true, on() {} };
+  hosts.view({ id: 'tells', client, machine: {}, capabilities: ['sessions.read', 'hello.changed'] });
+  hosts.view({ id: 'quiet', client: { ...client }, machine: {}, capabilities: ['sessions.read'] });
+  await flush();
+  refreshed.length = 0;
+  for (now = 60000; now < PROBE_EVERY_MS; now += 60000) { fleet.probe(); }
+  assert.deepEqual([...new Set(refreshed)], ['quiet']);
+  assert.equal(refreshed.length, 4);
+  now = PROBE_EVERY_MS;
+  fleet.probe();
+  assert.deepEqual(refreshed.slice(4).sort(), ['quiet', 'tells']);
+  fleet.clear();
+});
+
+test('a press on a machine not shown keeps the app busy from opening its channel until the response, so the connection never rests under it', async () => {
+  let answer;
+  const { fleet } = fleetWith({ b: { machine: {}, capabilities: ['update'], answer: () => new Promise((r) => { answer = r; }) } });
+  assert.equal(fleet.busy, false);
+  const call = fleet.call('b', 'update.check', { request: 'r1' });
+  assert.equal(fleet.busy, true, 'while its channel opens');
+  for (let i = 0; i < 5 && !answer; i++) { await flush(); }
+  assert.ok(answer, 'the request reached the machine');
+  assert.equal(fleet.busy, true, 'while its response is on its way');
+  answer({ outcome: 'accepted' });
+  assert.deepEqual(await call, { outcome: 'accepted' });
+  assert.equal(fleet.busy, false);
+});
+
+// #972 slice 2: who can sign Copilot in, read only where a machine offers it (its switch on), on
+// the channel of a machine shown and with the look at one that isn't; dropped when it stops.
+test('who can sign Copilot in is read from each machine that offers it, and dropped when it stops offering it', async () => {
+  const listed = { state: 'ready', devices: [{ name: 'iPhone', kind: 'phone', platform: 'iOS', thisDevice: true }] };
+  const { connection, hosts, fleet } = fleetWith({
+    b: { machine: {}, capabilities: ['sessions.read', 'signin.devices'], answer: (op) => (op === 'signin.devices' ? listed : null) },
+    c: { machine: {}, capabilities: ['sessions.read'] },
+  });
+  const asked = [];
+  const client = { synced: true, on: () => {}, request: async (op) => { asked.push(op); return { state: 'none', devices: [] }; } };
+  const link = hosts.view({ id: 'v', client, machine: {}, capabilities: ['sessions.read', 'signin.devices'] });
+  await flush();
+  await fleet.idle();
+
+  assert.deepEqual(fleet.signIns('b'), { state: 'ready', devices: [{ name: 'iPhone', kind: 'phone', platform: 'iOS', thisDevice: true }] });
+  assert.deepEqual(connection.hosts.b.requests, [{ op: 'signin.devices', data: undefined }]);
+  assert.equal(fleet.signIns('c'), null);
+  assert.equal(connection.hosts.c.requests, undefined);
+  assert.deepEqual(asked, ['signin.devices']);
+  assert.deepEqual(fleet.signIns('v'), { state: 'none', devices: [] });
+
+  link.capabilities = ['sessions.read'];
+  hosts.change();
+  assert.equal(fleet.signIns('v'), null);
+  fleet.clear();
+  assert.equal(fleet.signIns('b'), null);
 });

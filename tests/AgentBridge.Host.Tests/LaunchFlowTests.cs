@@ -2,6 +2,7 @@ using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Intake;
+using AgentBridge.Host.Core.Restore;
 using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Launch;
@@ -23,6 +24,8 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
     private protected static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
 
     private protected readonly Fixture f = new();
+    // Time stands still for a launch unless a test gives it a short budget to run out (see PollClock).
+    private protected readonly PollClock clock = new(DateTimeOffset.UtcNow, frozen: true);
     private protected readonly FakeProbe probe = new();
     private protected readonly FakeScreens screens = new();
     private protected readonly FakeStarter starter;
@@ -69,6 +72,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
     {
         await relay.DisposeAsync();
         await source.DisposeAsync();
+        await clock.DisposeAsync();
         foreach (var file in Directory.EnumerateFiles(f.Root, "*", SearchOption.AllDirectories)) { File.SetAttributes(file, FileAttributes.Normal); }
         f.Dispose();
     }
@@ -83,30 +87,36 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
         return change is null ? config : change(config);
     }
 
-    private protected LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null, IntakeState.AgentHomes? homes = null) => new(source, gate ?? probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
+    private protected LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null, IntakeState.AgentHomes? homes = null, ILaunchCredentials? credentials = null)
     {
-        CopilotHome = homes?.Copilot ?? f.CopilotHome,
-        ClaudeHome = homes?.Claude ?? f.ClaudeHome,
-        ClaudeConfigDirExplicit = homes?.ClaudeConfigDirExplicit,
-        CodexHome = homes?.Codex ?? f.CodexHome,
-        Config = config,
-        PlatformSupported = true,
-        RegistrationWait = wait ?? TimeSpan.FromSeconds(5),
-        PollInterval = TimeSpan.FromMilliseconds(25),
-        ScreenAfter = TimeSpan.Zero,
-        ScreenEvery = TimeSpan.FromMilliseconds(25),
-        ReadyWait = readyWait ?? TimeSpan.FromSeconds(5),
-        TrustConfirmWait = trustConfirm ?? TimeSpan.FromSeconds(5),
-        FollowFor = follow ?? TimeSpan.FromMinutes(10),
-        TrustFollowFor = follow ?? TimeSpan.FromMinutes(30),
-        ExitGrace = TimeSpan.FromMilliseconds(100),
-        // The fixture's folders are under temp, which is a system folder to a real launch.
-        IsSystemDirectory = _ => false,
-        WorktreeUsage = usage,
-        LocalNow = now ?? (() => DateTime.Now),
-        Transfers = fetcher ?? transfers,
-        TransferStaging = transfers?.Staging ?? Path.Combine(f.Root, "profile", "transfers"),
-    }, log: logged.Enqueue, attachments: attachments);
+        // A test that names a budget is about it running out.
+        if (wait is not null || readyWait is not null || trustConfirm is not null || follow is not null) { clock.Run(); }
+        return new(source, gate ?? probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
+        {
+            Time = clock,
+            CopilotHome = homes?.Copilot ?? f.CopilotHome,
+            ClaudeHome = homes?.Claude ?? f.ClaudeHome,
+            ClaudeConfigDirExplicit = homes?.ClaudeConfigDirExplicit,
+            CodexHome = homes?.Codex ?? f.CodexHome,
+            Config = config,
+            PlatformSupported = true,
+            RegistrationWait = wait ?? TimeSpan.FromSeconds(5),
+            PollInterval = TimeSpan.FromMilliseconds(25),
+            ScreenAfter = TimeSpan.Zero,
+            ScreenEvery = TimeSpan.Zero,
+            ReadyWait = readyWait ?? TimeSpan.FromSeconds(5),
+            TrustConfirmWait = trustConfirm ?? TimeSpan.FromSeconds(5),
+            FollowFor = follow ?? TimeSpan.FromMinutes(10),
+            TrustFollowFor = follow ?? TimeSpan.FromMinutes(30),
+            ExitGrace = TimeSpan.FromMilliseconds(100),
+            // The fixture's folders are under temp, which is a system folder to a real launch.
+            IsSystemDirectory = _ => false,
+            WorktreeUsage = usage,
+            LocalNow = now ?? (() => DateTime.Now),
+            Transfers = fetcher ?? transfers,
+            TransferStaging = transfers?.Staging ?? Path.Combine(f.Root, "profile", "transfers"),
+        }, log: logged.Enqueue, attachments: attachments, credentials: credentials);
+    }
 
     private protected void Serve(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, TimeSpan? readyWait = null) =>
         host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), launcher: Launcher(config, wait, usage, now, readyWait: readyWait)).HandleAsync;
@@ -119,7 +129,9 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
 
     private protected static async Task<JsonElement> RequestAsync(SecureChannel ch, string op, object data)
     {
-        var response = await ch.RequestAsync(op, data);
+        // A launch runs git (worktree remove, add) inside the request; on a loaded Arm runner that
+        // outran the channel's 15 s default (run 42518861981).
+        var response = await ch.RequestAsync(op, data, TimeSpan.FromSeconds(60));
         Assert.True(response.GetProperty("ok").GetBoolean(), response.GetRawText());
         return response.GetProperty("result");
     }
@@ -157,6 +169,7 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
             .InstallAsync("copilot", false, TextWriter.Null);
         var saved = IntakeState.Load(profile).State!.Homes!;
         locator.Installed[agent] = @"C:\fake\" + agent + ".exe";
+        locator.PathEnvironment = Path.Combine(f.Root, "new-runtime");
         starter.Registers = false;
         var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(100), homes: saved);
 
@@ -166,7 +179,48 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Equal(saved.Copilot, environment["COPILOT_HOME"]);
         Assert.Equal(saved.Claude, environment["CLAUDE_CONFIG_DIR"]);
         Assert.Equal(saved.Codex, environment["CODEX_HOME"]);
+        Assert.Equal(locator.PathEnvironment, environment["PATH"]);
         Assert.False(string.IsNullOrEmpty(environment[Launchers.SessionVariable]));
+    }
+
+    sealed class RecordedCredentials : ILaunchCredentials
+    {
+        public readonly List<string> Calls = [];
+        public string? Prepare(string session, string launchId) { Calls.Add($"prepare {session} {launchId}"); return "tok-" + launchId; }
+        public void Bind(string launchId, int processId, DateTimeOffset startedAt) => Calls.Add($"bind {launchId} {processId}");
+        public void Abandon(string launchId) => Calls.Add($"abandon {launchId}");
+    }
+
+    [Fact]
+    public async Task A_launch_hands_the_agent_its_credential_in_its_environment_and_binds_it_to_the_started_process()
+    {
+        var credentials = new RecordedCredentials();
+        var launcher = Launcher(Config(), credentials: credentials);
+
+        await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "phone");
+
+        var environment = Assert.Single(starter.Specs).Environment!;
+        var session = environment[Launchers.SessionVariable]!;
+        var launchId = credentials.Calls[0].Split(' ')[2];
+        Assert.Equal("tok-" + launchId, environment[Launchers.TokenVariable]);
+        Assert.Equal([$"prepare {session} {launchId}", $"bind {launchId} {Assert.Single(starter.Pids)}"], credentials.Calls);
+    }
+
+    [Fact]
+    public async Task A_launch_that_could_not_start_abandons_its_credential_and_one_without_a_service_inherits_no_token()
+    {
+        var credentials = new RecordedCredentials();
+        starter.Throws = new IOException("no such file");
+
+        var result = await Launcher(Config(), credentials: credentials).LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "phone");
+
+        Assert.Equal(LaunchOutcome.Failed, result.Outcome);
+        Assert.Equal(2, credentials.Calls.Count);
+        Assert.Equal("abandon " + credentials.Calls[0].Split(' ')[2], credentials.Calls[1]);
+
+        starter.Throws = null;
+        await Launcher(Config()).LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "phone");
+        Assert.Null(Assert.Single(starter.Specs).Environment![Launchers.TokenVariable]);
     }
 
     [Fact]
@@ -185,6 +239,69 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.False(environment.ContainsKey("CLAUDE_CONFIG_DIR"));
         Assert.False(environment.ContainsKey("CODEX_HOME"));
         Assert.False(string.IsNullOrEmpty(environment[Launchers.SessionVariable]));
+    }
+
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("claude")]
+    [InlineData("codex")]
+    public async Task A_launched_session_asks_for_a_console_wide_enough_for_every_tab_title_of_a_long_form(string agent)
+    {
+        locator.Installed[agent] = @"C:\fake\" + agent + ".exe";
+        starter.Registers = false;
+        var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(100));
+
+        await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = agent, Prompt = "go" }, "fixture");
+
+        // As wide as a six-field form's whole bar needs (AnswerFlowTests): the person's own
+        // default width is not asked for.
+        Assert.Equal(LaunchService.ConsoleColumns, Assert.Single(starter.Specs).Columns);
+    }
+
+    [Fact]
+    public async Task A_launched_sessions_console_is_widened_to_the_launch_width_and_the_width_it_got_is_logged()
+    {
+        starter.Registers = false;
+        var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(100));
+
+        await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Prompt = "go" }, "fixture");
+
+        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains($"console is {LaunchService.ConsoleColumns} columns wide", StringComparison.Ordinal))));
+        var widen = Assert.Single(screens.Widens);
+        Assert.Equal(LaunchService.ConsoleColumns, widen.Columns);
+        Assert.True(widen.Pid > 0);
+        // The process's creation time goes with its id, for the worker to check it is still that process.
+        Assert.NotEqual(default, widen.CreatedAt);
+        Assert.Empty(screens.Typed);
+    }
+
+    [Fact]
+    public async Task A_widen_is_not_asked_again_once_the_launched_process_has_exited_so_a_reused_id_is_never_widened()
+    {
+        starter.Registers = false;
+        starter.ExitsAtOnce = true;
+        screens.Widened = _ => new ConsoleWidth(null, "the console could not be widened (attach error 6)", true);
+        var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(100));
+
+        await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Prompt = "go" }, "fixture");
+
+        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains("console was not widened: its process (pid", StringComparison.Ordinal))));
+        Assert.Single(screens.Widens);
+        Assert.Empty(screens.Typed);
+    }
+
+    [Fact]
+    public async Task A_console_that_cannot_be_widened_is_logged_once_and_left_as_it_is()
+    {
+        starter.Registers = false;
+        screens.Widened = _ => new ConsoleWidth(null, "the console could not be widened (widen error 87)", false);
+        var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(100));
+
+        await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Prompt = "go" }, "fixture");
+
+        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains("console was not widened: the console could not be widened (widen error 87)", StringComparison.Ordinal))));
+        Assert.Single(screens.Widens);
+        Assert.Empty(screens.Typed);
     }
 
     [Theory]
@@ -333,6 +450,285 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Empty(screens.Typed);
     }
 
+    // #780: the host's restore record keeps what a launch started a session with, so restoring it
+    // after a reboot resumes it as it was launched.
+    [Fact]
+    public async Task A_started_session_is_told_to_the_restore_record_with_what_it_was_launched_with()
+    {
+        var launcher = Launcher(Config());
+        var told = new List<(string Id, LaunchedWith Launched)>();
+        launcher.SessionStarted += (id, launched) => { lock (told) { told.Add((id, launched)); } };
+        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), launcher: launcher).HandleAsync;
+        var ch = await OpenAsync();
+
+        var o = await LaunchAsync(ch, new { agent = "copilot", workspace = "API", prompt = "go" });
+
+        Assert.Equal("started", o.Outcome_);
+        var (id, launched) = Assert.Single(told);
+        Assert.Equal((o.Session, "copilot", "API", "ask"), (id, launched.Agent, launched.Workspace, launched.Permissions));
+    }
+
+    // #780 Host B: a restore is a resume through the same path as one from Launch, with nothing typed
+    // (so the session opens idle), found past the resume list's length, with what the machine no
+    // longer offers left to its defaults, and never Allow all for a session started by hand, whatever
+    // the machine's default.
+    [Fact]
+    public async Task A_restore_resumes_idle_with_no_prompt_and_never_gives_a_session_started_by_hand_allow_all()
+    {
+        const string Hand = "77777777-7777-4777-8777-777777777777";
+        const string Ours = "78787878-7878-4878-8878-787878787878";
+        Resumable(Hand, app, "By hand");
+        Resumable(Ours, app, "Launched here");
+        var launcher = Launcher(Config(c => c with { Permissions = LaunchProtocol.AllowAll, ResumeCount = 0 }));
+
+        var hand = await launcher.ResumeAsync(new ResumeAsk(Hand, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
+        var ours = await launcher.ResumeAsync(new ResumeAsk(Ours, AgentKind.Copilot,
+            new RestoreLaunch("copilot", "App", null, null, "gpt-9-retired", null, null, LaunchProtocol.AllowAll), RestoreRecorder.RestorePrincipal));
+
+        Assert.Equal((LaunchOutcome.Started, Hand), (hand.Outcome, hand.Session));
+        Assert.Equal(["--session-id", Hand, "--banner"], starter.Specs[0].Arguments);
+        Assert.Equal(LaunchProtocol.Ask, hand.Launched!.Permissions);
+        Assert.Equal((LaunchOutcome.Started, Ours), (ours.Outcome, ours.Session));
+        Assert.Equal(["--session-id", Ours, "--banner", "--allow-all"], starter.Specs[1].Arguments);
+        Assert.Empty(screens.Typed);
+        // Live now: a second restore is refused, as a second resume from Launch is.
+        Assert.Equal(LaunchOutcome.Refused, (await launcher.ResumeAsync(new ResumeAsk(Hand, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal))).Outcome);
+        Assert.Equal(2, starter.Specs.Count);
+
+        // Copilot on #837: extra arguments from the config that carry a prompt (-i) would make the
+        // restore submit one. Refused by the prompt-flag check before anything starts, and it stays
+        // offered for Launch.
+        const string Prompted = "76767676-7676-4676-8676-767676767676";
+        Resumable(Prompted, app, "Extra prompt");
+        var prompted = await Launcher(Config(c => c with
+        {
+            ResumeCount = 0,
+            Agents = new Dictionary<string, AgentConfig> { ["copilot"] = new() { ExtraArgs = ["-i", "continue the work"] } },
+        })).ResumeAsync(new ResumeAsk(Prompted, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
+        Assert.Equal(LaunchOutcome.Refused, prompted.Outcome);
+        Assert.Contains("extraArgs", prompted.Reason, StringComparison.Ordinal);
+        Assert.Equal(2, starter.Specs.Count);
+    }
+
+    // Engineering's ruling on #837 (r4487705409): a restore passes on only options on the agent's
+    // allowlist, each value in its expected form. --allow-all would give a session started by hand,
+    // restored asking permission, Allow all it never had; Claude takes a bare argument as its prompt;
+    // -- puts what follows past the options; a value that is not a path could be read as a prompt. Each
+    // is refused, nothing starts, and the reason (logged) names the option, never a value. --add-dir
+    // with a full path (Copilot's own --help) is passed on.
+    [Fact]
+    public async Task A_restore_passes_on_only_allowlisted_options_with_values_in_their_expected_form_and_says_which_by_name()
+    {
+        const string Widened = "75757575-7575-4575-8575-757575757575";
+        const string Talk = "74747474-7474-4474-8474-747474747474";
+        const string Unknown = "73737373-7373-4373-8373-737373737373";
+        const string Separated = "72727272-7272-4272-8272-727272727272";
+        const string Worded = "71717171-7171-4171-8171-717171717171";
+        const string Good = "70707070-7070-4070-8070-707070707070";
+        const string Prompt = "carry on where you left off";
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        foreach (var id in new[] { Widened, Unknown, Separated, Worded, Good }) { Resumable(id, app, "By hand"); }
+        ClaudeResumable(Talk, app, "Plan the release");
+        var folder = Path.Combine(Path.GetTempPath(), "notes");
+        Task<LaunchResult> Restore(string id, AgentKind agent, string launcher, params string[] extras) =>
+            Launcher(Config(c => c with
+            {
+                Permissions = LaunchProtocol.Ask,
+                ResumeCount = 0,
+                Agents = new Dictionary<string, AgentConfig> { [launcher] = new() { ExtraArgs = extras } },
+            })).ResumeAsync(new ResumeAsk(id, agent, null, RestoreRecorder.RestorePrincipal));
+
+        var widened = await Restore(Widened, AgentKind.Copilot, "copilot", "--allow-all");
+        var positional = await Restore(Talk, AgentKind.Claude, "claude", Prompt);
+        var unknown = await Restore(Unknown, AgentKind.Copilot, "copilot", "--yolo");
+        var separated = await Restore(Separated, AgentKind.Copilot, "copilot", "--", Prompt);
+        var worded = await Restore(Worded, AgentKind.Copilot, "copilot", "--add-dir", Prompt);
+
+        Assert.All(new[] { widened, positional, unknown, separated, worded }, r => Assert.Equal(LaunchOutcome.Refused, r.Outcome));
+        Assert.Contains("the option --allow-all", widened.Reason, StringComparison.Ordinal);
+        Assert.Contains("a positional argument", positional.Reason, StringComparison.Ordinal);
+        Assert.Contains("the option --yolo", unknown.Reason, StringComparison.Ordinal);
+        Assert.Contains("the -- separator", separated.Reason, StringComparison.Ordinal);
+        Assert.Contains("a value for --add-dir", worded.Reason, StringComparison.Ordinal);
+        Assert.All(new[] { positional, separated, worded }, r => Assert.DoesNotContain(Prompt, r.Reason, StringComparison.Ordinal));
+        Assert.Empty(starter.Specs);
+
+        var good = await Restore(Good, AgentKind.Copilot, "copilot", "--add-dir", folder);
+        Assert.Equal((LaunchOutcome.Started, Good), (good.Outcome, good.Session));
+        Assert.Equal(["--session-id", Good, "--banner", "--add-dir", folder], Assert.Single(starter.Specs).Arguments);
+    }
+
+    [Fact]
+    public async Task A_restore_starts_nothing_while_agent_ha_bridge_runs_or_launching_is_off()
+    {
+        const string Id = "79797979-7979-4979-8979-797979797979";
+        Resumable(Id, app, "Waiting");
+        probe.Reason = "agent-ha-bridge is running for this user";
+        var g5 = await Launcher(Config()).ResumeAsync(new ResumeAsk(Id, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
+        probe.Reason = null;
+        var off = await Launcher(Config(c => c with { Enabled = false })).ResumeAsync(new ResumeAsk(Id, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
+
+        Assert.Equal((LaunchOutcome.Refused, "agent-ha-bridge is running for this user"), (g5.Outcome, g5.Reason));
+        Assert.Equal(LaunchOutcome.Refused, off.Outcome);
+        Assert.Empty(starter.Specs);
+    }
+
+    // The host stopping (or a caller withdrawing) before the agent is started: nothing is started,
+    // and the restore is refused, so its stamp is taken back.
+    [Fact]
+    public async Task A_restore_withdrawn_before_its_launch_starts_nothing()
+    {
+        const string Id = "7d7d7d7d-7d7d-4d7d-8d7d-7d7d7d7d7d7d";
+        Resumable(Id, app, "Stopping");
+        using var stopping = new CancellationTokenSource();
+        stopping.Cancel();
+
+        var o = await Launcher(Config()).ResumeAsync(new ResumeAsk(Id, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal), stopping.Token);
+
+        Assert.Equal(LaunchOutcome.Refused, o.Outcome);
+        Assert.Empty(starter.Specs);
+    }
+
+    // A restore whose Copilot registers and then asks whether to trust its folder: replies are held
+    // while it asks (Enter would answer it), and let through once its window is seen ready.
+    [Fact]
+    public async Task A_reply_is_held_while_a_restored_Copilot_asks_whether_to_trust_its_folder()
+    {
+        const string Id = "7e7e7e7e-7e7e-4e7e-8e7e-7e7e7e7e7e7e";
+        Resumable(Id, app, "At trust");
+        screens.Rows = ["Confirm folder trust", app, "Do you trust the files in this folder?", "❯ 1. Yes", "  2. Yes, and remember this folder for future sessions", "  3. No (Esc)"];
+        var launcher = Launcher(Config());
+
+        var o = await launcher.ResumeAsync(new ResumeAsk(Id, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
+
+        Assert.Equal(LaunchOutcome.Unconfirmed, o.Outcome);
+        Assert.Equal("Copilot is asking whether to trust its folder, and a reply would answer it. Answer it on that machine", launcher.HeldForReply(Id));
+        Assert.Null(launcher.HeldForReply("7f7f7f7f-7f7f-4f7f-8f7f-7f7f7f7f7f7f"));
+        Assert.Empty(screens.Typed);
+        screens.Rows = CopilotReady;
+        await WaitAsync(() => Task.FromResult(launcher.HeldForReply(Id) is null));
+    }
+
+    // Followed no longer (its window never seen ready), the agent still running: replies stay held,
+    // until a turn has run there, which a person got past the question to give.
+    [Fact]
+    public async Task A_reply_stays_held_after_following_ends_unready_until_a_turn_runs_at_the_machine()
+    {
+        const string Id = "7e7e7e7e-7e7e-4e7e-8e7e-7e7e7e7e7e7f";
+        Resumable(Id, app, "Left at trust");
+        screens.Rows = ["Confirm folder trust", app, "Do you trust the files in this folder?", "❯ 1. Yes", "  2. Yes, and remember this folder for future sessions", "  3. No (Esc)"];
+        var launcher = Launcher(Config(), follow: TimeSpan.FromSeconds(1));
+
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await launcher.ResumeAsync(new ResumeAsk(Id, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal))).Outcome);
+        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains("wait until a prompt is typed at the machine", StringComparison.Ordinal))));
+        Assert.NotNull(launcher.HeldForReply(Id));
+
+        Fixture.Append(Path.Combine(f.CopilotHome, "session-state", Id, "events.jsonl"),
+            Copilot.User("trusted it, then this", 1), Copilot.TurnStart(2), Copilot.Assistant("Done.", 3), Copilot.TurnEnd(4));
+        await source.RefreshAsync();
+        Assert.Null(launcher.HeldForReply(Id));
+    }
+
+    // #855 L1: a new CLI's session.resume ends the killed turn, which counts a turn, with nobody having
+    // typed: replies stay held. Only a prompt of the person's after the launch lets them through.
+    [Fact]
+    public async Task A_resume_that_ends_a_killed_turn_does_not_lift_the_hold_but_a_prompt_typed_at_the_machine_does()
+    {
+        const string Id = "7e7e7e7e-7e7e-4e7e-8e7e-7e7e7e7e7e80";
+        Resumable(Id, app, "Killed mid-turn");
+        var events = Path.Combine(f.CopilotHome, "session-state", Id, "events.jsonl");
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2));
+        screens.Rows = ["Confirm folder trust", app, "Do you trust the files in this folder?", "❯ 1. Yes", "  2. Yes, and remember this folder for future sessions", "  3. No (Esc)"];
+        var launcher = Launcher(Config(), follow: TimeSpan.FromSeconds(1));
+
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await launcher.ResumeAsync(new ResumeAsk(Id, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal))).Outcome);
+        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains("wait until a prompt is typed at the machine", StringComparison.Ordinal))));
+        Fixture.Append(events, Copilot.Event("session.resume", new { }, 30));
+        await source.RefreshAsync();
+        Assert.NotNull(launcher.HeldForReply(Id));
+
+        // A prompt and the turn it starts, not yet ended: the turn count is the same as before.
+        Fixture.Append(events, Copilot.User("trusted it, then this", 40), Copilot.TurnStart(41));
+        await source.RefreshAsync();
+        Assert.Null(launcher.HeldForReply(Id));
+    }
+
+    // A launcher that hands its session on and exits (#780): with following ended unready, replies stay
+    // held while the process it handed the session to runs, and go through once that has gone.
+    [Fact]
+    public async Task A_reply_stays_held_after_following_ends_unready_while_the_process_a_launcher_handed_on_to_runs()
+    {
+        starter.ExitsAtOnce = true;
+        starter.HandsOn = true;
+        // Only the session's own window can be read; the launcher's went with it.
+        screens.Unreadable = pid => starter.Pids.Contains(pid);
+        screens.Rows = ["Confirm folder trust", "Do you trust the files in this folder?", "❯ 1. Yes"];
+        var launcher = Launcher(Config(), follow: TimeSpan.FromSeconds(1));
+
+        var o = await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "fixture");
+        Assert.Equal(LaunchOutcome.Unconfirmed, o.Outcome);
+        var id = o.Session!;
+        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains("wait until a prompt is typed at the machine", StringComparison.Ordinal))));
+        Assert.NotNull(launcher.HeldForReply(id));
+
+        starter.Exit(starter.Pids[0] + 3000);
+        Assert.Null(launcher.HeldForReply(id));
+        Assert.Empty(screens.Typed);
+    }
+
+    // A launch answered Unconfirmed (its window at folder trust) whose window is then seen ready while it
+    // is still followed says so, once, for the restore record to count and show it restored then (#780).
+    [Fact]
+    public async Task A_launch_answered_unconfirmed_whose_window_is_seen_ready_later_says_so_once()
+    {
+        const string Id = "7e7e7e7e-7e7e-4e7e-8e7e-7e7e7e7e7e82";
+        Resumable(Id, app, "Ready after trust");
+        screens.Rows = ["Confirm folder trust", app, "Do you trust the files in this folder?", "❯ 1. Yes", "  2. Yes, and remember this folder for future sessions", "  3. No (Esc)"];
+        var launcher = Launcher(Config());
+        var ready = new List<string>();
+        launcher.SeenReadyLate += id => { lock (ready) { ready.Add(id); } };
+
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await launcher.ResumeAsync(new ResumeAsk(Id, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal))).Outcome);
+        Assert.Empty(ready);
+        screens.Rows = CopilotReady;
+        await WaitAsync(() => Task.FromResult(launcher.HeldForReply(Id) is null));
+
+        lock (ready) { Assert.Equal([Id], ready); }
+    }
+
+    // The resume list reads only the newest 200 sessions of each agent; a restore names its session,
+    // and finds it whatever its age.
+    [Fact]
+    public async Task A_restore_finds_its_session_past_the_newest_two_hundred()
+    {
+        const string Old = "7a7a7a7a-7a7a-4a7a-8a7a-7a7a7a7a7a7a";
+        Resumable(Old, app, "Long ago");
+        Directory.SetLastWriteTimeUtc(Path.Combine(f.CopilotHome, "session-state", Old), DateTime.UtcNow.AddYears(-1));
+        for (var i = 0; i < ResumableStore.ScanLimit; i++) { Resumable(Guid.NewGuid().ToString(), app, $"Newer {i}"); }
+
+        var o = await Launcher(Config()).ResumeAsync(new ResumeAsk(Old, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
+
+        Assert.Equal((LaunchOutcome.Started, Old), (o.Outcome, o.Session));
+    }
+
+    // A setting a launch left to the agent is left to it on restore, though the machine has a default
+    // of its own now; a session started by hand gets the machine's.
+    [Fact]
+    public async Task A_restore_leaves_to_the_agent_what_its_launch_left_to_the_agent()
+    {
+        const string Ours = "7b7b7b7b-7b7b-4b7b-8b7b-7b7b7b7b7b7b";
+        const string Hand = "7c7c7c7c-7c7c-4c7c-8c7c-7c7c7c7c7c7c";
+        Resumable(Ours, app, "Launched here");
+        Resumable(Hand, app, "By hand");
+        var launcher = Launcher(Config(c => c with { Agents = new Dictionary<string, AgentConfig> { ["copilot"] = new() { Model = "gpt-6.1-sol" } } }));
+
+        await launcher.ResumeAsync(new ResumeAsk(Ours, AgentKind.Copilot, new RestoreLaunch("copilot", "App", null, null, null, null, null, LaunchProtocol.Ask), RestoreRecorder.RestorePrincipal));
+        await launcher.ResumeAsync(new ResumeAsk(Hand, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
+
+        Assert.Equal(["--session-id", Ours, "--banner"], starter.Specs[0].Arguments);
+        Assert.Equal(["--session-id", Hand, "--banner", "--model", "gpt-6.1-sol"], starter.Specs[1].Arguments);
+    }
+
     [Fact]
     public async Task A_resent_launch_gets_the_first_outcome_and_starts_nothing_more()
     {
@@ -381,6 +777,24 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
     }
 
     [Fact]
+    public async Task A_launch_starts_with_the_chosen_model_effort_and_context_and_reads_back_what_started()
+    {
+        Serve(Config(c => c with
+        {
+            Agents = new Dictionary<string, AgentConfig>
+            {
+                ["copilot"] = new() { Model = "gpt-6.1-sol", Models = ["gpt-6.1-sol", "claude-opus-5.5"], Efforts = ["low", "high"], Contexts = ["default", "long_context"] },
+            },
+        }));
+        var ch = await OpenAsync();
+        var o = await LaunchAsync(ch, new { model = "claude-opus-5.5", effort = "low", context = "long_context" });
+
+        Assert.Equal("started", o.Outcome_);
+        Assert.Equal(("claude-opus-5.5", "low", "long_context"), (o.Launched.GetProperty("model").GetString(), o.Launched.GetProperty("effort").GetString(), o.Launched.GetProperty("context").GetString()));
+        Assert.Equal(["--session-id", o.Session!, "--banner", "--model", "claude-opus-5.5", "--reasoning-effort", "low", "--context", "long_context"], starter.Specs[0].Arguments);
+    }
+
+    [Fact]
     public async Task Agency_starts_with_the_chosen_profile_and_a_profile_it_does_not_list_is_refused()
     {
         locator.Installed["agency"] = @"C:\fake\agency.exe";
@@ -396,20 +810,79 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.StartsWith("Unknown profile 'play'; this machine has home, work", (await LaunchAsync(ch, new { agent = "agency", profile = "play" })).Reason);
     }
 
+    [Theory]
+    [InlineData("copilot", "--allow-all")]
+    [InlineData("agency", "--allow-all")]
+    [InlineData("claude", "--dangerously-skip-permissions")]
+    [InlineData("codex", "--ask-for-approval=never")]
+    [InlineData("codex", "--config=approval_policy=\"never\"")]
+    [InlineData("copilot", "--no-auto-update")]
+    public async Task Verification_refuses_configured_extra_arguments_before_starting_any_process(string agent, string extra)
+    {
+        locator.Installed[agent] = @"C:\fake\" + agent + ".exe";
+        var config = Config(c => c with
+        {
+            Agents = new Dictionary<string, AgentConfig> { [agent] = new() { ExtraArgs = [extra] } },
+        });
+        var launcher = Launcher(config);
+        var request = new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = agent, Workspace = "App", Prompt = "connection test" };
+
+        var result = await launcher.LaunchVerificationAsync(request, "local app verification");
+
+        Assert.Equal(LaunchOutcome.Refused, result.Outcome);
+        Assert.Contains("cannot guarantee standard permissions", result.Reason);
+        Assert.Empty(starter.Specs);
+        Assert.Equal(extra, Assert.Single(config.Agent(agent).ExtraArgs));
+    }
+
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("agency")]
+    [InlineData("claude")]
+    [InlineData("codex")]
+    public async Task The_real_verification_launcher_keeps_standard_permissions_despite_allow_all_defaults(string agent)
+    {
+        locator.Installed[agent] = @"C:\fake\" + agent + ".exe";
+        starter.Registers = false;
+        var launcher = Launcher(Config(c => c with { Permissions = LaunchProtocol.AllowAll }),
+            wait: TimeSpan.FromMilliseconds(50), follow: TimeSpan.FromMilliseconds(100));
+        var result = await launcher.LaunchVerificationAsync(new LaunchRequest
+        {
+            Request = Guid.NewGuid().ToString("D"), Agent = agent, Workspace = "App",
+            Permissions = LaunchProtocol.AllowAll, Prompt = "connection test",
+        }, "local app verification");
+
+        var spec = Assert.Single(starter.Specs);
+        Assert.Equal(LaunchProtocol.Ask, result.Launched?.Permissions);
+        Assert.DoesNotContain("--allow-all", spec.Arguments);
+        Assert.DoesNotContain("--dangerously-skip-permissions", spec.Arguments);
+        Assert.DoesNotContain("--ask-for-approval", spec.Arguments);
+        Assert.Equal("connection test", spec.Arguments[^1]);
+    }
+
     [Fact]
     public async Task A_folder_trust_question_is_left_for_the_machine_and_other_launches_are_busy_meanwhile()
     {
         starter.Registers = false;
+        var launcher = Launcher(Config());
+        var registered = new TaskCompletionSource<(Guid Request, string Session)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        launcher.RequestRegistered += (key, id) => registered.TrySetResult((key, id));
+        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), launcher: launcher).HandleAsync;
         screens.Rows = ["Confirm folder trust", app, "Do you trust the files in this folder?", "❯ 1. Yes", "  2. Yes, and remember this folder for future sessions", "  3. No (Esc)"];
         var ch = await OpenAsync();
-        var first = await LaunchAsync(ch, new { workspace = "App", prompt = "go" });
+        var request = Guid.NewGuid().ToString("D");
+        var first = await LaunchAsync(ch, new { workspace = "App", prompt = "go" }, request);
         Assert.Equal("unconfirmed", first.Outcome_);
         Assert.Contains("is asking whether to trust App. Only a person at the machine can answer that", first.Reason);
         Assert.NotNull(first.Session);
+        Assert.False(registered.Task.IsCompleted);
 
         var second = await LaunchAsync(ch, new { workspace = "API" });
         Assert.Equal(("busy", "Busy: Copilot in App is waiting for a person to answer whether to trust that folder, so nothing was launched. Try again in a couple of minutes."), Pair(second));
-        Assert.Contains("waiting for a person", (await RequestAsync(ch, LaunchProtocol.Options, new { })).GetProperty("busy").GetString());
+        // Listed as what the machine is waiting on, not as a launch turned away: the first one
+        // did start, and its person may be the one reading it (#122).
+        Assert.Equal("Copilot in App is asking whether to trust its folder. New launches wait until it's answered.",
+            (await RequestAsync(ch, LaunchProtocol.Options, new { })).GetProperty("busy").GetString());
         Assert.Single(starter.Specs);
         // Read, never typed into.
         Assert.Empty(screens.Typed);
@@ -419,6 +892,7 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         screens.Rows = CopilotReady;
         starter.Register(starter.Specs[0]);
         await WaitAsync(async () => (await RequestAsync(ch, LaunchProtocol.Options, new { })).TryGetProperty("busy", out _) == false);
+        Assert.Equal((Guid.Parse(request), first.Session), await registered.Task.WaitAsync(Patience));
         starter.Registers = true;
         Assert.Equal("started", (await LaunchAsync(ch, new { workspace = "API" })).Outcome_);
     }
@@ -460,6 +934,23 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Empty(screens.Typed);
     }
 
+    // #780: registered is started, as far as the restore record goes, whether or not its window is
+    // ever seen ready: what it was launched with is kept for it.
+    [Fact]
+    public async Task A_session_whose_window_is_never_seen_ready_is_still_told_to_the_restore_record()
+    {
+        screens.Rows = null;
+        var launcher = Launcher(Config(), readyWait: TimeSpan.FromMilliseconds(300));
+        var told = new List<string>();
+        launcher.SessionStarted += (id, _) => { lock (told) { told.Add(id); } };
+        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), launcher: launcher).HandleAsync;
+        var ch = await OpenAsync();
+
+        var o = await LaunchAsync(ch, new { workspace = "App" });
+
+        Assert.Equal("unconfirmed", o.Outcome_);
+        lock (told) { Assert.Equal([o.Session!], told); }
+    }
     [Fact]
     public async Task A_Copilot_that_registers_but_whose_window_is_not_ready_when_the_wait_ends_is_said_to_have_appeared()
     {
@@ -665,6 +1156,8 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         const string First = "71111111-1111-4111-8111-111111111111", Second = "72222222-2222-4222-8222-222222222222";
         locator.Installed["codex"] = @"C:\fake\codex.cmd";
         starter.Registers = false;
+        // The first's wait spans both launches and the second's registration: the clock stands still until it is told to run, so it cannot run out (5 s did on a slow runner, main e50ec8e7).
+        Serve(Config());
         var ch = await OpenAsync();
         var first = LaunchAsync(ch, new { agent = "codex", prompt = "one" });
         await WaitAsync(() => Task.FromResult(starter.Pids.Count == 1));
@@ -882,7 +1375,7 @@ public abstract partial class LaunchFlowFixture
             var rows = Rows ?? [];
             foreach (var expect in plan.Sends.SelectMany(s => s.Expect ?? []))
             {
-                if (expect.Row >= rows.Count || rows[expect.Row].TrimEnd() != expect.Text.TrimEnd()) { return Task.FromResult(new InjectionResult(InjectionStatus.NothingTyped, "fail screen 0")); }
+                if (expect.Row >= rows.Count || rows[expect.Row].TrimEnd(' ') != expect.Text.TrimEnd(' ')) { return Task.FromResult(new InjectionResult(InjectionStatus.NothingTyped, "fail screen 0")); }
             }
             OnTyped?.Invoke(plan);
             return Task.FromResult(Then ?? new InjectionResult(InjectionStatus.Typed, "ok"));
@@ -898,18 +1391,30 @@ public abstract partial class LaunchFlowFixture
             // The window as it is when the read begins, returned once the read is done.
             var rows = Rows ?? [];
             if (Reading is { } reading) { await reading(); }
-            return new ConsoleScreen(rows, null);
+            return new ConsoleScreen([.. rows.Select(Worker.Read)], null);
         }
 
         // Awaited while a read is on its way: where a test holds one.
         public Func<Task>? Reading;
+
+        // Every console widened, and how wide; Widened says what a widen leaves (as asked, by default).
+        public readonly System.Collections.Concurrent.ConcurrentQueue<(int Pid, DateTimeOffset CreatedAt, int Columns)> Widens = new();
+        public Func<int, ConsoleWidth>? Widened;
+
+        public Task<ConsoleWidth> WidenAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default)
+        {
+            Widens.Enqueue((processId, createdAt, columns));
+            return Task.FromResult(Widened?.Invoke(columns) ?? new ConsoleWidth(columns, null, false));
+        }
     }
 
     private protected sealed class FakeLocator : IAgentLocator
     {
         public readonly Dictionary<string, string> Installed = [];
+        public string? PathEnvironment;
 
         public string? Find(Launcher launcher, AgentConfig config) => Installed.GetValueOrDefault(launcher.Id);
+        public string? ChildPath() => PathEnvironment;
     }
 
     private protected sealed class FakeRunner : ICommandRunner
@@ -935,6 +1440,8 @@ public abstract partial class LaunchFlowFixture
         public string? Unavailable_;
         public volatile bool Registers = true;
         public bool ExitsAtOnce;
+        // Starting the agent fails with this.
+        public Exception? Throws;
         // The launcher hands its session to a process of its own (its pid + 3000) and exits.
         public bool HandsOn;
         public readonly string CodexId = "66666666-6666-4666-8666-666666666666";
@@ -949,6 +1456,7 @@ public abstract partial class LaunchFlowFixture
 
         public Started Start(StartSpec spec)
         {
+            if (Throws is { } broken) { throw broken; }
             int pid;
             lock (Specs) { Specs.Add(spec); pid = ++next; Pids.Add(pid); if (!ExitsAtOnce) { running.Add(pid); } if (HandsOn) { running.Add(pid + 3000); } }
             if (Registers) { Register(spec, HandsOn ? pid + 3000 : pid); }

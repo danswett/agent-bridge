@@ -16,6 +16,12 @@ public sealed class Machine : IAsyncDisposable
         Host = host;
         Cards = cards;
         Toasts = toasts;
+        // Nor are rows a gap in its events may have left out of date (#427): the recovery's snapshot
+        // begins only once it has read hello, status and usage again, and until then the list looked
+        // whole, so answers, replies, End session and toasts' buttons went on against it. This
+        // machine's too, for its sign-ins only (Confirmed): Current still counts its rows as its
+        // host's word, so its questions are as before.
+        host.Gapped += Unconfirm;
         if (IsLocal) { return; }
         // Another machine's rows are acted on only while they are its host's word now (#269): its
         // cards, its toasts and its deliveries all ask, so a press, a toast's button or Needs you
@@ -33,10 +39,6 @@ public sealed class Machine : IAsyncDisposable
             if (up && !now) { Unconfirm(); }
             up = now;
         };
-        // Nor are rows a gap in its events may have left out of date (#427): the recovery's snapshot
-        // begins only once it has read hello, status and usage again, and until then the list looked
-        // whole, so answers, replies, End session and toasts' buttons went on against it.
-        host.Gapped += Unconfirm;
     }
 
     // "local" for this machine; another machine's relay device id.
@@ -83,6 +85,10 @@ public sealed class Machine : IAsyncDisposable
     }
 
     void Unconfirm() => confirmFrom = Host.Sessions.Snapshots + 1;
+
+    // No snapshot owed: none since it was last away or its events last had a gap, or one has begun
+    // since. This machine too, which Current always counts as its host's word (#800's sign-ins).
+    internal bool Confirmed => Host.Sessions.Snapshots >= confirmFrom;
 
     // Whether its rows are its host's word now, and so can be acted on: this machine's always (an
     // answer there waits for the host over the pipe, as before #269); another's only while it is in
@@ -152,6 +158,14 @@ public interface IFleetLink : IAsyncDisposable
     // machine asking (machinePublic, whose device id is machine), for exactly that question, choice
     // and request. Null when it cannot be signed now. None in a stand-in.
     SignedCommand? SignTrust(byte[]? machinePublic, string machine, string question, string choice, string request) => null;
+    // An escaped approval's confirmation (#803), signed as for SignTrust, for that session, question,
+    // what was read (EscapedText.Shown) and the answer's request, as of when its button was pressed.
+    // Null when it cannot be signed now.
+    SignedCommand? SignEscapedApproval(byte[]? machinePublic, string machine, string session, string question, string shown, string request, DateTimeOffset pressed) => null;
+    // An Update now press (#1159), signed as for SignTrust, for that machine alone: the release
+    // shown, and what the confirmation showed (accept, null on a quiet machine). Null when it cannot
+    // be signed now. None in a stand-in.
+    SignedCommand? SignUpdateNow(byte[]? machinePublic, string machine, string release, UpdateBusy? accept, string request) => null;
     // This app's own device id on the relay, which a machine approves to answer folder-trust
     // questions from; and the people's devices (the PWA, this app elsewhere) the relay lists now.
     string? DeviceId => null;
@@ -245,6 +259,7 @@ public sealed class Fleet : IAsyncDisposable
     public Task<string?> ForgetAsync(string machineId, CancellationToken ct) => link.ForgetAsync(machineId, ct);
     public SignedCommand? SignTransfer(TransferSource from, string session, string to) => link.SignTransfer(from, session, to);
     public SignedCommand? SignTrust(byte[]? machinePublic, string machine, string question, string choice, string request) => link.SignTrust(machinePublic, machine, question, choice, request);
+    public SignedCommand? SignUpdateNow(byte[]? machinePublic, string machine, string release, UpdateBusy? accept, string request) => link.SignUpdateNow(machinePublic, machine, release, accept, request);
     public string? DeviceId => link.DeviceId;
     public IReadOnlyList<FleetHost> People => link.People;
 
@@ -511,6 +526,9 @@ public sealed class RelayFleetLink : IFleetLink
     public int Account => Volatile.Read(ref accountGeneration);
     public string? AccountId => current?.AccountId;
 
+    // The connected relay client, or null while there is none (Send feedback's sender).
+    public RelayClient? Relay => current?.Relay;
+
     public IReadOnlyList<FleetHost> Hosts => current is { } c ? HostsOf(c, c.Relay.Presence) : [];
 
     static IReadOnlyList<FleetHost> HostsOf(Current c, IReadOnlyList<PresenceEntry> presence) =>
@@ -518,18 +536,14 @@ public sealed class RelayFleetLink : IFleetLink
 
     public IReadOnlyList<KnownMachine>? Offline => current?.Relay.Known;
 
-    // RelayClient sets Presence and then Known from each presence message. Known is read first, so
-    // where those stores stay in order (x64), a machine coming online between the two reads is in
-    // one list or the other, never neither, which would read as forgotten. Should it be in neither
-    // anyway, it is online: its own report says it is the account's again (UsageCache.Present).
+    // Capture one presence message rather than mix the lists from before and after a reconnect.
     public (IReadOnlyList<FleetHost> Hosts, IReadOnlyList<KnownMachine>? Offline) Snapshot
     {
         get
         {
             if (current is not { } c) { return ([], null); }
-            var known = c.Relay.Known;
-            Interlocked.MemoryBarrier();
-            return (HostsOf(c, c.Relay.Presence), known);
+            var snap = c.Relay.Snapshot;
+            return (HostsOf(c, snap.Presence), snap.Known);
         }
     }
 
@@ -740,6 +754,16 @@ public sealed class RelayFleetLink : IFleetLink
             ? Transfers.SignCommand(key, k, TrustProtocol.Action(choice), question, machine, DateTimeOffset.UtcNow, request)
             : null;
 
+    public SignedCommand? SignEscapedApproval(byte[]? machinePublic, string machine, string session, string question, string shown, string request, DateTimeOffset pressed) =>
+        machinePublic is { } k && Wire.DeviceId(k) == machine
+            ? Transfers.SignCommand(key, k, EscapedApproval.Action, session, machine, pressed, request, question, shown)
+            : null;
+
+    public SignedCommand? SignUpdateNow(byte[]? machinePublic, string machine, string release, UpdateBusy? accept, string request) =>
+        machinePublic is { } k && Wire.DeviceId(k) == machine
+            ? Transfers.SignUpdateNow(key, k, release, accept, DateTimeOffset.UtcNow, request)
+            : null;
+
     public async ValueTask DisposeAsync()
     {
         stop.Cancel();
@@ -750,7 +774,8 @@ public sealed class RelayFleetLink : IFleetLink
 // Every machine's usage as one list (pwa/js/usage.js, mergeUsage): one row per allowance (an
 // agent and its account), carrying the freshest reading any machine has. A reading outranks a
 // failure however new, since a failure is stamped with when the attempt was made; a failure
-// newer than the reading is still the latest word on why nothing fresher exists.
+// newer than the reading is still the latest word on why nothing fresher exists. A reading that
+// names no account is a row of its own for each machine that read it (UsageShare.Key).
 public static class UsageMerge
 {
     public static UsageReport Merge(IEnumerable<UsageReport> reports)
@@ -784,7 +809,7 @@ public static class UsageMerge
     {
         var slots = new Dictionary<string, (AgentUsage? Reading, AgentUsage? Failure)>(StringComparer.Ordinal);
         var order = new List<string>();
-        foreach (var a in reports.SelectMany(r => r.Agents))
+        foreach (var a in Current([.. reports.SelectMany(r => r.Agents)]))
         {
             var key = UsageShare.Key(a);
             if (!slots.TryGetValue(key, out var slot)) { order.Add(key); }
@@ -796,6 +821,39 @@ public static class UsageMerge
             slots[key] = slot;
         }
         return order.Select(k => slots[k]);
+    }
+
+    // One machine's readings of an agent that name an account and that name none are never shown
+    // side by side: whichever kind it took last stands for it (#200). Codex alternates between them,
+    // a probe's keyed reading while idle and its transcripts' keyless ones while a session runs, and
+    // kept apart they were one allowance shown twice, the older of the two going stale beside it.
+    // A failure is held to the same rule: a sign-out older than the other kind's last reading is
+    // history, and one newer than it still stands; of two failures of the two kinds and no reading
+    // newer than either, the later stands. Entries of the two kinds measured at the same moment go
+    // to whichever was reported first, as two readings of one account do.
+    static IEnumerable<AgentUsage> Current(List<AgentUsage> all)
+    {
+        static (AgentKind, string?) Of(AgentUsage a) => (a.Agent, a.ReadBy?.Id);
+        var newest = new Dictionary<((AgentKind, string?) Machine, bool Keyless), (DateTimeOffset At, int Order)>();
+        var failed = new Dictionary<((AgentKind, string?) Machine, bool Keyless), (DateTimeOffset At, int Order)>();
+        for (var i = 0; i < all.Count; i++)
+        {
+            var a = all[i];
+            var latest = a.Windows.Count == 0 ? failed : newest;
+            var kind = (Of(a), UsageShare.Keyless(a));
+            if (!latest.TryGetValue(kind, out var n) || a.MeasuredAt > n.At) { latest[kind] = (a.MeasuredAt, i); }
+        }
+        return all.Where((a, i) =>
+        {
+            var otherKind = (Of(a), !UsageShare.Keyless(a));
+            var read = newest.TryGetValue(otherKind, out var other);
+            if (a.Windows.Count == 0)
+            {
+                if (read && a.MeasuredAt <= other.At) { return false; }
+                return !failed.TryGetValue(otherKind, out var f) || a.MeasuredAt > f.At || (a.MeasuredAt == f.At && i < f.Order);
+            }
+            return !read || a.MeasuredAt > other.At || (a.MeasuredAt == other.At && i < other.Order);
+        });
     }
 
     // A machine's own readings, marked as taken by it, so a client can say where each one came from

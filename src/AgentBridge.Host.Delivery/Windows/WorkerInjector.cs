@@ -21,19 +21,28 @@ public sealed class WorkerInjector : IConsoleInjector
     static readonly SemaphoreSlim One = new(1, 1);
 
     readonly string path;
+    readonly Action<string> log;
 
-    public WorkerInjector(string? path = null) =>
+    // log: the host's log, which alone is told why the worker could not start (#995): the
+    // result's detail reaches a person's receipt, and an exception's text must not (#802).
+    public WorkerInjector(string? path = null, Action<string>? log = null)
+    {
         this.path = path ?? Path.Combine(AppContext.BaseDirectory, FileName);
+        this.log = log ?? (_ => { });
+    }
 
     public async Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
     {
         if (!File.Exists(path)) { return Nothing($"the injector is missing beside the host ({FileName})"); }
-        await One.WaitAsync(cancellationToken);
+        try { await One.WaitAsync(cancellationToken); }
+        // No worker was started, so none can be typing.
+        catch (Exception e) { throw new InjectorWorkerException(e, Task.CompletedTask); }
         try
         {
             if (plan.Proceed?.Invoke() is { } stop) { return Nothing($"stopped before typing: {stop}"); }
             return await RunAsync(processId, plan);
         }
+        catch (Exception e) when (e is not InjectorWorkerException) { throw new InjectorWorkerException(e, Task.CompletedTask); }
         finally { One.Release(); }
     }
 
@@ -44,6 +53,71 @@ public sealed class WorkerInjector : IConsoleInjector
         if (!File.Exists(path)) { return new ConsoleScreen(null, $"the injector is missing beside the host ({FileName})"); }
         await One.WaitAsync(cancellationToken);
         try { return await ScreenAsync(processId); }
+        finally { One.Release(); }
+    }
+
+    // agent-bridge-injector <pid> --widen <columns> <created>: one attach that types nothing and
+    // makes the console's screen buffer at least that wide, only while <pid> is the process
+    // created then; "width <n>" as read back, then "ok".
+    public async Task<ConsoleWidth> WidenAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default)
+    {
+        if (!File.Exists(path)) { return new ConsoleWidth(null, $"the injector is missing beside the host ({FileName})", false); }
+        await One.WaitAsync(cancellationToken);
+        try
+        {
+            var start = new ProcessStartInfo(path)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+            };
+            start.ArgumentList.Add(processId.ToString(CultureInfo.InvariantCulture));
+            start.ArgumentList.Add("--widen");
+            start.ArgumentList.Add(columns.ToString(CultureInfo.InvariantCulture));
+            start.ArgumentList.Add(createdAt.ToFileTime().ToString(CultureInfo.InvariantCulture));
+            Process? process;
+            try { process = ProcessLaunch.Start(start); }
+            catch (Exception e) { return new ConsoleWidth(null, CouldNotStart(processId, e), false); }
+            if (process is null) { return new ConsoleWidth(null, NotStarted, false); }
+            using (process)
+            {
+                process.StandardInput.Close();
+                var errors = process.StandardError.ReadToEndAsync();
+                int? width = null;
+                string? final = null;
+                using var patience = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                try
+                {
+                    while (await process.StandardOutput.ReadLineAsync(patience.Token) is { } line)
+                    {
+                        if (line.StartsWith("width ", StringComparison.Ordinal) && int.TryParse(line[6..], NumberStyles.None, CultureInfo.InvariantCulture, out var w)) { width = w; }
+                        else if (line == "ok" || line.StartsWith("fail ", StringComparison.Ordinal)) { final = line; }
+                    }
+                    await process.WaitForExitAsync(patience.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    try { process.Kill(); } catch (InvalidOperationException) { }
+                    return new ConsoleWidth(null, "the injector stopped responding while widening the console", false);
+                }
+                await errors;
+                if (final == "ok" && width is not null) { return new ConsoleWidth(width, null, false); }
+                if (final is not null)
+                {
+                    var parts = final.Split(' ');
+                    var stage = parts.Length > 1 ? parts[1] : "?";
+                    var code = parts.Length > 2 && int.TryParse(parts[2], CultureInfo.InvariantCulture, out var c) ? c : 0;
+                    // A console not yet allocated to a process just started: not attached yet.
+                    // "process": not the process started (gone, or its id another's): never again.
+                    if (stage == "process") { return new ConsoleWidth(null, "the process is no longer the one started, so its console was left alone", false); }
+                    return new ConsoleWidth(null, $"the console could not be widened ({stage} error {code})", stage == "attach" && code is 6 or 31 or 87);
+                }
+                return new ConsoleWidth(null, $"the injector stopped before widening the console (exit 0x{process.ExitCode:X8})", false);
+            }
+        }
         finally { One.Release(); }
     }
 
@@ -62,8 +136,8 @@ public sealed class WorkerInjector : IConsoleInjector
         start.ArgumentList.Add("--screen");
         Process? process;
         try { process = ProcessLaunch.Start(start); }
-        catch (Exception e) { return new ConsoleScreen(null, $"the injector could not start: {e.Message}"); }
-        if (process is null) { return new ConsoleScreen(null, "the injector could not start"); }
+        catch (Exception e) { return new ConsoleScreen(null, CouldNotStart(processId, e)); }
+        if (process is null) { return new ConsoleScreen(null, NotStarted); }
         using (process)
         {
             process.StandardInput.Close();
@@ -116,10 +190,11 @@ public sealed class WorkerInjector : IConsoleInjector
         start.ArgumentList.Add(processId.ToString(CultureInfo.InvariantCulture));
         Process? process;
         try { process = ProcessLaunch.Start(start); }
-        catch (Exception e) { return Nothing($"the injector could not start: {e.Message}"); }
-        if (process is null) { return Nothing("the injector could not start"); }
+        catch (Exception e) { return Nothing(CouldNotStart(processId, e)); }
+        if (process is null) { return Nothing(NotStarted); }
 
-        using (process)
+        var ended = false;
+        try
         {
             var wrote = false;
             string? final = null;
@@ -160,6 +235,9 @@ public sealed class WorkerInjector : IConsoleInjector
                 var parts = final.Split(' ');
                 var stage = parts.Length > 1 ? parts[1] : "?";
                 var code = parts.Length > 2 && int.TryParse(parts[2], CultureInfo.InvariantCulture, out var c) ? c : 0;
+                // A later send held to the screen, refused after an earlier one went: what went
+                // stays, and nothing after it does.
+                if (wrote && (stage, code) == ("screen", 0)) { return Interrupted(ScreenChangedPartway); }
                 return wrote ? Interrupted($"the injector failed while typing ({stage} error {code})") : Nothing(Explain(stage, code));
             }
             var exit = process.ExitCode;
@@ -172,10 +250,43 @@ public sealed class WorkerInjector : IConsoleInjector
             }
             return Nothing(closed ? "the session's console closed before anything was typed" : $"the injector stopped before typing (exit 0x{exit:X8})");
         }
+        catch (Exception e)
+        {
+            // Anything unforeseen leaves the worker perhaps still typing: it is ended, and the
+            // exception carries the proof of its end for the host's stop fence (DeliveryGate).
+            ended = true;
+            throw new InjectorWorkerException(e, await EndAsync(process));
+        }
+        finally
+        {
+            if (!ended) { process.Dispose(); }
+        }
+    }
+
+    // The worker may still be sending keys: end it, and wait a moment for proof. The proof is its
+    // exit, not the kill, so a worker that outlives the wait keeps its handle and is watched until
+    // it goes; one whose exit cannot be awaited at all faults, and is never taken as gone.
+    static async Task<Task> EndAsync(Process process)
+    {
+        try { process.Kill(entireProcessTree: true); }
+        catch (Exception) { }
+        var exited = ExitAsync(process);
+        try { await exited.WaitAsync(TimeSpan.FromSeconds(5)); }
+        catch (Exception) { }
+        return exited;
+
+        static async Task ExitAsync(Process process)
+        {
+            try { await process.WaitForExitAsync(); }
+            finally { process.Dispose(); }
+        }
     }
 
     // What a send held to the screen (KeySend.Expect) comes to when the screen no longer reads so.
     public const string ScreenChanged = "the prompt on the session's screen changed before anything was typed; look again and answer, or answer at the machine";
+
+    // The same, for a send after the first: the keys before it went, and nothing after.
+    public const string ScreenChangedPartway = "the session's screen changed after part of it was typed, so nothing more was";
 
     // What a person can do about a failure that happened before any key was written.
     internal static string Explain(string stage, int code) => (stage, code) switch
@@ -189,6 +300,17 @@ public sealed class WorkerInjector : IConsoleInjector
         ("screen", _) => $"the host could not read the session's screen (error {code}); answer at the machine",
         _ => $"the injector could not type ({stage} error {code}); answer at the machine",
     };
+
+    // The worker did not start, so nothing was typed. Fixed words: each caller says it in its own
+    // (a reply or an answer "the machine couldn't deliver it", DeliveryReasons.Of; Launch's folder
+    // trust its own, #995), and why goes to the host's log only (#802).
+    public const string NotStarted = "the injector could not start";
+
+    string CouldNotStart(int processId, Exception e)
+    {
+        log($"the injector could not start for pid {processId}: {e.GetType().Name}: {e.Message}");
+        return NotStarted;
+    }
 
     static InjectionResult Nothing(string detail) => new(InjectionStatus.NothingTyped, detail);
     static InjectionResult Interrupted(string detail) => new(InjectionStatus.Interrupted, detail);

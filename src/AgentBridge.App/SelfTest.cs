@@ -1,5 +1,4 @@
 using System.Runtime.InteropServices;
-using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text.Json;
 using AgentBridge.App.Core;
 using AgentBridge.Protocol;
@@ -9,7 +8,6 @@ using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Automation.Provider;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Graphics.Imaging;
 using Windows.Storage.Streams;
 
@@ -62,6 +60,7 @@ static partial class SelfTest
             var remoteFacts = rows.FirstOrDefault(r => r.Card?.Id == "demo-remote-codex") is { } rc ? ById<TextBlock>(rc, "RowFacts") : null;
             Check(remoteFacts is not null && Text(remoteFacts).EndsWith(" · " + remote.MachineName, StringComparison.Ordinal), $"names the machine on another machine's row ({(remoteFacts is null ? "none" : Text(remoteFacts))})");
             await CheckRowAnatomy(rows, Check);
+            CheckRowNames(window, rows, Check);
 
             // A session chosen in the list is the session pane's, with its question's controls.
             var approval = await Choose(window, main, "demo-approval", "Option:approve");
@@ -77,9 +76,10 @@ static partial class SelfTest
             Check(form is not null && ById<Button>(form, "SendAnswer") is not null && ById<TextBox>(form, "Field:notes") is not null,
                 "draws a form question with its fields and Send");
             Check(Message(form) is { Approval: false }, "draws a question that is not an approval as written");
+            await CheckAtMachineShape(window, main, demo, Check, outFile);
             var withResponse = main.AllCards.FirstOrDefault(c => c.HasResponse);
             var responding = withResponse is null ? null : await Choose(window, main, withResponse.Id, "Response");
-            Check(responding is not null && await Until(() => ById<FrameworkElement>(responding, "Response") is MarkdownView { Children.Count: > 0 }, TimeSpan.FromSeconds(5)), "renders a response's Markdown");
+            Check(responding is not null && await Until(() => ById<MarkdownView>(responding, "ResponseBlock") is { Children.Count: > 0 }, TimeSpan.FromSeconds(5)), "renders a response's Markdown");
             // Status is a glyph and words (docs/design/ui.md §2.2), the glyph drawn from the generated
             // styles and named as its row reads (§9).
             var glyphs = rows.Select(r => (r.Card, Glyph: ById<StatusGlyphView>(r, "StatusGlyph"))).ToList();
@@ -94,9 +94,15 @@ static partial class SelfTest
             await CheckInlineMono(window, Check);
             await CheckCodeBlocks(window, Check, outFile);
             await CheckUnparsableMarkdown(window, Check);
+            // Written down first: without its fix, the next check ends the process (0xC000027B).
+            await Write(outFile, result, checks, failures, "a word too long for WinUI's text layout");
+            await CheckLongWords(window, Check);
+            await Write(outFile, result, checks, failures, null);
+            await CheckFeedbackEntry(window, Check);
             await CheckShell(window, main, Check);
             await CheckStatusLines(window, main, Check);
             await CheckCurrentTools(window, main, Check);
+            await CheckUpdateBanner(window, main, Check, outFile);
 
             // Needs you (#165): every question on both machines, its count the one the tray shows,
             // and Approve once and Deny right there for the permission prompt.
@@ -138,8 +144,24 @@ static partial class SelfTest
                 bool InSession() => Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(window.RootElement.XamlRoot) is DependencyObject f && Above<FrameworkElement>(f, e => e == window.Sessions.SessionPaneView) is not null;
                 var focused = await Until(() => main.Selected is { WantsFocus: false } && InSession(), TimeSpan.FromSeconds(5));
                 Check(focused, "takes keyboard focus into the session a Needs you entry opens");
+                // On the question's heading, never an answer (#484): a stray Enter or Space there
+                // would answer the question unread.
+                Check(OnHeading(), $"puts keyboard focus on the opened question's heading, not an answer ({FocusedName(window)})");
             }
             else { Check(false, "finds the form question's Needs you entry"); }
+            // The same for a permission prompt, whose first control is Approve once.
+            var approvalEntry = Entries().FirstOrDefault(g => main.NeedsYou.ElementAtOrDefault(Entries().IndexOf(g))?.Card.Id == "demo-approval");
+            if (approvalEntry is not null && ById<HyperlinkButton>(approvalEntry, "NeedsYouOpen") is { } openApproval)
+            {
+                main.Selected = null;
+                ((IInvokeProvider)new HyperlinkButtonAutomationPeer(openApproval).GetPattern(PatternInterface.Invoke)).Invoke();
+                var onHeading = await Until(() => main.Selected is { Id: "demo-approval", WantsFocus: false } && OnHeading(), TimeSpan.FromSeconds(5));
+                Check(onHeading, $"puts keyboard focus on a permission prompt's heading when Needs you opens it, not on Approve once ({FocusedName(window)})");
+            }
+            else { Check(false, "finds the permission prompt's Needs you entry"); }
+            bool OnHeading() => Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(window.RootElement.XamlRoot) is FrameworkElement f
+                && f is not Microsoft.UI.Xaml.Controls.Primitives.ButtonBase && AutomationProperties.GetAutomationId(f) == "QuestionHeading"
+                && Above<FrameworkElement>(f, e => e == window.Sessions.SessionPaneView) is not null;
             // Alt+Down and Alt+Up on a row (§9, #164): the row moves, perhaps drawn by another
             // control, and its list item has focus again, so the next move is the same row's. A row
             // other than the open one, as from its menu: the session open stays open.
@@ -201,7 +223,7 @@ static partial class SelfTest
             if (choice?.Card is { } choiceCard && ById<Button>(choice, "Option:pg") is { } pg)
             {
                 ((IInvokeProvider)new ButtonAutomationPeer(pg).GetPattern(PatternInterface.Invoke)).Invoke();
-                var answered = await Until(() => choiceCard.ReceiptText.StartsWith("Your answer: Delivered", StringComparison.Ordinal), TimeSpan.FromSeconds(20));
+                var answered = await Until(() => choiceCard.ReceiptText.StartsWith("You answered", StringComparison.Ordinal), TimeSpan.FromSeconds(20));
                 result["receipt"] = choiceCard.ReceiptText;
                 Check(answered, "answers a question from its session and shows it was delivered");
                 // The receipt is laid out a pass after its text changes (#247): waited for, then the
@@ -220,7 +242,7 @@ static partial class SelfTest
             if (remoteChoice?.Card is { } remoteCard && ById<Button>(remoteChoice, "Option:device") is { } device)
             {
                 ((IInvokeProvider)new ButtonAutomationPeer(device).GetPattern(PatternInterface.Invoke)).Invoke();
-                var answered = await Until(() => remoteCard.ReceiptText.StartsWith("Your answer: Delivered", StringComparison.Ordinal), TimeSpan.FromSeconds(20));
+                var answered = await Until(() => remoteCard.ReceiptText.StartsWith("You answered", StringComparison.Ordinal), TimeSpan.FromSeconds(20));
                 result["remoteReceipt"] = remoteCard.ReceiptText;
                 Check(answered, "answers a question on another machine from its session and shows it was delivered");
             }
@@ -262,7 +284,9 @@ static partial class SelfTest
             await CheckPanes(window, main, Check, outFile);
             await CheckDividers(window, main, Check, outFile);
             await CheckMachineTabs(window, main, Check, outFile);
-            await CheckDelegates(window, main, Check, outFile);
+            await CheckDelegates(window, main, demo, Check, outFile);
+            await CheckSessionDetails(window, main, demo, Check, outFile);
+            await CheckAnswerMoves(window, main, Check, outFile);
 
             // Launch a session from the Launch page: it starts, its row appears, and Open goes to it.
             window.ShowPage("launch");
@@ -286,6 +310,7 @@ static partial class SelfTest
             else { Check(false, "finds the Launch button"); }
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".launched.png"));
             await CheckYourMessages(window, main, Check, outFile, launchedPrompt);
+            await CheckPrompts(window, main, demo, Check, outFile);
             Resize(window, 1000, 900);
 
             // Codex on the other machine starts only on a first message: nothing is sent without one.
@@ -307,6 +332,7 @@ static partial class SelfTest
             await Task.Delay(500);
             Check(Fits(window, "SettingsPane"), "fits the Settings page's column in a wide window");
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".settings.png"));
+            await CheckAgentRows(window, main, demo, Check, outFile, result);
 
             // Approve once from Needs you, as a person would: the card's own answer goes, and the
             // entry leaves with its question.
@@ -319,7 +345,7 @@ static partial class SelfTest
             {
                 ((IInvokeProvider)new ButtonAutomationPeer(approveButton).GetPattern(PatternInterface.Invoke)).Invoke();
                 var approvalCard = main.AllCards.First(c => c.Id == "demo-approval");
-                var gone = await Until(() => approvalCard.ReceiptText.StartsWith("Your answer: Delivered", StringComparison.Ordinal) && main.NeedsYou.All(e => e.Card.Id != "demo-approval") && main.Waiting == waiting - 1, TimeSpan.FromSeconds(20));
+                var gone = await Until(() => approvalCard.ReceiptText.StartsWith("You answered", StringComparison.Ordinal) && main.NeedsYou.All(e => e.Card.Id != "demo-approval") && main.Waiting == waiting - 1, TimeSpan.FromSeconds(20));
                 result["laneReceipt"] = approvalCard.ReceiptText;
                 Check(gone, "approves a permission prompt from Needs you: the card shows it delivered, and the entry and the tray count go down");
             }
@@ -341,14 +367,31 @@ static partial class SelfTest
             main.Selected = main.AllCards.First(c => c.Id == "demo-approval");
             await Task.Delay(700);
             await CheckMachinesPage(window, main, Check, outFile);
+            await CheckMachineHeld(window, main, remote, Check, outFile);
+            await CheckResumeHeld(window, launch, remote, Check, outFile);
+            await CheckMachineDiagnosis(window, remote, Check);
             await CheckNarrowest(window, Check, outFile);
             // The theme passes draw the Sessions page with a delegate in its strip and inspector.
             await ShowADelegate(window, main, Check);
             await CheckPagesInEveryTheme(window, Check, outFile);
+            AppLog.Write("self-test: sign-in");
+            await CheckSignIn(window, main, remote, Check, outFile);
+            await CaptureSignIn(window, main, remote, Check, outFile);
+            AppLog.Write("self-test: update captures");
+            await CaptureUpdate(window, main, Check, outFile);
+            // The receipt's states (ui.md §6.5) in each theme and at the narrowest width; high
+            // contrast's pass draws them too.
+            await ProgressPasses(window, main, demo, Check, outFile, result);
+            // The gallery's sessions are gone, and the one open with them: high contrast's pass
+            // draws the Sessions page as the theme passes did, a delegate in its strip and inspector.
+            await ShowADelegate(window, main, Check);
             // What was seen so far, written down first: a failure in high contrast that ends the
             // process (a XAML failure shows only as 0xC000027B) leaves the rest on record.
             await Write(outFile, result, checks, failures, "high contrast");
-            await CheckHighContrast(window, Check, outFile, result);
+            await CheckHighContrast(window, main, launch, demo, remote, Check, outFile, result);
+            // Last, as it adds sessions every check above counts without (#765).
+            await Write(outFile, result, checks, failures, "live resize");
+            await MeasureResize(window, main, demo, Check, outFile, result);
         }
         catch (Exception e)
         {
@@ -445,6 +488,30 @@ static partial class SelfTest
             if (!onLine1 || !oneLine || !weight || never || text.Split(" · ").Length > 2 || text.StartsWith('·') || text.Length == 0) { crooked.Add(card.Id); }
         }
         check(rows.Count > 0 && crooked.Count == 0, $"draws every row as two lines: the glyph on line 1, then at most two facts on one line, never the model or the pid{(crooked.Count > 0 ? $": not {string.Join(", ", crooked)}" : "")} ({string.Join(" | ", facts)})");
+    }
+
+    // ui.md §9.1 A1 (#796): the name UI Automation gives each row's list item, which Narrator reads
+    // as the row is reached, starts with the words the row draws, in the order drawn: its title,
+    // line 2's facts, then its age, or "New activity" where the dot is drawn instead. Read from the
+    // drawn text, not the view model, so a name built from words the row no longer draws fails.
+    static void CheckRowNames(MainWindow window, List<SessionRow> rows, Action<bool, string> check)
+    {
+        var wrong = new List<string>();
+        var names = new List<string>();
+        foreach (var row in rows)
+        {
+            if (row.Card is not { } card || window.Sessions.Rows.ContainerFromItem(card) is not ListViewItem item) { wrong.Add($"{row.Card?.Id ?? "?"}: no item"); continue; }
+            var name = FrameworkElementAutomationPeer.CreatePeerForElement(item)?.GetName() ?? "";
+            names.Add(name);
+            var title = ById<TextBlock>(row, "RowTitle");
+            var line2 = ById<TextBlock>(row, "RowFacts");
+            var age = ById<TextBlock>(row, "Age");
+            var dot = ById<FrameworkElement>(row, "Unread");
+            var shown = dot is { Visibility: Visibility.Visible } ? "New activity" : age?.Text;
+            var drawn = string.Join(", ", new[] { title?.Text }.Concat(line2 is null ? Enumerable.Empty<string>() : Text(line2).Split(StatusLine.Separator).Select(DelegateLabel.Aloud)).Append(shown).Where(s => !string.IsNullOrEmpty(s)));
+            if (drawn.Length == 0 || !(name == drawn || name.StartsWith(drawn + ", ", StringComparison.Ordinal)) || name != card.RowLabel) { wrong.Add($"{card.Id}: \"{name}\" for \"{drawn}\""); }
+        }
+        check(rows.Count > 0 && wrong.Count == 0, $"names every row's list item for its title, its second line's facts and its age, as drawn{(wrong.Count > 0 ? $": not {string.Join("; ", wrong)}" : "")} ({string.Join(" | ", names)})");
     }
 
     // The status words in their tone's text colour on every row and in the session's header, and
@@ -646,6 +713,47 @@ static partial class SelfTest
         }
         else { check(false, "finds Needs you and a second session to scroll the list to"); }
     }
+
+    // Send feedback (#738), from Settings and from the tray's menu: both open the one dialog that
+    // says feedback isn't available yet, and nothing offers to send. The tray's menu is Win32's
+    // and can't be clicked here, so its choice goes through the same dispatch (TrayIcon.Run) and
+    // the same action the app gives the tray, from a window hidden in the notification area.
+    static async Task CheckFeedbackEntry(MainWindow window, Action<bool, string> check)
+    {
+        ContentDialog? Dialog() => VisualTreeHelper.GetOpenPopupsForXamlRoot(window.RootElement.XamlRoot)
+            .Select(p => p.Child).OfType<UIElement>()
+            .SelectMany(c => c is ContentDialog d ? (IEnumerable<ContentDialog>)[d] : Find<ContentDialog>(c))
+            .FirstOrDefault(d => AutomationProperties.GetAutomationId(d) == "FeedbackUnavailable");
+        async Task Unavailable(string from)
+        {
+            var opened = await Until(() => Dialog() is not null, TimeSpan.FromSeconds(5));
+            var dialog = Dialog();
+            check(opened && dialog is { Title: "Send feedback", Content: "Feedback isn't available in the Windows app yet.", CloseButtonText: "Close", PrimaryButtonText: "", SecondaryButtonText: "" },
+                $"says feedback is unavailable without offering a send, from {from}");
+            dialog?.Hide();
+            check(await Until(() => Dialog() is null && !window.FeedbackOpen, TimeSpan.FromSeconds(5)), $"closes the feedback dialog opened from {from}");
+        }
+
+        window.ShowPage("settings");
+        // Settings was collapsed until now: its controls come only with the next layout pass.
+        Button? button = null;
+        await Until(() => (button = ById<Button>(window.SettingsPage, "SendFeedback")) is not null, TimeSpan.FromSeconds(10));
+        check(button is { IsEnabled: true, Content: "Send feedback" }, "offers Send feedback in Settings");
+        if (button is not null)
+        {
+            ((IInvokeProvider)new ButtonAutomationPeer(button).GetPattern(PatternInterface.Invoke)).Invoke();
+            await Unavailable("Settings");
+        }
+        window.ShowPage("sessions");
+
+        window.AppWindow.Hide();
+        var wrong = false;
+        TrayIcon.Run(TrayIcon.CmdFeedback, () => wrong = true, window.FeedbackFromTray, () => wrong = true);
+        check(!wrong && window.AppWindow.IsVisible, "shows the window from the tray's Send feedback, and only that");
+        await Unavailable("the tray");
+        window.ShowInFront();
+    }
+
     // The Windows shell (ui.md §7, #180): the 48 px title bar with the mark, the name and the search
     // box; the compact rail with every page and its 3×16 selection pill in Bridge; the pages on a
     // layer with an 8 px top-left radius; WinUI's accent controls in Bridge in both themes; and the
@@ -659,7 +767,8 @@ static partial class SelfTest
         check(bar.Title == Product.Name && window.Title == Product.Name && Math.Abs(bar.ActualHeight - (double)Application.Current.Resources["AbLayoutTitleBar"]) < 0.5,
             $"draws the 48 px title bar with the app's name ({bar.ActualHeight:0.#} px)");
         var mark = ById<ContentControl>(window.RootElement, "Mark");
-        check(mark is not null && Find<Microsoft.UI.Xaml.Shapes.Path>(mark).Count > 0, "draws the mark in the title bar");
+        check(mark is not null && Find<Microsoft.UI.Xaml.Shapes.Path>(mark).Count > 0 && ReferenceEquals(mark.Style, Application.Current.Resources["AbIconMark20"]) && mark.ActualWidth == 20,
+            "draws the mark in the title bar, its native 20 px cut at 20 px");
         check(window.Search.XamlRoot is not null && window.Search.ActualWidth > 100 && FindAncestor<TitleBar>(window.Search) == bar, $"puts the search box in the title bar ({window.Search.ActualWidth:0} px wide)");
         check(window.RootElement is Grid { KeyboardAccelerators: var keys } && keys.Any(k => k.Key == Windows.System.VirtualKey.K && k.Modifiers == Windows.System.VirtualKeyModifiers.Control), "focuses search with Ctrl+K");
         await CheckNoShortcutTooltip(window, check);
@@ -864,7 +973,7 @@ static partial class SelfTest
     // setting, not a window's: on CI the self-test turns it on for the pass and back off after.
     static readonly (string Tag, string Pane)[] Pages = [("sessions", "SessionsPage"), ("machines", "MachinesPane"), ("launch", "LaunchPane"), ("usage", "UsagePane"), ("settings", "SettingsPane")];
 
-    static async Task<List<string>> DrawPages(MainWindow window, string theme, string outFile)
+    static async Task<List<string>> DrawPages(MainWindow window, string theme, string outFile, Action<bool, string> check)
     {
         var root = window.RootElement;
         var broken = new List<string>();
@@ -886,7 +995,19 @@ static partial class SelfTest
                 if (!layout.ShowInspector && layout.Mode == PaneMode.Three) { broken.Add("three panes without the inspector"); }
                 await DrawDelegates(window, page, layout, broken, theme, outFile);
             }
-            await Picture(root, Path.ChangeExtension(outFile, $".{tag}.{theme.ToLowerInvariant()}.png"));
+            var picture = Path.ChangeExtension(outFile, $".{tag}.{theme.ToLowerInvariant()}.png");
+            await Picture(root, picture);
+            if (theme == "HighContrast" && page is not null)
+            {
+                // Every accent button this page draws: the system pair only, no plate under a label.
+                var accent = (Style)Application.Current.Resources["AccentButtonStyle"];
+                foreach (var button in Find<Button>(page).Where(b => b.Style == accent && b.IsEnabled && b.IsLoaded && Shown(b, page)).ToList())
+                {
+                    var plate = await AccentPlate(button);
+                    check(plate is null, $"draws the {tag} page's accent button in Highlight and HighlightText only ({plate})");
+                }
+            }
+            if (theme == nameof(ElementTheme.Dark)) { await CheckDarkPagePicture(window, picture, check); }
         }
         return broken;
     }
@@ -900,8 +1021,9 @@ static partial class SelfTest
             {
                 root.RequestedTheme = theme;
                 await Task.Delay(300);
-                var broken = await DrawPages(window, theme.ToString(), outFile);
+                var broken = await DrawPages(window, theme.ToString(), outFile, check);
                 check(broken.Count == 0 && root.ActualTheme == theme, $"draws every page with its title in {theme}{(broken.Count > 0 ? $": not {string.Join(", ", broken)}" : "")}");
+                await CheckEscapedSheet(window, check, outFile, theme.ToString().ToLowerInvariant(), notSent: true);
             }
             root.RequestedTheme = ElementTheme.Default;
         }
@@ -911,13 +1033,19 @@ static partial class SelfTest
     // setting is changed off the UI thread: SystemParametersInfo sends WM_SETTINGCHANGE to every
     // window, this app's included, and from the UI thread that message would re-enter XAML in the
     // middle of this method.
-    static async Task CheckHighContrast(MainWindow window, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
+    static async Task CheckHighContrast(MainWindow window, MainViewModel main, LaunchViewModel launch, DemoHost demo, DemoHost remote, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
     {
+        // A receipt line already on screen as the switch is made, and not bound again after it: it
+        // follows the switch by itself (#625, Copilot 4485379205). The passes below draw anew.
+        var line = ById<TextBlock>(window.Sessions.SessionPaneView, "ReplyStatus") is { IsLoaded: true } l ? l : null;
+        var inkBefore = (line?.Foreground as SolidColorBrush)?.Color.ToString();
+        var failedRow = await ShowFailedAgentRow(window, main);
         var contrast = await HighContrastPass.BeginAsync();
         result["highContrast"] = contrast.How;
         AppLog.Write($"self-test: high contrast {contrast.How}");
         if (!contrast.On)
         {
+            if (main.Settings is { } settings) { await settings.CheckAgentsAsync(); }
             // Skipped only off CI, where a developer's own setting is never changed.
             if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true") { check(false, $"turns Windows' high contrast on for the pass ({contrast.How})"); }
             return;
@@ -927,14 +1055,40 @@ static partial class SelfTest
             var on = await Until(() => new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast, TimeSpan.FromSeconds(15));
             await Task.Delay(1500);
             check(on, "sees Windows' high contrast turned on");
-            var hcBroken = await DrawPages(window, "HighContrast", outFile);
+            // Only a pass that turned it on is a transition: on already, the line was drawn in it.
+            if (contrast.TurnedOn) { await CheckAgentRowRepainted(window, main, failedRow, check); }
+            else if (main.Settings is { } drawn) { await drawn.CheckAgentsAsync(); }
+            if (line is { IsLoaded: true })
+            {
+                var windowText = Application.Current.Resources.TryGetValue("SystemColorWindowTextColor", out var w) && w is Windows.UI.Color text ? text.ToString() : null;
+                var followed = await Until(() => (line.Foreground as SolidColorBrush)?.Color.ToString() == windowText, TimeSpan.FromSeconds(5));
+                var inkAfter = (line.Foreground as SolidColorBrush)?.Color.ToString();
+                result["receiptInkAcrossContrast"] = $"{inkBefore} -> {inkAfter}";
+                check(followed, $"repaints a receipt line on screen in the window's text as high contrast turns on ({inkBefore} -> {inkAfter}, wanted {windowText})");
+            }
+            else { result["receiptInkAcrossContrast"] = "no receipt line on screen"; }
+            var hcBroken = await DrawPages(window, "HighContrast", outFile, check);
             check(hcBroken.Count == 0, $"draws every page with its title in high contrast{(hcBroken.Count > 0 ? $": not {string.Join(", ", hcBroken)}" : "")}");
+            await PictureYoursInHighContrast(window, check, outFile);
+            await PictureFoldInHighContrast(window, main, check, outFile);
+            await PictureDetailsInHighContrast(window, main, demo, check, outFile);
+            await PictureAgentRows(window, main, outFile, "highcontrast");
+            await PictureRowsTheAppCantActOn(window, main, demo, outFile, [ElementTheme.Default]);
+            await ProgressGallery(window, main, demo, check, outFile, result, "highcontrast");
+            await CheckEscapedSheet(window, check, outFile, "high-contrast", notSent: true);
             var system = new[] { "SystemColorHighlightColor", "SystemColorHighlightTextColor", "SystemColorWindowTextColor", "SystemColorWindowColor", "SystemColorGrayTextColor", "SystemColorButtonFaceColor", "SystemColorButtonTextColor", "SystemColorHotlightColor" }
                 .Select(k => Application.Current.Resources.TryGetValue(k, out var c) && c is Windows.UI.Color colour ? colour.ToString() : null).OfType<string>().ToHashSet();
             var own = Design.DesignKeys.Brushes.Where(k => !(Application.Current.Resources.TryGetValue(k, out var b) && b is SolidColorBrush s && system.Contains(s.Color.ToString()))).ToList();
             check(system.Count > 0 && own.Count == 0, $"uses a system colour for every role and surface in high contrast{(own.Count > 0 ? $": not {string.Join(", ", own)}" : "")}");
             var systemCaptions = await Until(() => window.AppWindow.TitleBar.ButtonForegroundColor is null, TimeSpan.FromSeconds(10));
             check(systemCaptions, $"leaves the caption buttons in the system's colours in high contrast ({window.AppWindow.TitleBar.ButtonForegroundColor?.ToString() ?? "system"})");
+            // The sign-in banner and sheet in high contrast (#800, Creative 6655285995).
+            await CaptureSignIn(window, main, remote, check, outFile, contrast: true);
+            // The update bar and Settings' update row in high contrast (#719, Creative 6643004091).
+            await CaptureUpdate(window, main, check, outFile, contrast: true);
+            // The held machine's row and a held resume's line in high contrast (#1064).
+            await CheckMachineHeld(window, main, remote, check, outFile, contrast: true);
+            await CheckResumeHeld(window, launch, remote, check, outFile, contrast: true);
             window.ShowPage("sessions");
         }
         finally
@@ -1128,17 +1282,30 @@ static partial class SelfTest
     static T? ById<T>(DependencyObject root, string id) where T : FrameworkElement =>
         Find<T>(root).FirstOrDefault(e => AutomationProperties.GetAutomationId(e) == id);
 
-    static async Task Picture(UIElement element, string file)
+    // On a backdrop, an element whose own fill is see-through (Dark's are) is drawn on what it sits
+    // on in the window, not on the viewer's white.
+    static async Task Picture(UIElement element, string file, Windows.UI.Color? backdrop = null)
     {
         try
         {
-            var bitmap = new RenderTargetBitmap();
-            await bitmap.RenderAsync(element);
-            var pixels = await bitmap.GetPixelsAsync();
+            var picture = await PicturePixels(element);
+            if (backdrop is { } under)
+            {
+                // Premultiplied: each colour gets the backdrop's share that the pixel lets through.
+                var p = picture.Pixels;
+                for (var i = 0; i < p.Length; i += 4)
+                {
+                    var through = 255 - p[i + 3];
+                    p[i] = (byte)(p[i] + under.B * through / 255);
+                    p[i + 1] = (byte)(p[i + 1] + under.G * through / 255);
+                    p[i + 2] = (byte)(p[i + 2] + under.R * through / 255);
+                    p[i + 3] = 255;
+                }
+            }
             using var stream = new InMemoryRandomAccessStream();
             var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
             var dpi = 96.0;
-            encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied, (uint)bitmap.PixelWidth, (uint)bitmap.PixelHeight, dpi, dpi, pixels.ToArray());
+            encoder.SetPixelData(BitmapPixelFormat.Bgra8, picture.Alpha, picture.Width, picture.Height, dpi, dpi, picture.Pixels);
             await encoder.FlushAsync();
             var bytes = new byte[stream.Size];
             using var reader = new DataReader(stream.GetInputStreamAt(0));
@@ -1148,6 +1315,7 @@ static partial class SelfTest
         }
         catch (Exception e) when (e is System.Runtime.InteropServices.COMException or ArgumentException)
         {
+            if (element is FrameworkElement root && ReferenceEquals(root.XamlRoot?.Content, root)) { throw; }
             AppLog.Write($"self-test picture not saved: {e.Message}");
         }
     }

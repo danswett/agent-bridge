@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Restore;
 using AgentBridge.Host.Delivery.Copilot;
 using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Protocol;
@@ -16,6 +17,12 @@ public interface ISessionLauncher
     Task<LaunchOptions> OptionsAsync(CancellationToken cancellationToken = default);
 
     Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default);
+
+    Task<LaunchResult> LaunchVerificationAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) =>
+        Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "This launcher cannot guarantee standard permissions for verification."));
+
+    // Also raised when registration succeeds after the initial answer was unconfirmed.
+    event Action<Guid, string>? RequestRegistered { add { } remove { } }
 
     // The agents launches started that still run, registered or not: whatever runs inside one
     // is an agent's, and may not manage the host (§6.3 invariant 13).
@@ -123,8 +130,10 @@ public sealed class LaunchServiceOptions
 //     before it asks, so its launch is started only once its window shows it ready.
 //   * Never while agent-ha-bridge is active for this user (G5), and never twice for one request
 //     (OutcomeMemory). One start at a time, so worktrees and Codex's binding cannot race.
-public sealed partial class LaunchService : ISessionLauncher
+public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 {
+    public event Action<Guid, string>? RequestRegistered;
+
     readonly ISessionSource source;
     readonly IAgentHaBridgeProbe probe;
     readonly IConsoleInjector injector;
@@ -139,6 +148,16 @@ public sealed partial class LaunchService : ISessionLauncher
     readonly OutcomeMemory<TrustAnswerResult> trustAnswers;
     readonly SemaphoreSlim starting = new(1, 1);
     readonly Lock pendingGate = new();
+    // Sessions whose launch here was never seen ready, with whether the agent it started still runs
+    // (HeldForReply). Under pendingGate; dropped once that agent has gone, or once a person got past
+    // whatever its window asked: a prompt of theirs in its transcript after the launch (Copilot), or,
+    // for an agent that registers only once ready, its registration.
+    readonly Dictionary<string, Unready> neverReady = new(StringComparer.OrdinalIgnoreCase);
+
+    // Alive: the launcher's process, or, once that handed the session on and exited, the session's own
+    // (AgentHeld). Transcript: Copilot's events.jsonl and its length just before the agent was started.
+    sealed record Unready(Func<bool> Alive, string Label, bool RegistersBeforeReady, (string Path, long From)? Transcript);
+    readonly ILaunchCredentials? credentials;
     readonly List<Pending> pending = [];
     // Every session id a launch has started an agent on (given, resumed, or the Codex session
     // bound to it), with its process: while that process runs, the session is not resumed
@@ -146,12 +165,18 @@ public sealed partial class LaunchService : ISessionLauncher
     // one launch is never bound to another.
     readonly Dictionary<string, Started> launchedOn = new(StringComparer.OrdinalIgnoreCase);
 
-    public LaunchService(ISessionSource source, IAgentHaBridgeProbe probe, IConsoleInjector injector, IAgentStarter starter, IAgentLocator locator,
-        AgencyCatalog agency, LaunchServiceOptions options, Action<string>? log = null, AttachmentStore? attachments = null)
+    // Test-only compatibility overload; production must pass the shared gate explicitly.
+    internal LaunchService(ISessionSource source, IAgentHaBridgeProbe probe, IConsoleInjector injector, IAgentStarter starter, IAgentLocator locator,
+        AgencyCatalog agency, LaunchServiceOptions options, Action<string>? log = null, AttachmentStore? attachments = null, DeliveryGate? gate = null, ILaunchCredentials? credentials = null)
+        : this(gate ?? new DeliveryGate(), source, probe, injector, starter, locator, agency, options, log, attachments, credentials) { }
+
+    public LaunchService(DeliveryGate gate, ISessionSource source, IAgentHaBridgeProbe probe, IConsoleInjector injector, IAgentStarter starter, IAgentLocator locator,
+        AgencyCatalog agency, LaunchServiceOptions options, Action<string>? log = null, AttachmentStore? attachments = null, ILaunchCredentials? credentials = null)
     {
+        this.credentials = credentials;
         this.source = source;
         this.probe = probe;
-        this.injector = injector;
+        this.injector = new GateTrackedInjector(injector, gate);
         this.starter = starter;
         this.locator = locator;
         this.agency = agency;
@@ -159,8 +184,11 @@ public sealed partial class LaunchService : ISessionLauncher
         this.log = log ?? (_ => { });
         this.attachments = attachments;
         resumable = new ResumableStore(options.CopilotHome, options.ClaudeHome, options.CodexHome, options.Time);
-        requests = new OutcomeMemory<LaunchResult>(options.Time, options.RememberFor);
-        trustAnswers = new OutcomeMemory<TrustAnswerResult>(options.Time, options.RememberFor);
+        var deliveryGate = gate ?? throw new ArgumentNullException(nameof(gate));
+        requests = new OutcomeMemory<LaunchResult>(options.Time, options.RememberFor, deliveryGate,
+            () => new LaunchResult(LaunchOutcome.Busy, "the host is preparing a departure"));
+        trustAnswers = new OutcomeMemory<TrustAnswerResult>(options.Time, options.RememberFor, deliveryGate,
+            () => new TrustAnswerResult(TrustAnswerOutcome.Refused, "the host is preparing a departure"));
         remoteFolderTrust = options.Config.RemoteFolderTrust;
         TrustDevices = options.Config.RemoteFolderTrustDevices;
     }
@@ -176,7 +204,25 @@ public sealed partial class LaunchService : ISessionLauncher
     // approved folders it caches, and so decides the resume labels over.
     const int KindsAmong = 200;
 
+    // How wide a launched session's console is made (its screen buffer, widened by the injector
+    // once the console exists): wide enough for Copilot's form tab
+    // bar (the console's width less four) to show every field's title, so the host can tell an
+    // answer's form is the question's before typing (#1123; a six-field form with long titles
+    // took about 230). Sessions a person started keep their own width, and a too-narrow
+    // form's refusal.
+    internal const int ConsoleColumns = 250;
+
     public bool Available => Config.Enabled && options.PlatformSupported && probe.Recent() is null && starter.Unavailable() is null;
+
+    // A session a launch started, with what it was started with: the host's restore record keeps it,
+    // so a session restored after a reboot is resumed as it was launched (#780). Raised as the launch
+    // is decided; a handler that throws costs only itself.
+    public event Action<string, LaunchedWith>? SessionStarted;
+
+    // A launch already answered Unconfirmed (its window not seen ready in time) whose window is seen
+    // ready later, while it is still followed: the restore record counts and shows it restored then
+    // (#780). Raised once per launch; a handler that throws costs only itself.
+    public event Action<string>? SeenReadyLate;
 
     public bool AnswersTrust => Available;
 
@@ -268,7 +314,7 @@ public sealed partial class LaunchService : ISessionLauncher
             Workspaces = workspaces,
             Resumable = resumableList,
             Defaults = new LaunchDefaults { Agent = defaultAgent, Workspace = defaultWorkspace, Permissions = Config.Permissions },
-            Busy = BusyReason(),
+            Busy = BusyReason(status: true),
             Trust = TrustQuestions() is { Count: > 0 } trust ? trust : null,
         };
         // Within its budget, losing the oldest resumable sessions first, then the longest lists.
@@ -353,20 +399,7 @@ public sealed partial class LaunchService : ISessionLauncher
     async Task<List<Offered>> ResumableAsync(IReadOnlyDictionary<string, string> executables, IReadOnlyList<Session> live, CancellationToken ct)
     {
         if (Config.ResumeCount <= 0) { return []; }
-        var kinds = new HashSet<string>(StringComparer.Ordinal);
-        if (executables.ContainsKey("claude")) { kinds.Add("claude"); }
-        if (executables.ContainsKey("codex")) { kinds.Add("codex"); }
-        IReadOnlyList<ResumeEntry> fromAgency = executables.TryGetValue("agency", out var a) ? await agency.SessionsAsync(a, ct) : [];
-        var copilotLauncher = executables.ContainsKey("copilot") ? "copilot" : executables.ContainsKey("agency") ? "agency" : null;
-        if (fromAgency.Count == 0 && copilotLauncher is not null) { kinds.Add("copilot"); }
-        var stored = await Task.Run(() => resumable.Read(kinds), ct);
-
-        var candidates = stored.Where(e => e.Agent != AgentKind.Copilot).Concat(fromAgency)
-            .Concat(stored.Where(e => e.Agent == AgentKind.Copilot).Select(e => e with { Launcher = copilotLauncher! }));
-        // An agent whose discovery is held may have a live session discovery could not see, and
-        // offering it would put two CLIs on one transcript; none of its sessions is offered
-        // until a complete pass (§6.3 invariants 6 and 10).
-        if (source.Held is { } held) { candidates = candidates.Where(e => !held.Agents.Contains(e.Agent)); }
+        var candidates = await CandidatesAsync(executables, ct);
         var once = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // Approval can ask git (a worktree's top and marker), so each folder is asked once per
         // pass, and newest first, so the older sessions past the limit are never asked about.
@@ -417,6 +450,44 @@ public sealed partial class LaunchService : ISessionLauncher
 
     // A label already offered, told apart by the start of its session's id.
     public static string Repeated(string title, string id) => Limits.KeepStart($"{title} ({id[..Math.Min(8, id.Length)]})", LaunchProtocol.MaxLabel * 2)!;
+
+    // Every installed agent's stored sessions, each under the launcher that resumes it (Agency's own
+    // list when it has one, Copilot's store otherwise), before any is checked or cut.
+    async Task<IEnumerable<ResumeEntry>> CandidatesAsync(IReadOnlyDictionary<string, string> executables, CancellationToken ct)
+    {
+        var kinds = new HashSet<string>(StringComparer.Ordinal);
+        if (executables.ContainsKey("claude")) { kinds.Add("claude"); }
+        if (executables.ContainsKey("codex")) { kinds.Add("codex"); }
+        IReadOnlyList<ResumeEntry> fromAgency = executables.TryGetValue("agency", out var a) ? await agency.SessionsAsync(a, ct) : [];
+        var copilotLauncher = executables.ContainsKey("copilot") ? "copilot" : executables.ContainsKey("agency") ? "agency" : null;
+        if (fromAgency.Count == 0 && copilotLauncher is not null) { kinds.Add("copilot"); }
+        var stored = await Task.Run(() => resumable.Read(kinds), ct);
+
+        var candidates = stored.Where(e => e.Agent != AgentKind.Copilot).Concat(fromAgency)
+            .Concat(stored.Where(e => e.Agent == AgentKind.Copilot).Select(e => e with { Launcher = copilotLauncher! }));
+        // An agent whose discovery is held may have a live session discovery could not see, and
+        // offering it would put two CLIs on one transcript; none of its sessions is offered
+        // until a complete pass (§6.3 invariants 6 and 10).
+        if (source.Held is { } held) { candidates = candidates.Where(e => !held.Agents.Contains(e.Agent)); }
+        return candidates;
+    }
+
+    // One stored session by its id for a restore: among the candidates, else read by its id alone,
+    // whatever its age (ResumableStore.Find), under the launcher that resumes it here. Never one
+    // whose agent's discovery is held.
+    async Task<ResumeEntry?> FindAsync(IReadOnlyDictionary<string, string> executables, string id, CancellationToken ct)
+    {
+        bool Same(ResumeEntry e) => string.Equals(e.Id, id, StringComparison.OrdinalIgnoreCase);
+        if ((await CandidatesAsync(executables, ct)).FirstOrDefault(Same) is { } listed) { return listed; }
+        var kinds = new HashSet<string>(StringComparer.Ordinal);
+        if (executables.ContainsKey("claude")) { kinds.Add("claude"); }
+        if (executables.ContainsKey("codex")) { kinds.Add("codex"); }
+        var copilotLauncher = executables.ContainsKey("copilot") ? "copilot" : executables.ContainsKey("agency") ? "agency" : null;
+        if (copilotLauncher is not null) { kinds.Add("copilot"); }
+        if (await Task.Run(() => resumable.Find(id, kinds), ct) is not { } found) { return null; }
+        if (found.Agent == AgentKind.Copilot) { found = found with { Launcher = copilotLauncher! }; }
+        return source.Held is { } held && held.Agents.Contains(found.Agent) ? null : found;
+    }
 
     // "<summary> - <folder>", the agent named when the list holds more than one kind, cut to 120
     // characters, as agent-ha-bridge labels its resume list.
@@ -482,6 +553,18 @@ public sealed partial class LaunchService : ISessionLauncher
 
     // ---- session.launch ----
 
+    public Task<LaunchResult> LaunchVerificationAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default)
+    {
+        if (Launchers.Find(request.Agent) is not { } agent) { return Task.FromResult(Refused("Choose an explicit agent for verification.")); }
+        // Extra arguments are provider-defined, including aliases and config overrides. Do
+        // not claim standard permissions by attempting an incomplete bypass-flag denylist.
+        if (Config.Agent(agent.Id).ExtraArgs.Count > 0)
+        {
+            return Task.FromResult(Refused($"Verification cannot guarantee standard permissions with configured launch.agents.{agent.Id}.extraArgs. Remove those extra arguments at the machine before testing; nothing was started."));
+        }
+        return LaunchAsync(request with { Permissions = LaunchProtocol.Ask }, peer, cancellationToken);
+    }
+
     public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key)) { return Task.FromResult(Refused("request must be a UUID")); }
@@ -489,11 +572,61 @@ public sealed partial class LaunchService : ISessionLauncher
             log($"launch {Short(key)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Session is { } s ? $" session {Short(s)}" : "")}{(result.Reason is null ? "" : $" ({result.Reason})")}"));
     }
 
+    // A restore after a reboot or a crash (#780, RestoreRecorder): a resume like any other, through
+    // every check a resume from Launch meets (G5, launch.enabled, busy while a folder-trust question
+    // waits, held discovery, the folder still approved, not already running), with no prompt, so the
+    // session opens idle. Not limited to the resume list's length. Its settings are what this host
+    // launched it with, each only while launch.options still offers it; a session started by hand, of
+    // which nothing is known, asks permission whatever the machine's default is: it is never given
+    // Allow all it may not have had.
+    public Task<LaunchResult> ResumeAsync(ResumeAsk ask, CancellationToken cancellationToken = default)
+    {
+        var key = Guid.NewGuid();
+        var l = ask.Launch;
+        var request = new LaunchRequest
+        {
+            Request = key.ToString("D"),
+            Resume = ask.Id,
+            Agent = l?.Launcher,
+            // For one this host launched, a setting it left out was the agent's own (""), not the
+            // machine's default, which may have changed since; one started by hand gets the
+            // machine's defaults (null).
+            Profile = l is null ? null : l.Profile ?? "",
+            Model = l is null ? null : l.Model ?? "",
+            Effort = l is null ? null : l.Effort ?? "",
+            Context = l is null ? null : l.Context ?? "",
+            Permissions = l?.Permissions == LaunchProtocol.AllowAll ? LaunchProtocol.AllowAll : LaunchProtocol.Ask,
+        };
+        return requests.Once(key, () => RunAsync(request, key, ask.By, restoring: true, cancellationToken), result =>
+            log($"launch {Short(key)} ({ask.By}): {result.Outcome.ToString().ToLowerInvariant()}{(result.Session is { } s ? $" session {Short(s)}" : "")}{(result.Reason is null ? "" : $" ({result.Reason})")}"));
+    }
+
+    // A restore's settings, each kept only while this machine still offers it (else its default),
+    // and its launcher only while installed and of the session's own agent (else the one that
+    // resumes it here).
+    static LaunchRequest StillOffered(LaunchRequest r, Resolved resolved)
+    {
+        var resume = resolved.Resumable.FirstOrDefault(e => string.Equals(e.Id, r.Resume, StringComparison.OrdinalIgnoreCase));
+        var agentId = r.Agent is { } named && Launchers.Find(named) is { } l && resolved.Executables.ContainsKey(l.Id) && (resume is null || l.Kind == resume.Agent) ? named : null;
+        var agent = resolved.Options.Agents.FirstOrDefault(a => a.Id == (agentId ?? resume?.Launcher));
+        static string? Keep(string? value, IReadOnlyList<string>? offered) => value is "" || value is not null && offered?.Contains(value, StringComparer.Ordinal) == true ? value : null;
+        return r with
+        {
+            Agent = agentId,
+            Profile = Keep(r.Profile, agent?.Profiles),
+            Model = Keep(r.Model, agent?.Models),
+            Effort = Keep(r.Effort, agent?.Efforts),
+            Context = Keep(r.Context, agent?.Contexts),
+        };
+    }
+
     // Everything a launch was settled on before it starts.
     sealed record Plan(Launcher Launcher, string Executable, string Directory, string? Workspace, WorkspaceConfig? Isolated, ResumeEntry? Resume,
         string Where, string Profile, string Model, string Effort, string Context, bool AllowAll, string Prompt, LaunchTransfer? Transfer = null);
 
-    async Task<LaunchResult> RunAsync(LaunchRequest request, Guid key, string peer)
+    // ct: a restore's, cancelled as the host stops or its caller withdraws it. Honoured until the
+    // agent is started, never after: a started session is followed whatever happens.
+    async Task<LaunchResult> RunAsync(LaunchRequest request, Guid key, string peer, bool restoring = false, CancellationToken ct = default)
     {
         try
         {
@@ -507,13 +640,24 @@ public sealed partial class LaunchService : ISessionLauncher
             log($"launch {Short(key)} received ({(settings.Length > 0 ? settings : "machine defaults")}; prompt of {(request.Prompt ?? "").Length} chars{((request.Attachments?.Count ?? 0) > 0 ? $", {request.Attachments!.Count} attachment(s)" : "")})");
             if (BusyReason() is { } busy) { return new LaunchResult(LaunchOutcome.Busy, busy) { Trust = BusyQuestion() }; }
 
-            var resolved = await ResolveAsync(CancellationToken.None);
+            var resolved = await ResolveAsync(ct);
             // A resume not on the list while discovery is held may be of a session that is
             // running unseen; that cannot be told until a complete pass, so it waits.
             if (request.Resume is { } resumeId && source.Held is { } held
                 && !resolved.Resumable.Any(e => string.Equals(e.Id, resumeId, StringComparison.OrdinalIgnoreCase)))
             {
                 return new LaunchResult(LaunchOutcome.Busy, HeldReason(held));
+            }
+            if (restoring && request.Resume is { } restoreId)
+            {
+                // Found among every stored session, not only the newest resumeCount; Settle and
+                // StartAsync still check its folder and that it is not running.
+                if (!resolved.Resumable.Any(e => string.Equals(e.Id, restoreId, StringComparison.OrdinalIgnoreCase))
+                    && await FindAsync(resolved.Executables, restoreId, ct) is { } found)
+                {
+                    resolved = resolved with { Resumable = [.. resolved.Resumable, found] };
+                }
+                request = StillOffered(request, resolved);
             }
             var (plan, problem) = Settle(request, resolved);
             if (plan is null) { return Refused(problem!); }
@@ -536,14 +680,18 @@ public sealed partial class LaunchService : ISessionLauncher
                 {
                     log($"launch {Short(key)}: bringing session {Short(transfer.Session)} from {Short(transfer.From)}");
                     try { fetched = await options.Transfers!.FetchAsync(transfer, peer, Config.Transfer.MaxBytes, CancellationToken.None); }
-                    catch (TransferRefusedException e) { return Refused($"the session could not be brought from the other machine: {e.Message}"); }
+                    catch (TransferRefusedException e)
+                    {
+                        log($"launch {Short(key)}: the session could not be brought from {Short(transfer.From)}: {e.Message}");
+                        return Refused("the session couldn't be brought from the other machine");
+                    }
                     if (fetched.About.Agent != plan.Launcher.Kind)
                     {
                         var theirs = Launchers.Find(fetched.About.Launcher)?.Label ?? fetched.About.Agent.ToString();
                         return Refused($"'{fetched.About.Title}' is a {theirs} session, so it resumes in {theirs}, not {plan.Launcher.Label}");
                     }
                 }
-                return await StartAsync(plan, claim, key, handed, fetched);
+                return await StartAsync(plan, claim, key, handed, fetched, ct, restoring);
             }
             finally
             {
@@ -552,11 +700,18 @@ public sealed partial class LaunchService : ISessionLauncher
                 fetched?.Dispose();
             }
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return Refused(Withdrawn);
+        }
         catch (Exception e)
         {
-            return Refused($"the host could not launch the session: {e.Message}");
+            log($"launch {Short(key)}: failed before the agent was started: {e.Message}");
+            return Refused("the machine couldn't start the session");
         }
     }
+
+    const string Withdrawn = "the restore was withdrawn (the host is stopping, or its caller cancelled it) before anything started";
 
     // agent-ha-bridge's Resolve-DaemonRequestedLaunch: what the request names, against what this
     // machine offers, with its defaults filling what the request leaves out.
@@ -672,11 +827,11 @@ public sealed partial class LaunchService : ISessionLauncher
             profile, model, effort, context, allowAll, LaunchProtocol.Flatten(r.Prompt), r.Transfer), null);
     }
 
-    async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched)
+    async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false)
     {
         Pending follow;
         LaunchedWith launched;
-        await starting.WaitAsync();
+        await starting.WaitAsync(ct);
         string? reservation = null, reserved = null;
         try
         {
@@ -693,6 +848,21 @@ public sealed partial class LaunchService : ISessionLauncher
             // bound to its launch as the first new Codex session to appear: with Codex's
             // discovery held, one that was running unseen could appear first and be taken for it.
             if (HeldFor(plan) is { } held) { return new LaunchResult(LaunchOutcome.Busy, HeldReason(held)); }
+            // Read once, so the arguments checked are the ones passed. A restore opens idle: extra
+            // arguments carrying a prompt would submit one with nobody pressing Continue (Copilot on
+            // #837), so it is refused before anything is made, and stays offered.
+            var extras = Config.Agent(plan.Launcher.Id).ExtraArgs;
+            if (restoring && Launchers.PromptFlag(plan.Launcher) is var flag && extras.Contains(flag, StringComparer.Ordinal))
+            {
+                return Refused($"{plan.Launcher.Label}'s extraArgs in the host's config carry {flag}, which would start the restored session with a prompt; resume it from Launch");
+            }
+            // And with its recorded permission mode: only options on the agent's allowlist, with their
+            // values in the expected form, are passed on (Engineering's ruling on #837). The reason,
+            // logged, names the option and never a value.
+            if (restoring && Launchers.RestoreRefusal(plan.Launcher, extras) is { } refusal)
+            {
+                return Refused($"{plan.Launcher.Label}'s extraArgs in the host's config hold {refusal}, which a restore does not pass on (only options known to start no prompt and widen no permission); resume it from Launch");
+            }
 
             var directory = plan.Directory;
             string? worktree = null;
@@ -723,7 +893,8 @@ public sealed partial class LaunchService : ISessionLauncher
                 try { staged = attachments.Stage(claim); }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException)
                 {
-                    return Refused($"the host could not stage the attachments privately ({e.Message}); nothing was started");
+                    log($"launch {Short(key)}: the attachments could not be staged privately: {e.Message}");
+                    return Refused("the machine couldn't stage the attachments privately; nothing was started");
                 }
                 if (CopilotReply.WithAttachments(prompt, staged) is not { } line) { return Refused("an attachment's staged path cannot be mentioned; nothing was started"); }
                 prompt = line;
@@ -734,19 +905,13 @@ public sealed partial class LaunchService : ISessionLauncher
             var newId = fetched is not null ? Guid.NewGuid().ToString() : null;
             var sessionId = newId ?? plan.Resume?.Id ?? (plan.Launcher.ChoosesOwnSessionId ? "" : Guid.NewGuid().ToString());
             var args = Launchers.Arguments(plan.Launcher, sessionId, plan.Resume is not null || newId is not null, plan.Model, plan.Effort, plan.Context, plan.AllowAll,
-                Config.Agent(plan.Launcher.Id).ExtraArgs, plan.Profile, prompt);
-            var environment = new Dictionary<string, string?>
-            {
-                [Launchers.SessionVariable] = sessionId.Length > 0 ? sessionId : "launched",
-            };
-            // CLAUDE_CONFIG_DIR changes the account file even when its path is unchanged.
-            // Restore recorded mode; older records keep the inherited mode when homes match.
-            var inherited = SessionSourceOptions.ForCurrentUser();
-            if (!Folders.Same(options.CopilotHome, inherited.CopilotHome)) { environment["COPILOT_HOME"] = options.CopilotHome; }
-            if (options.ClaudeConfigDirExplicit is { } explicitConfigDir) { environment["CLAUDE_CONFIG_DIR"] = explicitConfigDir ? options.ClaudeHome : null; }
-            else if (!Folders.Same(options.ClaudeHome, inherited.ClaudeHome)) { environment["CLAUDE_CONFIG_DIR"] = options.ClaudeHome; }
-            if (!Folders.Same(options.CodexHome, inherited.CodexHome)) { environment["CODEX_HOME"] = options.CodexHome; }
-            var spec = new StartSpec(plan.Executable, args, directory, environment);
+                extras, plan.Profile, prompt);
+            var environment = AgentEnvironment.For(options.CopilotHome, options.ClaudeHome,
+                options.CodexHome, options.ClaudeConfigDirExplicit, locator.ChildPath());
+            environment[Launchers.SessionVariable] = sessionId.Length > 0 ? sessionId : "launched";
+            // Set to nothing when none is issued, so a token of the host's own is never inherited.
+            environment[Launchers.TokenVariable] = null;
+            var spec = new StartSpec(plan.Executable, args, directory, environment, ConsoleColumns);
             if (starter.CommandLine(spec, out var tooLong) is null)
             {
                 return Refused($"the prompt is too long to start {plan.Launcher.Label} with on this machine: {tooLong}; shorten it, or send the rest as a reply once it has started");
@@ -763,7 +928,8 @@ public sealed partial class LaunchService : ISessionLauncher
                 }
                 catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException)
                 {
-                    return Refused($"the session from the other machine could not be installed here: {e.Message}; nothing was started");
+                    log($"launch {Short(key)}: the session from the other machine could not be installed here: {e.Message}");
+                    return Refused("the session from the other machine couldn't be installed here; nothing was started");
                 }
                 log($"launch {Short(key)}: installed session {Short(plan.Transfer!.Session)} from {Short(fetched.From)} as {Short(newId)} ({TransferLimits.Mib(fetched.About.Size)}, {fetched.About.Files} file(s))");
                 plan = plan with { Resume = new ResumeEntry(newId, fetched.About.Agent, plan.Launcher.Id, fetched.About.Title, directory, options.Time.GetUtcNow()), Where = fetched.About.Title };
@@ -790,18 +956,36 @@ public sealed partial class LaunchService : ISessionLauncher
             var tuning = string.Join(" / ", new[] { plan.Model, plan.Effort, plan.Context, plan.AllowAll ? "allow all" : "" }.Where(x => x.Length > 0));
             log($"launch {Short(key)}: {(plan.Resume is null ? "new" : "resuming")} {plan.Launcher.Label} session in '{plan.Where}' ({directory}){(plan.Profile.Length > 0 ? $" profile '{plan.Profile}'" : "")}{(tuning.Length > 0 ? $" [{tuning}]" : "")}");
 
+            // Last chance to withdraw: nothing has started yet.
+            if (ct.IsCancellationRequested) { return Refused(Withdrawn); }
+            // Where a prompt of the person's would show they got past its startup questions
+            // (HeldForReply): what the transcript holds now is from before this agent.
+            var transcriptFrom = TranscriptFrom(plan.Launcher, sessionId);
+            // A session whose id the agent chooses (Codex) has none to bind a credential to yet.
+            var launchId = Guid.NewGuid().ToString("N");
+            var credentialIssued = false;
+            if (credentials is not null && sessionId.Length > 0)
+            {
+                try { environment[Launchers.TokenVariable] = credentials.Prepare(sessionId, launchId); credentialIssued = environment[Launchers.TokenVariable] is not null; }
+                catch (Exception e) when (e is InvalidOperationException or ArgumentException or IOException or UnauthorizedAccessException)
+                {
+                    log($"launch {Short(key)}: no agent credential was issued: {e.Message}");
+                }
+            }
             Started started;
             try { started = starter.Start(spec); }
             catch (Exception e)
             {
+                if (credentialIssued) { credentials!.Abandon(launchId); }
                 log($"launch {Short(key)}: {plan.Launcher.Label} could not be started: {e.Message}");
-                return new LaunchResult(LaunchOutcome.Failed, $"{plan.Launcher.Label} could not be started: {e.Message}") { Launched = launched };
+                return new LaunchResult(LaunchOutcome.Failed, $"{plan.Launcher.Label} couldn't be started") { Launched = launched };
             }
+            if (credentialIssued) { credentials!.Bind(launchId, started.ProcessId, started.StartedAt); }
             if (claim is not null) { attachments!.Consume(claim); handed.Value = true; }
             if (sessionId.Length > 0) { Launched(sessionId, started); }
             log($"launch {Short(key)}: {(plan.Resume is null ? "started" : "resumed")} pid {started.ProcessId} in {directory} via {plan.Launcher.Label} (session {(sessionId.Length > 0 ? sessionId : "id chosen by the agent")})");
             // The reservation is the follow's now, released when the session registers.
-            follow = new Pending(key, plan.Launcher, sessionId, started, plan.Where, options.Time.GetUtcNow(), codexBefore, reserved, reservation, launched);
+            follow = new Pending(key, plan.Launcher, sessionId, started, plan.Where, options.Time.GetUtcNow(), codexBefore, reserved, reservation, launched) { Transcript = transcriptFrom };
             reservation = null;
             lock (pendingGate) { pending.Add(follow); }
             resumable.Forget();
@@ -813,6 +997,7 @@ public sealed partial class LaunchService : ISessionLauncher
         }
 
         _ = Task.Run(() => FollowAsync(follow));
+        _ = Task.Run(() => WidenAsync(follow));
         var waited = await Task.WhenAny(follow.Decided.Task, Task.Delay(options.RegistrationWait, options.Time));
         if (waited == follow.Decided.Task) { return await follow.Decided.Task; }
         // A session that registered but whose window is not yet seen ready (Copilot) did appear;
@@ -827,6 +1012,43 @@ public sealed partial class LaunchService : ISessionLauncher
         follow.Decided.TrySetResult(unconfirmed);
         return await follow.Decided.Task;
     }
+
+    // A launched session's console made ConsoleColumns wide as soon as it has one (a process just
+    // started may not yet: asked again every WidenEvery, WidenTries times). The console host
+    // takes no width from how it was started (ConsoleStartup), so it is set on the console itself,
+    // by the injector, which types nothing. Not done, the session keeps the console's own width,
+    // and an answer to a form too wide for it is refused as such (#1123).
+    async Task WidenAsync(Pending p)
+    {
+        try
+        {
+            for (var tries = 1; ; tries++)
+            {
+                var widened = await injector.WidenAsync(p.Started.ProcessId, p.Started.StartedAt, ConsoleColumns);
+                if (widened.Columns is { } columns)
+                {
+                    log($"launch {Short(p.Key)}: {p.Launcher.Label}'s console is {columns} columns wide");
+                    return;
+                }
+                if (!widened.NotYet || tries >= WidenTries)
+                {
+                    log($"launch {Short(p.Key)}: {p.Launcher.Label}'s console was not widened: {widened.Problem}");
+                    return;
+                }
+                // Its id may later be another process's: the worker checks that too; this ends the asking.
+                if (!starter.Running(p.Started))
+                {
+                    log($"launch {Short(p.Key)}: {p.Launcher.Label}'s console was not widened: its process (pid {p.Started.ProcessId}) has exited");
+                    return;
+                }
+                await Task.Delay(WidenEvery, options.Time);
+            }
+        }
+        catch (Exception e) { log($"launch {Short(p.Key)}: {p.Launcher.Label}'s console was not widened: {e.GetType().Name}"); }
+    }
+
+    const int WidenTries = 50;
+    static readonly TimeSpan WidenEvery = TimeSpan.FromMilliseconds(100);
 
     // One launch followed from its start until its session registers, its process exits, or
     // FollowFor runs out, a look every PollInterval: agent-ha-bridge's Update-DaemonPendingLaunch.
@@ -850,6 +1072,7 @@ public sealed partial class LaunchService : ISessionLauncher
                 {
                     p.RegisteredAt ??= now;
                     p.LiveId = id;
+                    Noted(p, id);
                     if (!p.Launcher.RegistersBeforeReady || p.Ready)
                     {
                         log($"launch {Short(p.Key)}: {label} in {p.Where} registered as session {Short(id)} after {(now - p.At).TotalSeconds:0.0} s");
@@ -885,6 +1108,7 @@ public sealed partial class LaunchService : ISessionLauncher
                     }
                     p.RegisteredAt ??= options.Time.GetUtcNow();
                     p.LiveId = late;
+                    Noted(p, late);
                     if (!p.Launcher.RegistersBeforeReady || p.Ready)
                     {
                         Decide(p, new LaunchResult(LaunchOutcome.Started) { Session = late, Launched = p.Launched });
@@ -975,7 +1199,24 @@ public sealed partial class LaunchService : ISessionLauncher
         }
         finally
         {
-            lock (pendingGate) { pending.Remove(p); }
+            // Stopped following before its window was seen ready: replies stay held while that agent
+            // runs, until a turn runs (HeldForReply).
+            var started = p.RegisteredLate || p.Decided.Task.IsCompletedSuccessfully && p.Decided.Task.Result.Outcome == LaunchOutcome.Started;
+            var unready = !started && !p.Closed ? p.LiveId ?? (p.SessionId.Length > 0 ? p.SessionId : null) : null;
+            var holding = false;
+            // Outside pendingGate: the session's own process is read from the source.
+            var alive = unready is null ? null : AgentHeld(p, unready);
+            lock (pendingGate)
+            {
+                pending.Remove(p);
+                if (unready is not null && alive is not null)
+                {
+                    neverReady[unready] = new Unready(alive, p.Launcher.Label, p.Launcher.RegistersBeforeReady,
+                        p.Transcript is { } tr && string.Equals(tr.Id, unready, StringComparison.OrdinalIgnoreCase) ? (tr.Path, tr.From) : null);
+                    holding = true;
+                }
+            }
+            if (holding) { log($"launch {Short(p.Key)}: replies to session {Short(unready!)} wait until a prompt is typed at the machine or it exits"); }
             if (p.Reservation is { } token && p.Worktree is { } worktree)
             {
                 // Only once it has registered: one still starting stays protected, and one that
@@ -1026,6 +1267,71 @@ public sealed partial class LaunchService : ISessionLauncher
             && (process?.StartedAt ?? source.Get(id)?.StartedAt) is { } at && at >= p.Started.StartedAt - TimeSpan.FromSeconds(2);
     }
 
+    // Why a reply must not be typed into this session yet (ReplyService.LaunchHeld): a launch of it
+    // here is still being followed and has not seen its window ready, or stopped following before
+    // it did, and that agent still runs. Its window may show a startup question, folder trust most
+    // of all, which a reply's Enter would answer; only a person at the machine answers that (#780).
+    public string? HeldForReply(string sessionId)
+    {
+        Unready? held;
+        lock (pendingGate)
+        {
+            var p = pending.FirstOrDefault(x => !x.Closed && (x.LiveId == sessionId || x.SessionId == sessionId)
+                && !(x.Decided.Task.IsCompletedSuccessfully && x.Decided.Task.Result.Outcome == LaunchOutcome.Started));
+            if (p is not null) { return Waiting(p.Launcher.Label, p.Question); }
+            if (!neverReady.TryGetValue(sessionId, out held)) { return null; }
+        }
+        // Outside pendingGate: the source and the transcript are read with no lock of this one's held.
+        // Not a turn count: a new CLI's session.resume ends a killed turn, which counts one, with
+        // nobody having typed anything.
+        var past = held.RegistersBeforeReady
+            ? held.Transcript is { } t && CopilotPrompts.Since(t.Path, t.From).Prompts.Count > 0
+            : source.Get(sessionId) is not null;
+        var alive = held.Alive();
+        lock (pendingGate)
+        {
+            if (alive && !past) { return FirstReplyWords.NotSeenReady(held.Label); }
+            neverReady.Remove(sessionId);
+            return null;
+        }
+    }
+
+    // What a held reply says while the launch is still followed: the question its window asks,
+    // answered from a device where the bridge allows that for folder trust (#947), else the
+    // machine; and, with no question drawn, that it is still starting (#1018), naming Needs you only
+    // where a trust question would show there with a way to answer it.
+    string Waiting(string label, StartupQuestion question) => question switch
+    {
+        StartupQuestion.None => FirstReplyWords.StillStarting(label, RemoteFolderTrust && TrustDevices.Count > 0),
+        StartupQuestion.Trust => FirstReplyWords.AskingTrust(label, RemoteFolderTrust && TrustDevices.Count > 0),
+        _ => FirstReplyWords.AskingAtMachine(label),
+    };
+
+
+    // Whether the agent a launch started on this session still runs, as a check to make again later,
+    // or null when it has already gone. The launcher's own process; once that handed the session on
+    // and exited, the session's process as discovery found it then, by its start time where known.
+    // Before, a launcher that handed on read as gone, and replies to its unready window went through.
+    Func<bool>? AgentHeld(Pending p, string sessionId)
+    {
+        if (!p.HandedOn) { return starter.Running(p.Started) ? () => starter.Running(p.Started) : null; }
+        if (source.ProcessOf(sessionId) is not { } owner) { return null; }
+        if (owner.StartedAt is { } at)
+        {
+            var child = new Started(owner.Id, at);
+            return starter.Running(child) ? () => starter.Running(child) : null;
+        }
+        return () => source.ProcessOf(sessionId)?.Id == owner.Id;
+    }
+
+    (string Id, string Path, long From)? TranscriptFrom(Launcher launcher, string sessionId)
+    {
+        if (launcher.Kind != AgentKind.Copilot || !Guid.TryParseExact(sessionId, "D", out _)) { return null; }
+        var path = Path.Combine(options.CopilotHome, "session-state", sessionId, "events.jsonl");
+        try { return (sessionId, path, File.Exists(path) ? new FileInfo(path).Length : 0); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+    }
+
     // Whether a launch has started an agent on this session that is still running.
     bool Starting(string sessionId)
     {
@@ -1043,13 +1349,37 @@ public sealed partial class LaunchService : ISessionLauncher
 
     void Decide(Pending p, LaunchResult result)
     {
-        if (!p.Decided.TrySetResult(result) && result.Outcome == LaunchOutcome.Started) { p.RegisteredLate = true; }
+        // Before the outcome is told, so the record has it by the time anyone hears of the session.
+        if (result is { Outcome: LaunchOutcome.Started, Session: { } id }) { Noted(p, id); RequestRegistered?.Invoke(p.Key, id); }
+        if (!p.Decided.TrySetResult(result) && result.Outcome == LaunchOutcome.Started)
+        {
+            p.RegisteredLate = true;
+            // Answered Unconfirmed before its window was seen ready; seen ready now.
+            if (result.Session is { } late && p.Decided.Task.Result.Outcome == LaunchOutcome.Unconfirmed && SeenReadyLate is { } ready)
+            {
+                try { ready(late); }
+                catch (Exception e) when (e is not OutOfMemoryException) { log($"launch: the restore record could not note session {late[..Math.Min(8, late.Length)]} seen ready: {e.Message}"); }
+            }
+        }
+    }
+
+    // Once the agent has registered the session, whatever the launch's outcome comes to: one whose
+    // window is never seen ready (Unconfirmed) is still a session this launch started, with what it
+    // was started with. Once per session id.
+    void Noted(Pending p, string id)
+    {
+        if (p.NotedId == id || SessionStarted is not { } started) { return; }
+        p.NotedId = id;
+        try { started(id, p.Launched); }
+        catch (Exception e) when (e is not OutOfMemoryException) { log($"launch: the restore record could not note session {id[..Math.Min(8, id.Length)]}: {e.Message}"); }
     }
 
     // agent-ha-bridge's Test-DaemonTrustAwaitingPress: a launched agent asking whether to trust
     // its folder, within the last two minutes, turns other launches away, so nothing is ever
-    // taken as its answer and nothing new starts over it.
-    string? BusyReason()
+    // taken as its answer and nothing new starts over it. A launch turned away is told so; what
+    // launch.options says (status) reads as the state of the machine, since the person reading it
+    // may be the one whose launch is waiting, and it did start (#122).
+    string? BusyReason(bool status = false)
     {
         var now = options.Time.GetUtcNow();
         lock (pendingGate)
@@ -1057,10 +1387,18 @@ public sealed partial class LaunchService : ISessionLauncher
             // A trust question first: it is the one shown beside the busy (BusyQuestion).
             bool Asking(Pending x, StartupQuestion q) => x.Asks(q) && x.TrustAt is { } at && now - at <= options.TrustBusyFor;
             var p = pending.FirstOrDefault(x => Asking(x, StartupQuestion.Trust)) ?? pending.FirstOrDefault(x => Asking(x, StartupQuestion.BypassPermissions));
-            return p is null ? null
-                : p.Question == StartupQuestion.BypassPermissions
-                ? $"Busy: {p.Launcher.Label} in {p.Where} is waiting for a person at the machine to confirm Bypass Permissions mode (Allow all), so nothing was launched. Try again in a couple of minutes."
-                : $"Busy: {p.Launcher.Label} in {p.Where} is waiting for a person to answer whether to trust that folder, so nothing was launched. Try again in a couple of minutes.";
+            if (p is null) { return null; }
+            var bypass = p.Question == StartupQuestion.BypassPermissions;
+            if (status)
+            {
+                return bypass
+                    ? $"{p.Launcher.Label} in {p.Where} is asking whether to allow Bypass Permissions. New launches wait until it's answered."
+                    : $"{p.Launcher.Label} in {p.Where} is asking whether to trust its folder. New launches wait until it's answered.";
+            }
+            var waiting = bypass
+                ? $"{p.Launcher.Label} in {p.Where} is waiting for a person at the machine to confirm Bypass Permissions mode (Allow all)"
+                : $"{p.Launcher.Label} in {p.Where} is waiting for a person to answer whether to trust that folder";
+            return $"Busy: {waiting}, so nothing was launched. Try again in a couple of minutes.";
         }
     }
 
@@ -1182,7 +1520,7 @@ public sealed partial class LaunchService : ISessionLauncher
                 log($"launch {Short(p.Key)}: folder trust for {by}: {Math.Abs(steps)} {(steps > 0 ? "down" : "up")} -> {moved.Status} {moved.Detail}");
                 if (moved.Status == InjectionStatus.NothingTyped)
                 {
-                    return Stopped(device) is not null ? TrustRefused(Refusal(device)) : TrustRefused($"its window changed before anything was typed ({moved.Detail}); answer at the machine");
+                    return Stopped(device) is not null ? TrustRefused(Refusal(device)) : TrustRefused(NothingTyped(moved.Detail));
                 }
                 if (moved.Status != InjectionStatus.Typed) { return TrustUnconfirmed("the highlight may have moved, but whether it did is not known"); }
                 var asked = screen;
@@ -1205,7 +1543,7 @@ public sealed partial class LaunchService : ISessionLauncher
                 var stopped = Stopped(device);
                 return before
                     ? TrustUnconfirmed(stopped is not null ? $"the highlight was moved, but Enter was not pressed: {stopped}" : "the highlight was moved, but its window changed before Enter, so Enter was not pressed")
-                    : stopped is not null ? TrustRefused(Refusal(device)) : TrustRefused($"its window changed before anything was typed ({typed.Detail}); answer at the machine");
+                    : stopped is not null ? TrustRefused(Refusal(device)) : TrustRefused(NothingTyped(typed.Detail));
             }
             // Esc that closed the agent can end the worker's attach before it says it is done
             // (interrupted): whether Quit worked is then what the agent did, which is looked for.
@@ -1217,15 +1555,25 @@ public sealed partial class LaunchService : ISessionLauncher
         catch (Exception e)
         {
             // A worker that failed part way may have typed: settled, so a resend gets this too.
-            if (!wrote) { return TrustRefused($"nothing was typed ({e.Message}); answer at the machine"); }
+            if (!wrote)
+            {
+                log($"launch {Short(p.Key)}: folder trust for {by}: {choice} failed before anything was typed: {e.Message}");
+                return TrustRefused("nothing was typed; answer at the machine");
+            }
             p.TrustTyped = true;
             log($"launch {Short(p.Key)}: folder trust for {by}: {choice} failed part way: {e.Message}");
-            return TrustUnconfirmed($"the {choice} may not have reached {label} ({e.Message})");
+            return TrustUnconfirmed($"the {choice} may not have reached {label}");
         }
         finally { Volatile.Write(ref p.Answering, 0); }
     }
 
     const int TrustKeyPauseMs = 300;
+
+    // A folder-trust key that never went. A worker that did not start says so in Creative's
+    // words (#995), the exception in the host's log only (#802), not as a window that changed.
+    static string NothingTyped(string detail) => detail == Windows.WorkerInjector.NotStarted
+        ? $"{DeliveryReasons.CouldNotDeliver}; answer at the machine"
+        : $"its window changed before anything was typed ({detail}); answer at the machine";
 
     // Whether the window still shows the question that id named when it was shown: one value, read
     // once, so an id is never checked against another read's words.
@@ -1250,6 +1598,9 @@ public sealed partial class LaunchService : ISessionLauncher
         $"Answer at the machine, or approve this device ({device[..Math.Min(8, device.Length)]}) to answer folder-trust questions in {AppSettings}.";
 
     static TrustAnswerResult TrustUnconfirmed(string what) => new(TrustAnswerOutcome.Unconfirmed, $"Not confirmed: answer at the machine. {char.ToUpperInvariant(what[0])}{what[1..]}.");
+
+    static TrustAnswerResult BypassAfterTrust(string label) => new(TrustAnswerOutcome.Unconfirmed,
+        $"Not confirmed: the folder was trusted, and {label} is now asking in its window to confirm Bypass Permissions mode (Allow all). Only a person at the machine can answer that; the session appears here once they do.");
 
     // The agent's own process: the launcher's, or, once that handed the session on and exited,
     // the session's own, by its start time where discovery knows it.
@@ -1295,6 +1646,9 @@ public sealed partial class LaunchService : ISessionLauncher
                 {
                     return new TrustAnswerResult(TrustAnswerOutcome.Started) { Session = id };
                 }
+                // Claude's Allow all asks this next, once the folder is trusted: said for what it
+                // is, and left for a person at the machine, never answered from here (#149, #158).
+                if (p.Asks(StartupQuestion.BypassPermissions)) { return BypassAfterTrust(label); }
                 if (p.LiveId is null && !AgentAlive(p)) { return TrustUnconfirmed($"{label} closed after the answer, before its session was seen"); }
             }
             else if (!AgentAlive(p))
@@ -1308,6 +1662,7 @@ public sealed partial class LaunchService : ISessionLauncher
                 return new TrustAnswerResult(TrustAnswerOutcome.Declined, $"{label} was not trusted with {p.Where}, and closed; nothing was launched");
             }
         }
+        if (trust && p.Asks(StartupQuestion.BypassPermissions)) { return BypassAfterTrust(label); }
         return TrustUnconfirmed(trust
             ? p.Question == StartupQuestion.Trust ? $"the question is still in {label}'s window" : $"{label}'s session was not seen to start within {options.TrustConfirmWait.TotalSeconds:0} s"
             : $"{label} was not seen to close within {options.TrustConfirmWait.TotalSeconds:0} s");
@@ -1345,12 +1700,17 @@ public sealed partial class LaunchService : ISessionLauncher
         // session once it is live, and who declined to trust the folder.
         public int? Window { get; set; }
         public volatile string? LiveId;
+        // The session the restore record was told of (#780).
+        public string? NotedId;
         public volatile string? Declined;
         // A launcher that registers before its window is ready: whether the last look found it
         // ready, when its session registered, whether its launch has already answered for a
         // window never seen ready, and whether its launcher exited, handing the session on.
         public volatile bool Ready;
         public DateTimeOffset? RegisteredAt { get; set; }
+        // Copilot's transcript of the session, and its length just before the agent was started: a
+        // prompt of the person's after it shows they got past the window's startup questions.
+        public (string Id, string Path, long From)? Transcript { get; set; }
         public bool ReadyMissed { get; set; }
         public bool HandedOn { get; set; }
         public bool RegisteredLate { get; set; }

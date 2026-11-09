@@ -1,5 +1,6 @@
 using AgentBridge.App.Core;
 using AgentBridge.Protocol;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 // The Sessions page's panes by window width (ui.md §5.2, #180): three panes from 1280, two
@@ -14,6 +15,8 @@ public sealed class PaneLayoutTests : IAsyncLifetime
     MainViewModel main = null!;
     PaneLayoutViewModel layout = null!;
     readonly System.Collections.Concurrent.ConcurrentQueue<string> fetched = new();
+    // The cards' clock: their ages and times read from it, not the wall clock.
+    readonly FakeTimeProvider clock = new(Make.T0.AddMinutes(5));
 
     public Task InitializeAsync()
     {
@@ -21,7 +24,7 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         host.Sessions.Add(Make.Session("busy", status: SessionStatus.Working, background: new Background { Agents = 2, Shells = 1 }, updated: Make.T0.AddMinutes(1)));
         host.Start();
         connection = host.Connect(ui, start: false);
-        main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection, FetchDetail = id => { fetched.Enqueue(id); return Task.FromResult<Session?>(null); } }, new UsageViewModel());
+        main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection, Time = clock, FetchDetail = id => { fetched.Enqueue(id); return Task.FromResult<Session?>(null); } }, new UsageViewModel());
         layout = new PaneLayoutViewModel(main);
         connection.Start();
         return Wait.UntilAsync(() => main.Sessions.Count == 2, "the sessions");
@@ -228,7 +231,7 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         var details = busy.Details.ToDictionary(d => d.Label);
         Assert.DoesNotContain("claude-opus-5.5", busy.RowFacts);
         Assert.Equal("claude-opus-5.5", details["Model"].Value);
-        Assert.Equal("100", details["Process"].Value);
+        Assert.Equal("pid 100", details["Process"].Value);
         Assert.True(details["Process"].Mono && details["Folder"].Mono && details["Branch"].Mono && details["ID"].Mono);
         Assert.False(details["Repository"].Mono || details["Model"].Mono);
         Assert.Equal(@"C:\src\agent-bridge", details["Folder"].Tip);
@@ -328,14 +331,15 @@ public sealed class PaneLayoutTests : IAsyncLifetime
     }
 
     [Fact]
-    public void A_row_is_read_aloud_with_its_glyphs_name_and_new_activity_while_unread()
+    public void A_row_is_read_aloud_with_new_activity_in_its_ages_place_while_unread()
     {
         var quiet = Card("quiet");
+        var age = TestUi.Read(() => quiet.AgeText);
         ui.Post(() => quiet.Unread = true);
-        Assert.Equal($"{quiet.GlyphLabel}, new activity", TestUi.Read(() => quiet.RowLabel));
+        Assert.Equal("A session, Idle, danswett/agent-bridge, New activity", TestUi.Read(() => quiet.RowLabel));
         Assert.False(TestUi.Read(() => quiet.ShowAge));
         Select("quiet");
-        Assert.Equal(quiet.GlyphLabel, TestUi.Read(() => quiet.RowLabel));
+        Assert.Equal($"A session, Idle, danswett/agent-bridge, {age}", TestUi.Read(() => quiet.RowLabel));
         Assert.True(TestUi.Read(() => quiet.ShowAge));
     }
 
@@ -351,7 +355,7 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         ui.Post(busy.RefreshTimes);
 
         Assert.Same(id, TestUi.Read(() => busy.Details.Single(d => d.Label == "ID")));
-        Assert.All(touched, label => Assert.Contains(label, new[] { "For", "Updated" }));
+        Assert.All(touched, label => Assert.Contains(label, new[] { "In this state", "Updated" }));
     }
 
     [Fact]
@@ -361,9 +365,9 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         var id = TestUi.Read(() => busy.Details.Single(d => d.Label == "ID"));
         var updated = TestUi.Read(() => busy.Details.Single(d => d.Label == "Updated"));
 
-        // Its background work finishes and it goes idle: Background and For leave Details.
+        // Its background work finishes and it goes idle: Background and In this state leave Details.
         await host.SendAsync(Events.SessionUpsert, Make.Session("busy", updated: Make.T0.AddMinutes(1)));
-        await Wait.UntilAsync(() => TestUi.Read(() => busy.Details.All(d => d.Label is not ("Background" or "For"))), "Background and For gone");
+        await Wait.UntilAsync(() => TestUi.Read(() => busy.Details.All(d => d.Label is not ("Background" or "In this state"))), "Background and In this state gone");
 
         Assert.Same(id, TestUi.Read(() => busy.Details.Single(d => d.Label == "ID")));
         Assert.Same(updated, TestUi.Read(() => busy.Details.Single(d => d.Label == "Updated")));
@@ -508,7 +512,7 @@ public sealed class PaneLayoutTests : IAsyncLifetime
     public async Task The_main_agents_answer_beside_a_delegates_is_dated_by_when_the_main_agent_wrote_it()
     {
         // A delegate's update moved the session's time; the main agent wrote five hours ago.
-        var now = DateTimeOffset.UtcNow;
+        var now = clock.GetUtcNow();
         await host.SendAsync(Events.SessionUpsert, Make.Session("busy", updated: now) with
         {
             Activity = new Activity

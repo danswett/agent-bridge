@@ -15,6 +15,8 @@ public static class KnownDifferences
         "TrustQuestion/missing-agent", "TrustQuestion/missing-answerable", "TrustQuestion/missing-kind",
         "Question/a-choice-that-cannot-be-read", "Question/a-choice-label-that-is-not-text", "Question/a-delegate-that-is-not-an-id",
         "DiscoveryChanged/wrong-type-discoveryHeld",
+        // The PWA reads escaped text it cannot read as held at the machine: Deny, never a one-tap Approve.
+        "Question/escaped-text-that-cannot-be-read",
     ];
 
     // #446: a required field missing, or one of the wrong type, that both read past. C# reads it as
@@ -36,6 +38,14 @@ public static class KnownDifferences
         "LaunchRequest/a-transfer-without-a-command", "LaunchRequest/a-transfer-with-a-malformed-command",
     ];
 
+    // #766: the PWA carries a field's constraints but does not check them yet; the host does.
+    static readonly string[] Constraints =
+    [
+        "a-number-below-its-minimum", "a-number-above-its-maximum", "a-number-that-is-not-whole", "a-number-off-its-step",
+        "a-number-at-its-exclusive-bound", "text-shorter-than-its-minimum", "whitespace-that-is-not-an-email-address", "text-longer-than-its-maximum-in-utf16-units", "text-off-its-pattern",
+        "text-that-is-not-an-email-address", "text-that-is-not-a-date", "too-few-ticked", "too-many-ticked",
+    ];
+
     public static readonly IReadOnlyList<KnownDifference> All =
     [
         .. StrictFields.Select(v => new KnownDifference(v, 446, "pwa", "read",
@@ -50,5 +60,13 @@ public static class KnownDifferences
         .. UncheckedTransfer.Select(v => new KnownDifference(v, 447, "pwa", "check",
             "LaunchProtocol.Check refuses it with TransferProtocol.Check's reason",
             "checkLaunch takes it")),
+        .. Constraints.Select(v => new KnownDifference($"AnswerRequest/{v}", 766, "pwa", "check",
+            "Answers.Check refuses it: outside the field's constraints",
+            "checkAnswer takes it: it does not check constraints yet")),
+        // #1159: Update now's client slice (3) reads confirm; until then the PWA, which sends no
+        // Update now, reads it as any outcome it doesn't know.
+        new("UpdateCommandResult/confirm", 1159, "pwa", "read",
+            "reads confirm: more is busy than the person confirmed, and nothing was asked",
+            "reads it as refused, as any outcome it doesn't know"),
     ];
 }

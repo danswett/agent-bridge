@@ -33,6 +33,9 @@ public static class Launchers
     // command line reads to tell that it is running inside a session (§6.3 invariant 13).
     public const string SessionVariable = "AGENT_BRIDGE_SESSION";
 
+    // The agent's credential for the host's pipe (agent.hello), when the launch issues one.
+    public const string TokenVariable = "AGENT_BRIDGE_TOKEN";
+
     public static readonly IReadOnlyList<Launcher> All =
     [
         new("agency", "Agency", AgentKind.Copilot, "agency", "copilot", TakesProfile: true, TakesAttachments: true, RegistersBeforeReady: true),
@@ -42,6 +45,60 @@ public static class Launchers
     ];
 
     public static Launcher? Find(string? id) => All.FirstOrDefault(l => l.Id == id);
+
+    // The argument Arguments puts a prompt behind on this agent's command line: -i for Copilot and
+    // Agency, -- for Claude and Codex. A restore passes no prompt; one in the extra arguments would
+    // make it submit one, and nothing is ever typed into a restored session automatically (#780).
+    public static string PromptFlag(Launcher launcher) => launcher.Tuning is "claude" or "codex" ? "--" : "-i";
+
+    // Why a restore may not pass on these extra arguments (launch.agents.<id>.extraArgs, imported from
+    // agent-ha-bridge's newSession.extraArgs too), or null when it may. Engineering's ruling on #837
+    // (r4487705409), beside PromptFlag's check: a restore opens idle with its recorded permission mode,
+    // and an extra argument could submit a prompt (-i, or a bare positional one) or grant what that
+    // mode does not (--allow-all, --dangerously-skip-permissions, --ask-for-approval never), and one an
+    // agent adds later could do either. So every token must be an option on the agent's allowlist,
+    // with its value in the expected form: no positional token, no --, and nothing after it. Said by
+    // the option's name only, never a value, as the reason is logged.
+    public static string? RestoreRefusal(Launcher launcher, IReadOnlyList<string> extras)
+    {
+        var allowed = RestoreOptions.TryGetValue(launcher.Id, out var options) ? options : NoOptions;
+        var tokens = extras.Where(e => !string.IsNullOrWhiteSpace(e)).ToList();
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            var token = tokens[i];
+            if (token == "--") { return "the -- separator"; }
+            if (!token.StartsWith('-')) { return "a positional argument"; }
+            var eq = token.IndexOf('=');
+            var name = eq > 0 ? token[..eq] : token;
+            if (!allowed.TryGetValue(name, out var form)) { return OptionName(name) is { } shown ? $"the option {shown}" : "an option (its name not shown)"; }
+            var value = eq > 0 ? token[(eq + 1)..] : i + 1 < tokens.Count ? tokens[++i] : null;
+            if (value is null || !form(value)) { return $"a value for {name} that is not in its expected form"; }
+        }
+        return null;
+    }
+
+    // The options a restore passes on, by launcher id, each with the form its value must take. Only
+    // ones confirmed from the agent's own --help, carrying no prompt: --add-dir <directory> on Copilot
+    // (`copilot --help`), Claude (`claude --help`) and Codex (`codex --help`, and CodexValueOptions,
+    // from codex-rs). Agency's pass through to its Copilot, unconfirmed, so it has none: its restores
+    // are offered rather than automatic. Leave out anything unsure.
+    static readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, Func<string, bool>>> RestoreOptions =
+        new Dictionary<string, IReadOnlyDictionary<string, Func<string, bool>>>(StringComparer.Ordinal)
+        {
+            ["copilot"] = new Dictionary<string, Func<string, bool>>(StringComparer.Ordinal) { ["--add-dir"] = FullPath },
+            ["claude"] = new Dictionary<string, Func<string, bool>>(StringComparer.Ordinal) { ["--add-dir"] = FullPath },
+            ["codex"] = new Dictionary<string, Func<string, bool>>(StringComparer.Ordinal) { ["--add-dir"] = FullPath },
+        };
+    static readonly IReadOnlyDictionary<string, Func<string, bool>> NoOptions = new Dictionary<string, Func<string, bool>>(StringComparer.Ordinal);
+
+    // A directory, as a full path: never words that could be read as a prompt, nor another option.
+    static bool FullPath(string value) => value.Length > 0 && value[0] != '-' && !value.Any(char.IsControl) && Path.IsPathFullyQualified(value);
+
+    // An option's name, when it is plainly one: a short option glued to its value (-ifix) could show
+    // the value.
+    static string? OptionName(string name) =>
+        (name.Length == 2 && char.IsAsciiLetterOrDigit(name[1])) || (name.Length > 2 && name.StartsWith("--", StringComparison.Ordinal) && name[2..].All(c => char.IsAsciiLetterOrDigit(c) || c == '-'))
+            ? name : null;
 
     // Effort names ordered weakest first, as agent-ha-bridge's $script:BridgeEffortOrder.
     public static readonly IReadOnlyList<string> EffortOrder = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];

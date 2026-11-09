@@ -90,6 +90,23 @@ public class ClaudeSubagentTests
             return Source.Get(Id)!;
         }
 
+        // Records written together, each before anything of its agent's transcript: a recorded
+        // agent's own, or one given (meta), and the pass that reads them.
+        public async Task<Session> Records(params (string Agent, string? Meta)[] records)
+        {
+            Directory.CreateDirectory(_beside);
+            foreach (var (agent, meta) in records) { File.WriteAllText(Path.Combine(_beside, "agent-" + agent + ".meta.json"), meta ?? _agents["agent-" + agent].Meta); }
+            await Source.RefreshAsync();
+            return Source.Get(Id)!;
+        }
+
+        // Another pass, nothing written.
+        public async Task<Session> Refresh()
+        {
+            await Source.RefreshAsync();
+            return Source.Get(Id)!;
+        }
+
         // A delegate's record and its transcript's first line (changed by edit), the newline not
         // written yet.
         public async Task<Session> FirstLineOnly(string agent, Func<string, string>? edit = null)
@@ -324,6 +341,25 @@ public class ClaudeSubagentTests
         Assert.Equal(Fixture.T0.AddMilliseconds(6943), Entry(s, Nested).StartedAt);
     }
 
+    // Found in review (#634): with spawnDepth left out (read as 2), a nested agent's record can sort
+    // before its parent's, so the pass that reads both lists the parent only. The next pass lists
+    // the child, but with the records unchanged the session was not built again, and the child
+    // stayed missing until something else changed.
+    [Fact]
+    public async Task A_nested_delegate_recorded_with_its_parent_and_sorted_before_it_is_listed_on_the_next_pass()
+    {
+        const string Child = "a0000000000000001";
+        await using var r = new Replay();
+        await r.Through(6.5);
+
+        var first = await r.Records((Nested, null), (Child, $"{{\"parentAgentId\":\"{Nested}\",\"description\":\"Read the build log\"}}"));
+        Assert.Contains(first.Subagents!, a => a.Id == Nested);
+
+        var s = await r.Refresh();
+
+        Assert.Equal((Nested, "Read the build log"), (Entry(s, Child).Parent, Entry(s, Child).Name));
+    }
+
     [Fact]
     public async Task A_notice_delivered_after_a_message_woke_the_delegate_does_not_end_its_new_run()
     {
@@ -427,6 +463,42 @@ public class ClaudeSubagentTests
 
         Assert.Equal(Fixture.T0.AddMilliseconds(6943), nested.StartedAt);
         Assert.Null(nested.Task);
+    }
+
+    // Found in review of #292: half a surrogate pair ("\uD800") in a nested agent's record or its
+    // first prompt threw out of the session's update, so the session was never listed.
+    [Fact]
+    public async Task A_nested_agents_record_and_first_prompt_holding_half_a_surrogate_pair_are_read_and_the_session_listed_and_updated()
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        // The session's own delegate, Nester: only then does the session read nested records.
+        var launched = JsonNode.Parse(Claude.ToolResult("agent1", 3))!.AsObject();
+        launched["toolUseResult"] = new JsonObject { ["status"] = "async_launched", ["agentId"] = Nester, ["description"] = "Lead", ["prompt"] = "lead" };
+        Fixture.Append(transcript,
+            Claude.User("go", 1),
+            Claude.Assistant(2, "tool_use", Claude.ToolUse("agent1", "Agent", new JsonObject { ["description"] = "Lead", ["prompt"] = "lead" })),
+            launched.ToJsonString());
+        var beside = Path.Combine(Path.GetDirectoryName(transcript)!, Id, "subagents");
+        Directory.CreateDirectory(beside);
+        File.WriteAllText(Path.Combine(beside, $"agent-{Nested}.meta.json"), $"{{\"parentAgentId\":\"{Nester}\",\"spawnDepth\":2,\"description\":\"cut \\uD800\"}}");
+        var first = JsonNode.Parse(File.ReadLines(FixturePath(Id, "subagents", $"agent-{Nested}.jsonl")).First())!;
+        first["message"]!["content"] = "look HALF";
+        File.WriteAllText(Path.Combine(beside, $"agent-{Nested}.jsonl"), first.ToJsonString().Replace("HALF", "\\uD800", StringComparison.Ordinal) + "\n");
+
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        var listed = source.Get(Id)!;
+        Assert.Equal("go", listed.Activity.UserMessage);
+        Assert.Contains(listed.Subagents!, a => a.Id == Nested);
+        Fixture.Append(transcript, Claude.User("next", 4));
+        await source.RefreshAsync();
+        Assert.Equal("next", source.Get(Id)!.Activity.UserMessage);
+
+        var read = Assert.Single(new AgentBridge.Host.Core.Parsing.ClaudeSubagents().Read(transcript));
+        Assert.Equal(("cut \uFFFD", "look \uFFFD"), (read.Description, read.Prompt));
     }
 
     [Fact]
@@ -745,7 +817,7 @@ public class CodexSubagentTests
         int _threadNext;
         public readonly AgentBridge.Host.Core.SessionSource Source;
 
-        public Replay(Func<string, string>? edit = null, long tailBytes = 4 * 1024 * 1024, Func<string[], long>? skim = null, Func<string[], long>? tail = null)
+        public Replay(Func<string, string>? edit = null, long tailBytes = 4 * 1024 * 1024, Func<string[], long>? skim = null, Func<string[], long>? tail = null, TimeSpan? stalledAfter = null)
         {
             _rollout = _f.CodexTranscript(Id);
             _thread = _f.CodexTranscript(Thread);
@@ -753,8 +825,11 @@ public class CodexSubagentTests
             _f.Processes.Run(AgentKind.Codex, 950);
             _lines = [.. Recorded(Id).SelectMany(l => (edit is null ? l : edit(l)).Split('\n'))];
             if (tail is not null) { tailBytes = tail(_lines); }
-            Source = skim is null ? _f.Source(tailBytes) : _f.Source(tailBytes, maxSkim: skim(_lines));
+            Source = skim is null ? _f.Source(tailBytes, stalledAfter: stalledAfter) : _f.Source(tailBytes, maxSkim: skim(_lines), stalledAfter: stalledAfter);
         }
+
+        // The sub-agent's own rollout, beside the session's.
+        public string ThreadRollout => _thread;
 
         public async Task<Session> Through(double second)
         {

@@ -4,6 +4,7 @@ using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Intake;
 using AgentBridge.Host.Core.Usage;
+using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
@@ -28,6 +29,8 @@ public sealed class LocalApiTests : IAsyncLifetime
     HostControl control = null!;
     AgentReadinessService readiness = null!;
     AgentSetupService setup = null!;
+    AgentVerificationService verification = null!;
+    readonly AgentVerificationTests.Launcher verificationLauncher = new();
     UpdateService updates = null!;
     LocalServer server = null!;
     readonly P256KeyPair hostKey = P256KeyPair.Generate();
@@ -47,6 +50,9 @@ public sealed class LocalApiTests : IAsyncLifetime
     Func<Uri, Action<string, string>, CancellationToken, Task<SignInResult>> signIn = (_, _, _) => Task.FromException<SignInResult>(new InvalidOperationException("no relay in these tests"));
     (SignInResult Account, Uri Relay)? saved;
     RelayAccount? credential;
+    string? probesFinishing;
+    int probeHolds;
+    Func<Task<IDisposable?>> prepareStop = () => Task.FromResult<IDisposable?>(new CancellationTokenSource());
 
     public LocalApiTests()
     {
@@ -73,19 +79,24 @@ public sealed class LocalApiTests : IAsyncLifetime
         setup = new AgentSetupService(new StandaloneHooks(profile,
             new IntakeState.AgentHomes(roots.CopilotHome, roots.ClaudeHome, roots.CodexHome), hookSource,
             Path.Combine(profile, "no-legacy"), () => null, new SetupAgents(), new EmptyMarketplaces()), () => null);
+        verification = new AgentVerificationService(source, verificationLauncher, new AgentVerificationTests.Notices(), () => null);
         control = new HostControl(new HostControlOptions
         {
             Agents = readiness,
             AgentSetup = setup,
             AgentInstall = new AgentInstallService(profile, new SetupAgents(), () => { }, new NoCommands(),
                 () => throw new InvalidOperationException("an existing fixture CLI must not invoke WinGet"), _ => { }),
+            AgentVerification = verification,
+            AgentSignIn = new AgentCliSignInService(profile,
+                new IntakeState.AgentHomes(roots.CopilotHome, roots.ClaudeHome, roots.CodexHome),
+                new SetupAgents(), () => { }, new AgentSignInTests.Starter(), new SignInCommands(), _ => { }),
             Updates = updates,
             Profile = "test",
             Folder = profile,
             Version = "0.1.0",
             Dev = true,
             Machine = machine,
-            Running = new HostSettingsView(RemoteApproval: true),
+            Running = new HostSettingsView(RemoteApproval: true, EscapedApproval: EscapedApproval.Confirm),
             ApplyRemoteFolderTrust = on => { onApply?.Invoke(on); lock (applied) { applied.Add(on); } },
             ApplyRemoteFolderTrustDevices = ids => { lock (applied) { approved.Add(ids); } },
             ApplyDevBoxKeepAwake = on => { lock (applied) { keptAwake.Add(on); } },
@@ -96,7 +107,9 @@ public sealed class LocalApiTests : IAsyncLifetime
             SignIn = (relay, show, ct) => signIn(relay, show, ct),
             SignedIn = (account, relay) => saved = (account, relay),
             Stop = () => Interlocked.Increment(ref stops),
+            PrepareStop = () => prepareStop(),
             Restart = () => Interlocked.Increment(ref restarts),
+            HoldProbes = () => { Interlocked.Increment(ref probeHolds); return probesFinishing; },
         });
         authorization = new RemoteAuthorization(false, new TrustedPeerStore(profile, hostKey.Public, () => "acct"));
         server = LocalServer.Start(LocalEndpoint.For(profile), LocalApi.Handler(service, control, callers, m => { lock (logged) { logged.Add(m); } }, authorization));
@@ -109,6 +122,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         authorization.Dispose();
         hostKey.Dispose();
         if (readiness is not null) { await readiness.DisposeAsync(); }
+        if (verification is not null) { await verification.DisposeAsync(); }
         await source.DisposeAsync();
         f.Dispose();
         try { Directory.Delete(profile, recursive: true); } catch (IOException) { }
@@ -202,7 +216,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal(RelayState.SignedOut, status.Relay.State);
         Assert.Null(status.Account);
         Assert.Equal(SignInState.Idle, status.SignIn.State);
-        Assert.Equal(new HostSettingsView(true), status.Settings);
+        Assert.Equal(new HostSettingsView(true, EscapedApproval: EscapedApproval.Confirm), status.Settings);
         Assert.False(status.RestartRequired);
     }
 
@@ -219,6 +233,8 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal(report.CheckedAt, pushed.CheckedAt);
         Assert.Equal(4, pushed.Agents.Count);
         Assert.All(pushed.Agents, a => Assert.Equal(ReadinessState.Missing, a.Installation.State));
+        Assert.All(pushed.Agents, a => Assert.Equal(HookSetupState.NotSetUp, a.HookSetup));
+        Assert.Contains("\"hookSetup\":\"notSetUp\"", JsonSerializer.Serialize(pushed, ProtocolJson.Options));
     }
 
     [Theory]
@@ -234,6 +250,26 @@ public sealed class LocalApiTests : IAsyncLifetime
         await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.AgentsRefresh));
 
         Assert.Null(readiness.Snapshot);
+    }
+
+    // #67 stays as it is: no caller on this machine, the app included, reaches manage.* through the
+    // pipe, so an agent session cannot restart its own host however it asks.
+    [Theory]
+    [InlineData(CallerKind.Agent)]
+    [InlineData(CallerKind.Other)]
+    [InlineData(CallerKind.HostCli)]
+    [InlineData(CallerKind.App)]
+    public async Task An_agent_session_cannot_invoke_manage_restart_or_any_management_through_the_pipe(CallerKind kind)
+    {
+        callers.Current = new FixedCallerGuard(new Caller(kind, "test caller"));
+        var ch = await ConnectAsync();
+        Assert.DoesNotContain(ManageProtocol.Capability, (await ch.HelloAsync()).Capabilities);
+
+        foreach (var op in ManageProtocol.Ops)
+        {
+            var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(op, new { }));
+            Assert.Contains("through the relay", refused.Message);
+        }
     }
 
     [Fact]
@@ -279,6 +315,24 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal(0, restarts);
     }
 
+    [Fact]
+    public async Task The_local_app_explicitly_starts_and_cancels_verification_and_status_carries_the_same_run()
+    {
+        var ch = await ConnectAsync();
+        Assert.Contains(HostOps.AgentVerificationCapability, (await ch.HelloAsync()).Capabilities);
+        var request = new AgentVerificationRequest(Guid.NewGuid().ToString("D"), "copilot", "Test");
+        await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.AgentsVerify, request));
+        Assert.Equal(0, verificationLauncher.Calls);
+
+        var report = await ch.CallAsync<AgentVerificationReport>(HostOps.AgentsVerify, request with { Confirmed = true });
+        await verificationLauncher.Called.Task.WaitAsync(Patience);
+        Assert.Equal(report.Request, Assert.Single((await ch.CallAsync<HostStatus>(HostOps.Status)).AgentVerifications!).Request);
+        var cancelled = await ch.CallAsync<AgentVerificationReport>(HostOps.AgentsVerifyCancel, new AgentVerificationCancel(request.Request));
+
+        Assert.Equal(VerificationState.Cancelled, cancelled.State);
+        Assert.Equal(1, verificationLauncher.Calls);
+    }
+
     [Theory]
     [InlineData(CallerKind.Agent)]
     [InlineData(CallerKind.Other)]
@@ -302,6 +356,69 @@ public sealed class LocalApiTests : IAsyncLifetime
         await Assert.ThrowsAsync<HostErrorException>(() =>
             ch.CallAsync(HostOps.AgentsInstall, new AgentInstallRequest("claude", true)));
         await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.AgentsInstallCancel));
+    }
+
+    [Fact]
+    public async Task The_local_app_can_open_CLI_sign_in_without_changing_hooks_or_relay_identity()
+    {
+        var ch = await ConnectAsync();
+        Assert.Contains(HostOps.AgentSignInCapability, (await ch.HelloAsync()).Capabilities);
+        var result = await ch.CallAsync<AgentSignInResult>(HostOps.AgentsSignIn, new AgentSignInRequest("claude", true));
+        Assert.True(result.Opened, result.Detail);
+        Assert.Null(IntakeState.Load(profile).State);
+        Assert.Null(saved);
+        Assert.Equal(0, restarts);
+    }
+
+    [Theory]
+    [InlineData(CallerKind.Agent)]
+    [InlineData(CallerKind.Other)]
+    [InlineData(CallerKind.HostCli)]
+    public async Task Verification_and_its_cancellation_require_a_fresh_local_app_identity(CallerKind kind)
+    {
+        var ch = await ConnectAsync();
+        Assert.Contains(HostOps.AgentVerificationCapability, (await ch.HelloAsync()).Capabilities);
+        callers.Current = new FixedCallerGuard(new Caller(kind, "test caller"));
+
+        var request = new AgentVerificationRequest(Guid.NewGuid().ToString("D"), "copilot", "Test", Confirmed: true);
+        await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.AgentsVerify, request));
+        await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.AgentsVerifyCancel, new AgentVerificationCancel(request.Request)));
+
+        Assert.Equal(0, verificationLauncher.Calls);
+        Assert.Empty(verification.Snapshot);
+        Assert.DoesNotContain(HostOps.AgentVerificationCapability, (await ch.HelloAsync()).Capabilities);
+    }
+
+    [Theory]
+    [InlineData(CallerKind.Agent)]
+    [InlineData(CallerKind.Other)]
+    [InlineData(CallerKind.HostCli)]
+    public async Task Other_callers_cannot_open_CLI_sign_in(CallerKind kind)
+    {
+        callers.Current = new FixedCallerGuard(new Caller(kind, "test caller"));
+        var ch = await ConnectAsync();
+        Assert.DoesNotContain(HostOps.AgentSignInCapability, (await ch.HelloAsync()).Capabilities);
+        await Assert.ThrowsAsync<HostErrorException>(() =>
+            ch.CallAsync(HostOps.AgentsSignIn, new AgentSignInRequest("claude", true)));
+    }
+
+    [Fact]
+    public async Task CLI_sign_in_reclassifies_the_caller_after_an_app_hello()
+    {
+        var ch = await ConnectAsync();
+        Assert.Contains(HostOps.AgentSignInCapability, (await ch.HelloAsync()).Capabilities);
+        callers.Current = new FixedCallerGuard(new Caller(CallerKind.Agent, "now an agent"));
+        await Assert.ThrowsAsync<HostErrorException>(() =>
+            ch.CallAsync(HostOps.AgentsSignIn, new AgentSignInRequest("claude", true)));
+    }
+
+    sealed class SignInCommands : ICommandRunner
+    {
+        public Task<CommandResult> RunAsync(string program, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken cancellationToken = default)
+        {
+            Assert.Equal(new[] { "--help" }, arguments);
+            return Task.FromResult(new CommandResult(true, false, 0, "Commands:\n  auth  Manage authentication"));
+        }
     }
 
     sealed class SetupAgents : IAgentLocator
@@ -372,7 +489,7 @@ public sealed class LocalApiTests : IAsyncLifetime
 
         var result = await ch.CallAsync<SettingsResult>(HostOps.Settings, new { remoteApproval = false, name = "  Desk\u0007top  " });
 
-        Assert.Equal(new HostSettingsView(false, "Desktop"), result.Settings);
+        Assert.Equal(new HostSettingsView(false, "Desktop", EscapedApproval: EscapedApproval.Confirm), result.Settings);
         Assert.True(result.RestartRequired);
         var saved = JsonNode.Parse(File.ReadAllText(Path.Combine(profile, "config.json")))!;
         Assert.Equal("C:\\src", saved["workspaces"]![0]!.GetValue<string>());
@@ -579,10 +696,10 @@ public sealed class LocalApiTests : IAsyncLifetime
 
         var stopping = await ch.CallAsync(HostOps.Stop);
         Assert.True(stopping.GetProperty("stopping").GetBoolean());
-        await Wait.UntilAsync(() => Volatile.Read(ref stops) == 1, "the stop to follow its response", Patience);
+        await HostWait.UntilAsync(() => Volatile.Read(ref stops) == 1, "the stop to follow its response", Patience);
         var restarting = await ch.CallAsync(HostOps.Restart);
         Assert.True(restarting.GetProperty("restarting").GetBoolean());
-        await Wait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the restart to follow its response", Patience);
+        await HostWait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the restart to follow its response", Patience);
     }
 
     [Fact]
@@ -605,6 +722,23 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal(0, Volatile.Read(ref stops));
     }
 
+    [Fact]
+    public async Task A_stop_that_times_out_on_a_delivery_refuses_without_stopping_the_host()
+    {
+        var gate = new DeliveryGate();
+        using var delivery = gate.TryEnterDelivery();
+        Assert.NotNull(delivery);
+        prepareStop = () => gate.PrepareStopAsync(TimeSpan.FromMilliseconds(50));
+        var ch = await ConnectAsync();
+
+        var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Stop));
+
+        Assert.Contains("delivery or typing is still in progress", refused.Message);
+        Assert.Equal(0, Volatile.Read(ref stops));
+        using var next = gate.TryEnterDelivery();
+        Assert.NotNull(next);
+    }
+
     // ---- §6.3 invariant 13: no agent session stops or restarts its host ----
 
     [Fact]
@@ -625,7 +759,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         var hello = await ch.HelloAsync();
         Assert.DoesNotContain(HostOps.Capability, hello.Capabilities);
         Assert.DoesNotContain(Capabilities.SessionsAnswer, hello.Capabilities);
-        foreach (var op in new[] { HostOps.Restart, HostOps.Stop, HostOps.Settings, HostOps.SignIn, HostOps.SignInCancel, HostOps.RelayAccount })
+        foreach (var op in new[] { HostOps.Restart, HostOps.Stop, HostOps.Settings, HostOps.SignIn, HostOps.SignInCancel, HostOps.RelayAccount, HostOps.ProbeHold })
         {
             var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(op, new { }));
             Assert.Equal($"refused: this connection is from pid {Environment.ProcessId}, inside the copilot session 77777777 (pid {parent.Id}); stopping, restarting, signing in, changing settings and reading the relay account are for the person, from the {Product.App}", refused.Message);
@@ -636,16 +770,31 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal(2, (await ch.CallAsync<SessionList>(Ops.SessionsList)).Sessions.Count);
         Assert.Equal(Environment.ProcessId, (await ch.CallAsync<HostStatus>(HostOps.Status)).ProcessId);
         await Task.Delay(200);
-        Assert.Equal((0, 0), (Volatile.Read(ref stops), Volatile.Read(ref restarts)));
+        Assert.Equal((0, 0, 0), (Volatile.Read(ref stops), Volatile.Read(ref restarts), Volatile.Read(ref probeHolds)));
         lock (logged) { Assert.Contains($"local pipe: refused host.restart from pid {Environment.ProcessId}, inside the copilot session 77777777 (pid {parent.Id})", logged); }
 
         // Once that session has gone, the same process is the app again, and restarts the host.
         f.Processes.Exit(AgentKind.Copilot, parent.Id);
         await source.RefreshAsync();
         Assert.True((await ch.CallAsync(HostOps.Restart)).GetProperty("restarting").GetBoolean());
-        await Wait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the app's restart", Patience);
+        await HostWait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the app's restart", Patience);
     }
 
+    [Fact]
+    public async Task The_app_about_to_stop_the_host_holds_its_usage_probes_and_hears_whether_one_is_still_finishing()
+    {
+        var ch = await ConnectAsync();
+        await ch.HelloAsync();
+
+        probesFinishing = "Codex's app-server, started to read its allowance, is still answering or finishing";
+        var busy = await ch.CallAsync<ProbeHoldResult>(HostOps.ProbeHold);
+        probesFinishing = null;
+        var done = await ch.CallAsync<ProbeHoldResult>(HostOps.ProbeHold);
+
+        Assert.Equal((true, "Codex's app-server, started to read its allowance, is still answering or finishing"), (busy.Busy, busy.Why));
+        Assert.Equal(new ProbeHoldResult(false), done);
+        Assert.Equal(2, Volatile.Read(ref probeHolds));
+    }
     [Fact]
     public async Task A_process_that_is_itself_an_agent_CLI_is_refused_even_before_any_session_of_it_is_found()
     {
@@ -668,12 +817,60 @@ public sealed class LocalApiTests : IAsyncLifetime
 
         var hello = await ch.HelloAsync();
         Assert.DoesNotContain(HostOps.Capability, hello.Capabilities);
-        var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Stop));
-        Assert.EndsWith($"which is not the {Product.App} beside this host; only the {Product.App} beside this host may stop, restart, sign in, change settings or read the relay account", refused.Message);
+        foreach (var op in new[] { HostOps.Stop, HostOps.ProbeHold })
+        {
+            var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(op));
+            Assert.EndsWith($"which is not the {Product.App} beside this host; only the {Product.App} beside this host may stop, restart, sign in, change settings or read the relay account", refused.Message);
+        }
         var answered = await ch.CallAsync<AnswerResult>(Ops.SessionAnswer, new { id = Id, question = "q1", request = Guid.NewGuid().ToString(), text = "yes" });
         Assert.Equal("this host does not take answers; answer at the machine", answered.Reason);
         await Task.Delay(200);
-        Assert.Equal(0, Volatile.Read(ref stops));
+        Assert.Equal((0, 0), (Volatile.Read(ref stops), Volatile.Read(ref probeHolds)));
+    }
+
+    // #292: a session's earlier turns are the person's to read, from the app or another process of
+    // theirs; an agent on the pipe reads the latest exchange and is neither offered nor given more.
+    [Fact]
+    public async Task An_agent_on_the_pipe_is_refused_a_sessions_history_that_the_app_and_the_users_other_processes_read()
+    {
+        foreach (var kind in new[] { CallerKind.App, CallerKind.Other })
+        {
+            callers.Current = new FixedCallerGuard(new Caller(kind, "a reader"));
+            var reader = await ConnectAsync();
+            Assert.Contains(HistoryProtocol.Capability, (await reader.HelloAsync()).Capabilities);
+            var page = await reader.CallAsync<HistoryResult>(HistoryProtocol.Op, new { id = Id });
+            Assert.Equal("go", page.Turns!.Single().Prompt!.Text);
+            Assert.True((await reader.CallAsync<HistoryResult>(HistoryProtocol.Op, new { id = "gone" })).Missing);
+            var malformed = await Assert.ThrowsAsync<HostErrorException>(() => reader.CallAsync(HistoryProtocol.Op, new { id = Id, limit = 51 }));
+            Assert.Equal($"limit must be 1 to {HistoryLimits.MaxTurns}", malformed.Message);
+        }
+
+        callers.Current = new FixedCallerGuard(new Caller(CallerKind.Agent, "pid 4242, inside the copilot session 77777777"));
+        var agent = await ConnectAsync();
+        Assert.DoesNotContain(HistoryProtocol.Capability, (await agent.HelloAsync()).Capabilities);
+        var refused = await Assert.ThrowsAsync<HostErrorException>(() => agent.CallAsync(HistoryProtocol.Op, new { id = Id }));
+        Assert.Equal("refused: this connection is from pid 4242, inside the copilot session 77777777; reading a session's history is for the person, from the app or a phone", refused.Message);
+        lock (logged) { Assert.Contains("local pipe: refused session.history from pid 4242, inside the copilot session 77777777", logged); }
+    }
+
+    // #1190: a device that says it is in use holds back the person's pushes, so an agent on the pipe
+    // saying so would silence their finished turns and questions; the app still says it.
+    [Fact]
+    public async Task An_agent_on_the_pipe_is_refused_sessions_focus_so_it_cannot_hold_back_pushes_but_the_app_is_not()
+    {
+        callers.Current = new FixedCallerGuard(new Caller(CallerKind.Agent, "pid 4242, inside the copilot session 77777777"));
+        var agent = await ConnectAsync();
+        await agent.CallAsync<SubscribeResult>(Ops.SessionsSubscribe);
+        var refused = await Assert.ThrowsAsync<HostErrorException>(() => agent.CallAsync(Ops.SessionsFocus, new { visible = true, open = Id, openQuestion = "q1", idleMs = 0 }));
+        Assert.Equal("refused: this connection is from pid 4242, inside the copilot session 77777777; telling the host the person is using the app is for the person, from the app or a phone", refused.Message);
+        lock (logged) { Assert.Contains("local pipe: refused sessions.focus from pid 4242, inside the copilot session 77777777", logged); }
+        Assert.Empty(service.Presences());
+
+        callers.Current = new FixedCallerGuard(new Caller(CallerKind.App, "the app"));
+        var app = await ConnectAsync();
+        await app.CallAsync<SubscribeResult>(Ops.SessionsSubscribe);
+        await app.CallAsync(Ops.SessionsFocus, new { visible = true, open = Id, idleMs = 0 });
+        Assert.True(Assert.Single(service.Presences()).Visible);
     }
 
     [Fact]
@@ -682,14 +879,15 @@ public sealed class LocalApiTests : IAsyncLifetime
         callers.Current = new FixedCallerGuard(new Caller(CallerKind.HostCli, "agent-bridge-host's command line (pid 30)"));
         var ch = await ConnectAsync();
 
-        foreach (var op in new[] { HostOps.Stop, HostOps.Settings, HostOps.SignIn })
+        foreach (var op in new[] { HostOps.Stop, HostOps.Settings, HostOps.SignIn, HostOps.ProbeHold })
         {
             var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(op, new { }));
             Assert.Contains($"only the {Product.App} beside this host may", refused.Message);
         }
+        Assert.Equal(0, Volatile.Read(ref probeHolds));
         await ch.CallAsync(HostOps.Restart);
 
-        await Wait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the restart to follow its response", Patience);
+        await HostWait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the restart to follow its response", Patience);
         Assert.Equal(0, Volatile.Read(ref stops));
     }
 
@@ -784,6 +982,25 @@ public sealed class LocalApiTests : IAsyncLifetime
             Assert.StartsWith($"refused: this connection is from pid 4242; only the {Product.App}", refused.Message);
         }
         Assert.Equal(state, updates.State());
+    }
+
+    [Fact]
+    public async Task Only_the_app_asks_the_host_to_leave_for_an_Update_now_and_the_hosts_departure_answers_it()
+    {
+        var app = await ConnectAsync();
+        // This host composes no Update now: its departure answers refused, unavailable.
+        var left = await app.CallAsync<UpdateDepartResult>(HostOps.UpdateDepart, new UpdateDepartRequest(Guid.NewGuid().ToString()));
+        Assert.Equal(new UpdateDepartResult(UpdateDepartOutcome.Refused, ManageReason.Unavailable), left);
+        var malformed = await Assert.ThrowsAsync<HostErrorException>(() => app.CallAsync(HostOps.UpdateDepart, new UpdateDepartRequest("not-a-uuid")));
+        Assert.Contains("needs the press's request", malformed.Message, StringComparison.Ordinal);
+
+        foreach (var kind in new[] { CallerKind.Agent, CallerKind.Other })
+        {
+            callers.Current = new FixedCallerGuard(new Caller(kind, "pid 4242"));
+            var other = await ConnectAsync();
+            var refused = await Assert.ThrowsAsync<HostErrorException>(() => other.CallAsync(HostOps.UpdateDepart, new UpdateDepartRequest(Guid.NewGuid().ToString())));
+            Assert.Equal($"refused: this connection is from pid 4242; only the {Product.App} beside this host reports its updates, and takes other devices' presses of Install", refused.Message);
+        }
     }
 
     sealed class Callers : ICallerGuard

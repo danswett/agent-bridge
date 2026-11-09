@@ -43,7 +43,7 @@ public sealed class FleetTests : IAsyncLifetime
         remoteHost.Start();
         link.Endpoints["remote-id"] = remoteHost.Endpoint;
         local = localHost.Connect(ui);
-        main = new MainViewModel(Build(Machine.LocalKey, local), new UsageViewModel(clock, new UsageCache(cacheFile, clock)));
+        main = new MainViewModel(Build(Machine.LocalKey, local), new UsageViewModel(clock, new UsageCache(cacheFile, clock))) { Time = clock };
         fleet = new Fleet(link, main, ui, h => Build(h.Id, new HostConnection(ct => link.OpenAsync(h.Id, ct), ui) { RetryDelay = TimeSpan.FromMilliseconds(100), RefusedRetryDelay = refusedRetryDelay }), clock);
         return Task.CompletedTask;
     }
@@ -129,7 +129,40 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Equal(1, main.Waiting);
     }
 
-    // As agent-executor's host answers a device it has not approved: hello, offering nothing, and
+    // #1064: a hold is not a banner. It reaches the machine's row only once it has lasted two
+    // minutes, counted per hold, and clears at once.
+    [Fact]
+    public async Task A_machines_discovery_hold_reaches_its_row_only_after_two_minutes_and_a_returning_hold_counts_again()
+    {
+        await BothMachinesAsync();
+        var held = new DiscoveryHeld("an unrecognised copilot process (pid 4120)", [AgentKind.Copilot]);
+        string? Facts() => Rows().Single(r => r.Name == "Build server").Facts;
+        void Ticks() => TestUi.Read(() => { for (var i = 0; i < 5; i++) { main.Tick(); } return true; });
+
+        await remoteHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(held));
+        await Wait.UntilAsync(() => TestUi.Read(() => main.MachineOf("remote-id")!.Host.Sessions.Held) is not null, "the hold");
+        clock.Advance(TimeSpan.FromSeconds(119));
+        Ticks();
+        Assert.Equal("1 session", Facts());
+
+        // Gone and back: its two minutes start over.
+        await remoteHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged());
+        await Wait.UntilAsync(() => TestUi.Read(() => main.MachineOf("remote-id")!.Host.Sessions.Held) is null, "the hold to clear");
+        Ticks();
+        await remoteHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(held));
+        await Wait.UntilAsync(() => TestUi.Read(() => main.MachineOf("remote-id")!.Host.Sessions.Held) is not null, "the hold again");
+        clock.Advance(TimeSpan.FromSeconds(119));
+        Ticks();
+        Assert.Equal("1 session", Facts());
+
+        clock.Advance(TimeSpan.FromSeconds(2));
+        Ticks();
+        Assert.Equal("1 session · Discovery held", Facts());
+        Assert.Equal($"Discovery held: {held.Reason}", Rows().Single(r => r.Name == "Build server").FactsWhy);
+
+        await remoteHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged());
+        await Wait.UntilAsync(() => !Rows().Single(r => r.Name == "Build server").Held, "the row to clear at once");
+    }
     // a refusal of the sessions the app asks for next. Asked again every 5 s for hours (#602).
     async Task RefusedAsync()
     {
@@ -193,7 +226,7 @@ public sealed class FleetTests : IAsyncLifetime
 
         ui.Post(() => q.Choose(q.Fields[0].Options.Single(o => o.Value == "sqlite")));
 
-        await Wait.UntilAsync(() => q.StatusText == "Delivered. The session has your answer.", "delivered");
+        await Wait.UntilAsync(() => q.StatusText == "You answered · \u2068sqlite\u2069", "delivered");
         Assert.Equal("there", Assert.Single(remoteHost.Sent(Ops.SessionAnswer)).GetProperty("id").GetString());
         Assert.Empty(localHost.Sent(Ops.SessionAnswer));
     }
@@ -251,9 +284,9 @@ public sealed class FleetTests : IAsyncLifetime
         await BothMachinesAsync();
         ui.Post(() => main.SelectedMachine = main.Machines.Single(m => m.Key == "remote-id"));
 
-        // The relay connection itself went: nothing says the machine has.
+        // The relay connection itself went: nothing says the machine has. The fleet reads the link
+        // on its Changed, posted to this test's UI turn and run there, so it is done when Set returns.
         link.Set(FleetState.Connecting);
-        await Task.Delay(200);
         Assert.NotNull(Card("there"));
 
         link.Set(FleetState.Connected, ("host-id", "Test PC"));
@@ -410,7 +443,7 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Contains(main.Ended, e => e.Title == "A session");
 
         ui.Post(() => question.Choose(question.Fields[0].Options.Single(o => o.Value == "sqlite")));
-        await Wait.UntilAsync(() => question.StatusText == "Delivered. The session has your answer.", "delivered");
+        await Wait.UntilAsync(() => question.StatusText == "You answered · \u2068sqlite\u2069", "delivered");
         Assert.Single(remoteHost.Sent(Ops.SessionAnswer));
     }
 
@@ -468,7 +501,9 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.False(TestUi.Read(() => question.CanAnswer));
         ui.Post(() => question.Choose(question.Fields[0].Options.Single(o => o.Value == "sqlite")));
         Assert.Equal(0, TestUi.Read(() => main.Waiting));
-        await Task.Delay(200);
+        // An answer sent would have been written as it was chosen: once the other machine's host has
+        // everything sent before this, none was.
+        await Remote().Host.CallAsync(FakeHost.Barrier);
         Assert.Empty(remoteHost.Sent(Ops.SessionAnswer));
     }
 
@@ -1134,6 +1169,76 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Equal("rate limited", Assert.Single(UsageMerge.Merge([new UsageReport([failure])]).Agents).Error);
     }
 
+    [Fact]
+    public void Two_keyless_Codex_readings_from_different_machines_stay_two_rows_a_keyed_one_still_merges_and_one_machine_shows_the_kind_it_took_last()
+    {
+        var vm = new UsageReader(new string('a', 32), "VM");
+        var laptop = new UsageReader(new string('b', 32), "Laptop");
+        var keyless = new AgentUsage { Agent = AgentKind.Codex, Label = "Codex", Source = UsageSource.Transcript, MeasuredAt = Make.T0, Windows = [new UsageWindow { Key = "primary", Label = "5h limit", Percent = 10 }] };
+
+        var apart = UsageMerge.Merge([new UsageReport([keyless with { ReadBy = vm }]), new UsageReport([keyless with { ReadBy = laptop, MeasuredAt = Make.T0.AddMinutes(5) }])]).Agents;
+
+        Assert.Equal(["VM", "Laptop"], apart.Select(a => a.ReadBy!.Name));
+
+        var keyed = keyless with { AccountKey = "c0dec0dec0de", Source = UsageSource.Api };
+        var together = UsageMerge.Merge([new UsageReport([keyed with { ReadBy = vm }]), new UsageReport([keyed with { ReadBy = laptop, MeasuredAt = Make.T0.AddMinutes(5) }])]).Agents;
+        Assert.Equal("Laptop", Assert.Single(together).ReadBy!.Name);
+
+        // One machine going from a probe's keyed reading to its transcripts' keyless one and back
+        // shows one row, whichever it took last; another machine's keyed reading still has its own.
+        var probe = keyed with { ReadBy = vm, MeasuredAt = Make.T0.AddMinutes(10) };
+        var transcript = keyless with { ReadBy = vm, MeasuredAt = Make.T0.AddMinutes(20), Windows = [new UsageWindow { Key = "primary", Label = "5h limit", Percent = 30 }] };
+        Assert.Equal(30, Assert.Single(UsageMerge.Merge([new UsageReport([probe]), new UsageReport([transcript])]).Agents).Windows[0].Percent);
+        Assert.Equal(UsageSource.Api, Assert.Single(UsageMerge.Merge([new UsageReport([transcript]), new UsageReport([probe with { MeasuredAt = Make.T0.AddMinutes(30) }])]).Agents).Source);
+        Assert.Equal(2, UsageMerge.Latest([new UsageReport([probe, transcript, keyed with { ReadBy = laptop }])]).Count);
+    }
+
+    [Fact]
+    public void A_machines_older_keyless_sign_out_is_dropped_once_it_gives_a_newer_keyed_reading_and_a_newer_one_still_stands()
+    {
+        var vm = new UsageReader(new string('a', 32), "VM");
+        var signedOut = new AgentUsage { Agent = AgentKind.Codex, Label = "Codex", Source = UsageSource.None, Error = "Codex needs signing in again on this machine", MeasuredAt = Make.T0, ReadBy = vm };
+        var probe = new AgentUsage
+        {
+            Agent = AgentKind.Codex, Label = "Codex", AccountKey = "c0dec0dec0de", Source = UsageSource.Api, MeasuredAt = Make.T0.AddMinutes(10), ReadBy = vm,
+            Windows = [new UsageWindow { Key = "primary", Label = "5h limit", Percent = 10 }],
+        };
+
+        var row = Assert.Single(UsageMerge.Merge([new UsageReport([signedOut]), new UsageReport([probe])]).Agents);
+        Assert.Equal((UsageSource.Api, null), (row.Source, row.Error));
+        Assert.Single(UsageMerge.Latest([new UsageReport([signedOut, probe])]));
+
+        var later = signedOut with { MeasuredAt = Make.T0.AddMinutes(20) };
+        Assert.Contains(UsageMerge.Merge([new UsageReport([later]), new UsageReport([probe])]).Agents, a => a.Error == later.Error);
+    }
+
+    [Fact]
+    public void Of_one_machines_keyed_and_keyless_failures_with_no_reading_newer_than_either_only_the_later_stands()
+    {
+        var vm = new UsageReader(new string('a', 32), "VM");
+        var keyless = new AgentUsage { Agent = AgentKind.Codex, Label = "Codex", Source = UsageSource.None, Error = "Codex needs signing in again on this machine", MeasuredAt = Make.T0, ReadBy = vm };
+        var keyed = keyless with { AccountKey = "c0dec0dec0de", MeasuredAt = Make.T0.AddMinutes(10) };
+
+        Assert.Equal("c0dec0dec0de", Assert.Single(UsageMerge.Merge([new UsageReport([keyless]), new UsageReport([keyed])]).Agents).AccountKey);
+        Assert.Null(Assert.Single(UsageMerge.Latest([new UsageReport([keyed, keyless with { MeasuredAt = Make.T0.AddMinutes(20) }])])).AccountKey);
+    }
+
+    [Fact]
+    public void One_machines_keyed_and_keyless_readings_taken_at_the_same_moment_are_one_row_the_first_reported()
+    {
+        var vm = new UsageReader(new string('a', 32), "VM");
+        var transcript = new AgentUsage
+        {
+            Agent = AgentKind.Codex, Label = "Codex", Source = UsageSource.Transcript, MeasuredAt = Make.T0, ReadBy = vm,
+            Windows = [new UsageWindow { Key = "primary", Label = "5h limit", Percent = 10 }],
+        };
+        var probe = transcript with { AccountKey = "c0dec0dec0de", Source = UsageSource.Api };
+
+        Assert.Equal(UsageSource.Transcript, Assert.Single(UsageMerge.Merge([new UsageReport([transcript]), new UsageReport([probe])]).Agents).Source);
+        Assert.Equal(UsageSource.Api, Assert.Single(UsageMerge.Merge([new UsageReport([probe]), new UsageReport([transcript])]).Agents).Source);
+        Assert.Single(UsageMerge.Latest([new UsageReport([probe, transcript])]));
+    }
+
     OfflineMachineViewModel[] Offline()
     {
         OfflineMachineViewModel[] now = [];
@@ -1175,6 +1280,50 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Equal(why, row.ViewOnlyWhy);
         Assert.DoesNotContain("read-only", row.Facts);
         Assert.False(Rows().Single(r => r.Name == "Test PC").ViewOnly);
+    }
+
+    // #788, #1064: the row says so from the host's hold itself, once it has lasted two minutes.
+    [Fact]
+    public async Task A_held_machines_row_says_discovery_held_with_the_hosts_reason_for_its_tooltip_until_the_hold_clears()
+    {
+        await BothMachinesAsync();
+        const string reason = "an unrecognised copilot process (pid 4120)";
+        await remoteHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(new DiscoveryHeld(reason, [AgentKind.Copilot])));
+        await HeldRowAsync();
+
+        var row = Rows().Single(r => r.Name == "Build server");
+        Assert.Equal("1 session · Discovery held", row.Facts);
+        Assert.Equal($"Discovery held: {reason}", row.FactsWhy);
+        Assert.DoesNotContain("pid", row.Facts);
+        var here = Rows().Single(r => r.Name == "Test PC");
+        Assert.Equal(("1 session", null), (here.Facts, here.FactsWhy));
+
+        await remoteHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged());
+        await Wait.UntilAsync(() => !Rows().Single(r => r.Name == "Build server").Held, "the hold to clear");
+        Assert.Equal(("1 session", null), (row.Facts, row.FactsWhy));
+    }
+
+    [Fact]
+    public async Task A_held_read_only_machines_row_says_discovery_held_in_view_onlys_place_and_both_reasons_in_its_tooltip()
+    {
+        const string why = "read-only: answer at the machine";
+        remoteHost.On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("remote-id", "Build server", "windows", "0.1.0", ReadOnly: why, Instance: "run-7"), [Capabilities.SessionsRead]));
+        remoteHost.Held = new DiscoveryHeld("the claude processes could not be listed", [AgentKind.Claude]);
+        await BothMachinesAsync();
+        await HeldRowAsync();
+
+        var row = Rows().Single(r => r.Name == "Build server");
+        Assert.Equal("1 session · Discovery held", row.Facts);
+        Assert.Equal($"View only: {why} · Discovery held: the claude processes could not be listed", row.FactsWhy);
+    }
+
+    // Past the two minutes a hold must last, drawn on the Tick.
+    async Task HeldRowAsync()
+    {
+        await Wait.UntilAsync(() => TestUi.Read(() => main.MachineOf("remote-id")!.Host.Sessions.Held) is not null, "the hold");
+        clock.Advance(TimeSpan.FromMinutes(2) + TimeSpan.FromSeconds(1));
+        TestUi.Read(() => { for (var i = 0; i < 5; i++) { main.Tick(); } return true; });
+        await Wait.UntilAsync(() => Rows().Single(r => r.Name == "Build server").Held, "the held machine's row");
     }
 
     [Fact]
@@ -1364,8 +1513,8 @@ public sealed class FleetTests : IAsyncLifetime
         link.Raise();
         await Wait.UntilAsync(() => Offline().Length == 1, "the offline machine");
 
+        // The fleet reads the link on its Changed, run on this test's UI turn: done when Set returns.
         link.Set(FleetState.Connecting);
-        await Task.Delay(200);
         Assert.Single(Offline());
 
         // A drop between reading the state and reading the list is the same.
@@ -1373,7 +1522,6 @@ public sealed class FleetTests : IAsyncLifetime
         await Wait.UntilAsync(() => Offline().Length == 1, "the offline machine");
         link.BeforeOfflineRead = () => link.Quietly(FleetState.Connecting, ("host-id", "Test PC"), ("remote-id", "Build server"));
         link.Raise();
-        await Task.Delay(200);
         Assert.Single(Offline());
 
         // An older relay keeps no roster: nothing listed, and nothing to forget.
@@ -1577,6 +1725,38 @@ public sealed class RelayFleetLinkTests
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task A_renamed_app_comes_back_under_its_new_name_as_the_same_device_not_a_second_one()
+    {
+        // An install from before the rebrand (#537) connected as "… · Agent Bridge app"; after the
+        // update it connects with the same key under the new name. The name is display only: the
+        // device is its key, so other machines see one device, renamed, not a new one to approve.
+        await using var relay = await TestRelay.StartAsync();
+        var token = relay.TokenFor(7, "octo");
+        await using var host = await relay.ConnectAsync(token, "Build server", "host");
+        var key = P256KeyPair.Generate();
+        RelayAccount Account() => new(relay.Url.ToString(), token, "7", "octo");
+        string id;
+        await using (var before = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(Account()), key, "Test PC · Agent Bridge app"))
+        {
+            before.Start();
+            await Wait.UntilAsync(() => host.Relay.Presence.Any(p => p.Id == before.DeviceId), "the app before the update", Patience);
+            id = before.DeviceId!;
+            Assert.Equal("Test PC · Agent Bridge app", host.Relay.Presence.Single(p => p.Id == id).Name);
+        }
+        await Wait.UntilAsync(() => host.Relay.Presence.All(p => p.Id != id), "the app gone for its update", Patience);
+
+        await using var after = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(Account()), key, Product.DeviceName("Test PC"));
+        after.Start();
+        await Wait.UntilAsync(() => host.Relay.Presence.Any(p => p.Id == after.DeviceId), "the app after the update", Patience);
+
+        Assert.Equal(id, after.DeviceId);
+        var app = Assert.Single(host.Relay.Presence, p => p.Kind == "app");
+        Assert.Equal(id, app.Id);
+        Assert.Equal($"Test PC · {Product.Name}", app.Name);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task The_app_lists_a_machine_that_has_gone_offline_and_as_a_persons_device_can_forget_it()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -1706,6 +1886,32 @@ public sealed class RelayFleetLinkTests
 
         Assert.Equal("_PJ9LEydaL4_cLc4dUQ-wkKfhFj1DfQi-9K7Bl_0fxs", command.Mac);
         Assert.Equal(BlobFormat.Base64Url(phone.Public), command.By);
+    }
+
+    // Update now (#1159, v1-update.md "The press"): as the PWA's signUpdateNow signs it, for that
+    // machine alone, no session, args binding now, the release shown and what was confirmed, living
+    // two minutes; its MAC the one the machine computes from its own key and this app's.
+    [Fact]
+    public void The_app_signs_an_Update_now_press_for_that_machine_alone_binding_now_the_release_and_what_was_shown()
+    {
+        var app = P256KeyPair.Generate();
+        var machine = P256KeyPair.Generate();
+        var at = DateTimeOffset.FromUnixTimeSeconds(1_793_300_000);
+        var accept = new UpdateBusy { Working = 1, Waiting = 0, Sessions = [new UpdateBusySession("s1", UpdateBusyState.Working)] };
+
+        var command = Transfers.SignUpdateNow(app, machine.Public, "0.5.0", accept, at, "7d0f3a2e-1c4b-4d5e-8f60-112233445566");
+
+        var body = BlobFormat.FromBase64Url(command.Body)!;
+        var expected = HMACSHA256.HashData(CommandMac.Key(machine, app.Public, Wire.DeviceId(app.Public), Wire.DeviceId(machine.Public)), body);
+        Assert.Equal(BlobFormat.Base64Url(expected), command.Mac);
+        var read = JsonSerializer.Deserialize<CommandBody>(body, ProtocolJson.Options)!;
+        Assert.Equal((UpdateProtocol.NowAction, "user", Wire.DeviceId(app.Public), Wire.DeviceId(machine.Public), (string?)null, Wire.DeviceId(machine.Public)),
+            (read.Action, read.Principal.Kind, read.Principal.Device, read.Target.Machine, read.Target.Session, read.To));
+        Assert.Equal((long)ManageProtocol.MaxLifetime.TotalSeconds, read.ExpiresAt - read.IssuedAt);
+        Assert.Equal("""{"now":true,"release":"0.5.0","accept":{"working":1,"waiting":0,"sessions":[{"id":"s1","state":"working"}]}}""", read.Args!.Value.GetRawText());
+        // On a quiet machine nothing was shown, and the press carries no accept.
+        var quiet = Transfers.SignUpdateNow(app, machine.Public, "0.5.0", null, at, "8e1a4b3f-2d5c-4e6f-9071-223344556677");
+        Assert.Equal("""{"now":true,"release":"0.5.0"}""", JsonSerializer.Deserialize<CommandBody>(BlobFormat.FromBase64Url(quiet.Body)!, ProtocolJson.Options)!.Args!.Value.GetRawText());
     }
 
     // #603: the app reconnecting after sleep opened each machine's channel with XX and then asked

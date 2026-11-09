@@ -6,6 +6,10 @@
 // one may send a number where a string belongs. Unknown fields are dropped; unknown enum
 // values read as the C# reader's [UnknownAs] value.
 
+import { readAttention, readMachineSignIn } from './auth-state.js';
+import { marksExact } from './escaped.js';
+import { fieldAnswerReason, resultAnswerReason } from './answers.js';
+
 export const PROTOCOL_VERSION = 1;
 
 export const Ops = Object.freeze({
@@ -13,6 +17,7 @@ export const Ops = Object.freeze({
   sessionsList: 'sessions.list',
   sessionGet: 'session.get',
   sessionsSubscribe: 'sessions.subscribe',
+  sessionsFocus: 'sessions.focus',
   sessionAnswer: 'session.answer',
   sessionReply: 'session.reply',
   sessionStop: 'session.stop',
@@ -30,9 +35,10 @@ export const Events = Object.freeze({
   sessionRemove: 'session.remove',
   sessionsSynced: 'sessions.synced',
   discoveryChanged: 'discovery.changed',
+  helloChanged: 'hello.changed',
 });
 
-export const Capabilities = Object.freeze({ sessionsRead: 'sessions.read', sessionsPatch: 'sessions.patch', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', sessionsAttach: 'sessions.attach', sessionsAttachBlob: 'sessions.attach.blob', sessionsStop: 'sessions.stop', sessionsApprove: 'sessions.approve', push: 'push' });
+export const Capabilities = Object.freeze({ helloChanged: 'hello.changed', sessionsRead: 'sessions.read', sessionsPatch: 'sessions.patch', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', sessionsAttach: 'sessions.attach', sessionsAttachBlob: 'sessions.attach.blob', sessionsStop: 'sessions.stop', sessionsApprove: 'sessions.approve', sessionsProgress: 'sessions.progress', sessionsFocus: 'sessions.focus', push: 'push' });
 
 export const Outcomes = Object.freeze(['delivered', 'unconfirmed', 'stale', 'busy', 'refused']);
 
@@ -101,9 +107,14 @@ function readField(raw) {
     type: readFieldType(f.type),
     options: Array.isArray(f.options) ? f.options.map(readOption).filter(Boolean) : [],
     allowOther: f.allowOther === true,
+    // Other the agent offers and the machine cannot send yet, by a reason this app knows: shown
+    // disabled, with why (#908). An unknown reason, or one beside allowOther, reads as none.
+    otherUnavailable: f.allowOther === true ? null : fieldAnswerReason(f.otherUnavailable),
     // Any JSON value. Views format it as text and never interpret it as markup.
     default: f.default === undefined ? null : f.default,
     required: f.required === true,
+    // The schema's constraints (#766), as sent: checked by the host, not yet by this app.
+    constraints: obj(f.constraints),
   };
 }
 
@@ -118,9 +129,33 @@ export function readQuestion(raw) {
     askedAt: str(q.askedAt),
     truncated: q.truncated === true,
     answerAtMachine: q.answerAtMachine === true,
+    answerAtMachineReason: str(q.answerAtMachineReason),
     // The sub-agent that asked, when it is not the session's own question.
     agent: str(q.agent),
+    // What the host escaped in an approval (#803): null when it escaped nothing. Marks that do not
+    // each cover exactly one escape in this message are not read as the host's (marksExact).
+    escaped: exactMarks(readEscaped(q.escaped), str(q.message) ?? ''),
+    // How many permission prompts wait, this one first, when more than one does (#690).
+    waiting: Number.isInteger(q.waiting) && q.waiting > 1 ? q.waiting : null,
   };
+}
+
+const HELD = Object.freeze({ shown: null, marks: [], approve: 'machine' });
+const exactMarks = (e, message) => (e && e.shown && !marksExact(message, e.marks) ? { ...HELD, marks: [] } : e);
+
+// An approval's escaped text: { shown, marks: [[start, length], ...], approve: 'confirm' | 'machine' | 'tooMany' }.
+// One that cannot be read is held at the machine for Approve, never read as nothing escaped, which
+// would offer the one-tap Approve it replaces; Deny goes as for any approval.
+export function readEscaped(raw) {
+  if (raw === undefined || raw === null) { return null; }
+  const e = obj(raw);
+  const marks = Array.isArray(e?.marks) ? e.marks : null;
+  const whole = (n) => Number.isInteger(n) && n >= 0;
+  const readable = e && typeof e.shown === 'string' && /^[0-9a-f]{64}$/.test(e.shown) && marks
+    && marks.every((m) => Array.isArray(m) && m.length === 2 && whole(m[0]) && whole(m[1]) && m[1] > 0)
+    && (e.approve === 'confirm' || e.approve === 'machine' || e.approve === 'tooMany');
+  if (!readable) { return { shown: null, marks: [], approve: 'machine' }; }
+  return { shown: e.shown, marks: marks.map(([start, length]) => [start, length]), approve: e.approve };
 }
 
 // One sub-agent the session started: who it is, where it sits, whether it runs, and its latest
@@ -200,6 +235,11 @@ export function readActivity(raw) {
     // a schedule's number: an agent's text, shown only through prompt-origin.js (#489).
     userMessageFrom: readUserMessageFrom(a.userMessageFrom),
     userMessageLabel: str(a.userMessageLabel),
+    // The latest turn's id, the one session.history gives it (#292, v1-history.md): the key a
+    // conversation merging live activity with history pages draws it once by.
+    turn: str(a.turn),
+    // The turn the main agent's latest reply is of: the latest turn's own only when it equals turn.
+    responseTurn: str(a.responseTurn),
     turnCount: num(a.turnCount),
     compactions: num(a.compactions),
     background: readBackground(a.background),
@@ -236,6 +276,9 @@ export function readSession(raw) {
     subagents: Array.isArray(s.subagents) ? s.subagents.map(readSubagent).filter(Boolean) : null,
     subagentsMore: Number.isSafeInteger(s.subagentsMore) && s.subagentsMore > 0 ? s.subagentsMore : 0,
     waitingOn: str(s.waitingOn),
+    // What is wrong with it (#800): it needs sign-in, its turn ended on an error, or it stopped
+    // answering. Shown over status (status.js); read where every name for it is kept.
+    attention: readAttention(s.attention),
   };
 }
 
@@ -255,16 +298,47 @@ export function readHello(raw) {
     protocol: num(h.protocol),
     // readOnly: why the machine takes nothing from the phone now (agent-ha-bridge runs there).
     // instance: this run of the host, which a reconnect resumes the list of (sessions.subscribe's since).
-    machine: { id: str(m.id), name: str(m.name), os: str(m.os), hostVersion: str(m.hostVersion), dev: m.dev === true, sessions: Number.isSafeInteger(m.sessions) && m.sessions >= 0 ? m.sessions : null, readOnly: str(m.readOnly) || null, instance: str(m.instance) },
+    machine: { id: str(m.id), name: str(m.name), os: str(m.os), hostVersion: str(m.hostVersion), dev: m.dev === true, sessions: Number.isSafeInteger(m.sessions) && m.sessions >= 0 ? m.sessions : null, readOnly: str(m.readOnly) || null, instance: str(m.instance), signIn: readMachineSignIn(m.signIn) },
     capabilities: Array.isArray(h.capabilities) ? h.capabilities.filter((c) => typeof c === 'string') : [],
   };
 }
 
-// session.answer's and session.reply's result: { outcome, reason }. Anything unreadable is
-// unconfirmed, since the host may have typed it.
+// session.answer's and session.reply's result: { outcome, reason, stage, code }, and timings
+// where the host sent them (sessions.progress): each stage it reached, in ms since it received
+// the request ({ typed, recorded, confirmed }). Only for this device's own timing marks, so a
+// stage that isn't a whole number of ms is left out, as is one the protocol doesn't name: its
+// name would be the host's own text in the console line (timing.js). code, on a refusal or a
+// stale answer, is a reason this app says in fixed words of its own (answers.js AnswerReasons;
+// formReset is kept on a stale result for the card, not yet shown). Anything unreadable
+// is unconfirmed, since the host may have typed it. stage, on an unconfirmed answer, is how far
+// it is known to have got (#467), named as the progress timings name the stages: 'typed' (every
+// key went, nothing recorded) or 'recorded' (the session recorded another answer); one this app
+// does not know reads as 'typed'.
+export const TimingStages = Object.freeze(['typed', 'recorded', 'confirmed']);
+export const AnswerStages = Object.freeze(['typed', 'recorded']);
 export function readAnswerResult(raw) {
   const r = obj(raw) ?? {};
-  return { outcome: readOutcome(r.outcome), reason: str(r.reason) };
+  const outcome = readOutcome(r.outcome);
+  const stage = outcome === 'unconfirmed' && r.stage != null ? tolerant(AnswerStages, 'typed')(r.stage) : null;
+  const code = resultAnswerReason(outcome, r.code);
+  const timings = Object.entries(obj(r.timings) ?? {}).filter(([what, ms]) => TimingStages.includes(what) && Number.isFinite(ms) && ms >= 0);
+  return {
+    outcome, reason: str(r.reason), stage, ...(code ? { code } : {}),
+    ...(timings.length ? { timings: Object.fromEntries(timings) } : {}),
+  };
+}
+
+// An interim frame's progress for a session.reply or session.answer that asked for it
+// (sessions.progress): { stage, working }, stage received (the host has it) or typed (the keys
+// have gone; working: the session was working, and takes it at its next step). Read as the C#
+// reader reads it, a stage that isn't a string as '': a stage this app doesn't know (from a newer
+// host) is the service's to pass over, as it says nothing the person can act on. Null for a frame
+// that isn't an object.
+export const ProgressStages = Object.freeze(['received', 'typed']);
+export function readProgress(raw) {
+  const p = obj(raw);
+  if (!p) { return null; }
+  return { stage: str(p.stage) ?? '', working: p.working === true };
 }
 
 // attachment.start's and attachment.chunk's result: { received, complete }. A count that is

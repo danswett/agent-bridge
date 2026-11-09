@@ -12,7 +12,7 @@ public sealed class CommandCleanupException(Exception inner)
 
 // The job is assigned atomically at creation: even an immediately exiting wrapper cannot
 // leave descendants behind. Ordinary launch/session processes must not use this runner.
-public sealed class VersionCommandRunner : ICommandRunner
+public sealed class VersionCommandRunner(Func<IReadOnlyDictionary<string, string?>>? environment = null) : ICommandRunner
 {
     public async Task<CommandResult> RunAsync(string program, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken cancellationToken = default)
     {
@@ -50,6 +50,7 @@ public sealed class VersionCommandRunner : ICommandRunner
         InitializeProcThreadAttributeList(0, 2, 0, ref size);
         if (size == 0) { throw new Win32Exception(Marshal.GetLastWin32Error()); }
         var storage = Marshal.AllocHGlobal(checked((int)size + 4 * IntPtr.Size));
+        nint childEnvironment = 0;
         ProcessInformation started;
         try
         {
@@ -68,15 +69,23 @@ public sealed class VersionCommandRunner : ICommandRunner
                     throw new Win32Exception(Marshal.GetLastWin32Error());
                 }
                 info.Attributes = storage;
+                if (environment?.Invoke() is { Count: > 0 } extra)
+                {
+                    childEnvironment = Marshal.StringToHGlobalUni(WindowsAgentStarter.EnvironmentBlock(extra));
+                }
                 if (!CreateProcessW(line.Application, new StringBuilder(line.CommandLine), 0, 0, true,
-                    0x08080000, 0, null, ref info, out started))
+                    0x08080400, childEnvironment, null, ref info, out started))
                 {
                     throw new Win32Exception(Marshal.GetLastWin32Error());
                 }
             }
             finally { DeleteProcThreadAttributeList(storage); }
         }
-        finally { Marshal.FreeHGlobal(storage); }
+        finally
+        {
+            if (childEnvironment != 0) { Marshal.FreeHGlobal(childEnvironment); }
+            Marshal.FreeHGlobal(storage);
+        }
         using var process = new SafeProcessHandle(started.Process, true);
         using var thread = new SafeWaitHandle(started.Thread, true);
         stdoutWrite.Dispose();

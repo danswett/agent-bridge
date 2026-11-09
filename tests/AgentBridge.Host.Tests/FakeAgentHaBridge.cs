@@ -35,6 +35,10 @@ sealed class FakeAgentHaBridge : IAsyncDisposable
     public string ClaudeSettings => Path.Combine(ClaudeHome, "settings.json");
     public string CodexHooks => Path.Combine(BridgeHome, "codex-bridge", "plugins", "agent-ha-bridge", "hooks.json");
     public string CodexScript => Path.Combine(BridgeHome, "codex-bridge", "plugins", "agent-ha-bridge", "hooks", "codex-bridge-hook.ps1");
+    // Codex's plugin cache: <codexHome>\plugins\cache\<marketplace>\<plugin>\<version>.
+    public const string CodexVersion = "1.0.0";
+    public string CodexCache => Path.Combine(CodexHome, "plugins", "cache", "agent-ha-bridge", "agent-ha-bridge");
+    public string CodexCacheHooks(string version = CodexVersion) => Path.Combine(CodexCache, version, "hooks.json");
     public string ConfigPath => Path.Combine(BridgeHome, "config.json");
 
     public FakeRuntime Runtime_ { get; }
@@ -118,6 +122,11 @@ sealed class FakeAgentHaBridge : IAsyncDisposable
         }
         Write(CodexHooks, Json(new JsonObject { ["description"] = "Copilot Home Assistant bridge", ["hooks"] = codex }));
         Write(CodexScript, "# codex hook\r\n");
+        // And Codex's own copy of that plugin, which `codex plugin add` made and Codex runs (#123).
+        Directory.CreateDirectory(Path.GetDirectoryName(CodexCacheHooks())!);
+        File.Copy(CodexHooks, CodexCacheHooks());
+        Write(Path.Combine(CodexCache, CodexVersion, ".codex-plugin", "plugin.json"), Json(new JsonObject { ["name"] = "agent-ha-bridge", ["version"] = CodexVersion, ["hooks"] = "./hooks.json" }));
+        Write(Path.Combine(CodexCache, CodexVersion, "hooks", "codex-bridge-hook.ps1"), "# codex hook\r\n");
         Write(Path.Combine(CodexHome, "AGENTS.md"), $"<!-- agent-ha-bridge-owner:{InstallationId} -->\r\nguidance\r\n<!-- /agent-ha-bridge -->\r\n");
         Write(Path.Combine(CodexHome, "config.toml"), "model = \"gpt-5\"\r\n\r\n[hooks.state]\r\n\"agent-ha-bridge\" = \"trusted\"\r\n");
 

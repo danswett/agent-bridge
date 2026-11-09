@@ -79,7 +79,8 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         return new Echo(process.ProcessId, nint.Parse(parts[2], CultureInfo.InvariantCulture), log);
     }
 
-    static T WaitFor<T>(string log, Func<string[], T?> found, int seconds = 15)
+    // 60 s, not 15: a loaded windows-11-arm runner took 11 s for a lone Escape key (#1379).
+    static T WaitFor<T>(string log, Func<string[], T?> found, int seconds = 60)
     {
         var deadline = Stopwatch.StartNew();
         while (true)
@@ -156,6 +157,19 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         Assert.Equal(expected, got.Where(k => k.StartsWith("key 1", StringComparison.Ordinal)).Select(k => int.Parse(k.Split(' ')[3], CultureInfo.InvariantCulture)));
     }
 
+    // Copilot CLI 1.0.105 ready for a prompt, as captured live (LaunchFlowTests.CopilotReady):
+    // its rail input box, empty, and the prompt's footer. A Copilot reply is typed only into
+    // that box, read off the screen first (#825).
+    static readonly string[] CopilotIdle =
+    [
+        "\u25CF Done.",
+        "",
+        "\u257B\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584",
+        "\u2503",
+        "\u2579\u2580\u2580\u2580\u2580\u2580\u2580\u2580\u2580",
+        " \u2190 open sidebar \u00B7 Interactive \u00B7 Allow All \u00B7 / commands \u00B7 ? help \u00B7 tab next tab",
+    ];
+
     // A Copilot permission prompt drawn on a real console: the worker reads the screen, the
     // host finds the plain Yes on it, and the digit goes only while that row still reads so.
     static readonly string[] PermissionPrompt =
@@ -167,6 +181,74 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         "  2. Yes, and don't ask again for `git push` in this directory",
         "  3. No, and tell Copilot what to do differently (Esc to stop)",
     ];
+
+    // A Copilot input box holding only Unicode spaces, read off a real console by the real
+    // worker: only the window's ASCII padding is trimmed, so the spaces are still there for the
+    // reader to refuse as a draft (#843 review, Copilot 4477100469).
+    [WindowsTheory]
+    [InlineData("\u00A0")]
+    [InlineData("\u2007")]
+    [InlineData("\u202F")]
+    [InlineData("\u3000")]
+    public async Task Unicode_spaces_at_the_end_of_a_real_screens_row_are_read_and_its_padding_is_not(string space)
+    {
+        string[] draft = ["\u25CF Done.", "", "\u257B\u2584\u2584\u2584\u2584", $"\u2503 {space}", "\u2579\u2580\u2580\u2580\u2580", " Interactive \u00B7 @ files"];
+        var echo = StartEcho(show: draft);
+
+        var screen = await new WorkerInjector(Worker).ReadScreenAsync(echo.Pid);
+
+        Assert.Null(screen.Problem);
+        Assert.Equal(draft, screen.Rows!.Take(draft.Length));
+        Assert.StartsWith("something is already typed in Copilot's input box", AgentBridge.Host.Delivery.Copilot.CopilotInputBoxReader.Read(screen.Rows!).Problem);
+    }
+
+    static DateTimeOffset CreatedAt(int pid)
+    {
+        using var process = Process.GetProcessById(pid);
+        Assert.True(GetProcessTimes(process.Handle, out var created, out _, out _, out _));
+        return DateTimeOffset.FromFileTime(created).ToUniversalTime();
+    }
+
+    [WindowsFact]
+    public async Task A_sessions_console_is_widened_by_the_worker_never_narrowed_and_its_screen_is_still_read()
+    {
+        var echo = StartEcho(show: PermissionPrompt);
+        var injector = new WorkerInjector(Worker);
+
+        var wide = await injector.WidenAsync(echo.Pid, CreatedAt(echo.Pid), 250);
+        Assert.Null(wide.Problem);
+        Assert.Equal(250, wide.Columns);
+
+        Assert.Equal(250, (await injector.WidenAsync(echo.Pid, CreatedAt(echo.Pid), 120)).Columns);
+        var screen = await injector.ReadScreenAsync(echo.Pid);
+        Assert.Null(screen.Problem);
+        Assert.Equal(PermissionPrompt, screen.Rows!.Take(PermissionPrompt.Length));
+        Assert.Empty(Keys(WaitFor(echo.Log, lines => lines)));
+    }
+
+    [WindowsFact]
+    public async Task A_widen_for_a_process_created_at_another_time_leaves_the_console_with_that_id_alone()
+    {
+        var echo = StartEcho();
+        var injector = new WorkerInjector(Worker);
+
+        // As if the launched process had gone and another had been given its id.
+        var other = await injector.WidenAsync(echo.Pid, CreatedAt(echo.Pid).AddSeconds(-5), 250);
+        Assert.Null(other.Columns);
+        Assert.False(other.NotYet);
+        Assert.Contains("no longer the one started", other.Problem);
+
+        // Its width as it was (a widen to 1 changes nothing and reads it back).
+        Assert.True((await injector.WidenAsync(echo.Pid, CreatedAt(echo.Pid), 1)).Columns < 250);
+    }
+
+    [WindowsFact]
+    public async Task A_widen_of_a_process_with_no_console_says_why_and_changes_nothing()
+    {
+        var width = await new WorkerInjector(Worker).WidenAsync(int.MaxValue - 1, DateTimeOffset.UtcNow, 250);
+        Assert.Null(width.Columns);
+        Assert.NotNull(width.Problem);
+    }
 
     [WindowsFact]
     public async Task A_permission_prompt_is_read_off_a_real_screen_and_approved_by_its_digit_only_while_the_row_still_reads_so()
@@ -242,6 +324,25 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         output.WriteLine(result.Detail);
     }
 
+    // #995, #802: a worker that cannot be started says only that it did not start, in fixed words
+    // its callers turn into their own, and why goes to the host's log: the detail reaches a receipt.
+    [WindowsFact]
+    public async Task A_worker_that_cannot_start_types_nothing_and_its_exception_goes_to_the_log_only()
+    {
+        var notAProgram = Path.Combine(root, "not-a-program.exe");
+        File.WriteAllText(notAProgram, "plain text, not a program");
+        var logged = new List<string>();
+        var injector = new WorkerInjector(notAProgram, logged.Add);
+
+        var typed = await injector.InjectAsync(1, new KeyPlan([new KeySend("x", true, 10, 0)]));
+        var screen = await injector.ReadScreenAsync(1);
+
+        Assert.Equal((InjectionStatus.NothingTyped, WorkerInjector.NotStarted), (typed.Status, typed.Detail));
+        Assert.Null(screen.Rows);
+        Assert.Equal(WorkerInjector.NotStarted, screen.Problem);
+        Assert.Equal(2, logged.Count(l => l.StartsWith("the injector could not start for pid 1: Win32Exception: ", StringComparison.Ordinal)));
+    }
+
     [WindowsFact]
     public async Task A_missing_worker_types_nothing()
     {
@@ -261,7 +362,7 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         // The longest reply allowed: 16 KiB of UTF-8, every byte a key down and up.
         text ??= string.Concat(Enumerable.Repeat("abcdefgh", AgentBridge.Protocol.Limits.ReplyText / 8));
         typed ??= text;
-        var echo = StartEcho();
+        var echo = StartEcho(show: CopilotIdle);
         using var f = new Fixture();
         const string Id = "33333333-3333-4333-8333-333333333333";
         // The lock is newer than the process, as a live CLI's is; an older one is a dead CLI's.
@@ -288,12 +389,108 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         Assert.Equal((AgentBridge.Protocol.AnswerOutcome.Delivered, (string?)null), (result.Outcome, result.Reason));
     }
 
+    // A reply to Claude Code through the real ReplyService and the real worker into a real
+    // console, its empty box drawn as Claude Code draws it: the pointer, then a no-break space
+    // (`children:[pointer,"\xA0"]`). The host holds the box's rows as the worker reads them, so the
+    // no-break space is in both; held as "❯" with it trimmed away, every Claude reply was refused
+    // as a box that had changed (#843 review). A bash-mode box ("!" then a no-break space) is no
+    // input box for a reply, which would run there as a command: nothing is typed into it.
+    [WindowsTheory]
+    [InlineData("\u276F", true)]
+    [InlineData(">", true)]
+    [InlineData("!", false)]
+    public async Task A_Claude_reply_into_its_empty_box_drawn_with_a_no_break_space_is_typed_and_delivered(string pointer, bool typed)
+    {
+        var rule = new string('\u2500', 40);
+        string[] screen = ["> plan it", "", "\u25CF Planned.", "", rule, pointer + "\u00A0", rule, "  \u23F5\u23F5 auto mode on"];
+        var echo = StartEcho(show: screen);
+        using var f = new Fixture();
+        const string Id = "c1a0de00-0000-4000-8000-0000000000a1";
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, echo.Pid, transcript);
+        Fixture.Append(transcript, Claude.User("plan it", 1));
+        f.Processes.Run(AgentBridge.Protocol.AgentKind.Claude, echo.Pid);
+        await using var source = new AgentBridge.Host.Core.SessionSource(f.Options(), f.Processes, TimeProvider.System);
+        await source.RefreshAsync();
+        var replies = new ReplyService(source, f.Processes, new NoBridge(), new NoGuard(), new WorkerInjector(Worker),
+            new ReplyOptions { CopilotHome = f.CopilotHome, PlatformSupported = true, ConfirmTimeout = TimeSpan.FromSeconds(60), PollInterval = TimeSpan.FromMilliseconds(50) });
+        const string Text = "Ship it";
+        var cli = typed ? Task.Run(() =>
+        {
+            var downs = WaitFor(echo.Log, lines => Keys(lines).Where(k => k.StartsWith("key 1 ", StringComparison.Ordinal)).ToList() is { } d && d.Count >= Text.Length + 1 ? d : null, seconds: 60);
+            var words = new string([.. downs.SkipLast(1).Select(k => (char)int.Parse(k.Split(' ')[3], CultureInfo.InvariantCulture))]);
+            var prompt = System.Text.Json.Nodes.JsonNode.Parse(Claude.User(words, 5))!.AsObject();
+            prompt["promptSource"] = "typed";
+            Fixture.Append(transcript, prompt.ToJsonString());
+            return words;
+        }) : null;
+
+        var result = await replies.ReplyAsync(new AgentBridge.Protocol.ReplyRequest { Id = Id, Request = Guid.NewGuid().ToString(), Text = Text });
+
+        if (cli is not null)
+        {
+            Assert.Equal(Text, await cli);
+            Assert.Equal((AgentBridge.Protocol.AnswerOutcome.Delivered, (string?)null), (result.Outcome, result.Reason));
+            return;
+        }
+        Assert.Equal(AgentBridge.Protocol.AnswerOutcome.Refused, result.Outcome);
+        Assert.Empty(Keys(WaitFor(echo.Log, lines => lines)));
+    }
+
+    // The real worker reading a footer's mode on a real console, the row's other parts free to
+    // change: in vim's normal mode nothing is typed; in insert mode the key goes (#843 review).
+    [WindowsTheory]
+    [InlineData("NORMAL", false)]
+    [InlineData("INSERT", true)]
+    public async Task The_worker_types_nothing_while_a_row_shows_a_forbidden_part_and_types_while_it_does_not(string mode, bool types)
+    {
+        string[] screen = [.. CopilotIdle.Take(5), $" -- {mode} -- \u00B7" + CopilotIdle[5]];
+        var echo = StartEcho(show: screen);
+        var injector = new WorkerInjector(Worker);
+
+        var result = await injector.InjectAsync(echo.Pid, new KeyPlan([new KeySend("x", false, 0, 0, null, [new ScreenRowCheck(5, ScreenCheck.WithoutParts, ["-- NORMAL --", "Shell"]), new ScreenRowCheck(5, ScreenCheck.WithAny, ["open sidebar"]), new ScreenRowCheck(5, ScreenCheck.WithNone, ["esc interrupt"]), new ScreenRowCheck(3, ScreenCheck.NotStartingWith, ["\u2503 !"])])]));
+
+        if (types)
+        {
+            Assert.Equal(InjectionStatus.Typed, result.Status);
+            Assert.NotEmpty(Keys(WaitFor(echo.Log, lines => Keys(lines).Count > 0 ? lines : null)));
+        }
+        else
+        {
+            Assert.Equal((InjectionStatus.NothingTyped, WorkerInjector.ScreenChanged), (result.Status, result.Detail));
+            Assert.Empty(Keys(WaitFor(echo.Log, lines => lines)));
+        }
+    }
+
+    // A person's draft in Copilot's input box on a real console, read by the real worker: the
+    // reply is refused with the draft shown, and not one key reaches the console (#825).
+    [WindowsFact]
+    public async Task A_reply_to_a_real_console_whose_Copilot_input_box_holds_a_draft_types_nothing()
+    {
+        string[] draft = [.. CopilotIdle.Take(3), "\u2503 half a thought", .. CopilotIdle.Skip(4)];
+        var echo = StartEcho(show: draft);
+        using var f = new Fixture();
+        const string Id = "55555555-5555-4555-8555-555555555555";
+        var events = f.CopilotSession(Id, echo.Pid, lockWrite: DateTimeOffset.UtcNow);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Assistant("Done.", 3), Copilot.TurnEnd(4));
+        f.Processes.Run(AgentBridge.Protocol.AgentKind.Copilot, echo.Pid);
+        await using var source = new AgentBridge.Host.Core.SessionSource(f.Options(), f.Processes, TimeProvider.System);
+        await source.RefreshAsync();
+        var replies = new ReplyService(source, f.Processes, new NoBridge(), new NoGuard(), new WorkerInjector(Worker),
+            new ReplyOptions { CopilotHome = f.CopilotHome, PlatformSupported = true });
+
+        var result = await replies.ReplyAsync(new AgentBridge.Protocol.ReplyRequest { Id = Id, Request = Guid.NewGuid().ToString(), Text = "go on" });
+
+        Assert.Equal((AgentBridge.Protocol.AnswerOutcome.Refused, "something is already typed in Copilot's input box at the machine (14 characters: \"half a thought\"); send or clear it there first"), (result.Outcome, result.Reason));
+        Assert.Empty(Keys(WaitFor(echo.Log, lines => lines)));
+    }
+
     // A reply with a file: staged privately, its path typed as an @ mention ahead of the words
     // by the real worker, and delivered once the "CLI" records the prompt with it attached.
     [WindowsFact]
     public async Task A_reply_with_an_attachment_types_its_staged_path_as_an_at_mention_and_is_delivered_once_attached()
     {
-        var echo = StartEcho();
+        var echo = StartEcho(show: CopilotIdle);
         using var f = new Fixture();
         const string Id = "44444444-4444-4444-8444-444444444444";
         var events = f.CopilotSession(Id, echo.Pid);
@@ -433,6 +630,9 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
 
     [DllImport("kernel32.dll")]
     static extern bool CloseHandle(nint handle);
+
+    [DllImport("kernel32.dll")]
+    static extern bool GetProcessTimes(nint process, out long creation, out long exit, out long kernel, out long user);
 
     [DllImport("kernel32.dll")]
     static extern bool TerminateProcess(nint process, uint exitCode);

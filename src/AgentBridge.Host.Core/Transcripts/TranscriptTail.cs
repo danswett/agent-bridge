@@ -11,6 +11,8 @@ internal interface ILineSink
     void Parse(ReadOnlyMemory<byte> line);
     // Bytes between the skimmed part and the window were never read at all.
     void Skipped() { }
+    // A line longer than the tail reads was passed over; head is its first bytes.
+    void Dropped(ReadOnlySpan<byte> head) { }
 }
 
 internal enum TailOutcome { Missing, Unreadable, Unchanged, Appended, Restarted }
@@ -35,14 +37,56 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
     // False when the offset is inside a line (a skim that jumped to the window and found
     // no newline yet), so the next read drops that fragment instead of parsing it.
     bool _aligned = true;
-    byte[] _anchor = [];
+    readonly byte[] _anchor = new byte[AnchorBytes];
+    int _anchorLength;
     bool _started;
+    // The file's size and write time as they were just before the last read, and when they were
+    // looked at. Every pass opened every transcript to find it unchanged, most of the host's
+    // kernel time (#608); the same size and time, looked at well after that time, is unchanged.
+    FileInfo? _info;
+    (long Length, DateTime Written)? _stamp;
+    DateTime _stampedAt;
+    // A write within this of a look may not have moved the time a file system keeps (a coarse
+    // clock), so a stamp that recent is not trusted to show a same-size rewrite.
+    static readonly TimeSpan Racy = TimeSpan.FromSeconds(2);
 
     public string Path { get; } = path;
 
     public long Offset => _offset;
 
+    // Tests: how many times the file was opened.
+    internal int Opens { get; private set; }
+    // Tests: run once a read has parsed what it found, before it notes where it stopped.
+    internal Action? AfterParse { get; set; }
+    // Tests: the wall clock a look is timed by, compared with the file system's own times.
+    internal Func<DateTime> UtcNow { get; set; } = static () => DateTime.UtcNow;
+
     public TailOutcome Read(ILineSink sink)
+    {
+        var before = Stamp(out var at);
+        if (_started && before is { } now && _stamp is { } last && now == last && now.Written < _stampedAt - Racy) { return TailOutcome.Unchanged; }
+        var outcome = Open(sink);
+        if (outcome is TailOutcome.Missing or TailOutcome.Unreadable) { _stamp = null; }
+        else { (_stamp, _stampedAt) = (before, at); }
+        return outcome;
+    }
+
+    (long Length, DateTime Written)? Stamp(out DateTime at)
+    {
+        at = UtcNow();
+        try
+        {
+            _info ??= new FileInfo(Path);
+            _info.Refresh();
+            // A link (a symlink or junction to the transcript) has a size and time of its own, not
+            // its target's, and would read as unchanged for ever: no stamp, so it is read each pass.
+            if (_info.Exists && _info.Attributes.HasFlag(FileAttributes.ReparsePoint)) { return null; }
+            return _info.Exists ? (_info.Length, _info.LastWriteTimeUtc) : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return null; }
+    }
+
+    TailOutcome Open(ILineSink sink)
     {
         FileStream stream;
         try
@@ -50,6 +94,7 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
             // Shared read, write and delete: the agent keeps the transcript open while it
             // writes, and nothing here may stop it renaming or deleting the file either.
             stream = new FileStream(Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.SequentialScan);
+            Opens++;
         }
         catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return TailOutcome.Missing; }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return TailOutcome.Unreadable; }
@@ -75,7 +120,7 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
             sink.Reset();
             _offset = 0;
             _aligned = true;
-            _anchor = [];
+            _anchorLength = 0;
             _started = true;
         }
 
@@ -91,7 +136,7 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
             var skimEnd = Math.Min(parseFrom, from + options.MaxSkimBytes);
             // Lines that start before the window are skimmed whole, so the line straddling
             // its edge is neither lost nor seen twice.
-            (position, aligned) = Scan(stream, from, length, aligned, stopAtLineStart: skimEnd, sink.Skim);
+            (position, aligned) = Scan(stream, from, length, aligned, stopAtLineStart: skimEnd, sink.Skim, sink);
             if (position < skimEnd || (position < parseFrom && skimEnd < parseFrom))
             {
                 // Skim budget spent (or one line longer than all of it): jump to the
@@ -103,26 +148,28 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
         }
         // A trailing line with no newline yet stays unread: the offset stops just past the
         // last newline, so it is read whole once it is finished.
-        (_offset, _aligned) = Scan(stream, position, length, aligned, stopAtLineStart: long.MaxValue, sink.Parse);
-        _anchor = ReadAnchor(stream, _offset);
+        (_offset, _aligned) = Scan(stream, position, length, aligned, stopAtLineStart: long.MaxValue, sink.Parse, sink);
+        AfterParse?.Invoke();
+        _anchorLength = ReadAnchor(stream, _offset, _anchor);
         return restart ? TailOutcome.Restarted : TailOutcome.Appended;
     }
 
     bool AnchorStillMatches(FileStream stream)
     {
-        if (_anchor.Length == 0) { return true; }
-        var now = ReadAnchor(stream, _offset);
-        return now.AsSpan().SequenceEqual(_anchor);
+        if (_anchorLength == 0) { return true; }
+        Span<byte> now = stackalloc byte[AnchorBytes];
+        var read = ReadAnchor(stream, _offset, now);
+        return now[..read].SequenceEqual(_anchor.AsSpan(0, _anchorLength));
     }
 
-    static byte[] ReadAnchor(FileStream stream, long offset)
+    // Into buffer, the bytes just before offset; how many.
+    static int ReadAnchor(FileStream stream, long offset, Span<byte> buffer)
     {
         var count = (int)Math.Min(AnchorBytes, offset);
-        if (count == 0) { return []; }
-        var buffer = new byte[count];
+        if (count == 0) { return 0; }
         stream.Seek(offset - count, SeekOrigin.Begin);
-        stream.ReadExactly(buffer);
-        return buffer;
+        stream.ReadExactly(buffer[..count]);
+        return count;
     }
 
     static bool IsLineStart(FileStream stream, long position)
@@ -135,13 +182,17 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
     // Calls onLine for every complete line in [start, end) and returns the position just
     // past the last newline consumed. Unaligned, everything up to the first newline is a
     // fragment of a line that began earlier and is dropped. Stops once a line starts at or
-    // beyond stopAtLineStart. Lines over MaxLineBytes are dropped, not buffered.
-    (long Consumed, bool Aligned) Scan(FileStream stream, long start, long end, bool aligned, long stopAtLineStart, Action<ReadOnlyMemory<byte>> onLine)
+    // beyond stopAtLineStart. Lines over MaxLineBytes are dropped, not buffered: the sink is
+    // told of each with its first bytes, all of it that is kept.
+    (long Consumed, bool Aligned) Scan(FileStream stream, long start, long end, bool aligned, long stopAtLineStart, Action<ReadOnlyMemory<byte>> onLine, ILineSink sink)
     {
         if (start >= end) { return (start, aligned); }
         stream.Seek(start, SeekOrigin.Begin);
-        var chunk = ArrayPool<byte>.Shared.Rent(ChunkBytes);
+        // No bigger than the read: a 1 MiB rent for a one-line append was a large-object array
+        // whenever the pool had none to hand.
+        var chunk = ArrayPool<byte>.Shared.Rent((int)Math.Min(ChunkBytes, end - start));
         var line = new ArrayBufferWriter<byte>();
+        var head = new Head();
         var oversized = false;
         var dropping = !aligned;
         var consumed = start;
@@ -158,27 +209,34 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
                     var newline = chunk.AsSpan(i, read - i).IndexOf((byte)'\n');
                     if (newline < 0)
                     {
-                        Append(line, chunk.AsSpan(i, read - i), ref oversized, dropping);
+                        Append(line, chunk.AsSpan(i, read - i), ref oversized, dropping, head);
                         break;
                     }
-                    if (!dropping && !oversized)
+                    if (!dropping)
                     {
                         ReadOnlyMemory<byte> whole;
-                        if (line.WrittenCount == 0) { whole = chunk.AsMemory(i, newline); }
+                        if (line.WrittenCount == 0 && !oversized) { whole = chunk.AsMemory(i, newline); }
                         else
                         {
-                            Append(line, chunk.AsSpan(i, newline), ref oversized, dropping);
+                            Append(line, chunk.AsSpan(i, newline), ref oversized, dropping, head);
                             whole = oversized ? ReadOnlyMemory<byte>.Empty : line.WrittenMemory;
                         }
                         if (!oversized)
                         {
                             if (whole.Length > 0 && whole.Span[^1] == '\r') { whole = whole[..^1]; }
-                            if (whole.Length > options.MaxLineBytes) { whole = ReadOnlyMemory<byte>.Empty; }
+                            if (whole.Length > options.MaxLineBytes)
+                            {
+                                head.Keep(whole.Span);
+                                oversized = true;
+                                whole = ReadOnlyMemory<byte>.Empty;
+                            }
                             if (!whole.IsEmpty) { onLine(whole); }
                         }
+                        if (oversized) { sink.Dropped(head.Line()); }
                     }
                     dropping = false;
                     oversized = false;
+                    head.Clear();
                     line.ResetWrittenCount();
                     consumed = position + i + newline + 1;
                     i += newline + 1;
@@ -193,10 +251,39 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
         finally { ArrayPool<byte>.Shared.Return(chunk); }
     }
 
-    void Append(ArrayBufferWriter<byte> line, ReadOnlySpan<byte> bytes, ref bool oversized, bool dropping)
+    void Append(ArrayBufferWriter<byte> line, ReadOnlySpan<byte> bytes, ref bool oversized, bool dropping, Head head)
     {
-        if (dropping || oversized) { return; }
-        if (line.WrittenCount + bytes.Length > options.MaxLineBytes) { oversized = true; line.ResetWrittenCount(); return; }
+        if (dropping) { return; }
+        if (oversized) { head.Keep(bytes); return; }
+        if (line.WrittenCount + bytes.Length > options.MaxLineBytes)
+        {
+            oversized = true;
+            head.Keep(line.WrittenSpan);
+            head.Keep(bytes);
+            line.ResetWrittenCount();
+            return;
+        }
         line.Write(bytes);
+    }
+
+    // The first bytes of a line too long to read (HistoryReader reads the same many of one).
+    sealed class Head
+    {
+        const int Bytes = 4096;
+        readonly byte[] _bytes = new byte[Bytes];
+        int _length;
+
+        public void Keep(ReadOnlySpan<byte> bytes)
+        {
+            var n = Math.Min(bytes.Length, Bytes - _length);
+            bytes[..n].CopyTo(_bytes.AsSpan(_length));
+            _length += n;
+        }
+
+        // Held whole, a line ends without its carriage return, as a line read does.
+        public ReadOnlySpan<byte> Line() =>
+            _length < Bytes && _length > 0 && _bytes[_length - 1] == '\r' ? _bytes.AsSpan(0, _length - 1) : _bytes.AsSpan(0, _length);
+
+        public void Clear() => _length = 0;
     }
 }

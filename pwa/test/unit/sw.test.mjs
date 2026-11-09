@@ -17,8 +17,29 @@ function worker({ clients = [] } = {}) {
   const handlers = {};
   const shown = [];
   const opened = [];
+  // What is in the tray: shown, and not closed since; one per tag, as the browser keeps it.
+  const open = [];
+  const events = [];
   const self = {
-    registration: { scope, showNotification: async (title, options) => { shown.push({ title, ...options }); } },
+    registration: {
+      scope,
+      showNotification: async (title, options) => {
+        // Per the Notifications spec: a silent notification cannot renotify.
+        if (options.silent && options.renotify) { throw new TypeError('silent and renotify are mutually exclusive'); }
+        const n = { title, ...options, close: () => { events.push('close'); open.splice(open.indexOf(n), 1); } };
+        await new Promise((r) => setImmediate(r));
+        events.push('show');
+        shown.push({ title, ...options });
+        const at = options.tag === undefined ? -1 : open.findIndex((o) => o.tag === options.tag);
+        if (at >= 0) { open.splice(at, 1); }
+        open.push(n);
+      },
+      // A browser answers this asynchronously too: other pushes' work can land in between.
+      getNotifications: async ({ tag } = {}) => {
+        await new Promise((r) => setImmediate(r));
+        return open.filter((o) => tag === undefined || o.tag === tag);
+      },
+    },
     clients: { matchAll: async () => clients, openWindow: async (u) => { opened.push(u); }, claim() {} },
     addEventListener: (type, fn) => { handlers[type] = fn; },
     skipWaiting() {},
@@ -29,7 +50,13 @@ function worker({ clients = [] } = {}) {
     handlers[type]({ ...event, waitUntil: (p) => { done = p; } });
     await done;
   };
-  return { fire, shown, opened };
+  // Dispatched and left running, as a browser does with pushes that arrive close together.
+  const start = (type, event) => {
+    let done;
+    handlers[type]({ ...event, waitUntil: (p) => { done = p; } });
+    return done;
+  };
+  return { fire, start, shown, opened, open, events };
 }
 
 // Objects made inside the worker's realm have its prototypes; compare their contents.
@@ -70,6 +97,166 @@ test('an answered question replaces its notification quietly, and a finished tur
   await sw.fire('push', push(notice('finished', { body: 'DEV · finished\nDone.' })));
   assert.deepEqual(sw.shown.map((n) => [n.data.kind, n.tag, n.silent ?? false, n.renotify]),
     [['resolved', `${MACHINE}:s1`, true, false], ['finished', `${MACHINE}:s1`, false, true]]);
+});
+
+// A push as the host sends it once it sends a class (#913).
+const classed = (kind, cls, extra = {}) => {
+  const base = notice(kind).notification;
+  return { web_push: 8030, notification: { ...base, ...(kind === 'finished' && cls === 'done' ? { silent: true } : {}), ...extra, data: { ...base.data, ...(cls === undefined ? {} : { class: cls }) } } };
+};
+
+test('a done notification is silent and never alerts again, whatever the push says of itself', async () => {
+  const sw = worker();
+  await sw.fire('push', push(classed('finished', 'done', { silent: false })));
+  await sw.fire('push', push(classed('finished', 'done', { silent: undefined })));
+  assert.deepEqual(sw.shown.map((n) => [n.tag, n.silent, n.renotify]), [[`${MACHINE}:s1`, true, false], [`${MACHINE}:s1`, true, false]]);
+  assert.equal(sw.open.length, 1, 'replaced in place, not stacked');
+});
+
+test('a push whose kind and class disagree takes the quieter reading: a finished that needs you never alerts as finished', async () => {
+  const sw = worker();
+  await sw.fire('push', push(classed('finished', 'needsYou', { silent: false })));
+  await sw.fire('push', push(classed('question', 'done', { silent: false })));
+  assert.deepEqual(sw.shown.map((n) => [n.silent, n.renotify]), [[true, false], [true, false]]);
+});
+
+test('a silent finished push shows rather than throwing on silent with renotify', async () => {
+  const sw = worker();
+  await sw.fire('push', push(notice('finished', { silent: true })));
+  assert.equal(sw.shown.length, 1);
+  assert.equal(sw.shown[0].silent, true);
+  assert.equal(sw.shown[0].renotify, false);
+});
+
+test('an FYI leaves nothing in the tray, though it is shown first so the push is not left showing nothing', async () => {
+  const sw = worker();
+  await sw.fire('push', push(classed('question', 'fyi')));
+  assert.equal(sw.shown.length, 1);
+  assert.equal(sw.shown[0].silent, true);
+  assert.deepEqual(sw.open, []);
+});
+
+test('an FYI takes the session\'s earlier notification away with it', async () => {
+  const sw = worker();
+  await sw.fire('push', push(classed('question', 'needsYou')));
+  await sw.fire('push', push(classed('question', 'fyi')));
+  assert.deepEqual(sw.open, []);
+});
+
+test('a question that needs you alerts again, and replaces the session\'s earlier notification', async () => {
+  const sw = worker();
+  await sw.fire('push', push(classed('finished', 'done')));
+  await sw.fire('push', push(classed('question', 'needsYou')));
+  assert.equal(sw.shown[1].renotify, true);
+  assert.equal(sw.shown[1].silent, undefined);
+  assert.deepEqual(sw.open.map((n) => n.data.kind), ['question']);
+});
+
+test('a question answered on any device is withdrawn: its notification is closed, and other sessions\' stay', async () => {
+  const sw = worker();
+  await sw.fire('push', push(classed('question', 'needsYou')));
+  await sw.fire('push', push(classed('question', 'needsYou', { tag: `${MACHINE}:s2` })));
+  await sw.fire('push', push(notice('resolved', { body: 'DEV · no longer waiting' })));
+  assert.deepEqual(sw.open.map((n) => n.tag), [`${MACHINE}:s2`]);
+});
+
+test('a withdrawal still under way never closes a newer question that arrived for the same session', async () => {
+  const sw = worker();
+  await Promise.all([
+    sw.start('push', push(notice('resolved', { body: 'DEV · no longer waiting' }))),
+    sw.start('push', push(classed('question', 'needsYou', { body: 'DEV · waiting on you\nWhich port?' }))),
+  ]);
+  assert.deepEqual(sw.open.map((n) => [n.tag, n.data.kind, n.body]), [[`${MACHINE}:s1`, 'question', 'DEV · waiting on you\nWhich port?']]);
+  assert.deepEqual(sw.events, ['show', 'close', 'show']);
+});
+
+test('an answered question with no tag to withdraw it by is shown and closed under one of its own', async () => {
+  const sw = worker();
+  await sw.fire('push', push(notice('resolved', { tag: '' })));
+  assert.equal(sw.shown.length, 1);
+  assert.deepEqual(sw.open, []);
+});
+
+test('a withdrawn notice says the session\'s own line while it is up, never a placeholder, and is closed only after it is shown', async () => {
+  const sw = worker();
+  await sw.fire('push', push(classed('question', 'fyi', { body: 'DEV · finished a side task' })));
+  await sw.fire('push', push(notice('resolved', { body: 'DEV · no longer waiting' })));
+  await sw.fire('push', push(notice('resolved', { body: undefined })));
+  assert.deepEqual(sw.shown.map((n) => [n.body, n.silent, n.renotify]), [
+    ['DEV · finished a side task', true, false],
+    ['DEV · no longer waiting', true, false],
+    ['Pick the session store', true, false],
+  ]);
+  assert.deepEqual(sw.events, ['show', 'close', 'show', 'close', 'show', 'close']);
+});
+
+test('a class from a newer machine, or of the wrong type, reads as none: the notice is as before', async () => {
+  const sw = worker();
+  for (const cls of ['urgent', 7, null, { a: 1 }]) {
+    await sw.fire('push', push(classed('question', cls === null ? undefined : cls)));
+  }
+  assert.equal(sw.shown.length, 4);
+  for (const n of sw.shown) {
+    assert.equal(n.renotify, true);
+    assert.equal(n.silent, undefined);
+  }
+  assert.equal(sw.open.length, 1);
+});
+
+test('every notification carries the app icon and the mark as its badge, for Android\'s status bar', async () => {
+  const sw = worker();
+  await sw.fire('push', push(notice('question')));
+  await sw.fire('push', push(undefined));
+  assert.deepEqual(sw.shown.map((n) => [n.icon, n.badge]), [['icons/icon-192.png', 'icons/badge-96.png'], ['icons/icon-192.png', 'icons/badge-96.png']]);
+});
+
+// A group: the machine's questions as one notice, with no session of its own (#913).
+const group = (extra = {}, data = {}) => ({
+  web_push: 8030,
+  notification: {
+    title: 'Needs you',
+    body: 'DEV · 3 sessions are waiting on you',
+    navigate: `${scope}?host=${MACHINE}&needsyou=1`,
+    tag: `${MACHINE}:~needsyou`,
+    lang: 'en',
+    data: { v: 1, kind: 'group', machine: MACHINE, session: '', sessions: 3, class: 'needsYou', at: '2026-10-28T04:22:43.182Z', ...data },
+    ...extra,
+  },
+});
+
+test('a group is shown as Needs you with its count, under the machine\'s group tag, alerting, and a tap goes to Needs you', async () => {
+  const sw = worker();
+  await sw.fire('push', push(group()));
+  const [n] = sw.shown;
+  assert.equal(n.title, 'Needs you');
+  assert.equal(n.tag, `${MACHINE}:~needsyou`);
+  assert.equal(n.renotify, true);
+  assert.equal(n.silent, undefined);
+  assert.deepEqual(plain(n.data), { url: `${scope}?host=${MACHINE}&needsyou=1`, kind: 'group', machine: MACHINE, session: null, question: null, class: 'needsYou', sessions: 3 });
+});
+
+test('a group the host calls silent changes in place without alerting again', async () => {
+  const sw = worker();
+  await sw.fire('push', push(group()));
+  await sw.fire('push', push(group({ silent: true }, { sessions: 2 })));
+  assert.deepEqual(sw.shown.map((n) => [n.silent ?? false, n.renotify, n.data.sessions]), [[false, true, 3], [true, false, 2]]);
+  assert.equal(sw.open.length, 1);
+});
+
+test('a resolved under the group\'s tag takes the group away, and other notices stay', async () => {
+  const sw = worker();
+  await sw.fire('push', push(group()));
+  await sw.fire('push', push(classed('question', 'needsYou', { tag: `${MACHINE}:s2` })));
+  await sw.fire('push', push(notice('resolved', { tag: `${MACHINE}:~needsyou`, body: 'DEV · nobody is waiting on you', data: { v: 1, kind: 'resolved', machine: MACHINE, session: '' } })));
+  assert.deepEqual(sw.open.map((n) => n.tag), [`${MACHINE}:s2`]);
+});
+
+test('a question\'s reminder is kept in its notice, which still alerts', async () => {
+  const sw = worker();
+  const reminded = (reminder) => ({ ...classed('question', 'needsYou'), notification: { ...classed('question', 'needsYou').notification, data: { ...notice('question').notification.data, class: 'needsYou', reminder } } });
+  await sw.fire('push', push(reminded(true)));
+  await sw.fire('push', push(reminded('yes')));
+  assert.deepEqual(sw.shown.map((n) => [n.data.reminder, n.renotify]), [[true, true], [undefined, true]]);
 });
 
 test('a kind from a newer machine is shown as a question', async () => {
@@ -178,6 +365,13 @@ test('a release\'s own files come from its cache, with nothing asked of the netw
   assert.deepEqual(sw.fetched, []);
 });
 
+test('a page of another site under the same scope is left to the browser, never answered with the app', async () => {
+  const sw = cachingWorker({ [CURRENT]: { [scope]: 'page' } });
+  assert.equal(await sw.get(`${scope}s4/`, 'navigate'), undefined);
+  assert.equal(await sw.get(`${scope}app/?demo=1`, 'navigate'), undefined);
+  assert.deepEqual(sw.fetched, []);
+});
+
 test('a file that is not the release\'s own is served as kept, and fetched again for next time', async () => {
   const sw = cachingWorker({ [CURRENT]: { [`${scope}js/ui/glyph.js`]: 'kept' } });
   assert.equal((await sw.get(`${scope}js/ui/glyph.js`)).body, 'kept');
@@ -234,8 +428,9 @@ test('a tap brings an open app forward and tells it where to go, keeping its con
   const messages = [];
   let focused = 0;
   const elsewhere = { url: 'https://danswett.github.io/other-app/', postMessage: () => assert.fail('not this app'), focus: async () => assert.fail('not this app') };
+  const spike = { url: `${scope}s4/`, postMessage: () => assert.fail('a page of another site, not the app'), focus: async () => assert.fail('a page of another site, not the app') };
   const app = { url: `${scope}?x=1`, postMessage: (m) => messages.push(m), focus: async () => { focused++; } };
-  const sw = worker({ clients: [elsewhere, app] });
+  const sw = worker({ clients: [elsewhere, spike, app] });
   await sw.fire('notificationclick', tapped({ url: `${scope}?host=${MACHINE}&session=s1&question=q1` }));
   assert.deepEqual(plain(messages), [{ type: 'agent-bridge.open', url: `${scope}?host=${MACHINE}&session=s1&question=q1` }]);
   assert.equal(focused, 1);

@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading.Channels;
 using AgentBridge.Host.Core.Discovery;
 using AgentBridge.Host.Core.Processes;
+using AgentBridge.Host.Core.Restore;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Core;
@@ -12,7 +13,7 @@ namespace AgentBridge.Host.Core;
 // Discovers live Copilot, Claude and Codex sessions and keeps a contract Session for
 // each, strictly read-only: it opens agent files for shared reading and never writes,
 // locks, renames or deletes anything, and never lists agent-ha-bridge's hook spool.
-public sealed class SessionSource : ISessionSource
+public sealed class SessionSource : ISessionSource, IRestoreMarks
 {
     static readonly TimeSpan TranscriptSearchCache = TimeSpan.FromSeconds(30);
     static readonly TimeSpan WakeDebounce = TimeSpan.FromMilliseconds(50);
@@ -31,9 +32,17 @@ public sealed class SessionSource : ISessionSource
     readonly Dictionary<string, CodexLockHolding> _codexLockHolders = new(StringComparer.OrdinalIgnoreCase);
     // Sessions the host is ending, and since when. Under _gate.
     readonly Dictionary<string, DateTimeOffset> _ending = new(StringComparer.Ordinal);
+    readonly Dictionary<string, (DateTimeOffset ErrorAt, string Generation, RecoveryState State)> _recovery = new(StringComparer.Ordinal);
+    // Sessions restored after a reboot or a crash (#780, RestoreRecorder), with their mark. Set before
+    // the session registers, too: shown from its first upsert. Under _gate.
+    readonly Dictionary<string, RestoreMarkState> _restoreMarks = new(StringComparer.Ordinal);
+    // The mark each one replaced, kept as it was then, for a restore attempt that started nothing
+    // (IRestoreMarks.Revert). Under _gate.
+    readonly Dictionary<string, RestoreMarkState> _restoreMarksBefore = new(StringComparer.Ordinal);
     // Who drives each session (Session.Driver), shared with the Home Assistant connector; null for
     // a source that does not say.
     readonly SessionDrivers? _drivers;
+    readonly Func<Session, bool>? _answerAttempted;
     readonly List<FileSystemWatcher> _watchers = [];
     readonly CancellationTokenSource _stop = new();
     readonly Task _dispatch;
@@ -72,6 +81,7 @@ public sealed class SessionSource : ISessionSource
         public SessionTracker Tracker { get; } = tracker;
         public Session ListForm = null!;
         public Session GetForm = null!;
+        public Session GuardForm = null!;
         // GetForm before SessionBudget.Fit (GetUnbudgeted), and its JSON when Fit changed it.
         public Session Unbudgeted = null!;
         public string? UnbudgetedJson;
@@ -89,15 +99,32 @@ public sealed class SessionSource : ISessionSource
         // emitted (null when none waits): what a resumed subscription and its watermark go by.
         public long Committed;
         public long? Pending;
+        // What the last commit was made from: Commit made again from the same is the same.
+        public Session? CommittedFull;
+        public (DateTimeOffset? Touched, DateTimeOffset? Ending, DriverKind? Driver, string? Principal, bool AgentsPrompt, SessionRestored? Restored, DateTimeOffset? Boundary, bool Prompted, SessionStatus Turn, bool PhoneSignIn, bool Attempted) CommittedWith;
+        // The turns whose prompt the host showed as an agent's (#489), newest last, as many as
+        // history serves: the transcript does not mark them, and history shows them as live did.
+        // Under the gate.
+        public readonly HashSet<string> AgentTurns = new(StringComparer.Ordinal);
+        public readonly Queue<string> AgentTurnOrder = new();
+
+        public void AgentTurn(string turn)
+        {
+            if (!AgentTurns.Add(turn)) { return; }
+            AgentTurnOrder.Enqueue(turn);
+            if (AgentTurnOrder.Count > HistoryLimits.Kept) { AgentTurns.Remove(AgentTurnOrder.Dequeue()); }
+        }
     }
 
-    public SessionSource(SessionSourceOptions options, IProcessInspector? processes = null, TimeProvider? time = null, SessionDrivers? drivers = null)
+    public SessionSource(SessionSourceOptions options, IProcessInspector? processes = null, TimeProvider? time = null, SessionDrivers? drivers = null,
+        Func<Session, bool>? answerAttempted = null)
     {
         _options = options;
         _processes = processes ?? new SystemProcessInspector();
         _time = time ?? TimeProvider.System;
         _unaccounted = new Unaccounted(_time, Log);
         _drivers = drivers;
+        _answerAttempted = answerAttempted;
         if (_drivers is not null)
         {
             _drivers.SourceObserves = true;
@@ -149,6 +176,13 @@ public sealed class SessionSource : ISessionSource
         lock (_gate) { return _entries.TryGetValue(id, out var e) ? e.GetForm : null; }
     }
 
+    public Session? GetForDelivery(string id)
+    {
+        lock (_gate) { return _entries.TryGetValue(id, out var e) ? e.GuardForm : null; }
+    }
+
+    public void AnswerAttemptsChanged() => _wake.Writer.TryWrite(true);
+
     public Session? GetUnbudgeted(string id)
     {
         lock (_gate) { return _entries.TryGetValue(id, out var e) ? e.Unbudgeted : null; }
@@ -160,6 +194,14 @@ public sealed class SessionSource : ISessionSource
     }
 
     public event EventHandler<string>? UnbudgetedChanged;
+
+    // Tests: how many times a session was fitted and serialised (Commit), and built (its tracker).
+    internal int Commits { get; private set; }
+
+    internal int Builds
+    {
+        get { lock (_gate) { return _entries.Values.Sum(e => e.Tracker.Builds); } }
+    }
 
     // Read between passes, as a pass is what changes a tracker's state.
     public async Task<Subagent?> GetAgentAsync(string id, string agent, CancellationToken cancellationToken = default)
@@ -190,6 +232,44 @@ public sealed class SessionSource : ISessionSource
             var d = e.Tracker.Discovered;
             return new SessionFiles(d.Agent, d.TranscriptPath, d.Registration?.Path);
         }
+    }
+
+    public bool ServesHistory => true;
+
+    // Reads of history at once: each is bounded (HistoryBudgets), and a client asks for the next
+    // page only as its reader scrolls, so more than this waiting is a client asking too much.
+    readonly SemaphoreSlim _historyReads = new(2, 2);
+    readonly object _historyStart = new();
+    Conversation.HistoryReader? _history;
+
+    // Made once, by one caller: two first requests at once each loading the key could have one
+    // fall back to a key for this run only, and its cursors go stale at the next restart.
+    Conversation.HistoryReader HistoryReader()
+    {
+        lock (_historyStart)
+        {
+            return _history ??= new Conversation.HistoryReader(_options.HistoryBudgets with { MaxLineBytes = _options.MaxLineBytes }, Conversation.HistoryKey.Load(_options.HistoryKeyFile, Log));
+        }
+    }
+
+    // Off the pass and its lock: it reads only the transcript, which the agent keeps writing, and
+    // the main agent's delegates as of the session's last update.
+    public async Task<HistoryResult> HistoryAsync(string id, string? before, int limit, CancellationToken cancellationToken = default)
+    {
+        AgentKind agent;
+        string? transcript;
+        Conversation.HistorySeed seed;
+        lock (_gate)
+        {
+            if (!_entries.TryGetValue(id, out var e)) { return HistoryResult.Gone; }
+            agent = e.Tracker.Discovered.Agent;
+            transcript = e.Tracker.Discovered.TranscriptPath;
+            seed = e.Tracker.MainDelegates with { AgentTurns = new HashSet<string>(e.AgentTurns, StringComparer.Ordinal) };
+        }
+        var reader = HistoryReader();
+        await _historyReads.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { return await Task.Run(() => reader.Read(id, agent, transcript, before, limit, seed, _options.CopilotRemoteApproval, cancellationToken), cancellationToken).ConfigureAwait(false); }
+        finally { _historyReads.Release(); }
     }
 
     public SessionSubscription Subscribe() => Subscribe(null);
@@ -356,6 +436,13 @@ public sealed class SessionSource : ISessionSource
             Entry? entry;
             lock (_gate) { _entries.TryGetValue(discovered.Id, out entry); }
             var tracker = entry?.Tracker ?? new SessionTracker(discovered, _options, _time);
+            // A restored session's boundary, before the transcript is read: what the interrupted run
+            // left asking is set aside before the status and its times are worked out (#780).
+            lock (_gate)
+            {
+                var restoreMark = _restoreMarks.GetValueOrDefault(discovered.Id);
+                tracker.SetQuestionsFrom(restoreMark?.Given.At, restoreMark?.Known);
+            }
             Session full;
             try { full = tracker.Update(discovered); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException or ArgumentException)
@@ -365,6 +452,11 @@ public sealed class SessionSource : ISessionSource
                 // running, and must not be offered for resume.
                 if (discover && entry is null) { unread.Add(discovered.Agent); }
                 continue;
+            }
+            // What it set aside, for the recorder to keep with the boundary (IRestoreMarks.Interrupted).
+            lock (_gate)
+            {
+                if (_restoreMarks.TryGetValue(discovered.Id, out var read) && tracker.QuestionsFrom == read.Given.At) { read.Interrupted = tracker.InterruptedQuestions; }
             }
             Commit(entry ?? new Entry(tracker), full);
         }
@@ -475,13 +567,21 @@ public sealed class SessionSource : ISessionSource
             // (status, permission prompts) and wins. One CLI owns one session.
             var ids = sessions.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
             var pids = sessions.Select(s => s.ProcessId).ToHashSet();
-            var own = ClaudeSessionDiscovery.Find(_options.ClaudeHome, observed.Processes, findTranscript, holds, accounted, observed.Unidentified);
+            var own = ClaudeSessionDiscovery.Find(_options.ClaudeHome, observed.Processes, findTranscript, holds, accounted, observed.Unidentified, _options.UsageProbeRoots);
             sessions = [.. sessions, .. own.Where(s => !ids.Contains(s.Id) && !pids.Contains(s.ProcessId))];
         }
         if (agent == AgentKind.Codex)
         {
             accounted.UnionWith(observed.Processes.Where(p => CommandLine.IsCodexAppServer(p.CommandLine)).Select(p => p.Id));
             HoldForPidless(observed, accounted, pidless!, holds);
+        }
+        // The host's own usage probe is nobody's session (#200), and nor is the `claude auth status`
+        // it asks before one, though only when this host started it: a person's own run of it holds
+        // as any Claude process does.
+        if (agent == AgentKind.Claude)
+        {
+            accounted.UnionWith(observed.Processes.Where(p => CommandLine.IsClaudeUsageProbe(p.CommandLine)
+                || (CommandLine.IsClaudeAuthStatus(p.CommandLine) && _processes.IsOwnChild(p))).Select(p => p.Id));
         }
         Account(agent, observed, accounted, previous, holds);
         return new(agent, sessions, holds, observed, ended);
@@ -800,6 +900,101 @@ public sealed class SessionSource : ISessionSource
     // it is something a client shows.
     void OnDriverChanged(string id) => _ = RecommitDriverAsync(id);
 
+    public async Task SetSignInRecoveryAsync(string id, DateTimeOffset errorAt, string generation, RecoveryState state, bool begin = false, CancellationToken cancellationToken = default)
+    {
+        await _pass.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            Entry? entry;
+            lock (_gate)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!_entries.TryGetValue(id, out entry)
+                    || entry.Full.Attention is not { Kind: AttentionKind.SignInNeeded } attention || attention.Since != errorAt) { return; }
+                if (!begin && (!_recovery.TryGetValue(id, out var previous) || previous.Generation != generation || previous.ErrorAt != errorAt)) { return; }
+                _recovery[id] = (errorAt, generation, state);
+                entry.Touched = _time.GetUtcNow();
+            }
+            Commit(entry, entry.Full);
+        }
+        finally { _pass.Release(); }
+    }
+
+    // IRestoreMarks: shown at once, off the caller's thread (the recorder calls under its own lock).
+    public void Mark(string id, SessionRestored? mark)
+    {
+        lock (_gate)
+        {
+            if (mark is null)
+            {
+                // The badge goes, the boundary stays: the session is still the restored one.
+                _restoreMarksBefore.Remove(id);
+                if (!_restoreMarks.TryGetValue(id, out var showing) || !showing.Shown) { return; }
+                showing.Shown = false;
+            }
+            else if (!SetMark(id, mark, shown: true)) { return; }
+            if (!_entries.ContainsKey(id)) { return; }
+        }
+        _ = Task.Run(() => RecommitDriverAsync(id));
+    }
+
+    public void Hold(string id, SessionRestored mark)
+    {
+        lock (_gate)
+        {
+            if (!SetMark(id, mark, shown: false) || !_entries.ContainsKey(id)) { return; }
+        }
+        _ = Task.Run(() => RecommitDriverAsync(id));
+    }
+
+    // A boundary an earlier host run kept (RestoreRecorder.HoldBoundaries), with the interrupted run's
+    // questions as that run found them, told by identity from then on.
+    public void Hold(string id, SessionRestored mark, IReadOnlyCollection<string>? interrupted)
+    {
+        lock (_gate)
+        {
+            var changed = SetMark(id, mark, shown: false);
+            if (interrupted is not null && _restoreMarks.TryGetValue(id, out var state) && state.Given == mark)
+            {
+                state.Known = interrupted.ToHashSet(StringComparer.Ordinal);
+                state.Interrupted ??= [.. interrupted];
+            }
+            if (!changed || !_entries.ContainsKey(id)) { return; }
+        }
+        _ = Task.Run(() => RecommitDriverAsync(id));
+    }
+
+    public IReadOnlyList<string>? Interrupted(string id)
+    {
+        lock (_gate) { return _restoreMarks.TryGetValue(id, out var state) ? state.Interrupted : null; }
+    }
+
+    // Under _gate. The same mark held earlier is shown in place, keeping what it has seen since (its
+    // prompt baseline, Continue gone); another replaces it, kept for Revert. Whether anything changed.
+    bool SetMark(string id, SessionRestored mark, bool shown)
+    {
+        if (_restoreMarks.TryGetValue(id, out var was) && was.Given == mark)
+        {
+            if (was.Shown || !shown) { return false; }
+            was.Shown = true;
+            return true;
+        }
+        if (was is not null) { _restoreMarksBefore[id] = was; } else { _restoreMarksBefore.Remove(id); }
+        _restoreMarks[id] = new RestoreMarkState(mark) { Shown = shown };
+        return true;
+    }
+
+    public void Revert(string id, SessionRestored mark)
+    {
+        lock (_gate)
+        {
+            if (!_restoreMarks.TryGetValue(id, out var now) || now.Given != mark) { return; }
+            if (_restoreMarksBefore.Remove(id, out var before)) { _restoreMarks[id] = before; } else { _restoreMarks.Remove(id); }
+            if (!_entries.ContainsKey(id)) { return; }
+        }
+        _ = Task.Run(() => RecommitDriverAsync(id));
+    }
+
     async Task RecommitDriverAsync(string id)
     {
         try
@@ -825,25 +1020,146 @@ public sealed class SessionSource : ISessionSource
         }
     }
 
+    bool PhoneSignInPinned()
+    {
+        try { return _options.PhoneSignInPinned(); }
+        catch (Exception) { return false; }
+    }
+
     void Commit(Entry entry, Session full)
     {
         entry.Full = full;
         DateTimeOffset? endingSince;
-        lock (_gate) { endingSince = _ending.TryGetValue(full.Id, out var at) ? at : null; }
-        var shown = entry.Touched is { } touched && touched > full.UpdatedAt ? full with { UpdatedAt = touched } : full;
-        if (endingSince is { } since) { shown = shown with { Status = SessionStatus.Ending, StatusSince = since }; }
+        SessionRestored? restored;
+        DateTimeOffset? boundary = null;
+        var prompted = false;
+        var turn = SessionStatus.Idle;
+        var setAside = false;
+        var crashed = false;
+        lock (_gate)
+        {
+            endingSince = _ending.TryGetValue(full.Id, out var at) ? at : null;
+            // Continue is for a session that went mid-turn and has not been given a turn since:
+            // once a prompt arrives after the restore (Continue pressed, any reply, or typed at the
+            // machine), it goes, whether that turn is still running when this looks or has already
+            // ended or come to a question. A prompt is after the restore by its own time, so one
+            // whose whole turn ran before the first read after the launch still counts; and by the
+            // count the transcript held when the mark was first read, for one with no time.
+            restored = null;
+            if (_restoreMarks.TryGetValue(full.Id, out var state))
+            {
+                state.Prompts ??= entry.Tracker.Prompts;
+                prompted = entry.Tracker.Prompts > state.Prompts || entry.Tracker.LastPromptAt > state.Mark.At;
+                if (state.Mark.MidTurn == true && (prompted || (full.Status == SessionStatus.Working && full.StatusSince > state.Mark.At)))
+                {
+                    state.Mark = state.Mark with { MidTurn = null, Continue = null };
+                }
+                // A crash restore needs the person (session.class, #913) until they act on it: a
+                // prompt since the restore, or a turn started after it. Once, for that restore.
+                if (prompted || (full.Status == SessionStatus.Working && full.StatusSince > state.Mark.At)) { state.Acted = true; }
+                boundary = state.Mark.At;
+                restored = state.Shown ? state.Mark : null;
+                crashed = restored is { Cause: RestoreCause.Crash } && !state.Acted;
+                turn = entry.Tracker.TurnStatus;
+                // Built with this boundary, the session already has the interrupted run's questions
+                // set aside, by transcript position: a question it shows is a new one, though a clock
+                // set back may date it before the restore (Copilot on #837).
+                setAside = entry.Tracker.BuiltFrom == state.Mark.At;
+            }
+        }
+        (DriverKind? Kind, string? Principal) driver = (null, null);
+        var agentsPrompt = false;
         if (_drivers is not null)
         {
             // From what the transcript says, not the ending override: a new turn decides who drives it.
+            // Every pass, changed or not: an arm runs out with time.
             _drivers.For(full.Id).Observe(full, _time.GetUtcNow(), _drivers.Arm, entry.Tracker.PromptKey, entry.Tracker.Prompts);
-            var (driver, principal) = _drivers.Shown(full.Id);
-            shown = shown with { Driver = driver, DriverPrincipal = principal };
+            driver = _drivers.Shown(full.Id);
+            agentsPrompt = _drivers.For(full.Id).PromptIsAgents;
+        }
+        // The restore mark too (#780), and what its boundary decides below: the mark is held, cleared
+        // and taken away apart from the transcript, so an unchanged session with a changed mark is
+        // shown again, its status not left as the interrupted run's.
+        // Whether its sign-in is the phone's: held apart from the transcript, in the roster (#972).
+        var phoneSignIn = full.Attention is { Kind: AttentionKind.SignInNeeded, SignIn: null } failing
+            && _options.PhoneSignIn.Contains(failing.Agent ?? full.Agent) && PhoneSignInPinned();
+        var attempted = _answerAttempted?.Invoke(full) == true;
+        var inputs = (entry.Touched, endingSince, driver.Kind, driver.Principal, agentsPrompt, restored, boundary, prompted, turn, phoneSignIn, attempted);
+        // The tracker hands back the very session it built last when nothing it reads changed.
+        // Fitting and serialising it again (about 37 MB/min, #608) found the same JSON every time.
+        // Never while a sign-in recovery overlay is held (#800): each step of it (Checking, then
+        // Pending), and the clearing of one gone stale, is decided below and nowhere else, often
+        // with the same session and the same time (#634 review, H2). It is held only while a
+        // sign-in is under way.
+        if (ReferenceEquals(full, entry.CommittedFull) && inputs == entry.CommittedWith)
+        {
+            lock (_gate)
+            {
+                if (_entries.TryGetValue(full.Id, out var current) && current == entry && !_recovery.ContainsKey(full.Id)) { return; }
+            }
+        }
+        var shown = entry.Touched is { } touched && touched > full.UpdatedAt ? full with { UpdatedAt = touched } : full;
+        lock (_gate)
+        {
+            if (_recovery.TryGetValue(full.Id, out var recovery))
+            {
+                if (shown.Attention is { Kind: AttentionKind.SignInNeeded } attention && attention.Since == recovery.ErrorAt)
+                {
+                    shown = shown with { Attention = attention with { Recovery = recovery.State } };
+                }
+                else { _recovery.Remove(full.Id); }
+            }
+        }
+        if (phoneSignIn && shown.Attention is { Kind: AttentionKind.SignInNeeded, SignIn: null } needed)
+        {
+            shown = shown with { Attention = needed with { SignIn = SignInWhere.Phone } };
+        }
+        if (endingSince is { } since) { shown = shown with { Status = SessionStatus.Ending, StatusSince = since }; }
+        if (restored is not null) { shown = shown with { Restored = restored }; }
+        // Badge or not (it goes after a day; the restore stays):
+        if (boundary is { } restoredAt)
+        {
+            // A question or approval the interrupted run left waiting went with it (questionLost says
+            // so): the resumed agent is not asking it, so it is not shown as asked. One asked after
+            // the restore is. Replies still read the transcript first, and refuse while it holds an
+            // unanswered ask: typing into a question the agent may still show would answer it.
+            if (!setAside && shown.Status == SessionStatus.Waiting && shown.StatusSince < restoredAt && (shown.Question is null || shown.Question.AskedAt < restoredAt))
+            {
+                // Set aside, the status is the turn's own: a prompt since the restore that started
+                // work (the old question still without its result) is shown working, not idle
+                // (Copilot on #837). Replies still read the transcript first, as above.
+                var working = prompted && turn == SessionStatus.Working;
+                shown = shown with { Question = null, WaitingOn = null, Status = working ? SessionStatus.Working : SessionStatus.Idle, StatusSince = restoredAt };
+            }
+            // Nor is the turn the interrupted run was in: resumed with no prompt, the agent is idle
+            // until a prompt arrives after the restore, whatever its transcript last said.
+            else if (shown.Status == SessionStatus.Working && shown.StatusSince < restoredAt && !prompted)
+            {
+                shown = shown with { Status = SessionStatus.Idle, StatusSince = restoredAt };
+            }
+        }
+        if (_drivers is not null)
+        {
+            shown = shown with { Driver = driver.Kind, DriverPrincipal = driver.Principal };
             // A prompt an agent sent through the host carries no mark of it in the transcript:
             // the host knows it from the turn the agent's reply or launch started (#489).
-            if (shown.Activity is { UserMessage: not null, UserMessageFrom: null } activity && _drivers.For(full.Id).PromptIsAgents)
+            if (shown.Activity is { UserMessage: not null, UserMessageFrom: null } activity && agentsPrompt)
             {
                 shown = shown with { Activity = activity with { UserMessageFrom = UserMessageFrom.Agent } };
+                if (activity.Turn is { } agentTurn) { lock (_gate) { entry.AgentTurn(agentTurn); } }
             }
+        }
+        Commits++;
+        entry.CommittedFull = full;
+        entry.CommittedWith = inputs;
+        // Last, from the session as clients are shown it, the ending override included (#913).
+        // classSince carries over from what was last sent while the tier is unchanged (an episode).
+        var tier = NotificationClasses.Of(shown, crashed);
+        shown = shown with { Class = tier, ClassSince = NotificationClasses.Since(shown, tier, entry.Unbudgeted, crashed) };
+        var guardForm = SessionBudget.Fit(shown);
+        if (attempted && shown.Question is { } question)
+        {
+            shown = shown with { Question = question with { AnswerAtMachine = true } };
         }
         var getForm = SessionBudget.Fit(shown);
         var listForm = SessionBudget.Fit(shown.WithoutHistory());
@@ -852,6 +1168,7 @@ public sealed class SessionSource : ISessionSource
         var unbudgetedJson = ReferenceEquals(getForm, shown) ? null : JsonSerializer.Serialize(shown, ProtocolJson.Options);
         lock (_gate)
         {
+            entry.GuardForm = guardForm;
             if (json == entry.Json && _entries.ContainsKey(full.Id))
             {
                 if (unbudgetedJson == entry.UnbudgetedJson) { return; }
@@ -928,6 +1245,9 @@ public sealed class SessionSource : ISessionSource
         {
             if (!_entries.Remove(id, out var entry)) { return; }
             _ending.Remove(id);
+            _recovery.Remove(id);
+            _restoreMarks.Remove(id);
+            _restoreMarksBefore.Remove(id);
             _drivers?.Forget(id);
             entry.Timer?.Dispose();
             entry.Timer = null;
@@ -1025,4 +1345,23 @@ public sealed class SessionSource : ISessionSource
         _stop.Dispose();
         _pass.Dispose();
     }
+}
+
+// A restored session's mark (#780), and how many prompts its transcript held when the mark was first
+// shown: Continue goes once there is one more.
+sealed class RestoreMarkState(SessionRestored mark)
+{
+    // As the recorder gave it; Mark loses midTurn and Continue once a turn starts.
+    public SessionRestored Given { get; } = mark;
+    public SessionRestored Mark { get; set; } = mark;
+    // The badge (Session.restored): false once the recorder has taken it away. The boundary stays.
+    public bool Shown { get; set; } = true;
+    public int? Prompts { get; set; }
+    // A person has acted on this restore (a prompt since it, or a turn started after it): a crash
+    // restore no longer makes the session needsYou.
+    public bool Acted { get; set; }
+    // The interrupted run's questions as an earlier host run found them, given with a boundary it
+    // kept; and as this run found them, once read with the boundary (SessionState.Known, Interrupted).
+    public IReadOnlySet<string>? Known { get; set; }
+    public IReadOnlyList<string>? Interrupted { get; set; }
 }

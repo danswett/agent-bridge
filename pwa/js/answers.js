@@ -32,6 +32,28 @@ const blank = (s) => s === null || s === undefined || !visible(s);
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 
+// Reasons said in fixed words, the same in every client (src/AgentBridge.Protocol/AnswerReasons.cs):
+// a field's otherUnavailable, and an answer refused or retired for it (its result's code).
+// otherNotSendable: a Copilot list's Other, which the CLI offers and the machine cannot send yet
+// (#908); temporary, an exception to #876 until #908 lands. formReset: on a stale answer only, the
+// machine reset a part-answered form and the session moved on, so the answer was never delivered
+// (#1123); kept on the result, not yet shown.
+export const AnswerReasons = Object.freeze({
+  otherNotSendable: "Your own answer can't be sent from here yet. Pick an option, or answer at the machine.",
+  formReset: 'The session moved on from this question. Your answer was not delivered.',
+});
+export const NOT_SENT = 'Not sent · ';
+export const knownAnswerReason = (code) => (typeof code === 'string' && has(AnswerReasons, code) ? code : null);
+// The code a field may carry as its otherUnavailable (AnswerReasons.OnField): only otherNotSendable.
+export const fieldAnswerReason = (code) => (code === 'otherNotSendable' ? code : null);
+// The code an answer's result may carry for its outcome: otherNotSendable on a refusal, formReset
+// on a stale answer, nothing else.
+const ResultReasons = Object.freeze({ refused: 'otherNotSendable', stale: 'formReset' });
+export const resultAnswerReason = (outcome, code) => (has(ResultReasons, outcome) && ResultReasons[outcome] === code ? code : null);
+// The code a refusal's reason says, if it is that sentence (AnswerReasons.Code).
+export const answerReasonCode = (reason) => (reason === AnswerReasons.otherNotSendable ? 'otherNotSendable' : null);
+const hasOther = (v) => (isObject(v) && has(v, 'other')) || (Array.isArray(v) && v.some(hasOther));
+
 const textProblem = (text, what) =>
   (typeof text === 'string' && utf8Bytes(text) > Limits.text ? `${what} is longer than ${Limits.text / 1024} KiB` : null);
 
@@ -97,6 +119,12 @@ export function checkAnswer(question, answer) {
       if (field.required === true) { return `"${label(field)}" needs an answer`; }
       continue;
     }
+    // Other the agent offers and the machine cannot send: the sentence the field already shows.
+    if (field.allowOther !== true && fieldAnswerReason(field.otherUnavailable) && hasOther(value)) { return AnswerReasons[field.otherUnavailable]; }
+    // Empty text is typed as nothing, which a form records as no answer at all, and text of only
+    // spaces, or of control characters a host types as spaces, might be recorded trimmed to that
+    // (Answers.Check, FieldConstraints.BlankOnceTyped).
+    if (field.required === true && field.type === 'text' && typeof value === 'string' && value.replace(/\p{Cc}/gu, ' ').trim() === '') { return `"${label(field)}" needs an answer`; }
     const problem = valueProblem(field, value);
     if (problem) { return `"${label(field)}": ${problem}`; }
   }
@@ -167,8 +195,24 @@ export function answerability(question, capabilities, agent = null) {
     return { ok: false, why: off ? 'approvalOff' : 'atMachine' };
   }
   if (!capabilities.includes('sessions.answer')) { return { ok: false, why: 'machine' }; }
+  // Before the shape, as the app's card does: a cut approval ends inside its block, and the person is
+  // told that part of it is missing, not only that it is answered at the machine.
   if (question.truncated) { return { ok: false, why: 'truncated' }; }
+  // A Codex approval is answered here only as a host sends it from #209 (wholeCommand). An older
+  // host sent "Needs approval: " and the hook's 300-character preview, cut to 297 and "..." with
+  // nothing marking it truncated, so a card drawing all of it still showed only the start of what
+  // Approve once runs (#209 security review).
+  if (question.kind === 'approval' && agent === 'codex' && !wholeCommand(question.message)) { return { ok: false, why: 'atMachine' }; }
   return { ok: true, why: null };
+}
+
+// A Codex approval as a host sends it from #209 (AgentBridge.Protocol ApprovalShape.IsFencedCommand):
+// "Allow **<name>**?", the name literal, then the whole command in one block whose fence is longer
+// than any run of backticks in it.
+const CODEX_SHAPE = /^Allow \*\*(?:\\[^\n]|[^\\`*_[\]<>&|~^+=!#:\n])+\*\*\?\n\n(`{3,})\n([\s\S]*)\n\1$/;
+export function wholeCommand(message) {
+  const m = CODEX_SHAPE.exec(message ?? '');
+  return !!m && (m[2].match(/`+/g) ?? []).every((run) => run.length < m[1].length);
 }
 
 const RECOMMENDED = /\(recommended\)/i;

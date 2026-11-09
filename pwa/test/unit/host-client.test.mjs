@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { HostClient } from '../../js/host-client.js';
+import { Limits, hostJsonBytes } from '../../js/answers.js';
 import { SessionsStore } from '../../js/sessions-store.js';
 
 // A transport that records what the client sends and lets the test play the host.
@@ -51,6 +52,27 @@ test('a request on a dead transport fails at once instead of timing out', async 
   t.send = () => Promise.reject(new Error('not connected to the relay'));
   const client = new HostClient(t, { timeoutMs: 60000 });
   await assert.rejects(client.request('hello'), /not connected to the relay/);
+});
+
+test('a reply or answer is said to have gone once its transport has taken it, and never when the transport refuses it', async () => {
+  const t = fakeTransport();
+  let take;
+  t.send = (m) => { t.sent.push(m); return new Promise((r) => { take = r; }); };
+  const client = new HostClient(t, { timeoutMs: 60000 });
+  const went = [];
+
+  client.reply({ id: 's1', request: 'r1', text: 'go' }, { onSent: () => went.push('r1') }).catch(() => {});
+  assert.deepEqual(went, [], 'not as the call returns');
+  await flush();
+  assert.deepEqual(went, [], 'nor while the transport still has it');
+  take();
+  await flush();
+  assert.deepEqual(went, ['r1']);
+
+  t.send = () => Promise.reject(new Error('not connected to the relay'));
+  await assert.rejects(client.answer({ id: 's1', question: 'q1', request: 'r2', text: 'yes' }, { onSent: () => went.push('r2') }), /not connected/);
+  assert.deepEqual(went, ['r1']);
+  client.close();
 });
 
 test('closing the transport fails every pending request', async () => {
@@ -315,4 +337,264 @@ test('what holds the host\'s discovery arrives with the snapshot and with each c
   assert.equal(store.held, null);
   t.host({ ev: 'discovery.changed', seq: 4, data: { discoveryHeld: { reason: 42 } } });
   assert.equal(store.held, null);
+});
+
+// ---- progress (sessions.progress, #600) ----
+
+async function greeted(capabilities) {
+  const t = fakeTransport();
+  const client = new HostClient(t, { timeoutMs: 1000 });
+  const p = client.hello();
+  await flush();
+  t.host({ re: t.lastRequest('hello').id, ok: true, result: { protocol: 1, machine: { id: 'm' }, capabilities } });
+  await p;
+  return { t, client };
+}
+
+test('a reply asks for progress only from a host that offers sessions.progress', async () => {
+  const older = await greeted(['sessions.read', 'sessions.reply']);
+  older.client.reply({ id: 's1', request: 'r1', text: 'go' }, { onProgress: () => {} }).catch(() => {});
+  await flush();
+  assert.deepEqual(older.t.lastRequest('session.reply').data, { id: 's1', request: 'r1', text: 'go' });
+  const newer = await greeted(['sessions.read', 'sessions.reply', 'sessions.answer', 'sessions.progress']);
+  newer.client.reply({ id: 's1', request: 'r1', text: 'go' }, { onProgress: () => {} }).catch(() => {});
+  newer.client.answer({ id: 's1', question: 'q1', request: 'r2', text: 'yes' }, { onProgress: () => {} }).catch(() => {});
+  await flush();
+  assert.equal(newer.t.lastRequest('session.reply').data.progress, true);
+  assert.equal(newer.t.lastRequest('session.answer').data.progress, true);
+  older.client.close();
+  newer.client.close();
+});
+
+test('an answer that fits the 16 KiB only without the progress flag goes without it, rather than be refused for asking', async () => {
+  const { t, client } = await greeted(['sessions.read', 'sessions.answer', 'sessions.progress']);
+  const answer = (text) => ({ id: 's1', question: 'q1', request: '00000000-0000-4000-8000-000000000000', text });
+  // 8 bytes under the limit as it is: "progress":true would put it 8 over, and the host refuse it.
+  const text = 'x'.repeat(Limits.request - 8 - hostJsonBytes(answer('')));
+  assert.equal(hostJsonBytes(answer(text)), Limits.request - 8);
+  client.answer(answer(text), { onProgress: () => {} }).catch(() => {});
+  await flush();
+  assert.equal('progress' in t.lastRequest('session.answer').data, false);
+  client.answer(answer('short'), { onProgress: () => {} }).catch(() => {});
+  await flush();
+  assert.equal(t.lastRequest('session.answer').data.progress, true);
+  client.close();
+});
+
+test('progress frames tell a reply how far it has got, in order, and never settle it', async () => {
+  const { t, client } = await greeted(['sessions.read', 'sessions.reply', 'sessions.progress']);
+  const heard = [];
+  let settled = false;
+  const p = client.reply({ id: 's1', request: 'r1', text: 'go' }, { onProgress: (s) => heard.push(s) }).finally(() => { settled = true; });
+  await flush();
+  const re = t.lastRequest('session.reply').id;
+  t.host({ re, progress: { stage: 'received' } });
+  t.host({ re, progress: { stage: 'typed', working: true } });
+  // A stage this app doesn't know, from a newer host, settles nothing either: the service passes it over.
+  t.host({ re, progress: { stage: 'pondering' } });
+  await flush();
+  assert.equal(settled, false);
+  assert.deepEqual(heard, [{ stage: 'received', working: false }, { stage: 'typed', working: true }, { stage: 'pondering', working: false }]);
+  t.host({ re, ok: true, result: { outcome: 'delivered', timings: { typed: 352, recorded: 1190, confirmed: 1361, bogus: 'x' } } });
+  assert.deepEqual(await p, { outcome: 'delivered', reason: null, stage: null, timings: { typed: 352, recorded: 1190, confirmed: 1361 } });
+});
+
+test('a progress frame for a request the client is not waiting on is ignored', async () => {
+  const { t, client } = await greeted(['sessions.read', 'sessions.reply', 'sessions.progress']);
+  const heard = [];
+  const p = client.reply({ id: 's1', request: 'r1', text: 'go' }, { onProgress: (s) => heard.push(s) });
+  await flush();
+  const re = t.lastRequest('session.reply').id;
+  t.host({ re: re + 7, progress: { stage: 'typed', working: false } });
+  t.host({ re, ok: true, result: { outcome: 'delivered' } });
+  assert.deepEqual(await p, { outcome: 'delivered', reason: null, stage: null });
+  // Nor one for the request after its response: it is settled and gone.
+  t.host({ re, progress: { stage: 'received' } });
+  assert.deepEqual(heard, []);
+});
+
+// ---- sessions.focus (#1190) ----
+
+const waitMs = (ms) => new Promise((r) => setTimeout(r, ms));
+const focusOffered = ['sessions.read', 'sessions.focus'];
+const focusSent = (t) => t.sent.filter((m) => m.op === 'sessions.focus').map((m) => m.data);
+
+async function focusing(capabilities = focusOffered, focusGapMs = 0) {
+  const t = fakeTransport();
+  const client = new HostClient(t, { timeoutMs: 1000, focusGapMs });
+  const p = client.hello();
+  await flush();
+  t.host({ re: t.lastRequest('hello').id, ok: true, result: { protocol: 1, machine: { id: 'm' }, capabilities } });
+  await p;
+  return { t, client };
+}
+
+async function subscribeAgain(t, client) {
+  const p = client.subscribe();
+  await flush();
+  t.host({ re: t.lastRequest('sessions.subscribe').id, ok: true, result: { revision: 1, count: 0 } });
+  await p;
+  await flush();
+}
+
+test('the page says it is visible, and which session it shows, each time that changes', async () => {
+  const { t, client } = await focusing();
+  client.setFocus({ visible: true });
+  client.setFocus({ visible: true });
+  await flush();
+  client.setFocus({ visible: true, open: 's1' });
+  await flush();
+  client.setFocus({ visible: false, open: 's1' });
+  await flush();
+  client.setFocus({ visible: true, open: null });
+  await flush();
+  assert.deepEqual(focusSent(t), [{ visible: true }, { visible: true, open: 's1' }, { visible: false, open: 's1' }, { visible: true }]);
+  client.close();
+});
+
+test('the focus is said again after every sessions.subscribe, for the channel it is on', async () => {
+  const { t, client } = await focusing();
+  client.setFocus({ visible: true, open: 's1' });
+  await flush();
+  assert.equal(focusSent(t).length, 1);
+  await subscribeAgain(t, client);
+  await subscribeAgain(t, client);
+  assert.deepEqual(focusSent(t), Array(3).fill({ visible: true, open: 's1' }));
+  client.close();
+});
+
+test('a focus said before the host has answered hello goes once subscribing begins, and not before', async () => {
+  const t = fakeTransport();
+  const client = new HostClient(t, { timeoutMs: 1000, focusGapMs: 0 });
+  client.setFocus({ visible: true, open: 's1' });
+  await flush();
+  assert.deepEqual(focusSent(t), []);
+  const p = client.hello();
+  await flush();
+  t.host({ re: t.lastRequest('hello').id, ok: true, result: { protocol: 1, machine: { id: 'm' }, capabilities: focusOffered } });
+  await p;
+  await subscribeAgain(t, client);
+  assert.deepEqual(focusSent(t), [{ visible: true, open: 's1' }]);
+  client.close();
+});
+
+test('nothing is sent to a host that does not offer sessions.focus', async () => {
+  const { t, client } = await focusing(['sessions.read', 'sessions.patch']);
+  client.setFocus({ visible: true, open: 's1' });
+  await flush();
+  await subscribeAgain(t, client);
+  client.setFocus({ visible: false });
+  await flush();
+  assert.deepEqual(focusSent(t), []);
+  client.close();
+});
+
+test('rapid changes keep inside the host\'s limit: one goes at once, then only the latest state after the gap', async () => {
+  const { t, client } = await focusing(focusOffered, 60);
+  for (let i = 0; i < 40; i++) { client.setFocus({ visible: i % 2 === 0, open: `s${i}` }); }
+  await flush();
+  assert.deepEqual(focusSent(t), [{ visible: true, open: 's0' }]);
+  await waitMs(150);
+  assert.deepEqual(focusSent(t), [{ visible: true, open: 's0' }, { visible: false, open: 's39' }]);
+  // Said and then taken back inside the gap: what the host was last told is still right.
+  client.setFocus({ visible: true, open: 's5' });
+  client.setFocus({ visible: false, open: 's6' });
+  client.setFocus({ visible: true, open: 's5' });
+  await waitMs(150);
+  assert.deepEqual(focusSent(t).slice(2), [{ visible: true, open: 's5' }]);
+  client.close();
+});
+
+test('a focus the host refuses, or that never gets there, does not break subscribing or reach the page', async () => {
+  const { t, client } = await focusing();
+  client.setFocus({ visible: true });
+  await flush();
+  t.host({ re: t.lastRequest('sessions.focus').id, ok: false, error: 'too many requests' });
+  await flush();
+  t.send = () => Promise.reject(new Error('not connected to the relay'));
+  client.setFocus({ visible: false });
+  await flush();
+  t.send = function send(m) { this.sent.push(m); return Promise.resolve(); };
+  await subscribeAgain(t, client);
+  assert.equal(client.closed, false);
+  client.close();
+  client.setFocus({ visible: true });
+  await flush();
+});
+
+test('the focus carries the age of the last input as it is sent, an integer, and leaves it out when there is none to report', async () => {
+  const { t, client } = await focusing();
+  let idle = null;
+  client.setFocus({ visible: true, idle: () => idle });
+  await flush();
+  idle = 1500.9;
+  client.setFocus({ visible: true, open: 's1', idle: () => idle });
+  await flush();
+  idle = 0;
+  client.setFocus({ visible: false, open: 's1', idle: () => idle });
+  await flush();
+  for (const bad of [-1, NaN, 'soon', undefined]) {
+    idle = bad;
+    client.refreshFocus();
+    await waitMs(5);
+  }
+  assert.deepEqual(focusSent(t).slice(0, 3), [{ visible: true }, { visible: true, open: 's1', idleMs: 1500 }, { visible: false, open: 's1', idleMs: 0 }]);
+  assert.equal(focusSent(t).length, 3, 'refreshes are held to the input gap');
+  client.close();
+});
+
+test('a burst of input keeps inside the host\'s limit: refreshFocus says the focus again at most once in the input gap, with the age at that moment', async () => {
+  const t = fakeTransport();
+  const client = new HostClient(t, { timeoutMs: 1000, focusGapMs: 0, inputGapMs: 60 });
+  const p = client.hello();
+  await flush();
+  t.host({ re: t.lastRequest('hello').id, ok: true, result: { protocol: 1, machine: { id: 'm' }, capabilities: focusOffered } });
+  await p;
+  let idle = 10;
+  client.setFocus({ visible: true, idle: () => idle });
+  await flush();
+  for (let i = 0; i < 100; i++) { idle = 20 + i; client.refreshFocus(); }
+  await flush();
+  assert.deepEqual(focusSent(t), [{ visible: true, idleMs: 10 }]);
+  await waitMs(120);
+  assert.deepEqual(focusSent(t), [{ visible: true, idleMs: 10 }, { visible: true, idleMs: 119 }], 'once, as it stood when sent');
+  client.close();
+});
+
+test('the question on screen goes with the open session as openQuestion, again when it changes, and never without a session', async () => {
+  const { t, client } = await focusing();
+  client.setFocus({ visible: true, open: 's1', openQuestion: 'q1' });
+  await flush();
+  client.setFocus({ visible: true, open: 's1', openQuestion: 'q1' });
+  client.setFocus({ visible: true, open: 's1', openQuestion: 'q2' });
+  await flush();
+  client.setFocus({ visible: true, open: 's1' });
+  await flush();
+  client.setFocus({ visible: true, openQuestion: 'q2' });
+  await flush();
+  assert.deepEqual(focusSent(t), [
+    { visible: true, open: 's1', openQuestion: 'q1' },
+    { visible: true, open: 's1', openQuestion: 'q2' },
+    { visible: true, open: 's1' },
+    { visible: true },
+  ]);
+  // Said again after a subscribe as it stands.
+  client.setFocus({ visible: true, open: 's1', openQuestion: 'q9' });
+  await flush();
+  await subscribeAgain(t, client);
+  assert.deepEqual(focusSent(t).slice(-2), Array(2).fill({ visible: true, open: 's1', openQuestion: 'q9' }));
+  client.close();
+});
+
+test('refreshing the focus sends nothing to a host that does not offer it, or before anything is said', async () => {
+  const older = await focusing(['sessions.read']);
+  older.client.setFocus({ visible: true });
+  older.client.refreshFocus();
+  const fresh = await focusing(focusOffered, 0);
+  fresh.client.refreshFocus();
+  await flush();
+  assert.deepEqual(focusSent(older.t), []);
+  assert.deepEqual(focusSent(fresh.t), []);
+  older.client.close();
+  fresh.client.close();
 });

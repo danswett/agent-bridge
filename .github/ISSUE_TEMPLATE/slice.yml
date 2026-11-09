@@ -1,0 +1,107 @@
+name: Slice (dispatchable work item)
+description: One worker, one pull request, 400 changed lines or fewer. Product and slicers use this for every slice.
+title: "#<parent> S<n>: <what changes>"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A slice is the unit the dispatcher hands to one worker. It must be finishable in one PR of **400 changed lines or fewer** (added plus deleted, tests and docs included). If an honest estimate is over 400, split it. Add the `ready` label only when every box at the bottom is ticked.
+  - type: input
+    id: parent
+    attributes:
+      label: Parent issue
+      description: The canonical issue or epic this slice advances.
+      placeholder: "#292"
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: One to three plain-English sentences. Name the real classes, functions or screens involved.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Three to six checkable items, each proven by a test or an observable behaviour. End with the validation run.
+      value: |
+        - [ ]
+        - [ ]
+        - [ ]
+        - [ ] `pwsh quality/run.ps1` passes and any docs touched by the change are updated in the same PR
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: Files expected to change
+      description: One repo-relative path per line, tests included. Mark new files "(new)". The dispatcher uses this to avoid two in-flight slices on the same hot file.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: size
+    attributes:
+      label: Size estimate (changed lines)
+      options:
+        - "XS: up to 50"
+        - "S: 51 to 150"
+        - "M: 151 to 250"
+        - "L: 251 to 400"
+      default: 1
+    validations:
+      required: true
+  - type: input
+    id: size_basis
+    attributes:
+      label: How you estimated it
+      description: One sentence, for example "two source files of about 60 lines each plus 90 lines of tests".
+    validations:
+      required: true
+  - type: dropdown
+    id: sensitive
+    attributes:
+      label: Sensitive?
+      description: Yes if any expected file matches `sensitive_paths` in `quality/merge-rule.yml`, or the change touches authorization, keys, tokens or how an approval renders. A sensitive slice also gets the `sensitive` label and needs both independent-review receipts.
+      options:
+        - "No"
+        - "Yes"
+      default: 0
+    validations:
+      required: true
+  - type: input
+    id: sensitive_reason
+    attributes:
+      label: Matching sensitive path (if Yes)
+  - type: input
+    id: depends_on
+    attributes:
+      label: Depends on
+      description: Issues or PRs that must merge first, or "none". A slice with an unmerged dependency is not ready.
+      value: none
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: How to verify
+      description: Exact commands (for example a `dotnet test --filter` line, `pwsh quality/run.ps1`, PWA tests) and any manual check.
+      render: text
+    validations:
+      required: true
+  - type: checkboxes
+    id: ready_check
+    attributes:
+      label: Ready checklist
+      description: Add the `ready` label only when all of these are true.
+      options:
+        - label: A worker with only this issue and the repository can start now, with no question to ask.
+          required: true
+        - label: No owner decision, design decision, machine access or secret is needed.
+          required: true
+        - label: Every file listed exists on main (or is marked new), and the size estimate is 400 lines or fewer.
+          required: true
+        - label: No open PR already covers this work.
+          required: true

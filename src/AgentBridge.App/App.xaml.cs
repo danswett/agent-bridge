@@ -73,19 +73,22 @@ public partial class App : Application
         }
 
         var prefsFile = Path.Combine(appData, $"{options.Profile}-settings.json");
+        var firstInstall = installed && !options.Demo && options.SelfTest is null && AppPreferences.IsFirstRun(prefsFile);
         var prefs = AppPreferences.Load(prefsFile);
+        if (firstInstall) { prefs = prefs with { GuidePending = true }; }
         AppPreferences Prefs() => prefs;
         void SavePrefs(AppPreferences next)
         {
             prefs = next;
             try { next.Save(prefsFile); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { AppLog.Write($"settings not saved: {e.Message}"); }
         }
+        if (firstInstall) { SavePrefs(prefs); }
 
         // One updater for Settings and the automatic updates alike, observed so that what either
         // does is what the account's other devices are told (#51).
-        var updater = new ObservedUpdater(new VelopackUpdater(() => prefs.Prereleases, ui, options.Profile));
+        var updater = new ObservedUpdater(new VelopackUpdater(() => prefs.Prereleases, ui, options.Profile, manager.Layout.ProfileFolder, AppLog.Write));
         IAppAtSignIn atSignIn = installed ? new RunKey(Paths.Exe) : new NoRunKey();
-        var settings = new SettingsViewModel(connection, manager, updater, atSignIn, Prefs, SavePrefs, version, HostDefaults.Relay);
+        var settings = new SettingsViewModel(connection, manager, updater, atSignIn, Prefs, SavePrefs, version, HostDefaults.Relay) { LogTo = AppLog.Write, OpenGuideAtFirstLaunch = installed && !options.Demo && options.SelfTest is null && !options.Background && !options.ToastActivated };
 
         if (installed)
         {
@@ -100,7 +103,9 @@ public partial class App : Application
 
         // A machine's cards and toasts, whichever machine it is: everything they do goes to that
         // machine's own host.
-        Machine Build(string key, HostConnection conn, FoldStore folds, Func<string?> readOnlyWhy, IBlobStore? blobs = null)
+        // signer: another machine's fleet link, which signs an escaped approval's confirmation for it
+        // (#803); none for this machine, whose host never takes one through its pipe.
+        Machine Build(string key, HostConnection conn, FoldStore folds, Func<string?> readOnlyWhy, IBlobStore? blobs = null, IFleetLink? signer = null)
         {
             Machine? m = null;
             var cards = new CardContext
@@ -123,6 +128,7 @@ public partial class App : Application
                 },
                 FetchDelegate = (id, agent) => Attribution.FetchDelegateAsync(conn, id, agent),
                 Ui = ui,
+                SignEscaped = signer is null ? null : (session, question, shown, request, pressed) => signer.SignEscapedApproval(conn.PeerKey, key, session, question, shown, request, pressed),
             };
             var planner = new ToastPlanner(sink)
             {
@@ -133,6 +139,7 @@ public partial class App : Application
                 Capabilities = () => conn.Capabilities,
                 MachineName = () => m?.Name,
                 MachineKey = key == Machine.LocalKey ? null : key,
+                QuestionClosed = id => responder?.QuestionClosed(key == Machine.LocalKey ? null : key, id),
             };
             return m = new Machine(key, conn, cards, planner);
         }
@@ -152,7 +159,7 @@ public partial class App : Application
         // demo's is a second pretend host). Remote folds are not kept across restarts.
         IFleetLink? link = null;
         Machine Remote(FleetHost h) =>
-            Build(h.Id, new HostConnection(ct => link!.OpenAsync(h.Id, ct), ui, AppLog.Write) { RetryDelay = TimeSpan.FromSeconds(options.Demo ? 0.5 : 5), RefusedRetryDelay = Fleet.RefusedRetryDelay }, new FoldStore(null), () => null, link!.Blobs);
+            Build(h.Id, new HostConnection(ct => link!.OpenAsync(h.Id, ct), ui, AppLog.Write) { RetryDelay = TimeSpan.FromSeconds(options.Demo ? 0.5 : 5), RefusedRetryDelay = Fleet.RefusedRetryDelay }, new FoldStore(null), () => null, link!.Blobs, link);
         if (options.Demo)
         {
             remoteDemo = DemoHost.Start(version, remote: true);
@@ -176,7 +183,7 @@ public partial class App : Application
             return;
         }
 
-        tray = new TrayIcon(window.Handle, Path.Combine(AppContext.BaseDirectory, AppAssets.Icon), () => ShowWindow(null, null), Quit);
+        tray = new TrayIcon(window.Handle, Path.Combine(AppContext.BaseDirectory, AppAssets.Icon), () => ShowWindow(null, null), window.FeedbackFromTray, Quit);
         timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         timer.Tick += (_, _) =>
         {
@@ -197,8 +204,30 @@ public partial class App : Application
         // changed.
         if (!options.Demo && updater.InstalledVersion is not null)
         {
-            AutoUpdater.Announce(Prefs, SavePrefs, updater, sink, AppLog.Write);
-            autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write, PackageProcesses.Others);
+            var announced = AutoUpdater.Announce(Prefs, SavePrefs, updater, sink, AppLog.Write, blockers: InstallBlockers.Find);
+            MainWindow shownIn = window;
+            autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write, PackageProcesses.Others, ui: ui, preflight: InstallBlockers.Find)
+            {
+                WindowOpen = () => shownIn.IsOpen,
+            };
+            // The banner's Restart to update, and Settings' (#516): the updater's changes come on
+            // whichever thread made them.
+            var appUpdate = AppUpdateViewModel.For(autoUpdater);
+            autoUpdater.StateChanged += () => ui.Post(appUpdate.Changed);
+            updater.Changed += () => ui.Post(settings.UpdatesChanged);
+            main.AppUpdate = appUpdate;
+            // How the update went (#1167): where the window was open for it, it opens again and says
+            // so; an install that didn't take is said in the window either way, with Try again.
+            if (announced is { } a)
+            {
+                if (a.WindowOpen) { window.Activate(); }
+                if (a.WindowOpen || !a.Took) { appUpdate.Show(a); }
+            }
+            // One restart, with one state, whichever control starts it (Creative, 6676653935).
+            settings.ShareRestart(appUpdate);
+            // When an update is ready, changed in Settings, is acted on and said to the devices at once.
+            var updates = autoUpdater;
+            settings.PreferencesChanged += () => _ = updates.TickAsync();
             updateTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
             updateTimer.Tick += (_, _) => _ = autoUpdater.TickAsync();
             updateTimer.Start();
@@ -246,7 +275,8 @@ public partial class App : Application
     {
         if (window is null) { return; }
         window.ShowInFront();
-        if (sessionId is not null) { main?.Open(machine, sessionId); }
+        // Keyboard focus with it, on its question's heading (#484), as Needs you's open does.
+        if (sessionId is not null) { main?.Open(machine, sessionId, focus: true); }
     }
 
     // The account's other machines through the relay: the app's own device key (kept like the
@@ -285,7 +315,9 @@ public partial class App : Application
             RelayAccount? now = null;
             if (local.Can(HostOps.Capability))
             {
-                try { now = await local.CallAsync<RelayAccount>(HostOps.RelayAccount, ct: ct); }
+                // Says this app's own device id, so its host refuses that key through the relay
+                // (#801): this app manages its own machine from Settings.
+                try { now = await local.CallAsync<RelayAccount>(HostOps.RelayAccount, new RelayAccountRequest(Wire.DeviceId(identity.Key.Public)), ct: ct); }
                 catch (HostErrorException) { }
             }
             Volatile.Write(ref last, now);
@@ -370,7 +402,7 @@ public partial class App : Application
 // The relay the app offers to sign in to, until the person names another.
 static class HostDefaults
 {
-    public const string Relay = "https://relay.bad-duck.com";
+    public const string Relay = "https://relay.slipgates.com";
 }
 
 // Stand-ins where the real thing would touch the machine: a development copy and the demo

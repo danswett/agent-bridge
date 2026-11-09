@@ -4,15 +4,302 @@ using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Core.Usage;
 
-// Codex's two rate-limit windows, read from its own transcripts. There is no endpoint to ask:
-// Codex learns its limits from the headers on its replies and records them only in the
-// token_count events it writes as it goes. So this is the newest figure Codex itself saw,
-// and it ages between runs, which is why the reading carries when it was measured.
-public sealed class CodexUsageCollector(UsageOptions options) : IUsageCollector
+// Codex's two rate-limit windows, from Codex itself (#200) and from its own transcripts.
+//
+// Codex's app-server is asked for a reading (CodexUsageProbe) once the newest one has gone stale,
+// at the pace ProbePace sets. Between those, and wherever no probe can run (codex missing, an API
+// key login, a session running without the daemon), the transcripts stand: Codex learns its limits
+// from the headers on its replies and records them in the token_count events it writes as it goes,
+// so that is the newest figure Codex itself saw, ageing between runs. The newer of the two wins.
+public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time = null, UsageProbes? probes = null, Action<string>? log = null) : IUsageCollector
 {
+    readonly TimeProvider clock = time ?? TimeProvider.System;
+    readonly Action<string> say = log ?? (_ => { });
+    readonly ProbePace pace = new(options);
+    readonly object gate = new();
+    AgentUsage? probed;
+    DateTimeOffset? signedOutAt;
+    // The reading taken by a probe that found the current sign-out (its second account/read), if
+    // any; forgotten with that sign-out, so a later one is never shown as an old reading.
+    AgentUsage? signedOutReading;
+    // A login no probe reads replaced one whose reading or sign-out was published (TakeWithdrawal).
+    bool withdrawn;
+    // A Codex session has run here since the sign-out: the probe that lets go ahead decides whether
+    // it has ended, and the sign-out stands until then. Taken down on the session's arrival alone,
+    // it went out, was withdrawn and came back whenever the user was still signed out (#238 review).
+    bool ending;
+    // Readings measured no later than a sign-out that ended without one of its own: older than what
+    // was published, so never put back in its place.
+    DateTimeOffset? hiddenUpTo;
+    bool sessionOpen, busy, wasOpen;
+    Task? running;
+    Task? answering;
+    DateTimeOffset heldUntil = DateTimeOffset.MinValue;
+    bool finished;
+    DateTimeOffset? nextDue;
+    string? said;
+
     public AgentKind Agent => AgentKind.Codex;
 
-    public Task<AgentUsage?> CollectAsync(CancellationToken cancellationToken = default) => Task.FromResult(Read(cancellationToken));
+    public void Pace(bool sessionOpen, bool busy)
+    {
+        lock (gate)
+        {
+            (this.sessionOpen, this.busy) = (sessionOpen, busy);
+            if (sessionOpen && !wasOpen) { EndHold(); }
+            wasOpen = sessionOpen;
+        }
+    }
+
+    // Any new one, not only the first: with one session left open, the user signing in and
+    // opening another changed nothing Pace sees, and the sign-out stood for the hold's two hours
+    // (#238 review).
+    public void SessionArrived()
+    {
+        lock (gate) { EndHold(); }
+    }
+
+    // Under gate. A Codex session running here again ends the hold a sign-out put on the probes: it
+    // may have signed in. The sign-out stands until a probe says so (ending). Not a transcript: a
+    // session whose refresh token is lost still reads its limits on the access token it has, and
+    // its readings hid a sign-out it was still in (#238 review).
+    void EndHold()
+    {
+        if (signedOutAt is null) { return; }
+        ending = true;
+        pace.Release();
+        // Due at once, so the monitor wakes for the probe this allows: beside agent-ha-bridge the
+        // pace stays idle, so a session opening does not bring the next ask forward, and with no
+        // wake the probe waited out the idle interval (#238 review). The monitor's MinimumGap still
+        // spaces the asks.
+        nextDue = clock.GetUtcNow();
+    }
+
+    public DateTimeOffset? WakeAt
+    {
+        get
+        {
+            lock (gate) { return finished ? DateTimeOffset.MinValue : running is null ? nextDue : null; }
+        }
+    }
+
+    // The probe's run, while one is under way, for tests to wait on.
+    internal Task Running { get { lock (gate) { return running ?? Task.CompletedTask; } } }
+
+    // A probe whose standard input goes with the host: until its answers are in and its grace has
+    // passed, stopping the host would cut it short.
+    public Task StoppingAsync()
+    {
+        lock (gate) { return answering ?? Task.CompletedTask; }
+    }
+
+    public bool Hold(DateTimeOffset until)
+    {
+        lock (gate)
+        {
+            if (until > heldUntil) { heldUntil = until; }
+            return answering is { IsCompleted: false };
+        }
+    }
+
+    public bool TakeWithdrawal()
+    {
+        lock (gate)
+        {
+            var was = withdrawn;
+            withdrawn = false;
+            return was;
+        }
+    }
+
+    public Task<AgentUsage?> CollectAsync(CancellationToken cancellationToken = default)
+    {
+        var now = clock.GetUtcNow();
+        var transcript = Read(cancellationToken);
+        AgentUsage? newest;
+        DateTimeOffset? readingAt;
+        lock (gate)
+        {
+            finished = false;
+            newest = Visible(Newer(transcript, probed));
+            // No probe can say whether the sign-out has ended: the session's arrival must.
+            if (probes is null && ending) { EndSignOut(); }
+            // The probe a session's arrival released runs at once: a fresh transcript, which says
+            // nothing of the sign-out, must not put it off.
+            readingAt = ending ? null : newest?.MeasuredAt;
+        }
+        if (probes is not null) { Consider(readingAt, now); }
+        lock (gate)
+        {
+            newest = Visible(Newer(transcript, probed));
+            // Something to say again replaces what was withdrawn.
+            if (newest is not null) { withdrawn = false; }
+            if (signedOutAt is { } at)
+            {
+                // The probe that found the sign-out read the allowance first: that reading is
+                // newer than anything a client holds, so it goes out, carrying the error.
+                if (newest is not null && ReferenceEquals(newest, signedOutReading))
+                {
+                    return Task.FromResult<AgentUsage?>(newest with { Error = CodexUsageProbe.SignedOutError });
+                }
+                // Otherwise a failure of its own, timed when the sign-out was found, in the newest
+                // reading's place (its key, or none): a client keeps that reading and shows this
+                // beside it.
+                return Task.FromResult<AgentUsage?>(UsageRead.Failure(AgentKind.Codex, CodexUsageProbe.SignedOutError, at, accountKey: newest?.AccountKey, plan: newest?.Plan));
+            }
+        }
+        return Task.FromResult(newest);
+    }
+
+    // Of two readings, the one measured later: a session's transcript can be newer than the last
+    // probe, and a probe newer than any transcript.
+    static AgentUsage? Newer(AgentUsage? a, AgentUsage? b) => a is null ? b : b is null ? a : b.MeasuredAt > a.MeasuredAt ? b : a;
+
+    AgentUsage? Visible(AgentUsage? reading) => reading is not null && hiddenUpTo is { } upTo && reading.MeasuredAt <= upTo ? null : reading;
+
+    // The sign-out is over, and what was published for it withdrawn unless something measured since
+    // replaces it. Under gate.
+    void EndSignOut()
+    {
+        hiddenUpTo = signedOutAt;
+        signedOutAt = null;
+        signedOutReading = null;
+        ending = false;
+        withdrawn = true;
+    }
+
+    void Consider(DateTimeOffset? readingAt, DateTimeOffset now)
+    {
+        lock (gate)
+        {
+            nextDue = null;
+            if (running is not null) { return; }
+            // The host is about to stop or be updated: a probe started now could be cut short.
+            if (now < heldUntil)
+            {
+                nextDue = heldUntil;
+                return;
+            }
+            if (!pace.Due(readingAt, busy, now))
+            {
+                nextDue = pace.DueAt(readingAt, busy);
+                return;
+            }
+            // Codex has been used here: a machine where it is installed and never run says nothing.
+            // Nor can any probe then say whether a sign-out has ended: the session's arrival must.
+            if (!Directory.Exists(Path.Combine(options.CodexHome, "sessions")))
+            {
+                if (ending) { EndSignOut(); }
+                return;
+            }
+            pace.Started(now);
+            var run = new CodexUsageProbe(options, probes!, clock, say).Start();
+            answering = run.Released;
+            running = Task.Run(async () =>
+            {
+                try
+                {
+                    var outcome = await run.Reported;
+                    Apply(outcome);
+                    // An answer after the report gave up: a sign-out or a reading still counts; a
+                    // failure was already counted as the timeout.
+                    if (await run.Late is { } late)
+                    {
+                        if (late.Kind != CodexProbeKind.Failed) { Apply(late); }
+                        else if (late.Reading is { } kept) { Keep(kept); }
+                    }
+                    await run.Finished;
+                }
+                catch (Exception e)
+                {
+                    say($"usage: asking Codex for its allowance failed: {e.GetType().Name}");
+                    lock (gate) { pace.Failed(clock.GetUtcNow()); }
+                }
+                finally
+                {
+                    lock (gate)
+                    {
+                        running = null;
+                        answering = null;
+                        finished = true;
+                    }
+                }
+            });
+        }
+    }
+
+    // A reading that came with a failure already counted (the report's timeout): kept, without a
+    // second back-off, and the monitor woken to publish it.
+    void Keep(AgentUsage reading)
+    {
+        lock (gate)
+        {
+            if (probed is null || reading.MeasuredAt > probed.MeasuredAt) { probed = reading; }
+            // A sign-out stands: the probe this came from failed, as one answering in time would
+            // have (Apply), and a lost refresh token still reads the allowance (#238 review). The
+            // next released probe decides.
+            finished = true;
+        }
+    }
+
+    void Apply(CodexProbeOutcome outcome)
+    {
+        var now = clock.GetUtcNow();
+        string? line;
+        lock (gate)
+        {
+            if (outcome.Reading is { } r && (probed is null || r.MeasuredAt > probed.MeasuredAt)) { probed = r; }
+            switch (outcome.Kind)
+            {
+                case CodexProbeKind.Reading:
+                    pace.Succeeded();
+                    signedOutAt = null;
+                    signedOutReading = null;
+                    ending = false;
+                    line = null;
+                    break;
+                case CodexProbeKind.SignedOut:
+                    // No more probes until the longest back-off ends or a Codex session runs here.
+                    // Timed at the first finding; the reading of every probe that found it, the
+                    // newest, still goes out. Found again after a Codex session ran here, it is a
+                    // finding of its own, and stands throughout: never withdrawn in between.
+                    if (ending)
+                    {
+                        signedOutAt = now;
+                        signedOutReading = null;
+                        ending = false;
+                    }
+                    signedOutAt ??= now;
+                    if (outcome.Reading is { } fresh && ReferenceEquals(fresh, probed)) { signedOutReading = fresh; }
+                    pace.Hold(now);
+                    line = $"usage: {CodexUsageProbe.SignedOutError} ({outcome.Why}); not asking it again for {options.ProbeBackoffMax.TotalHours:0} hours or until a Codex session runs here";
+                    break;
+                case CodexProbeKind.NotApplicable:
+                    // Signed in some other way now (an API key, another provider): no longer a
+                    // sign-out to report, and an earlier probe's reading is not this login's, so
+                    // the transcripts stand alone.
+                    withdrawn |= probed is not null || signedOutAt is not null;
+                    signedOutAt = null;
+                    signedOutReading = null;
+                    ending = false;
+                    probed = null;
+                    pace.Hold(now);
+                    line = $"usage: Codex is not asked for its allowance ({outcome.Why}); its transcripts are read";
+                    break;
+                case CodexProbeKind.Skipped:
+                    line = $"usage: Codex was not asked for its allowance ({outcome.Why}); its transcripts are read";
+                    break;
+                default:
+                    var wait = pace.Failed(now);
+                    line = $"usage: asking Codex for its allowance failed ({outcome.Why}); trying again in {wait.TotalMinutes:0} minutes";
+                    break;
+            }
+            finished = true;
+            if (line == said) { return; }
+            said = line;
+        }
+        if (line is not null) { say(line); }
+    }
 
     AgentUsage? Read(CancellationToken cancellationToken)
     {
@@ -58,6 +345,11 @@ public sealed class CodexUsageCollector(UsageOptions options) : IUsageCollector
         return newest;
     }
 
+    // A window named by its length, as the transcripts and the app-server both give it.
+    internal static string WindowLabel(double? minutes, string fallback) => minutes is { } m and > 0
+        ? m >= 10080 ? "Weekly" : m >= 1440 ? $"{Math.Round(m / 1440)}d limit" : $"{Math.Round(m / 60)}h limit"
+        : fallback;
+
     // Without a timestamp on the event, the file's last write is the latest it can have been.
     internal static AgentUsage? Parse(string line, DateTimeOffset written)
     {
@@ -72,10 +364,8 @@ public sealed class CodexUsageCollector(UsageOptions options) : IUsageCollector
             foreach (var (name, fallback) in new[] { ("primary", "5h limit"), ("secondary", "Weekly") })
             {
                 if (UsageRead.Property(limits, name) is not { } limit || UsageRead.Number(limit, "used_percent") is not { } percent) { continue; }
-                var label = UsageRead.Number(limit, "window_minutes") is { } minutes and > 0
-                    ? minutes >= 10080 ? "Weekly" : minutes >= 1440 ? $"{Math.Round(minutes / 1440)}d limit" : $"{Math.Round(minutes / 60)}h limit"
-                    : fallback;
-                DateTimeOffset? resets = UsageRead.Number(limit, "resets_at") is { } seconds and > 0 ? DateTimeOffset.FromUnixTimeSeconds((long)seconds) : null;
+                var label = WindowLabel(UsageRead.Number(limit, "window_minutes"), fallback);
+                DateTimeOffset? resets = UsageRead.UnixSeconds(UsageRead.Number(limit, "resets_at"));
                 // No start: Codex says when a window resets but not when it began, and guessing it
                 // from the length would quietly turn a rolling window into a fixed one.
                 windows.Add(UsageRead.Window(name, label, percent, resets));

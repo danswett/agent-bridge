@@ -1,5 +1,13 @@
 # The Home Assistant connector
 
+**Current compatibility, not the target architecture.** The owner redirected HA
+delivery on 2026-11-02 in [#387](https://github.com/danswett/agent-bridge/issues/387):
+the separate [integration and companion card](https://github.com/danswett/agent-bridge-home-assistant/issues/1)
+own HA entities/actions/presentation. Bridge retains generic protocol/core logic
+and host-enforced authorization. The stages, settings and operator procedures
+below describe the existing compatibility connector unless explicitly labeled
+target or historical; they are not installation instructions for its successor.
+
 A machine moved off agent-ha-bridge's PowerShell daemon onto `agent-bridge-host` stays on the
 existing Home Assistant dashboard: its cards, answering, replies, attachments, launch, stop,
 usage, fleet status, update buttons and phone notifications, as today (decided 2026-10-29;
@@ -20,13 +28,14 @@ The plan, with every stage done, is below.
 
 ### Retaining HA without a legacy daemon (#317)
 
-The owner decided on 2026-11-02 to keep the HA dashboard after the legacy daemon is
-retired. #318 implements native shared dashboard/card publication; #319 depends on it
-for an explicit writer handover, rollback and disposable-HA rehearsal. This is not
-permission to bypass G7: the current connector still does not publish shared resources,
-and writer migration remains refused until the replacement is verified.
+The owner requires HA functionality without a legacy daemon. The later redirect
+in #387 supersedes the permanent native shared dashboard/card publisher direction
+of #318, **not the functionality and not completion of #318**. #317 remains the
+parent goal; #319 remains the explicit writer cutover, rollback and disposable-HA
+rehearsal gate. G7 still refuses writer migration. A target diagram or fixture
+pass does not authorize cutover.
 
-The first implementation slice ports protocol 1's policy validation, ordinal canonical
+**Merged compatibility evidence (#322).** The first implementation slice ports protocol 1's policy validation, ordinal canonical
 policy JSON/digest/resource URL, receipt-progress checks and writer/artifact authorization
 to `HaPublicationPolicy`. Exact rollback pins independently verify the served inline
 card's version and bytes; an opaque file URL cannot prove a pin. It is internal
@@ -46,6 +55,52 @@ tree, stubs local settings in memory and performs no HA or installed-config acce
 Malformed resources are not absence, observers cannot acquire writer authority, and
 generation/high-water regressions remain refusals. Policy validation additionally
 rejects duplicate JSON members instead of letting a parser silently select one.
+
+### Publisher work disposition (#387)
+
+Verified against main `95983d6031dfc690b5c6a122b2e8f4ac8cac955e` and actual PR
+metadata/file inventories on 2026-11-05 PT. These are preservation/extraction
+boundaries, not permission to close PRs, remove trees or merge the held stack.
+
+| Work | Retain / extract / supersede |
+|---|---|
+| [#322](https://github.com/danswett/agent-bridge/pull/322), merged as `d2c40f62e07467a897947a0568a37154e96df194` | **Retain** `HaPublicationPolicy`, `PublicationTests`, `Fixtures/ha-publication.json` and `Export-HaPublication.ps1` as current compatibility/rollback evidence. This internal contract is not a running shared publisher. Final lifetime/placement belongs to #387/#389 |
+| [#331](https://github.com/danswett/agent-bridge/pull/331), closed unmerged 2026-11-05 at 12:45 PT; branch kept, retained head `b58fcd42f7b936ef1316ccab42ee88a29908b4ff` | **Preserve** authority observation, protected high-water receipts and recorded malformed/missing/regression cases. **Extract** relevant migration failure evidence through reviewed replacement slices; no claim its receipt runtime is on main |
+| [#337](https://github.com/danswett/agent-bridge/pull/337), closed unmerged 2026-11-05 at 12:45 PT; branch kept, retained head `ac1fd159cecff4231ae09e5f5e660e7a52f79898` | Permanent host renderer/writer is **superseded**. **Preserve/extract** card behavior, templates, whole-view recordings, exact-pin/upgrade/conflict tests for HA-side delivery. Keep source commit, exporter recipe, card-byte provenance and `Publication/LICENSE` with any approved extraction; do not copy bundled third-party content without license review |
+| [#345](https://github.com/danswett/agent-bridge/pull/345), closed unmerged 2026-11-05 at 00:59:49 PT; retained head `0f81009b434414ccd9209ac103108e6c7db9fa73` | Permanent opt-in host fleet publisher is **superseded**. **Preserve/extract** mixed-fleet reconciliation, selector repair, retirement and restart/rollback failure cases; do not adopt host publication configuration or drift jobs by inertia. Closure is withdrawal, not authorization for cleanup or cutover |
+
+Preserve all commits/worktrees while ownership and extraction are resolved.
+[The canonical whole-HA audit](https://github.com/danswett/agent-bridge/issues/389#issuecomment-6617977766)
+routes cleanup through #389 and its existing children: #525 runtime/generic seams,
+#526 credential/config lifecycle, #527 CI/tooling. No bulk HA string purge:
+generic dashboard UI, `driver`/`driverPrincipal`, licenses and historical results
+are not obsolete merely because they mention HA.
+
+### Target prerequisites and existing owners
+
+The merged [connector read profile](protocol/connector-read.md) (#534) describes
+existing application reads and host-backed reference fixtures, **not** released
+enrollment, encrypted transport certification or an installable integration.
+[The agent-principals design](design/agent-principals.md) (#522) is design, not a
+service-identity implementation. #388/#519 and #55/#391 retain identity, grants,
+attribution and roster ownership; this redirect does not design a competing path.
+Initial connector reads do not imply any action grant, and agents must never
+answer approvals or folder trust.
+
+[#394](https://github.com/danswett/agent-bridge/pull/394)'s original architecture and
+enrollment proposal at `d9382fd31dc9fad9d34919317bf7a3265de43c18` is preserved
+historical, **unadopted** evidence. That proposal is withdrawn from the corrected
+documentation-only #394; preserving its source does not adopt its enrollment
+design or protocol audit. Enrollment interface work remains Trust-owned under #388.
+
+#258 (Settings/health) and #175 (sub-agents/shadow) remain existing compatibility
+work with their existing owners. Closed #78 is historical token-propagation
+scope, not a request to restore that path. No issue is closed or reassigned here.
+The supported legacy configuration window, final fixture placement, notification/
+action parity and credential revocation/rollback retention still need decisions
+on #387 with those owners. Keep current connector credentials/settings and G5/G6/G7
+and owner-only management guards until verified #319 replacement/rollback; only
+then may #389 remove obsolete dependencies.
 
 ## What it never does
 
@@ -201,7 +256,7 @@ Per session:
 
 | Entity (pinned id) | Discovery topic | State / attributes |
 |---|---|---|
-| `sensor.<node>_status` | `homeassistant/sensor/<node>/status/config` | `working`, `waiting`, `idle`, `agents` (idle, background agents running), `shell` (idle, background commands running) or `ending`; attributes `session`, `machine`, `process_id`, `updated`, and only when non-empty or non-zero `model`, `background_agents`, `background_shells`, `compactions` (`Add-DaemonTuningAttributes`) |
+| `sensor.<node>_status` | `homeassistant/sensor/<node>/status/config` | `working`, `waiting`, `idle`, `agents` (idle, background agents running), `shell` (idle, background commands running) or `ending`; while the host sets the session's `attention` (#800, below), the clients' words instead: `Needs sign-in`, `Signed in · waiting for the session to confirm`, `Agent error` (`Not authorised` or `Rate limited` by class), `Not responding`. Attributes `session`, `machine`, `process_id`, `updated`, and only when non-empty or non-zero `model`, `background_agents`, `background_shells`, `compactions` (`Add-DaemonTuningAttributes`), and `attention` while it is set |
 | `sensor.<node>_activity` | `homeassistant/sensor/<node>/activity/config` | a line, cut to 255 with `...`: `Running: <tool>`, the reply's first line, `Thinking`, or `Idle`; attributes `session`, `machine`, `verbose`, `updated`, `driver`, `history` (12 deep, 24 with Detailed activity), and the card text as `Add-DaemonCardText` lays it out: `response` (to 6000 characters, then `_(truncated - see terminal)_`) with `response_kind` `text` or `reasoning`, and for an agent that does not interleave its thinking, `reasoning` (to 4000). Added, only for a session with sub-agents: `subagents` and `subagents_more` (below) |
 
 Both carry the device block (`identifiers: [<node>]`, `name`, `manufacturer: AI CLI bridge`,
@@ -222,6 +277,27 @@ How the host's `Session` maps to what the daemon kept, where the two differ:
   (`Get-BridgeThoughtLine`, ported and fixture-checked), the reply's first line.
 * `driver` is `human` until an answer from the card sets it (stage 2, below); replies and
   launches set it from stages 3 and 5.
+* **Attention** (#800, [v1-sessions.md](protocol/v1-sessions.md#attention)). The host keeps a
+  session's `status` truthful: `idle` after a turn that ended on a 401 or an agent error, with the
+  turn before's reply still beside it. On its own, that read on the card as an idle session that
+  had answered. While `Session.attention` is set, the status sensor's state is the clients'
+  words for it, in the order of their status rules (`StatusRules`, `AuthState.ErrorWords`): the
+  session's own question still reads `waiting`, then `Needs sign-in` (or `Signed in · waiting for
+  the session to confirm` while recovery is `pending`), then a delegate's question `waiting`, then
+  `Not responding`, then `working`, then the error's words (`Not authorised` for `auth`,
+  `Rate limited` for `rate`, otherwise `Agent error`). An `ending` session still reads `ending`.
+    The card shows the state as written.
+  The status attributes gain `attention`:
+  `{kind, error_class?, provider?, message?, since}`, with `kind` one of `sign_in_needed`, `error`
+  or `not_responding`. `error_class` is only for an error. `provider` is only for a sign-in, and
+  only when it is `github`, `anthropic` or `openai`. `message` is the host's own sentence
+  (`AgentErrors.Template`, never the agent's words), on one line, within 300 characters, with its
+  template markup broken. It never carries the account, a sign-in code or a URL. A value the
+  connector doesn't know makes no claim, as on the clients: an unknown kind is an error, and an
+  unknown class is `other`. A session without attention publishes exactly the daemon's attributes.
+  End session still judges the session by its own status, so one idle after a failed turn ends at
+  one press, as the host ends it. The shadow shows these as differences from agent-ha-bridge,
+  which has no attention.
 * **Sub-agents** ([design/subagents.md](design/subagents.md) §7, #175). The host's top-level
   `response` and `reasoning` are the latest writer's, a delegate's included, as on
   agent-ha-bridge's card. The connector publishes the **main agent's own** instead: `own`'s
@@ -394,7 +470,7 @@ Where stage 2 knowingly differs from the daemon:
 | An empty multi-select answer is allowed only for Copilot | The host's `Field` carries no `minItems`; Copilot's own forms allow it |
 | `takes_typed_answer` only for a lone choice that allows another answer | The daemon also offers it for yes/no, which the host's question model cannot take |
 | Claude forms use field slots, never the selector's choices | Claude's questions always arrive as forms here |
-| An approval offers `Approve` / `Deny` on the selector with `answer_on_tap` | The host's approval is a question kind of its own |
+| An approval offers `Approve` / `Deny` on the selector with `answer_on_tap`. One the host escaped anything in (`escaped`, #803) offers `Deny` only, under "_Approve from the Agent Bridge app or at the machine._" (or "_Approve at the machine._" when its `approve` is `machine` or `tooMany`), and its phone buttons are Deny only. One that is also `answerAtMachine`, as one listed while other Copilot permissions wait usually is (#690), offers nothing, Deny included | The host's approval is a question kind of its own. Approve on an escaped approval needs a person's signed confirmation from an approved device, which Home Assistant cannot give: it has no device key, and its users include agents (`agentUserIds`) |
 | `Cancel request` says `Answer NOT sent` and resets the selector | The host has no way to cancel an agent's question |
 | A reply while a question is open answers the question; at a question only the terminal can answer, it says `Reply NOT sent` (`the session is waiting on a question`) | The host refuses a reply while its session asks a question |
 | A free-text answer from the reply box must differ from the box at arming | The box keeps the previous reply; the daemon reads it the same way through its baseline |
@@ -412,6 +488,21 @@ repeated publishes; box words, a refusal, a follow-up typed during delivery, a b
 person, from an agent and given up on, a repeated press) with the daemon's constants. The
 contract tests assert the connector tells the card exactly what the daemon told it, and makes
 the same service calls.
+
+**Request id and acknowledgement.** A sender may add `rid` (1 to 64 letters, digits, `-`, `_`, `.`;
+anything else is ignored) and `sender` (a name, at most 64 characters). The host then publishes
+`reply_ack` `{rid, outcome, at, sender?, duplicate?}` in the session's activity attributes in the same
+update as `Reply sent` / `Reply NOT sent`. `outcome` is `delivered`, `unconfirmed` or `refused`. The ack
+stays until a newer one replaces it, so a sender that finds another rid there knows its message was
+swapped or lost and sends again. A rid seen before (the last 50 per session) is not delivered again; the
+host re-acks it with `duplicate: true`. A `refused` rid is forgotten, so the same rid may be retried.
+The history is kept per session in the connector, not on the card, so a pause or restart that rebuilds
+the cards neither empties it nor loses the rid of a delivery still running; a repeat after the rebuild
+is still dropped. When a session ends for good its history is dropped with its card (after any
+delivery still running for it finishes); a session that comes back under the same id starts empty.
+`sender` loses control, format and unassigned characters, whitespace is collapsed,
+and the cut at 64 never splits a character. A reply discarded because a question opened gets no ack.
+Publishes without a `rid` behave as before.
 
 **The reply card** publishes `{at, text, images: [{id, name, content_type}], files: [{name,
 content_type, b64}], driver?}` (not retained) to `copilot/cli/<node>/replypayload/set`, read
@@ -574,6 +665,18 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   that took a request launches nothing (the daemon's guard against two presses for one request).
   A press whose prompt payload cannot be read waits for the next pass rather than launching from
   the card, since it may carry a request with settings of its own.
+- **Launch options (beyond agent-ha-bridge, #1142).** `sensor.agent_bridge_<machine>_launch_options`
+  is read-only. Its state is a 12-character `version` (a hash of `default_agent` and the lists, so it
+  changes exactly when an answer does); its attributes (`json_attributes_topic` `newsession/options`,
+  retained) are `{version, default_agent, agents: {<id>: {label, models, efforts, contexts,
+  defaults: {model, effort, context}}}}` for every agent the host's launcher offers, whichever
+  agent the card has selected, so choosing another agent on the card never changes it. The lists
+  are the launcher's own (the card's selectors show only the selected agent's, "Agent default"
+  excluded: omit an axis to take it). It is republished on the card's refresh (30 s) when a
+  list changes, and again after a pause. When the host does not serve launch it is withdrawn (its
+  config and state cleared) rather than left with lists nothing refreshes. It is not in
+  agent-ha-bridge's per-machine topic list, so that daemon's Forget does not clear it. `launch-remote.ps1 -Options` prints it and a launch is checked
+  against it before the button is pressed.
 * **The purple edge**: a session an agent's press launched is `agent`-driven from the moment it
   appears, for the turn it was launched with (already under way or still to come); the turn
   after that is whoever's it is.
@@ -670,6 +773,38 @@ settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-r
   questions included, exactly as the daemon's hooks send them (`Fixtures/ha-notify.json`),
   so on that path a delegate's question is treated as the session's are and neither
   replaces the other; the answer buttons are where the newer replaces the older.
+  **A turn that ended on an error or a failed sign-in is not a finished turn** (#800; the
+  host's Web Push rule, #845). Its session is idle beside the turn before's reply, and pushing
+  that reply was the owner's "replies with the last turn as if alive". No finished push goes
+  while `attention` is `signInNeeded` or `error` (or a kind not known here). That includes one
+  already waiting its 3 s when the attention arrives. The reply is taken as told, so it isn't
+  pushed later either. The next turn that does finish is pushed as ever.
+* **Needs sign-in** (#800), through the same two channels as a question's Needs you, mirroring
+  the host's `signIn` push (§3 of #800's
+  [6646501884](https://github.com/danswett/agent-bridge/issues/800#issuecomment-6646501884)):
+  * There is **one per machine, agent and account**, never one per session. It goes on the first
+    pass after the first of its sessions needs a person to sign in: kind `signInNeeded`, and not
+    while recovery is `pending`. The pass runs each second, well inside the owner's 60 s. It goes
+    again **at most hourly** while any of its sessions still needs it.
+  * It goes to every phone in `answerButtons.services`, with no actions. The tag is
+    `bridge_signin_<slug>_<agent>_<first 8 hex of SHA-256(account)>`, with the question's
+    icon, colour and interruption level, the subtitle `<machine> - needs sign-in`, and the
+    dashboard to open. When `notifications.enabled` is on, it also goes on `notifications.service`.
+  * Title: `<Agent> on <machine> needs sign-in` (ui.md §6.13). Message: `2 sessions: <name>, <name>`
+    (`1 session: <name>` for one), naming three at most.
+  * **No account, code or URL** is in either one.
+  * It is withdrawn from the phones (`clear_notification` by its tag) once none of its sessions
+    needs a person: signed in, recovered or ended. A later need is news again. Nothing is withdrawn
+    while the host's session discovery is held. Retirement waits the same way: after a restart
+    under a hold, a session not found yet is missing, not signed in.
+  * When it was sent, which destinations have it and which phones hold it are kept in the
+    connector's state file. A restart within the hour therefore doesn't send it again, and still
+    withdraws it. A destination that missed it (a phone or the push service failing, or a pass
+    stopped part-way) is tried again every 15 s. Each destination is told again an hour after its
+    own delivery, never sooner, and a failing service is logged once until it works. Once the need
+    is over, what was delivered is forgotten at once, even while a withdrawal is still being
+    retried, so a need that comes back is told everywhere again.
+  * An error and Not responding send nothing. They show on the status only, as on the clients.
 
 Where stage 5b knowingly differs from the daemon:
 
@@ -680,6 +815,7 @@ Where stage 5b knowingly differs from the daemon:
 | Until migrate re-points the hooks, a machine whose agent-ha-bridge hooks still run may push a question twice | Both would be sending; `migrate` moves the hooks to the host, and nothing runs agent-ha-bridge's hooks after it |
 | The host's own Web Push (`push.*`) notifies the app's phones as well | A different channel, with its own settings; turn one off if both reach the same phone |
 | A tap must name an action its notification offered; a withdrawal that failed is retried, across a restart too | Beyond parity: the daemon reads the index off any action's suffix, and forgets a withdrawal whether or not it arrived |
+| A session that needs sign-in, or whose turn ended on an error, gets no finished push. Sign-in gets a notice of its own (#800) | The daemon has no attention, and the agent's stop hook pushed the turn before's reply as if the session were alive |
 ### Stage 6: update buttons
 
 The machine row's update entity, and its **Install Bridge Update** and **Check for Bridge
@@ -692,8 +828,8 @@ be established; a check that found nothing newer; completed) and the busy notice
 What is checked and installed is **this host's own product** (design G2): the app's package,
 which carries the host (`IHostUpdates`, Velopack on Windows, [app-windows.md](app-windows.md)),
 with the app's feed (GitHub releases of `danswett/agent-bridge`, or the app's `feed.txt`) and
-its "Include pre-releases" setting. `latest_version` on a migrated machine is therefore an
-agent-bridge version, never agent-ha-bridge's. A copy its updater did not install (a build
+its "Include pre-releases" setting. `latest_version` on a migrated machine is therefore a
+Slipgates version, never agent-ha-bridge's. A copy its updater did not install (a build
 folder, or a platform it does not package yet) serves no buttons and reports its own version as
 current, as stage 1 did; so does a host with `homeAssistant.updates.checkForUpdates` off, which
 looks nothing up, and a read-only host (`delivery.readOnly`), which acts on nothing from another
@@ -718,7 +854,14 @@ device.
   newest release again, downloads it (`downloading` with `update_percentage`), records the
   attempt in the connector's state file (an attempt that cannot be recorded is not handed
   over: the host that came back could not say how it ended), shows `restarting` and hands the
-  release to Velopack,
+  release to Velopack. Before that, still showing `downloading`, it makes sure nothing the update
+  ends is mid-refresh (#238): this host's own usage probes are held and a standalone Codex
+  app-server it started is waited for, at most 11 minutes; another profile's host running from the
+  package refuses the install, since its probes cannot be held from this host (its pipe takes
+  management only from the app; install from the app there, which holds them all), asked again
+  once this host's wait is over. When it cannot confirm, the
+  install fails to start and `stage_detail` and the notification say why. The release goes to
+  Velopack,
   which applies it once the host has exited; the host then stops as on Ctrl+C. Velopack
   force-stops everything else running from the package folder (the app, and every other
   profile's host, with their sessions' delivery), starts the app again in the background for the
@@ -1053,8 +1196,13 @@ publishes with, and the agent's (`homeAssistant.agentTokenEnvVar`, default
 card agent-driven (the purple edge) when the `context.user_id` on the state change that carried
 the input is in `homeAssistant.agentUserIds`. The connector keeps that split: it publishes with
 the user's token only, reads `context.user_id` off each command's state change and matches it
-against its own `homeAssistant.agentUserIds` to set `driver` (stage 2). Agents driving a
-migrated machine go on using their own token, unchanged.
+against its own `homeAssistant.agentUserIds` to set `driver` (stage 2).
+`migrate` imports `agentTokenEnvVar` as metadata only; the native launcher does not
+resolve that name or inject an HA token. A child may inherit its host's environment,
+but that is not managed token propagation or the proposed native agent credential.
+See [host-launch.md](host-launch.md) and [host-config.md](host-config.md).
+The target uses separately reviewed Bridge identities/attribution, not permanent
+per-host HA agent tokens; this does not change current command authorization.
 
 **Notifications.** The phone flow (`notify.mobile_app_*` with answer buttons, and
 `mobile_app_notification_action` events back) is stage 5b (above). A tap is attributed as a
@@ -1205,7 +1353,7 @@ for retained state, and `config/entity_registry/list` for ids:
 1. Daemon → host: the machine row stays (online, session count, version, `(dev)`); each card
    keeps rendering status, activity, the reply text, the trail, compactions and background
    counts; Detailed activity toggles reasoning; usage rows stay; no `_2` ids; the update row
-   shows agent-bridge's version and its Install and Check buttons work; a question is answered
+   shows the Slipgates version and its Install and Check buttons work; a question is answered
    from the card, on a phone-sized browser too.
 2. A session ending: it leaves the list, the writer drops its card, and only then do its
    entities go; all 29 topics are empty.

@@ -17,9 +17,18 @@ public static class Program
         // uninstall, and Run() handles those and exits. The host lives in the app's folder, so
         // it is stopped before an update replaces the folder and started by the new version;
         // uninstall takes away everything the app put outside it.
+        // Never applies a downloaded update by itself as the app starts (#516): Velopack's default
+        // did, so a release downloaded in the background was installed by the next start of the
+        // exe, a second start that only shows the window included, stopping every process in the
+        // package (this profile's running app and host, and every other profile's) without a word.
+        // A release downloaded waits for Restart to update (AutoUpdater).
+        // No after-update callback (#497, #1167): the host it started was ended by Velopack as soon
+        // as the hook exited (1.2.161's run_hook force-stops the package after every hook), and the
+        // hook, waiting up to 10 s for that host, took 4-15 s in Velopack's log on one machine (11
+        // of 49 killed at its 15 s limit). The restarted app starts the host, once (App.StartHostAsync).
         VelopackApp.Build()
+            .SetAutoApplyOnStartup(false)
             .OnBeforeUpdateFastCallback(_ => Lifecycle.BeforeUpdate())
-            .OnAfterUpdateFastCallback(_ => Lifecycle.AfterUpdate())
             .OnBeforeUninstallFastCallback(_ => Lifecycle.BeforeUninstall())
             .Run();
 
@@ -124,35 +133,46 @@ static class Lifecycle
         return true;
     }
 
-    // In the old version, before its folder is replaced: the host runs from that folder.
-    public static void BeforeUpdate()
-    {
-        if (Refused("update")) { return; }
-        try { Manager().StopAsync().Wait(TimeSpan.FromSeconds(25)); }
-        catch (Exception e) { AppLog.Write($"update: the host did not stop: {e.Message}"); }
-    }
+    // Velopack gives each update hook 15 s, and kills one still running then, going on with the
+    // update whatever it was doing (https://docs.velopack.io/integrating/hooks). The waits here were 25 s,
+    // so a slow stop was killed part-way. Now the hook waits at most HookWait, which leaves the app's
+    // own start-up and exit the rest; within it, a usage probe tied to the host (#238) gets
+    // HookProbeWait, and the stop itself the remainder.
+    static readonly TimeSpan HookWait = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan HookProbeWait = TimeSpan.FromSeconds(6);
 
-    // In the new version. The app restarts after an update and starts the host itself; this is
-    // for an update applied without a restart, so the host is not left stopped.
-    public static void AfterUpdate()
+    // In the old version, before its folder is replaced: the host runs from that folder. Every
+    // update the app starts has stopped the host already, waiting for its usage probes however long
+    // they took (HostManager.StopAndApplyAsync), so nothing is begun here. One started otherwise
+    // finds it running: it is stopped only if its probes are done within HookProbeWait; if not, it
+    // is left to Velopack, which ends it with the package (docs/app-windows.md says what that leaves).
+    public static void BeforeUpdate() => StopForHook("update");
+
+    static void StopForHook(string what)
     {
-        if (Refused("update")) { return; }
+        if (Refused(what)) { return; }
         try
         {
-            var manager = Manager();
-            if (manager.StartsAtSignIn) { manager.StartAsync().Wait(TimeSpan.FromSeconds(25)); }
+            var stop = Manager().StopWithinAsync(HookProbeWait);
+            if (!stop.Wait(HookWait)) { AppLog.Write($"{what}: the host had not stopped after {HookWait.TotalSeconds:0} s, and Velopack ends it"); }
+            else if (stop.Result is { } busy) { AppLog.Write($"{what}: the host was left running, and Velopack ends it: {busy}"); }
         }
-        catch (Exception e) { AppLog.Write($"update: the host did not start: {e.Message}"); }
+        catch (Exception e) { AppLog.Write($"{what}: the host did not stop: {e.GetBaseException().Message}"); }
     }
 
     // Everything the app put outside its folder: owned hooks, the host stopped, its logon task,
-    // the app's Run entry and toast registration. The host's profile (key, account, config) stays,
-    // like any app's data, so reinstalling picks up where it was; docs/app-windows.md.
+    // the app's Run entry, toast registration and the host's logon marker (#780). The host's profile
+    // (key, account, config) stays, like any app's data, so reinstalling picks up where it was;
+    // docs/app-windows.md.
     public static void BeforeUninstall()
     {
         if (Refused("uninstall")) { return; }
         var manager = Manager();
         // Velopack terminates this callback after 30 seconds; reserve time for registration cleanup.
+        // The stop waits for a busy usage probe (#238) only within those 12 s: past them it is not
+        // stopped, its hooks are left alone, and Velopack ends it with the package. Not StopWithinAsync:
+        // its "not running" is also a host that refused this app or is not answering, whose hooks
+        // must stay.
         using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(12));
         var stopped = false;
         try { manager.StopAsync(stop.Token).GetAwaiter().GetResult(); stopped = true; }
@@ -169,5 +189,6 @@ static class Lifecycle
         try { manager.SetStartAtSignIn(false); } catch (Exception e) { AppLog.Write($"uninstall: the logon task stays: {e.Message}"); }
         try { new RunKey(Paths.Exe).Set(false); } catch (Exception e) { AppLog.Write($"uninstall: the Run entry stays: {e.Message}"); }
         try { ToastActivator.Unregister(); } catch (Exception e) { AppLog.Write($"uninstall: the toast registration stays: {e.Message}"); }
+        try { AgentBridge.Host.Core.Restore.VolatileLogonMarker.RemoveAll(); } catch (Exception e) { AppLog.Write($"uninstall: the host's logon marker stays: {e.Message}"); }
     }
 }

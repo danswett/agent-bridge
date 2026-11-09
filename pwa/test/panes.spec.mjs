@@ -3,6 +3,7 @@
 // 760 with Conversation and Tools as tabs, and one column below with the session pushed over the
 // list and the browser's own back. What a row and a header say, and how their facts wrap.
 import { test, expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 import { open, row, view } from './nav.mjs';
 
 const COPILOT = '02d9e5d5-6b35-49bd-b083-39572fbff648';
@@ -118,7 +119,12 @@ const pageScroll = (page) => page.evaluate(() => document.scrollingElement.scrol
 async function scrollsOnItsOwn(page, pane) {
   await pane.evaluate((el) => { el.scrollTop = 0; });
   expect(await pane.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThan(0);
-  await pane.hover();
+  // Near its foot: on a phone the session's header lies over the top of the conversation (ui.md §6.2)
+  // and the reply area over its foot (§6.5), so the pointer goes just above that.
+  const box = await pane.boundingBox();
+  const slot = await page.locator('.session-view:not([hidden]) .reply-slot').boundingBox();
+  const foot = slot && slot.y < box.y + box.height ? slot.y - box.y : box.height;
+  await pane.hover({ position: { x: box.width / 2, y: foot - 12 } });
   await page.mouse.wheel(0, 120);
   await expect.poll(() => pane.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
   expect(await page.evaluate(() => scrollY)).toBe(0);
@@ -213,7 +219,7 @@ test.describe('on a phone', () => {
   test('a pushed session\'s Back, overflow, tabs and reply buttons are at least 44 px to a finger', async ({ page }) => {
     await openDemo(page);
     const v = await open(page, CLAUDE);
-    const controls = await v.locator('.session-header .back, .session-header .more button, .view-tab, .reply-tools button').filter({ visible: true }).all();
+    const controls = await v.locator('.session-bar .back, .session-bar .more, .view-tab, .reply-tools button, .reply-box > .attach').filter({ visible: true }).all();
     expect(controls.length).toBeGreaterThanOrEqual(5);
     for (const c of controls) {
       const b = await c.boundingBox();
@@ -238,7 +244,7 @@ test.describe('on a phone', () => {
     const header = await box(v.locator('.session-header'));
     expect(header.y).toBeGreaterThanOrEqual(strip.y + strip.height - 0.5);
     expect(await reachable(v.locator('.back'))).toBe(true);
-    expect(await reachable(v.locator('.session-header .more'))).toBe(true);
+    expect(await reachable(v.locator('.session-bar .more'))).toBe(true);
   });
 
   test('a session opened from a search is not under the search row, and back returns to what was searched', async ({ page }) => {
@@ -605,6 +611,50 @@ test('a row is two lines: the title, then the status and the repository, never t
   await expect(v.locator('.fact-pid dd')).toHaveText('pid 39844');
 });
 
+// #1087: one set of rows, in one order, in both clients (docs/design/session-details.json).
+test('Details lists the shared table\'s rows in its order: Status, how long, Agent through Process, Updated and the ID', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDemo(page);
+  const table = JSON.parse(readFileSync(new URL('../../docs/design/session-details.json', import.meta.url), 'utf8')).rows.map((r) => r.row);
+  const terms = await view(page, COPILOT).locator('.facts dt').allTextContents();
+  expect(terms).toEqual(['Status', 'In this state', 'Agent', 'Model', 'Machine', 'Repository', 'Branch', 'Folder', 'Started', 'Updated', 'Turns', 'Compactions', 'Process', 'ID']);
+  expect(terms.map((t) => table.indexOf(t))).toEqual(terms.map((t) => table.indexOf(t)).toSorted((a, b) => a - b));
+  expect(terms.every((t) => table.includes(t))).toBe(true);
+  const facts = view(page, COPILOT).locator('.facts');
+  await expect(facts.locator('.fact-status dd')).toHaveText('Waiting on you');
+  await expect(facts.locator('.fact-since dd')).toHaveText(/^for \d/);
+  await expect(facts.locator('.fact-updated dd')).toHaveText(/ago$|just now$/);
+  await expect(facts.locator('.fact-turns dd')).toHaveText('412 turns');
+  await expect(facts.locator('.fact-id dd')).toHaveText('02d9e5d5-6b35-49bd-b083-39572fbff648');
+  // A tick or an update that changes only the clocks leaves the other rows' nodes where they are,
+  // so a selection in the ID or the folder survives it.
+  const id = await facts.locator('.fact-id dd .mono').elementHandle();
+  await upsert(page, COPILOT, { updatedAt: later() });
+  await expect(facts.locator('.fact-updated dd')).toHaveText(/ago$|just now$/);
+  expect(await id.evaluate((n) => n.isConnected)).toBe(true);
+});
+
+test('Details\' Started gains its date when the clock passes local midnight, in the same <time> with its tooltip', async ({ page }) => {
+  const midnight = new Date();
+  midnight.setHours(24, 0, 0, 0);
+  await page.clock.install({ time: new Date(midnight.getTime() - 10 * 60000) });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDemo(page);
+  const startedAt = new Date(midnight.getTime() - 30 * 60000).toISOString();
+  await upsert(page, COPILOT, { startedAt });
+  const started = view(page, COPILOT).locator('.facts .fact-started time');
+  await expect(started).toHaveAttribute('datetime', startedAt);
+  const before = await started.textContent();
+  expect(before).not.toMatch(/[A-Za-z]{3,}\.? \d{1,2}/);
+  const node = await started.elementHandle();
+  const title = await started.getAttribute('title');
+  await page.clock.fastForward(20 * 60000);
+  await expect(started).toHaveText(/[A-Za-z]{3,}\.? \d{1,2}/);
+  await expect(started).toContainText(before);
+  expect(await node.evaluate((n) => n.isConnected)).toBe(true);
+  await expect(started).toHaveAttribute('title', title);
+});
+
 test('the header\'s Pin pins the session, and its row goes to Pinned', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openDemo(page);
@@ -857,7 +907,7 @@ test.describe('the session pane after #221\'s review', () => {
       const v = await open(page, COPILOT);
       await expect(v.locator('.question')).toBeVisible();
       if (width === 390) {
-        await v.locator('.session-header .more').click();
+        await v.locator('.session-bar .more').click();
         await page.getByRole('menuitem', { name: 'Details' }).click();
       } else {
         await v.locator('.session-header .details-button').click();

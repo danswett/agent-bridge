@@ -11,6 +11,7 @@ import { prepareAttachment } from '../../js/attachments.js';
 import { DemoBlobStore, DemoConnection, DemoHost } from '../../js/demo.js';
 import { ChannelSet, KIND } from '../../js/channels.js';
 import { P256KeyPair } from '../../js/noise-p256.js';
+import { BridgeConnection, QUIET_AFTER_MS } from '../../js/connection.js';
 
 const flush = () => new Promise((r) => setImmediate(r));
 
@@ -24,13 +25,13 @@ function fakeConnection(presence) {
     opens,
     emit(type, detail) { for (const fn of listeners.get(type) ?? []) { fn(detail); } },
     on(type, fn) { (listeners.get(type) ?? listeners.set(type, []).get(type)).push(fn); },
-    openChannel(peerId, { signal = null } = {}) {
+    openChannel(peerId, { signal = null, early = null } = {}) {
       let resolve, reject;
       const p = new Promise((res, rej) => { resolve = res; reject = rej; });
       const channel = { peerId, peerName: peerId, closed: false, close() { this.closed = true; } };
       // As ChannelSet does: a handshake no longer wanted is closed, and its open fails.
       signal?.addEventListener('abort', () => { channel.close(); reject(new Error('no longer wanted')); });
-      opens.push({ peerId, channel, signal, resolve: () => resolve(channel), reject });
+      opens.push({ peerId, channel, signal, early, resolve: () => resolve(channel), reject });
       return p;
     },
   };
@@ -52,6 +53,25 @@ function session(presence) {
   const hosts = new HostSession({ connection, store: new SessionsStore(), storage: null, makeClient: (ch) => fakeClient(ch) });
   return { connection, hosts };
 }
+
+test("a shown machine's channel asks hello early with the data its first hello sends, so the handshake's answer is the one used (#603)", async () => {
+  const connection = fakeConnection([{ id: 'a', kind: 'host' }]);
+  const asked = [];
+  const hosts = new HostSession({
+    connection, store: new SessionsStore(), storage: null,
+    makeClient: (ch) => {
+      const c = fakeClient(ch);
+      c.hello = async (data) => { asked.push(data); return { protocol: 1, machine: { name: 'a' }, capabilities: ['sessions.read'] }; };
+      return c;
+    },
+  });
+  hosts.select('a');
+  await flush();
+  connection.opens[0].resolve();
+  await flush();
+  assert.equal(connection.opens[0].early.op, 'hello');
+  assert.deepEqual(asked[0], connection.opens[0].early.data);
+});
 
 test('a hello that times out is retried, not taken for an old host', async () => {
   const connection = fakeConnection([{ id: 'a', kind: 'host' }]);
@@ -884,4 +904,218 @@ test('a machine still in presence whose channel drops takes nothing new until a 
   two.releaseResponses();
   await until(() => answers.get('two', 'same-id', 'q1')?.state === 'done', 'its outcome');
   assert.deepEqual([answers.get('two', 'same-id', 'q1').outcome, two.typed.length], ['delivered', 1]);
+});
+
+// The demo host's timings are a host's (v1-sessions.md): each copy of a request counts them from
+// its own arrival, a stage reached before it came as 0.
+test('the demo machine times a repeated reply from the repeat\'s own arrival', async () => {
+  const t0 = new Date().toISOString();
+  const host = new DemoHost({ sessions: [{ id: 's1', agent: 'copilot', title: 'T', status: 'idle', statusSince: t0, startedAt: t0, updatedAt: t0, processId: 1, activity: {} }] }, { answerDelayMs: 40 });
+  const got = [];
+  const channel = { deliver: (m) => got.push(m) };
+  const results = () => got.filter((m) => m.ok === true).map((m) => m.result);
+  const send = (id) => host.receive(channel, { id, op: 'session.reply', data: { id: 's1', request: 'r1', text: 'hi', progress: true } });
+  send('1');
+  await until(() => results().length === 1, 'the first outcome');
+  assert.equal(results()[0].outcome, 'delivered');
+  assert.ok(results()[0].timings.typed >= 30, `the first copy waited for its typing (${results()[0].timings.typed} ms)`);
+  send('2');
+  await until(() => results().length === 2, 'the repeat\'s outcome');
+  assert.deepEqual(results()[1], { outcome: 'delivered', timings: { typed: 0, recorded: 0, confirmed: 0 } });
+});
+
+test('a machine asked to say when its hello changes is asked for it again when it says so, on the same channel', async () => {
+  const connection = fakeConnection([{ id: 'a', kind: 'host' }]);
+  const asked = [];
+  const events = [];
+  const hosts = new HostSession({
+    connection, store: new SessionsStore(), storage: null,
+    makeClient: (ch) => {
+      const c = fakeClient(ch);
+      c.on = (type, fn) => { if (type === 'event') { events.push(fn); } };
+      c.hello = async (options) => {
+        asked.push(options);
+        return { protocol: 1, machine: { name: 'a', readOnly: asked.length > 1 ? 'agent-ha-bridge is running for this user' : null }, capabilities: ['sessions.read', 'hello.changed'] };
+      };
+      return c;
+    },
+  });
+  hosts.select('a');
+  await flush();
+  connection.opens[0].resolve();
+  await flush();
+  assert.equal(hosts.phase, 'open');
+  assert.deepEqual(asked, [{ changes: true }]);
+
+  for (const fn of events) { fn({ ev: 'session.upsert', seq: 1, data: {} }); }
+  await flush();
+  assert.equal(asked.length, 1, 'only hello.changed asks again');
+  for (const fn of events) { fn({ ev: 'hello.changed', seq: 2, data: {} }); }
+  await flush();
+  assert.deepEqual(asked, [{ changes: true }, { changes: true }]);
+  assert.equal(hosts.link('a').machine.readOnly, 'agent-ha-bridge is running for this user');
+  assert.equal(connection.opens.length, 1);
+});
+
+test('a relay connection put to rest says so on each machine shown, rather than that it dropped', async () => {
+  const { connection, hosts } = session([{ id: 'a', kind: 'host' }]);
+  hosts.select('a');
+  await flush();
+  connection.opens[0].resolve();
+  await flush();
+  assert.equal(hosts.phase, 'open');
+  connection.emit('lost', { code: 1000, reason: 'resting', resting: true });
+  assert.equal(hosts.link('a').stale, true);
+  assert.equal(hosts.link('a').error, 'Paused while the app is in the background.');
+});
+
+test('a rest leaves each machine whose list was current confirming, not reconnecting, until its list is whole again, and a real drop says reconnecting', async () => {
+  const connection = fakeConnection([{ id: 'a', kind: 'host' }, { id: 'b', kind: 'host' }]);
+  const hosts = new HostSession({ connection, store: new SessionsStore(), storage: null, makeClient: (ch) => Object.assign(fakeClient(ch), { synced: true }) });
+  hosts.select(ALL);
+  await flush();
+  // b's channel never opens: it is reconnecting when the app rests, and stays so.
+  connection.opens.find((o) => o.peerId === 'a').resolve();
+  await flush();
+  assert.notEqual(hosts.route('a'), null);
+  connection.emit('lost', { code: 1000, reason: 'resting', resting: true });
+  assert.deepEqual(hosts.staleOf('a'), { reason: 'confirming', since: null, rested: true });
+  assert.deepEqual(hosts.staleOf('b'), { reason: 'reconnecting', since: null });
+  connection.emit('state', { state: 'connecting' });
+  assert.equal(hosts.staleOf('a').rested, true, 'coming back is not trouble');
+
+  connection.emit('ready');
+  await flush();
+  connection.opens.filter((o) => o.peerId === 'a').at(-1).resolve();
+  await flush();
+  assert.equal(hosts.staleOf('a'), null, 'its whole list is in');
+  assert.equal(hosts.link('a').rested, false);
+
+  connection.emit('lost', { code: 1006, reason: '' });
+  assert.deepEqual(hosts.staleOf('a'), { reason: 'reconnecting', since: null });
+});
+
+// The relay connection itself, put to rest by the page going out of sight: its channels close the
+// host clients at once (as ChannelSet's do), which the machines shown must not take for a drop.
+test('the app put to rest through its relay connection leaves each machine whose list was current confirming, though its channels close at once', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const visibility = [];
+  const doc = { visibilityState: 'visible', addEventListener(type, fn) { if (type === 'visibilitychange') { visibility.push(fn); } }, removeEventListener() {} };
+  const relays = [];
+  const connection = new BridgeConnection({
+    base: 'http://relay.invalid', key: {}, deviceId: 'me', name: 'phone', account: { token: 't' },
+    win: { document: doc, addEventListener() {}, removeEventListener() {} },
+    makeRelay: () => {
+      const r = { open: false, async connect() { this.open = true; return this; }, close() { this.open = false; this.onClose?.({ code: 1000, reason: 'resting' }); } };
+      relays.push(r);
+      return r;
+    },
+  });
+  const channels = [];
+  connection.channels = {
+    attach(r) { if (!r) { for (const ch of channels.splice(0)) { ch.close(); } } },
+    open(peerId) {
+      const ch = { peerId, peerName: peerId, closed: false, onclose: null, close() { if (!this.closed) { this.closed = true; this.onclose?.(); } } };
+      channels.push(ch);
+      return Promise.resolve(ch);
+    },
+  };
+  const hosts = new HostSession({
+    connection, store: new SessionsStore(), storage: null,
+    makeClient: (ch) => {
+      const closing = [];
+      const c = Object.assign(fakeClient(ch), { synced: true, on(type, fn) { if (type === 'close') { closing.push(fn); } }, close() { ch.close(); } });
+      ch.onclose = () => { for (const fn of closing) { fn(); } };
+      return c;
+    },
+  });
+  await connection.start();
+  relays[0].onPresence([{ id: 'a', kind: 'host' }], null);
+  hosts.select('a');
+  await flush();
+  assert.notEqual(hosts.route('a'), null);
+
+  doc.visibilityState = 'hidden';
+  for (const fn of visibility) { fn(); }
+  t.mock.timers.tick(QUIET_AFTER_MS);
+
+  assert.equal(connection.state, 'resting');
+  assert.equal(channels.length, 0, 'its channels went');
+  assert.deepEqual(hosts.staleOf('a'), { reason: 'confirming', since: null, rested: true });
+  connection.stop();
+});
+
+test('back from a rest, the relay failing to come back turns its machines to reconnecting', async () => {
+  const connection = fakeConnection([{ id: 'a', kind: 'host' }]);
+  const hosts = new HostSession({ connection, store: new SessionsStore(), storage: null, makeClient: (ch) => Object.assign(fakeClient(ch), { synced: true }) });
+  let changes = 0;
+  hosts.onChange(() => { changes++; });
+  hosts.select('a');
+  await flush();
+  connection.opens[0].resolve();
+  await flush();
+  connection.emit('lost', { code: 1000, reason: 'resting', resting: true });
+  assert.equal(hosts.staleOf('a').rested, true);
+  const before = changes;
+  connection.emit('state', { state: 'reconnecting' });
+  assert.deepEqual(hosts.staleOf('a'), { reason: 'reconnecting', since: null });
+  assert.equal(hosts.link('a').error, 'The relay connection dropped; reconnecting.', 'no longer blamed on the background');
+  assert.ok(changes > before, 'whoever draws it hears so');
+});
+
+test('a hello that changes while the channel is still subscribing is asked for again once it is open', async () => {
+  const connection = fakeConnection([{ id: 'a', kind: 'host' }]);
+  const asked = [];
+  let events = [];
+  let subscribed;
+  const hosts = new HostSession({
+    connection, store: new SessionsStore(), storage: null,
+    makeClient: (ch) => {
+      const c = fakeClient(ch);
+      c.on = (type, fn) => { if (type === 'event') { events.push(fn); } };
+      c.hello = async (options) => { asked.push(options); return { protocol: 1, machine: { name: 'a' }, capabilities: ['sessions.read', 'hello.changed'] }; };
+      c.subscribe = () => new Promise((resolve) => { subscribed = resolve; });
+      return c;
+    },
+  });
+  hosts.select('a');
+  await flush();
+  connection.opens[0].resolve();
+  await flush();
+  assert.equal(asked.length, 1);
+  for (const fn of events) { fn({ ev: 'hello.changed', seq: 1, data: {} }); }
+  await flush();
+  assert.equal(asked.length, 1, 'not while it is still being set up');
+  subscribed({ revision: 1, count: 0 });
+  await flush();
+  assert.equal(hosts.phase, 'open');
+  assert.equal(asked.length, 2, 'asked once it is open: the host says so only once');
+  events = [];
+});
+
+test("the page's focus (#1190) is told to a machine's channel as it is made, and to every open one when it changes, the open session only to its own machine", async () => {
+  const connection = fakeConnection([{ id: 'a', kind: 'host' }, { id: 'b', kind: 'host' }]);
+  const told = [];
+  const refreshed = [];
+  const hosts = new HostSession({
+    connection, store: new SessionsStore(), storage: null,
+    makeClient: (ch) => Object.assign(fakeClient(ch), {
+      setFocus: ({ idle, ...f }) => told.push([ch.peerId, { ...f, idle: idle?.() }]),
+      refreshFocus: () => refreshed.push(ch.peerId),
+    }),
+  });
+  hosts.setFocus({ visible: true, hostId: 'b', id: 's1', question: 'q1', idle: () => 4200 });
+  hosts.select(ALL);
+  await flush();
+  connection.opens[0].resolve();
+  await flush();
+  assert.deepEqual(told, [['a', { visible: true, open: null, openQuestion: null, idle: 4200 }]]);
+  connection.opens[1].resolve();
+  await flush();
+  assert.deepEqual(told.at(-1), ['b', { visible: true, open: 's1', openQuestion: 'q1', idle: 4200 }]);
+  told.length = 0;
+  hosts.setFocus({ visible: false, hostId: 'a', id: 's9', question: 'q2', idle: () => 4200 });
+  assert.deepEqual(told, [['a', { visible: false, open: 's9', openQuestion: 'q2', idle: 4200 }], ['b', { visible: false, open: null, openQuestion: null, idle: 4200 }]]);
+  hosts.refreshFocus();
+  assert.deepEqual(refreshed, ['a', 'b']);
 });

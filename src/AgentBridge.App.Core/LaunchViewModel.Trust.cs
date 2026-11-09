@@ -87,7 +87,7 @@ public sealed partial class LaunchViewModel
     // shows when its machine is picked again.
     readonly Dictionary<string, TrustAnswer> trustAnswers = new(StringComparer.Ordinal);
     // By machine key: the question an unconfirmed launch from here met, and the prompt it sent.
-    readonly Dictionary<string, (string Question, string? Prompt)> askedBy = new(StringComparer.Ordinal);
+    readonly Dictionary<string, (TrustQuestion Question, string? Prompt, string Request)> askedBy = new(StringComparer.Ordinal);
     readonly Dictionary<string, TrustCard> trustCards = new(StringComparer.Ordinal);
     // This machine's questions as its host lists them through the relay, where each says whether
     // this app may answer it: the pipe's never can. Null until asked, or when it could not be.
@@ -310,16 +310,38 @@ public sealed partial class LaunchViewModel
             // prompt went with it, as for a launch that starts at once, and must not go again with
             // the next launch. Only that launch, however many busy ones (which send nothing) came
             // after it, and only its prompt unchanged: one typed since stays.
-            if (askedBy.TryGetValue(answer.Machine, out var by) && by.Question == answer.Question.Id)
+            if (askedBy.TryGetValue(answer.Machine, out var by) && SameQuestion(by.Question, answer.Question))
             {
                 askedBy.Remove(answer.Machine);
                 if ((string.IsNullOrWhiteSpace(prompt) ? null : prompt) == by.Prompt) { Prompt = ""; }
+                // That launch's own status says so too, rather than that it was not confirmed,
+                // whether or not its session could be followed (Codex's has no id until it starts;
+                // a Copilot's may be listed already).
+                if (lost is null && last?.Request == by.Request) { startedLate = by.Request; Show(); }
+            }
+            if (Following(answer))
+            {
+                // Its unchanged prompt goes too: once late is let go, StartedLate never clears it.
+                if (lost is null && last is { } launched && launched.Request == late!.Request)
+                {
+                    if (launched.Payload is LaunchRequest sent && (string.IsNullOrWhiteSpace(prompt) ? null : prompt) == sent.Prompt) { Prompt = ""; }
+                    startedLate = late.Request;
+                    Show();
+                }
+                late = null;
             }
             if (TrustResult(d)?.Session is { } id) { main.Open(answer.Machine, id, untilItArrives: true); }
         }
+        // Not trusted: that launch's agent closed, and nothing it leaves behind is its start.
+        else if (TrustOutcome(d) == "declined" && Following(answer)) { late = null; }
         // Its busy and its questions have changed.
         if (machine?.Key == answer.Machine && shown) { _ = RefreshAsync(); }
     }
+
+    // The launch followed for its session asked this question: by its id, or, as one whose words
+    // changed is asked again under a new id, by its folder, agent and when it was first asked,
+    // never by folder alone: another launch into the same folder asks a question of its own.
+    bool Following(TrustAnswer answer) => late is { } l && l.Machine.Key == answer.Machine && Current(l) && l.Asked(answer.Question);
 
     // The relay or this machine's loopback came up after this machine's questions were listed
     // through the pipe alone: list them through the relay now, so one this app may answer offers

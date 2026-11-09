@@ -92,6 +92,10 @@ test('right-click, or Shift+F10, opens the row menu: pin and unpin, with pinned 
   const menu = card(page, CODEX).getByRole('menu');
   await expect(menu.getByRole('menuitem')).toHaveText(['Move up', 'Move down', 'Pin']);
   await expect(menu.getByRole('menuitem', { name: 'Move up' })).toBeFocused();
+  // With a pointer its rows are a desktop menu's 32px, not a finger's 44 (A11), and a click
+  // draws no focus ring (A12).
+  expect((await menu.getByRole('menuitem').first().boundingBox()).height).toBe(32);
+  await expect(menu.getByRole('menuitem', { name: 'Move up' })).toHaveAttribute('data-focus-quiet', '');
   await menu.getByRole('menuitem', { name: 'Pin' }).click();
   await expect(menu).toHaveCount(0);
   await expect.poll(() => order(page)).toEqual([CODEX, COPILOT, CLAUDE, DELEGATING]);

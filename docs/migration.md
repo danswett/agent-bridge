@@ -4,6 +4,14 @@
 daemon to this host. `agent-bridge-host rollback` puts agent-ha-bridge back exactly as it
 was. Both are explicit, at the machine, reversible and verified (design G8). Issue #38.
 
+**Compatibility runbook.** These commands describe the current host/legacy
+transition, not installation of the target HA integration/card (#387).
+[HA architecture and preserved publisher evidence](ha-connector.md#retaining-ha-without-a-legacy-daemon-317)
+supersede the permanent native publisher plan, not G5/G6/G7 or owner-only
+management. The writer still cannot migrate until #319 verifies replacement,
+cutover and rollback. Keep legacy configuration/credentials for rollback;
+#389 cleanup follows that gate, not a documentation merge.
+
 ```
 agent-bridge-host migrate [--dry-run] [--bridge-home <dir>] [--hook <file>] [--profile <name>]
 agent-bridge-host rollback [--dry-run] [--profile <name>]
@@ -71,7 +79,9 @@ second snapshot the first's changes as the state to restore; the second is refus
      started since the file was last written is known to hold them: one started before (or
      whose start cannot be told) may still hold the PowerShell entries the installer replaced,
      so it refuses too, until those sessions end. The same holds for Codex's Go hook entries
-     left in place when this product's hook path has a space. (After a rollback, a session holding the
+     left in place when this product's hook path has a space; only a file (source or cached
+     copy) holding this installation's own native entry counts, not one holding only a person's
+     hooks or another installation's. (After a rollback, a session holding the
      host's hook spools too, to the daemon, which takes the same spool);
    * a hook settings file is there but cannot be read as JSON: whether it holds
      agent-ha-bridge's entries, and a session started with them, cannot be told;
@@ -157,6 +167,35 @@ other field (matcher, timeout, type) stays.
 | Copilot | `~\.copilot\hooks\decision-notifier.json` | `exec <bridgeHome>\bin\agent-bridge-hook.exe`, `args [copilot, <name>, <script>]`, or `powershell & '<script>'` | `exec <hook>`, `args [copilot, <name>]` (`agent_stop`, `ask_user`, `permission`) |
 | Claude | `~\.claude\settings.json` | `"<go hook>" claude <name> "<script>"`, or `"<ha-bridge>\run-hook.cmd" "<script>"` | `"<hook>" claude <name>` (`ask`, `notification`, `stop`, `register`) |
 | Codex | `<bridgeHome>\codex-bridge\plugins\agent-ha-bridge\hooks.json` | `<go hook> codex hook <script>`, or `pwsh -NoProfile -ExecutionPolicy Bypass -File <script>` | `<hook> codex hook` |
+| Codex (what it runs) | `~\.codex\plugins\cache\agent-ha-bridge\agent-ha-bridge\<version>\hooks.json`, every version present | the same entries, as Codex copied them | the same, per entry |
+
+Codex runs its cached copy of the plugin, not the source, and copies it again only for a new
+version (#123), so each cached version's `hooks.json` is re-pointed with the source, snapshotted
+and put back byte for byte by a rollback in the same way. Only that marketplace and plugin
+(agent-ha-bridge's installer registers both as `agent-ha-bridge`) are read, only entries naming
+this installation's hook are changed, and a version with none is not written. A folder or
+`hooks.json` there, or any folder on the way to it from the drive's root, `~\.codex` (or a
+custom Codex home, inside your home or not) itself included,
+that is a symbolic link or junction refuses the migration in preflight, before anything is
+written, since Codex makes plain folders and a link could lead the rewrite out of the cache. With no
+cache, as before Codex first loads the plugin, there is nothing to re-point. A rollback checks
+the same way, from the drive's root to each cached `hooks.json` it recorded, before it puts
+anything back: a link made there since the migration refuses the whole rollback, with nothing
+rolled back and `migration.json` and the snapshot kept, naming the link and the snapshot copy
+to put back by hand if it cannot be made a plain folder or file again.
+
+A rehearsal baseline (`agent-bridge-rehearsal baseline save`) hashes these cached copies too,
+in the Codex home (and Copilot and Claude homes) agent-ha-bridge's `installation.json` records,
+which are the ones a migration rewrites, whatever `CODEX_HOME` or `--home` says. A record that
+cannot say which homes they are (not a JSON object, or a home that is not a valid full path) is
+refused with an error rather than guessed at. A recorded home inside `~/.agent-ha-bridge` is
+measured once, as that agent's file. Save the baseline with the current rehearsal
+tool **before migrating**. One saved by an older tool, which never measured the cache, or
+(version 2) may have measured another Codex home's, or which holds one file twice, is refused by
+`baseline compare` with an
+error rather than compared; save it again before migrating. If the machine is already migrated,
+that is too late: the cache as it was before migrating was never measured, and a baseline saved
+now does not prove it.
 
 Files are written whole, flushed to the disk and renamed into place (snapshots, `migration.json`,
 `intake.json` and `hook.json` too), so a power cut leaves either the old file or the new one,
@@ -202,7 +241,8 @@ tells them apart by folder, as agent-ha-bridge did.
 | `homeAssistant.baseUrl` | `homeAssistant.baseUrl` |
 | `dashboard.urlPath` | `homeAssistant.dashboardUrlPath` |
 | `detailedActivity` | `homeAssistant.detailedActivity` |
-| `homeAssistant.agentUserIds`, `agentTokenEnvVar` | `homeAssistant.agentUserIds`, `agentTokenEnvVar` (read by the connector from its stage 2) |
+| `homeAssistant.agentUserIds` | `homeAssistant.agentUserIds` (the connector matches HA `context.user_id` for compatibility attribution from stage 2) |
+| `homeAssistant.agentTokenEnvVar` | `homeAssistant.agentTokenEnvVar` (variable-name metadata only; the native launcher does not resolve it or inject an HA token) |
 | `notifications.*`, `answerButtons.*` | `homeAssistant.notifications.*`, `homeAssistant.answerButtons.*` (the connector's phone notifications, stage 5b; a key it does not know is named as not carried) |
 | `updates.checkForUpdates`, `updates.checkHours` | `homeAssistant.updates.checkForUpdates`, `homeAssistant.updates.checkHours` (whether, and how often, the connector looks for this host's own releases, stage 6). The rest of `updates` is about agent-ha-bridge's own install and is named as not carried; `updates.token` is a secret and never copied |
 | `devBox.keepAwake`, `devBox.intervalMinutes` (or 1.25.0's `devBox.intervalHours`, in minutes; each read as PowerShell's `-as [int]` reads it first, so numeric text counts and hours are whole before they become minutes; a nonsense value as 15 and anything over 30 as 30, as `Get-BridgeDevBoxIntervalMinutes` ran it, and reported) | `devBox.keepAwake`, `devBox.intervalMinutes` (#47). Migrate disables agent-ha-bridge's `AgentBridgeDevBoxKeepAwake_<id>`, and the restarted host takes over keeping the Dev Box awake ([host-config.md](host-config.md#dev-box-keep-awake)). Without this a migrated Dev Box would hibernate on disconnect. agent-ha-bridge's keep-awake is its task, not the file: enabled, it runs whatever `devBox.keepAwake` says (its pass never reads it, and its installer reads any text as true), so an enabled task is carried as `devBox.keepAwake: true` whatever the file says, or absent, and the report says so |
@@ -224,9 +264,14 @@ publishes the dashboard (G7).
 * **`~\.agent-ha-bridge`**: nothing in it is written but the Codex plugin's `hooks.json`,
   which is where Codex reads agent-ha-bridge's hook command from. Its `config.json`,
   `installation.json`, scripts, secrets and runtime records are as they were.
+* **Codex's plugin cache** (`~\.codex\plugins\cache`): nothing but agent-ha-bridge's cached
+  `hooks.json` copies above. Other marketplaces and plugins, the plugin's other cached files and
+  the person's own entries are not touched.
 * **Instruction blocks** (`~\.copilot\instructions\agent-ha-bridge.instructions.md`, the
   marked blocks in `~\.claude\CLAUDE.md` and `~\.codex\AGENTS.md`): left in place. They name
-  agent-ha-bridge's agent token, which still authenticates against Home Assistant.
+  agent-ha-bridge's agent token. Preserving that text does not provision a token in
+  native-launched sessions, implement #519's agent credential, or authorize an agent
+  to answer approvals or folder trust.
 * **Home Assistant**: the dashboard, its Lovelace resources and the publication policy are
   never touched. Entities move as `docs/ha-connector.md` describes.
 * **Worktrees** (the decision #38 asks for): agent-ha-bridge's trees, marked
@@ -315,9 +360,11 @@ own, so this pointer is never changed under those sessions.
   the host starts, before it takes the spool, even with no hook beside it to update from.
 * `agent-bridge-host migration status` shows the installation, since when, and whether each
   re-pointed file is still as migrated. `agent-bridge-host hooks status` shows the spool.
-* Sessions the host launches do not get agent-ha-bridge's agent token in their environment
-  (`AGENT_HA_AGENT_TOKEN`), because the secret is not copied. The connector's stage 2 owns
-  agent attribution.
+* Migration does not copy agent-ha-bridge's agent token, and the native launcher does
+  not resolve `agentTokenEnvVar` or inject `AGENT_HA_AGENT_TOKEN`. A host's existing
+  environment can still be inherited; that is not managed token propagation. The
+  connector's stage 2 matches HA user ids for compatibility attribution, not native
+  agent authentication.
 * On a Dev Box, the host keeps the machine awake in place of agent-ha-bridge's disabled
   `AgentBridgeDevBoxKeepAwake_<id>` task, if `devBox.keepAwake` was carried on (always, when that
   task was enabled)

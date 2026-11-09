@@ -81,6 +81,195 @@ public class BaselineTests
     }
 
     [Fact]
+    public void Codexs_cached_copy_of_the_plugins_hooks_counts_as_a_hook_and_the_rest_of_its_cache_is_not_watched()
+    {
+        using var s = Install();
+        s.File(".codex/plugins/cache/agent-ha-bridge/agent-ha-bridge/1.0.0/hooks.json", "{\"hooks\":1}");
+        s.File(".codex/plugins/cache/agent-ha-bridge/agent-ha-bridge/1.0.0/.codex-plugin/plugin.json", "{}");
+        var before = BaselineCapture.Capture(Homes.For(s.Root), new Tasks(Daemon), DateTimeOffset.UtcNow);
+        s.File(".codex/plugins/cache/agent-ha-bridge/agent-ha-bridge/1.0.0/hooks.json", "{\"hooks\":2}");
+        s.File(".codex/plugins/cache/agent-ha-bridge/agent-ha-bridge/1.0.0/.codex-plugin/plugin.json", "{\"v\":2}");
+        s.File(".codex/plugins/cache/another/plugin/1.0.0/hooks.json", "{}");
+
+        var d = Assert.Single(Again(s, before));
+
+        Assert.Equal(BaselineCapture.Hooks, d.Category);
+        Assert.Equal("~/.codex/plugins/cache/agent-ha-bridge/agent-ha-bridge/1.0.0/hooks.json", d.Path);
+    }
+
+    [Fact]
+    public void A_baseline_saved_before_the_cache_was_measured_is_refused_and_says_to_save_one_again_before_migrating()
+    {
+        using var s = Install();
+        s.File(".codex/plugins/cache/agent-ha-bridge/agent-ha-bridge/1.0.0/hooks.json", "{\"hooks\":1}");
+        var captured = BaselineCapture.Capture(Homes.For(s.Root), new Tasks(Daemon), DateTimeOffset.UtcNow);
+        // As the version 1 tool saved it: without the cache, which is unchanged since.
+        var older = captured with { Version = 1, Files = [.. captured.Files.Where(f => !f.Path.Contains("/plugins/cache/", StringComparison.Ordinal))] };
+
+        foreach (var allowed in new[] { new HashSet<string>(), new HashSet<string> { BaselineCapture.Hooks } })
+        {
+            var outcome = BaselineCapture.Judge(older, Again(s, older), allowed);
+
+            Assert.Equal(Verdict.Error, outcome.Verdict);
+            Assert.Contains("Before migrating, save the baseline again", outcome.Detail);
+            Assert.Contains("never measured", outcome.Detail);
+        }
+        Assert.Equal(Verdict.Pass, BaselineCapture.Judge(captured, Again(s, captured), new HashSet<string>()).Verdict);
+    }
+
+    [Fact]
+    public void A_custom_codex_home_recorded_by_the_installation_is_the_cache_measured_whatever_the_home_given()
+    {
+        using var s = Install();
+        using var elsewhere = new Scratch();
+        var codexHome = Path.Combine(elsewhere.Root, "codex");
+        s.File(".agent-ha-bridge/installation.json", System.Text.Json.JsonSerializer.Serialize(new { codexHome }));
+        // The default folder has a cache too, which a migration of this installation never touches.
+        s.File(".codex/plugins/cache/agent-ha-bridge/agent-ha-bridge/1.0.0/hooks.json", "{\"hooks\":0}");
+        var older = elsewhere.File("codex/plugins/cache/agent-ha-bridge/agent-ha-bridge/0.9.0/hooks.json", "{\"hooks\":1}");
+        var newer = elsewhere.File("codex/plugins/cache/agent-ha-bridge/agent-ha-bridge/1.0.0/hooks.json", "{\"hooks\":1}");
+        var before = BaselineCapture.Capture(Homes.For(s.Root), new Tasks(Daemon), DateTimeOffset.UtcNow);
+        Assert.Contains(before.Files, f => f.Path == older.Replace('\\', '/'));
+        Assert.Contains(before.Files, f => f.Path == newer.Replace('\\', '/'));
+
+        // As a migration rewrites it, and a rollback that missed it.
+        File.WriteAllText(newer, "{\"hooks\":2}");
+        var diffs = Again(s, before);
+
+        var d = Assert.Single(diffs);
+        Assert.Equal(newer.Replace('\\', '/'), d.Path);
+        Assert.Equal(Verdict.Fail, BaselineCapture.Judge(before, diffs, new HashSet<string>()).Verdict);
+    }
+
+    [Fact]
+    public void A_codex_home_recorded_inside_agent_ha_bridges_folder_is_measured_once_as_codexs_and_compares_after_saving()
+    {
+        using var s = Install();
+        using var saved = new Scratch();
+        var codexHome = Path.Combine(s.Root, ".agent-ha-bridge", "codex-profile");
+        s.File(".agent-ha-bridge/installation.json", System.Text.Json.JsonSerializer.Serialize(new { codexHome }));
+        s.File(".agent-ha-bridge/codex-profile/config.toml", "x = 1");
+        var cached = s.File(".agent-ha-bridge/codex-profile/plugins/cache/agent-ha-bridge/agent-ha-bridge/1.0.0/hooks.json", "{\"hooks\":1}");
+        var file = Path.Combine(saved.Root, "base.json");
+        BaselineCapture.Save(BaselineCapture.Capture(Homes.For(s.Root), new Tasks(Daemon), DateTimeOffset.UtcNow), file);
+        var before = BaselineCapture.Load(file);
+
+        var hook = Assert.Single(before.Files, f => f.Path.EndsWith("/1.0.0/hooks.json", StringComparison.Ordinal));
+        Assert.Equal(("~/.agent-ha-bridge/codex-profile/plugins/cache/agent-ha-bridge/agent-ha-bridge/1.0.0/hooks.json", BaselineCapture.Hooks), (hook.Path, hook.Category));
+        Assert.Equal(BaselineCapture.Agents, Assert.Single(before.Files, f => f.Path == "~/.agent-ha-bridge/codex-profile/config.toml").Category);
+        Assert.Empty(Again(s, before));
+
+        File.WriteAllText(cached, "{\"hooks\":2}");
+        var diffs = Again(s, before);
+
+        var d = Assert.Single(diffs);
+        Assert.Equal((hook.Path, BaselineCapture.Hooks), (d.Path, d.Category));
+        Assert.Equal(Verdict.Fail, BaselineCapture.Judge(before, diffs, new HashSet<string> { BaselineCapture.Install }).Verdict);
+        Assert.Equal(Verdict.Pass, BaselineCapture.Judge(before, diffs, new HashSet<string> { BaselineCapture.Hooks }).Verdict);
+    }
+
+    [Fact]
+    public void A_saved_baseline_holding_a_file_twice_is_refused_rather_than_compared_by_one_of_its_hashes()
+    {
+        using var s = Install();
+        using var saved = new Scratch();
+        var captured = BaselineCapture.Capture(Homes.For(s.Root), new Tasks(Daemon), DateTimeOffset.UtcNow);
+        var first = captured.Files[0];
+        var file = Path.Combine(saved.Root, "base.json");
+        BaselineCapture.Save(captured with { Files = [.. captured.Files, first with { Category = BaselineCapture.Hooks, Sha256 = new string('0', 64) }] }, file);
+
+        var e = Assert.Throws<IOException>(() => BaselineCapture.Load(file));
+
+        Assert.Contains($"holds {first.Path} 2 times", e.Message);
+        Assert.Contains("Before migrating, save the baseline again", e.Message);
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("{\"codexHome\":5}")]
+    [InlineData("{\"codexHome\":\"relative\\\\codex\"}")]
+    [InlineData("{\"home\":true}")]
+    [InlineData("{not json")]
+    public void An_installation_record_that_cannot_say_which_codex_home_is_migrated_is_refused(string json)
+    {
+        using var s = Install();
+        s.File(".agent-ha-bridge/installation.json", json);
+
+        var e = Assert.Throws<IOException>(() => BaselineCapture.Capture(Homes.For(s.Root), new Tasks(Daemon), DateTimeOffset.UtcNow));
+
+        Assert.Contains("which homes a migration would rewrite cannot be told", e.Message);
+    }
+
+    [Theory]
+    [InlineData("home")]
+    [InlineData("copilotHome")]
+    [InlineData("claudeHome")]
+    [InlineData("codexHome")]
+    public void A_recorded_home_that_is_a_full_path_but_not_a_valid_one_is_refused_naming_it(string name)
+    {
+        using var s = Install();
+        s.File(".agent-ha-bridge/installation.json", System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string> { [name] = Path.Combine(s.Root, "bad\0home") }));
+
+        var e = Assert.Throws<IOException>(() => BaselineCapture.Capture(Homes.For(s.Root), new Tasks(Daemon), DateTimeOffset.UtcNow));
+
+        Assert.Contains($"has a {name} that is not a valid path", e.Message);
+        Assert.Contains("which homes a migration would rewrite cannot be told", e.Message);
+    }
+
+    [Theory]
+    [InlineData("home", "\\uD800")]
+    [InlineData("copilotHome", "\\uDC00")]
+    [InlineData("claudeHome", "\\uD800")]
+    [InlineData("codexHome", "\\uDC00")]
+    public void A_recorded_home_holding_half_a_surrogate_pair_is_refused_naming_it(string name, string escape)
+    {
+        using var s = Install();
+        s.File(".agent-ha-bridge/installation.json", Recording(name, Path.Combine(s.Root, "bad"), escape + "home"));
+
+        var e = Assert.Throws<IOException>(() => BaselineCapture.Capture(Homes.For(s.Root), new Tasks(Daemon), DateTimeOffset.UtcNow));
+
+        Assert.Contains($"has a {name} that is not readable text", e.Message);
+        Assert.Contains("which homes a migration would rewrite cannot be told", e.Message);
+    }
+
+    // A home as installation.json text, with JSON escapes appended as written (no serializer
+    // will write half a surrogate pair).
+    static string Recording(string name, string path, string escapedTail) =>
+        $"{{\"{name}\":{System.Text.Json.JsonSerializer.Serialize(path)[..^1]}{escapedTail}\"}}";
+
+    [Theory]
+    [InlineData("\\u0000", "not a valid path")]
+    [InlineData("\\uD800", "not readable text")]
+    [InlineData("\\uDC00", "not readable text")]
+    public async Task Baseline_save_given_a_recorded_home_that_is_not_a_valid_path_records_an_error_for_its_step_and_writes_no_baseline(string escape, string why)
+    {
+        using var s = Install();
+        using var run = new Scratch();
+        s.File(".agent-ha-bridge/installation.json", Recording("codexHome", Path.Combine(s.Root, "bad"), escape + "home"));
+        var file = Path.Combine(run.Root, "base.json");
+
+        var code = await Program.Main(["baseline", "save", "--home", s.Root, "--out", file, "--step", "B-01", "--evidence", Path.Combine(run.Root, "evidence")]);
+
+        Assert.NotEqual(0, code);
+        Assert.False(File.Exists(file));
+        using var step = System.Text.Json.JsonDocument.Parse(Assert.Single(File.ReadAllLines(Path.Combine(run.Root, "evidence", "steps", "B-01.jsonl"))));
+        Assert.Equal("error", step.RootElement.GetProperty("verdict").GetString());
+        Assert.Contains($"has a codexHome that is {why}", step.RootElement.GetProperty("detail").GetString());
+    }
+
+    [Fact]
+    public void A_version_2_baseline_which_may_have_measured_another_codex_home_is_refused()
+    {
+        using var s = Install();
+        var captured = BaselineCapture.Capture(Homes.For(s.Root), new Tasks(Daemon), DateTimeOffset.UtcNow);
+
+        var outcome = BaselineCapture.Judge(captured with { Version = 2 }, Again(s, captured), new HashSet<string> { BaselineCapture.Hooks });
+
+        Assert.Equal(Verdict.Error, outcome.Verdict);
+        Assert.Contains("Before migrating, save the baseline again", outcome.Detail);
+    }
+
+    [Fact]
     public void A_baseline_that_filed_codexs_hooks_as_install_is_judged_by_the_current_rule()
     {
         using var s = Install();

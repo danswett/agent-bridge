@@ -85,11 +85,26 @@ saved under `<profile>\hooks\backups`. Malformed Claude hook groups are refused 
 registration or ownership changes, including in dry runs. Claude executable paths are
 shell-escaped so dollar signs, command substitutions and apostrophes remain literal;
 repair/removal still recognize registrations from the older double-quoted format.
-JSON formatting/comments can change. Codex gets a
+JSON formatting/comments can change while hooks are registered. Removal writes back the
+first original settings byte for byte (comments, BOM and line endings included) only when
+the settings without the owned hooks still parse to exactly what that backup holds.
+Otherwise, including after later edits, removal rewrites the current settings without the
+owned hooks, so their formatting and comments can change; their values are kept. A
+settings file is never deleted on removal, and an unreadable backup is reported as a
+warning and left as it is. Codex gets a
 local plugin installed using its supported CLI, never a rewrite of hook trust settings.
 Each selected agent home gets `agent-bridge-owner.json`. Setup is repeatable; failures
 report incomplete setup and retain ownership so retry/removal is possible. Multiple agents
-are handled in order, not as one transaction.
+are handled in order, not as one transaction. Ownership is saved first without
+`setupCompleted`; only after the registrations (and Codex's plugin) and `intake.json` are all
+written does setup rewrite the record with `"setupCompleted": true`. Every setup or repair
+first rewrites the record without it, so a failed repair cannot leave an earlier completion
+behind. Removal likewise clears it before its first cleanup step and deletes the record only
+after every step succeeded, so a failed or cancelled removal stays owned and incomplete; a
+Copilot record kept for another tool's additions stays without it.
+Readiness reports an owned record without `setupCompleted: true`, including records from
+before this field existed, as incomplete setup needing repair. Completion is setup evidence,
+not evidence that hooks run in a new session.
 
 Setup also installs product guidance in Copilot's `instructions\agent-bridge.instructions.md`,
 Claude's `CLAUDE.md` and Codex's `AGENTS.md`. The block is delimited by
@@ -330,6 +345,11 @@ second. It deletes:
 It prunes only when the process list is complete. A runtime (node, bun) whose command line
 could not be read counts as live: it may be the session's.
 
+It prunes nothing while the host is still judging what a reboot or a crash took
+([host-launch.md](host-launch.md), #780) and has not yet read a Claude or Codex session's
+registration: an ended session's registration pruned first would read as a death. A first
+drain of the spool that took over 60 s once did exactly that.
+
 **Stopping.** On a clean stop the host removes the heartbeat if it is still its own. Hooks then
 give their fixed reply at once, rather than spooling to nobody until it goes stale.
 
@@ -350,7 +370,17 @@ The files and their shapes are agent-ha-bridge's:
   `WorkingDirectory`, `Updated`, `HookStatus`, `HookStatusAt`;
 * `agent-bridge-codex\<id>.json`: `SessionId`, `ProcessId`, `TranscriptPath`,
   `WorkingDirectory`, `Model`, `Status`, `Activity`, `Ended`, `Updated`;
-* `agent-bridge-codex\<id>.approval.json`: `SessionId`, `DecisionId`, `Question`, `Created`.
+* `agent-bridge-codex\<id>.approval.json`: `SessionId`, `DecisionId`, `Question`, `Created`,
+  and beside them `Tool` and `Command`: the whole command, kept to its first 16,384 characters with
+  `CommandCut` true past that (#209). `Command` is recorded only for the `Bash`, `shell` or
+  `apply_patch` tool whose `tool_input` holds `command` and nothing else but `description`: the hook
+  fires for MCP tools too, whose other arguments (a `host`) decide what runs, so such an approval
+  records no `Command` and is answered at the machine (#338). So is a network approval, which Codex
+  sends as `Bash` with its own `description` `network-access <target>` (any case or spacing): what
+  is approved is the target, which the command does not show. `Question` stays the 300-character activity line
+  agent-ha-bridge's reader expects; a client is shown `Command`, fenced. A marker without
+  `Command` (agent-ha-bridge's hook, or this host before #209) is shown as its preview and
+  marked `truncated`, so it is answered at the machine.
 
 Three rules carry over from agent-ha-bridge:
 
@@ -519,8 +549,9 @@ connector's own guards. Discovery needs no notice: it watches the registration f
 ## Not yet
 
 * **macOS ancestry, and intake off Windows**: #48 and the Mac's migration.
-* **Hook registration for a fresh install** with no agent-ha-bridge (#54). The program and the
-  contract are ready for it.
+* **Live proof of hook registration for a fresh install** with no agent-ha-bridge (#54). The
+  registration is built (`hooks install`, the Settings agent rows); a clean signed install on real CLIs, with an
+  explicit restart and an owned-only uninstall, is still to be shown in the #736 lab.
 * **A Claude `AskUserQuestion` waiting at the terminal.** Claude writes its `tool_use` to the
   transcript only once it is answered (#59), so the host cannot show the question from the
   transcript. The `claude/ask` notice carries it the moment it is asked, for the Claude/Codex

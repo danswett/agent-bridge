@@ -14,6 +14,93 @@
                 <ResourceDictionary Source="ms-appx:///Design/DesignResources.xaml" />
             </ResourceDictionary.MergedDictionaries>
 
+            <!-- #1202: in high contrast an accent button is the system pair, HighlightText on Highlight
+                 (swapped as the pointer is over or presses it), and nothing inside it sets its own
+                 background, so no plate shows under the label of Try again, Restart to update or
+                 Sign in. System colours only. -->
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="HighContrast">
+                    <SolidColorBrush x:Key="AccentButtonBackground" Color="{ThemeResource SystemColorHighlightColor}" />
+                    <SolidColorBrush x:Key="AccentButtonBackgroundPointerOver" Color="{ThemeResource SystemColorHighlightTextColor}" />
+                    <SolidColorBrush x:Key="AccentButtonBackgroundPressed" Color="{ThemeResource SystemColorHighlightTextColor}" />
+                    <SolidColorBrush x:Key="AccentButtonBackgroundDisabled" Color="{ThemeResource SystemColorWindowColor}" />
+                    <SolidColorBrush x:Key="AccentButtonForeground" Color="{ThemeResource SystemColorHighlightTextColor}" />
+                    <SolidColorBrush x:Key="AccentButtonForegroundPointerOver" Color="{ThemeResource SystemColorHighlightColor}" />
+                    <SolidColorBrush x:Key="AccentButtonForegroundPressed" Color="{ThemeResource SystemColorHighlightColor}" />
+                    <SolidColorBrush x:Key="AccentButtonForegroundDisabled" Color="{ThemeResource SystemColorGrayTextColor}" />
+                    <SolidColorBrush x:Key="AccentButtonBorderBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+                    <SolidColorBrush x:Key="AccentButtonBorderBrushPointerOver" Color="{ThemeResource SystemColorHighlightColor}" />
+                    <SolidColorBrush x:Key="AccentButtonBorderBrushPressed" Color="{ThemeResource SystemColorHighlightColor}" />
+                    <SolidColorBrush x:Key="AccentButtonBorderBrushDisabled" Color="{ThemeResource SystemColorGrayTextColor}" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+
+            <!-- #1202: the framework's own high-contrast adjustment (Auto) draws a backplate under
+                 text; the system pair above needs none. Same key as the built-in style, based on it,
+                 so every accent button follows. -->
+            <Style x:Key="AccentButtonStyle" TargetType="Button" BasedOn="{StaticResource AccentButtonStyle}">
+                <Setter Property="HighContrastAdjustment" Value="None" />
+                <!-- The built-in template's pointer-over, pressed and disabled brushes resolve in the control
+                     library's own dictionaries, which draw WindowText on Window in high contrast (CI at
+                     e4164e8b), so the keys above never reached them. The same template, defined here, resolves
+                     them from this dictionary. -->
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <ContentPresenter x:Name="ContentPresenter" Background="{TemplateBinding Background}" BackgroundSizing="{TemplateBinding BackgroundSizing}" Foreground="{TemplateBinding Foreground}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}" ContentTransitions="{TemplateBinding ContentTransitions}" CornerRadius="{TemplateBinding CornerRadius}" Padding="{TemplateBinding Padding}" HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" AutomationProperties.AccessibilityView="Raw">
+                                                            <ContentPresenter.BackgroundTransition>
+                                                                <BrushTransition Duration="0:0:0.083" />
+                                                            </ContentPresenter.BackgroundTransition>
+                                                            <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualState x:Name="Normal" />
+                                        <VisualState x:Name="PointerOver">
+                                            <Storyboard>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Background">
+                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource AccentButtonBackgroundPointerOver}" />
+                                                </ObjectAnimationUsingKeyFrames>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="BorderBrush">
+                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource AccentButtonBorderBrushPointerOver}" />
+                                                </ObjectAnimationUsingKeyFrames>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Foreground">
+                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource AccentButtonForegroundPointerOver}" />
+                                                </ObjectAnimationUsingKeyFrames>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="Pressed">
+                                            <Storyboard>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Background">
+                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource AccentButtonBackgroundPressed}" />
+                                                </ObjectAnimationUsingKeyFrames>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="BorderBrush">
+                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource AccentButtonBorderBrushPressed}" />
+                                                </ObjectAnimationUsingKeyFrames>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Foreground">
+                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource AccentButtonForegroundPressed}" />
+                                                </ObjectAnimationUsingKeyFrames>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="Disabled">
+                                            <Storyboard>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Background">
+                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource AccentButtonBackgroundDisabled}" />
+                                                </ObjectAnimationUsingKeyFrames>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="BorderBrush">
+                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource AccentButtonBorderBrushDisabled}" />
+                                                </ObjectAnimationUsingKeyFrames>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Foreground">
+                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource AccentButtonForegroundDisabled}" />
+                                                </ObjectAnimationUsingKeyFrames>
+                                            </Storyboard>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                            </ContentPresenter>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
             <!-- A keyed style replaces the implicit TextBlock style, so each one here names the text face. -->
             <Style x:Key="AbSecondaryText" TargetType="TextBlock">
                 <Setter Property="FontFamily" Value="{StaticResource SansFontFamily}" />

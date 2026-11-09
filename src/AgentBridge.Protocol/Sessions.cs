@@ -73,6 +73,27 @@ public sealed class TolerantEnumConverterFactory : JsonConverterFactory
     }
 }
 
+// For an optional field whose unknown value must read as absent, not as one of its values
+// (session.class, #913): its absence is the older host's behaviour, which a client knows how to show.
+public sealed class UnknownAsAbsentConverter<T> : JsonConverter<T?> where T : struct, Enum
+{
+    static readonly Dictionary<string, T> ByName = Enum.GetValues<T>().ToDictionary(v => JsonNamingPolicy.CamelCase.ConvertName(v.ToString()), v => v, StringComparer.Ordinal);
+
+    public override T? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.String && ByName.TryGetValue(reader.GetString()!, out var v)) { return v; }
+        // Anything else, an object or a list included, is passed over whole.
+        reader.Skip();
+        return null;
+    }
+
+    public override void Write(Utf8JsonWriter writer, T? value, JsonSerializerOptions options)
+    {
+        if (value is { } v) { writer.WriteStringValue(JsonNamingPolicy.CamelCase.ConvertName(v.ToString())); }
+        else { writer.WriteNullValue(); }
+    }
+}
+
 // Limits are UTF-8 bytes of the text. Its JSON form can be larger (escaped quotes and
 // control characters, and 12 bytes for each emoji), which SessionBudget.Fit accounts for.
 public static class Limits
@@ -97,6 +118,8 @@ public static class Limits
     public const int SubagentName = 120;
     public const int SubagentTask = 512;
     public const int SubagentLine = 300;
+    // session.attention.message: the host's own sentence about what went wrong (#800, #841).
+    public const int AttentionMessage = 300;
     // Entries a host lists, running ones first; SessionBudget.Fit may cap them further.
     public const int Subagents = 20;
 
@@ -199,7 +222,10 @@ public static class SessionBudget
         }
         if (!fits(s) && s.Question is { } q1)
         {
-            s = s with { Question = q1 with { Message = Limits.KeepStart(q1.Message, 2 * 1024)!, Truncated = true } };
+            // The escaped text goes with the message it describes: the same marks, those still in it,
+            // and the digest of what is now sent. Cut, it is truncated, which is never confirmed.
+            var kept = Limits.KeepStart(q1.Message, 2 * 1024)!;
+            s = s with { Question = q1 with { Message = kept, Truncated = true, Escaped = q1.Escaped is { } e ? EscapedApproval.Cut(e, kept) : null } };
         }
         if (!fits(s) && s.Question is { } q2)
         {
@@ -289,13 +315,45 @@ public enum FieldType { Choice, Multi, Boolean, Text, Number }
 [UnknownAs(Unconfirmed)]
 public enum AnswerOutcome { Delivered, Unconfirmed, Stale, Busy, Refused }
 
+// session.attention.kind (#800). A kind a client does not know is shown as an error: something
+// is wrong, and the agent's own message says what.
+[UnknownAs(Error)]
+public enum AttentionKind { Error, SignInNeeded, NotResponding }
+
+// What sort of error ended the turn, from the agent's structured fields, never its wording.
+[UnknownAs(Other)]
+public enum ErrorClass { Other, Auth, Rate, Quota, Model, Network }
+
+// Where the agent can be signed in again. Machine is sent only when the host knows nothing else
+// is possible. A value a client does not know is Unknown, which claims nothing (#800 ruling): no
+// sign-in from the phone is offered on it, and nor is it said to be the machine's only.
+[UnknownAs(Unknown)]
+public enum SignInWhere { Phone, Machine, Unknown }
+
+// The way back from signInNeeded. Pending: signed in (a sign-in finished, or a still-valid
+// credential was found), waiting for the session to show it: attention stays signInNeeded until
+// the model is seen answering after the latest failure, and a sign-in alone never clears it
+// (#800 ruling). One a client does not know is Failed: a sign-in is then offered where it can
+// be, rather than waited on.
+[UnknownAs(Failed)]
+public enum RecoveryState { Checking, SigningIn, Pending, Failed }
+
+// session.class (#913): which notification tier the session is in now, decided by the host so
+// every client follows one policy instead of its own. A class a client does not know reads as
+// absent (UnknownAsAbsentConverter), so it keeps today's rules: read as NeedsYou, a newer host
+// could interrupt people with something an older client can't explain (Creative, #913 q10).
+public enum NotificationClass { NeedsYou, Done, Fyi }
+
 // Dev: built from a working copy rather than released (docs/protocol/v1-usage.md). Sessions:
 // how many were live when hello was answered. ReadOnly: why this machine takes no answers,
 // replies, stops or launches from other devices now (agent-ha-bridge running for the user,
 // design G5), for a client to say so rather than only leave the controls out. Instance: this
 // run of the host, new each time it starts, so a client can tell a reconnect to the same process
 // from a restart.
-public sealed record MachineInfo([property: Strict(Strictness.Identity)] string Id, string Name, string Os, string HostVersion, bool? Dev = null, int? Sessions = null, string? ReadOnly = null, string? Instance = null);
+// Restore: what went when the host last stopped (#780, RestoreProtocol), for RestoreProtocol.ShownFor
+// after it started; absent when nothing did, or from a host that does not say.
+public sealed record MachineInfo([property: Strict(Strictness.Identity)] string Id, string Name, string Os, string HostVersion, bool? Dev = null, int? Sessions = null, string? ReadOnly = null, string? Instance = null,
+    RestoreNotice? Restore = null);
 
 public sealed record HelloResult([property: Strict(Strictness.Identity)] int Protocol, MachineInfo Machine, IReadOnlyList<string> Capabilities);
 
@@ -332,9 +390,52 @@ public sealed record Session
     // Status precedence rule 2: the sub-agent whose question is pending (Question.Agent),
     // when the session itself has none.
     public string? WaitingOn { get; init; }
+    // What is wrong with the session that its status cannot say (#800): it needs its agent
+    // signed in again, its turn ended on an error, or it stopped answering. Status stays
+    // truthful beside it (idle after an error), so an older client, which ignores this,
+    // reads the session as it always did. Absent when nothing is wrong.
+    public Attention? Attention { get; init; }
+    // The notification tier the session is in (#913): NeedsYou interrupts, Done waits, Fyi never
+    // notifies. The host sets it from the fields above, the parent session carrying its
+    // delegates' questions. Absent from an older host, and a client then keeps its own rules.
+    [JsonConverter(typeof(UnknownAsAbsentConverter<NotificationClass>))]
+    public NotificationClass? Class { get; init; }
+    // When the session entered its present tier (#913), the episode's start, which the 15-minute
+    // reminder counts from: kept while Class is unchanged, so a further question never restarts it;
+    // on a change of Class, the earliest of question.askedAt and attention.since for NeedsYou, else
+    // statusSince. It moves only with Class, so never moves updatedAt on its own.
+    public DateTimeOffset? ClassSince { get; init; }
+    // Restored by the host after a reboot or a crash (#780, RestoreProtocol). Absent otherwise,
+    // and from a host that does not restore.
+    public SessionRestored? Restored { get; init; }
 
     // The list and event form: everything but the tool history.
     public Session WithoutHistory() => Activity.History is null ? this : this with { Activity = Activity with { History = null } };
+}
+
+// session.attention (#800, v1-sessions.md "Attention"). Which fields a kind uses is the spec's;
+// a reader takes whatever is there. Nothing in it is a credential, a sign-in code or a link:
+// message is a sentence the host composes from kind, errorClass, statusCode and provider alone,
+// never the agent's words (#841), shown as text only.
+public sealed record Attention
+{
+    public required AttentionKind Kind { get; init; }
+    // When it began: the error's time, or for NotResponding the last event's.
+    public required DateTimeOffset Since { get; init; }
+    public AgentKind? Agent { get; init; }
+    // SignInNeeded: whose sign-in it is ("github", "anthropic", "openai").
+    public string? Provider { get; init; }
+    // SignInNeeded: the account, when the host knows it from metadata, never from a token.
+    public string? Account { get; init; }
+    // Host-composed from the structured fields, never agent text; within Limits.AttentionMessage.
+    public string? Message { get; init; }
+    public ErrorClass? ErrorClass { get; init; }
+    // Error: when the agent said it can be tried again (a rate limit, a quota).
+    public DateTimeOffset? RetryAt { get; init; }
+    public SignInWhere? SignIn { get; init; }
+    public RecoveryState? Recovery { get; init; }
+    // NotResponding: the transcript's last event.
+    public DateTimeOffset? LastEventAt { get; init; }
 }
 
 public sealed record Activity
@@ -352,6 +453,13 @@ public sealed record Activity
     public UserMessageFrom? UserMessageFrom { get; init; }
     // A short plain-text label for it, at most Limits.UserMessageLabel bytes: a schedule's number.
     public string? UserMessageLabel { get; init; }
+    // The id of the latest turn, which UserMessage, Reasoning, CurrentTool and the question belong
+    // to: the id session.history gives it (docs/protocol/v1-history.md), so a client merging live
+    // activity with history pages draws it once. Never trimmed by SessionBudget.
+    public string? Turn { get; init; }
+    // The turn the main agent's own latest reply (Own.Response, else Response) was written in:
+    // Turn once the latest turn has replied, an earlier turn's until then. Never trimmed.
+    public string? ResponseTurn { get; init; }
     public int? TurnCount { get; init; }
     public int? Compactions { get; init; }
     // Work the session started that outlives its own turn, still running. Absent when there
@@ -478,10 +586,42 @@ public sealed record Question
     // no controls and says it is waiting at the machine.
     [Strict(Strictness.Security)]
     public bool? AnswerAtMachine { get; init; }
+    // Display only: "shape" explains a Copilot ask_user with no form fields or with legacy
+    // choices. Unknown or absent reasons keep the client's existing at-machine wording.
+    public string? AnswerAtMachineReason { get; init; }
     // The sub-agent that asked, when it is not the session's own question (status
     // precedence rule 2). Absent for the main agent's.
     [Strict(Strictness.Security)]
     public string? Agent { get; init; }
+    // Set by the host on an approval it showed one or more characters of as escapes (#220): Approve
+    // then takes the escaped-command confirmation, Deny does not (#803, EscapedApproval).
+    [Strict(Strictness.Security)]
+    public EscapedText? Escaped { get; init; }
+    // How many permission prompts the session has waiting, this one included, when more than
+    // one is: Copilot can ask several at once (parallel tool calls) and shows them one at a
+    // time, this one first (#690). A client says "1 of N permissions waiting"; the next one
+    // comes as a new question, with its own id, once this one is answered.
+    public int? Waiting { get; init; }
+}
+
+// What the host escaped in an approval's message, and how Approve is given for it (#803).
+//   Shown: SHA-256, lower-case hex, of the message's UTF-8 exactly as sent. A confirmation names it,
+//     so one given for what a person read approves nothing that reads otherwise.
+//   Marks: the host's own escapes in the message, each [start, length] in UTF-16 code units, in
+//     order, one mark for each escape and nothing else (EscapedApproval.IsEscape). Text an agent wrote itself (six characters "\u202E")
+//     is never in one, which is how a client tells the two apart.
+//   Approve: "confirm" (Approve needs the confirmation, from an approved person's device) or
+//     "machine" (this machine takes Approve for it only at the machine; Deny still goes) or
+//     "tooMany" (more escapes than Marks can carry, EscapedApproval.MaxMarks: Approve only at the
+//     machine whatever its policy; Deny still goes).
+public sealed record EscapedText
+{
+    [Strict(Strictness.Security)]
+    public required string Shown { get; init; }
+    [Strict(Strictness.Security)]
+    public required IReadOnlyList<IReadOnlyList<int>> Marks { get; init; }
+    [Strict(Strictness.Security)]
+    public required string Approve { get; init; }
 }
 
 public sealed record Field
@@ -498,8 +638,16 @@ public sealed record Field
     public IReadOnlyList<Option>? Options { get; init; }
     [Strict(Strictness.Security)]
     public bool? AllowOther { get; init; }
+    // Why the agent offers Other here but this machine cannot send it (AnswerReasons), for a
+    // field whose AllowOther is not true: a client shows Other disabled, with the reason's
+    // sentence. Display only, so not strict: read wrong, a client only leaves Other out, as one
+    // that predates it does. It never enables Other or changes what Answers.Check takes (#908).
+    public string? OtherUnavailable { get; init; }
     public JsonElement? Default { get; init; }
     public bool? Required { get; init; }
+    // What the agent's schema allows (#766). Not strict: a client that cannot read them checks
+    // less before sending, and the host checks them again before it types.
+    public FieldConstraints? Constraints { get; init; }
 }
 
 public sealed record Option([property: Strict(Strictness.Security)] string Value, [property: Strict(Strictness.Security)] string? Label = null);
@@ -543,11 +691,15 @@ public sealed record SubscribeSince
 
 // sessions.focus (Capabilities.SessionsFocus): whether the client is on screen now, and the session
 // it shows, if any. Live changes to the others then come together at most every 12 s, and a
-// visible device is not notified of a finished turn it can see (#610).
+// visible device is not notified of a finished turn it can see (#610). OpenQuestion and IdleMs say
+// which question's card is on screen and how long ago the person last gave input, so the host can
+// hold back pushes from a device in use (#1190); absent, both are unknown.
 public sealed record FocusRequest
 {
     public required bool Visible { get; init; }
     public string? Open { get; init; }
+    public string? OpenQuestion { get; init; }
+    public long? IdleMs { get; init; }
 }
 
 // sessions.subscribe's result; the sessions themselves follow as session.upsert events,
@@ -579,10 +731,18 @@ public sealed record AnswerRequest
     // True from a client that saw sessions.progress: it hears DeliveryProgress frames before the
     // result, and the result carries Timings. Absent, nothing about the exchange changes.
     public bool? Progress { get; init; }
+    // With Approve on a question that has Escaped: the command the person's device signed when they
+    // pressed the confirmation (EscapedApproval). Only a host's relay channel acts on one.
+    public SignedCommand? Confirm { get; init; }
 }
 
-public sealed record AnswerResult(AnswerOutcome Outcome, string? Reason = null)
+public sealed record AnswerResult(AnswerOutcome Outcome, string? Reason = null, AnswerStage? Stage = null)
 {
+    // Why, as a code a client says in its own fixed words (AnswerReasons), beside Reason: on a
+    // refused whose Reason is the code's sentence, or on a stale from a part-answered form the
+    // host reset (FormReset); absent for every other reason. A client that does not know the code
+    // shows Reason.
+    public string? Code { get; init; }
     // Only for a request that asked for progress.
     public DeliveryTimings? Timings { get; init; }
 }
@@ -609,6 +769,16 @@ public sealed record DeliveryProgress(string Stage, bool? Working = null)
     // working, so the agent takes it at its next step (queued).
     public const string Typed = "typed";
 }
+
+// How far an unconfirmed answer is known to have got (#467), named as DeliveryTimings names the
+// stages, so a client can say which: typed, every key went and nothing has been recorded for the
+// question since, which may mean it was never submitted (an Enter the CLI took as part of the
+// words); recorded, the session recorded an answer to that very question that is not, or not
+// yet, the one typed. Confirmed is delivered, never a stage. Unlike the progress frames and
+// timings, it is on every unconfirmed answer's result, whether or not the client asked for
+// progress. A stage a client does not know reads as typed, the one that claims least.
+[UnknownAs(Typed)]
+public enum AnswerStage { Typed, Recorded }
 
 // session.reply: a prompt for the session, typed into its own input as if at the machine.
 // Request is the client's UUID for this reply, as for an answer. Attachments name files the

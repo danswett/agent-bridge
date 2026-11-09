@@ -1,17 +1,30 @@
-# agent-bridge
+# Slipgates
 
-A standalone app for watching and driving AI coding agent sessions (GitHub Copilot
-CLI, Claude Code, Codex) across your machines and your phone. It is the successor to
+*(formerly Agent Bridge)*
+
+Slipgates is a standalone app for watching and driving AI coding agent sessions (GitHub
+Copilot CLI, Claude Code, Codex) across your machines and your phone. A question asked on a
+Dev Box shows up on your phone, and your answer goes straight back. It is the successor to
 [agent-ha-bridge](https://github.com/danswett/agent-ha-bridge), without the need for
 Home Assistant.
 
-> **Status: in use on a first migrated machine (2026-11-01).** The host, Windows app, phone
-> PWA and relay are built to parity with agent-ha-bridge, and machines are moving over
-> one at a time, with rollback. agent-ha-bridge stays the supported product on every
-> machine not yet migrated. **Where things stand, what's next and how to pick the work
-> up: [docs/status.md](docs/status.md).** The plan and architecture are in
-> [docs/design.md](docs/design.md), how to work here is in [AGENTS.md](AGENTS.md), and
-> feature-by-feature parity with evidence is in [docs/parity.md](docs/parity.md).
+**Contributing, with or without agents? [Start here](CONTRIBUTING.md).**
+The guide covers choosing work, working safely alongside other contributors, checks,
+reviews and handoffs. Fresh agent sessions start with [AGENTS.md](AGENTS.md).
+
+> **The name.** The product is called Slipgates ([brand](docs/design/brand.md)). The
+> repository (`danswett/agent-bridge`), project and namespace names (`AgentBridge.*`),
+> commands (`agent-bridge-host`), install paths, environment variables and the web app's
+> address are legacy names, kept until Phase 3
+> ([#541](https://github.com/danswett/agent-bridge/issues/541)) migrates them
+> ([what stays](docs/design/brand.md#33-never-renamed-by-the-brand)). The protocol's name,
+> Bridge Protocol v1, is also a legacy name kept until Phase 3.
+
+> **Project context:** [docs/status.md](docs/status.md) distinguishes dated migration
+> snapshots from live work references. [Product priorities](https://github.com/danswett/agent-bridge/issues/696)
+> determine the order of work; canonical issues and PRs hold current ownership and evidence.
+> The architecture is in [docs/design.md](docs/design.md), and feature-by-feature parity
+> with evidence is in [docs/parity.md](docs/parity.md).
 
 ## Planned shape
 
@@ -19,18 +32,19 @@ Nothing depends on Windows: the host, hook, relay, protocol and all product logi
 shared on Windows, macOS and Linux, and each desktop gets a native app of equal
 standing.
 
-* **Bridge Host** (C#/.NET, Windows, macOS and Linux): one per machine. It does what
+* **The Slipgates host** (C#/.NET, Windows, macOS and Linux): one per machine. It does what
   the agent-ha-bridge daemon does today: picks up hook events, tails transcripts, and
   delivers answers, replies, launches and stops. It holds all the product logic.
-* **Agent Bridge apps**: WinUI 3 on Windows and SwiftUI on macOS. Both are thin native
+* **Slipgates apps**: WinUI 3 on Windows and SwiftUI on macOS. Both are thin native
   shells over the host, providing the desktop UI, notifications, and the installer and
   manager for the host and agent hooks. Linux runs the host only, for now.
 * **Relay**: an untrusted, end-to-end-encrypted rendezvous so your machines and phone
   can reach each other from anywhere. It can be self-hosted, and there are LAN-only
   options.
-* **Phone**: a PWA first, native apps later.
+* **Phone**: the Slipgates web app (a PWA) first, native apps later.
 
-The protocol between them is specified in [docs/protocol](docs/protocol/v1-sessions.md).
+Slipgates' protocol (Bridge Protocol v1) connects them, and is specified in
+[docs/protocol](docs/protocol/v1-sessions.md).
 
 ## Product code so far
 

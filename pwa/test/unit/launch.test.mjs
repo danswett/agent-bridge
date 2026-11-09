@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { LaunchService } from '../../js/launch-service.js';
 import { HostClient, HostError } from '../../js/host-client.js';
 import { checkLaunch, flattenPrompt, readLaunchOptions, readLaunchResult, readTrustResult, MAX_PROMPT } from '../../js/launch.js';
-import { describeLaunch, describeTrust } from '../../js/ui/launch-view.js';
+import { describeLaunch, describeTrust, launchPending } from '../../js/ui/launch-view.js';
 
 const flush = () => new Promise((r) => setImmediate(r));
 const REQUEST = '2b6e1f0a-7c3d-4e5f-8a9b-0c1d2e3f4a5b';
@@ -141,13 +141,34 @@ test('a prompt reaches the agent on one line, as the machine flattens it', () =>
 
 test('what a launch says matches its outcome, and a started session says where it went', () => {
   const done = (outcome, extra = {}) => ({ state: 'done', outcome, ...extra });
-  assert.deepEqual(describeLaunch(done('started', { detail: { launched: { worktree: true } } })), { text: 'Session started in a new worktree.', tone: 'ok' });
+  assert.deepEqual(describeLaunch(done('started', { detail: { session: 's1', launched: { worktree: true } } })), { text: 'Session started in a new worktree.', tone: 'ok' });
+  // A start whose session is not known has no card to open: it says where to find it (#973).
+  assert.equal(describeLaunch(done('started', { detail: { launched: { worktree: true } } })).text, 'Session started in a new worktree. Open it from the list.');
+  assert.equal(describeLaunch(done('started'), { session: null }).text, 'Session started. Open it from the list.');
+  assert.equal(describeLaunch(done('started'), { session: 's1' }).text, 'Session started.');
   assert.equal(describeLaunch(done('unconfirmed', { reason: 'it is asking whether to trust its folder; answer that at the machine' })).tone, 'warn');
   assert.match(describeLaunch(done('busy', { reason: 'a session is waiting at its trust prompt' })).text, /^Not launched: a session is waiting at its trust prompt\. Try again/);
   assert.equal(describeLaunch(done('refused', { reason: 'no workspace is approved' })).text, 'Not launched: no workspace is approved.');
   assert.equal(describeLaunch(done('failed', { reason: 'it exited' })).tone, 'bad');
   assert.equal(describeLaunch({ state: 'waiting' }, { machineName: 'Desk' }).tone, 'progress');
   assert.match(describeLaunch({ state: 'sending' }, { machineName: 'Desk' }).text, /on Desk/);
+});
+
+test('a resume the machine holds back while its discovery is held shows the waiting form, and another busy launch does not', () => {
+  const held = 'Held: session discovery is waiting on an unrecognised copilot process (pid 4120), so whether that session is still running cannot be told yet. Try again in a minute or two.';
+  const done = (answer, reason) => ({ state: 'done', outcome: 'busy', answer, reason });
+  assert.deepEqual(describeLaunch(done({ resume: 's1' }, held), { machineName: 'Desk' }), { text: 'Desk is still finding its sessions. Try Launch again in a moment.', tone: 'progress' });
+  assert.match(describeLaunch(done({ workspace: 'B' }, held), { machineName: 'Desk' }).text, /^Not launched: Held:/);
+  assert.match(describeLaunch(done({ resume: 's1' }, 'another launch is running'), { machineName: 'Desk' }).text, /^Not launched: another launch/);
+});
+
+test('a resume refused as held is drawn as waiting but the launch region is not busy, as it is done and nothing retries it', () => {
+  const held = { state: 'done', outcome: 'busy', answer: { resume: 's1' }, reason: 'Held: discovery is held' };
+  assert.equal(describeLaunch(held, { machineName: 'Desk' }).tone, 'progress');
+  assert.equal(launchPending(held), false);
+  assert.equal(launchPending({ state: 'sending' }), true);
+  assert.equal(launchPending({ state: 'waiting' }), true);
+  assert.equal(launchPending(null), false);
 });
 
 test('a folder-trust question is read whole from options and from a launch it met, and nothing unreadable is shown', () => {

@@ -2,18 +2,32 @@
 // (docs/protocol/v1-usage.md):
 //   * each machine shown (the one chosen, or every one with All): its hello, its live session
 //     count, and a usage subscription on the channel already open to it;
-//   * every other online machine: a short channel (hello, usage.get, close) once a minute
+//   * every other online machine: a short channel (hello, usage.get, close) every five minutes
 //     each while the app is in front, and never more often, so the list says
 //     "3 sessions · 0.1.0 (dev)" for each and usage is merged across machines as
 //     agent-ha-bridge's card merged them. With every machine shown there are none of these:
 //     one channel per machine is all it takes.
 // And each machine's updates (#51, docs/protocol/v1-update.md), the same ways: followed on the
-// channel of a machine shown, and read with the once-a-minute look at the others, which comes
-// every few seconds instead while an update there is under way.
+// channel of a machine shown, and read with the look at the others every five minutes, which
+// comes every few seconds instead while an update there is under way.
+//
+// Five minutes, not one (#610): each look opened a channel and a handshake to every other
+// machine, and asked each for a hello it answers with a check of its own, every minute the app
+// was open; a phone's radio was never let rest. What changes there in between is a session
+// count and a usage figure. A machine shown is asked for its hello again on its own channel as
+// often, if it says when that changes (hello.changed); one that doesn't is asked every minute,
+// as before, so its turning read-only (agent-ha-bridge starting there) still shows within one.
 import { HostClient } from './host-client.js';
-import { Ops } from './protocol.js';
+import { Capabilities, Ops } from './protocol.js';
 import { USAGE, machineFacts, machineStatus } from './usage.js';
 import { UPDATE, underWay } from './update.js';
+import { SIGN_IN_DEVICES, readSignInDevices } from './signin-devices.js';
+import { DIAGNOSTICS } from './diagnostics.js';
+
+export const PROBE_EVERY_MS = 5 * 60 * 1000;
+export const REFRESH_EVERY_MS = 60 * 1000;
+// How long a discovery hold must last before its machine's row says so (#1064).
+export const HELD_ROW_MS = 2 * 60 * 1000;
 
 export class FleetStatus {
   #listeners = new Set();
@@ -40,15 +54,29 @@ export class FleetStatus {
   // A press accepted on a machine: looked at every fastMs until then, even before its state says
   // anything is under way (the answer is the state from before the app took the press).
   #watchUntil = new Map();
-
+  // Ops from call() on their way (busy).
+  #calls = 0;
+  // Who can sign Copilot in on each machine that has it on (#972), and the client it was last read
+  // on for a machine shown.
+  #signIns = new Map();
+  #signInsRead = new Map();
+  // When each machine's current discovery hold began as this client saw it, and the timer that
+  // draws its row once the hold has lasted HELD_ROW_MS.
+  #heldAt = new Map();
+  #heldTimers = new Map();
   // hosts: a HostSession (host-session.js): links() for the machines shown, link(id), shows(id)
   // and refresh(id).
-  constructor({ connection, hosts, book, me, probeEveryMs = 60000, fastMs = 10000, now = () => Date.now(), doc = globalThis.document, makeClient = (ch) => new HostClient(ch) }) {
-    Object.assign(this, { connection, hosts, book, me, probeEveryMs, fastMs, now, doc, makeClient });
+  // probeEveryMs: how often each machine is looked at. refreshEveryMs: how often a machine shown
+  // that doesn't say when its hello changes is asked for it again.
+  constructor({
+    connection, hosts, book, me, probeEveryMs = PROBE_EVERY_MS, refreshEveryMs = REFRESH_EVERY_MS, fastMs = 10000,
+    now = () => Date.now(), doc = globalThis.document, makeClient = (ch) => new HostClient(ch),
+  }) {
+    Object.assign(this, { connection, hosts, book, me, probeEveryMs, refreshEveryMs, fastMs, now, doc, makeClient });
     connection.on('presence', () => { this.probe(); this.#retime(); });
     connection.on('ready', () => this.probe());
     hosts.onChange(() => this.#onHosts());
-    hosts.sessions.onChange(() => this.#emit());
+    hosts.sessions.onChange(() => { this.#watchHeld(); this.#emit(); });
     doc?.addEventListener?.('visibilitychange', () => {
       if (doc.visibilityState === 'hidden') { this.#stopTimer(); return; }
       this.probe();
@@ -57,8 +85,9 @@ export class FleetStatus {
     });
   }
 
-  // Looks again every probeEveryMs while the app is in front: presence changes only when a
-  // device comes or goes, so a machine left alone would otherwise never be looked at again.
+  // Looks again while the app is in front, at whatever is due (probeEveryMs, refreshEveryMs):
+  // presence changes only when a device comes or goes, so a machine left alone would otherwise
+  // never be looked at again.
   start() {
     this.#started = true;
     this.#startTimer();
@@ -66,7 +95,7 @@ export class FleetStatus {
 
   #startTimer() {
     if (!this.#started || this.#timer || this.doc?.visibilityState === 'hidden') { return; }
-    this.#timer = setInterval(() => this.probe(), this.probeEveryMs);
+    this.#timer = setInterval(() => this.probe(), Math.min(this.probeEveryMs, this.refreshEveryMs));
   }
 
   #stopTimer() {
@@ -99,8 +128,35 @@ export class FleetStatus {
     this.#retime();
   }
 
+  // Whether a machine offers this device its diagnostics (#802): true or false as its last hello
+  // said, null while none has been heard.
+  diagnosable(id) { return this.#machines.get(id)?.diagnostics ?? null; }
+
   // What a machine's updater is doing, or null when it offers no updates (or none is known yet).
   update(id) { return this.#updates.get(id) ?? null; }
+
+  // Who can sign Copilot in on a machine ({ state, devices }), or null where it is off or unknown.
+  signIns(id) { return this.#signIns.get(id) ?? null; }
+
+  // A machine shown: read again on its channel when that is new and at each later look, and
+  // dropped once its hello stops offering it (the switch turned off and the host restarted).
+  #readSignIns(link, again = false) {
+    const { id, client } = link;
+    if (!link.capabilities?.includes(SIGN_IN_DEVICES.capability)) {
+      this.#signInsRead.delete(id);
+      if (this.#signIns.delete(id)) { this.#emit(); }
+      return;
+    }
+    if (!again && this.#signInsRead.get(id) === client) { return; }
+    this.#signInsRead.set(id, client);
+    const mine = () => this.#signInsRead.get(id) === client;
+    client.request(SIGN_IN_DEVICES.op).then((r) => {
+      if (!mine()) { return; }
+      const read = readSignInDevices(r);
+      if (read) { this.#signIns.set(id, read); } else { this.#signIns.delete(id); }
+      this.#emit();
+    }, () => {});
+  }
 
   // A machine's update state as a press's answer said it.
   noteUpdate(id, state) { this.#setUpdate(id, state); }
@@ -112,13 +168,23 @@ export class FleetStatus {
   }
 
   // An op on a machine: on the channel of a machine shown, else on a short one of its own.
+  // Counted from the channel's opening to the response, so the connection doesn't rest under a
+  // press (Check, Install) still on its way to a machine not shown (busy).
   async call(id, op, data) {
-    const link = this.#followed(id) ? this.hosts.link(id) : null;
-    if (link?.phase === 'open' && link.client) { return link.client.request(op, data); }
-    const channel = await this.connection.openChannel(id, { timeoutMs: 10000 });
-    const client = this.makeClient(channel);
-    try { return await client.request(op, data); } finally { client.close(); }
+    this.#calls += 1;
+    try {
+      const link = this.#followed(id) ? this.hosts.link(id) : null;
+      if (link?.phase === 'open' && link.client) { return await link.client.request(op, data); }
+      const channel = await this.connection.openChannel(id, { timeoutMs: 10000 });
+      const client = this.makeClient(channel);
+      try { return await client.request(op, data); } finally { client.close(); }
+    } finally {
+      this.#calls -= 1;
+    }
   }
+
+  // An op from call() still on its way.
+  get busy() { return this.#calls > 0; }
 
   onChange(fn) { this.#listeners.add(fn); return () => this.#listeners.delete(fn); }
 
@@ -142,7 +208,35 @@ export class FleetStatus {
     // A machine shown has its count live once its snapshot is in.
     const link = this.hosts.shows(id) ? this.hosts.link(id) : null;
     const live = link?.phase === 'open' && link.client?.synced;
-    return { ...m, sessions: live ? link.store.size : m.sessions, held: live ? link.store.held?.reason : null };
+    return { ...m, sessions: live ? link.store.size : m.sessions, held: live && this.#heldLong(id) ? link.store.held?.reason : null };
+  }
+
+  // Whether a machine's discovery hold has lasted HELD_ROW_MS (ui.md §6.6, #1064): a hold shorter
+  // than that is routine (a start or an end of discovery) and changes nothing on screen.
+  #heldLong(id) {
+    const at = this.#heldAt.get(id);
+    return at !== undefined && this.now() - at >= HELD_ROW_MS;
+  }
+
+  // Starts each hold's clock when a machine's list first says it is held, and ends it when it
+  // is not (or the machine is not live): a hold that returns counts from its own start. The row
+  // is drawn again when the clock runs out.
+  #watchHeld() {
+    const holding = new Set();
+    for (const link of this.hosts.links()) {
+      if (link.phase === 'open' && link.client?.synced && link.store.held) { holding.add(link.id); }
+    }
+    for (const id of [...this.#heldAt.keys()]) {
+      if (holding.has(id)) { continue; }
+      this.#heldAt.delete(id);
+      clearTimeout(this.#heldTimers.get(id));
+      this.#heldTimers.delete(id);
+    }
+    for (const id of holding) {
+      if (this.#heldAt.has(id)) { continue; }
+      this.#heldAt.set(id, this.now());
+      this.#heldTimers.set(id, setTimeout(() => { this.#heldTimers.delete(id); this.#emit(); }, HELD_ROW_MS));
+    }
   }
 
   // Whether a machine's figures come on a channel of its own: shown, and not found unable to
@@ -159,7 +253,12 @@ export class FleetStatus {
     this.#machines.delete(id);
     this.#updates.delete(id);
     this.#updateFollowed.delete(id);
+    this.#signIns.delete(id);
+    this.#signInsRead.delete(id);
     this.#watchUntil.delete(id);
+    clearTimeout(this.#heldTimers.get(id));
+    this.#heldTimers.delete(id);
+    this.#heldAt.delete(id);
     this.book.delete(id, { forget: true });
     this.#retime();
     this.#emit();
@@ -176,7 +275,12 @@ export class FleetStatus {
     this.#viewedAt.clear();
     this.#updates.clear();
     this.#updateFollowed.clear();
+    this.#signIns.clear();
+    this.#signInsRead.clear();
     this.#watchUntil.clear();
+    for (const t of this.#heldTimers.values()) { clearTimeout(t); }
+    this.#heldTimers.clear();
+    this.#heldAt.clear();
     this.book.clear();
     this.#emit();
   }
@@ -188,8 +292,9 @@ export class FleetStatus {
       shown.add(id);
       if (link.phase !== 'open' || !client) { continue; }
       // What the machine says now, refreshed hellos included (read-only, say).
-      this.#note(id, link.machine);
+      this.#note(id, link.machine, link.capabilities);
       this.#followUpdates(link);
+      this.#readSignIns(link);
       if (this.#viewed.get(id) === client) { continue; }
       this.#viewed.set(id, client);
       this.#viewedAt.set(id, this.now());
@@ -204,8 +309,9 @@ export class FleetStatus {
     }
     // A machine no longer shown is looked at as the others are; its last report stays until then.
     for (const id of [...this.#viewed.keys()]) {
-      if (!shown.has(id)) { this.#viewed.delete(id); this.#viewedAt.delete(id); this.#updateFollowed.delete(id); }
+      if (!shown.has(id)) { this.#viewed.delete(id); this.#viewedAt.delete(id); this.#updateFollowed.delete(id); this.#signInsRead.delete(id); }
     }
+    this.#watchHeld();
     this.#retime();
     this.#emit();
     this.probe();
@@ -233,22 +339,26 @@ export class FleetStatus {
     client.subscribeUpdate().then((s) => { if (mine()) { this.#setUpdate(id, s); } }, () => { if (mine()) { this.#updateFollowed.delete(id); } });
   }
 
-  #note(id, machine) {
+  #note(id, machine, capabilities) {
     if (!id || !machine) { return; }
-    this.#machines.set(id, { hostVersion: machine.hostVersion ?? null, dev: machine.dev === true, sessions: machine.sessions ?? null, readOnly: machine.readOnly ?? null, at: this.now() });
+    // diagnostics: whether its hello offers diagnostics.get (#802); an older host does not.
+    this.#machines.set(id, { hostVersion: machine.hostVersion ?? null, dev: machine.dev === true, sessions: machine.sessions ?? null, readOnly: machine.readOnly ?? null, diagnostics: Array.isArray(capabilities) && capabilities.includes(DIAGNOSTICS.capability), at: this.now() });
   }
 
   // Looks at every online machine not shown that has not been looked at for a minute. One at
   // a time: a phone opening the app should not start a handshake with every machine at once.
   probe() {
     if (!this.connection.ready || this.doc?.visibilityState === 'hidden') { return; }
-    // Each machine shown is asked again on its own channel, as often: it may have become
-    // read-only, or stopped being, with nothing else to say so.
+    // Each machine shown is asked again on its own channel: it may have become read-only, or
+    // stopped being. One that says when (hello.changed) is asked only now and then, in case it
+    // was missed; one that doesn't, every refreshEveryMs.
     for (const link of this.hosts.links()) {
-      if (link.phase !== 'open' || !link.client || this.now() - (this.#viewedAt.get(link.id) ?? 0) < this.probeEveryMs) { continue; }
+      const every = link.capabilities?.includes(Capabilities.helloChanged) ? this.probeEveryMs : Math.min(this.probeEveryMs, this.refreshEveryMs);
+      if (link.phase !== 'open' || !link.client || this.now() - (this.#viewedAt.get(link.id) ?? 0) < every) { continue; }
       this.#viewedAt.set(link.id, this.now());
       this.hosts.refresh?.(link.id)?.catch(() => {});
       this.#followUpdates(link);
+      this.#readSignIns(link, true);
     }
     for (const d of this.connection.presence) {
       if (d.kind !== 'host' || d.id === this.me || this.#followed(d.id) || this.#queued.has(d.id)) { continue; }
@@ -281,7 +391,7 @@ export class FleetStatus {
       const viewed = () => this.#followed(id);
       const hello = await client.hello();
       if (viewed() || forgotten()) { return; }
-      this.#note(id, hello.machine);
+      this.#note(id, hello.machine, hello.capabilities);
       if (hello.capabilities.includes(USAGE.capability)) {
         const report = await client.usage({ shared: hello.capabilities.includes(USAGE.shared) });
         if (!viewed() && !forgotten()) { this.book.set(id, report, hello.machine?.name); }
@@ -293,10 +403,14 @@ export class FleetStatus {
         const state = await client.updateState();
         if (!viewed() && !forgotten()) { this.#updates.set(id, state); }
       } else if (!viewed() && !forgotten()) { this.#updates.delete(id); }
+      if (hello.capabilities.includes(SIGN_IN_DEVICES.capability)) {
+        const read = readSignInDevices(await client.request(SIGN_IN_DEVICES.op));
+        if (!viewed() && !forgotten()) { if (read) { this.#signIns.set(id, read); } else { this.#signIns.delete(id); } }
+      } else if (!viewed() && !forgotten()) { this.#signIns.delete(id); }
       this.#retime();
     } catch {
       if (forgotten()) { return; }
-      // Not retried before the minute is up, whatever went wrong.
+      // Not retried before its next look is due, whatever went wrong.
       const old = this.#machines.get(id);
       this.#machines.set(id, { ...(old ?? { hostVersion: null, dev: false, sessions: null }), at: this.now() });
     } finally {

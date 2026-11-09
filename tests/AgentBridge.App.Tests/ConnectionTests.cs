@@ -45,6 +45,44 @@ public sealed class ConnectionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Reconnect_ends_a_hung_attempt_and_starts_one_new_attempt_without_overlapping_loops()
+    {
+        // #800: a link not Connected while its host answers. The first attempt's connect hangs
+        // until it is cancelled, as no timeout of the app's own would end it.
+        var attempts = 0;
+        var open = 0;
+        var most = 0;
+        var hungCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lines = new List<string>();
+        await using var link = new HostConnection(async ct =>
+        {
+            var n = Interlocked.Increment(ref attempts);
+            var now = Interlocked.Increment(ref open);
+            lock (lines) { most = Math.Max(most, now); }
+            try
+            {
+                if (n == 1)
+                {
+                    try { await Task.Delay(Timeout.Infinite, ct); }
+                    catch (OperationCanceledException) { hungCancelled.TrySetResult(); throw; }
+                }
+                return await LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromSeconds(1), ct);
+            }
+            finally { Interlocked.Decrement(ref open); }
+        }, new LockedDispatcher(), l => { lock (lines) { lines.Add(l); } }) { RetryDelay = TimeSpan.FromMilliseconds(100) };
+        link.Start();
+        await Wait.UntilAsync(() => Volatile.Read(ref attempts) == 1, "the first attempt under way", TimeSpan.FromSeconds(30));
+
+        link.Reconnect();
+        link.Reconnect();
+
+        await hungCancelled.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await Wait.UntilAsync(() => link.State == LinkState.Connected, "the link made again", TimeSpan.FromSeconds(30));
+        Assert.Equal(1, most);
+        lock (lines) { Assert.Contains(lines, l => l.Contains("ended to reconnect", StringComparison.Ordinal)); }
+    }
+
+    [Fact]
     public async Task A_connection_that_follows_no_sessions_stops_when_disposed_rather_than_spinning()
     {
         // The relay loopback's kind (Subscribes = false). Disposed while connected, its wait for a
@@ -103,6 +141,22 @@ public sealed class ConnectionTests : IAsyncLifetime
 
         await Wait.UntilAsync(() => connection.Sessions.Get("s2") is not null && connection.Sessions.Get("s1") is null, "the upsert and removal");
         await Wait.UntilAsync(() => connection.Usage.Agents.Count == 1 && connection.Status!.Relay.State == RelayState.Connected, "usage and status");
+    }
+
+    // #493: a host past the protocol's limits (the demo's, a broken or a remote one) sent a word
+    // WinUI's text layout failed on, and the app ended. Held to the limits as it arrives.
+    [Fact]
+    public async Task A_session_over_the_protocols_limits_is_cut_to_them_as_it_arrives()
+    {
+        await Wait.UntilAsync(() => connection.Sessions.Get("s1") is not null, "the snapshot");
+
+        var question = Make.Form() with { Message = "Which one? " + new string('[', 9000) };
+        await host.SendAsync(Events.SessionUpsert, Make.Session("s2", question: question, response: "Done: " + new string('[', 32000)));
+
+        await Wait.UntilAsync(() => connection.Sessions.Get("s2") is not null, "the upsert");
+        var s = connection.Sessions.Get("s2")!;
+        Assert.Equal((Limits.Response, true), (s.Activity.Response!.Length, s.Activity.ResponseTruncated));
+        Assert.Equal((Limits.QuestionMessage, true), (s.Question!.Message.Length, s.Question.Truncated));
     }
 
     // #446: a record the app could not read ended the event pump, and the connection with it; the
@@ -391,7 +445,7 @@ public sealed class ConnectionTests : IAsyncLifetime
 
         first.Release();
         await Wait.UntilAsync(() => first.Drained, "the first channel's pump to read the gap");
-        await Task.Delay(300);
+        await Wait.UntilAsync(() => first.Handled, "the first channel's pump to have handled it");
         Assert.True(TestUi.Read(() => machine.Current));
     }
 
@@ -402,10 +456,33 @@ public sealed class ConnectionTests : IAsyncLifetime
         readonly System.Threading.Channels.Channel<AgentBridge.Transport.ChannelEvent> events = System.Threading.Channels.Channel.CreateUnbounded<AgentBridge.Transport.ChannelEvent>();
         volatile TaskCompletionSource? held;
         int holding;
+        readonly PumpedReader reader;
+
+        // The events as the app's pump reads them (HostConnection.PumpAsync: await foreach over
+        // ReadAllAsync, each event handled before the next is asked for). The enumeration ends, and
+        // Done is set, only once the pump has finished with the last event it was given.
+        sealed class PumpedReader(System.Threading.Channels.ChannelReader<AgentBridge.Transport.ChannelEvent> inner)
+            : System.Threading.Channels.ChannelReader<AgentBridge.Transport.ChannelEvent>
+        {
+            volatile bool done;
+            public bool Done => done;
+            public override Task Completion => inner.Completion;
+            public override bool TryRead([System.Diagnostics.CodeAnalysis.MaybeNullWhen(false)] out AgentBridge.Transport.ChannelEvent item) => inner.TryRead(out item);
+            public override ValueTask<bool> WaitToReadAsync(CancellationToken cancellationToken = default) => inner.WaitToReadAsync(cancellationToken);
+            public override async IAsyncEnumerable<AgentBridge.Transport.ChannelEvent> ReadAllAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+            {
+                try
+                {
+                    await foreach (var e in inner.ReadAllAsync(cancellationToken)) { yield return e; }
+                }
+                finally { done = true; }
+            }
+        }
 
         public GatedChannel(IClientChannel inner)
         {
             this.inner = inner;
+            reader = new PumpedReader(events.Reader);
             _ = Task.Run(async () =>
             {
                 await foreach (var e in inner.Events.ReadAllAsync())
@@ -420,10 +497,13 @@ public sealed class ConnectionTests : IAsyncLifetime
         public int Holding => Volatile.Read(ref holding);
         // Everything passed on and read by the pump.
         public bool Drained => events.Reader.Completion.IsCompleted;
+        // The pump has finished with this channel's events, the last one handled: it came back for
+        // more and found none, or let go of them.
+        public bool Handled => reader.Done;
         public void Hold() => held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         public void Release() { var h = held; held = null; h?.TrySetResult(); }
 
-        public System.Threading.Channels.ChannelReader<AgentBridge.Transport.ChannelEvent> Events => events.Reader;
+        public System.Threading.Channels.ChannelReader<AgentBridge.Transport.ChannelEvent> Events => reader;
         public Exception? CloseReason => inner.CloseReason;
         public string PeerId => inner.PeerId;
         public string PeerName => inner.PeerName;
@@ -446,12 +526,90 @@ public sealed class ConnectionTests : IAsyncLifetime
         store.BeginSnapshot(on);
         // Read on the pump before the subscribe's answer is applied: the synced waits for it.
         store.EndSnapshot(older, on, 5);
-        store.SetHeld(newer);
+        store.SetHeld(newer, on);
 
         store.Answered(on, 4);
 
         Assert.True(store.Complete);
         Assert.Equal(newer, store.Held);
+    }
+
+    [Fact]
+    public void A_discovery_change_from_another_channel_does_not_rewrite_a_pending_snapshot_end()
+    {
+        var store = new SessionStore();
+        var on = new object();
+        var pending = new DiscoveryHeld("the snapshot's hold", [AgentKind.Claude]);
+        var other = new DiscoveryHeld("another channel's hold", [AgentKind.Copilot]);
+        store.BeginSnapshot(on);
+        store.EndSnapshot(pending, on, 5);
+        store.SetHeld(other, new object());
+        Assert.Equal(other, store.Held);
+
+        store.Answered(on, 4);
+
+        Assert.True(store.Complete);
+        Assert.Equal(pending, store.Held);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Session_writes_queued_by_a_replaced_channel_are_dropped_after_the_new_snapshot(bool staleHold)
+    {
+        var older = staleHold ? new DiscoveryHeld("old channel's hold", [AgentKind.Claude]) : null;
+        var newer = staleHold ? null : new DiscoveryHeld("new channel's hold", [AgentKind.Copilot]);
+        await using var other = new FakeHost { Held = older };
+        other.Sessions.Add(Make.Session("a", title: "Before reconnect"));
+        other.Start();
+        var ui = new HoldingDispatcher();
+        await using var conn = new HostConnection(ct => LocalClient.ConnectAsync(other.Endpoint, TimeSpan.FromSeconds(1), ct), ui)
+        {
+            RetryDelay = TimeSpan.Zero,
+            CapabilityRefresh = TimeSpan.FromHours(1),
+        };
+        conn.Start();
+        await Wait.UntilAsync(() => conn.State == LinkState.Connected && conn.Sessions.Complete, "the first snapshot");
+        ui.Hold();
+        try
+        {
+            // These are wire-only events: the next snapshot must not include their stale state.
+            var old = Assert.Single(other.Channels.Where(c => c.IsOpen).Distinct());
+            await old.SendEventAsync(Events.SessionUpsert, Make.Session("ended"));
+            await old.SendEventAsync(Events.SessionRemove, new SessionRemoved("a"));
+            await old.SendEventAsync(Events.SessionUpsert, new System.Text.Json.Nodes.JsonObject { ["id"] = 7 });
+            await old.SendEventAsync(Events.DiscoveryChanged, new DiscoveryChanged(older));
+            await Wait.UntilAsync(() => ui.QueuedCount == 4, "the old channel's session writes queued");
+            var delayed = ui.TakeHeld();
+
+            other.Sessions[0] = Make.Session("a", title: "After reconnect");
+            other.Held = newer;
+            await other.StopAsync();
+            other.Start();
+            await Wait.UntilAsync(() => conn.ConnectionNumber == 2 && conn.Sessions.Snapshots == 2
+                && conn.Sessions.Complete && conn.Sessions.Get("a")?.Title == "After reconnect", "the replacement snapshot");
+            Assert.Equal(newer?.Reason, conn.Sessions.Held?.Reason);
+            Assert.Equal(newer?.Agents ?? [], conn.Sessions.Held?.Agents ?? []);
+            var changes = 0;
+            conn.Sessions.HeldChanged += () => changes++;
+
+            // Apply after the new snapshot, even though the old pump posted while still followed.
+            foreach (var action in delayed) { ui.Post(action); }
+
+            Assert.Null(conn.Sessions.Get("ended"));
+            Assert.Equal("After reconnect", conn.Sessions.Get("a")!.Title);
+            Assert.False(conn.Sessions.Unsure);
+            Assert.True(conn.Sessions.Complete);
+            Assert.Equal(newer?.Reason, conn.Sessions.Held?.Reason);
+            Assert.Equal(newer?.Agents ?? [], conn.Sessions.Held?.Agents ?? []);
+            Assert.Equal(0, changes);
+
+            var current = new DiscoveryHeld("current channel's next change", [AgentKind.Codex]);
+            await other.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(current));
+            await Wait.UntilAsync(() => conn.Sessions.Held?.Reason == current.Reason, "the current channel's discovery change");
+            Assert.Equal(current.Agents, conn.Sessions.Held!.Agents);
+        }
+        finally { ui.Release(); }
     }
 
     static void Skip(FakeHost h, long count)
@@ -861,6 +1019,7 @@ public sealed class ConnectionTests : IAsyncLifetime
         await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Done, "the give-up");
         Assert.Equal("unconfirmed", deliveries.Get("k")!.Outcome);
         Assert.StartsWith("too long has passed since it was first sent", deliveries.Get("k")!.Reason);
+        Assert.DoesNotContain("at the machine", deliveries.Get("k")!.Reason);
         Assert.Single(host.Sent(Ops.SessionReply));
     }
 
@@ -915,6 +1074,7 @@ public sealed class ConnectionTests : IAsyncLifetime
         gate.SetResult();
         Assert.Equal("unconfirmed", deliveries.Get("k")!.Outcome);
         Assert.StartsWith("too long has passed since it was first sent", deliveries.Get("k")!.Reason);
+        Assert.DoesNotContain("at the machine", deliveries.Get("k")!.Reason);
     }
 
     [Fact]
@@ -1017,6 +1177,7 @@ public sealed class ConnectionTests : IAsyncLifetime
         await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Done, "the give-up");
         Assert.Equal("unconfirmed", deliveries.Get("k")!.Outcome);
         Assert.StartsWith("too long has passed since it was first sent", deliveries.Get("k")!.Reason);
+        Assert.DoesNotContain("at the machine", deliveries.Get("k")!.Reason);
     }
 
     [Fact]
@@ -1283,7 +1444,7 @@ public sealed class ConnectionTests : IAsyncLifetime
 
         first.Release();
         await Wait.UntilAsync(() => first.Drained, "the first channel's pump to read its change");
-        await Task.Delay(300);
+        await Wait.UntilAsync(() => first.Handled, "the first channel's pump to have handled it");
         Assert.Equal("Newer", TestUi.Read(() => conn.Sessions.Get("a")!.Title));
     }
 
@@ -1328,7 +1489,7 @@ public sealed class ConnectionTests : IAsyncLifetime
 
         first.Release();
         await Wait.UntilAsync(() => first.Drained, "the first channel's pump to read it");
-        await Task.Delay(300);
+        await Wait.UntilAsync(() => first.Handled, "the first channel's pump to have handled it");
         Assert.False(TestUi.Read(() => conn.Sessions.Unsure));
         Assert.NotNull(TestUi.Read(() => conn.Sessions.ResumeFrom("run-1")));
     }

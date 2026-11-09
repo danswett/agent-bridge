@@ -229,10 +229,11 @@ public sealed class PaneLayoutViewModel : Observable
         if (e.PropertyName is nameof(DelegatesViewModel.Listed) or nameof(DelegatesViewModel.HasSelected) or "" or null) { Changed(); }
     }
 
-    // The strip appearing above the conversation being read moves it down, and its question's
-    // buttons with it, while the session stays the same (its agent started listing delegates): the
-    // view holds them from the pointer again (AnswerGuard, #491). Not as a session is chosen, which
-    // draws its question afresh, nor where the conversation is not being viewed.
+    // The strip appearing above the conversation being read, or going (its agent started or stopped
+    // listing delegates, or the window left three panes), moves it down or up, and its question's
+    // buttons with it, while the session stays the same: the view holds them from the pointer again
+    // (AnswerGuard, #491). Not as a session is chosen, which draws its question afresh, nor where
+    // the conversation is not being viewed.
     public event Action? ConversationShifted;
     bool stripShown;
     SessionCardViewModel? stripOf;
@@ -240,7 +241,7 @@ public sealed class PaneLayoutViewModel : Observable
     void Changed()
     {
         var strip = ShowStrip;
-        var shifted = strip && !stripShown && stripOf == main.Selected && ViewingConversation;
+        var shifted = strip != stripShown && stripOf == main.Selected && ViewingConversation;
         (stripShown, stripOf) = (strip, main.Selected);
         foreach (var p in new[]
         {

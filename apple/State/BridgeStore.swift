@@ -45,7 +45,7 @@ final class BridgeStore {
     private(set) var activeOrigin: String?
     private(set) var activeAccountID: String?
     var profile = UserDefaults.standard.string(forKey: "bridgeProfile") ?? "default"
-    var relayAddress = UserDefaults.standard.string(forKey: "bridgeRelay") ?? "https://relay.bad-duck.com"
+    var relayAddress = UserDefaults.standard.string(forKey: "bridgeRelay") ?? "https://relay.slipgates.com"
     var deviceName = UserDefaults.standard.string(forKey: "bridgeDeviceName") ?? "Apple client"
     var selectedMachine: String?
     var selectedSessionID: String?
@@ -239,7 +239,7 @@ final class BridgeStore {
             launchDrafts = [:]
             hosts.removeAll { !$0.isLocal }
             roster = []
-            remoteStatus = error.localizedDescription
+            remoteStatus = BridgeShownError.sentence(for: error)
         }
     }
 
@@ -299,7 +299,7 @@ final class BridgeStore {
                 guard token == signInGeneration else { return }
                 isSigningIn = false
                 signInCode = nil
-                signInStatus = error.localizedDescription
+                signInStatus = BridgeShownError.signInSentence(for: error)
             }
         }
     }
@@ -322,7 +322,7 @@ final class BridgeStore {
             if let activeOrigin {
                 try BridgeKeychain.remove("account:\(activeOrigin)")
             }
-        } catch { remoteStatus = error.localizedDescription; return }
+        } catch { remoteStatus = BridgeShownError.sentence(for: error); return }
         account = nil
         activeAccountID = nil
         roster = []
@@ -334,7 +334,7 @@ final class BridgeStore {
             let clearing = usageLifecycle.clear(relay: oldOrigin, account: oldAccount)
             Task {
                 do { try await clearing.value }
-                catch { cacheStatus = "Could not clear saved usage: \(error.localizedDescription)" }
+                catch { cacheStatus = "Could not clear saved usage. Try again." }
             }
         } else {
             usageLifecycle.deactivate()
@@ -389,7 +389,7 @@ final class BridgeStore {
                     guard token == generation else { return }
                     relay = nil
                     hosts.filter { !$0.isLocal }.forEach { $0.stop() }
-                    remoteStatus = "\(error.localizedDescription) Reconnecting…"
+                    remoteStatus = BridgeShownError.reconnectingStatus(for: error)
                 }
                 do { try await Task.sleep(for: .seconds(delay)) } catch { return }
                 delay = min(delay * 2, 30)
@@ -580,7 +580,7 @@ final class BridgeStore {
                 }
             } catch {
                 if token == generation {
-                    cacheStatus = error.localizedDescription
+                    cacheStatus = BridgeShownError.sentence(for: error)
                 }
             }
         }
@@ -600,7 +600,7 @@ final class BridgeStore {
                 cachedUsage = report
             } catch {
                 if token == generation {
-                    cacheStatus = error.localizedDescription
+                    cacheStatus = BridgeShownError.sentence(for: error)
                 }
             }
         }
@@ -631,7 +631,7 @@ final class BridgeStore {
                 cachedUsage = report
             } catch {
                 if token == generation {
-                    cacheStatus = error.localizedDescription
+                    cacheStatus = BridgeShownError.sentence(for: error)
                 }
             }
         }

@@ -107,12 +107,14 @@ public sealed class AgentReadinessService(
     async Task<AgentReadiness> CheckAsync(Launcher launcher, IntakeState? state, string? problem, CancellationToken ct)
     {
         var home = launcher.Tuning switch { "claude" => homes.Claude, "codex" => homes.Codex, _ => homes.Copilot };
+        var (hooks, setup) = Hooks(home, state, problem);
         var row = new AgentReadiness(launcher.Id, launcher.Label, home, null, null,
             new(ReadinessState.Missing, "Not installed. Install this CLI, then check again."),
             new(ReadinessState.Unknown, "Version not checked."),
-            Hooks(home, state, problem),
+            hooks,
             new(ReadinessState.Unknown, "CLI sign-in and entitlement have not been verified."),
-            new(ReadinessState.Unknown, "Folder trust, hook activation and a new session have not been verified."));
+            new(ReadinessState.Unknown, "Folder trust, hook activation and a new session have not been verified."),
+            HookSetup: setup);
         try
         {
             var executable = locator.Find(launcher, config.Agent(launcher.Id));
@@ -163,38 +165,48 @@ public sealed class AgentReadinessService(
         }
     }
 
-    ReadinessCheck Hooks(string home, IntakeState? state, string? problem)
+    (ReadinessCheck, HookSetupState) Hooks(string home, IntakeState? state, string? problem)
     {
-        if (readOnly() is { } why) { return new(ReadinessState.Blocked, $"Hook setup is unavailable while this host is read-only: {why}"); }
-        if (problem is not null) { return new(ReadinessState.Failed, problem); }
+        if (readOnly() is { } why) { return (new(ReadinessState.Blocked, $"Hook setup is unavailable while this host is read-only: {why}"), HookSetupState.Unknown); }
+        if (problem is not null) { return (new(ReadinessState.Failed, problem), HookSetupState.Unknown); }
         try
         {
             byte[] bytes;
             try { bytes = File.ReadAllBytes(Path.Combine(home, "agent-bridge-owner.json")); }
             catch (Exception absent) when (absent is FileNotFoundException or DirectoryNotFoundException)
             {
-                return state is null ? new(ReadinessState.NeedsAction, "Hook intake is off for this profile. Explicit setup or migration is required.")
-                    : new(ReadinessState.Unknown, "Intake is enabled; this agent's registration and ownership have not been verified.");
+                return (state is null ? new(ReadinessState.NeedsAction, "Hook intake is off for this profile. Explicit setup or migration is required.")
+                    : new(ReadinessState.Unknown, "Intake is enabled; this agent's registration and ownership have not been verified."), HookSetupState.NotSetUp);
             }
             using var doc = JsonDocument.Parse(bytes);
             var root = doc.RootElement;
+            JsonElement completed = default;
             if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("version", out var version) || version.ValueKind != JsonValueKind.Number || !version.TryGetInt32(out var number) || number != 1
                 || !root.TryGetProperty("profile", out var owner) || owner.ValueKind != JsonValueKind.String
-                || owner.GetString() is not { } path || !Path.IsPathFullyQualified(path))
+                || owner.GetString() is not { } path || !Path.IsPathFullyQualified(path)
+                || (root.TryGetProperty("setupCompleted", out completed) && completed.ValueKind is not (JsonValueKind.True or JsonValueKind.False)))
             {
-                return new(ReadinessState.Failed, "The hook ownership record is not recognized. Inspect it before repairing setup.");
+                return (new(ReadinessState.Failed, "The hook ownership record is not recognized. Inspect it before repairing setup."), HookSetupState.Unknown);
             }
             var comparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
             if (!string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)), Path.TrimEndingDirectorySeparator(Path.GetFullPath(profile)), comparison))
             {
-                return new(ReadinessState.Blocked, "Another bridge profile owns this agent's hook setup. Do not overwrite its registrations.");
+                return (new(ReadinessState.Blocked, "Another bridge profile owns this agent's hook setup. Do not overwrite its registrations."), HookSetupState.Unknown);
             }
-            return state is null ? new(ReadinessState.NeedsAction, "An owned setup record exists, but this profile's hook intake is off.")
-                : new(ReadinessState.Unknown, "An owned setup record exists; registration and activation still need verification.");
+            // Ownership is saved before registrations so a failed install stays repairable; only
+            // setupCompleted, written after every step succeeded, says setup finished. Records
+            // from before that marker existed cannot prove it and are conservatively incomplete.
+            if (completed.ValueKind != JsonValueKind.True)
+            {
+                return (state is null ? new(ReadinessState.NeedsAction, "Hook setup for this profile did not complete, and this profile's hook intake is off. Repair setup.")
+                    : new(ReadinessState.Failed, "Hook setup for this profile did not complete; its registrations may be partial. Repair setup."), HookSetupState.Incomplete);
+            }
+            return (state is null ? new(ReadinessState.NeedsAction, "An owned setup record exists, but this profile's hook intake is off.")
+                : new(ReadinessState.Unknown, "An owned setup record exists and setup completed; registration and activation still need verification."), HookSetupState.Completed);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or ArgumentException or InvalidOperationException)
         {
-            return new(ReadinessState.Failed, $"Hook ownership could not be checked: {e.Message}");
+            return (new(ReadinessState.Failed, $"Hook ownership could not be checked: {e.Message}"), HookSetupState.Unknown);
         }
     }
 

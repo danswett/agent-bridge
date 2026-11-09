@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "packageId": "Velopack",
+  "packageVersion": "1.2.161",
+  "licenseExpression": "MIT",
+  "packageSha512": "f0d030e3a34a045935ad4f3040ae332f587a222ed73ba5d81245b228eda19867c15234379d488b716562e7f22a314a8072ac232a8d4525fd92650feb96e95655",
+  "repositoryUrl": "https://github.com/velopack/velopack",
+  "repositoryCommit": "92d6a1c91716729d449034df5c50307dcce39493",
+  "noticeFile": "LICENSE",
+  "noticeSourceUrl": "https://github.com/velopack/velopack/blob/92d6a1c91716729d449034df5c50307dcce39493/LICENSE",
+  "noticeSha256": "91845db83551c877ebbb1118e0fb92e4e527290d23b995c55dcd438b3293943f"
+}

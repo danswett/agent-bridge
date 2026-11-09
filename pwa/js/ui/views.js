@@ -5,8 +5,11 @@ import { SessionCard } from './session-card.js';
 import { RowMenu } from './row-menu.js';
 import { SessionOrder } from '../session-order.js';
 import { ago } from './time.js';
+import { whileVisible } from './ticker.js';
 import { enter, leave, seen, select as showSelection, slide } from './motion.js';
 import { updateLine, lastLine, canCheck, canInstall } from '../update.js';
+import { signInDevicesLines } from '../signin-devices.js';
+import { BRAND } from '../brand.js';
 
 const LONG_PRESS_MS = 500;
 // A finger that moves further than this is scrolling, not pressing.
@@ -46,8 +49,10 @@ export class SessionListView {
   // views go (the session pane). layout() -> { inspector }: whether the inspector is a pane now.
   // viewing() -> whether the selected session's view is on screen (on a phone, only once pushed).
   // stale(hostId) -> why a machine's sessions can't be acted on now ({ reason, since }), or null.
-  constructor(container, sessions, { fetchDetail, fetchDelegate = null, machine = () => ({ name: '', show: false }), answering = () => null, order = new SessionOrder(), shows = () => true, settled = () => true, views = null, layout = () => ({ inspector: false }), viewing = () => true, stale = () => null } = {}) {
-    Object.assign(this, { container, sessions, fetchDetail, fetchDelegate, machine, answering, order, shows, settled, layout, viewing, stale });
+  // heading() -> the list's heading, where focus goes when a session that had it ends with no
+  // row left to take it.
+  constructor(container, sessions, { fetchDetail, fetchDelegate = null, machine = () => ({ name: '', show: false }), answering = () => null, order = new SessionOrder(), shows = () => true, settled = () => true, views = null, layout = () => ({ inspector: false }), viewing = () => true, stale = () => null, heading = () => null } = {}) {
+    Object.assign(this, { container, sessions, fetchDetail, fetchDelegate, machine, answering, order, shows, settled, layout, viewing, stale, heading });
     this.views = views ?? h('div');
     sessions.onChange((change) => {
       this.order.observe(change);
@@ -56,8 +61,8 @@ export class SessionListView {
       }
       this.schedule();
     });
-    // Relative times move on without any event from the host.
-    this.ticker = setInterval(() => { for (const c of this.#cards.values()) { c.refreshTimes(); } }, 15000);
+    // Relative times move on without any event from the host, while anyone can see them.
+    this.ticker = whileVisible(() => { for (const c of this.#cards.values()) { c.refreshTimes(); } }, 15000);
     // What a move did, said to a screen reader.
     this.said = h('p', { class: 'sr-only', role: 'status', 'aria-live': 'polite' });
     container.after(this.said);
@@ -112,6 +117,10 @@ export class SessionListView {
     // session updates in Most recent: the text box being typed in keeps focus and the caret.
     const focused = this.container.contains(document.activeElement) ? document.activeElement : null;
     const caret = focused && typeof focused.selectionStart === 'number' ? [focused.selectionStart, focused.selectionEnd] : null;
+    // The rows as they were, for where focus goes if the session that had it ends (below).
+    const active = document.activeElement;
+    const rowsWere = [...this.container.querySelectorAll('.session')];
+    let goneAt = null;
     const want = [];
     // Search only hides a card: one it leaves out keeps its card, with an unsent reply, files
     // attached or a question half answered, kept current for when search lets it back in.
@@ -181,6 +190,7 @@ export class SessionListView {
     while (prev ? prev.nextSibling : this.container.firstChild) { (prev ? prev.nextSibling : this.container.firstChild).remove(); }
     for (const [key, card] of this.#cards) {
       if (!live.has(key)) {
+        if (active && (card.element.contains(active) || card.view.contains(active))) { goneAt = rowsWere.indexOf(card.element); }
         card.dispose();
         card.element.remove();
         card.view.remove();
@@ -192,6 +202,7 @@ export class SessionListView {
       focused.focus({ preventScroll: true });
       if (caret) { try { focused.setSelectionRange(...caret); } catch { /* not a text control */ } }
     }
+    if (goneAt !== null) { this.#refocus(rowsWere, goneAt); }
     for (const key of arrived) {
       const el = this.#cards.get(key)?.element;
       if (el?.isConnected) { enter(el, 'listItem'); }
@@ -202,6 +213,30 @@ export class SessionListView {
     this.onRender?.(entries.length);
     // A save that failed while drawing (storage full) turned the list to Most recent: draw it so.
     if (this.order.sort !== sort) { this.schedule(); }
+  }
+
+  // A session that had focus (its row, or its view: End session pressed twice) has ended, and its
+  // focus went with it to the page, so the next Tab began at the top (§9.1 A4, #369). It goes to
+  // the row that takes its place, or the one before it if it was last, or else the list's
+  // heading. Only to one in sight: on a phone the list is under the session's view, and going
+  // back to it (sessions-page.js) gives focus back there.
+  #refocus(rowsWere, at) {
+    const doc = this.container.ownerDocument;
+    // Unless focus went somewhere real meanwhile. The list's own ancestors don't count: WebKit
+    // can give lost focus to the Sessions section.
+    const now = doc.activeElement;
+    if (now && now !== doc.body && now.isConnected && !now.contains(this.container)) { return; }
+    const shown = (r) => this.container.contains(r) && r.getClientRects().length > 0;
+    const next = rowsWere.slice(at + 1).find(shown) ?? rowsWere.slice(0, Math.max(at, 0)).reverse().find(shown);
+    let to = next?.querySelector('.row-main');
+    if (!to) {
+      const heading = this.heading();
+      if (!heading?.getClientRects().length) { return; }
+      if (!heading.hasAttribute('tabindex')) { heading.tabIndex = -1; }
+      to = heading;
+    }
+    to.focus({ preventScroll: true });
+    to.scrollIntoView?.({ block: 'nearest' });
   }
 
   #head(id, text) {
@@ -474,12 +509,13 @@ export class SessionListView {
 // keys, Home and End move between them, choosing as they go, as a SelectorBar does.
 const tabsDrawnAs = new WeakMap();
 
-export function renderMachineTabs(bar, { presence, me, current, nameOf = () => null, onSelect, controls = null, away = [] }) {
+export function renderMachineTabs(bar, { presence, me, current, nameOf = () => null, onSelect, controls = null, away = [], quiet = false }) {
   const hosts = presence.filter((d) => d.id !== me && d.kind === 'host');
   const all = current === ALL;
   const awayIds = away.filter((id) => id !== me && !hosts.some((d) => d.id === id));
   const kept = all ? awayIds : [];
-  const awayTab = (id) => ({ id, name: nameOf(id) ?? 'This machine', label: nameOf(id) ?? 'This machine', away: true });
+  // Quiet (the return grace): an away machine's tab keeps the look it had, not yet marked offline.
+  const awayTab = (id) => ({ id, name: nameOf(id) ?? 'This machine', label: nameOf(id) ?? 'This machine', away: !quiet });
   const tabs = [
     // A machine chosen while it is away counts too, so All stays offered to go back to (#269).
     ...(hosts.length + awayIds.length > 1 ? [{ id: ALL, name: 'All', label: 'All machines' }] : []),
@@ -583,6 +619,69 @@ function updateRow(updates, id, name, now) {
   };
 }
 
+// Who can sign Copilot in there (#972, ui.md §6.6), inside the row like its updates, only where the
+// machine has it on: read-only, with no Add, Remove or disabled button.
+function signInRow(info) {
+  const said = signInDevicesLines(info);
+  if (!said) { return { key: null, el: null }; }
+  return {
+    key: [said.line, said.note, said.all],
+    el: h('div', { class: 'machine-signin' },
+      h('p', { class: 'machine-signin-line', title: said.all },
+        said.line, said.all ? h('span', { class: 'sr-only' }, `: ${said.all}`) : null),
+      said.note ? h('p', { class: 'machine-signin-note' }, said.note) : null),
+  };
+}
+
+// "Diagnose this machine" inside a machine's row (#802, diagnostics.js, ui.md §6.6): the snapshot
+// shown as plain text to read, a box to say it was reviewed, and Copy only once it is. Nothing is
+// sent anywhere from here; the person pastes it where they choose. A machine whose host does not
+// offer it shows a line saying so in its place, never a button that cannot act.
+function diagnoseRow(diagnose, id, name) {
+  if (!diagnose) { return { key: null, el: null }; }
+  const offered = diagnose.offered(id);
+  if (offered === false) {
+    return { key: 'not-offered', el: h('p', { class: 'machine-diagnose-hint' }, `Can't be diagnosed from this device \u00B7 update ${BRAND.name} on ${name}`) };
+  }
+  if (offered !== true) { return { key: null, el: null }; }
+  const s = diagnose.stateOf(id);
+  const key = [s.phase, s.text, s.reviewed, s.copied, s.note];
+  const review = s.phase === 'review';
+  const box = review ? h('input', {
+    type: 'checkbox', class: 'machine-diagnose-review', id: `diagnose-review-${id}`, checked: s.reviewed,
+    onchange: (e) => diagnose.review(id, e.target.checked),
+  }) : null;
+  // Close is the report's default: Escape anywhere in it closes it. Focus moves to Diagnose first,
+  // so the redraw gives it back there.
+  const close = (e) => {
+    e.currentTarget.closest('li')?.querySelector('.machine-diagnose')?.focus();
+    diagnose.close(id);
+  };
+  return {
+    key,
+    el: h('div', {
+      class: 'machine-diagnosis',
+      onkeydown: review ? (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(e); } } : null,
+    },
+      h('div', { class: 'machine-actions' },
+        h('button', {
+          type: 'button', class: 'button secondary small machine-diagnose', 'aria-label': `Diagnose ${name}`,
+          'aria-disabled': s.phase === 'asking' ? 'true' : null,
+          onclick: () => diagnose.press(id, name),
+        }, s.phase === 'asking' ? 'Diagnosing\u2026' : review ? 'Diagnose again' : 'Diagnose'),
+        review ? h('button', { type: 'button', class: 'button secondary small machine-diagnose-close', 'aria-label': `Close ${name}'s diagnostics`, onclick: close }, 'Close') : null),
+      review ? h('pre', { class: 'machine-diagnostics plain', tabindex: '0', 'aria-label': `${name}'s diagnostics` }, s.text) : null,
+      review ? h('label', { class: 'machine-diagnose-check', for: `diagnose-review-${id}` }, box,
+        ' I have read this and it is fine to share') : null,
+      review ? h('div', { class: 'machine-actions' }, h('button', {
+        type: 'button', class: 'button secondary small machine-diagnose-copy',
+        'aria-disabled': s.reviewed ? null : 'true',
+        onclick: () => { if (s.reviewed) { diagnose.copyReviewed(id); } },
+      }, s.copied ? 'Copied' : 'Copy')) : null,
+      s.note ? h('p', { class: 'machine-error', role: 'alert' }, s.note) : null),
+  };
+}
+
 // A machine's second line (ui.md §6.1, #213): at most two facts, never a sentence or an id. Its
 // sessions, then its version, or in its place "View only" or "Discovery held", whose reasons the
 // machine gives in full are in the line's tooltip and said to a screen reader.
@@ -616,11 +715,13 @@ function machineRow({ id, name, select = null, selected = false, facts, state, o
     head, extra.length ? h('div', { class: 'machine-more' }, extra) : null);
 }
 
-export function renderMachines(list, { presence, me, current, onSelect, status = () => '', facts = null, known = null, forget = null, updates = null, now = Date.now(), allStatus = '' }) {
+export function renderMachines(list, { presence, me, current, onSelect, status = () => '', facts = null, known = null, forget = null, updates = null, signInDevices = null, diagnose = null, now = Date.now(), allStatus = '' }) {
   const hosts = presence.filter((d) => d.id !== me && d.kind === 'host');
   const all = current === ALL;
   const offline = offlineMachines({ presence, known, me });
   const rows = new Map(hosts.map((d) => [d.id, updateRow(updates, d.id, d.name, now)]));
+  const signInRows = new Map(hosts.map((d) => [d.id, signInRow(signInDevices?.(d.id))]));
+  const diagnoses = new Map(hosts.map((d) => [d.id, diagnoseRow(diagnose, d.id, d.name)]));
   const updating = hosts.filter((d) => rows.get(d.id).el);
   // A machine's facts, from facts(id) where given, else its status line as one fact.
   const lineOf = (id) => {
@@ -632,7 +733,7 @@ export function renderMachines(list, { presence, me, current, onSelect, status =
   // Drawn again only when something in it changes. It is asked to redraw on every session
   // update of every machine shown, and a button replaced between a tap's touch and its release
   // takes no click: a tap at startup, with every machine sending its sessions, was lost.
-  const key = JSON.stringify([current, allStatus, hosts.map((d) => [d.id, d.name, lines.get(d.id).key, rows.get(d.id).key]),
+  const key = JSON.stringify([current, allStatus, hosts.map((d) => [d.id, d.name, lines.get(d.id).key, rows.get(d.id).key, signInRows.get(d.id).key, diagnoses.get(d.id).key]),
     // lastSeen itself, not only how it reads: Forget sends it, to tell a machine that came back.
     offline.map((k) => [k.id, k.name, k.lastSeen, ago(k.lastSeen, now), forget?.stateOf(k.id) ?? null]), !!forget]);
   if (drawnAs.get(list) === key) { return hosts.length; }
@@ -640,7 +741,7 @@ export function renderMachines(list, { presence, me, current, onSelect, status =
   // Every change redraws the list, so the button that had focus is replaced: Forget's first
   // press redraws it armed, and a keyboard's second press must land on the new one.
   const active = list.ownerDocument?.activeElement;
-  const had = active && list.contains(active) ? { id: active.closest('li')?.dataset.deviceId, cls: ['machine-forget', 'machine-button', 'machine-update-check', 'machine-update-install', 'machine-check-all'].find((c) => active.classList.contains(c)) } : null;
+  const had = active && list.contains(active) ? { id: active.closest('li')?.dataset.deviceId, cls: ['machine-forget', 'machine-button', 'machine-update-check', 'machine-update-install', 'machine-check-all', 'machine-diagnose', 'machine-diagnose-close', 'machine-diagnose-review', 'machine-diagnose-copy', 'machine-diagnostics'].find((c) => active.classList.contains(c)) } : null;
   const everyMachine = hosts.length > 1 ? [machineRow({
     id: ALL, name: 'All machines', select: () => onSelect(ALL), selected: all,
     facts: h('span', { class: 'machine-status' }, allStatus || `${hosts.length} machines`),
@@ -650,7 +751,7 @@ export function renderMachines(list, { presence, me, current, onSelect, status =
     const selected = d.id === current || (all && hosts.length === 1);
     return machineRow({
       id: d.id, name: d.name, select: () => onSelect(d.id), selected,
-      facts: lines.get(d.id).el, state: selected ? 'Viewing' : 'Online', more: [rows.get(d.id).el],
+      facts: lines.get(d.id).el, state: selected ? 'Viewing' : 'Online', more: [rows.get(d.id).el, signInRows.get(d.id).el, diagnoses.get(d.id).el],
     });
   }), ...offline.map((k) => {
     const name = typeof k.name === 'string' && k.name ? k.name : 'unnamed';

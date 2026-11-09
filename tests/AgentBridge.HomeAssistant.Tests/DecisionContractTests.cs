@@ -149,9 +149,11 @@ public sealed class DecisionContractTests
             // answer the prompt refuses comes back as not sent.
             Assert.Equal(name == "manyMulti" || e.AllowsEmpty, a.AllowsEmpty);
         }
-        // "Other" is offered only where the host can deliver words: a lone choice. The daemon
-        // offered it beside a lone Yes/No too, where nothing types the words in.
-        Assert.Equal(name == "single", plan.TakesTypedAnswer);
+        // "Other" is offered only where the host can deliver words. A lone choice's goes into a
+        // box a live Copilot session draws apart from the form, which the host cannot type into
+        // yet (#510; #908 restores it), so none is offered for now. The daemon offered it beside a
+        // lone Yes/No too, where nothing types the words in.
+        Assert.False(plan.TakesTypedAnswer);
         Assert.Equal(q["takesTypedAnswer"]!.GetValue<bool>(), name is "single" or "boolean");
     }
 
@@ -181,7 +183,7 @@ public sealed class DecisionContractTests
     {
         var approval = new Question
         {
-            Id = "q", Kind = QuestionKind.Approval, Message = "Codex wants to run:\n\ngit push", AskedAt = DateTimeOffset.UnixEpoch,
+            Id = "q", Kind = QuestionKind.Approval, Message = "Allow **Bash**?\n\n```\ngit push\n```", AskedAt = DateTimeOffset.UnixEpoch,
             Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = QuestionMapper.ApprovalOptions, Required = true }],
         };
         var plan = HaDecision.Plan(approval, AgentKind.Codex);
@@ -245,6 +247,27 @@ public sealed class DecisionContractTests
         Assert.True(plan.AnswerOnTap);
         Assert.StartsWith($"_{ShownText.HiddenNote}_\n\n", plan.Question, StringComparison.Ordinal);
         Assert.Equal(approval.Message, Source(plan.Question));
+    }
+
+    // Copilot asks a permission for each of a batch of parallel tool calls and shows them one at a
+    // time (#690): the card says how many wait above the one it shows, and answers only that one.
+    [Fact]
+    public void A_permission_shown_while_others_wait_says_how_many_above_it_and_is_still_answered_on_a_tap()
+    {
+        var approval = new Question
+        {
+            Id = "r1#d", Kind = QuestionKind.Approval, Message = "Allow **read**?\n\n```\nC:\\notes\\a.md\n```", AskedAt = DateTimeOffset.UnixEpoch, Waiting = 3,
+            Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = QuestionMapper.ApprovalOptions, Required = true }],
+        };
+
+        var plan = HaDecision.Plan(approval, AgentKind.Copilot);
+        var alone = HaDecision.Plan(approval with { Waiting = null }, AgentKind.Copilot);
+
+        Assert.True(plan.AnswerOnTap);
+        Assert.Equal("r1#d", plan.QuestionId);
+        Assert.StartsWith("_1 of 3 permissions waiting_\n\n", plan.Question, StringComparison.Ordinal);
+        Assert.Equal(approval.Message, Source(plan.Question));
+        Assert.DoesNotContain("permissions waiting", alone.Question, StringComparison.Ordinal);
     }
 
     // The agent's own words, before a host escapes them (#212), drawn as Markdown: a line of backticks
@@ -337,6 +360,87 @@ public sealed class DecisionContractTests
         if (message is not null) { Assert.Equal(message, body); }
     }
 
+    // A Codex approval as the host builds it from its hook's marker (#209): the whole command is
+    // answered on the card's tap, and a marker holding only the hook's 300-character preview is
+    // answered in the terminal.
+    [Fact]
+    public void A_Codex_approval_carrying_its_whole_command_is_tapped_on_the_card_and_a_preview_only_one_goes_to_the_terminal()
+    {
+        var command = "git push origin main && " + new string('x', 400);
+        var whole = QuestionMapper.CodexApproval("node-1", "Bash", command, false, "Needs approval: " + command[..297] + "...", DateTimeOffset.UnixEpoch, atMachine: false);
+        var preview = QuestionMapper.CodexApproval("node-2", null, null, false, "Needs approval: " + command[..297] + "...", DateTimeOffset.UnixEpoch, atMachine: false);
+
+        var tapped = HaDecision.Plan(whole, AgentKind.Codex);
+        Assert.True(tapped.AnswerOnTap);
+        Assert.Contains($"```\n{command}\n```", tapped.Question);
+        Assert.True(HaDecision.Plan(preview, AgentKind.Codex).TerminalOnly);
+    }
+
+    // The security review's commands (tests/fixtures/approvals/codex-commands.json, #209): as a host
+    // sends each, the card shows it whole in a block and takes the tap; as an older host sent it
+    // (Markdown prose, drawn as a link's words or an image), the card shows its source and sends the
+    // person to the terminal.
+    public static TheoryData<string> CodexCommands => [.. CodexCases().Select(c => (string)c["name"]!)];
+
+    static IEnumerable<JsonObject> CodexCases() =>
+        JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "approvals", "codex-commands.json")))!["cases"]!
+            .AsArray().Select(c => c!.AsObject());
+
+    [Theory]
+    [MemberData(nameof(CodexCommands))]
+    public void A_codex_command_Markdown_would_draw_as_a_link_or_image_is_tapped_only_as_a_whole_block_and_an_older_hosts_prose_goes_to_the_terminal(string name)
+    {
+        var c = CodexCases().Single(c => (string)c["name"]! == name);
+        static Question Approval(string message) => new()
+        {
+            Id = "q", Kind = QuestionKind.Approval, Message = message, AskedAt = DateTimeOffset.UnixEpoch,
+            Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = QuestionMapper.ApprovalOptions, Required = true }],
+        };
+
+        var sent = HaDecision.Plan(Approval((string)c["message"]!), AgentKind.Codex);
+        Assert.True(sent.AnswerOnTap);
+        Assert.Equal((string)c["message"]!, Source(sent.Question));
+
+        var legacy = HaDecision.Plan(Approval((string)c["legacy"]!), AgentKind.Codex);
+        Assert.True(legacy.TerminalOnly);
+        Assert.False(legacy.AnswerOnTap);
+        Assert.Empty(legacy.Choices);
+        Assert.StartsWith($"```\n{(string)c["legacy"]!}\n```\n\n", legacy.Question);
+        Assert.Contains("answered in the terminal", legacy.Question);
+    }
+
+    // An older host sent a Codex approval as "Needs approval: " and the hook's 300-character preview,
+    // cut to 297 and "..." with nothing marking it truncated (codex-commands.json, olderHostPreview).
+    // Nothing in it is Markdown, so it draws as written, yet the curl past the cut is what Approve
+    // would run as well (#209 security review).
+    [Fact]
+    public void An_older_hosts_Codex_preview_cut_short_of_what_runs_is_answered_in_the_terminal_as_its_source()
+    {
+        var c = JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "approvals", "codex-commands.json")))!["olderHostPreview"]!;
+        static Question Approval(string message) => new()
+        {
+            Id = "q", Kind = QuestionKind.Approval, Message = message, AskedAt = DateTimeOffset.UnixEpoch,
+            Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = QuestionMapper.ApprovalOptions, Required = true }],
+        };
+
+        var legacy = HaDecision.Plan(Approval((string)c["legacy"]!), AgentKind.Codex);
+        Assert.True(legacy.TerminalOnly);
+        Assert.False(legacy.AnswerOnTap);
+        Assert.Empty(legacy.Choices);
+        Assert.StartsWith($"```\n{(string)c["legacy"]!}\n```\n\n", legacy.Question);
+
+        var session = new Session
+        {
+            Id = "s1", Agent = AgentKind.Codex, Status = SessionStatus.Waiting, UpdatedAt = DateTimeOffset.UnixEpoch, StatusSince = DateTimeOffset.UnixEpoch, Activity = new Activity(),
+            Subagents = [new Subagent { Id = "a1", Kind = SubagentKind.Background, Name = "Builder", Status = SubagentStatus.Waiting }],
+        };
+        Assert.True(HaDecision.Plan(Approval((string)c["legacy"]!) with { Agent = "a1" }, session).TerminalOnly);
+
+        var sent = HaDecision.Plan(Approval((string)c["message"]!), AgentKind.Codex);
+        Assert.True(sent.AnswerOnTap);
+        Assert.Equal((string)c["message"]!, Source(sent.Question));
+    }
+
     [Fact]
     public void A_delegate_whose_name_needs_neutralising_leaves_an_ordinary_approval_answerable_on_the_card()
     {
@@ -396,6 +500,22 @@ public sealed class DecisionContractTests
         Assert.Contains(HaDecision.TruncatedNote, plan.Question);
         AssertSource(plan.Question.Replace(HaDecision.TruncatedNote, ""));
     }
+
+    [Fact]
+    public void An_approval_the_host_cut_still_says_part_is_missing_when_a_misleading_reference_holds_it_and_it_fits()
+    {
+        var approval = new Question
+        {
+            Id = "q", Kind = QuestionKind.Approval, AskedAt = DateTimeOffset.UnixEpoch, Truncated = true,
+            Message = "Allow **shell**?\n\n````\nGet-ChildItem&ZeroWidthSpace; | Remove-It",
+            Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = QuestionMapper.ApprovalOptions, Required = true }],
+        };
+
+        var plan = HaDecision.Plan(approval, AgentKind.Copilot);
+
+        Assert.True(plan.TerminalOnly);
+        Assert.Contains(HaDecision.TruncatedNote, plan.Question, StringComparison.Ordinal);
+    }
     // A delegate's name leads its question's card as Markdown. Its own text must not be able to
     // open a fence around the approval below it (so drawing the command as prose while Approve
     // stays), and a name that is drawn other than as it is holds the approval to the terminal.
@@ -447,7 +567,7 @@ public sealed class DecisionContractTests
         var command = "git push --force " + new string('x', HaDecision.QuestionMaxChars);
         var approval = new Question
         {
-            Id = "q", Kind = QuestionKind.Approval, Message = "Codex wants to run:\n\n" + command, AskedAt = DateTimeOffset.UnixEpoch,
+            Id = "q", Kind = QuestionKind.Approval, Message = "Allow **Bash**?\n\n```\n" + command + "\n```", AskedAt = DateTimeOffset.UnixEpoch,
             Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = QuestionMapper.ApprovalOptions, Required = true }],
         };
         var plan = HaDecision.Plan(approval, AgentKind.Codex);
@@ -474,5 +594,34 @@ public sealed class DecisionContractTests
         Assert.Equal(Root["mixedHint"]!.GetValue<string>(), HaDecision.MixedFormHint("Anything else?"));
         Assert.Equal(HaContract.ReplyMaxChars, Root["constants"]!["replyMaxChars"]!.GetValue<int>());
         Assert.Equal(HaDecision.QuestionMaxChars, Root["constants"]!["questionMaxChars"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void An_approval_the_host_escaped_anything_in_offers_Deny_only_and_says_where_to_approve_it()
+    {
+        // Approve on it takes a person's signed confirmation from an approved device (#803), which
+        // Home Assistant, whose users include agents, cannot give.
+        var q = QuestionMapper.Approval("r1#0011223344556677", "Allow **shell**?\n\n```\necho \u202E safe\n```", DateTimeOffset.UnixEpoch);
+        Assert.NotNull(q.Escaped);
+
+        var plan = HaDecision.Plan(q, AgentKind.Copilot);
+
+        Assert.False(plan.TerminalOnly);
+        Assert.Equal(["Deny"], plan.Choices);
+        Assert.EndsWith(HaDecision.DenyOnlyNote, plan.Question);
+        Assert.Equal(["Approve", "Deny"], HaDecision.Plan(QuestionMapper.Approval("r2#0011223344556677", "Allow **shell**?\n\n```\necho safe\n```", DateTimeOffset.UnixEpoch), AgentKind.Copilot).Choices);
+    }
+
+    [Fact]
+    public void An_approval_with_too_many_escapes_to_mark_offers_Deny_and_sends_Approve_to_the_machine_not_the_app()
+    {
+        var q = QuestionMapper.Approval("r1#0011223344556677", "Allow **shell**?\n\n```\necho " + string.Concat(Enumerable.Repeat("\u200B", EscapedApproval.MaxMarks + 1)) + "\n```", DateTimeOffset.UnixEpoch);
+        Assert.Null(q.Truncated);
+
+        var plan = HaDecision.Plan(q, AgentKind.Copilot);
+
+        Assert.False(plan.TerminalOnly);
+        Assert.Equal(["Deny"], plan.Choices);
+        Assert.EndsWith(HaDecision.AtMachineNote, plan.Question);
     }
 }

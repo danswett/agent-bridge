@@ -1,6 +1,7 @@
 // The app in demo mode (?demo=1): a simulated host speaking the real protocol to the real
 // client, so these tests cover event handling through to what is on screen.
 import { test, expect } from '@playwright/test';
+import { BRAND } from '../js/brand.js';
 import { open, row, view } from './nav.mjs';
 import { readFileSync } from 'node:fs';
 
@@ -52,7 +53,7 @@ test('demo mode shows every session from the worked example, with every field', 
   await expect(copilot.locator('.facts')).toContainText('detached@5e59309');
   await expect(copilot.locator('.facts')).toContainText('claude-opus-5.5');
   await expect(copilot.locator('.status-text')).toHaveText('Waiting on you');
-  await expect(copilot.locator('.since')).toHaveText(/^for /);
+  await expect(copilot.locator('.fact-since dd')).toHaveText(/^for /);
   await expect(copilot.locator('.facts')).toContainText('412 turns');
   await expect(copilot.locator('.facts')).toContainText('1 compaction');
   await expect(copilot.locator('.facts')).toContainText('pid 39844');
@@ -75,7 +76,7 @@ test('demo mode shows every session from the worked example, with every field', 
   await expect(q.locator('.field[data-field="urgent"] .opt.chosen .label')).toHaveText('No');
   await expect(q.locator('.field[data-field="notes"] .answer-box')).toHaveText('Free text');
   await expect(q.locator('.field[data-field="count"] .answer-box')).toHaveText('A number');
-  await expect(q.locator('.read-only-why')).toHaveText("This machine doesn't take answers from the phone yet. Answer at the machine on Demo machine.");
+  await expect(q.locator('.read-only-why')).toHaveText(`This machine doesn't take answers from ${BRAND.name} yet. Answer at the machine on Demo machine.`);
   // Read-only: nothing in the question can be operated.
   await expect(q.locator('button, input, select, textarea')).toHaveCount(0);
 
@@ -91,13 +92,13 @@ test('demo mode shows every session from the worked example, with every field', 
   await expect(codex).toHaveAttribute('data-status', 'idle');
   await expect(codex.locator('.status-text')).toHaveText('Idle');
   await expect(codex.locator('.tool-line')).toBeHidden();
-  await expect(codex.locator('.since')).toHaveText('');
+  await expect(codex.locator('.fact-since')).toHaveCount(0);
 
   const delegating = card(page, DELEGATING);
   await expect(delegating).toHaveAttribute('data-status', 'idle');
   await expect(delegating).toHaveAttribute('data-view', 'delegating');
   await expect(delegating.locator('.status-text')).toHaveText('Delegating to 2 agents · details not reported');
-  await expect(delegating.locator('.since')).toHaveText(/^for /);
+  await expect(delegating.locator('.fact-since dd')).toHaveText(/^for /);
   await expect(delegating.locator('.fact-background dd')).toHaveText('2 background agents · 1 background command');
   await expect(delegating.locator('.fact-turns dd')).toHaveText('5 turns');
 
@@ -116,7 +117,7 @@ test('a machine where agent-ha-bridge runs is shown read-only with its reason, a
   await expect(status.locator('.machine-flag .sr-only')).toHaveText(`: ${reason}`);
   await expect(status).toHaveAttribute('title', `4 sessions · 0.1.0 (dev) · view only: ${reason}`);
   const q = card(page, COPILOT).locator('.question');
-  await expect(q.locator('.read-only-why')).toHaveText(`This machine is read-only from the phone: ${reason}.`);
+  await expect(q.locator('.read-only-why')).toHaveText(`This machine is read-only from ${BRAND.name}: ${reason}.`);
   await expect(q.locator('button, input, select, textarea')).toHaveCount(0);
   await expect(page.locator('form.reply')).toHaveCount(0);
   await expect(page.locator('.end-session')).toHaveCount(0);
@@ -128,7 +129,38 @@ test('a machine where agent-ha-bridge runs is shown read-only with its reason, a
   const prompt = (await page.evaluate((id) => window.agentBridgeDemo.host.get(id), COPILOT)).question;
   await upsert(page, COPILOT, { question: { ...prompt, id: 'q-at-machine', answerAtMachine: true }, updatedAt: later() });
   await expect(q.locator('.read-only-why')).toHaveText('This prompt can only be answered at the machine on Demo machine.');
-  await expect(q.locator('.read-only-machine')).toHaveText(`This machine is read-only from the phone: ${reason}.`);
+  await expect(q.locator('.read-only-machine')).toHaveText(`This machine is read-only from ${BRAND.name}: ${reason}.`);
+});
+
+test('only the host shape reason adds a quiet explanation after the at-machine line, including same-id updates', async ({ page }) => {
+  await openDemo(page);
+  const prompt = {
+    id: 'legacy-887', kind: 'form', message: 'Keep the old witness format?', askedAt: later(), answerAtMachine: true,
+    fields: [{ name: 'answer', type: 'choice', options: [{ value: 'Yes' }, { value: 'No' }], allowOther: true, required: true }],
+  };
+  await upsert(page, COPILOT, { question: prompt, updatedAt: later() });
+  const q = (await open(page, COPILOT)).locator('.question');
+  const rowStatus = await row(page, COPILOT).locator('.row-status').innerText();
+  for (const reason of [null, 'future', 'shape', null]) {
+    await upsert(page, COPILOT, { question: { ...prompt, answerAtMachineReason: reason }, updatedAt: later() });
+    await expect(q.locator('button, input, select, textarea, .fields')).toHaveCount(0);
+    await expect(q.locator('.read-only-why')).toHaveText(reason === 'shape'
+      ? 'Answer at the machine · Demo machine' : 'This prompt can only be answered at the machine on Demo machine.');
+    await expect(q.locator('.at-machine-explanation')).toHaveCount(reason === 'shape' ? 1 : 0);
+    if (reason === 'shape') {
+      const line = q.locator('.at-machine-explanation');
+      await expect(line).toHaveText('This kind of question can only be answered at the machine.');
+      await expect(q).toMatchAriaSnapshot(`
+        - heading "Main agent asks" [level=4]
+        - paragraph: Keep the old witness format?
+        - note: Answer at the machine · Demo machine
+        - paragraph: This kind of question can only be answered at the machine.
+      `);
+      expect(await line.evaluate((e) => e.closest('[aria-live], [role="alert"], [role="status"]'))).toBeNull();
+      expect(await colourOf(line)).toBe(await role(page, 'needs-text'));
+    }
+    await expect(row(page, COPILOT).locator('.row-status')).toHaveText(rowStatus);
+  }
 });
 
 // The status glyph and words (docs/design/ui.md §2), which replaced the coloured edges and glows.
@@ -187,7 +219,7 @@ test('an idle session still waiting on background work is delegating: its own gl
   await expect(c).toHaveAttribute('data-view', 'idle');
   await expect(c.locator('.status-text')).toHaveText('Idle');
   await expect(glyphOf(page, DELEGATING)).toHaveAttribute('data-glyph', 'idle');
-  await expect(c.locator('.since')).toHaveText('');
+  await expect(c.locator('.fact-since')).toHaveCount(0);
 
   // A session working on its own turn is working, whatever it has in the background.
   await upsert(page, DELEGATING, { status: 'working', statusSince: later(), updatedAt: later(), activity: { background: { agents: 1, shells: 0 } } });
@@ -275,6 +307,34 @@ test('every glyph is named with its state, as a row reads: title, status, machin
   // The tool's words are its name and summary, so its glyph says whether it is running, done or failed.
   await open(page, CLAUDE);
   await expect(card(page, CLAUDE).locator('.tool-line .glyph')).toHaveAccessibleName('running');
+});
+
+// ui.md §9.1 A1 (#365): the words a row draws, in the order drawn and joined with commas (its
+// title, its second line's facts, its age or the new activity dot in its place), then what else
+// its glyph's name says.
+test('a session row is named for the words it draws, in the order drawn, then for what else its glyph says', async ({ page }) => {
+  await openDemo(page);
+  const named = (id) => row(page, id).locator('.row-main');
+  await expect(named(COPILOT)).toHaveAccessibleName(/^Plan Migration to Windows App, Waiting on you, danswett\/agent-ha-bridge, \d+d ago, Demo machine$/);
+  await expect(named(DELEGATING)).toHaveAccessibleName(/^Land the P1 slices, Delegating to 2 agents, danswett\/agent-bridge, \d+d ago, details not reported, Demo machine$/);
+  // Driven: "Driven by an agent" in the status's place; and, updated while not open, the dot in the age's.
+  await upsert(page, CODEX, { driver: 'agent', updatedAt: later() });
+  await expect(named(CODEX)).toHaveAccessibleName('Fix flaky test, Driven by an agent, New activity, idle, Demo machine');
+  // With every machine shown, the row draws its machine where the workspace was.
+  await openDemo(page, '&machines=3');
+  await expect(named(COPILOT)).toHaveAccessibleName(/^Plan Migration to Windows App, Waiting on you, Demo machine, \d+d ago$/);
+});
+
+// Rules 10-12 over rule 7 (#800): the row draws what is wrong, not "Driven by an agent", so its
+// name starts with that too, and says it is driven only after its age (A1).
+test('a driven session that needs sign-in or is not responding is named for the status its row draws, with its driver after its age', async ({ page }) => {
+  await openDemo(page, '&signin=1');
+  const named = (id) => row(page, id).locator('.row-main');
+  await upsert(page, 'signin-1', { driver: 'agent', driverPrincipal: 'homeassistant:demo' });
+  await expect(row(page, 'signin-1').locator('.row-status')).toHaveText('Needs sign-in');
+  await expect(named('signin-1')).toHaveAccessibleName(/^Coordinate the Shiproom, Needs sign-in, danswett\/agent-bridge, [^,]+, Copilot · @demo-user, driven by an agent, Demo machine$/);
+  await expect(row(page, 'stalled').locator('.row-status')).toHaveText('Not responding');
+  await expect(named('stalled')).toHaveAccessibleName(/^Re-run the flaky suite, Not responding, [^,]+, since [^,]+, driven by an agent, Demo machine$/);
 });
 
 test('the latest response is rendered as Markdown', async ({ page }) => {
@@ -514,10 +574,10 @@ test.describe('installed', () => {
   test('the service worker controls only the app path', async ({ page }) => {
     await openDemo(page);
     const scope = await page.evaluate(async () => (await navigator.serviceWorker.ready).scope);
-    expect(new URL(scope).pathname).toBe('/agent-bridge/app/');
+    expect(new URL(scope).pathname).toBe('/');
   });
 
-  test('an app whose new releases keep failing to install says so, and goes on with the one it has', async ({ page }) => {
+  test('an app whose new releases keep failing to install says so after a grace, and goes on with the one it has', async ({ page }) => {
     await openDemo(page);
     await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
     await expect(page.locator('#stuck-banner')).toBeHidden();
@@ -533,7 +593,9 @@ test.describe('installed', () => {
     await page.evaluate((r) => localStorage.setItem('agent-bridge.app.installFailures', JSON.stringify({ release: r, failures: 3 })), active);
     await page.reload();
     await page.waitForSelector('html[data-demo-ready]');
-    await expect(page.locator('#stuck-banner')).toBeVisible();
+    // Only a lasting state gets a banner (ui.md §7, #1064): none until it has stood three seconds.
+    await expect(page.locator('#stuck-banner')).toBeHidden();
+    await expect(page.locator('#stuck-banner')).toBeVisible({ timeout: 10000 });
     await expect(page.locator('#stuck-banner')).toContainText("A new version of the app keeps failing to install. You're still on the version you had.");
     await expect(page.locator('#stuck-banner .button.secondary')).toHaveText('Try again');
     // Said through the live region already on the page, which one unhidden with its words is not.
@@ -565,4 +627,54 @@ test('a long unbroken path never makes a row or a session wider than a phone scr
   widths = await rows();
   expect(widths.page).toBeLessThanOrEqual(widths.view);
   for (const right of widths.cards) expect(right).toBeLessThanOrEqual(widths.view);
+});
+
+// A13 (#373): chrome's words aren't selected by a press, a long press or a double tap, and
+// everything a person may want to copy still is. Whether a part is selectable is the first
+// user-select set on it or around it, as the browser uses it.
+test('chrome\'s words are not selectable, and the conversation, code, a question and every field are', async ({ page }) => {
+  await openDemo(page);
+  await open(page, CODEX);
+  await upsert(page, CODEX, { updatedAt: later(), activity: { response: 'Run this once:\n\n```\nnpm run build\n```' } });
+  const v = card(page, CODEX);
+  await expect(v.locator('.response pre code')).toHaveText('npm run build');
+  const select = (locator) => locator.first().evaluate((el) => {
+    for (let e = el; e; e = e.parentElement) {
+      const s = getComputedStyle(e);
+      const used = s.userSelect || s.webkitUserSelect;
+      if (used && used !== 'auto') { return used; }
+    }
+    return 'auto';
+  });
+  const chrome = {
+    'a row\'s title': row(page, CODEX).locator('.row-title'),
+    'a row\'s facts': row(page, CODEX).locator('.row-facts'),
+    'the session\'s title': v.locator('.session-title'),
+    'the session\'s status line': v.locator('.status-line'),
+    'a tab': v.locator('.view-tab'),
+    'a button\'s words': v.locator('.end-session button'),
+    'the page\'s title': page.locator('#sessions-h'),
+    'the app bar\'s title': page.locator('.brand-name'),
+    'the navigation': page.locator('.nav-item .nav-label'),
+    'a banner\'s words': page.locator('#demo-banner span'),
+  };
+  for (const [name, locator] of Object.entries(chrome)) { expect(await select(locator), name).toBe('none'); }
+  const content = {
+    'the response': v.locator('.response p'),
+    'code': v.locator('.response pre code'),
+    'a question': card(page, COPILOT).locator('.question-message'),
+    'the reply box': v.getByRole('textbox', { name: 'Reply' }),
+    'search': page.locator('#search'),
+  };
+  for (const [name, locator] of Object.entries(content)) { expect(await select(locator), name).not.toBe('none'); }
+  // As a double tap or a double click finds them: the title's words aren't taken, the response's
+  // are. Each on its first word: a block's middle may be past its words.
+  const picked = async (locator) => {
+    await page.evaluate(() => getSelection().removeAllRanges());
+    const box = await locator.first().boundingBox();
+    await locator.first().dblclick({ position: { x: 8, y: box.height / 2 } });
+    return page.evaluate(() => getSelection().toString().trim());
+  };
+  expect(await picked(v.locator('.session-title'))).toBe('');
+  expect(await picked(v.locator('.response p'))).not.toBe('');
 });

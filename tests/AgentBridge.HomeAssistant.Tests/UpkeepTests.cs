@@ -553,7 +553,7 @@ public sealed class UpkeepTests : IDisposable
     [Fact]
     public async Task An_approval_tapped_while_its_question_is_armed_again_is_delivered_not_set_waiting_over()
     {
-        var question = new Question { Id = "q1", Kind = QuestionKind.Approval, Message = "rm -rf build", AskedAt = FakeSessions.T0 };
+        var question = new Question { Id = "q1", Kind = QuestionKind.Approval, Message = "Allow **Bash**?\n\n```\nrm -rf build\n```", AskedAt = FakeSessions.T0 };
         sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { Agent = AgentKind.Codex, Question = question });
         await using var c = Connector(answers: true);
         await Run(c, 90);
@@ -707,7 +707,7 @@ public sealed class UpkeepTests : IDisposable
     [Fact]
     public async Task An_approval_tapped_on_a_restored_card_is_not_armed_over_while_its_selector_is_unavailable()
     {
-        var question = new Question { Id = "q1", Kind = QuestionKind.Approval, Message = "rm -rf build", AskedAt = FakeSessions.T0 };
+        var question = new Question { Id = "q1", Kind = QuestionKind.Approval, Message = "Allow **Bash**?\n\n```\nrm -rf build\n```", AskedAt = FakeSessions.T0 };
         sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { Agent = AgentKind.Codex, Question = question });
         await using var c = Connector(answers: true);
         await Run(c, 70);
@@ -910,7 +910,7 @@ public sealed class UpkeepTests : IDisposable
             Agent = AgentKind.Codex,
             Question = new Question
             {
-                Id = "a1", Kind = QuestionKind.Approval, Message = "Codex wants to run git push", AskedAt = FakeSessions.T0,
+                Id = "a1", Kind = QuestionKind.Approval, Message = "Allow **Bash**?\n\n```\ngit push\n```", AskedAt = FakeSessions.T0,
                 Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")], Required = true }],
             },
         });
@@ -1004,6 +1004,8 @@ public sealed class UpkeepTests : IDisposable
         // topics and the sessions its retained list names.
         var listed = JsonNode.Parse(ha.Retained[HaContract.GlobalAttributesTopic(Slug)])!["sessions"]!.AsArray().Select(s => s!["node"]!.GetValue<string>()).ToList();
         var forget = HaContract.ForgetTopics(Slug, listed).ToHashSet(StringComparer.Ordinal);
+        // launch_options is beyond agent-ha-bridge's list (#1142), so the writer's X does not name it.
+        forget.UnionWith([HaContract.LaunchOptionsConfig(Slug, "").Topic, HaContract.LaunchOptionsTopic(Slug)]);
         Assert.All(ha.Retained.Keys, topic => Assert.Contains(topic, forget));
 
         // So the X, pressed, leaves nothing of the machine but the switch, which is Home

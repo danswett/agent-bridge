@@ -8,7 +8,7 @@ using Xunit;
 // moved in one implementation fails in the other.
 public class ProtocolVectorTests
 {
-    static readonly string[] Names = ["sessions.json", "attachments.json", "push.json", "launch.json", "transfer.json", "update.json", "usage.json"];
+    static readonly string[] Names = ["sessions.json", "attachments.json", "push.json", "launch.json", "transfer.json", "update.json", "manage.json", "usage.json", "history.json", "diagnostics.json", "agent-principals.json"];
 
     static IEnumerable<(string File, string Record, JsonObject Entry, JsonObject Vector)> All(string kind) =>
         from file in Names
@@ -40,10 +40,10 @@ public class ProtocolVectorTests
     static Type TypeOf(string record) =>
         typeof(Session).Assembly.GetType($"AgentBridge.Protocol.{record}") ?? throw new InvalidOperationException($"no record is called {record}");
 
-    // A record a host sends is read as a client reads it (v1-sessions.md "Malformed records").
-    static object Read(string file, JsonObject entry, JsonNode json, string record) => ProtocolVectors.ReadLeniently(entry["direction"]!.GetValue<string>(), file)
-        ? Received.Read(JsonSerializer.SerializeToElement(json), TypeOf(record))
-        : json.Deserialize(TypeOf(record), ProtocolJson.Options)!;
+    // A record is read as its reader reads it: a host's as a client does (v1-sessions.md
+    // "Malformed records"), the journal's by JournalCodec (ProtocolVectors.Read).
+    static object Read(string file, JsonObject entry, JsonNode json, string record) =>
+        ProtocolVectors.Read(entry["direction"]!.GetValue<string>(), file, TypeOf(record), json);
 
     [Fact]
     public void The_committed_vectors_are_the_ones_the_records_generate()
@@ -60,7 +60,7 @@ public class ProtocolVectorTests
         var (entry, vector, context) = Find(file, record, "valid", name);
         var value = Read(file, entry, vector["json"]!, record);
 
-        var back = JsonSerializer.SerializeToNode(value, TypeOf(record), ProtocolJson.Options);
+        var back = ProtocolVectors.Write(value, TypeOf(record));
         var expected = vector["reads"] ?? vector["json"];
         Assert.True(JsonNode.DeepEquals(expected, back), $"{record}/{name} reads back as {back?.ToJsonString()}");
         if (entry["check"]?.GetValue<string>() is { } check) { Assert.Null(VectorChecks.Run(check, value, context)); }

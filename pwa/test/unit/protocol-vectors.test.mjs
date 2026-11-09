@@ -11,14 +11,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import {
-  readActivity, readAnswerResult, readAttachmentState, readBackground, readDiscoveryHeld, readHello, readOwn,
+  readActivity, readAnswerResult, readAttachmentState, readBackground, readDiscoveryHeld, readHello, readOwn, readProgress,
   readQuestion, readSession, readSource, readStopResult, readSubagent, readTool,
 } from '../../js/protocol.js';
 import { checkAnswer } from '../../js/answers.js';
 import { checkReply } from '../../js/replies.js';
 import { checkLaunch, readLaunchOptions, readLaunchResult, readTrustQuestion, readTrustResult } from '../../js/launch.js';
 import { readUpdateCommandResult, readUpdateState } from '../../js/update.js';
+import { readSignInDevices } from '../../js/signin-devices.js';
 import { readUsage } from '../../js/usage.js';
+import { readDiagnostics } from '../../js/diagnostics.js';
 import { HostClient } from '../../js/host-client.js';
 import { PatchError, applyPatch, readPatch } from '../../js/session-patch.js';
 import { SessionsStore } from '../../js/sessions-store.js';
@@ -41,7 +43,15 @@ const SIGNED = 'signed-command.json';
 const PATCHES = 'session-patches.json';
 // The channel's IK handshake, not records: test/unit/channels.test.mjs replays it.
 const NOISE = 'noise-ik-p256.json';
-const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED && f !== PATCHES && f !== NOISE).sort().map((f) => [f, load(f)]);
+// The signed agent-command envelope's vectors (#722) are not records either; C# replays them.
+const ENVELOPE = 'agent-envelope.json';
+// The device roster's encoding, not records: test/unit/roster-vectors.test.mjs replays it.
+const ROSTER = 'roster.json';
+// The roster's acceptance-rule scenarios, not records: test/unit/roster-state.test.mjs replays them.
+const ROSTER_STATE = 'roster-state.json';
+// The roster's vetoes, person commands and attestations: test/unit/roster-commands.test.mjs replays them.
+const ROSTER_COMMANDS = 'roster-commands.json';
+const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED && f !== PATCHES && f !== NOISE && f !== ENVELOPE && f !== ROSTER && f !== ROSTER_STATE && f !== ROSTER_COMMANDS).sort().map((f) => [f, load(f)]);
 const records = new Map(files.flatMap(([file, json]) => Object.entries(json.records).map(([name, r]) => [name, { ...r, file, contexts: json.contexts }])));
 const known = new Map(files.flatMap(([, json]) => json.knownDifferences).filter((d) => d.differs === 'pwa').map((d) => [`${d.vector}:${d.step}`, d]));
 
@@ -82,7 +92,7 @@ async function shown(message) {
   const handlers = {};
   const list = [];
   const self = {
-    registration: { scope: SCOPE, showNotification: async (title, options) => { list.push({ title, ...options }); } },
+    registration: { scope: SCOPE, showNotification: async (title, options) => { list.push({ title, ...options }); }, getNotifications: async () => [] },
     clients: { matchAll: async () => [], openWindow: async () => {}, claim() {} },
     addEventListener: (type, fn) => { handlers[type] = fn; },
     skipWaiting() {},
@@ -96,7 +106,8 @@ async function shown(message) {
   return {
     notification: {
       title: n.title, body: n.body, tag: n.tag, lang: n.lang, silent: n.silent, navigate: n.data.url,
-      data: { kind: n.data.kind, machine: n.data.machine, session: n.data.session, question: n.data.question },
+      // A group stands for no one session: the wire says "", which the worker reads as none.
+      data: { kind: n.data.kind, machine: n.data.machine, session: n.data.session ?? (n.data.kind === 'group' ? '' : undefined), question: n.data.question, class: n.data.class, sessions: n.data.sessions, reminder: n.data.reminder },
     },
   };
 }
@@ -137,19 +148,31 @@ function holds(read, wire, unread = [], at = '') {
 // it drops the record. unread: the parts it has no use for. refuses: false, with why, when it
 // cannot drop one it fails to read.
 const SESSION_ID = '4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b';
+const ESCAPED_MESSAGE = () => records.get('Question').valid.find((v) => v.name === 'an-escaped-approval').json.message;
+// A snapshot section as readDiagnostics reads it: within the vectors' whole snapshot, so a
+// section it refuses drops the snapshot it came in.
+const inSnapshot = (key) => (j) => {
+  const s = JSON.parse(JSON.stringify(records.get('DiagnosticsSnapshot').valid.find((v) => v.name === 'a-machine').json));
+  return readDiagnostics({ ...s, [key]: j })?.[key] ?? null;
+};
 const READS = {
   MachineInfo: { read: (j) => readHello({ protocol: 1, machine: j, capabilities: [] }).machine },
   HelloResult: { read: readHello },
   ToolCall: { read: readTool },
   Option: { read: (j) => readQuestion({ fields: [{ name: 'f', type: 'choice', options: [j] }] }).fields[0].options[0] ?? null },
   Field: { read: (j) => readQuestion({ fields: [j] }).fields[0] ?? null },
+  FieldConstraints: { read: (j) => readQuestion({ fields: [{ name: 'f', type: 'number', constraints: j }] }).fields[0].constraints },
   Question: { read: readQuestion },
+  // One the PWA cannot read is dropped for a hold at the machine that keeps nothing of it (no shown).
+  // Its marks are checked against the message they are of: the escaped approval's own.
+  EscapedText: { read: (j) => { const e = readQuestion({ kind: 'approval', message: ESCAPED_MESSAGE(), escaped: j }).escaped; return e?.shown === null ? null : e; } },
   Background: { read: readBackground },
   ActivitySource: { read: readSource },
   OwnActivity: { read: readOwn },
   Activity: { read: readActivity },
   Subagent: { read: readSubagent },
-  Session: { read: readSession },
+  // attention (#800) is read from the PWA's own slice of it on; until then the status beside it is shown.
+  Session: { read: readSession, unread: ['attention'] },
   DiscoveryHeld: { read: readDiscoveryHeld },
   // As listAll pages through it: the cursor it reads is the one it sends for the next page.
   SessionList: {
@@ -200,6 +223,10 @@ const READS = {
   SessionPatch: { read: readPatch },
   SubagentsPatch: { read: (j) => readPatch({ id: SESSION_ID, subagents: j })?.subagents ?? null },
   AnswerResult: { read: readAnswerResult },
+  // An answer's or a reply's progress frame and its result's timings, which only a host asked
+  // for progress sends (#600): read as the service gets them.
+  DeliveryProgress: { read: readProgress },
+  DeliveryTimings: { read: (j) => readAnswerResult({ outcome: 'delivered', timings: j }).timings ?? {} },
   ReplyResult: { read: readAnswerResult },
   StopResult: { read: readStopResult },
   AttachmentState: { read: readAttachmentState },
@@ -222,18 +249,35 @@ const READS = {
   LaunchedTransfer: { read: (j) => readLaunchResult({ launched: { agent: 'claude', transfer: j } }).launched.transfer },
   TrustQuestion: { read: readTrustQuestion },
   TrustAnswerResult: { read: readTrustResult },
-  UpdateState: { read: readUpdateState },
-  UpdateResult: { read: (j) => readUpdateState({ last: j }).last },
-  UpdateCommandResult: { read: readUpdateCommandResult },
+  // Update now's fields (#1159) are read from its client slice (3) on.
+  UpdateState: { read: readUpdateState, unread: ['canUpdateNow', 'updateNowWhy', 'updateNowAt', 'busy', 'requestNow', 'waitingCode', 'last.code'] },
+  UpdateResult: { read: (j) => readUpdateState({ last: j }).last, unread: ['code'] },
+  UpdateCommandResult: {
+    read: readUpdateCommandResult,
+    unread: ['code', 'state.canUpdateNow', 'state.updateNowWhy', 'state.updateNowAt', 'state.busy', 'state.requestNow', 'state.waitingCode', 'state.last.code'],
+  },
+  SignInDevices: { read: readSignInDevices },
+  SignInDevice: { read: (j) => readSignInDevices({ state: 'ready', devices: [j] })?.devices[0] ?? null },
   UsageReport: { read: readUsage },
   AgentUsage: { read: (j) => readUsage({ agents: [j] }).agents[0] ?? null },
   UsageWindow: { read: (j) => readUsage({ agents: [{ agent: 'copilot', label: 'Copilot', windows: [j] }] }).agents[0].windows[0] ?? null },
   UsageReader: { read: (j) => readUsage({ agents: [{ agent: 'copilot', label: 'Copilot', readBy: j }] }).agents[0].readBy },
   // Every push must show something, or iOS revokes the app's notifications (sw.js): the worker
   // shows a generic notice for whatever it cannot read, and never drops one.
-  PushMessage: { read: shown, unread: ['web_push', 'notification.data.v', 'notification.data.at'], refuses: 'a push is always shown' },
-  PushNotification: { read: async (j) => (await shown({ notification: j })).notification, unread: ['data.v', 'data.at'], refuses: 'a push is always shown' },
-  PushNoticeData: { read: async (j) => (await shown({ notification: { data: j } })).notification.data, unread: ['v', 'at'], refuses: 'a push is always shown' },
+  // agent: a signIn notice's (#800), which the worker shows only as its title and body.
+  PushMessage: { read: shown, unread: ['web_push', 'notification.data.v', 'notification.data.at', 'notification.data.agent'], refuses: 'a push is always shown' },
+  PushNotification: { read: async (j) => (await shown({ notification: j })).notification, unread: ['data.v', 'data.at', 'data.agent'], refuses: 'a push is always shown' },
+  PushNoticeData: { read: async (j) => (await shown({ notification: { data: j } })).notification.data, unread: ['v', 'at', 'agent'], refuses: 'a push is always shown' },
+  // Journal entries are read into what Review shows (readEntry), not kept as sent:
+  // test/unit/diagnostics.test.mjs replays what it keeps and drops. The schema is checked, not kept.
+  DiagnosticsSnapshot: { read: readDiagnostics, unread: ['schema', 'journal.entries'] },
+  DiagnosticsHost: { read: inSnapshot('host') },
+  DiagnosticsRestart: { read: inSnapshot('lastRestart') },
+  DiagnosticsRelay: { read: inSnapshot('relay') },
+  DiagnosticsHolds: { read: inSnapshot('holds') },
+  DiagnosticsReadiness: { read: inSnapshot('readiness') },
+  DiagnosticsAgent: { read: (j) => inSnapshot('readiness')({ checkedAt: null, omitted: 0, missing: null, agents: [j] })?.agents[0] ?? null },
+  DiagnosticsJournalPart: { read: inSnapshot('journal'), unread: ['entries'] },
 };
 
 // Records the PWA sends that it checks first, mirroring the host's check word for word.
@@ -304,6 +348,17 @@ const BUILDS = {
       return sentBy(LaunchService, 'launch', j.request, (s) => s.submit({ hostId: 'h', launch }));
     },
   },
+  FocusRequest: {
+    build: async (j) => {
+      const t = fakeTransport();
+      const client = new HostClient(t, { timeoutMs: 1000, focusGapMs: 0 });
+      client.capabilities = ['sessions.focus'];
+      client.setFocus({ visible: j.visible, open: j.open ?? null });
+      await flush();
+      client.close();
+      return t.lastRequest('sessions.focus').data;
+    },
+  },
   ListRequest: {
     build: async (j) => {
       const t = fakeTransport();
@@ -364,7 +419,6 @@ const BUILDS = {
 const NOT_REPLAYED = {
   SubscribeResult: 'the PWA waits for sessions.synced and uses nothing of this result',
   SubscribeSince: 'built only within SubscribeRequest, from what the store holds',
-  FocusRequest: 'the PWA does not send sessions.focus yet (#610)',
   PushSubscribeRequest: 'PushRegistrar sends the browser\'s own subscription, from a private method',
   PushKeys: 'part of PushSubscribeRequest',
   PushUnsubscribeRequest: 'PushRegistrar sends the browser\'s own endpoint, from a private method',
@@ -383,10 +437,42 @@ const NOT_REPLAYED = {
   CommandTarget: 'replayed by signing signed-command.json\'s commands again',
   TransferRequest: 'host to host: no client sends it',
   TransferResult: 'host to host: no client reads it',
-  UpdateCommand: 'built inside UpdateControl from a fresh request, with nothing else in it',
-  // The PWA asks for progress from #600; until then a host sends neither to it.
-  DeliveryProgress: 'progress frames come only to a client that sends progress: true, which the PWA does not yet',
-  DeliveryTimings: 'timings come only to a client that sends progress: true, which the PWA does not yet',
+  UpdateCommand: 'built inside UpdateControl from a fresh request, with nothing else in it; Update now\'s is #1159\'s client slice (3)',
+  UpdateNowArgs: 'the PWA does not offer Update now yet (#1159 slice 3)',
+  UpdateBusy: 'the PWA does not offer Update now yet (#1159 slice 3)',
+  UpdateBusySession: 'the PWA does not offer Update now yet (#1159 slice 3)',
+  // #801 slice A is the host's half; the PWA's controls wait for ui.md's spec.
+  ManageCommand: 'the PWA does not manage machines yet (#801)',
+  ManageRepairArgs: 'the PWA does not manage machines yet (#801)',
+  ManageConfigArgs: 'held until the signed roster (#55)',
+  ManageHaTokenRequest: 'held until the signed roster (#55)',
+  ManageRestarts: 'the PWA does not manage machines yet (#801)',
+  ManagePending: 'the PWA does not manage machines yet (#801)',
+  ManageLast: 'the PWA does not manage machines yet (#801)',
+  ManageState: 'the PWA does not manage machines yet (#801)',
+  ManageResult: 'the PWA does not manage machines yet (#801)',
+  Attention: 'read within Session once the PWA shows attention (#800); until then Session leaves it unread',
+  // The PWA shows what a reboot took once Design's spec lands (#780, client slice); until then
+  // it ignores machine.restore and reads a restored push as a question (title and body only).
+  RestoreNotice: 'the PWA does not read machine.restore yet (#780)',
+  RestoreSession: 'the PWA does not read machine.restore yet (#780)',
+  SessionRestored: 'no host sends a session\'s restored yet, and the PWA does not read it (#780)',
+
+  // Its client slice is #292's next step; the protocol and host land first (v1-history.md).
+  HistoryRequest: 'the PWA does not page a session\'s history yet (#292)',
+  HistoryResult: 'the PWA does not page a session\'s history yet (#292)',
+  HistoryStart: 'the PWA does not page a session\'s history yet (#292)',
+  HistoryTurn: 'the PWA does not page a session\'s history yet (#292)',
+  AgentHelloRequest: 'agent.hello is local pipe only; no PWA or relay channel serves it (#720)',
+  AgentHelloResult: 'agent.hello is local pipe only; no PWA or relay channel serves it (#720)',
+  HistoryPrompt: 'the PWA does not page a session\'s history yet (#292)',
+  HistoryPart: 'the PWA does not page a session\'s history yet (#292)',
+  DelegateEvent: 'the PWA does not page a session\'s history yet (#292)',
+
+  JournalEntry: 'read by readEntry into what Review shows, not as sent; test/unit/diagnostics.test.mjs replays it',
+  JournalStage: 'part of JournalEntry, read by readEntry',
+  JournalException: 'part of JournalEntry: readEntry keeps a recognized type and a count of frames',
+  JournalFrame: 'part of JournalEntry: readEntry keeps only how many frames there were',
 };
 
 // ---- the replay ----
@@ -474,6 +560,20 @@ for (const [record, r] of records) {
 
 // ---- recorded sessions, patched ----
 
+// openQuestion and idleMs are the PWA's own additions to sessions.focus (#1190); the vectors do not
+// carry them yet, and a host that does not read them ignores them. Each goes in the request only
+// beside what it belongs to, and the vectors' own two requests are unchanged by them (above).
+test('a FocusRequest with the question on screen and the age of the last input is the vector\'s with those two fields added', async () => {
+  const t = fakeTransport();
+  const client = new HostClient(t, { timeoutMs: 1000, focusGapMs: 0 });
+  client.capabilities = ['sessions.focus'];
+  const open = records.get('FocusRequest').valid.find((v) => v.name === 'a-session-open').json;
+  client.setFocus({ visible: open.visible, open: open.open, openQuestion: 'q1', idle: () => 1500 });
+  await flush();
+  client.close();
+  assert.deepEqual(t.lastRequest('sessions.focus').data, { ...open, openQuestion: 'q1', idleMs: 1500 });
+});
+
 // session-patches.json: each recorded session as a host sends it to a client that asked for
 // patches. Every patch, applied as the PWA applies it, must give exactly the session an upsert of
 // that moment would: the JSON itself, and what the views are given of it.
@@ -525,7 +625,8 @@ for (const v of signed.valid) {
     const [signer, machine] = await Promise.all([pair(signed.keys.signer), pair(signed.keys.machine)]);
     const command = await signCommand({
       key: signer, deviceId: signed.keys.signer.device, machinePublic: machine.public,
-      action: v.body.action, session: v.body.target.session, to: v.body.to, now: v.body.issuedAt * 1000, request: v.body.request,
+      action: v.body.action, session: v.body.target.session, question: v.body.target.question, shown: v.body.target.shown,
+      args: v.body.args, to: v.body.to, now: v.body.issuedAt * 1000, request: v.body.request,
     });
     assert.deepEqual(JSON.parse(fromUtf8.decode(fromBase64url(command.body))), v.body);
     assert.deepEqual(command, v.command);

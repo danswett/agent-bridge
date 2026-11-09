@@ -27,6 +27,15 @@ public interface IHostUpdates
     // Hands the downloaded release to the updater, which applies it once this process has exited,
     // and has the host exit. Throws when it cannot be handed over.
     void ApplyAndRestart(UpdateRelease release);
+    Task ApplyAndRestartAsync(UpdateRelease release)
+    {
+        ApplyAndRestart(release);
+        return Task.CompletedTask;
+    }
+    // Before ApplyAndRestart: everything the update would end is safe to end (#238), or this
+    // throws why not, and nothing is handed over. Velopack ends every process in the package, and a
+    // usage probe's process whose input goes with a host must not be cut mid-refresh.
+    Task ReadyAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
 // Stage 6: the machine's update entity and its Install and Check buttons (docs/ha-connector.md,
@@ -408,6 +417,12 @@ public sealed partial class HaConnector
                 lock (gate) { if (updateProgress is { Stage: "downloading" }) { updateProgress = ("downloading", Math.Clamp(percent, 0, 100) / 100.0); } }
             }, ct);
             ct.ThrowIfCancellationRequested();
+            // Waited for while the entity still says downloading: a usage probe tied to this host
+            // or another in the package finishing (#238). One that cannot be confirmed refuses the
+            // update, said on the entity like any other failure to start.
+            log($"Home Assistant connector: self-update: {release.Version} downloaded; making sure nothing it would end is mid-refresh");
+            await updates.ReadyAsync(ct);
+            ct.ThrowIfCancellationRequested();
             lock (gate)
             {
                 updateProgress = ("restarting", null);
@@ -421,7 +436,7 @@ public sealed partial class HaConnector
             }
             await SayAsync(() => PublishUpdateAsync(time.GetUtcNow(), ct), "show the restart", ct);
             log($"Home Assistant connector: self-update: restarting into {release.Version}");
-            updates.ApplyAndRestart(release);
+            await updates.ApplyAndRestartAsync(release);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception e)

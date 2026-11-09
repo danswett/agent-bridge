@@ -282,26 +282,6 @@ public sealed class MainTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task What_holds_the_hosts_discovery_is_shown_until_it_clears()
-    {
-        await SnapshotAsync();
-        Assert.False(main.IsHeld);
-
-        await host.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(new DiscoveryHeld("an unrecognised copilot process (pid 4120)", [AgentKind.Copilot])));
-        await Wait.UntilAsync(() => main.IsHeld, "the hold");
-        Assert.StartsWith("Discovery held: an unrecognised copilot process (pid 4120).", main.HeldWhy);
-
-        await host.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged());
-        await Wait.UntilAsync(() => !main.IsHeld, "the hold to clear");
-
-        // A host already held when the app connects says so with its snapshot.
-        host.Held = new DiscoveryHeld("the claude processes could not be listed", [AgentKind.Claude]);
-        await host.StopAsync();
-        host.Start();
-        await Wait.UntilAsync(() => main.HeldWhy?.Contains("the claude processes could not be listed", StringComparison.Ordinal) == true, "the hold from the snapshot");
-    }
-
-    [Fact]
     public async Task No_card_moves_while_someone_is_typing_in_any_card()
     {
         await SnapshotAsync();
@@ -360,6 +340,24 @@ public sealed class MainTests : IAsyncLifetime
         ui.Post(() => main.Open("old"));
         Assert.Equal(["later", "old"], opened);
         Assert.Same(Card("old"), TestUi.Read(() => main.Selected));
+    }
+
+    [Fact]
+    public async Task A_session_a_toast_opens_takes_keyboard_focus_whether_it_is_there_already_or_arrives_later()
+    {
+        // As Needs you's open does: the session view puts it on the question's heading, never on
+        // an answer (#484). A search or the list opening one asks for none.
+        await SnapshotAsync();
+        ui.Post(() => main.Open(null, "asking", focus: true));
+        Assert.True(TestUi.Read(() => Card("asking").WantsFocus));
+
+        ui.Post(() => main.Open(null, "later", focus: true));
+        await host.SendAsync(Events.SessionUpsert, Make.Session("later", updated: Make.T0.AddMinutes(5)));
+        await Wait.UntilAsync(() => TestUi.Read(() => main.Selected?.Id == "later"), "the session to open");
+        Assert.True(TestUi.Read(() => Card("later").WantsFocus));
+
+        ui.Post(() => main.Open("old"));
+        Assert.False(TestUi.Read(() => Card("old").WantsFocus));
     }
 
     [Fact]

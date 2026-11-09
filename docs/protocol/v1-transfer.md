@@ -121,10 +121,18 @@ relay at that moment (below).
 }
 ```
 
+`target` may also carry `question` and `shown`: only an escaped approval's confirmation
+(`session.approve:escaped`, [v1-sessions.md](v1-sessions.md#escaped-approvals)) names them, after
+`machine` and `session` in that order, and no other command does.
+
 The source acts on a command only if all of these hold, and says which did not:
 
 * `body`, `by`, `mac` are base64url within 2048, 96 and 64 characters; `by` is a point on
-  P-256; the MAC is the one it computes with its own key;
+  P-256; the MAC is the one it computes with its own key. The `body` bound is per action, checked
+  before the MAC like the rest (`TransferProtocol.MaxBodyFor`): 2048 for every action but
+  `update.install.now` ([v1-update.md](v1-update.md#update-now-1159)), whose signed confirmation
+  lists up to 32 busy sessions and so may take 4096; a body past 2048 signed for any other action
+  is malformed;
 * `v` is 1, `action` is `session.transfer`, `request` is a UUID;
 * `principal.kind` is `user` and `principal.device` is the id of the key that signed it;
 * `target.machine` is the source itself, and `to` is the machine on the channel asking;

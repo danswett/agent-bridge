@@ -411,7 +411,9 @@ static class ReportCommand
     /// <summary>
     /// Whether main is red now, as merge-rule's ReadMain judges it: the newest finished run decides,
     /// and anything but success (cancelled or skipped too) is red; a run being re-run is red; a new
-    /// run still going doesn't count. Null when no run in the window decides.
+    /// run still going doesn't count. Unlike ReadMain, it doesn't read a cancelled run's jobs to
+    /// pass over one replaced before it started, so it can call main red where merge-rule doesn't.
+    /// Null when no run in the window decides.
     /// </summary>
     internal static bool? MainRed(IEnumerable<(long Id, string? Status, string? Conclusion, int Attempt)> runs)
     {

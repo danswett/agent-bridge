@@ -26,23 +26,41 @@
 // Status is a glyph and the words of ui.md §2.2 (js/status.js): no coloured edge or glow (#178).
 import { h } from './dom.js';
 import { designIcon, drivenBadge, glyph, setGlyph } from './glyph.js';
-import { ago, duration, localTime } from './time.js';
-import { renderMarkdown } from '../markdown.js';
-import { sessionStatus, statusLabel } from '../status.js';
-import { QuestionPanel, describeAnswer, renderQuestion } from './question-view.js';
+import { ago, localTime } from './time.js';
+import { copyText, renderMarkdown } from '../markdown.js';
+import { ATTENTION_RULES, rowAt, sessionStatus, statusLabel } from '../status.js';
+import { awayWords, detailRows } from '../details-rows.js';
+import { QuestionPanel, describeAnswer, describeClosed, renderQuestion, renderResolved } from './question-view.js';
+import { ReceiptClock, ReceiptTiming, LINGER_READ_MS, drawReceipt, drawn, receiptLive } from './receipt.js';
 import { answerability } from '../answers.js';
+import { escapedApprove } from '../escaped.js';
 import { ReplyBox } from './reply-view.js';
 import { EndSession } from './stop-view.js';
 import { lastSegment, pathView, setFacts } from './meta.js';
 import { RowMenu } from './row-menu.js';
 import { DelegateDetail, DelegatesBlock, DelegateStrip } from './delegates-view.js';
-import { backgroundCounts, delegateEvents, mainVoice } from '../attribution.js';
+import { aloud, backgroundCounts, delegateEvents, delegateFold, delegateList, eventParts, mainVoice } from '../attribution.js';
 import { delegateOf } from '../needs-you.js';
 import { enter, leave, scrollBehavior, slide, stopTravel } from './motion.js';
+import { CollapsingHeader, PHONE } from './collapse-header.js';
+import { CollapsingFoot } from './collapse-foot.js';
 import { UNSUPPORTED_SESSIONS } from '../brand.js';
 import { PromptMemory, disclosureName, promptOrigin } from '../prompt-origin.js';
+import { holdKey } from './hold.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
+// The Details rows whose values move with the clock: drawn again where they are, not as new nodes.
+const CLOCK_ROWS = new Set(['status', 'since', 'started', 'updated']);
+// Each session's delegate events as the person left them (ui.md §6.4): its fold (D3) open or
+// closed, and the shared lines opened to name everyone. By machine and session, so a card drawn
+// again (a machine back online, a list sent again) keeps them, for as long as the page is open.
+const EVENT_STATE = new Map();
+// Puts nodes in a parent in this order, moving none that are already so: a node moved loses focus.
+function place(parent, nodes) {
+  const now = [...parent.children];
+  if (now.length === nodes.length && now.every((n, i) => n === nodes[i])) { return; }
+  parent.replaceChildren(...nodes);
+}
 // A tool call's glyph: running turns, as working does; a finished one is done or failed.
 const TOOL_GLYPH = { running: 'working', done: 'done', failed: 'failed' };
 // How long a question's controls ignore a pointer's click once the question appears or is
@@ -370,15 +388,30 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
   };
 }
 
-const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+// An answer whose panel stays once its question has gone (SessionCard #leave): one on its way, and
+// any outcome §6.5 draws on the panel. Once it has an outcome other than delivered the card resolves
+// at once to a closed item (SessionCard #leave): "No longer waiting", neutral (ui.md §7).
+const leaves = (entry) => entry.state === 'sending' || entry.state === 'waiting' || entry.state === 'failed'
+  || (entry.state === 'done' && entry.outcome !== 'busy' && entry.outcome !== 'refused');
+
+// How many closed items (questions the session stopped asking whose answer did not go through)
+// a card keeps in its conversation, as the history keeps its latest (ui.md §6.4).
+const CLOSED_KEPT = 20;
 
 // Why nothing can be given for a session now, for under its controls, or null (#269): its
 // machine is offline, reconnecting, back and its whole list not yet in, or no longer offering
-// sessions. what: 'answered', 'replied to'...
+// sessions. what: 'answered', 'replied to'... While the app is catching up after a return (#950) the
+// hold says nothing: { updating, drawn }. An offline machine's reply box and question say so in one
+// line in place of their actions (ui.md rule 8): { text, offline }.
 export function staleNote(stale, machineName, what) {
   if (!stale) { return null; }
+  if (stale.grace) { return { updating: true, drawn: stale.drawn === true }; }
   const name = machineName || 'The machine';
-  if (stale.reason === 'offline') { return `${name} is offline. This can't be ${what} from here until it is back.`; }
+  if (stale.reason === 'offline') {
+    return what === 'ended'
+      ? `${name} is offline. This can't be ${what} from here until it is back.`
+      : { text: `${name} is offline \u00b7 you can answer once it's back`, offline: true };
+  }
   if (stale.reason === 'unsupported') { return `${name} ${UNSUPPORTED_SESSIONS} now, so this can't be ${what} from here.`; }
   const where = stale.reason === 'confirming' ? 'is back' : 'is reconnecting';
   return `${name} ${where}. This can be ${what} once it has sent its sessions again.`;
@@ -392,6 +425,11 @@ export class SessionCard {
   #history = { loaded: false, loading: false };
   #panel = null;
   #receipt = null;
+  // Receipts that closed: the question went and the answer did not go through. They stay, in order,
+  // above the receipt and the question, and are not dropped by the next question (#retireReceipt).
+  #closed = [];
+  // The panel of a question its host took away while its answer was still on its way (#leave).
+  #leaving = null;
   #orphan = null;
   #reply = null;
   // The host the reply box is for, and what it held when it last went away (the machine
@@ -407,6 +445,12 @@ export class SessionCard {
   // the words that said so when last drawn, which move on with the clock.
   #stale = null;
   #shownStale = null;
+  // Details' value cells by row, and the status words the header shows, which its Status row says.
+  #factCells = null;
+  #detailsStatus = null;
+  #detailsAway = false;
+  // The row's name but for its age, as #nameRow puts it together: { drawn, unsaid }.
+  #rowName = { drawn: [], unsaid: [] };
   // The question last drawn (undefined before the first drawing), and whether a finger or a
   // mouse button is on the conversation: what decides a scroll to a question that arrives.
   #asked = undefined;
@@ -446,8 +490,14 @@ export class SessionCard {
   // began (null where unknown).
   #prompts = new PromptMemory();
   #promptOpen = false;
+  // The keys of the delegate event lines drawn, or null before the first: only a line arriving
+  // after that fades in.
+  #eventKeys = null;
   #promptAt = null;
-
+  // The Delegates tab's count on a phone (#629): what the last update counted, and the width that shows it.
+  #tabCounts = { running: 0, asking: 0 };
+  #phone = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia(PHONE) : null;
+  #onPhone = () => this.#renderTabCount();
   // hostId: the machine the session is on, which everything the view sends goes to.
   // fetchDetail(id) -> Promise<Session|null>, for the tool history (session.get).
   // answering() -> { service, replies, stops, hostId, capabilities } | null: who answers
@@ -461,7 +511,7 @@ export class SessionCard {
     Object.assign(this, { hostId, fetchDetail, fetchDelegate, machineName, labelled, answering, onSelect, onPin, onBack, layout, viewing });
     this.#stale = stale;
     const n = ++seq;
-    this.ids = { row: `s${n}-row`, glyph: `s${n}-glyph`, unread: `s${n}-unread`, title: `s${n}-title`, conversation: `s${n}-conversation`, tools: `s${n}-tools`, details: `s${n}-details`, tabC: `s${n}-tab-c`, tabD: `s${n}-tab-d`, tabT: `s${n}-tab-t`, delegates: `s${n}-delegates`, delegate: `s${n}-delegate`, prompt: `s${n}-prompt` };
+    this.ids = { row: `s${n}-row`, glyph: `s${n}-glyph`, unread: `s${n}-unread`, title: `s${n}-title`, conversation: `s${n}-conversation`, tools: `s${n}-tools`, details: `s${n}-details`, tabC: `s${n}-tab-c`, tabD: `s${n}-tab-d`, tabT: `s${n}-tab-t`, delegates: `s${n}-delegates`, delegate: `s${n}-delegate`, prompt: `s${n}-prompt`, events: `s${n}-events` };
     this.#buildRow();
     this.#buildView();
     this.update(session);
@@ -480,10 +530,12 @@ export class SessionCard {
     e.rowLine1 = h('span', { class: 'row-line1' }, e.rowTitle);
     e.rowFacts = h('span', { class: 'row-facts' });
     e.rowAge = h('time', { class: 'row-age' });
-    // The row reads as its glyph's name: "title, status, machine" (ui.md §9).
-    e.open = h('button', { type: 'button', class: 'row-main', id: this.ids.row, 'aria-labelledby': this.ids.glyph, onclick: () => this.onSelect(this) },
-      h('span', { class: 'row-glyph' }, e.rowGlyph),
-      h('span', { class: 'row-text' }, e.rowLine1, e.rowFacts),
+    // Named by #nameRow (ui.md §9.1 A1). The spaces between its lines draw nothing in the grid,
+    // but without them the title, the facts and the age read as run-together words
+    // ("…AppWaiting on you"), which no name can contain (axe label-content-name-mismatch, #365).
+    e.open = h('button', { type: 'button', class: 'row-main', id: this.ids.row, onclick: () => this.onSelect(this) },
+      h('span', { class: 'row-glyph' }, e.rowGlyph), ' ',
+      h('span', { class: 'row-text' }, e.rowLine1, ' ', e.rowFacts), ' ',
       e.rowAge);
     this.element = h('div', { class: 'session' }, e.open);
   }
@@ -501,8 +553,14 @@ export class SessionCard {
     e.detailsButton = h('button', { type: 'button', class: 'icon-button details-button', 'aria-pressed': 'false', 'aria-controls': this.ids.details, 'aria-label': 'Details', title: 'Details', onclick: () => this.showDetails() }, designIcon('inspector', { cls: 'ab-icon-20' }));
     e.inspectorButton = h('button', { type: 'button', class: 'icon-button inspector-button', 'aria-label': 'Hide inspector', title: 'Hide inspector', onclick: () => this.onInspector?.() }, designIcon('sidebar', { cls: 'ab-icon-20' }));
     e.more = h('button', { type: 'button', class: 'icon-button more', 'aria-haspopup': 'menu', 'aria-label': 'More', title: 'More', onclick: () => this.#openMore() }, designIcon('more', { cls: 'ab-icon-20' }));
-    e.actions = h('div', { class: 'header-actions' }, e.pin, e.detailsButton, e.inspectorButton, e.more);
-    e.header = h('header', { class: 'session-header' }, e.back, h('div', { class: 'header-main' }, e.titleText, e.statusLine), e.actions);
+    e.actions = h('div', { class: 'header-actions' }, e.pin, e.detailsButton, e.inspectorButton);
+    e.header = h('header', { class: 'session-header' }, h('div', { class: 'header-main' }, e.titleText, e.statusLine), e.actions);
+    // The pinned bar of a phone's collapsing header (ui.md §6.2): Back and More are the bar's, always
+    // in reach and first in the tab order. Its glyph and title are drawn, not read: the status is
+    // read from the meta line, and the h2 is the one heading. From 760 the bar is not shown.
+    e.barGlyph = glyph('idle', { size: 16 });
+    e.barTitle = h('span', { class: 'bar-title-text' });
+    e.bar = h('div', { class: 'session-bar' }, e.back, h('div', { class: 'bar-title', 'aria-hidden': 'true' }, e.barGlyph, e.barTitle), e.more);
     // The delegate strip (§6.3): at three panes under the header; on a phone a chip row.
     // Its item pressed again lets the delegate go, if it is on screen. Out of sight, it shows it:
     // the inspector hidden, or (with no inspector pane) another tab chosen over it, which a tab
@@ -518,15 +576,22 @@ export class SessionCard {
     // Conversation / Delegates / Tools, where the inspector isn't a pane of its own (ui.md §6.3).
     // Delegates is there only while the host lists any.
     e.tabC = h('button', { type: 'button', role: 'tab', class: 'view-tab', id: this.ids.tabC, 'aria-controls': this.ids.conversation, onclick: () => this.setTab('conversation') }, 'Conversation');
-    e.tabD = h('button', { type: 'button', role: 'tab', class: 'view-tab', id: this.ids.tabD, 'aria-controls': this.ids.delegates, hidden: true, onclick: () => this.setTab('delegates') }, 'Delegates');
+    // On a phone, with no strip, the tab carries what the strip did (#629): "Delegates 2" while two
+    // run, led by the needs glyph while one asks, and named for both. In place: never a new height.
+    e.tabNeeds = glyph('needs', { size: 16 });
+    e.tabNeeds.setAttribute('hidden', '');
+    e.tabCount = h('span', { class: 'tab-count', 'aria-hidden': 'true' });
+    e.tabD = h('button', { type: 'button', role: 'tab', class: 'view-tab', id: this.ids.tabD, 'aria-controls': this.ids.delegates, hidden: true, onclick: () => this.setTab('delegates') }, e.tabNeeds, 'Delegates', e.tabCount);
     e.tabT = h('button', { type: 'button', role: 'tab', class: 'view-tab', id: this.ids.tabT, 'aria-controls': this.ids.tools, onclick: () => this.setTab('tools') }, 'Tools');
     e.tabs = h('div', { class: 'view-tabs', role: 'tablist', 'aria-label': 'Session' }, e.tabC, e.tabD, e.tabT);
     e.tabs.addEventListener('keydown', (ev) => {
-      if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') { return; }
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(ev.key)) { return; }
       ev.preventDefault();
       const tabs = [['conversation', e.tabC], ['delegates', e.tabD], ['tools', e.tabT]].filter(([, el]) => !el.hidden);
       const i = Math.max(0, tabs.findIndex(([t]) => t === this.#tab));
-      const [next, el] = tabs[(i + (ev.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length];
+      // Left and Right wrap; Home and End go to the first and last (ui.md §6.2, #629).
+      const to = ev.key === 'Home' ? 0 : ev.key === 'End' ? tabs.length - 1 : (i + (ev.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+      const [next, el] = tabs[to];
       this.setTab(next);
       el.focus();
     });
@@ -565,18 +630,35 @@ export class SessionCard {
     e.toolSummary = h('span', { class: 'tool-summary' });
     e.toolGlyph = glyph('working', { size: 12 });
     e.tool = h('p', { class: 'tool-line', hidden: true }, e.toolGlyph, e.toolName, e.toolSummary);
-    // Its own delegates starting and reporting back (§6.4): one meta line each, the name opening
-    // it; after its words and before what it is running now.
+    // Its own delegates starting and reporting back (§6.4, #661): one meta line per delegate, the
+    // name opening it; after its words and before what it is running now. Two or more lines
+    // fold into one (D3): its button, the chevron ending it, then a link of its own to the
+    // earliest delegate still working.
     e.events = h('ol', { class: 'delegate-events', 'aria-label': 'Delegates started and finished', hidden: true });
+    e.foldText = h('span', { class: 'delegate-fold-label' });
+    // The button's name is the whole summary (aria-label); the chevron only shows which way it is.
+    e.foldToggle = h('button', { type: 'button', class: 'delegate-fold-toggle', 'aria-expanded': 'false', 'aria-controls': this.ids.events, onclick: () => this.#toggleEventFold() },
+      e.foldText, h('span', { class: 'delegate-fold-chevron', 'aria-hidden': 'true' }, designIcon('chevron', { size: 16 })));
+    e.foldWorking = h('button', { type: 'button', class: 'delegate-link delegate-fold-working', hidden: true, onclick: () => this.openDelegate(e.foldWorking.dataset.id) });
+    e.foldLines = h('ol', { class: 'delegate-fold-lines', id: this.ids.events, hidden: true });
+    e.fold = h('li', { class: 'delegate-fold' },
+      h('div', { class: 'delegate-fold-line' },
+        h('span', { class: 'delegate-event-mark' }, designIcon('delegate', { size: 16 })),
+        h('span', { class: 'delegate-fold-text' }, e.foldToggle, e.foldWorking)),
+      e.foldLines);
     e.agentBlock = h('div', { class: 'agent-block' }, e.speaker, e.reasoning, e.truncated, e.dropped, e.response, e.events, e.tool);
     e.question = h('div', { class: 'question-slot' });
     this.#guardQuestion(e.question);
     e.stream = h('div', { class: 'stream' }, e.user, e.prompt, e.agentBlock, e.question);
     e.reply = h('div', { class: 'reply-slot' });
+    // A phone's compact reply area (CollapsingFoot, ui.md §6.5): a pinned bar holding a copy of the
+    // box, drawn, not read, and no tab stop; a tap on it brings the box back, focused.
+    e.replyCopy = h('div', { class: 'reply-copy', 'aria-hidden': 'true' }, h('span'));
+    e.replyBar = h('div', { class: 'reply-bar' }, e.replyCopy);
     e.scroll = h('div', { class: 'stream-scroll' }, e.stream);
     this.#watchHold(e.scroll);
     e.conversation = h('div', { class: 'conversation', id: this.ids.conversation, role: 'tabpanel', 'aria-labelledby': this.ids.tabC },
-      e.scroll, e.reply);
+      e.scroll, e.reply, e.replyBar);
 
     // The inspector: Details, then Tools.
     e.facts = h('dl', { class: 'facts' });
@@ -605,8 +687,16 @@ export class SessionCard {
     // The delegate's pane is in the document only while one is open.
     e.inspector = h('aside', { class: 'inspector', 'aria-label': 'Inspector' }, e.details, e.delegates, e.tools);
 
+    // The header floats over the conversation on a phone (CollapsingHeader); the bar first, so Back and
+    // More come before the tabs.
+    e.top = h('div', { class: 'session-top' }, e.header, this.strip.element, e.tabs);
+    e.head = h('div', { class: 'session-head' }, e.bar, e.top);
     this.view = h('section', { class: 'session-view', 'aria-labelledby': this.ids.title, hidden: true, dataset: { tab: 'conversation' } },
-      e.header, this.strip.element, e.tabs, h('div', { class: 'view-body' }, e.conversation, e.inspector));
+      e.head, h('div', { class: 'view-body' }, e.conversation, e.inspector));
+    const foot = new CollapsingFoot({ view: this.view, slot: e.reply, bar: e.replyBar, copy: e.replyCopy, scroller: e.scroll });
+    this.collapse = new CollapsingHeader({ view: this.view, head: e.head, top: e.top, bar: e.bar, scroller: e.scroll, foot });
+    this.foot = foot;
+    this.#phone?.addEventListener('change', this.#onPhone);
     this.#applyTab();
     // A question that stays where it is can still move (#491): a title wrapping, a tool line
     // coming or going, the response or reasoning or your message changing above it, a note,
@@ -661,25 +751,47 @@ export class SessionCard {
     const stale = this.#staleText();
     this.#shownStale = stale?.join(' ') ?? null;
     for (const el of [this.element, this.view]) {
-      if (this.#stale) { el.dataset.stale = this.#stale.reason; } else { delete el.dataset.stale; }
+      if (this.#stale && !this.#stale.grace) { el.dataset.stale = this.#stale.reason; } else { delete el.dataset.stale; }
     }
     const away = stale?.join(' \u00b7 ');
     const words = stale ? { ...state, glyph: 'failed', driven: false, facts: stale, text: away, tone: 'muted', spoken: away.charAt(0).toLowerCase() + away.slice(1) } : state;
+    this.#detailsStatus = stale ? words.text : null;
+    this.#detailsAway = !!stale;
 
     // The row.
     e.rowTitle.textContent = title;
     setGlyph(e.rowGlyph, words.glyph, { size: 16, driven: words.driven, label: statusLabel(words, { title: s.title, machine: this.machineName }) });
-    if (this.#changed('row', [words.text, words.tone, words.driven, s.driverPrincipal, where, s.repository, this.labelled ? this.machineName : null])) {
-      // Rule 7 on a row: "Driven by an agent" in agent colour, in place of the status words.
-      const status = words.driven
+    // Rule 7 on a row: "Driven by an agent" in agent colour, in place of the status words; not over
+    // rules 10-12 (#800), which say what is wrong. The glyph keeps the driven badge either way.
+    const drivenDrawn = words.driven && !ATTENTION_RULES.has(words.rule);
+    if (this.#changed('row', [words.text, words.tone, words.driven, words.rule, s.driverPrincipal, where, s.repository, this.labelled ? this.machineName : null])) {
+      const status = drivenDrawn
         ? h('span', { class: 'row-status driver', dataset: { tone: 'agent' }, title: s.driverPrincipal ?? null }, 'Driven by an agent')
         : h('span', { class: 'row-status', dataset: { tone: words.tone } }, words.facts[0]);
       setFacts(e.rowFacts, [status, this.labelled && this.machineName ? h('span', { class: 'machine-label' }, this.machineName) : whereView()]);
     }
+    // The row's name (ui.md §9.1 A1, #365) starts with the words it draws, in the order drawn:
+    // its title, its second line's facts, then its age (#nameRow). What else §9.2's name holds
+    // follows, so nothing it said before goes unsaid: the status's later facts, or all of it
+    // under "Driven by an agent", the driver under a rule 10-12 status drawn in its place, and
+    // its machine while the row doesn't show it. Both halves key off drivenDrawn, as the row
+    // does, or a driven row needing sign-in reads "Driven by an agent" over "Needs sign-in".
+    // A status fact can carry a delegate's name, read without its commas there, as in the
+    // glyph's name (§9.2).
+    this.#rowName = {
+      drawn: [title, drivenDrawn ? 'Driven by an agent' : aloud(words.facts[0]), this.labelled && this.machineName ? this.machineName : where],
+      unsaid: [
+        drivenDrawn ? words.spoken : words.facts.slice(1).map(aloud).join(' \u00b7 '),
+        words.driven && !drivenDrawn ? 'driven by an agent' : null,
+        this.labelled ? null : this.machineName,
+      ],
+    };
 
     // The header: one meta line, glyph · status · machine · repository.
     e.titleText.textContent = title;
+    e.barTitle.textContent = title;
     setGlyph(e.glyph, words.glyph, { size: 16, driven: words.driven });
+    setGlyph(e.barGlyph, words.glyph, { size: 16, driven: words.driven });
     if (this.#changed('meta', [words.text, words.tone, words.driven, s.driverPrincipal, this.machineName, where, s.repository])) {
       e.statusText.dataset.tone = words.tone;
       setFacts(e.statusText, words.facts);
@@ -690,8 +802,8 @@ export class SessionCard {
     const said = mainVoice(s).at ?? s.updatedAt;
     e.agentAge.dateTime = said;
     e.agentAge.title = localTime(said);
-    e.rowAge.dateTime = s.updatedAt;
-    e.rowAge.title = localTime(s.updatedAt);
+    e.rowAge.dateTime = rowAt(s);
+    e.rowAge.title = localTime(rowAt(s));
     this.refreshTimes();
 
     const t = s.activity.currentTool;
@@ -731,9 +843,14 @@ export class SessionCard {
     // prompt you didn't type is no bubble of yours and never rises.
     if (!first && echoed && !e.user.hidden) { enter(e.user, 'acknowledge', { dy: 1 }); }
 
-    if (this.#changed('facts', [s.agent, s.model, s.repository, s.branch, s.cwd, this.machineName, s.startedAt, s.activity.turnCount, s.activity.compactions, s.activity.background, s.processId])) {
-      this.#renderFacts(s);
+    // The rows, as the shared table sets them. What moves with the clock is drawn again by the
+    // tick, in place, so only the rest, and which rows there are, decide a redraw. Started's own time
+    // is in the key: another start is another <time>.
+    const rows = detailRows(s, { status: stale ? words.text : null, machine: this.machineName || null, away: !!stale });
+    if (this.#changed('facts', rows.map((r) => (CLOCK_ROWS.has(r.kind) ? [r.kind, r.at] : [r.kind, r.text])))) {
+      this.#renderFacts(rows);
     }
+    this.#tickFacts(s, Date.now());
     this.#bringQuestion(atEnd);
 
     // The tools shown follow the session: refetched (at most every 2 s) as it changes.
@@ -755,9 +872,29 @@ export class SessionCard {
     e.delegateCounts.hidden = !counts;
     e.delegates.hidden = !listed && !counts;
     e.tabD.hidden = e.delegates.hidden;
+    // Running as the strip counts them, the main agent's own; asking at any depth, since a
+    // question waits on the person whoever asks it.
+    const d = listed ? delegateList(s) : null;
+    this.#tabCounts = d
+      ? { running: d.active.filter((r) => r.running && (!r.parent || r.parent === r.id)).length, asking: d.active.filter((r) => r.status === 'waiting').length }
+      : { running: 0, asking: 0 };
+    this.#renderTabCount();
     if (e.tabD.hidden && this.#tab === 'delegates') { this.setTab('conversation'); }
     this.#linkDelegatesTab();
     this.#renderEvents(s, now);
+  }
+
+  // From 760 the strip says all this, and the tab is plain "Delegates".
+  #renderTabCount() {
+    const e = this.els;
+    const { running, asking } = this.#phone?.matches ? this.#tabCounts : { running: 0, asking: 0 };
+    // The leading space keeps the visible text "Delegates 2", within the name (WCAG 2.5.3); the
+    // flex row draws only the gap.
+    e.tabCount.textContent = running ? ` ${running}` : '';
+    // An <svg> has no hidden property; the attribute is what app.css hides.
+    e.tabNeeds.toggleAttribute('hidden', !asking);
+    const said = [running && `${running} running`, asking && `${asking} asking`].filter(Boolean);
+    if (said.length) { e.tabD.setAttribute('aria-label', ['Delegates', ...said].join(', ')); } else { e.tabD.removeAttribute('aria-label'); }
   }
 
   // Pushed in the list's place, the delegate open is what the Delegates tab shows: the tab
@@ -771,20 +908,109 @@ export class SessionCard {
     if (pushed) { pane.setAttribute('role', 'tabpanel'); } else { pane.removeAttribute('role'); }
   }
 
+  #eventState() {
+    const key = `${this.hostId ?? ''}|${this.#s?.id ?? ''}`;
+    if (!EVENT_STATE.has(key)) { EVENT_STATE.set(key, { open: false, more: new Set() }); }
+    return EVENT_STATE.get(key);
+  }
+
+  // The fold opened or closed (Disclosure, ui.md §5.3): its space opens at once and app.css
+  // settles its lines in; focus stays on its button.
+  #toggleEventFold() {
+    const st = this.#eventState();
+    st.open = !st.open;
+    this.#renderEvents(this.#s);
+  }
+
+  // Drawn again as they change and as their ages move on, line by line by key (D2): a line that
+  // changes is the same line, its words changed at once and its glyph cross-faded (setGlyph), and
+  // only a line arriving fades in, so nothing beside it slides. A control with keyboard focus
+  // keeps it, or gives it to where its line went.
   #renderEvents(s, now = Date.now()) {
     const e = this.els;
-    const events = delegateEvents(s, now);
-    if (!this.#changed('events', events)) { return; }
-    // Rebuilt as their ages move on: a name with keyboard focus keeps it, in its new line.
-    const focused = e.events.contains(document.activeElement) ? document.activeElement.closest('.delegate-event')?.dataset.key : null;
-    e.events.replaceChildren(...events.map((ev) => h('li', { class: 'delegate-event', dataset: { kind: ev.kind, key: ev.key } },
-      glyph(ev.glyph ?? 'delegating', { size: 12 }),
-      h('span', { class: 'delegate-event-text' },
-        ev.before ? `${ev.before}${ev.name ? ' ' : ''}` : '',
-        ev.name ? h('button', { type: 'button', class: 'delegate-link', dataset: { id: ev.id }, onclick: () => this.openDelegate(ev.id) }, ev.name) : null,
-        ev.after ? ` ${ev.after}` : ''))));
-    e.events.hidden = events.length === 0;
-    if (focused) { [...e.events.children].find((li) => li.dataset.key === focused)?.querySelector('.delegate-link')?.focus({ preventScroll: true }); }
+    const lines = delegateEvents(s, now);
+    const fold = delegateFold(lines);
+    const st = this.#eventState();
+    if (!this.#changed('events', [lines, fold, st.open, [...st.more]])) { return; }
+    const had = e.events.contains(document.activeElement) ? document.activeElement : null;
+    const where = had && { key: had.closest('.delegate-event')?.dataset.key ?? null, id: had.dataset.id ?? null, more: had.classList.contains('delegate-more') };
+    const old = new Map([...e.events.querySelectorAll('li.delegate-event')].map((li) => [li.dataset.key, li]));
+    const drawn = this.#eventKeys;
+    const keys = new Set(lines.map((l) => l.key));
+    // A line keyed anew (a start another joined) is the same line, its old key no longer drawn.
+    const was = (line) => (line.was && !keys.has(line.was) ? line.was : null);
+    const items = lines.map((line) => this.#eventLine(old.get(line.key) ?? old.get(was(line)), line, st));
+    this.#eventKeys = keys;
+    if (fold) {
+      e.foldText.textContent = fold.button;
+      e.foldToggle.setAttribute('aria-label', fold.label);
+      e.foldToggle.setAttribute('aria-expanded', String(st.open));
+      e.foldWorking.hidden = !fold.link;
+      e.foldWorking.textContent = fold.link ?? '';
+      e.foldWorking.dataset.id = fold.workingId ?? '';
+      e.fold.toggleAttribute('data-open', st.open);
+      e.foldLines.hidden = !st.open;
+      place(e.foldLines, items);
+      place(e.events, [e.fold]);
+    } else {
+      place(e.events, items);
+      e.foldLines.replaceChildren();
+    }
+    e.events.hidden = lines.length === 0;
+    if (drawn) { items.forEach((li, i) => { if (!drawn.has(lines[i].key) && !drawn.has(was(lines[i]))) { enter(li, 'listItem'); } }); }
+    // A control no longer drawn has lost focus, whatever activeElement says (WebKit keeps a
+    // hidden one there).
+    if (!had || (document.activeElement === had && had.isConnected && !had.hidden && had.getClientRects().length)) { return; }
+    // Its line went into a closed fold: to the fold's button. Its name still drawn, in its line or
+    // one of its own it moved to: to its name there. Else to what its line has left. The fold
+    // gone from under its button or link: to the working delegate's name the link named, else
+    // to the first line's.
+    const key = (where.key && lines.find((l) => was(l) === where.key)?.key) ?? where.key;
+    const li = key ? [...e.events.querySelectorAll('li.delegate-event')].find((x) => x.dataset.key === key) : null;
+    const byId = (root) => (where.id ? [...root.querySelectorAll('li.delegate-event .delegate-link')].find((b) => b.dataset.id === where.id) : null);
+    const target = had === e.foldToggle || had === e.foldWorking ? (fold ? e.foldToggle : byId(e.events) ?? e.events.querySelector('li.delegate-event .delegate-link'))
+      : (fold && !st.open) ? e.foldToggle
+        : (li && byId(li)) ?? byId(e.events) ?? (li && ((where.more ? li.querySelector('.delegate-more') : null) ?? li.querySelector('.delegate-link')));
+    target?.focus({ preventScroll: true });
+  }
+
+  // One line: the delegate icon for a start, the outcome's glyph once it reported back; its words
+  // with each name a link, and its absolute time (the viewer's own) as its tooltip and in its name.
+  #eventLine(li, line, st) {
+    if (!li) { li = h('li', { class: 'delegate-event' }, h('span', { class: 'delegate-event-mark' }), h('span', { class: 'delegate-event-text' })); }
+    li.dataset.kind = line.kind;
+    li.dataset.key = line.key;
+    li.title = line.tip;
+    const mark = li.firstChild;
+    const was = mark.firstChild;
+    if (line.glyph && was?.classList.contains('glyph')) {
+      setGlyph(was, line.glyph, { size: 12 });
+    } else if (line.glyph) {
+      const g = glyph(line.glyph, { size: 12 });
+      if (was) { leave(was, 'glyph'); }
+      mark.replaceChildren(g);
+      if (was) { enter(g, 'glyph'); }
+    } else if (was?.dataset.icon !== 'delegate') {
+      mark.replaceChildren(designIcon('delegate', { size: 16 }));
+    }
+    const expanded = st.more.has(line.key);
+    const parts = eventParts(line, { expanded });
+    const said = JSON.stringify([parts, line.tip]);
+    if (li.dataset.said === said) { return li; }
+    li.dataset.said = said;
+    li.lastChild.replaceChildren(...parts.map((p) => {
+      if (typeof p === 'string') { return p; }
+      if (p.more) {
+        return h('button', { type: 'button', class: 'delegate-link delegate-more', onclick: () => {
+          st.more.add(line.key);
+          this.#renderEvents(this.#s);
+          // To the first name it brought.
+          li.querySelectorAll('.delegate-link')[2]?.focus();
+        } }, `${p.more} more`);
+      }
+      return h('button', { type: 'button', class: 'delegate-link', dataset: { id: p.id }, onclick: () => this.openDelegate(p.id) }, p.name);
+    }), h('span', { class: 'sr-only' }, ` (${line.tip})`));
+    return li;
   }
 
   // A delegate opened from the strip, the list, a nested list or the conversation: in the
@@ -884,30 +1110,44 @@ export class SessionCard {
     if (origin) { e.promptToggle.setAttribute('aria-label', disclosureName(origin, open)); }
   }
 
-  // Details (ui.md §6.2): everything the row leaves out, as a property list.
-  #renderFacts(s) {
+  // Details (ui.md §6.2): everything the row leaves out, as a property list, its rows and their
+  // order the shared table's (details-rows.js). Not responding since is the time it went silent,
+  // which the row's age counts from (§6.13); Message is the bridge's sentence for what is wrong
+  // (#800), plain text, never a link and never the agent's own words, and only here.
+  #renderFacts(list) {
     const e = this.els;
-    const rows = [];
-    const add = (term, value, cls) => {
-      if (value === null || value === undefined || value === '') { return; }
-      rows.push(h('div', { class: `fact${cls ? ` fact-${cls}` : ''}` }, h('dt', null, term), h('dd', null, value)));
+    const cells = new Map();
+    const value = (row) => {
+      switch (row.kind) {
+        case 'agent': return h('span', { class: 'agent-name' }, row.text);
+        case 'branch': return h('span', { class: 'branch' }, row.text);
+        case 'folder': return pathView(row.text);
+        case 'attention': return h('span', { class: 'attention-message', dir: 'ltr' }, row.text);
+        case 'pid': case 'id': return h('span', { class: 'mono' }, row.text);
+        case 'started': return h('time', { datetime: row.at, title: localTime(row.at) }, row.text);
+        default: return row.text;
+      }
     };
-    const b = s.activity.background;
-    add('Agent', h('span', { class: 'agent-name' }, AGENT_NAME[s.agent]), 'agent');
-    add('Machine', this.machineName || null, 'machine');
-    add('Repository', s.repository, 'repo');
-    add('Branch', s.branch ? h('span', { class: 'branch' }, s.branch) : null, 'branch');
-    add('Folder', s.cwd ? pathView(s.cwd) : null, 'folder');
-    add('Model', s.model, 'model');
-    add('Started', s.startedAt ? h('time', { datetime: s.startedAt, title: localTime(s.startedAt) }, localTime(s.startedAt)) : null, 'started');
-    e.since = h('span', { class: 'since' });
-    add('In this state', e.since, 'since');
-    add('Background', [b?.agents ? plural(b.agents, 'background agent', 'background agents') : null, b?.shells ? plural(b.shells, 'background command', 'background commands') : null].filter(Boolean).join(' \u00b7 ') || null, 'background');
-    add('Turns', s.activity.turnCount !== null && s.activity.turnCount !== undefined ? `${s.activity.turnCount} turns` : null, 'turns');
-    add('Compactions', s.activity.compactions ? plural(s.activity.compactions, 'compaction', 'compactions') : null, 'compactions');
-    add('Process', s.processId !== null && s.processId !== undefined ? `pid ${s.processId}` : null, 'pid');
+    const rows = list.map((row) => {
+      const dd = h('dd', null, value(row));
+      cells.set(row.kind, dd);
+      return h('div', { class: `fact fact-${row.kind}` }, h('dt', null, row.term), dd);
+    });
+    this.#factCells = cells;
     e.facts.replaceChildren(...rows);
     this.refreshTimes();
+  }
+
+  // The values that move with the clock (and the status words, which "last seen 2m ago" is one of
+  // while the machine is away), changed where they are, so a selection in another row stays.
+  #tickFacts(s, now) {
+    if (!this.#factCells?.size) { return; }
+    for (const row of detailRows(s, { status: this.#detailsStatus, machine: this.machineName || null, away: this.#detailsAway, now })) {
+      const dd = CLOCK_ROWS.has(row.kind) ? this.#factCells.get(row.kind) : null;
+      // Started's words are in its <time>, which keeps its datetime and its full timestamp's tooltip.
+      const at = row.kind === 'started' ? dd?.firstElementChild ?? dd : dd;
+      if (at && at.textContent !== row.text) { at.textContent = row.text; }
+    }
   }
 
   // What the session's machine is called, and whether its row says so. What is sent from the
@@ -923,22 +1163,16 @@ export class SessionCard {
   // Its machine went offline, came back, or sent a whole new list since (#269): what the row and
   // header say. What it offers to send follows answering(), drawn again by refreshQuestion().
   setStale(stale) {
-    const same = (a, b) => (a?.reason ?? null) === (b?.reason ?? null) && (a?.since ?? null) === (b?.since ?? null);
+    const same = (a, b) => (a?.reason ?? null) === (b?.reason ?? null) && (a?.since ?? null) === (b?.since ?? null)
+      && (a?.grace ?? false) === (b?.grace ?? false) && (a?.drawn ?? false) === (b?.drawn ?? false);
     if (same(stale, this.#stale)) { return; }
     this.#stale = stale ?? null;
     if (this.#s) { this.update(this.#s); }
   }
 
-  // ui.md §2.2 (#269), as facts: "Offline · last seen 2m ago" while its machine is away,
-  // "Reconnecting…" while it has no open channel and is still tried; null otherwise, including
-  // while its snapshot is still coming (its rows say what that snapshot says, and still take
-  // nothing) and for a machine that no longer offers sessions (its host line says so).
+  // ui.md §2.2 (#269), as facts (details-rows.js's awayWords).
   #staleText(now = Date.now()) {
-    const stale = this.#stale;
-    if (!stale || stale.reason === 'confirming' || stale.reason === 'unsupported') { return null; }
-    if (stale.reason === 'reconnecting') { return ['Reconnecting…']; }
-    const seen = ago(stale.since, now);
-    return seen ? ['Offline', `last seen ${seen}`] : ['Offline'];
+    return awayWords(this.#stale, now);
   }
 
   // Activity since the session was last on screen (session-order.js): semibold, and the 6 px
@@ -949,7 +1183,6 @@ export class SessionCard {
     if (unread && !e.unread) {
       e.unread = h('span', { class: 'unread-dot' }, h('span', { class: 'sr-only', id: this.ids.unread }, 'New activity'));
       e.rowLine1.append(e.unread);
-      e.open.setAttribute('aria-labelledby', `${this.ids.glyph} ${this.ids.unread}`);
       this.element.classList.add('unread');
       // Activity dot (ui.md §5.3): fades in, and later out; it never pulses or repeats.
       enter(e.unread, 'activityDot');
@@ -957,9 +1190,16 @@ export class SessionCard {
       leave(e.unread, 'activityDot');
       e.unread.remove();
       e.unread = null;
-      e.open.setAttribute('aria-labelledby', this.ids.glyph);
     }
     this.element.classList.toggle('unread', unread);
+    this.#nameRow();
+  }
+
+  // The row's name with its age, or "New activity" where the dot is drawn in the age's place.
+  #nameRow() {
+    const e = this.els;
+    const { drawn, unsaid } = this.#rowName;
+    e.open.setAttribute('aria-label', [...drawn, e.unread ? 'New activity' : e.rowAge.textContent, ...unsaid].filter(Boolean).join(', '));
   }
 
   setPinned(pinned) {
@@ -979,6 +1219,8 @@ export class SessionCard {
     this.element.classList.toggle('selected', selected);
     if (selected) { this.els.open.setAttribute('aria-current', 'true'); } else { this.els.open.removeAttribute('aria-current'); }
     this.view.hidden = !selected;
+    // Shown again (a row chosen, the browser's Back or Forward): its header whole, the scroll kept.
+    if (selected) { this.collapse?.shown(); }
     // Shown now, in the page it was put into: what holds it there can move its question too.
     // Hidden, nothing of it is read or watched.
     if (selected) {
@@ -1055,6 +1297,8 @@ export class SessionCard {
       el.tabIndex = on || (this.#tab === 'details' && tab === 'conversation') ? 0 : -1;
     }
     e.detailsButton.setAttribute('aria-pressed', this.#tab === 'details' ? 'true' : 'false');
+    // The header is whole on every tab but the conversation.
+    this.collapse?.setPaused(this.#tab !== 'conversation');
   }
 
   // Details: in the inspector, where it is a pane (shown, if it was hidden); otherwise in place
@@ -1091,8 +1335,8 @@ export class SessionCard {
 
   // A phone's overflow menu: Pin, Details and End session (ui.md §6.2).
   #openMore() {
-    const end = this.#stop && !this.#stop.element.querySelector('.end-button')?.disabled ? this.#stop : null;
-    this.#menu.show(this.els.header, [
+    const end = this.#stop?.pressable ? this.#stop : null;
+    this.#menu.show(this.els.bar, [
       { label: this.#pinned ? 'Unpin' : 'Pin', run: () => this.onPin(this, !this.#pinned) },
       { label: 'Details', run: () => { this.setTab('details'); this.focusDetails(); } },
       ...(end ? [{ label: 'End session', run: () => { this.setTab('details'); end.element.querySelector('.end-button').click(); } }] : []),
@@ -1108,10 +1352,14 @@ export class SessionCard {
     this.#stop?.destroy();
     this.#stop = null;
     this.#menu.close(false);
+    this.#dropLeaving();
     this.#dropReceipt();
+    for (const r of this.#closed.splice(0)) { this.#destroyReceipt(r); }
     this.delegates.dispose();
     this.detail.dispose();
     this.#moves?.stop();
+    this.collapse?.destroy();
+    this.#phone?.removeEventListener('change', this.#onPhone);
     clearTimeout(this.#history.timer);
   }
 
@@ -1152,7 +1400,7 @@ export class SessionCard {
         this.#reply = null;
       }
       if (hostId) {
-        this.#reply = new ReplyBox({ machineName: this.machineName, replying: { service: ctx.replies, hostId, sessionId: s.id }, attach: ctx.capabilities.includes('sessions.attach'), largeMax: ctx.largeAttachments?.() ?? 0 });
+        this.#reply = new ReplyBox({ machineName: this.machineName, replying: { service: ctx.replies, hostId, sessionId: s.id }, attach: ctx.capabilities.includes('sessions.attach'), largeMax: ctx.largeAttachments?.() ?? 0, onGoToQuestion: () => this.#goToQuestion(), onChange: () => this.foot?.changed() });
         if (this.#replyDraft.hostId === hostId) { this.#reply.els.input.value = this.#replyDraft.text; }
       }
       this.#replyHost = hostId;
@@ -1173,11 +1421,22 @@ export class SessionCard {
     // Its machine offline, or back without its whole list yet (#269): the form stays, with what
     // was entered, but takes nothing until the machine says the question is still asked.
     const held = staleNote(ctx?.stale, this.machineName, 'answered');
-    if (!this.#changed('question', [q, answerable, answerable ? ctx.hostId : null, able?.why, ctx?.readOnly ?? null, asker, held])) { return; }
+    // An approval the host escaped anything in (#803): how Approve is given for it from here.
+    const escapedMode = q && answerable ? escapedApprove(q, ctx.capabilities) : null;
+    // A quiet hold starting or turning drawn changes the controls only: the panel stays, with what it says,
+    // so a sheet open on it keeps the panel whose hold its signing checks (#950).
+    if (!this.#changed('question', [q, answerable, answerable ? ctx.hostId : null, able?.why, ctx?.readOnly ?? null, asker, held?.updating ? '' : holdKey(held), escapedMode])) { this.#panel?.setHeld(held); return; }
     // Drawn by the app, not by the person typing in it: whatever this moves counts.
     this.#moves?.notOwn();
+    // A new question while the last one's answer is still on its way: that answer goes on as a receipt.
+    if (q && this.#leaving) {
+      const { panel } = this.#leaving;
+      this.#dropLeaving();
+      this.#watchReceipt(panel.answering, panel.q, panel.asker);
+    }
     const old = this.#panel;
     const sameQuestion = !!(old && q && old.questionId === q.id && answerable && old.answering.hostId === ctx.hostId);
+    let leaving = false;
     if (old && !sameQuestion) {
       // The question changed or went while it was being answered. Text the person typed
       // and hasn't sent is kept in the view, not dropped with the form; an answer that went
@@ -1186,11 +1445,17 @@ export class SessionCard {
       const entry = old.entry;
       if (draft) {
         this.#orphan = { text: draft, why: !q || q.id !== old.questionId ? 'changed' : 'unanswerable' };
+      } else if (entry && !q && leaves(entry)) {
+        // Whichever came first, the question going or the answer's result: the same panel, so a
+        // result that arrived first keeps its check, or its pressed option and its words, as the
+        // other order does.
+        this.#leave(old);
+        leaving = true;
       } else if (entry) {
-        this.#watchReceipt(old.answering, old.questionId);
+        this.#watchReceipt(old.answering, old.q, old.asker);
       }
     }
-    old?.destroy();
+    if (!leaving) { old?.destroy(); }
     this.#panel = null;
     let view = '';
     if (q && answerable) {
@@ -1198,25 +1463,28 @@ export class SessionCard {
         machineName: this.machineName,
         answering: { service: ctx.service, hostId: ctx.hostId, sessionId: s.id },
         state: sameQuestion ? old.state : null,
+        sentDraft: sameQuestion ? old.sentDraft : null,
         asker,
+        onSend: (typed) => this.#sent(typed),
+        listed: () => this.#s?.question?.id === q.id,
+        escaped: escapedMode ? { mode: escapedMode === 'confirm' && !ctx.confirm ? 'device' : escapedMode, sign: ctx.confirm ?? null, title: s.title ?? null } : null,
       });
       this.#panel.setHeld(held);
       view = this.#panel.element;
     } else if (q) {
       view = renderQuestion(q, { machineName: this.machineName, why: able.why, readOnly: ctx?.readOnly ?? null, asker });
     }
-    // A new question replaces a receipt that has said its last word. A question that stays moves
-    // up into its place.
+    // A new question replaces a receipt that has said its last word, unless that word was that the
+    // question it was about is no longer waiting: that stays in the conversation (#retireReceipt). A
+    // question that stays moves up into its place.
     let dropped = false;
-    if (q && this.#receipt?.final) {
-      this.#dropReceipt();
-      dropped = true;
-    }
+    if (q && this.#receipt?.final) { dropped = this.#retireReceipt(); }
     // Scroll to a question (ui.md §5.3): one that arrives is brought into sight once the whole
     // update is drawn (#bringQuestion), as long as the conversation was read to its end.
     const arrived = this.#asked !== undefined && !!q && q.id !== this.#asked;
     this.#asked = q?.id ?? null;
-    this.els.question.replaceChildren(...[this.#orphanView(), this.#receipt?.element, view].filter(Boolean));
+    this.#receipt?.redraw();
+    this.els.question.replaceChildren(...[this.#orphanView(), ...this.#closed.map((r) => r.element), this.#receipt?.element, this.#leaving?.panel.element, view].filter(Boolean));
     // An approval's command never slides: a push still under way stops travelling.
     if (view) { stopTravel(view); }
     if (this.#receipt?.fresh) {
@@ -1323,10 +1591,32 @@ export class SessionCard {
 
   // The question brought into sight on purpose (a notification, a Needs you entry): its controls
   // wait as they do for one that arrives. behavior: the page's smooth scroll, or a jump. el: the
-  // part of it to bring into sight (a notification's focused answer), the whole question if not.
+  // part of it that must be in sight (a notification's focused heading). The whole question when
+  // it fits in the pane, so its answers come with it; el when it is taller: brought to the
+  // nearest edge, the whole question moved nowhere from midway through it, and a heading that
+  // had focus stayed out of sight (#893 review, Copilot 4481392664).
   revealQuestion(behavior = scrollBehavior(), el = null) {
     const view = this.#guarded?.isConnected ? this.#guarded : null;
-    if (view) { this.#scrollTo(el && view.contains(el) ? el : view, behavior); }
+    if (!view) { return; }
+    const fits = view.getBoundingClientRect().height <= this.els.scroll.getBoundingClientRect().height;
+    this.#scrollTo(el && view.contains(el) && !fits ? el : view, behavior);
+  }
+
+  // The phone notice's "Go to the question" (ui.md §6.5): an app scroll to the question, which
+  // leaves the header as it was, and focus on its first choice. A question taking nothing yet (its
+  // machine offline) has no choice to focus: its heading takes focus, as a notification's does.
+  #goToQuestion() {
+    const view = this.#guarded?.isConnected ? this.#guarded : null;
+    if (!view) { return; }
+    const usable = (c) => !c.disabled && !c.closest('fieldset:disabled') && c.getClientRects().length > 0;
+    let target = [...view.querySelectorAll('.answer-controls button, .answer-controls input, .answer-controls select, .answer-controls textarea')].find(usable)
+      ?? [...view.querySelectorAll(QUESTION_CONTROLS)].find(usable);
+    if (!target) {
+      target = view.querySelector('.question-head');
+      if (target) { target.tabIndex = -1; }
+    }
+    target?.focus({ preventScroll: true });
+    this.revealQuestion(scrollBehavior(), target);
   }
 
   // A scroll to the question: the guard runs from now and, for a smooth scroll that has somewhere
@@ -1340,9 +1630,17 @@ export class SessionCard {
     this.#scrollEnd = null;
     const v = view.getBoundingClientRect();
     const box = sc.getBoundingClientRect();
+    // What the floating header covers, and the room the scroll leaves below it (scroll-padding-top).
+    const covered = this.collapse?.covered() ?? 0;
+    const room = covered > 0 ? parseFloat(sc.ownerDocument.defaultView?.getComputedStyle?.(sc).getPropertyValue('--ab-space-2')) || 0 : 0;
+    const top = box.top + (covered > 0 ? covered + room : 0);
     // A pixel's rounding is nowhere to go.
-    const moves = sc.getClientRects().length > 0 && (v.top < box.top - 1 || v.bottom > box.bottom + 1);
-    view.scrollIntoView({ block: 'nearest', behavior });
+    // And what the reply area covers at the foot (scroll-padding-bottom).
+    const bottom = box.bottom - (this.collapse?.footCovered() ?? 0);
+    const moves = sc.getClientRects().length > 0 && (v.top < top - 1 || v.bottom > bottom + 1);
+    const scroll = () => view.scrollIntoView({ block: 'nearest', behavior });
+    // A scroll the app makes leaves the header as it was.
+    if (this.collapse) { this.collapse.appScroll(scroll); } else { scroll(); }
     this.#guard();
     if (!moves || behavior !== 'smooth') { return; }
     // Every step of the scroll re-arms it, so it runs out only after the question has stopped
@@ -1393,43 +1691,195 @@ export class SessionCard {
     });
   }
 
-  #watchReceipt({ service, hostId, sessionId }, questionId) {
-    this.#dropReceipt();
-    const element = h('p', { class: 'answer-receipt', role: 'status', 'aria-live': 'polite' });
-    const receipt = { element, final: false, unwatch: null, fresh: true };
+  // question: the one answered, which says what a confirmed answer's value was (answeredValue).
+  // asker: who asked it, for the question kept once it is no longer waiting (renderResolved).
+  #watchReceipt({ service, hostId, sessionId }, question, asker = null) {
+    this.#retireReceipt();
+    const questionId = question.id;
+    // The line, and apart from it the one a screen reader hears it on (receipt.js).
+    const line = h('p', { class: 'answer-receipt' });
+    const live = receiptLive();
+    const element = h('div', { class: 'answer-receipt-slot' }, line, live);
+    let resolved = null;
+    // What the person typed, kept in view with Copy when the form could not take it (notDelivered).
+    let kept = null;
+    // The same request's clock as the form's was: an answer the form left at Passed to the agent
+    // still stalls here, and a handoff inside the quiet window or a dwell still waits it out.
+    const clock = new ReceiptClock({
+      // Closed only once the session no longer lists the question; one still listed (not answerable
+      // from here now) keeps the answer's own words, amber, beside it.
+      describe: (entry, { stalled }) => (this.#s?.question?.id === questionId ? describeAnswer : describeClosed)(entry, this.machineName, { question, stalled }),
+      draw: (d) => {
+        // Its words change as the answer goes, above a question that may stay: whatever they move counts.
+        this.#moves?.notOwn();
+        // A closed answer is the question as it was asked with "No longer waiting" under it, neutral.
+        const closed = d?.tone === 'closed';
+        receipt.closed = closed;
+        if (closed && !resolved) {
+          // Its line is under the question it is about, inside it, and what was kept with it.
+          resolved = renderResolved(question, { asker });
+          element.prepend(resolved);
+          resolved.append(line);
+          if (kept) { line.after(kept.element); }
+        } else if (!closed && resolved) {
+          element.prepend(line);
+          if (kept) { line.after(kept.element); }
+          resolved.remove();
+          resolved = null;
+        }
+        const words = d?.key === 'notDelivered' ? d.words ?? null : null;
+        if (words && (!kept || kept.words !== words)) {
+          kept?.element.remove();
+          kept = { words, element: this.#keptWords(words) };
+          line.after(kept.element);
+        } else if (!words && kept) {
+          kept.element.remove();
+          kept = null;
+        }
+        // "You answered · value" says whose answer it is, and "No longer waiting" is about the question;
+        // anything else says it is about the answer.
+        drawReceipt(line, 'answer-receipt', !d?.text || ['delivered', 'closed', 'notDelivered'].includes(d.key) ? d : { ...d, text: `Your answer: ${d.text}` }, { enters: false });
+      },
+      say: (text) => { live.textContent = text; },
+      heard: () => drawn(live),
+      follow: (fn) => service.watch(hostId, sessionId, questionId, fn),
+    });
+    const receipt = { element, final: false, closed: false, unwatch: null, fresh: true, clock, redraw: null };
     const show = (entry) => {
       if (!entry) { return; }
-      // Its words change as the answer goes, above a question that may stay: whatever they move counts.
-      this.#moves?.notOwn();
-      const { text, tone } = describeAnswer(entry, this.machineName);
-      element.className = `answer-receipt ${tone}`;
-      element.dataset.answer = entry.state === 'done' ? entry.outcome : entry.state;
-      element.textContent = `Your answer: ${text}`;
+      line.dataset.answer = entry.state === 'done' ? entry.outcome : entry.state;
+      clock.show(entry);
       receipt.final = entry.state === 'done';
     };
+    // Drawn again when the session's list has changed what it says (the question has left since).
+    receipt.redraw = () => show(service.get(hostId, sessionId, questionId));
     receipt.unwatch = service.watch(hostId, sessionId, questionId, show);
     show(service.get(hostId, sessionId, questionId));
     this.#receipt = receipt;
   }
 
+  // What the person typed for an answer that did not go, kept in view to read and copy.
+  #keptWords(words) {
+    const ta = h('textarea', { class: 'text-input', readonly: true, rows: 3, 'aria-label': 'What you typed' });
+    ta.value = words;
+    const copy = h('button', {
+      type: 'button',
+      class: 'button secondary answer-copy',
+      onclick: async () => {
+        const ok = await copyText(words);
+        copy.textContent = ok ? 'Copied' : "Couldn't copy";
+        setTimeout(() => { copy.textContent = 'Copy'; }, LINGER_READ_MS);
+      },
+    }, 'Copy');
+    return h('div', { class: 'answer-kept' }, ta, copy);
+  }
+
+  // A host takes a question away as it types the answer, before its result comes back. The panel
+  // stays, with its ring on the control that sent the answer (ui.md §6.5, tap to answer, #617):
+  // delivered, its check holds for sendCheckHold, then the card resolves to "You answered". Any
+  // other result resolves the card at once to the question as asked with "No longer waiting" (or,
+  // not confirmed, its words, neutral), kept in the conversation (ui.md §7): the cause of an amber
+  // or red line is gone with the question, and nothing can be tried again for it.
+  #leave(panel) {
+    this.#dropLeaving();
+    const { service, hostId, sessionId } = panel.answering;
+    const leaving = { panel, unwatch: null, timer: null };
+    const resolve = () => {
+      if (this.#leaving !== leaving) { return; }
+      this.#leaving = null;
+      leaving.unwatch?.();
+      this.#watchReceipt(panel.answering, panel.q, panel.asker);
+      if (panel.element.isConnected) {
+        this.#moves?.notOwn();
+        panel.element.replaceWith(this.#receipt.element);
+        this.#receipt.fresh = false;
+        enter(this.#receipt.element, 'acknowledge', { dy: 1 });
+      }
+      panel.element.remove();
+      panel.destroy();
+    };
+    const settle = (entry) => {
+      if (this.#leaving !== leaving || leaving.timer || !entry || entry.state === 'sending' || entry.state === 'waiting') { return; }
+      if (entry.state === 'done' && entry.outcome === 'delivered') {
+        // For what is left of its check: all of it, unless the result came before the question went.
+        const until = panel.checkUntil;
+        leaving.timer = setTimeout(resolve, until === null ? ReceiptTiming.sendCheckHoldMs : Math.max(0, until - Date.now()));
+      } else {
+        // After the watchers being told now, the panel's own among them: none is told of a view it has left.
+        queueMicrotask(resolve);
+      }
+    };
+    this.#leaving = leaving;
+    leaving.unwatch = service.watch(hostId, sessionId, panel.questionId, settle);
+    settle(service.get(hostId, sessionId, panel.questionId));
+  }
+
+  #dropLeaving() {
+    const l = this.#leaving;
+    if (!l) { return; }
+    this.#leaving = null;
+    clearTimeout(l.timer);
+    l.unwatch?.();
+    l.panel.element.remove();
+    l.panel.destroy();
+  }
+
   #dropReceipt() {
-    this.#receipt?.unwatch?.();
-    this.#receipt?.element.remove();
+    this.#destroyReceipt(this.#receipt);
     this.#receipt = null;
   }
 
+  #destroyReceipt(r) {
+    r?.unwatch?.();
+    r?.clock.destroy();
+    r?.element.remove();
+  }
+
+  // The receipt gives way to the next one, or to the next question. One that closed (its question
+  // is no longer waiting) is kept, newest last, up to CLOSED_KEPT; any other is dropped. Whether it
+  // was dropped: the question that follows moves up into its place.
+  #retireReceipt() {
+    const r = this.#receipt;
+    if (!r) { return false; }
+    if (!r.closed) {
+      this.#dropReceipt();
+      return true;
+    }
+    this.#receipt = null;
+    this.#closed.push(r);
+    while (this.#closed.length > CLOSED_KEPT) { this.#destroyReceipt(this.#closed.shift()); }
+    return false;
+  }
+
+  // An answer went from the form: text kept for the person (#orphanView) that is in it has been sent.
+  #sent(typed) {
+    const o = this.#orphan;
+    const text = o?.text.trim();
+    if (text && typed.includes(text)) { this.#dropOrphan(); }
+  }
+
+  #dropOrphan() {
+    const o = this.#orphan;
+    if (!o) { return; }
+    this.#orphan = null;
+    o.element?.remove();
+    this.#movedUnder();
+  }
+
+  // Text the person typed for a question that went, kept until they dismiss it or send it (ui.md §7).
+  // A neutral note: what it says is over, so it isn't amber, and it stays through the next turn.
   #orphanView() {
     const o = this.#orphan;
     if (!o) { return null; }
     if (!o.element) {
       const ta = h('textarea', { class: 'text-input', readonly: true, rows: 3, 'aria-label': 'What you typed' });
       ta.value = o.text;
-      o.element = h('div', { class: 'question-changed', role: 'alert' },
-        h('p', { class: 'note warn' }, o.why === 'changed'
+      o.element = h('div', { class: 'question-changed', role: 'status' },
+        h('p', { class: 'note' }, o.why === 'changed'
           ? 'The question changed before you sent your answer. It was answered at the machine, or the agent moved on. What you typed is kept here.'
           : 'This question can no longer be answered from here. What you typed is kept here.'),
         ta,
-        h('button', { type: 'button', class: 'button secondary', onclick: () => { this.#orphan = null; o.element.remove(); this.#movedUnder(); } }, 'Dismiss'));
+        h('button', { type: 'button', class: 'button secondary', onclick: () => this.#dropOrphan() }, 'Dismiss'));
     }
     return o.element;
   }
@@ -1437,13 +1887,9 @@ export class SessionCard {
   refreshTimes(now = Date.now()) {
     const s = this.#s;
     const e = this.els;
-    // Idle needs no clock; delegating does, since it is waiting on something.
-    const since = sessionStatus(s).view === 'idle' ? '' : duration(s.statusSince, now);
-    if (e.since) {
-      e.since.textContent = since ? `for ${since}` : '';
-      e.since.closest('.fact')?.toggleAttribute('hidden', !since);
-    }
-    e.rowAge.textContent = ago(s.updatedAt, now);
+    this.#tickFacts(s, now);
+    e.rowAge.textContent = ago(rowAt(s), now);
+    this.#nameRow();
     e.agentAge.textContent = ago(mainVoice(s).at ?? s.updatedAt, now);
     if (this.#promptAt) { e.promptAge.textContent = ago(this.#promptAt, now); }
     this.delegates.refreshTimes(now);

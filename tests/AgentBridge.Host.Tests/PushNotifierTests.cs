@@ -64,15 +64,15 @@ public sealed class PushNotifierTests : IDisposable
 
     PushPeer Peer(string device, string account = Account, bool inAccount = true) => new(device, device == Phone ? "iPhone" : "Laptop", account, inAccount);
 
-    object? Subscribe(string device, string? endpoint = null, PushPeer? peer = null)
+    object? Subscribe(string device, string? endpoint = null, PushPeer? peer = null, string? name = null, string app = "https://danswett.github.io/agent-bridge/app/")
     {
         if (!browsers.TryGetValue(device, out var b)) { browsers[device] = b = (P256KeyPair.Generate(), System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)); }
         var data = JsonSerializer.SerializeToElement(new
         {
             endpoint = endpoint ?? $"https://web.push.apple.com/{device}",
             keys = new { p256dh = B64Url.Encode(b.Key.Public), auth = B64Url.Encode(b.Auth) },
-            app = "https://danswett.github.io/agent-bridge/app/",
-            device = device == Phone ? "iPhone" : "Laptop",
+            app,
+            device = name ?? (device == Phone ? "iPhone" : "Laptop"),
         });
         return notifier.Handle(peer ?? Peer(device), Ops.PushSubscribe, data);
     }
@@ -122,6 +122,121 @@ public sealed class PushNotifierTests : IDisposable
         source.Upsert(S("s1", SessionStatus.Waiting, response: "thinking", question: Q("q1")));
         await After(TimeSpan.FromSeconds(10));
         Assert.Single(sender.Sent);
+    }
+
+    // #780: what a reboot took, to every device, as words only. An app from before restored reads
+    // it as a question; with no question and no session named, it opens the machine and nothing
+    // that could be answered.
+    [Fact]
+    public async Task What_a_reboot_took_reaches_every_device_naming_no_question_and_opening_only_the_machine()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+
+        notifier.NotifyRestore(new RestoreNotice
+        {
+            At = T,
+            Cause = RestoreCause.Reboot,
+            Why = RestoreWhy.Pending,
+            Offered = [new RestoreSession { Id = "s1", Agent = AgentKind.Copilot, Title = "Fix the login", MidTurn = true }, new RestoreSession { Id = "s2", Agent = AgentKind.Claude, QuestionLost = true }],
+        });
+        await After(TimeSpan.Zero);
+
+        var received = Received();
+        Assert.Equal([Phone, Laptop], received.Select(r => r.Device).Order(StringComparer.Ordinal));
+        var (_, n, ttl, urgency, topic) = received.Single(r => r.Device == Phone);
+        Assert.Equal("restored", Kind(n));
+        Assert.Equal("DEV restarted", n.GetProperty("title").GetString());
+        Assert.Equal("2 sessions went with it.\nMid-turn: Fix the login.\nA question went unanswered in Claude session.\nResume them from Launch.", n.GetProperty("body").GetString());
+        Assert.Equal($"https://danswett.github.io/agent-bridge/app/?host={Machine}", n.GetProperty("navigate").GetString());
+        Assert.Equal("", n.GetProperty("data").GetProperty("session").GetString());
+        Assert.False(n.GetProperty("data").TryGetProperty("question", out _));
+        Assert.Equal((86400, "normal", PushNotice.Topic(Machine, "~restore")), (ttl, urgency, topic));
+    }
+
+    // #801, Q-O3: who restarted the machine, kept in the other devices' trays. As a resolved notice
+    // the PWA's worker withdrew it the moment it showed it (Codex on #886); finished and done, it is
+    // silent and stays. The device that acted is not told, and the task says when it has gone.
+    [Fact]
+    public async Task A_machine_notice_reaches_the_other_devices_as_a_silent_one_kept_in_the_tray()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+
+        var sent = notifier.NotifyMachine(Phone, "DEV", "DEV was restarted from iPhone (pwa aaaaaaaa) at 21:00 PT.");
+        Assert.False(sent.IsCompleted);
+        await After(TimeSpan.Zero);
+
+        await sent.WaitAsync(TimeSpan.FromSeconds(30));
+        var (device, n, _, urgency, topic) = Assert.Single(Received());
+        Assert.Equal(Laptop, device);
+        Assert.Equal("finished", Kind(n));
+        Assert.Equal("done", n.GetProperty("data").GetProperty("class").GetString());
+        Assert.True(n.GetProperty("silent").GetBoolean());
+        Assert.Equal($"https://danswett.github.io/agent-bridge/app/?host={Machine}", n.GetProperty("navigate").GetString());
+        Assert.Equal(("normal", PushNotice.Topic(Machine, PushNotifier.MachineNotice)), (urgency, topic));
+    }
+
+    // A subscribed URL that already routes somewhere (the page it was installed from was a session's)
+    // still opens only the machine: its routing is replaced, not appended to, and nothing else in it
+    // is lost.
+    [Fact]
+    public async Task What_a_reboot_took_opens_only_the_machine_from_an_app_url_that_already_routes_to_a_session()
+    {
+        Start();
+        Subscribe(Phone, app: "https://danswett.github.io/agent-bridge/app/?v=2&host=other&session=s9&question=q9#top");
+
+        notifier.NotifyRestore(new RestoreNotice
+        {
+            At = T,
+            Cause = RestoreCause.Crash,
+            Why = RestoreWhy.Pending,
+            Offered = [new RestoreSession { Id = "s1", Agent = AgentKind.Copilot, Title = "Fix the login" }],
+        });
+        await After(TimeSpan.Zero);
+
+        var n = Assert.Single(Received()).Notification;
+        Assert.Equal($"https://danswett.github.io/agent-bridge/app/?v=2&host={Machine}", n.GetProperty("navigate").GetString());
+    }
+
+    // #780 Host B: what was restored is said first, and what was not after it, with those that died
+    // again too soon after a restore counted.
+    [Fact]
+    public async Task What_a_reboot_took_says_how_many_were_restored_and_which_are_left_to_resume()
+    {
+        Start();
+        Subscribe(Phone);
+
+        notifier.NotifyRestore(new RestoreNotice
+        {
+            At = T,
+            Cause = RestoreCause.Reboot,
+            Why = RestoreWhy.Pending,
+            Restored = 3,
+            Loops = 1,
+            Offered = [new RestoreSession { Id = "s1", Agent = AgentKind.Copilot, Title = "Fix the login" }],
+        });
+        await After(TimeSpan.Zero);
+
+        var (_, n, _, _, _) = Assert.Single(Received());
+        Assert.Equal("3 sessions were restored, idle.\n1 more went with it.\n1 died again soon after a restore, so it wasn't restored again.\nResume them from Launch.", n.GetProperty("body").GetString());
+    }
+
+    // Restored or not, a turn cut short and a question nobody answered are said.
+    [Fact]
+    public async Task What_restored_sessions_lost_is_said_when_every_session_was_restored()
+    {
+        Start();
+        Subscribe(Phone);
+
+        notifier.NotifyRestore(new RestoreNotice { At = T, Cause = RestoreCause.Reboot, Why = RestoreWhy.Pending, Restored = 2 },
+            [new RestoreSession { Id = "s1", Agent = AgentKind.Copilot, Title = "Fix the login", MidTurn = true }, new RestoreSession { Id = "s2", Agent = AgentKind.Claude, QuestionLost = true }]);
+        await After(TimeSpan.Zero);
+
+        var (_, n, _, _, _) = Assert.Single(Received());
+        Assert.Equal("2 sessions were restored, idle.\nMid-turn: Fix the login.\nA question went unanswered in Claude session.", n.GetProperty("body").GetString());
     }
 
     [Fact]
@@ -200,6 +315,107 @@ public sealed class PushNotifierTests : IDisposable
         Assert.False(n.GetProperty("data").TryGetProperty("question", out _));
         Assert.Equal($"https://danswett.github.io/agent-bridge/app/?host={Machine}&session=s1", n.GetProperty("navigate").GetString());
         Assert.Equal((21600, "normal"), (ttl, urgency));
+    }
+
+    // #913: each notice says its tier, so a client follows the host's class rather than its own
+    // rules. A resolved notice withdraws one and is none itself.
+    [Fact]
+    public async Task A_question_goes_as_needs_you_its_finished_turn_as_done_and_its_withdrawal_with_no_class()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        notifier.Answered(Laptop, "s1", "q1");
+        source.Upsert(S("s1", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Postgres it is.", turns: 2));
+        await After(TimeSpan.FromSeconds(3));
+
+        var classes = Received()
+            .Select(r => (Kind(r.Notification), r.Notification.GetProperty("data").TryGetProperty("class", out var c) ? c.GetString() : null))
+            .Distinct().ToList();
+        Assert.Equal(new (string, string?)[] { ("question", "needsYou"), ("resolved", null), ("finished", "done") }, classes);
+    }
+
+    // #913 (the owner's B): a finished turn is Done, which waits and never alerts, on any client.
+    // The question before it still alerts.
+    [Fact]
+    public async Task A_finished_turn_goes_silent_while_a_question_does_not()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s1", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Postgres it is.", turns: 2));
+        await After(TimeSpan.FromSeconds(3));
+
+        var silent = Received()
+            .Select(r => (Kind(r.Notification), r.Notification.TryGetProperty("silent", out var s) && s.GetBoolean()))
+            .Where(r => r.Item1 != "resolved").Distinct().ToList();
+        Assert.Equal(new[] { ("question", false), ("finished", true) }, silent);
+    }
+
+    // #913 Q3: a finished push is always done, even for a session whose own class is needsYou at
+    // the time (here it stopped responding as its turn ended), so no client alerts it as finished.
+    [Fact]
+    public async Task A_finished_push_is_never_needs_you_even_when_its_session_is()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(1));
+        var stalled = S("s1", SessionStatus.Idle, response: "Postgres it is.", turns: 2) with
+        {
+            Attention = new Attention { Kind = AttentionKind.NotResponding, Since = T, LastEventAt = T },
+        };
+        Assert.Equal(NotificationClass.NeedsYou, AgentBridge.Host.Core.NotificationClasses.Of(stalled));
+        source.Upsert(stalled);
+        await After(TimeSpan.FromSeconds(3));
+
+        var n = Assert.Single(Received()).Notification;
+        Assert.Equal(("finished", "done"), (Kind(n), n.GetProperty("data").GetProperty("class").GetString()));
+    }
+
+    // #913: sign-in needed and sessions a crash took are needsYou; a planned reboot or restart of
+    // the host is no tier of #913's, so its notice carries none and clients keep today's rules.
+    [Theory]
+    [InlineData(RestoreCause.Crash, "needsYou")]
+    [InlineData(RestoreCause.Reboot, null)]
+    [InlineData(RestoreCause.Restart, null)]
+    public async Task What_a_crash_took_goes_as_needs_you_and_a_reboot_with_no_class(RestoreCause cause, string? expected)
+    {
+        Start();
+        Subscribe(Phone);
+        notifier.NotifyRestore(new RestoreNotice
+        {
+            At = T,
+            Cause = cause,
+            Why = RestoreWhy.Pending,
+            Offered = [new RestoreSession { Id = "s1", Agent = AgentKind.Copilot, Title = "Fix the login", MidTurn = true }],
+        });
+        await After(TimeSpan.Zero);
+
+        var data = Assert.Single(Received()).Notification.GetProperty("data");
+        Assert.Equal(expected, data.TryGetProperty("class", out var c) ? c.GetString() : null);
+    }
+
+    [Fact]
+    public async Task A_sign_in_notice_goes_as_needs_you()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with
+        {
+            Attention = new Attention { Kind = AttentionKind.SignInNeeded, Since = T, Agent = AgentKind.Copilot, Provider = "github" },
+        });
+        await After(TimeSpan.Zero);
+
+        var n = Assert.Single(Received()).Notification;
+        Assert.Equal(("signIn", "needsYou"), (Kind(n), n.GetProperty("data").GetProperty("class").GetString()));
     }
 
     [Fact]
@@ -304,6 +520,828 @@ public sealed class PushNotifierTests : IDisposable
         await TurnAsync("four", 4);
         Assert.Equal(3, sender.Sent.Count);
         Assert.Equal("DEV · finished\nfour", LastBody());
+    }
+
+    // #1190: where a push's time goes, in the host's log: when what it says was first seen, when the
+    // host made the notice, handed it to the relay and heard back, by the start of the ids only.
+    [Fact]
+    public async Task A_question_push_logs_when_it_was_queued_decided_sent_and_answered_by_the_push_service()
+    {
+        Start();
+        Subscribe(Phone);
+        sender.Respond = _ =>
+        {
+            time.Advance(TimeSpan.FromMilliseconds(250));
+            return new PushResult(201, null);
+        };
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+
+        await After(TimeSpan.FromSeconds(2));
+
+        var line = Assert.Single(logs, l => l.StartsWith("push question ", StringComparison.Ordinal));
+        Assert.Equal("push question session=s1 device=aaaaaaaa queued=2026-10-28T04:00:00.000Z decided=+2000ms sent=+2000ms response=+2250ms status=201 attempt=1 outcome=delivered", line);
+        Assert.DoesNotContain(Phone, line);
+        Assert.DoesNotContain("Which database", line);
+    }
+
+    [Fact]
+    public async Task A_push_the_push_service_turns_away_for_now_logs_its_status_and_that_it_will_be_retried()
+    {
+        Start();
+        Subscribe(Phone);
+        sender.Respond = _ => new PushResult(503, "busy");
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+
+        await After(TimeSpan.FromSeconds(2));
+
+        Assert.Contains("push question session=s1 device=aaaaaaaa queued=2026-10-28T04:00:00.000Z decided=+2000ms sent=+2000ms response=+2000ms status=503 attempt=1 outcome=retrying", logs);
+    }
+
+    [Fact]
+    public async Task A_finished_turn_not_pushed_to_a_device_on_screen_is_logged_as_dropped_there_and_sent_to_the_other()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        notifier.Watching = device => device == Phone;
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+
+        await After(TimeSpan.FromSeconds(3));
+
+        Assert.Contains("push finished session=s1 device=aaaaaaaa queued=2026-10-28T04:00:00.000Z decided=+3000ms dropped=on-screen at=+3000ms", logs);
+        Assert.Contains("push finished session=s1 device=bbbbbbbb queued=2026-10-28T04:00:00.000Z decided=+3000ms sent=+3000ms response=+3000ms status=201 attempt=1 outcome=delivered", logs);
+    }
+
+    [Fact]
+    public async Task A_finished_push_that_waited_for_the_relay_is_logged_as_dropped_once_its_device_is_on_screen()
+    {
+        Start();
+        Subscribe(Phone);
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+
+        notifier.Watching = device => device == Phone;
+        notifier.Attach(new FakeSender(Account));
+        await After(TimeSpan.FromSeconds(5));
+
+        Assert.Contains("push finished session=s1 device=aaaaaaaa queued=2026-10-28T04:00:00.000Z decided=+3000ms dropped=on-screen at=+8000ms", logs);
+    }
+
+    [Fact]
+    public async Task A_finished_turn_held_by_the_ten_minute_collapse_logs_that_it_is_held_and_how_long_it_took_once_it_goes()
+    {
+        Start();
+        Subscribe(Phone);
+        async Task TurnAsync(string response, int turns)
+        {
+            source.Upsert(S("s1", SessionStatus.Working, turns: turns - 1));
+            source.Upsert(S("s1", SessionStatus.Idle, response: response, turns: turns));
+            await After(TimeSpan.FromSeconds(3));
+        }
+
+        await TurnAsync("one", 1);
+        await TurnAsync("two", 2);
+        Assert.Contains("push finished session=s1 device=aaaaaaaa queued=2026-10-28T04:00:03.000Z decided=+3000ms held=collapse until=+600000ms", logs);
+
+        await After(new PushOptions().FinishedCollapse);
+        Assert.Contains("push finished session=s1 device=aaaaaaaa queued=2026-10-28T04:00:03.000Z decided=+3000ms sent=+603000ms response=+603000ms status=201 attempt=1 outcome=delivered", logs);
+    }
+
+    // #1190: what a device says it shows (sessions.focus), as SessionService.Presences gives it; input
+    // so many seconds before now, or null for a device that gave no idleMs.
+    DevicePresence Said(string device, bool visible = true, string? open = null, string? question = null, int? inputSecondsAgo = 10) =>
+        new(device, visible, open, question, inputSecondsAgo is { } s ? time.GetUtcNow() - TimeSpan.FromSeconds(s) : null);
+
+    // The owner's rule (#1190): no finished push while the person uses the app, on that device or any other.
+    [Fact]
+    public async Task A_finished_turn_is_pushed_to_none_of_the_persons_devices_while_one_of_them_is_in_use()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        var said = new List<DevicePresence> { Said(Phone) };
+        notifier.Presences = () => said;
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+
+        await After(TimeSpan.FromSeconds(3));
+
+        Assert.Empty(sender.Sent);
+        Assert.Contains("push finished session=s1 device=aaaaaaaa queued=2026-10-28T04:00:00.000Z decided=+3000ms dropped=in-use at=+3000ms", logs);
+        Assert.Contains("push finished session=s1 device=bbbbbbbb queued=2026-10-28T04:00:00.000Z decided=+3000ms dropped=in-use-elsewhere by=aaaaaaaa at=+3000ms", logs);
+    }
+
+    // Presence that is stale, unknown (no idleMs) or out of sight is no sign of use: send as before.
+    [Theory]
+    [InlineData(true, 123)]
+    [InlineData(true, null)]
+    [InlineData(false, 10)]
+    public async Task A_finished_turn_still_goes_when_the_persons_presence_is_stale_unknown_or_out_of_sight(bool visible, int? inputSecondsAgo)
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        var said = new List<DevicePresence> { Said(Phone, visible, inputSecondsAgo: inputSecondsAgo) };
+        notifier.Presences = () => said;
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+
+        await After(TimeSpan.FromSeconds(3));
+
+        Assert.Equal([Phone, Laptop], Received().Select(r => r.Device).Order());
+    }
+
+    // A question needs the person, who may be in another session: it goes, at its usual time, to a
+    // device in use, unless that device shows its very card, or the device is not in use at all.
+    [Theory]
+    [InlineData("s2", "q1", 10)]
+    [InlineData("s1", "q0", 10)]
+    [InlineData("s1", null, 10)]
+    [InlineData(null, null, 10)]
+    [InlineData("s1", "q1", null)]
+    [InlineData("s1", "q1", 150)]
+    public async Task A_question_still_goes_to_a_device_in_use_unless_it_shows_that_questions_card(string? open, string? question, int? inputSecondsAgo)
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        var said = new List<DevicePresence> { Said(Phone, open: open, question: question, inputSecondsAgo: inputSecondsAgo) };
+        notifier.Presences = () => said;
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+
+        await After(TimeSpan.FromSeconds(2));
+
+        Assert.Equal([Phone, Laptop], Received().Select(r => r.Device).Order());
+    }
+
+    // Seen on a device in use counts for every device (Creative's ruling on #1190).
+    [Fact]
+    public async Task A_question_whose_card_a_device_in_use_shows_is_pushed_to_none_of_the_persons_devices()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        var said = new List<DevicePresence> { Said(Phone, open: "s1", question: "q1") };
+        notifier.Presences = () => said;
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+
+        await After(TimeSpan.FromSeconds(2));
+
+        Assert.Empty(sender.Sent);
+        Assert.Contains("push question session=s1 device=aaaaaaaa queued=2026-10-28T04:00:00.000Z decided=+2000ms dropped=card-on-screen at=+2000ms", logs);
+        Assert.Contains("push question session=s1 device=bbbbbbbb queued=2026-10-28T04:00:00.000Z decided=+2000ms dropped=card-on-screen-elsewhere by=aaaaaaaa at=+2000ms", logs);
+    }
+
+    // Held back, it would leave the earlier question, answered, on a device that shows its notice:
+    // there the new one goes, and replaces it.
+    [Fact]
+    public async Task A_question_whose_card_a_device_in_use_shows_still_replaces_an_earlier_questions_notice_on_any_device()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        var said = new List<DevicePresence>();
+        notifier.Presences = () => said;
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q0")));
+        await After(TimeSpan.FromSeconds(2));
+
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        said.Add(Said(Phone, open: "s1", question: "q1"));
+        await After(TimeSpan.FromSeconds(2));
+
+        Assert.Equal([Phone, Laptop], Received().Where(r => r.Notification.GetProperty("data").GetProperty("question").GetString() == "q1").Select(r => r.Device).Order());
+    }
+
+    // Checked as it goes, not as it is made: a device that came into use while the notice waited for
+    // the relay holds it back, and one that went idle meanwhile no longer does.
+    [Fact]
+    public async Task A_device_that_comes_into_use_before_a_waiting_finished_push_goes_holds_it_back()
+    {
+        Start();
+        Subscribe(Phone);
+        var said = new List<DevicePresence>();
+        notifier.Presences = () => said;
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+        Assert.Equal(1, notifier.Pending);
+
+        said.Add(Said(Phone));
+        var next = new FakeSender(Account);
+        notifier.Attach(next);
+        await notifier.PumpAsync();
+
+        Assert.Empty(next.Sent);
+        Assert.Equal(0, notifier.Pending);
+    }
+
+    [Fact]
+    public async Task A_device_in_use_when_a_finished_push_was_made_but_idle_before_it_goes_is_sent_it()
+    {
+        Start();
+        Subscribe(Phone);
+        var said = new List<DevicePresence> { Said(Phone) };
+        notifier.Presences = () => said;
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+        Assert.Equal(1, notifier.Pending);
+
+        time.Advance(TimeSpan.FromMinutes(2));
+        var next = new FakeSender(Account);
+        notifier.Attach(next);
+        await notifier.PumpAsync();
+
+        Assert.Single(next.Sent);
+    }
+
+    // In use means input less than two minutes before the push goes (decided at +3 s), not before it was made.
+    [Theory]
+    [InlineData(119, false)]
+    [InlineData(120, true)]
+    [InlineData(121, true)]
+    public async Task A_finished_turn_is_held_back_with_input_119_seconds_before_it_goes_and_sent_with_input_120_or_121(int secondsBeforeSend, bool sent)
+    {
+        Start();
+        Subscribe(Phone);
+        notifier.Presences = () => [new DevicePresence(Phone, true, null, null, T.AddSeconds(3 - secondsBeforeSend))];
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+
+        await After(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(sent ? 1 : 0, sender.Sent.Count);
+    }
+
+    // As Sees: the finished notice takes the place of the question notice still on the device, which
+    // held back would stay there, answered.
+    [Fact]
+    public async Task A_finished_turn_still_replaces_a_question_notice_on_the_device_in_use()
+    {
+        Start();
+        Subscribe(Phone);
+        var inUse = false;
+        notifier.Presences = () => inUse ? new[] { Said(Phone, open: "s1") } : [];
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+
+        inUse = true;
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "All done."));
+        await After(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(["question", "finished"], Received().Select(r => Kind(r.Notification)));
+    }
+
+    // The reminder is the question's own notice again: on the card's screen it is as read.
+    [Fact]
+    public async Task A_reminder_of_a_question_whose_card_a_device_in_use_shows_is_not_sent()
+    {
+        Start();
+        Subscribe(Phone);
+        var showing = false;
+        notifier.Presences = () => showing ? new[] { Said(Phone, open: "s1", question: "q1") } : [];
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Single(sender.Sent);
+
+        showing = true;
+        await After(TimeSpan.FromMinutes(15));
+        await After(TimeSpan.FromSeconds(1));
+
+        Assert.Single(sender.Sent);
+        Assert.Contains(logs, l => l.Contains("push question session=s1 device=aaaaaaaa", StringComparison.Ordinal) && l.Contains("dropped=card-on-screen", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_question_whose_card_is_open_on_a_device_out_of_sight_still_goes_to_every_device()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        notifier.Presences = () => [Said(Phone, visible: false, open: "s1", question: "q1")];
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+
+        await After(TimeSpan.FromSeconds(2));
+
+        Assert.Equal([Phone, Laptop], Received().Select(r => r.Device).Order());
+    }
+
+    // One channel in use is enough, whatever the device's other channels and the other devices say.
+    [Fact]
+    public async Task A_device_in_use_on_one_channel_holds_back_a_finished_turn_though_its_other_channel_is_hidden_and_another_device_is_stale()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        notifier.Presences = () => [Said(Phone, visible: false), Said(Laptop, inputSecondsAgo: 200), Said(Phone, open: "s2")];
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+
+        await After(TimeSpan.FromSeconds(3));
+
+        Assert.Empty(sender.Sent);
+        Assert.Contains("push finished session=s1 device=aaaaaaaa queued=2026-10-28T04:00:00.000Z decided=+3000ms dropped=in-use at=+3000ms", logs);
+        Assert.Contains("push finished session=s1 device=bbbbbbbb queued=2026-10-28T04:00:00.000Z decided=+3000ms dropped=in-use-elsewhere by=aaaaaaaa at=+3000ms", logs);
+    }
+
+    // Only finished turns and questions are held back: a resolved replaces what is shown, and the
+    // rest need the person.
+    [Fact]
+    public async Task Restored_sign_in_resolved_and_grouped_notices_still_go_while_a_device_is_in_use()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        notifier.Presences = () => [Said(Phone, open: "s9")];
+
+        notifier.NotifyRestore(new RestoreNotice { At = T, Cause = RestoreCause.Reboot, Why = RestoreWhy.Pending, Restored = 1 });
+        source.Upsert(S("s5", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut with { Account = "octo" } });
+        await After(TimeSpan.Zero);
+
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        notifier.Answered(Laptop, "s1", "q1");
+        source.Upsert(S("s1", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(2));
+
+        await After(TimeSpan.FromHours(1));
+        source.Upsert(S("s2", SessionStatus.Waiting, question: Q("q2")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s3", SessionStatus.Waiting, question: Q("q3")));
+        await After(TimeSpan.FromSeconds(10));
+
+        var toPhone = Received().Where(r => r.Device == Phone).Select(r => Kind(r.Notification)).ToList();
+        Assert.Contains("restored", toPhone);
+        Assert.Contains("signIn", toPhone);
+        Assert.Contains("resolved", toPhone);
+        Assert.Contains("group", toPhone);
+        Assert.DoesNotContain(logs, l => l.Contains("dropped=in-use", StringComparison.Ordinal) || l.Contains("dropped=card-on-screen", StringComparison.Ordinal));
+    }
+
+    static readonly Attention SignedOut = new() { Kind = AttentionKind.SignInNeeded, Since = T, Agent = AgentKind.Copilot, Provider = "github" };
+
+    // The pushes about sessions, without the machine's sign-in notices.
+    List<string> SessionKinds() => [.. Received().Select(r => Kind(r.Notification)).Where(k => k != "signIn")];
+
+    int SignInsSent() => Received().Count(r => Kind(r.Notification) == "signIn");
+
+    // #800 P0: a 401 stopped every session on the machine, each idle beside its last answer, and
+    // nothing told the owner. One notice per agent and account, at once, on every device, in ui.md
+    // §6.13's words; never per session, never for an agent error; again hourly while it lasts.
+    [Fact]
+    public async Task Sessions_that_need_sign_in_send_one_notice_per_agent_and_account_at_once_and_again_hourly_while_any_still_does()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        var octo = SignedOut with { Account = "octo" };
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = octo });
+        source.Upsert(S("s2", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = octo with { Since = T.AddSeconds(5) } });
+        source.Upsert(S("s3", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = new Attention { Kind = AttentionKind.Error, Since = T, Agent = AgentKind.Copilot } });
+        await After(TimeSpan.Zero);
+
+        var sent = Received();
+        Assert.Equal([Phone, Laptop], sent.Select(r => r.Device).Order());
+        var (_, n, ttl, urgency, topic) = sent.Single(r => r.Device == Phone);
+        var key = PushNotice.SignInKey(AgentKind.Copilot, "octo");
+        Assert.Equal(("Copilot on DEV needs sign-in", "2 sessions affected", $"{Machine}:{key}"), (n.GetProperty("title").GetString(), n.GetProperty("body").GetString(), n.GetProperty("tag").GetString()));
+        Assert.Equal($"https://danswett.github.io/agent-bridge/app/?host={Machine}&signin=copilot", n.GetProperty("navigate").GetString());
+        var data = n.GetProperty("data");
+        Assert.Equal(("signIn", "copilot", 2, false), (Kind(n), data.GetProperty("agent").GetString(), data.GetProperty("sessions").GetInt32(), data.TryGetProperty("session", out _)));
+        Assert.Equal((21600, "high", PushNotice.Topic(Machine, key)), (ttl, urgency, topic));
+        // The owner's question sound (ui.md §6.13), and nothing of the account.
+        Assert.False(n.TryGetProperty("silent", out _));
+        Assert.DoesNotContain("octo", n.GetRawText(), StringComparison.Ordinal);
+
+        await After(TimeSpan.FromMinutes(59));
+        Assert.Equal(2, sender.Sent.Count);
+        await After(TimeSpan.FromMinutes(1));
+        Assert.Equal(4, SignInsSent());
+    }
+
+    [Fact]
+    public async Task Once_every_session_is_signed_in_again_a_waiting_sign_in_notice_is_withdrawn_and_the_next_failure_notifies_at_once()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut });
+        await After(TimeSpan.Zero);
+        Assert.Equal(1, SignInsSent());
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Answered.", turns: 2));
+        await After(TimeSpan.Zero);
+
+        // Within the hour, but a new failure after the last was cleared: at once. Cleared again
+        // before it could go: withdrawn.
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Answered.", turns: 3) with { Attention = SignedOut with { Since = T.AddMinutes(1) } });
+        await After(TimeSpan.Zero);
+        Assert.Equal(1, notifier.Pending);
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Answered again.", turns: 3));
+        await After(TimeSpan.Zero);
+        Assert.Equal(0, notifier.Pending);
+
+        sender.Connected = true;
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Answered again.", turns: 4) with { Attention = SignedOut with { Since = T.AddMinutes(2) } });
+        await After(TimeSpan.Zero);
+        Assert.Equal(2, SignInsSent());
+    }
+
+    // A machine stopped on a 401 reads idle and takes every update: each restart re-alerted every
+    // phone. When a sign-in notice went is kept with the subscriptions.
+    [Fact]
+    public async Task A_host_that_restarts_while_sessions_still_need_sign_in_keeps_to_the_hourly_repeat()
+    {
+        var signedOut = S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut };
+        Start(null, signedOut);
+        Subscribe(Phone);
+        await After(TimeSpan.Zero);
+        Assert.Equal(1, SignInsSent());
+
+        await notifier.DisposeAsync();
+        time.Advance(TimeSpan.FromMinutes(20));
+        Start();
+        await After(TimeSpan.Zero);
+        Assert.Equal(1, SignInsSent());
+        await After(TimeSpan.FromMinutes(40));
+        Assert.Equal(2, SignInsSent());
+    }
+
+    // Signed in again and failing again while a push is in flight, before the next pump: a new
+    // incident, notified at once rather than held for the rest of the hour.
+    [Fact]
+    public async Task A_sign_in_that_recovers_and_fails_again_while_a_push_is_in_flight_notifies_again_at_once()
+    {
+        Start();
+        Subscribe(Phone);
+        var first = true;
+        sender.Respond = _ =>
+        {
+            if (first)
+            {
+                first = false;
+                source.Upsert(S("s1", SessionStatus.Idle, response: "Answered.", turns: 2));
+                source.Upsert(S("s1", SessionStatus.Idle, response: "Answered.", turns: 3) with { Attention = SignedOut with { Since = T.AddMinutes(1) } });
+            }
+            return new PushResult(201, null);
+        };
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut });
+        await After(TimeSpan.Zero);
+        await After(TimeSpan.Zero);
+
+        Assert.Equal(2, SignInsSent());
+    }
+
+    // A notice still waiting for the relay when the host restarted never reached anyone: the next
+    // host makes it again rather than counting the hour from it.
+    [Fact]
+    public async Task A_sign_in_notice_lost_with_a_restart_before_it_went_is_made_again_at_once()
+    {
+        var signedOut = S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut };
+        Start(null, signedOut);
+        Subscribe(Phone);
+        sender.Connected = false;
+        await After(TimeSpan.Zero);
+        Assert.Equal(1, notifier.Pending);
+
+        await notifier.DisposeAsync();
+        sender.Connected = true;
+        Start();
+        await After(TimeSpan.Zero);
+        Assert.Equal(1, SignInsSent());
+    }
+
+    [Fact]
+    public async Task A_sign_in_notice_is_not_sent_to_the_next_device_once_the_sessions_are_signed_in_again()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        sender.Respond = _ =>
+        {
+            source.Upsert(S("s1", SessionStatus.Idle, response: "Answered.", turns: 2));
+            return new PushResult(201, null);
+        };
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut });
+        await After(TimeSpan.Zero);
+
+        Assert.Equal(1, SignInsSent());
+    }
+
+    // Its repeat due with no device left to tell made nothing, and woke the loop at once, forever.
+    [Fact]
+    public async Task A_sign_in_repeat_with_no_device_to_tell_does_not_spin_the_notifier()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut });
+        await After(TimeSpan.Zero);
+        notifier.Handle(Peer(Phone), Ops.PushUnsubscribe, default);
+
+        time.Advance(TimeSpan.FromMinutes(61));
+        Assert.Equal(Timeout.InfiniteTimeSpan, await notifier.PumpAsync());
+    }
+
+    // #945: the relay came back a second before the hourly repeat was due, and the push it was
+    // waiting for was still in flight when that hour passed. Refused, it left nothing to wake
+    // the notifier, and an idle signed-out machine sent no more reminders.
+    [Fact]
+    public async Task A_sign_in_repeat_that_comes_due_while_a_push_in_flight_is_dropped_still_goes()
+    {
+        Start();
+        Subscribe(Phone);
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut });
+        await After(TimeSpan.Zero);
+        await After(TimeSpan.FromMinutes(59) + TimeSpan.FromSeconds(59));
+        sender.Connected = true;
+        sender.Respond = _ =>
+        {
+            time.Advance(TimeSpan.FromSeconds(2));
+            return new PushResult(400, "bad request");
+        };
+
+        var wait = await notifier.PumpAsync();
+        Assert.Equal(0, SignInsSent());
+        Assert.InRange(wait, TimeSpan.FromMilliseconds(1), TimeSpan.FromSeconds(1));
+
+        sender.Respond = null;
+        await After(wait);
+        Assert.Equal(1, SignInsSent());
+    }
+
+    // ...and one that did reach the device counts the next hour from then (v1-sessions.md, Push signIn).
+    [Fact]
+    public async Task A_sign_in_push_delivered_after_its_repeat_came_due_counts_the_next_hour_from_its_delivery()
+    {
+        Start();
+        Subscribe(Phone);
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut });
+        await After(TimeSpan.Zero);
+        await After(TimeSpan.FromMinutes(59) + TimeSpan.FromSeconds(59));
+        sender.Connected = true;
+        sender.Respond = _ =>
+        {
+            time.Advance(TimeSpan.FromSeconds(2));
+            return new PushResult(201, null);
+        };
+
+        await notifier.PumpAsync();
+        Assert.Equal(1, SignInsSent());
+        sender.Respond = null;
+        await After(TimeSpan.FromMinutes(59) + TimeSpan.FromSeconds(59));
+        Assert.Equal(1, SignInsSent());
+        await After(TimeSpan.FromSeconds(1));
+        Assert.Equal(2, SignInsSent());
+    }
+
+    // D (#800 P0): Daily's own session at 09:52:24 PT on 2026-11-05, captured read-only from its
+    // events.jsonl and redacted (tests/fixtures/copilot/signin-401.jsonl). The CLI wrote turn_end,
+    // then session.error 9 ms later, and read between the two the session was idle with the previous
+    // answer, exactly as a finished turn. Read by the real SessionSource, one write at a time.
+    [Fact]
+    public async Task Dailys_captured_401_reads_needs_sign_in_and_sends_one_sign_in_push_and_no_finished_push()
+    {
+        const string id = "0d800000-0000-4000-8000-0000000000ff";
+        using var f = new Fixture();
+        var events = f.CopilotSession(id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        Fixture.Append(events, Copilot.User("Ship it", 1), Copilot.TurnStart(2), Copilot.Assistant("Shipped.", 3), Copilot.TurnEnd(4));
+        await using var real = f.Source();
+        // The notifier hears each change before this test's own handler does: it subscribes first.
+        using (var first = new SemaphoreSlim(0))
+        {
+            void Seen(object? _, SessionChange c) => first.Release();
+            real.Changed += Seen;
+            await real.RefreshAsync();
+            Assert.True(await first.WaitAsync(TimeSpan.FromSeconds(10)), "the session was listed");
+            real.Changed -= Seen;
+        }
+        store = PushStore.Load(StorePath, Account);
+        notifier = new PushNotifier(real, new MachineInfo(Machine, "DEV", "windows", "0.1.0"), store, null, logs.Add, f.Time);
+        notifier.Attach(sender);
+        Subscribe(Phone);
+        using var changes = new SemaphoreSlim(0);
+        real.Changed += (_, c) => { if (c.Id == id) { changes.Release(); } };
+
+        var captured = File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, "fixtures", "copilot", "signin-401.jsonl"));
+        var firstError = Array.FindIndex(captured, l => l.Contains("\"session.error\"", StringComparison.Ordinal));
+        async Task Write(params string[] lines)
+        {
+            f.Time.Advance(TimeSpan.FromSeconds(1));
+            Fixture.Append(events, lines);
+            await real.RefreshAsync();
+            Assert.True(await changes.WaitAsync(TimeSpan.FromSeconds(10)), "the session changed");
+            await notifier.PumpAsync();
+        }
+        await Write(captured[..2]);
+        Assert.Equal(SessionStatus.Working, real.Get(id)!.Status);
+        await Write(captured[2..firstError]);
+        Assert.Equal(SessionStatus.Idle, real.Get(id)!.Status);
+        Assert.Null(real.Get(id)!.Attention);
+        await Write(captured[firstError]);
+        await Write(captured[(firstError + 1)..]);
+        f.Time.Advance(TimeSpan.FromMinutes(10));
+        await notifier.PumpAsync();
+
+        var session = real.Get(id)!;
+        Assert.Equal((SessionStatus.Idle, AttentionKind.SignInNeeded), (session.Status, session.Attention?.Kind));
+        Assert.Equal(DateTimeOffset.Parse("2026-11-05T17:53:03.004Z", System.Globalization.CultureInfo.InvariantCulture), session.Attention!.Since);
+        // The previous turn's answer is still beside it: the attention says what it is, and no push quotes it.
+        Assert.Equal("Shipped.", session.Activity.Response);
+        Assert.Equal(["signIn"], Received().Select(r => Kind(r.Notification)));
+        await notifier.DisposeAsync();
+    }
+
+    // #845: the failed turn leaves the last answer beside a truthful idle; quoted as "finished",
+    // it read as the new prompt's answer.
+    [Fact]
+    public async Task A_new_prompt_that_fails_sign_in_after_an_earlier_answer_sends_no_finished_push()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "The build is green."));
+        await After(TimeSpan.FromSeconds(3));
+        Assert.Single(sender.Sent);
+        await After(new PushOptions().FinishedCollapse);
+
+        source.Upsert(S("s1", SessionStatus.Working, response: "The build is green.", turns: 1));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "The build is green.", turns: 2) with { Attention = SignedOut });
+        await After(new PushOptions().FinishedCollapse);
+
+        Assert.Equal(["finished"], SessionKinds());
+        Assert.Equal(1, SignInsSent());
+    }
+
+    [Fact]
+    public async Task A_finished_turn_still_queued_when_the_next_prompt_fails_sign_in_is_withdrawn()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "one"));
+        await After(TimeSpan.FromSeconds(3));
+        source.Upsert(S("s1", SessionStatus.Working, response: "one"));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "two", turns: 2));
+        await After(TimeSpan.FromSeconds(3));
+        Assert.Equal(1, notifier.Pending);
+
+        source.Upsert(S("s1", SessionStatus.Working, response: "two", turns: 2));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "two", turns: 3) with { Attention = SignedOut });
+        await After(new PushOptions().FinishedCollapse);
+
+        Assert.Equal(["finished"], SessionKinds());
+        Assert.Equal(1, SignInsSent());
+        Assert.Equal(0, notifier.Pending);
+    }
+
+    // A finished push in flight when the next prompt fails sign-in comes back as a retry: it is
+    // checked again as it goes, and not sent while the attention lasts.
+    [Fact]
+    public async Task A_finished_push_retried_after_the_next_prompt_failed_sign_in_is_not_sent()
+    {
+        Start();
+        Subscribe(Phone);
+        var first = true;
+        sender.Respond = _ =>
+        {
+            if (!first) { return new PushResult(201, null); }
+            first = false;
+            source.Upsert(S("s1", SessionStatus.Working, response: "The build is green.", turns: 1));
+            source.Upsert(S("s1", SessionStatus.Idle, response: "The build is green.", turns: 2) with { Attention = SignedOut });
+            return new PushResult(503, "unavailable");
+        };
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "The build is green."));
+
+        await After(TimeSpan.FromSeconds(3));
+        await After(TimeSpan.FromMinutes(1));
+
+        // Only the sign-in notice goes: the finished one was tried once, and never again.
+        Assert.Equal(["signIn"], Received().Select(r => Kind(r.Notification)));
+        Assert.True(sender.Attempts == 2, $"tried {sender.Attempts} times");
+    }
+
+    // A delegate's question still pending returns before the cleanup once did: the finished
+    // notice waiting for the relay went out with the stale answer when it came back.
+    [Fact]
+    public async Task A_finished_push_waiting_for_the_relay_is_withdrawn_when_sign_in_fails_with_a_delegates_question_pending()
+    {
+        Start();
+        Subscribe(Phone);
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "The build is green."));
+        await After(TimeSpan.FromSeconds(3));
+        Assert.Equal(1, notifier.Pending);
+
+        source.Upsert(S("s1", SessionStatus.Waiting, response: "The build is green.", turns: 2, question: Q("dq") with { Agent = "agent-1" }) with { WaitingOn = "agent-1", Attention = SignedOut });
+        Assert.Equal(0, notifier.Pending);
+        sender.Connected = true;
+        await After(TimeSpan.FromSeconds(3));
+
+        Assert.DoesNotContain(Received(), r => Kind(r.Notification) == "finished");
+    }
+
+    // #841: the finished notice that would have replaced an answered question on the phone did
+    // not go, so the question's resolution goes instead; the phone never keeps it.
+    [Fact]
+    public async Task An_answered_question_is_resolved_when_its_finished_push_is_withdrawn_for_a_failed_sign_in()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+        Assert.Equal(1, notifier.Pending);
+
+        source.Upsert(S("s1", SessionStatus.Working, response: "Done.", turns: 1));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut });
+        sender.Connected = true;
+        await After(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(["question", "resolved"], SessionKinds());
+        Assert.Equal(1, SignInsSent());
+    }
+
+    [Fact]
+    public async Task An_answered_question_is_resolved_when_its_finished_push_in_flight_meets_a_failed_sign_in()
+    {
+        Start();
+        Subscribe(Phone);
+        sender.Respond = _ =>
+        {
+            if (sender.Attempts != 2) { return new PushResult(201, null); }
+            source.Upsert(S("s1", SessionStatus.Working, response: "Done.", turns: 1));
+            source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut });
+            return new PushResult(503, "unavailable");
+        };
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+
+        await After(TimeSpan.FromSeconds(3));
+        await After(TimeSpan.FromMinutes(1));
+
+        Assert.Equal(["question", "resolved"], SessionKinds());
+        Assert.Equal(1, SignInsSent());
+    }
+
+    // Refused by one device only: the question is resolved there, while another device's
+    // finished push, held by the collapse window, still goes.
+    [Fact]
+    public async Task An_answered_question_is_resolved_only_on_the_device_that_refused_its_finished_push()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        var laptop = 0;
+        sender.Respond = e => e.EndsWith(Laptop) && ++laptop % 2 == 1 ? new PushResult(403, "forbidden") : new PushResult(201, null);
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Earlier.", turns: 1));
+        await After(TimeSpan.FromSeconds(3));
+        source.Upsert(S("s1", SessionStatus.Waiting, response: "Earlier.", turns: 1, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s1", SessionStatus.Working, response: "Earlier.", turns: 1));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2));
+
+        await After(TimeSpan.FromSeconds(3));
+        await After(new PushOptions().FinishedCollapse);
+
+        Assert.Equal(["finished", "question", "finished"], Received().Where(r => r.Device == Phone).Select(r => Kind(r.Notification)));
+        Assert.Equal(["question", "resolved"], Received().Where(r => r.Device == Laptop).Select(r => Kind(r.Notification)));
+    }
+
+    // Still asked: nothing is resolved.
+    [Fact]
+    public async Task A_question_asked_again_is_not_resolved_when_a_finished_push_is_withdrawn()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+
+        source.Upsert(S("s1", SessionStatus.Waiting, response: "Done.", turns: 2, question: Q("q1")) with { Attention = SignedOut });
+        sender.Connected = true;
+        await After(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(["question"], SessionKinds());
+        Assert.Equal(1, SignInsSent());
     }
 
     [Fact]
@@ -554,7 +1592,8 @@ public sealed class PushNotifierTests : IDisposable
     [Fact]
     public async Task A_push_the_relay_never_answers_is_retried_later_and_holds_up_nothing_else()
     {
-        Start();
+        // Two sessions' questions, each to go as itself, not grouped (#913 rule 3).
+        Start(new PushOptions { BurstWindow = TimeSpan.Zero });
         Subscribe(Phone);
         sender.Failures.Enqueue(new TimeoutException());
         source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
@@ -646,7 +1685,7 @@ public sealed class PushNotifierTests : IDisposable
     [Fact]
     public async Task Sends_past_the_rate_limit_wait_for_the_next_minute_rather_than_being_refused()
     {
-        Start(new PushOptions { MaxPerMinute = 3 });
+        Start(new PushOptions { MaxPerMinute = 3, BurstWindow = TimeSpan.Zero });
         Subscribe(Phone);
         for (var i = 0; i < 5; i++) { source.Upsert(S($"s{i}", SessionStatus.Waiting, question: Q($"q{i}"))); }
         await After(TimeSpan.FromSeconds(2));
@@ -762,6 +1801,20 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal(Laptop, Assert.Single(store.All).Device);
     }
 
+    // The rebrand (#538) changes the name a device registers with ("iPhone · Agent Bridge" becomes
+    // "iPhone · Slipgates") on every installed app's next registration: it must stay the same
+    // device with its one subscription, not a second one or a new device to approve.
+    [Fact]
+    public void A_device_registering_again_under_a_new_name_keeps_its_one_subscription_with_the_new_name()
+    {
+        Start();
+        Subscribe(Phone, name: "iPhone · Agent Bridge");
+        var before = Assert.Single(store.All);
+        Subscribe(Phone, name: "iPhone · Slipgates");
+        var after = Assert.Single(store.All);
+        Assert.Equal((Phone, before.Endpoint, before.P256dh, "iPhone · Slipgates"), (after.Device, after.Endpoint, after.P256dh, after.Name));
+    }
+
     RemoteAuthorization Enforce(P256KeyPair host, P256KeyPair person)
     {
         var pins = new TrustedPeerStore(folder, host.Public, () => Account, time);
@@ -872,6 +1925,347 @@ public sealed class PushNotifierTests : IDisposable
             Assert.Throws<InvalidOperationException>(() => Subscribe(peer.Device, peer: peer));
         }
         Assert.Empty(store.All);
+    }
+
+    // ---- #913 rule 5: one reminder ----
+
+    static bool Reminder(JsonElement n) => n.GetProperty("data").TryGetProperty("reminder", out var r) && r.GetBoolean();
+
+    static bool Silent(JsonElement n) => n.TryGetProperty("silent", out var s) && s.GetBoolean();
+
+    static string? QuestionOf(JsonElement n) => n.GetProperty("data").TryGetProperty("question", out var q) ? q.GetString() : null;
+
+    [Fact]
+    public async Task A_question_still_unanswered_15_minutes_after_its_notice_alerts_once_more_as_itself_on_every_device()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Equal(2, sender.Sent.Count);
+
+        await After(TimeSpan.FromMinutes(15) - TimeSpan.FromSeconds(1));
+        Assert.Equal(2, sender.Sent.Count);
+        await After(TimeSpan.FromSeconds(1));
+
+        var received = Received();
+        Assert.Equal(4, received.Count);
+        Assert.All(received.Take(2), r => Assert.False(Reminder(r.Notification)));
+        var reminders = received.Skip(2).ToList();
+        Assert.Equal([Phone, Laptop], reminders.Select(r => r.Device).Order(StringComparer.Ordinal));
+        var original = received.Take(2).Single(r => r.Device == Phone);
+        var again = reminders.Single(r => r.Device == Phone);
+        Assert.True(Reminder(again.Notification));
+        // The question's own notice again, alerting, in its place.
+        Assert.Equal(("question", "needsYou", false), (Kind(again.Notification), again.Notification.GetProperty("data").GetProperty("class").GetString(), Silent(again.Notification)));
+        foreach (var field in new[] { "title", "body", "tag", "navigate" })
+        {
+            Assert.Equal(original.Notification.GetProperty(field).GetString(), again.Notification.GetProperty(field).GetString());
+        }
+        Assert.Equal("q1", QuestionOf(again.Notification));
+        Assert.Equal((original.Ttl, original.Urgency, original.Topic), (again.Ttl, again.Urgency, again.Topic));
+    }
+
+    [Fact]
+    public async Task A_question_answered_within_15_minutes_is_not_reminded()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        await After(TimeSpan.FromMinutes(10));
+        notifier.Answered(Laptop, "s1", "q1");
+        source.Upsert(S("s1", SessionStatus.Working));
+        await After(TimeSpan.FromMinutes(30));
+
+        Assert.Equal(["question", "question", "resolved"], Received().Select(r => Kind(r.Notification)));
+        Assert.DoesNotContain(Received(), r => Reminder(r.Notification));
+    }
+
+    [Fact]
+    public async Task A_reminder_goes_once_and_a_further_question_while_the_session_still_needs_you_brings_no_second()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        await After(TimeSpan.FromMinutes(15));
+        Assert.Equal(1, Received().Count(r => Reminder(r.Notification)));
+        await After(TimeSpan.FromMinutes(15));
+        await After(TimeSpan.FromHours(2));
+
+        // q1 answered as q2 is asked: still needsYou, the same episode, which has had its reminder.
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q2", "And the cache?")));
+        await After(TimeSpan.FromSeconds(2));
+        await After(TimeSpan.FromMinutes(15));
+        await After(TimeSpan.FromMinutes(15));
+
+        Assert.Equal(["q1", "q1", "q2"], Received().Select(r => QuestionOf(r.Notification)));
+        Assert.Equal(1, Received().Count(r => Reminder(r.Notification)));
+    }
+
+    // sr2-1020: answered (or ending) while its reminder goes out, device by device: the devices still to
+    // be reminded are not, of a question nobody waits on any more.
+    [Theory]
+    [InlineData("answered")]
+    [InlineData("ending")]
+    public async Task A_reminder_still_queued_for_another_device_is_not_sent_once_the_session_no_longer_needs_you(string change)
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        var reminding = false;
+        sender.Respond = _ =>
+        {
+            if (reminding)
+            {
+                reminding = false;
+                source.Upsert(change == "answered" ? S("s1", SessionStatus.Working) : S("s1", SessionStatus.Waiting, question: Q("q1")) with { Status = SessionStatus.Ending });
+            }
+            return new PushResult(201, null);
+        };
+
+        reminding = true;
+        await After(TimeSpan.FromMinutes(15));
+        await After(TimeSpan.FromSeconds(1));
+
+        Assert.Single(Received(), r => Reminder(r.Notification));
+    }
+
+    // ---- #913 rule 3: bursts group ----
+
+    [Fact]
+    public async Task Questions_of_three_sessions_within_30_seconds_go_as_the_first_and_one_grouped_notice()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s2", SessionStatus.Waiting, question: Q("q2", "Allow **Run a command**?", QuestionKind.Approval)));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s3", SessionStatus.Waiting, question: Q("q3")));
+        await After(TimeSpan.FromSeconds(10));
+
+        var received = Received();
+        Assert.Equal(("question", "q1"), (Kind(received[0].Notification), QuestionOf(received[0].Notification)));
+        Assert.DoesNotContain(received, r => QuestionOf(r.Notification) is "q2" or "q3");
+        var groups = received.Skip(1).Select(r => r.Notification).ToList();
+        Assert.Equal(["group", "group"], groups.Select(Kind));
+        // One notice, made by the second question and changed in place, quietly, by the third.
+        Assert.All(groups, n => Assert.Equal($"{Machine}:~needsyou", n.GetProperty("tag").GetString()));
+        Assert.Equal([false, true], groups.Select(Silent));
+        Assert.Equal([2, 3], groups.Select(n => n.GetProperty("data").GetProperty("sessions").GetInt32()));
+        Assert.Equal(("high", PushNotice.Topic(Machine, "~needsyou")), (received[1].Urgency, received[1].Topic));
+        var last = groups[^1];
+        Assert.Equal(("Needs you", "DEV · 3 sessions waiting on you"), (last.GetProperty("title").GetString(), last.GetProperty("body").GetString()));
+        Assert.Equal($"https://danswett.github.io/agent-bridge/app/?host={Machine}&needsyou=1", last.GetProperty("navigate").GetString());
+        // Nothing to answer from it (#253), and nothing of any session's (#263).
+        var data = last.GetProperty("data");
+        Assert.Equal(("", "needsYou"), (data.GetProperty("session").GetString(), data.GetProperty("class").GetString()));
+        Assert.Null(QuestionOf(last));
+        Assert.DoesNotContain("Which database?", last.GetRawText(), StringComparison.Ordinal);
+        Assert.DoesNotContain("Fix the login", last.GetRawText(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_first_question_of_a_burst_goes_after_its_usual_delay_not_after_the_window()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(1));
+        Assert.Empty(sender.Sent);
+        await After(TimeSpan.FromSeconds(1));
+        var (_, first, _, urgency, _) = Assert.Single(Received());
+        Assert.Equal(("question", "q1", false, "high"), (Kind(first), QuestionOf(first), Silent(first), urgency));
+
+        // A second within the window is grouped: the first, already out, is not held back or taken back.
+        source.Upsert(S("s2", SessionStatus.Waiting, question: Q("q2")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Equal(["question", "group"], Received().Select(r => Kind(r.Notification)));
+    }
+
+    [Fact]
+    public async Task A_question_alone_in_its_window_goes_as_itself()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        // No group of one.
+        await After(TimeSpan.FromSeconds(30));
+        Assert.Single(sender.Sent);
+
+        // After the first's window: as itself, opening a window of its own.
+        source.Upsert(S("s2", SessionStatus.Waiting, question: Q("q2")));
+        await After(TimeSpan.FromSeconds(2));
+        // Within that window, but its question is answered: nothing pending to group the next with.
+        source.Upsert(S("s2", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s3", SessionStatus.Waiting, question: Q("q3")));
+        await After(TimeSpan.FromSeconds(2));
+        await After(TimeSpan.FromSeconds(30));
+
+        Assert.Equal(["question", "question", "resolved", "question"], Received().Select(r => Kind(r.Notification)));
+        Assert.Equal(["q1", "q2", "q2", "q3"], Received().Select(r => QuestionOf(r.Notification)));
+    }
+
+    [Fact]
+    public async Task A_sign_in_within_a_burst_goes_as_its_own_notice_and_is_not_counted_in_the_group()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s2", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut });
+        await After(TimeSpan.Zero);
+        source.Upsert(S("s3", SessionStatus.Waiting, question: Q("q3")));
+        await After(TimeSpan.FromSeconds(2));
+
+        var received = Received();
+        Assert.Equal(["question", "signIn", "group"], received.Select(r => Kind(r.Notification)));
+        var signIn = received[1].Notification;
+        Assert.Equal($"{Machine}:{PushNotice.SignInKey(AgentKind.Copilot, null)}", signIn.GetProperty("tag").GetString());
+        Assert.Equal(2, received[2].Notification.GetProperty("data").GetProperty("sessions").GetInt32());
+    }
+
+    [Fact]
+    public async Task A_grouped_notice_changes_quietly_as_its_questions_are_answered_and_is_withdrawn_with_the_last()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s2", SessionStatus.Waiting, question: Q("q2")));
+        await After(TimeSpan.FromSeconds(2));
+
+        source.Upsert(S("s2", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(2));
+        var fewer = Received()[^1].Notification;
+        Assert.Equal(("group", 1, true), (Kind(fewer), fewer.GetProperty("data").GetProperty("sessions").GetInt32(), Silent(fewer)));
+        Assert.Equal(("Needs you", "DEV · 1 session waiting on you"), (fewer.GetProperty("title").GetString(), fewer.GetProperty("body").GetString()));
+
+        source.Upsert(S("s1", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(2));
+        var received = Received();
+        Assert.Equal(["question", "group", "group", "resolved", "resolved"], received.Select(r => Kind(r.Notification)));
+        Assert.Equal($"{Machine}:s1", received[3].Notification.GetProperty("tag").GetString());
+        var withdrawn = received[4].Notification;
+        Assert.Equal($"{Machine}:~needsyou", withdrawn.GetProperty("tag").GetString());
+        Assert.True(Silent(withdrawn));
+        Assert.Equal(("", false), (withdrawn.GetProperty("data").GetProperty("session").GetString(), withdrawn.GetProperty("data").TryGetProperty("class", out _)));
+        Assert.Equal(0, notifier.Pending);
+
+        await After(TimeSpan.FromMinutes(1));
+        Assert.Equal(5, sender.Sent.Count);
+    }
+
+    // sr2-1020: a question asked in the same pump as the group's last questions are answered goes as
+    // itself, alerting, even from a session first seen before them: once it joined a group about to
+    // empty, and was said only by a silent group of one.
+    [Fact]
+    public async Task A_question_asked_as_its_group_is_answered_alerts_as_itself_whatever_order_the_sessions_were_seen_in()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("c", SessionStatus.Working));
+        source.Upsert(S("a", SessionStatus.Waiting, question: Q("qa")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("b", SessionStatus.Waiting, question: Q("qb")));
+        await After(TimeSpan.FromSeconds(2));
+
+        source.Upsert(S("a", SessionStatus.Working));
+        source.Upsert(S("b", SessionStatus.Working));
+        source.Upsert(S("c", SessionStatus.Waiting, question: Q("qc")));
+        await After(TimeSpan.FromSeconds(2));
+
+        var received = Received();
+        var c = Assert.Single(received, r => QuestionOf(r.Notification) == "qc");
+        Assert.Equal(("question", false), (Kind(c.Notification), Silent(c.Notification)));
+        Assert.DoesNotContain(received, r => Kind(r.Notification) == "group" && r.Notification.GetProperty("data").GetProperty("sessions").GetInt32() == 1);
+    }
+
+    // sr-1020: what a restart found pending was on devices as itself, so it goes again as itself, each
+    // under its own tag, never grouped, and an answer elsewhere withdraws it there. Nor do they open a
+    // window that groups the next live question.
+    [Fact]
+    public async Task Questions_pending_when_the_host_starts_each_go_as_themselves_and_are_resolved_on_their_own_tags()
+    {
+        Start(null, S("s1", SessionStatus.Waiting, question: Q("q1")), S("s2", SessionStatus.Waiting, question: Q("q2")), S("s3", SessionStatus.Waiting, question: Q("q3")));
+        Subscribe(Phone);
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s4", SessionStatus.Waiting, question: Q("q4")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Equal(["q1", "q2", "q3", "q4"], Received().Select(r => QuestionOf(r.Notification)));
+        Assert.Equal([$"{Machine}:s1", $"{Machine}:s2", $"{Machine}:s3", $"{Machine}:s4"], Received().Select(r => r.Notification.GetProperty("tag").GetString()));
+
+        source.Upsert(S("s2", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(2));
+
+        var received = Received();
+        Assert.DoesNotContain(received, r => Kind(r.Notification) == "group");
+        var resolved = received[^1].Notification;
+        Assert.Equal(("resolved", $"{Machine}:s2", "q2"), (Kind(resolved), resolved.GetProperty("tag").GetString(), QuestionOf(resolved)));
+        Assert.Equal(5, received.Count);
+    }
+
+    // The group's alert counts once it reaches a device, not once it is made: a session joining while
+    // the relay is down replaces the alerting notice still waiting, and its replacement alerts in its
+    // place. Once delivered, what changes it is silent.
+    [Fact]
+    public async Task A_group_whose_alert_never_left_while_the_relay_was_down_still_alerts_once_on_every_device()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s2", SessionStatus.Waiting, question: Q("q2")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s3", SessionStatus.Waiting, question: Q("q3")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Empty(sender.Sent);
+
+        sender.Connected = true;
+        await After(TimeSpan.Zero);
+        source.Upsert(S("s4", SessionStatus.Waiting, question: Q("q4")));
+        await After(TimeSpan.FromSeconds(2));
+
+        foreach (var device in new[] { Phone, Laptop })
+        {
+            var groups = Received().Where(r => r.Device == device && Kind(r.Notification) == "group").ToList();
+            Assert.Equal([(3, false, "high"), (4, true, "normal")],
+                groups.Select(g => (g.Notification.GetProperty("data").GetProperty("sessions").GetInt32(), Silent(g.Notification), g.Urgency)));
+        }
+    }
+
+    // Only a session joining it alerts: one leaving it, after a later question opened a new window,
+    // changes it quietly.
+    [Fact]
+    public async Task A_grouped_notice_that_only_loses_a_question_after_a_later_window_opened_stays_quiet()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s2", SessionStatus.Waiting, question: Q("q2")));
+        await After(TimeSpan.FromSeconds(2));
+        await After(TimeSpan.FromSeconds(60));
+        source.Upsert(S("s3", SessionStatus.Waiting, question: Q("q3")));
+        await After(TimeSpan.FromSeconds(2));
+
+        source.Upsert(S("s2", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(2));
+
+        var received = Received();
+        Assert.Equal(["question", "group", "question", "group"], received.Select(r => Kind(r.Notification)));
+        var fewer = received[^1];
+        Assert.Equal((1, true, "normal"), (fewer.Notification.GetProperty("data").GetProperty("sessions").GetInt32(), Silent(fewer.Notification), fewer.Urgency));
     }
 
     sealed class FakeSource : ISessionSource

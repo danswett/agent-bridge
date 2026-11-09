@@ -72,15 +72,38 @@ public sealed class ToastResponder
         foreach (var tag in tags ?? []) { sink.Withdraw(tag); }
     }
 
-    void Show(string? machine, string tag, string xml)
+    // The outcome toasts that say why an answer could not go: their cause ends with the question.
+    readonly HashSet<string> causeBound = new(StringComparer.Ordinal);
+
+    // The session is known and no longer asks the question the click named: a cause-bound outcome
+    // arriving now has nothing left to say, and QuestionClosed has already come and gone.
+    bool Closed(ToastAction action) =>
+        action.Session is { } session && SessionOf(action.Machine, session) is { } s && s.Question?.Id != action.Question;
+
+    // The question closed (answered elsewhere, cancelled, its session ended): a toast saying an
+    // answer to it did not go has nothing left to say, and goes. What an answer came to stays (#1193).
+    public void QuestionClosed(string? machine, string session)
     {
-        if (machine is not null)
+        var tag = ToastPlanner.OutcomeTag(session, machine);
+        bool bound;
+        lock (shownFor)
         {
-            lock (shownFor)
+            bound = causeBound.Remove(tag);
+            if (bound && machine is not null && shownFor.TryGetValue(machine, out var tags)) { tags.Remove(tag); }
+        }
+        if (bound) { sink.Withdraw(tag); }
+    }
+
+    void Show(string? machine, string tag, string xml, bool outlives = false)
+    {
+        lock (shownFor)
+        {
+            if (machine is not null)
             {
                 if (!shownFor.TryGetValue(machine, out var tags)) { shownFor[machine] = tags = new(StringComparer.Ordinal); }
                 tags.Add(tag);
             }
+            if (outlives) { causeBound.Remove(tag); } else { causeBound.Add(tag); }
         }
         sink.Show(new ToastNotice(tag, xml, Quiet: true));
     }
@@ -104,6 +127,12 @@ public sealed class ToastResponder
             Show(action.Machine, tag, ToastXml.Outcome(action.Session, title, $"Not sent: {problem}. Open the session to answer.", action.Machine));
             return;
         }
+        // The words chosen (Delivery.Chosen), as the app knows the question at the click: taken here,
+        // before anything is waited for. Taken after FindAsync, an option relabelled while the machine
+        // was coming back gave its new label (#625 cr2-625d, 6676595964). A question the app doesn't
+        // know yet at the click gives none ("You answered"), and none is looked up later.
+        var asked = SessionOf(action.Machine, action.Session)?.Question is { } q && q.Id == action.Question ? q : null;
+        var chosen = ReceiptWords.AnsweredValue(asked, answer);
         if (await FindAsync(action.Machine) is not { } deliveries)
         {
             Show(action.Machine, tag, ToastXml.Outcome(action.Session, title, "Not sent: that machine is not connected to this app now. Open the session to answer.", action.Machine));
@@ -121,19 +150,20 @@ public sealed class ToastResponder
         deliveries.Changed += Watch;
         try
         {
-            var entry = deliveries.Submit(key, AgentBridge.Protocol.Ops.SessionAnswer, request => answer with { Request = request }, outcome => outcome is not ("busy" or "refused"), payload: answer);
+            var entry = deliveries.Submit(key, AgentBridge.Protocol.Ops.SessionAnswer, request => answer with { Request = request }, outcome => outcome is not ("busy" or "refused"), payload: answer, chosen: chosen);
             if (entry.State is DeliveryState.Done or DeliveryState.Failed) { done.TrySetResult(entry); }
             Delivery result;
             try { result = await done.Task.WaitAsync(OutcomeWait); }
             catch (TimeoutException)
             {
+                // The send is still unresolved, so this notice does not depend on the question staying open.
                 if (Gone()) { return; }
-                Show(action.Machine, tag, ToastXml.Outcome(action.Session, title, "Still sending your answer. Open the session to see what became of it.", action.Machine));
+                Show(action.Machine, tag, ToastXml.Outcome(action.Session, title, "Still sending your answer. Open the session to see what became of it.", action.Machine), outlives: true);
                 return;
             }
-            if (Gone()) { return; }
-            var (text, _) = QuestionViewModel.Describe(result, "");
-            Show(action.Machine, tag, ToastXml.Outcome(action.Session, title, text, action.Machine));
+            if (Gone() || (Closed(action) && !QuestionViewModel.OutlivesQuestion(result))) { return; }
+            var text = QuestionViewModel.Describe(result, null).Whole;
+            Show(action.Machine, tag, ToastXml.Outcome(action.Session, title, text, action.Machine), QuestionViewModel.OutlivesQuestion(result));
         }
         finally { deliveries.Changed -= Watch; }
     }

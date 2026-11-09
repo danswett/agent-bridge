@@ -474,3 +474,77 @@ test('a link after thousands of unclosed ones is still a link', () => {
   parsesLinearly((n) => '[a](('.repeat(n) + '[b](https://ok.example/)', 5000);
   assert.deepEqual(walk(parseMarkdown('[a](('.repeat(20000) + '[b](https://ok.example/)')).hrefs, ['https://ok.example/']);
 });
+
+// The shared vectors (tests/fixtures/approvals/literal-intentions.json): what a host sends for a
+// Copilot permission prompt whose intention tries to open a fence or draw Markdown (#212). The
+// card draws the intention as its words and what is approved as code, whole.
+test('a permission prompt draws the agent\'s intention as its words and what is approved as code', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { cases } = JSON.parse(readFileSync(new URL('../../../tests/fixtures/approvals/literal-intentions.json', import.meta.url), 'utf8'));
+  const words = (s) => s.split(/\s+/).filter(Boolean).join(' ');
+  // A line break is a space between words.
+  const spoken = (n) => (typeof n === 'string' ? n : n.tag === 'br' ? ' ' : (n.children ?? []).map(spoken).join(''));
+  assert.ok(cases.length >= 15);
+  for (const c of cases) {
+    const nodes = parseMarkdown(c.message);
+    const code = c.kind === 'commands' ? [c.command] : [c.file, c.diff];
+    assert.deepEqual(nodes[0], { tag: 'p', children: ['Allow ', { tag: 'strong', children: [c.kind === 'commands' ? 'shell' : 'edit'] }, '?'] }, c.name);
+    assert.deepEqual(nodes.slice(-code.length).map((n) => [n.tag, textOf(n)]), code.map((t) => ['pre', t]), c.name);
+    const prose = nodes.slice(1, -code.length);
+    const r = walk(prose);
+    // Paragraphs of text: no emphasis, code, heading, list, quote, table or rule, and a link only
+    // where its words are its address.
+    assert.ok(r.tags.every((t) => t === 'p' || t === 'br' || t === 'a'), `${c.name}: ${r.tags.join()}`);
+    for (const a of prose.flatMap(function links(n) { return typeof n === 'string' ? [] : n.tag === 'a' ? [n] : (n.children ?? []).flatMap(links); })) {
+      assert.equal(textOf(a).replace(/\/+$/, ''), a.attrs.href.replace(/\/+$/, ''), c.name);
+    }
+    assert.equal(words(prose.map(spoken).join(' ')), words(c.intention), c.name);
+  }
+});
+
+// The security review's commands (tests/fixtures/approvals/codex-commands.json, #209): all ASCII,
+// yet as Markdown prose each draws a link's words or an image in place of what runs. This card draws
+// an approval exactly as written (#429), so as a host sends it and as an older host sent it, each is
+// drawn whole, with no link or image. Approve once is offered as a host sends it (#253, decision 3);
+// an older host's is answered at the machine, since its preview could be cut short of what runs.
+test('a codex command Markdown would draw as a link or image is drawn exactly as written, and approved only as a host sends it whole', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { answerability } = await import('../../js/answers.js');
+  const { cases } = JSON.parse(readFileSync(new URL('../../../tests/fixtures/approvals/codex-commands.json', import.meta.url), 'utf8'));
+  const caps = ['sessions.read', 'sessions.answer', 'sessions.approve'];
+  assert.ok(cases.length >= 4);
+  for (const c of cases) {
+    for (const [message, able] of [[c.message, { ok: true, why: null }], [c.legacy, { ok: false, why: 'atMachine' }]]) {
+      const nodes = parseApproval(message);
+      assert.deepEqual(nodes.map(textOf), [message], c.name);
+      assert.ok(!walk(nodes).tags.some((t) => t === 'a' || t === 'img'), c.name);
+      const approval = { id: 'd1', kind: 'approval', message, fields: [{ name: 'decision', type: 'choice', options: [{ value: 'approve', label: 'Approve once' }, { value: 'deny', label: 'Deny' }], required: true }] };
+      assert.deepEqual(answerability(approval, caps, 'codex'), able, c.name);
+    }
+  }
+});
+
+// An older host sent a Codex approval as "Needs approval: " and the hook's 300-character preview,
+// cut to 297 and "..." with nothing marking it truncated (codex-commands.json, olderHostPreview).
+// Drawn exactly as written, it still shows only the start of what Approve once would run (#209
+// security review).
+test('an older host\'s codex preview cut short of what runs is drawn as written and answered at the machine', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { answerability } = await import('../../js/answers.js');
+  const { olderHostPreview: c } = JSON.parse(readFileSync(new URL('../../../tests/fixtures/approvals/codex-commands.json', import.meta.url), 'utf8'));
+  const caps = ['sessions.read', 'sessions.answer', 'sessions.approve'];
+  const approval = (message) => ({ id: 'd1', kind: 'approval', message, fields: [{ name: 'decision', type: 'choice', options: [{ value: 'approve', label: 'Approve once' }, { value: 'deny', label: 'Deny' }], required: true }] });
+  assert.ok(c.legacy.endsWith('...') && !c.legacy.includes('curl') && c.command.includes('curl'));
+  assert.deepEqual(parseApproval(c.legacy).map(textOf), [c.legacy]);
+  assert.deepEqual(answerability(approval(c.legacy), caps, 'codex'), { ok: false, why: 'atMachine' });
+  assert.deepEqual(answerability(approval(c.message), caps, 'codex'), { ok: true, why: null });
+});
+
+// A host from #209 marks a Codex approval it had to cut, which then ends inside its block: the card
+// says part of it is missing, as for any cut question, not only that it is answered at the machine.
+test('a codex approval a host had to cut says that part of it is missing', async () => {
+  const { answerability } = await import('../../js/answers.js');
+  const caps = ['sessions.read', 'sessions.answer', 'sessions.approve'];
+  const cut = { id: 'd1', kind: 'approval', truncated: true, message: 'Allow **Bash**?\n\n```\necho one\necho tw', fields: [{ name: 'decision', type: 'choice', options: [{ value: 'approve', label: 'Approve once' }, { value: 'deny', label: 'Deny' }], required: true }] };
+  assert.deepEqual(answerability(cut, caps, 'codex'), { ok: false, why: 'truncated' });
+});

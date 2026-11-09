@@ -23,8 +23,41 @@ From `hooks/daemon-launch.ps1` (`Use-DaemonLaunchRequest`, `Resolve-DaemonReques
 * **How.** `Start-Process` of the agent's executable (CreateProcess with a new console), in
   the working directory, with the daemon's environment plus the agent token variable. The
   daemon runs unelevated in the user's logon session (a logon task, hidden through a `.vbs`),
-  so the agent's console is a normal window on the person's desktop, in whatever the default
-  terminal is. No window title is set on Windows.
+  so the agent's console is a normal window on the person's desktop. No window title is set
+  on Windows.
+* **Width.** The host's launches (Windows) make the agent's console 250 columns wide, so
+  Copilot's form tab bar (the console's width less four) shows every field's title and the
+  host can tell an answer's form is the question's before it types (#1123; a six-field form
+  with long titles needed about 230). No console host takes a width from the start: with
+  "wrap text output on resize" on (the default) the console host's buffer follows its window,
+  and the screen clamps the window, so STARTUPINFO's count of characters
+  (`STARTF_USECOUNTCHARS`) of 250 gave 75 columns on a 640-pixel screen, and `STARTF_USESIZE`
+  no more (found by #1160's CI). A buffer set wider once the console exists is kept, the window
+  scrolling across it. So the host widens it then: `agent-bridge-injector <pid> --widen 250
+  <created>` holds the process open, checks it is still the one launched (its creation time,
+  so a later process given the same id is never touched), attaches, types nothing, and calls
+  `SetConsoleScreenBufferSize` (its height kept; never narrower), asked again every 100 ms for
+  up to 5 s while the new process has no console yet, and not once it has exited.
+  The log says the width it got, or why not. Windows Terminal, as the default terminal, takes
+  a new console over and sizes it itself (its `ConptyConnection::InitializeFromHandoff`); the
+  console host does not hand over a console started hidden or minimized
+  (`_shouldAttemptHandoff`). So a launch starts minimized without taking the focus
+  (`SW_SHOWMINNOACTIVE`): on the taskbar, in the console host, whatever the default terminal.
+  The agent draws to the buffer's width (libuv's columns, which follow a resize), and the
+  injector reads whole buffer rows. Restoring or resizing the window takes the buffer back to
+  the window's width, as wide as the screen allows (about 200 columns or more at 1920
+  pixels). Maximizing a launched session's window therefore narrows it, from 250 to what the
+  screen allows. Where a form is then too wide (that, a session a person started, or titles
+  longer than 250 columns hold), the answer is refused before any key, saying how many
+  columns the titles need and to widen the window or make its font smaller, or, where they
+  need more than 250, that the titles are too long for Slipgates to check (host-answers.md).
+  Considered and not first: tabs of one Windows Terminal window (`wt -w <name> new-tab`):
+  `wt` returns its own process, not the agent's, and the host reads and types through the
+  agent's console (`AttachConsole` on its process); unproven. Wrapping the agent in
+  `conhost.exe --width`: conhost re-splits and re-quotes the command line, undoing the quoting
+  that keeps an npm `.cmd` shim's arguments safe, and the process started would be conhost.
+  Unverified live: a Copilot session redrawing at the new width on Windows 11 with Windows
+  Terminal as the default terminal, and how a 250-column window looks once restored.
 * **The command line**, per agent: Copilot `--session-id <id> --banner [--model]
   [--reasoning-effort] [--context] [--allow-all] [extras] [-i <prompt>]`; Agency `copilot
   [--profile-only <profile>]` then Copilot's; Claude `--session-id <id>` (`--resume <id>`)
@@ -92,7 +125,8 @@ differences, each deliberate:
    workspace gets its worktree (below), a resume in one of this host's worktrees reuses it;
    either is locked until the session registers. Attachments are staged. The command line is
    built and checked for length (`refused`). The agent is started (`failed` if Windows will
-   not): a new console, the workspace as working directory, the host's environment.
+   not): a new console, minimized, in the console host, then widened to 250 columns (Width,
+   above), the workspace as working directory, the host's environment.
 7. The launch is followed: every 500 ms, a discovery pass (during the first 60 s) and a look
    for its session; its window read every second for a startup question; its process checked.
    Registered: `started`, except for Copilot, which registers (its `inuse.<pid>.lock`) before
@@ -160,6 +194,7 @@ the primary checkout.
 |---|---|
 | Whether a session is using it cannot be established (below), which keeps every one | `N worktree(s) were retained: whether a session is using them cannot be established (…)` |
 | A live session, of any agent, works in it or below it (physically, links resolved) | `a live session is working in it` |
+| A session waiting to be restored after a reboot or a crash worked in it or below it, or the host's record of those cannot be read, which keeps every one ([below](#restoring-after-a-reboot-or-a-crash)) | `a live session is working in it`, or `the sessions waiting to be restored cannot be read` |
 | Its git common folder is not the repository's | `which repository it belongs to is uncertain` |
 | It is locked (`git worktree lock`): a launch still starting, or anyone's lock | `it is locked (…)` |
 | A tracked entry is a link, a submodule or a conflict; a path in it is a junction or symlink; a tracked file is missing | `it holds a link, a submodule, a conflict, or a tracked file that is missing or unreadable` |
@@ -211,6 +246,118 @@ and are reproducible only because a worktree reaches removal with no tracked fil
 agent-bridge names none of its own: its build output is `bin/` and `obj/` folders, and an
 ignored folder keeps a worktree like any other ignored data, since removing it would mean a
 recursive delete. A worktree where agent-bridge was built stays until a person removes it.
+
+## Restoring after a reboot or a crash
+
+A machine that reboots, or a host that crashes, takes the sessions running there with it (#780).
+The host keeps a record of the sessions it sees live, and when it starts again it restores those
+that died, idle, through this page's resume path and every rule it has, and says what went.
+
+**The record.** `restore.json` in the profile's folder, beside `config.json`. For each live session
+only what `launch.options` already says of one: its id, agent, title, folder, model, whether a turn
+was running and whether a question was waiting, and for a session this host launched, what it was
+launched with (launcher, workspace, worktree, profile, model, effort, context, permissions), and
+when this host restored it, until it has stayed live 10 minutes (for a session restored on request that the record holds no entry of, in `stamps`: its id and when, kept a day at most if it never registers). Never a prompt, a response, a
+question's words or an attachment. With it, when the machine booted, the logon session's number
+(an opaque id, so a missing logon marker within the same logon is not read as a new logon), this run's
+`machine.instance`, when it was written and, after a clean stop, `stopped`. It is written on each
+change that matters, at most every 250 ms, whole: to a temporary file, flushed to the disk, then
+renamed over the last, so a power cut leaves the record before or the record after. A session that
+goes stays in it for 60 s more, because a shutting-down machine ends its agents before its host. A
+record that cannot be read (or one from a newer host) is set aside as `restore.json.unreadable`,
+offers nothing, and keeps every worktree, on that start and every later one, until a person
+removes that file: what was owed is unknown, and unknown is never read as nothing owed. So is one holding a field longer than the host ever writes, by the protocol's own limits: an id or a launch setting past 256 bytes, a title past 240, a model past 256, or a folder past Windows' longest path (32,767 characters); the host cuts the title and model it writes to the same limits. And one whose owed entry lacks its `entry`, `cause`, `at` or `decided`. One that
+cannot be moved aside is left as it is and never written over: the record does not start that run.
+
+**At start**, after discovery's first pass, each session the last run saw live is judged:
+
+| | |
+|---|---|
+| Running now | Adopted as it is. Nothing to restore |
+| Its agent's discovery is held ([v1-sessions.md](protocol/v1-sessions.md#discovery-held)) | Waits, and is judged once it can be: never read as gone (§6.3, #43) |
+| The machine booted since (boot times more than 2 minutes apart), or on Windows the person's logon is new (a sign-out, or a shutdown with Fast Startup, which keeps the boot time): an empty, volatile key of the profile's, `HKCU\Software\AgentBridge\logon-<hash>`, which Windows drops with the logon and which holds no value (uninstall removes any left behind), missing, and the logon session's number not the one the record was written in; a start makes it only once it has written its record, so one that goes down before that leaves the next start reading the logon as new too | Died: a shutdown or a sign-out ends every session, so an ending written as it went down is the shutdown's |
+| Same boot, and the last run saw it go | Ended under the host's eyes |
+| Same boot, and its agent's endings are not yet all taken in (on a machine migrated from agent-ha-bridge, a Claude or Codex SessionEnd still in the hook intake's spool) | Waits until the intake has drained the spool, then is judged; while the profile's `intake.json` cannot be read no intake runs, and it waits; so it does while the intake cannot claim the spool (another host has it, or the claim file cannot be opened), since nothing here takes it in |
+| Same boot, and its agent recorded a normal end | Ended. Copilot: a `session.shutdown` of the main agent after the last `user.message` and the last `session.resume` in its `events.jsonl`. Claude and Codex: its hook registration says `Ended` (their SessionEnd hook), the newest of its roots; an ending read while discovery was held is kept, since the intake may prune the registration before the hold lifts |
+| Same boot, a Claude or Codex session, and its registration is gone | Uncertain: agent-ha-bridge's daemon prunes an ended registration within about a minute, and a Claude one once it is 240 minutes old, so its absence says nothing either way. Not offered, not in the push and never restored; its folder is kept from the worktree reclaimer for as long as an offer's (7 days), and the host log says so |
+| Otherwise | Died with the host |
+
+The cause is `reboot` across boots or logons; on the same boot, `restart` if the last run wrote `stopped`, else
+`crash`. A Copilot session a person closed while the host was down, with nothing its agent records, reads
+as died: it is offered, never typed into. A Claude or Codex one whose registration is gone reads as
+uncertain (above): not offered, its folder kept.
+
+**Restoring.** Once every session is judged, or 10 minutes after start while one still is (its agent's discovery held: those
+judged are not kept back by it, and it is restored once it is judged, #855), what this start found died is restored, newest first,
+one at a time, each as a resume from Launch would be (`launch <id> (host-restore): …` in the log):
+every check that resume meets (agent-ha-bridge, `launch.enabled`, discovery held, its folder still
+approved, not already running, busy while a folder-trust or Bypass Permissions question waits for a
+person) and no prompt, so the session opens **idle** and nothing is typed. The agent's `extraArgs` in `config.json` (on a machine migrated from agent-ha-bridge, its imported `newSession.extraArgs`, which go to every agent's) are checked first (Engineering's ruling on #837; Launch is unchanged). A restore is refused, and the session stays offered, when they hold the agent's prompt flag (`-i` for Copilot and Agency, `--` for Claude and Codex), or any token that is not an option on the agent's allowlist with its value in the expected form: so no positional token, no `--` and nothing after it. The allowlist holds only options confirmed from each agent's own `--help` to carry no prompt: `--add-dir <directory>` for Copilot, Claude and Codex, its value a full path (as the next argument or after `=`). Agency has none yet, so its restores are offered rather than automatic. The refusal, which is logged, names the option and never a value. An extra argument could submit a prompt (`-i`, or Claude's bare positional one) or grant what the recorded permission mode does not (`--allow-all`, `--dangerously-skip-permissions`, `--ask-for-approval never`), and one an agent adds later could do either. Folder trust is never
+answered: a restore that meets the question is `unconfirmed`: never counted restored nor shown with `restored` or Continue (one tap would type into the question), with replies to it refused while its window has not been seen ready (`LaunchService.HeldForReply`), and offered until its session registers; seen ready later, while its launch still follows it (even after its stamp is cleared, 10 minutes live), it is counted and shown restored then (`LaunchService.SeenReadyLate`), with the notification sent then if it was all that one waited for, and the next waits while launches are
+busy, trying again every 15 s. It is not limited to the resume list's length: the session is found by its id, whatever its age, and a Copilot session with no summary or prompt to name it is found too, as "Copilot session". Its settings are what
+this host launched it with, each kept only while `launch.options` still offers it (else the
+machine's default), and one that launch left to the agent is left to it; a session started by hand, of which nothing is known, asks permission, whatever
+the machine's default is: it is never given Allow all it may not have had. A restore that is refused
+or fails stays offered (one that registered and then failed, as one that died again). Restored, and once its window has been seen ready, a session carries `restored` ([v1-sessions.md](protocol/v1-sessions.md#sessions))
+for this run, at most 24 hours (the badge goes then; what the interrupted run left stays hidden while the session lives): when, why, whether it went mid-turn or with a question waiting, and
+for one that went mid-turn `continue`, the words of the reply a client offers as **Continue**
+("You were interrupted by a reboot at 03:12; carry on where you left off", in the machine's time).
+Continue is an ordinary `session.reply` a person sends, with no more trust than any reply; no host
+sends it, and `midTurn` and `continue` go once a prompt arrives after the restore, whether its turn is still running when the host looks or has already ended. A question or approval the interrupted run left waiting is not shown as asked (`questionLost` says it went); one asked after the restore is. Nor is the turn it was in shown as running: the session reads idle until a prompt arrives after the restore. That boundary outlives the host run: the record keeps each restored session's `boundary` (its latest restore), with `interrupted`, the ids of the questions it set aside as the interrupted run's and still unanswered (a stale Claude hook approval by its tool and time), the newest 64 of them (one left out is shown as new after a restart, never a new one hidden), for as long as it keeps the session, live or owed (one held undecided at a start and adopted once the hold lifts keeps it too), apart from the crash-loop stamp, and a host started again holds it on the sessions before its first discovery pass publishes them, so the interrupted run's question is never listed again as asked, or answerable, after a host restart. Replayed, those questions are told by their ids, not their times: a question asked after the restore that a clock set back dated before it is still shown. An entry without `interrupted` (an older record, or one not yet read with its boundary) is told by time, as before. The badge and Continue are not shown again. Replies still read the transcript first and refuse while it holds an unanswered ask, since typing into a question the agent may still show would answer it; for Copilot, a turn left open by a CLI that was killed ends with the new CLI's `session.resume`, but what it left asking still keeps replies out (the new CLI may show it again without writing it again, and Enter would accept it) until it is completed, aborted, replaced by a question the session itself asks since (a subagent's is its own, #855), or a prompt is typed at the machine; an answer to it is refused as stale.
+
+**Crash loops.** Each restore is stamped in the record **before** its launch (on its owed entry, or in `stamps` for one the record holds no entry of), so a session that registers and dies at once, with the host, is still known as restored. A restore that starts nothing (busy, refused, or withdrawn because the host is stopping or its caller cancelled it before the agent started) puts back what was there before, its own stamp and mark only; a restore that registers and dies before its launch returns is offered as a loop. A restored session that dies before it has been seen live 10 minutes (with the host
+watching, judged as at a start, so one its agent ended normally does not count; or found dead at the next start, including an offer an earlier run restored whose session had not registered) is not restored again: it is kept owed, offered, and counted in
+`loops`. Its stamp is cleared only once it has been seen live that long; one still waiting to register (at folder trust) keeps it. A host that keeps starting
+cannot restore one more than once. A host that stops while a restore waits its turn starts nothing more, and lets the one under way finish (a few seconds at most) before its last write, whether the queue's or one asked for; a stamp carried by no entry that never registers goes after 24 hours, with a write due then.
+
+**What died** and was not restored is kept in the record as owed, offered for 7 days (counted from when it is offered, and let go on time while the host keeps
+running; one still being judged is never let go) unless it is resumed or seen live again, and said in `hello`'s `machine.restore` ([v1-sessions.md](protocol/v1-sessions.md#hello)) for
+this run, at most 24 hours, and in one `restored` notification, sent when every session is judged and
+restored, or 10 minutes after start, and only if this start found any that died. The notification
+says how many were restored (a session restored and then offered as a loop is counted once, as a loop) and counts those offered, and names only those, restored or not, that went mid-turn or with a question waiting; the rest are left to Launch, where they are offered; one an earlier start offered is offered still in
+`hello`, not notified again, and is not restored by a later start: a person resumes it from Launch.
+One an earlier start was still judging is judged now, as of this start's cause. Beside agent-ha-bridge,
+or while the machine is read-only or launching is off, nothing is restored: the sessions are only
+offered (design G5), and are restored if the machine takes launches again while this run lasts.
+A host the logon task's launcher started after the person pressed Stop in the app restores nothing: it
+looks for the app's Stop marker before the record starts, and exits as it always has; and no restore
+resumes an agent until it has looked again with its pipe open, so a Stop pressed while it starts leaves
+what died offered (#986). With
+`sessions.restoreOnStart` off ([host-config.md](host-config.md)), nothing is restored, what went is
+said and nothing is kept owed, and what earlier starts kept owed is let go. (**Proposed, not built,
+#948:** a person may restore what this run said from a client, `restore.run`, for as long as the
+notice offers it; [restore-run.md](protocol/restore-run.md#what-changes-in-the-record).) Off only because
+`config.json` could not be read, nothing is restored but what died is kept owed, as when it is on.
+
+**For other callers** (#800, sessions an expired sign-in stopped): `ISessionRestorer.RestoreAsync`
+resumes one session the same way, through the same one-at-a-time queue and checks, marks it restored,
+once its window is seen ready (#855), with the cause it is given and Continue when it went mid-turn, and is refused while the machine is
+read-only, or while that session is already running or being restored. It is busy, and starts nothing,
+while the restore record cannot take its stamp first: the recorder did not start (a record that could
+not be set aside) or failed, or the write failed.
+
+**Worktrees.** The reclaimer keeps the worktree of every session owed or still being judged, as it
+keeps a live session's, and of a restored session while it is still stamped, live or just gone, so the record's own snapshot holds
+its folder as it dies (#855; every worktree while that folder is not known), and of a session restored on request until it registers, starts nothing, or
+its stamp goes (every worktree, while its folder is not known, and across a restart, when only its stamp is left). A folder deleted since is placed under what is left of its path, so it keeps
+the worktree it was in; one owed without a folder, one whose place cannot be resolved (a link that
+cannot be read), or a record set aside, keeps every worktree.
+
+**A clock set back** (a bad RTC, a VM restored from a snapshot, a year corrected) leaves times in the
+record ahead of it. One more than 2 minutes ahead is read as now: an offer is kept, and let go a week
+from then. No timer is set more than a day ahead, and one that fires early only looks again, since the
+system's timers refuse anything past about 49.7 days and that refusal stopped the host at every start.
+How long `hello` says what went (24 hours) and the 10 minutes before a partial notification are
+counted on the monotonic clock, so a clock set back stretches neither.
+**A clock set forward** more than the 7 days an offer is kept would let every offer go at once, nobody having
+seen it. A step the host did not live through is not counted against them (#855): while it runs, a step of more
+than 7 days that the monotonic clock did not take; at a start, a record last written more than 7 days
+before, which the wall clock cannot tell from a machine off that long, so each offer keeps the time it had left
+when the record was written, less 3 hours. While anything is offered the record is written at least every 3 hours,
+so the host can have run at most that long after it: days it ran with nothing else to write are never forgiven, and an
+offer goes after 7 days the host saw, however often it crashes. A smaller step counts, as days with the machine off do.
+Anything else that stops the record from starting, or from being looked at later, is logged and keeps
+every worktree for that run; the host goes on serving.
 
 ## The log
 

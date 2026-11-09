@@ -77,6 +77,13 @@ public sealed class FoldStore
     }
 }
 
+// When an update is ready on this machine (owner decision on #689, 6674007815; Product's names,
+// 6674016765). Restart to update, for a machine a person uses: it waits for their press (#516).
+// Install between turns, for a machine agents use: it installs by itself at the first moment no
+// session there has a turn running or a question waiting (AutoUpdater).
+[UnknownAs(RestartToUpdate)]
+public enum UpdateWhenReady { RestartToUpdate, InstallBetweenTurns }
+
 // The app's own preferences, beside the host's data: what the app shows and does, never what
 // the host may do (that is the host's config.json, changed through host.settings).
 public sealed record AppPreferences
@@ -87,15 +94,35 @@ public sealed record AppPreferences
     public bool FinishedToasts { get; init; } = true;
     // Include pre-releases when checking for updates.
     public bool Prereleases { get; init; } = true;
-    // Install updates without being asked (AutoUpdater).
+    // Check for and download updates in the background (AutoUpdater).
     public bool AutoUpdate { get; init; } = true;
+    // When an update is ready, for this machine and profile, as the person set it; unset, it is
+    // DefaultWhenReady, so a later default (Product's, for agent machines) reaches every machine
+    // nobody set.
+    public UpdateWhenReady? WhenUpdateReady { get; init; }
+    public static UpdateWhenReady DefaultWhenReady => UpdateWhenReady.RestartToUpdate;
+    [JsonIgnore]
+    public UpdateWhenReady WhenReady => WhenUpdateReady ?? DefaultWhenReady;
     // Set just before an update is applied, and cleared by the new version's first start, which
     // announces it: the version updated from, and the new one's release notes.
     public string? UpdatedFrom { get; init; }
     public string? UpdateNotes { get; init; }
+    // The window was open when that update was handed over (#1167): the next start opens it again,
+    // with Updated or why it couldn't install there rather than a toast. Never set by an update
+    // started while the window was closed, so an unattended machine never gets a window (#1159).
+    public bool UpdateWindowOpen { get; init; }
+    // Update.exe started for that update (AutoUpdater.HandedOver): an install was attempted. Unset,
+    // a next start still on this version says nothing to the person (#1167).
+    public bool UpdateHandedOver { get; init; }
     // The press from another device that update answers, if one asked for it (#51), and how the
     // last update asked for or installed ended, for the host to tell the account's devices.
     public string? UpdateRequest { get; init; }
+    // Installs that failed in a row, and when the next may be tried by itself (UpdateBackoff):
+    // kept because a failed update restarts the app.
+    public int? UpdateFailures { get; init; }
+    public DateTimeOffset? UpdateRetryAt { get; init; }
+    // The release those failures were of: a different release pending is not held by them.
+    public string? UpdateFailedRelease { get; init; }
     public UpdateResult? LastUpdate { get; init; }
     // The presses from other devices this app has taken on, the latest last: one the host still
     // lists after the app restarts (its report that it took them lost) is not carried out twice.
@@ -105,9 +132,24 @@ public sealed record AppPreferences
     public string? UpdateInstallAsked { get; init; }
     public string? UpdateCheckAsked { get; init; }
     public string? Relay { get; init; }
+    // Send feedback (#738): a staging override of the compiled-in recipient (key id and base64url
+    // public key), used only when both are set; otherwise FeedbackSenderFactory's production key applies.
+    public string? FeedbackKeyId { get; init; }
+    public string? FeedbackPublicKey { get; init; }
+    // Turning this off makes feedback unavailable, whatever else is set.
+    public bool FeedbackUpload { get; init; } = true;
     // The installed app's first run turned on starting at sign-in (the host's logon task and
     // the app's Run entry); after that they are the person's to turn off and stay off.
     public bool SetUp { get; init; }
+    // Set only by a first install (no settings file yet), cleared when Settings has opened on Get
+    // started (#384). Never set for an upgrader, whose file already exists.
+    public bool GuidePending { get; init; }
+
+    // A missing file is a first run. An unreadable one is not: it belongs to someone who has used the app.
+    public static bool IsFirstRun(string path) => !File.Exists(path);
+    // Not now on the card for an agent installed after the bridge (#231): the version each agent
+    // was dismissed at, by agent id. A different version is a new offer; the row's own Set up stays.
+    public IReadOnlyDictionary<string, string>? AgentOffersDismissed { get; init; }
 
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {

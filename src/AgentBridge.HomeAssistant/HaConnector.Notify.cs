@@ -445,8 +445,16 @@ public sealed partial class HaConnector
         // has a new turn, now at rest with a reply that turn has not been pushed for. Sent once it
         // has stayed at rest a moment, as the host's own notifier waits: a question answered at the
         // machine passes through idle on its way back to work. A background agent's message while
-        // the session rests is not a finished turn.
-        if (status == SessionStatus.Idle && question is null && key is not null && key != state.FinishedKey)
+        // the session rests is not a finished turn. Nor is a turn that ended on an error or a
+        // failed sign-in (#800, #845): the reply beside it is the turn before's, and pushing it was
+        // the owner's "replies with the last turn as if alive". It is taken as told, so it is not
+        // pushed later either.
+        if (HaPayloads.Failed(full))
+        {
+            if (key is not null) { state.FinishedKey = key; }
+            state.FinishedDue = null;
+        }
+        else if (status == SessionStatus.Idle && question is null && key is not null && key != state.FinishedKey)
         {
             // A reply that changes while it waits is the turn's latest: the wait starts again with
             // it. Anything else that changes meanwhile (reasoning, history) leaves the wait as it is.
@@ -472,6 +480,12 @@ public sealed partial class HaConnector
         {
             p.Notify.FinishedDue = null;
             if (CardSession(id) is not { Status: SessionStatus.Idle, Question: null } s) { continue; }
+            // The attention came after the wait began: the turn failed, and its reply is the one before.
+            if (HaPayloads.Failed(s))
+            {
+                if (FinishedKey(s) is { } failed) { p.Notify.FinishedKey = failed; }
+                continue;
+            }
             // A reply newer than the one the wait began with, still at rest: wait again for it,
             // rather than drop the turn because the session moved on between the two reads.
             if (FinishedKey(s) is var current && current != key)
@@ -487,16 +501,27 @@ public sealed partial class HaConnector
         }
     }
 
-    async Task PushAsync(string title, string message, CancellationToken ct)
+    async Task PushAsync(string title, string message, CancellationToken ct) => await TryPushAsync(title, message, ct);
+
+    // Whether the push was taken. A push tried again until it is (the sign-in notice) names its
+    // problem, so a service that keeps failing is said once until it works again, not on each try.
+    async Task<bool> TryPushAsync(string title, string message, CancellationToken ct, string? problem = null)
     {
-        if (HaNotify.Split(Notify.Service) is not { } target) { return; }
+        if (HaNotify.Split(Notify.Service) is not { } target) { return false; }
         var data = HaNotify.Notification(Notify.Service, title, message, Notify.TickerCategory, options.DashboardUrlPath);
-        try { await ha.CallServiceAsync(target.Domain, target.Service, data, ct); }
+        try
+        {
+            await ha.CallServiceAsync(target.Domain, target.Service, data, ct);
+            if (problem is not null) { Resolved(problem); }
+            return true;
+        }
         catch (Exception e) when (OnePhone(e, ct))
         {
             // As the hooks do: the session is on the dashboard already, and a lost push must not
             // hold anything else up.
-            log($"Home Assistant connector notification via {Notify.Service} failed: {Describe(e)}");
+            var said = $"Home Assistant connector notification via {Notify.Service} failed: {Describe(e)}";
+            if (problem is not null) { Problem(problem, said); } else { log(said); }
+            return false;
         }
     }
 

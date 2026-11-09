@@ -34,9 +34,9 @@
             AutomationProperties.AutomationId="TitleBar">
             <TitleBar.LeftHeader>
                 <ContentControl
-                    Style="{StaticResource AbIconMark}"
-                    Width="16"
-                    Height="16"
+                    Style="{StaticResource AbIconMark20}"
+                    Width="20"
+                    Height="20"
                     Margin="16,0,0,0"
                     VerticalAlignment="Center"
                     Foreground="{ThemeResource AbBridge}"
@@ -114,8 +114,13 @@
                 </NavigationViewItem>
             </NavigationView.MenuItems>
             <NavigationView.FooterMenuItems>
-                <NavigationViewItem Tag="settings" AutomationProperties.AutomationId="NavSettings" AutomationProperties.Name="Settings" ToolTipService.ToolTip="Settings">
+                <NavigationViewItem x:Name="SettingsItem" Tag="settings" AutomationProperties.AutomationId="NavSettings" AutomationProperties.Name="Settings" ToolTipService.ToolTip="Settings">
                     <ContentControl Style="{StaticResource AbIconSettings}" Width="20" Height="20" Margin="-8,0,0,0" AutomationProperties.AutomationId="NavIcon" />
+                    <!-- An agent installed after the bridge (#231; ui.md §6.7, §6.9): a grey dot, never a count. It
+                         is in the item's name too ("Settings, new agent found"), and goes with its card. -->
+                    <NavigationViewItem.InfoBadge>
+                        <InfoBadge x:Name="SettingsDot" Background="{ThemeResource AbNeutral}" Visibility="Collapsed" AutomationProperties.AutomationId="NavSettingsDot" />
+                    </NavigationViewItem.InfoBadge>
                 </NavigationViewItem>
             </NavigationView.FooterMenuItems>
 
@@ -126,6 +131,7 @@
                 </Grid.RowDefinitions>
                 <!-- What stops the app doing its job, over every page. -->
                 <StackPanel Grid.Row="0">
+                    <!-- Never closable (#293): it says what keeps the app from its job, and goes once that is put right. -->
                     <InfoBar
                         x:Name="Banner"
                         Margin="24,12,24,0"
@@ -134,14 +140,59 @@
                         Severity="Warning"
                         IsOpen="{x:Bind ViewModel.HasBanner, Mode=OneWay}"
                         Message="{x:Bind ViewModel.Banner, Mode=OneWay}" />
+                    <!-- This machine's update, downloaded and waiting for the person (#516): no dismiss, so the
+                         action stays while the release waits, and nothing restarts until it is pressed. -->
                     <InfoBar
-                        x:Name="DiscoveryHeld"
+                        x:Name="UpdateReady"
                         Margin="24,12,24,0"
-                        AutomationProperties.AutomationId="DiscoveryHeld"
+                        AutomationProperties.AutomationId="UpdateReady"
+                        AutomationProperties.LiveSetting="Polite"
                         IsClosable="False"
-                        Severity="Informational"
-                        IsOpen="{x:Bind ViewModel.IsHeld, Mode=OneWay}"
-                        Message="{x:Bind ViewModel.HeldWhy, Mode=OneWay}" />
+                        Severity="{x:Bind local:Ui.UpdateSeverity(ViewModel.AppUpdate.Failed), Mode=OneWay}"
+                        IsOpen="{x:Bind ViewModel.AppUpdate.Shown, Mode=OneWay}"
+                        Message="{x:Bind ViewModel.AppUpdate.Message, Mode=OneWay}">
+                        <!-- Restarting, the button that started it shows its progress ring and says so, ignores
+                             presses (RestartAsync) and keeps focus, never drawn at rest in accent (Creative on
+                             #719, 6675195544; ui.md §5.3, §9.1 A4). Failed, it is Try again. -->
+                        <InfoBar.ActionButton>
+                            <Button
+                                Style="{x:Bind local:Ui.ActionStyle(ViewModel.AppUpdate.Restarting), Mode=OneWay}"
+                                AutomationProperties.AutomationId="RestartToUpdate"
+                                AutomationProperties.Name="{x:Bind ViewModel.AppUpdate.ActionLabel, Mode=OneWay}"
+                                AutomationProperties.ItemStatus="{x:Bind ViewModel.AppUpdate.ActionStatus, Mode=OneWay}"
+                                Visibility="{x:Bind local:Ui.Show(ViewModel.AppUpdate.Offered), Mode=OneWay}"
+                                Click="OnRestartToUpdate">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <ProgressRing
+                                        Width="16"
+                                        Height="16"
+                                        IsActive="{x:Bind ViewModel.AppUpdate.Restarting, Mode=OneWay}"
+                                        Visibility="{x:Bind local:Ui.Show(ViewModel.AppUpdate.Restarting), Mode=OneWay}" />
+                                    <TextBlock Text="{x:Bind ViewModel.AppUpdate.ActionLabel, Mode=OneWay}" />
+                                </StackPanel>
+                            </Button>
+                        </InfoBar.ActionButton>
+                    </InfoBar>
+                    <!-- The new version's first start, where the window was open for the update (#1167): a
+                         success the person closes, with the release's notes a link away. A polite live
+                         region, said once as it opens (MainWindow.FollowUpdating). -->
+                    <InfoBar
+                        x:Name="UpdatedBar"
+                        Margin="24,12,24,0"
+                        AutomationProperties.AutomationId="Updated"
+                        AutomationProperties.LiveSetting="Polite"
+                        IsClosable="True"
+                        Severity="Success"
+                        IsOpen="{x:Bind ViewModel.AppUpdate.HasUpdated, Mode=OneWay}"
+                        Message="{x:Bind ViewModel.AppUpdate.UpdatedMessage, Mode=OneWay}"
+                        CloseButtonClick="OnCloseUpdated">
+                        <InfoBar.ActionButton>
+                            <HyperlinkButton
+                                AutomationProperties.AutomationId="WhatsNew"
+                                Content="What's new"
+                                NavigateUri="{x:Bind ViewModel.AppUpdate.ReleaseNotes, Mode=OneWay}" />
+                        </InfoBar.ActionButton>
+                    </InfoBar>
                 </StackPanel>
 
                 <!-- Sessions (ui.md §5.2, §6): the list, the session and its inspector, by the window's width. -->
@@ -205,14 +256,15 @@
                                                         <TextBlock Style="{StaticResource AbTypeRow}" TextTrimming="CharacterEllipsis" AutomationProperties.AutomationId="MachineName" Text="{x:Bind Name, Mode=OneWay}" />
                                                         <TextBlock Grid.Column="1" Style="{StaticResource AbTypeRow}" Foreground="{ThemeResource AbText2}" AutomationProperties.AutomationId="MachineStatus" Text="{x:Bind Status, Mode=OneWay}" />
                                                     </Grid>
-                                                    <!-- At most two facts. A read-only host's reason is a sentence: its tooltip, not the row. -->
+                                                    <!-- At most two facts. A read-only or held host's reason is a sentence: its tooltip and
+                                                         accessible description, not the row (ui.md §6.6). Its name is the words shown (§9.1 A1). -->
                                                     <TextBlock
                                                         Style="{StaticResource AbTypeMeta}"
                                                         Foreground="{ThemeResource AbText2}"
                                                         TextTrimming="CharacterEllipsis"
                                                         AutomationProperties.AutomationId="MachineFacts"
-                                                        AutomationProperties.HelpText="{x:Bind ViewOnlyWhy, Mode=OneWay}"
-                                                        ToolTipService.ToolTip="{x:Bind ViewOnlyWhy, Mode=OneWay}"
+                                                        AutomationProperties.HelpText="{x:Bind FactsWhy, Mode=OneWay}"
+                                                        ToolTipService.ToolTip="{x:Bind FactsWhy, Mode=OneWay}"
                                                         Text="{x:Bind Facts, Mode=OneWay}"
                                                         Visibility="{x:Bind local:Ui.Some(Facts), Mode=OneWay}" />
                                                     <TextBlock
@@ -242,7 +294,41 @@
                                                             Text="{x:Bind Update.Note, Mode=OneWay}"
                                                             Visibility="{x:Bind local:Ui.Some(Update.Note), Mode=OneWay, FallbackValue=Collapsed}" />
                                                     </StackPanel>
-                                                    <local:WrapRow Spacing="8" Margin="0,8,0,0" AutomationProperties.AutomationId="MachineButtons">
+                                                    <!-- Diagnose (#802): read here, copied only once the person says they reviewed it. -->
+                                                    <StackPanel Spacing="8" Margin="0,8,0,0" Tag="{x:Bind}" AutomationProperties.AutomationId="MachineDiagnosis" Visibility="{x:Bind local:Ui.Show(HasDiagnosis), Mode=OneWay}" KeyDown="OnMachineDiagnosisKeyDown">
+                                                        <TextBlock
+                                                            Style="{StaticResource AbTypeMeta}"
+                                                            Foreground="{ThemeResource AbText2}"
+                                                            TextWrapping="Wrap"
+                                                            AutomationProperties.AutomationId="MachineDiagnoseHint"
+                                                            Text="{x:Bind Diagnosis.UpdateHint, Mode=OneWay}"
+                                                            Visibility="{x:Bind local:Ui.Show(Diagnosis.NotOffered), Mode=OneWay, FallbackValue=Collapsed}" />
+                                                        <TextBlock
+                                                            Style="{StaticResource AbTypeMeta}"
+                                                            Foreground="{ThemeResource AbText2}"
+                                                            TextWrapping="Wrap"
+                                                            AutomationProperties.AutomationId="MachineDiagnosisNote"
+                                                            Text="{x:Bind Diagnosis.Note, Mode=OneWay}"
+                                                            Visibility="{x:Bind local:Ui.Some(Diagnosis.Note), Mode=OneWay, FallbackValue=Collapsed}" />
+                                                        <TextBox
+                                                            IsReadOnly="True"
+                                                            AcceptsReturn="True"
+                                                            TextWrapping="NoWrap"
+                                                            FontFamily="{StaticResource MonoFontFamily}"
+                                                            MaxHeight="360"
+                                                            ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                                            ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                            AutomationProperties.AutomationId="MachineDiagnosisText"
+                                                            AutomationProperties.Name="{x:Bind Diagnosis.DiagnoseName, Mode=OneWay}"
+                                                            Text="{x:Bind Diagnosis.Text, Mode=OneWay}"
+                                                            Visibility="{x:Bind local:Ui.Show(Diagnosis.HasText), Mode=OneWay, FallbackValue=Collapsed}" />
+                                                        <CheckBox
+                                                            Content="I have read this and it is fine to share"
+                                                            AutomationProperties.AutomationId="MachineDiagnosisReviewed"
+                                                            IsChecked="{x:Bind Diagnosis.Reviewed, Mode=TwoWay}"
+                                                            Visibility="{x:Bind local:Ui.Show(Diagnosis.HasText), Mode=OneWay, FallbackValue=Collapsed}" />
+                                                    </StackPanel>
+                                                    <local:WrapRow Spacing="8" Margin="0,8,0,0" Tag="{x:Bind}" AutomationProperties.AutomationId="MachineButtons" KeyDown="OnMachineDiagnosisKeyDown">
                                                         <Button
                                                             Content="Show sessions"
                                                             Tag="{x:Bind}"
@@ -274,6 +360,28 @@
                                                             Visibility="{x:Bind local:Ui.Show(HasUpdate), Mode=OneWay}"
                                                             Click="OnInstallMachine" />
                                                         <Button
+                                                            Content="Diagnose"
+                                                            Tag="{x:Bind}"
+                                                            AutomationProperties.AutomationId="DiagnoseMachine"
+                                                            AutomationProperties.Name="{x:Bind Diagnosis.DiagnoseName, Mode=OneWay}"
+                                                            IsEnabled="{x:Bind Diagnosis.CanDiagnose, Mode=OneWay, FallbackValue=False}"
+                                                            Visibility="{x:Bind local:Ui.Show(Diagnosis.Offered), Mode=OneWay, FallbackValue=Collapsed}"
+                                                            Click="OnDiagnoseMachine" />
+                                                        <Button
+                                                            Tag="{x:Bind}"
+                                                            AutomationProperties.AutomationId="CopyMachineDiagnosis"
+                                                            AutomationProperties.Name="{x:Bind Diagnosis.CopyName, Mode=OneWay}"
+                                                            Content="{x:Bind Diagnosis.CopyText, Mode=OneWay}"
+                                                            IsEnabled="{x:Bind Diagnosis.CanCopy, Mode=OneWay, FallbackValue=False}"
+                                                            Visibility="{x:Bind local:Ui.Show(Diagnosis.HasText), Mode=OneWay, FallbackValue=Collapsed}"
+                                                            Click="OnCopyMachineDiagnosis" />
+                                                        <Button
+                                                            Content="Close"
+                                                            Tag="{x:Bind}"
+                                                            AutomationProperties.AutomationId="CloseMachineDiagnosis"
+                                                            Visibility="{x:Bind local:Ui.Show(Diagnosis.HasText), Mode=OneWay, FallbackValue=Collapsed}"
+                                                            Click="OnCloseMachineDiagnosis" />
+                                                        <Button
                                                             Tag="{x:Bind}"
                                                             AutomationProperties.AutomationId="ForgetMachine"
                                                             AutomationProperties.Name="{x:Bind Offline.ForgetName, Mode=OneWay}"
@@ -297,5 +405,62 @@
                 <local:SettingsView x:Name="SettingsPane" Grid.Row="1" Visibility="Collapsed" />
             </Grid>
         </NavigationView>
+
+        <!-- Updating (#1167): while this machine's update is handed to Velopack, with the window open,
+             the window's content is one centred state, on the page's layer (the window colour in high
+             contrast). The rail and the pages under it are collapsed meanwhile, out of reach of the
+             pointer, Tab and a screen reader alike, and search is disabled (MainWindow.FollowUpdating).
+             No buttons: the app closes for a moment and opens again by itself. -->
+        <Grid
+            x:Name="UpdatingPane"
+            Grid.Row="1"
+            Background="{ThemeResource AbLayer}"
+            AutomationProperties.AutomationId="Updating"
+            Visibility="{x:Bind local:Ui.Show(ViewModel.AppUpdate.IsUpdating), Mode=OneWay}">
+            <StackPanel MaxWidth="440" Padding="24" Spacing="12" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <ProgressRing
+                    Width="32"
+                    Height="32"
+                    HorizontalAlignment="Center"
+                    IsIndeterminate="True"
+                    IsActive="{x:Bind ViewModel.AppUpdate.IsUpdating, Mode=OneWay}"
+                    AutomationProperties.AutomationId="UpdatingProgress"
+                    AutomationProperties.Name="{x:Bind ViewModel.AppUpdate.UpdatingTitle, Mode=OneWay}" />
+                <!-- The heading takes keyboard focus as the screen appears, so its line is read
+                     (MainWindow.FollowUpdating); a tab stop only while it has focus. Should focus not
+                     be had (the window not in front), its polite live region says it instead.
+                     Focused programmatically, it draws no focus rectangle after a pointer press;
+                     after keyboard use WinUI draws one, so its padding and focus margin keep that
+                     rectangle clear of the first and last letters (Creative on #1181). -->
+                <ContentControl
+                    x:Name="UpdatingHeading"
+                    HorizontalAlignment="Center"
+                    Padding="8,2"
+                    FocusVisualMargin="-2"
+                    IsTabStop="False"
+                    UseSystemFocusVisuals="True"
+                    AutomationProperties.AutomationId="UpdatingTitle"
+                    AutomationProperties.HeadingLevel="Level1"
+                    AutomationProperties.LiveSetting="Polite"
+                    AutomationProperties.Name="{x:Bind ViewModel.AppUpdate.UpdatingTitle, Mode=OneWay}"
+                    LostFocus="OnUpdatingHeadingLostFocus">
+                    <TextBlock
+                        x:Name="UpdatingTitle"
+                        Style="{StaticResource AbTypeTitle}"
+                        TextAlignment="Center"
+                        TextWrapping="Wrap"
+                        AutomationProperties.AccessibilityView="Raw"
+                        Text="{x:Bind ViewModel.AppUpdate.UpdatingTitle, Mode=OneWay}" />
+                </ContentControl>
+                <TextBlock
+                    Style="{StaticResource AbTypeRow}"
+                    Foreground="{ThemeResource AbText2}"
+                    HorizontalAlignment="Center"
+                    TextAlignment="Center"
+                    TextWrapping="Wrap"
+                    AutomationProperties.AutomationId="UpdatingBody"
+                    Text="{x:Bind core:AppUpdateViewModel.UpdatingBody}" />
+            </StackPanel>
+        </Grid>
     </Grid>
 </Window>

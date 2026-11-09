@@ -119,6 +119,29 @@ public sealed class LaunchPieceTests : IDisposable
 
     [WindowsFact]
     [Trait("Category", "Process")]
+    public async Task A_probe_resolves_a_new_runtime_from_its_fresh_child_PATH_without_changing_the_host()
+    {
+        var runtime = Out("new-runtime-\u03bb");
+        Directory.CreateDirectory(runtime);
+        File.WriteAllText(Path.Combine(runtime, "fixture-runtime.cmd"), "@echo fixture version 1.2.3\r\n");
+        var shim = Out("fresh-cli.cmd");
+        File.WriteAllText(shim, "@echo off\r\ncall fixture-runtime.cmd\r\n");
+        var inherited = Environment.GetEnvironmentVariable("PATH");
+        IReadOnlyDictionary<string, string?> environment = new Dictionary<string, string?>();
+        var runner = new VersionCommandRunner(() => environment);
+        environment = new Dictionary<string, string?> { ["PATH"] = runtime };
+
+        var result = await runner.RunAsync(shim, ["--help"], TimeSpan.FromSeconds(15));
+
+        Assert.True(result.Ran);
+        Assert.False(result.TimedOut);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("fixture version 1.2.3", result.Output);
+        Assert.Equal(inherited, Environment.GetEnvironmentVariable("PATH"));
+    }
+
+    [WindowsFact]
+    [Trait("Category", "Process")]
     public Task Cancelling_a_version_probe_terminates_its_orphaned_grandchild_before_returning() => ProbeDescendant(false, true);
 
     [WindowsFact]
@@ -133,7 +156,11 @@ public sealed class LaunchPieceTests : IDisposable
     [Trait("Category", "Process")]
     public Task A_batch_command_cannot_inherit_a_probe_writer_from_another_launch() => SharedInheritanceWindow(true);
 
-    async Task SharedInheritanceWindow(bool batch)
+    [WindowsFact]
+    [Trait("Category", "Process")]
+    public Task A_usage_probe_cannot_inherit_a_probe_writer_from_another_launch() => SharedInheritanceWindow(false, usageProbe: true);
+
+    async Task SharedInheritanceWindow(bool batch, bool usageProbe = false)
     {
         var pidFile = Out("concurrent.pid");
         var shim = Out("concurrent.cmd");
@@ -150,11 +177,19 @@ public sealed class LaunchPieceTests : IDisposable
         AgentBridge.Host.Core.Usage.ICommandRunner runner = batch
             ? new BatchFileRunner(new AgentBridge.Host.Core.Usage.CommandRunner())
             : new AgentBridge.Host.Core.Usage.CommandRunner();
-        var pending = Task.Run(() =>
-        {
-            entered.Set();
-            return runner.RunAsync(batch ? shim : Echo, batch ? [] : ["--probe-child", pidFile, "close"], TimeSpan.FromMinutes(2), stop.Token);
-        });
+        AgentBridge.Host.Core.Usage.IProbeProcess? probe = null;
+        var pending = usageProbe
+            ? Task.Run(() =>
+            {
+                entered.Set();
+                probe = new ProbeLauncher().Start(new AgentBridge.Host.Core.Usage.ProbeCommand(Echo, ["--probe-child", pidFile, "close"], Path.GetDirectoryName(pidFile)!,
+                    new Dictionary<string, string?>()));
+            })
+            : Task.Run(() =>
+            {
+                entered.Set();
+                return runner.RunAsync(batch ? shim : Echo, batch ? [] : ["--probe-child", pidFile, "close"], TimeSpan.FromMinutes(2), stop.Token);
+            });
         Process? child = null;
         try
         {
@@ -175,6 +210,7 @@ public sealed class LaunchPieceTests : IDisposable
             stop.Cancel();
             try { await pending.WaitAsync(TimeSpan.FromSeconds(30)); }
             catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+            probe?.Dispose();
             if (child is not null)
             {
                 if (!child.HasExited) { child.Kill(); await child.WaitForExitAsync(); }
@@ -268,6 +304,38 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Process")]
+    public async Task A_usage_probe_runs_in_its_folder_with_the_profiles_home_set_a_removed_variable_gone_and_nothing_on_its_input()
+    {
+        var folder = Directory.CreateDirectory(Path.Combine(root, "usage probe")).FullName;
+        string script;
+        if (OperatingSystem.IsWindows())
+        {
+            // An npm shim, as claude.cmd is: run through cmd.exe.
+            script = Path.Combine(root, "claude.cmd");
+            File.WriteAllText(script, "@echo off\r\necho home=%CLAUDE_CONFIG_DIR%\r\necho gone=%AGENT_BRIDGE_PROBE_TEST%\r\necho cwd=%CD%\r\nset /p LINE=\r\necho stdin=[%LINE%]\r\nexit /b 3\r\n");
+        }
+        else
+        {
+            script = Path.Combine(root, "claude");
+            File.WriteAllText(script, "#!/bin/sh\necho \"home=$CLAUDE_CONFIG_DIR\"\necho \"gone=$AGENT_BRIDGE_PROBE_TEST\"\necho \"cwd=$(pwd)\"\nread LINE\necho \"stdin=[$LINE]\"\nexit 3\n");
+            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+        Environment.SetEnvironmentVariable("AGENT_BRIDGE_PROBE_TEST", "inherited");
+        try
+        {
+            using var probe = new ProbeLauncher().Start(new AgentBridge.Host.Core.Usage.ProbeCommand(script, ["auth", "status"], folder,
+                new Dictionary<string, string?> { ["CLAUDE_CONFIG_DIR"] = Path.Combine(root, "profile"), ["AGENT_BRIDGE_PROBE_TEST"] = null }))!;
+
+            Assert.Equal(3, await probe.Exited.WaitAsync(TimeSpan.FromSeconds(30)));
+            var lines = (await probe.Output).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            Assert.Equal([$"home={Path.Combine(root, "profile")}", "gone=", $"cwd={folder}", "stdin=[]"], lines);
+            Assert.Null(probe.Input);
+        }
+        finally { Environment.SetEnvironmentVariable("AGENT_BRIDGE_PROBE_TEST", null); }
+    }
+
+    [Fact]
     public void A_line_too_long_for_cmd_exe_is_refused_rather_than_cut()
     {
         Assert.Null(WindowsCommandLine.For(@"C:\npm\copilot.cmd", ["-i", new string('a', 9000)], out var problem));
@@ -275,6 +343,20 @@ public sealed class LaunchPieceTests : IDisposable
         Assert.NotNull(WindowsCommandLine.For(@"C:\bin\copilot.exe", ["-i", new string('a', 9000)], out _));
         Assert.Null(WindowsCommandLine.For(@"C:\bin\copilot.exe", ["-i", new string('a', 33000)], out problem));
         Assert.Contains("Windows takes at most", problem);
+    }
+
+    [Fact]
+    public void A_wide_console_starts_minimized_without_the_focus_so_the_console_host_keeps_it_to_be_widened()
+    {
+        Assert.Equal(new ConsoleStartup.Shape(ConsoleStartup.UseShowWindow, ConsoleStartup.ShowMinimizedNoActivate), ConsoleStartup.For(250, hidden: false));
+    }
+
+    [Fact]
+    public void A_console_without_a_width_opens_as_before_and_a_hidden_one_stays_hidden()
+    {
+        Assert.Equal(new ConsoleStartup.Shape(ConsoleStartup.UseShowWindow, ConsoleStartup.ShowNormal), ConsoleStartup.For(null, hidden: false));
+        Assert.Equal(ConsoleStartup.Hide, ConsoleStartup.For(250, hidden: true).Show);
+        Assert.Equal(ConsoleStartup.Hide, ConsoleStartup.For(null, hidden: true).Show);
     }
 
     [WindowsFact]
@@ -455,7 +537,9 @@ public sealed class LaunchPieceTests : IDisposable
 
     static void Git(string dir, params string[] args)
     {
-        var r = AgentBridge.Host.Delivery.Launch.Git.Run(dir, args);
+        // Fixture setup is not testing git's production timeout. A loaded runner took
+        // longer than its default 30 seconds just to create the seed commit (#664).
+        var r = AgentBridge.Host.Delivery.Launch.Git.Run(dir, args, timeout: TimeSpan.FromMinutes(2));
         Assert.True(r.Ok, $"git {string.Join(' ', args)}: {r.Said}");
     }
 
@@ -645,6 +729,23 @@ public sealed class LaunchPieceTests : IDisposable
         Directory.SetLastWriteTimeUtc(old, new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc));
 
         Assert.Contains(new ResumableStore(copilot, root, root).Read(["copilot"]), e => e.Id == Id(9999));
+    }
+
+    // Copilot on #837: a Copilot session with no summary and no prompt is left off the list, but one
+    // asked for by its id (a restore after a reboot) is found, with a title to show.
+    [Fact]
+    public void A_copilot_session_with_nothing_to_call_it_by_is_not_listed_but_is_found_by_its_id()
+    {
+        var copilot = Path.Combine(root, ".copilot");
+        const string Id = "00000007-0000-4000-8000-000000000000";
+        var dir = Directory.CreateDirectory(Path.Combine(copilot, "session-state", Id)).FullName;
+        File.WriteAllText(Path.Combine(dir, "workspace.yaml"), "cwd: C:\\repos\\app\n");
+        var store = new ResumableStore(copilot, root, root);
+
+        Assert.DoesNotContain(store.Read(["copilot"]), e => e.Id == Id);
+        var found = store.Find(Id, ["copilot"]);
+        Assert.NotNull(found);
+        Assert.Equal((Id, "Copilot session", @"C:\repos\app"), (found.Id, found.Summary, found.Folder));
     }
 
     [Fact]

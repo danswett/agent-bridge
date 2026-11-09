@@ -15,9 +15,9 @@ const mac = async (secret, ...parts) => {
 
 // A relay's end of the socket: early, it sends the challenge as the socket opens when asked to.
 // Every message either way is noted, in order, to count round trips after the opening.
-function fakeRelay({ early }) {
+function fakeRelay({ early, feedback = 0 }) {
   const flights = [];
-  const relay = { flights, url: null, proofOk: null };
+  const relay = { flights, url: null, proofOk: null, feedbackRequest: null };
   class FakeSocket {
     readyState = 0;
     constructor(url) {
@@ -52,7 +52,12 @@ function fakeRelay({ early }) {
           ? await mac(secret, utf8.encode('agent-bridge-relay-early-proof'), this.nonce)
           : await mac(secret, utf8.encode('agent-bridge-s4-relay-proof'), this.nonce, utf8.encode('1'));
         relay.proofOk = m.mac === expected;
-        this.#reply(relay.proofOk ? { t: 'ready', device, account: '1', login: 'octo' } : { t: 'refused' });
+        this.#reply(relay.proofOk
+          ? { t: 'ready', device, account: '1', login: 'octo', ...(feedback ? { feedback: { max: feedback } } : {}) }
+          : { t: 'refused' });
+      } else if (m.t === 'feedback-put') {
+        relay.feedbackRequest = m;
+        this.#reply({ t: 'feedback-result', id: m.id, url: 'https://blob.example/once', expires: '2026-11-07T01:00:00Z' });
       }
     }
 
@@ -81,3 +86,19 @@ for (const early of [true, false]) {
     assert.equal(roundTrips(after), early ? 1 : 2);
   });
 }
+
+test('feedback upload asks for a stored-size URL through the matching relay result', async (t) => {
+  const { relay, FakeSocket } = fakeRelay({ early: true, feedback: 8192 });
+  const real = globalThis.WebSocket;
+  globalThis.WebSocket = FakeSocket;
+  t.after(() => { globalThis.WebSocket = real; });
+  const key = await P256KeyPair.generate();
+  const r = await new Relay({ base: 'https://relay.example', key, deviceId: await deviceIdOf(key.public), name: 'Phone' }).connect('token');
+
+  const slot = await r.feedbackPut(4096);
+
+  assert.deepEqual(relay.feedbackRequest, { t: 'feedback-put', size: 4096, id: 1 });
+  assert.equal(slot.url, 'https://blob.example/once');
+  assert.equal(r.feedbackMaxBytes, 8192);
+  assert.equal(r.busy, false);
+});

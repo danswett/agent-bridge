@@ -33,8 +33,15 @@ public static partial class TransferProtocol
 
     // A command's parts are base64url; these bound what a host reads before checking them.
     public const int MaxBody = 2048;
+    // update.install's Update now (UpdateProtocol.NowAction) only: its signed args carry the
+    // confirmation, which lists up to 32 busy sessions by id and state (docs/protocol/v1-update.md),
+    // and 32 UUIDs with the envelope come to about 3,300 characters. Every other action keeps MaxBody.
+    public const int MaxNowBody = 4096;
     public const int MaxKey = 96;
     public const int MaxMac = 64;
+
+    // The most body a signed command for action may carry, checked before its MAC.
+    public static int MaxBodyFor(string? action) => action == UpdateProtocol.NowAction ? MaxNowBody : MaxBody;
 
     public static bool IsDeviceId(string? id) => id is { Length: 32 } && DeviceId().IsMatch(id);
 
@@ -46,10 +53,13 @@ public static partial class TransferProtocol
         return t.Command is null ? "transfer.command is missing: a transfer needs a command signed by the device asking for it" : Check(t.Command);
     }
 
-    public static string? Check(SignedCommand c)
+    public static string? Check(SignedCommand c) => Check(c, null);
+
+    // For the action it is checked as: the body's bound is that action's (MaxBodyFor).
+    public static string? Check(SignedCommand c, string? action)
     {
         static bool Part(string? s, int max) => s is { Length: > 0 } && s.Length <= max && s.All(x => char.IsAsciiLetterOrDigit(x) || x is '-' or '_');
-        if (!Part(c.Body, MaxBody) || !Part(c.By, MaxKey) || !Part(c.Mac, MaxMac)) { return "the signed command is malformed"; }
+        if (!Part(c.Body, MaxBodyFor(action)) || !Part(c.By, MaxKey) || !Part(c.Mac, MaxMac)) { return "the signed command is malformed"; }
         return null;
     }
 
@@ -93,6 +103,11 @@ public sealed record CommandBody
     public required string To { get; init; }
     public required long IssuedAt { get; init; }
     public required long ExpiresAt { get; init; }
+    // A management command's arguments (manage.*, docs/protocol/v1-sessions.md, "Managing a machine"), signed with the
+    // rest; absent for a transfer. Null is never written, so a transfer's bytes are as before.
+    public System.Text.Json.JsonElement? Args { get; init; }
+    // manage.haToken.set only: SHA-256 of the secret that travels beside the command.
+    public string? ContentSha256 { get; init; }
 }
 
 public sealed record CommandPrincipal
@@ -106,6 +121,10 @@ public sealed record CommandTarget
 {
     public required string Machine { get; init; }
     public string? Session { get; init; }
+    // An escaped approval's confirmation (EscapedApproval): the question it approves, and the
+    // escaped message the person read (EscapedText.Shown).
+    public string? Question { get; init; }
+    public string? Shown { get; init; }
 }
 
 // session.transfer's request: the command, nothing else. Everything the source acts on is in it.

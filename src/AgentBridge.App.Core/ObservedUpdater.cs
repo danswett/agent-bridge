@@ -2,8 +2,8 @@ using AgentBridge.Protocol;
 
 namespace AgentBridge.App.Core;
 
-// The app's one updater, as everything that uses it shares it: Settings' Check, Download and
-// Update and restart, and the automatic updates (AutoUpdater), which tell the account's other
+// The app's one updater, as everything that uses it shares it: Settings' Check and Restart to
+// update, and the background updates (AutoUpdater), which tell the account's other
 // devices what it is doing (#51). Each of them goes through here, so a check or download made from
 // Settings is reported as one the AutoUpdater made would be: what the last check found (kept when
 // its download fails, so a release that is there is not reported as nothing newer), when, and
@@ -15,13 +15,32 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     // when another holds it, so Settings' and the automatic one's overlapping made the second fail
     // (reported to every device as a failed update).
     readonly SemaphoreSlim downloading = new(1, 1);
-    // Which release's download last failed, and when: not tried again for DownloadAgainAfter,
-    // whoever asks (Settings, the automatic updates, a device's press, or one waiting above).
-    (string? Release, DateTimeOffset At)? failed;
+    // One check at a time, so what it found and when the feed was last asked (DiscoveredAt) are
+    // read together: overlapping, Settings' and the automatic one's could give one's older answer,
+    // from the machine's shared copy, the other's fresh fetch time (Copilot on #709, r4487867309).
+    readonly SemaphoreSlim checking = new(1, 1);
+    // Which release's download last failed, when, and how many times in a row: not tried again
+    // until RetryAt, whoever asks (Settings, the automatic updates, a device's press, or one
+    // waiting above).
+    (string? Release, DateTimeOffset At, int Times)? failed;
     int checks;
     int downloads;
 
+    // The wait after a release's first failed download, doubled after each further one in a row
+    // up to DownloadAgainAtMost (#516): a download that keeps failing (a feed out of reach, a disk
+    // full) is retried in the background, more and more rarely, and never ends the app.
     public static readonly TimeSpan DownloadAgainAfter = TimeSpan.FromMinutes(10);
+    public static readonly TimeSpan DownloadAgainAtMost = TimeSpan.FromHours(4);
+
+    public static TimeSpan HoldAfter(int times)
+    {
+        var hold = DownloadAgainAfter * Math.Pow(2, Math.Clamp(times - 1, 0, 16));
+        return hold < DownloadAgainAtMost ? hold : DownloadAgainAtMost;
+    }
+
+    // When the release the last check found may be downloaded again after its download failed;
+    // null when it has not failed (or another release has been found since).
+    public DateTimeOffset? RetryAt => failed is { } f && f.Release == Found ? f.At + HoldAfter(f.Times) : null;
 
     // Raised whenever anything below changes, on the thread that changed it.
     public event Action? Changed;
@@ -29,6 +48,10 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     // The release the last check found, null when it found nothing newer (or none has finished).
     public string? Found { get; private set; }
     public DateTimeOffset? CheckedAt { get; private set; }
+    // As of when Found is known: the feed's own answer may be older than the check that read it,
+    // from the machine's shared copy (#530), and the devices are told how old it really is.
+    public DateTimeOffset? FoundAsOf { get; private set; }
+    public DateTimeOffset? DiscoveredAt => inner.DiscoveredAt;
     public UpdatePhase Phase => Volatile.Read(ref downloads) > 0 ? UpdatePhase.Downloading : Volatile.Read(ref checks) > 0 ? UpdatePhase.Checking : UpdatePhase.Idle;
     public int? Progress { get; private set; }
 
@@ -40,15 +63,21 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     {
         Interlocked.Increment(ref checks);
         Raise();
+        await checking.WaitAsync();
         try
         {
+            var from = Bound();
             var found = await inner.CheckAsync();
+            // A check that finished after its source changed answers for the old one.
+            if (Bound() != from) { return found; }
             Found = found;
             CheckedAt = time.GetUtcNow();
+            FoundAsOf = inner.DiscoveredAt is { } at && at < CheckedAt ? at : CheckedAt;
             return found;
         }
         finally
         {
+            checking.Release();
             Interlocked.Decrement(ref checks);
             Raise();
         }
@@ -66,11 +95,12 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
             held = true;
             // The one waited for downloaded the release the last check found: nothing to do.
             if (inner.Ready is not null) { return; }
+            var from = Bound();
             var release = Found;
             var now = time.GetUtcNow();
-            if (failed is { } f && f.Release == release && now - f.At < DownloadAgainAfter)
+            if (failed is { } f && f.Release == release && now - f.At < HoldAfter(f.Times))
             {
-                throw new DownloadHeldException($"downloading {release} failed {Words.Ago(f.At, now)}; it is tried again after {(f.At + DownloadAgainAfter).ToLocalTime():t}");
+                throw new DownloadHeldException($"downloading {release} failed {Words.Ago(f.At, now)}; it is tried again after {(f.At + HoldAfter(f.Times)).ToLocalTime():t}");
             }
             try
             {
@@ -83,7 +113,8 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
             }
             catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
             {
-                failed = (release, time.GetUtcNow());
+                // Held against this source only: one that changed meanwhile owes it nothing.
+                if (Bound() == from) { failed = (release, time.GetUtcNow(), failed is { } before && before.Release == release ? before.Times + 1 : 1); }
                 throw;
             }
             failed = null;
@@ -97,10 +128,40 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         }
     }
 
-    public void ApplyAndRestart() => inner.ApplyAndRestart();
+    public void ApplyAndRestart(string version, Action? handedOver = null) => inner.ApplyAndRestart(version, handedOver);
 
     // Something the state reads besides the updater changed: Settings' install failing.
     public void Noted() => Raise();
+
+    // The source changed (Include pre-releases): what the last check found was the old source's,
+    // so it is no longer reported (UpdateState.available) until a check on the new one, nor is a
+    // failed download of the old source's held against the new. Source names it, with the changes
+    // counted here, so what others cached from a check (AutoUpdater) can be told to be the old
+    // source's too, whether the app changed it or feed.txt did.
+    public void SourceChanged()
+    {
+        changes++;
+        Found = null;
+        CheckedAt = null;
+        FoundAsOf = null;
+        failed = null;
+        Raise();
+    }
+    int changes;
+    public string Source => $"{changes}|{Bound()}";
+
+    // The inner updater's source as this last saw it (the feed, and Include pre-releases): when
+    // feed.txt changes it, with no SourceChanged from the app, what the last check found and a
+    // failed download's hold are the old feed's, so they go too. Before, a failure on feed A held
+    // the same version on feed B for up to four hours.
+    string? bound;
+    string Bound()
+    {
+        var now = inner.Source;
+        if (bound is not null && bound != now) { (Found, CheckedAt, FoundAsOf, failed) = (null, null, null, null); }
+        bound = now;
+        return now;
+    }
 
     void Raise() => Changed?.Invoke();
 }

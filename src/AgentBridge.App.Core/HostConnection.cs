@@ -97,6 +97,10 @@ public sealed class HostConnection : IAsyncDisposable
 
     // Raised on the UI thread: the link, hello, status or usage changed.
     public event Action? Changed;
+    // Raised on the UI thread: signin.code or signin.done (#800, AuthState), by name, with its data
+    // as sent. They come only to the channels in a flow, and are not kept here: a code is the
+    // sheet's for as long as it is open, and no one else's.
+    public event Action<string, JsonElement>? AgentSignIn;
 
     public bool Can(string capability) => Capabilities.Contains(capability);
 
@@ -156,14 +160,41 @@ public sealed class HostConnection : IAsyncDisposable
     // goes on. knownHost: send nothing until that process is known, for an op that must never
     // reach a restarted host a second time. onlyTo: send only to that process, else throw
     // HostRestartedException, checked against the very connection the call would go on.
-    public Task<JsonElement> CallAsync(string op, object? data, TimeSpan? timeout, bool knownHost, string? onlyTo, out string? instance, CancellationToken ct = default)
+    // progress: hears the host's progress frames for it (IClientChannel.RequestAsync), on the
+    // receive path.
+    public Task<JsonElement> CallAsync(string op, object? data, TimeSpan? timeout, bool knownHost, string? onlyTo, out string? instance, CancellationToken ct = default, Action<JsonElement>? progress = null)
     {
         var now = Volatile.Read(ref current);
         if (now is null || !now.Channel.IsOpen) { throw new HostNotRunningException($"not connected to the {Product.HostName}"); }
         if (knownHost && now.Instance is null) { throw new HostNotRunningException($"still connecting to the {Product.HostName}"); }
         if (onlyTo is not null && now.Instance != onlyTo) { throw new HostRestartedException(); }
         instance = now.Instance;
-        return now.Channel.CallAsync(op, data, timeout, ct);
+        return now.Channel.CallAsync(op, data, timeout, ct, progress);
+    }
+
+    // A line for the app's log (the one this connection was given), for what the app measures of
+    // its own deliveries (Deliveries' timing marks, #600). Queued, and written in order by one task
+    // of its own: a delivery finishes on the UI thread, and the app's log opens, appends to and
+    // locks a file there, which held up input and painting whenever the disk was slow (#625,
+    // Copilot 4478421982). What is still queued is written when the connection is let go.
+    internal void Log(string line)
+    {
+        if (!logged.Writer.TryWrite(line)) { return; }
+        lock (logGate) { logging ??= Task.Run(WriteLogAsync); }
+    }
+
+    readonly System.Threading.Channels.Channel<string> logged =
+        System.Threading.Channels.Channel.CreateUnbounded<string>(new System.Threading.Channels.UnboundedChannelOptions { SingleReader = true });
+    readonly object logGate = new();
+    Task? logging;
+
+    async Task WriteLogAsync()
+    {
+        await foreach (var line in logged.Reader.ReadAllAsync().ConfigureAwait(false))
+        {
+            try { log(line); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or ObjectDisposedException) { }
+        }
     }
 
     public async Task<T> CallAsync<T>(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) =>
@@ -189,17 +220,39 @@ public sealed class HostConnection : IAsyncDisposable
         });
     }
 
-    async Task RunAsync(CancellationToken ct)
+    // The attempt under way (connecting, or connected), which Reconnect cancels; null between
+    // attempts.
+    CancellationTokenSource? attempt;
+
+    // Ends the attempt under way, connecting or connected, and lets the loop start another, as when
+    // the connection fails: for a link that is not Connected while its host answers on its pipe
+    // (#800: an app sat ~20 h believing its live host was not running). The one loop goes on, so
+    // attempts never overlap, and calling it again, or between attempts, does no more than once.
+    public void Reconnect()
+    {
+        if (Volatile.Read(ref attempt) is { } now)
+        {
+            try { now.Cancel(); }
+            // Ended and disposed meanwhile: the next attempt starts anyway.
+            catch (ObjectDisposedException) { }
+        }
+        RetryNow();
+    }
+
+    async Task RunAsync(CancellationToken stopping)
     {
         // What the host last refused this device with, while every attempt since has been refused
         // the same way: logged once, not at every attempt.
         string? refusal = null;
-        while (!ct.IsCancellationRequested)
+        while (!stopping.IsCancellationRequested)
         {
             IClientChannel? ch = null;
             HelloResult? said = null;
             string? refusedNow = null;
             Volatile.Write(ref poked, 0);
+            var mine = CancellationTokenSource.CreateLinkedTokenSource(stopping);
+            Volatile.Write(ref attempt, mine);
+            var ct = mine.Token;
             try
             {
                 ch = await connect(ct);
@@ -289,7 +342,13 @@ public sealed class HostConnection : IAsyncDisposable
                 }
                 log($"connection to the host ended: {ch.CloseReason?.Message}");
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (OperationCanceledException) when (stopping.IsCancellationRequested) { break; }
+            // Reconnect: whatever the cancellation surfaced as.
+            catch (Exception e) when (mine.IsCancellationRequested && !stopping.IsCancellationRequested && e is not OutOfMemoryException)
+            {
+                log("host connection: the attempt under way was ended to reconnect");
+                ui.Post(() => SetState(LinkState.Connecting, "reconnecting"));
+            }
             catch (LocalRefusedException e) { ui.Post(() => SetState(LinkState.Refused, e.Message)); }
             catch (HostNotRunningException e) { ui.Post(() => SetState(LinkState.NotRunning, e.Message)); }
             catch (HostErrorException e) when (Refusal(said))
@@ -309,6 +368,8 @@ public sealed class HostConnection : IAsyncDisposable
                 Volatile.Write(ref helloChanged, null);
                 Volatile.Write(ref current, null);
                 if (ch is not null) { await ch.DisposeAsync(); }
+                Interlocked.CompareExchange(ref attempt, null, mine);
+                mine.Dispose();
                 if (Volatile.Read(ref connected).Task.IsCompleted) { Volatile.Write(ref connected, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)); }
             }
             refusal = refusedNow;
@@ -316,7 +377,7 @@ public sealed class HostConnection : IAsyncDisposable
             {
                 if (State == LinkState.Connected) { SetState(LinkState.Connecting, "the host went away; reconnecting"); }
             });
-            try { await WaitAsync(refusedNow is not null, ct); }
+            try { await WaitAsync(refusedNow is not null, stopping); }
             catch (OperationCanceledException) { break; }
         }
     }
@@ -383,14 +444,14 @@ public sealed class HostConnection : IAsyncDisposable
         var patch = hello.Capabilities.Contains(AgentBridge.Protocol.Capabilities.SessionsPatch);
         var instance = hello.Machine.Instance;
         var request = patch ? new SubscribeRequest { Patch = true, Since = Sessions.ResumeFrom(instance) } : null;
-        ui.Post(() => Sessions.BeginSnapshot(ch, patch ? instance : null));
+        PostSessions(ch, () => Sessions.BeginSnapshot(ch, patch ? instance : null));
         // Its result is read loosely, only for resumed: read strictly, a result the app could not
         // read ended the connection, and every reconnect asked again (#446).
         var (result, before) = await ch.CallOrderedAsync(Ops.SessionsSubscribe, request, ct: ct);
         var resumed = request?.Since is not null && result.ValueKind == JsonValueKind.Object
             && result.TryGetProperty("resumed", out var r) && r.ValueKind == JsonValueKind.True;
         var asked = request?.Since is not null;
-        ui.Post(() => Sessions.Answered(ch, before, resumed, asked));
+        PostSessions(ch, () => Sessions.Answered(ch, before, resumed, asked));
     }
 
     // What the host tells hello.changed of: its read-only reason can change on its own (a host
@@ -510,16 +571,10 @@ public sealed class HostConnection : IAsyncDisposable
     // The channel's sessions may be missing changes from at on: they are subscribed again.
     void Resubscribe(IClientChannel ch, long at, SemaphoreSlim gaps)
     {
-        ui.Post(() =>
+        PostSessions(ch, () =>
         {
-            // The snapshot only if it is this channel's (AbandonSnapshot checks): an old channel's
-            // own snapshot must still end unfinished, or its sessions.synced, read next, ends it.
             Sessions.AbandonSnapshot(ch, at);
-            // Gapped only for the channel followed now. RunAsync doesn't wait for a pump to
-            // finish, so one draining a channel already replaced could read a gap after the new
-            // channel's snapshot began, and unconfirm rows whose recovery it can't ask for (that
-            // goes to its own channel's gap signal), holding them for good.
-            if (ReferenceEquals(Volatile.Read(ref pumping), ch)) { Gapped?.Invoke(); }
+            Gapped?.Invoke();
         });
         gaps.Release();
     }
@@ -552,7 +607,7 @@ public sealed class HostConnection : IAsyncDisposable
     {
         Session s;
         bool exact;
-        try { s = Received.Read<Session>(data, out exact); }
+        try { s = ReceivedLimits.Fit(Received.Read<Session>(data, out exact)); }
         catch (JsonException)
         {
             // A session the app could not read may be the busy one: the list is not
@@ -560,9 +615,10 @@ public sealed class HostConnection : IAsyncDisposable
             RefuseOn(ch);
             throw;
         }
-        ui.Post(() =>
+        // Its attention (#800), which the protocol's record doesn't carry yet, kept beside it.
+        AuthState.Attach(s, data);
+        PostSessions(ch, () =>
         {
-            if (!Followed(ch)) { return; }
             Sessions.Upsert(s, exact, ch, seq);
             Sessions.Advance(ch, revision);
         });
@@ -571,10 +627,14 @@ public sealed class HostConnection : IAsyncDisposable
 
     bool Followed(IClientChannel ch) => ReferenceEquals(Volatile.Read(ref pumping), ch);
 
+    // Checked when the UI applies the post, not when the pump queues it: reconnect may
+    // replace the channel while this action waits on a busy dispatcher (#547).
+    void PostSessions(IClientChannel ch, Action apply) => ui.Post(() => { if (Followed(ch)) { apply(); } });
+
     // Something on that channel was refused: the list is not whole. Not an old channel's, whose
     // events no longer change the list: it would leave the list of the channel that replaced it
     // unsure and never resumed from, with nothing on that channel to ask for it again.
-    void RefuseOn(IClientChannel ch) => ui.Post(() => { if (Followed(ch)) { Sessions.Refuse(); } });
+    void RefuseOn(IClientChannel ch) => PostSessions(ch, Sessions.Refuse);
 
     // Host records are read as the spec says (Received): a field that cannot be read is absent,
     // unless the record is filed or decided on by it. The host's own status, a local-pipe record
@@ -629,9 +689,8 @@ public sealed class HostConnection : IAsyncDisposable
                         throw;
                     }
                     held.Remove(r.Id);
-                    ui.Post(() =>
+                    PostSessions(ch, () =>
                     {
-                        if (!Followed(ch)) { return; }
                         Sessions.Remove(r.Id);
                         Sessions.Advance(ch, r.Revision);
                     });
@@ -647,16 +706,23 @@ public sealed class HostConnection : IAsyncDisposable
                     try { synced = Received.Read<SessionsSynced>(ev.Data); }
                     catch (JsonException)
                     {
-                        ui.Post(() => Sessions.RefuseSynced(ch, seq));
+                        PostSessions(ch, () => Sessions.RefuseSynced(ch, seq));
                         throw;
                     }
-                    ui.Post(() => Sessions.EndSnapshot(synced.DiscoveryHeld, ch, seq, synced.Revision, synced.Live));
+                    PostSessions(ch, () => Sessions.EndSnapshot(synced.DiscoveryHeld, ch, seq, synced.Revision, synced.Live));
                     break;
                 }
             case Events.DiscoveryChanged:
                 {
                     var d = Received.Read<DiscoveryChanged>(ev.Data);
-                    ui.Post(() => Sessions.SetHeld(d.DiscoveryHeld));
+                    PostSessions(ch, () => Sessions.SetHeld(d.DiscoveryHeld, ch));
+                    break;
+                }
+            case AuthState.CodeEvent or AuthState.DoneEvent:
+                {
+                    var name = ev.Name;
+                    var data = ev.Data.Clone();
+                    PostSessions(ch, () => AgentSignIn?.Invoke(name, data));
                     break;
                 }
             case UsageProtocol.Update:
@@ -697,6 +763,10 @@ public sealed class HostConnection : IAsyncDisposable
     {
         stop.Cancel();
         try { await loop; } catch (Exception) { }
+        logged.Writer.TryComplete();
+        Task? writing;
+        lock (logGate) { writing = logging; }
+        if (writing is not null) { try { await writing; } catch (Exception) { } }
     }
 }
 
@@ -718,12 +788,12 @@ public sealed class SessionStore
     public event Action? Synced;
     public event Action? HeldChanged;
 
-    public void SetHeld(DiscoveryHeld? held)
+    public void SetHeld(DiscoveryHeld? held, object? on = null)
     {
         // A discovery.changed read after a sessions.synced that still waits on its subscribe's
         // answer is the newer word: finishing that snapshot later must not put the synced's older
         // hold back, which hid a newly reported hold until the next change.
-        if (early is { } e) { early = e with { Held = held }; }
+        if (ReferenceEquals(on, snapshotOn) && early is { } e) { early = e with { Held = held }; }
         ApplyHeld(held);
     }
 

@@ -36,7 +36,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 test.skip(!existsSync(dll), 'the dev stack is not built: dotnet build spikes/s4-relay/src/S4.DevStack -c Release');
 test.describe.configure({ mode: 'serial' });
 
-let stack, site, host, appUrl, relayUrl;
+let stack, site, host, appUrl, relayUrl, siteDir;
+let feedbackBuildConfigured = false;
 
 const vapidKey = () => generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64');
 const stackOut = [];
@@ -48,8 +49,9 @@ test.beforeAll(async ({}, info) => {
   const sitePort = relayPort + 1;
   const relay = `http://127.0.0.1:${relayPort}`;
   relayUrl = relay;
-  const dir = buildSite({ out: path.join(pwa, '.site', `e2e-${info.project.name}`), relay });
-  site = await startStaticServer({ dir, port: sitePort });
+  siteDir = path.join(pwa, '.site', `e2e-${info.project.name}`);
+  buildSite({ out: siteDir, relay });
+  site = await startStaticServer({ dir: siteDir, port: sitePort });
   appUrl = `http://127.0.0.1:${sitePort}${APP_PATH}`;
   stack = spawn('dotnet', [dll, 'serve', '--port', String(relayPort)], {
     // The page's origin, which the relay must accept for sign-in (CORS) and the socket.
@@ -60,7 +62,7 @@ test.beforeAll(async ({}, info) => {
   stack.stdout.on('data', (d) => stackOut.push(d.toString()));
   stack.stderr.on('data', (d) => stackOut.push(d.toString()));
   await expect.poll(() => stackOut.join(''), { timeout: 60000 }).toContain('ready ');
-  host = await startFixtureHost({ base: relay, name: 'fixture-host', sessions: structuredClone(fixture.sessions) });
+  host = await startFixtureHost({ base: relay, name: 'fixture-host', sessions: structuredClone(fixture.sessions), signingIn: true });
 });
 
 test.afterAll(async () => {
@@ -70,20 +72,37 @@ test.afterAll(async () => {
   expect(stackOut.join('')).not.toContain('LEAK');
 });
 
+test.afterEach(() => {
+  if (!feedbackBuildConfigured) { return; }
+  buildSite({ out: siteDir, relay: relayUrl });
+  feedbackBuildConfigured = false;
+});
+
 async function signIn(page) {
   await page.goto(appUrl);
   await page.click('#signin-button');
-  await expect(page.locator('#avatar')).toBeVisible({ timeout: 30000 });
+  // Not shown on a phone, whose bar has no avatar: what unhides it is the sign-in.
+  await expect(page.locator('#avatar')).not.toHaveAttribute('hidden', '', { timeout: 30000 });
   await expect(page.locator('#conn')).toHaveText('Connected', { timeout: 20000 });
   // Every machine is shown at first: settled once each has said what it is, so a tap on the
   // list that follows lands on the list it was aimed at.
   await expect(page.locator('[data-device-name="fixture-host"] .machine-status')).toContainText('0.0.0-fixture', { timeout: 30000 });
-  await expect(page.locator('#host-state')).toContainText('demo-host:', { timeout: 30000 });
+  await expect(page.locator('#return-slot')).toContainText('demo-host:', { timeout: 30000 });
 }
 
 // A session's view (#179); page.locator('.session') is its row.
 const card = (page, id) => view(page, id);
 const subscribes = () => host.log.filter((op) => op === 'sessions.subscribe').length;
+
+// Neither a ring on what has focus nor one around the session's header (A12, #373).
+async function expectNoRing(v) {
+  const outline = await v.page().evaluate(() => {
+    const s = getComputedStyle(document.activeElement);
+    return s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) >= 1;
+  });
+  expect(outline, 'a ring on what has focus').toBe(false);
+  expect(await v.locator('.session-header').evaluate((e) => getComputedStyle(e).boxShadow), 'a ring around the header').toBe('none');
+}
 
 test('a signed-in phone sees a machine\'s live sessions over an end-to-end channel', async ({ page, context }) => {
   const violations = [];
@@ -100,7 +119,7 @@ test('a signed-in phone sees a machine\'s live sessions over an end-to-end chann
   await page.click('#machine-tabs [data-device-name="fixture-host"]');
   await expect(page.locator('.session')).toHaveCount(fixture.sessions.length, { timeout: 30000 });
   await expect(page.locator('#sessions-h')).toHaveText('Sessions on fixture-host');
-  await expect(page.locator('[data-device-name="fixture-host"] button')).toHaveAttribute('aria-current', 'true');
+  await expect(page.locator('[data-device-name="fixture-host"] button.machine-button')).toHaveAttribute('aria-current', 'true');
   await expect(card(page, CLAUDE)).toHaveAttribute('data-status', 'working');
   // Idle, but waiting on work it started: background crosses the relay intact.
   await expect(card(page, DELEGATING)).toHaveAttribute('data-view', 'delegating');
@@ -136,12 +155,132 @@ test('a signed-in phone sees a machine\'s live sessions over an end-to-end chann
   expect(violations).toEqual([]);
 });
 
+test('feedback panel stays hidden until its build has a feedback key', async ({ page }) => {
+  await signIn(page);
+  await page.click('#nav [data-nav="settings"]');
+  await expect(page.locator('#feedback')).toBeHidden();
+  await expect(page.locator('#feedback-dialog')).toBeHidden();
+});
+
+test('feedback preview shows readable diagnostics and exact data before sending', async ({ page }) => {
+  buildSite({
+    out: siteDir,
+    relay: relayUrl,
+    feedbackKeyId: 'test-key',
+    feedbackPublicKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+  });
+  feedbackBuildConfigured = true;
+  await signIn(page);
+  await page.click('#nav [data-nav="settings"]');
+  await expect(page.locator('#feedback')).toBeVisible();
+  await page.click('#feedback-open');
+  await expect(page.locator('#feedback-dialog')).toBeVisible();
+  await expect(page.locator('#feedback-dialog > .note').first()).toHaveText(
+    "Your note and selected diagnostics are encrypted on this device before they're sent to the Slipgates feedback service, where they're processed automatically.",
+  );
+  await page.locator('#feedback-included > summary').click();
+  await expect(page.locator('#feedback-platform')).not.toBeEmpty();
+  await expect(page.locator('#feedback-app-version')).toHaveText('dev');
+  await expect(page.locator('#feedback-browser')).not.toBeEmpty();
+  await expect(page.locator('#feedback-protocol-version')).toHaveText('1');
+  await expect(page.locator('#feedback-events-summary')).toHaveText(/^\d+ connection events?$/);
+  await expect(page.locator('#feedback-error-codes-summary')).toHaveText(/^\d+ error codes?$/);
+  await page.locator('#feedback-hosts > summary').click();
+  await page.locator('#feedback-events > summary').click();
+  await page.locator('#feedback-error-codes > summary').click();
+  await expect(page.locator('#feedback-hosts-list')).toBeVisible();
+  await expect(page.locator('#feedback-events-list')).toBeVisible();
+  await expect(page.locator('#feedback-error-codes-list')).toBeVisible();
+  await page.locator('#feedback-exact-data > summary').click();
+  await expect(page.locator('#feedback-preview')).toBeVisible();
+  const note = 'The app stopped after refresh.';
+  await page.locator('#feedback-note').fill(note);
+  const preview = await page.locator('#feedback-preview').textContent();
+  const bundle = JSON.parse(preview);
+  expect(bundle.schema).toBe('slipgates-feedback.v1');
+  expect(bundle.versions.app).toBe('dev');
+  expect(bundle.versions.protocol).toBe(1);
+  expect(bundle.note).toBe(note);
+  expect(bundle.events.length).toBeLessThanOrEqual(100);
+  expect(bundle.logs.every((entry) => ['relay-message-error', 'relay-undeliverable', 'transport-error'].includes(entry.code))).toBe(true);
+  expect(preview).not.toContain(CLAUDE);
+  expect(preview).not.toContain(fixture.sessions[0].title);
+  await expect(page.locator('#feedback-send')).toBeDisabled();
+  await expect(page.locator('#feedback-error')).toContainText("doesn't accept feedback uploads yet");
+  await page.locator('#feedback-note').fill('password=hunter2');
+  await expect(page.locator('#feedback-warning')).toHaveText(
+    'This looks like a password or token. Remove it to send.',
+  );
+});
+
+test('feedback cannot be sent twice while an upload is in progress and can be retried after failure', async ({ page, context }) => {
+  const { publicKey } = generateKeyPairSync('x25519');
+  buildSite({
+    out: siteDir,
+    relay: relayUrl,
+    feedbackKeyId: 'test-key',
+    feedbackPublicKey: publicKey.export({ format: 'jwk' }).x,
+  });
+  feedbackBuildConfigured = true;
+  const requests = [];
+  let client;
+  await context.routeWebSocket(/\/v1\/ws(\?|$)/, (ws) => {
+    client = ws;
+    const server = ws.connectToServer();
+    server.onMessage((data) => {
+      if (typeof data === 'string') {
+        const message = JSON.parse(data);
+        if (message.t === 'ready') {
+          ws.send(JSON.stringify({ ...message, feedback: { max: 65536 } }));
+          return;
+        }
+      }
+      ws.send(data);
+    });
+    ws.onMessage((data) => {
+      if (typeof data === 'string') {
+        const message = JSON.parse(data);
+        if (message.t === 'feedback-put') {
+          requests.push(message);
+          return;
+        }
+      }
+      server.send(data);
+    });
+  });
+  await signIn(page);
+  await page.click('#nav [data-nav="settings"]');
+  await page.click('#feedback-open');
+  const canEncrypt = await page.evaluate(async () => {
+    try { await crypto.subtle.generateKey({ name: 'X25519' }, false, ['deriveBits']); return true; } catch { return false; }
+  });
+  test.skip(!canEncrypt, 'This Playwright browser does not support WebCrypto X25519; verify real Safari separately.');
+  const send = page.locator('#feedback-send');
+  await expect(send).toBeEnabled();
+  await send.click();
+  await expect(send).toBeDisabled();
+  await expect(send).toHaveText('Sending…');
+  await expect.poll(() => requests.length).toBe(1);
+  await page.evaluate(async () => {
+    await document.querySelector('#feedback-send').onclick(new MouseEvent('click'));
+  });
+  expect(requests).toHaveLength(1);
+  client.send(JSON.stringify({ t: 'feedback-result', id: requests[0].id, error: 'unavailable' }));
+  await expect(send).toHaveText('Retry');
+  await expect(send).toBeEnabled();
+  await send.click();
+  await expect(send).toBeDisabled();
+  await expect.poll(() => requests.length).toBe(2);
+  client.send(JSON.stringify({ t: 'feedback-result', id: requests[1].id, error: 'unavailable' }));
+  await expect(send).toBeEnabled();
+});
+
 test('a machine from before the sessions protocol is reported, ?host= opens a machine directly, and a refused sign-in leaves nothing behind', async ({ page, context }) => {
   const sockets = [];
   await context.routeWebSocket(/\/v1\/ws(\?|$)/, (ws) => { ws.connectToServer(); sockets.push(ws); });
   await signIn(page);
   await page.click('#machine-tabs [data-device-name="demo-host"]');
-  await expect(page.locator('#host-state')).toContainText(`${UNSUPPORTED_SESSIONS} yet`, { timeout: 30000 });
+  await expect(page.locator('#return-slot')).toContainText(`${UNSUPPORTED_SESSIONS} yet`, { timeout: 30000 });
   await expect(page.locator('.session')).toHaveCount(0);
   await page.close();
 
@@ -169,7 +308,7 @@ test('a machine from before the sessions protocol is reported, ?host= opens a ma
   // The new sign-in starts where one with nothing remembered does, at every machine, not at
   // the machine the last one chose.
   await expect(opened.locator('[data-device-id="all"] button')).toHaveAttribute('aria-current', 'true');
-  await expect(opened.locator('[data-device-name="fixture-host"] button')).not.toHaveAttribute('aria-current', 'true');
+  await expect(opened.locator('[data-device-name="fixture-host"] button.machine-button')).not.toHaveAttribute('aria-current', 'true');
   await expect(opened.locator('#sessions-h')).toHaveText('Sessions on all machines');
 });
 
@@ -180,7 +319,7 @@ test('with every machine shown, a machine\'s sessions come over its own channel,
   await expect(page.locator('.session').first()).toBeVisible({ timeout: 30000 });
   await expect(page.locator(`.session[data-host-id="${host.deviceId}"]`).first().locator('.machine-label')).toHaveText('fixture-host');
   // The S4 demo host predates the sessions protocol: it says so, and the fixture host's sessions stay.
-  await expect(page.locator('#host-state')).toContainText(`demo-host: This machine ${UNSUPPORTED_SESSIONS} yet`, { timeout: 30000 });
+  await expect(page.locator('#return-slot')).toContainText(`demo-host: This machine ${UNSUPPORTED_SESSIONS} yet`, { timeout: 30000 });
   await expect(page.locator(`.session:not([data-host-id="${host.deviceId}"])`)).toHaveCount(0);
 });
 
@@ -205,7 +344,7 @@ test('a phone answers a question through the relay, and an answer in flight when
   await open(page, 'ask-1');
   await expect(q1.locator('.choice[data-value]').first()).toHaveText('B (Recommended)');
   await q1.locator('.choice[data-value="a"]').click();
-  await expect(card(page, 'ask-1').locator('.answer-receipt')).toHaveText('Your answer: Delivered. The session has your answer.', { timeout: 15000 });
+  await expect(card(page, 'ask-1').locator('.answer-receipt')).toHaveText('You answered · A', { timeout: 15000 });
   await expect(q1).toHaveCount(0);
   expect(sentFor('ask-1')).toEqual([{ id: 'ask-1', question: 'q1', request: expect.stringMatching(UUID), fields: { answer: 'a' } }]);
   expect(typedFor('ask-1')).toHaveLength(1);
@@ -220,7 +359,7 @@ test('a phone answers a question through the relay, and an answer in flight when
   await q2.locator('.choice[data-value="b"]').click();
   await expect.poll(() => sentFor('ask-2').length, { timeout: 10000 }).toBe(1);
   for (const ws of sockets.splice(0)) { await ws.close({ code: 4000, reason: 'test drop' }); }
-  await expect(card(page, 'ask-2').locator('.answer-receipt')).toHaveText('Your answer: Delivered. The session has your answer.', { timeout: 30000 });
+  await expect(card(page, 'ask-2').locator('.answer-receipt')).toHaveText('You answered · B (Recommended)', { timeout: 30000 });
   const sent = sentFor('ask-2');
   expect(sent).toHaveLength(2);
   expect(sent[1].request).toBe(sent[0].request);
@@ -231,8 +370,8 @@ test('a phone answers a question through the relay, and an answer in flight when
   await ask('ask-3', 'q3');
   await expect(card(page, 'ask-3').locator('.question')).toHaveAttribute('data-answerable', 'true', { timeout: 15000 });
   const direct = (data) => page.evaluate((d) => window.agentBridge.hosts.client.answer({ ...d, request: crypto.randomUUID() }), data);
-  expect(await direct({ id: 'ask-3', question: 'q-old', fields: { answer: 'a' } })).toEqual({ outcome: 'stale', reason: 'the session is no longer asking that question' });
-  expect(await direct({ id: 'ask-3', question: 'q3', fields: { answer: 'zzz' } })).toEqual({ outcome: 'refused', reason: '"Pick": not one of the choices' });
+  expect(await direct({ id: 'ask-3', question: 'q-old', fields: { answer: 'a' } })).toEqual({ outcome: 'stale', reason: 'the session is no longer asking that question', stage: null });
+  expect(await direct({ id: 'ask-3', question: 'q3', fields: { answer: 'zzz' } })).toEqual({ outcome: 'refused', reason: '"Pick": not one of the choices', stage: null });
   expect(typedFor('ask-3')).toHaveLength(0);
   await expect(card(page, 'ask-3').locator('.question')).toHaveCount(1);
 });
@@ -254,7 +393,7 @@ test('a phone replies to a session through the relay, and a reply in flight when
   await expect(input).toBeEnabled({ timeout: 30000 });
   await input.fill('Ship it.\nThen tag v0.2 – 🚀');
   await reply.getByRole('button', { name: 'Send' }).click();
-  await expect(reply.locator('.reply-status')).toHaveText('Delivered. The session has your reply.', { timeout: 15000 });
+  await expect(reply).toHaveAttribute('data-reply', 'delivered', { timeout: 15000 });
   await expect(input).toHaveValue('');
   expect(sentFor('reply-1')).toEqual([{ id: 'reply-1', request: expect.stringMatching(UUID), text: 'Ship it.\nThen tag v0.2 – 🚀' }]);
   expect(typedFor('reply-1').map((r) => r.said)).toEqual(['Ship it. Then tag v0.2 – 🚀']);
@@ -267,7 +406,7 @@ test('a phone replies to a session through the relay, and a reply in flight when
   await reply.getByRole('button', { name: 'Send' }).click();
   await expect.poll(() => sentFor('reply-1').length, { timeout: 10000 }).toBe(2);
   for (const ws of sockets.splice(0)) { await ws.close({ code: 4000, reason: 'test drop' }); }
-  await expect(reply.locator('.reply-status')).toHaveText('Delivered. The session has your reply.', { timeout: 30000 });
+  await expect(reply).toHaveAttribute('data-reply', 'delivered', { timeout: 30000 });
   const sent = sentFor('reply-1');
   expect(sent).toHaveLength(3);
   expect(sent[2].request).toBe(sent[1].request);
@@ -278,7 +417,7 @@ test('a phone replies to a session through the relay, and a reply in flight when
   await host.upsert({ id: 'reply-1', agent: 'copilot', title: 'Takes replies', status: 'waiting', statusSince: asked, updatedAt: asked, activity: {}, question: { id: 'rq1', kind: 'form', message: 'Which?', fields: [], askedAt: asked } });
   await expect(input).toBeDisabled({ timeout: 15000 });
   const direct = await page.evaluate(() => window.agentBridge.hosts.client.reply({ id: 'reply-1', request: crypto.randomUUID(), text: 'not now' }));
-  expect(direct).toEqual({ outcome: 'refused', reason: 'the session is waiting for an answer to its question; answer that first' });
+  expect(direct).toEqual({ outcome: 'refused', reason: 'the session is waiting for an answer to its question; answer that first', stage: null });
   expect(typedFor('reply-1')).toHaveLength(2);
 });
 
@@ -357,7 +496,8 @@ test.describe('notifications', () => {
 
   test('a notification\'s link opens its machine and session with the question ready, and so does a tap while the app is open', async ({ page }) => {
     const t = new Date().toISOString();
-    // A command in the message gets a Copy button; focus still goes to the answers.
+    // A command in the message gets a Copy button; focus goes to neither it nor an answer, which
+    // Enter or Space would send unread (#484), but to the question's heading.
     const question = (id) => ({ id: `q-${id}`, kind: 'form', message: 'Which one?\n\n```\ngit push\n```', askedAt: t, fields: [{ name: 'answer', type: 'choice', options: [{ value: 'a' }, { value: 'b' }] }] });
     for (const id of ['linked-1', 'linked-2']) {
       await host.upsert({ id, agent: 'copilot', title: id, status: 'waiting', statusSince: t, updatedAt: t, activity: {}, question: question(id) });
@@ -366,8 +506,12 @@ test.describe('notifications', () => {
     await page.goto(`${appUrl}?host=${host.deviceId}&session=linked-1&question=q-linked-1`);
     await expect(card(page, 'linked-1')).toHaveClass(/linked/, { timeout: 30000 });
     await expect(card(page, 'linked-1').locator('.question-message .md-copy')).toHaveCount(1);
-    await expect(card(page, 'linked-1').locator('.question-slot button:not(.md-copy)').first()).toBeFocused();
+    await expect(card(page, 'linked-1').locator('.question-slot .question-head')).toBeFocused();
+    expect(await page.evaluate(() => document.activeElement?.closest('button, input, textarea') ?? null)).toBeNull();
     expect(new URL(page.url()).search).toBe('');
+    // Focus is on its question for a screen reader, with no ring drawn on it, or around the
+    // session's header (A12, #373): nothing a key moved.
+    await expectNoRing(card(page, 'linked-1'));
 
     // At two panes, where Tools is a tab: one left on Tools still opens on its question.
     await page.setViewportSize({ width: 900, height: 800 });
@@ -381,8 +525,110 @@ test.describe('notifications', () => {
     await page.evaluate((url) => navigator.serviceWorker.dispatchEvent(new MessageEvent('message', { data: { type: 'agent-bridge.open', url } })),
       `${appUrl}?host=${host.deviceId}&session=linked-2&question=q-linked-2`);
     await expect(card(page, 'linked-2')).toHaveClass(/linked/);
-    await expect(card(page, 'linked-2').locator('.question-slot button:not(.md-copy)').first()).toBeFocused();
+    await expect(card(page, 'linked-2').locator('.question-slot .question-head')).toBeFocused();
     await expect(page.locator('#search')).toHaveValue('');
+    // Though keys were pressed (the search), what the tap brought draws no ring.
+    await expectNoRing(card(page, 'linked-2'));
+  });
+
+  // A sign-in push links to ?host=&signin=<agent> and nothing more (v1-sessions.md Push signIn, #969).
+  test('a sign-in notification\'s link opens its machine\'s banner for that agent with Sign in focused, and a stale one or an unknown agent only shows the machine', async ({ page, browserName }, testInfo) => {
+    const t = new Date().toISOString();
+    const needing = { id: 'signin-link', agent: 'copilot', title: 'Fix the relay', status: 'idle', statusSince: t, updatedAt: t, activity: {},
+      attention: { kind: 'signInNeeded', since: t, agent: 'copilot', provider: 'github', signIn: 'phone' } };
+    await host.upsert(needing);
+    try {
+      await signIn(page);
+      const banner = page.locator('#sign-in-banners .sign-in-banner[data-agent="copilot"]');
+      const signInButton = banner.getByRole('button', { name: 'Sign in to Copilot on fixture-host' });
+      await page.goto(`${appUrl}?host=${host.deviceId}&signin=copilot`);
+      await expect(signInButton).toBeFocused({ timeout: 30000 });
+      await expect(banner.locator('.sign-in-line')).toHaveText('1 session affected: Fix the relay');
+      expect(new URL(page.url()).search).toBe('');
+      // For Creative (#969): the banner as the link leaves it, Sign in focused with no ring (A12: a
+      // tap on a notification draws none), then with its ring once a key is pressed, each in light,
+      // dark and forced colours; kept by CI as pwa-captures-e2e. In Chromium: WebKit draws a
+      // screenshot with a style the CSP refuses.
+      if (browserName === 'chromium') {
+        for (const [name, key] of [['signin-link-focus', null], ['signin-link-focus-key', 'Shift']]) {
+          if (key) { await page.keyboard.press(key); }
+          for (const [suffix, media] of [['', { colorScheme: 'light', forcedColors: 'none' }], ['.dark', { colorScheme: 'dark', forcedColors: 'none' }], ['.forced-colors', { colorScheme: 'light', forcedColors: 'active' }]]) {
+            await page.emulateMedia(media);
+            await expect(signInButton).toBeFocused();
+            const path = testInfo.outputPath(`${name}${suffix}.png`);
+            await banner.screenshot({ path });
+            await testInfo.attach(`${name}${suffix}.png`, { path, contentType: 'image/png' });
+          }
+        }
+        await page.emulateMedia({ colorScheme: 'light', forcedColors: 'none' });
+      }
+
+      // An agent no push names: the link only shows its machine, and moves no focus.
+      await page.goto(`${appUrl}?host=${host.deviceId}&signin=gemini`);
+      await expect(signInButton).toBeVisible({ timeout: 30000 });
+      await expect(page.locator('.session[data-id="signin-link"]')).toBeVisible();
+      await expect(signInButton).not.toBeFocused();
+      expect(new URL(page.url()).search).toBe('');
+
+      // Signed in since the push: the machine as it is, with no banner, no error and focus left alone.
+      await host.upsert({ ...needing, attention: undefined, updatedAt: new Date().toISOString() });
+      await page.goto(`${appUrl}?host=${host.deviceId}&signin=copilot`);
+      await expect(page.locator('.session[data-id="signin-link"] .row-status')).toHaveText('Idle', { timeout: 30000 });
+      await expect(page.locator('#sign-in-banners .sign-in-banner')).toHaveCount(0);
+      expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+
+      // A tap while the app is open: needed again, and the worker's link focuses Sign in.
+      await host.upsert({ ...needing, updatedAt: new Date().toISOString() });
+      await expect(signInButton).toBeVisible({ timeout: 30000 });
+      await page.evaluate((url) => navigator.serviceWorker.dispatchEvent(new MessageEvent('message', { data: { type: 'agent-bridge.open', url } })),
+        `${appUrl}?host=${host.deviceId}&signin=copilot`);
+      await expect(signInButton).toBeFocused();
+    } finally {
+      await host.remove('signin-link');
+    }
+  });
+
+  // Tapped while the list isn't on screen (6692135282): Settings shows no banner, nor does a phone
+  // with a session over the list, and focus() on a hidden banner does nothing. The link shows the
+  // list first, then focuses the banner.
+  test.describe('on a phone', () => {
+    test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
+
+    // A phone signed in, with a session that needs sign-in, and the tap that a push's link makes.
+    const away = async (page, body) => {
+      const t = new Date().toISOString();
+      await host.upsert({ id: 'signin-away', agent: 'copilot', title: 'Fix the relay', status: 'idle', statusSince: t, updatedAt: t, activity: {},
+        attention: { kind: 'signInNeeded', since: t, agent: 'copilot', provider: 'github', signIn: 'phone' } });
+      try {
+        await signIn(page);
+        const signInButton = page.locator('#sign-in-banners .sign-in-banner[data-agent="copilot"]').getByRole('button', { name: 'Sign in to Copilot on fixture-host' });
+        await expect(signInButton).toBeVisible({ timeout: 30000 });
+        const tap = () => page.evaluate((url) => navigator.serviceWorker.dispatchEvent(new MessageEvent('message', { data: { type: 'agent-bridge.open', url } })),
+          `${appUrl}?host=${host.deviceId}&signin=copilot`);
+        await body(signInButton, tap);
+        await expect(signInButton).toBeVisible();
+        await expect(signInButton).toBeFocused();
+      } finally {
+        await host.remove('signin-away');
+      }
+    };
+
+    test('a sign-in notification tapped from Settings shows the list with Sign in focused', async ({ page }) => {
+      await away(page, async (signInButton, tap) => {
+        await go(page, 'settings');
+        await expect(signInButton).toBeHidden();
+        await tap();
+      });
+    });
+
+    test('a sign-in notification tapped from a session open over the list shows the list with Sign in focused', async ({ page }) => {
+      await away(page, async (signInButton, tap) => {
+        await open(page, 'signin-away');
+        await expect(signInButton).toBeHidden();
+        await tap();
+        await expect(view(page, 'signin-away')).toBeHidden();
+      });
+    });
   });
 
   // A notification's session, opened while its machine's list is not yet whole (#269).
@@ -469,17 +715,47 @@ test.describe('notifications', () => {
     expect(await page.evaluate(() => !!document.activeElement?.closest('.question-slot'))).toBe(false);
   });
 
-  test('a notification\'s question, its list whole, takes no click for a moment as its answer takes focus', async ({ page }) => {
+  test('a notification\'s question, its list whole, takes no click for a moment as it takes focus', async ({ page }) => {
     await host.upsert(asking('held-5', 'q-held-f', 'Approve F?'));
     const release = await heldOpen(page, 'held-5', 'q-held-f');
     // Longer than the wait that opening it began, so what holds a click now began with the focus.
     try { await page.waitForTimeout(700); } finally { release(); }
-    // Read on every frame: the moment an answer has focus, its question is holding clicks back.
+    // Read on every frame: the moment its heading has focus, its question is holding clicks back.
     const at = await page.waitForFunction(() => {
       const a = document.activeElement;
       return a?.closest('.question-slot') ? { arriving: a.closest('.question')?.hasAttribute('data-arriving') ?? false } : null;
     }, null, { polling: 'raf', timeout: 30000 });
     expect(await at.jsonValue()).toEqual({ arriving: true });
+  });
+
+  test('a notification\'s question taller than the pane, opened scrolled midway through it, brings its focused heading into sight', async ({ page }) => {
+    // Scrolled to the nearest edge of the whole question, one taller than the pane did not move,
+    // and the heading that had focus stayed out of sight (#893 review, Copilot 4481392664).
+    const message = ['Which one?', ...Array.from({ length: 150 }, (_, i) => `Line ${i + 1} of what the question says.`)].join('\n');
+    await host.upsert(asking('tall-1', 'q-tall', message));
+    await signIn(page);
+    const v = await open(page, 'tall-1');
+    const head = v.locator('.question-slot .question-head');
+    await expect(head).toBeAttached();
+    // Midway through it: its heading above the pane, its text filling the pane.
+    const tall = await v.locator('.stream-scroll').evaluate((s) => {
+      const q = s.querySelector('.question');
+      s.scrollTop += q.getBoundingClientRect().top - s.getBoundingClientRect().top + 600;
+      return q.getBoundingClientRect().height > s.getBoundingClientRect().height;
+    });
+    expect(tall).toBe(true);
+    await expect(head).not.toBeInViewport();
+    await page.evaluate(() => document.activeElement?.blur());
+    await page.evaluate((url) => navigator.serviceWorker.dispatchEvent(new MessageEvent('message', { data: { type: 'agent-bridge.open', url } })),
+      `${appUrl}?host=${host.deviceId}&session=tall-1&question=q-tall`);
+    // Read on every frame: the moment its heading has focus, its question holds clicks back.
+    const at = await page.waitForFunction(() => {
+      const a = document.activeElement;
+      return a?.classList.contains('question-head') ? { arriving: a.closest('.question')?.hasAttribute('data-arriving') ?? false } : null;
+    }, null, { polling: 'raf', timeout: 30000 });
+    expect(await at.jsonValue()).toEqual({ arriving: true });
+    await expect(head).toBeFocused();
+    await expect(head).toBeInViewport();
   });
 });
 

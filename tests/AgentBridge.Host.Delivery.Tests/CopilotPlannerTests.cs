@@ -16,6 +16,9 @@ public class CopilotPlannerTests
     {
         using var doc = JsonDocument.Parse(arguments);
         var question = QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0);
+        // Free text is listed for the machine and refused before it is planned (AnswerService,
+        // #510 review); its plan is still the planner's to make, and is tested here as such.
+        if (question.Fields.Count == 0) { question = question with { AnswerAtMachine = null }; }
         var (form, problem) = CopilotForm.Read(doc.RootElement.Clone());
         Assert.Null(problem);
         // The two readers of one schema agree, or nothing would be typed at all.
@@ -45,6 +48,17 @@ public class CopilotPlannerTests
     {
         var (form, question) = Ask(arguments);
         Assert.Null(Answers.Check(question, answer));
+        var (plan, problem) = CopilotPlanner.Plan(form, answer);
+        Assert.Null(plan);
+        return problem!;
+    }
+
+    // A default no answer can keep (#882): the question is listed at the machine, and the planner, a
+    // second guard, still refuses it before any key.
+    static string Unkept(string arguments, AnswerRequest answer)
+    {
+        var (form, question) = Ask(arguments);
+        Assert.True(question.AnswerAtMachine);
         var (plan, problem) = CopilotPlanner.Plan(form, answer);
         Assert.Null(plan);
         return problem!;
@@ -125,8 +139,1021 @@ public class CopilotPlannerTests
             """, Answer(new { colour = "blue", go = true, notes = "note\nhere", count = 42 }));
 
         Assert.Equal([(U + U + D + D, true), (U, true), ("note here", true), ("42", true)], Keys(plan));
-        Assert.All(plan.Keys.Sends, s => Assert.Equal((CopilotPlanner.FieldEnterDelayMs, CopilotPlanner.AfterFieldMs), (s.EnterDelayMs, s.PauseAfterMs)));
+        // Words wait the reply's pause before their Enter, an option list its own (#467).
+        Assert.Equal([CopilotPlanner.FieldEnterDelayMs, CopilotPlanner.FieldEnterDelayMs, CopilotPlanner.ReplyEnterDelayMs, CopilotPlanner.ReplyEnterDelayMs],
+            plan.Keys.Sends.Select(s => s.EnterDelayMs));
+        Assert.All(plan.Keys.Sends, s => Assert.Equal(CopilotPlanner.AfterFieldMs, s.PauseAfterMs));
         Assert.Equal(["colour", "go", "notes", "count"], plan.Fields.Select(f => f.Name));
+    }
+
+    // A number field the prompt opens with 3 already typed into it (#662).
+    const string Days = """{ "message": "m", "requestedSchema": { "properties": { "days": { "type": "integer", "default": 3 } } } }""";
+    const string Note = """{ "message": "m", "requestedSchema": { "properties": { "note": { "type": "string", "default": "none" } } } }""";
+
+    [Fact]
+    public void A_field_answered_with_the_default_it_opens_with_is_left_as_it_is_and_only_its_Enter_goes()
+    {
+        var plan = Plan(Days, Answer(new { days = 3 }));
+
+        Assert.Equal([("", true)], Keys(plan));
+        Assert.Equal(3, Assert.IsType<Expected.Number>(Assert.Single(plan.Fields).Value).Raw.GetInt32());
+        // As the prompt shows it: 3.0 is the 3 it opened with.
+        Assert.Equal([("", true)], Keys(Plan(Days, Answer(Raw("""{ "days": 3.0 }""")))));
+        Assert.Equal([("", true)], Keys(Plan(Note, Answer(new { note = "none" }))));
+        Assert.Equal("none", Assert.IsType<Expected.Words>(Plan(Note, Answer(new { note = "none" })).Fields[0].Value).Text);
+    }
+
+    [Fact]
+    public void Anything_but_the_default_a_field_opens_with_is_refused_whole_since_its_keys_would_be_added_to_the_default()
+    {
+        // 33 typed into a field that opened with 3 would be 333, and 3 into one that opened with 3, 33.
+        Assert.EndsWith("answer at the machine (this field has a pre-filled default)", Refusal(Days, Answer(new { days = 33 })));
+        Assert.Contains("\"days\"", Refusal(Days, Answer(new { days = 4 })));
+        Assert.Contains("pre-filled default", Refusal(Note, Answer(new { note = "nonenone" })));
+        Assert.Contains("pre-filled default", Refusal(Note, Answer(new { note = "" })));
+        // Left out, the field would still be recorded with its default, which nobody gave.
+        const string PickAndDays = """{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a", "b"] }, "days": { "type": "integer", "default": 3 } } } }""";
+        Assert.Contains("pre-filled default", Refusal(PickAndDays, Answer(new { pick = "a" })));
+    }
+
+    // #766: Copilot CLI 1.0.105 checks none of a form field's constraints on ask_user, and records
+    // whatever is typed, so the host checks them, on what it would type, before any key.
+    internal static string Schema(string name, string property) =>
+        $$"""{ "message": "m", "requestedSchema": { "properties": { "{{name}}": {{property}} } } }""";
+
+    // Refused by the shared check a client also runs, and again by the host's own plan.
+    static string Outside(string arguments, AnswerRequest answer)
+    {
+        var (form, question) = Ask(arguments);
+        var problem = Answers.Check(question, answer);
+        Assert.NotNull(problem);
+        var (plan, planned) = CopilotPlanner.Plan(form, answer);
+        Assert.Null(plan);
+        Assert.EndsWith(planned!, problem);
+        return problem!;
+    }
+
+    const string Count = """{ "type": "integer", "minimum": 2, "maximum": 10, "multipleOf": 2 }""";
+
+    [Theory]
+    [InlineData("""{ "n": 1 }""", "\"n\": must be at least 2")]
+    [InlineData("""{ "n": 12 }""", "\"n\": must be at most 10")]
+    [InlineData("""{ "n": 4.5 }""", "\"n\": must be a whole number")]
+    [InlineData("""{ "n": 5 }""", "\"n\": must be a multiple of 2")]
+    public void A_number_outside_its_bounds_not_whole_or_off_its_step_is_refused_before_any_key(string answer, string why)
+    {
+        Assert.Equal(why, Outside(Schema("n", Count), Answer(Raw(answer))));
+    }
+
+    [Fact]
+    public void A_number_inside_its_constraints_is_typed_as_before()
+    {
+        Assert.Equal([("10", true)], Keys(Plan(Schema("n", Count), Answer(Raw("""{ "n": 10 }""")))));
+        Assert.Equal([("0.3", true)], Keys(Plan(Schema("x", """{ "type": "number", "exclusiveMinimum": 0, "multipleOf": 0.1 }"""), Answer(Raw("""{ "x": 0.3 }""")))));
+    }
+
+    [Fact]
+    public void Number_constraints_are_compared_exactly_never_as_doubles()
+    {
+        // As doubles 0.3 % 0.1 is not 0, and 0.30000000000000004 > 0.3 is easy to miss.
+        Assert.Equal("\"x\": must be at most 0.3", Outside(Schema("x", """{ "type": "number", "maximum": 0.3 }"""), Answer(Raw("""{ "x": 0.30000000000000004 }"""))));
+        Assert.Equal("\"x\": must be more than 0", Outside(Schema("x", """{ "type": "number", "exclusiveMinimum": 0 }"""), Answer(Raw("""{ "x": 0 }"""))));
+        Assert.Equal("\"x\": must be less than 1e2", Outside(Schema("x", """{ "type": "number", "exclusiveMaximum": 1e2 }"""), Answer(Raw("""{ "x": 100.0 }"""))));
+    }
+
+    [Theory]
+    [InlineData("""{ "type": "string", "minLength": 3 }""", "ab", "\"t\": must be at least 3 characters")]
+    [InlineData("""{ "type": "string", "maxLength": 3 }""", "abcd", "\"t\": must be at most 3 characters")]
+    [InlineData("""{ "type": "string", "pattern": "^[A-Z]{3}-[0-9]+$" }""", "ABC-x", "\"t\": does not match the form the question asks for")]
+    [InlineData("""{ "type": "string", "format": "email" }""", "someone@example", "\"t\": must be an email address")]
+    [InlineData("""{ "type": "string", "format": "uri" }""", "ftp://example.com", "\"t\": must be a URL starting http:// or https://")]
+    [InlineData("""{ "type": "string", "format": "date" }""", "2026-02-30", "\"t\": must be a date, as YYYY-MM-DD")]
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04 19:30", "\"t\": must be a date and time, as YYYY-MM-DDTHH:MM")]
+    // What the CLI's check refuses too (cli-main.js PIo and Date.parse): an hour-only offset, a
+    // lower-case t, a three-digit or out-of-range offset, and an offset after a z.
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34+05", "\"t\": must be a date and time, as YYYY-MM-DDTHH:MM")]
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04t19:58", "\"t\": must be a date and time, as YYYY-MM-DDTHH:MM")]
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34+053", "\"t\": must be a date and time, as YYYY-MM-DDTHH:MM")]
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34+0560", "\"t\": must be a date and time, as YYYY-MM-DDTHH:MM")]
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34+2400", "\"t\": must be a date and time, as YYYY-MM-DDTHH:MM")]
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34z+0530", "\"t\": must be a date and time, as YYYY-MM-DDTHH:MM")]
+    // Whitespace is what Copilot records as typed, so it is checked like any other words (review
+    // of #844): spaces under a minimum length, a tab or a no-break space off a pattern, spaces as
+    // an email address.
+    [InlineData("""{ "type": "string", "minLength": 3 }""", "  ", "\"t\": must be at least 3 characters")]
+    [InlineData("""{ "type": "string", "pattern": "^[a-z]+$" }""", "\t", "\"t\": does not match the form the question asks for")]
+    [InlineData("""{ "type": "string", "pattern": "^[a-z]+$" }""", "\u00A0", "\"t\": does not match the form the question asks for")]
+    [InlineData("""{ "type": "string", "format": "email" }""", "   ", "\"t\": must be an email address")]
+    // And as trimmed, since a trim where Copilot records the words is not ruled out (review of
+    // #844): "  ab" is 4 typed but 2 trimmed, and " ab" fits a leading-space pattern only typed.
+    [InlineData("""{ "type": "string", "minLength": 4 }""", "  ab", "\"t\": must be at least 4 characters")]
+    [InlineData("""{ "type": "string", "pattern": "^ [a-z]+$" }""", " ab", "\"t\": does not match the form the question asks for")]
+    public void Text_outside_its_length_pattern_or_format_is_refused_before_any_key(string property, string text, string why)
+    {
+        Assert.Equal(why, Outside(Schema("t", property), Answer(new { t = text })));
+    }
+
+    [Theory]
+    [InlineData("""{ "type": "string", "minLength": 3, "maxLength": 3 }""", "abc")]
+    [InlineData("""{ "type": "string", "pattern": "^[A-Z]{3}-[0-9]+$" }""", "ABC-42")]
+    [InlineData("""{ "type": "string", "format": "email" }""", "someone@example.com")]
+    [InlineData("""{ "type": "string", "format": "uri" }""", "https://example.com/a")]
+    [InlineData("""{ "type": "string", "format": "date" }""", "2028-02-29")]
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:30:05.123-08:00")]
+    // Date.parse reads any number of fraction digits.
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34.746123Z")]
+    // And an offset without its colon, or a lower-case z, which it takes too (review of #844).
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34+0530")]
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58-0800")]
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34.746123+2359")]
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34.5z")]
+    // The CLI knows four formats and ignores the rest; so does the host.
+    [InlineData("""{ "type": "string", "format": "hostname" }""", "not a host name")]
+    // Spaces in a field with no constraints are still typed, and read as the field left empty;
+    // words with spaces around them are typed as they are, and fit limits both forms meet.
+    [InlineData("""{ "type": "string" }""", "   ")]
+    [InlineData("""{ "type": "string" }""", "  ab")]
+    [InlineData("""{ "type": "string", "maxLength": 4 }""", "  ab")]
+    public void Text_inside_its_constraints_is_typed_as_before(string property, string text)
+    {
+        Assert.Equal([(text, true)], Keys(Plan(Schema("t", property), Answer(new { t = text }))));
+    }
+
+    [Fact]
+    public void Lengths_count_UTF16_code_units_as_JavaScript_does()
+    {
+        Assert.Equal("\"t\": must be at most 1 characters", Outside(Schema("t", """{ "type": "string", "maxLength": 1 }"""), Answer(new { t = "\U0001F600" })));
+    }
+
+    [Fact]
+    public void A_pattern_is_read_as_JavaScript_reads_it_not_as_dotnet_does()
+    {
+        // JavaScript's \s takes a no-break space, where .NET's ECMAScript mode does not.
+        Outside(Schema("t", """{ "type": "string", "pattern": "^\\S+$" }"""), Answer(new { t = "a\u00A0b" }));
+        // And its $ is the end, never the place before a final line break.
+        var (_, question) = Ask(Schema("t", """{ "type": "string", "pattern": "^abc$" }"""));
+        Assert.NotNull(Answers.Check(question, Answer(new { t = "abc\n" })));
+    }
+
+    // Found in review of #844: .NET's \w takes U+0130 even in ECMAScript mode, and JavaScript's
+    // does not; its \d is ASCII too.
+    [Fact]
+    public void Word_and_digit_classes_are_JavaScripts_ASCII_ones()
+    {
+        Assert.Equal("\"t\": does not match the form the question asks for", Outside(Schema("t", """{ "type": "string", "pattern": "^\\w+$" }"""), Answer(new { t = "\u0130" })));
+        Assert.Equal("\"t\": does not match the form the question asks for", Outside(Schema("t", """{ "type": "string", "pattern": "^[\\w.]+$" }"""), Answer(new { t = "a\u0130" })));
+        Assert.Equal("\"t\": does not match the form the question asks for", Outside(Schema("t", """{ "type": "string", "pattern": "^\\d+$" }"""), Answer(new { t = "\u0661" })));
+        Assert.Equal([("a_1", true)], Keys(Plan(Schema("t", """{ "type": "string", "pattern": "^\\w+$" }"""), Answer(new { t = "a_1" }))));
+        // A hyphen first or last in a class is itself in both engines, so the class stays checkable.
+        Assert.Equal([("a-1", true)], Keys(Plan(Schema("t", """{ "type": "string", "pattern": "^[\\w-]+$" }"""), Answer(new { t = "a-1" }))));
+        Assert.Equal([("-b", true)], Keys(Plan(Schema("t", """{ "type": "string", "pattern": "^[-\\w]+$" }"""), Answer(new { t = "-b" }))));
+        // A { that starts no quantifier is a literal after $, and a group repeated is still a group.
+        Assert.Equal([("ab", true)], Keys(Plan(Schema("t", """{ "type": "string", "pattern": "^(?:a|b)+$|${x}" }"""), Answer(new { t = "ab" }))));
+        Assert.Equal([("aa", true)], Keys(Plan(Schema("t", """{ "type": "string", "pattern": "^(a$|a)+$" }"""), Answer(new { t = "aa" }))));
+        Assert.Equal("\"t\": does not match the form the question asks for", Outside(Schema("t", """{ "type": "string", "pattern": "^[\\w-]+$" }"""), Answer(new { t = "a\u0130" })));
+    }
+    [Fact]
+    public void Text_is_checked_as_it_would_be_typed_with_its_line_breaks_flattened()
+    {
+        // The line break passes a pattern that refuses spaces; the space it is typed as does not.
+        var arguments = Schema("t", """{ "type": "string", "pattern": "^[^ ]+$" }""");
+        var (form, question) = Ask(arguments);
+        Assert.Null(Answers.Check(question, Answer(new { t = "a\nb" })));
+        Assert.Equal("\"t\": does not match the form the question asks for", CopilotPlanner.Plan(form, Answer(new { t = "a\nb" })).Problem);
+    }
+
+    [Fact]
+    public void A_checkbox_list_ticked_outside_its_item_counts_is_refused_before_any_key()
+    {
+        var arguments = Schema("l", """{ "type": "array", "minItems": 2, "maxItems": 2, "items": { "enum": ["a", "b", "c"] } }""");
+        Assert.Equal("\"l\": choose at least 2", Outside(arguments, Answer(new { l = new[] { "a" } })));
+        Assert.Equal("\"l\": choose at most 2", Outside(arguments, Answer(new { l = new[] { "a", "b", "c" } })));
+        Assert.Equal(2, Keys(Plan(arguments, Answer(new { l = new[] { "a", "c" } }))).Count);
+    }
+
+    [Theory]
+    // A bound JavaScript would hold as another number, or none at all.
+    [InlineData("""{ "type": "integer", "maximum": 9007199254740993 }""")]
+    [InlineData("""{ "type": "number", "minimum": "1" }""")]
+    [InlineData("""{ "type": "number", "multipleOf": 0 }""")]
+    [InlineData("""{ "type": "string", "maxLength": 1.5 }""")]
+    [InlineData("""{ "type": "string", "minLength": -1 }""")]
+    [InlineData("""{ "type": "array", "maxItems": "2", "items": { "enum": ["a"] } }""")]
+    // Patterns .NET would read otherwise: a lookbehind, an escape that is a letter in JavaScript,
+    // class subtraction, JavaScript's empty class, and one that does not compile at all.
+    [InlineData("""{ "type": "string", "pattern": "(?<=a)b" }""")]
+    [InlineData("""{ "type": "string", "pattern": "^\\a$" }""")]
+    [InlineData("""{ "type": "string", "pattern": "[a-z-[aeiou]]" }""")]
+    [InlineData("""{ "type": "string", "pattern": "[]" }""")]
+    [InlineData("""{ "type": "string", "pattern": "(" }""")]
+    [InlineData("""{ "type": "string", "format": 5 }""")]
+    // Patterns JavaScript and .NET read differently (review of #844): a back-reference into a
+    // capture a later pass clears, \s beside a class hyphen, a word boundary.
+    [InlineData("""{ "type": "string", "pattern": "^(a|(b))+\\2$" }""")]
+    [InlineData("""{ "type": "string", "pattern": "^[\\s-\\uFFFF]+$" }""")]
+    [InlineData("""{ "type": "string", "pattern": "\\bword\\b" }""")]
+    // Patterns JavaScript refuses ("Nothing to repeat"): an end or start anchor quantified, which
+    // .NET took, the end even as a lookahead that matched (review of #844).
+    [InlineData("""{ "type": "string", "pattern": "^a$?" }""")]
+    [InlineData("""{ "type": "string", "pattern": "^a${2}" }""")]
+    [InlineData("""{ "type": "string", "pattern": "a$*" }""")]
+    [InlineData("""{ "type": "string", "pattern": "a$+?" }""")]
+    [InlineData("""{ "type": "string", "pattern": "a${1,}" }""")]
+    [InlineData("""{ "type": "string", "pattern": "^?a" }""")]
+    [InlineData("""{ "type": "string", "pattern": "^{1,2}a" }""")]
+    [InlineData("""{ "type": "string", "pattern": "a\\b?" }""")]
+    // A quantified lookahead: JavaScript, but not shown to repeat the same in .NET.
+    [InlineData("""{ "type": "string", "pattern": "(?=a)?a" }""")]
+    [InlineData("""{ "type": "string", "pattern": "(?!b){2}a" }""")]
+    // A list of choices with text limits, which its options and Other are not checked against.
+    [InlineData("""{ "type": "string", "enum": ["ok", "toolong"], "maxLength": 2 }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": ["ok", "toolong"], "maxLength": 2 } }""")]
+    // Numbers limited by what the host does not check (review of #844): a number box's listed
+    // values, and options under number limits. The CLI draws a number with an enum as a box that
+    // takes any number and records it (walked as a list, its arrows added one, #700).
+    [InlineData("""{ "type": "integer", "enum": [1, 2, 3] }""")]
+    [InlineData("""{ "type": "integer", "enum": [1, 2, 3], "default": 2 }""")]
+    [InlineData("""{ "type": "number", "oneOf": [{ "const": 1 }, { "const": 2 }] }""")]
+    [InlineData("""{ "type": "number", "const": 4 }""")]
+    [InlineData("""{ "type": "string", "const": "only" }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": [1, 2, 3], "minimum": 2 } }""")]
+    [InlineData("""{ "type": "array", "items": { "type": "number", "enum": [1, 1.5], "multipleOf": 1 } }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": [1, 2], "exclusiveMaximum": 2 } }""")]
+    [InlineData("""{ "type": "string", "enum": [1, 2], "maximum": 1 }""")]
+    // Limits on allowed values outside the keywords the host checks, decided from an allow-list
+    // (review of #844): a Yes/No's const, enum or oneOf took No; a number's anyOf, allOf or not
+    // took 5; a text box's anyOf (drawn as a box, #700) took any words, and its allOf no length.
+    [InlineData("""{ "type": "boolean", "const": true }""")]
+    [InlineData("""{ "type": "boolean", "enum": [true] }""")]
+    [InlineData("""{ "type": "boolean", "oneOf": [{ "const": true }] }""")]
+    [InlineData("""{ "type": "integer", "anyOf": [{ "const": 1 }, { "const": 2 }] }""")]
+    [InlineData("""{ "type": "integer", "allOf": [{ "enum": [1, 2, 3] }] }""")]
+    [InlineData("""{ "type": "integer", "not": { "const": 0 } }""")]
+    [InlineData("""{ "type": "string", "anyOf": [{ "const": "x", "title": "X" }, { "const": "y" }] }""")]
+    [InlineData("""{ "type": "string", "anyOf": [{ "const": "x" }], "default": "x" }""")]
+    [InlineData("""{ "type": "string", "allOf": [{ "maxLength": 2 }] }""")]
+    [InlineData("""{ "type": "string", "not": { "const": "" } }""")]
+    [InlineData("""{ "type": "string", "if": { "minLength": 1 }, "then": { "maxLength": 2 } }""")]
+    [InlineData("""{ "type": "string", "x-unknown": 1 }""")]
+    [InlineData("""{ "type": "string", "enum": ["a", "b"], "oneOf": [{ "const": "a" }, { "const": "c" }] }""")]
+    [InlineData("""{ "type": "string", "oneOf": [{ "const": "a", "maxLength": 0 }, { "const": "b" }] }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": ["a", "b"], "not": { "const": "a" } } }""")]
+    [InlineData("""{ "type": "array", "items": { "anyOf": [{ "const": "a" }, { "const": "b" }], "allOf": [{ "maxLength": 0 }] } }""")]
+    [InlineData("""{ "type": "array", "items": { "type": "integer", "enum": [1, 1.5] } }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": ["a", "b"] }, "contains": { "const": "a" } }""")]
+    // And the edge cases of Copilot's closer look (5780739922): a reference, a type list, OpenAPI's
+    // nullable, a format on a number, a content encoding, a tuple, and a list whose two options of
+    // one value could both be ticked under uniqueItems.
+    [InlineData("""{ "$ref": "#/$defs/x" }""")]
+    [InlineData("""{ "type": "string", "$ref": "#/$defs/x" }""")]
+    [InlineData("""{ "type": ["string", "null"] }""")]
+    [InlineData("""{ "type": "string", "nullable": true }""")]
+    [InlineData("""{ "type": "number", "format": "date-time" }""")]
+    [InlineData("""{ "type": "string", "contentEncoding": "base64" }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": ["a", "b"] }, "prefixItems": [{ "const": "a" }] }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": ["a", "a"] }, "uniqueItems": true }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": ["a", "b"] }, "minContains": 1 }""")]
+    // A null-valued limit, which the CLI reads as absent but the schema does not (Copilot review
+    // 5782070219 of #844): const null allows only null, and a null elsewhere is no schema at all.
+    // Then a const or enum of another type than the field's, which the allow-list already routed.
+    [InlineData("""{ "type": "string", "const": null }""")]
+    [InlineData("""{ "type": "boolean", "const": null }""")]
+    [InlineData("""{ "type": "integer", "const": null }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": ["a", "b"], "const": null } }""")]
+    [InlineData("""{ "type": "string", "maxLength": null }""")]
+    [InlineData("""{ "type": null }""")]
+    [InlineData("""{ "type": "integer", "const": "x" }""")]
+    [InlineData("""{ "type": "string", "const": 5 }""")]
+    [InlineData("""{ "type": "string", "enum": [null, "a"] }""")]
+    [InlineData("""{ "type": "boolean", "enum": [null] }""")]
+    [InlineData("""{ "type": "array", "items": { "type": "string", "enum": [null, "a"] } }""")]    // An option entry's own type, which its const must match like any other limit (Quality's review
+    // of #844): a dropdown's oneOf, a checkbox list's anyOf with and without items.type.
+    [InlineData("""{ "type": "string", "oneOf": [{ "const": "a", "type": "number" }, { "const": "b" }] }""")]
+    [InlineData("""{ "type": "array", "items": { "type": "string", "anyOf": [{ "const": "a", "type": "integer" }, { "const": "b" }] } }""")]
+    [InlineData("""{ "type": "array", "items": { "anyOf": [{ "const": "a", "type": "integer" }, { "const": "b" }] } }""")]
+    [InlineData("""{ "type": "array", "items": { "anyOf": [{ "const": 1.5, "type": "integer" }] } }""")]
+    [InlineData("""{ "type": "string", "oneOf": [{ "const": "a", "type": ["string", "null"] }] }""")]    // A default outside the field's own constraints, which is the only answer it can be given.
+    // Spaces included: Copilot records a default of spaces as it is (review of #844).
+    [InlineData("""{ "type": "string", "minLength": 5, "default": "   " }""")]
+    [InlineData("""{ "type": "integer", "minimum": 5, "default": 3 }""")]
+    [InlineData("""{ "type": "string", "maxLength": 2, "default": "none" }""")]
+    public void A_field_whose_constraints_cannot_be_checked_exactly_or_whose_default_breaks_them_is_answered_at_the_machine(string property)
+    {
+        using var doc = JsonDocument.Parse(Schema("f", property));
+        Assert.True(QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0).AnswerAtMachine);
+        var (form, problem) = CopilotForm.Read(doc.RootElement);
+        Assert.Null(form);
+        Assert.EndsWith("; answer it at the machine", problem);
+    }
+
+    [Theory]
+    // What the allow-list keeps answerable: annotations, the keywords the host checks, and lists
+    // whose options are all their type allows (review of #844).
+    [InlineData("""{ "type": "boolean", "default": true, "title": "T", "description": "d" }""")]
+    [InlineData("""{ "type": "string", "default": null, "title": null, "description": null }""")]
+    [InlineData("""{ "type": "string", "oneOf": [{ "const": "a", "type": "string" }, { "const": "b", "title": "B" }] }""")]
+    [InlineData("""{ "type": "array", "items": { "anyOf": [{ "const": 1, "type": "integer" }, { "const": 2.5, "type": "number" }] } }""")]    [InlineData("""{ "type": "boolean" }""")]
+    [InlineData("""{ "type": "string", "title": "t", "examples": ["x"], "$comment": "c", "maxLength": 9 }""")]
+    [InlineData("""{ "title": "untyped text" }""")]
+    [InlineData("""{ "type": "number", "title": "n", "minimum": 1, "multipleOf": 0.5 }""")]
+    [InlineData("""{ "type": "string", "enum": ["a", "b"], "enumNames": ["A", "B"], "default": "a" }""")]
+    [InlineData("""{ "type": "string", "enum": ["a", "b"], "oneOf": [{ "const": "b", "title": "B" }, { "const": "a" }] }""")]
+    [InlineData("""{ "type": "array", "items": { "type": "string", "enum": ["a", "b"] }, "minItems": 1, "uniqueItems": true }""")]
+    [InlineData("""{ "type": "array", "items": { "type": "integer", "anyOf": [{ "const": 1, "title": "One" }, { "const": 2 }] } }""")]
+    public void A_field_carrying_only_what_the_host_checks_stays_answerable(string property)
+    {
+        using var doc = JsonDocument.Parse(Schema("f", property));
+        Assert.Null(QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0).AnswerAtMachine);
+        var (form, problem) = CopilotForm.Read(doc.RootElement);
+        Assert.Null(problem);
+        Assert.NotNull(form);
+    }
+
+    [Theory]
+    // A field listed twice, one that is not an object, or a required one the form does not draw:
+    // the host would accept an answer the form forbids (Copilot review 5780983797 of #844).
+    [InlineData("""{ "properties": { "f": { "type": "string" } }, "required": ["g"] }""")]
+    [InlineData("""{ "properties": { "f": { "type": "string" } }, "required": "f" }""")]
+    [InlineData("""{ "properties": { "f": { "type": "string" }, "f": { "type": "number" } } }""")]
+    [InlineData("""{ "properties": { "f": true } }""")]
+    [InlineData("""{ "properties": [], "required": ["f"] }""")]
+    public void A_form_whose_fields_or_required_do_not_read_one_way_is_answered_at_the_machine(string schema)
+    {
+        using var doc = JsonDocument.Parse($$"""{ "message": "m", "requestedSchema": {{schema}} }""");
+        Assert.True(QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0).AnswerAtMachine);
+        var (form, problem) = CopilotForm.Read(doc.RootElement);
+        Assert.Null(form);
+        Assert.EndsWith("; answer it at the machine", problem);
+    }
+
+    [Fact]
+    public void A_form_requiring_a_field_it_draws_stays_answerable()
+    {
+        using var doc = JsonDocument.Parse("""{ "message": "m", "requestedSchema": { "type": "object", "properties": { "f": { "type": "string" } }, "required": ["f"], "additionalProperties": false } }""");
+        Assert.Null(QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0).AnswerAtMachine);
+        Assert.NotNull(CopilotForm.Read(doc.RootElement).Form);
+    }
+    [Theory]
+    [InlineData("""{ "allOf": [{ "properties": { "f": { "maxLength": 2 } } }] }""")]
+    [InlineData("""{ "if": { "required": ["f"] }, "then": { "required": ["g"] } }""")]
+    [InlineData("""{ "dependentRequired": { "f": ["g"] } }""")]
+    [InlineData("""{ "minProperties": 2 }""")]
+    [InlineData("""{ "propertyNames": { "maxLength": 1 } }""")]
+    [InlineData("""{ "$ref": "#/$defs/form" }""")]
+    public void A_form_limiting_its_fields_across_them_is_answered_at_the_machine(string extra)
+    {
+        var limits = extra.Trim()[1..^1];
+        using var doc = JsonDocument.Parse($$"""{ "message": "m", "requestedSchema": { "type": "object", "properties": { "f": { "type": "string" }, "g": { "type": "string" } }, {{limits}} } }""");
+        Assert.True(QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0).AnswerAtMachine);
+        var (form, problem) = CopilotForm.Read(doc.RootElement);
+        Assert.Null(form);
+        Assert.EndsWith("; answer it at the machine", problem);
+    }
+
+    static string Fields(int count, string property) =>
+        $$"""{ "message": "m", "requestedSchema": { "properties": { {{string.Join(", ", Enumerable.Range(0, count).Select(i => $"\"f{i}\": {property}"))}} } } }""";
+
+    // Found in review of #844: each field's pattern ran on its default with 250 ms a match, and the
+    // question was read twice, so an agent's ask_user of many slow patterns held up the refresh of
+    // every session. All of a question's patterns now share one 250 ms.
+    [Fact]
+    public void Many_slow_patterns_in_one_question_cost_one_budget_and_answer_it_at_the_machine()
+    {
+        var slow = $$"""{ "type": "string", "pattern": "^(a+)+$", "default": "{{new string('a', 40)}}!" }""";
+        using var doc = JsonDocument.Parse(Fields(40, slow));
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var question = QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0);
+        var (form, problem) = CopilotForm.Read(doc.RootElement);
+        clock.Stop();
+
+        Assert.True(question.AnswerAtMachine);
+        Assert.Null(form);
+        Assert.EndsWith("has limits the host cannot check exactly; answer it at the machine", problem);
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(3), $"took {clock.Elapsed}");
+    }
+
+    // Found in review of #844: the email check's classes overlap on dots, so a backtracking match of
+    // a default made of `a@`, a run of dots and a space was quadratic, and it ran while the question
+    // was read, outside the pattern budget. Measured at 5,000, 10,000 and 20,000 dots it took 29, 117
+    // and 452 ms; the generated matcher's vectorised scans only shrink the constant, so at n and 2n of
+    // a million it ran for minutes, far past a bound the linear match keeps with a wide margin. The
+    // default is still not an email.
+    //
+    // The bound is 60 s, not 5 (#990): on a loaded windows-11-arm runner (run 42175493996) the
+    // linear read missed 5 s. What it measures is wall-clock time, and that counts every wait for a
+    // CPU. Grown as n², the old match's 452 ms at 20,000 dots is 452 ms × 50² ≈ 19 minutes at a
+    // million and 452 ms × 100² ≈ 75 minutes at two million, so 60 s still stops it about 19 times
+    // short of its quicker run; the linear match is a few passes over the text, milliseconds. The
+    // read runs on a thread of its own, not the pool's: a Task.Run waits in the pool's queue behind
+    // the suite's other tests, and that wait came out of the bound too.
+    [Fact]
+    public async Task An_email_default_of_a_long_run_of_dots_is_read_in_linear_time()
+    {
+        foreach (var n in new[] { 1_000_000, 2_000_000 })
+        {
+            using var doc = JsonDocument.Parse(Schema("e", $$"""{ "type": "string", "format": "email", "default": "a@{{new string('.', n)}} " }"""));
+            var root = doc.RootElement.Clone();
+            // Past the bound, WaitAsync throws: the old match was still running.
+            var read = Task.Factory.StartNew(() => QuestionMapper.FromCopilotAskUser("call-1", root, Fixture.T0), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+            var question = await read.WaitAsync(TimeSpan.FromSeconds(60));
+            Assert.True(question.AnswerAtMachine);
+        }
+        Assert.Equal([("a@b.c", true)], Keys(Plan(Schema("t", """{ "type": "string", "format": "email" }"""), Answer(new { t = "a@b.c" }))));
+        Assert.Equal("\"t\": must be an email address", Outside(Schema("t", """{ "type": "string", "format": "email" }"""), Answer(new { t = "a@b." })));
+    }
+
+    // The bound above stops the old match only on a runner that reaches it; this stops it on any.
+    // The email check is FieldConstraints.Email(), which returns the private EmailPattern field
+    // (src/AgentBridge.Protocol/FieldConstraints.cs). Its classes overlap on dots, so without
+    // NonBacktracking the match backtracks quadratically (#844 review, #990). Read by reflection,
+    // since Protocol keeps both private: a rename or a second overload throws here and fails loudly.
+    [Fact]
+    public void The_email_check_is_matched_without_backtracking()
+    {
+        var email = typeof(FieldConstraints).GetMethod("Email", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+            ?? throw new MissingMethodException(nameof(FieldConstraints), "Email");
+        var regex = Assert.IsType<System.Text.RegularExpressions.Regex>(email.Invoke(null, null));
+
+        Assert.True(regex.Options.HasFlag(System.Text.RegularExpressions.RegexOptions.NonBacktracking), $"the email check is built with {regex.Options}");
+    }
+
+    // #882: a field Copilot opens with its default typed in takes only that default from another
+    // device (Keeps). One whose default no answer can keep is listed at the machine; one whose
+    // default can be kept stays answerable, and planning that very default goes through.
+    [Theory]
+    [InlineData("""{ "type": "string", "default": 5 }""", null)]
+    [InlineData("""{ "type": "string", "default": true }""", null)]
+    [InlineData("""{ "type": "string", "default": [] }""", null)]
+    [InlineData("""{ "type": "number", "default": null }""", null)]
+    [InlineData("""{ "type": "number", "default": "abc" }""", null)]
+    [InlineData("""{ "type": "integer", "default": "9007199254740993" }""", null)]
+    [InlineData("""{ "type": "number", "default": true }""", null)]
+    [InlineData("""{ "type": "string", "default": "x" }""", "\"x\"")]
+    [InlineData("""{ "type": "string", "default": null }""", "")]
+    [InlineData("""{ "type": "string", "default": "" }""", "")]
+    [InlineData("""{ "type": "number", "default": 3 }""", "3")]
+    [InlineData("""{ "type": "number", "default": "3" }""", "3")]
+    [InlineData("""{ "type": "number", "default": "" }""", "")]
+    // A default a client cannot send as it is (#921 review): blank once typed or invisible, which
+    // the PWA leaves out of the answer, and half a surrogate pair, which .NET does not read as
+    // text and both clients send as U+FFFD. A whole pair, or a zero-width space between visible
+    // characters, is text like any other.
+    [InlineData("""{ "type": "string", "default": "   " }""", null)]
+    [InlineData("""{ "type": "string", "default": "\u0085" }""", null)]
+    [InlineData("""{ "type": "string", "default": "\u200B" }""", null)]
+    [InlineData("""{ "type": "string", "default": "\u2800" }""", null)]
+    [InlineData("""{ "type": "string", "default": "\u0301" }""", null)]
+    [InlineData("""{ "type": "string", "default": "a\u200Bb" }""", "\"a\\u200Bb\"")]
+    [InlineData("""{ "type": "string", "default": "a\uD800" }""", null)]
+    [InlineData("""{ "type": "string", "default": "a\uD83D\uDE00" }""", "\"a\\uD83D\\uDE00\"")]
+    public void A_default_no_answer_can_keep_is_answered_at_the_machine(string property, string? kept)
+    {
+        using var doc = JsonDocument.Parse(Schema("f", property));
+        var question = QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0);
+
+        Assert.Equal(kept is null ? true : null, question.AnswerAtMachine);
+        if (kept is { Length: > 0 })
+        {
+            var (form, _) = CopilotForm.Read(doc.RootElement.Clone());
+            var (plan, problem) = CopilotPlanner.Plan(form!, Answer(new Dictionary<string, JsonElement> { ["f"] = JsonDocument.Parse(kept).RootElement.Clone() }));
+            Assert.Null(problem);
+            Assert.NotNull(plan);
+        }
+    }
+
+    // A text default is its field's only answer, and an answer's text is at most Limits.AnswerText
+    // UTF-8 bytes: one longer has no answer it can be given (#921 review).
+    [Theory]
+    [InlineData('x', Limits.AnswerText, false)]
+    [InlineData('x', Limits.AnswerText + 1, true)]
+    [InlineData('é', Limits.AnswerText / 2, false)]
+    [InlineData('é', Limits.AnswerText / 2 + 1, true)]
+    public void A_text_default_longer_than_an_answer_takes_is_answered_at_the_machine(char c, int count, bool atMachine)
+    {
+        var text = new string(c, count);
+        var (question, form) = Asked(JsonSerializer.Serialize(new { message = "m", requestedSchema = new { properties = new { f = new { type = "string", @default = text } } } }));
+
+        Assert.Equal(atMachine ? true : null, question.AnswerAtMachine);
+        if (!atMachine) { Kept(question, form, new Dictionary<string, string> { ["f"] = text }); }
+    }
+
+    // Every pre-filled text box is answered with its default, so the answer carries them all: past
+    // Limits.AnswerRequest together, no answer fits, though each fits alone (#921 review).
+    [Theory]
+    [InlineData(3, false)]
+    [InlineData(5, true)]
+    public void Text_defaults_too_long_together_for_one_answer_are_answered_at_the_machine(int fields, bool atMachine)
+    {
+        var defaults = Enumerable.Range(0, fields).ToDictionary(i => "f" + i, _ => new string('x', 4_000));
+        var (question, form) = Asked(JsonSerializer.Serialize(new { message = "m", requestedSchema = new { properties = defaults.ToDictionary(d => d.Key, d => new { type = "string", @default = d.Value }) } }));
+
+        Assert.Equal(atMachine ? true : null, question.AnswerAtMachine);
+        if (!atMachine) { Kept(question, form, defaults); }
+    }
+
+    // The whole answer counts, not only its fields: id, question, request and progress too, and
+    // every field an answer must carry, not only the text defaults (#921 reviews). Here the
+    // smallest answer a device can send fills the largest envelope a host takes, a 256-character
+    // session id, to the byte, then one byte over. It carries the text defaults; a number default
+    // of 1e20, which the PWA writes as 21 digits; a required choice of one 600-character option;
+    // a boolean's default; and a list whose default can be cleared, as [].
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(1, true)]
+    public void A_form_whose_smallest_answer_fills_a_whole_answer_is_offered_and_one_byte_more_is_answered_at_the_machine(int over, bool atMachine)
+    {
+        var (question, form, answer) = Smallest(over, required: new string('y', 600), numbers: 1, script: true);
+
+        Assert.Equal(Limits.AnswerRequest + over, ProtocolJson.ByteCount(answer));
+        Assert.Equal(atMachine ? true : null, question.AnswerAtMachine);
+        if (atMachine) { return; }
+        Assert.Null(Answers.Check(question, answer));
+        var (plan, problem) = CopilotPlanner.Plan(form, answer);
+        Assert.Null(problem);
+        Assert.NotNull(plan);
+    }
+
+    // The two forms the review found offered and every answer refused: one that fits with only
+    // its text defaults counted, but not with a required choice of a 600-character option, and
+    // one that fits with twenty number defaults of 1e20 as written, but not as the PWA sends them.
+    [Theory]
+    [InlineData(true, 0)]
+    [InlineData(false, 20)]
+    public void A_form_that_fits_only_counted_short_is_answered_at_the_machine(bool required, int numbers)
+    {
+        // Sized so the short count is 100 bytes under the bound.
+        var (_, _, shortCount) = Smallest(-100, required: null, numbers, script: false);
+        var (question, _, answer) = Smallest(-100, required: required ? new string('y', 600) : null, numbers, script: true, filler: Filler(shortCount));
+
+        Assert.True(ProtocolJson.ByteCount(answer) > Limits.AnswerRequest);
+        Assert.True(question.AnswerAtMachine);
+    }
+
+    static int Filler(AnswerRequest answer) => answer.Fields!["d"].GetString()!.Length;
+
+    // The nearest allowed number need not serialize shortest: 1e21 fits where JavaScript's
+    // 21-digit spelling of 1e20 does not. The lower-bound estimate must offer the form, while
+    // the submitted answer still has to fit the whole-request limit (#921 review).
+    [Theory]
+    [InlineData("minimum", 1e20)]
+    [InlineData("exclusiveMinimum", 1e20)]
+    [InlineData("maximum", -1e20)]
+    public void Required_numbers_are_offered_when_a_shorter_allowed_value_fits(string bound, double value)
+    {
+        var numbers = Enumerable.Range(0, 30).Select(i => "n" + i).ToList();
+        AnswerRequest Largest(int last, string written) => new()
+        {
+            Id = new string('x', 256), Question = "call-1", Request = Guid.NewGuid().ToString(), Progress = true,
+            Fields = new Dictionary<string, JsonElement>
+            {
+                ["a"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
+                ["b"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
+                ["c"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
+                ["d"] = JsonSerializer.SerializeToElement(new string('x', last)),
+            }.Concat(numbers.Select(n => KeyValuePair.Create(n, JsonDocument.Parse(written).RootElement.Clone()))).ToDictionary(),
+        };
+        // Sized so exponent notation fits, but the nearest bound's fixed-point spelling does not.
+        var last = Limits.AnswerRequest - 200 - ProtocolJson.ByteCount(Largest(0, "0"));
+        var atBound = Largest(last, CopilotFieldSchema.JavaScriptNumber(value));
+        var shorter = Largest(last, CopilotFieldSchema.JavaScriptNumber(Math.CopySign(1e21, value)));
+        var properties = new Dictionary<string, object>
+        {
+            ["a"] = new { type = "string", @default = new string('x', 4_000) },
+            ["b"] = new { type = "string", @default = new string('x', 4_000) },
+            ["c"] = new { type = "string", @default = new string('x', 4_000) },
+            ["d"] = new { type = "string", @default = new string('x', last) },
+        };
+        foreach (var n in numbers) { properties[n] = new Dictionary<string, object> { ["type"] = "number", [bound] = value }; }
+        var (question, form) = Asked(JsonSerializer.Serialize(new { message = "m", requestedSchema = new { properties, required = numbers } }));
+
+        Assert.True(ProtocolJson.ByteCount(atBound) > Limits.AnswerRequest);
+        Assert.True(ProtocolJson.ByteCount(shorter) <= Limits.AnswerRequest);
+        Assert.Null(question.AnswerAtMachine);
+        Assert.Equal($"the answer is larger than {Limits.AnswerRequest / 1024} KiB", Answers.Check(question, atBound));
+        Assert.Null(Answers.Check(question, shorter));
+        var (plan, problem) = CopilotPlanner.Plan(form, shorter);
+        Assert.Null(problem);
+        Assert.NotNull(plan);
+    }
+
+    // Required numbers without defaults contribute a one-byte lower bound, not the length of
+    // the nearest allowed answer. Even when that estimate offers a form, Answers.Check refuses
+    // an oversized submission. The form goes to the machine once the lower bound itself is over.
+    [Theory]
+    [InlineData("""{ "type": "integer", "exclusiveMinimum": 9 }""", 10d, 0)]
+    [InlineData("""{ "type": "integer", "exclusiveMinimum": 9 }""", 10d, 1)]
+    [InlineData("""{ "type": "integer", "exclusiveMinimum": 9 }""", 10d, 30)]
+    [InlineData("""{ "type": "integer", "exclusiveMinimum": 9 }""", 10d, 31)]
+    [InlineData("""{ "type": "number", "minimum": 1, "multipleOf": 123456789 }""", 123456789d, 0)]
+    [InlineData("""{ "type": "number", "minimum": 1, "multipleOf": 123456789 }""", 123456789d, 1)]
+    [InlineData("""{ "type": "number", "exclusiveMinimum": 0.5 }""", 0.5000000000000001, 0)]
+    [InlineData("""{ "type": "number", "exclusiveMinimum": 0.5 }""", 0.5000000000000001, 1)]
+    [InlineData("""{ "type": "integer", "minimum": 0.2, "multipleOf": 0.5 }""", 1d, 0)]
+    [InlineData("""{ "type": "integer", "minimum": 0.2, "multipleOf": 0.5 }""", 1d, 1)]
+    [InlineData("""{ "type": "integer", "exclusiveMinimum": 0, "multipleOf": 1.5 }""", 3d, 0)]
+    [InlineData("""{ "type": "integer", "exclusiveMinimum": 0, "multipleOf": 1.5 }""", 3d, 1)]
+    [InlineData("""{ "type": "number", "maximum": -1, "multipleOf": 7 }""", -7d, 0)]
+    [InlineData("""{ "type": "number", "maximum": -1, "multipleOf": 7 }""", -7d, 1)]
+    [InlineData("""{ "type": "number", "exclusiveMaximum": 0, "multipleOf": 0.25 }""", -0.25, 0)]
+    [InlineData("""{ "type": "number", "exclusiveMaximum": 0, "multipleOf": 0.25 }""", -0.25, 1)]
+    public void Required_numbers_use_a_lower_bound_without_weakening_the_answer_limit(string schema, double nearest, int over)
+    {
+        var numbers = Enumerable.Range(0, 30).Select(i => "n" + i).ToList();
+        var script = CopilotFieldSchema.JavaScriptNumber(nearest);
+        var dotnet = JsonSerializer.Serialize(nearest, ProtocolJson.Options);
+        var written = script.Length >= dotnet.Length ? script : dotnet;
+        AnswerRequest Largest(int last) => new()
+        {
+            Id = new string('x', 256), Question = "call-1", Request = Guid.NewGuid().ToString(), Progress = true,
+            Fields = new Dictionary<string, JsonElement>
+            {
+                ["a"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
+                ["b"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
+                ["c"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
+                ["d"] = JsonSerializer.SerializeToElement(new string('x', last)),
+            }.Concat(numbers.Select(n => KeyValuePair.Create(n, JsonDocument.Parse(written).RootElement.Clone()))).ToDictionary(),
+        };
+        var last = Limits.AnswerRequest - ProtocolJson.ByteCount(Largest(0)) + over;
+        var smallest = Largest(last);
+        var properties = new Dictionary<string, object>
+        {
+            ["a"] = new { type = "string", @default = new string('x', 4_000) },
+            ["b"] = new { type = "string", @default = new string('x', 4_000) },
+            ["c"] = new { type = "string", @default = new string('x', 4_000) },
+            ["d"] = new { type = "string", @default = new string('x', last) },
+        };
+        foreach (var n in numbers) { properties[n] = JsonDocument.Parse(schema).RootElement.Clone(); }
+        var (question, _) = Asked(JsonSerializer.Serialize(new { message = "m", requestedSchema = new { properties, required = numbers } }));
+
+        Assert.Equal(Limits.AnswerRequest + over, ProtocolJson.ByteCount(smallest));
+        var lowerBound = ProtocolJson.ByteCount(smallest) - numbers.Count * (written.Length - 1);
+        Assert.Equal(lowerBound > Limits.AnswerRequest ? true : null, question.AnswerAtMachine);
+        if (question.AnswerAtMachine != true)
+        {
+            Assert.Equal(over > 0 ? $"the answer is larger than {Limits.AnswerRequest / 1024} KiB" : null, Answers.Check(question, smallest));
+        }
+    }
+
+    // A required text's minLength past what an answer's text takes has no answer at all, and was
+    // written out to measure: 2,147,483,647 asked for 4 GiB (#921 review).
+    [Theory]
+    [InlineData(Limits.AnswerText, false)]
+    [InlineData(Limits.AnswerText + 1, true)]
+    [InlineData(int.MaxValue, true)]
+    public void A_required_text_longer_than_an_answer_takes_is_answered_at_the_machine(int minLength, bool atMachine)
+    {
+        var (question, _) = Asked(JsonSerializer.Serialize(new { message = "m", requestedSchema = new { properties = new { t = new { type = "string", minLength } }, required = new[] { "t" } } }));
+
+        Assert.Equal(atMachine ? true : null, question.AnswerAtMachine);
+        if (!atMachine) { Assert.Null(Answers.Check(question, Answer(new { t = new string('x', minLength) }))); }
+    }
+
+    // Required text counted at its minLength, never written out (#921 review), still to the byte:
+    // the smallest answer filling a whole answer is offered and accepted; one byte more is
+    // answered at the machine.
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(1, true)]
+    public void Required_text_filling_a_whole_answer_at_its_minimum_length_is_offered_and_one_byte_more_is_answered_at_the_machine(int over, bool atMachine)
+    {
+        AnswerRequest Largest(int last) => new()
+        {
+            Id = new string('x', 256), Question = "call-1", Request = Guid.NewGuid().ToString(), Progress = true,
+            Fields = new Dictionary<string, JsonElement>
+            {
+                ["a"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
+                ["b"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
+                ["c"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
+                ["d"] = JsonSerializer.SerializeToElement(new string('x', last)),
+            },
+        };
+        var last = Limits.AnswerRequest - ProtocolJson.ByteCount(Largest(0)) + over;
+        var smallest = Largest(last);
+        var properties = new Dictionary<string, object>
+        {
+            ["a"] = new { type = "string", minLength = 4_000 },
+            ["b"] = new { type = "string", minLength = 4_000 },
+            ["c"] = new { type = "string", minLength = 4_000 },
+            ["d"] = new { type = "string", minLength = last },
+        };
+        var (question, _) = Asked(JsonSerializer.Serialize(new { message = "m", requestedSchema = new { properties, required = new[] { "a", "b", "c", "d" } } }));
+
+        Assert.InRange(last, 1, Limits.AnswerText);
+        Assert.Equal(Limits.AnswerRequest + over, ProtocolJson.ByteCount(smallest));
+        Assert.Equal(atMachine ? true : null, question.AnswerAtMachine);
+        if (!atMachine) { Assert.Null(Answers.Check(question, smallest)); }
+    }
+
+    // What is accepted instead for text that must match a pattern (#921 review): a pattern is not
+    // solved for its shortest match, so text it needs is counted at its minLength. Such a form is
+    // offered, and an answer too large for it is refused whole, before any key is typed.
+    [Fact]
+    public void A_required_pattern_is_counted_at_its_minimum_length_and_a_too_large_answer_is_refused_before_any_key()
+    {
+        var properties = new Dictionary<string, object>
+        {
+            ["a"] = new { type = "string", @default = new string('x', 4_000) },
+            ["b"] = new { type = "string", @default = new string('x', 4_000) },
+            ["c"] = new { type = "string", @default = new string('x', 4_000) },
+            ["d"] = new { type = "string", @default = new string('x', 3_900) },
+            ["p"] = new { type = "string", pattern = "^x{600}$" },
+        };
+        var (question, _) = Asked(JsonSerializer.Serialize(new { message = "m", requestedSchema = new { properties, required = new[] { "p" } } }));
+        var answer = Answer(new Dictionary<string, string>
+        {
+            ["a"] = new string('x', 4_000), ["b"] = new string('x', 4_000), ["c"] = new string('x', 4_000), ["d"] = new string('x', 3_900), ["p"] = new string('x', 600),
+        });
+
+        Assert.Null(question.AnswerAtMachine);
+        Assert.Equal($"the answer is larger than {Limits.AnswerRequest / 1024} KiB", Answers.Check(question, answer));
+    }
+
+    // A number default spelled long is still one short number: neither client sends it as
+    // written, and Keeps takes the number it is. Five of "1." and 4,090 zeros were measured as
+    // written and the form sent to the machine (#921 review).
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_number_default_spelled_long_is_measured_as_the_number_it_is(bool quoted)
+    {
+        var spelled = "1." + new string('0', 4_090);
+        var properties = Enumerable.Range(0, 5).ToDictionary(i => "n" + i, _ => (object)new { type = "number", @default = JsonDocument.Parse(quoted ? $"\"{spelled}\"" : spelled).RootElement.Clone() });
+        var (question, form) = Asked(JsonSerializer.Serialize(new { message = "m", requestedSchema = new { properties } }));
+        var answer = Answer(Enumerable.Range(0, 5).ToDictionary(i => "n" + i, _ => 1));
+
+        Assert.Null(question.AnswerAtMachine);
+        Assert.Null(Answers.Check(question, answer));
+        var (plan, problem) = CopilotPlanner.Plan(form, answer);
+        Assert.Null(problem);
+        Assert.NotNull(plan);
+    }
+
+    // A form of three 4,000-character text defaults, numbers number defaults of 1e20, a boolean
+    // defaulting to true, a list defaulting to one tick, a required choice when given, and a
+    // text default "d" filling the smallest answer (sent as `script`: numbers as the PWA writes
+    // them, or as the schema does) to over bytes past the bound, or of filler characters.
+    static (Question Question, CopilotForm Form, AnswerRequest Answer) Smallest(int over, string? required, int numbers, bool script, int? filler = null)
+    {
+        Dictionary<string, JsonElement> Fields(int last)
+        {
+            var fields = new Dictionary<string, JsonElement>
+            {
+                ["a"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
+                ["b"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
+                ["c"] = JsonSerializer.SerializeToElement(new string('x', 4_000)),
+                ["flag"] = JsonSerializer.SerializeToElement(true),
+                ["list"] = JsonSerializer.SerializeToElement(Array.Empty<string>()),
+                ["d"] = JsonSerializer.SerializeToElement(new string('x', last)),
+            };
+            for (var i = 0; i < numbers; i++) { fields["n" + i] = JsonDocument.Parse(script ? "100000000000000000000" : "1e20").RootElement.Clone(); }
+            if (required is not null) { fields["e"] = JsonSerializer.SerializeToElement(required); }
+            return fields;
+        }
+        AnswerRequest Largest(Dictionary<string, JsonElement> fields) => new()
+        {
+            Id = new string('x', 256), Question = "call-1", Request = Guid.NewGuid().ToString(), Fields = fields, Progress = true,
+        };
+        var last = filler ?? Limits.AnswerRequest - ProtocolJson.ByteCount(Largest(Fields(0))) + over;
+        var answer = Largest(Fields(last));
+        var properties = new Dictionary<string, object>
+        {
+            ["a"] = new { type = "string", @default = new string('x', 4_000) },
+            ["b"] = new { type = "string", @default = new string('x', 4_000) },
+            ["c"] = new { type = "string", @default = new string('x', 4_000) },
+            ["flag"] = new { type = "boolean", @default = true },
+            ["list"] = new { type = "array", items = new { @enum = new[] { "p", "q" } }, @default = new[] { "p" } },
+            ["d"] = new { type = "string", @default = new string('x', last) },
+        };
+        for (var i = 0; i < numbers; i++) { properties["n" + i] = new { type = "number", @default = JsonDocument.Parse("1e20").RootElement.Clone() }; }
+        if (required is not null) { properties["e"] = new { type = "string", @enum = new[] { required } }; }
+        var (question, form) = Asked(JsonSerializer.Serialize(new
+        {
+            message = "m",
+            requestedSchema = new { properties, required = required is null ? Array.Empty<string>() : ["e"] },
+        }));
+        return (question, form, answer);
+    }
+    static (Question Question, CopilotForm Form) Asked(string arguments)
+    {
+        using var doc = JsonDocument.Parse(arguments);
+        var question = QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0);
+        var (form, problem) = CopilotForm.Read(doc.RootElement.Clone());
+        Assert.Null(problem);
+        return (question, form!);
+    }
+
+    // Each default given back as the answer passes the shared check, and keeps every field.
+    static void Kept(Question question, CopilotForm form, Dictionary<string, string> defaults)
+    {
+        var answer = Answer(defaults);
+        Assert.Null(Answers.Check(question, answer));
+        var (plan, problem) = CopilotPlanner.Plan(form, answer);
+        Assert.Null(problem);
+        Assert.NotNull(plan);
+    }
+
+    // An empty answer is typed as nothing, and Copilot then records no answer at all to a field
+    // the form requires; one of only spaces might be recorded trimmed to that, and so might one of
+    // control characters, which are typed as spaces though trim() alone keeps them (review of #844).
+    [Fact]
+    public void An_empty_or_blank_answer_to_a_required_text_field_is_refused()
+    {
+        var (_, question) = Ask("""{ "message": "m", "requestedSchema": { "properties": { "t": { "type": "string" } }, "required": ["t"] } }""");
+
+        Assert.Equal("\"t\" needs an answer", Answers.Check(question, Answer(new { t = "" })));
+        Assert.Equal("\"t\" needs an answer", Answers.Check(question, Answer(new { t = " \t\u00A0" })));
+        Assert.Equal("\"t\" needs an answer", Answers.Check(question, Answer(new { t = "\u0085" })));
+        Assert.Equal("\"t\" needs an answer", Answers.Check(question, Answer(new { t = "\u0001" })));
+        Assert.Equal("\"t\" needs an answer", Answers.Check(question, Answer(new { t = "\u001b " })));
+        Assert.Null(Answers.Check(question, Answer(new { t = " a " })));
+    }
+
+    // Words around control characters are still an answer, typed as Collapse makes them.
+    [Theory]
+    [InlineData(" a", " a")]
+    [InlineData("\u0001a", " a")]
+    public void A_required_text_answer_with_words_is_still_typed(string text, string typed)
+    {
+        const string Required = """{ "message": "m", "requestedSchema": { "properties": { "t": { "type": "string" } }, "required": ["t"] } }""";
+        Assert.Equal([(typed, true)], Keys(Plan(Required, Answer(new { t = text }))));
+    }
+
+    [Fact]
+    public void Many_quick_patterns_in_one_question_fit_its_budget()
+    {
+        var (_, question) = Ask(Fields(50, """{ "type": "string", "pattern": "^[a-z]+$" }"""));
+        Assert.Null(question.AnswerAtMachine);
+        Assert.Equal(50, question.Fields.Count(f => f.Constraints?.Pattern is not null));
+    }
+
+    [Fact]
+    public void A_question_carries_its_fields_constraints_so_a_client_can_check_them_first()
+    {
+        var (_, question) = Ask(Schema("n", Count));
+        var limits = Assert.Single(question.Fields).Constraints!;
+        Assert.Equal("""{"minimum":2,"maximum":10,"multipleOf":2,"integer":true}""", JsonSerializer.Serialize(limits, ProtocolJson.Options));
+        Assert.Null(Ask(Schema("t", """{ "type": "string", "format": "hostname" }""")).Question.Fields[0].Constraints);
+    }
+    // Fields as JSON text, so a number keeps the spelling it was given.
+    static JsonElement Raw(string json) => JsonDocument.Parse(json).RootElement.Clone();
+
+    [Fact]
+    public void A_number_that_only_rounds_to_the_default_is_not_the_default()
+    {
+        // A number field, not Days's integer one, which the shared check refuses first for not being whole.
+        const string Amount = """{ "message": "m", "requestedSchema": { "properties": { "days": { "type": "number", "default": 3 } } } }""";
+        Assert.Contains("pre-filled default", Refusal(Amount, Answer(Raw("""{ "days": 3.0000000000000000000000000000001 }"""))));
+        Assert.Contains("pre-filled default", Refusal(Amount, Answer(Raw("""{ "days": 3e-29 }"""))));
+        Assert.Equal("\"days\": must be a whole number", Answers.Check(Ask(Days).Question, Answer(Raw("""{ "days": 3e-29 }"""))));
+    }
+
+    [Theory]
+    // Neither can be compared exactly (an exponent too large to hold, or no finite double for
+    // the CLI to record), so the same spelling in both is no proof: refused before any key (#700).
+    [InlineData("1e99999999999")]
+    [InlineData("1e400")]
+    public void A_default_and_answer_that_cannot_be_compared_as_numbers_are_refused_however_alike_they_read(string number)
+    {
+        var huge = $$"""{ "message": "m", "requestedSchema": { "properties": { "n": { "type": "number", "default": {{number}} } } } }""";
+
+        Assert.Contains("pre-filled default", Unkept(huge, Answer(Raw($$"""{ "n": {{number}} }"""))));
+    }
+
+    [Fact]
+    public void A_number_fields_string_default_is_kept_only_when_it_is_plainly_that_number()
+    {
+        // The CLI records a number field's string as Number(text), so "3" is kept as 3; hex,
+        // padding and words are not read as numbers here, and nothing is typed for them.
+        Assert.Equal([("", true)], Keys(Plan(Number("\"3\""), Answer(new { n = 3 }))));
+        Assert.Contains("pre-filled default", Unkept(Number("\"0x10\""), Answer(new { n = 16 })));
+        Assert.Contains("pre-filled default", Unkept(Number("\" 3\""), Answer(new { n = 3 })));
+        Assert.Contains("pre-filled default", Unkept(Number("\"abc\""), Answer(new { n = 3 })));
+    }
+
+    internal static string Number(string @default) =>
+        $$"""{ "message": "m", "requestedSchema": { "properties": { "n": { "type": "integer", "default": {{@default}} } } } }""";
+
+    [Theory]
+    // The CLI holds each as another double, so what it records is not the default or the answer:
+    // precision lost, underflow to 0, and past the largest double (#700).
+    [InlineData("\"9007199254740993\"", "9007199254740993")]
+    [InlineData("9007199254740993", "9007199254740993")]
+    [InlineData("\"1e-400\"", "1e-400")]
+    [InlineData("1e-400", "1e-400")]
+    [InlineData("\"1e400\"", "1e400")]
+    public void A_default_the_CLI_would_hold_as_another_number_is_refused_even_when_the_answer_reads_the_same(string @default, string answer)
+    {
+        var schema = $$"""{ "message": "m", "requestedSchema": { "properties": { "n": { "type": "number", "default": {{@default}} } } } }""";
+
+        Assert.Contains("pre-filled default", Unkept(schema, Answer(Raw($$"""{ "n": {{answer}} }"""))));
+    }
+
+    [Theory]
+    [InlineData("9007199254740993")]
+    [InlineData("1e-400")]
+    [InlineData("1e300")]
+    public void A_number_the_CLI_would_record_differently_or_that_is_too_long_to_type_is_refused_before_any_key(string answer)
+    {
+        const string Free = """{ "message": "m", "requestedSchema": { "properties": { "n": { "type": "number" } } } }""";
+
+        Assert.Contains("answer at the machine", Refusal(Free, Answer(Raw($$"""{ "n": {{answer}} }"""))));
+    }
+
+    [Fact]
+    public void A_number_is_typed_as_plain_decimal_since_the_box_drops_a_key_that_leaves_it_not_a_number()
+    {
+        // "1e" is not a number, so the "e" of 1e5 typed key by key would be dropped: 15.
+        const string Free = """{ "message": "m", "requestedSchema": { "properties": { "n": { "type": "number" } } } }""";
+
+        var plan = Plan(Free, Answer(Raw("""{ "n": 1e5 }""")));
+
+        Assert.Equal([("100000", true)], Keys(plan));
+        // Expected as typed, the number the CLI records.
+        Assert.Equal("100000", Assert.IsType<Expected.Number>(Assert.Single(plan.Fields).Value).Raw.GetRawText());
+    }
+
+    [Theory]
+    [InlineData("2.50", "25e-1", true)]
+    [InlineData("100", "1E+2", true)]
+    [InlineData("-0", "0.000", true)]
+    [InlineData("3", "3.0000000000000000000000000000001", false)]
+    [InlineData("1e-29", "0", false)]
+    [InlineData("1e99999999999", "1e99999999999", false)]
+    public void Numbers_are_the_same_only_when_they_are_exactly_equal(string a, string b, bool same)
+    {
+        Assert.Equal(same, CopilotForm.SameScalar(Raw(a), Raw(b)));
+    }
+
+    // ---- fields drawn as Copilot CLI draws them (cli-main.js `tle`), not as their keywords suggest ----
+
+    [Fact]
+    public void A_string_with_enum_or_oneOf_is_still_a_list_walked_with_arrows_and_oneOf_is_read_first_as_the_CLI_reads_it()
+    {
+        Assert.Equal([(U + U + U + D + D + D, true)], Keys(Plan(Pick, Answer(new { pick = "d" }))));
+        const string Both = """{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a", "b"], "oneOf": [ { "const": "b" }, { "const": "a" } ] } } } }""";
+        Assert.Equal([(U, true)], Keys(Plan(Both, Answer(new { pick = "b" }))));
+    }
+
+    [Theory]
+    // Untyped options: the CLI draws a text box.
+    [InlineData("""{ "pick": { "enum": ["a", "b"] } }""")]
+    [InlineData("""{ "pick": { "oneOf": [ { "const": "a" } ] } }""")]
+    // A type it does not know, or one that is not a name.
+    [InlineData("""{ "pick": { "type": "object" } }""")]
+    [InlineData("""{ "pick": { "type": ["string", "null"], "enum": ["a"] } }""")]
+    // An option the CLI would record as nothing, and keywords that are not lists.
+    [InlineData("""{ "pick": { "type": "string", "oneOf": [ { "title": "A" } ] } }""")]
+    [InlineData("""{ "pick": { "type": "string", "enum": "a" } }""")]
+    [InlineData("""{ "many": { "type": "array", "items": { "anyOf": [ { "title": "A" } ] } } }""")]
+    public void A_field_whose_input_cannot_be_told_from_the_CLIs_reading_is_answered_at_the_machine(string properties)
+    {
+        using var doc = JsonDocument.Parse($$"""{ "message": "m", "requestedSchema": { "properties": {{properties}} } }""");
+
+        Assert.EndsWith("answer it at the machine", CopilotForm.Read(doc.RootElement).Problem);
+        Assert.True(QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0).AnswerAtMachine);
+    }
+
+    [Fact]
+    public void A_number_or_text_field_without_a_default_or_with_an_empty_one_is_typed_as_before()
+    {
+        const string NoDefault = """{ "message": "m", "requestedSchema": { "properties": { "days": { "type": "integer" } } } }""";
+        const string NullText = """{ "message": "m", "requestedSchema": { "properties": { "note": { "type": "string", "default": null } } } }""";
+        const string EmptyDefault = """{ "message": "m", "requestedSchema": { "properties": { "note": { "type": "string", "default": "" } } } }""";
+        const string EmptyNumber = """{ "message": "m", "requestedSchema": { "properties": { "days": { "type": "integer", "default": "" } } } }""";
+
+        Assert.Equal([("33", true)], Keys(Plan(NoDefault, Answer(new { days = 33 }))));
+        // A text box shows `default ?? ""`: a null default leaves it empty.
+        Assert.Equal([("hello", true)], Keys(Plan(NullText, Answer(new { note = "hello" }))));
+        Assert.Equal([("hello", true)], Keys(Plan(EmptyDefault, Answer(new { note = "hello" }))));
+        Assert.Equal([("3", true)], Keys(Plan(EmptyNumber, Answer(new { days = 3 }))));
+    }
+
+    [Fact]
+    public void A_number_field_with_a_null_default_opens_reading_null_so_nothing_is_typed_into_it()
+    {
+        // The number box shows String(default), and String(null) is "null" (cli-main.js `Lxn`).
+        const string NullNumber = """{ "message": "m", "requestedSchema": { "properties": { "days": { "type": "integer", "default": null } } } }""";
+
+        Assert.Contains("pre-filled default", Unkept(NullNumber, Answer(new { days = 3 })));
+    }
+
+    [Fact]
+    public void A_field_left_at_its_default_is_followed_by_the_next_fields_and_lists_with_defaults_are_still_walked()
+    {
+        const string Form = """
+            { "message": "m", "requestedSchema": { "properties": {
+              "window": { "type": "integer", "default": 90 },
+              "pick": { "type": "string", "enum": ["a", "b", "c", "d"], "default": "c" },
+              "go": { "type": "boolean", "default": false },
+              "notes": { "type": "string" } } } }
+            """;
+
+        var plan = Plan(Form, Answer(new { window = 90, pick = "a", go = true, notes = "hi" }));
+
+        Assert.Equal([("", true), (U + U + U, true), (U, true), ("hi", true)], Keys(plan));
+        // Refused whole: not the fields before it either.
+        Assert.Contains("\"window\"", Refusal(Form, Answer(new { window = 9090, pick = "a", go = true, notes = "hi" })));
     }
 
     [Fact]
@@ -169,13 +1196,22 @@ public class CopilotPlannerTests
         const string AtLeastOne = """{ "message": "m", "requestedSchema": { "properties": { "many": { "type": "array", "minItems": 1, "items": { "enum": ["a", "b"] } } } } }""";
 
         Assert.Equal([(U, true)], Keys(Plan(AnyOrNone, Answer(new { many = Array.Empty<string>() }))));
-        Assert.Contains("at least one", Refusal(AtLeastOne, Answer(new { many = Array.Empty<string>() })));
+        // minItems is now a constraint a client checks too (#766); the plan still refuses on its own.
+        var (form, question) = Ask(AtLeastOne);
+        var none = Answer(new { many = Array.Empty<string>() });
+        Assert.Equal("\"many\": choose at least 1", Answers.Check(question, none));
+        Assert.Contains("at least one", CopilotPlanner.Plan(form, none).Problem);
     }
 
     [Fact]
     public void Words_through_Other_walk_up_to_the_top_then_down_past_the_last_option_and_submit_separately()
     {
-        var plan = Plan(Pick, Answer(new { pick = new { other = "none of these 🙂" } }));
+        // Planned as before, and marked as going through Other, which the host refuses before any
+        // key for now and the listing does not offer (#510 review, Trust on 5c1d5147).
+        var (form, _) = Ask(Pick);
+        var plan = CopilotPlanner.Plan(form, Answer(new { pick = new { other = "none of these 🙂" } })).Plan!;
+        Assert.True(CopilotPlanner.ThroughOther(form, plan));
+        Assert.False(CopilotPlanner.ThroughOther(form, Plan(Pick, Answer(new { pick = "b" }))));
 
         // Four options: three Ups reach the top from any row, four Downs open Other.
         Assert.Equal([(U + U + U + D + D + D + D, false), ("none of these 🙂", true)], Keys(plan));
@@ -187,7 +1223,7 @@ public class CopilotPlannerTests
     [Fact]
     public void Other_in_a_tabbed_form_or_a_checkbox_list_is_refused_because_no_walk_reaches_it()
     {
-        var (form, _) = Ask("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "enum": ["a"] }, "go": { "type": "boolean" } } } }""");
+        var (form, _) = Ask("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a"] }, "go": { "type": "boolean" } } } }""");
         var (plan, problem) = CopilotPlanner.Plan(form, Answer(new { pick = new { other = "x" }, go = true }));
         Assert.Null(plan);
         Assert.Contains("one option list", problem);
@@ -207,7 +1243,7 @@ public class CopilotPlannerTests
     [Fact]
     public void An_optional_text_field_left_out_is_skipped_with_Enter_and_an_option_list_cannot_be()
     {
-        const string Form = """{ "message": "m", "requestedSchema": { "properties": { "pick": { "enum": ["a", "b"] }, "notes": { "type": "string" } } } }""";
+        const string Form = """{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a", "b"] }, "notes": { "type": "string" } } } }""";
 
         var plan = Plan(Form, Answer(new { pick = "b" }));
         Assert.Equal([(U + D, true), ("", true)], Keys(plan));
@@ -222,16 +1258,92 @@ public class CopilotPlannerTests
         using var legacy = JsonDocument.Parse("""{ "question": "Go?", "choices": ["Yes", "No"] }""");
         Assert.Contains("older Copilot format", CopilotForm.Read(legacy.RootElement).Problem);
 
-        using var lost = JsonDocument.Parse("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "enum": ["a", "b"], "default": "z" } } } }""");
+        using var lost = JsonDocument.Parse("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a", "b"], "default": "z" } } } }""");
         Assert.Contains("not one of its options", CopilotForm.Read(lost.RootElement).Problem);
     }
 
     [Fact]
-    public void A_null_default_leaves_the_caret_on_the_first_row_and_a_schema_written_as_text_is_read()
+    public void An_absent_default_leaves_the_caret_on_the_first_row_and_a_schema_written_as_text_is_read()
     {
-        var plan = Plan("""{ "message": "m", "requestedSchema": "{\"properties\":{\"pick\":{\"enum\":[\"a\",\"b\"],\"default\":null}}}" }""", Answer(new { pick = "b" }));
+        var plan = Plan("""{ "message": "m", "requestedSchema": "{\"properties\":{\"pick\":{\"type\":\"string\",\"enum\":[\"a\",\"b\"]}}}" }""", Answer(new { pick = "b" }));
 
         Assert.Equal([(U + D, true)], Keys(plan));
+    }
+
+    [Theory]
+    // Copilot 1.0.105 copies a null default in and opens the list on its Other box; the walk
+    // from the top row then ends a row off: "a" recorded "b", and "b" reopened Other (#700).
+    [InlineData("""{ "type": "string", "enum": ["a", "b"], "default": null }""")]
+    [InlineData("""{ "type": "string", "oneOf": [ { "const": "a" }, { "const": "b" } ], "default": null }""")]
+    public void An_option_list_whose_default_is_null_opens_on_Other_and_is_refused_before_any_key(string field)
+    {
+        using var doc = JsonDocument.Parse($$"""{ "message": "m", "requestedSchema": { "properties": { "pick": {{field}} } } }""");
+
+        var (form, problem) = CopilotForm.Read(doc.RootElement);
+
+        Assert.Null(form);
+        Assert.Contains("opens on its Other box", problem);
+        Assert.Contains("answer it at the machine", problem);
+    }
+
+    [Theory]
+    [InlineData("""{ "type": "array" }""")]
+    [InlineData("""{ "type": "array", "items": true }""")]
+    [InlineData("""{ "type": "array", "items": "x" }""")]
+    [InlineData("""{ "type": "array", "items": [] }""")]
+    [InlineData("""{ "type": "array", "items": {} }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": [] } }""")]
+    public void A_checkbox_list_whose_items_yield_no_options_is_refused_before_any_key(string field)
+    {
+        using var doc = JsonDocument.Parse($$"""{ "message": "m", "requestedSchema": { "properties": { "many": {{field}} } } }""");
+
+        var (form, problem) = CopilotForm.Read(doc.RootElement);
+
+        Assert.Null(form);
+        Assert.Contains("no options to choose from", problem);
+    }
+
+    [Fact]
+    public void A_yes_or_no_field_whose_default_is_null_is_still_walked_from_the_top_row()
+    {
+        // Its Yes / No list has no Other box while schema constraints are enforced; a null
+        // default only puts the caret on No, and the walk starts with an Up.
+        var plan = Plan("""{ "message": "m", "requestedSchema": { "properties": { "ok": { "type": "boolean", "default": null } } } }""", Answer(new { ok = true }));
+
+        Assert.Equal([(U, true)], Keys(plan));
+    }
+
+    [Theory]
+    // ask_user's Yes / No list has a third row, Other (`Oxn` with enforceSchemaConstraints off).
+    // A text default opens it there, and the walk's Up leaves the caret on No: Yes recorded No,
+    // and No's Down reopened Other (#768). Refused before any key, for either answer.
+    [InlineData("\"yes\"")]
+    [InlineData("\"\"")]
+    [InlineData("1")]
+    [InlineData("{}")]
+    public void A_yes_or_no_field_whose_default_is_not_yes_or_no_is_refused_before_any_key(string @default)
+    {
+        using var doc = JsonDocument.Parse($$"""{ "message": "m", "requestedSchema": { "properties": { "ok": { "type": "boolean", "default": {{@default}} } } } }""");
+
+        var (form, problem) = CopilotForm.Read(doc.RootElement);
+
+        Assert.Null(form);
+        Assert.Contains("not Yes or No", problem);
+        Assert.Contains("answer it at the machine", problem);
+    }
+
+    [Theory]
+    // A boolean default opens on its own row (`Oxn`: N = r === void 0 || r ? 0 : 1); the walk's
+    // one Up reaches Yes either way, and a Down then picks No, never past it into Other.
+    [InlineData("true", true, U)]
+    [InlineData("true", false, U + D)]
+    [InlineData("false", true, U)]
+    [InlineData("false", false, U + D)]
+    public void A_yes_or_no_field_whose_default_is_yes_or_no_is_walked_to_either_answer(string @default, bool answer, string keys)
+    {
+        var plan = Plan($$"""{ "message": "m", "requestedSchema": { "properties": { "ok": { "type": "boolean", "default": {{@default}} } } } }""", Answer(new { ok = answer }));
+
+        Assert.Equal([(keys, true)], Keys(plan));
     }
 
     [Fact]
@@ -243,4 +1355,127 @@ public class CopilotPlannerTests
         Assert.False(form.Matches(reordered));
         Assert.False(form.Matches(question with { Fields = [] }));
     }
+
+    [Fact]
+    public void Typed_words_are_found_on_screen_by_their_end_however_the_CLI_wraps_and_borders_them()
+    {
+        var tail = WordsOnScreen.Tail("Very close. The middle bar does not connect all the way");
+        Assert.Equal(0, WordsOnScreen.Count(["\u2502 Feedback (optional)  \u2502", "\u2502                      \u2502"], tail));
+        Assert.Equal(1, WordsOnScreen.Count(["\u2502 Very close. The middle bar does \u2502", "\u2502 not connect all the  \u2502", "\u2502 way                  \u2502"], tail));
+    }
 }
+
+// Found while checking #844's cost per refresh: an option list's oneOf was matched against its
+// enum, and uniqueItems checked, each option against every other, on the thread that refreshes
+// every session. Timed as a ratio, not against a wall clock: CI runs under coverage on a shared
+// runner, where 40,000 options read linearly still ran past a 5 s bound (#844 CI 41983282680).
+// Then 8,000 against 32,000, the faster of two runs of each, read 12.4x on a runner whose test
+// assemblies ran side by side under coverage (#844 CI 42027418041), against about 4.7 locally.
+// So the gap is wide: 1,000 against 64,000. Measured locally, linear read 85-136x (allocation
+// and cache make the larger list dearer than its count) and a list checked each against every
+// other 1,340-1,450x; at 2,000 against 32,000 the two were 19-39x and 74-145x, too close to
+// split. Bounded at 500; the sizes take turns, the fastest of three runs of each counts, and
+// nothing else in this assembly runs alongside.
+[Collection(nameof(CopilotFormGrowthTests))]
+public class CopilotFormGrowthTests
+{
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Long_option_lists_are_checked_in_linear_time(bool choice)
+    {
+        string Property(int n)
+        {
+            var numbers = string.Join(", ", Enumerable.Range(0, n));
+            return choice
+                ? $$"""{ "type": "string", "enum": [{{numbers}}], "oneOf": [{{string.Join(", ", Enumerable.Range(0, n).Select(i => $$"""{ "const": {{i}} }"""))}}] }"""
+                : $$"""{ "type": "array", "items": { "enum": [{{numbers}}] }, "uniqueItems": true }""";
+        }
+        double Read(JsonDocument doc)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var question = QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0);
+            var elapsed = clock.Elapsed.TotalMilliseconds;
+            // A string list of numbers breaks its own type; a checkbox list of distinct ones is answerable.
+            Assert.Equal(choice, question.AnswerAtMachine == true);
+            return elapsed;
+        }
+
+        using var warm = JsonDocument.Parse(CopilotPlannerTests.Schema("f", Property(500)));
+        using var small = JsonDocument.Parse(CopilotPlannerTests.Schema("f", Property(1_000)));
+        using var large = JsonDocument.Parse(CopilotPlannerTests.Schema("f", Property(64_000)));
+        Read(warm);
+        Read(small);
+        var (fewest, most) = (double.MaxValue, double.MaxValue);
+        for (var run = 0; run < 3; run++)
+        {
+            fewest = Math.Min(fewest, Read(small));
+            most = Math.Min(most, Read(large));
+        }
+        var ratio = most / Math.Max(fewest, 1);
+
+        Assert.True(ratio < 500, $"reading 64x the options took {ratio:F1}x as long");
+    }
+
+    // #852: a checkbox list's default was matched entry by entry against every option, as the
+    // question was read on the thread that refreshes every session, then again as the form was
+    // read and planned. Here the default ticks the whole list and the answer keeps it. Counted,
+    // not timed (#921 review): the values compared or keyed (CopilotFieldSchema.Compared), of which
+    // the old match made about one for each pair of options and this a few for each option; and,
+    // as the planner compares neither way, each read of the field's options and ticks it is given
+    // (Counted), where each answer against every option and each row against every tick read
+    // about one for each pair (#921 review). The lists stay short enough that the old code fails
+    // in seconds rather than hanging.
+    [Fact]
+    public void A_long_list_its_default_ticks_whole_is_read_and_planned_in_linear_time()
+    {
+        string Property(int n)
+        {
+            var numbers = string.Join(", ", Enumerable.Range(0, n));
+            return $$"""{ "type": "array", "items": { "enum": [{{numbers}}] }, "default": [{{numbers}}] }""";
+        }
+        (long Compared, long Read) Work(int n)
+        {
+            using var doc = JsonDocument.Parse(CopilotPlannerTests.Schema("f", Property(n)));
+            var answer = CopilotPlannerTests.Answer(new Dictionary<string, string[]> { ["f"] = [.. Enumerable.Range(0, n).Select(i => i.ToString(System.Globalization.CultureInfo.InvariantCulture))] });
+            var before = CopilotFieldSchema.Compared;
+            var question = QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0);
+            var (form, unread) = CopilotForm.Read(doc.RootElement);
+            var compared = CopilotFieldSchema.Compared - before;
+            var reads = new Reads();
+            var field = form!.Fields.Single();
+            var counted = form with { Fields = [field with { Options = new Counted<CopilotOption>(field.Options, reads), Checked = new Counted<int>(field.Checked, reads) }] };
+            var (plan, problem) = CopilotPlanner.Plan(counted, answer);
+            Assert.Null(question.AnswerAtMachine);
+            Assert.Null(unread);
+            Assert.Null(problem);
+            Assert.NotNull(plan);
+            return (compared, reads.Count);
+        }
+
+        var small = Work(1_000);
+        var large = Work(4_000);
+
+        Assert.True(large.Compared <= 16 * 4_000, $"reading 4,000 options compared {large.Compared:N0} values, more than 16 for each");
+        Assert.True(large.Compared <= 5 * small.Compared, $"reading 4x the options compared {(double)large.Compared / small.Compared:F1}x as many values");
+        Assert.True(large.Read <= 16 * 4_000, $"planning 4,000 options read {large.Read:N0} options and ticks, more than 16 for each");
+        Assert.True(large.Read <= 5 * small.Read, $"planning 4x the options read {(double)large.Read / small.Read:F1}x as many options and ticks");
+    }
+
+    sealed class Reads { public long Count; }
+
+    // A list that counts each item read from it, by index or in turn.
+    sealed class Counted<T>(IReadOnlyList<T> items, Reads reads) : IReadOnlyList<T>
+    {
+        public T this[int index] { get { reads.Count++; return items[index]; } }
+        public int Count => items.Count;
+        public IEnumerator<T> GetEnumerator()
+        {
+            foreach (var item in items) { reads.Count++; yield return item; }
+        }
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+}
+
+[CollectionDefinition(nameof(CopilotFormGrowthTests), DisableParallelization = true)]
+public sealed class CopilotFormGrowthCollection;

@@ -194,3 +194,210 @@ public sealed class AnswerGuard
 
     public bool Accepts(bool pointer, DateTimeOffset now) => !pointer || Remaining(now) == TimeSpan.Zero;
 }
+
+// A scroller holding a question's answers, as one look saw it: where its viewport is in the window,
+// how far it is scrolled, how far it can be, and whether the person is scrolling it now (a wheel,
+// a finger, a key or its scroll bar). Content is what it scrolls as that measured itself, which
+// unlike the extent doesn't stop at the viewport: a conversation shorter than its pane grows as the
+// question does, where the extent, the pane's height, stays put. Not given: taken to be the extent.
+public readonly record struct ScrollerLook(
+    double Left, double Top, double OffsetX, double OffsetY, double ScrollableWidth, double ScrollableHeight,
+    double ViewportWidth, double ViewportHeight, double ExtentWidth, double ExtentHeight, bool Person,
+    double ContentWidth = double.NaN, double ContentHeight = double.NaN)
+{
+    public double MeasuredWidth => double.IsNaN(ContentWidth) ? ExtentWidth : ContentWidth;
+    public double MeasuredHeight => double.IsNaN(ContentHeight) ? ExtentHeight : ContentHeight;
+}
+
+// A box, in whatever coordinates its look says.
+public readonly record struct LookBox(double X, double Y, double Width, double Height);
+
+// One look at a question's answers (#491): where each shown answer is in the window, every scroller
+// holding them (the same ones from one look to the next), the window's size, and, for the session
+// view's question, the question's own box in what the innermost scroller scrolls.
+public sealed record AnswerLook(
+    IReadOnlyList<(double X, double Y)> Answers, IReadOnlyList<ScrollerLook> Scrollers, double WindowWidth, double WindowHeight, LookBox? Question = null, int Drawn = 0, int Rows = 0);
+
+// How long the person's own act in their question holds what it lays out as theirs (#491; see
+// AnswerMoves.Theirs). Not a count of frames, and not a fixed moment from the act: the first layout
+// pass of a control shown for the first time (Other's box) can come most of a second after the act
+// on a busy machine, and its later passes a frame or more apart. So the act holds for up to First
+// until the question first lays itself out, then for Then after each pass that does; a move that
+// isn't theirs ends it, whether or not it held for that read. The app drawing in the question itself
+// (who asks) is never theirs: see AnswerLook.Drawn.
+public sealed class OwnAct
+{
+    public static readonly TimeSpan First = TimeSpan.FromSeconds(2);
+    public static readonly TimeSpan Then = TimeSpan.FromMilliseconds(300);
+
+    DateTimeOffset until = DateTimeOffset.MinValue;
+
+    public void Acted(DateTimeOffset now) => until = now + First;
+
+    public bool Holds(DateTimeOffset now) => now < until;
+
+    // After a read: theirs, the question laid itself out; found, something else moved.
+    public void Read(DateTimeOffset now, bool theirs, bool found)
+    {
+        if (theirs) { until = now + Then; }
+        else if (found) { until = now; }
+    }
+}
+
+// Answers moved under a still pointer (#491, the app's half of #559's watchMoves): each look is
+// compared with where the answers were last taken to be, and a move of more than a pixel of any
+// answer, across or down, or a change in how many are shown, is a move: AnswerGuard holds them
+// again. Whatever moved them: a
+// title wrapping, the delegate strip coming or going, a banner, the pane or the window resized, or
+// a scroller pulled back as what it scrolls gets shorter at its end. Only a scroll the person
+// makes is taken off where the answers were, by how far it went: their own scroll isn't a move
+// under their pointer. Never a clamp (the scroller pulled back to a lower end), even mid-scroll,
+// and never the app's own scrolling, which holds the answers in its own right where it means to
+// (a question or a row brought into view). So a scroll and a move in one look (content above
+// growing as the person scrolls) still find the move.
+public sealed class AnswerMoves
+{
+    // A move of more than this, in either direction, is one.
+    public const double Slack = 1;
+
+    AnswerLook? was;
+    // Where the answers were last taken to be, less the person's scrolling since: each look is
+    // measured from here, not from the look before, so moves too small to count one by one (a
+    // centred column drifting half a pixel a pass) add up to one that does.
+    (double X, double Y)[] at = [];
+
+    // own: the person's own act in the question (a key, a click, typing) is being laid out. Their
+    // question laying itself out in answer (Other's box opening, an error under a field) isn't a
+    // move under their pointer, but only if nothing else changed with it: see Theirs.
+    public bool Read(AnswerLook now, bool own = false)
+    {
+        Took = false;
+        var before = was;
+        was = now;
+        if (before is null)
+        {
+            at = [.. now.Answers];
+            drawing = false;
+            return false;
+        }
+        // The app drew in the question (who asks): the next move is the app's, however late its
+        // layout pass comes, and whatever reads come between.
+        drawing |= now.Drawn != before.Drawn;
+        // Rows of the list came, went or moved: the list may scroll itself to keep rows in place
+        // (KeepItemsInView), and that scroll, whenever its layout pass comes, looks like the
+        // person's if they are scrolling. Nothing is taken off as theirs until the person has
+        // stopped and a look finds everything still: no rows changed, no scroller theirs, and none
+        // moved or resized since the look before. Two identical looks while they scroll (a scroll's
+        // ViewChanged and the layout pass after it) aren't enough: the list's own pass may still be
+        // to come. Their own scrolling meanwhile holds the answers, the safe way round.
+        if (now.Rows != before.Rows) { settling = true; }
+        else if (settling && Still(before, now) && !now.Scrollers.Any(s => s.Person)) { settling = false; }
+        var (dx, dy) = settling ? (0, 0) : Scrolled(before, now);
+        var moved = now.Answers.Count != at.Length;
+        for (var i = 0; i < at.Length && !moved; i++)
+        {
+            at[i] = (at[i].X - dx, at[i].Y - dy);
+            var (x, y) = now.Answers[i];
+            moved = Math.Abs(x - at[i].X) > Slack || Math.Abs(y - at[i].Y) > Slack;
+        }
+        if (!moved) { return false; }
+        at = [.. now.Answers];
+        Took = own && !drawing && Theirs(before, now);
+        drawing = false;
+        return !Took;
+    }
+
+    bool drawing;
+    bool settling;
+
+    static bool Resized(ScrollerLook was, ScrollerLook now) =>
+        Math.Abs(now.ExtentWidth - was.ExtentWidth) > Exact || Math.Abs(now.ExtentHeight - was.ExtentHeight) > Exact
+        || Math.Abs(now.MeasuredWidth - was.MeasuredWidth) > Exact || Math.Abs(now.MeasuredHeight - was.MeasuredHeight) > Exact;
+
+    static bool Still(AnswerLook before, AnswerLook now)
+    {
+        if (now.Scrollers.Count != before.Scrollers.Count) { return false; }
+        for (var i = 0; i < now.Scrollers.Count; i++)
+        {
+            var (s, w) = (now.Scrollers[i], before.Scrollers[i]);
+            if (Math.Abs(s.OffsetX - w.OffsetX) > Exact || Math.Abs(s.OffsetY - w.OffsetY) > Exact || Resized(w, s)) { return false; }
+        }
+        return true;
+    }
+
+    // A read with the person's act (OwnAct) at the time: it exempts their own question laying itself
+    // out while it holds, and any move that isn't theirs ends it, exempt or not (a move found while
+    // the app draws who asks, or by the click-time check).
+    public bool Read(AnswerLook now, OwnAct act, DateTimeOffset time, bool exempt)
+    {
+        var found = Read(now, own: exempt && act.Holds(time));
+        act.Read(time, Took, found);
+        return found;
+    }
+
+    // The last look's move was the person's own question laying itself out (own, and Theirs).
+    public bool Took { get; private set; }
+
+    // Measured afresh from the next look: a new set of answers drawn, or none shown.
+    public void Forget()
+    {
+        was = null;
+        at = [];
+        drawing = false;
+        settling = false;
+    }
+
+    // How far the person's own scrolling moved what the scrollers hold since the last look; nothing
+    // if the scrollers aren't the same ones.
+    static (double X, double Y) Scrolled(AnswerLook before, AnswerLook now)
+    {
+        if (now.Scrollers.Count != before.Scrollers.Count) { return (0, 0); }
+        double x = 0, y = 0;
+        for (var i = 0; i < now.Scrollers.Count; i++)
+        {
+            var (s, w) = (now.Scrollers[i], before.Scrollers[i]);
+            // A scroll in the same look as what it scrolls changing size is the scroller keeping
+            // what is in sight in place (KeepItemsInView, a row coming or going), or a clamp: never
+            // the person's, whenever that look comes.
+            if (!s.Person || Resized(w, s)) { continue; }
+            if (!Clamped(w.OffsetX, s.OffsetX, s.ScrollableWidth)) { x += s.OffsetX - w.OffsetX; }
+            if (!Clamped(w.OffsetY, s.OffsetY, s.ScrollableHeight)) { y += s.OffsetY - w.OffsetY; }
+        }
+        return (x, y);
+    }
+
+    // Pulled back from past its new end: it was scrolled further than it can be now. However far
+    // it went, part of it wasn't the person's, so none of it is taken off: a person scrolling up in
+    // the same look as the clamp ends short of the end, and still finds the move. Strictly, not to
+    // within Slack: a clamp of under a pixel a look, taken off as the person's scroll, would hide
+    // the whole of it however many looks it went on for.
+    public static bool Clamped(double was, double now, double scrollable) =>
+        now < was - Exact && was > scrollable + Exact;
+
+    // Offsets that differ by less than this are the same: what a layout rounds.
+    const double Exact = 0.01;
+
+    // The person's own question resized, and nothing outside it changed: the window and every
+    // scroller's viewport the same size and in the same place, the question where it was in what
+    // scrolls, and what scrolls changed by no more than the question did. A pull back because their
+    // question got shorter stays theirs; a window resized, a title wrapping or a response growing
+    // as they type is not.
+    static bool Theirs(AnswerLook before, AnswerLook now)
+    {
+        if (now.Question is not { } q || before.Question is not { } wq) { return false; }
+        if (Math.Abs(q.Width - wq.Width) <= Slack && Math.Abs(q.Height - wq.Height) <= Slack) { return false; }
+        if (Math.Abs(q.X - wq.X) > Slack || Math.Abs(q.Y - wq.Y) > Slack) { return false; }
+        if (now.WindowWidth != before.WindowWidth || now.WindowHeight != before.WindowHeight) { return false; }
+        if (now.Scrollers.Count != before.Scrollers.Count || now.Scrollers.Count == 0) { return false; }
+        for (var i = 0; i < now.Scrollers.Count; i++)
+        {
+            var (s, w) = (now.Scrollers[i], before.Scrollers[i]);
+            if (Math.Abs(s.Left - w.Left) > Slack || Math.Abs(s.Top - w.Top) > Slack
+                || Math.Abs(s.ViewportWidth - w.ViewportWidth) > Slack || Math.Abs(s.ViewportHeight - w.ViewportHeight) > Slack) { return false; }
+        }
+        // The innermost: what it scrolls is the question's, and grew or shrank only as it did.
+        var (inner, wasInner) = (now.Scrollers[0], before.Scrollers[0]);
+        return Math.Abs(inner.MeasuredWidth - wasInner.MeasuredWidth) <= Slack
+            && Math.Abs(inner.MeasuredHeight - wasInner.MeasuredHeight - (q.Height - wq.Height)) <= Slack;
+    }
+}

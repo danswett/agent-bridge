@@ -61,7 +61,7 @@ struct AttachmentComposer: View {
             .fileImporter(isPresented: $importing, allowedContentTypes: [.item]) { result in
                 switch result {
                 case let .success(url): start { ImportedAttachment(url: url, temporaryDirectory: nil) }
-                case let .failure(failure): error = failure.localizedDescription
+                case let .failure(failure): error = BridgeShownError.sentence(for: failure)
                 }
             }
             .onChange(of: photo) {
@@ -122,7 +122,7 @@ struct AttachmentComposer: View {
                 }
             } catch is CancellationError {
                 error = nil
-            } catch { self.error = error.localizedDescription }
+            } catch { self.error = BridgeShownError.sentence(for: error) }
         }
     }
 
@@ -136,7 +136,7 @@ struct AttachmentComposer: View {
             do {
                 try await uploader.discard(id: id, endpoint: endpoint)
                 attachments.removeAll { $0.0 == id }
-            } catch { self.error = error.localizedDescription }
+            } catch { self.error = BridgeShownError.sentence(for: error) }
         }
     }
 
@@ -150,7 +150,7 @@ struct AttachmentComposer: View {
                 }
                 guard !image.0.isEmpty, image.0.count <= BridgeAttachmentImage.maximumInputBytes else { throw BridgeOperationError("The clipboard image exceeds 100 MiB.") }
                 start { try await ClipboardImageImport.shared.write(image.0, extension: image.1) }
-            } catch { self.error = error.localizedDescription }
+            } catch { self.error = BridgeShownError.sentence(for: error) }
         }
     #endif
 }

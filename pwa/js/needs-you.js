@@ -195,6 +195,8 @@ export function needsYou(entries, { capabilities = () => [], nameOf = () => '', 
   const out = [];
   for (const { hostId, session: s } of entries) {
     const q = s?.question;
+    // Questions and approvals only (ui.md §6.13, owner decision 6675817525): a session that needs
+    // sign-in is the machine's banner's (ui/sign-in-view.js), never an entry here, nor counted.
     if (!q || !current(hostId)) { continue; }
     const machine = nameOf(hostId) ?? '';
     const able = answerability(q, capabilities(hostId) ?? [], s.agent);

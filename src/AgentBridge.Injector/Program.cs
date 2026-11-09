@@ -4,7 +4,7 @@ using System.Text;
 
 namespace AgentBridge.Injector;
 
-// agent-bridge-injector <pid> [--screen]
+// agent-bridge-injector <pid> [--screen | --widen <columns> <created>]
 //
 // Reads a key plan on stdin (KeyPlan.ToWorkerScript in AgentBridge.Host.Delivery) and
 // types it into the console of <pid>, one attach-write-detach per send, the shape
@@ -20,8 +20,17 @@ namespace AgentBridge.Injector;
 //
 // A send may name rows of the console's visible window and their text: it is typed only if,
 // inside the same attach, every one still reads so; otherwise "fail screen 0" and nothing of
-// it is written. With --screen nothing is typed at all: it says "row <base64>" for each row
-// of the visible window, top to bottom, then "ok".
+// it is written. It may also check what rows say, in the same read (KeyPlan's ScreenRowCheck):
+// "~<row>" shows none of the given parts (split at '·' and at runs of two or more spaces,
+// trimmed), "+<row>" contains one of the given texts, "-<row>" contains none of them, "_<row>"
+// is blank (ASCII spaces at most) and so is every row below it, "^<row>" starts, leading
+// spaces aside, with none of them. With --screen nothing is typed at all: it says "row <base64>" for each row
+// of the visible window, top to bottom, then "ok". With --widen nothing is typed either: only
+// while <pid> is still the process created at <created> (a FILETIME), held open throughout,
+// else "fail process <code>", the console's screen buffer is made at least <columns> wide
+// (SetConsoleScreenBufferSize, its
+// height kept), the width an agent in it draws to, and it says "width <columns>" as read back,
+// then "ok". A buffer already as wide is left as it is.
 //
 // The host treats a worker that ends any other way after a "writing" line as "some of the
 // answer may have gone", and never retries it. It is a separate process because Windows
@@ -36,13 +45,18 @@ internal static unsafe partial class Program
     {
         // Taken before any attach: these are the pipes the host gave us, and stay so.
         output = Console.OpenStandardOutput();
-        if (args.Length is not (1 or 2) || (args.Length == 2 && args[1] != "--screen")
+        var columns = 0;
+        long created = 0;
+        if (args.Length is not (1 or 2 or 4) || (args.Length == 2 && args[1] != "--screen")
+            || (args.Length == 4 && (args[1] != "--widen" || !int.TryParse(args[2], NumberStyles.None, CultureInfo.InvariantCulture, out columns) || columns is < 1 or > short.MaxValue
+                || !long.TryParse(args[3], NumberStyles.None, CultureInfo.InvariantCulture, out created) || created <= 0))
             || !uint.TryParse(args[0], NumberStyles.None, CultureInfo.InvariantCulture, out var pid) || pid == 0)
         {
             Say("fail usage 0");
             return 2;
         }
         if (args.Length == 2) { return Screen(pid); }
+        if (args.Length == 4) { return Widen(pid, (short)columns, created); }
         var sends = Read(Console.OpenStandardInput());
         if (sends is null)
         {
@@ -62,7 +76,7 @@ internal static unsafe partial class Program
         return 0;
     }
 
-    sealed record KeySend(string Text, bool Enter, int EnterDelayMs, int PauseAfterMs, List<(int Row, string Text)> Expect);
+    sealed record KeySend(string Text, bool Enter, int EnterDelayMs, int PauseAfterMs, List<(int Row, string Text)> Expect, List<(char Kind, int Row, string[] Values)> Checks);
 
     static List<KeySend>? Read(Stream input)
     {
@@ -81,13 +95,16 @@ internal static unsafe partial class Program
             {
                 var text = Encoding.UTF8.GetString(Convert.FromBase64String(parts[1]));
                 var expect = new List<(int, string)>();
+                var checks = new List<(char, int, string[])>();
                 for (var k = 5; k < parts.Length; k += 2)
                 {
-                    expect.Add((int.Parse(parts[k], NumberStyles.None, CultureInfo.InvariantCulture), Encoding.UTF8.GetString(Convert.FromBase64String(parts[k + 1]))));
+                    var value = Encoding.UTF8.GetString(Convert.FromBase64String(parts[k + 1]));
+                    if (parts[k].Length > 0 && parts[k][0] is '~' or '+' or '-' or '_' or '^') { checks.Add((parts[k][0], int.Parse(parts[k][1..], NumberStyles.None, CultureInfo.InvariantCulture), value.Split('\n'))); }
+                    else { expect.Add((int.Parse(parts[k], NumberStyles.None, CultureInfo.InvariantCulture), value)); }
                 }
                 sends.Add(new KeySend(text, parts[2] == "1",
                     int.Parse(parts[3], NumberStyles.None, CultureInfo.InvariantCulture),
-                    int.Parse(parts[4], NumberStyles.None, CultureInfo.InvariantCulture), expect));
+                    int.Parse(parts[4], NumberStyles.None, CultureInfo.InvariantCulture), expect, checks));
             }
             catch (FormatException) { return null; }
             catch (OverflowException) { return null; }
@@ -113,13 +130,17 @@ internal static unsafe partial class Program
         }
         try
         {
-            if (send.Expect.Count > 0)
+            if (send.Expect.Count > 0 || send.Checks.Count > 0)
             {
                 var (rows, failure) = Window();
                 if (rows is null) { return failure; }
                 foreach (var (row, expected) in send.Expect)
                 {
-                    if (row >= rows.Count || !string.Equals(rows[row], expected.TrimEnd(), StringComparison.Ordinal)) { return "fail screen 0"; }
+                    if (row >= rows.Count || !string.Equals(rows[row], expected.TrimEnd(' '), StringComparison.Ordinal)) { return "fail screen 0"; }
+                }
+                foreach (var (kind, row, values) in send.Checks)
+                {
+                    if (!Passes(rows, kind, row, values)) { return "fail screen 0"; }
                 }
             }
             if (send.Text.Length > 0)
@@ -169,8 +190,81 @@ internal static unsafe partial class Program
         return 0;
     }
 
-    // The visible window of the attached console's active screen buffer, each row with its
-    // trailing spaces removed. Only read: nothing is written to CONOUT$.
+    // The attached console's active screen buffer made at least `columns` wide. The console host
+    // takes no width from STARTUPINFO (its buffer follows its window, which the screen clamps,
+    // while "wrap text output on resize" is on, as it is by default); a buffer set wider than its
+    // window afterwards is kept, the window scrolling across it, until the window is restored
+    // from minimized or resized, when the buffer follows the window again (#1123).
+    static int Widen(uint pid, short columns, long created)
+    {
+        // The process must be the one the host started (its creation time, as a FILETIME), and is
+        // held open until the widen is done, so its id cannot pass to another process meanwhile.
+        var process = OpenProcess(ProcessQueryLimitedInformation, false, pid);
+        if (process == 0)
+        {
+            Say($"fail process {Marshal.GetLastPInvokeError()}");
+            return 3;
+        }
+        try
+        {
+            if (!GetExitCodeProcess(process, out var code) || code != StillActive
+                || !GetProcessTimes(process, out var actual, out _, out _, out _) || actual != created)
+            {
+                Say("fail process 0");
+                return 3;
+            }
+            return WidenAttached(pid, columns);
+        }
+        finally { CloseHandle(process); }
+    }
+
+    static int WidenAttached(uint pid, short columns)
+    {
+        FreeConsole();
+        if (!AttachConsole(pid))
+        {
+            Say($"fail attach {Marshal.GetLastPInvokeError()}");
+            return 3;
+        }
+        Ignore();
+        try
+        {
+            var screen = CreateFile("CONOUT$", GenericRead | GenericWrite, FileShareRead | FileShareWrite, 0, OpenExisting, 0, 0);
+            if (screen == -1)
+            {
+                Say($"fail output {Marshal.GetLastPInvokeError()}");
+                return 3;
+            }
+            try
+            {
+                if (!GetConsoleScreenBufferInfo(screen, out var info))
+                {
+                    Say($"fail output {Marshal.GetLastPInvokeError()}");
+                    return 3;
+                }
+                if (info.SizeX < columns && !SetConsoleScreenBufferSize(screen, new Coord { X = columns, Y = info.SizeY }))
+                {
+                    Say($"fail widen {Marshal.GetLastPInvokeError()}");
+                    return 3;
+                }
+                if (!GetConsoleScreenBufferInfo(screen, out info))
+                {
+                    Say($"fail output {Marshal.GetLastPInvokeError()}");
+                    return 3;
+                }
+                Say(string.Create(CultureInfo.InvariantCulture, $"width {info.SizeX}"));
+            }
+            finally { CloseHandle(screen); }
+        }
+        finally { FreeConsole(); }
+        Say("ok");
+        return 0;
+    }
+
+    // The visible rows of the attached console's active screen buffer, each whole (the
+    // buffer's full width, as the agent draws to it: libuv takes a console's columns from its
+    // buffer, so a window narrower than its buffer, clamped to the screen or scrolled, still
+    // reads as drawn), with trailing spaces removed. Only read: nothing is written to CONOUT$.
     static (List<string>? Rows, string? Failure) Window()
     {
         var screen = CreateFile("CONOUT$", GenericRead | GenericWrite, FileShareRead | FileShareWrite, 0, OpenExisting, 0, 0);
@@ -178,7 +272,7 @@ internal static unsafe partial class Program
         try
         {
             if (!GetConsoleScreenBufferInfo(screen, out var info)) { return (null, $"fail output {Marshal.GetLastPInvokeError()}"); }
-            var width = info.WindowRight - info.WindowLeft + 1;
+            var width = Math.Max((int)info.SizeX, info.WindowRight + 1);
             if (width <= 0 || info.WindowBottom < info.WindowTop) { return (null, "fail output 0"); }
             var buffer = new char[width];
             var rows = new List<string>();
@@ -187,12 +281,15 @@ internal static unsafe partial class Program
                 uint read;
                 fixed (char* first = buffer)
                 {
-                    if (!ReadConsoleOutputCharacterW(screen, first, (uint)width, new Coord { X = info.WindowLeft, Y = (short)y }, out read))
+                    if (!ReadConsoleOutputCharacterW(screen, first, (uint)width, new Coord { X = 0, Y = (short)y }, out read))
                     {
                         return (null, $"fail output {Marshal.GetLastPInvokeError()}");
                     }
                 }
-                rows.Add(new string(buffer, 0, (int)read).TrimEnd());
+                // Only the window's padding, which is ASCII spaces: a no-break or other Unicode
+                // space at a row's end is something drawn there, a draft of nothing else among
+                // them (#843 review, Copilot 4477100469).
+                rows.Add(new string(buffer, 0, (int)read).TrimEnd(' '));
             }
             return (rows, null);
         }
@@ -310,6 +407,24 @@ internal static unsafe partial class Program
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetConsoleScreenBufferSize(nint output, Coord size);
+
+    const uint ProcessQueryLimitedInformation = 0x1000;
+    const uint StillActive = 259;
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    private static partial nint OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint processId);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetExitCodeProcess(nint process, out uint code);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetProcessTimes(nint process, out long creation, out long exit, out long kernel, out long user);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool ReadConsoleOutputCharacterW(nint output, char* characters, uint length, Coord at, out uint read);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
@@ -319,4 +434,20 @@ internal static unsafe partial class Program
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool SetConsoleCtrlHandler(delegate* unmanaged<uint, int> handler, [MarshalAs(UnmanagedType.Bool)] bool add);
+
+    // The same as AgentBridge.Host.Delivery's ScreenRowCheck.Passes, which writes the plan.
+    static bool Passes(List<string> rows, char kind, int row, string[] values) => kind == '_'
+        ? rows.Skip(row).All(r => r.Trim(' ').Length == 0)
+        : row < rows.Count && kind switch
+    {
+        '~' => !Parts(rows[row]).Any(values.Contains),
+        '+' => values.Any(v => rows[row].Contains(v, StringComparison.Ordinal)),
+        '-' => !values.Any(v => rows[row].Contains(v, StringComparison.Ordinal)),
+        _ => !values.Any(v => rows[row].TrimStart(' ').StartsWith(v, StringComparison.Ordinal)),
+    };
+
+    // A row read as a footer is: its parts between '·' and runs of two or more spaces, trimmed.
+    // The same as AgentBridge.Host.Delivery's ScreenParts.Of.
+    static IEnumerable<string> Parts(string row) =>
+        row.Split('\u00B7').SelectMany(part => System.Text.RegularExpressions.Regex.Split(part, " {2,}")).Select(part => part.Trim()).Where(part => part.Length > 0);
 }

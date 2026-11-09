@@ -90,19 +90,40 @@ public static partial class ShownText
     // unpaired surrogate is escaped on its own. rightToLeft: right-to-left letters too, as an
     // approval's are: even in a left-to-right line the punctuation between two of them joins their
     // run and is drawn reversed, so `echo \u05D0#;\u05D1;rm -rf ~` (as letters) would read as commented out.
-    public static string Reveal(string text, bool rightToLeft = false)
+    public static string Reveal(string text, bool rightToLeft = false) => Reveal(text, rightToLeft, null);
+
+    // Reveal, saying where each escape it wrote is: [start, length] in UTF-16 code units of what it
+    // returns, one mark for each escape, adjacent ones too (EscapedText.Marks, #803). Only escapes
+    // written here: text that was already "\u202E" is not one. One escape per mark is what clients
+    // check a mark against: a mark that covered more could draw "\u202E" and hide the text beside
+    // it, while the confirmation hashed all of it.
+    public static (string Shown, IReadOnlyList<(int Start, int Length)> Marks) RevealMarked(string text, bool rightToLeft = false)
+    {
+        var marks = new List<(int Start, int Length)>();
+        return (Reveal(text, rightToLeft, marks), marks);
+    }
+
+    static string Reveal(string text, bool rightToLeft, List<(int Start, int Length)>? marks)
     {
         if (!HasHidden(text) && !(rightToLeft && HasRightToLeft(text))) { return text; }
         var b = new StringBuilder(text.Length + 16);
+        void Mark(int start) => marks?.Add((start, b.Length - start));
         for (var i = 0; i < text.Length;)
         {
+            var at = b.Length;
             if (Rune.DecodeFromUtf16(text.AsSpan(i), out var r, out var n) != OperationStatus.Done)
             {
                 b.Append($"\\u{(int)text[i]:X4}");
+                Mark(at);
                 i += Math.Max(n, 1);
                 continue;
             }
-            if (Hidden(r) || (rightToLeft && HasRightToLeft(r.ToString()))) { b.Append(r.Value > 0xFFFF ? $"\\u{{{r.Value:X}}}" : $"\\u{r.Value:X4}"); } else { b.Append(r.ToString()); }
+            if (Hidden(r) || (rightToLeft && HasRightToLeft(r.ToString())))
+            {
+                b.Append(r.Value > 0xFFFF ? $"\\u{{{r.Value:X}}}" : $"\\u{r.Value:X4}");
+                Mark(at);
+            }
+            else { b.Append(r.ToString()); }
             i += n;
         }
         return b.ToString();
@@ -113,6 +134,9 @@ public static partial class ShownText
     // cut (Limits.KeepStart) knowing it was, without escaping all of a 32 MiB transcript line first.
     public static string RevealWithin(string text, int maxBytes, bool rightToLeft = false) =>
         Reveal(Limits.KeepStart(text, maxBytes + 4)!, rightToLeft);
+
+    public static (string Shown, IReadOnlyList<(int Start, int Length)> Marks) RevealWithinMarked(string text, int maxBytes, bool rightToLeft = false) =>
+        RevealMarked(Limits.KeepStart(text, maxBytes + 4)!, rightToLeft);
 
     // Whether text holds an escape, as Reveal writes one, of a hidden character or a right-to-left
     // letter. A host sends an approval escaped, so the Needs you lane, which never offers one holding

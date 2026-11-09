@@ -7,6 +7,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>AgentBridge.Host</RootNamespace>
     <AssemblyName>agent-bridge-host</AssemblyName>
+    <!-- What Task Manager and the file's properties call it (docs/design/brand.md §3.1, #537). The
+         file's name is an identifier that installers, tasks and the updater find it by, and stays (#539). -->
+    <Product>Slipgates</Product>
+    <AssemblyTitle>Slipgates host</AssemblyTitle>
     <!-- Reported to clients as hello's machine.hostVersion. -->
     <Version>0.1.0</Version>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
@@ -24,6 +28,7 @@
   <ItemGroup>
     <ProjectReference Include="..\AgentBridge.Host.Core\AgentBridge.Host.Core.csproj" />
     <ProjectReference Include="..\AgentBridge.Transport\AgentBridge.Transport.csproj" />
+    <ProjectReference Include="..\AgentBridge.AgentEnvelope\AgentBridge.AgentEnvelope.csproj" />
     <ProjectReference Include="..\AgentBridge.Host.Delivery\AgentBridge.Host.Delivery.csproj" />
     <ProjectReference Include="..\AgentBridge.Local\AgentBridge.Local.csproj" />
     <ProjectReference Include="..\AgentBridge.HomeAssistant\AgentBridge.HomeAssistant.csproj" />

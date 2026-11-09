@@ -246,6 +246,24 @@ public class ReceivedTests
         Assert.Equal(("s1", (int?)null), (s.Id, s.ProcessId));
     }
 
+    [Theory]
+    [InlineData("shape")]
+    [InlineData("future")]
+    [InlineData(null)]
+    public void An_at_machine_reason_is_optional_display_text_and_does_not_change_the_hold(string? reason)
+    {
+        var node = Session();
+        node["question"]!["answerAtMachine"] = true;
+        node["question"]!["answerAtMachineReason"] = reason;
+
+        var q = Read(node).Question!;
+        Assert.True(q.AnswerAtMachine);
+        Assert.Equal(reason, q.AnswerAtMachineReason);
+        node["question"]!["answerAtMachineReason"] = new JsonArray();
+        Assert.True(Read(node).Question!.AnswerAtMachine);
+        Assert.Null(Read(node).Question!.AnswerAtMachineReason);
+    }
+
     [Fact]
     public void An_unknown_question_kind_still_reads_as_a_form_as_the_spec_says()
     {
@@ -383,6 +401,21 @@ public class ReceivedTests
     [InlineData("null")]
     public void A_message_that_is_not_a_record_at_all_is_refused(string json) =>
         Assert.Throws<MalformedRecordException>(() => Received.Read<Session>(JsonDocument.Parse(json).RootElement));
+
+    // Read as "", a session with no id would be offered to resume under no session at all (#780).
+    [Fact]
+    public void A_session_that_went_with_the_host_and_has_no_id_it_can_be_resumed_by_is_not_offered()
+    {
+        var notice = JsonNode.Parse($$"""
+            {"at":"{{T}}","cause":"reboot","why":"pending",
+             "offered":[{"agent":"copilot","title":"No id"},{"id":42,"agent":"claude"},{"id":"s1","agent":"copilot","title":"Fix the build"}]}
+            """)!;
+
+        var n = Received.Read<RestoreNotice>(JsonSerializer.SerializeToElement(notice));
+
+        Assert.Equal(["s1"], n.Offered.Select(o => o.Id));
+        Assert.Throws<MalformedRecordException>(() => Received.Read<RestoreSession>(JsonDocument.Parse("""{"agent":"copilot"}""").RootElement));
+    }
 
     // The spec's table of strict fields and the [Strict] marks are one list: a field marked here and
     // not there, or there and not here, or in the wrong column, fails.

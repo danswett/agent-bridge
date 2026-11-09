@@ -26,6 +26,10 @@ public class MergeRuleTests
         main_green:
           workflow: ci.yml
           exempt_labels: [fixes-main]
+        copilot_waiver:
+          labels: [copilot-waived]
+          second_review: independent-review-2
+          one_review_paths: [docs/status.md]
         sensitive_paths:
           - .github/**
           - src/AgentBridge.Transport/**
@@ -73,6 +77,13 @@ public class MergeRuleTests
 
     static StatusFact Receipt(string state, string creator = "danswett", int minute = 0) =>
         new("independent-review", state, $"sec-42 {state}", creator, new DateTimeOffset(2026, 11, 3, 12, minute, 0, TimeSpan.Zero));
+
+    // Receipts as Engineering words them, naming the agent and its model.
+    static StatusFact First(string model = "claude-opus-5.5", string state = "success") =>
+        new("independent-review", state, $"CLEAN ENTIRE: security-review, {model} (Engineering)", "danswett", new DateTimeOffset(2026, 11, 3, 12, 0, 0, TimeSpan.Zero));
+
+    static StatusFact Second(string model = "gpt-6.1-sol", string state = "success", string creator = "danswett") =>
+        new("independent-review-2", state, $"sr-42b {(state == "success" ? "CLEAN" : "HIGH")}: security-review, {model}", creator, new DateTimeOffset(2026, 11, 3, 12, 1, 0, TimeSpan.Zero));
 
     [Fact]
     public void A_reviewed_change_with_green_CodeQL_and_nothing_sensitive_passes()
@@ -153,6 +164,218 @@ public class MergeRuleTests
         var verdict = MergeRule.Evaluate(Config, MainGreen, Pr([".github/workflows/ci.yml"], reviews: [Copilot with { Body = BillingError }]))!;
 
         Assert.Equal(["Copilot's review of abcdef0 didn't complete (it reported an error): request another", "needs an independent review of abcdef0: it touches .github/workflows/ci.yml"], verdict.Reasons);
+    }
+
+    // What every Copilot review ended with from 2026-11-05 18:02 PT (#955).
+    const string QuotaError = "Copilot was unable to review this pull request because the user who requested the review has insufficient remaining quota.";
+
+    [Fact]
+    public void A_quota_failed_Copilot_review_is_waived_by_the_label_with_a_posters_success_receipt()
+    {
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { Body = QuotaError }], labels: ["Copilot-Waived"], statuses: [Receipt("success")]))!;
+        var noReview = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [], labels: ["copilot-waived"], statuses: [Receipt("success")]))!;
+
+        Assert.Equal(("success", "Copilot review waived (label); independent review on file; every check passed"), (verdict.State, verdict.Description));
+        Assert.Equal("success", noReview.State);
+    }
+
+    [Fact]
+    public void The_waiver_label_without_a_receipt_fails_and_says_the_receipt_is_missing()
+    {
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { Body = QuotaError }], labels: ["copilot-waived"]))!;
+
+        Assert.Equal(["Copilot review waived by the label 'copilot-waived', but the waiver needs an independent review's receipt on abcdef0 in its place"], verdict.Reasons);
+        Assert.Equal("failure", verdict.State);
+    }
+
+    [Fact]
+    public void The_waiver_label_with_a_receipt_from_someone_not_a_poster_fails()
+    {
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [], labels: ["copilot-waived"], statuses: [Receipt("success", creator: "github-actions")]))!;
+
+        Assert.Equal(["Copilot review waived by the label 'copilot-waived', but the waiver needs an independent review's receipt on abcdef0 in its place"], verdict.Reasons);
+    }
+
+    [Fact]
+    public void A_quota_failed_review_without_the_label_still_fails_even_with_a_receipt()
+    {
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { Body = QuotaError }], statuses: [Receipt("success")]))!;
+
+        Assert.Equal(("failure", "Copilot's review of abcdef0 didn't complete (its outcome isn't recognized): request another"), (verdict.State, verdict.Description));
+    }
+
+    [Fact]
+    public void The_waiver_doesnt_lift_a_red_main_a_hold_a_draft_or_a_failed_receipt()
+    {
+        var red = new MainFact("failure", "main is red (CI c500000): waiting for main to be fixed");
+        ReviewFact[] quota = [Copilot with { Body = QuotaError }];
+        StatusFact[] clean = [Receipt("success")];
+
+        var onRedMain = MergeRule.Evaluate(Config, red, Pr(reviews: quota, labels: ["copilot-waived"], statuses: clean))!;
+        var held = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: quota, labels: ["copilot-waived", "hold"], statuses: clean))!;
+        var draft = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: quota, labels: ["copilot-waived"], statuses: clean, draft: true))!;
+        var failed = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: quota, labels: ["copilot-waived"], statuses: [Receipt("success", minute: 0), Receipt("failure", minute: 5)]))!;
+
+        Assert.Equal(["main is red (CI c500000): waiting for main to be fixed"], onRedMain.Reasons);
+        Assert.Equal(["held by the label 'hold'"], held.Reasons);
+        Assert.Equal(["draft: mark it ready for review"], draft.Reasons);
+        Assert.All(new[] { onRedMain, held, draft, failed }, v => Assert.Equal("failure", v.State));
+        Assert.Equal(
+            ["Copilot review waived by the label 'copilot-waived', but the waiver needs an independent review's receipt on abcdef0 in its place",
+             "the independent review of abcdef0 failed: sec-42 failure"],
+            failed.Reasons);
+    }
+
+    [Fact]
+    public void A_waived_sensitive_change_needs_a_second_receipt_from_another_model_family()
+    {
+        string[] files = [".github/workflows/ci.yml"];
+        ReviewFact[] quota = [Copilot with { Body = QuotaError }];
+
+        var oneFamily = MergeRule.Evaluate(Config, MainGreen, Pr(files, reviews: quota, labels: ["copilot-waived"], statuses: [First()]))!;
+        var twoFamilies = MergeRule.Evaluate(Config, MainGreen, Pr(files, reviews: quota, labels: ["copilot-waived"], statuses: [First(), Second()]))!;
+
+        Assert.Equal("failure", oneFamily.State);
+        Assert.Equal(["Copilot review waived by the label 'copilot-waived', but it touches .github/workflows/ci.yml, so the waiver needs a second review's receipt (independent-review-2) on abcdef0, from another model family"], oneFamily.Reasons);
+        Assert.Equal(("success", "Copilot review waived (label); two model families' reviews on file; every check passed"), (twoFamilies.State, twoFamilies.Description));
+    }
+
+    [Fact]
+    public void Two_receipts_from_one_model_family_or_naming_no_model_dont_waive_a_sensitive_change()
+    {
+        string[] files = ["src/AgentBridge.Host/Pairing/Codes.cs"];
+        ReviewFact[] quota = [Copilot with { Body = QuotaError }];
+        const string why = "Copilot review waived by the label 'copilot-waived', but the two receipts on abcdef0 must each name a model, from different families";
+
+        var sameFamily = MergeRule.Evaluate(Config, MainGreen, Pr(files, reviews: quota, labels: ["copilot-waived"], statuses: [First(), Second("claude-sonnet-5.5")]))!;
+        var unnamed = MergeRule.Evaluate(Config, MainGreen, Pr(files, reviews: quota, labels: ["copilot-waived"], statuses: [Receipt("success"), Second()]))!;
+
+        Assert.Equal([why], sameFamily.Reasons);
+        Assert.Equal([why], unnamed.Reasons);
+    }
+
+    [Fact]
+    public void A_second_receipt_from_someone_not_a_poster_doesnt_count()
+    {
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr([".github/workflows/ci.yml"], reviews: [], labels: ["copilot-waived"], statuses: [First(), Second(creator: "github-actions")]))!;
+
+        Assert.Equal("failure", verdict.State);
+        Assert.Contains("needs a second review's receipt (independent-review-2)", verdict.Reasons[0]);
+    }
+
+    [Fact]
+    public void A_security_marked_change_needs_the_second_family_even_when_it_touches_nothing_sensitive()
+    {
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [], labels: ["copilot-waived"], statuses: [First()]) with { Title = "Security: bind approvals to what was shown" })!;
+
+        Assert.Equal(["Copilot review waived by the label 'copilot-waived', but it's marked as a security change, so the waiver needs a second review's receipt (independent-review-2) on abcdef0, from another model family"], verdict.Reasons);
+    }
+
+    [Fact]
+    public void A_failed_second_receipt_blocks_even_a_change_that_one_review_would_waive()
+    {
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [], labels: ["copilot-waived"], statuses: [First(), Second(state: "failure")]))!;
+
+        Assert.Equal("failure", verdict.State);
+        Assert.Equal(["the second review of abcdef0 failed: sr-42b HIGH: security-review, gpt-6.1-sol"], verdict.Reasons);
+    }
+
+    [Fact]
+    public void A_status_md_row_alone_is_waived_on_one_receipt_but_not_beside_another_sensitive_file()
+    {
+        var config = MergeRuleConfig.Parse("""
+            base: main
+            status_poster: github-actions
+            copilot_reviewer: copilot-pull-request-reviewer
+            independent_review:
+              context: independent-review
+              posters: [danswett]
+            codeql:
+              workflow: CodeQL
+              check: CodeQL
+            main_green:
+              workflow: ci.yml
+            copilot_waiver:
+              labels: [copilot-waived]
+              second_review: independent-review-2
+              one_review_paths: [docs/status.md]
+            sensitive_paths:
+              - docs/status.md
+              - .github/**
+            """);
+
+        var rowAlone = MergeRule.Evaluate(config, MainGreen, Pr(["docs/status.md", "docs/design/ui.md"], reviews: [], labels: ["copilot-waived"], statuses: [First()]))!;
+        var withCi = MergeRule.Evaluate(config, MainGreen, Pr(["docs/status.md", ".github/workflows/ci.yml"], reviews: [], labels: ["copilot-waived"], statuses: [First()]))!;
+
+        Assert.Equal(("success", "Copilot review waived (label); independent review on file; every check passed"), (rowAlone.State, rowAlone.Description));
+        Assert.Equal("failure", withCi.State);
+    }
+
+    [Fact]
+    public void A_waiver_label_with_no_second_review_context_refuses_to_load()
+    {
+        var error = Assert.Throws<FormatException>(() => MergeRuleConfig.Parse("""
+            base: main
+            status_poster: github-actions
+            copilot_reviewer: copilot-pull-request-reviewer
+            independent_review:
+              context: independent-review
+              posters: [danswett]
+            codeql:
+              workflow: CodeQL
+              check: CodeQL
+            main_green:
+              workflow: ci.yml
+            copilot_waiver:
+              labels: [copilot-waived]
+            sensitive_paths: [.github/**]
+            """));
+
+        Assert.Contains("copilot_waiver.second_review", error.Message);
+    }
+
+    [Theory]
+    [InlineData("CLEAN: code-review agent, claude-opus-5.5 (Engineering)", "sr-1b CLEAN: security-review, gpt-6.1-sol", true)]
+    [InlineData("CLEAN: claude-opus-5.5", "CLEAN: Gemini-4-argon", true)]
+    [InlineData("CLEAN: claude-opus-5.5", "CLEAN: claude-haiku-5.5", false)]
+    [InlineData("CLEAN: claude-opus-5.5 and gpt-6.1-sol", "CLEAN: gpt-5.6-terra", false)]
+    [InlineData("sec-42 CLEAN", "CLEAN: gpt-6.1-sol", false)]
+    [InlineData("CLEAN: claude-opus-5.5", "CLEAN by Gptbot", false)]
+    [InlineData(null, "CLEAN: gpt-6.1-sol", false)]
+    public void Model_families_are_read_from_the_model_each_receipt_names(string? first, string second, bool different)
+    {
+        Assert.Equal(different, MergeRule.DifferentFamilies(first, second));
+    }
+
+    [Fact]
+    public void Removing_the_waiver_label_doesnt_discard_a_failed_second_review()
+    {
+        // sr-962b: Copilot completed, the first receipt passed, the second family failed; taking the
+        // label off used to read the second receipt as absent and pass.
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr([".github/workflows/ci.yml"], statuses: [First(), Second(state: "failure")]))!;
+
+        Assert.Equal("failure", verdict.State);
+        Assert.Equal(["the second review of abcdef0 failed: sr-42b HIGH: security-review, gpt-6.1-sol"], verdict.Reasons);
+    }
+
+    [Fact]
+    public void A_completed_Copilot_review_is_the_other_family_so_the_label_then_changes_nothing()
+    {
+        var labelled = MergeRule.Evaluate(Config, MainGreen, Pr([".github/workflows/ci.yml"], labels: ["copilot-waived"], statuses: [First()]))!;
+        var unlabelled = MergeRule.Evaluate(Config, MainGreen, Pr([".github/workflows/ci.yml"], statuses: [First()]))!;
+
+        Assert.Equal(("success", "Copilot reviewed abcdef0; every check passed; independent review on file"), (labelled.State, labelled.Description));
+        Assert.Equal((labelled.State, labelled.Description), (unlabelled.State, unlabelled.Description));
+    }
+
+    [Theory]
+    [InlineData("gemini-4-argon", "gpt-6.1-sol", "success")]
+    [InlineData("claude-opus-5.5 and gpt-5.6-terra", "gpt-6.1-sol", "failure")]
+    public void The_waiver_gate_passes_any_two_families_and_refuses_a_shared_one(string firstModel, string secondModel, string state)
+    {
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(["src/AgentBridge.Transport/Relay.cs"], reviews: [], labels: ["copilot-waived"], statuses: [First(firstModel), Second(secondModel)]))!;
+
+        Assert.Equal(state, verdict.State);
     }
 
     [Fact]
@@ -643,6 +866,18 @@ public class MergeRuleTests
             facts.Checks.Select(c => $"{c.Name} {c.State}").Order(StringComparer.Ordinal));
     }
 
+    [Fact]
+    public void The_second_review_receipt_is_judged_as_a_receipt_not_counted_as_a_check()
+    {
+        using var doc = JsonDocument.Parse(GraphQLPullRequest(Head,
+            extraStatuses: [new { context = "independent-review-2", state = "FAILURE", description = "spoofed", createdAt = "2026-11-03T20:02:00Z", creator = new { login = "someone" } }]));
+
+        var facts = MergeRuleCommand.ParseFacts(doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest"), Config);
+
+        Assert.DoesNotContain(facts.Checks, c => c.Name == "independent-review-2");
+        Assert.Contains(facts.Statuses, s => s.Context == "independent-review-2");
+    }
+
     // apple.yml (#260) sits outside quality-gate: a red native-clients must hold the merge on its own.
     [Fact]
     public void A_red_native_clients_job_fails_the_merge_rule_though_quality_gate_passed()
@@ -726,6 +961,77 @@ public class MergeRuleTests
         Assert.Equal("agent-bridge-merge-rule", MergeRuleConfig.Load(Path.Combine(root, "quality", "merge-rule.yml")).StatusPoster);
     }
 
+    // FLEET_MERGERULE=off must put back the wait, the build and the one shared group; the fast path
+    // (cached evaluator, scoped judging) is only for when it isn't off.
+    [Fact]
+    public void The_merge_rule_workflows_kill_switch_restores_the_wait_the_build_and_the_single_group()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var stream = new YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(root, ".github", "workflows", "merge-rule.yml"))));
+        var job = (YamlMappingNode)((YamlMappingNode)((YamlMappingNode)stream.Documents[0].RootNode)
+            .Children[new YamlScalarNode("jobs")]).Children[new YamlScalarNode("evaluate")];
+        string Scalar(YamlMappingNode node, string key) => ((YamlScalarNode)node.Children[new YamlScalarNode(key)]).Value!;
+        var steps = ((YamlSequenceNode)job.Children[new YamlScalarNode("steps")]).Cast<YamlMappingNode>().ToList();
+        YamlMappingNode Step(string name) => steps.Single(s => s.Children.ContainsKey(new YamlScalarNode("name")) && Scalar(s, "name") == name);
+        var concurrency = (YamlMappingNode)job.Children[new YamlScalarNode("concurrency")];
+
+        Assert.Equal("merge-rule", Scalar(concurrency, "group"));
+        Assert.Equal("false", Scalar(concurrency, "cancel-in-progress"));
+        Assert.Contains("vars.FLEET_MERGERULE == 'off'", Scalar(Step("Let a burst of events settle"), "if"), StringComparison.Ordinal);
+        Assert.Contains("vars.FLEET_MERGERULE != 'off'", Scalar(Step("Restore main's built evaluator"), "if"), StringComparison.Ordinal);
+        Assert.Contains("vars.FLEET_MERGERULE == 'off'", Scalar(Step("Build main's evaluator"), "if"), StringComparison.Ordinal);
+        Assert.Contains("FAST: ${{ vars.FLEET_MERGERULE != 'off' }}", File.ReadAllText(Path.Combine(root, ".github", "workflows", "merge-rule.yml")), StringComparison.Ordinal);
+    }
+
+    // A sweep displaced by a scoped run for another head must not leave a stale success: while
+    // main is red, any scoped run judges every open pull request and posts failure on each.
+    [Theory]
+    [InlineData("--sha")]
+    [InlineData("--pr")]
+    public void A_scoped_run_while_main_is_red_replaces_every_stale_success(string scope)
+    {
+        const string Success = "Copilot reviewed abcdef0; every check passed; independent review on file";
+        var a = GraphQLPullRequest(Head, mergeRule: ("success", Success), number: 42);
+        var b = GraphQLPullRequest(Older, mergeRule: ("success", Success), number: 7);
+        var github = new FakeGitHub(a, listed: [a, b], byNumber: new Dictionary<int, string> { [42] = a, [7] = b },
+            mainRuns: MainRuns((5, "completed", "failure", 1), (4, "completed", "success", 1)));
+        var config = WriteConfig();
+        try
+        {
+            var output = new StringWriter();
+            MergeRuleCommand.Run([scope, scope == "--sha" ? Head : "42", "--config", config, "--post"], output, github, OnMain);
+
+            Assert.Equal(2, github.Posted.Count);
+            Assert.All(github.Posted, p => Assert.Contains(" failure merge-rule Main is red", p, StringComparison.Ordinal));
+            Assert.Contains(github.Posted, p => p.StartsWith(Head, StringComparison.Ordinal));
+            Assert.Contains(github.Posted, p => p.StartsWith(Older, StringComparison.Ordinal));
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    [Fact]
+    public void A_scoped_run_while_main_is_green_judges_only_its_own_head()
+    {
+        var a = GraphQLPullRequest(Head, number: 42);
+        var b = GraphQLPullRequest(Older, number: 7);
+        var github = new FakeGitHub(a, listed: [a, b], byNumber: new Dictionary<int, string> { [42] = a, [7] = b });
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--sha", Head, "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Single(github.Posted);
+            Assert.StartsWith(Head, github.Posted[0], StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
     // Auto-merge doesn't pause while main is red, so the merge rule must: judged by main's CI
     // push run that finished last, at its latest attempt.
     [Fact]
@@ -784,6 +1090,176 @@ public class MergeRuleTests
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
 
             Assert.Equal([$"{Head} failure merge-rule {description} "], github.Posted);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    // Main's CI concurrency group replaces a pending run with a newer one, cancelling it before it
+    // starts: it tested nothing, so the run before it still decides, green or red, whether a newer
+    // run is waiting or not.
+    [Theory]
+    [InlineData("success", "success", "Copilot reviewed abcdef0; every check passed; independent review on file")]
+    [InlineData("failure", "failure", "Main is red (CI c500000): waiting for main to be fixed")]
+    public void A_main_run_replaced_before_it_started_is_passed_over_for_the_run_before_it(string before, string state, string description)
+    {
+        var runs = MainRuns((7, "queued", null, 1), (6, "completed", "cancelled", 1), (5, "completed", before, 1));
+        var empty = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: runs, mainJobs: MainJobs());
+        var unpicked = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: runs, mainJobs: MainJobs((null, 0), (0, 0)));
+        var config = WriteConfig();
+        try
+        {
+            var output = new StringWriter();
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, empty, OnMain);
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), unpicked, OnMain);
+
+            Assert.Equal([$"{Head} {state} merge-rule {description} "], empty.Posted);
+            Assert.Equal([$"{Head} {state} merge-rule {description} "], unpicked.Posted);
+            Assert.Contains("repos/danswett/agent-bridge/actions/runs/6/jobs?per_page=100", empty.RestPaths);
+            Assert.Contains($"repos/danswett/agent-bridge/compare/{"c6".PadRight(40, '0')}...{"c7".PadRight(40, '0')}?per_page=1", empty.RestPaths);
+            Assert.Contains($"Main: ci.yml run 5 (attempt 1) on c500000 ended {before}. Passed over run(s) 6 on c600000", output.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    // The newest run covers a replaced run's commit only if it builds on it: GitHub doesn't promise
+    // pushes enter main's concurrency group in order, so a newest run on an older or diverged
+    // commit (the replaced commit then never tested), or a compare that can't be read, blocks.
+    [Theory]
+    [InlineData("""{"status": "ahead"}""", "success", "Copilot reviewed abcdef0; every check passed; independent review on file")]
+    [InlineData("""{"status": "identical"}""", "success", "Copilot reviewed abcdef0; every check passed; independent review on file")]
+    [InlineData("""{"status": "behind"}""", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData("""{"status": "diverged"}""", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData(null, "error", "Couldn't read main's CI: gh: HTTP 502")]
+    public void A_replaced_main_run_is_passed_over_only_when_the_newest_run_builds_on_its_commit(string? compare, string state, string description)
+    {
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: MainRuns((7, "queued", null, 1), (6, "completed", "cancelled", 1), (5, "completed", "success", 1)), mainJobs: MainJobs(), mainCompare: compare);
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Equal([$"{Head} {state} merge-rule {description} "], github.Posted);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    // A passed run vouches only for main up to its own commit: an older run by id on a later
+    // commit (runs created out of push order) that was replaced, failed or is being re-run blocks
+    // until it passes, and so do main's later commits that can't all be listed.
+    [Theory]
+    [InlineData("completed", "cancelled", 1, true, "ahead", 1, "failure", "Main's CI hasn't passed on c600000, a commit after CI c700000: waiting for main to be green")]
+    [InlineData("completed", "failure", 1, true, "ahead", 1, "failure", "Main's CI hasn't passed on c600000, a commit after CI c700000: waiting for main to be green")]
+    [InlineData("in_progress", null, 2, true, "ahead", 1, "failure", "Main's CI hasn't passed on c600000, a commit after CI c700000: waiting for main to be green")]
+    [InlineData("completed", "success", 2, true, "ahead", 1, "success", "Copilot reviewed abcdef0; every check passed; independent review on file")]
+    [InlineData("completed", "cancelled", 1, false, "identical", 0, "success", "Copilot reviewed abcdef0; every check passed; independent review on file")]
+    [InlineData("completed", "cancelled", 1, true, "ahead", 101, "failure", "Main's commits after CI c700000 can't all be listed: waiting for main's CI")]
+    [InlineData("completed", "cancelled", 1, false, "diverged", 0, "failure", "Main's commits after CI c700000 can't all be listed: waiting for main's CI")]
+    [InlineData("completed", "cancelled", 1, true, null, 1, "error", "Couldn't read main's CI: gh: HTTP 502")]
+    public void A_passed_main_run_does_not_vouch_for_a_later_commit_whose_older_run_has_not_passed(string status, string? conclusion, int attempt, bool later, string? compare, int total, string state, string description)
+    {
+        var commits = new[] { new { sha = "c6".PadRight(40, '0') } }.Take(later ? 1 : 0);
+        var after = compare is null ? null : JsonSerializer.Serialize(new { status = compare, total_commits = total, commits });
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: MainRuns((7, "completed", "success", 1), (6, status, conclusion, attempt), (5, "completed", "success", 1)), mainAfter: after);
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Equal([$"{Head} {state} merge-rule {description} "], github.Posted);
+            Assert.Contains($"repos/danswett/agent-bridge/compare/{"c7".PadRight(40, '0')}...main?per_page=100", github.RestPaths);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    // A passed run's later commits each need their run found: one past the first page (runs aren't
+    // promised to be created in push order) is read from the next few, and blocks unless it
+    // passed; one not found within them, or never run, or a page that can't be read, fails closed.
+    [Theory]
+    [InlineData("cancelled", "failure", "Main's CI hasn't passed on c500000, a commit after CI c400000: waiting for main to be green")]
+    [InlineData("passed", "success", "Copilot reviewed abcdef0; every check passed; independent review on file")]
+    [InlineData("beyond", "failure", "Main's CI on c500000, a commit after CI c400000, can't be found: waiting for main's CI")]
+    [InlineData("never", "failure", "Main's CI on c500000, a commit after CI c400000, can't be found: waiting for main's CI")]
+    [InlineData("unreadable", "error", "Couldn't read main's CI: gh: HTTP 502")]
+    public void A_passed_main_run_does_not_vouch_for_a_later_commit_whose_run_is_past_the_first_page(string where, string state, string description)
+    {
+        // Twenty finished runs, ids down from the given one; run 5 is the later commit's.
+        static string Page(int from, int cancelled = 0) =>
+            MainRuns([.. Enumerable.Range(from - 19, 20).Reverse().Select(id => ((long)id, "completed", (string?)(id == cancelled ? "cancelled" : "success"), 1))]);
+        string?[] pages = where switch
+        {
+            "cancelled" => [Page(40), Page(20, cancelled: 5)],
+            "passed" => [Page(40), Page(20)],
+            "beyond" => [Page(40), Page(200), Page(180), Page(160), Page(140), Page(20, cancelled: 5)],
+            "never" => [Page(40), MainRuns((20, "completed", "success", 1))],
+            _ => [Page(40), null],
+        };
+        var after = JsonSerializer.Serialize(new { status = "ahead", total_commits = 1, commits = new[] { new { sha = "c5".PadRight(40, '0') } } });
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainAfter: after, mainPages: pages);
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Equal([$"{Head} {state} merge-rule {description} "], github.Posted);
+            Assert.Contains("repos/danswett/agent-bridge/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=20&page=2", github.RestPaths);
+            Assert.DoesNotContain(github.RestPaths, p => p.EndsWith("&page=6", StringComparison.Ordinal) || (where == "never" && p.EndsWith("&page=3", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    // Only a cancelled run proven never to have started, with a newer run after it, is passed over:
+    // one a runner picked up, the newest run, a re-run, or one whose jobs can't be read or are cut
+    // short could hide a real failure, so it still blocks, whether the run before it passed or
+    // failed (a red main stays red: the newest finished run cancelled, nothing newer, run 5 red).
+    // The newest run cancelled pending, by whatever took its place, never tested its commit: it
+    // blocks until it's re-run.
+    [Theory]
+    [InlineData(7L, 1, "[[12,0]]", "success", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData(7L, 1, "[[null,3]]", "success", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData(0L, 1, "[]", "success", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData(7L, 2, "[]", "success", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData(7L, 1, "truncated", "success", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData(7L, 1, null, "success", "error", "Couldn't read main's CI: gh: HTTP 502")]
+    [InlineData(7L, 1, "[[12,0]]", "failure", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData(0L, 1, "[]", "failure", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData(7L, 2, "[]", "failure", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData(7L, 1, "truncated", "failure", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData(7L, 1, null, "failure", "error", "Couldn't read main's CI: gh: HTTP 502")]
+    public void A_cancelled_main_run_not_proven_replaced_before_it_started_still_blocks(long newer, int attempt, string? jobs, string before, string state, string description)
+    {
+        var runs = new List<(long, string, string?, int)>();
+        if (newer != 0)
+            runs.Add((newer, "queued", null, 1));
+        runs.Add((6, "completed", "cancelled", attempt));
+        runs.Add((5, "completed", before, 1));
+        var listed = jobs switch
+        {
+            null => null,
+            "truncated" => """{"total_count": 101, "jobs": []}""",
+            _ => MainJobs([.. JsonSerializer.Deserialize<long?[][]>(jobs)!.Select(j => (j[0], (int)j[1]!.Value))]),
+        };
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: MainRuns([.. runs]), mainJobs: listed);
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Equal([$"{Head} {state} merge-rule {description} "], github.Posted);
         }
         finally
         {
@@ -1022,6 +1498,14 @@ public class MergeRuleTests
             workflow_runs = runs.Select(r => new { id = r.Id, head_sha = $"c{r.Id}".PadRight(40, '0'), status = r.Status, conclusion = r.Conclusion, run_attempt = r.Attempt }),
         });
 
+    // A run's jobs as REST lists them: each with its runner (null before one picks it up) and steps.
+    static string MainJobs(params (long? Runner, int Steps)[] jobs) =>
+        JsonSerializer.Serialize(new
+        {
+            total_count = jobs.Length,
+            jobs = jobs.Select(j => new { runner_id = j.Runner, steps = Enumerable.Range(1, j.Steps).Select(n => new { number = n }) }),
+        });
+
     static object Suite(string slug, object? run, string status, string? conclusion, params object[] checkRuns) =>
         new { app = new { slug }, workflowRun = run, status, conclusion, checkRuns = new { nodes = checkRuns } };
 
@@ -1095,7 +1579,7 @@ public class MergeRuleTests
     /// <paramref name="statuses"/> REST's status history, and <paramref name="mainRuns"/> (or one
     /// green run) main's CI.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false) : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainCompare = """{"status": "ahead"}""", string? mainAfter = """{"status": "identical", "total_commits": 0, "commits": []}""", string?[]? mainPages = null) : IGitHub
     {
         public List<string> Posted { get; } = [];
 
@@ -1121,8 +1605,23 @@ public class MergeRuleTests
         public JsonDocument Rest(string path)
         {
             RestPaths.Add(path);
+            // Main's runs a page at a time when given pages (null: one that can't be read), past
+            // the last none.
+            if (mainPages is not null && path.Contains("/actions/workflows/", StringComparison.Ordinal))
+            {
+                var page = path.Contains("&page=", StringComparison.Ordinal) ? int.Parse(path[(path.LastIndexOf('=') + 1)..], System.Globalization.CultureInfo.InvariantCulture) : 1;
+                return JsonDocument.Parse(page > mainPages.Length ? """{"workflow_runs": []}""" : mainPages[page - 1] ?? throw new InvalidOperationException("gh: HTTP 502"));
+            }
             if (path.Contains("/actions/workflows/", StringComparison.Ordinal))
                 return failMain ? throw new InvalidOperationException("gh: HTTP 502") : JsonDocument.Parse(mainRuns ?? MainRuns((1, "completed", "success", 1)));
+            if (path.Contains("/actions/runs/", StringComparison.Ordinal))
+                return JsonDocument.Parse(mainJobs ?? throw new InvalidOperationException("gh: HTTP 502"));
+            // Main's commits after a passed run's, then two of main's commits compared, not a pull
+            // request's head against main.
+            if (path.Contains("...main?", StringComparison.Ordinal))
+                return JsonDocument.Parse(mainAfter ?? throw new InvalidOperationException("gh: HTTP 502"));
+            if (path.Contains("/compare/", StringComparison.Ordinal) && !path.Contains("/compare/main...", StringComparison.Ordinal))
+                return JsonDocument.Parse(mainCompare ?? throw new InvalidOperationException("gh: HTTP 502"));
             if (failStatuses && path.Contains("/statuses", StringComparison.Ordinal))
                 throw new InvalidOperationException("gh: HTTP 502");
             return JsonDocument.Parse(path.Contains("/statuses", StringComparison.Ordinal)

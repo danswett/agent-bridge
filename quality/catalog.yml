@@ -50,6 +50,7 @@ global_triggers:
   - AgentBridge.slnx
   - nuget.config
   - global.json
+  - .gitattributes
   - '**/Directory.Build.*'
   - '**/Directory.Packages.props'
   - .config/dotnet-tools.json       # coverage tools (#363)
@@ -75,6 +76,7 @@ no_test_paths:
   - ops/**                      # SRE plan, runbooks, KQL and read-only operator probes; nothing ships from it
   - .github/dependabot.yml      # schedules update PRs; each PR's own changes select its tests
   - .github/CODEOWNERS          # who reviews what; CI's plan runs the whole ring for .github/ anyway
+  - .github/ISSUE_TEMPLATE/**   # issue forms; GitHub renders them, nothing builds or tests from them
 
 suites:
   # ---------------------------------------------------------------- .NET unit and component
@@ -92,6 +94,19 @@ suites:
     baseline: { tests: 571, seconds: 3 }
     status: exists
 
+  - id: agent-envelope
+    kind: unit
+    ring: 0
+    select: affected
+    security_sensitive: true  # AGENTS.md rule 5: signed-command parsing and verification
+    platforms: [win-x64, linux-x64]
+    runner: local
+    project: tests/AgentBridge.AgentEnvelope.Tests
+    triggers: [docs/protocol/vectors/agent-envelope.json]
+    command: dotnet test tests/AgentBridge.AgentEnvelope.Tests -c Release
+    where: ci.yml product
+    status: exists
+
   - id: connector-conformance
     kind: component
     ring: 0
@@ -100,6 +115,17 @@ suites:
     runner: local
     triggers: [tools/connector-conformance/**, docs/protocol/connector-read*]
     command: node --test tools/connector-conformance/mock-host.test.mjs
+    where: ci.yml light
+    status: exists
+
+  - id: mcp-server
+    kind: component
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [mcp/**, docs/protocol/local-pipe*]
+    command: node --test "mcp/test/*.test.mjs"
     where: ci.yml light
     status: exists
 
@@ -114,6 +140,35 @@ suites:
     command: dotnet test tests/AgentBridge.Transport.Tests -c Release
     where: ci.yml product
     baseline: { tests: 122, skipped: 2, seconds: 13 }
+    status: exists
+
+  - id: feedback-inbox
+    kind: component
+    ring: 0
+    select: affected
+    security_sensitive: true
+    platforms: [win-x64, linux-x64]
+    runner: local
+    project: tests/AgentBridge.FeedbackInbox.Tests
+    command: dotnet test tests/AgentBridge.FeedbackInbox.Tests -c Release
+    where: ci.yml product
+    status: exists
+
+  - id: roster
+    kind: unit
+    ring: 0
+    select: affected
+    security_sensitive: true  # the signed device roster (#55): AGENTS.md rule 5
+    platforms: [win-x64, linux-x64]
+    runner: local
+    project: tests/AgentBridge.Roster.Tests
+    triggers: [docs/protocol/vectors/roster.json, docs/protocol/vectors/roster-state.json, docs/protocol/vectors/roster-commands.json]
+    # Generates docs/protocol/vectors/roster.json, roster-state.json and roster-commands.json, and
+    # fails while any committed file is stale; pwa-unit replays them (test/unit/roster-vectors,
+    # roster-state and roster-commands.test.mjs).
+    command: dotnet test tests/AgentBridge.Roster.Tests -c Release
+    where: ci.yml product
+    baseline: { tests: 256, seconds: 90 }
     status: exists
 
   - id: local-api
@@ -165,7 +220,7 @@ suites:
     project: tests/AgentBridge.Host.Tests
     # CallerGuardTests reads the app's AssemblyName and pack-app.ps1's -e, and PushVectorTests and
     # SignedCommandVectorTests the shared vectors (#454), none of which the graph can see.
-    triggers: [src/AgentBridge.App/AgentBridge.App.csproj, build/pack-app.ps1, docs/protocol/vectors/**, docs/protocol/connector-read*]
+    triggers: [src/AgentBridge.App/AgentBridge.App.csproj, build/app-channels.ps1, build/pack-app.ps1, docs/protocol/vectors/**, docs/protocol/connector-read*]
     # Bounded by the MigrationTests and LaunchFlow classes, each split for parallelism (#496).
     command: dotnet test tests/AgentBridge.Host.Tests -c Release
     where: ci.yml product
@@ -341,6 +396,17 @@ suites:
     where: ci.yml product
     status: exists
 
+  - id: beta-release-manifest
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [linux-x64]
+    runner: local
+    triggers: [build/release-manifest.ps1, build/test-release-manifest.ps1, build/app-channels.ps1]
+    command: pwsh -NoProfile -File build/test-release-manifest.ps1
+    where: ci.yml light
+    status: exists
+
   - id: build-scripts
     kind: unit
     ring: 1
@@ -351,6 +417,46 @@ suites:
     triggers: [build/**]
     command: pwsh build/test-shadow-week.ps1; pwsh build/test-publish-prerelease.ps1
     where: ci.yml product
+    status: exists
+
+  - id: lab-scripts
+    kind: unit
+    ring: 0
+    select: affected
+    # The clean-VM lab's provisioning and runner-interface drafts, with external commands stubbed:
+    # nothing reaches Azure. Ring 0 on Linux, so a draft's fast ring runs it too.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/lab/**]
+    command: pwsh -NoProfile -File quality/lab/test-scripts.ps1
+    where: ci.yml light
+    status: exists
+
+  - id: beta-acceptance
+    kind: e2e
+    ring: 4
+    select: always
+    # The real published Beta installer on a clean hosted Windows runner, x64 and Arm64, through
+    # a working session driven from the PWA (#1185, #736). Dispatched by hand after review: no
+    # pull_request trigger, no cron, no secrets. Pairing and driving from the PWA are not built yet,
+    # so a run reports them NOT RUN and is not a full pass.
+    platforms: [win-x64, win-arm64]
+    runner: device
+    command: gh workflow run beta-acceptance.yml --ref <branch>
+    where: beta-acceptance.yml accept, report
+    status: partial
+  - id: forms-soak-scripts
+    kind: unit
+    ring: 0
+    select: affected
+    # The forms soak rig's redaction checks and a syntax check of its stub server (#1138). The rig
+    # itself, which needs a console, the host's injector and the Copilot CLI, is run by hand on a
+    # lab machine and is not part of this suite.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [tools/lab/forms-soak/**]
+    command: pwsh -NoProfile -File tools/lab/forms-soak/Test-Redaction.ps1; node --check tools/lab/forms-soak/stub-mcp.js
+    where: ci.yml light
     status: exists
 
   - id: relay-container
@@ -375,7 +481,23 @@ suites:
     # What the app's build takes in from outside src/ (the protocol's example sessions, embedded
     # in App.Core for the demo the self-test runs) reaches it through builds (#487).
     builds: src/AgentBridge.App
-    triggers: [src/**, build/pack-app.ps1, build/app-*.ps1, build/host-identity.ps1, build/publish-prerelease.ps1, build/release-notes.ps1, design/**]
+    # src/** is not a trigger (#1249): the app's folder and what it builds from (builds), the other
+    # projects pack-app.ps1 publishes, and the packaging inputs are. app-package-host adds the
+    # host's own closure.
+    triggers: [src/AgentBridge.App/**, src/AgentBridge.HostLauncher/**, src/AgentBridge.Injector/**, src/AgentBridge.Hook/**, build/pack-app.ps1, build/app-*.ps1, build/host-identity.ps1, build/publish-prerelease.ps1, build/release-notes.ps1, build/notices/**, LICENSE, design/**]
+    command: see ci.yml app job
+    where: ci.yml app
+    status: exists
+
+  - id: app-package-host
+    kind: packaging
+    ring: 1
+    select: affected
+    # The host and every project it builds from ship inside the app's package (pack-app.ps1
+    # publishes it), so a change to any of them packages the app too.
+    platforms: [win-x64, win-arm64]
+    runner: hosted
+    builds: src/AgentBridge.Host
     command: see ci.yml app job
     where: ci.yml app
     status: exists
@@ -385,11 +507,13 @@ suites:
     ring: 2
     select: always
     # Every merge to main: only main's newest commit passes the gate, then the x64 and Arm64
-    # packages become one GitHub pre-release, which installed copies update from.
+    # packages become one GitHub pre-release, which installed copies update from. With
+    # APP_SIGNING, the sign job packs and signs them first (#734; docs/app-windows.md, Signing);
+    # either way it asks again whether main is still at this commit, and publish runs only on yes.
     platforms: [win-x64, win-arm64]
     runner: hosted
-    command: see ci.yml publish-gate and publish (main only)
-    where: ci.yml publish-gate, publish
+    command: see ci.yml publish-gate, sign and publish (main only)
+    where: ci.yml publish-gate, sign, publish
     status: exists
 
   - id: app-upgrade
@@ -542,6 +666,20 @@ suites:
     where: ci.yml light
     status: exists
 
+  - id: playwright-apt
+    kind: unit
+    ring: 1
+    select: affected
+    platforms: [linux-x64]
+    runner: hosted
+    # The download every job that runs `playwright install --with-deps` makes first (#799, #689):
+    # against stand-ins for npx, sudo and apt-get, it leaves the Azure mirror for Canonical's
+    # archive only at the time limit, and fails on any other apt failure or an unexpected mirror list.
+    triggers: [.github/actions/playwright-system-packages/**]
+    command: bash .github/actions/playwright-system-packages/test.sh
+    where: ci.yml light
+    status: exists
+
   - id: pwa-pages
     kind: packaging
     ring: 2
@@ -665,6 +803,20 @@ suites:
     status: exists
 
   # ---------------------------------------------------------------- live, on disposable machines
+  - id: lab-nightly
+    kind: unit
+    ring: 0
+    select: affected
+    # The held nightly lab run's gate and cut verdict (lab-nightly.yml), offline: the gate refuses
+    # every run until the lab's prerequisites are met in reviewed source, and the verdict passes a
+    # cut only when both roles pass it. Ring 0 on Linux, so a draft's fast ring runs it too.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/lab/**, .github/workflows/lab-nightly.yml]
+    command: pwsh quality/lab/test-nightly.ps1
+    where: ci.yml light
+    status: exists
+
   - id: lab-e2e-simulated
     kind: e2e
     ring: 3
@@ -672,8 +824,12 @@ suites:
     # The packaged app and host installed on clean lab VMs, driven end to end (launch, ask,
     # answer from the PWA through the staging relay, reply, attach, stop, transfer between
     # machines) with simulated agents that write real-format transcripts and run the real hook.
+    # Its first coverage (v1, Windows x64 and native Arm64) is agreed in quality/lab/README.md;
+    # only nonexecuting provisioning and runner-interface drafts exist (lab-scripts).
     platforms: [win-x64, win-arm64, linux-x64, macos-arm64]
     runner: lab
+    # Windows x64 and Arm64 nightly, once its gate lets it run (lab-nightly); it refuses today.
+    where: lab-nightly.yml
     status: planned
 
   - id: lab-e2e-agents
@@ -715,6 +871,35 @@ suites:
     runner: lab
     command: build/shadow-soak-vm.ps1 -Status (gate PASS)
     status: exists
+
+  - id: lab-release-verify
+    kind: unit
+    ring: 0
+    select: affected
+    # The held lab release verification's gate and verdict (lab-release-verify.yml), and that
+    # workflow's shape, offline: the gate refuses every verification until its prerequisites are met
+    # in reviewed source, and the verdict passes a release only when the nightly passed it and both
+    # roles' results are that release's. Ring 0 on Linux, so a draft's fast ring runs it too.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/lab/release-*, quality/lab/test-release-verify.ps1, .github/workflows/lab-release-verify.yml]
+    command: pwsh quality/lab/test-release-verify.ps1
+    where: ci.yml light
+    status: exists
+
+  - id: lab-release-verification
+    kind: e2e
+    ring: 4
+    select: always
+    # One named release run through the lab nightly (#854) on both roles and held to its results:
+    # v1 evidence about that release, never a promotion, a channel move or a Beta 1 count (§7, #736).
+    # Held: its gate refuses every run today (quality/lab/release-gate.ps1), and no ring 4 gate
+    # reads it.
+    platforms: [win-x64, win-arm64]
+    runner: lab
+    command: see lab-release-verify.yml (gh workflow run lab-release-verify.yml -f release=v0.1.N -f relay=staging, once its gate allows)
+    where: lab-release-verify.yml
+    status: planned
 
   # ---------------------------------------------------------------- security
   - id: codeql
@@ -771,7 +956,7 @@ suites:
     triggers: [src/AgentBridge.Relay/**, src/AgentBridge.Transport/**, nuget.config, .github/actions/install-trivy/**]
     # Blocks on a fixable HIGH or CRITICAL vulnerability (none on main when added, #433); unfixed
     # ones go to code scanning from main only. relay.yml scan holds staging and production back.
-    command: see ci.yml product (trivy image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 agent-bridge-relay)
+    command: see ci.yml product (install-trivy's vulnerability-db, then trivy image --scanners vuln --skip-db-update --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 agent-bridge-relay)
     where: ci.yml product, relay-image-sarif; relay.yml scan
     status: exists
 
@@ -793,10 +978,10 @@ suites:
     select: affected
     platforms: [linux-x64]
     runner: hosted
-    triggers: [.github/workflows/**, .github/actions/**]
+    triggers: [.github/workflows/**, .github/actions/**, build/actionlint-findings.ps1, build/test-actionlint-findings.ps1]
     # actionlint blocks; shellcheck and zizmor are advisory until their existing findings (#360) are fixed.
     # Drafts run it too: it's part of the fast ring (quality/README.md §2).
-    command: see workflow-lint.yml (actionlint, shellcheck, zizmor)
+    command: see workflow-lint.yml (actionlint, its one exception and pwsh build/test-actionlint-findings.ps1, shellcheck, zizmor)
     where: workflow-lint.yml lint
     status: exists
 
@@ -842,8 +1027,8 @@ suites:
     runner: hosted
     triggers: [pwa/**, design/**]
     # @axe-core/playwright on every view in light, dark and forced colors, plus keyboard-only and
-    # reduced-motion specs. The 6 forced-colors tests are skipped on WebKit. Known issues #365,
-    # #366, #369, #370 and #371 are allowlisted by rule, selector and issue.
+    # reduced-motion specs. The 6 forced-colors tests are skipped on WebKit. A known issue is
+    # allowlisted by rule, selector and issue; none is today (#365, #366 and #371 are fixed).
     command: cd pwa && npx playwright test axe.spec.mjs keyboard.spec.mjs reduced-motion.spec.mjs
     where: ci.yml pwa-ui
     baseline: { files: 3, tests: 58 }
@@ -917,6 +1102,22 @@ suites:
     triggers: [src/AgentBridge.Hook/**, src/AgentBridge.Hooks/**]
     command: see perf.yml perf (dotnet publish src/AgentBridge.Hook -c Release -r <rid> -o <dir>; dotnet run -c Release --project tests/AgentBridge.PerfHook -- --hook <dir>/agent-bridge-host-hook[.exe] --out <file.json>)
     where: perf.yml perf
+    status: exists
+
+  - id: perf-update-gap
+    kind: perf
+    ring: 2
+    select: affected
+    # How long an update keeps the Windows app away (#1167): the old window's close to the new
+    # version's process start and window, through Velopack's silent apply on a throwaway portable
+    # install, five runs, medians in the run's summary. Arm64 only here (Daily has no Arm64
+    # machine), by hand (workflow_dispatch), never on a pull request; x64 is measured locally with
+    # the same script. Records, does not gate, as perf.yml: the owner's budget is 8 s.
+    platforms: [win-arm64]
+    runner: hosted
+    triggers: [build/measure-update-gap.ps1, .github/workflows/update-gap.yml]
+    command: see update-gap.yml arm64 (pwsh build/pack-app.ps1 -Runtime win-arm64 -NoPack; pwsh build/measure-update-gap.ps1 -Runtime win-arm64 -RealHooks)
+    where: update-gap.yml arm64
     status: exists
 
   - id: perf-host

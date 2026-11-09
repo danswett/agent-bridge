@@ -11,7 +11,9 @@ public sealed record CopilotCallState(
     bool IsMainAgent,
     CopilotAnswerRecord? Answer,
     bool SessionEnded,
-    long ScannedTo);
+    long ScannedTo,
+    bool Resumed = false,
+    bool Readable = true);
 
 // HumanContent is response.content of human_response.recorded; otherwise the call's
 // tool.execution_complete, with its result text or its failure. At is that record's own
@@ -42,10 +44,13 @@ public static class CopilotTranscript
         return state!;
     }
 
-    // Reads from a known line boundary (an earlier ScannedTo) for records of the call.
+    // Reads from a known line boundary (an earlier ScannedTo) for records of the call. Readable
+    // is false when the transcript could not be read, or, with a mark, is not the file marked.
     public static CopilotCallState Since(string path, string toolCallId, long from) => Scan(path, toolCallId, from, requireStart: false);
 
-    static CopilotCallState Scan(string path, string toolCallId, long from, bool requireStart)
+    internal static CopilotCallState Since(string path, string toolCallId, long from, JsonlMark mark) => Scan(path, toolCallId, from, requireStart: false, mark);
+
+    static CopilotCallState Scan(string path, string toolCallId, long from, bool requireStart, JsonlMark? mark = null)
     {
         var id = Encoding.UTF8.GetBytes($"\"{toolCallId}\"");
         JsonElement? arguments = null;
@@ -54,22 +59,24 @@ public static class CopilotTranscript
         DateTimeOffset? humanAt = null;
         CopilotAnswerRecord? completed = null;
         var ended = false;
+        var resumed = false;
         var started = !requireStart;
 
         // A window starting inside a line skips that partial line; Since starts on a boundary.
         // A trailing line without its newline is still being written; ScannedTo stays before
         // it so the next scan reads it whole.
-        if (Jsonl.Lines(path, from, skipFirst: requireStart, Line) is not { } scannedTo)
+        if (Jsonl.Lines(path, from, skipFirst: requireStart, Line, mark) is not { } scannedTo)
         {
-            return new CopilotCallState(null, true, null, false, from);
+            return new CopilotCallState(null, true, null, false, from, Readable: false);
         }
         var answer = human is { } h ? new CopilotAnswerRecord(h, completed is not null, completed?.Succeeded ?? true, completed?.ResultText, humanAt) : completed;
-        return new CopilotCallState(arguments, main, started ? answer : null, started && ended, scannedTo);
+        return new CopilotCallState(arguments, main, started ? answer : null, started && ended, scannedTo, started && ended && resumed);
 
         void Line(ReadOnlySpan<byte> bytes, long start)
         {
             var named = bytes.IndexOf(id) >= 0;
-            var ending = !named && (bytes.IndexOf("\"type\":\"abort\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.shutdown\""u8) >= 0);
+            var ending = !named && (bytes.IndexOf("\"type\":\"abort\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.shutdown\""u8) >= 0
+                || bytes.IndexOf("\"type\":\"session.resume\""u8) >= 0);
             if (!named && !ending) { return; }
             JsonDocument doc;
             try { doc = JsonDocument.Parse(bytes.ToArray()); }
@@ -83,8 +90,15 @@ public static class CopilotTranscript
                 var sub = Str(e, "agentId") is { Length: > 0 };
                 if (ending)
                 {
-                    // The session's own abort or shutdown ends its question; a subagent's does not.
-                    if (started && !sub) { ended = true; }
+                    // The session's own abort, shutdown or resume in a new CLI ends its question; a
+                    // subagent's does not. After a resume the killed CLI's question may still be on
+                    // the screen, or not, and keys typed for it would go to whatever the new CLI
+                    // shows: never answered, as CopilotInput holds replies on it (stale).
+                    if (started && !sub && type is "abort" or "session.shutdown" or "session.resume")
+                    {
+                        ended = true;
+                        resumed = type == "session.resume";
+                    }
                     return;
                 }
                 if (data.ValueKind != JsonValueKind.Object || Str(data, "toolCallId") != toolCallId) { return; }
@@ -99,6 +113,9 @@ public static class CopilotTranscript
                             main = !sub;
                             started = true;
                         }
+                        // Asked again since a resume, by the new CLI: open again, as CopilotInput
+                        // reads a question asked after the resume.
+                        else if (ended && resumed) { (ended, resumed) = (false, false); }
                         break;
                     case "human_response.recorded" when started && human is null:
                         human = data.TryGetProperty("response", out var r) && r.ValueKind == JsonValueKind.Object && r.TryGetProperty("content", out var c)
@@ -119,4 +136,28 @@ public static class CopilotTranscript
 
     static string? Str(JsonElement e, string name) =>
         e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+}
+
+// One call's records as the transcript gains them: each Read takes in only the lines added since
+// the last, from a line boundary already read (the ScannedTo of the Find that validated the call),
+// and says what they hold of it, an answer or the session's end. The checks before each write of
+// an answer read so, with the typing slot every session shares held (#510 review, Copilot
+// 4479319394). A transcript that cannot be read, or is not the file read when the call was found
+// (shorter, another file, or other bytes where it was read: JsonlMark, Copilot 4484702591), is
+// not Readable, then or ever again: nothing more is typed into it.
+public sealed class CopilotCallWatch(string path, string toolCallId, long from)
+{
+    // Taken as the watch is made, right after the read that found the call stopped at `from`.
+    readonly JsonlMark mark = JsonlMark.Of(path, from);
+
+    // The bytes the last Read took in.
+    public long LastRead { get; private set; }
+
+    public CopilotCallState Read()
+    {
+        LastRead = 0;
+        var state = CopilotTranscript.Since(path, toolCallId, from, mark);
+        if (state.Readable) { (LastRead, from) = (state.ScannedTo - from, state.ScannedTo); }
+        return state;
+    }
 }

@@ -53,6 +53,28 @@ const textFile = (name, size = 40, mimeType = 'text/markdown') => ({ name, mimeT
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
 
+  test('a file read after a reply\'s outcome line has ended leaves no "Reading the attachment…" behind', async ({ page }) => {
+    await openDemo(page);
+    await page.evaluate(() => window.agentBridgeDemo.scriptReplies('stale'));
+    const reply = box(page);
+    const input = reply.getByRole('textbox', { name: 'Reply' });
+    await input.fill('first try');
+    await reply.getByRole('button', { name: 'Send' }).click();
+    await expect(reply.locator('.reply-status')).toHaveText('Not sent: the session has ended.');
+    // The next edit ends the line; then a file is attached.
+    await input.pressSequentially(' again');
+    await expect(reply.locator('.reply-status')).toHaveText('');
+    await pick(page, textFile('notes.md'));
+    await expect(reply.getByRole('button', { name: 'Remove notes.md' })).toBeVisible();
+    await expect(reply.locator('.reply-status')).toHaveText('');
+  });
+  test('a file being read is said once on the live line as its reading starts, as well as shown', async ({ page }) => {
+    await openDemo(page);
+    const reply = box(page);
+    await pick(page, textFile('notes.md'));
+    await expect(reply.locator('.receipt-live')).toHaveText('Reading the attachment');
+    await expect(reply.getByRole('button', { name: 'Remove notes.md' })).toBeVisible();
+  });
   test('a picked file and a pasted screenshot show as chips, go first, and reach the session as @ mentions ahead of the words', async ({ page }) => {
     await openDemo(page);
     const reply = box(page);
@@ -72,7 +94,7 @@ test.describe('on a phone', () => {
 
     await reply.getByRole('textbox', { name: 'Reply' }).fill('What do you\nmake of these?');
     await reply.getByRole('button', { name: 'Send' }).tap();
-    await expect(reply.locator('.reply-status')).toHaveText('Delivered. The session has your reply.');
+    await expect(reply).toHaveAttribute('data-reply', 'delivered');
 
     const [sent] = await typed(page);
     const words = sent.said.split(' ');

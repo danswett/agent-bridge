@@ -161,7 +161,7 @@ test('on a phone a session\'s content slides in from the trailing side, and the 
   await openDemo(page, { width: 390, height: 844 });
   const t = await tokens(page);
   await open(page, CLAUDE);
-  await view(page, CLAUDE).locator('.session-header .back').click();
+  await view(page, CLAUDE).locator('.session-bar .back').click();
   await expect(row(page, CLAUDE)).toBeVisible();
   const push = (await motions(page)).filter((m) => m.id === 'ab-motion-push');
   expect(push[0].from).toBe('translate(24px, 0px)');
@@ -174,7 +174,7 @@ test('an approval\'s command never moves: a session asking a question fades in w
   await openDemo(page, { width: 390, height: 844 });
   await expect(page.locator('#needs-you')).toBeVisible();
   await open(page, COPILOT);
-  await view(page, COPILOT).locator('.session-header .back').click();
+  await view(page, COPILOT).locator('.session-bar .back').click();
   await expect(row(page, COPILOT)).toBeVisible();
   const push = (await motions(page)).filter((m) => m.id === 'ab-motion-push');
   expect(push[0]).toMatchObject({ travels: false });
@@ -202,7 +202,7 @@ test('on a phone, Back to the list shows Needs you as it was: no mark fades in a
   await expect(page.locator(`#needs-you .needs-entry[data-id="${CLAUDE}"]`)).toBeVisible();
   const before = (await motions(page)).filter((m) => m.inLane).length;
   await open(page, CODEX);
-  await view(page, CODEX).locator('.session-header .back').click();
+  await view(page, CODEX).locator('.session-bar .back').click();
   await expect(page.locator(`#needs-you .needs-entry[data-id="${CLAUDE}"]`)).toBeVisible();
   await page.waitForTimeout(300);
   expect((await motions(page)).filter((m) => m.inLane)).toHaveLength(before);
@@ -216,7 +216,7 @@ test('with reduced motion nothing travels: the only motions are fades no longer 
   await page.waitForTimeout(400);
   expect(await cssMotions(page)).toEqual([]);
   await open(page, COPILOT);
-  await view(page, COPILOT).locator('.session-header .back').click();
+  await view(page, COPILOT).locator('.session-bar .back').click();
   await expect(row(page, COPILOT)).toBeVisible();
   await page.setViewportSize({ width: 1440, height: 900 });
   await desktopTour(page);
@@ -237,7 +237,7 @@ test('a tap during a push lands: Back works while the session is still sliding i
   // Long enough to be sure the tap comes mid-motion.
   await page.evaluate(() => document.documentElement.style.setProperty('--ab-motion-push-duration', '5000ms'));
   await row(page, CLAUDE).locator('.row-main').click();
-  const back = view(page, CLAUDE).locator('.session-header .back');
+  const back = view(page, CLAUDE).locator('.session-bar .back');
   await expect(back).toBeAttached();
   expect(await page.evaluate(() => document.getAnimations().some((a) => a.id === 'ab-motion-push' && a.playState === 'running'))).toBe(true);
   const b = await back.boundingBox();
@@ -444,56 +444,52 @@ test('what leaves is a copy with nothing in it to find, use or run: text stays t
   expect(copy.gone).toBe(true);
 });
 
-// An app banner leaving (ui.md §5.3, Toast and banner; PWA app banners): its space closes at once,
-// and a copy goes back up the way it came in, quicker; under reduced motion the copy only fades.
-async function bannerLeaving(page) {
+// An app banner opening and closing (ui.md §5.3, Toast and banner; §7, #1064): its height opens
+// from nothing and closes back over the toast times, and what is below moves with it; under
+// reduced motion it is instant.
+async function bannerMoving(page) {
   return page.evaluate(async () => {
     const { conceal, reveal } = await import('./js/ui/motion.js');
     const banner = document.getElementById('replaced-banner');
+    const drawn = (from) => window.__motions.slice(from).filter((x) => x.a.id === 'ab-motion-toast');
+    const frames = (m) => m?.keyframes.map((k) => ({ height: k.height ?? null, opacity: k.opacity })) ?? [];
+    let from = window.__motions.length;
     reveal(banner);
+    const opening = drawn(from)[0];
+    const opened = { shown: !banner.hidden, duration: opening?.duration ?? 0, keyframes: frames(opening) };
     await Promise.all(banner.getAnimations().map((a) => a.finished.catch(() => {})));
-    const from = window.__motions.length;
+    from = window.__motions.length;
     conceal(banner);
-    const hiddenAtOnce = banner.hidden;
-    const m = window.__motions.slice(from).find((x) => x.a.id === 'ab-motion-toast');
-    const copy = m && window.__shadows.at(-1);
-    const out = {
-      hiddenAtOnce,
-      moved: !!m,
-      duration: m?.duration ?? 0,
-      keyframes: m?.keyframes.map((k) => ({ opacity: k.opacity, transform: k.transform ?? null })) ?? [],
-      text: copy?.textContent ?? '',
-    };
-    await m?.a.finished.catch(() => {});
-    out.gone = m ? !m.el.isConnected : true;
-    return out;
+    const closing = drawn(from)[0];
+    const closed = { stillShown: !banner.hidden, duration: closing?.duration ?? 0, keyframes: frames(closing) };
+    await closing?.a.finished.catch(() => {});
+    await new Promise((r) => setTimeout(r, 50));
+    return { opened, closed, hiddenAfter: banner.hidden, full: banner.getBoundingClientRect().height };
   });
 }
 
-test('an app banner leaves as it came, quicker: up and out over the toast exit time, its space closing at once', async ({ page }) => {
+test('an app banner opens and closes in height over the toast times, kept in view while it closes', async ({ page }) => {
   await openDemo(page);
   const t = await tokens(page);
-  const out = await bannerLeaving(page);
-  expect(out.hiddenAtOnce).toBe(true);
-  expect(out.moved).toBe(true);
-  expect(out.text).toContain('This app is open in another window or tab.');
-  expect(out.duration).toBe(t.toast[1]);
-  expect(out.duration).toBeLessThan(t.toast[0]);
-  expect(out.keyframes).toEqual([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translate(0px, -12px)' }]);
-  expect(out.gone).toBe(true);
+  const out = await bannerMoving(page);
+  expect(out.opened.shown).toBe(true);
+  expect(out.opened.duration).toBe(t.toast[0]);
+  expect(out.opened.keyframes[0]).toEqual({ height: '0px', opacity: 0 });
+  expect(out.opened.keyframes[1].opacity).toBe(1);
+  expect(out.closed.stillShown).toBe(true);
+  expect(out.closed.duration).toBe(t.toast[1]);
+  expect(out.closed.duration).toBeLessThan(t.toast[0]);
+  expect(out.closed.keyframes.at(-1)).toEqual({ height: '0px', opacity: 0 });
+  expect(out.hiddenAfter).toBe(true);
 });
 
-test('with reduced motion an app banner leaving only cross-fades, and its space still closes at once', async ({ page }) => {
+test('with reduced motion an app banner opens and closes at once, drawing no motion', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await openDemo(page);
-  const t = await tokens(page);
-  const out = await bannerLeaving(page);
-  expect(out.hiddenAtOnce).toBe(true);
-  expect(out.moved).toBe(true);
-  expect(out.duration).toBeGreaterThan(0);
-  expect(out.keyframes).toEqual([{ opacity: 1, transform: null }, { opacity: 0, transform: null }]);
-  expect(out.duration).toBeLessThanOrEqual(t.crossFade);
-  expect(out.gone).toBe(true);
+  const out = await bannerMoving(page);
+  expect(out.opened).toEqual({ shown: true, duration: 0, keyframes: [] });
+  expect(out.closed).toEqual({ stillShown: false, duration: 0, keyframes: [] });
+  expect(out.hiddenAfter).toBe(true);
 });
 
 test('a copy shows only what showed of what left: clipped by its scroller, and drawn where it was even mid-motion', async ({ page }) => {
@@ -713,8 +709,15 @@ test('the same question redrawn while its wait runs says so on the new drawing, 
     d.upsert({ ...d.host.get('019a1b2c-codex-example'), status: 'waiting', statusSince: t, updatedAt: new Date(Date.now() + 60_000 + message.length).toISOString(), question });
   }, message);
   const marked = () => v.locator('.question-slot .question').evaluate((q) => q.hasAttribute('data-arriving'));
+  // The fake clock drives timers and animation frames, not native ResizeObserver delivery.
+  // Let watchMoves read each drawing before running the clock beyond its arrival wait.
+  const laidOut = () => v.locator('.question-slot .question').evaluate((q) => new Promise((resolve) => {
+    const observer = new ResizeObserver(() => { observer.disconnect(); resolve(); });
+    observer.observe(q);
+  }));
   await draw('Which?');
   await page.clock.runFor(20);
+  await laidOut();
   expect(await marked()).toBe(true);
   const first = await v.locator('.question-slot .question').elementHandle();
   const top = await v.locator('.question-slot .choice').first().evaluate((c) => c.getBoundingClientRect().top);
@@ -723,6 +726,7 @@ test('the same question redrawn while its wait runs says so on the new drawing, 
   await page.clock.runFor(280);
   await draw('Which?');
   await page.clock.runFor(20);
+  await laidOut();
   expect(await first.evaluate((q) => q.isConnected)).toBe(false);
   expect(await v.locator('.question-slot .choice').first().evaluate((c) => c.getBoundingClientRect().top)).toBe(top);
   expect(await marked()).toBe(true);
@@ -877,7 +881,7 @@ const typedAsItChanged = (page, change) => page.evaluate(async (change) => {
     }
   });
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-  const question = slot.querySelector('.question');
+  const question = slot.querySelector('.question:not(.resolved)');
   return { moved: question.querySelector('button.send').getBoundingClientRect().top - top > 1, armed: question.hasAttribute('data-arriving') };
 }, change);
 const notes = (id) => ({ id, kind: 'form', message: 'Notes?', askedAt: new Date().toISOString(), fields: [{ name: 'n', title: 'Notes', type: 'text' }] });
@@ -890,7 +894,10 @@ test('the same question drawn again, longer, as the person types in it still tak
 });
 
 test('a receipt above a question whose words grow as the person types below it still holds the question\'s click', async ({ page }) => {
-  await openDemo(page, { width: 390, height: 844 });
+  // A machine from before progress: the receipt's next words are its outcome (stale, as the
+  // question has changed since), which take more lines than "Sending…". With progress the next
+  // would be the shorter "Sent".
+  await openDemo(page, { width: 390, height: 844, hash: '&progress=0' });
   await askCodex(page, choices('q-answered'));
   const v = await open(page, CODEX);
   await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
@@ -1191,32 +1198,42 @@ test('a receipt that goes from above a question that stays moves it up, and a cl
   await openDemo(page);
   await askCodex(page, choices('q-first'));
   const v = await open(page, CODEX);
-  // The first answered, its response held back; a second question comes while it is on its way,
-  // under the first's receipt.
-  await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
+  // The first answered, its outcome held back after the host typed it; a second question comes
+  // while it is on its way, under the first's receipt.
+  await page.evaluate(() => window.agentBridgeDemo.host.holdBefore('result'));
   await v.locator('.question-slot .choice').first().click();
+  // Typed by the host (delivered, as its outcome will say), so the receipt's last word is not one
+  // that stays: a stale one would stay in the conversation as a closed question (#1193), not go.
+  await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.host.typed.length)).toBe(1);
   await askCodex(page, choices('q-second'), {}, 62_000);
   const receipt = v.locator('.answer-receipt');
   await expect(receipt).toHaveCount(1);
   await expect(v.locator('.question-slot .question[data-question="q-second"]')).toHaveCount(1);
-  // The first's answer comes back: the receipt has said its last word.
-  await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
-  await expect(receipt).not.toHaveAttribute('data-answer', /sending|waiting|progress/);
+  // The first's answer comes back delivered: the receipt has said its last word.
+  await page.evaluate(() => window.agentBridgeDemo.host.releaseBefore('result'));
+  await expect(receipt).toHaveAttribute('data-answer', 'delivered');
   await expect(v.locator('.question-slot .question[data-arriving]')).toHaveCount(0);
   const before = await answered(page);
   // The second, drawn again as it stays (reworded): the receipt goes and the question moves up
   // into its place, as a click is on its way.
-  const after = await page.evaluate(async () => {
+  // The click lands as soon as the redraw is in the page, before any frame: the guard the redraw
+  // set is looked at then, not at a later frame. That frame can start after the guard's 500 ms
+  // have run out on a slow runner, ahead of the same frame's ResizeObserver setting it again (#864).
+  const after = await page.evaluate(() => new Promise((resolve) => {
     const slot = document.querySelector('.session-view[data-id="019a1b2c-codex-example"] .question-slot');
     const d = window.agentBridgeDemo;
     const s = d.host.get('019a1b2c-codex-example');
+    const seen = new MutationObserver(() => {
+      if (slot.querySelector('.answer-receipt')) { return; }
+      seen.disconnect();
+      const question = slot.querySelector('.question');
+      const armed = question.hasAttribute('data-arriving');
+      question.querySelector('.choice').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+      resolve({ gone: true, same: question.dataset.question, armed });
+    });
+    seen.observe(slot, { childList: true, subtree: true });
     d.upsert({ ...s, question: { ...s.question, message: 'Which, now?' }, updatedAt: new Date(Date.now() + 63_000).toISOString() });
-    for (let i = 0; i < 120 && slot.querySelector('.answer-receipt'); i += 1) { await new Promise((r) => requestAnimationFrame(r)); }
-    const question = slot.querySelector('.question');
-    const armed = question.hasAttribute('data-arriving');
-    question.querySelector('.choice').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
-    return { gone: !slot.querySelector('.answer-receipt'), same: question.dataset.question, armed };
-  });
+  }));
   expect(after).toEqual({ gone: true, same: 'q-second', armed: true });
   await page.waitForTimeout(100);
   expect(await answered(page)).toBe(before);
@@ -1480,7 +1497,7 @@ test('a question already there takes no click for a moment when its session is o
   expect(await tapThrough('.session[data-id="019a1b2c-codex-example"] .row-main')).toBe(true);
   await page.waitForTimeout(100);
   expect(await answers()).toBe(before);
-  await view(page, CODEX).locator('.session-header .back').click();
+  await view(page, CODEX).locator('.session-bar .back').click();
   await expect(row(page, CODEX)).toBeVisible();
   expect(await tapThrough('#needs-you .needs-entry[data-id="019a1b2c-codex-example"] .needs-title')).toBe(true);
   await page.waitForTimeout(100);

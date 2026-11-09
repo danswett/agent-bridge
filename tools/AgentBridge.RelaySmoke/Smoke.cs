@@ -37,9 +37,11 @@ public sealed class Smoke(Uri relay, TextWriter output)
             var i = Array.IndexOf(args, name);
             return i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
         }
+        if (args.Length > 0 && args[0] == "host-probe") { return await HostProbe.RunAsync(args[1..], Console.Out); }
         if (Arg("--relay") is not { } url || !Uri.TryCreate(url, UriKind.Absolute, out var uri))
         {
             Console.Error.WriteLine("usage: relay-smoke --relay <https://...> [--origin <allowed web origin>] [--expect-version <v>] [--expect-push] [--expect-blobs] [--wait <seconds>]");
+            Console.Error.WriteLine("       relay-smoke host-probe ...  (ends a host connection in a chosen way; see HostProbe.cs)");
             Console.Error.WriteLine("  RELAY_SMOKE_TOKEN_KEY: the relay's token key (base64). With it, two devices are connected and talk.");
             return 2;
         }

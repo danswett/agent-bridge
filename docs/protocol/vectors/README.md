@@ -14,11 +14,18 @@ are generated.
 | `push.json` | `push.subscribe`, `push.unsubscribe`, `push.list` and the notice a push carries |
 | `launch.json` | `launch.options`, `session.launch`, folder-trust questions and `launch.trust.answer` |
 | `transfer.json` | A launch's `transfer`, the signed command's parts, `session.transfer` (host to host) |
-| `update.json` | `update.get`, `update.state`, `update.check` and `update.install` |
+| `manage.json` | `manage.get`, `manage.state`, `manage.restart` and `manage.hooks.repair` (#801), and the held `manage.config.set` and `manage.haToken.set` |
+| `update.json` | `update.get`, `update.state`, `update.check` and `update.install`, Update now's press, `busy` and codes (#1159) included |
 | `usage.json` | `usage.get`, `usage.update` and shared readings |
-| `signed-command.json` | Fixed keys, the commands they sign with the MAC each gives, and commands the machine must refuse |
+| `history.json` | `session.history`: its request, pages, turns, prompts and their senders, each part (responses, reasoning, tools, delegate events, questions and approvals with their outcomes), and the `missing`, `stale` and `unavailable` results ([v1-history.md](../v1-history.md)) |
+| `diagnostics.json` | `diagnostics.get`'s snapshot and its sections, and the content-free journal entries it carries (#802, #737) |
+| `signed-command.json` | Fixed keys, the commands they sign with the MAC each gives, and commands the machine must refuse; among them Update now's press at its longest, the one body past 2048 characters any action takes (up to 4096, for `update.install.now` only) |
+| `agent-envelope.json` | The signed agent-command envelope (#722, [agent-principals §4.3](../../design/agent-principals.md)): a `hostSign` public key, one valid envelope per action, and envelopes a verifier must refuse, each with its refusal code (a case may carry its own `hostSign`). Only the C# library replays this file so far; the PWA and other implementations do not. ECDSA signatures are not deterministic, so `EnvelopeTests.cs` in `tests/AgentBridge.AgentEnvelope.Tests` replays the committed file and rewrites it only with `UPDATE_PROTOCOL_VECTORS=1` |
 | `noise-ik-p256.json` | Not records: the channel's Noise IK handshake (#603) with fixed keys (spike S2's), each message and the transport messages after it, byte for byte. `NoiseTests.cs` in `tests/AgentBridge.Transport.Tests` writes it, and `pwa/test/unit/channels.test.mjs` replays it with WebCrypto |
 | `session-patches.json` | The recorded sessions in `tests/fixtures` as a subscriber that asked for patches is sent them: the snapshot's upsert, then each `session.patch` with the session the client must then hold |
+| `roster.json` | Not records: the signed device roster's encoding ([devices.md](../devices.md), #55): framing, keys, ids, entries and the code each refused one gets, presence assertions and enrollment values. `RosterVectorTests.cs` in `tests/AgentBridge.Roster.Tests` writes it, and `pwa/test/unit/roster-vectors.test.mjs` replays it |
+| `roster-state.json` | Not records: the roster's acceptance rule and state ([devices.md](../devices.md), #55): the §10 scenarios as entries offered in order, each verdict and refusal code, and the state a verifier then applies. `RosterStateVectorTests.cs` in `tests/AgentBridge.Roster.Tests` writes it, and `pwa/test/unit/roster-state.test.mjs` replays it through the PWA's port of the rule |
+| `roster-commands.json` | Not records: the roster's vetoes, person commands and head attestations ([devices.md](../devices.md), #55): each case's parser refusal or check code against one roster, and an attestation's key, message and MAC beside a signed command's under the same key. `RosterCommandTests.cs` in `tests/AgentBridge.Roster.Tests` writes it, and `pwa/test/unit/roster-commands.test.mjs` replays it |
 
 ## Shape
 

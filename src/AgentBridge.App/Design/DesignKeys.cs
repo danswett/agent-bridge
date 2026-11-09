@@ -129,6 +129,7 @@ static class DesignKeys
     [
         "AbIconAttach",
         "AbIconBack",
+        "AbIconCheck",
         "AbIconChevron",
         "AbIconClock",
         "AbIconCopy",
@@ -208,6 +209,9 @@ static class DesignKeys
         "AbMotionListItemExitDuration",
         "AbMotionListItemExitEase",
         "AbMotionListItemReduced",
+        "AbMotionShiftDuration",
+        "AbMotionShiftEase",
+        "AbMotionShiftReduced",
         "AbMotionGlyphDuration",
         "AbMotionGlyphEase",
         "AbMotionGlyphReduced",
@@ -216,6 +220,9 @@ static class DesignKeys
         "AbMotionActivityDotExitDuration",
         "AbMotionActivityDotExitEase",
         "AbMotionActivityDotReduced",
+        "AbMotionValueDuration",
+        "AbMotionValueEase",
+        "AbMotionValueReduced",
         "AbMotionSelectionDuration",
         "AbMotionSelectionEase",
         "AbMotionSelectionReduced",
@@ -249,6 +256,9 @@ static class DesignKeys
         "AbMotionReorderDuration",
         "AbMotionReorderEase",
         "AbMotionReorderReduced",
+        "AbMotionCollapseDuration",
+        "AbMotionCollapseEase",
+        "AbMotionCollapseReduced",
     ];
 
     // The bundled fonts and their licences, as the app's folder holds them

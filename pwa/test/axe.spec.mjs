@@ -18,15 +18,7 @@ const FAILING = new Set(['serious', 'critical']);
 
 // Known violations, each tracked by an issue. `selector` is matched against the element axe names,
 // so an entry covers those elements only and never the rule: the same rule elsewhere still fails.
-const KNOWN = [
-  // A row's name is its glyph's "title, status, machine" (ui.md §9); the row shows its facts and
-  // age as well.
-  { rule: 'label-content-name-mismatch', selector: '.session .row-main', issue: 365 },
-  // Bridge text on the selected fill, in light: 4.45:1 over the card, 4.09:1 over the shell.
-  { rule: 'color-contrast', selector: '.machine.selected .machine-state', issue: 366 },
-  { rule: 'color-contrast', selector: '.machine.selected .machine-update-check', issue: 366 },
-  { rule: 'color-contrast', selector: '.machine.selected .machine-update-install', issue: 366 },
-];
+const KNOWN = [];
 
 const THEMES = [
   { name: 'light', media: { colorScheme: 'light' } },
@@ -69,22 +61,29 @@ async function openDemo(page, query) {
 }
 
 // The serious and critical violations on the page as it is, less the known ones, as
-// "rule: selector: what to fix" lines.
-async function scan(page) {
+// "rule: selector: what to fix". only: { include, rules } scans those elements for those rules
+// alone, and then also returns the elements they passed on, so a scan that found nothing to
+// check can't pass.
+async function scan(page, only = null) {
   let violations;
+  let passes;
   for (let attempt = 1; ; attempt += 1) {
     // At rest: a fade still under way draws its text paler than it will be, which isn't the
     // contrast anyone reads (ui.md §5.3's fades last a few frames), and an element still at
     // opacity 0 isn't checked at all.
     const before = await motionsDone(page);
     if (before === null) { throw new Error('scan needs countMotions(page) before the page loads'); }
-    ({ violations } = await new AxeBuilder({ page }).withTags(TAGS).analyze());
+    const axe = new AxeBuilder({ page });
+    ({ violations, passes } = await (only ? axe.include(only.include).withRules(only.rules) : axe.withTags(TAGS)).analyze());
     // A motion that started while axe read the page (#551) makes what it read neither the page
     // before nor the page after, and may have hidden an element mid-fade from it: that reading is
     // thrown away and the page read again once at rest. A page that never comes to rest fails.
     const moved = (await motionsStarted(page)) - before;
     if (!moved) { break; }
-    if (attempt === 3) { return [`the page never came to rest: motions started during each of ${attempt} scans (${moved} in the last)`]; }
+    if (attempt === 3) {
+      const restless = [`the page never came to rest: motions started during each of ${attempt} scans (${moved} in the last)`];
+      return only ? { failed: restless, passed: [] } : restless;
+    }
   }
   const nodes = violations.filter((v) => FAILING.has(v.impact)).flatMap((v) => v.nodes.map((node) => ({ v, node })));
   // Whether each is a known one, in one call. A node has one selector, unless it is inside a frame
@@ -96,8 +95,42 @@ async function scan(page) {
     const els = document.querySelectorAll(target[0]);
     return els.length === 1 && selectors.some((s) => els[0].matches(s));
   }), nodes.map(({ v, node }) => ({ target: node.target, selectors: KNOWN.filter((k) => k.rule === v.id).map((k) => k.selector) })));
-  return nodes.filter((_, i) => !known[i]).map(({ v, node }) =>
+  const failed = nodes.filter((_, i) => !known[i]).map(({ v, node }) =>
     `${v.id} (${v.impact}): ${node.target.join(' >>> ')}: ${(node.failureSummary ?? v.help).replace(/\s+/g, ' ')}`);
+  return only ? { failed, passed: passes.flatMap((p) => p.nodes.map((n) => n.target.join(' >>> '))) } : failed;
+}
+
+// The two that were known before ui.md §9.1 settled them, each on its own, in light at both
+// widths: a session row's name holds every word the row draws (A1, #365), and a selected
+// machine's state and its Check and Install, words that would be Bridge on the selected tint,
+// read at 4.5:1 there, over a phone's shell and a desktop's layer (A8, #366).
+for (const layout of LAYOUTS) {
+  test.describe(`${layout.name} in light`, () => {
+    test.use({ viewport: layout.viewport, hasTouch: layout.phone });
+
+    test('every session row\'s name holds the words it draws, and a selected machine\'s state, Check and Install read at 4.5:1 on its tint', async ({ page }) => {
+      await page.emulateMedia({ colorScheme: 'light' });
+      await countMotions(page);
+      // Rows with every machine shown, which draw their machine, and with one, which draw their
+      // workspace.
+      for (const query of ['&machines=3', '&updates=1']) {
+        await openDemo(page, query);
+        const rows = await scan(page, { include: '.session .row-main', rules: ['label-content-name-mismatch'] });
+        expect(rows.failed, query).toEqual([]);
+        expect(rows.passed.length, query).toBe(await page.locator('.session .row-main').count());
+      }
+
+      await go(page, 'machines');
+      const selected = page.locator('.machine.selected');
+      await expect(selected.locator('.machine-update-install')).toBeVisible();
+      const words = await scan(page, { include: '.machine.selected', rules: ['color-contrast'] });
+      expect(words.failed).toEqual([]);
+      const checked = await page.evaluate((targets) => targets.map((t) => document.querySelector(t)?.className ?? ''), words.passed);
+      for (const part of ['machine-state', 'machine-update-check', 'machine-update-install']) {
+        expect(checked.some((c) => c.split(' ').includes(part)), `${part} is checked`).toBe(true);
+      }
+    });
+  });
 }
 
 for (const layout of LAYOUTS) {
@@ -220,6 +253,13 @@ for (const layout of LAYOUTS) {
 
         await go(page, 'settings');
         await check(page, 'settings');
+
+        // The keyboard check on, with its practice targets and a key listed (#1209).
+        await page.locator('#key-check-toggle').click();
+        await page.locator('.key-check-button').focus();
+        await page.keyboard.press('Alt+ArrowUp');
+        await expect(page.locator('#key-check-list li').filter({ hasText: 'key "ArrowUp"' })).toHaveCount(1);
+        await check(page, 'settings with the keyboard check on');
       });
 
       test('the sign-in page has no serious or critical violations', async ({ page }) => {

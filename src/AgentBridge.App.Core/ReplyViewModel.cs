@@ -38,13 +38,13 @@ public interface IImageShrinker
 // sends; what was sent comes out of the box only once the session has it.
 public sealed class ReplyViewModel : Observable
 {
-    static readonly Dictionary<string, Func<string, string>> OutcomeText = new()
+    static readonly Dictionary<string, string> OutcomeText = new()
     {
-        ["delivered"] = _ => "Delivered. The session has your reply.",
-        ["unconfirmed"] = at => $"Sent, but not confirmed. Check at the machine{at} before sending it again.",
-        ["stale"] = _ => "Not sent: the session has ended.",
-        ["busy"] = _ => "Not sent: an answer or another reply to this session is being delivered. Try again in a moment.",
-        ["refused"] = _ => "The machine refused this reply.",
+        ["delivered"] = "Delivered",
+        ["unconfirmed"] = ReceiptWords.Unconfirmed,
+        ["stale"] = "Not sent: the session has ended.",
+        ["busy"] = "Not sent: an answer or another reply to this session is being delivered. Try again in a moment.",
+        ["refused"] = "The machine refused this reply.",
     };
     static readonly Dictionary<string, string> ImageExtensions = new()
     {
@@ -55,7 +55,6 @@ public sealed class ReplyViewModel : Observable
     readonly HostConnection? host;
     readonly IImageShrinker? shrinker;
     readonly string sessionId;
-    readonly string at;
     readonly Func<bool> current;
     Session session;
     bool attach;
@@ -65,10 +64,21 @@ public sealed class ReplyViewModel : Observable
     string? error;
     string statusText = "";
     Tone statusTone;
+    ReceiptMark statusMark;
+    // Times the status line's words, as the receipt of the reply (Receipt, #600, #617).
+    readonly Receipt receipt;
+    readonly string? machineName;
     int preparing;
     (string Request, string Text, List<ReplyAttachment> Files)? sent;
     string? handled;
     bool pausedAfterBusy;
+    // The line's room stays from Send until the box is next typed in (ui.md §6.5), so the check and
+    // Send's return to rest move nothing either.
+    bool keepRoom;
+    // Text set by this view model (what went coming out of the box), not typed.
+    bool settingText;
+    bool sendCheck;
+    ITimer? checkTimer;
 
     // large: the host takes files up to AttachmentLimits.DirectBytes in chunks over the pipe
     // (sessions.attach.direct), not only AttachmentLimits.Bytes. current: whether the machine's rows
@@ -83,14 +93,70 @@ public sealed class ReplyViewModel : Observable
         this.shrinker = shrinker;
         this.current = current ?? (() => true);
         sessionId = session.Id;
-        at = string.IsNullOrEmpty(machineName) ? "" : $" on {machineName}";
+        this.machineName = machineName;
+        receipt = new Receipt(deliveries.Time, deliveries.Ui, Describe, Shown, Said);
         deliveries.Changed += OnDelivery;
         Refresh();
     }
 
     void OnDelivery(Delivery d) { if (d.Key == Key) { Refresh(); } }
 
-    public void Detach() => deliveries.Changed -= OnDelivery;
+    public void Detach()
+    {
+        deliveries.Changed -= OnDelivery;
+        receipt.Dispose();
+        checkTimer?.Dispose();
+    }
+
+    void Shown(ReceiptLine line)
+    {
+        StatusMark = line.Mark;
+        (StatusText, StatusTone) = (line.Whole, line.Tone);
+        Raise(nameof(ShowStatus));
+        Raise(nameof(SendStill));
+        Unsay();
+    }
+
+    // Send's check for about a second once its reply is delivered, then rest (ui.md §6.5). The
+    // expiry belongs to the request that showed the check: disposing the timer doesn't take back a
+    // SetCheck(false) already posted, which then cleared the next reply's check early (#625,
+    // Copilot 4486937437).
+    void ShowCheck()
+    {
+        checkTimer?.Dispose();
+        SetCheck(true);
+        var shownFor = handled;
+        checkTimer = deliveries.Time.CreateTimer(_ => deliveries.Ui.Post(() => { if (handled == shownFor) { SetCheck(false); } }), null, ReceiptTiming.SendCheckHold, Timeout.InfiniteTimeSpan);
+    }
+
+    void SetCheck(bool on)
+    {
+        if (sendCheck == on) { return; }
+        sendCheck = on;
+        Raise(nameof(SendCheck));
+        Raise(nameof(SendRest));
+        Raise(nameof(SendEnabled));
+    }
+
+    // The words changed: the line is named by them again until their own announcement, so a reader
+    // moving to it never hears what an earlier state said (the last reply's Delivered, say).
+    void Unsay()
+    {
+        if (Announcement.Length == 0) { return; }
+        Announcement = "";
+        Raise(nameof(Announcement));
+    }
+
+    // Cleared first, so the same words said again (the next reply delivered) are a change too.
+    void Said(string speech, bool urgent)
+    {
+        AnnouncementUrgent = urgent;
+        Raise(nameof(AnnouncementUrgent));
+        Announcement = "";
+        Raise(nameof(Announcement));
+        Announcement = speech;
+        Raise(nameof(Announcement));
+    }
 
     public string Key => $"reply|{sessionId}";
     public ObservableCollection<ReplyAttachment> Attachments { get; } = [];
@@ -99,8 +165,12 @@ public sealed class ReplyViewModel : Observable
     // the words, files and any reply on its way carry over.
     internal void TakeDraft(ReplyViewModel old)
     {
-        Text = old.text;
+        settingText = true;
+        try { Text = old.text; }
+        finally { settingText = false; }
         sent = old.sent;
+        // The room the old box kept stays kept (a reply's capability coming back rebuilds the box).
+        keepRoom = old.keepRoom;
         if (attach) { foreach (var f in old.Attachments) { Attachments.Add(f); } }
         Refresh();
     }
@@ -111,10 +181,18 @@ public sealed class ReplyViewModel : Observable
         set
         {
             if (!Set(ref text, value)) { return; }
+            // Not while the reply goes or its check shows: the line is the live region, and its outcome
+            // ("Reply delivered", within a second) is still to be said there.
+            if (!settingText && keepRoom && !Pending && !sendCheck)
+            {
+                keepRoom = false;
+                Raise(nameof(ShowStatus));
+            }
             Error = null;
             Raise(nameof(LineBreakHint));
             Raise(nameof(BytesText));
             Raise(nameof(CanSend));
+        Raise(nameof(SendEnabled));
         }
     }
 
@@ -141,6 +219,28 @@ public sealed class ReplyViewModel : Observable
     public bool HasError => error is not null;
     public string StatusText { get => statusText; private set => Set(ref statusText, value); }
     public Tone StatusTone { get => statusTone; private set => Set(ref statusTone, value); }
+    // What Send shows for the request (ui.md §6.5): its ring, the ring standing still, or its check.
+    public ReceiptMark StatusMark { get => statusMark; private set => Set(ref statusMark, value); }
+    // Send's ring stands still while the reply waits on this device for its machine to come back.
+    public bool SendStill => Pending && StatusMark == ReceiptMark.Still;
+    // Send's check, held about a second after its reply is delivered (ReceiptTiming.SendCheckHold).
+    public bool SendCheck => sendCheck;
+    // Send keeps its look while it shows its ring or its check (ui.md §6.5: the same size and colour
+    // throughout); Send itself still does nothing unless CanSend.
+    public bool SendEnabled => CanSend || Pending || sendCheck;
+    // Send's own arrow: neither its ring nor its check.
+    public bool SendRest => !Pending && !sendCheck;
+    // The line keeps its room from Send until the box is next typed in, empty unless it has
+    // something to say.
+    public bool ShowStatus => StatusText.Length > 0 || Pending || keepRoom;
+    // What a screen reader is to hear of the status line now: raised once for each, at most one a
+    // second (Receipt); the view raises LiveRegionChanged with it.
+    public string Announcement { get; private set; } = "";
+    // Whether that is a failure or a refusal, which a screen reader hears at once (assertively);
+    // set before Announcement is raised, so the view reads it with the words.
+    public bool AnnouncementUrgent { get; private set; }
+    // The words the view keeps room for (ReceiptWords.Room).
+    public string StatusRoom => ReceiptWords.Room;
 
     // Another machine's way to files over 256 KiB: the relay's blob store, and its device there.
     public IBlobStore? Blobs { get; init; }
@@ -267,6 +367,10 @@ public sealed class ReplyViewModel : Observable
         var sentText = text;
         var entry = deliveries.Submit(Key, Ops.SessionReply, r => Request(r, sentText, files), _ => false, payload: files, before: (call, progress) => UploadAsync(call, files, progress), replayAfterRestart: false);
         sent = (entry.Request, sentText, files);
+        keepRoom = true;
+        // Sent inside the last one's check: Send shows this one's ring, not that check.
+        checkTimer?.Dispose();
+        SetCheck(false);
         Refresh();
     }
 
@@ -274,6 +378,13 @@ public sealed class ReplyViewModel : Observable
     {
         if (!ShowResend || deliveries.Get(Key) is not { State: DeliveryState.Failed, Payload: List<ReplyAttachment> files } || sent is null) { return; }
         var sentText = sent.Value.Text;
+        // The line's room again, as Send kept it: typing after the failure let it go, and the check
+        // of a resend that delivers showed with the line collapsing under it (#625, Copilot 4487937147).
+        if (!keepRoom)
+        {
+            keepRoom = true;
+            Raise(nameof(ShowStatus));
+        }
         deliveries.Resend(Key, Ops.SessionReply, r => Request(r, sentText, files), (call, progress) => UploadAsync(call, files, progress));
     }
 
@@ -370,8 +481,11 @@ public sealed class ReplyViewModel : Observable
             if (e.Outcome == "delivered")
             {
                 // What went comes out of the box, and only that: anything typed meanwhile stays.
-                if (text.StartsWith(s.Text, StringComparison.Ordinal)) { Text = text[s.Text.Length..].TrimStart(); }
+                settingText = true;
+                try { if (text.StartsWith(s.Text, StringComparison.Ordinal)) { Text = text[s.Text.Length..].TrimStart(); } }
+                finally { settingText = false; }
                 foreach (var f in s.Files) { Attachments.Remove(f); }
+                ShowCheck();
             }
             else if (e.Outcome == "unconfirmed")
             {
@@ -382,41 +496,53 @@ public sealed class ReplyViewModel : Observable
         }
         if (e is { State: DeliveryState.Done, Outcome: "busy" } && !pausedAfterBusy && handled == e.Request && e.Request != busyFor)
         {
-            busyFor = e.Request;
+            var request = e.Request;
+            busyFor = request;
             pausedAfterBusy = true;
-            _ = Task.Delay(2000).ContinueWith(_ => deliveries.Ui.Post(() => { pausedAfterBusy = false; Raise(nameof(CanSend)); }), TaskScheduler.Default);
+            _ = Task.Delay(2000).ContinueWith(_ => deliveries.Ui.Post(() => { pausedAfterBusy = false; busyGone = request; Refresh(); }), TaskScheduler.Default);
         }
-        (StatusText, StatusTone) = preparing > 0 && !Pending ? ("Reading the attachment…", Tone.Progress) : e is null ? ("", Tone.None) : Describe(e);
+        // A busy refusal is a moment's news: once the pause has passed, the line goes (#1193).
+        receipt.Show(e is { State: DeliveryState.Done, Outcome: "busy" } && e.Request == busyGone ? null : e, preparing > 0 && !Pending ? new ReceiptLine("reading", "Reading the attachment…", null, Tone.Progress, ReceiptMark.Ring, null) : null);
         Raise(nameof(Held));
         Raise(nameof(HeldText));
         Raise(nameof(Pending));
+        Raise(nameof(SendRest));
+        Raise(nameof(SendStill));
+        Raise(nameof(ShowStatus));
         Raise(nameof(CanSend));
+        Raise(nameof(SendEnabled));
         Raise(nameof(CanAttach));
         Raise(nameof(ShowAttach));
         Raise(nameof(ShowResend));
     }
 
     string? busyFor;
+    string? busyGone;
 
-    (string, Tone) Describe(Delivery e)
+    // What a reply's progress or outcome says: the receipt under the box (Receipt; ui.md §6.5,
+    // decided on #617). Its files going; then nothing on the line through the stages and a
+    // delivery (Send's ring, then its check, say those), words for a stall or a wait; any other
+    // outcome keeps its words. stalled: whether the state it is in has stalled (Receipt).
+    ReceiptLine Describe(Delivery e, bool stalled)
     {
+        static ReceiptLine Said(string key, string text, Tone tone) => new(key, text, null, tone, ReceiptMark.None, $"Reply: {text}");
         switch (e.State)
         {
-            case DeliveryState.Sending when e.Progress is { Total: > 0 } p:
+            case DeliveryState.Sending when e.Progress is { Total: > 0 } p && p.Sent < p.Total:
                 var count = (e.Payload as List<ReplyAttachment>)?.Count ?? 1;
-                return ($"Sending {(count == 1 ? "the attachment" : $"{count} attachments")}… {100 * p.Sent / p.Total}%", Tone.Progress);
-            case DeliveryState.Sending:
-                var sending = e.Attempts > 1 ? "Sending again…" : "Sending…";
-                return (session.Status == SessionStatus.Working ? $"{sending} The session is working, and takes it at its next step." : sending, Tone.Progress);
-            case DeliveryState.Waiting:
-                return (e.Reason == "still being delivered" ? "The machine is still delivering it…" : $"Waiting for the {Product.HostName}{at}. Your reply goes as soon as it is back.", Tone.Progress);
+                var what = $"Sending {(count == 1 ? "the attachment" : $"{count} attachments")}…";
+                // Said once, not at every percent.
+                return new("upload", $"{what} {100 * p.Sent / p.Total}%", null, Tone.Progress, ReceiptMark.Ring, $"Reply: {what}");
+            case DeliveryState.Sending or DeliveryState.Waiting:
+                return ReceiptWords.InFlight(answer: false, e, machineName, stalled);
             case DeliveryState.Failed:
-                return ($"Couldn't send it: {e.Reason ?? "the machine said no"}.", Tone.Bad);
+                return Said("failed", $"Couldn't send it: {e.Reason ?? "the machine said no"}.", Tone.Bad);
         }
         var outcome = e.Outcome is { } o && OutcomeText.ContainsKey(o) ? o : "unconfirmed";
-        var t = OutcomeText[outcome](at);
+        if (outcome == "delivered") { return new("delivered", "", null, Tone.None, ReceiptMark.Check, "Reply delivered"); }
+        var t = OutcomeText[outcome];
         if (outcome == "refused" && e.Reason is { } r) { t = $"The machine refused this reply: {r}."; }
         if (outcome == "unconfirmed" && e.Reason is { } u) { t += $" ({u})"; }
-        return (t, outcome == "delivered" ? Tone.Ok : outcome == "refused" ? Tone.Bad : Tone.Warn);
+        return Said(outcome, t, outcome == "refused" ? Tone.Bad : Tone.Warn);
     }
 }

@@ -1,4 +1,5 @@
 using AgentBridge.Host;
+using AgentBridge.Host.Core.AgentMessaging;
 using AgentBridge.Protocol;
 using Xunit;
 
@@ -14,6 +15,22 @@ public sealed class HostSettingsTests : IDisposable
         return HostSettings.Load(folder);
     }
 
+    // Only a file not found is absent: a config.json that is a folder (or whose metadata cannot be
+    // read) was read as no settings at all, restore and remote approval on, by File.Exists.
+    [Fact]
+    public void A_config_json_that_cannot_be_read_as_a_file_turns_everything_off_rather_than_reading_as_absent()
+    {
+        Directory.CreateDirectory(Path.Combine(folder, HostSettings.FileName));
+
+        var (settings, problem) = HostSettings.Load(folder);
+
+        Assert.Contains("could not be read", problem);
+        Assert.False(settings.RestoreOnStart);
+        Assert.False(settings.RemoteApproval);
+        Assert.True(settings.ReadOnly);
+        Assert.Equal((HostSettings.Default, (string?)null), HostSettings.Load(Path.Combine(folder, "missing")));
+    }
+
     [Fact]
     public void Remote_approval_is_on_without_a_file_or_a_setting_and_off_only_when_set_false()
     {
@@ -21,6 +38,43 @@ public sealed class HostSettingsTests : IDisposable
         Assert.True(With("{ \"permissions\": {} }").Settings.RemoteApproval);
         Assert.True(With("{ \"permissions\": { \"remoteApproval\": true } }").Settings.RemoteApproval);
         Assert.Equal((new HostSettings(false), (string?)null), With("{ // mine\n \"permissions\": { \"remoteApproval\": false, } }"));
+    }
+
+    [Fact]
+    public void Escaped_approvals_are_confirmed_from_the_folder_trust_devices_until_a_list_of_their_own_replaces_them()
+    {
+        var unset = With("{ \"permissions\": {} }").Settings;
+        Assert.Equal((EscapedApproval.Confirm, (IReadOnlyList<string>?)null), (unset.EscapedApproval, unset.EscapedApprovalDevices));
+        var device = new string('a', 32);
+        var listed = With($"{{ \"permissions\": {{ \"escapedApproval\": \"machine\", \"escapedApprovalDevices\": [\"{device}\"] }} }}").Settings;
+        Assert.Equal(EscapedApproval.Machine, listed.EscapedApproval);
+        Assert.Equal([device], listed.EscapedApprovalDevices);
+        // An empty list is a list: no device, not the folder-trust ones.
+        Assert.Equal([], With("{ \"permissions\": { \"escapedApprovalDevices\": [] } }").Settings.EscapedApprovalDevices!);
+    }
+
+    [Theory]
+    [InlineData("{ \"permissions\": { \"escapedApproval\": \"always\" } }", "permissions.escapedApproval")]
+    [InlineData("{ \"permissions\": { \"escapedApproval\": true } }", "permissions.escapedApproval")]
+    [InlineData("{ \"permissions\": { \"escapedApprovalDevices\": \"all\" } }", "permissions.escapedApprovalDevices")]
+    [InlineData("{ \"permissions\": { \"escapedApprovalDevices\": [\"not-a-device\"] } }", "not a device id")]
+    public void An_escaped_approval_setting_that_cannot_be_read_approves_less_and_says_so(string text, string said)
+    {
+        var settings = With(text).Settings;
+
+        Assert.Contains(settings.PermissionProblems, p => p.Contains(said));
+        // Either it is approved only at the machine, or no device is listed for it.
+        Assert.True(settings.EscapedApproval == EscapedApproval.Machine || settings.EscapedApprovalDevices is { Count: 0 });
+        Assert.True(settings.RemoteApproval);
+    }
+
+    [Fact]
+    public void Remote_management_is_on_by_default_and_off_when_the_owner_or_a_spoiled_file_says_so()
+    {
+        Assert.True(With(null).Settings.RemoteManage);
+        Assert.False(With("{ \"permissions\": { \"remoteManage\": false } }").Settings.RemoteManage);
+        Assert.False(With("{ \"permissions\": { \"remoteApproval\": false, \"remoteManage\": false } }").Settings.RemoteManage);
+        Assert.False(With("{ \"permissions\": { \"remoteManage\": \"no\" } }").Settings.RemoteManage);
     }
 
     [Theory]
@@ -35,6 +89,7 @@ public sealed class HostSettingsTests : IDisposable
 
         Assert.False(settings.RemoteApproval);
         Assert.Contains("remote approval of permission prompts, launching, notifications and agent usage are off", problem);
+        Assert.Equal((EscapedApproval.Machine, 0), (settings.EscapedApproval, settings.EscapedApprovalDevices!.Count));
         Assert.False(settings.Launch.Enabled);
         Assert.False(settings.Push);
         Assert.True(settings.ReadOnly);
@@ -71,6 +126,25 @@ public sealed class HostSettingsTests : IDisposable
         if (problem is null) { Assert.Null(said); } else { Assert.Contains(problem, said); }
     }
 
+    [Theory]
+    [InlineData(null, true, null)]
+    [InlineData("{ \"sessions\": {} }", true, null)]
+    [InlineData("{ \"sessions\": { \"restoreOnStart\": true } }", true, null)]
+    [InlineData("{ \"sessions\": { \"restoreOnStart\": false } }", false, null)]
+    [InlineData("{ \"sessions\": { \"restoreOnStart\": \"yes\" } }", false, "sessions.restoreOnStart is not true or false")]
+    [InlineData("{ \"sessions\": true }", false, "sessions is not an object")]
+    [InlineData("not json", false, "is not valid")]
+    public void Restoring_sessions_after_a_reboot_is_on_unless_set_false_and_a_value_that_is_not_true_or_false_turns_it_off(string? text, bool on, string? problem)
+    {
+        var (settings, said) = With(text);
+
+        Assert.Equal(on, settings.RestoreOnStart);
+        if (problem is null) { Assert.Null(said); } else { Assert.Contains(problem, said); }
+        // Off because the file has a problem starts nothing, but keeps what a reboot took to offer;
+        // off because the person said so keeps nothing (sec-813).
+        Assert.Equal(problem is not null, settings.RestoreKept);
+    }
+
     [Fact]
     public void A_config_from_a_newer_schema_is_not_guessed_at()
     {
@@ -80,6 +154,35 @@ public sealed class HostSettingsTests : IDisposable
         Assert.False(settings.Launch.Enabled);
         Assert.Contains($"written by a newer {Product.Name}", problem);
         Assert.True(With("{ \"version\": 1 }").Settings.RemoteApproval);
+    }
+
+    [Theory]
+    [InlineData("{}", false)]
+    [InlineData("{\"permissions\":{\"phoneSignIn\":false}}", false)]
+    [InlineData("{\"permissions\":{\"phoneSignIn\":true}}", true)]
+    [InlineData("{\"permissions\":{\"phoneSignIn\":\"true\"}}", false)]
+    [InlineData("{\"version\":2,\"permissions\":{\"phoneSignIn\":true}}", false)]
+    [InlineData("{", false)]
+    public void Sign_in_from_devices_is_off_unless_the_machine_sets_it_true(string text, bool on)
+    {
+        Assert.False(HostSettings.Default.PhoneSignIn);
+        Assert.Equal(on, With(text).Settings.PhoneSignIn);
+    }
+
+    [Fact]
+    public void The_apps_switch_writes_sign_in_from_devices_beside_the_other_permissions()
+    {
+        With("{ \"permissions\": { \"remoteApproval\": false }, \"push\": { \"enabled\": false } }");
+
+        HostConfigFile.Patch(folder, null, null, phoneSignIn: true);
+        var (on, problem) = HostSettings.Load(folder);
+        HostConfigFile.Patch(folder, null, null, phoneSignIn: false);
+
+        Assert.Null(problem);
+        Assert.True(on.PhoneSignIn);
+        Assert.False(on.RemoteApproval);
+        Assert.False(on.Push);
+        Assert.False(HostSettings.Load(folder).Settings.PhoneSignIn);
     }
 
     [Theory]
@@ -175,6 +278,17 @@ public sealed class HostSettingsTests : IDisposable
     }
 
     [Fact]
+    public void Restoring_sessions_is_turned_off_at_the_machine_with_the_cli_and_only_with_true_or_false()
+    {
+        Assert.Equal(1, Run("config", "set", "sessions.restoreOnStart", "no"));
+        Assert.True(HostSettings.Load(folder).Settings.RestoreOnStart);
+        Assert.Equal(0, Run("config", "set", "sessions.restoreOnStart", "false"));
+        Assert.False(HostSettings.Load(folder).Settings.RestoreOnStart);
+        Assert.Equal(0, Run("config", "unset", "sessions.restoreOnStart"));
+        Assert.True(HostSettings.Load(folder).Settings.RestoreOnStart);
+    }
+
+    [Fact]
     public void The_home_assistant_connector_is_off_by_default_and_a_wrong_section_turns_off_only_it()
     {
         var off = With(null).Settings;
@@ -223,6 +337,60 @@ public sealed class HostSettingsTests : IDisposable
         Assert.Equal(0, Run("config", "set", "devBox.intervalMinutes", "10"));
         var devBox = HostSettings.Load(folder).Settings.DevBox;
         Assert.Equal((true, 10), (devBox.KeepAwake, devBox.IntervalMinutes));
+    }
+
+    [Fact]
+    public void Remote_agent_messaging_is_off_and_all_targets_refused_without_a_file_or_a_setting()
+    {
+        Assert.Equal(AgentMessagingSettings.Default, With(null).Settings.AgentMessaging);
+        Assert.Equal(("off", false), (AgentMessagingSettings.Default.Remote, AgentMessagingSettings.Default.AllowAllTargets));
+        // An upgrade or install that writes other sections never turns it on.
+        var settings = With("""{ "devBox": { "keepAwake": true } }""").Settings;
+        Assert.False(settings.AgentMessaging.RemoteEnabled);
+        Assert.Empty(settings.AgentMessagingProblems);
+    }
+
+    [Theory]
+    [InlineData("""{ "agentMessaging": { "remote": "own_account" } }""", "agentMessaging.remote")]
+    [InlineData("""{ "agentMessaging": { "remote": true } }""", "agentMessaging.remote")]
+    [InlineData("""{ "agentMessaging": { "remote": "on", "allowAllTargets": true } }""", "agentMessaging.remote")]
+    [InlineData("""{ "agentMessaging": { "allowAllTargets": "yes" } }""", "agentMessaging.allowAllTargets")]
+    [InlineData("""{ "agentMessaging": "own-account" }""", "agentMessaging is not an object")]
+    public void A_remote_agent_messaging_value_that_cannot_be_read_means_off_and_says_so(string text, string said)
+    {
+        var settings = With(text).Settings;
+
+        Assert.False(settings.AgentMessaging.RemoteEnabled);
+        Assert.False(settings.AgentMessaging.AllowAllTargets);
+        Assert.Contains(settings.SectionProblems, p => p.Contains(said, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Allow_all_targets_counts_only_while_remote_is_own_account()
+    {
+        Assert.False(With("""{ "agentMessaging": { "allowAllTargets": true } }""").Settings.AgentMessaging.AllowAllTargets);
+        Assert.True(With("""{ "agentMessaging": { "remote": "own-account", "allowAllTargets": true } }""").Settings.AgentMessaging.AllowAllTargets);
+        Assert.False(With("""{ "agentMessaging": { "remote": "own-account" } }""").Settings.AgentMessaging.AllowAllTargets);
+    }
+
+    [Fact]
+    public void Switching_remote_agent_messaging_off_takes_effect_on_the_next_read_without_a_restart_and_a_newer_file_is_off()
+    {
+        Assert.Equal(0, Run("config", "set", "agentMessaging.remote", "own-account"));
+        Assert.Contains("no restart", Said);
+        Assert.True(HostSettings.CurrentAgentMessaging(folder).RemoteEnabled);
+
+        Assert.Equal(0, Run("config", "set", "agentMessaging.remote", "off"));
+        Assert.False(HostSettings.CurrentAgentMessaging(folder).RemoteEnabled);
+
+        // config set refuses a value that would be read as off for being wrong.
+        Assert.Equal(1, Run("config", "set", "agentMessaging.remote", "everyone"));
+        Assert.Contains("Not written", Said);
+
+        File.WriteAllText(Path.Combine(folder, HostSettings.FileName), """{ "version": 99, "agentMessaging": { "remote": "own-account" } }""");
+        Assert.False(HostSettings.CurrentAgentMessaging(folder).RemoteEnabled);
+        File.WriteAllText(Path.Combine(folder, HostSettings.FileName), "{ not json");
+        Assert.False(HostSettings.CurrentAgentMessaging(folder).RemoteEnabled);
     }
 
     [Fact]

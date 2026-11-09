@@ -3,6 +3,7 @@
 // upsert when it types an answer, and plays any outcome a test scripts. Every field type,
 // every outcome, resends, a question changing under the person, and the keyboard.
 import { test, expect } from '@playwright/test';
+import { BRAND } from '../js/brand.js';
 import { open, view } from './nav.mjs';
 
 const COPILOT = '02d9e5d5-6b35-49bd-b083-39572fbff648';
@@ -12,6 +13,11 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 // A session's view (#179), where its question is answered.
 const card = (page, id) => view(page, id);
 const later = () => new Date(Date.now() + 1000).toISOString();
+// The session stops asking: its question leaves the list, as when it was withdrawn or answered elsewhere.
+const withdraw = (page, id = CODEX) => page.evaluate(({ id, t }) => {
+  const d = window.agentBridgeDemo;
+  d.upsert({ ...d.host.get(id), status: 'working', statusSince: t, updatedAt: t, question: null });
+}, { id, t: later() });
 const log = (page) => page.evaluate(() => window.agentBridgeDemo.host.answerLog);
 const typed = (page) => page.evaluate(() => window.agentBridgeDemo.host.typed);
 // Keeps the host's responses back while a test looks at an answer on its way: the answer
@@ -34,7 +40,7 @@ async function ask(page, question, id = CODEX) {
     const d = window.agentBridgeDemo;
     d.upsert({ ...d.host.get(id), status: 'waiting', statusSince: t, updatedAt: t, question: { kind: 'form', askedAt: t, ...question } });
   }, { id, question, t: later() });
-  const q = card(page, id).locator('.question');
+  const q = card(page, id).locator('.question:not(.resolved)');
   await expect(q).toHaveAttribute('data-question', question.id);
   await open(page, id);
   return q;
@@ -45,6 +51,64 @@ const script = (page, ...outcomes) => page.evaluate((o) => window.agentBridgeDem
 const choice = (extra = {}) => ({
   id: 'q-choice', message: 'Which **database**?',
   fields: [{ name: 'answer', title: 'Database', type: 'choice', required: true, options: [{ value: 'sqlite', label: 'SQLite' }, { value: 'pg', label: 'PostgreSQL (Recommended)' }, { value: 'none', label: 'Neither' }], ...extra }],
+});
+
+// #908: Other the CLI offers and the machine can't send yet, shown disabled with why.
+const OTHER_NOT_SENDABLE = "Your own answer can't be sent from here yet. Pick an option, or answer at the machine.";
+
+test('Other the machine cannot send yet is shown disabled, its label unchanged, with why under the choices and as their description', async ({ page }) => {
+  await openDemo(page);
+  const q = await ask(page, choice({ required: false, otherUnavailable: 'otherNotSendable' }));
+  const other = q.locator('.choices .other-unavailable');
+  await expect(other).toHaveText('Other…');
+  await expect(other).toBeDisabled();
+  const note = q.locator('.other-unavailable-note');
+  await expect(note).toHaveText(OTHER_NOT_SENDABLE);
+  await expect(note).toHaveClass(/field-desc/);
+  // Read as the choices' description, and the disabled Other's own.
+  const described = (loc) => loc.evaluate((el) => (el.getAttribute('aria-describedby') ?? '').split(' ').map((i) => document.getElementById(i)?.textContent ?? '').join(' '));
+  expect(await described(q.locator('.choices'))).toBe(OTHER_NOT_SENDABLE);
+  expect(await described(other)).toBe(OTHER_NOT_SENDABLE);
+  // No box to type in, and the options still answer on a tap. Tapped as open() left it, with
+  // the question's arrival wait over: nothing has moved it since.
+  await expect(q.locator('.other-box')).toHaveCount(0);
+  await q.locator('.choice[data-value="sqlite"]').click();
+  await expect.poll(() => log(page)).toHaveLength(1);
+  expect((await log(page))[0].fields).toEqual({ answer: 'sqlite' });
+});
+
+// The acceptance captures, apart from the tap above: resizing the page and scrolling the note
+// into view move the question, which starts its arrival wait again (#491), and a tap after
+// them was dropped on a slow runner, as it should be.
+test('Other the machine cannot send yet is captured disabled with why under it, light and dark', async ({ page }, info) => {
+  await openDemo(page);
+  const q = await ask(page, choice({ required: false, otherUnavailable: 'otherNotSendable' }));
+  // WebKit's screenshot adds an inline style of Playwright's own, which the page's CSP reports:
+  // the page's own reports are kept around it.
+  const reported = await page.evaluate(() => [...window.__cspViolations]);
+  // Tall enough that the reply box under the conversation covers none of the question.
+  await page.setViewportSize({ width: 900, height: 1600 });
+  await q.locator('.other-unavailable-note').scrollIntoViewIfNeeded();
+  for (const colorScheme of ['light', 'dark']) {
+    await page.emulateMedia({ colorScheme });
+    await expect(q.locator('.other-unavailable-note')).toHaveText(OTHER_NOT_SENDABLE);
+    await page.screenshot({ path: info.outputPath(`other-unavailable-${colorScheme}.png`), caret: 'initial', animations: 'disabled', clip: await q.boundingBox() });
+  }
+  await page.evaluate((r) => { window.__cspViolations = r; }, reported);
+  // Nothing was sent by looking.
+  expect(await log(page)).toEqual([]);
+});
+
+test('a refusal for Other the machine cannot send yet is said in the same words, after Not sent', async ({ page }) => {
+  await openDemo(page);
+  const q = await ask(page, choice({ required: false, allowOther: true }));
+  await script(page, { outcome: 'refused', reason: OTHER_NOT_SENDABLE, code: 'otherNotSendable' });
+  await q.locator('.other-toggle').click();
+  await q.locator('.other-box textarea').fill('DuckDB');
+  await q.locator('button.send').click();
+  await expect(q.locator('.answer-status')).toHaveText(`Not sent · ${OTHER_NOT_SENDABLE}`);
+  // A refusal: nothing went, so the person may answer again.
+  await expect(q.locator('button.send')).toBeEnabled();
 });
 
 test.afterEach(async ({ page }) => {
@@ -64,8 +128,11 @@ test.describe('on a phone', () => {
 
     await hold(page);
     await q.locator('.choice[data-value="sqlite"]').tap();
-    // While it is on its way: progress, and nothing can be tapped again.
-    await expect(q.locator('.answer-status')).toHaveText('Sending…');
+    // While it is on its way: the ring on the option tapped, heard and not seen (ui.md §6.5), and
+    // nothing can be tapped again.
+    await expect(q.locator('.receipt-live')).toHaveText('Sending answer');
+    await expect(q.locator('.answer-status')).toHaveText('');
+    expect(await q.locator('.choice[data-value="sqlite"]').evaluate((b) => getComputedStyle(b, '::after').content)).not.toBe('none');
     await expect(q.locator('.answer')).toHaveAttribute('aria-busy', 'true');
     await expect(q.locator('.choice[data-value="pg"]')).toBeDisabled();
     await expect(q.locator('.choice[data-value="sqlite"]')).toHaveAttribute('aria-pressed', 'true');
@@ -74,12 +141,73 @@ test.describe('on a phone', () => {
     // Delivered: the host's upsert takes the question away, and the card says what happened.
     await expect(q).toHaveCount(0);
     const receipt = card(page, CODEX).locator('.answer-receipt');
-    await expect(receipt).toHaveText('Your answer: Delivered. The session has your answer.');
+    await expect(receipt).toHaveText('You answered · SQLite');
     await expect(receipt).toHaveAttribute('data-answer', 'delivered');
     const [sent] = await log(page);
-    expect(sent).toEqual({ id: CODEX, question: 'q-choice', request: expect.stringMatching(UUID), fields: { answer: 'sqlite' } });
+    expect(sent).toEqual({ id: CODEX, question: 'q-choice', request: expect.stringMatching(UUID), fields: { answer: 'sqlite' }, progress: true });
     expect(await typed(page)).toHaveLength(1);
     await expect(card(page, CODEX)).toHaveAttribute('data-status', 'working');
+  });
+
+  test('an option\'s ring has a slot of its own at its end, clear of its words and its badge, so the option never resizes as it comes', async ({ page }) => {
+    await openDemo(page);
+    const q = await ask(page, choice({ default: 'pg' }));
+    const pg = q.locator('.choice[data-value="pg"]');
+    const before = await pg.boundingBox();
+    await hold(page);
+    await pg.tap();
+    await expect(q.locator('.answer')).toHaveAttribute('aria-busy', 'true');
+    const fit = await pg.evaluate((b) => {
+      const ring = getComputedStyle(b, '::after');
+      const px = (v) => parseFloat(v) || 0;
+      const reach = px(ring.right) + px(ring.width) + (ring.boxSizing === 'border-box' ? 0 : px(ring.borderLeftWidth) + px(ring.borderRightWidth));
+      const end = Math.max(...[...b.querySelectorAll('*')].map((c) => c.getBoundingClientRect().right));
+      return { reach, room: b.getBoundingClientRect().right - end, badges: b.querySelectorAll('.badge').length };
+    });
+    expect(fit.badges).toBeGreaterThan(0);
+    expect(fit.room).toBeGreaterThanOrEqual(fit.reach);
+    expect(await pg.boundingBox()).toEqual(before);
+    await release(page);
+  });
+  test('an answer is heard as sent, keeps its ring on the option tapped once the host takes the question away, shows the check, then resolves to You answered with its value, with no badge (#600)', async ({ page }) => {
+    await openDemo(page);
+    const q = await ask(page, choice());
+    await page.evaluate(() => { const h = window.agentBridgeDemo.host; h.holdBefore('typing'); h.holdBefore('result'); });
+    await q.locator('.choice[data-value="pg"]').tap();
+    await expect(q.locator('.receipt-live')).toHaveText('Answer sent');
+    await expect(q.locator('.answer-status')).toHaveText('');
+    await page.evaluate(() => window.agentBridgeDemo.host.releaseBefore('typing'));
+    // Typed: the host's upsert takes the question away, but not the answer's ring (ui.md §6.5, tap to
+    // answer): the panel stays while the answer is open, the option tapped pressed and nothing to tap.
+    await expect(card(page, CODEX)).toHaveAttribute('data-status', 'working');
+    const pg = q.locator('.choice[data-value="pg"]');
+    await expect(pg).toHaveAttribute('aria-pressed', 'true');
+    await expect(q.locator('.choice[data-value="sqlite"]')).toBeDisabled();
+    expect(await pg.evaluate((b) => getComputedStyle(b, '::after').content)).not.toBe('none');
+    await expect(q.locator('.answer-status')).toHaveText('');
+    await page.evaluate(() => window.agentBridgeDemo.host.releaseBefore('result'));
+    // Delivered: the check on the option, then the card resolves to what was answered.
+    await expect(pg).toHaveClass(/\bchecked\b/);
+    await expect(q).toHaveCount(0);
+    const receipt = card(page, CODEX).locator('.answer-receipt');
+    await expect(receipt).toHaveText('You answered · PostgreSQL (Recommended)');
+    await expect(receipt.locator('svg')).toHaveCount(0);
+    const [timing] = await page.evaluate(() => window.agentBridgeDemo.timings());
+    expect(timing).toMatchObject({ kind: 'answer', outcome: 'delivered', host: { typed: expect.any(Number) } });
+    expect(timing.client.map(([mark]) => mark)).toEqual(['sent', 'received', 'typed', 'result']);
+  });
+  test('with Other… open, an option tapped instead has the ring and Send answer has none', async ({ page }) => {
+    await openDemo(page);
+    const q = await ask(page, choice({ allowOther: true }));
+    await q.locator('.other-toggle').tap();
+    await expect(q.locator('button.send')).toBeVisible();
+    await hold(page);
+    await q.locator('.choice[data-value="sqlite"]').tap();
+    await expect(q.locator('.answer')).toHaveAttribute('aria-busy', 'true');
+
+    expect(await q.locator('.choice[data-value="sqlite"]').evaluate((b) => getComputedStyle(b, '::after').content)).not.toBe('none');
+    expect(await q.locator('button.send').evaluate((b) => getComputedStyle(b, '::after').content)).toBe('none');
+    await release(page);
   });
 
   test('Other… opens a box for an answer of your own, which must say something', async ({ page }) => {
@@ -208,7 +336,8 @@ test.describe('on a phone', () => {
     await expect(q.locator('.field[data-field="urgent"] .toggle[aria-pressed="true"]')).toHaveText('No');
     await expect(q.locator('.field')).toHaveCount(5);
     await q.getByRole('button', { name: 'Send answer' }).tap();
-    await expect(card(page, COPILOT).locator('.answer-receipt')).toHaveText('Your answer: Delivered. The session has your answer.');
+    // A form of several fields has no one value to say.
+    await expect(card(page, COPILOT).locator('.answer-receipt')).toHaveText('You answered');
     expect((await log(page))[0].fields).toEqual({ plan: 'go', urgent: false });
   });
 
@@ -221,14 +350,15 @@ test.describe('on a phone', () => {
     await q.getByRole('button', { name: 'Send answer' }).tap();
     await expect(q).toHaveCount(0);
     const [sent] = await log(page);
-    expect(sent).toEqual({ id: CODEX, question: 'q-plain', request: expect.stringMatching(UUID), text: 'The phone can answer now.' });
+    expect(sent).toEqual({ id: CODEX, question: 'q-plain', request: expect.stringMatching(UUID), text: 'The phone can answer now.', progress: true });
     expect(sent.fields).toBeUndefined();
   });
 
   test('an approval is big allow and deny buttons, answered on a tap', async ({ page }) => {
     await openDemo(page);
+    // As a host sends a Codex approval (#209): an older host's prose is answered at the machine.
     const q = await ask(page, {
-      id: 'q-approval', kind: 'approval', message: 'Run `rm -rf build`?',
+      id: 'q-approval', kind: 'approval', message: 'Allow **Bash**?\n\n```\nrm -rf build\n```',
       fields: [{ name: 'decision', type: 'choice', required: true, options: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No, and tell the agent what to do' }] }],
     });
     await expect(q.locator('.question-head')).toHaveText('Main agent asks');
@@ -264,7 +394,27 @@ test.describe('on a phone', () => {
 
     await q.getByRole('button', { name: 'Approve once' }).tap();
     await expect(q).toHaveCount(0);
-    expect((await log(page))[0]).toEqual({ id: COPILOT, question: 'r1#0123456789abcdef', request: expect.stringMatching(UUID), fields: { decision: 'approve' } });
+    expect((await log(page))[0]).toEqual({ id: COPILOT, question: 'r1#0123456789abcdef', request: expect.stringMatching(UUID), fields: { decision: 'approve' }, progress: true });
+  });
+
+  // Copilot asks a permission for each of a batch of parallel tool calls and shows them one at a
+  // time (#690): the card says how many wait, and the next comes as its own question.
+  test('permissions asked together are shown one at a time saying how many wait, each answered by its own id', async ({ page }) => {
+    await openDemo(page);
+    const q = await ask(page, { ...permission, waiting: 4 }, COPILOT);
+    await expect(q.locator('.note.queue')).toHaveText('1 of 4 permissions waiting');
+    await q.getByRole('button', { name: 'Approve once' }).tap();
+    await expect(q).toHaveCount(0);
+
+    const next = await ask(page, { ...permission, id: 'r2#fedcba9876543210', waiting: 3 }, COPILOT);
+    await expect(next.locator('.note.queue')).toHaveText('1 of 3 permissions waiting');
+    await next.getByRole('button', { name: 'Approve once' }).tap();
+    await expect(next).toHaveCount(0);
+    expect((await log(page)).map((a) => a.question)).toEqual(['r1#0123456789abcdef', 'r2#fedcba9876543210']);
+
+    // The last one waiting says nothing of a queue.
+    const last = await ask(page, { ...permission, id: 'r3#00112233aabbccdd' }, COPILOT);
+    await expect(last.locator('.note.queue')).toHaveCount(0);
   });
 
   test('a Copilot permission prompt at a machine with approving turned off says so and offers nothing', async ({ page }) => {
@@ -272,7 +422,7 @@ test.describe('on a phone', () => {
     const q = await ask(page, { ...permission, answerAtMachine: true }, COPILOT);
     await expect(q).toHaveAttribute('data-answerable', 'false');
     await expect(q.locator('.question-message')).toContainText('git push origin main --force-with-lease');
-    await expect(q.locator('.read-only-why')).toHaveText('Approving permission prompts from the phone is turned off on this machine. Answer at the machine on Demo machine.');
+    await expect(q.locator('.read-only-why')).toHaveText(`Approving permission prompts from ${BRAND.name} is turned off on this machine. Answer at the machine on Demo machine.`);
     // Nothing that answers.
     await expect(q.locator(':is(button, input, select, textarea):not(.md-copy)')).toHaveCount(0);
   });
@@ -296,15 +446,72 @@ test.describe('on a phone', () => {
 test.describe('outcomes', () => {
   test.use({ viewport: { width: 390, height: 664 } });
 
-  test('unconfirmed says to check at the machine, and nothing offers to send it again', async ({ page }) => {
+  // The machine's result can reach the phone before its update taking the question away: the card
+  // ends as it does the other way round. The demo host's question-clearing upsert is held back here
+  // until the result is in.
+  const resultFirst = (page) => page.evaluate(() => {
+    const h = window.agentBridgeDemo.host;
+    const upsert = h.upsert.bind(h);
+    const held = [];
+    h.upsert = (s) => { if (s.question === null) { held.push(s); } else { upsert(s); } };
+    window.__questionGoes = () => { h.upsert = upsert; for (const s of held) { upsert(s); } };
+  });
+
+  test('a delivered result before its question goes keeps the panel for the rest of its check, then resolves to You answered', async ({ page }) => {
+    await openDemo(page);
+    const q = await ask(page, choice());
+    await resultFirst(page);
+    // When the check went on, and when the panel went: a second apart, as when the question goes first.
+    await q.evaluate((el) => {
+      const option = el.querySelector('.choice[data-value="sqlite"]');
+      const at = window.__panel = {};
+      new MutationObserver(() => {
+        if (at.checked === undefined && option.classList.contains('checked')) { at.checked = performance.now(); }
+        if (at.gone === undefined && !el.isConnected) { at.gone = performance.now(); }
+      }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] });
+    });
+    const sqlite = q.locator('.choice[data-value="sqlite"]');
+    await sqlite.click();
+    await expect(sqlite).toHaveClass(/\bchecked\b/);
+    await page.evaluate(() => window.__questionGoes());
+    await expect(card(page, CODEX)).toHaveAttribute('data-status', 'working');
+    await expect(q).toHaveCount(0);
+    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveText('You answered · SQLite');
+    const at = await page.evaluate(() => window.__panel);
+    expect(at.gone - at.checked).toBeGreaterThanOrEqual(900);
+  });
+
+  test('an unconfirmed result before its question goes is amber on the panel while it is listed, then neutral in the conversation, keeping its words', async ({ page }) => {
+    await openDemo(page);
+    await script(page, 'unconfirmed');
+    const q = await ask(page, choice());
+    await resultFirst(page);
+    await q.locator('.choice[data-value="pg"]').click();
+    await expect(q).toHaveAttribute('data-answer', 'unconfirmed');
+    await expect(q.locator('.answer-status')).toHaveText('Sent, but not confirmed. Check the conversation. (the session stopped answering)');
+    await expect(q.locator('.answer-status')).toHaveClass(/\bwarn\b/);
+    await page.evaluate(() => window.__questionGoes());
+    await expect(card(page, CODEX)).toHaveAttribute('data-status', 'working');
+    const line = card(page, CODEX).locator('.answer-receipt');
+    await expect(line).toHaveText('Your answer: Sent, but not confirmed. Check the conversation. (the session stopped answering)');
+    await expect(line).toHaveClass(/\bclosed\b/);
+    await expect(card(page, CODEX).locator('.question.resolved')).toHaveCount(1);
+    await expect(card(page, CODEX).locator('.question.answerable')).toHaveCount(0);
+  });
+
+  test('unconfirmed says to check the conversation, in neutral words under the question as it was asked, and nothing offers to send it again', async ({ page }) => {
     await openDemo(page);
     await script(page, 'unconfirmed');
     const q = await ask(page, choice());
     await q.locator('.choice[data-value="pg"]').click();
-    const receipt = card(page, CODEX).locator('.answer-receipt');
-    // The host typed it, so the question goes; the receipt carries the outcome.
-    await expect(receipt).toHaveText('Your answer: Sent, but not confirmed. Check at the machine on Demo machine. (the session stopped answering)');
-    await expect(receipt).toHaveAttribute('data-answer', 'unconfirmed');
+    // The host typed it and took the question away, but it may not have gone in: one attempt per
+    // prompt (ui.md §6.5), so the closed item says so, in text2 and not amber.
+    const line = card(page, CODEX).locator('.answer-receipt');
+    await expect(line).toHaveText('Your answer: Sent, but not confirmed. Check the conversation. (the session stopped answering)');
+    await expect(line).toHaveAttribute('data-answer', 'unconfirmed');
+    await expect(line).toHaveClass(/\bclosed\b/);
+    await expect(line).not.toHaveClass(/\b(warn|bad)\b/);
+    await expect(card(page, CODEX).locator('.question.resolved')).toHaveAttribute('data-answerable', 'false');
     await page.waitForTimeout(500);
     expect(await log(page)).toHaveLength(1);
     await expect(card(page, CODEX).getByRole('button', { name: 'Try again' })).toHaveCount(0);
@@ -315,7 +522,7 @@ test.describe('outcomes', () => {
     await script(page, { outcome: 'queued', reason: 'a newer host' });
     const q = await ask(page, choice());
     await q.locator('.choice[data-value="pg"]').click();
-    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveText('Your answer: Sent, but not confirmed. Check at the machine on Demo machine. (a newer host)');
+    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveText('Your answer: Sent, but not confirmed. Check the conversation. (a newer host)');
   });
 
   test('stale says it was already answered or is gone, and holds the form', async ({ page }) => {
@@ -326,6 +533,165 @@ test.describe('outcomes', () => {
     await expect(q.locator('.answer-status')).toHaveText('Already answered or gone: the session is no longer asking this.');
     await expect(q).toHaveAttribute('data-answer', 'stale');
     await expect(q.locator('.choice[data-value="sqlite"]')).toBeDisabled();
+  });
+
+  // The question leaves the session list after an answer that did not go through (#1193): the line
+  // is about a question that is gone, so it is the question as it was asked with "No longer waiting"
+  // under it, in neutral words, kept in the conversation. Never amber or red, never "Try again",
+  // never "Your answer:", never a cause the host cannot prove.
+  for (const [what, scripted, live] of [
+    ['stale', 'stale', 'Already answered or gone: the session is no longer asking this.'],
+    ['busy', 'busy', 'Another answer to this session is being delivered. Try again in a moment.'],
+    ['refused', { outcome: 'refused', reason: 'the session is running elevated' }, 'The machine refused this answer: the session is running elevated.'],
+  ]) {
+    test(`a ${what} answer whose question has left the list leaves no warning, only "No longer waiting" under the question`, async ({ page }) => {
+      await openDemo(page);
+      await script(page, scripted);
+      const q = await ask(page, choice());
+      await q.locator('.choice[data-value="pg"]').click();
+      await expect(q.locator('.answer-status')).toHaveText(live);
+      await withdraw(page);
+      const line = card(page, CODEX).locator('.answer-receipt');
+      await expect(line).toHaveText('No longer waiting');
+      await expect(line).toHaveClass(/\bclosed\b/);
+      await expect(line).not.toHaveClass(/\b(warn|bad)\b/);
+      const resolved = card(page, CODEX).locator('.question.resolved');
+      await expect(resolved).toHaveCount(1);
+      await expect(resolved.locator('.question-message')).toContainText('database');
+      await expect(card(page, CODEX).locator('.question.answerable')).toHaveCount(0);
+      await expect(card(page, CODEX)).not.toContainText('Your answer:');
+      await expect(card(page, CODEX)).not.toContainText(/already answered|cancelled|another device/i);
+      await expect(card(page, CODEX).getByRole('button', { name: 'Try again' })).toHaveCount(0);
+    });
+  }
+
+  test('an answer that comes back stale after its question was replaced is drawn and said as closed, and is still there past 5 s', async ({ page }) => {
+    await openDemo(page);
+    await script(page, 'stale');
+    const q = await ask(page, choice());
+    await hold(page);
+    await q.locator('.choice[data-value="pg"]').click();
+    await expect(q).toHaveAttribute('data-answer', /^(sending|waiting)$/);
+    await ask(page, { id: 'q-next', message: 'Run the tests now?', fields: [{ name: 'ok', type: 'boolean', default: true }] });
+    await release(page);
+    const line = card(page, CODEX).locator('.answer-receipt');
+    await expect(line).toHaveText('No longer waiting');
+    await expect(page.locator('.receipt-live, .receipt-alert').filter({ hasText: /already answered/i })).toHaveCount(0);
+    // The closed question stays in the conversation, above the new one.
+    await page.waitForTimeout(5500);
+    await expect(line).toHaveText('No longer waiting');
+    await expect(card(page, CODEX).locator('.question.resolved')).toHaveCount(1);
+  });
+
+  test('a closed question stays in the conversation through the next question and the next turn, and only a delivered answer is dropped by it', async ({ page }) => {
+    await openDemo(page);
+    await script(page, 'stale');
+    const q = await ask(page, choice());
+    await q.locator('.choice[data-value="pg"]').click();
+    await withdraw(page);
+    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveText('No longer waiting');
+    // The session asks again, and works again: the closed question is still there above it.
+    await script(page, 'delivered');
+    const next = await ask(page, { id: 'q-next', message: 'And the **cache**?', fields: [{ name: 'c', title: 'Cache', type: 'choice', required: true, options: [{ value: 'redis', label: 'Redis' }, { value: 'none', label: 'None' }] }] });
+    await expect(card(page, CODEX).locator('.question.resolved')).toHaveCount(1);
+    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveText('No longer waiting');
+    await next.locator('.choice[data-value="redis"]').click();
+    await expect(card(page, CODEX).locator('.answer-receipt').last()).toHaveText('You answered · Redis');
+    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveCount(2);
+  });
+
+  test('"Your answer:" says an answer the person gave only for one on its way or one that may have gone in; a delivered one says You answered', async ({ page }) => {
+    await openDemo(page);
+    await script(page, 'unconfirmed');
+    const q = await ask(page, choice());
+    await q.locator('.choice[data-value="pg"]').click();
+    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveText(/^Your answer: Sent, but not confirmed/);
+    await script(page, 'delivered');
+    const next = await ask(page, { ...choice(), id: 'q-two' });
+    await next.locator('.choice[data-value="sqlite"]').click();
+    await expect(card(page, CODEX).locator('.answer-receipt').last()).toHaveText('You answered · SQLite');
+  });
+
+  // The host cancelled a form it left part answered (code formReset, #1123): the question was not
+  // withdrawn or answered elsewhere, and none of the answer went in.
+  const FORM_RESET = { outcome: 'stale', code: 'formReset', reason: 'this question is out of date: the answer was left part answered at the machine, so the host cancelled the form there, and the session did not ask it again' };
+  const NOT_DELIVERED = 'Not delivered: the form could not take your answer at the machine.';
+  const form = () => ({
+    id: 'q-form', message: 'Which **database**, and why?',
+    fields: [
+      { name: 'db', title: 'Database', type: 'choice', required: true, options: [{ value: 'sqlite', label: 'SQLite' }, { value: 'pg', label: 'PostgreSQL' }] },
+      { name: 'why', title: 'Why', type: 'text', required: true },
+    ],
+  });
+
+  test('a stale answer for a form the host cancelled says it was not delivered, keeps the words with Try again, and never says already answered', async ({ page }) => {
+    await openDemo(page);
+    await script(page, FORM_RESET, 'delivered');
+    const q = await ask(page, form());
+    await q.getByRole('radio', { name: 'PostgreSQL' }).check();
+    await q.getByRole('textbox', { name: 'Why' }).fill('it has the JSON I need');
+    await q.getByRole('button', { name: 'Send answer' }).click();
+    await expect(q.locator('.answer-status')).toHaveText(NOT_DELIVERED);
+    await expect(q).not.toContainText(/already answered/i);
+    await expect(q.locator('.answer-status')).not.toContainText('Your answer');
+    // Still listed: what was typed is still there, and goes again as a new request.
+    await expect(q.getByRole('textbox', { name: 'Why' })).toHaveValue('it has the JSON I need');
+    // A press right as the card moved is held back a moment (the card's guard); this one is not.
+    await page.waitForTimeout(800);
+    await q.getByRole('button', { name: 'Try again' }).click();
+    await expect(q).toHaveCount(0);
+    const [first, second] = await log(page);
+    expect(second.request).not.toBe(first.request);
+    expect(second.fields.why).toBe('it has the JSON I need');
+  });
+
+  test('words changed in a form after the host cancelled it are kept when the question is then withdrawn', async ({ page }) => {
+    await openDemo(page);
+    await script(page, FORM_RESET);
+    const q = await ask(page, form());
+    await q.getByRole('radio', { name: 'PostgreSQL' }).check();
+    await q.getByRole('textbox', { name: 'Why' }).fill('it has the JSON I need');
+    await q.getByRole('button', { name: 'Send answer' }).click();
+    await expect(q.locator('.answer-status')).toHaveText(NOT_DELIVERED);
+    await q.getByRole('textbox', { name: 'Why' }).fill('it has the JSON I need, and better tooling');
+    await withdraw(page);
+    await expect(card(page, CODEX).locator('.question-changed textarea')).toHaveValue(/better tooling/);
+  });
+
+  test('a form the host cancelled keeps its Not delivered item, not a "changed" note, when the question is redrawn and then withdrawn', async ({ page }) => {
+    await openDemo(page);
+    await script(page, FORM_RESET);
+    const q = await ask(page, form());
+    await q.getByRole('radio', { name: 'PostgreSQL' }).check();
+    await q.getByRole('textbox', { name: 'Why' }).fill('it has the JSON I need');
+    await q.getByRole('button', { name: 'Send answer' }).click();
+    await expect(q.locator('.answer-status')).toHaveText(NOT_DELIVERED);
+    // The same question drawn again (reworded) builds the panel again, with what was typed.
+    await ask(page, { ...form(), message: 'Which **database**, and why? (reworded)' });
+    await expect(q.locator('.question-message')).toContainText('reworded');
+    await withdraw(page);
+    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveText(NOT_DELIVERED);
+    await expect(card(page, CODEX).locator('.answer-kept textarea')).toHaveValue('Database: PostgreSQL\nWhy: it has the JSON I need');
+    await expect(card(page, CODEX).locator('.question-changed')).toHaveCount(0);
+  });
+
+  test('a form the host cancelled, its question gone from the list, keeps what the person typed to read and copy, and is not "No longer waiting"', async ({ page, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']).catch(() => {});
+    await openDemo(page);
+    await script(page, FORM_RESET);
+    const q = await ask(page, form());
+    await q.getByRole('radio', { name: 'PostgreSQL' }).check();
+    await q.getByRole('textbox', { name: 'Why' }).fill('it has the JSON I need');
+    await q.getByRole('button', { name: 'Send answer' }).click();
+    await expect(q.locator('.answer-status')).toHaveText(NOT_DELIVERED);
+    await withdraw(page);
+    const line = card(page, CODEX).locator('.answer-receipt');
+    await expect(line).toHaveText(NOT_DELIVERED);
+    await expect(line).toHaveClass(/\bclosed\b/);
+    await expect(card(page, CODEX)).not.toContainText(/No longer waiting|already answered|Your answer:/i);
+    const kept = card(page, CODEX).locator('.answer-kept');
+    await expect(kept.getByRole('textbox', { name: 'What you typed' })).toHaveValue('Database: PostgreSQL\nWhy: it has the JSON I need');
+    await expect(kept.getByRole('button', { name: 'Copy' })).toBeVisible();
   });
 
   test('busy lets you try again after a moment, as a new request', async ({ page }) => {
@@ -367,8 +733,8 @@ test.describe('outcomes', () => {
     await script(page, { outcome: 'delivered', drop: true });
     const q = await ask(page, choice());
     await q.locator('.choice[data-value="pg"]').click();
-    await expect(q.locator('.answer-status')).toHaveText(/Sending|Waiting for the connection/);
-    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveText('Your answer: Delivered. The session has your answer.', { timeout: 10000 });
+    await expect(q).toHaveAttribute('data-answer', /^(sending|waiting)$/);
+    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveText('You answered · PostgreSQL (Recommended)', { timeout: 10000 });
     const sent = await log(page);
     expect(sent.length).toBeGreaterThanOrEqual(2);
     expect(new Set(sent.map((r) => r.request)).size).toBe(1);
@@ -391,6 +757,25 @@ test.describe('when the question changes', () => {
     await expect(changed).toHaveCount(0);
     await ask(page, { id: 'q-new', message: 'Something else, reworded?', fields: [] });
     await expect(card(page, CODEX).locator('.question-changed')).toHaveCount(0);
+  });
+
+  test('the note for text kept from a question that went is neutral, stays through the next turn, and goes once that text is sent', async ({ page }) => {
+    await openDemo(page);
+    const q = await ask(page, { id: 'q-old', message: 'Notes?', fields: [{ name: 'n', title: 'Notes', type: 'text' }] });
+    await q.getByRole('textbox', { name: 'Notes' }).fill('half a thought');
+    await ask(page, { id: 'q-new', message: 'Something else?', fields: [{ name: 'n', title: 'Notes', type: 'text' }] });
+    const changed = card(page, CODEX).locator('.question-changed');
+    await expect(changed.locator('p.note')).not.toHaveClass(/\bwarn\b/);
+    await expect(changed).not.toHaveAttribute('role', 'alert');
+    // The next turn: the session works, then asks again. The text is still kept.
+    await page.evaluate(({ id, t }) => { const d = window.agentBridgeDemo; d.upsert({ ...d.host.get(id), status: 'working', statusSince: t, updatedAt: t, question: null }); }, { id: CODEX, t: later() });
+    await ask(page, { id: 'q-third', message: 'Third?', fields: [{ name: 'n', title: 'Notes', type: 'text' }] });
+    await expect(changed.getByRole('textbox', { name: 'What you typed' })).toHaveValue('half a thought');
+    // Sent, in an answer to the question now asked: it goes.
+    const third = card(page, CODEX).locator('.question.answerable');
+    await third.getByRole('textbox', { name: 'Notes' }).fill('half a thought, finished');
+    await third.getByRole('button', { name: 'Send answer' }).click();
+    await expect(changed).toHaveCount(0);
   });
 
   test('text typed for a question that goes away is kept too', async ({ page }) => {

@@ -31,7 +31,7 @@
          name, "AgentBridge"), its icon, and through build/app-channels.ps1 the installer's title
          and icon. The app's code reads the same from Product.Name and AppAssets; AppBrandTests
          holds them together. AssemblyName and the files' names are identifiers and stay (#541). -->
-    <Product>Agent Bridge</Product>
+    <Product>Slipgates</Product>
     <AssemblyTitle>$(Product)</AssemblyTitle>
     <AppIconFile>Assets\AgentBridge.ico</AppIconFile>
     <AppLogoFile>Assets\AgentBridge.png</AppLogoFile>
@@ -65,6 +65,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\AgentBridge.App.Core\AgentBridge.App.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The host's own reader of the release list (#530, #927), so the app and the host read releases one way. -->
+    <Compile Include="..\AgentBridge.Host\DiscoveredGithubSource.cs" Link="DiscoveredGithubSource.cs" />
   </ItemGroup>
 
 </Project>

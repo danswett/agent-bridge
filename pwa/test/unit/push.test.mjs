@@ -1,7 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PushRegistrar, base64UrlToBytes, closeNotices, closeStaleNotices, fetchVapidKey, noticeTag, pushSupport } from '../../js/push.js';
+import { PushRegistrar, base64UrlToBytes, closeNotices, closeReadNotices, closeStaleNotices, fetchVapidKey, noticeTag, pushSupport } from '../../js/push.js';
 import { SessionsStore } from '../../js/sessions-store.js';
+import { Reading } from '../../js/reading.js';
+import { deviceName } from '../../js/identity.js';
+import { BRAND } from '../../js/brand.js';
 
 const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Mobile/15E148 Safari/604.1';
 const IPAD_AS_MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15';
@@ -215,6 +218,278 @@ test('question notifications this app sees answered are closed; others stay', as
   assert.equal(noticeTag('m1', 's1'), 'm1:s1');
   assert.ok(tagged.every((n) => n.closed));
 });
+
+// ---- the session being read (#1190) ----
+
+function readingPage({ visible = true, keepaliveMs = 30, laterMs = [], close = null } = {}) {
+  const doc = { visibilityState: visible ? 'visible' : 'hidden', fire: [], addEventListener(type, fn) { if (type === 'visibilitychange') { this.fire.push(fn); } }, removeEventListener(type, fn) { this.fire = this.fire.filter((f) => f !== fn); } };
+  const inputs = [];
+  const listening = new Set();
+  const win = {
+    addEventListener(type, fn, options) { listening.add(fn); if (options?.passive === true) { inputs.push(fn); } },
+    removeEventListener(type, fn) { listening.delete(fn); const i = inputs.indexOf(fn); if (i >= 0) { inputs.splice(i, 1); } },
+  };
+  const changes = [];
+  const focus = [];
+  const closed = [];
+  const clock = { t: 1_000_000 };
+  const said = { refreshes: 0, idle: null };
+  const hosts = {
+    setFocus: ({ idle, ...f }) => { said.idle = idle; if (f.question === null) { delete f.question; } focus.push(f); },
+    refreshFocus: () => { said.refreshes += 1; },
+    sessions: { onChange: (fn) => { changes.push(fn); return () => { changes.splice(changes.indexOf(fn), 1); }; } },
+  };
+  const reading = new Reading({ hosts, doc, win, delayMs: 20, laterMs, keepaliveMs, now: () => clock.t, close: close ?? (async (h, s, q) => { closed.push(q ? `${h}/${s}/${q}` : `${h}/${s}`); }) });
+  const initial = focus.splice(0);
+  const flip = (state) => { doc.visibilityState = state; for (const fn of doc.fire) { fn(); } };
+  const input = (advanceMs = 300) => { clock.t += advanceMs; for (const fn of inputs) { fn(); } };
+  const settle = () => new Promise((r) => { setTimeout(r, 60); });
+  return { reading, focus, initial, said, clock, input, closed, changes, flip, settle, doc, win, listening, hosts };
+}
+
+
+test('the page says what it shows as soon as it starts, even with no session open', () => {
+  assert.deepEqual(readingPage().initial, [{ visible: true, hostId: null, id: null }]);
+  assert.deepEqual(readingPage({ visible: false }).initial, [{ visible: false, hostId: null, id: null }]);
+});
+
+test('the age of the last input is read as it is sent, and is unknown, not 0, until there has been input', () => {
+  const { reading, said, clock, input } = readingPage();
+  assert.equal(reading.idleMs(), null);
+  assert.equal(said.idle(), null);
+  input();
+  clock.t += 5000;
+  assert.equal(said.idle(), 5000);
+  clock.t += 2500;
+  assert.equal(said.idle(), 7500);
+});
+
+test('the first input says the person is active at once, a burst of input says nothing more, and a keepalive follows only while input continues', async () => {
+  const { said, clock, input, settle } = readingPage();
+  input();
+  assert.equal(said.refreshes, 1);
+  for (let i = 0; i < 40; i++) { input(300); }
+  assert.equal(said.refreshes, 1, 'a burst of input is not said again');
+  await settle();
+  assert.ok(said.refreshes >= 2, 'kept alive while input goes on');
+  // Input stops: the next tick finds the person idle, and nothing goes after it.
+  clock.t += 120_000;
+  await settle();
+  const before = said.refreshes;
+  await settle();
+  await settle();
+  assert.equal(said.refreshes, before, 'nothing while idle');
+  input();
+  assert.equal(said.refreshes, before + 1, 'input after being idle says so at once');
+  clock.t += 120_000;
+});
+
+test('nothing about input is said while the page is hidden, and the keepalive stops', async () => {
+  const { focus, said, input, flip, settle } = readingPage();
+  input();
+  flip('hidden');
+  assert.deepEqual(focus, [{ visible: false, hostId: null, id: null }]);
+  const before = said.refreshes;
+  input();
+  await settle();
+  await settle();
+  assert.equal(said.refreshes, before);
+  assert.equal(focus.length, 1, 'hidden is said once');
+});
+
+test("opening a session while the page is in sight tells the machines and closes that session's notices, no other's", async () => {
+  const { reading, focus, closed } = readingPage();
+  reading.open({ hostId: 'm1', id: 's1' });
+  reading.open({ hostId: 'm1', id: 's1' });
+  await Promise.resolve();
+  assert.deepEqual(focus, [{ visible: true, hostId: 'm1', id: 's1' }]);
+  assert.deepEqual(closed, ['m1/s1']);
+  reading.open(null);
+  await Promise.resolve();
+  assert.deepEqual(focus.at(-1), { visible: true, hostId: null, id: null });
+  assert.deepEqual(closed, ['m1/s1'], 'the list has no session to close notices of');
+});
+
+
+test('a hidden page closes no notices and says it is hidden; coming back to the open session closes them', async () => {
+  const { reading, focus, closed, flip } = readingPage({ visible: false });
+  reading.open({ hostId: 'm1', id: 's1' });
+  await Promise.resolve();
+  assert.deepEqual(focus, [{ visible: false, hostId: 'm1', id: 's1' }]);
+  assert.deepEqual(closed, []);
+  flip('visible');
+  await Promise.resolve();
+  assert.deepEqual(focus.at(-1), { visible: true, hostId: 'm1', id: 's1' });
+  assert.deepEqual(closed, ['m1/s1']);
+  flip('hidden');
+  await Promise.resolve();
+  assert.deepEqual(focus.at(-1), { visible: false, hostId: 'm1', id: 's1' });
+  assert.deepEqual(closed, ['m1/s1']);
+});
+
+test('the question its card shows is said with the open session, and said again when it changes', async () => {
+  const { reading, focus, closed } = readingPage();
+  reading.open({ hostId: 'm1', id: 's1', question: 'q1' });
+  reading.open({ hostId: 'm1', id: 's1', question: 'q1' });
+  reading.open({ hostId: 'm1', id: 's1', question: 'q2' });
+  reading.open({ hostId: 'm1', id: 's1', question: null });
+  await Promise.resolve();
+  assert.deepEqual(focus, [
+    { visible: true, hostId: 'm1', id: 's1', question: 'q1' },
+    { visible: true, hostId: 'm1', id: 's1', question: 'q2' },
+    { visible: true, hostId: 'm1', id: 's1' },
+  ]);
+  assert.deepEqual(closed, ['m1/s1/q1', 'm1/s1/q2', 'm1/s1']);
+});
+
+test('only a notice of the question on screen is closed with a session being read; its other notices go, and a question not shown stays', async () => {
+  const tagged = () => [
+    notification({ kind: 'question', machine: 'm1', session: 's1', question: 'q1' }),
+    notification({ kind: 'question', machine: 'm1', session: 's1', question: 'q2' }),
+    notification({ kind: 'finished', machine: 'm1', session: 's1' }),
+  ];
+  let shown = tagged();
+  const registration = { getNotifications: async (filter) => { assert.deepEqual(filter, { tag: noticeTag('m1', 's1') }); return shown; } };
+  await closeReadNotices(registration, 'm1', 's1', 'q2');
+  assert.deepEqual(shown.map((n) => n.closed), [false, true, true]);
+  shown = tagged();
+  await closeReadNotices(registration, 'm1', 's1', null);
+  assert.deepEqual(shown.map((n) => n.closed), [false, false, true], 'no question on screen: no question notice is read');
+});
+
+test('a stopped Reading has let go of every listener and says nothing more', async () => {
+  const { reading, focus, said, input, flip, settle, doc, listening, changes, closed } = readingPage();
+  reading.open({ hostId: 'm1', id: 's1' });
+  input();
+  assert.ok(listening.size > 0 && doc.fire.length === 1 && changes.length === 1);
+  reading.stop();
+  await Promise.resolve();
+  assert.equal(listening.size, 0, 'no window listener left');
+  assert.equal(doc.fire.length, 0, 'no visibility listener left');
+  assert.equal(changes.length, 0, 'no sessions listener left');
+  const [sent, refreshed, shut] = [focus.length, said.refreshes, closed.length];
+  reading.open({ hostId: 'm1', id: 's2' });
+  flip('hidden');
+  flip('visible');
+  await settle();
+  await settle();
+  assert.deepEqual([focus.length, said.refreshes, closed.length], [sent, refreshed, shut]);
+});
+
+test('a Reading made for a later sign-in is the only one listening once the earlier is stopped', () => {
+  const first = readingPage();
+  const alone = first.listening.size;
+  first.reading.stop();
+  // The same page again, as begin() makes it: a second Reading on the same window and document.
+  const again = new Reading({ hosts: first.hosts, doc: first.doc, win: first.win, close: async () => {} });
+  assert.equal(first.listening.size, alone, 'the listeners are the second Reading\'s alone');
+  assert.equal(first.doc.fire.length, 1);
+  assert.equal(first.changes.length, 1);
+  again.stop();
+  assert.equal(first.listening.size, 0);
+});
+
+// The notices the page has shown, found by their tag as the registration finds them.
+function noticeWorld() {
+  const shown = [];
+  const registration = { getNotifications: async ({ tag }) => shown.filter((n) => n.tag === tag) };
+  const appear = (hostId, sessionId, data = {}) => {
+    const n = { ...notification({ kind: 'finished', ...data }), tag: noticeTag(hostId, sessionId) };
+    shown.push(n);
+    return n;
+  };
+  return { appear, close: (hostId, sessionId, question) => closeReadNotices(registration, hostId, sessionId, question) };
+}
+const wait = (ms) => new Promise((r) => { setTimeout(r, ms); });
+const changeOf = (page, hostId, id) => { for (const fn of page.changes) { fn({ type: 'upsert', hostId, id }); } };
+
+test("a notice shown after the first look at a change, as the host's delayed push is, is closed by a later pass", async () => {
+  const w = noticeWorld();
+  const page = readingPage({ laterMs: [80, 160], close: w.close });
+  page.reading.open({ hostId: 'm1', id: 's1' });
+  changeOf(page, 'm1', 's1');
+  await wait(50);
+  const late = w.appear('m1', 's1');
+  const other = w.appear('m1', 's2');
+  assert.equal(late.closed, false);
+  await wait(80);
+  assert.equal(late.closed, true, 'by the pass after 80 ms');
+  const later = w.appear('m1', 's1');
+  await wait(80);
+  assert.equal(later.closed, true, 'by the pass after 160 ms');
+  assert.equal(other.closed, false, 'a notice of another session is left');
+  page.reading.stop();
+});
+
+test('the later passes are cancelled when the page hides, the session shown changes, or the Reading stops', async () => {
+  const hidden = noticeWorld();
+  const a = readingPage({ laterMs: [80, 160], close: hidden.close });
+  a.reading.open({ hostId: 'm1', id: 's1' });
+  changeOf(a, 'm1', 's1');
+  await wait(40);
+  a.flip('hidden');
+  const unread = hidden.appear('m1', 's1');
+  await wait(220);
+  assert.equal(unread.closed, false, 'a hidden page reads nothing');
+
+  const moved = noticeWorld();
+  const b = readingPage({ laterMs: [80, 160], close: moved.close });
+  b.reading.open({ hostId: 'm1', id: 's1' });
+  changeOf(b, 'm1', 's1');
+  await wait(40);
+  b.reading.open({ hostId: 'm1', id: 's2' });
+  const first = moved.appear('m1', 's1');
+  const second = moved.appear('m1', 's2');
+  await wait(220);
+  assert.equal(first.closed, false, 'the session no longer shown is not read');
+  assert.equal(second.closed, true, 'the one shown now has passes of its own');
+  b.reading.stop();
+
+  const stopped = noticeWorld();
+  const c = readingPage({ laterMs: [80, 160], close: stopped.close });
+  c.reading.open({ hostId: 'm1', id: 's1' });
+  changeOf(c, 'm1', 's1');
+  await wait(40);
+  c.reading.stop();
+  const left = stopped.appear('m1', 's1');
+  await wait(220);
+  assert.equal(left.closed, false);
+});
+
+test('a stream of changes leaves one first pass and one of each later pass, however many there are', async () => {
+  const calls = [];
+  const page = readingPage({ laterMs: [60, 120], close: async (h, s) => { calls.push(`${h}/${s}`); } });
+  page.reading.open({ hostId: 'm1', id: 's1' });
+  await Promise.resolve();
+  calls.length = 0;
+  for (let i = 0; i < 50; i++) { changeOf(page, 'm1', 's1'); }
+  await wait(300);
+  assert.equal(calls.length, 3);
+  page.reading.stop();
+});
+
+test("a change to the open session closes its notices a moment later; another session's change, or one while hidden, closes nothing", async () => {
+  const { reading, closed, changes, flip, settle } = readingPage();
+  reading.open({ hostId: 'm1', id: 's1' });
+  await settle();
+  closed.length = 0;
+  const change = (hostId, id) => { for (const fn of changes) { fn({ type: 'upsert', hostId, id }); } };
+  change('m1', 's2');
+  change('m2', 's1');
+  await settle();
+  assert.deepEqual(closed, []);
+  for (let i = 0; i < 5; i++) { change('m1', 's1'); }
+  await Promise.resolve();
+  assert.deepEqual(closed, [], 'not before the push that came with it has been shown');
+  await settle();
+  assert.deepEqual(closed, ['m1/s1'], 'once, however many changes came');
+  flip('hidden');
+  closed.length = 0;
+  change('m1', 's1');
+  await settle();
+  assert.deepEqual(closed, []);
+});
+
 test('turning notifications off while a registration waits for the relay key leaves this device unsubscribed', async () => {
   const win = browser({ permission: 'granted' });
   const pm = pushManager();
@@ -313,4 +588,25 @@ test('a machine\'s question notifications stay when its list stops being current
   const lookup = async () => { store.clear(); current = false; return shown; };
   await closeStaleNotices({ getNotifications: lookup }, 'm1', store, () => current);
   assert.equal(shown[0].closed, false);
+});
+
+test('an app updated to the new name keeps notifications on and its browser subscription, and registers the same endpoint under the new device name', async () => {
+  const win = browser({ ua: IPHONE, standalone: true, permission: 'granted' });
+  const pm = pushManager();
+  const store = storage();
+  const app = (device) => new PushRegistrar({
+    win, storage: store, registration: async () => ({ pushManager: pm }), fetchKey: async () => base64UrlToBytes(KEY),
+    appUrl: 'https://danswett.github.io/agent-bridge/app/', device,
+  });
+  // Before the update, under the old name.
+  await app('iPhone · Agent Bridge').enable();
+  // After it: the same browser, storage and subscription, with the name the app now gives.
+  assert.notEqual(deviceName(IPHONE), 'iPhone · Agent Bridge', 'the device name changed with the rename');
+  const updated = app(deviceName(IPHONE));
+  assert.equal(updated.enabled, true, 'still on, without asking again');
+  const host = client();
+  assert.equal(await updated.register(host, host.capabilities), true);
+  assert.equal(pm.subscribed.length, 1, 'no second browser subscription');
+  assert.deepEqual(host.requests.map((q) => [q.op, q.data.endpoint, q.data.device]),
+    [['push.subscribe', 'https://web.push.apple.com/sub-1', `iPhone · ${BRAND.name}`]]);
 });

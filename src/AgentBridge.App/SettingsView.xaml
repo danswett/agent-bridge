@@ -5,14 +5,73 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:AgentBridge.App"
     xmlns:core="using:AgentBridge.App.Core">
+    <UserControl.Resources>
+        <!-- An agent row's status in its tone (Ui.ToneKey). A ThemeResource follows the theme the row
+             is drawn in and high contrast as XAML applies them; a brush set from code at an event
+             raced high contrast's resources and kept the Light one (#705 review). An explicit style
+             replaces the implicit one, so the face is set here too. -->
+        <Style x:Key="AgentStatusAbBridge" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{StaticResource SansFontFamily}" />
+            <Setter Property="Foreground" Value="{ThemeResource AbBridge}" />
+        </Style>
+        <Style x:Key="AgentStatusAbNeedsText" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{StaticResource SansFontFamily}" />
+            <Setter Property="Foreground" Value="{ThemeResource AbNeedsText}" />
+        </Style>
+        <Style x:Key="AgentStatusAbDangerText" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{StaticResource SansFontFamily}" />
+            <Setter Property="Foreground" Value="{ThemeResource AbDangerText}" />
+        </Style>
+        <Style x:Key="AgentStatusAbText2" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{StaticResource SansFontFamily}" />
+            <Setter Property="Foreground" Value="{ThemeResource AbText2}" />
+        </Style>
+    </UserControl.Resources>
     <ScrollViewer AutomationProperties.AutomationId="SettingsPane">
         <!-- In a Grid: a ScrollViewer centres a narrower child by its desired width, which pushed
              the column off the right edge (see LaunchView). -->
         <Grid>
             <StackPanel MaxWidth="920" Padding="24,20,24,24" Spacing="8">
                 <TextBlock Style="{StaticResource AbTypeTitle}" AutomationProperties.HeadingLevel="Level1" Text="Settings" />
+                <Button Content="Send feedback" AutomationProperties.AutomationId="SendFeedback" Click="OnSendFeedback" />
                 <InfoBar Severity="Error" Title="That didn't work" IsClosable="False" IsOpen="{x:Bind ViewModel.HasError, Mode=OneWay}" Message="{x:Bind ViewModel.Error, Mode=OneWay}" />
                 <ProgressBar IsIndeterminate="True" Visibility="{x:Bind local:Ui.Show(ViewModel.Busy), Mode=OneWay}" />
+
+                <!-- An agent installed after the bridge (#231; ui.md §6.9): a card per agent, never a toast, a
+                     push or a count. It holds the agent's only Set up while it shows; Not now hides it and the
+                     Settings item's dot at this version. It never takes focus where it appears. -->
+                <ItemsControl x:Name="OfferList" ItemsSource="{x:Bind ViewModel.AgentOffers, Mode=OneWay}" IsTabStop="False" AutomationProperties.AutomationId="AgentOffers">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="core:AgentOffer">
+                            <local:AgentOfferGroup
+                                AutomationProperties.Name="{x:Bind Name}"
+                                AutomationProperties.AutomationId="{x:Bind GroupId}"
+                                AutomationProperties.LiveSetting="Polite">
+                                <Border Background="{ThemeResource AbSubtle}" BorderBrush="{ThemeResource AbStroke}" BorderThickness="1" CornerRadius="{StaticResource AbRadiusCard}" Padding="16" Margin="0,0,0,8">
+                                    <StackPanel Spacing="12">
+                                        <TextBlock Text="{x:Bind Text}" TextWrapping="Wrap" />
+                                        <local:WrapRow Spacing="8">
+                                            <Button
+                                                Style="{StaticResource AccentButtonStyle}"
+                                                Content="Set up"
+                                                Tag="{x:Bind Id}"
+                                                IsEnabled="{x:Bind CanSetUp}"
+                                                Click="OnSetUpAgent"
+                                                AutomationProperties.Name="{x:Bind SetUpName}"
+                                                AutomationProperties.AutomationId="{x:Bind SetUpId}" />
+                                            <Button
+                                                Content="Not now"
+                                                Tag="{x:Bind Id}"
+                                                Click="OnNotNowAgent"
+                                                AutomationProperties.Name="{x:Bind NotNowName}"
+                                                AutomationProperties.AutomationId="{x:Bind NotNowId}" />
+                                        </local:WrapRow>
+                                    </StackPanel>
+                                </Border>
+                            </local:AgentOfferGroup>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
     
                 <!-- The host: the background program that watches this machine's agent sessions. -->
                 <TextBlock Style="{StaticResource AbSectionTitle}" Text="{x:Bind local:SettingsView.HostSection}" />
@@ -61,13 +120,22 @@
                     AutomationProperties.AutomationId="HostAtSignIn"
                     IsOn="{x:Bind ViewModel.StartAtSignIn, Mode=TwoWay}" />
 
+                <StackPanel Spacing="4" AutomationProperties.AutomationId="GetStarted" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowSetupSteps), Mode=OneWay}">
+                    <TextBlock Style="{StaticResource AbSectionTitle}" Text="Get started" AutomationProperties.HeadingLevel="Level2" />
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.SetupSteps, Mode=OneWay}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="core:SetupStep">
+                                <TextBlock TextWrapping="Wrap" Text="{x:Bind Line}" AutomationProperties.Name="{x:Bind AccessibleName}" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
                 <TextBlock Style="{StaticResource AbSectionTitle}" Text="Agents on this machine" AutomationProperties.HeadingLevel="Level2" />
+                <TextBlock Text="{x:Bind ViewModel.AgentSignInStatus, Mode=OneWay}" TextWrapping="Wrap" IsTextSelectionEnabled="True" AutomationProperties.AutomationId="AgentSignInStatus" />
                 <TextBlock Style="{StaticResource AbSecondaryText}" AutomationProperties.AutomationId="AgentsState" Text="{x:Bind ViewModel.AgentsState, Mode=OneWay}" />
-                <Button Content="Check agents again" AutomationProperties.AutomationId="CheckAgents" Click="OnCheckAgents" IsEnabled="{x:Bind ViewModel.CanCheckAgents, Mode=OneWay}" />
-                <TextBlock Text="{x:Bind ViewModel.AgentSetupStatus, Mode=OneWay}" TextWrapping="Wrap" IsTextSelectionEnabled="True" AutomationProperties.AutomationId="AgentSetupStatus" />
-                <TextBlock Text="{x:Bind ViewModel.AgentInstallStatus, Mode=OneWay}" TextWrapping="Wrap" IsTextSelectionEnabled="True" AutomationProperties.AutomationId="AgentInstallStatus" />
-                <Button Content="Cancel CLI installation" Click="OnCancelAgentInstall" Visibility="{x:Bind local:Ui.Show(ViewModel.AgentInstallInProgress), Mode=OneWay}" IsEnabled="{x:Bind ViewModel.HostRunning, Mode=OneWay}" AutomationProperties.AutomationId="CancelAgentInstall" />
-                <ItemsControl ItemsSource="{x:Bind ViewModel.Agents, Mode=OneWay}" AutomationProperties.AutomationId="AgentReadiness">
+                <Button x:Name="CheckAgentsButton" Content="Check agents again" AutomationProperties.AutomationId="CheckAgents" Click="OnCheckAgents" IsEnabled="{x:Bind ViewModel.CanCheckAgents, Mode=OneWay}" />
+                <ItemsControl x:Name="AgentList" ItemsSource="{x:Bind ViewModel.Agents, Mode=OneWay}" AutomationProperties.AutomationId="AgentReadiness">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="core:AgentReadinessRow">
                             <Border Background="{ThemeResource AbSubtle}" CornerRadius="{StaticResource AbRadiusCard}" Padding="16" Margin="0,0,0,8">
@@ -78,17 +146,104 @@
                                     <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind Home}" IsTextSelectionEnabled="True" />
                                     <TextBlock Text="{x:Bind Checks}" TextWrapping="Wrap" />
                                     <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind HookActivity}" />
+                                    <!-- One verb for the hooks' state, named for the agent (#678): the accent action
+                                         when there is one, and Remove after it as the destructive one, in Danger text
+                                         on a standard button, as End session is. -->
                                     <local:WrapRow Spacing="8">
-                                        <Button Content="Install CLI" Tag="{x:Bind Id}" IsEnabled="{x:Bind CanInstall}" Click="OnInstallAgent" AutomationProperties.AutomationId="InstallAgent" />
-                                        <Button Content="Set up / Repair" Tag="{x:Bind Id}" IsEnabled="{x:Bind CanSetUp}" Click="OnSetUpAgent" AutomationProperties.AutomationId="SetUpAgent" />
-                                        <Button Content="Remove connection" Tag="{x:Bind Id}" IsEnabled="{x:Bind CanRemove}" Click="OnRemoveAgent" AutomationProperties.AutomationId="RemoveAgent" />
+                                        <!-- Showing its ring while its installation runs, still focusable, with its
+                                             presses ignored (ui.md §9.1 A4, as Send does); Cancel beside it then. A
+                                             ToggleButton read as "pressed", a state the person didn't choose (A1). -->
+                                        <Button
+                                            Tag="{x:Bind Id}"
+                                            Visibility="{x:Bind local:Ui.Show(ShowInstall)}"
+                                            IsEnabled="{x:Bind InstallEnabled}"
+                                            Click="OnInstallAgent"
+                                            AutomationProperties.Name="{x:Bind InstallName}"
+                                            AutomationProperties.ItemStatus="{x:Bind InstallItemStatus}"
+                                            AutomationProperties.AutomationId="{x:Bind InstallId}">
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <ProgressRing Width="16" Height="16" IsActive="{x:Bind Installing}" Visibility="{x:Bind local:Ui.Show(Installing)}" />
+                                                <TextBlock Text="Install CLI" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Button
+                                            Content="Cancel"
+                                            Tag="{x:Bind Id}"
+                                            Visibility="{x:Bind local:Ui.Show(Installing)}"
+                                            Click="OnCancelAgentInstall"
+                                            AutomationProperties.Name="{x:Bind CancelInstallName}"
+                                            AutomationProperties.AutomationId="{x:Bind CancelInstallId}" />
+                                        <Button
+                                            Content="Sign in / Switch account"
+                                            Tag="{x:Bind Id}"
+                                            Visibility="{x:Bind local:Ui.Show(ShowSignIn)}"
+                                            IsEnabled="{x:Bind CanSignIn}"
+                                            Click="OnSignInAgent"
+                                            AutomationProperties.Name="{x:Bind SignInName}"
+                                            AutomationProperties.AutomationId="{x:Bind SignInId}" />
+                                        <Button
+                                            Style="{StaticResource AccentButtonStyle}"
+                                            Content="{x:Bind SetUpVerb}"
+                                            Tag="{x:Bind Id}"
+                                            Visibility="{x:Bind local:Ui.Show(ShowSetUp)}"
+                                            IsEnabled="{x:Bind CanSetUp}"
+                                            Click="OnSetUpAgent"
+                                            AutomationProperties.Name="{x:Bind SetUpName}"
+                                            AutomationProperties.AutomationId="{x:Bind SetUpId}" />
+                                        <Button
+                                            Content="Remove connection"
+                                            Foreground="{ThemeResource AbDangerText}"
+                                            Tag="{x:Bind Id}"
+                                            Visibility="{x:Bind local:Ui.Show(ShowRemove)}"
+                                            IsEnabled="{x:Bind CanRemove}"
+                                            Click="OnRemoveAgent"
+                                            AutomationProperties.Name="{x:Bind RemoveName}"
+                                            AutomationProperties.AutomationId="{x:Bind RemoveId}" />
                                     </local:WrapRow>
+                                    <!-- This row's setup, as it runs and once it ends, read out for this agent. -->
+                                    <TextBlock
+                                        Text="{x:Bind Status}"
+                                        TextWrapping="Wrap"
+                                        IsTextSelectionEnabled="True"
+                                        Loaded="OnAgentStatusLoaded"
+                                        Visibility="{x:Bind local:Ui.Some(Status)}"
+                                        AutomationProperties.LiveSetting="Polite"
+                                        AutomationProperties.Name="{x:Bind StatusName}"
+                                        AutomationProperties.AutomationId="{x:Bind StatusId}" />
                                 </StackPanel>
                             </Border>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
     
+                <TextBlock Style="{StaticResource AbSectionTitle}" Text="Test an agent connection" />
+                <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind ViewModel.VerificationStateText, Mode=OneWay}" AutomationProperties.AutomationId="VerificationState" />
+                <local:WrapRow Spacing="8">
+                    <Button Content="Load launch choices" Click="OnLoadVerification" IsEnabled="{x:Bind ViewModel.CanLoadVerificationChoices, Mode=OneWay}" />
+                    <Button Content="Recheck test status" Click="OnRefreshVerification" IsEnabled="{x:Bind ViewModel.CanRefreshVerification, Mode=OneWay}" />
+                </local:WrapRow>
+                <ComboBox Header="Agent to test" ItemsSource="{x:Bind ViewModel.VerificationAgents, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.VerificationAgent, Mode=TwoWay}" DisplayMemberPath="Label" AutomationProperties.AutomationId="VerificationAgent" HorizontalAlignment="Stretch" />
+                <ComboBox Header="Approved workspace" ItemsSource="{x:Bind ViewModel.VerificationWorkspaces, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.VerificationWorkspace, Mode=TwoWay}" DisplayMemberPath="Label" AutomationProperties.AutomationId="VerificationWorkspace" HorizontalAlignment="Stretch" />
+                <ComboBox Header="Agency profile" ItemsSource="{x:Bind ViewModel.VerificationProfiles, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.VerificationProfile, Mode=TwoWay}" DisplayMemberPath="Label" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowVerificationProfiles), Mode=OneWay}" HorizontalAlignment="Stretch" />
+                <Button Content="Run new test session..." Click="OnRunVerification" IsEnabled="{x:Bind ViewModel.CanRunVerification, Mode=OneWay}" AutomationProperties.AutomationId="RunVerification" />
+                <TextBlock Text="{x:Bind ViewModel.VerificationActionStatus, Mode=OneWay}" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                <ItemsControl ItemsSource="{x:Bind ViewModel.Verifications, Mode=OneWay}" AutomationProperties.AutomationId="AgentVerifications">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="core:AgentVerificationRow">
+                            <Border Background="{ThemeResource AbSubtle}" CornerRadius="{StaticResource AbRadiusCard}" Padding="16" Margin="0,0,0,8">
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="{x:Bind Selection}" FontWeight="SemiBold" AutomationProperties.HeadingLevel="Level3" />
+                                    <TextBlock Text="{x:Bind State}" TextWrapping="Wrap" />
+                                    <TextBlock Text="{x:Bind Detail}" TextWrapping="Wrap" />
+                                    <TextBlock Text="{x:Bind Checks}" TextWrapping="Wrap" />
+                                    <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind Evidence}" IsTextSelectionEnabled="True" />
+                                    <Button Content="Stop observing" Tag="{x:Bind Request}" IsEnabled="{x:Bind CanStopObserving}" Click="OnCancelVerification" />
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
                 <!-- The relay: how this machine reaches the person's other devices. -->
                 <TextBlock Style="{StaticResource AbSectionTitle}" Text="Your devices" />
                 <TextBlock TextWrapping="Wrap" AutomationProperties.AutomationId="Account" Text="{x:Bind ViewModel.AccountText, Mode=OneWay}" />
@@ -149,6 +304,38 @@
                     Style="{StaticResource AbSecondaryText}"
                     Text="Off: Copilot's Approve once and Deny are answered only in the agent's own window. Questions are still answered anywhere. A change applies when the host restarts." />
                 <ToggleSwitch
+                    Header="Let my devices sign Copilot in on this machine"
+                    AutomationProperties.AutomationId="PhoneSignIn"
+                    IsEnabled="{x:Bind ViewModel.HostRunning, Mode=OneWay}"
+                    IsOn="{x:Bind ViewModel.PhoneSignIn, Mode=TwoWay}" />
+                <TextBlock
+                    Style="{StaticResource AbSecondaryText}"
+                    Text="When Copilot needs signing in again, a device pinned as yours here can start Copilot's own sign-in and is shown the one-time code to enter at github.com/login/device. While it runs, this machine opens a browser and copies the code. Off by default. A change applies when the host restarts." />
+                <!-- Who can sign Copilot in here (#972, ui.md 6.9): read-only, only while the switch is on.
+                     No Add or Remove yet, and no disabled button for either. -->
+                <StackPanel Spacing="4" AutomationProperties.AutomationId="SignInDevices" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowSignInDevices), Mode=OneWay}">
+                    <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" Text="Devices that can sign Copilot in" />
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.SignInDevices, Mode=OneWay}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="core:SignInDeviceRow">
+                                <StackPanel Margin="0,0,0,4">
+                                    <TextBlock AutomationProperties.AutomationId="SignInDevice" TextWrapping="Wrap" Text="{x:Bind Name}" />
+                                    <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind Detail}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        AutomationProperties.AutomationId="SignInDevicesEmpty"
+                        Text="{x:Bind ViewModel.SignInDevicesEmpty, Mode=OneWay}"
+                        Visibility="{x:Bind local:Ui.Some(ViewModel.SignInDevicesEmpty), Mode=OneWay}" />
+                    <TextBlock
+                        Style="{StaticResource AbSecondaryText}"
+                        Text="{x:Bind ViewModel.SignInDevicesNote, Mode=OneWay}"
+                        Visibility="{x:Bind local:Ui.Some(ViewModel.SignInDevicesNote), Mode=OneWay}" />
+                </StackPanel>
+                <ToggleSwitch
                     Header="Answer folder-trust questions from my devices"
                     AutomationProperties.AutomationId="RemoteFolderTrust"
                     IsEnabled="{x:Bind ViewModel.HostRunning, Mode=OneWay}"
@@ -169,6 +356,11 @@
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
+                <TextBlock
+                    Style="{StaticResource AbSecondaryText}"
+                    AutomationProperties.AutomationId="EscapedApprovalDevices"
+                    Text="{x:Bind ViewModel.EscapedApprovalText, Mode=OneWay}"
+                    Visibility="{x:Bind local:Ui.Some(ViewModel.EscapedApprovalText), Mode=OneWay}" />
 
                 <!-- A Dev Box only: its pending stop-on-disconnect kept away while the host runs. -->
                 <StackPanel Spacing="8" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowDevBox), Mode=OneWay}">
@@ -194,22 +386,70 @@
                 <ToggleSwitch Header="Notify me when a session asks something" AutomationProperties.AutomationId="Toasts" IsOn="{x:Bind ViewModel.Toasts, Mode=TwoWay}" />
                 <ToggleSwitch Header="Notify me when a session finishes a turn" AutomationProperties.AutomationId="FinishedToasts" IsEnabled="{x:Bind ViewModel.Toasts, Mode=OneWay}" IsOn="{x:Bind ViewModel.FinishedToasts, Mode=TwoWay}" />
                 <ToggleSwitch Header="Start the app in the notification area when I sign in" AutomationProperties.AutomationId="AppAtSignIn" IsOn="{x:Bind ViewModel.AppStartsAtSignIn, Mode=TwoWay}" />
-                <ToggleSwitch Header="Include pre-releases in updates" AutomationProperties.AutomationId="Prereleases" IsOn="{x:Bind ViewModel.Prereleases, Mode=TwoWay}" />
-                <ToggleSwitch Header="Install updates automatically" AutomationProperties.AutomationId="AutoUpdate" IsOn="{x:Bind ViewModel.AutoUpdate, Mode=TwoWay}" />
-                <TextBlock
-                    Style="{StaticResource AbSecondaryText}"
-                    Text="Checked every half hour. An update waits until no session here has had a turn running or a question waiting for two minutes, for at most six hours, then restarts the app and the host. Read-only hosts and hosts beside agent-ha-bridge update too; never while another profile runs from this installation." />
-                <TextBlock Text="{x:Bind local:SettingsView.AppLine(ViewModel.AppVersion, ViewModel.InstalledText), Mode=OneWay}" Style="{StaticResource AbSecondaryText}" />
-                <local:WrapRow Spacing="8">
-                    <Button Content="Check for updates" AutomationProperties.AutomationId="CheckUpdates" Click="OnCheckUpdates" IsEnabled="{x:Bind local:Ui.Not(ViewModel.Busy), Mode=OneWay}" />
-                    <Button
-                        Content="Update and restart"
-                        Style="{StaticResource AccentButtonStyle}"
-                        AutomationProperties.AutomationId="InstallUpdate"
-                        Visibility="{x:Bind local:Ui.Show(ViewModel.UpdateAvailable), Mode=OneWay}"
-                        Click="OnInstallUpdate" />
-                </local:WrapRow>
-                <TextBlock TextWrapping="Wrap" AutomationProperties.AutomationId="UpdateStatus" Text="{x:Bind ViewModel.UpdateStatus, Mode=OneWay}" />
+                <!-- Updates, one element for the self-test's pictures of them (Creative, #719). -->
+                <StackPanel AutomationProperties.AutomationId="UpdateRow" Spacing="8">
+                    <ToggleSwitch Header="Include pre-releases in updates" AutomationProperties.AutomationId="Prereleases" IsOn="{x:Bind ViewModel.Prereleases, Mode=TwoWay}" />
+                    <ToggleSwitch Header="Download updates automatically" AutomationProperties.AutomationId="AutoUpdate" IsOn="{x:Bind ViewModel.AutoUpdate, Mode=TwoWay}" />
+                    <TextBlock Style="{StaticResource AbSecondaryText}" Text="Checked every half hour, and downloaded in the background." />
+                    <!-- Per machine and profile (#689 6674007815; Product's names and hints, 6674016765). -->
+                    <!-- Headed as the toggles above are, a group's gap below them (Creative, 6675195544). -->
+                    <RadioButtons
+                        Margin="0,12,0,0"
+                        AutomationProperties.AutomationId="WhenUpdateReady"
+                        AutomationProperties.Name="When an update is ready"
+                        SelectedIndex="{x:Bind ViewModel.WhenReadyIndex, Mode=TwoWay}">
+                        <RadioButtons.Header>
+                            <TextBlock Text="When an update is ready" FontFamily="{StaticResource ContentControlThemeFontFamily}" FontSize="{ThemeResource ControlContentThemeFontSize}" Foreground="{ThemeResource ToggleSwitchHeaderForeground}" />
+                        </RadioButtons.Header>
+                        <RadioButton AutomationProperties.AutomationId="RestartToUpdateMode" AutomationProperties.Name="Restart to update" AutomationProperties.HelpText="For a machine you use">
+                            <StackPanel>
+                                <TextBlock Text="Restart to update" />
+                                <TextBlock Style="{StaticResource AbSecondaryText}" Text="For a machine you use" />
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton AutomationProperties.AutomationId="InstallBetweenTurnsMode" AutomationProperties.Name="Install between turns" AutomationProperties.HelpText="For a machine agents use">
+                            <StackPanel>
+                                <TextBlock Text="Install between turns" />
+                                <TextBlock Style="{StaticResource AbSecondaryText}" Text="For a machine agents use" />
+                            </StackPanel>
+                        </RadioButton>
+                    </RadioButtons>
+                    <TextBlock
+                        Style="{StaticResource AbSecondaryText}"
+                        AutomationProperties.AutomationId="WhenUpdateReadyNote"
+                        Text="{x:Bind ViewModel.WhenReadyNote, Mode=OneWay}" />
+                    <TextBlock Text="{x:Bind local:SettingsView.AppLine(ViewModel.AppVersion, ViewModel.InstalledText), Mode=OneWay}" Style="{StaticResource AbSecondaryText}" />
+                    <local:WrapRow Spacing="8">
+                        <Button Content="Check for updates" AutomationProperties.AutomationId="CheckUpdates" Click="OnCheckUpdates" IsEnabled="{x:Bind local:Ui.Not(ViewModel.Busy), Mode=OneWay}" />
+                        <!-- Restarting from here, it shows its ring and says so, and ignores presses
+                             (OnInstallUpdate), as the banner's does (Creative, 6676653935). -->
+                        <Button
+                            Style="{x:Bind local:Ui.ActionStyle(ViewModel.RestartingHere), Mode=OneWay}"
+                            AutomationProperties.AutomationId="InstallUpdate"
+                            AutomationProperties.Name="Restart to update"
+                            AutomationProperties.ItemStatus="{x:Bind ViewModel.RestartStatus, Mode=OneWay}"
+                            Visibility="{x:Bind local:Ui.Show(ViewModel.UpdateAvailable), Mode=OneWay}"
+                            Click="OnInstallUpdate">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <ProgressRing
+                                    Width="16"
+                                    Height="16"
+                                    IsActive="{x:Bind ViewModel.RestartingHere, Mode=OneWay}"
+                                    Visibility="{x:Bind local:Ui.Show(ViewModel.RestartingHere), Mode=OneWay}" />
+                                <TextBlock Text="Restart to update" />
+                            </StackPanel>
+                        </Button>
+                    </local:WrapRow>
+                    <!-- Not disabled while Settings is busy: its own restart warning keeps Settings busy, and
+                         focus must come back to it after Not now (ui.md §9.1 A4). OnInstallUpdate ignores a
+                         press while busy. The line below is a polite live region for what changes on its own (A6). -->
+                    <TextBlock
+                        x:Name="UpdateStatusText"
+                        TextWrapping="Wrap"
+                        AutomationProperties.AutomationId="UpdateStatus"
+                        AutomationProperties.LiveSetting="Polite"
+                        Text="{x:Bind ViewModel.UpdateStatus, Mode=OneWay}" />
+                </StackPanel>
     
                 <!-- The host's log, read from its file, so it is there when the host is not. -->
                 <Grid Margin="0,12,0,4">

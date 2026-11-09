@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Automation.Provider;
 using Microsoft.UI.Xaml.Controls;
+using Windows.ApplicationModel.DataTransfer;
 
 namespace AgentBridge.App;
 
@@ -95,6 +96,8 @@ static partial class SelfTest
             }
             check(chatCode?.Text == BareReturnRevealed && copied.SequenceEqual([BareReturnRevealed]),
                 $"draws a bare carriage return in a conversation's block as an escape on its line, and copies it so ({chatCode?.Text})");
+            MarkdownView.PutText = put;
+            await CheckRealClipboard(md, check);
             await Picture(host, Path.ChangeExtension(outFile, ".code.png"));
         }
         finally
@@ -102,5 +105,72 @@ static partial class SelfTest
             root.Children.Remove(host);
             MarkdownView.PutText = put;
         }
+    }
+
+    // #1090: the one check that presses Copy against the machine's own clipboard. Every check above
+    // swaps in a fake that always says it worked, which is how a Copy that put nothing on the
+    // clipboard went unseen. What was on the clipboard is put back afterwards.
+    static async Task CheckRealClipboard(MarkdownView md, Action<bool, string> check)
+    {
+        var button = Find<Button>(md).FirstOrDefault(b => AutomationProperties.GetAutomationId(b) == "CopyCode");
+        if (button is null) { check(false, "has a Copy button to press against the real clipboard"); return; }
+        string? before;
+        try
+        {
+            var held = Clipboard.GetContent();
+            if (held.AvailableFormats.Any(f => f != StandardDataFormats.Text))
+            {
+                // Only the text can be put back; any other format the person copied would be lost.
+                check(true, "skipped the real-clipboard Copy check: the clipboard holds formats the test can't restore");
+                return;
+            }
+            before = held.Contains(StandardDataFormats.Text) ? await held.GetTextAsync() : null;
+        }
+        catch (Exception e) when (e is System.Runtime.InteropServices.COMException or UnauthorizedAccessException)
+        {
+            check(false, $"reads the clipboard before pressing Copy (0x{e.HResult:X8})");
+            return;
+        }
+        string? after = null;
+        string said = "";
+        try
+        {
+            Clipboard.Clear();
+            ((IInvokeProvider)new ButtonAutomationPeer(button).GetPattern(PatternInterface.Invoke)).Invoke();
+            // Copy sets the label as it returns; read it now, before its 1.5 s reset.
+            said = string.Join(", ", Find<TextBlock>(button).Select(t => t.Text));
+            for (var i = 0; i < 30 && after is null; i++)
+            {
+                await Task.Delay(100);
+                after = await ReadClipboardText();
+            }
+            check(after == LongCommand, $"puts the block's exact text on the real clipboard when Copy is pressed ({after?.Length ?? -1} of {LongCommand.Length} characters)");
+            check((said == CodeCopy.Done) == (after == LongCommand), $"says Copied only if the text reached the clipboard (said: {said})");
+        }
+        catch (Exception e) when (e is System.Runtime.InteropServices.COMException or UnauthorizedAccessException)
+        {
+            check(false, $"presses Copy against the real clipboard without it refusing the test (0x{e.HResult:X8})");
+        }
+        finally
+        {
+            try
+            {
+                if (before is null) { Clipboard.Clear(); }
+                // Through Put, which flushes: the app exits when the self-test ends, and a restored
+                // clipboard still owned by it would be gone.
+                else { ClipboardText.Put(before); }
+            }
+            catch (Exception e) when (e is System.Runtime.InteropServices.COMException or UnauthorizedAccessException) { }
+        }
+    }
+
+    static async Task<string?> ReadClipboardText()
+    {
+        try
+        {
+            var held = Clipboard.GetContent();
+            return held.Contains(StandardDataFormats.Text) ? await held.GetTextAsync() : null;
+        }
+        catch (Exception e) when (e is System.Runtime.InteropServices.COMException or UnauthorizedAccessException) { return null; }
     }
 }

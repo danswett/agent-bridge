@@ -28,8 +28,11 @@ internal sealed class Fixture : IDisposable
     public string ClaudeRegistrations => Path.Combine(Runtime, "agent-bridge-claude");
     public string CodexRegistrations => Path.Combine(Runtime, "agent-bridge-codex");
 
+    // stalledAfter: the Not responding watchdog, off unless a test sets it. Every transcript here is
+    // dated about T0 while the clock reads an hour later, so each working session would read as
+    // stalled.
     public SessionSourceOptions Options(long tailBytes = 4 * 1024 * 1024, bool watch = false, long maxSkim = 512L * 1024 * 1024, bool remoteApproval = true,
-        Action<string>? log = null, Action<string>? afterRegistrationRead = null, string? stateFile = null, IReadOnlyList<string>? codexRoots = null) => new()
+        Action<string>? log = null, Action<string>? afterRegistrationRead = null, string? stateFile = null, IReadOnlyList<string>? codexRoots = null, TimeSpan? stalledAfter = null, IReadOnlyList<string>? probeRoots = null, IReadOnlyCollection<AgentKind>? phoneSignIn = null, Func<bool>? phoneSignInPinned = null) => new()
     {
         CopilotHome = CopilotHome,
         ClaudeHome = ClaudeHome,
@@ -44,11 +47,16 @@ internal sealed class Fixture : IDisposable
         Log = log,
         AfterRegistrationRead = afterRegistrationRead,
         StateFile = stateFile,
+        NotRespondingAfter = stalledAfter ?? TimeSpan.MaxValue,
+        NotRespondingBusyAfter = stalledAfter is { } after ? after * 3 : TimeSpan.MaxValue,
+        UsageProbeRoots = probeRoots ?? [],
+        PhoneSignIn = phoneSignIn ?? [],
+        PhoneSignInPinned = phoneSignInPinned ?? (() => false),
     };
 
     public SessionSource Source(long tailBytes = 4 * 1024 * 1024, long maxSkim = 512L * 1024 * 1024, bool remoteApproval = true,
-        Action<string>? log = null, Action<string>? afterRegistrationRead = null, SessionDrivers? drivers = null, string? stateFile = null, IReadOnlyList<string>? codexRoots = null) =>
-        new(Options(tailBytes, maxSkim: maxSkim, remoteApproval: remoteApproval, log: log, afterRegistrationRead: afterRegistrationRead, stateFile: stateFile, codexRoots: codexRoots), Processes, Time, drivers);
+        Action<string>? log = null, Action<string>? afterRegistrationRead = null, SessionDrivers? drivers = null, string? stateFile = null, IReadOnlyList<string>? codexRoots = null, TimeSpan? stalledAfter = null, IReadOnlyList<string>? probeRoots = null, IReadOnlyCollection<AgentKind>? phoneSignIn = null, Func<bool>? phoneSignInPinned = null) =>
+        new(Options(tailBytes, maxSkim: maxSkim, remoteApproval: remoteApproval, log: log, afterRegistrationRead: afterRegistrationRead, stateFile: stateFile, codexRoots: codexRoots, stalledAfter: stalledAfter, probeRoots: probeRoots, phoneSignIn: phoneSignIn, phoneSignInPinned: phoneSignInPinned), Processes, Time, drivers);
 
     // session-state/<id>/ with workspace.yaml and, optionally, inuse.<pid>.lock. Returns
     // the events.jsonl path (not created).
@@ -136,9 +144,12 @@ internal sealed class Fixture : IDisposable
         File.WriteAllText(Path.Combine(CodexRegistrations, id + ".json"), json.ToJsonString());
     }
 
-    // agent-ha-bridge's <id>.approval.json, as Write-CodexApprovalMarker writes it, and as
-    // Set-CodexApprovalAttempt rewrites it once it has typed into the approval.
-    public string CodexApprovalMarker(string id, string decisionId, string question = "Needs approval: git push", DateTimeOffset? created = null, JsonNode? attempted = null, string? owner = null)
+    // An <id>.approval.json as this host's hook writes it (Write-CodexApprovalMarker's fields, and
+    // the tool and whole command beside them, #209), or with legacy as agent-ha-bridge's hook
+    // writes it (the 300-character activity line alone); and as Set-CodexApprovalAttempt rewrites
+    // it once it has typed into the approval.
+    public string CodexApprovalMarker(string id, string decisionId, string question = "Needs approval: git push", DateTimeOffset? created = null, JsonNode? attempted = null, string? owner = null,
+        string? command = "git push", bool legacy = false)
     {
         Directory.CreateDirectory(CodexRegistrations);
         var json = new JsonObject
@@ -148,6 +159,11 @@ internal sealed class Fixture : IDisposable
             ["Question"] = question,
             ["Created"] = (created ?? T0).ToString("o"),
         };
+        if (!legacy)
+        {
+            json["Tool"] = "Bash";
+            if (command is not null) { json["Command"] = command; }
+        }
         if (attempted is not null)
         {
             json["DeliveryAttempted"] = attempted;
@@ -288,6 +304,11 @@ internal sealed class FakeProcesses : IProcessInspector
             Launchers = launchers,
         };
     }
+
+    // The processes this host started itself (its `claude auth status`), by pid.
+    public HashSet<int> Own { get; } = [];
+
+    public bool IsOwnChild(AgentProcess process) => Own.Contains(process.Id);
 }
 
 // Line builders, one per agent, reproducing each transcript's shape.
@@ -391,6 +412,47 @@ internal static class Copilot
 
     public static string ShellCompleted(string shellId, int s) =>
         Event("system.notification", new { content = $"<system_notification>\nShell command \"Fixture\" (shellId: {shellId}) has completed successfully.\n</system_notification>", kind = new { type = "shell_completed", shellId, exitCode = 0, description = "Fixture" } }, s);
+}
+
+// A permission prompt as Copilot CLI 1.0.105 draws it (its Dialog component): a round frame the
+// screen's width, the title, a rule, the body's parts a blank row apart (a box's lines one to a
+// row in a box of their own), the question, a blank row, then the options. Lines are drawn as
+// given: a test wraps one by passing its rows.
+internal static class CopilotScreen
+{
+    public static string[] ShellOptions => ["\u276F 1. Yes", "  2. No, and tell Copilot what to do differently (Esc to stop)"];
+
+    public static string[] PathOptions => ["  1. Yes", "\u276F 2. Yes, and remember these paths for this session", "  3. No (Esc)"];
+
+    public static string[] Shell(string title, params string[] command) =>
+        Dialog(title, [(true, command)], "Do you want to run this command?", ShellOptions);
+
+    public static string[] Path(params string[] paths) =>
+        Dialog("Allow path access", [(false, [$"This action may read the following {(paths.Length == 1 ? "path" : "paths")} outside the paths currently allowed for this session."]), (true, paths)], "Do you want to allow this?", PathOptions);
+
+    public static string[] Dialog(string title, (bool Boxed, string[] Lines)[] body, string question, string[] options, int width = 120)
+    {
+        var inner = width - 2;
+        string Row(string content) => "\u2502" + (" " + content).PadRight(inner) + "\u2502";
+        var box = inner - 2;
+        var rows = new List<string> { "\u256D" + new string('\u2500', inner) + "\u256E", Row(title), Row(new string('\u2500', inner - 2)) };
+        foreach (var (boxed, lines) in body)
+        {
+            if (boxed)
+            {
+                rows.Add(Row("\u256D" + new string('\u2500', box - 2) + "\u256E"));
+                rows.AddRange(lines.Select(l => Row(("\u2502 " + l).PadRight(box - 1) + "\u2502")));
+                rows.Add(Row("\u2570" + new string('\u2500', box - 2) + "\u256F"));
+            }
+            else { rows.Add(Row(lines[0])); }
+            rows.Add(Row(""));
+        }
+        rows.Add(Row(question));
+        rows.Add(Row(""));
+        rows.AddRange(options.Select(Row));
+        rows.Add("\u2570" + new string('\u2500', inner) + "\u256F");
+        return [.. rows];
+    }
 }
 
 internal static class Claude

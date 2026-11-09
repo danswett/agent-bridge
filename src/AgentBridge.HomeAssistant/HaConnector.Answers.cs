@@ -293,7 +293,7 @@ public sealed partial class HaConnector
     // label stands for. Two forms can show the same labels over swapped values.
     static bool SameSource(Field? a, Field? b) =>
         a is null || b is null ? a is null && b is null
-        : a.Name == b.Name && a.Type == b.Type && a.AllowOther == b.AllowOther && a.Required == b.Required
+        : a.Name == b.Name && a.Type == b.Type && a.AllowOther == b.AllowOther && a.OtherUnavailable == b.OtherUnavailable && a.Required == b.Required
             && a.Default?.GetRawText() == b.Default?.GetRawText() && (a.Options ?? []).SequenceEqual(b.Options ?? []);
 
     static bool Same(CardSeen a, CardSeen b) =>
@@ -784,7 +784,7 @@ public sealed partial class HaConnector
             ? new JsonObject { ["error"] = "the session is waiting on a question", ["hint"] = "answer it first, then reply" }
             : new JsonObject
             {
-                ["error"] = "this machine's host does not take replies from the dashboard yet",
+                ["error"] = "this machine's bridge doesn't take replies from the dashboard yet",
                 ["hint"] = "reply at the machine",
             }, ct);
     }
@@ -806,6 +806,8 @@ public sealed partial class HaConnector
         var detail = p.Detail?.DeepClone().AsObject() ?? [];
         foreach (var key in new[] { "error", "hint", "waiting_on", "sent", "unsent", "recorded", "answer", "at" }) { detail.Remove(key); }
         foreach (var (key, value) in extra) { detail[key] = value?.DeepClone(); }
+        if (p.Reply.Ack is { } ack) { detail["reply_ack"] = ack.DeepClone(); }
+        else { detail.Remove("reply_ack"); }
         // A card that no longer asks for a second press of End session does not take one: the
         // next press is a first press again, so nothing ends on a question nobody can see.
         // Before publishing, as a publish that half-succeeds can still replace the question. (A
