@@ -4,6 +4,7 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY nuget.config ./
 COPY src/AgentBridge.Transport src/AgentBridge.Transport
+COPY src/AgentBridge.Roster src/AgentBridge.Roster
 COPY src/AgentBridge.Relay src/AgentBridge.Relay
 RUN dotnet publish src/AgentBridge.Relay -c Release -o /app
 

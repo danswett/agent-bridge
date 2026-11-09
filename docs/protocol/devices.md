@@ -9,7 +9,7 @@ machines seen online.
 **Status: R1a, R1b and R1c.** R1a is the encoding: framing, ids, entries, their strict parsing,
 presence assertions and the values enrollment computes. R1b is the acceptance rule and state in C#
 (design §3.3 to §3.5). R1c ports the rule to the PWA and adds vetoes, person commands and head
-attestations in both. R1d stores signing keys (TPM, DPAPI, WebCrypto). It is a library only: nothing in the host, the relay or a client uses it yet
+attestations in both. R1d keeps signing keys (TPM, DPAPI, WebCrypto). It is a library only: nothing in the host, the relay or a client uses it yet
 (slices R2 to R5).
 
 | Implementation | Where |
@@ -336,6 +336,49 @@ acknowledgement) is always there, empty when there are none. A signed command's 
 body's JSON bytes, and this input begins with its own label, so neither ever verifies as the
 other. The library takes the raw ECDH secret, which the caller's key store computes.
 
+## Signing keys
+
+A person's device's `sign` key (design §3.2) is its own ECDSA P-256 key, beside its ECDH device
+key, kept where it cannot be copied (#55 R1d). Every signature it makes is minimal DER with a low
+S: the platforms sign in IEEE P1363 (`r ‖ s`), and S is replaced by n − S when it is the high one.
+
+| Where | Store |
+|---|---|
+| Windows (the app) | `RosterSigningKeys` in `src/AgentBridge.Transport`: the TPM (Platform Crypto Provider, `ECDSA_P256`, per user, not exportable) when it can sign with P-256, else a software key encrypted to the user with DPAPI. A key never moves between them; a TPM key that cannot be opened means enrolling again. Forgetting the device deletes the TPM key itself |
+| PWA | `pwa/js/roster/signing-key.js`: a WebCrypto key generated non-extractable, usable only to sign, kept in IndexedDB beside the device key |
+| Apple clients | The Secure Enclave, with slice A1 |
+
+`RosterSigningKeyTests` (in `tests/AgentBridge.Transport.Tests`) and
+`pwa/test/unit/roster-signing-key.test.mjs` check the DPAPI and WebCrypto stores on every run. The
+TPM test runs only on a machine whose TPM can sign with P-256. GitHub's runners have none, so after
+a change here check it by hand on a Windows machine with a TPM 2.0:
+
+```powershell
+dotnet test tests/AgentBridge.Transport.Tests -c Release --filter "FullyQualifiedName~RosterSigningKeyTests"
+# A_TPM_signing_key_… must pass, not be skipped. Then no test key may be left in the TPM:
+certutil -user -csp "Microsoft Platform Crypto Provider" -key | Select-String agent-bridge-roster-sign
+```
+## The relay's copy
+
+The relay keeps one append-only log per account and is an untrusted store (design §3.6): it keeps an entry only if the entry is valid against the relay's own copy, and a host verifies what it reads for itself and never takes the relay's word. Mode is `observe`: the relay serves every account's log and enforces nothing; no connection is refused for want of a roster entry.
+
+Both messages are text frames from an admitted device of any kind, counted against the frame rate. Entries are the canonical text of §Framing. A device's own `id` (a number) is echoed so a reply can be matched.
+
+```
+-> {"t":"roster-get","id":1}
+<- {"t":"roster","id":1,"mode":"observe","generation":"<hex>|null","entries":["<entry>",...]}
+
+-> {"t":"roster-append","id":2,"entries":["<entry>",...]}
+<- {"t":"roster-append-result","id":2,"results":[{"hash":"<b64url>","verdict":"accepted|quarantined|duplicate|refused","reason":"<code>|null"}]}
+```
+
+* One append carries 1 to 16 entries, offered in the order given (a parent before its child). Anything else is `{"error":"bad-request"}`; a store that could not be reached is `{"error":"unavailable"}` and nothing was kept.
+* The first entry kept for an account must be a genesis whose `account` is the account's id; its `generation` then fixes the log. Any other first entry is refused `genesis`, a genesis for another account `account`.
+* An entry that does not parse is refused with its parse code and an empty `hash`. Accepted and quarantined entries are kept; refused and duplicate ones are not.
+* An entry over a signer's budget or a cap is refused for now. A later removal in the same append that needs it as evidence (§3.3) brings it in: it is kept, ahead of the removal, and its result becomes `accepted` with reason `evidence`. So send such ancestors and the removal in one append, parent first.
+* `roster-get` is `{"error":"unavailable"}` too when the store cannot be reached. A stored log that does not decode or rebuild is never added to: an append says `unavailable`. So does an append that finds more than four others waiting on the account, and a request while the connection already has two roster requests running. Offering only entries already kept answers `duplicate` without replaying the log.
+* The log is bounded at 224 KiB stored; an append that would pass it is refused `cap`.
+* The relay judges time by its own clock. That is defence in depth: a host applies the same rules on its own clock.
 ## Vectors
 
 [vectors/roster.json](vectors/roster.json) holds fixed test keys (`d`, `public`, `device`) and:
