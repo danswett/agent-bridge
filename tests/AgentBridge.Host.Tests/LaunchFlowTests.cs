@@ -670,8 +670,10 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         var id = o.Session!;
         await WaitAsync(() => Task.FromResult(launcher.HeldForReply(id) is not null));
 
+        // Following may end after this exit and read the session's process from the source as it last
+        // looked: look again on each wait, so a slow runner cannot leave the hold on a gone process.
         starter.Exit(starter.Pids[0] + 3000);
-        await WaitAsync(() => Task.FromResult(launcher.HeldForReply(id) is null));
+        await WaitAsync(async () => { await source.RefreshAsync(); return launcher.HeldForReply(id) is null; });
         Assert.Empty(screens.Typed);
     }
 
