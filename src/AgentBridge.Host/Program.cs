@@ -775,7 +775,8 @@ async Task<int> ServeAsync(HostHandover handover)
     personRoster.Changed += control.Refresh;
     LocalServer? local = null;
     var liteLink = new AgentBridge.Host.Lite.RelayLiteLink();
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, new AgentBridge.Host.Lite.SettingsLiteMode(() => HostSettings.CurrentAgentMessaging(identity.Folder)), new AgentBridge.Host.Lite.OwnLitePeers(new OwnPeers(identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, () => identity.Account?.AccountId)), liteLink, agentCredentials, identity.Key.Public)), Log); }
+    var fleetRoster = new AgentBridge.Host.Fleet.RelayFleetRoster();
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, new AgentBridge.Host.Lite.SettingsLiteMode(() => HostSettings.CurrentAgentMessaging(identity.Folder)), new AgentBridge.Host.Lite.OwnLitePeers(new OwnPeers(identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, () => identity.Account?.AccountId)), liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster)), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);
@@ -842,6 +843,7 @@ async Task<int> ServeAsync(HostHandover handover)
             relayBlobs.Attach(relay);
             transfers.Attach(relay, hub);
             liteLink.Attach(relay, hub);
+            fleetRoster.Attach(relay);
             usagePeers?.Attach(relay, hub);
             trustAnswers.Attach(relay);
             escapedApprovals.Attach(relay);
