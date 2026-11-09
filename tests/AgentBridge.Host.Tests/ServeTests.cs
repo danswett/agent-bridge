@@ -381,6 +381,9 @@ public sealed class ServeTests : IAsyncLifetime
         await source.RefreshAsync();
         Assert.Equal(Other, Received.Read<SessionPatch>((await NextAsync(ch)).Data).Id);
         var before = source.Revision;
+        // Past the source's own coalesce window, so "second" goes out at once. Inside it, it waits
+        // on a real 250 ms timer, which a backed-up pool on a loaded runner ran late (#1487).
+        await Task.Delay(f.Options().CoalesceInterval + TimeSpan.FromMilliseconds(50));
         Fixture.Append(otherEvents, Copilot.Assistant("second", 5));
         await source.RefreshAsync();
         await HostWait.UntilAsync(() => feed!.Held == 1, "the quiet session's next change held", Patience);
