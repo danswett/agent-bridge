@@ -174,7 +174,10 @@ public class AgentLiteSenderTests
     {
         using var r = new Rig();
         r.Link.Reply = async (_, ct) => { r.Mode.On = false; await Task.Delay(Timeout.Infinite, ct); return null!; };
-        var o = await r.Sender().SendAsync(Caller, new LiteSendInput("vm2", "agent-b2", "hi"), default);
+        // The ack limit is far longer than the watcher's tick, so a loaded runner cannot let the timeout beat the
+        // mode watcher (#1521: with a 200 ms limit it sometimes reported "timeout"). Only the watcher can end this send.
+        var sender = new AgentLiteSender(r.Mode, new Peers(true), r.Link, _ => true, () => new EcdsaEnvelopeSigner(r.Key), OwnStatic, null, TimeSpan.FromSeconds(60), TimeSpan.FromMilliseconds(1));
+        var o = await sender.SendAsync(Caller, new LiteSendInput("vm2", "agent-b2", "hi"), default).WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Equal((LiteKind.Unconfirmed, "mode switched off"), (o.Kind, o.Code));
     }
 
