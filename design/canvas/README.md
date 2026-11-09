@@ -1,6 +1,6 @@
 # Design canvas source
 
-A copy of the owner's design canvas, "Agent Bridge — Session Workbench", as of
+A copy of the owner's design canvas, "Slipgates — Session Workbench", as of
 2026-11-01:
 - `canvas.json` is the board layout;
 - each `*.dc.html` file is one board, in the canvas's Design Component format.
