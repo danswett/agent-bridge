@@ -655,6 +655,25 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         static (IHeldProcess?, bool, string?) Shape(HeldOpen o) => (o.Process, o.Gone, o.Refusal);
     }
 
+    [WindowsFact]
+    public void A_session_the_host_terminates_exits_with_zero_so_its_terminal_tab_closes_instead_of_lingering()
+    {
+        if (!OperatingSystem.IsWindows() || Elevated) { return; }
+        var echo = StartEcho();
+        using var process = Process.GetProcessById(echo.Pid);
+        var startedAt = new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero);
+
+        using (var held = new WindowsProcessControl().Open(echo.Pid, startedAt).Process)
+        {
+            Assert.NotNull(held);
+            Assert.Null(held.Terminate());
+            Assert.True(held.WaitForExitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult());
+        }
+
+        Assert.True(GetExitCodeProcess(started[^1], out var code));
+        Assert.Equal(0u, code);
+    }
+
     sealed class NoGuard : ITargetGuard
     {
         public string? Refuse(int processId) => null;
@@ -686,6 +705,9 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
 
     [DllImport("kernel32.dll")]
     static extern bool GetProcessTimes(nint process, out long creation, out long exit, out long kernel, out long user);
+
+    [DllImport("kernel32.dll")]
+    static extern bool GetExitCodeProcess(nint process, out uint exitCode);
 
     [DllImport("kernel32.dll")]
     static extern bool TerminateProcess(nint process, uint exitCode);

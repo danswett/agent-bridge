@@ -100,7 +100,7 @@ public sealed class WindowsProcessControl : IProcessControl
 
         public string? Terminate()
         {
-            if (TerminateProcess(handle, 1)) { return null; }
+            if (TerminateProcess(handle, EndedExitCode)) { return null; }
             var error = Marshal.GetLastWin32Error();
             // ERROR_ACCESS_DENIED is also what terminating a process that is already exiting
             // returns; the wait that follows tells the two apart.
@@ -109,6 +109,11 @@ public sealed class WindowsProcessControl : IProcessControl
 
         public void Dispose() => handle.Dispose();
     }
+
+    // 0, not 1: Windows Terminal's default closeOnExit ("graceful") closes a tab only when its
+    // process exited with 0, so a session the person ended with End session left a dead window
+    // behind each time (#1509). A launcher shim (cmd.exe) passes the agent's exit code on.
+    internal const uint EndedExitCode = 0;
 
     const int Synchronize = 0x00100000;
     const int ProcessTerminate = 0x0001;
