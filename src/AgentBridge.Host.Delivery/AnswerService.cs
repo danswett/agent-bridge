@@ -73,6 +73,10 @@ public sealed class AnswerOptions
     // the conversation scrolling) was enough to refuse an answer or leave a form part answered.
     public TimeSpan FormRecheck { get; init; } = TimeSpan.FromSeconds(2);
 
+    // How much longer, past FormRecheck, a refused write waits for the form to come back while
+    // the screen is still changing (a busy session streaming output after other replies landed).
+    public TimeSpan BusyScreenWait { get; init; } = TimeSpan.FromSeconds(8);
+
     // How long a form left part answered waits, holding no keys, for the screen to show it again
     // at the field it stopped at, to finish it from there (#1123); then it is reset (ResetWait).
     // Zero leaves a part-answered form as it was left, for the person to finish at the machine.
@@ -1204,7 +1208,11 @@ public sealed class AnswerService : ISessionAnswerer
                     continue;
                 }
                 log($"typing into {Short(sessionId)} (pid {pid}) stopped before {(sends is [{ Text: "", Enter: true }] ? "an Enter" : "its next keys")}: {result.Detail}");
-                return Stop(changed ? "the session's screen changed before the next key could go" : result.Detail);
+                return Stop(changed
+                    ? typedAny
+                        ? "the session's screen changed before the next key could go"
+                        : "the session's screen changed while it was busy, and no key was typed; answer again in a moment, or answer at the machine"
+                    : result.Detail);
             }
         }
 
@@ -1214,13 +1222,21 @@ public sealed class AnswerService : ISessionAnswerer
         async Task<IReadOnlyList<string>?> SameFieldAsync(IReadOnlyList<string> rows, long started)
         {
             if (CopilotFormScreen.Input(rows, form, Field()) is not { } field) { return null; }
-            while (options.Time.GetElapsedTime(started) < options.FormRecheck)
+            IReadOnlyList<string>? last = null;
+            while (true)
             {
+                var elapsed = options.Time.GetElapsedTime(started);
+                if (elapsed >= options.FormRecheck + options.BusyScreenWait) { return null; }
                 await Task.Delay(options.ScreenPollInterval ?? options.PollInterval, options.Time);
                 if (await ReadRowsAsync(pid) is not { } now) { return null; }
                 if (CopilotFormScreen.Input(now, form, Field()) is { } drawn && drawn.SequenceEqual(field)) { return now; }
+                // Past FormRecheck it keeps looking only while the screen is still moving: other
+                // sessions' replies landing make the agent stream output for several seconds,
+                // with the form not yet back (#1497). A screen that has stopped changing without
+                // showing the form is not coming back.
+                if (elapsed >= options.FormRecheck && last is not null && now.SequenceEqual(last)) { return null; }
+                last = now;
             }
-            return null;
         }
 
         // The screen the last Enter was pressed on. Whatever goes next waits for the form to move
