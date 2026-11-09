@@ -13,14 +13,21 @@ while the session is wedged can lose its result.
 
 ## What the bridge does (slice 1, #687)
 
-- **Detects.** The host already marks the session `Agent error` (a Copilot `session.error` that
-  ends the turn) or `Not responding` (working, nothing written for longer than a turn goes
-  quiet; #800). Both are treated as stuck, except an error with its own class (rate limit,
-  authorisation, quota) and any session with a question open. An `Agent error` must last 5
-  minutes first (`StuckErrorAfter`), so a one-off error the next prompt clears sends nothing.
+- **Detects, from data and not from a timer.** A session is stuck on the first confirmed
+  evidence: the wedge the host recognised from the CLI's own did-not-acknowledge/did-not-complete
+  error (`AgentErrors.HostWedgeMessage`, #1516), or `Not responding` as the host already decides it
+  (#800). Any session with a question open is not stuck. Other errors (rate limit, authorisation,
+  quota, an error of no known cause) show on the status only. (The host's own "unconfirmed reply
+  on an idle session" evidence is used by the guarded resume in #1520, not by this notice.)
 - **Tells the owner.** The Home Assistant connector sends "Copilot on *machine* looks stuck" to
-  the phones and push service that take sign-in notices: one per session, at most hourly, and it
-  is withdrawn when the session recovers. The host log records each notice and withdrawal.
+  the phones and push service that take sign-in notices: one per stuck episode, withdrawn when the
+  session takes a new event or acknowledgement. Only the recognised wedge is said to "not recover
+  by itself"; a session that is only `Not responding` is not, as it may pass. The host log records
+  each notice and withdrawal.
+- **Flood guard.** A session that gets stuck again within an hour of its last notice is not told
+  again; that is logged as a `FAULT` line, so a suppressed notice is never silent.
+- **Where it moves.** The notice rides the HA connector, which #1396 retires; it moves to the
+  Slipgates push path then, with the same rules.
 - **Does not restart anything.**
 
 ## Manual recovery (the owner, at the machine or over RDP)

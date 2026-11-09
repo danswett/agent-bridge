@@ -194,13 +194,17 @@ public static class HaPayloads
     // the session to confirm (recovery pending), which needs nobody.
     public static bool NeedsPerson(Session s) => s.Attention is { Kind: AttentionKind.SignInNeeded } a && a.Recovery != RecoveryState.Pending;
 
-    // A session that looks stuck on Copilot CLI's 120 s event watchdog (#687): Not responding, or a
-    // Copilot "Agent error" of no known class (rate, auth and quota are said in their own words)
-    // that has lasted `errorAfter`. Never one with a question open: it is waiting on the person.
-    public static bool Stuck(Session s, DateTimeOffset now, TimeSpan errorAfter) =>
-        s.Question is null && s.Attention is { } a
-        && (a.Kind == AttentionKind.NotResponding
-            || (a.Kind == AttentionKind.Error && (a.Agent ?? s.Agent) == AgentKind.Copilot && a.ErrorClass is null or ErrorClass.Other && now - a.Since >= errorAfter));
+    // A session that looks stuck (#687), decided on data, never on how long it has been in error:
+    // Not responding as the host already decides it, or the wedge the host recognised from Copilot
+    // CLI's own "did not acknowledge/complete" error (AgentErrors.HostWedgeMessage). Any later event
+    // or acknowledgement replaces the attention, so the session stops being stuck at once. Never one
+    // with a question open: it is waiting on the person.
+    public static bool Stuck(Session s) => s.Question is null && s.Attention is { } a && (a.Kind == AttentionKind.NotResponding || IsHostWedge(s));
+
+    // Only the recognised wedge is one the CLI never recovers from by itself; Not responding may pass.
+    public static bool IsHostWedge(Session s) =>
+        s.Attention is { Kind: AttentionKind.Error } a && (a.Agent ?? s.Agent) == AgentKind.Copilot
+        && string.Equals(a.Message, AgentBridge.Host.Core.Parsing.AgentErrors.HostWedgeMessage, StringComparison.Ordinal);
 
     // A turn that ended on an error or a failed sign-in did not finish (#845; PushNotifier.Failed):
     // the reply beside it is the turn before's. A kind not known here is an error.

@@ -2,32 +2,50 @@ using AgentBridge.Protocol;
 
 namespace AgentBridge.HomeAssistant;
 
-// A session stuck on Copilot CLI's own 120 s event-delivery watchdog (#687) tells the owner so, on
-// the same phones and push service a sign-in notice takes. The CLI never recovers from it by
-// itself (every later session.send fails until --resume), and its card only said "Agent error"
-// or "Not responding", so the owner found out by trying and then went to the machine.
-// One notice per session, repeated at most hourly, withdrawn once the session is not stuck.
+// One notice per stuck episode, decided on data (the host's recognised wedge, or Not responding),
+// never on how long the session has been in error. It is withdrawn when the session takes a new
+// event or acknowledgement. The only time limit is a flood guard: a session that gets stuck again
+// within SignInRepeat of its last notice is not told again, and that is logged as a fault.
 // Nothing here restarts anything: the runbook (docs/runbooks/stuck-session.md) is the recovery.
+// This notice rides the HA connector, which #1396 retires; it moves to the Slipgates push path.
 public sealed partial class HaConnector
 {
     // By session id. Not kept in the ledger: after a host restart a session still stuck is told of
     // once more, which is wanted.
     readonly Dictionary<string, SignInNotice> stucks = new(StringComparer.Ordinal);
+    // When each session was last told, kept past a withdrawal so the flood guard can see it.
+    readonly Dictionary<string, DateTimeOffset> stuckTold = new(StringComparer.Ordinal);
 
     async Task StuckAsync(DateTimeOffset now, CancellationToken ct)
     {
-        var stuck = source.Snapshot().Where(s => HaPayloads.Stuck(s, now, options.StuckErrorAfter)).ToList();
+        var stuck = source.Snapshot().Where(HaPayloads.Stuck).ToList();
         var channels = Notify.ButtonsOn || Notify.Enabled;
         foreach (var s in stuck)
         {
             if (!channels) { break; }
             SignInNotice? n;
+            var push = Notify.Enabled && HaNotify.Split(Notify.Service) is not null ? "push:" + Notify.Service : null;
+            bool suppressed = false;
             lock (gate)
             {
-                if (!stucks.TryGetValue(s.Id, out n)) { stucks[s.Id] = n = new SignInNotice { Tag = HaNotify.StuckTag(Slug, s.Id) }; }
+                if (!stucks.TryGetValue(s.Id, out n))
+                {
+                    stucks[s.Id] = n = new SignInNotice { Tag = HaNotify.StuckTag(Slug, s.Id) };
+                    if (stuckTold.TryGetValue(s.Id, out var last) && now - last < options.SignInRepeat)
+                    {
+                        suppressed = true;
+                        foreach (var p in Notify.AnswerButtonServices) { n.Delivered[p] = now; }
+                        if (push is not null) { n.Delivered[push] = now; }
+                    }
+                }
             }
-            var push = Notify.Enabled && HaNotify.Split(Notify.Service) is not null ? "push:" + Notify.Service : null;
-            bool Due(string destination) => !n.Delivered.TryGetValue(destination, out var at) || now - at >= options.SignInRepeat;
+            if (suppressed)
+            {
+                log($"Home Assistant connector FAULT: session {s.Id} got stuck again within {options.SignInRepeat} of its last notice, so the flood guard did not tell the owner again");
+                continue;
+            }
+            // Once told, a destination is not told again for the same episode.
+            bool Due(string destination) => !n.Delivered.ContainsKey(destination);
             List<string> phones;
             bool pushDue;
             lock (gate)
@@ -37,11 +55,11 @@ public sealed partial class HaConnector
             }
             if ((phones.Count == 0 && !pushDue) || now < n.RetryAt) { continue; }
             var agent = s.Attention!.Agent ?? s.Agent;
-            var (title, message) = HaNotify.Stuck(options.MachineName, AgentName(agent), HaPayloads.SessionName(s));
+            var (title, message) = HaNotify.Stuck(options.MachineName, AgentName(agent), HaPayloads.SessionName(s), HaPayloads.IsHostWedge(s));
             var missed = false;
             void Took(string destination)
             {
-                lock (gate) { n.Delivered[destination] = now; }
+                lock (gate) { n.Delivered[destination] = now; stuckTold[s.Id] = now; }
             }
             if (phones.Count > 0)
             {

@@ -16,6 +16,8 @@
     <InternalsVisibleTo Include="AgentBridge.Host.Delivery.Tests" />
     <!-- The HA connector's contract tests build questions the way the host parses them. -->
     <InternalsVisibleTo Include="AgentBridge.HomeAssistant.Tests" />
+    <!-- The stuck-session notice recognises the host-wedge error by AgentErrors.HostWedgeMessage (#687). -->
+    <InternalsVisibleTo Include="AgentBridge.HomeAssistant" />
     <!-- The migration finds agent-ha-bridge's processes by command line, as the scanner does. -->
     <InternalsVisibleTo Include="agent-bridge-host" />
     <!-- bench-micro times transcript tailing and upsert building, which are internal

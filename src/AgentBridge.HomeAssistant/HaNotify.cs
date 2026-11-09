@@ -290,9 +290,12 @@ public static partial class HaNotify
 
     // Plain words, no command: the steps are in docs/runbooks/stuck-session.md and the notice opens
     // the dashboard.
-    public static (string Title, string Message) Stuck(string machineName, string agentName, string sessionName) =>
+    // "Won't recover by itself" is said only of the recognised wedge; Not responding may pass.
+    public static (string Title, string Message) Stuck(string machineName, string agentName, string sessionName, bool wedged) =>
         (NotificationTitle($"{agentName} on {machineName} looks stuck"),
-         Cap($"{sessionName} has stopped responding and won't recover by itself. Close that session and resume it in a new window; it keeps its history."));
+         Cap(wedged
+             ? $"{sessionName} has stopped taking messages and won't recover by itself. Close that session and resume it in a new window; it keeps its history."
+             : $"{sessionName} is not responding. If it stays that way, close it and resume it in a new window; it keeps its history."));
 
     public static JsonObject StuckPayload(string tag, string title, string message, string dashboardUrlPath, string machineName,
         string icon = "mdi:chat-question", string iconColor = "#FFFFFF", string color = "#FF9F0A", string interruptionLevel = "time-sensitive")

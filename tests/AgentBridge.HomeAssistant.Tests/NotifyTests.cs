@@ -1370,7 +1370,7 @@ public sealed class NotifyTests : IDisposable
     }
 
     [Fact]
-    public async Task A_session_that_is_not_responding_tells_the_owner_it_looks_stuck_once_an_hour_and_is_withdrawn_when_it_recovers()
+    public async Task A_session_that_is_not_responding_tells_the_owner_once_without_saying_it_will_not_recover_and_is_withdrawn_when_it_takes_an_event()
     {
         await using var c = Connector(Phones with { Enabled = true });
         Ask(null);
@@ -1383,13 +1383,13 @@ public sealed class NotifyTests : IDisposable
         Assert.Single(StuckNotices(Tablet));
         Assert.Equal($"Copilot on {Machine} looks stuck", notice["title"]!.GetValue<string>());
         Assert.Contains("Fix the relay", notice["message"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.DoesNotContain("won't recover", notice["message"]!.GetValue<string>(), StringComparison.Ordinal);
         Assert.Equal($"{Machine} - looks stuck", notice["data"]!["subtitle"]!.GetValue<string>());
         Assert.Single(Pushes());
 
-        await Pass(c, 30 * 60);
+        // One notice for the episode: an hour later it is not repeated.
+        await Pass(c, 61 * 60);
         Assert.Single(StuckNotices());
-        await Pass(c, 31 * 60);
-        Assert.Equal(2, StuckNotices().Count);
 
         // Any event clears it: the notice is withdrawn from the phones.
         Ask(null);
@@ -1401,28 +1401,46 @@ public sealed class NotifyTests : IDisposable
     }
 
     [Fact]
-    public async Task An_agent_error_is_stuck_only_when_it_lasts_and_has_no_class_of_its_own_and_no_question_is_open()
+    public async Task The_recognised_host_wedge_is_told_at_once_as_one_that_will_not_recover_and_other_errors_are_not_stuck()
     {
         await using var c = Connector(Phones);
-        Fail(Failure, status: SessionStatus.Working);
+        Fail(HostWedge, status: SessionStatus.Idle);
         await Pass(c);
-        Assert.Empty(StuckNotices());
+        var notice = Assert.Single(StuckNotices());
+        Assert.Contains("won't recover by itself", notice["message"]!.GetValue<string>(), StringComparison.Ordinal);
 
-        // Five minutes after it began, still the same error.
-        await Pass(c, 6 * 60);
-        Assert.Single(StuckNotices());
-
-        // A rate limit has its own words and its own remedy.
-        Fail(Failure with { ErrorClass = ErrorClass.Rate }, id: B, status: SessionStatus.Working);
+        // An error of no known cause is only the status, as is a rate limit.
+        Fail(Failure, id: B, status: SessionStatus.Working);
+        Fail(Failure with { ErrorClass = ErrorClass.Rate }, id: "c-3", status: SessionStatus.Working);
         await Pass(c, 10 * 60);
         Assert.Empty(StuckNotices(id: B));
+        Assert.Empty(StuckNotices(id: "c-3"));
 
         // A session waiting on a question is waiting on the person.
-        sessions.Set(FakeSessions.Copilot(A, title: "Fix the relay", status: SessionStatus.Waiting) with { Question = Form("q1", Release), Attention = NotResponding });
+        sessions.Set(FakeSessions.Copilot(A, title: "Fix the relay", status: SessionStatus.Waiting) with { Question = Form("q1", Release), Attention = HostWedge });
         await Pass(c);
         Assert.Equal(1, StuckClears());
     }
 
+    [Fact]
+    public async Task A_session_that_gets_stuck_again_within_the_hour_is_not_told_again_and_that_is_logged_as_a_fault()
+    {
+        await using var c = Connector(Phones);
+        Fail(HostWedge, status: SessionStatus.Idle);
+        await Pass(c);
+        Assert.Single(StuckNotices());
+        Ask(null);
+        await Pass(c);
+        Fail(HostWedge, status: SessionStatus.Idle);
+        await Pass(c);
+        Assert.Single(StuckNotices());
+        Assert.Contains(log, m => m.Contains("FAULT", StringComparison.Ordinal) && m.Contains("flood guard", StringComparison.Ordinal));
+    }
+
+    static readonly Attention HostWedge = new()
+    {
+        Kind = AttentionKind.Error, Since = FakeSessions.T0.AddMinutes(1), Agent = AgentKind.Copilot, ErrorClass = ErrorClass.Other, Message = AgentBridge.Host.Core.Parsing.AgentErrors.HostWedgeMessage,
+    };
     static readonly Attention NotResponding = new()
     {
         Kind = AttentionKind.NotResponding, Since = FakeSessions.T0.AddMinutes(1), LastEventAt = FakeSessions.T0.AddMinutes(1), Agent = AgentKind.Copilot, Message = "Copilot isn't responding.",
