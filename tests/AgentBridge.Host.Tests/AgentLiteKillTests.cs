@@ -270,10 +270,13 @@ public sealed class AgentLiteKillTests : IDisposable
     public async Task The_watcher_of_a_finished_send_leaves_no_unobserved_exception()
     {
         var unobserved = new List<Exception>();
-        // Host.Tests share one process: keep only what the watcher itself can leak, not other tests' tasks.
+        // Host.Tests share one process, and a collection here finalizes other tests' abandoned tasks too:
+        // keep only what the watcher itself leaked, which the lite kill's frames in its stack name.
         void Handler(object? s, UnobservedTaskExceptionEventArgs e)
         {
-            if (e.Exception.Flatten().InnerExceptions.Any(x => x is OperationCanceledException or ObjectDisposedException)) { unobserved.Add(e.Exception); }
+            var mine = e.Exception.Flatten().InnerExceptions.Any(x => x is OperationCanceledException or ObjectDisposedException
+                && (x.StackTrace?.Contains(nameof(LiteKill), StringComparison.Ordinal) ?? false));
+            if (mine) { lock (unobserved) { unobserved.Add(e.Exception); } }
         }
         TaskScheduler.UnobservedTaskException += Handler;
         try

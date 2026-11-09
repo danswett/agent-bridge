@@ -3193,20 +3193,22 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         return field >= TwoNames.Length ? ["(sent)"] : Framed("Tell me", TwoNames, field, [$"Field: {TwoNames[field]}", .. Input("")]);
     }
 
+    // The first pass logs this as it stops with a field held before its Enter, just before it waits to resume.
+    bool FirstPassStopped() { lock (logged) { return logged.Any(l => l.Contains("held before its Enter", StringComparison.Ordinal)); } }
+
     [Fact]
     public async Task A_part_answered_form_is_finished_from_the_field_it_stopped_at_once_the_screen_shows_it_there_again()
     {
         Serve(Answerer(resume: true));
         await AskFieldsAsync(TwoLists, 2, TwoPicked);
         // A permission prompt drawn over the form once its first field took its Enter, gone again
-        // a moment later: the first pass stops there, the form part answered.
-        DateTime? back = null;
+        // once the first pass has stopped there, the form part answered. Not a clock: under load a
+        // fixed delay could end before the first pass gave up, and it would type on, never resuming.
         injector.OnInject = () =>
         {
-            if (Enters() == 1) { back ??= DateTime.UtcNow.AddMilliseconds(800); }
             if (Enters() == 2) { Fixture.Append(events, Recorded("q2", TwoPicked)); }
         };
-        injector.Screen = () => back is { } b && DateTime.UtcNow < b ? PermissionPrompt : FieldsScreen(TwoNames);
+        injector.Screen = () => Enters() >= 1 && !FirstPassStopped() ? PermissionPrompt : FieldsScreen(TwoNames);
         var ch = await OpenAsync();
 
         var result = await AnswerResultAsync(ch, TwoPicked, Guid.NewGuid().ToString());
