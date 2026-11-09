@@ -150,6 +150,14 @@ differences, each deliberate:
    its window ready), `declined` once the agent closes, and otherwise `unconfirmed`, "Not
    confirmed: answer at the machine", after 60 s. Nothing is typed twice.
 
+### The PWA keeps the last choices
+
+`launch.options` resolves the agent, profiles and resumable sessions afresh on every call, which
+can take up to a minute on a loaded machine. The PWA therefore keeps the last answer from each
+machine (memory only) and shows it at once, with its age, while it asks again in the background
+(#1527). The kept copy is only for display: the host still checks every launch against its own
+options, so a stale choice is refused there, never launched.
+
 ## Isolation
 
 For a workspace with `isolate: true`, each new session (never a resume):
