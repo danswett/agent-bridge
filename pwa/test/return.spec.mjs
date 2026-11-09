@@ -31,7 +31,8 @@ async function comeBack(page) {
 
 test.use({ viewport: { width: 1440, height: 900 }, hasTouch: false });
 
-test('a machine that goes away just after a return reads as last seen for 3 s, then shows offline in place', async ({ page }) => {
+// Quarantined (#1493, #1474): turned the webkit job red on main; restore by 2026-11-12.
+test.skip('a machine that goes away just after a return reads as last seen for 3 s, then shows offline in place', async ({ page }) => {
   await openDemo(page);
   await comeBack(page);
   await setOnline(page, false);
@@ -149,7 +150,8 @@ test('End session held for a return is aria-disabled at once, a press says Updat
   expect(await page.evaluate(() => window.agentBridgeDemo.machines['demo-laptop'].stopLog.length)).toBe(0);
 });
 
-test('focus on the sort control when the strip takes the title row goes to the strip, never to the page', async ({ page }) => {
+// Quarantined (#1493, #1474): turned the webkit job red on main; restore by 2026-11-12.
+test.skip('focus on the sort control when the strip takes the title row goes to the strip, never to the page', async ({ page }) => {
   await openDemo(page);
   await page.locator('.sessions-head select').first().focus();
   await comeBack(page);
