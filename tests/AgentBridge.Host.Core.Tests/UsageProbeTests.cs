@@ -1538,11 +1538,14 @@ public sealed class UsageProbeTests : IDisposable
     public async Task A_sign_out_with_no_reading_stands_after_a_Codex_session_opens_until_the_probe_it_allows_says_otherwise(string then)
     {
         CodexUsed();
-        AppServer(s => s.Answers["account/rateLimits/read"] = _ => FakeAppServer.Error("failed to fetch codex rate limits: 401 Unauthorized"));
+        var first = AppServer(s => s.Answers["account/rateLimits/read"] = _ => FakeAppServer.Error("failed to fetch codex rate limits: 401 Unauthorized"));
         var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
         var sessions = new FakeSessions();
         var monitor = new UsageMonitor([codex], sessions, Options(), time, log: Log);
         await monitor.PassAsync();
+        // The app-server answers in real time. Stepping the fake clock before it has, on a loaded
+        // runner, ran out the probe's 60 s report timeout: a failure, not the sign-out the test needs.
+        await Until(() => first.Answered >= 4);
         await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
         await monitor.PassAsync();
         Assert.Equal(CodexUsageProbe.SignedOutError, Assert.Single(monitor.Current.Report.Agents, a => a.Agent == AgentKind.Codex).Error);
@@ -1551,7 +1554,7 @@ public sealed class UsageProbeTests : IDisposable
 
         // A Codex session runs here, and the probe its arrival allows is under way at the next look.
         var later = new TaskCompletionSource();
-        AppServer(s =>
+        var second = AppServer(s =>
         {
             s.Before["account/rateLimits/read"] = later.Task;
             if (then != "reading")
@@ -1568,6 +1571,7 @@ public sealed class UsageProbeTests : IDisposable
         Assert.Equal(CodexUsageProbe.SignedOutError, Assert.Single(monitor.Current.Report.Agents, a => a.Agent == AgentKind.Codex).Error);
 
         later.SetResult();
+        await Until(() => second.Answered >= 4);
         await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
         await monitor.PassAsync();
 
