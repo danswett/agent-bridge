@@ -218,6 +218,24 @@ public class AttemptLedgerTests
         Assert.Equal(AnswerOutcome.Unconfirmed, new AttemptLedger(path).Outcome(request)!.Outcome);
     }
 
+    // #1389: a scanner holding the ledger for a moment refused a fresh answer on windows-latest.
+    [Fact]
+    public async Task A_ledger_held_open_for_a_moment_is_read_and_replaced_once_it_is_let_go()
+    {
+        using var f = new Fixture();
+        var path = Path.Combine(f.Root, "profile", "answer-attempts.json");
+        var request = Guid.NewGuid();
+        Assert.Null(new AttemptLedger(path).Claim("first", Guid.NewGuid()));
+
+        using var hold = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
+        var letGo = Task.Run(async () => { await Task.Delay(100); hold.Dispose(); });
+        var restarted = new AttemptLedger(path);
+        Assert.Null(restarted.Claim("second", request));
+        await letGo;
+
+        Assert.Equal(AnswerOutcome.Unconfirmed, new AttemptLedger(path).Outcome(request)!.Outcome);
+    }
+
     [Fact]
     public void A_transient_write_failure_recovers_once_the_obstruction_clears_and_keeps_earlier_claims()
     {
