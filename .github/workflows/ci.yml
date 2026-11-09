@@ -1095,6 +1095,7 @@ jobs:
     #  - pwa-site-csp: the Pages build's CSP;
     #  - lab-scripts: the clean-VM lab's provisioning and runner-interface drafts, offline;
     #  - post-receipt-script: the receipts App's posting script, refusals and a dry run, offline;
+    #  - red-minutes-script: the red-minutes figure's spell counting, offline (quality/red-minutes.ps1);
     #  - rerun-known-flakes: the automatic re-run of a known flake on main, refusals included, offline;
     #  - forms-soak-scripts: the forms soak rig's redaction checks and a syntax check of its stub
     #    server, offline (tools/lab/forms-soak);
@@ -1137,6 +1138,11 @@ jobs:
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'post-receipt-script')) }}
         shell: pwsh
         run: pwsh -NoProfile -File quality/test-post-receipt.ps1
+      - name: The red-minutes figure counts spells the way the guardian does
+        # A fixed run list: nothing reaches GitHub.
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'red-minutes-script')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File quality/test-red-minutes.ps1
       - name: Known-flake re-runs refuse real failures
         # Against a stand-in for gh: nothing reaches GitHub.
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'rerun-known-flakes')) }}

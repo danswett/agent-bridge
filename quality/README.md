@@ -737,6 +737,14 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   counted against the quarantine thresholds. The workflow runs main's copy of the script with a
   token that can re-run workflows and comment on issues, and never runs the failed run's code.
   Offline test: `quality/test-rerun-known-flakes.ps1` (catalog suite `rerun-known-flakes`).
+- **Red minutes on main** (owner target, 2026-11-09): `pwsh quality/red-minutes.ps1` prints how long
+  main's CI was red over the last 24 h, the same way the main guardian counts it (a spell runs from a
+  failed push run of `ci.yml` to the next success; cancelled and running runs say nothing). Target:
+  p90 of red minutes per hour at most 10 over any rolling 24 h, mean at most 3, no single spell over
+  30 minutes, and every spell gets a named cause. It reads with a cached ETag, so a poll that finds
+  nothing new costs no rate limit. The Quality Lead puts its one-line result in the 08:00 digest and
+  in the weekly report. A failure that went green on a re-run is invisible to it, so it undercounts.
+  Offline test: `quality/test-red-minutes.ps1` (catalog suite `red-minutes-script`).
 - **The weekly report** (`weekly-report`, [weekly-report.yml](../.github/workflows/weekly-report.yml))
   is how the flake record gets read, so flakes are fixed rather than re-run. Every Monday at 08:00
   PT, `agent-bridge-quality report` reads the past 7 days from GitHub and the workflow comments it
