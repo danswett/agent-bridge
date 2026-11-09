@@ -688,7 +688,8 @@ public sealed class HostManagerTests : IAsyncLifetime
     [InlineData(true)]
     public async Task A_host_that_stops_answering_while_a_stop_waits_for_its_usage_probe_is_said_to_be_running_not_ended(bool pipeGone)
     {
-        var m = QuickProbes(callTimeout: TimeSpan.FromMilliseconds(500));
+        // A 5-minute ProbeWait cannot elapse before the 500 ms call times out, whatever the runner.
+        var m = QuickProbes(probeWait: TimeSpan.FromMinutes(5), callTimeout: TimeSpan.FromMilliseconds(500));
         processes.Alive.Add(4242);
         var asked = 0;
         // Held until the test ends rather than for a fixed time: on a loaded runner the call's
