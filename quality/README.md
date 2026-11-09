@@ -492,7 +492,12 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      whose jobs or compare can't be read, still counts as not green: re-run it. A run that passed
      doesn't vouch for a later commit (by main's compare from it) whose run, older by id since
      runs aren't promised to be created in push order, hasn't passed, nor for one whose run isn't
-     found: a later commit with no run on the first page of 20 is looked for on up to four more,
+     found. A later commit's first-attempt run still queued or running counts as found and as not
+     red: the pass stands, so a pull request can be judged green while main's CI on its newest
+     commit is still running, and the verdict follows that run (merge-rule judges again when
+     main's `CI` push run is requested, starts and finishes), so a red result fails every pull
+     request at once. Only a commit with no run at all is "can't be found", which the run's own
+     `requested` event settles within seconds, without a timer. A later commit with no run on the first page of 20 is looked for on up to four more,
      and one still not found (further back, or never run, as a commit inside a push of several)
      holds main not green until a run on main's head passes. While it
      isn't green, every pull request fails, its description starting `Main is red (CI <sha>)`;
