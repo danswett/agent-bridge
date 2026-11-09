@@ -103,15 +103,16 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         var live = hits.Where(h => h.Machine.Online).ToList();
         var stale = hits.Where(h => !h.Machine.Online).ToList();
         if (live.Any(h => !h.Machine.Verified)) { return new { result = "unverified", machines = live.Select(h => new { machine = h.Machine.Id, online = true }) }; }
-        var cands = live.SelectMany(h => h.Sessions.Select(s => new { id = s.Id ?? s.Node, node = s.Node, machine = h.Machine.Id, state = s.State, since = s.Since, online = true })).ToList();
-        if (cands.Count >= 2 || (cands.Count == 1 && stale.Count > 0)) { return new { result = "ambiguous", candidates = cands }; }
+        var cands = live.SelectMany(h => h.Sessions.Select(s => new { id = s.Id ?? s.Node, node = (string?)s.Node, machine = h.Machine.Id, state = s.State, since = s.Since, online = true })).ToList();
+        var offlineCands = stale.SelectMany(h => h.Sessions.Select(s => new { id = s.Id ?? s.Node, node = (string?)null, machine = h.Machine.Id, state = s.State, since = s.Since, online = false })).ToList();
+        if (cands.Count >= 2 || (cands.Count == 1 && stale.Count > 0)) { return new { result = "ambiguous", candidates = cands.Concat(offlineCands).ToList() }; }
         if (cands.Count == 0)
         {
             if (stale.Count > 0) { return new { result = "offline", machines = stale.Select(h => new { machine = h.Machine.Id }).ToList() }; }
             return new { result = "notFound" };
         }
         // Only reachable once records can be verified (hostSign): one verified live match.
-        if (machine is null) { return new { result = "unpinned", machines = live.Select(h => new { machine = h.Machine.Id, online = true, verified = true }).ToList() }; }
+        if (machine is null) { return new { result = "unpinned", machines = live.Select(h => new { machine = h.Machine.Id, online = true, verified = true, state = h.Sessions[0].State, since = h.Sessions[0].Since }).ToList() }; }
         return new { result = "found", session = cands[0] };
     }
     AgentCredential Authorize(IProtocolChannel channel, string op)

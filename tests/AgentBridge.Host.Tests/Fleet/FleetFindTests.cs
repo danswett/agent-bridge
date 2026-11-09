@@ -75,6 +75,10 @@ public sealed class FleetFindTests : IDisposable
         var one = Op(M("a", true, "SG Quality", verified: true), M("b", true, null, verified: true));
         var unpinned = await Find(one, new { name = "SG Quality" });
         Assert.Equal("unpinned", unpinned.GetProperty("result").GetString());
+        var pin = unpinned.GetProperty("machines").EnumerateArray().Single();
+        Assert.Equal("a", pin.GetProperty("machine").GetString());
+        Assert.True(pin.GetProperty("verified").GetBoolean());
+        Assert.True(pin.TryGetProperty("state", out _) && pin.TryGetProperty("since", out _));
         var trimmed = await Find(one, new { name = " SG Quality " });
         Assert.Equal("unpinned", trimmed.GetProperty("result").GetString());
         var pinned = await Find(one, new { name = "SG Quality", machine = "a" });

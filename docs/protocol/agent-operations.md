@@ -34,9 +34,9 @@ Optional `"machine"` (1 to 64 of letters, digits, `.`, `_`, `-`) limits the matc
 | --- | --- | --- |
 | `incomplete` | A live machine in scope published a truncated list, so a duplicate could be hidden | `machines`: ids |
 | `unverified` | A live match exists and records are unsigned (no `hostSign` yet) | `machines`: `{ machine, online }`, no node |
-| `ambiguous` | Two or more verified live matches, or one plus a match on an offline machine | `candidates`: `{ id, node, machine, state, since, online }` |
+| `ambiguous` | Two or more verified live matches, or one plus a match on an offline machine | `candidates`: `{ id, node, machine, state, since, online }`, including offline matches with `online: false` and no `node` |
 | `offline` | Matches only on offline machines | `machines`: `{ machine }` |
-| `unpinned` | One verified live match and no `machine` given | `machines`: `{ machine, online, verified }` |
+| `unpinned` | One verified live match and no `machine` given | `machines`: `{ machine, online, verified, state, since }` |
 | `found` | One verified live match on the given `machine` | `session`: `{ id, node, machine, state, since, online }` |
 | `notFound` | Otherwise | none |
 
