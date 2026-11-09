@@ -158,6 +158,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // (AgentHeld). Transcript: Copilot's events.jsonl and its length just before the agent was started.
     sealed record Unready(Func<bool> Alive, string Label, bool RegistersBeforeReady, (string Path, long From)? Transcript);
     readonly ILaunchCredentials? credentials;
+    readonly ILaunchAccount? launchAccount;
     readonly List<Pending> pending = [];
     // Every session id a launch has started an agent on (given, resumed, or the Codex session
     // bound to it), with its process: while that process runs, the session is not resumed
@@ -167,13 +168,21 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     // Test-only compatibility overload; production must pass the shared gate explicitly.
     internal LaunchService(ISessionSource source, IAgentHaBridgeProbe probe, IConsoleInjector injector, IAgentStarter starter, IAgentLocator locator,
-        AgencyCatalog agency, LaunchServiceOptions options, Action<string>? log = null, AttachmentStore? attachments = null, DeliveryGate? gate = null, ILaunchCredentials? credentials = null)
-        : this(gate ?? new DeliveryGate(), source, probe, injector, starter, locator, agency, options, log, attachments, credentials) { }
+        AgencyCatalog agency, LaunchServiceOptions options, Action<string>? log = null, AttachmentStore?         attachments = null, DeliveryGate? gate = null, ILaunchCredentials? credentials = null, ILaunchAccount? account = null)
+                : this(gate ?? new DeliveryGate(), source, probe, injector, starter, locator, agency, options, log, attachments, credentials, account ?? new AcceptingAccount()) { }
+
+    // Existing launch tests are about other things; they take a fake token. The checks themselves
+    // are tested with their own fakes, and the public constructor has no such default.
+    sealed class AcceptingAccount : ILaunchAccount
+    {
+        public Task<LaunchAccount> CheckAsync(string? expectedLogin, CancellationToken cancellationToken) => Task.FromResult(LaunchAccount.Allowed("fake-test-token"));
+    }
 
     public LaunchService(DeliveryGate gate, ISessionSource source, IAgentHaBridgeProbe probe, IConsoleInjector injector, IAgentStarter starter, IAgentLocator locator,
-        AgencyCatalog agency, LaunchServiceOptions options, Action<string>? log = null, AttachmentStore? attachments = null, ILaunchCredentials? credentials = null)
+        AgencyCatalog agency, LaunchServiceOptions options, Action<string>? log = null,         AttachmentStore? attachments = null, ILaunchCredentials? credentials = null, ILaunchAccount? account = null)
     {
         this.credentials = credentials;
+                launchAccount = account;
         this.source = source;
         this.probe = probe;
         this.injector = new GateTrackedInjector(injector, gate);
@@ -827,6 +836,19 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             profile, model, effort, context, allowAll, LaunchProtocol.Flatten(r.Prompt), r.Transfer), null);
     }
 
+    // No account checker is a refusal, not a pass: production always wires one, and a launch must
+    // not start on whatever login the CLI finds.
+    async Task<LaunchAccount> CheckAccount(Guid key, CancellationToken ct)
+    {
+        if (launchAccount is null) { return LaunchAccount.Refuse("this host has no way to check the Copilot account, so no Copilot session was started"); }
+        try { return await launchAccount.CheckAsync(Config.CopilotAccount, ct); }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            log($"launch {Short(key)}: the account check failed: {e.GetType().Name}");
+            return LaunchAccount.Refuse("could not check the account; no Copilot session was started");
+        }
+    }
+
     async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false)
     {
         Pending follow;
@@ -862,6 +884,17 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             if (restoring && Launchers.RestoreRefusal(plan.Launcher, extras) is { } refusal)
             {
                 return Refused($"{plan.Launcher.Label}'s extraArgs in the host's config hold {refusal}, which a restore does not pass on (only options known to start no prompt and widen no permission); resume it from Launch");
+            }
+
+            // Before a worktree or a process exists (#1518): a Copilot session spends the account of the
+            // token it is handed, so one that is missing, rejected, the wrong account or out of
+            // premium quota is refused here and never falls back to a stored login.
+            string? copilotToken = null;
+            if (plan.Launcher.Kind == AgentKind.Copilot)
+            {
+                var account = await CheckAccount(key, ct);
+                if (account.Refusal is { } why) { return Refused(why); }
+                copilotToken = account.Token;
             }
 
             var directory = plan.Directory;
@@ -911,6 +944,9 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             environment[Launchers.SessionVariable] = sessionId.Length > 0 ? sessionId : "launched";
             // Set to nothing when none is issued, so a token of the host's own is never inherited.
             environment[Launchers.TokenVariable] = null;
+            // GH_TOKEN and GITHUB_TOKEN are left alone: the CLI prefers this one, and the session's
+            // own gh work needs them.
+            if (copilotToken is not null) { environment[CopilotLaunchAccount.Variable] = copilotToken; }
             var spec = new StartSpec(plan.Executable, args, directory, environment, ConsoleColumns);
             if (starter.CommandLine(spec, out var tooLong) is null)
             {

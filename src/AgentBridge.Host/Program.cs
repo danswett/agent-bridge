@@ -940,6 +940,8 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
     IAgentStarter starter = OperatingSystem.IsWindows() ? new WindowsAgentStarter() : new UnsupportedPlatformStarter();
     IAgentHaBridgeProbe probe = new ReadOnlyGate(g5, ReadOnlyReason());
     IConsoleInjector injector = OperatingSystem.IsWindows() ? new WorkerInjector(log: Log) : new NoScreens();
+    // Lives as long as the launcher; the 15 s is the HTTP client's last-resort timeout for the account check.
+    var launchHttp = new UsageHttp(TimeSpan.FromSeconds(15));
     var launcher = new LaunchService(deliveryGate, source, probe, injector, starter, agentLocator, new AgencyCatalog(new BatchFileRunner(new CommandRunner())), new LaunchServiceOptions
     {
         CopilotHome = options.CopilotHome,
@@ -951,7 +953,7 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
         WorktreeUsage = new RestoreWorktreeUsage(restore, new AgentWorktreeUsage(new SystemProcessInspector(), options.CopilotHome, options.ClaudeRegistrationRoots, options.CodexRegistrationRoots)),
         Transfers = transfers,
         TransferStaging = transfers.Staging,
-    }, Log, attachments, credentials: credentials);
+    }, Log, attachments, credentials: credentials, account: new CopilotLaunchAccount(launchHttp, log: Log));
     var why = !settings.Launch.Enabled ? "turned off (launch.enabled)" : starter.Unavailable() ?? probe.Active();
     var count = settings.Launch.Workspaces.Count;
     Log(why is null
