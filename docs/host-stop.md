@@ -71,7 +71,11 @@ The same rules, with these differences, each deliberate:
    through its handle.
 9. Still running: agent-ha-bridge again (`failed` if it has started, nothing terminated),
    then `TerminateProcess` on the handle, and up to 5 s for it to go. Gone: `ended`
-   (`forced` if terminated). Still there: `failed`.
+   (`forced` if terminated). Still there: `failed`. The terminated process exits with code
+   0, not 1 (#1509): Windows Terminal closes a tab on exit 0 only, so any other code left an
+   empty "process exited" tab behind for every session the host had to terminate. A launch
+   that crashed on its own, or one still running unconfirmed, is not reaped: its tab cannot
+   be closed from outside, and the process may be a live session.
 10. A pass of the session source, so the session is removed as soon as it has gone; if it
     is still there, it shows its own status again. While its agent's discovery is held
     ([v1-sessions.md](protocol/v1-sessions.md#discovery-held)) it stays, `ending`, until a
