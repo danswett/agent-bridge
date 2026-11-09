@@ -481,7 +481,7 @@ public sealed class AttemptLedger
     {
         try
         {
-            using var stream = new FileStream(path!, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var stream = Transient(() => new FileStream(path!, FileMode.Open, FileAccess.Read, FileShare.Read));
             using var doc = JsonDocument.Parse(stream);
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Object) { throw new JsonException("ledger is not an object"); }
@@ -536,6 +536,25 @@ public sealed class AttemptLedger
         }
     }
 
+    // On Windows a virus scanner or indexer briefly holds a file it has just seen written, so the
+    // next open or replace of the ledger fails with a sharing violation for a few milliseconds
+    // (#1389: a fresh request was refused "couldn't deliver it" by a read that would have
+    // succeeded a moment later). A missing file is not transient, and the wait is bounded.
+    internal static T Transient<T>(Func<T> operation)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try { return operation(); }
+            catch (Exception e) when (attempt < TransientAttempts && e is (IOException and not FileNotFoundException and not DirectoryNotFoundException) or UnauthorizedAccessException)
+            {
+                Thread.Sleep(TransientWait * attempt);
+            }
+        }
+    }
+
+    const int TransientAttempts = 6;
+    static readonly TimeSpan TransientWait = TimeSpan.FromMilliseconds(20);
+
     string? Save()
     {
         var now = time.GetUtcNow();
@@ -552,7 +571,7 @@ public sealed class AttemptLedger
                 JsonSerializer.Serialize(stream, new FileData(Version, claims, receipts));
                 stream.Flush(flushToDisk: true);
             }
-            File.Move(temp, path, overwrite: true);
+            Transient(() => { File.Move(temp, path, overwrite: true); return 0; });
             return null;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
