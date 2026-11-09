@@ -2250,8 +2250,7 @@ Each slice adds its own. Together they cover:
   person's one removal of D keeps E and E2, and so takes J and K. On a fork from before it, D confirms J
   and K and adds Y, and J and K cosign a removal of D (rank 2). Y and D's confirms of J and K are
   D's concurrent grants and void; J's and K's removal revokes no signer of the person's, so it
-  shields nothing. E and E2 are void until re-enrolled (§3.5): the removal takes J and K, so they are
-  D's grants concurrent with it.
+  shields nothing; E and E2 stay active.
 * **A quarantined descendant does not block the recovery.** At head P the roster holds G, S, and
   C1 and C2, which G approved and confirmed independently of S. The honest line advances 9
   entries; S then submits `add(J)` on P, which every verifier quarantines. C1 and C2 remove S,
