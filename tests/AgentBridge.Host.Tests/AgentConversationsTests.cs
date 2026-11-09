@@ -93,7 +93,7 @@ public sealed class AgentConversationsTests
     }
 
     [Fact]
-    public void A_full_table_refuses_a_new_session_rather_than_forget_a_live_one_and_makes_room_by_age_or_when_a_session_ends()
+    public void A_full_table_refuses_a_new_session_and_only_a_session_ending_makes_room()
     {
         var c = Make();
         for (var i = 0; i < 1024; i++) { Assert.True(c.TrySend("A", $"t{i}").Allowed); }
@@ -102,8 +102,29 @@ public sealed class AgentConversationsTests
         c.SessionEnded("t0");
         Assert.True(c.TrySend("B", "one-too-many").Allowed);
         Assert.Equal("conversation-budget", c.TrySend("B", "another").Reason);
-
-        now = now.AddMinutes(61);
-        Assert.True(c.TrySend("B", "another").Allowed);
     }
-}
+
+    [Fact]
+    public void An_expired_conversation_stays_refused_when_the_table_is_full_and_ages_out_nothing()
+    {
+        var c = Make();
+        for (var i = 0; i < 1024; i++) { Assert.True(c.TrySend("A", $"t{i}").Allowed); }
+        now = now.AddMinutes(61);
+
+        Assert.Equal("conversation-budget", c.TrySend("B", "new").Reason);
+    }
+
+    [Fact]
+    public void An_old_launch_mark_is_kept_when_the_table_is_full_so_the_session_still_cannot_launch()
+    {
+        var c = Make();
+        for (var i = 0; i < 1024; i++)
+        {
+            Assert.True(c.TryLaunch("A", $"l{i}").Allowed);
+            c.RecordTurn($"l{i}", AgentTurnDriver.Person);
+        }
+        now = now.AddHours(25);
+
+        Assert.Equal("launch-not-allowed", c.TryLaunch("B", "new").Reason);
+        Assert.Equal("launch-not-allowed", c.TryLaunch("l0", "child").Reason);
+    }}
