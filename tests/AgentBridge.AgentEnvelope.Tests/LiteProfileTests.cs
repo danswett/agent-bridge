@@ -31,6 +31,34 @@ public class LiteProfileTests
         LiteProfile.Check(env, Sample.Point(key), Account, Text, Now + 1);
     }
 
+    [Theory]
+    [InlineData("12345678")]
+    [InlineData("18446744073709551615")]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+    public void A_numeric_or_hex_account_builds_parses_verifies_and_passes_the_same_account_check(string account)
+    {
+        using var key = Sample.NewKey();
+        var env = Envelope.Parse(LiteProfile.Seal(Sender with { Account = account }, Target, Request, Text, Now, new EcdsaEnvelopeSigner(key), 120));
+        Assert.Equal(account, env.Body.Target.Account);
+        LiteProfile.Check(env, Sample.Point(key), account, Text, Now + 1);
+        Assert.Equal(LiteRefusal.Account, Code(() => LiteProfile.Check(env, Sample.Point(key), "87654321", Text, Now + 1)));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("123456789012345678901")]
+    [InlineData("12a45")]
+    [InlineData("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]
+    [InlineData("123.45")]
+    [InlineData("123|45")]
+    [InlineData("0123")]
+    [InlineData("+123")]
+    public void An_account_that_is_neither_numeric_nor_32_hex_is_not_sealed(string account)
+    {
+        using var key = Sample.NewKey();
+        Assert.Equal(Refusal.Value, Code(() => Envelope.Parse(LiteProfile.Seal(Sender with { Account = account }, Target, Request, Text, Now, new EcdsaEnvelopeSigner(key), 120))));
+    }
+
     [Fact]
     public void A_lifetime_over_120_seconds_is_not_sealed()
     {
