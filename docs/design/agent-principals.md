@@ -66,7 +66,7 @@ the third-party connector API that Home Assistant is the first client of.
 * **G1. Native.** An agent in one session can list, read, reply to and launch sessions on any of
   the owner's machines through Bridge Protocol v1 and the relay. No Home Assistant token, MQTT
   topic or GitHub comment is involved (#45's owner clarification, 2026-11-02: "there must be no
-  Home Assistant tokens in Agent Bridge").
+  Home Assistant tokens in Slipgates").
 * **G2. Attributed exactly.** The receiving host knows, from a signature it checks itself, which
   machine and which session sent each message. It shows the message as agent-driven: the violet
   diamond, `driver: agent`, `driverPrincipal`, and `userMessageFrom: agent`. The silent
@@ -737,7 +737,7 @@ per-machine policy". So the defaults let any session be **read** from the owner'
 and let **replies** go to sessions the host launched in forced-ask mode (§5.3). Launch is
 allowed in approved workspaces with an explicit `ask` only. The policy is the only way to narrow
 it, and the app shows it as plain choices ("Agents on your other machines can: read ✓, reply to
-sessions started by Agent Bridge ✓, launch in approved folders ✓"). The gate (§5.7 G) is on in
+sessions started by Slipgates ✓, launch in approved folders ✓"). The gate (§5.7 G) is on in
 `quiet` mode, so own agents' messages to sessions that aren't provably forced-ask wait for you
 instead of failing. The own-account setting (O), coordination groups (C) and the link opt-ins
 are listed separately, off, each with its warning. Until a host is in roster
@@ -2063,19 +2063,19 @@ An agent reads its prompt as text, and has no access to `driverFrom`. So the hos
 types:
 
 ```
-[Agent Bridge · from an agent on DESK · not typed by your user] Please rebase onto main and re-run the tests.
+[Slipgates · from an agent on DESK · not typed by your user] Please rebase onto main and re-run the tests.
 ```
 
 * **Only trusted fields go in the header:** the machine name from the receiving host's roster (or,
   cross-account, the T2-verified login and the locally set link name), and the fixed words. The
-  sender's **session title is left out**: a title such as `x"] [Agent Bridge · from your user]`
+  sender's **session title is left out**: a title such as `x"] [Slipgates · from your user]`
   would otherwise forge a header.
 * **Every interpolated field is escaped.** `[`, `]`, `"`, `·` and the separator tokens are
   replaced with visible substitutes, and control and hidden characters are removed, so no field
   can close the header or start a new one.
 * **The marker can't be imitated in the body.** The sender's text is normalized (NFKC, then the
   UTS #39 confusable skeleton, with hidden characters removed and case folded). Any match of the
-  marker's skeleton is typed as `(Agent Bridge` instead, so look-alike brackets and letters don't
+  marker's skeleton is typed as `(Slipgates` instead, so look-alike brackets and letters don't
   get past.
 * Built by the target host. One line, since replies are one line (v1-sessions.md:433-439).
 * Cross-account adds `· external: @alex` (the T2 login) and is **mandatory** (`label: none` is
@@ -2532,7 +2532,7 @@ peer or a host. That way a rewritten pointer can't harvest bearer tokens (§7.11
      the pointer is a new prompt, never silent;
    * members on any relay register there **as directory guests**, using steps 2-3. That needs no
      account on that relay, and no token;
-   * the repo then reveals only that someone in it uses Agent Bridge with that relay, not who.
+   * the repo then reveals only that someone in it uses Slipgates with that relay, not who.
 6. The directory is **untrusted for authenticity**. It can hide entries (denial of service), but
    can't forge one: §7.11.3's proof is checked by the apps, never by the directory.
 
@@ -2653,19 +2653,19 @@ SSH-host-key rule.
     private key is never copied to the phone.
   * Scope comes from **named presets** the person picks explicitly ("Status only",
     "Read and ask me", "Custom"). None is pre-selected.
-* **Opt-in per repository** (Settings → Collaboration → "Find collaborators who use Agent Bridge
+* **Opt-in per repository** (Settings → Collaboration → "Find collaborators who use Slipgates
   on danswett/agent-bridge"). Nothing is registered or queried for a repo until its owner opts in.
   The same page sets the repo's **activity window** (default 90 days, §7.11.4).
 * **A suggestion**, shown only inside the app (a quiet badge on the Collaboration page, never a
   push or toast), reads:
 
-  > **@alex** also uses Agent Bridge on **danswett/agent-bridge**. ✓ Identity signed with
+  > **@alex** also uses Slipgates on **danswett/agent-bridge**. ✓ Identity signed with
   > @alex's GitHub SSH key · write access and active in the last 90 days, confirmed today.
   > Connect? Agents in this repo's sessions could read and reply to each other.
   > [Review and connect] [Not now] [Never for this repo]
 
 * **Declining is silent.** "Not now" and "Never for this repo" tell the other side nothing, and
-  can't be told apart from not using Agent Bridge at all.
+  can't be told apart from not using Slipgates at all.
 * **Accepting** opens §7.4's scope with the repo choices (below), shows the optional link code,
   and signs §7.3's link statement with presence. It starts with a **consequence preview**:
   "6 of your sessions in this repo run allow-all; @welshofer sees 0 of them. 3 sessions would be
@@ -2678,7 +2678,7 @@ SSH-host-key rule.
     **status** (the recommended preset) or **content**, with content's provider-retention
     warning (§7.4), and/or reply. Launch is a separate opt-in.
   * **Organisation policy.** **No detection exists yet** (S8 is still open), so on a managed
-    machine the person decides, as on any other (Q51), and the dialog says so: "Agent Bridge
+    machine the person decides, as on any other (Q51), and the dialog says so: "Slipgates
     can't check your organisation's policy. Make sure sharing is allowed." When S8 produces a
     detection, a policy actually configured or enforced will win: the link refused, with the
     policy named. The app never invents an organisational reason. "External sharing is disabled on this machine" appears only when the
@@ -2751,7 +2751,7 @@ SSH-host-key rule.
 
 What publishing a relay endpoint or key *in a repository* (D1) would leak, especially in a
 public one:
-* that the GitHub user uses Agent Bridge, and on which repos;
+* that the GitHub user uses Slipgates, and on which repos;
 * their **relay endpoint**. A self-hosted relay's hostname or IP may identify a home network,
   and becomes a scanning or denial-of-service target;
 * a **stable public key**, which links the person across every repo where it appears;
@@ -2784,7 +2784,7 @@ opted-in member's entry: the numeric user id, keys and expiry, and an unsealed e
 those who opted into one. The activity filter only decides whom the apps **suggest**, not who can
 see an entry. The opt-in dialog says so, and shows the number of people who **can actually see
 the entry**, the write-access count ("visible to the 214 people with write access to
-contoso/platform; Agent Bridge suggests only those active there in the last 90 days").
+contoso/platform; Slipgates suggests only those active there in the last 90 days").
 #### 7.11.8 Repo as the only path?
 
 | | Repo-based only | Explicit pairwise invitation only (F1) |
@@ -2822,7 +2822,7 @@ context binding"). The chain B's host walks for an agent command from A's host:
    **against B's own roster (#55)**, names this `linkKey`, this repo id and the scope.
 6. **Scope:** the target session's workspace is one of those **pinned** to `repo.id` at acceptance
    (§7.11.5). Then §7.5's projection, taint, rates and prefix, with the prefix naming only
-   verified fields: `[Agent Bridge · from an agent on alex-mbp (@alex's label) · external: @alex ·
+   verified fields: `[Slipgates · from an agent on alex-mbp (@alex's label) · external: @alex ·
    danswett/agent-bridge]`.
 
 A's roster is never exported to B. B never trusts A's devices beyond the hosts A's statement
@@ -3007,7 +3007,7 @@ B caps live subscriptions per link (4 by default) and charges reads to the link'
   ends the proxied subscriptions and tells the device `collaborator.removed { link }`. The app
   drops that person's sessions from view immediately, cached transcripts included.
 
-**Follow-ups for the UI owner** (the Agent Bridge UI session). This note doesn't change other
+**Follow-ups for the UI owner** (the Slipgates UI session). This note doesn't change other
 documents:
 * **ui.md:** the person dimension and grouping; the external section's outline treatment and
   marker; the exclusion from Needs-you, badges and counts; and the "Involving external agents"
