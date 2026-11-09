@@ -220,7 +220,7 @@ public class AttemptLedgerTests
 
     // #1389: a scanner holding the ledger for a moment refused a fresh answer on windows-latest.
     [Fact]
-    public async Task A_ledger_held_open_for_a_moment_is_read_and_replaced_once_it_is_let_go()
+    public void A_ledger_held_open_for_a_moment_is_read_and_replaced_once_it_is_let_go()
     {
         using var f = new Fixture();
         var path = Path.Combine(f.Root, "profile", "answer-attempts.json");
@@ -228,10 +228,13 @@ public class AttemptLedgerTests
         Assert.Null(new AttemptLedger(path).Claim("first", Guid.NewGuid()));
 
         using var hold = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
-        var letGo = Task.Run(async () => { await Task.Delay(100); hold.Dispose(); });
+        // A thread of its own: the claim blocks this one, and a busy thread pool (other tests running at
+        // once) can be slow to run a task, which outlasted the retry's whole budget on CI.
+        var letGo = new Thread(() => { Thread.Sleep(100); hold.Dispose(); });
+        letGo.Start();
         var restarted = new AttemptLedger(path);
         Assert.Null(restarted.Claim("second", request));
-        await letGo;
+        letGo.Join();
 
         Assert.Equal(AnswerOutcome.Unconfirmed, new AttemptLedger(path).Outcome(request)!.Outcome);
     }
