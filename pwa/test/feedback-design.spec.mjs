@@ -84,12 +84,14 @@ test('feedback disclosure stays keyboard accessible and actions remain pinned ac
   expect(layout.footerVisible).toBe(true);
   expect(layout.footerBottomGap).toBeLessThanOrEqual(1);
   await page.locator('#feedback-error-codes > summary').focus();
-  const focusClearance = await page.evaluate(() => {
+  // WebKit scrolls the focused summary into view after focus() returns, so a single read can
+  // land before the dialog has scrolled it clear of the sticky footer (flaky, #1417). Poll the
+  // same measurement until it settles; the bar stays the same: no overlap with the footer.
+  await expect.poll(() => page.evaluate(() => {
     const focused = document.activeElement.getBoundingClientRect();
     const actions = document.querySelector('.feedback-actions').getBoundingClientRect();
     return actions.top - focused.bottom;
-  });
-  expect(focusClearance).toBeGreaterThanOrEqual(0);
+  })).toBeGreaterThanOrEqual(0);
   await page.evaluate(() => { document.activeElement.blur(); });
   await page.evaluate(() => { document.querySelector('#feedback-dialog').scrollTop = 0; });
 
