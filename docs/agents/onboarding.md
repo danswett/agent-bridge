@@ -42,10 +42,10 @@ coordinator owns a lane, and you reach it by putting its tag in a GitHub comment
 2. **Work in your own worktree,** and keep the PR a draft while you iterate (drafts run a fast subset of CI). Batch fixes so each push answers a whole round of review.
 3. **Mark it ready** once CI is green on the final head and Copilot has reviewed *that* head. A Copilot error, such as a billing failure or a timeout, counts as no review, so request another with `gh pr edit <n> --add-reviewer "@copilot"`.
 4. **Engineering reviews it without being asked.** It sweeps for ready PRs every few minutes, ordered by Product's rank, and posts a comment with its verdict. A CLEAN verdict is tagged `[to:quality]`; a NOT CLEAN one goes to your team with its findings.
-   - **Only Engineering's receipt counts.** The receipt is the `independent-review` status from an account in `independent_review.posters`. A "CLEAN" comment from you or your own reviewer isn't a receipt, however careful the review behind it.
+   - **Only Engineering's receipt counts, and only a sensitive PR needs one** (AGENTS.md rules 4 and 5). The receipt is the `independent-review` status from an account in `independent_review.posters`; under `copilot-waived` a sensitive PR also needs `independent-review-2` from another model family. A "CLEAN" comment from you or your own reviewer isn't a receipt, however careful the review behind it. For other PRs, Engineering's verdict is advisory.
    - Fix every finding, or reply on its thread with your reasoning, then push once. Engineering then reviews only what changed (a "delta"), rather than starting over.
-5. **Quality admits it** with auto-merge, after checking freshness: if main has changed your files since your CI ran, the branch is updated first (Amendment 1a). Engineering carries the receipt across a merge-only update.
-6. **Arm auto-merge yourself** for your own ready PR (AGENTS.md rule 4), pinned to the head you mean.
+5. **Quality coordinates the landing:** it checks freshness (if main has changed your files since your CI ran, the branch is updated first, Amendment 1a), sets the order, and applies holds. Engineering carries the receipt across a merge-only update.
+6. **Arm auto-merge yourself** for your own ready PR once its gates are met (AGENTS.md rule 4), pinned to the head you mean. Quality merges only a PR whose session didn't arm it.
 
 ## 4. What catches new agents out
 
