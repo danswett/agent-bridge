@@ -155,6 +155,11 @@ public sealed class ReplyService : ISessionReplier
     // Ends the late watches of replies that timed out (#1025) when the host stops, so none outlives it.
     public CancellationToken Stopping { get; set; }
 
+    // Told of each reply that reached its confirmation: session, agent, whether it was working when
+    // typed, when typing finished (ms after receipt), and the outcome. For the deaf-session watch
+    // (#687); never the reply's words.
+    public Func<string, AgentKind, bool, long?, AnswerOutcome, Task>? Measured { get; set; }
+
     void OnSessionChanged(object? sender, SessionChange change)
     {
         if (change.Kind == SessionChangeKind.Removed)
@@ -304,6 +309,8 @@ public sealed class ReplyService : ISessionReplier
         var (typedAt, working, recorded) = timeline.Stages();
         var when = recorded is { } r ? Ms(r) : seen.At is { } s ? $"~{Ms(s)}" : "never";
         log(FormattableString.Invariant($"reply {id} to {Short(sessionId)} confirm: {seen.Agent.ToString().ToLowerInvariant()}, {(working ? "working" : "idle")}, typed {(typedAt is { } t ? Ms(t) : "?")}, recorded {when}, timeout {options.ConfirmTimeout.TotalSeconds:0} s, {result.Outcome.ToString().ToLowerInvariant()}"));
+        // Not awaited: a recovery ends and resumes a session, which no reply waits for.
+        if (Measured is { } measured && !seen.Ended) { _ = Task.Run(() => measured(sessionId, seen.Agent, working, typedAt, result.Outcome)); }
         if (result.Outcome == AnswerOutcome.Unconfirmed && recorded is null && seen.At is null && !seen.Ended && options.LateWatch > TimeSpan.Zero)
         {
             _ = Task.Run(() => WatchLateAsync(id, seen, timeline));

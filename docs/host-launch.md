@@ -359,6 +359,18 @@ offer goes after 7 days the host saw, however often it crashes. A smaller step c
 Anything else that stops the record from starting, or from being looked at later, is logged and keeps
 every worktree for that run; the host goes on serving.
 
+## A Copilot session that stopped taking messages (#687)
+
+Copilot's own host-event watchdog can give up after 120 seconds ("did not acknowledge"), after which the session
+no longer takes messages and a background agent's result may be lost. The host treats a Copilot session as deaf on
+one of three signals: a reply that stayed unconfirmed while the session was idle; two replies in a row that took
+over 20 seconds to be typed; or the "stopped taking messages" attention the host raises for that error.
+It then ends the session through the normal stop path and resumes it through the normal resume path, but only when
+nothing would be lost: the session is idle, no tool is running, no background work or sub-agent is unfinished, no
+question is open, and the screen shows an empty input box. Otherwise it leaves the session alone and logs why.
+A session recovered once is not recovered again until it has taken a reply, with no timer involved. This restores a session that takes messages; it
+cannot bring back a result that was already lost. The cause is in the Copilot CLI (github/copilot-cli#5395).
+
 ## The log
 
 ```
