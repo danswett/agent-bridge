@@ -2247,6 +2247,27 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Keys_refused_while_a_busy_session_streams_output_wait_for_the_form_to_come_back()
+    {
+        // Other sessions' replies landing make the agent stream output for seconds, the form not
+        // drawn meanwhile: past FormRecheck the answer used to stop with "the session's screen
+        // changed before the next key could go" (#1497). The screen is still moving, so it waits.
+        DateTime? refusedAt = null;
+        var reads = 0;
+        injector.Screen = () => refusedAt is { } at && DateTime.UtcNow - at < TimeSpan.FromMilliseconds(2600)
+            ? [$"\u25CF streaming output {Interlocked.Increment(ref reads)}"]
+            : WhichOne;
+        injector.Holding = _ => { if (injector.Attempts.Count == 1) { refusedAt = DateTime.UtcNow; } };
+        injector.OnInject = () => { if (Enters() == 1) { Fixture.Append(events, Recorded("q1", new { pick = "b" })); } };
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal(("delivered", (string?)null), (outcome, reason));
+        Assert.Equal(1, Enters());
+    }
+
+    [Fact]
     public async Task A_field_drawn_differently_when_its_Enter_was_refused_gets_no_Enter()
     {
         // The pointer moved off the option the keys walked to before its Enter (something else
