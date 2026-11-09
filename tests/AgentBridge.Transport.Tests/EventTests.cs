@@ -256,9 +256,16 @@ public class EventTests
         await atHost.SendEventAsync("a");
         await atHost.SendEventAsync("b");
 
-        // The pacing window is full, so this one waits for about a second; cancel it first.
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => atHost.SendEventAsync("cancelled", null, cts.Token));
+        // The pacing window is held full, so this one waits and cannot go however slow the machine
+        // is; cancel it while it waits.
+        host.Relay.PaceWindowOverride = TimeSpan.FromHours(1);
+        using var cts = new CancellationTokenSource();
+        var cancelled = atHost.SendEventAsync("cancelled", null, cts.Token);
+        await Task.Delay(100);
+        Assert.False(cancelled.IsCompleted);
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
+        host.Relay.MaxFramesPerSecond = 0;
         var after = await atHost.SendEventAsync("after");
         var got = await ReadAsync(atClient, 3);
 

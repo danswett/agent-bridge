@@ -290,20 +290,23 @@ public sealed class RelayClient : IAsyncDisposable
     // second plus how much later the earliest of them was read than the latest, so spacing N
     // over 1.5 s keeps every window to N while that lag stays under half a second.
     internal static readonly TimeSpan PaceWindow = TimeSpan.FromMilliseconds(1500);
+    // Test use: a window held open, so a send that must wait for it cannot be let through by a
+    // slow machine running past the real one.
+    internal TimeSpan? PaceWindowOverride { get; set; }
     readonly Queue<long> recentSends = new();
 
     // Called under sendLock, so waiting here holds back every later send, in order.
     async Task PaceAsync(CancellationToken ct)
     {
-        while (Pace(recentSends, Environment.TickCount64, MaxFramesPerSecond) is { } wait) { await Task.Delay(wait, ct); }
+        while (Pace(recentSends, Environment.TickCount64, MaxFramesPerSecond, PaceWindowOverride) is { } wait) { await Task.Delay(wait, ct); }
     }
 
     // How long the next send must wait, given when the latest ones went (oldest first); null
     // when it may go now, and then it is counted as sent.
-    internal static TimeSpan? Pace(Queue<long> recentSends, long now, int limit)
+    internal static TimeSpan?     Pace(Queue<long> recentSends, long now, int limit, TimeSpan? windowOverride = null)
     {
         if (limit <= 0) { return null; }
-        var window = (long)PaceWindow.TotalMilliseconds;
+            var window = (long)(windowOverride ?? PaceWindow).TotalMilliseconds;
         while (recentSends.Count > 0 && now - recentSends.Peek() >= window) { recentSends.Dequeue(); }
         if (recentSends.Count < limit) { recentSends.Enqueue(now); return null; }
         return TimeSpan.FromMilliseconds(window - (now - recentSends.Peek()) + 1);
