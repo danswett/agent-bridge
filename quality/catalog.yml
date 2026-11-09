@@ -433,6 +433,19 @@ suites:
     where: ci.yml light
     status: exists
 
+  - id: post-receipt-script
+    kind: unit
+    ring: 0
+    select: affected
+    # The receipts App's posting script: argument refusals and a dry run with a throwaway key.
+    # Nothing reaches GitHub and the real key is never read.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/post-receipt.ps1, quality/test-post-receipt.ps1]
+    command: pwsh -NoProfile -File quality/test-post-receipt.ps1
+    where: ci.yml light
+    status: exists
+
   - id: beta-acceptance
     kind: e2e
     ring: 4
