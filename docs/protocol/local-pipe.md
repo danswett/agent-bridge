@@ -176,15 +176,27 @@ then an agent connection is refused the acting ops exactly as before.
 Windows only, pipe only, and only on a connection that has passed `agent.hello`. Any other
 caller (a plain pipe client, a connector, the HTTP MCP server, a script) is refused with
 `refused: agent.send is for an agent connection that has passed agent.hello`. The sender is
-always the connection's credential: any `principal` or other extra field in the request is
+always the connection's credential (a non-Windows host, or one without agent credentials, answers
+`refused: agent.send isn't available on this host`; with the mode off or no sender wired, an agent
+connection gets the `off` outcome below): any `principal` or other extra field in the request is
 ignored.
 
 ```json
 { "id": 2, "op": "agent.send", "data": { "machine": "<machine>", "session": "<session id>", "text": "..." } }
 ```
 
-All three are required; `text` is at most 4096 characters (longer is refused before anything is
-sent). The host hands it to the AP5-lite sender, which answers
+All three are required strings, checked before anything is sent; a bad request is refused with a
+code in the message:
+
+| Field | Rule | Code |
+|---|---|---|
+| `machine` | 1 to 64 of letters, digits, `.`, `_`, `-` | `badMachine` |
+| `session` | the receiver's roster node id: `agent_bridge_` and exactly 16 lowercase hex digits | `badSession` |
+| `text` | not empty, not blank, no control characters except newline | `badText` |
+| `text` | at most 4096 characters (UTF-16 code units, not bytes) | `textTooLong` |
+
+A body that isn't an object is refused with `badRequest`. The host hands the request to the AP5-lite
+sender, which answers
 `{ "outcome", "code", "request" }`:
 
 | `outcome` | Meaning | Caller |
@@ -193,6 +205,7 @@ sent). The host hands it to the AP5-lite sender, which answers
 | `refused` | the target refused; `code` is its reason (`notReplyTarget`, `busy`, `composerNotEmpty`, `noSuchSession`, ...) | fall back to Home Assistant on `notReplyTarget` or `busy` |
 | `undeliverable` | no channel to the target; **the message was not queued anywhere** and is never retried | fall back to Home Assistant |
 | `unconfirmed` | sent, but no acknowledgement; it may or may not have arrived | fall back to Home Assistant |
+| `rate` | (reserved) the sender's rate cap was hit; this is final, with no Home Assistant fallback | do not fall back |
 | `off` | the mode is off, killed, or the peer isn't pinned; no channel was opened | fall back to Home Assistant |
 
 `request` is the sender's request id.

@@ -27,7 +27,7 @@ public static class LocalApi
 
     public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,     RemoteAuthorization? authorization = null,     AgentCredentials? credentials = null, AgentBridge.Host.Lite.ILiteSender? lite = null) => async (channel, op, data) =>
     {
-            if (op == AgentBridge.Host.Lite.LiteAgentSend.Op && credentials is not null && lite is not null) { return await AgentBridge.Host.Lite.LiteAgentSend.HandleAsync(credentials, lite, channel, data); }
+            if (op == AgentBridge.Host.Lite.LiteAgentSend.Op) { return await AgentBridge.Host.Lite.LiteAgentSend.HandleAsync(credentials, lite, channel, data); }
             // Pipe only, and Windows only for now (§3.4): a relay channel never reaches this handler.
             if (op == AgentProtocol.Hello)
             {

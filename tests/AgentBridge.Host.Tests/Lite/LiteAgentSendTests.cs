@@ -27,7 +27,8 @@ public sealed class LiteAgentSendTests : IDisposable
     Task<object?> Send(IProtocolChannel channel, string json) =>
         LiteAgentSend.HandleAsync(store, sender, channel, JsonDocument.Parse(json).RootElement);
 
-    const string Body = """{"machine":"m2","session":"s2","text":"hi"}""";
+    const string Sess = "agent_bridge_0123456789abcdef";
+    const string Body = """{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":"hi"}""";
 
     [Fact]
     public async Task Send_before_hello_is_refused_and_nothing_is_sent()
@@ -39,10 +40,10 @@ public sealed class LiteAgentSendTests : IDisposable
     [Fact]
     public async Task A_principal_in_the_body_is_ignored_and_the_credential_is_the_sender()
     {
-        await Send(hello, """{"machine":"m2","session":"s2","text":"hi","principal":"agent:other:sess-9","caller":{"session":"sess-9"}}""");
+        await Send(hello, """{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":"hi","principal":"agent:other:sess-9","caller":{"session":"sess-9"}}""");
         var call = Assert.Single(sender.Calls);
         Assert.Equal("sess-1", call.Caller.Session);
-        Assert.Equal(new LiteSendInput("m2", "s2", "hi"), call.Input);
+        Assert.Equal(new LiteSendInput("m2", Sess, "hi"), call.Input);
     }
 
     [Theory]
@@ -61,19 +62,75 @@ public sealed class LiteAgentSendTests : IDisposable
     [Fact]
     public async Task Text_over_4096_characters_is_refused_before_the_sender_is_called()
     {
-        await Assert.ThrowsAsync<ArgumentException>(() => Send(hello, JsonSerializer.Serialize(new { machine = "m2", session = "s2", text = new string('x', 4097) })));
+        await Assert.ThrowsAsync<ArgumentException>(() => Send(hello, JsonSerializer.Serialize(new { machine = "m2", session = Sess, text = new string('x', 4097) })));
         Assert.Empty(sender.Calls);
-        await Send(hello, JsonSerializer.Serialize(new { machine = "m2", session = "s2", text = new string('x', 4096) }));
+        await Send(hello, JsonSerializer.Serialize(new { machine = "m2", session = Sess, text = new string('x', 4096) }));
+        Assert.Single(sender.Calls);
+    }
+
+    [Theory]
+    [InlineData("""{"session":"agent_bridge_0123456789abcdef","text":"hi"}""")]
+    [InlineData("""{"machine":"","session":"agent_bridge_0123456789abcdef","text":"hi"}""")]
+    [InlineData("""{"machine":5,"session":"agent_bridge_0123456789abcdef","text":"hi"}""")]
+    [InlineData("""{"machine":"bad name","session":"agent_bridge_0123456789abcdef","text":"hi"}""")]
+    [InlineData("""{"machine":"m2","text":"hi"}""")]
+    [InlineData("""{"machine":"m2","session":"","text":"hi"}""")]
+    [InlineData("""{"machine":"m2","session":7,"text":"hi"}""")]
+    [InlineData("""{"machine":"m2","session":"s2","text":"hi"}""")]
+    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789ABCDEF","text":"hi"}""")]
+    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef\n","text":"hi"}""")]
+    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcde","text":"hi"}""")]
+    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef"}""")]
+    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":""}""")]
+    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":null}""")]
+    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":4}""")]
+    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":"  \n "}""")]
+    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":"a\u001b[31m"}""")]
+    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":"a\rb"}""")]
+    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":"a\u0000b"}""")]
+    [InlineData("[1]")]
+    public async Task A_bad_request_is_refused_before_the_sender_runs(string json)
+    {
+        await Assert.ThrowsAsync<ArgumentException>(() => Send(hello, json));
+        Assert.Empty(sender.Calls);
+    }
+
+    [Fact]
+    public async Task Newlines_are_allowed_in_text()
+    {
+        await Send(hello, """{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":"a\nb"}""");
         Assert.Single(sender.Calls);
     }
 
     [Fact]
-    public async Task A_request_missing_a_field_is_refused()
+    public async Task An_unwired_sender_answers_off()
     {
-        await Assert.ThrowsAsync<ArgumentException>(() => Send(hello, """{"machine":"m2","text":"hi"}"""));
+        var reply = Assert.IsType<LiteSendReply>(await LiteAgentSend.HandleAsync(store, null, hello, JsonDocument.Parse(Body).RootElement));
+        Assert.Equal("off", reply.Outcome);
+    }
+
+    static JsonElement Json() => JsonDocument.Parse(Body).RootElement;
+
+    [Fact]
+    public async Task Through_the_local_api_a_non_agent_channel_and_a_host_without_credentials_are_refused()
+    {
+        var withCreds = LocalApi.Handler(null!, null!, null!, null, null, store, sender);
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => withCreds(new Chan(), LiteAgentSend.Op, Json()));
+        Assert.StartsWith("refused:", refused.Message);
+        var bare = LocalApi.Handler(null!, null!, null!);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => bare(hello, LiteAgentSend.Op, Json()));
         Assert.Empty(sender.Calls);
     }
 
+    [Fact]
+    public async Task Through_the_local_api_an_agent_connection_reaches_the_sender_or_the_off_stub()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var wired = LocalApi.Handler(null!, null!, null!, null, null, store, sender);
+        Assert.Equal("delivered", Assert.IsType<LiteSendReply>(await wired(hello, LiteAgentSend.Op, Json())).Outcome);
+        var unwired = LocalApi.Handler(null!, null!, null!, null, null, store, null);
+        Assert.Equal("off", Assert.IsType<LiteSendReply>(await unwired(hello, LiteAgentSend.Op, Json())).Outcome);
+    }
     sealed class Sender : ILiteSender
     {
         public List<(AgentCredential Caller, LiteSendInput Input)> Calls { get; } = [];
