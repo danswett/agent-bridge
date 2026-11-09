@@ -91,7 +91,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
     {
         // A test that names a budget is about it running out.
         if (wait is not null || readyWait is not null || trustConfirm is not null || follow is not null) { clock.Run(); }
-        return new(source, gate ?? probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
+        return new(source, gate ?? probe, screens, starter,         locator, new AgencyCatalog(agency, log: logged.Enqueue), new LaunchServiceOptions
         {
             Time = clock,
             CopilotHome = homes?.Copilot ?? f.CopilotHome,
@@ -850,6 +850,32 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
     }
 
     [Fact]
+    public async Task Launch_options_answer_without_waiting_for_a_slow_sessions_scan_and_the_finished_scan_shows_on_the_next_ask()
+    {
+        locator.Installed["agency"] = @"C:\fake\agency.exe";
+        using var release = new ManualResetEventSlim();
+        agency.OnSessions = () => release.Wait(TimeSpan.FromSeconds(15));
+        var ch = await OpenAsync();
+
+        var first = await RequestAsync(ch, LaunchProtocol.Options, new { });
+
+        Assert.True(first.GetProperty("resumablePending").GetBoolean());
+        Assert.Equal("agency", first.GetProperty("agents")[0].GetProperty("id").GetString());
+        Assert.Contains(logged, l => l.StartsWith("launch.options: lookup ") && l.Contains("scan still running"));
+
+        release.Set();
+        JsonElement later = default;
+        for (var i = 0; i < 100; i++)
+        {
+            later = await RequestAsync(ch, LaunchProtocol.Options, new { });
+            if (!later.TryGetProperty("resumablePending", out _)) { break; }
+            await Task.Delay(100);
+        }
+        Assert.False(later.TryGetProperty("resumablePending", out _));
+        Assert.Contains(logged, l => l.StartsWith("launch.options: sessions scan found 0 in "));
+    }
+
+    [Fact]
     public async Task Agency_starts_with_the_chosen_profile_and_a_profile_it_does_not_list_is_refused()
     {
         locator.Installed["agency"] = @"C:\fake\agency.exe";
@@ -1341,6 +1367,11 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         var ch = await OpenAsync();
 
         var options = await RequestAsync(ch, LaunchProtocol.Options, new { });
+        for (var i = 0; i < 100 && options.TryGetProperty("resumablePending", out _); i++)
+        {
+            await Task.Delay(50);
+            options = await RequestAsync(ch, LaunchProtocol.Options, new { });
+        }
 
         Assert.Null(source.Held);
         Assert.Equal(Id, Assert.Single(source.Snapshot()).Id);
