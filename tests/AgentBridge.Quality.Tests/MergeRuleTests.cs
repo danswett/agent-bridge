@@ -407,6 +407,22 @@ public class MergeRuleTests
         Assert.Equal(("success", "Copilot reviewed abcdef0; every check passed; independent review on file"), (byReviewer.State, byReviewer.Description));
     }
 
+    // The receipts App posts as agent-bridge-receipts (GraphQL leaves off REST's "[bot]"); danswett stays
+    // a poster as the fallback, and a workflow's own token still counts for nothing.
+    [Theory]
+    [InlineData("agent-bridge-receipts", "success")]
+    [InlineData("danswett", "success")]
+    [InlineData("agent-bridge-receipts[bot]", "failure")]
+    [InlineData("github-actions", "failure")]
+    public void The_receipts_app_and_danswett_are_the_listed_posters_in_the_real_config(string poster, string state)
+    {
+        var config = MergeRuleConfig.Load(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
+
+        var verdict = MergeRule.Evaluate(config, MainGreen, Pr(["AGENTS.md"], statuses: [Receipt("success", poster)]))!;
+
+        Assert.Equal(state, verdict.State);
+    }
+
     [Fact]
     public void Sensitive_paths_match_whatever_the_case() =>
         Assert.Equal("failure", MergeRule.Evaluate(Config, MainGreen, Pr(["SRC/agentbridge.transport/Channel.cs"]))!.State);

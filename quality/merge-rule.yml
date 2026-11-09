@@ -28,9 +28,13 @@ hold_labels: [hold, do-not-merge]
 # latest from one of these accounts is success (AGENTS.md says how to post it). A status binds to
 # its commit, so any new push drops it. Statuses from anyone else, the workflows' own token above
 # all, are ignored: a pull request's workflow can't post its own receipt.
+# agent-bridge-receipts is the receipts GitHub App (Commit statuses: write only; its key stays on
+# VM4, quality/post-receipt.ps1), named as GraphQL names it, without REST's "[bot]". It has its own
+# rate pool, so danswett's quota running out can't stop receipts. danswett stays as the fallback:
+# the App's key lives on one machine, and a receipt must still be postable when it is down.
 independent_review:
   context: independent-review
-  posters: [danswett]
+  posters: [danswett, agent-bridge-receipts]
 
 # A pull request marked as a security change needs the receipt whatever it touches: a title
 # starting with this word (any case), or one of these labels. #549, a fix to how approvals render,

@@ -644,8 +644,8 @@ request is otherwise reviewed.
 
 - **What fails over is the reviewer's model quota.** Review sessions run under the
   `dswett_microsoft` (EMU) Copilot entitlement. GitHub refuses that account any write on this
-  repository, so receipts still post only through `independent_review.posters` (`danswett`), and
-  that list does not change.
+  repository, so receipts post only through `independent_review.posters` (`danswett`, and the
+  receipts App below), and the EMU account is not on that list.
 - **A quota stall** is any of: a reviewer session returning a quota, rate-limit, billing, 429 or
   401 error; no receipt on a ready head 20 minutes after it was asked for. An optional Copilot
   review that hasn't completed within 20 minutes is dropped from the wait, never waited for.
@@ -660,6 +660,15 @@ request is otherwise reviewed.
 - **The EMU token** (`COPILOT_GITHUB_TOKEN`, a fine-grained PAT) lasts 8 days. When it expires,
   EMU reviews return 401 and the fallback above moves to the `danswett` entitlement until the
   owner renews it. Never `/login` per session: EMU sign-ins revoke each other.
+
+### Who posts receipts
+
+Receipts count only from `independent_review.posters` in `quality/merge-rule.yml`: `danswett`
+and the receipts GitHub App `agent-bridge-receipts`, written as GraphQL names it, without REST's
+`[bot]`. The App holds Commit statuses (write), Pull requests (read) and Metadata (read), and
+nothing else; its key stays on VM4. It has its own rate pool, so danswett's quota running out
+doesn't stop receipts. danswett stays a poster as the fallback for when the App's machine is down.
+To roll back, revoke the App's key or suspend it in GitHub settings; nothing else depends on it.
 
 ## 5. Coverage, timing, flakes and reports
 
