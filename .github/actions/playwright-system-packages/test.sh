@@ -41,6 +41,7 @@ chmod +x "$work/bin/npx" "$work/bin/sudo" "$work/bin/apt-get"
 export PATH="$work/bin:$PATH" NPX_LOG="$work/npx.log" APT_LOG="$work/apt.log"
 export PLAYWRIGHT_APT_ETC="$work/apt" PLAYWRIGHT_APT_LIMIT=1s
 unset GITHUB_JOB
+export PLAYWRIGHT_APT_ATTEMPTS=1 PLAYWRIGHT_APT_RETRY_DELAY=0
 
 azure=$'http://azure.archive.ubuntu.com/ubuntu/\tpriority:1'
 canonical=$'https://archive.ubuntu.com/ubuntu/\tpriority:2'
@@ -108,6 +109,21 @@ reset "$azure" "$canonical"; export APT_SLOW=1
 echo 'deb http://azure.archive.ubuntu.com/ubuntu noble main' > "$PLAYWRIGHT_APT_ETC/sources.list"
 check "a slow download fails when another apt source still names the Azure mirror after the edit" \
   1 "$(printf 'update\n%s' "$download")" "$canonical"
+
+# Retries: a transient failure of apt-get update or of the download is tried again; a persistent one
+# still fails the step after the last attempt.
+reset "$azure" "$canonical"; export PLAYWRIGHT_APT_ATTEMPTS=3 APT_UPDATE_EXIT=100
+check "a persistently failing apt-get update is tried three times, then fails the step" \
+  100 "$(printf 'update\nupdate\nupdate')" "$azure" "$canonical"
+
+reset "$azure" "$canonical"; export PLAYWRIGHT_APT_ATTEMPTS=3 APT_DOWNLOAD_EXIT=100
+check "a persistently failing download is tried three times, then fails the step" \
+  100 "$(printf 'update\n%s\n%s\n%s' "$download" "$download" "$download")" "$azure" "$canonical"
+
+reset "$azure" "$canonical"; export PLAYWRIGHT_APT_ATTEMPTS=3 APT_SLOW=1
+check "a slow download is not retried: it leaves the Azure mirror after one try" \
+  0 "$(printf 'update\n%s\n%s' "$download" "$download")" "$canonical"
+export PLAYWRIGHT_APT_ATTEMPTS=1
 
 # force-apt-fallback (ci.yml's pwa-ui on a run by hand): APT_SLOW stays set, so a download tried
 # before leaving the Azure mirror would time out and show up as a second call.

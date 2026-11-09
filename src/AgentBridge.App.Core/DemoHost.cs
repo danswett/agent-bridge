@@ -229,7 +229,7 @@ public sealed partial class DemoHost : IAsyncDisposable
             case Ops.Hello:
                 {
                     var hello = new HelloResult(1, new MachineInfo(MachineId, MachineName, "windows", version, Dev: true, Sessions: Count), remote
-                        ? [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsStop, Capabilities.SessionsProgress, UsageProtocol.Capability, LaunchProtocol.Capability, AuthState.Capability]
+                        ? [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsStop, Capabilities.SessionsProgress, UsageProtocol.Capability, LaunchProtocol.Capability, AuthState.Capability, DiagnosticsProtocol.Capability]
                         : [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsAttachDirect, Capabilities.SessionsStop, Capabilities.SessionsProgress, UsageProtocol.Capability, LaunchProtocol.Capability, HostOps.Capability, HostOps.AgentReadinessCapability, HostOps.AgentSetupCapability, HostOps.AgentInstallCapability]);
                     // Held for a test: the reply a recovery reads before it subscribes again.
                     if (HoldHello is { } hold) { HoldHello = null; return After(hold.Task, hello); }
@@ -237,6 +237,8 @@ public sealed partial class DemoHost : IAsyncDisposable
                 }
             case HostOps.Status or HostOps.Subscribe when !remote:
                 return Done(Status());
+            case DiagnosticsProtocol.Get when remote:
+                return Done(RemoteDiagnostics(now));
             case UsageProtocol.Get or UsageProtocol.Subscribe:
                 return Done(remote ? RemoteUsage(now) : Usage(now));
             case Ops.SessionsSubscribe:
@@ -696,6 +698,16 @@ public sealed partial class DemoHost : IAsyncDisposable
     // arriving (#489), which nothing in the demo sends on its own.
     public Task Upsert(Session next) => Change(next);
 
+    // The same with what is wrong with it (#800), as a host sends the two together; null clears it.
+    // Stays as sent: no turn ends a moment later. For the self-test's Details (#1087).
+    public Task Upsert(Session next, JsonObject? attention)
+    {
+        SetAttention(next.Id, attention);
+        return Change(next, finishes: false);
+    }
+
+    public JsonObject? AttentionOf(string id) { lock (gate) { return attention.TryGetValue(id, out var a) ? (JsonObject)a.DeepClone() : null; } }
+
     // The pauses a change and a removal take, as a host's would; a test holds them to order a
     // removal against a turn finishing.
     internal Func<TimeSpan, Task> Pause { get; set; } = d => Task.Delay(d);
@@ -896,6 +908,14 @@ public sealed partial class DemoHost : IAsyncDisposable
             },
         ];
     }
+
+    // The other machine's diagnostics: fictional, every part as a host sends it, the journal empty.
+    static DiagnosticsSnapshot RemoteDiagnostics(DateTimeOffset now) => new(DiagnosticsProtocol.Schema, now,
+        new DiagnosticsHost("0.4.0", true, now.AddHours(-3), 3 * 3600), new DiagnosticsRestart(now.AddHours(-3), DiagnosticsMissing.NotRecorded),
+        new DiagnosticsRelay(DiagnosticsRelayState.Connected, now.AddHours(-3)), new DiagnosticsHolds(DiagnosticsReadOnly.None, []),
+        new DiagnosticsReadiness(now.AddMinutes(-5), [new DiagnosticsAgent(DiagnosticsAgentId.Copilot, "1.0.2", DiagnosticsCheck.Working, DiagnosticsCheck.Working,
+            DiagnosticsCheck.Working, DiagnosticsCheck.Working, DiagnosticsCheck.Working, now.AddMinutes(-1))], 0),
+        new DiagnosticsJournalPart([], 0, 0, 0, 0, 0, 0, 0, 0, 0, false, 0));
 
     static UsageReport RemoteUsage(DateTimeOffset now) => new(
     [

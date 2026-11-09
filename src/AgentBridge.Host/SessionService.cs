@@ -120,6 +120,10 @@ public sealed class SessionService
     // the machine's person-device roster, given the asking device's id. Offered with sign-in itself.
     internal Func<string?, SignInDevices>? SignInDevices { get; init; }
 
+    // diagnostics.get, through the relay only, to a device pinned as a person's (RemoteDiagnostics).
+    public RemoteDiagnostics? Diagnostics { get; init; }
+    public Lite.LiteReceiver? LiteReceiver { get; init; }
+
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
         UsageService? usage = null, ISessionLauncher? launcher = null, SessionTransfers? transfers = null)
@@ -135,7 +139,11 @@ public sealed class SessionService
         this.usage = usage;
         this.launcher = launcher;
         this.transfers = transfers;
-        if (push is not null) { push.Watching = Watching; }
+        if (push is not null)
+        {
+            push.Watching = Watching;
+            push.Presences = Presences;
+        }
     }
 
     // How often live changes to the sessions a client does not show go to it, once it has said
@@ -206,6 +214,8 @@ public sealed class SessionService
             // session with a command a person's device signed.
             case TransferProtocol.Op when transfers is not null && channel is SecureChannel secure:
                 return await transfers.ServeAsync(secure, data);
+            case Lite.LiteReceiver.Op when LiteReceiver is not null && channel is SecureChannel secure:
+                return await LiteReceiver.ServeAsync(secure, data, CancellationToken.None);
             // A person's device through the relay, with a command it signed. Never this machine's
             // pipe, which agents and the MCP server reach, nor the Home Assistant connector.
             case TrustProtocol.Answer when TrustAnswers is not null && channel is SecureChannel secure:
@@ -219,6 +229,9 @@ public sealed class SessionService
                 return await Updates.HandleAsync(channel, op, data);
             case var manage when ManageProtocol.Ops.Contains(manage) && Manage is not null:
                 return await Manage.HandleAsync(channel, op, data);
+            // Never this machine's pipe: a LocalChannel falls through to an unknown op.
+            case DiagnosticsProtocol.Get when Diagnostics is not null && channel is SecureChannel:
+                return await Diagnostics.HandleAsync(channel, data);
             case Ops.SessionsList:
                 return source.List(String(data, "cursor"));
             case Ops.SessionGet:
@@ -307,7 +320,7 @@ public sealed class SessionService
         if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("sessions.focus needs visible"); }
         FocusRequest focus;
         try { focus = data.Deserialize<FocusRequest>(ProtocolJson.Options) ?? throw new ArgumentException("sessions.focus needs visible"); }
-        catch (JsonException) { throw new ArgumentException("sessions.focus needs visible, and open only as a session id"); }
+        catch (JsonException) { throw new ArgumentException("sessions.focus needs visible, open and openQuestion only as strings, and idleMs only as a whole number"); }
         var state = StateOf(channel);
         // Each one puts a marker in the feed's queue; a client says it on a page or session change,
         // so more than this in a window is a client gone wrong (#697).
@@ -322,8 +335,29 @@ public sealed class SessionService
             if (++state.FocusCount > FocusesPerWindow) { throw new InvalidOperationException($"sessions.focus is said at most {FocusesPerWindow} times in {FocusWindow.TotalSeconds:0} s"); }
         }
         Volatile.Write(ref state.Focus, focus);
+        Volatile.Write(ref state.Presence, new FocusSaid(focus, LastInput(focus, Time.GetUtcNow())));
         state.Feed?.Refocus();
         return new { };
+    }
+
+    // When the person last gave input on the device, from idleMs, an age (#1190): the host's own
+    // clock minus it, so the two clocks need not agree. Unknown without it, or past a day, which
+    // is stale anyway and would only risk an overflow.
+    static DateTimeOffset? LastInput(FocusRequest focus, DateTimeOffset received) =>
+        focus.IdleMs is { } idle and >= 0 and <= 86_400_000 ? received - TimeSpan.FromMilliseconds(idle) : null;
+
+    // What each of the account's devices with a subscription open says it shows (sessions.focus),
+    // one entry per channel: PushNotifier holds back pushes from a device in use (#1190).
+    public IReadOnlyList<DevicePresence> Presences()
+    {
+        var all = new List<DevicePresence>();
+        foreach (var (channel, state) in subscribers)
+        {
+            if (!channel.IsOpen || state.Feed is null || Volatile.Read(ref state.Presence) is not { } said) { continue; }
+            var f = said.Focus;
+            all.Add(new DevicePresence(channel.PeerId, f.Visible, f.Open, f.Open is null ? null : f.OpenQuestion, said.LastInput));
+        }
+        return all;
     }
 
     // A device of the account that has a subscription open on a channel that says it is on screen
@@ -356,6 +390,8 @@ public sealed class SessionService
         finally { state.Gate.Release(); }
     }
 
+    internal sealed record FocusSaid(FocusRequest Focus, DateTimeOffset? LastInput);
+
     internal sealed class Subscriber
     {
         public readonly SemaphoreSlim Gate = new(1, 1);
@@ -363,6 +399,8 @@ public sealed class SessionService
         public int Registered;
         // Null until the channel says (sessions.focus): every live change then goes at once, as before.
         public FocusRequest? Focus;
+        // The same, with when the person last gave input (#1190), for PushNotifier.
+        public FocusSaid? Presence;
         // sessions.focus said in the window that started at FocusWindow, under lock (this).
         public DateTimeOffset FocusWindow = DateTimeOffset.MinValue;
         public int FocusCount;
@@ -380,7 +418,7 @@ public sealed class SessionService
         // A confirmation is checked as coming from the device on the other end of a channel through
         // the relay, and from nowhere else: on this machine's pipe it is none, and refused as such.
         var confirmed = channel is SecureChannel secure && EscapedApprovals is { } escaped ? escaped.For(secure.PeerId, request) : null;
-        var result = await answers.AnswerAsync(request, watch: watch, confirmed: confirmed);
+        var result = await answers.AnswerAsync(request, watch: watch, confirmed: confirmed, sender: channel.PeerId);
         // Typed from this device: it needs no notification that the question was answered.
         if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed)
         {
@@ -554,6 +592,7 @@ public sealed class SessionService
         if (Updates?.Offered(channel) == true) { offered.Add(UpdateProtocol.Capability); }
         if (Restore is not null) { offered.Add(RestoreProtocol.Capability); }
         if (Manage is not null) { offered.AddRange(Manage.Offered(channel)); }
+        if (Diagnostics?.Offered(channel) == true) { offered.Add(DiagnosticsProtocol.Capability); }
         // Transfers are signed by a device through the relay, and go through its blob store.
         if (transfers is not null && channel is SecureChannel)
         {
@@ -619,7 +658,7 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
         // own app has no key the other machine knows.
         if (request.Transfer is not null && (channel is not SecureChannel || transfers is null))
         {
-            return new LaunchResult(LaunchOutcome.Refused, "a session from another machine is brought in through the relay, from the phone or browser app");
+            return new LaunchResult(LaunchOutcome.Refused, $"a session from another machine is brought in through the relay, from {Product.Name}");
         }
         var result = await launcher!.LaunchAsync(request, channel.PeerId);
         return result.Trust is null ? result : result with { Trust = ForPeer(channel, result.Trust) };

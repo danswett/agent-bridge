@@ -114,6 +114,45 @@ test.describe('on a phone', () => {
     expect((await log(page)).map((s) => s.confirm)).toEqual([undefined, undefined]);
   });
 
+  // Lines that outlive their cause go (#1193). The clock is the page's, so the times are exact.
+  test('a lapsed confirmation is neutral, and goes 5 s after it lapsed', async ({ page }) => {
+    await openDemo(page, '&stopWindow=1500');
+    await showEnd(page, CLAUDE);
+    await page.clock.install();
+    await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
+    const line = footer(page, CLAUDE).locator('.stop-status');
+    await end(page, CLAUDE).tap();
+    await page.clock.runFor(500);
+    await expect(footer(page, CLAUDE)).toHaveAttribute('data-stop', 'confirm');
+    await page.clock.runFor(2000);
+    await expect(line).toHaveText('End session NOT confirmed: no second press within 2 s. The session is still running.');
+    await expect(line).toHaveClass(/\bclosed\b/);
+    await expect(line).not.toHaveClass(/\b(warn|bad)\b/);
+    await page.clock.runFor(4000);
+    await expect(line).toHaveText(/NOT confirmed/);
+    await page.clock.runFor(1000);
+    await expect(line).toHaveText('');
+    await expect(card(page, CLAUDE)).toHaveAttribute('data-status', 'working');
+  });
+
+  test('"Try again in a moment" goes when the 2 s pause ends, as the button comes back', async ({ page }) => {
+    await openDemo(page);
+    await showEnd(page, CODEX);
+    await page.clock.install();
+    await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
+    await script(page, 'busy');
+    const line = footer(page, CODEX).locator('.stop-status');
+    await end(page, CODEX).tap();
+    await page.clock.runFor(500);
+    await expect(line).toHaveText(/Try again in a moment\.$/);
+    await expect(end(page, CODEX)).toHaveAttribute('aria-disabled', 'true');
+    await page.clock.runFor(1000);
+    await expect(line).toHaveText(/Try again in a moment\.$/);
+    await page.clock.runFor(1500);
+    await expect(line).toHaveText('');
+    await expect(end(page, CODEX)).not.toHaveAttribute('aria-disabled', 'true');
+  });
+
   test('a session waiting for background agents it started takes two presses too', async ({ page }) => {
     await openDemo(page);
     await showEnd(page, DELEGATING);

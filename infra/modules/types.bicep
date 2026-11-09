@@ -31,4 +31,6 @@ type appConfig = {
   blobStorageName: string?
   @description('Storage account for this app\'s machine roster (modules/roster-store.bicep): globally unique, 3-24 lowercase letters and digits. Unset: the relay keeps the roster in memory, and a restart forgets every offline machine.')
   rosterStorageName: string?
+  @description('Name of a user-assigned identity that may only READ this app\'s feedback container (Storage Blob Data Reader, no condition). Unset: none. Staging only for now; docs/relay-deploy.md says how the inbox gets a token as it.')
+  feedbackReaderIdentityName: string?
 }

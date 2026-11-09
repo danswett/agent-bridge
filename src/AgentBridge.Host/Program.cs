@@ -5,6 +5,7 @@ using AgentBridge.Hooks;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.DevBox;
+using AgentBridge.Host.Core.Diagnostics;
 using AgentBridge.Host.Core.Intake;
 using AgentBridge.Host.Core.Processes;
 using AgentBridge.Host.Core.Restore;
@@ -264,6 +265,17 @@ switch (command)
             if (ConfigCommands.Writes(rest) && Refused("change the host's config")) { return 4; }
             return ConfigCommands.Run(rest, LoadIdentity().Folder, Console.Out, Console.Error);
         }
+    case "peers":
+        {
+            // AP5-lite pinned own-peers: at the machine only, never from an agent session.
+            var rest = new List<string>(arguments);
+            var p = rest.IndexOf("--profile");
+            if (p >= 0) { rest.RemoveRange(p, Math.Min(2, rest.Count - p)); }
+            if (OwnPeerCommands.Writes(rest) && Refused("change the pinned own-peers")) { return 4; }
+            var identity = LoadIdentity();
+            var local = new OwnPeerCommands.Local(Wire.DeviceId(identity.Key.Public), identity.Account?.AccountId);
+            return OwnPeerCommands.Run(rest, identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, local, Console.In.ReadLine, Console.Out, Console.Error);
+        }
     case "hooks" when arguments.ElementAtOrDefault(1) == "status":
         // Read only: the profile's folder is looked in, never created, and no identity is loaded.
         if (intakeFolder is null) { Console.Error.WriteLine("agent-bridge-host: --profile is not a valid profile name"); return 2; }
@@ -292,6 +304,7 @@ switch (command)
     default:
         Console.Error.WriteLine("usage: agent-bridge-host sessions [--compact] | get <id> | watch [--json] | usage | sign-in --relay <url> | serve [--relay <url>] [--name <name>] [--local-only] | whoami");
         Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]");
+        Console.Error.WriteLine("       " + OwnPeerCommands.Usage);
         Console.Error.WriteLine("       " + AgentBridge.Host.Shadow.ShadowCommand.Usage);
         Console.Error.WriteLine("       agent-bridge-host hooks status | hooks install|remove <copilot|claude|codex> [...] [--dry-run]");
         Console.Error.WriteLine("       agent-bridge-host hooks cleanup [--profile <name>]");
@@ -353,7 +366,19 @@ async Task<int> ServeAsync(HostHandover handover)
     if (trustedPeers.Enabled) { Log("trusted-peer enforcement is on; only explicit full-key pins grant remote authority"); }
 
     using var stop = new CancellationTokenSource();
-    Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
+    var deliveryGate = new DeliveryGate();
+    var plannedStops = new PlannedStops(deliveryGate, TimeSpan.FromSeconds(15), Log);
+    Task<IDisposable?> PrepareStop() => plannedStops.PrepareStopAsync();
+    async Task StopOnCancelAsync()
+    {
+        try { if (await PrepareStop() is not null) { stop.Cancel(); } }
+        catch (Exception ex) { Log($"the host could not prepare to stop: {ex}"); }
+    }
+    Console.CancelKeyPress += (_, e) =>
+    {
+        e.Cancel = true;
+        _ = StopOnCancelAsync();
+    };
     // Who drives each session (the purple edge): one record for the host's own clients and the
     // Home Assistant cards, so both show the same.
     var drivers = new SessionDrivers();
@@ -363,7 +388,9 @@ async Task<int> ServeAsync(HostHandover handover)
     // the scan a first reply would have paid for (137 ms cold, 6 ms warm, measured in #599), and
     // its command lines are already known.
     var processes = new SystemProcessInspector();
-    await using var source = new SessionSource(options, processes, drivers: drivers);
+    var attempts = new AttemptLedger(Path.Combine(identity.Folder, "answer-attempts.json"), log: Log);
+    await using var source = new SessionSource(options, processes, drivers: drivers, answerAttempted: attempts.IsClaimed);
+    attempts.Changed += source.AnswerAttemptsChanged;
     // Writes to transcripts as the source's watcher hears them, so a delivery confirms as soon as
     // the agent records what it typed rather than at its next poll.
     var writes = new TranscriptWrites();
@@ -383,8 +410,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // types, stops or launches still looks afresh, immediately before it acts.
     var haProbe = OperatingSystem.IsWindows() ? new AgentHaBridgeProbe() : null;
     var g5 = new SharedAgentHaBridgeProbe((IAgentHaBridgeProbe?)haProbe ?? new NoAgentHaBridge());
-    var deliveryGate = new DeliveryGate();
-    var (answers, replies, attachments, stops) = Typists(source, g5, processes, writes, Path.Combine(identity.Folder, "attachments"), Path.Combine(identity.Folder, "answer-attempts.json"), relayBlobs, codexUnsettled, deliveryGate);
+    var (answers, replies, attachments, stops) = Typists(source, g5, processes, writes, Path.Combine(identity.Folder, "attachments"), attempts, relayBlobs, codexUnsettled, deliveryGate);
     using var attachmentsLifetime = attachments;
     // Notifications: the account's phones hear of questions and finished turns even with the
     // app closed. Subscriptions live in the profile's own folder, for this account only. None at
@@ -458,7 +484,8 @@ async Task<int> ServeAsync(HostHandover handover)
     // through the relay's blob store (docs/host-transfer.md). Bundles wait in the profile's own
     // private folder, never a shared temporary one.
     using var transfers = new SessionTransfers(identity.Key, Path.Combine(identity.Folder, "transfers"), Log) { Trust = trustedPeers };
-    var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore);
+    var agentCredentials = OperatingSystem.IsWindows() ? new AgentCredentials(identity.Folder, machine.Id, log: Log, rootAlive: AgentCredentials.SameProcessAlive) : null;
+    var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore, agentCredentials);
     launcher.SessionStarted += restore.Launched;
     launcher.SeenReadyLate += restore.SeenReadyLate;
     // Not before the app's Stop has been looked for: a host the logon task's launcher started after a
@@ -494,7 +521,8 @@ async Task<int> ServeAsync(HostHandover handover)
     // (delivery.readOnly), which acts on nothing from another device: the buttons are withdrawn.
     var hostUpdates = VelopackHostUpdates.For(ReadOnlyReason(), OperatingSystem.IsWindows(),
         () => new VelopackHostUpdates(Path.GetDirectoryName(identity.Folder) ?? Identity.DefaultRoot, profile, () => stop.Cancel(), Log,
-            ready: ct => HostUpdateGate.ReadyAsync(HostUpdateGate.OtherHosts, usageMonitor is null ? null : usageMonitor.SettleProbesAsync, ct)));
+            ready: ct => HostUpdateGate.ReadyAsync(HostUpdateGate.OtherHosts, usageMonitor is null ? null : usageMonitor.SettleProbesAsync, ct),
+            prepareStop: PrepareStop));
     // Home Assistant's refusals of this machine, counted with every other process of this user so a
     // rejected token is never repeated into a ban (#227); the app shows what it says.
     var haAuth = new AgentBridge.HomeAssistant.HaAuthGuard(AgentBridge.HomeAssistant.HaAuthGuard.FileFor(identity.Folder), log: Log);
@@ -507,10 +535,6 @@ async Task<int> ServeAsync(HostHandover handover)
     // holds one (SessionService.G5), so it never says read-only beside actions offered, or offers
     // none without saying why.
     string? OfferedReadOnly() => ReadOnlyReason() ?? g5.Recent();
-    // Updates asked for from the account's other devices, which the app beside this host installs
-    // (#51, docs/protocol/v1-update.md). A read-only machine serves none, as #112 withdrew Home
-    // Assistant's Install there.
-    var updates = new UpdateService(HostVersion(), Log) { ReadOnly = ServeReadOnly, OfferedReadOnly = OfferedReadOnly };
     // Signing an agent in again from a person's pinned device (#972, sessions.signin): only where
     // permissions.phoneSignIn is on, and only for an agent with an adapter here. Never read-only.
     // The pin is a device the person-device roster pins (RosterSignInAuthority); a #402 trusted-peer
@@ -530,21 +554,51 @@ async Task<int> ServeAsync(HostHandover handover)
     // won over is not reported done by the next host.
     Action? handingOver = null;
     var restart = new SettledRestart(usageMonitor is null ? null : (t, ct) => usageMonitor.SettleProbesAsync(t, ct),
-        () => { handingOver?.Invoke(); handover.Request(); }, stop.Cancel, stop.Token);
-    void RestartHost() => _ = Task.Run(restart.RunAsync);
+        () => { handingOver?.Invoke(); handover.Request(); }, stop.Cancel, stop.Token,
+        ct => deliveryGate.PrepareStopAsync(TimeSpan.FromSeconds(15), ct), plannedStops.TryCommitRestart);
+    void RestartHost()
+    {
+        var interrupted = plannedStops.RestartToken();
+        _ = Task.Run(() => restart.RunAsync(interrupted));
+    }
     using var departureWatchdog = new DepartureWatchdog(new RestartingDepartureStuckHandler(Log, RestartHost, () => stop.IsCancellationRequested));
     // Restart from a person's device through the relay (#801, docs/protocol/v1-sessions.md, "Managing
     // a machine"), every planned departure through one quiet lease (#805). ServeReadOnly is the
-    // acting answer (G5's Active).
-    var (manage, lifecycle, _) = ManageComposition.For(settings, identity.Key, identity.Folder, deliveryGate, ServeReadOnly, OfferedReadOnly,
+    // acting answer (G5's Active). Update now (#1159) leaves through the same lease, its Update
+    // conditions registered there, another profile's host among them where the host is packaged.
+    var composed = ManageComposition.For(settings, identity.Key, identity.Folder, deliveryGate, ServeReadOnly, OfferedReadOnly,
         () =>
         {
             Log("restarting: asked by a person's device through the relay");
             RestartHost();
         },
-        push, name, Log, watchdog: departureWatchdog);
+        push, name, Log, watchdog: departureWatchdog, otherHosts: OperatingSystem.IsWindows() ? HostUpdateGate.OtherHosts : null);
+    var (manage, lifecycle) = (composed.Manage, composed.Lifecycle);
     handingOver = manage.HandingOver;
     manage.Start();
+    // Updates asked for from the account's other devices, which the app beside this host installs
+    // (#51, docs/protocol/v1-update.md). A read-only machine serves none, as #112 withdrew Home
+    // Assistant's Install there. Update now (#1159) passes remote management's signed-command gate
+    // and counts its restarts with it; busy is read from this host's own sessions.
+    var updates = new UpdateService(HostVersion(), Log)
+    {
+        ReadOnly = ServeReadOnly,
+        OfferedReadOnly = OfferedReadOnly,
+        Now = composed.UpdateNow(source, identity.Folder),
+    };
+    // The content-free journal (#737), one per host, and "Diagnose this machine" (#802,
+    // docs/protocol/v1-diagnostics.md): only a device pinned here as a person's reads it, with a
+    // closed snapshot of this host's health, through the relay. The journal names only Host.Core's
+    // and the hook contract's frames (listed by DiagnosticsJournal), which the Windows app reading a
+    // snapshot lists too; this executable's own read as <external> where they are captured. G5
+    // there is only reported, from the last look something else made, never a look of its own
+    // (RemoteDiagnostics.AgentHaBridge).
+    var diagnosticsJournal = new DiagnosticsJournal(TimeProvider.System, Path.Combine(identity.Folder, "diagnostics-journal.jsonl"));
+    var diagnostics = new RemoteDiagnostics(trustedPeers.IsPinnedPerson, diagnosticsJournal, HostVersion(), IsDevBuild(),
+        () => source.Held,
+        () => settings.ReadOnly ? (settingsProblem is null ? DiagnosticsReadOnly.ConfigReadOnly : DiagnosticsReadOnly.ConfigProblem, null)
+            : RemoteDiagnostics.AgentHaBridge(g5),
+        log: Log);
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log, peerUsage), launcher, transfers)
     {
         Drivers = drivers,
@@ -559,6 +613,8 @@ async Task<int> ServeAsync(HostHandover handover)
         SignInEntrypointApproved = signIn is not null,
         SignInDevices = self => PersonDevices.View(personRoster, rosterAccount(), self),
         Manage = manage,
+        Diagnostics = diagnostics,
+        LiteReceiver = new AgentBridge.Host.Lite.LiteReceiver(new AgentBridge.Host.Lite.SettingsLiteMode(() => HostSettings.CurrentAgentMessaging(identity.Folder)), new AgentBridge.Host.Lite.NoLitePeers(), new AgentBridge.Host.Lite.NoLiteDelivery()),
     };
     // Who is on the other end of the pipe: the app beside this host, or something inside an
     // agent session, which may not manage it (§6.3 invariant 13).
@@ -578,7 +634,7 @@ async Task<int> ServeAsync(HostHandover handover)
     {
         Log(refreshed);
     }
-    await using var intake = StartIntake(haProbe, () => restore.JudgingEndings, stop.Token);
+    await using var intake = StartIntake(haProbe, () => restore.JudgingEndings, diagnosticsJournal, stop.Token);
     runningIntake = intake;
 
     // The desktop app's way in (docs/protocol/local-pipe.md): the same sessions ops, and the
@@ -610,6 +666,14 @@ async Task<int> ServeAsync(HostHandover handover)
         ServeReadOnly, agentLocator, new BatchFileRunner(new CommandRunner(codexEnvironment), codexEnvironment)) : null;
     var agentSetup = standaloneHooks is null ? null : new AgentSetupService(standaloneHooks, ServeReadOnly, stop.Token);
     if (agentSetup is not null) { manage.Hooks = new AgentSetupHookRepair(agentSetup, agentHomes, identity.Folder); }
+    var agentProbes = new VersionCommandRunner(() => AgentEnvironment.For(agentHomes.Copilot,
+        agentHomes.Claude, agentHomes.Codex, agentHomes.ClaudeConfigDirExplicit, agentLocator.ChildPath()));
+    void CheckAgentMutation(string agent)
+    {
+        if (ServeReadOnly() is { } why) { throw new InvalidOperationException($"CLI setup is unavailable while this host is read-only: {why}"); }
+        if (standaloneHooks is null) { throw new InvalidOperationException("CLI setup is not available on this platform."); }
+        standaloneHooks.CheckInstall(agent);
+    }
     await using var agentInstall = standaloneHooks is null ? null : new AgentInstallService(identity.Folder,
         agentLocator, agentLocator.Refresh, new VersionCommandRunner(),
         () =>
@@ -617,13 +681,27 @@ async Task<int> ServeAsync(HostHandover handover)
             var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps", "winget.exe");
             return File.Exists(path) ? path : null;
         },
-        agent =>
-        {
-            if (ServeReadOnly() is { } why) { throw new InvalidOperationException($"CLI installation is unavailable while this host is read-only: {why}"); }
-            standaloneHooks.CheckInstall(agent);
-        }, stop.Token);
+        CheckAgentMutation, stop.Token);
+    var agentSignIn = OperatingSystem.IsWindows() && standaloneHooks is not null
+        ? new AgentCliSignInService(identity.Folder, agentHomes, agentLocator, agentLocator.Refresh,
+            new WindowsAgentStarter(), agentProbes, CheckAgentMutation, stop.Token) : null;
     await using var agentReadiness = new AgentReadinessService(identity.Folder, agentHomes,
-        settings.Launch, agentLocator, new VersionCommandRunner(), ServeReadOnly, intake);
+        settings.Launch, agentLocator, agentProbes, ServeReadOnly, intake);
+    var launchConfiguration = JsonSerializer.Serialize(settings.Launch, ProtocolJson.Options);
+    string? VerificationUnavailable()
+    {
+        if (ServeReadOnly() is { } why) { return why; }
+        if (agentSetup?.RestartRequired == true) { return "Hook setup changed. Explicitly restart the host before verification."; }
+        var (configured, problem) = HostSettings.Load(identity.Folder);
+        if (problem is not null || configured.LaunchProblems.Count > 0) { return "Repair the profile's launch configuration and restart the host before verification."; }
+        if (configured.ReadOnly || JsonSerializer.Serialize(configured.Launch, ProtocolJson.Options) != launchConfiguration)
+        {
+            return "Launch settings changed. Explicitly restart the host before verification.";
+        }
+        return null;
+    }
+    await using var agentVerification = OperatingSystem.IsWindows()
+        ? new AgentVerificationService(source, launcher, intake, VerificationUnavailable, Log, stop.Token) : null;
     var control = new HostControl(new HostControlOptions
     {
         Profile = profile,
@@ -658,6 +736,8 @@ async Task<int> ServeAsync(HostHandover handover)
         LocalAppDevice = manage.NoteLocalApp,
         // Only while this host runs sign-in from devices: a switch changed since applies at the next start.
         SignInDevices = signIn is null ? null : self => PersonDevices.View(personRoster, rosterAccount(), self),
+        AgentVerification = agentVerification,
+        AgentSignIn = agentSignIn,
         SignIn = async (relay, show, ct) =>
         {
             using var http = new HttpClient();
@@ -677,10 +757,12 @@ async Task<int> ServeAsync(HostHandover handover)
             wake.Release();
         },
         Stop = () => stop.Cancel(),
+        PrepareStop = PrepareStop,
         Restart = RestartHost,
         HoldProbes = () => usageMonitor?.HoldProbes(TimeSpan.FromMinutes(15)) == true
             ? "Codex's app-server, started to read its allowance, is still answering or finishing" : null,
     }, Log);
+    diagnostics.Bind(() => control.RelayNow, () => agentReadiness.Snapshot, control.StartedAt);
     agentReadiness.Start();
     // A pass, or keep-awake turned on or off, changes what the app's Settings shows.
     if (keepAwake is not null) { keepAwake.Changed += control.Refresh; }
@@ -688,7 +770,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // The roster changing changes who the app's Settings lists (#972).
     personRoster.Changed += control.Refresh;
     LocalServer? local = null;
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers), Log); }
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);
@@ -842,7 +924,7 @@ async Task<int> ServeAsync(HostHandover handover)
 // Launching and resuming sessions from other devices (docs/host-launch.md): only in the folders
 // the profile's config.json approves, and on Windows only for now. The agent starts in a console
 // of its own on this desktop, so the host must run here, as the user, unelevated.
-LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, AttachmentStore? attachments, SessionTransfers transfers, DeliveryGate deliveryGate, IRestorePending restore)
+LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, AttachmentStore? attachments, SessionTransfers transfers, DeliveryGate deliveryGate, IRestorePending restore, ILaunchCredentials? credentials)
 {
     foreach (var problem in settings.LaunchProblems) { Log($"config.json: {problem}"); }
     IAgentStarter starter = OperatingSystem.IsWindows() ? new WindowsAgentStarter() : new UnsupportedPlatformStarter();
@@ -859,7 +941,7 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
         WorktreeUsage = new RestoreWorktreeUsage(restore, new AgentWorktreeUsage(new SystemProcessInspector(), options.CopilotHome, options.ClaudeRegistrationRoots, options.CodexRegistrationRoots)),
         Transfers = transfers,
         TransferStaging = transfers.Staging,
-    }, Log, attachments);
+    }, Log, attachments, credentials: credentials);
     var why = !settings.Launch.Enabled ? "turned off (launch.enabled)" : starter.Unavailable() ?? probe.Active();
     var count = settings.Launch.Workspaces.Count;
     Log(why is null
@@ -930,7 +1012,7 @@ void RestartSelf()
 // Hook intake (docs/host-hooks.md): only for a profile that has migrated from agent-ha-bridge,
 // and only where agent-ha-bridge's daemon can be seen, since the intake must stand back
 // whenever it runs (G5). Null when off.
-HookIntake? StartIntake(AgentHaBridgeProbe? probe, Func<bool> keepEndings, CancellationToken cancellationToken)
+HookIntake? StartIntake(AgentHaBridgeProbe? probe, Func<bool> keepEndings, IDiagnosticsJournal journal, CancellationToken cancellationToken)
 {
     if (intakeProblem is not null) { Log(intakeProblem); }
     if (intakeState is null) { return null; }
@@ -946,6 +1028,8 @@ HookIntake? StartIntake(AgentHaBridgeProbe? probe, Func<bool> keepEndings, Cance
         ClaudeHome = options.ClaudeHome,
         AgentHaBridgeActive = active,
         KeepEndings = keepEndings,
+        // The one journal diagnostics.get reads (#737, #802).
+        Journal = journal,
     }, new SystemProcessInspector(), log: Log);
     intake.Start(cancellationToken);
     var owner = intakeState.Standalone ? "this fresh installation" : $"agent-ha-bridge installation {intakeState.InstallationId}";
@@ -963,7 +1047,7 @@ static string OsName() =>
 // session at once. Files sent with replies are staged in the profile's own folder, private
 // to this user (docs/host-replies.md), and the prompts already
 // answered are recorded there too, so none is typed into twice.
-(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, IAgentHaBridgeProbe g5, IProcessInspector processes, TranscriptWrites writes, string staging, string attempts, IBlobSource blobs, Func<string, string?>? codexUnsettled, DeliveryGate gate)
+(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, IAgentHaBridgeProbe g5, IProcessInspector processes, TranscriptWrites writes, string staging, AttemptLedger attempts, IBlobSource blobs, Func<string, string?>? codexUnsettled, DeliveryGate gate)
 {
     if (!OperatingSystem.IsWindows())
     {
@@ -979,7 +1063,7 @@ static string OsName() =>
     Log($"approving Copilot permission prompts from other devices is {(settings.RemoteApproval ? "on" : "off")} (permissions.remoteApproval)");
     var attachments = new AttachmentStore(new AttachmentOptions { StagingRoot = staging }, Log, blobs: blobs);
     return (
-        new AnswerService(gate, source, processes, probe, guard, injector, new AnswerOptions { CopilotHome = options.CopilotHome, AttemptLedgerPath = attempts, CopilotRemoteApproval = settings.RemoteApproval, CodexApprovalsUnsettled = codexUnsettled, Writes = writes }, Log),
+        new AnswerService(gate, source, processes, probe, guard, injector, new AnswerOptions { CopilotHome = options.CopilotHome, AttemptLedger = attempts, CopilotRemoteApproval = settings.RemoteApproval, CodexApprovalsUnsettled = codexUnsettled, Writes = writes }, Log),
         new ReplyService(gate, source, processes, probe, guard, injector, new ReplyOptions { CopilotHome = options.CopilotHome, Writes = writes, LateWatch = TimeSpan.FromMinutes(5) }, Log, attachments),
         attachments,
         new StopService(gate, source, processes, probe, injector, new WindowsProcessControl(), new StopOptions { CopilotHome = options.CopilotHome }, Log));

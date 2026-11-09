@@ -18,7 +18,84 @@ public static class ProtocolVectors
 
     // Whether a vector's record is read under v1-sessions.md "Malformed records" (Received): one a
     // host sends a client over the channel. Not a push (push.json), and not one host to another.
-    public static bool ReadLeniently(string direction, string file) => direction == Host && file != "push.json";
+    // Nor a diagnostics snapshot (diagnostics.json), which both clients read strictly: a part
+    // missing or of the wrong type makes the reply unreadable, never a healthy default.
+    public static bool ReadLeniently(string direction, string file) => direction == Host && file != "push.json" && file != "diagnostics.json";
+
+    // A vector's record read as its reader reads it: the journal's by JournalCodec, a record a host
+    // sends a client under "Malformed records", any other by ProtocolJson.Options.
+    public static object Read(string direction, string file, Type type, JsonNode json) =>
+        IsJournal(type) ? JournalRead(type, json)
+        : ReadLeniently(direction, file) ? Received.Read(JsonSerializer.SerializeToElement(json), type)
+        : json.Deserialize(type, file == "diagnostics.json" ? StrictDiagnostics : ProtocolJson.Options)!;
+
+    // As the Windows app reads a snapshot (MachineDiagnosisViewModel): every field without a
+    // default required, and null only where the record allows it.
+    static readonly JsonSerializerOptions StrictDiagnostics = new(ProtocolJson.Options)
+    {
+        RespectRequiredConstructorParameters = true,
+        RespectNullableAnnotations = true,
+        TypeInfoResolver = new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver(),
+    };
+
+    // A record as its writer writes it.
+    public static JsonNode Write(object? value, Type type) =>
+        IsJournal(type) ? JournalWrite(value!) : JsonSerializer.SerializeToNode(value, type, ProtocolJson.Options)!;
+
+    // The #737 journal's records have one serialized form, JournalCodec's, not ProtocolJson's: a
+    // diagnostics.get reply carries its entries in it, and another process reads them with
+    // TryReadFromAnotherProcess. Their vectors are that form, written and read by the codec
+    // itself; a stage, an exception or a frame as it is within an entry.
+    static bool IsJournal(Type t) => t == typeof(JournalEntry) || t == typeof(JournalStage) || t == typeof(JournalException) || t == typeof(JournalFrame);
+
+    static JournalEntry Carrier => new(JournalContract.Schema, 1, T0, JournalFamily.Crash, JournalKind.UnhandledException, JournalOutcome.Failed,
+        null, null, null, [], null, JournalOmissions.None);
+
+    static JsonNode JournalWrite(object value)
+    {
+        var entry = value switch
+        {
+            JournalEntry e => e,
+            JournalStage s => Carrier with { Family = JournalFamily.Delivery, Kind = JournalKind.DeliveryStage, Outcome = JournalOutcome.Ok, Stages = [s] },
+            JournalException x => Carrier with { Exception = x },
+            JournalFrame f => Carrier with { Exception = new JournalException(typeof(InvalidOperationException).FullName!, [f]) },
+            _ => throw new ArgumentException($"{value.GetType().Name} is not the journal's"),
+        };
+        var node = JsonNode.Parse(JournalCodec.Write(entry))!;
+        return value switch
+        {
+            JournalStage => node["stages"]![0]!.DeepClone(),
+            JournalException => node["exception"]!.DeepClone(),
+            JournalFrame => node["exception"]!["frames"]![0]!.DeepClone(),
+            _ => node,
+        };
+    }
+
+    static object JournalRead(Type type, JsonNode json)
+    {
+        var carrier = JsonNode.Parse(JournalCodec.Write(Carrier))!.AsObject();
+        if (type == typeof(JournalStage))
+        {
+            carrier["family"] = nameof(JournalFamily.Delivery);
+            carrier["kind"] = nameof(JournalKind.DeliveryStage);
+            carrier["outcome"] = nameof(JournalOutcome.Ok);
+            carrier["stages"] = new JsonArray(json.DeepClone());
+        }
+        else if (type == typeof(JournalException)) { carrier["exception"] = json.DeepClone(); }
+        else if (type == typeof(JournalFrame))
+        {
+            carrier["exception"] = new JsonObject { ["type"] = typeof(InvalidOperationException).FullName, ["frames"] = new JsonArray(json.DeepClone()) };
+        }
+        else { carrier = json.DeepClone() as JsonObject ?? new JsonObject { ["not"] = json.DeepClone() }; }
+        if (!JournalCodec.TryReadFromAnotherProcess(System.Text.Encoding.UTF8.GetBytes(carrier.ToJsonString()), out var e))
+        {
+            throw new JsonException("JournalCodec refuses it");
+        }
+        return type == typeof(JournalStage) ? e.Stages[0]
+            : type == typeof(JournalException) ? e.Exception!
+            : type == typeof(JournalFrame) ? e.Exception!.Frames[0]
+            : e;
+    }
 
     static readonly DateTimeOffset T0 = new(2026, 10, 28, 4, 22, 43, 182, TimeSpan.Zero);
     static readonly DateTimeOffset T1 = T0.AddMinutes(3);
@@ -53,6 +130,8 @@ public static class ProtocolVectors
         Manage(catalog.File("manage.json", "v1-sessions.md", "Restarting a machine and repairing its hooks from a person's other device (#801)."));
         Usage(catalog.File("usage.json", "v1-usage.md", "How much of each agent's allowance is gone."));
         History(catalog.File("history.json", "v1-history.md", "A session's earlier turns, a page at a time, for the conversation pane."));
+        Diagnostics(catalog.File("diagnostics.json", "v1-diagnostics.md", "Diagnosing a machine from a person's device: its health and its content-free journal (#737)."));
+        AgentPrincipals(catalog.File("agent-principals.json", "local-pipe.md#agent-principals-agenthello", "An agent session opening its local pipe connection as itself (Windows, local pipe only)."));
         foreach (var d in KnownDifferences.All) { catalog.Differs(d); }
         return catalog.Build();
     }
@@ -433,6 +512,7 @@ public static class ProtocolVectors
             .Valid("refused", new AnswerResult(AnswerOutcome.Refused, "\"Spike\" needs an answer"))
             .Valid("refused-for-other-the-machine-cannot-send-yet", new AnswerResult(AnswerOutcome.Refused, AnswerReasons.Text(AnswerReasons.OtherNotSendable)) { Code = AnswerReasons.OtherNotSendable })
             .Valid("stale", new AnswerResult(AnswerOutcome.Stale, "the question is no longer pending"))
+            .Valid("stale-after-the-host-reset-a-part-answered-form", new AnswerResult(AnswerOutcome.Stale, "this question is out of date: the answer was left part answered at the machine, so the host cancelled the form there, and the session did not ask it again") { Code = AnswerReasons.FormReset })
             .Valid("typed-but-not-recorded", new AnswerResult(AnswerOutcome.Unconfirmed, "the answer was typed into the prompt, but the session did not record an answer within 15 seconds, so it may not have been submitted; check at the machine", AnswerStage.Typed))
             .Valid("recorded-differently", new AnswerResult(AnswerOutcome.Unconfirmed, "the session recorded a different answer for \"spike\"; check at the machine", AnswerStage.Recorded))
             .Reads("an-unknown-outcome-reads-as-unconfirmed", """{"outcome":"queued","reason":"later"}""")
@@ -771,21 +851,50 @@ public static class ProtocolVectors
         f.Record<UpdateResult>(Host)
             .Valid("updated", last)
             .Valid("refused", new UpdateResult { Outcome = UpdateOutcome.Refused, Reason = "a session is busy", At = T0 })
+            // Update now (#1159): how it ended as a code, which a client words itself.
+            .Valid("an-update-now-refused-with-a-code", new UpdateResult { Outcome = UpdateOutcome.Refused, Reason = "Update now has used its restarts", Request = Request, Code = UpdateCode.RestartCap, At = T0 })
             .Reads("an-unknown-outcome-reads-as-failed", """{"outcome":"rolledBack","at":"2026-10-28T04:22:43.182Z"}""");
+        // What Update now would go over (#1159): ids and states only, approvals first; past 32, how
+        // many of each kind were left out.
+        var approval = new UpdateBusySession(SessionId, UpdateBusyState.Approval);
+        f.Record<UpdateBusySession>(Host)
+            .Valid("an-approval", approval)
+            .Valid("a-turn", new UpdateBusySession("s-2", UpdateBusyState.Working));
+        var busy = new UpdateBusy { Working = 1, Waiting = 1, Sessions = [approval, new UpdateBusySession("s-2", UpdateBusyState.Working)] };
+        f.Record<UpdateBusy>(Host)
+            .Valid("quiet", new UpdateBusy())
+            .Valid("an-approval-and-a-turn", busy)
+            .Valid("past-32", new UpdateBusy
+            {
+                Working = 2, Waiting = 32, Sessions = [.. Enumerable.Range(0, UpdateProtocol.BusyListed).Select(i => new UpdateBusySession($"s-{i}", UpdateBusyState.Approval))],
+                MoreApprovals = 0, MoreOther = 2,
+            })
+            .Valid("cant-tell", new UpdateBusy { Unknown = true });
+        f.Record<UpdateNowArgs>(Client)
+            .Valid("one-press", new UpdateNowArgs { Now = true, Release = "0.1.201" })
+            .Valid("confirmed", new UpdateNowArgs { Now = true, Release = "0.1.201", Accept = busy });
         var state = new UpdateState
         {
             Current = "0.1.200", Installer = true, Available = "0.1.201", Notes = "Fixes the flaky reconnect.", CheckedAt = T0, Phase = UpdatePhase.Downloading, Progress = 40,
             Request = Request, Automatic = true, Last = last,
         };
+        var offered = state with { Phase = UpdatePhase.Idle, Progress = null, Request = null, CanUpdateNow = true, Busy = busy };
         f.Record<UpdateState>(Host)
             .Valid("downloading", state)
             .Valid("waiting", state with { Phase = UpdatePhase.Waiting, Progress = null, Waiting = "a session is busy" })
             .Valid("no-app", new UpdateState { Unavailable = "the Windows app is not running" })
+            .Valid("update-now-offered", offered)
+            .Valid("update-now-held-by-the-restart-cap", offered with { CanUpdateNow = false, Busy = null, UpdateNowWhy = UpdateNowWhy.RestartCap, UpdateNowAt = T0.AddHours(6) })
+            .Valid("an-update-now-waiting-for-a-turn", state with { Phase = UpdatePhase.Waiting, Progress = null, RequestNow = true, WaitingCode = UpdateWaitingCode.TurnRunning })
             .Reads("an-unknown-phase-reads-as-idle", """{"current":"0.1.200","installer":true,"phase":"verifying","automatic":false}""");
-        f.Record<UpdateCommand>(Client).Valid("a-press", new UpdateCommand(Request));
+        f.Record<UpdateCommand>(Client)
+            .Valid("a-press", new UpdateCommand(Request))
+            .Valid("an-update-now", new UpdateCommand { Now = Signed });
         f.Record<UpdateCommandResult>(Host)
             .Valid("accepted", new UpdateCommandResult(UpdateAck.Accepted) { State = state with { Phase = UpdatePhase.Checking, Progress = null } })
             .Valid("refused", new UpdateCommandResult(UpdateAck.Refused, "the machine is read-only"))
+            .Valid("an-update-now-refused-with-a-code", new UpdateCommandResult(UpdateAck.Refused, "the release offered here is no longer the one the person was shown") { Code = UpdateCode.ReleaseChanged })
+            .Valid("confirm", new UpdateCommandResult(UpdateAck.Confirm, "more is busy here than the confirmation covered") { State = offered })
             .Reads("an-unknown-outcome-reads-as-refused", """{"outcome":"maybe"}""");
     }
 
@@ -941,5 +1050,100 @@ public static class ProtocolVectors
         f.Record<UsageReport>(Host)
             .Valid("two-agents", new UsageReport([reading, new AgentUsage { Agent = AgentKind.Codex, Label = "Codex", Source = UsageSource.Transcript, Windows = [new UsageWindow { Key = "weekly", Label = "Weekly", Percent = 90 }], MeasuredAt = T0 }]))
             .Valid("none", UsageReport.Empty);
+    }
+
+    static void AgentPrincipals(VectorFileBuilder f)
+    {
+        f.Record<AgentHelloRequest>(Client)
+            .Valid("a-token", new AgentHelloRequest { Token = AgentProtocol.TokenPrefix + Repeat('A', 43) });
+        f.Record<AgentHelloResult>(Host)
+            .Valid("a-reader", new AgentHelloResult("agent:machine1/session-1", AgentProtocol.ScopeRead));
+    }
+
+    // ---- diagnostics ----
+
+    static void Diagnostics(VectorFileBuilder f)
+    {
+        var product = new JournalFrame(typeof(JournalCodec).FullName!, nameof(JournalCodec.Write));
+        var external = new JournalFrame(JournalContract.External, JournalContract.External);
+        var connected = new JournalEntry(JournalContract.Schema, 41, T0, JournalFamily.RelayConnect, JournalKind.RelayConnected, JournalOutcome.Ok, null, "0.1.200", 160,
+            [new JournalStage(JournalStageName.Connect, 120), new JournalStage(JournalStageName.Handshake, 40)], null, JournalOmissions.None);
+        var crash = new JournalEntry(JournalContract.Schema, 42, T1, JournalFamily.Crash, JournalKind.UnhandledException, JournalOutcome.Failed, null, "0.1.200", null, [],
+            new JournalException(typeof(InvalidOperationException).FullName!, [product, external]), JournalOmissions.FrameUnrecognized);
+        f.Record<JournalEntry>(Host)
+            .Valid("a-relay-connect", connected)
+            .Valid("a-crash", crash)
+            .Valid("a-closed-relay-with-its-code", new JournalEntry(JournalContract.Schema, 43, T1, JournalFamily.RelayDrop, JournalKind.RelayClosed, JournalOutcome.Failed, 1006, null, null, [], null, JournalOmissions.VersionInvalid))
+            // Another process's names it does not list are never read as they are.
+            .Reads("an-exception-type-not-the-journals-reads-as-unrecognized",
+                """{"schema":1,"seq":44,"at":"2026-10-28T04:25:43.182Z","family":"Crash","kind":"UnhandledException","outcome":"Failed","exception":{"type":"System.ghp_CANARY","frames":[{"type":"Contoso.Secrets","method":"ghp_CANARY"}]}}""")
+            .Refused("a-message", j => j["message"] = "the user's prompt")
+            .Refused("a-kind-by-number", j => j["kind"] = 0)
+            .Refused("a-kind-of-another-family", j => j["family"] = nameof(JournalFamily.Crash))
+            .Refused("a-version-with-letters", j => j["version"] = "0.1.200-octocat")
+            .Refused("a-time-with-an-offset", j => j["at"] = "2026-10-27T21:22:43.182-07:00")
+            .Refused("a-time-on-a-day-there-is-not", j => j["at"] = "2025-02-30T00:00:00.000Z");
+        f.Record<JournalStage>(Host)
+            .Valid("connect", new JournalStage(JournalStageName.Connect, 120))
+            .Refused("a-stage-not-the-journals", """{"name":"Thinking","ms":1}""");
+        f.Record<JournalException>(Host)
+            .Valid("the-runtimes-with-the-products-frame", new JournalException(typeof(InvalidOperationException).FullName!, [product]))
+            .Valid("unrecognized", new JournalException(JournalContract.Unrecognized, [external]))
+            .Reads("a-type-not-the-journals-reads-as-unrecognized", """{"type":"Contoso.SecretException","frames":[]}""");
+        f.Record<JournalFrame>(Host)
+            .Valid("the-products", product)
+            .Valid("external", external)
+            .Reads("a-frame-outside-the-product-reads-as-external", """{"type":"Contoso.Secrets","method":"ghp_CANARY"}""");
+
+        var host = new DiagnosticsHost("0.1.200", Dev: false, T0.AddHours(-2), 7200);
+        f.Record<DiagnosticsHost>(Host)
+            .Valid("a-release", host)
+            .Valid("a-version-not-recorded", new DiagnosticsHost(null, Dev: true, T0.AddHours(-2), 7200, DiagnosticsMissing.NotRecorded))
+            .Refused("a-version-left-out", j => j.Remove("version"));
+        // The last restart is this process's start; why it restarted is not recorded (#802).
+        var restart = new DiagnosticsRestart(T0.AddHours(-2), DiagnosticsMissing.NotRecorded);
+        f.Record<DiagnosticsRestart>(Host).Valid("this-process", restart);
+        var relay = new DiagnosticsRelay(DiagnosticsRelayState.Connected, T0.AddHours(-1));
+        f.Record<DiagnosticsRelay>(Host)
+            .Valid("connected", relay)
+            .Valid("not-started", new DiagnosticsRelay(DiagnosticsRelayState.Unknown, null, DiagnosticsMissing.NotStarted))
+            .Reads("a-newer-state-reads-as-unknown", """{"state":"teleporting","since":null}""");
+        var holds = new DiagnosticsHolds(DiagnosticsReadOnly.None, []);
+        f.Record<DiagnosticsHolds>(Host)
+            .Valid("none", holds)
+            .Valid("read-only-and-held", new DiagnosticsHolds(DiagnosticsReadOnly.ConfigReadOnly, [AgentKind.Claude]))
+            // Whether the machine is read-only is not known yet (the shared probe has not
+            // reported): null, with why, never None.
+            .Valid("read-only-not-known", new DiagnosticsHolds(null, [], ReadOnlyMissing: DiagnosticsMissing.NotStarted))
+            .Valid("read-only-could-not-be-checked", new DiagnosticsHolds(null, [AgentKind.Copilot], ReadOnlyMissing: DiagnosticsMissing.Failed));
+        var agent = new DiagnosticsAgent(DiagnosticsAgentId.Copilot, "1.0.12", DiagnosticsCheck.Working, DiagnosticsCheck.Working, DiagnosticsCheck.Working,
+            DiagnosticsCheck.Working, DiagnosticsCheck.Working, T0.AddMinutes(-5));
+        f.Record<DiagnosticsAgent>(Host)
+            .Valid("working", agent)
+            .Valid("a-version-withheld", new DiagnosticsAgent(DiagnosticsAgentId.Claude, null, DiagnosticsCheck.Working, DiagnosticsCheck.NeedsAction, DiagnosticsCheck.Missing,
+                DiagnosticsCheck.Unknown, DiagnosticsCheck.Blocked, null, DiagnosticsMissing.Invalid));
+        var readiness = new DiagnosticsReadiness(T0.AddMinutes(-1), [agent], 0);
+        f.Record<DiagnosticsReadiness>(Host)
+            .Valid("checked", readiness)
+            .Valid("not-started", new DiagnosticsReadiness(null, [], 0, DiagnosticsMissing.NotStarted));
+        static JsonElement Canonical(JournalEntry e) => JsonDocument.Parse(JournalCodec.Write(e)).RootElement.Clone();
+        var journal = new DiagnosticsJournalPart([Canonical(crash), Canonical(connected)], OmittedByLimit: 3, OmittedBySize: 0, Invalid: 0,
+            EvictedByCount: 12, EvictedByAge: 0, EvictedByBytes: 0, RejectedOversized: 0, RejectedMalformed: 1, DroppedOnLoad: 0, LoadFailed: false, PersistFailures: 0);
+        f.Record<DiagnosticsJournalPart>(Host)
+            .Valid("two-entries", journal)
+            .Valid("not-configured", new DiagnosticsJournalPart([], 0, 0, 0, 0, 0, 0, 0, 0, 0, false, 0, DiagnosticsMissing.NotConfigured))
+            .Valid("its-file-unreadable-at-start", new DiagnosticsJournalPart([], 0, 0, 0, 0, 0, 0, 0, 0, 2, true, 0));
+        var snapshot = new DiagnosticsSnapshot(DiagnosticsProtocol.Schema, T0, host, restart, relay, holds, readiness, journal);
+        f.Record<DiagnosticsSnapshot>(Host)
+            .Valid("a-machine", snapshot)
+            .Valid("little-known", snapshot with
+            {
+                Host = new DiagnosticsHost(null, Dev: false, T0, 0, DiagnosticsMissing.NotRecorded),
+                Relay = new DiagnosticsRelay(DiagnosticsRelayState.Unknown, null, DiagnosticsMissing.NotStarted),
+                Holds = new DiagnosticsHolds(null, [], ReadOnlyMissing: DiagnosticsMissing.NotStarted),
+                Readiness = new DiagnosticsReadiness(null, [], 0, DiagnosticsMissing.NotStarted),
+                Journal = new DiagnosticsJournalPart([], 0, 0, 0, 0, 0, 0, 0, 0, 0, false, 0, DiagnosticsMissing.NotConfigured),
+            })
+            .Refused("a-section-left-out", j => j.Remove("holds"));
     }
 }

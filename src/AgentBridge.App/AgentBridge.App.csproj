@@ -67,4 +67,9 @@
     <ProjectReference Include="..\AgentBridge.App.Core\AgentBridge.App.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The host's own reader of the release list (#530, #927), so the app and the host read releases one way. -->
+    <Compile Include="..\AgentBridge.Host\DiscoveredGithubSource.cs" Link="DiscoveredGithubSource.cs" />
+  </ItemGroup>
+
 </Project>

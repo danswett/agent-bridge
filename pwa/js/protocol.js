@@ -8,7 +8,7 @@
 
 import { readAttention, readMachineSignIn } from './auth-state.js';
 import { marksExact } from './escaped.js';
-import { knownAnswerReason } from './answers.js';
+import { fieldAnswerReason, resultAnswerReason } from './answers.js';
 
 export const PROTOCOL_VERSION = 1;
 
@@ -17,6 +17,7 @@ export const Ops = Object.freeze({
   sessionsList: 'sessions.list',
   sessionGet: 'session.get',
   sessionsSubscribe: 'sessions.subscribe',
+  sessionsFocus: 'sessions.focus',
   sessionAnswer: 'session.answer',
   sessionReply: 'session.reply',
   sessionStop: 'session.stop',
@@ -37,7 +38,7 @@ export const Events = Object.freeze({
   helloChanged: 'hello.changed',
 });
 
-export const Capabilities = Object.freeze({ helloChanged: 'hello.changed', sessionsRead: 'sessions.read', sessionsPatch: 'sessions.patch', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', sessionsAttach: 'sessions.attach', sessionsAttachBlob: 'sessions.attach.blob', sessionsStop: 'sessions.stop', sessionsApprove: 'sessions.approve', sessionsProgress: 'sessions.progress', push: 'push' });
+export const Capabilities = Object.freeze({ helloChanged: 'hello.changed', sessionsRead: 'sessions.read', sessionsPatch: 'sessions.patch', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', sessionsAttach: 'sessions.attach', sessionsAttachBlob: 'sessions.attach.blob', sessionsStop: 'sessions.stop', sessionsApprove: 'sessions.approve', sessionsProgress: 'sessions.progress', sessionsFocus: 'sessions.focus', push: 'push' });
 
 export const Outcomes = Object.freeze(['delivered', 'unconfirmed', 'stale', 'busy', 'refused']);
 
@@ -108,7 +109,7 @@ function readField(raw) {
     allowOther: f.allowOther === true,
     // Other the agent offers and the machine cannot send yet, by a reason this app knows: shown
     // disabled, with why (#908). An unknown reason, or one beside allowOther, reads as none.
-    otherUnavailable: f.allowOther === true ? null : knownAnswerReason(f.otherUnavailable),
+    otherUnavailable: f.allowOther === true ? null : fieldAnswerReason(f.otherUnavailable),
     // Any JSON value. Views format it as text and never interpret it as markup.
     default: f.default === undefined ? null : f.default,
     required: f.required === true,
@@ -128,6 +129,7 @@ export function readQuestion(raw) {
     askedAt: str(q.askedAt),
     truncated: q.truncated === true,
     answerAtMachine: q.answerAtMachine === true,
+    answerAtMachineReason: str(q.answerAtMachineReason),
     // The sub-agent that asked, when it is not the session's own question.
     agent: str(q.agent),
     // What the host escaped in an approval (#803): null when it escaped nothing. Marks that do not
@@ -305,8 +307,9 @@ export function readHello(raw) {
 // where the host sent them (sessions.progress): each stage it reached, in ms since it received
 // the request ({ typed, recorded, confirmed }). Only for this device's own timing marks, so a
 // stage that isn't a whole number of ms is left out, as is one the protocol doesn't name: its
-// name would be the host's own text in the console line (timing.js). code, on a refusal, is a
-// reason this app says in fixed words of its own (answers.js AnswerReasons). Anything unreadable
+// name would be the host's own text in the console line (timing.js). code, on a refusal or a
+// stale answer, is a reason this app says in fixed words of its own (answers.js AnswerReasons;
+// formReset is kept on a stale result for the card, not yet shown). Anything unreadable
 // is unconfirmed, since the host may have typed it. stage, on an unconfirmed answer, is how far
 // it is known to have got (#467), named as the progress timings name the stages: 'typed' (every
 // key went, nothing recorded) or 'recorded' (the session recorded another answer); one this app
@@ -317,7 +320,7 @@ export function readAnswerResult(raw) {
   const r = obj(raw) ?? {};
   const outcome = readOutcome(r.outcome);
   const stage = outcome === 'unconfirmed' && r.stage != null ? tolerant(AnswerStages, 'typed')(r.stage) : null;
-  const code = outcome === 'refused' ? knownAnswerReason(r.code) : null;
+  const code = resultAnswerReason(outcome, r.code);
   const timings = Object.entries(obj(r.timings) ?? {}).filter(([what, ms]) => TimingStages.includes(what) && Number.isFinite(ms) && ms >= 0);
   return {
     outcome, reason: str(r.reason), stage, ...(code ? { code } : {}),

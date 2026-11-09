@@ -489,6 +489,21 @@ person, from an agent and given up on, a repeated press) with the daemon's const
 contract tests assert the connector tells the card exactly what the daemon told it, and makes
 the same service calls.
 
+**Request id and acknowledgement.** A sender may add `rid` (1 to 64 letters, digits, `-`, `_`, `.`;
+anything else is ignored) and `sender` (a name, at most 64 characters). The host then publishes
+`reply_ack` `{rid, outcome, at, sender?, duplicate?}` in the session's activity attributes in the same
+update as `Reply sent` / `Reply NOT sent`. `outcome` is `delivered`, `unconfirmed` or `refused`. The ack
+stays until a newer one replaces it, so a sender that finds another rid there knows its message was
+swapped or lost and sends again. A rid seen before (the last 50 per session) is not delivered again; the
+host re-acks it with `duplicate: true`. A `refused` rid is forgotten, so the same rid may be retried.
+The history is kept per session in the connector, not on the card, so a pause or restart that rebuilds
+the cards neither empties it nor loses the rid of a delivery still running; a repeat after the rebuild
+is still dropped. When a session ends for good its history is dropped with its card (after any
+delivery still running for it finishes); a session that comes back under the same id starts empty.
+`sender` loses control, format and unassigned characters, whitespace is collapsed,
+and the cut at 64 never splits a character. A reply discarded because a question opened gets no ack.
+Publishes without a `rid` behave as before.
+
 **The reply card** publishes `{at, text, images: [{id, name, content_type}], files: [{name,
 content_type, b64}], driver?}` (not retained) to `copilot/cli/<node>/replypayload/set`, read
 through the reply payload sensor: its state is `at`, the stamp that makes a publish new. A new
@@ -650,6 +665,18 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   that took a request launches nothing (the daemon's guard against two presses for one request).
   A press whose prompt payload cannot be read waits for the next pass rather than launching from
   the card, since it may carry a request with settings of its own.
+- **Launch options (beyond agent-ha-bridge, #1142).** `sensor.agent_bridge_<machine>_launch_options`
+  is read-only. Its state is a 12-character `version` (a hash of `default_agent` and the lists, so it
+  changes exactly when an answer does); its attributes (`json_attributes_topic` `newsession/options`,
+  retained) are `{version, default_agent, agents: {<id>: {label, models, efforts, contexts,
+  defaults: {model, effort, context}}}}` for every agent the host's launcher offers, whichever
+  agent the card has selected, so choosing another agent on the card never changes it. The lists
+  are the launcher's own (the card's selectors show only the selected agent's, "Agent default"
+  excluded: omit an axis to take it). It is republished on the card's refresh (30 s) when a
+  list changes, and again after a pause. When the host does not serve launch it is withdrawn (its
+  config and state cleared) rather than left with lists nothing refreshes. It is not in
+  agent-ha-bridge's per-machine topic list, so that daemon's Forget does not clear it. `launch-remote.ps1 -Options` prints it and a launch is checked
+  against it before the button is pressed.
 * **The purple edge**: a session an agent's press launched is `agent`-driven from the moment it
   appears, for the turn it was launched with (already under way or still to come); the turn
   after that is whoever's it is.

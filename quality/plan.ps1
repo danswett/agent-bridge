@@ -37,7 +37,14 @@ param(
     [string[]] $Jobs,
     # A ring-1 selection to report beside a ring-2 run, as what ring 1 would have chosen: when a
     # whole-ring main run fails, it says at once whether ring 1 would have run the failing job (§4.8).
-    [switch] $CompareRing1
+    [switch] $CompareRing1,
+    # Jobs a ring-2 run gives true only when ring 1 selected them for a reason of their own, not
+    # because the whole ring runs (#1249: the app's packaging legs on a pull request that only
+    # touches workflows or the quality tool). Main never passes it: there they all run.
+    [string[]] $Narrow = @(),
+    # Platforms product doesn't run on this event (#1249: win-arm64 runs on main, not on a pull
+    # request head). The app job still packages both architectures whenever it runs.
+    [string[]] $ExcludePlatform = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -75,10 +82,42 @@ $whole = $selection.mode -in 'full', 'everything'
 $runners = [ordered]@{ 'linux-x64' = 'ubuntu-latest'; 'win-x64' = 'windows-latest'; 'win-arm64' = 'windows-11-arm' }
 $platforms = @($productSuites | ForEach-Object { $_.platforms })
 # The whole ring runs as product always did: everything, on every runner. The fast ring is Linux's.
-$productOs = @($runners.Keys | Where-Object { ($whole -or $_ -in $platforms) -and (-not $platform -or $_ -eq $platform) } | ForEach-Object { $runners[$_] })
+$productOs = @($runners.Keys | Where-Object { ($whole -or $_ -in $platforms) -and (-not $platform -or $_ -eq $platform) -and $_ -notin $ExcludePlatform } | ForEach-Object { $runners[$_] })
+# Never an empty matrix: a suite that only the excluded platform runs falls back to every runner.
+if ($productOs.Count -eq 0 -and $productIds.Count -gt 0) { $productOs = @($runners.Keys | Where-Object { -not $platform -or $_ -eq $platform } | ForEach-Object { $runners[$_] }) }
+
+function Test-WholeRing([string] $rule) { $rule.StartsWith('global_triggers ') -or $rule.StartsWith('unclaimed path') }
+
+# Build inputs every project compiles from: a pull request changing one still packages the app.
+$appInputs = @('AgentBridge.slnx', 'nuget.config', 'global.json', '**/Directory.Build.*', '**/Directory.Packages.props')
+function Test-NotOwn([string] $rule) {
+    if ($rule.StartsWith('global_triggers ')) { return $rule.Substring('global_triggers '.Length) -notin $appInputs }
+    $rule.StartsWith('unclaimed path')
+}
+
+$Narrow = @($Narrow -split '[,\s]+' | Where-Object { $_ })
+# Ring 1's selection, for -Narrow and -CompareRing1 both.
+$ring1 = $null
+if ($Ring -gt 1 -and ($Narrow.Count -gt 0 -or $CompareRing1)) { $ring1 = Select-Suites 1 }
+$ring1Ci = if ($ring1) { $ring1.jobs['ci.yml'] ?? @{} } else { @{} }
+# ci.yml holds the app job's packaging and SBOM steps, and install-trivy feeds them: a pull request
+# editing either must still package the app, which the workflows-wide global trigger can't say.
+$packagingEdited = $false
+if ($ring1) {
+    $edited = @(git -C $root diff --name-only "$Base...$Head")
+    $packagingEdited = @($edited | Where-Object { $_ -eq '.github/workflows/ci.yml' -or $_ -like '.github/actions/install-trivy/*' }).Count -gt 0
+}
+function Test-OwnReason([string] $job) {
+    if ($packagingEdited -and $job -eq 'app') { return $true }
+    $own = @($ring1Ci[$job] ?? @())
+    @($ring1.suites | Where-Object { $_.id -in $own -and @($_.reasons | Where-Object { -not (Test-NotOwn $_.rule) }).Count -gt 0 }).Count -gt 0
+}
 
 $outputs = [ordered]@{}
-foreach ($job in $Jobs) { $outputs[$job] = if ($ci.ContainsKey($job)) { 'true' } else { 'false' } }
+foreach ($job in $Jobs) {
+    $runs = if ($job -in $Narrow -and $ring1) { Test-OwnReason $job } else { $ci.ContainsKey($job) }
+    $outputs[$job] = if ($runs) { 'true' } else { 'false' }
+}
 $outputs['suites'] = ConvertTo-JsonArray $ids
 $outputs['test-projects'] = ConvertTo-JsonArray $testProjects
 $outputs['whole-solution'] = if ($whole) { 'true' } else { 'false' }
@@ -98,8 +137,6 @@ function Files($files) {
     if ($list.Count -gt 3) { $shown += " (+$($list.Count - 3) more)" }
     $shown
 }
-function Test-WholeRing([string] $rule) { $rule.StartsWith('global_triggers ') -or $rule.StartsWith('unclaimed path') }
-
 $md = [System.Collections.Generic.List[string]]::new()
 $md.Add("## What runs and why")
 $md.Add("")
@@ -119,7 +156,7 @@ $md.Add("")
 $md.Add("| ci.yml job | Runs | Suites |")
 $md.Add("|---|---|---|")
 foreach ($job in $Jobs) {
-    $runs = if ($ci.ContainsKey($job)) { 'yes' } else { 'skipped' }
+    $runs = if ($outputs[$job] -eq 'true') { 'yes' } else { 'skipped' }
     $md.Add("| $job | $runs | $((@($ci[$job] ?? @()) | ForEach-Object { Code $_ }) -join ', ') |")
 }
 $md.Add("")
@@ -148,7 +185,7 @@ if ($selection.files.Count -gt 0) {
     $md.Add("</details>")
 }
 if ($CompareRing1) {
-    $pr = Select-Suites 1
+    $pr = $ring1
     $prJobs = @(($pr.jobs['ci.yml'] ?? @{}).Keys | Where-Object { $_ -in $Jobs } | Sort-Object)
     $md.Add("")
     $md.Add("Ring 1 over the same change (what its pull request ran, mode $($pr.mode)): $(if ($prJobs) { ($prJobs | ForEach-Object { Code $_ }) -join ', ' } else { 'none of the gated jobs' }).")

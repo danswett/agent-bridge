@@ -6,8 +6,9 @@ namespace AgentBridge.App.Core;
 
 // Between this machine's updater and its host (#51, docs/protocol/v1-update.md): tells the host
 // what the updater is doing (host.update.report), which it serves to the account's other devices,
-// and hands the updater the presses of Check and Install the host carries from them
-// (HostStatus.UpdateAsks), each once, telling the host it has taken them. A copy of the app the
+// and hands the updater the presses of Check, Install and Update now (#1159) the host carries from
+// them (HostStatus.UpdateAsks), each once, telling the host it has taken them, and that it carries
+// Update now. A copy of the app the
 // updater cannot update (a build folder) reports that, and takes nothing: the host then refuses
 // the presses itself.
 public sealed class UpdateReporter : IDisposable
@@ -60,7 +61,7 @@ public sealed class UpdateReporter : IDisposable
                 fresh.Add(ask);
             }
         }
-        foreach (var ask in fresh) { _ = updater!.Ask(ask.Kind, ask.Request, ask.At); }
+        foreach (var ask in fresh) { _ = updater!.Ask(ask.Kind, ask.Request, ask.At, ask.Now, ask.By); }
         if (fresh.Count > 0 || listed || Connection() != Volatile.Read(ref triedTo)) { Report(); }
     }
 
@@ -78,7 +79,9 @@ public sealed class UpdateReporter : IDisposable
             Volatile.Write(ref triedTo, instance);
             List<string> done;
             lock (taken) { done = [.. (status.UpdateAsks ?? []).Select(a => a.Request).Where(taken.Contains)]; }
-            var report = new UpdateReport(State, done.Count > 0 ? done : null);
+            // Carries Update now (#1159) wherever it updates at all: the host then offers it, and
+            // hands this app the presses (an older app says nothing, and is told old-app).
+            var report = new UpdateReport(State, done.Count > 0 ? done : null, CarriesUpdateNow: updater is not null);
             var json = JsonSerializer.Serialize(report, ProtocolJson.Options);
             if (instance == sentTo && json == sent) { return; }
             await host.CallAsync(HostOps.UpdateReport, report, TimeSpan.FromSeconds(10));

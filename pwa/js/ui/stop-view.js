@@ -11,6 +11,7 @@
 // left, and a press after the window has lapsed is another first press.
 import { h, icon } from './dom.js';
 import { UPDATING, holdOf } from './hold.js';
+import { LINGER_READ_MS } from './receipt.js';
 
 export const CONFIRM_NOTE = 'Press End session again to end it';
 export const LAPSED_NOTE = 'End session NOT confirmed';
@@ -23,7 +24,7 @@ const sentence = (s) => (s && !/[.!?]$/.test(s) ? `${s}.` : s);
 
 // What a press's progress or outcome says. armed: { left } (seconds) while a first press is
 // waiting for its second, or lapsed: true once the window has passed. tone: progress | ok |
-// warn | bad.
+// warn | bad, or closed for a line whose cause is gone (neutral).
 export function describeStop(entry, { machineName, armed = null, lapsed = false } = {}) {
   switch (entry.state) {
     case 'sending':
@@ -44,7 +45,8 @@ export function describeStop(entry, { machineName, armed = null, lapsed = false 
   switch (entry.outcome) {
     case 'confirm':
       if (lapsed || !armed) {
-        return { text: `${LAPSED_NOTE}: no second press within ${d.confirmSeconds ?? 10} s. The session is still running.`, tone: 'warn' };
+        // Past: the countdown ended, and nothing is waiting for a press. Neutral, and gone after a moment (EndSession).
+        return { text: `${LAPSED_NOTE}: no second press within ${d.confirmSeconds ?? 10} s. The session is still running.`, tone: 'closed' };
       }
       return { text: `${CONFIRM_NOTE}: ${sentence(entry.reason ?? 'this session is not idle')} ${armed.left} s left.`, tone: 'warn' };
     case 'ended':
@@ -68,6 +70,11 @@ export class EndSession {
   #tick = null;
   #busyTimer = null;
   #busyFor = null;
+  // The request whose line has gone, its cause with it (the busy pause over, a lapsed press read for
+  // LINGER_READ_MS): it is not drawn again (ui.md §7). #lapsedFor: the one whose lapse is timed.
+  #ended = null;
+  #lapsedFor = null;
+  #lapseTimer = null;
   #held = null;
   // On a return the app is catching up (hold.js): the button is aria-disabled, and a press says so.
   #quiet = false;
@@ -85,6 +92,7 @@ export class EndSession {
     this.#unwatch?.();
     clearInterval(this.#tick);
     clearTimeout(this.#busyTimer);
+    clearTimeout(this.#lapseTimer);
   }
 
   get entry() { const { service, hostId, sessionId } = this.stopping; return service.get(hostId, sessionId); }
@@ -136,6 +144,12 @@ export class EndSession {
     service.submit({ hostId, sessionId, confirm });
   }
 
+  // The line for a request has served its time: its words go, and it is not drawn again.
+  #end(request) {
+    this.#ended = request;
+    this.#show(this.entry);
+  }
+
   #resend() {
     if (this.#held) { return; }
     const { service, hostId, sessionId } = this.stopping;
@@ -153,10 +167,16 @@ export class EndSession {
       }, 1000);
     }
     const left = this.#left(entry);
-    const shown = entry
+    const gone = !!entry && entry.request === this.#ended;
+    const shown = entry && !gone
       ? describeStop(entry, { machineName: this.machineName, armed: left === null ? null : { left }, lapsed: left === null })
       : { text: '', tone: '' };
     const state = !entry ? 'none' : entry.state !== 'done' ? entry.state : entry.outcome === 'confirm' ? (left === null ? 'lapsed' : 'confirm') : entry.outcome;
+    if (state === 'lapsed' && this.#lapsedFor !== entry.request) {
+      this.#lapsedFor = entry.request;
+      clearTimeout(this.#lapseTimer);
+      this.#lapseTimer = setTimeout(() => this.#end(entry.request), LINGER_READ_MS);
+    }
     this.element.dataset.stop = state;
     e.status.textContent = shown.text;
     e.status.className = `answer-status stop-status${shown.tone ? ` ${shown.tone}` : ''}`;
@@ -164,7 +184,7 @@ export class EndSession {
     e.resend.hidden = entry?.state !== 'failed';
     if (entry?.state === 'done' && entry.outcome === 'busy' && !this.#busyTimer && this.#busyFor !== entry.request) {
       this.#busyFor = entry.request;
-      this.#busyTimer = setTimeout(() => { this.#busyTimer = null; this.#show(this.entry); }, STOP_BUSY_PAUSE_MS);
+      this.#busyTimer = setTimeout(() => { this.#busyTimer = null; this.#end(entry.request); }, STOP_BUSY_PAUSE_MS);
     }
     // Not disabled when it can't be pressed: a disabled button loses focus, which fell to the top
     // of the page between a working session's two presses (#369). #press does nothing meanwhile.

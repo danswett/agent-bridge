@@ -1,5 +1,6 @@
 using System.Threading.Channels;
 using AgentBridge.Hooks;
+using AgentBridge.Host.Core.Diagnostics;
 using AgentBridge.Host.Core.Processes;
 using AgentBridge.Protocol;
 
@@ -43,6 +44,11 @@ public sealed class HookIntakeOptions
     // else why not. The heartbeat alone proves nothing on a full disk (its few bytes live in the
     // file's own MFT record), while events, and the log lines that would say they were lost, fail.
     public Func<string, string?> SpaceProbe { get; init; } = HookIntake.ProbeSpace;
+
+    // The diagnostics journal (#737), told of failed passes, events retried or dropped, and the
+    // intake standing back or taking the spool again: as kinds and exception shapes, never the
+    // log's words, an event's file name or an exception's message.
+    public IDiagnosticsJournal? Journal { get; init; }
 }
 
 // Host.Intake (design §6.1): on a machine migrated from agent-ha-bridge, the host takes over
@@ -58,7 +64,7 @@ public sealed class HookIntakeOptions
 // while agent-ha-bridge's daemon runs (G5): the daemon keeps its own heartbeat and consumes the
 // spool itself, and two consumers would handle each event twice. Every read is of a copy in
 // memory, through a handle that lets a concurrent deleter delete.
-public sealed class HookIntake : IAsyncDisposable
+public sealed class HookIntake : IHookNotices, IAsyncDisposable
 {
     readonly HookIntakeOptions _options;
     readonly IProcessInspector _processes;
@@ -244,7 +250,11 @@ public sealed class HookIntake : IAsyncDisposable
             while (!token.IsCancellationRequested)
             {
                 try { Pass(); }
-                catch (Exception e) when (e is not OperationCanceledException) { _log($"hook intake pass failed: {e.GetType().Name}: {e.Message}"); }
+                catch (Exception e) when (e is not OperationCanceledException)
+                {
+                    _log($"hook intake pass failed: {e.GetType().Name}: {e.Message}");
+                    _options.Journal?.Record(JournalEvents.Failure(JournalKind.HookPassFailed, e));
+                }
                 try { await _wake.WaitAsync(_options.SweepInterval, token); }
                 catch (OperationCanceledException) { break; }
             }
@@ -282,7 +292,11 @@ public sealed class HookIntake : IAsyncDisposable
         }
         lock (_gate)
         {
-            if (_paused is not null) { _log($"the host takes the hook spool again (was: {_paused})"); }
+            if (_paused is not null)
+            {
+                _log($"the host takes the hook spool again (was: {_paused})");
+                _options.Journal?.Record(JournalContract.Draft(JournalKind.HookIntakeResumed, JournalOutcome.Ok));
+            }
             _paused = null;
         }
         // Approvals are settled whether or not the heartbeat could be written: the events about to
@@ -315,7 +329,11 @@ public sealed class HookIntake : IAsyncDisposable
     {
         lock (_gate)
         {
-            if (_paused is null) { _log($"standing back from the hook spool: {why}"); }
+            if (_paused is null)
+            {
+                _log($"standing back from the hook spool: {why}");
+                _options.Journal?.Record(JournalContract.Draft(JournalKind.HookIntakePaused, JournalOutcome.Refused));
+            }
             _paused = why;
             _pausedForDaemon = daemon;
         }
@@ -637,6 +655,7 @@ public sealed class HookIntake : IAsyncDisposable
                 if (attempts >= 2)
                 {
                     _log($"dropped spooled hook {name} after {attempts} attempts: {e.Message}");
+                    _options.Journal?.Record(JournalEvents.Failure(JournalKind.HookSpoolDropped, e));
                     _attempts.Remove(name);
                     Dropped++;
                     // It may have been the Codex event that retired an approval: as good as a hook
@@ -648,6 +667,7 @@ public sealed class HookIntake : IAsyncDisposable
                 {
                     _attempts[name] = attempts;
                     _log($"spooled hook {name} failed, will retry: {e.Message}");
+                    _options.Journal?.Record(JournalEvents.Failure(JournalKind.HookSpoolRetry, e));
                     // Until it has been, it may be the Codex PreToolUse that answered an approval at
                     // the terminal, whose marker would stay answerable meanwhile. So it is a gap at
                     // once, as a drop is: no answer until the sweep has settled the markers.

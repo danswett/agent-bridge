@@ -105,8 +105,8 @@ public struct BridgeLaunchDraft: Sendable, Equatable {
 
     public func operation(options: BridgeLaunchOptions, capabilities: Set<String>, requestID: UUID = UUID()) throws -> BridgeOperation {
         try BridgeOperationValidation.require("sessions.launch", in: capabilities)
-        if let busy = options.busy, !busy.isEmpty {
-            throw BridgeOperationError(busy)
+        if let busy = options.busy, !busy.isEmpty { // host text: never shown, only its presence counts
+            throw BridgeOperationError("This machine is busy. Try again in a moment.")
         }
         guard resume == nil || workspace == nil else { throw BridgeOperationError("A resumed session reopens in its own folder. Choose a workspace or a session to resume.") }
         let resumed = options.resumable.first { $0.id == resume }
@@ -126,11 +126,11 @@ public struct BridgeLaunchDraft: Sendable, Equatable {
                 throw BridgeOperationError("Choose a workspace approved on this machine.")
             }
         }
-        for (name, value, offered) in [("model", model, launcher.models), ("effort", effort, launcher.efforts), ("context", context, launcher.contexts)] {
+        for (_, value, offered) in [("model", model, launcher.models), ("effort", effort, launcher.efforts), ("context", context, launcher.contexts)] {
             if let value, !value.isEmpty {
                 let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-:[]")
                 guard !value.hasPrefix("-"), value.unicodeScalars.allSatisfy({ allowed.contains($0) }), offered.contains(value) else {
-                    throw BridgeOperationError("Choose a \(name) offered by this launcher.")
+                    throw BridgeOperationError("Choose a model, effort or context offered by this launcher.")
                 }
             }
         }
@@ -149,7 +149,7 @@ public struct BridgeLaunchDraft: Sendable, Equatable {
         for (name, value) in [("agent", agent), ("workspace", workspace), ("resume", resume), ("profile", profile), ("model", model), ("effort", effort), ("context", context), ("permissions", permissions)] {
             if let value {
                 guard value.utf8.count <= 256, !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
-                    throw BridgeOperationError("The \(name) is too long or contains control characters.")
+                    throw BridgeOperationError("A launch option is too long or contains control characters.")
                 }
                 data[name] = .string(value)
             }

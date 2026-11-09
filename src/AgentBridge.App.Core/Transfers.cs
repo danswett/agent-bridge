@@ -36,7 +36,22 @@ public static class Transfers
     // question and shown: an escaped approval's confirmation names the question and what was read
     // (#803); nothing else does.
     public static SignedCommand SignCommand(P256KeyPair key, byte[] machinePublic, string action, string session, string to, DateTimeOffset now, string request,
-        string? question = null, string? shown = null)
+        string? question = null, string? shown = null) =>
+        SignBody(key, machinePublic, action, session, to, now, request, CommandLifetime, question, shown);
+
+    // An Update now press (#1159, v1-update.md "The press"), as the PWA's signUpdateNow: for that
+    // machine alone, no session, its request only inside, and args binding now, the release shown
+    // and what the confirmation showed (accept, absent for one press on a quiet machine). It lives
+    // ManageProtocol.MaxLifetime, as every press that manages a machine.
+    public static SignedCommand SignUpdateNow(P256KeyPair key, byte[] machinePublic, string release, UpdateBusy? accept, DateTimeOffset now, string request)
+    {
+        var machine = Wire.DeviceId(machinePublic);
+        var args = JsonSerializer.SerializeToElement(new UpdateNowArgs { Now = true, Release = release, Accept = accept }, ProtocolJson.Options);
+        return SignBody(key, machinePublic, UpdateProtocol.NowAction, null, machine, now, request, ManageProtocol.MaxLifetime, args: args);
+    }
+
+    static SignedCommand SignBody(P256KeyPair key, byte[] machinePublic, string action, string? session, string to, DateTimeOffset now, string request,
+        TimeSpan lifetime, string? question = null, string? shown = null, JsonElement? args = null)
     {
         var issued = now.ToUnixTimeSeconds();
         var body = JsonSerializer.SerializeToUtf8Bytes(new CommandBody
@@ -48,7 +63,8 @@ public static class Transfers
             Target = new CommandTarget { Machine = Wire.DeviceId(machinePublic), Session = session, Question = question, Shown = shown },
             To = to,
             IssuedAt = issued,
-            ExpiresAt = issued + (long)CommandLifetime.TotalSeconds,
+            ExpiresAt = issued + (long)lifetime.TotalSeconds,
+            Args = args,
         }, ProtocolJson.Options);
         return new SignedCommand
         {

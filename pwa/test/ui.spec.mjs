@@ -1,6 +1,7 @@
 // The app in demo mode (?demo=1): a simulated host speaking the real protocol to the real
 // client, so these tests cover event handling through to what is on screen.
 import { test, expect } from '@playwright/test';
+import { BRAND } from '../js/brand.js';
 import { open, row, view } from './nav.mjs';
 import { readFileSync } from 'node:fs';
 
@@ -52,7 +53,7 @@ test('demo mode shows every session from the worked example, with every field', 
   await expect(copilot.locator('.facts')).toContainText('detached@5e59309');
   await expect(copilot.locator('.facts')).toContainText('claude-opus-5.5');
   await expect(copilot.locator('.status-text')).toHaveText('Waiting on you');
-  await expect(copilot.locator('.since')).toHaveText(/^for /);
+  await expect(copilot.locator('.fact-since dd')).toHaveText(/^for /);
   await expect(copilot.locator('.facts')).toContainText('412 turns');
   await expect(copilot.locator('.facts')).toContainText('1 compaction');
   await expect(copilot.locator('.facts')).toContainText('pid 39844');
@@ -75,7 +76,7 @@ test('demo mode shows every session from the worked example, with every field', 
   await expect(q.locator('.field[data-field="urgent"] .opt.chosen .label')).toHaveText('No');
   await expect(q.locator('.field[data-field="notes"] .answer-box')).toHaveText('Free text');
   await expect(q.locator('.field[data-field="count"] .answer-box')).toHaveText('A number');
-  await expect(q.locator('.read-only-why')).toHaveText("This machine doesn't take answers from the phone yet. Answer at the machine on Demo machine.");
+  await expect(q.locator('.read-only-why')).toHaveText(`This machine doesn't take answers from ${BRAND.name} yet. Answer at the machine on Demo machine.`);
   // Read-only: nothing in the question can be operated.
   await expect(q.locator('button, input, select, textarea')).toHaveCount(0);
 
@@ -91,13 +92,13 @@ test('demo mode shows every session from the worked example, with every field', 
   await expect(codex).toHaveAttribute('data-status', 'idle');
   await expect(codex.locator('.status-text')).toHaveText('Idle');
   await expect(codex.locator('.tool-line')).toBeHidden();
-  await expect(codex.locator('.since')).toHaveText('');
+  await expect(codex.locator('.fact-since')).toHaveCount(0);
 
   const delegating = card(page, DELEGATING);
   await expect(delegating).toHaveAttribute('data-status', 'idle');
   await expect(delegating).toHaveAttribute('data-view', 'delegating');
   await expect(delegating.locator('.status-text')).toHaveText('Delegating to 2 agents · details not reported');
-  await expect(delegating.locator('.since')).toHaveText(/^for /);
+  await expect(delegating.locator('.fact-since dd')).toHaveText(/^for /);
   await expect(delegating.locator('.fact-background dd')).toHaveText('2 background agents · 1 background command');
   await expect(delegating.locator('.fact-turns dd')).toHaveText('5 turns');
 
@@ -116,7 +117,7 @@ test('a machine where agent-ha-bridge runs is shown read-only with its reason, a
   await expect(status.locator('.machine-flag .sr-only')).toHaveText(`: ${reason}`);
   await expect(status).toHaveAttribute('title', `4 sessions · 0.1.0 (dev) · view only: ${reason}`);
   const q = card(page, COPILOT).locator('.question');
-  await expect(q.locator('.read-only-why')).toHaveText(`This machine is read-only from the phone: ${reason}.`);
+  await expect(q.locator('.read-only-why')).toHaveText(`This machine is read-only from ${BRAND.name}: ${reason}.`);
   await expect(q.locator('button, input, select, textarea')).toHaveCount(0);
   await expect(page.locator('form.reply')).toHaveCount(0);
   await expect(page.locator('.end-session')).toHaveCount(0);
@@ -128,7 +129,38 @@ test('a machine where agent-ha-bridge runs is shown read-only with its reason, a
   const prompt = (await page.evaluate((id) => window.agentBridgeDemo.host.get(id), COPILOT)).question;
   await upsert(page, COPILOT, { question: { ...prompt, id: 'q-at-machine', answerAtMachine: true }, updatedAt: later() });
   await expect(q.locator('.read-only-why')).toHaveText('This prompt can only be answered at the machine on Demo machine.');
-  await expect(q.locator('.read-only-machine')).toHaveText(`This machine is read-only from the phone: ${reason}.`);
+  await expect(q.locator('.read-only-machine')).toHaveText(`This machine is read-only from ${BRAND.name}: ${reason}.`);
+});
+
+test('only the host shape reason adds a quiet explanation after the at-machine line, including same-id updates', async ({ page }) => {
+  await openDemo(page);
+  const prompt = {
+    id: 'legacy-887', kind: 'form', message: 'Keep the old witness format?', askedAt: later(), answerAtMachine: true,
+    fields: [{ name: 'answer', type: 'choice', options: [{ value: 'Yes' }, { value: 'No' }], allowOther: true, required: true }],
+  };
+  await upsert(page, COPILOT, { question: prompt, updatedAt: later() });
+  const q = (await open(page, COPILOT)).locator('.question');
+  const rowStatus = await row(page, COPILOT).locator('.row-status').innerText();
+  for (const reason of [null, 'future', 'shape', null]) {
+    await upsert(page, COPILOT, { question: { ...prompt, answerAtMachineReason: reason }, updatedAt: later() });
+    await expect(q.locator('button, input, select, textarea, .fields')).toHaveCount(0);
+    await expect(q.locator('.read-only-why')).toHaveText(reason === 'shape'
+      ? 'Answer at the machine · Demo machine' : 'This prompt can only be answered at the machine on Demo machine.');
+    await expect(q.locator('.at-machine-explanation')).toHaveCount(reason === 'shape' ? 1 : 0);
+    if (reason === 'shape') {
+      const line = q.locator('.at-machine-explanation');
+      await expect(line).toHaveText('This kind of question can only be answered at the machine.');
+      await expect(q).toMatchAriaSnapshot(`
+        - heading "Main agent asks" [level=4]
+        - paragraph: Keep the old witness format?
+        - note: Answer at the machine · Demo machine
+        - paragraph: This kind of question can only be answered at the machine.
+      `);
+      expect(await line.evaluate((e) => e.closest('[aria-live], [role="alert"], [role="status"]'))).toBeNull();
+      expect(await colourOf(line)).toBe(await role(page, 'needs-text'));
+    }
+    await expect(row(page, COPILOT).locator('.row-status')).toHaveText(rowStatus);
+  }
 });
 
 // The status glyph and words (docs/design/ui.md §2), which replaced the coloured edges and glows.
@@ -187,7 +219,7 @@ test('an idle session still waiting on background work is delegating: its own gl
   await expect(c).toHaveAttribute('data-view', 'idle');
   await expect(c.locator('.status-text')).toHaveText('Idle');
   await expect(glyphOf(page, DELEGATING)).toHaveAttribute('data-glyph', 'idle');
-  await expect(c.locator('.since')).toHaveText('');
+  await expect(c.locator('.fact-since')).toHaveCount(0);
 
   // A session working on its own turn is working, whatever it has in the background.
   await upsert(page, DELEGATING, { status: 'working', statusSince: later(), updatedAt: later(), activity: { background: { agents: 1, shells: 0 } } });
@@ -542,7 +574,7 @@ test.describe('installed', () => {
   test('the service worker controls only the app path', async ({ page }) => {
     await openDemo(page);
     const scope = await page.evaluate(async () => (await navigator.serviceWorker.ready).scope);
-    expect(new URL(scope).pathname).toBe('/agent-bridge/app/');
+    expect(new URL(scope).pathname).toBe('/');
   });
 
   test('an app whose new releases keep failing to install says so after a grace, and goes on with the one it has', async ({ page }) => {

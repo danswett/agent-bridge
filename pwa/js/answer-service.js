@@ -71,7 +71,9 @@ export class AnswerService {
     giveUpFor = null,
     send = (client, data, entry, progress, stage) => client.answer(data, { onProgress: stage, onSent: sent(entry) }),
     payload = (e) => ({ id: e.sessionId, question: e.questionId, request: e.request, ...e.answer }),
-    final = (e) => !['busy', 'refused'].includes(e.outcome),
+    // A stale answer from a form the host cancelled part answered (formReset) never went in: giving
+    // it again, with a new request, is safe.
+    final = (e) => !['busy', 'refused'].includes(e.outcome) && !(e.outcome === 'stale' && e.detail?.code === 'formReset'),
     // Whether busy on a resend means the first copy is still being delivered. A launch's host
     // returns the first copy's outcome to a resend, whatever it is, so busy there is the answer.
     resendOnBusy = true,

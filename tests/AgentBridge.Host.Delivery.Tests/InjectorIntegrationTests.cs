@@ -79,7 +79,8 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         return new Echo(process.ProcessId, nint.Parse(parts[2], CultureInfo.InvariantCulture), log);
     }
 
-    static T WaitFor<T>(string log, Func<string[], T?> found, int seconds = 15)
+    // 60 s, not 15: a loaded windows-11-arm runner took 11 s for a lone Escape key (#1379).
+    static T WaitFor<T>(string log, Func<string[], T?> found, int seconds = 60)
     {
         var deadline = Stopwatch.StartNew();
         while (true)
@@ -199,6 +200,54 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         Assert.Null(screen.Problem);
         Assert.Equal(draft, screen.Rows!.Take(draft.Length));
         Assert.StartsWith("something is already typed in Copilot's input box", AgentBridge.Host.Delivery.Copilot.CopilotInputBoxReader.Read(screen.Rows!).Problem);
+    }
+
+    static DateTimeOffset CreatedAt(int pid)
+    {
+        using var process = Process.GetProcessById(pid);
+        Assert.True(GetProcessTimes(process.Handle, out var created, out _, out _, out _));
+        return DateTimeOffset.FromFileTime(created).ToUniversalTime();
+    }
+
+    [WindowsFact]
+    public async Task A_sessions_console_is_widened_by_the_worker_never_narrowed_and_its_screen_is_still_read()
+    {
+        var echo = StartEcho(show: PermissionPrompt);
+        var injector = new WorkerInjector(Worker);
+
+        var wide = await injector.WidenAsync(echo.Pid, CreatedAt(echo.Pid), 250);
+        Assert.Null(wide.Problem);
+        Assert.Equal(250, wide.Columns);
+
+        Assert.Equal(250, (await injector.WidenAsync(echo.Pid, CreatedAt(echo.Pid), 120)).Columns);
+        var screen = await injector.ReadScreenAsync(echo.Pid);
+        Assert.Null(screen.Problem);
+        Assert.Equal(PermissionPrompt, screen.Rows!.Take(PermissionPrompt.Length));
+        Assert.Empty(Keys(WaitFor(echo.Log, lines => lines)));
+    }
+
+    [WindowsFact]
+    public async Task A_widen_for_a_process_created_at_another_time_leaves_the_console_with_that_id_alone()
+    {
+        var echo = StartEcho();
+        var injector = new WorkerInjector(Worker);
+
+        // As if the launched process had gone and another had been given its id.
+        var other = await injector.WidenAsync(echo.Pid, CreatedAt(echo.Pid).AddSeconds(-5), 250);
+        Assert.Null(other.Columns);
+        Assert.False(other.NotYet);
+        Assert.Contains("no longer the one started", other.Problem);
+
+        // Its width as it was (a widen to 1 changes nothing and reads it back).
+        Assert.True((await injector.WidenAsync(echo.Pid, CreatedAt(echo.Pid), 1)).Columns < 250);
+    }
+
+    [WindowsFact]
+    public async Task A_widen_of_a_process_with_no_console_says_why_and_changes_nothing()
+    {
+        var width = await new WorkerInjector(Worker).WidenAsync(int.MaxValue - 1, DateTimeOffset.UtcNow, 250);
+        Assert.Null(width.Columns);
+        Assert.NotNull(width.Problem);
     }
 
     [WindowsFact]
@@ -581,6 +630,9 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
 
     [DllImport("kernel32.dll")]
     static extern bool CloseHandle(nint handle);
+
+    [DllImport("kernel32.dll")]
+    static extern bool GetProcessTimes(nint process, out long creation, out long exit, out long kernel, out long user);
 
     [DllImport("kernel32.dll")]
     static extern bool TerminateProcess(nint process, uint exitCode);

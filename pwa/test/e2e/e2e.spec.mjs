@@ -36,7 +36,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 test.skip(!existsSync(dll), 'the dev stack is not built: dotnet build spikes/s4-relay/src/S4.DevStack -c Release');
 test.describe.configure({ mode: 'serial' });
 
-let stack, site, host, appUrl, relayUrl;
+let stack, site, host, appUrl, relayUrl, siteDir;
+let feedbackBuildConfigured = false;
 
 const vapidKey = () => generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64');
 const stackOut = [];
@@ -48,8 +49,9 @@ test.beforeAll(async ({}, info) => {
   const sitePort = relayPort + 1;
   const relay = `http://127.0.0.1:${relayPort}`;
   relayUrl = relay;
-  const dir = buildSite({ out: path.join(pwa, '.site', `e2e-${info.project.name}`), relay });
-  site = await startStaticServer({ dir, port: sitePort });
+  siteDir = path.join(pwa, '.site', `e2e-${info.project.name}`);
+  buildSite({ out: siteDir, relay });
+  site = await startStaticServer({ dir: siteDir, port: sitePort });
   appUrl = `http://127.0.0.1:${sitePort}${APP_PATH}`;
   stack = spawn('dotnet', [dll, 'serve', '--port', String(relayPort)], {
     // The page's origin, which the relay must accept for sign-in (CORS) and the socket.
@@ -68,6 +70,12 @@ test.afterAll(async () => {
   stack?.kill();
   await new Promise((r) => (site ? site.close(r) : r()));
   expect(stackOut.join('')).not.toContain('LEAK');
+});
+
+test.afterEach(() => {
+  if (!feedbackBuildConfigured) { return; }
+  buildSite({ out: siteDir, relay: relayUrl });
+  feedbackBuildConfigured = false;
 });
 
 async function signIn(page) {
@@ -111,7 +119,7 @@ test('a signed-in phone sees a machine\'s live sessions over an end-to-end chann
   await page.click('#machine-tabs [data-device-name="fixture-host"]');
   await expect(page.locator('.session')).toHaveCount(fixture.sessions.length, { timeout: 30000 });
   await expect(page.locator('#sessions-h')).toHaveText('Sessions on fixture-host');
-  await expect(page.locator('[data-device-name="fixture-host"] button')).toHaveAttribute('aria-current', 'true');
+  await expect(page.locator('[data-device-name="fixture-host"] button.machine-button')).toHaveAttribute('aria-current', 'true');
   await expect(card(page, CLAUDE)).toHaveAttribute('data-status', 'working');
   // Idle, but waiting on work it started: background crosses the relay intact.
   await expect(card(page, DELEGATING)).toHaveAttribute('data-view', 'delegating');
@@ -147,6 +155,126 @@ test('a signed-in phone sees a machine\'s live sessions over an end-to-end chann
   expect(violations).toEqual([]);
 });
 
+test('feedback panel stays hidden until its build has a feedback key', async ({ page }) => {
+  await signIn(page);
+  await page.click('#nav [data-nav="settings"]');
+  await expect(page.locator('#feedback')).toBeHidden();
+  await expect(page.locator('#feedback-dialog')).toBeHidden();
+});
+
+test('feedback preview shows readable diagnostics and exact data before sending', async ({ page }) => {
+  buildSite({
+    out: siteDir,
+    relay: relayUrl,
+    feedbackKeyId: 'test-key',
+    feedbackPublicKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+  });
+  feedbackBuildConfigured = true;
+  await signIn(page);
+  await page.click('#nav [data-nav="settings"]');
+  await expect(page.locator('#feedback')).toBeVisible();
+  await page.click('#feedback-open');
+  await expect(page.locator('#feedback-dialog')).toBeVisible();
+  await expect(page.locator('#feedback-dialog > .note').first()).toHaveText(
+    "Your note and selected diagnostics are encrypted on this device before they're sent to the Slipgates feedback service, where they're processed automatically.",
+  );
+  await page.locator('#feedback-included > summary').click();
+  await expect(page.locator('#feedback-platform')).not.toBeEmpty();
+  await expect(page.locator('#feedback-app-version')).toHaveText('dev');
+  await expect(page.locator('#feedback-browser')).not.toBeEmpty();
+  await expect(page.locator('#feedback-protocol-version')).toHaveText('1');
+  await expect(page.locator('#feedback-events-summary')).toHaveText(/^\d+ connection events?$/);
+  await expect(page.locator('#feedback-error-codes-summary')).toHaveText(/^\d+ error codes?$/);
+  await page.locator('#feedback-hosts > summary').click();
+  await page.locator('#feedback-events > summary').click();
+  await page.locator('#feedback-error-codes > summary').click();
+  await expect(page.locator('#feedback-hosts-list')).toBeVisible();
+  await expect(page.locator('#feedback-events-list')).toBeVisible();
+  await expect(page.locator('#feedback-error-codes-list')).toBeVisible();
+  await page.locator('#feedback-exact-data > summary').click();
+  await expect(page.locator('#feedback-preview')).toBeVisible();
+  const note = 'The app stopped after refresh.';
+  await page.locator('#feedback-note').fill(note);
+  const preview = await page.locator('#feedback-preview').textContent();
+  const bundle = JSON.parse(preview);
+  expect(bundle.schema).toBe('slipgates-feedback.v1');
+  expect(bundle.versions.app).toBe('dev');
+  expect(bundle.versions.protocol).toBe(1);
+  expect(bundle.note).toBe(note);
+  expect(bundle.events.length).toBeLessThanOrEqual(100);
+  expect(bundle.logs.every((entry) => ['relay-message-error', 'relay-undeliverable', 'transport-error'].includes(entry.code))).toBe(true);
+  expect(preview).not.toContain(CLAUDE);
+  expect(preview).not.toContain(fixture.sessions[0].title);
+  await expect(page.locator('#feedback-send')).toBeDisabled();
+  await expect(page.locator('#feedback-error')).toContainText("doesn't accept feedback uploads yet");
+  await page.locator('#feedback-note').fill('password=hunter2');
+  await expect(page.locator('#feedback-warning')).toHaveText(
+    'This looks like a password or token. Remove it to send.',
+  );
+});
+
+test('feedback cannot be sent twice while an upload is in progress and can be retried after failure', async ({ page, context }) => {
+  const { publicKey } = generateKeyPairSync('x25519');
+  buildSite({
+    out: siteDir,
+    relay: relayUrl,
+    feedbackKeyId: 'test-key',
+    feedbackPublicKey: publicKey.export({ format: 'jwk' }).x,
+  });
+  feedbackBuildConfigured = true;
+  const requests = [];
+  let client;
+  await context.routeWebSocket(/\/v1\/ws(\?|$)/, (ws) => {
+    client = ws;
+    const server = ws.connectToServer();
+    server.onMessage((data) => {
+      if (typeof data === 'string') {
+        const message = JSON.parse(data);
+        if (message.t === 'ready') {
+          ws.send(JSON.stringify({ ...message, feedback: { max: 65536 } }));
+          return;
+        }
+      }
+      ws.send(data);
+    });
+    ws.onMessage((data) => {
+      if (typeof data === 'string') {
+        const message = JSON.parse(data);
+        if (message.t === 'feedback-put') {
+          requests.push(message);
+          return;
+        }
+      }
+      server.send(data);
+    });
+  });
+  await signIn(page);
+  await page.click('#nav [data-nav="settings"]');
+  await page.click('#feedback-open');
+  const canEncrypt = await page.evaluate(async () => {
+    try { await crypto.subtle.generateKey({ name: 'X25519' }, false, ['deriveBits']); return true; } catch { return false; }
+  });
+  test.skip(!canEncrypt, 'This Playwright browser does not support WebCrypto X25519; verify real Safari separately.');
+  const send = page.locator('#feedback-send');
+  await expect(send).toBeEnabled();
+  await send.click();
+  await expect(send).toBeDisabled();
+  await expect(send).toHaveText('Sending…');
+  await expect.poll(() => requests.length).toBe(1);
+  await page.evaluate(async () => {
+    await document.querySelector('#feedback-send').onclick(new MouseEvent('click'));
+  });
+  expect(requests).toHaveLength(1);
+  client.send(JSON.stringify({ t: 'feedback-result', id: requests[0].id, error: 'unavailable' }));
+  await expect(send).toHaveText('Retry');
+  await expect(send).toBeEnabled();
+  await send.click();
+  await expect(send).toBeDisabled();
+  await expect.poll(() => requests.length).toBe(2);
+  client.send(JSON.stringify({ t: 'feedback-result', id: requests[1].id, error: 'unavailable' }));
+  await expect(send).toBeEnabled();
+});
+
 test('a machine from before the sessions protocol is reported, ?host= opens a machine directly, and a refused sign-in leaves nothing behind', async ({ page, context }) => {
   const sockets = [];
   await context.routeWebSocket(/\/v1\/ws(\?|$)/, (ws) => { ws.connectToServer(); sockets.push(ws); });
@@ -180,7 +308,7 @@ test('a machine from before the sessions protocol is reported, ?host= opens a ma
   // The new sign-in starts where one with nothing remembered does, at every machine, not at
   // the machine the last one chose.
   await expect(opened.locator('[data-device-id="all"] button')).toHaveAttribute('aria-current', 'true');
-  await expect(opened.locator('[data-device-name="fixture-host"] button')).not.toHaveAttribute('aria-current', 'true');
+  await expect(opened.locator('[data-device-name="fixture-host"] button.machine-button')).not.toHaveAttribute('aria-current', 'true');
   await expect(opened.locator('#sessions-h')).toHaveText('Sessions on all machines');
 });
 

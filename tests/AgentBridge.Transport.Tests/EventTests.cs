@@ -25,11 +25,13 @@ public class EventTests
         return (relay, host, atHost, atClient);
     }
 
-    static async Task<List<ChannelEvent>> ReadAsync(SecureChannel ch, int count)
+    // Within 20 s, or by deadline when one is given.
+    static async Task<List<ChannelEvent>> ReadAsync(SecureChannel ch, int count, CancellationToken deadline = default)
     {
         var got = new List<ChannelEvent>();
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-        while (got.Count < count) { got.Add(await ch.Events.ReadAsync(cts.Token)); }
+        using var cts = deadline.CanBeCanceled ? null : new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var token = cts?.Token ?? deadline;
+        while (got.Count < count) { got.Add(await ch.Events.ReadAsync(token)); }
         return got;
     }
 
@@ -74,9 +76,14 @@ public class EventTests
             var r = await atClient.RequestAsync("echo", new { n }, TimeSpan.FromSeconds(30));
             return (n, echoed: r.GetProperty("result").GetProperty("n").GetInt32());
         })).ToArray();
-        var reading = ReadAsync(atClient, Events);
+        // The deadline starts once everything is sent. The relay paces the host's 500 frames to
+        // about 100 a second, so sending alone takes seconds; on a loaded runner it took the
+        // whole 20 s a deadline counted from here would allow, and every event had been sent.
+        using var delivered = new CancellationTokenSource();
+        var reading = ReadAsync(atClient, Events, delivered.Token);
         await Task.WhenAll(senders);
         var answers = await Task.WhenAll(requests);
+        delivered.CancelAfter(TimeSpan.FromSeconds(20));
         var events = await reading;
 
         Assert.All(answers, a => Assert.Equal(a.n, a.echoed));

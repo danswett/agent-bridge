@@ -1,8 +1,10 @@
 using AgentBridge.App.Core;
+using AgentBridge.Protocol;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 
 namespace AgentBridge.App;
@@ -21,7 +23,7 @@ static partial class SelfTest
         public string Source => "self-test";
         public Task<string?> CheckAsync() => Task.FromResult<string?>("0.1.999");
         public Task DownloadAsync(Action<int> progress) => Task.CompletedTask;
-        public void ApplyAndRestart(string version) => throw new InvalidOperationException("the self-test never updates");
+        public void ApplyAndRestart(string version, Action? handedOver = null) => throw new InvalidOperationException("the self-test never updates");
     }
 
     static async Task CaptureUpdate(MainWindow window, MainViewModel main, Action<bool, string> check, string outFile, bool contrast = false)
@@ -77,6 +79,11 @@ static partial class SelfTest
             var accent = (Style)Application.Current.Resources["AccentButtonStyle"];
             await Bar("ready", "Version 0.1.999 is ready. Restart to update.");
             check(Action() is { } atRest && atRest.Style == accent && AutomationProperties.GetName(atRest) == "Restart to update", $"draws the update bar's Restart to update as the accent action at rest{where}");
+            if (contrast && Action() is { } plain)
+            {
+                var atRestPlate = await AccentPlate(plain);
+                check(atRestPlate is null, $"draws Restart to update in Highlight and HighlightText only{where} ({atRestPlate})");
+            }
             var restarting = update.RestartAsync(_ => Task.FromResult(true));
             await Bar("restarting", "Restarting to update\u2026");
             // Creative on #719 (6675195544): the button that started it shows its progress ring,
@@ -90,6 +97,15 @@ static partial class SelfTest
             await Bar("failed", "The update didn't install because another bridge profile is running from this installation.");
             check(bar is { Severity: InfoBarSeverity.Warning } && !bar.Message.Any(char.IsDigit) && Action() is { } retry && AutomationProperties.GetName(retry) == "Try again" && retry.Style == accent,
                 $"draws a failed install as a warning with Try again and no machine detail{where}");
+            if (contrast && Action() is { } again)
+            {
+                var againPlate = await AccentPlate(again);
+                check(againPlate is null, $"draws Try again in Highlight and HighlightText only{where} ({againPlate})");
+            }
+
+            // #1167: the Updating screen, the open window's while the release is handed to
+            // Velopack, and the new version's Updated bar, and an install that didn't take.
+            await CaptureUpdating(window, main, check, File, Under, Looks, where, contrast);
 
             // Settings' update row, over the stand-in release, under the banner offering it: the
             // banner says the offer, so Settings' line doesn't repeat it, and its Restart to update
@@ -164,5 +180,127 @@ static partial class SelfTest
             if (!contrast) { window.RootElement.RequestedTheme = ElementTheme.Default; }
             window.ShowPage("sessions");
         }
+    }
+
+    // #1167's captures: the Updating screen (one centred state, no buttons, its title a heading said
+    // once, on the page's layer, which high contrast draws in the window colour), the Updated bar
+    // with What's new, and a start still on the old version, as a warning with Try again.
+    static async Task CaptureUpdating(MainWindow window, MainViewModel main, Action<bool, string> check, Func<string, string, string> file,
+        Func<DependencyObject, Windows.UI.Color> under, Func<Func<string, Task>, Task> looks, string where, bool contrast)
+    {
+        var before = main.AppUpdate;
+        try
+        {
+            // Focus somewhere under the screen first, as a press of Restart to update leaves it:
+            // the screen takes it, and gives it back should the install not go ahead.
+            window.FocusSearch();
+            await Task.Delay(200);
+            var updating = new AppUpdateViewModel(() => null, _ => Task.FromResult<string?>(null), () => "0.1.999");
+            main.AppUpdate = updating;
+            var pane = ById<Grid>(window.RootElement, "Updating");
+            var heading = pane is null ? null : ById<ContentControl>(pane, "UpdatingTitle");
+            var ring = pane is null ? null : ById<ProgressRing>(pane, "UpdatingProgress");
+            var body = pane is null ? null : ById<TextBlock>(pane, "UpdatingBody");
+            var drawn = await Until(() => pane is { Visibility: Visibility.Visible, ActualHeight: > 0 } && heading is { Content: TextBlock t } && Text(t) == "Updating to version 0.1.999", TimeSpan.FromSeconds(5));
+            check(drawn, $"captures the Updating screen{where}");
+            check(heading is not null && AutomationProperties.GetHeadingLevel(heading) == AutomationHeadingLevel.Level1 && AutomationProperties.GetName(heading) == "Updating to version 0.1.999"
+                && AutomationProperties.GetLiveSetting(heading) == AutomationLiveSetting.Polite
+                && ring is { IsActive: true, IsIndeterminate: true } && AutomationProperties.GetName(ring) == "Updating to version 0.1.999"
+                && body is not null && Text(body) == AppUpdateViewModel.UpdatingBody
+                && pane is not null && Find<Button>(pane).Count == 0,
+                $"draws the Updating screen as one state, its title a polite heading, its ring named, with no buttons{where}");
+
+            // Nothing under the screen in reach: the heading has focus, so its line is read; Tab and
+            // Shift+Tab reach nothing in the rail or the pages; and they are not in the automation
+            // tree a screen reader browses.
+            var xamlRoot = window.RootElement.XamlRoot;
+            bool Within(DependencyObject? at, DependencyObject root)
+            {
+                for (var up = at; up is not null; up = VisualTreeHelper.GetParent(up)) { if (ReferenceEquals(up, root)) { return true; } }
+                return false;
+            }
+            var focusedHeading = await Until(() => ReferenceEquals(FocusManager.GetFocusedElement(xamlRoot), heading), TimeSpan.FromSeconds(3));
+            var reached = new List<string>();
+            foreach (var way in new[] { FocusNavigationDirection.Next, FocusNavigationDirection.Previous })
+            {
+                for (var step = 0; step < 6; step++)
+                {
+                    if (!FocusManager.TryMoveFocus(way, new FindNextElementOptions { SearchRoot = xamlRoot.Content })) { break; }
+                    if (FocusManager.GetFocusedElement(xamlRoot) is DependencyObject now && Within(now, window.Rail)) { reached.Add((now as FrameworkElement)?.Name is { Length: > 0 } n ? n : now.GetType().Name); }
+                }
+                if (heading is not null) { heading.IsTabStop = true; heading.Focus(FocusState.Programmatic); }
+            }
+            // Out of the tree a screen reader browses, read as one reads it: from another process,
+            // through UI Automation (Uia below), the rail's items and the update bar absent, the
+            // heading there. In-process peers can't say it: they report offscreen only once a
+            // client has asked.
+            var seen = await Uia(window.Handle);
+            var reachable = seen is null ? ["(UI Automation unreadable)"] : new[] { "Rail", "NavSessions", "UpdateReady" }.Where(seen.Contains).ToList();
+            var headingOnScreen = seen?.Contains("UpdatingTitle") == true;
+            check(focusedHeading && reached.Count == 0 && window.Rail.Visibility == Visibility.Collapsed && !window.Search.IsEnabled && reachable.Count == 0 && headingOnScreen,
+                $"puts focus on the Updating heading and leaves nothing under the screen to Tab to or for a screen reader to find{where} (focus on {(FocusManager.GetFocusedElement(xamlRoot) as FrameworkElement)?.Name}, at once {focusedHeading}; Tab reached {string.Join(", ", reached)}; search enabled {window.Search.IsEnabled}; in UI Automation still {string.Join(", ", reachable)}; heading there {headingOnScreen})");
+            if (contrast)
+            {
+                var windowColour = Application.Current.Resources.TryGetValue("SystemColorWindowColor", out var w) && w is Windows.UI.Color c ? c : (Windows.UI.Color?)null;
+                check(pane?.Background is SolidColorBrush { Color: var fill } && fill == windowColour, $"draws the Updating screen on the window colour in high contrast ({(pane?.Background as SolidColorBrush)?.Color}, wanted {windowColour})");
+            }
+            if (drawn) { await looks(look => Picture(window.RootElement, file("updating", look), under(window.RootElement))); }
+
+            var updated = new AppUpdateViewModel(() => null, _ => Task.FromResult<string?>(null));
+            main.AppUpdate = updated;
+            updated.Show(new UpdateAnnouncement(true, "0.1.0", "0.1.999", "0.1.999", WindowOpen: true));
+            var bar = ById<InfoBar>(window.RootElement, "Updated");
+            var shown = await Until(() => pane is { Visibility: Visibility.Collapsed } && window.Rail.Visibility == Visibility.Visible && window.Search.IsEnabled && bar is { IsOpen: true, ActualHeight: > 0 } && bar.Message == "Updated to version 0.1.999.", TimeSpan.FromSeconds(5));
+            check(shown && Within(FocusManager.GetFocusedElement(xamlRoot) as DependencyObject, window.Search),
+                $"gives the rail, the pages, search and focus back once the Updating screen goes{where} (focus on {(FocusManager.GetFocusedElement(xamlRoot) as FrameworkElement)?.Name})");
+            // The control for the read above: the same read now finds the rail, and not the heading.
+            var back = await Uia(window.Handle);
+            check(back is not null && back.Contains("NavSessions") && !back.Contains("UpdatingTitle"),
+                $"finds the rail through UI Automation again once the Updating screen goes{where} ({(back is null ? "unreadable" : $"{back.Count} ids")})");
+            // Its action is in the bar's template, there only once the bar is open.
+            var link = bar is null ? null : ById<HyperlinkButton>(bar, "WhatsNew");
+            check(shown && bar is { Severity: InfoBarSeverity.Success, IsClosable: true } && AutomationProperties.GetLiveSetting(bar) == AutomationLiveSetting.Polite
+                && link is { NavigateUri: { } notes } && notes.ToString().EndsWith("/releases/tag/v0.1.999", StringComparison.Ordinal) && link.Content as string == "What's new",
+                $"draws the Updated bar as a closable success with What's new{where} ({bar?.Message}; {link?.NavigateUri})");
+            if (shown) { await looks(look => Picture(bar!, file("updated", look), under(bar!))); }
+
+            var failed = new AppUpdateViewModel(() => "0.1.999", _ => Task.FromResult<string?>(null));
+            main.AppUpdate = failed;
+            failed.Show(new UpdateAnnouncement(false, "0.1.0", "0.1.0", "0.1.999", WindowOpen: false));
+            var ready = ById<InfoBar>(window.RootElement, "UpdateReady");
+            var couldNot = $"Couldn't install version 0.1.999. {Product.Name} is still on 0.1.0.";
+            var warned = await Until(() => ready is { IsOpen: true, Severity: InfoBarSeverity.Warning, ActualHeight: > 0 } && ready.Message == couldNot
+                && ById<Button>(ready, "RestartToUpdate") is { } again && AutomationProperties.GetName(again) == "Try again", TimeSpan.FromSeconds(5));
+            check(warned, $"says an install that didn't take as a warning with Try again{where} ({ready?.Message})");
+            if (warned) { await looks(look => Picture(ready!, file("bar-could-not-install", look), under(ready!))); }
+        }
+        finally { main.AppUpdate = before; }
+    }
+
+    // Every AutomationId in the window's raw UI Automation tree, read from another process as a
+    // screen reader reads it (Windows PowerShell's UIAutomationClient, part of Windows), so the
+    // app's UI thread is free to answer. Null when it can't be read.
+    static async Task<HashSet<string>?> Uia(nint window)
+    {
+        const string script = "Add-Type -AssemblyName UIAutomationClient; $w = [System.Windows.Automation.TreeWalker]::RawViewWalker; "
+            + "function Walk($e, $d) { if ($d -gt 60) { return }; $c = $w.GetFirstChild($e); while ($c) { try { $c.Current.AutomationId } catch { }; Walk $c ($d + 1); $c = $w.GetNextSibling($c) } }; "
+            + "Walk ([System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]::new([long]$args[0]))) 0";
+        try
+        {
+            var info = new System.Diagnostics.ProcessStartInfo(Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe"))
+            {
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            foreach (var a in new[] { "-NoProfile", "-NonInteractive", "-Command", $"& {{ {script} }} {window}" }) { info.ArgumentList.Add(a); }
+            using var p = System.Diagnostics.Process.Start(info)!;
+            var output = p.StandardOutput.ReadToEndAsync();
+            using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+            try { await p.WaitForExitAsync(limit.Token); }
+            catch (OperationCanceledException) { p.Kill(true); return null; }
+            return p.ExitCode == 0 ? (await output).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToHashSet() : null;
+        }
+        catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException or IOException) { return null; }
     }
 }

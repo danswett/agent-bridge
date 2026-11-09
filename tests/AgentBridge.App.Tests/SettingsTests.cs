@@ -43,12 +43,13 @@ public sealed class SettingsTests : IAsyncLifetime
             Ready = "0.2.0";
             return Task.CompletedTask;
         }
-        public void ApplyAndRestart(string version)
+        public void ApplyAndRestart(string version, Action? handedOver = null)
         {
             OnApply?.Invoke();
             if (ApplyFails is { } e) { throw e; }
             if (Ready != version) { throw new InvalidOperationException($"{version} is no longer the update downloaded"); }
             Applied = true;
+            handedOver?.Invoke();
         }
     }
 
@@ -68,6 +69,9 @@ public sealed class SettingsTests : IAsyncLifetime
         host.StopsWhenAsked();
         host.Capabilities.Add(HostOps.AgentSetupCapability);
         host.Capabilities.Add(HostOps.AgentInstallCapability);
+        host.Capabilities.Add(HostOps.AgentVerificationCapability);
+        host.Capabilities.Add(LaunchProtocol.Capability);
+        host.Capabilities.Add(HostOps.AgentSignInCapability);
         host.Start();
         connection = host.Connect(ui);
         // Start and stop timeouts on a clock that never moves, as in AutoUpdaterTests: they wait
@@ -95,6 +99,188 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     Task Connected() => Wait.UntilAsync(() => settings.HostRunning && connection.Status is not null, "the connection");
+
+    static LaunchOptions VerificationOptions() => new()
+    {
+        Agents = [new LaunchAgent { Id = "agency", Label = "Agency", Kind = AgentKind.Copilot, Profiles = ["work"] }],
+        Workspaces = [new LaunchWorkspace { Label = "approved", Path = @"C:\src\approved", Isolate = true }],
+        Defaults = new LaunchDefaults { Agent = "agency", Workspace = "approved", Permissions = LaunchProtocol.AllowAll },
+    };
+
+    static AgentVerificationReport VerificationReport(string request, VerificationState state)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var check = new ReadinessCheck(ReadinessState.Unknown, "Still observing this exact test session.");
+        return new(request, "agency", "approved", "work", state, "Current host run only.", now, now,
+            check, check, check, check, Session: "test-session");
+    }
+
+    async Task<VerificationSelection> PickVerificationAsync()
+    {
+        await Connected();
+        await settings.LoadVerificationChoicesAsync();
+        settings.VerificationAgent = Assert.Single(settings.VerificationAgents);
+        settings.VerificationWorkspace = Assert.Single(settings.VerificationWorkspaces);
+        settings.VerificationProfile = settings.VerificationProfiles.Single(p => p.Value == "work");
+        return settings.CaptureVerificationSelection();
+    }
+
+    [Fact]
+    public async Task A_new_test_requires_explicit_picks_and_a_confirmation_of_the_exact_folder_and_profile()
+    {
+        host.On(LaunchProtocol.Options, _ => VerificationOptions());
+        host.On(HostOps.AgentsVerify, data =>
+        {
+            var request = data.Deserialize<AgentVerificationRequest>(ProtocolJson.Options)!;
+            var report = VerificationReport(request.Request, VerificationState.Running);
+            host.Status = host.Status with { AgentVerifications = [report] };
+            return report;
+        });
+        await Connected();
+        await settings.LoadVerificationChoicesAsync();
+        Assert.False(settings.CanRunVerification);
+        Assert.DoesNotContain(host.Received, r => r.Op == HostOps.AgentsVerify);
+        settings.VerificationAgent = Assert.Single(settings.VerificationAgents);
+        Assert.False(settings.CanRunVerification);
+        settings.VerificationWorkspace = Assert.Single(settings.VerificationWorkspaces);
+        settings.VerificationProfile = settings.VerificationProfiles.Single(p => p.Value == "work");
+        var consent = settings.CaptureVerificationSelection();
+        Assert.Contains(@"C:\src\approved", consent.Consent, StringComparison.Ordinal);
+        Assert.Contains("paid usage", consent.Consent, StringComparison.Ordinal);
+        Assert.Contains("Standard permission prompts", consent.Consent, StringComparison.Ordinal);
+        Assert.Contains("work", consent.Consent, StringComparison.Ordinal);
+        Assert.DoesNotContain(host.Received, r => r.Op == HostOps.AgentsVerify);
+
+        await settings.RunVerificationAsync(consent);
+        Assert.Null(settings.Error);
+        var sent = Assert.Single(host.Received, r => r.Op == HostOps.AgentsVerify).Data
+            .Deserialize<AgentVerificationRequest>(ProtocolJson.Options)!;
+        Assert.True(sent.Confirmed);
+        Assert.True(Guid.TryParseExact(sent.Request, "D", out _));
+        Assert.Equal(("agency", "approved", "work"), (sent.Agent, sent.Workspace, sent.Profile));
+        await Wait.UntilAsync(() => settings.Verifications.Count == 1, "current verification report");
+        Assert.True(Assert.Single(settings.Verifications).CanStopObserving);
+        Assert.False(settings.CanRunVerification);
+        Assert.DoesNotContain(host.Received, r => r.Op == LaunchProtocol.Launch);
+    }
+
+    [Theory]
+    [InlineData("path")]
+    [InlineData("isolate")]
+    [InlineData("profile")]
+    [InlineData("host")]
+    public async Task Choices_changed_after_consent_never_open_a_test_in_a_different_context(string changed)
+    {
+        var options = VerificationOptions();
+        host.On(LaunchProtocol.Options, _ => options);
+        var consent = await PickVerificationAsync();
+        options = changed switch
+        {
+            "path" => options with { Workspaces = [options.Workspaces[0] with { Path = @"C:\different" }] },
+            "isolate" => options with { Workspaces = [options.Workspaces[0] with { Isolate = false }] },
+            "profile" => options with { Agents = [options.Agents[0] with { Profiles = ["other"] }] },
+            _ => options,
+        };
+        if (changed == "host") { consent = consent with { Host = "a-replaced-host" }; }
+        await settings.RunVerificationAsync(consent);
+        Assert.NotNull(settings.Error);
+        Assert.DoesNotContain(host.Received, r => r.Op == HostOps.AgentsVerify);
+    }
+
+    [Theory]
+    [InlineData("read-only")]
+    [InlineData("restart")]
+    public async Task Becoming_unavailable_while_the_consent_dialog_is_open_blocks_the_test(string reason)
+    {
+        host.On(LaunchProtocol.Options, _ => VerificationOptions());
+        var consent = await PickVerificationAsync();
+        host.Status = reason == "read-only" ? host.Status with { ReadOnly = "legacy owner is active" }
+            : host.Status with { RestartRequired = true };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => !settings.CanRunVerification, "verification blocked");
+        await settings.RunVerificationAsync(consent);
+        Assert.NotNull(settings.Error);
+        Assert.DoesNotContain(host.Received, r => r.Op == HostOps.AgentsVerify);
+    }
+
+    [Fact]
+    public async Task Reconnect_recovers_host_reports_but_a_new_host_never_inherits_a_success_or_approval()
+    {
+        host.On(LaunchProtocol.Options, _ => VerificationOptions());
+        var consent = await PickVerificationAsync();
+        var report = VerificationReport(Guid.NewGuid().ToString("D"), VerificationState.Verified);
+        host.Status = host.Status with { AgentVerifications = [report] };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.Verifications.Count == 1, "host verification");
+        Assert.Contains("Verified", Assert.Single(settings.Verifications).State, StringComparison.Ordinal);
+        await host.StopAsync();
+        await Wait.UntilAsync(() => !settings.HostRunning, "disconnected");
+        Assert.Empty(settings.Verifications);
+        host.Start();
+        connection.RetryNow();
+        await Connected();
+        await Wait.UntilAsync(() => settings.Verifications.Count == 1, "recovered verification");
+        await host.StopAsync();
+        await Wait.UntilAsync(() => !settings.HostRunning, "disconnected again");
+        host.Status = host.Status with { StartedAt = host.Status.StartedAt.AddSeconds(1), AgentVerifications = null };
+        host.Start();
+        connection.RetryNow();
+        await Connected();
+        Assert.Empty(settings.Verifications);
+        Assert.False(settings.CanRunVerification);
+        await settings.RunVerificationAsync(consent);
+        Assert.NotNull(settings.Error);
+        Assert.DoesNotContain(host.Received, r => r.Op == HostOps.AgentsVerify);
+    }
+
+    [Fact]
+    public async Task Stopping_a_recovered_test_only_stops_observing_the_same_host_request()
+    {
+        await Connected();
+        var request = Guid.NewGuid().ToString("D");
+        host.Status = host.Status with { AgentVerifications = [VerificationReport(request, VerificationState.Running)] };
+        host.On(HostOps.AgentsVerifyCancel, data =>
+        {
+            Assert.Equal(request, data.Deserialize<AgentVerificationCancel>(ProtocolJson.Options)!.Request);
+            var report = VerificationReport(request, VerificationState.Cancelled);
+            host.Status = host.Status with { AgentVerifications = [report] };
+            return report;
+        });
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.Verifications.Count == 1, "recovered running test");
+        await settings.CancelVerificationAsync(Assert.Single(settings.Verifications).Request);
+        Assert.Null(settings.Error);
+        await Wait.UntilAsync(() => !Assert.Single(settings.Verifications).CanStopObserving, "observation stopped");
+        Assert.Contains("was not closed", settings.VerificationActionStatus, StringComparison.Ordinal);
+        Assert.DoesNotContain(host.Received, r => r.Op == HostOps.AgentsVerify || r.Op == LaunchProtocol.Launch || r.Op == Ops.SessionStop);
+    }
+
+    [Theory]
+    [InlineData(VerificationState.Verified)]
+    [InlineData(VerificationState.Unknown)]
+    [InlineData(VerificationState.Running)]
+    public async Task A_racing_or_unrecognized_cancel_result_never_claims_observation_was_cancelled(VerificationState state)
+    {
+        await Connected();
+        var request = Guid.NewGuid().ToString("D");
+        host.Status = host.Status with { AgentVerifications = [VerificationReport(request, VerificationState.Running)] };
+        host.On(HostOps.AgentsVerifyCancel, _ =>
+        {
+            var report = VerificationReport(request, state);
+            host.Status = host.Status with { AgentVerifications = [report] };
+            return report;
+        });
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.Verifications.Count == 1, "running verification");
+        await settings.CancelVerificationAsync(request);
+        Assert.DoesNotContain("Observation stopped.", settings.VerificationActionStatus, StringComparison.Ordinal);
+        if (state == VerificationState.Verified)
+        {
+            Assert.Null(settings.Error);
+            Assert.Contains("already ended", settings.VerificationActionStatus, StringComparison.Ordinal);
+        }
+        else { Assert.Contains("did not confirm", settings.Error, StringComparison.Ordinal); }
+    }
 
     // The host's status as the test sets it, seen by the app. The app may have read the status before
     // the test set it (on Linux its socket connects at once), so it is sent as the host would.
@@ -146,6 +332,33 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Empty(host.Sent(HostOps.Restart));
         Assert.Empty(host.Sent(HostOps.AgentsSetup));
         Assert.Empty(host.Sent(HostOps.SignIn));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CLI_sign_in_sends_person_confirmation_but_does_not_mark_authentication_or_trust_verified(bool opened)
+    {
+        await Connected();
+        host.Status = host.Status with { Agents = Readiness("1.2.3") };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.Agents.Count == 1, "agent readiness");
+        Assert.True(Assert.Single(settings.Agents).CanSignIn);
+        host.On(HostOps.AgentsSignIn, d =>
+        {
+            var request = d.Deserialize<AgentSignInRequest>(ProtocolJson.Options)!;
+            Assert.Equal("claude", request.Agent);
+            Assert.True(request.Confirmed);
+            return new AgentSignInResult(opened, "Fixture sign-in window outcome; account access remains unverified.");
+        });
+        await settings.SignInAgentAsync("claude");
+        Assert.Contains("account access remains unverified", settings.AgentSignInStatus);
+        Assert.Equal(!opened, settings.HasError);
+        Assert.Contains("Sign-in has not been verified", Assert.Single(settings.Agents).Checks);
+        Assert.Empty(host.Sent(HostOps.SignIn));
+        Assert.Empty(host.Sent(HostOps.AgentsSetup));
+        Assert.Empty(host.Sent(HostOps.Restart));
+        Assert.False(settings.Busy);
     }
 
     [Fact]
@@ -343,6 +556,7 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.True(reopened.AgentInstallInProgress);
         Assert.Contains("another window", reopened.AgentInstallStatus);
         Assert.False(reopened.CanInstallAgents);
+        Assert.False(reopened.CanSignInAgents);
         host.On(HostOps.AgentsInstallCancel, _ => new { cancellationRequested = true });
         await reopened.CancelAgentInstallAsync();
         Assert.Single(host.Sent(HostOps.AgentsInstallCancel));
@@ -644,6 +858,32 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Get_started_points_CLI_sign_in_at_the_Copilot_row_first_and_stays_yours_to_check()
+    {
+        AgentReadinessRow Row(string id, string label) => new(Agent(id, label, ReadinessState.NeedsAction), canManage: true, canInstall: true);
+        SetupStep SignIn(params AgentReadinessRow[] rows) => SetupGuide.Steps(true, rows, false).Single(x => x.Id == "cli-signin");
+
+        var both = SignIn(Row("claude", "Claude Code"), Row("copilot", "Copilot CLI"));
+        Assert.Equal("Yours to check", both.Mark);
+        Assert.Contains("Choose Sign in on the Copilot CLI row below", both.Detail);
+        Assert.Contains("Choose Sign in on the Claude Code row below", SignIn(Row("claude", "Claude Code")).Detail);
+        Assert.Contains("Open the CLI once in a terminal", SignIn().Detail);
+    }
+
+    [Fact]
+    public void Get_started_marks_the_new_session_step_done_only_on_a_passed_test_of_an_installed_agent()
+    {
+        var rows = new[] { new AgentReadinessRow(Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: "owned setup record")) };
+        string Session(params AgentVerificationReport[] v) => SetupGuide.Steps(true, rows, false, v).Single(x => x.Id == "session").Mark;
+
+        var claude = VerificationReport("r1", VerificationState.Verified) with { Agent = "claude" };
+        Assert.Equal("Next", Session());
+        Assert.Equal("Next", Session(claude with { State = VerificationState.Running }));
+        Assert.Equal("Next", Session(claude with { Agent = "codex" }));
+        Assert.Equal("Done", Session(claude));
+    }
+
+    [Fact]
     public void A_set_up_agent_the_host_cannot_test_yet_offers_no_verb_and_says_it_is_not_tested_yet()
     {
         var row = new AgentReadinessRow(Agent("copilot", "Copilot CLI", ReadinessState.Unknown, hooksDetail: RecordIntakeOn), canManage: true);
@@ -655,6 +895,38 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Equal(Tone.None, row.StatusTone);
     }
 
+    // #1221: QA saw Agency and Copilot CLI read "Not tested yet" after the host had handled their hooks.
+    // Agency has no hooks of its own; the host reports the shared Copilot CLI hook on its row.
+    [Theory]
+    [InlineData("claude", "Claude Code")]
+    [InlineData("codex", "Codex")]
+    [InlineData("copilot", "Copilot CLI")]
+    [InlineData("agency", "Agency")]
+    public void A_handled_hook_flips_a_set_up_agent_from_not_tested_yet_to_ready_and_no_hook_leaves_it_untested(string id, string label)
+    {
+        var none = Agent(id, label, ReadinessState.Unknown, hooksDetail: RecordIntakeOn);
+        var seen = none with { LastHookHandledAt = DateTimeOffset.UtcNow.AddHours(-30) };
+
+        var untested = new AgentReadinessRow(none, canManage: true);
+        var ready = new AgentReadinessRow(seen, canManage: true);
+
+        Assert.True(untested.NotTested);
+        Assert.Equal("Not tested yet", untested.Status);
+        Assert.False(ready.NotTested);
+        Assert.True(ready.HooksWorking);
+        Assert.Equal("Ready", ready.Status);
+        Assert.Null(ready.SetUpVerb);
+    }
+
+    [Fact]
+    public void A_handled_hook_does_not_say_Ready_on_a_row_that_is_not_installed_or_needs_repair()
+    {
+        var heard = DateTimeOffset.UtcNow;
+        Assert.NotEqual("Ready", new AgentReadinessRow(Agent("codex", "Codex", ReadinessState.Unknown, installation: ReadinessState.Missing, hooksDetail: RecordIntakeOn) with { LastHookHandledAt = heard }).Status);
+        Assert.NotEqual("Ready", new AgentReadinessRow(Agent("codex", "Codex", ReadinessState.Failed, hooksDetail: DidNotComplete) with { LastHookHandledAt = heard }, canManage: true).Status);
+        Assert.Equal("Hook ownership couldn't be checked · couldn't read", new AgentReadinessRow(FromWire("failed", UnknownRecord, "unknown") with { LastHookHandledAt = heard }, canManage: true).Status);
+        Assert.Equal(OlderHost, new AgentReadinessRow(FromWire("unknown", RecordIntakeOn, "unknown") with { LastHookHandledAt = heard }, canManage: true).Status);
+    }
     // The host's `hookSetup` (#705 review r4474869190), on the wire beside the hooks state its host
     // sends with it. Until this build's AgentReadiness carries the field, the adapter reads it as
     // missing, and the fixture's value is handed to the row as the adapter will hand it then.
@@ -1080,6 +1352,72 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Equal("Next", hooks.Mark);
         Assert.DoesNotContain("can't be changed", hooks.Detail);
         Assert.Contains("Set up on Claude Code", hooks.Detail);
+    }
+
+    [Fact]
+    public async Task A_first_install_opens_Get_started_once_when_no_agent_is_set_up()
+    {
+        prefs = prefs with { GuidePending = true };
+        var wanted = 0;
+        var first = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default") { OpenGuideAtFirstLaunch = true };
+        first.GuideWanted += () => Interlocked.Increment(ref wanted);
+
+        await WithAgents([NeverSetUp("claude", "Claude Code")]);
+        await Wait.UntilAsync(() => wanted == 1, "Get started opened");
+        // Taken: later reports, and a restart's new page, do not pull the person back.
+        await HostNowSays(NeverSetUp("claude", "Claude Code", version: "1.2.4"));
+        var restarted = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default") { OpenGuideAtFirstLaunch = true };
+        var again = 0;
+        restarted.GuideWanted += () => again++;
+        restarted.Refresh();
+
+        Assert.Equal(1, wanted);
+        Assert.Equal(0, again);
+        Assert.False(prefs.GuidePending);
+        first.Detach();
+        restarted.Detach();
+    }
+
+    [Fact]
+    public async Task An_upgrader_a_background_start_or_a_set_up_agent_never_opens_Get_started()
+    {
+        var wanted = 0;
+        // An upgrader: no first-run mark, so even a window that asks is not pulled to Settings.
+        var upgrader = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default") { OpenGuideAtFirstLaunch = true };
+        upgrader.GuideWanted += () => wanted++;
+        await WithAgents([NeverSetUp("claude", "Claude Code")]);
+        Assert.Equal(0, wanted);
+        upgrader.Detach();
+
+        // A start at sign-in does not ask, and leaves the mark for the launch that shows the window.
+        prefs = prefs with { GuidePending = true };
+        var background = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        background.GuideWanted += () => wanted++;
+        background.Refresh();
+        Assert.Equal(0, wanted);
+        Assert.True(prefs.GuidePending);
+
+        // Agents already set up: nothing to guide.
+        await HostNowSays(Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: "owned setup record") with { Version = "1.2.9" });
+        var asked = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default") { OpenGuideAtFirstLaunch = true };
+        asked.GuideWanted += () => wanted++;
+        asked.Refresh();
+        await Wait.UntilAsync(() => asked.SetupSteps.Single(s => s.Id == "hooks").Mark == "Done", "hooks connected");
+
+        Assert.Equal(0, wanted);
+        background.Detach();
+        asked.Detach();
+    }
+
+    [Fact]
+    public void Only_a_missing_settings_file_is_a_first_run()
+    {
+        var file = Path.Combine(app, "first-run-settings.json");
+        Assert.True(AppPreferences.IsFirstRun(file));
+
+        File.WriteAllText(file, "{ not json");
+        Assert.False(AppPreferences.IsFirstRun(file));
+        Assert.False(AppPreferences.Load(file).GuidePending);
     }
 
     [Theory]

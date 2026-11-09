@@ -961,6 +961,77 @@ public class MergeRuleTests
         Assert.Equal("agent-bridge-merge-rule", MergeRuleConfig.Load(Path.Combine(root, "quality", "merge-rule.yml")).StatusPoster);
     }
 
+    // FLEET_MERGERULE=off must put back the wait, the build and the one shared group; the fast path
+    // (cached evaluator, scoped judging) is only for when it isn't off.
+    [Fact]
+    public void The_merge_rule_workflows_kill_switch_restores_the_wait_the_build_and_the_single_group()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var stream = new YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(root, ".github", "workflows", "merge-rule.yml"))));
+        var job = (YamlMappingNode)((YamlMappingNode)((YamlMappingNode)stream.Documents[0].RootNode)
+            .Children[new YamlScalarNode("jobs")]).Children[new YamlScalarNode("evaluate")];
+        string Scalar(YamlMappingNode node, string key) => ((YamlScalarNode)node.Children[new YamlScalarNode(key)]).Value!;
+        var steps = ((YamlSequenceNode)job.Children[new YamlScalarNode("steps")]).Cast<YamlMappingNode>().ToList();
+        YamlMappingNode Step(string name) => steps.Single(s => s.Children.ContainsKey(new YamlScalarNode("name")) && Scalar(s, "name") == name);
+        var concurrency = (YamlMappingNode)job.Children[new YamlScalarNode("concurrency")];
+
+        Assert.Equal("merge-rule", Scalar(concurrency, "group"));
+        Assert.Equal("false", Scalar(concurrency, "cancel-in-progress"));
+        Assert.Contains("vars.FLEET_MERGERULE == 'off'", Scalar(Step("Let a burst of events settle"), "if"), StringComparison.Ordinal);
+        Assert.Contains("vars.FLEET_MERGERULE != 'off'", Scalar(Step("Restore main's built evaluator"), "if"), StringComparison.Ordinal);
+        Assert.Contains("vars.FLEET_MERGERULE == 'off'", Scalar(Step("Build main's evaluator"), "if"), StringComparison.Ordinal);
+        Assert.Contains("FAST: ${{ vars.FLEET_MERGERULE != 'off' }}", File.ReadAllText(Path.Combine(root, ".github", "workflows", "merge-rule.yml")), StringComparison.Ordinal);
+    }
+
+    // A sweep displaced by a scoped run for another head must not leave a stale success: while
+    // main is red, any scoped run judges every open pull request and posts failure on each.
+    [Theory]
+    [InlineData("--sha")]
+    [InlineData("--pr")]
+    public void A_scoped_run_while_main_is_red_replaces_every_stale_success(string scope)
+    {
+        const string Success = "Copilot reviewed abcdef0; every check passed; independent review on file";
+        var a = GraphQLPullRequest(Head, mergeRule: ("success", Success), number: 42);
+        var b = GraphQLPullRequest(Older, mergeRule: ("success", Success), number: 7);
+        var github = new FakeGitHub(a, listed: [a, b], byNumber: new Dictionary<int, string> { [42] = a, [7] = b },
+            mainRuns: MainRuns((5, "completed", "failure", 1), (4, "completed", "success", 1)));
+        var config = WriteConfig();
+        try
+        {
+            var output = new StringWriter();
+            MergeRuleCommand.Run([scope, scope == "--sha" ? Head : "42", "--config", config, "--post"], output, github, OnMain);
+
+            Assert.Equal(2, github.Posted.Count);
+            Assert.All(github.Posted, p => Assert.Contains(" failure merge-rule Main is red", p, StringComparison.Ordinal));
+            Assert.Contains(github.Posted, p => p.StartsWith(Head, StringComparison.Ordinal));
+            Assert.Contains(github.Posted, p => p.StartsWith(Older, StringComparison.Ordinal));
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    [Fact]
+    public void A_scoped_run_while_main_is_green_judges_only_its_own_head()
+    {
+        var a = GraphQLPullRequest(Head, number: 42);
+        var b = GraphQLPullRequest(Older, number: 7);
+        var github = new FakeGitHub(a, listed: [a, b], byNumber: new Dictionary<int, string> { [42] = a, [7] = b });
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--sha", Head, "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Single(github.Posted);
+            Assert.StartsWith(Head, github.Posted[0], StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
     // Auto-merge doesn't pause while main is red, so the merge rule must: judged by main's CI
     // push run that finished last, at its latest attempt.
     [Fact]

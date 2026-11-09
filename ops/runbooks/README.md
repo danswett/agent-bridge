@@ -17,6 +17,7 @@ for each alert.
 | [security-events](security-events.md) | A-CHANGE; a key or token exposed |
 | [log-cap](log-cap.md) | A-LOGCAP |
 | [cost](cost.md) | A-BUDGET |
+| [relay-messaging](relay-messaging.md) | None yet; the fleet's messaging cut-over from Home Assistant to the relay, and its rollback |
 | [windows-release](windows-release.md) | A-RELEASE; a release breaking machines |
 | [pwa](pwa.md) | A-PAGES; a PWA deploy breaking phones |
 

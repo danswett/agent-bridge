@@ -75,7 +75,7 @@ struct LocalHostDetailsView: View {
             details = result
         } catch {
             if token == generation, connection == host.connectionID {
-                self.error = error.localizedDescription
+                self.error = BridgeShownError.sentence(for: error)
             }
         }
         if token == generation {

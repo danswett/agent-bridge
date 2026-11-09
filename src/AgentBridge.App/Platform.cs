@@ -1,4 +1,5 @@
 using AgentBridge.App.Core;
+using AgentBridge.Host;
 using AgentBridge.Host.Core.Updates;
 using Microsoft.Win32;
 using Velopack;
@@ -13,12 +14,13 @@ namespace AgentBridge.App;
 // Releases come from the repository's GitHub releases; a feed.txt beside the app's data (a
 // folder or URL holding releases.<channel>.json) overrides that, for a test VM or a private channel.
 // profileFolder: this profile's own folder, where the installer's copy of the package is made
-// (PackageHandoff); null for a copy that only reads its version.
-sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string profile, string? profileFolder = null) : IUpdater
+// (PackageHandoff); null for a copy that only reads its version. log: where which source answered
+// a check (the CDN or GitHub, #927) is said.
+sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string profile, string? profileFolder = null, Action<string>? log = null) : IUpdater
 {
     public const string Repository = "https://github.com/danswett/agent-bridge";
     // Shared with every profile's app and host through the app's folder (#530).
-    readonly ReleaseDiscovery discovery = new(Paths.AppData);
+    readonly ReleaseDiscovery discovery = new(Paths.AppData, log: log);
     UpdateManager? manager;
     UpdateInfo? pending;
     string? source;
@@ -45,13 +47,21 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     static bool Unreadable(Exception e) =>
         e is IOException or UnauthorizedAccessException or InvalidOperationException or NotSupportedException or UriFormatException or ArgumentException;
 
+    // The version installed, for a check under way (a CDN's list may not be older, #927): the
+    // manager as it is, never one Manager() would make afresh mid-check.
+    string? Installed()
+    {
+        try { return manager is { IsInstalled: true } m ? m.CurrentVersion?.ToString() : null; }
+        catch (Exception e) when (Unreadable(e)) { return null; }
+    }
+
     UpdateManager Manager()
     {
         var feed = File.Exists(FeedFile) ? File.ReadAllText(FeedFile).Trim() : "";
         var key = $"{feed}|{prereleases()}";
         if (manager is not null && source == key) { return manager; }
         IUpdateSource from = feed.Length == 0
-            ? new DiscoveredGithubSource(Repository, prereleases(), discovery)
+            ? new DiscoveredGithubSource(Repository, prereleases(), discovery, installed: Installed)
             : Uri.TryCreate(feed, UriKind.Absolute, out var u) && u.Scheme is "http" or "https"
                 ? new SimpleWebSource(feed)
                 : new SimpleFileSource(new DirectoryInfo(feed));
@@ -170,7 +180,7 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     // Only the release named, downloaded here from the source selected now (Ready, which the mark
     // vouches for): anything else throws, before anything is replaced. A check or a download from
     // Settings may have replaced the one the person chose while the host stopped (r4487830884).
-    public void ApplyAndRestart(string version)
+    public void ApplyAndRestart(string version, Action? handedOverTo = null)
     {
         if (Ready is not { } ready) { throw new InvalidOperationException("no downloaded update to install; check for updates again"); }
         if (ready != version) { throw new InvalidOperationException($"{version} is no longer the update downloaded ({ready} is); nothing was installed"); }
@@ -179,7 +189,7 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         // Not Velopack's ApplyUpdatesAndRestart, which names the shared packages folder's file to
         // Update.exe (#984): the bytes verified and marked, copied into this profile's own folder
         // and checked again from the handle that keeps them until this process ends, then
-        // Update.exe started as ApplyUpdatesAndRestart starts it, with --package naming the copy
+        // Update.exe started as ApplyUpdatesAndRestart starts it, but silent (#1167), with --package naming the copy
         // and the shared --packageDir, where its install lock is.
         Manager();
         var handoff = Handoff ?? throw new InvalidOperationException("this copy of the app has no profile folder to hand an update over from; nothing was installed");
@@ -195,24 +205,12 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         var copy = handoff.Prepare(file, version, source!);
         handedOver = handoff.Launch(copy, (uint)Environment.ProcessId, root, packages, ["--background", "--profile", profile],
             args => locator.Process.StartProcess(updateExe, args, Path.GetDirectoryName(updateExe)!, false));
+        // Update.exe has started: the next start may say the install didn't take (#1167). Best
+        // effort; it must not keep this process from exiting.
+        try { handedOverTo?.Invoke(); }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { log?.Invoke($"update: the hand-over could not be recorded: {e.Message}"); }
         // As ApplyUpdatesAndRestart ends: Update.exe waits for this process to exit (--waitPid).
         locator.Process.Exit(0);
-    }
-}
-
-// Velopack's GithubSource with its release list from the machine's shared ReleaseDiscovery
-// (#530), as the host's (DiscoveredGithubSource in AgentBridge.Host's HostUpdates.cs): one request
-// to the API per interval for every app and host here, rather than one per check. Each release's
-// feed and the packages come from their browser download URLs, which the API's limit does not count.
-sealed class DiscoveredGithubSource(string repository, bool prereleases, ReleaseDiscovery discovery) : GithubSource(repository, null, prereleases)
-{
-    protected override async Task<GithubRelease[]> GetReleases(bool includePrereleases)
-    {
-        // Read through discovery, so a list this can't read is its failure, backed off, never kept.
-        var releases = await discovery.ReleasesAsync(ReleaseDiscovery.ReleasesUrl(RepoUri.ToString()),
-            json => System.Text.Json.JsonSerializer.Deserialize<GithubRelease?[]>(json) ?? [], CancellationToken.None);
-        // As GithubSource orders and filters its own.
-        return [.. releases.OfType<GithubRelease>().OrderByDescending(r => r.PublishedAt).Where(r => includePrereleases || !r.Prerelease)];
     }
 }
 

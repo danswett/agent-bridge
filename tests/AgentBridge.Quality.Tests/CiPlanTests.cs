@@ -12,14 +12,15 @@ public class CiPlanTests
             outputs:
               whole-ring: ${{ steps.whole-ring.outputs.whole-ring }}
               suites: ${{ steps.select.outputs.suites }}
-              product-os: ${{ steps.whole-ring.outputs.whole-ring == 'true' && '["ubuntu-latest","windows-latest","windows-11-arm"]' || steps.select.outputs.product-os }}
+              product-os: ${{ steps.whole-ring.outputs.whole-ring == 'true' && (github.event_name == 'pull_request' && '["ubuntu-latest","windows-latest"]' || '["ubuntu-latest","windows-latest","windows-11-arm"]') || steps.select.outputs.product-os }}
               product: ${{ steps.select.outputs.product }}
               ha-integration: ${{ steps.select.outputs.ha-integration }}
+              app: ${{ steps.select.outputs.app }}
             steps:
               - id: whole-ring
               - id: select
                 env:
-                  JOBS: product ha-integration
+                  JOBS: product ha-integration app
           product:
             needs: plan
             if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.product == 'true'
@@ -36,10 +37,13 @@ public class CiPlanTests
           ha-integration:
             needs: plan
             if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration == 'true'
+          app:
+            needs: plan
+            if: (needs.plan.outputs.whole-ring == 'true' && github.event_name != 'pull_request') || needs.plan.outputs.app == 'true'
           relay-image-sarif:
             needs: product
           quality-gate:
-            needs: [plan, product, ha-integration]
+            needs: [plan, product, ha-integration, app]
             if: always()
             outputs:
               app: ${{ needs.app.result }}
@@ -218,9 +222,9 @@ public class CiPlanTests
     [Fact]
     public void A_check_job_missing_from_the_gate_is_reported_whether_or_not_it_reads_the_plan()
     {
-        const string Problem = " isn't in quality-gate's needs, so its result wouldn't count (only attest, publish, publish-gate, relay-image-sarif may stay out)";
+        const string Problem = " isn't in quality-gate's needs, so its result wouldn't count (only attest, publish, publish-gate, relay-image-sarif, sign may stay out)";
 
-        Assert.Equal(["ci.yml job ha-integration" + Problem], Check(Wired.Replace("needs: [plan, product, ha-integration]", "needs: [plan, product]")));
+        Assert.Equal(["ci.yml job ha-integration" + Problem], Check(Wired.Replace("needs: [plan, product, ha-integration, app]", "needs: [plan, product, app]")));
         Assert.Equal(["ci.yml job lint" + Problem], Check(Wired.Replace("  quality-gate:", "  lint:\n    runs-on: ubuntu-latest\n  quality-gate:")));
         // Downstream of the gate, it could fail after the gate passed.
         Assert.Equal(["ci.yml job lint" + Problem], Check(Wired.Replace("  quality-gate:", "  lint:\n    needs: quality-gate\n  quality-gate:")));
@@ -269,21 +273,28 @@ public class CiPlanTests
     // Home Assistant) carries its skip down past publish-gate's !cancelled(), so an app build that
     // passed every check it needed would never publish (#938's review).
     [Theory]
-    [InlineData("[publish-gate]", PublishIfLine, null)]
-    [InlineData("[publish-gate]", ">-\n      !cancelled()\n      && needs.publish-gate.result == 'success'", null)]
-    [InlineData("[plan]", PublishIfLine, "ci.yml delivery job publish must need exactly [publish-gate]")]
-    [InlineData("[publish-gate]", "github.ref == 'refs/heads/main'", IfProblem)]
-    [InlineData("[publish-gate]", "''", IfProblem)]
-    [InlineData("[publish-gate]", "${{ success() }}", IfProblem)]
-    [InlineData("[publish-gate]", "${{ always() && needs.publish-gate.result == 'success' }}", IfProblem)]
-    [InlineData("[publish-gate]", "${{ !cancelled() }}", IfProblem)]
-    [InlineData("[publish-gate]", "${{ needs.publish-gate.result == 'success' }}", IfProblem)]
-    [InlineData("[publish-gate]", "${{ !cancelled() && needs.publish-gate.result != 'failure' }}", IfProblem)]
-    [InlineData("[publish-gate]", "${{ !cancelled() && needs.publish-gate.result == 'success' || always() }}", IfProblem)]
-    [InlineData("[publish-gate]", "x ${{ !cancelled() && needs.publish-gate.result == 'success' }}", IfProblem)]
-    public void Publish_runs_exactly_when_publish_gate_succeeded(string needs, string condition, string? problem)
+    [InlineData("publish", "[publish-gate, sign]", PublishAfterSignIfLine, null)]
+    [InlineData("publish", "[publish-gate, sign]", ">-\n      !cancelled()\n      && needs.publish-gate.result == 'success'\n      && needs.sign.result == 'success'", null)]
+    [InlineData("publish", "[publish-gate]", PublishAfterSignIfLine, "ci.yml delivery job publish must need exactly [publish-gate, sign]")]
+    [InlineData("publish", "[plan]", PublishAfterSignIfLine, "ci.yml delivery job publish must need exactly [publish-gate, sign]")]
+    [InlineData("publish", "[publish-gate, sign]", "${{ !cancelled() && needs.publish-gate.result == 'success' }}", PublishIfProblem)]
+    [InlineData("publish", "[publish-gate, sign]", "${{ !cancelled() && needs.sign.result == 'success' }}", PublishIfProblem)]
+    [InlineData("publish", "[publish-gate, sign]", "github.ref == 'refs/heads/main'", PublishIfProblem)]
+    [InlineData("publish", "[publish-gate, sign]", "''", PublishIfProblem)]
+    [InlineData("publish", "[publish-gate, sign]", "${{ success() }}", PublishIfProblem)]
+    [InlineData("publish", "[publish-gate, sign]", "${{ always() && needs.publish-gate.result == 'success' && needs.sign.result == 'success' }}", PublishIfProblem)]
+    [InlineData("publish", "[publish-gate, sign]", "${{ !cancelled() && needs.publish-gate.result == 'success' && needs.sign.result != 'failure' }}", PublishIfProblem)]
+    [InlineData("publish", "[publish-gate, sign]", "${{ !cancelled() && needs.publish-gate.result == 'success' && needs.sign.result == 'success' || always() }}", PublishIfProblem)]
+    [InlineData("publish", "[publish-gate, sign]", "x ${{ !cancelled() && needs.publish-gate.result == 'success' && needs.sign.result == 'success' }}", PublishIfProblem)]
+    // sign holds the signing identity: it too runs only on a publish-gate that succeeded.
+    [InlineData("sign", "[publish-gate]", PublishIfLine, null)]
+    [InlineData("sign", "[plan]", PublishIfLine, "ci.yml delivery job sign must need exactly [publish-gate]")]
+    [InlineData("sign", "[publish-gate]", "${{ success() }}", SignIfProblem)]
+    [InlineData("sign", "[publish-gate]", "${{ always() && needs.publish-gate.result == 'success' }}", SignIfProblem)]
+    [InlineData("sign", "[publish-gate]", "${{ !cancelled() && needs.publish-gate.result == 'success' || always() }}", SignIfProblem)]
+    public void Publish_and_sign_run_only_after_publish_gate_succeeded(string job, string needs, string condition, string? problem)
     {
-        var problems = Check(Wired + $"\n  publish:\n    needs: {needs}\n    if: {condition}\n" + PublishQueued + "\n");
+        var problems = Check(Wired + $"\n  {job}:\n    needs: {needs}\n    if: {condition}\n" + (job == "publish" ? PublishQueued + "\n" : ""));
 
         Assert.Equal(problem is null ? [] : [problem], problems);
     }
@@ -291,13 +302,15 @@ public class CiPlanTests
     [Fact]
     public void Publish_without_an_if_is_reported_since_a_skipped_check_would_stop_every_publish()
     {
-        var problems = Check(Wired + "\n  publish:\n    needs: [publish-gate]\n" + PublishQueued + "\n");
+        var problems = Check(Wired + "\n  publish:\n    needs: [publish-gate, sign]\n" + PublishQueued + "\n");
 
-        Assert.Equal([IfProblem], problems);
+        Assert.Equal([PublishIfProblem], problems);
     }
 
     const string PublishIfLine = "${{ !cancelled() && needs.publish-gate.result == 'success' }}";
-    const string IfProblem = "ci.yml publish's if: isn't exactly !cancelled() && needs.publish-gate.result == 'success', so it could run without publish-gate succeeding or never run after a skipped check";
+    const string PublishAfterSignIfLine = "${{ !cancelled() && needs.publish-gate.result == 'success' && needs.sign.result == 'success' }}";
+    const string PublishIfProblem = "ci.yml publish's if: isn't exactly !cancelled() && needs.publish-gate.result == 'success' && needs.sign.result == 'success', so it could run without publish-gate succeeding and sign succeeding or never run after a skipped check";
+    const string SignIfProblem = "ci.yml sign's if: isn't exactly !cancelled() && needs.publish-gate.result == 'success', so it could run without publish-gate succeeding or never run after a skipped check";
 
     // publish's concurrency as the repository has it, after its needs and if:.
     const string PublishQueued = """
@@ -306,7 +319,7 @@ public class CiPlanTests
               cancel-in-progress: false
               queue: max
         """;
-    const string Queued = Wired + "\n  publish:\n    needs: [publish-gate]\n    if: " + PublishIfLine + "\n" + PublishQueued + "\n";
+    const string Queued = Wired + "\n  publish:\n    needs: [publish-gate, sign]\n    if: " + PublishAfterSignIfLine + "\n" + PublishQueued + "\n";
     const string QueueProblem = "ci.yml publish's concurrency isn't exactly group publish-prerelease, cancel-in-progress false and queue max, so publishes could run at once or a re-run's could replace a newer run's waiting one";
     const string HaIf = "if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration == 'true'";
     const string RootCancel = "cancel-in-progress: ${{ github.event_name == 'pull_request' }}";
@@ -342,11 +355,26 @@ public class CiPlanTests
     [Fact]
     public void Products_runners_are_pinned_so_main_and_the_whole_ring_get_every_os()
     {
-        Assert.Equal(["ci.yml plan's output product-os isn't ${{ steps.whole-ring.outputs.whole-ring == 'true' && '[\"ubuntu-latest\",\"windows-latest\",\"windows-11-arm\"]' || steps.select.outputs.product-os }}"],
-            Check(Wired.Replace("&& '[\"ubuntu-latest\",\"windows-latest\",\"windows-11-arm\"]'", "&& '[\"ubuntu-latest\"]'")));
+        const string Expected = "${{ steps.whole-ring.outputs.whole-ring == 'true' && (github.event_name == 'pull_request' && '[\"ubuntu-latest\",\"windows-latest\"]' || '[\"ubuntu-latest\",\"windows-latest\",\"windows-11-arm\"]') || steps.select.outputs.product-os }}";
+        Assert.Equal([$"ci.yml plan's output product-os isn't {Expected}"],
+            Check(Wired.Replace("|| '[\"ubuntu-latest\",\"windows-latest\",\"windows-11-arm\"]')", "|| '[\"ubuntu-latest\"]')")));
+        // Only a pull request's whole ring leaves windows-11-arm out; main's keeps it.
+        Assert.Equal([$"ci.yml plan's output product-os isn't {Expected}"],
+            Check(Wired.Replace("github.event_name == 'pull_request' && '[\"ubuntu-latest\",\"windows-latest\"]' ||", "")));
         // And with Linux alone, the Windows step could never run.
         Assert.Equal(["ci.yml job product's strategy.matrix.os isn't ${{ fromJSON(needs.plan.outputs.product-os) }}", StepProblem],
             Check(Wired.Replace("os: ${{ fromJSON(needs.plan.outputs.product-os) }}", "os: [ubuntu-latest]")));
+    }
+
+    [Fact]
+    public void The_app_is_the_one_job_the_whole_ring_does_not_bring_to_a_pull_request()
+    {
+        const string AppIf = "if: (needs.plan.outputs.whole-ring == 'true' && github.event_name != 'pull_request') || needs.plan.outputs.app == 'true'";
+        const string Message = "ci.yml job app is gated on the plan, but its if: isn't exactly: (needs.plan.outputs.whole-ring == 'true' && github.event_name != 'pull_request') || needs.plan.outputs.app == 'true'";
+        // The usual shape would run the app on every whole-ring pull request again.
+        Assert.Equal([Message], Check(Wired.Replace(AppIf, "if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.app == 'true'")));
+        // And without the whole ring, main would skip it when the plan didn't pick it.
+        Assert.Equal([Message], Check(Wired.Replace(AppIf, "if: needs.plan.outputs.app == 'true'")));
     }
 
     [Fact]

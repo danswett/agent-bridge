@@ -63,14 +63,10 @@ public static class KnownDifferences
         .. Constraints.Select(v => new KnownDifference($"AnswerRequest/{v}", 766, "pwa", "check",
             "Answers.Check refuses it: outside the field's constraints",
             "checkAnswer takes it: it does not check constraints yet")),
-        // #913 host slice 2: the clients' half (CX) is to come. Until then the PWA shows a grouped
-        // notice as a question naming no session, which opens the machine, and a reminder as the
-        // question's own notice.
-        .. new[] { "PushNoticeData/group", "PushNotification/group" }.Select(v => new KnownDifference(v, 913, "pwa", "read",
-            "reads kind group: questions of several sessions as one notice, opening Needs you",
-            "reads it as a question, an unknown kind, naming no session: it opens the machine")),
-        new("PushNoticeData/a-reminder", 913, "pwa", "read",
-            "reads reminder: true",
-            "does not read reminder: it shows the question's notice as it is"),
+        // #1159: Update now's client slice (3) reads confirm; until then the PWA, which sends no
+        // Update now, reads it as any outcome it doesn't know.
+        new("UpdateCommandResult/confirm", 1159, "pwa", "read",
+            "reads confirm: more is busy than the person confirmed, and nothing was asked",
+            "reads it as refused, as any outcome it doesn't know"),
     ];
 }

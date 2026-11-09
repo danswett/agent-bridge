@@ -350,7 +350,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         injector.Gate = release.Task;
         var request = Guid.NewGuid().ToString();
         var first = ReplyAsync(ch, "mine", request);
-        await Wait.UntilAsync(() => injector.Plans.Count == 1, "the reply to start typing", Patience);
+        await HostWait.UntilAsync(() => injector.Plans.Count == 1, "the reply to start typing", Patience);
 
         // An agent drives the session while the person's reply is still going in, and the phone,
         // having lost the outcome, sends the same request again.
@@ -473,11 +473,11 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         var request = Guid.NewGuid().ToString();
         var data = new { id = Id, request, text = "once", progress = true };
         var first = HearAsync(ch, Ops.SessionReply, data);
-        await Wait.UntilAsync(() => injector.Plans.Count == 1, "the reply to be typed", Patience);
+        await HostWait.UntilAsync(() => injector.Plans.Count == 1, "the reply to be typed", Patience);
 
         var heard = new List<string>();
         var repeat = (await OpenAsync()).RequestAsync(Ops.SessionReply, data, progress: p => { lock (heard) { heard.Add(p.GetRawText()); } });
-        await Wait.UntilAsync(() => { lock (heard) { return heard.Count == 2; } }, "the repeat to hear the stages reached", Patience);
+        await HostWait.UntilAsync(() => { lock (heard) { return heard.Count == 2; } }, "the repeat to hear the stages reached", Patience);
         Assert.False(repeat.IsCompleted);
         Fixture.Append(events, Prompt("once"));
 
@@ -528,7 +528,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Equal("delivered", (await ReplyAsync(ch, "timed", request)).Outcome);
 
         static bool Timing(string m) => m.Contains(" timings ", StringComparison.Ordinal);
-        await Wait.UntilAsync(() => { lock (logged) { return logged.Any(Timing); } }, "the timing line", Patience);
+        await HostWait.UntilAsync(() => { lock (logged) { return logged.Any(Timing); } }, "the timing line", Patience);
         await Task.Delay(200);
         var line = Assert.Single(logged, Timing);
         var match = Regex.Match(line, $@"^reply {request[..8]} timings \(ms after (?<at>\d{{4}}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d\d\dZ)\): checked \d+, turn \d+, inject \d+-\d+, typed \d+, recorded \d+, confirmed \d+, settled \d+, sent \d+$");
@@ -591,7 +591,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
             Assert.Single(Lines(logged), l => l.Contains(" confirm: ", StringComparison.Ordinal)));
         Fixture.Append(events, Now(Prompt("on its way")));
         var late = $"reply {request[..8]} late: recorded ";
-        await Wait.UntilAsync(() => Lines(logged).Any(l => l.StartsWith(late, StringComparison.Ordinal)), "the late line", Patience);
+        await HostWait.UntilAsync(() => Lines(logged).Any(l => l.StartsWith(late, StringComparison.Ordinal)), "the late line", Patience);
         var ms = long.Parse(Assert.Single(Lines(logged), l => l.StartsWith(late, StringComparison.Ordinal))[late.Length..], System.Globalization.CultureInfo.InvariantCulture);
         // Recorded after the timeout ran out, in ms after the request was received, as the agent timed it.
         Assert.InRange(ms, 1000, 60_000);
@@ -608,7 +608,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Equal("unconfirmed", (await ReplyAsync(ch, "lost", request)).Outcome);
 
         var never = $"reply {request[..8]} late: not recorded within 1 s more";
-        await Wait.UntilAsync(() => Lines(logged).Contains(never), "the late line", Patience);
+        await HostWait.UntilAsync(() => Lines(logged).Contains(never), "the late line", Patience);
     }
 
     [Fact]
@@ -639,7 +639,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         var replier = Replier();
         Serve(Answerer(), replier);
         var length = new FileInfo(events).Length;
-        await Wait.UntilAsync(() => replier.InputOf(Id)?.BytesRead == length, "the transcript to be read ahead", Patience);
+        await HostWait.UntilAsync(() => replier.InputOf(Id)?.BytesRead == length, "the transcript to be read ahead", Patience);
         var ch = await OpenAsync();
 
         Assert.Equal("delivered", (await ReplyAsync(ch, "after the history")).Outcome);
@@ -658,14 +658,14 @@ public sealed class ReplyFlowTests : IAsyncLifetime
             PlatformSupported = true,
             Writes = writes,
         }, gate: gate);
-        await Wait.UntilAsync(() => replier.InputOf(Id)?.BytesRead == new FileInfo(events).Length, "the transcript to be read ahead", Patience);
+        await HostWait.UntilAsync(() => replier.InputOf(Id)?.BytesRead == new FileInfo(events).Length, "the transcript to be read ahead", Patience);
 
         // No refresh, so no upsert: as for hook and model records, which change nothing shown.
         Fixture.Append(events, [.. Enumerable.Range(0, 100).Select(_ => Copilot.Assistant(new string('x', 1000), second))]);
         writes.Written(events);
 
         var length = new FileInfo(events).Length;
-        await Wait.UntilAsync(() => replier.InputOf(Id)?.BytesRead == length, "the write to be read ahead", Patience);
+        await HostWait.UntilAsync(() => replier.InputOf(Id)?.BytesRead == length, "the write to be read ahead", Patience);
     }
 
     // Long enough that only a write can wake a confirmation within the client's 15 s.
@@ -762,10 +762,10 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         injector.OnInject = null;
         var ch = await OpenAsync();
         var first = ReplyAsync(ch, "yes");
-        await Wait.UntilAsync(() => injector.Plans.Count == 1, "the first reply to be typed", Patience);
+        await HostWait.UntilAsync(() => injector.Plans.Count == 1, "the first reply to be typed", Patience);
         await Task.Delay(300);
         var second = ReplyAsync(ch, "yes");
-        await Wait.UntilAsync(() => injector.Plans.Count == 2, "the second reply to be typed", Patience);
+        await HostWait.UntilAsync(() => injector.Plans.Count == 2, "the second reply to be typed", Patience);
         await Task.Delay(300);
         Fixture.Append(events, Prompt("yes", "steering"));
 
@@ -930,7 +930,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
 
         injector.Screen = pid => pid == 100 ? CopilotAsking : null;
         var answer = ch.RequestAsync(Ops.SessionAnswer, new { id = Id, question = "q1", request = Guid.NewGuid().ToString(), fields = new { pick = "b" } });
-        await Wait.UntilAsync(() => injector.Plans.Count == 1, "the answer to start typing", Patience);
+        await HostWait.UntilAsync(() => injector.Plans.Count == 1, "the answer to start typing", Patience);
         Assert.Equal(("busy", "another answer or reply to this session is being delivered"), await ReplyAsync(ch, "hello"));
         release.SetResult();
         Assert.Equal("delivered", (await answer).GetProperty("result").GetProperty("outcome").GetString());
@@ -944,7 +944,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         injector.OnInject = plan => Fixture.Append(events, Prompt(plan.Sends[0].Text));
         var first = ReplyAsync(ch, "first");
         // After the answer's two writes: its walk, then its Enter (#510).
-        await Wait.UntilAsync(() => injector.Plans.Count == 3, "the first reply to start typing", Patience);
+        await HostWait.UntilAsync(() => injector.Plans.Count == 3, "the first reply to start typing", Patience);
         Assert.Equal("busy", (await ReplyAsync(ch, "second")).Outcome);
         release.SetResult();
         Assert.Equal("delivered", (await first).Outcome);
@@ -960,7 +960,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         var request = Guid.NewGuid().ToString();
 
         var first = ReplyAsync(ch, "once only", request);
-        await Wait.UntilAsync(() => injector.Plans.Count == 1, "the reply to start typing", Patience);
+        await HostWait.UntilAsync(() => injector.Plans.Count == 1, "the reply to start typing", Patience);
         var during = ReplyAsync(ch, "once only", request);
         release.SetResult();
         var again = await ReplyAsync(await OpenAsync(), "once only", request);
@@ -1668,7 +1668,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         // The person's own client is shown it; the host's log says its length only.
         Assert.Equal("refused", outcome);
         Assert.Equal($"something is already typed in Copilot's input box at the machine (28 characters: \"token {Secret}\"); send or clear it there first", reason);
-        await Wait.UntilAsync(() => { lock (logged) { return logged.Any(m => m.StartsWith("reply ", StringComparison.Ordinal) && m.Contains("refused", StringComparison.Ordinal)); } }, "the outcome line", Patience);
+        await HostWait.UntilAsync(() => { lock (logged) { return logged.Any(m => m.StartsWith("reply ", StringComparison.Ordinal) && m.Contains("refused", StringComparison.Ordinal)); } }, "the outcome line", Patience);
         lock (logged)
         {
             Assert.DoesNotContain(logged, m => m.Contains(Secret, StringComparison.Ordinal));
@@ -1776,7 +1776,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
 
         Assert.StartsWith("the attachment in the blob store is not what was sent (a part of the blob was changed", e.Message);
         Assert.Empty(injector.Plans);
-        await Wait.UntilAsync(() => RelayStore.Stored.Count == 0, "the unusable blob to be deleted");
+        await HostWait.UntilAsync(() => RelayStore.Stored.Count == 0, "the unusable blob to be deleted");
     }
 
     [Fact]

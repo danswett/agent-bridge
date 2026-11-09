@@ -23,11 +23,35 @@ inputs:
 runs:
   using: composite
   steps:
+    # The .deb files from main's last run, keyed by runner image, Playwright and browsers, so a
+    # mirror outage costs nothing once main has saved them. Only main writes it. apt checks every
+    # package against the signed index whichever way it got there, and ignores a stale file.
+    - id: ubuntu
+      shell: bash
+      run: echo "version=$(lsb_release -rs)-${ImageVersion:-noimage}" >> "$GITHUB_OUTPUT"
+    - id: debs
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/playwright-apt-debs
+        key: playwright-apt-${{ runner.os }}-${{ runner.arch }}-${{ steps.ubuntu.outputs.version }}-${{ inputs.browsers }}-${{ hashFiles(format('{0}/package-lock.json', inputs.working-directory)) }}
     - shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
         BROWSERS: ${{ inputs.browsers }}
         PLAYWRIGHT_APT_FORCE_FALLBACK: ${{ inputs.force-apt-fallback }}
       run: |
+        # A forced fallback proves the mirror switch, so it must really download.
+        if [ "$PLAYWRIGHT_APT_FORCE_FALLBACK" != true ] && compgen -G "$HOME/.cache/playwright-apt-debs/*.deb" > /dev/null; then
+          sudo cp -n "$HOME"/.cache/playwright-apt-debs/*.deb /var/cache/apt/archives/
+        fi
         read -ra browsers <<< "$BROWSERS"
         bash "$GITHUB_ACTION_PATH/download.sh" "${browsers[@]}"
+        if [ "${{ steps.debs.outputs.cache-hit }}" != true ] && compgen -G "/var/cache/apt/archives/*.deb" > /dev/null; then
+          mkdir -p "$HOME/.cache/playwright-apt-debs"
+          cp /var/cache/apt/archives/*.deb "$HOME/.cache/playwright-apt-debs/"
+        fi
+    - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.debs.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/playwright-apt-debs
+        key: ${{ steps.debs.outputs.cache-primary-key }}

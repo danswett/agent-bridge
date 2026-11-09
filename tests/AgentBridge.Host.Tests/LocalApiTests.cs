@@ -4,6 +4,7 @@ using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Intake;
 using AgentBridge.Host.Core.Usage;
+using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
@@ -28,6 +29,8 @@ public sealed class LocalApiTests : IAsyncLifetime
     HostControl control = null!;
     AgentReadinessService readiness = null!;
     AgentSetupService setup = null!;
+    AgentVerificationService verification = null!;
+    readonly AgentVerificationTests.Launcher verificationLauncher = new();
     UpdateService updates = null!;
     LocalServer server = null!;
     readonly P256KeyPair hostKey = P256KeyPair.Generate();
@@ -49,6 +52,7 @@ public sealed class LocalApiTests : IAsyncLifetime
     RelayAccount? credential;
     string? probesFinishing;
     int probeHolds;
+    Func<Task<IDisposable?>> prepareStop = () => Task.FromResult<IDisposable?>(new CancellationTokenSource());
 
     public LocalApiTests()
     {
@@ -75,12 +79,17 @@ public sealed class LocalApiTests : IAsyncLifetime
         setup = new AgentSetupService(new StandaloneHooks(profile,
             new IntakeState.AgentHomes(roots.CopilotHome, roots.ClaudeHome, roots.CodexHome), hookSource,
             Path.Combine(profile, "no-legacy"), () => null, new SetupAgents(), new EmptyMarketplaces()), () => null);
+        verification = new AgentVerificationService(source, verificationLauncher, new AgentVerificationTests.Notices(), () => null);
         control = new HostControl(new HostControlOptions
         {
             Agents = readiness,
             AgentSetup = setup,
             AgentInstall = new AgentInstallService(profile, new SetupAgents(), () => { }, new NoCommands(),
                 () => throw new InvalidOperationException("an existing fixture CLI must not invoke WinGet"), _ => { }),
+            AgentVerification = verification,
+            AgentSignIn = new AgentCliSignInService(profile,
+                new IntakeState.AgentHomes(roots.CopilotHome, roots.ClaudeHome, roots.CodexHome),
+                new SetupAgents(), () => { }, new AgentSignInTests.Starter(), new SignInCommands(), _ => { }),
             Updates = updates,
             Profile = "test",
             Folder = profile,
@@ -98,6 +107,7 @@ public sealed class LocalApiTests : IAsyncLifetime
             SignIn = (relay, show, ct) => signIn(relay, show, ct),
             SignedIn = (account, relay) => saved = (account, relay),
             Stop = () => Interlocked.Increment(ref stops),
+            PrepareStop = () => prepareStop(),
             Restart = () => Interlocked.Increment(ref restarts),
             HoldProbes = () => { Interlocked.Increment(ref probeHolds); return probesFinishing; },
         });
@@ -112,6 +122,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         authorization.Dispose();
         hostKey.Dispose();
         if (readiness is not null) { await readiness.DisposeAsync(); }
+        if (verification is not null) { await verification.DisposeAsync(); }
         await source.DisposeAsync();
         f.Dispose();
         try { Directory.Delete(profile, recursive: true); } catch (IOException) { }
@@ -304,6 +315,24 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal(0, restarts);
     }
 
+    [Fact]
+    public async Task The_local_app_explicitly_starts_and_cancels_verification_and_status_carries_the_same_run()
+    {
+        var ch = await ConnectAsync();
+        Assert.Contains(HostOps.AgentVerificationCapability, (await ch.HelloAsync()).Capabilities);
+        var request = new AgentVerificationRequest(Guid.NewGuid().ToString("D"), "copilot", "Test");
+        await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.AgentsVerify, request));
+        Assert.Equal(0, verificationLauncher.Calls);
+
+        var report = await ch.CallAsync<AgentVerificationReport>(HostOps.AgentsVerify, request with { Confirmed = true });
+        await verificationLauncher.Called.Task.WaitAsync(Patience);
+        Assert.Equal(report.Request, Assert.Single((await ch.CallAsync<HostStatus>(HostOps.Status)).AgentVerifications!).Request);
+        var cancelled = await ch.CallAsync<AgentVerificationReport>(HostOps.AgentsVerifyCancel, new AgentVerificationCancel(request.Request));
+
+        Assert.Equal(VerificationState.Cancelled, cancelled.State);
+        Assert.Equal(1, verificationLauncher.Calls);
+    }
+
     [Theory]
     [InlineData(CallerKind.Agent)]
     [InlineData(CallerKind.Other)]
@@ -327,6 +356,69 @@ public sealed class LocalApiTests : IAsyncLifetime
         await Assert.ThrowsAsync<HostErrorException>(() =>
             ch.CallAsync(HostOps.AgentsInstall, new AgentInstallRequest("claude", true)));
         await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.AgentsInstallCancel));
+    }
+
+    [Fact]
+    public async Task The_local_app_can_open_CLI_sign_in_without_changing_hooks_or_relay_identity()
+    {
+        var ch = await ConnectAsync();
+        Assert.Contains(HostOps.AgentSignInCapability, (await ch.HelloAsync()).Capabilities);
+        var result = await ch.CallAsync<AgentSignInResult>(HostOps.AgentsSignIn, new AgentSignInRequest("claude", true));
+        Assert.True(result.Opened, result.Detail);
+        Assert.Null(IntakeState.Load(profile).State);
+        Assert.Null(saved);
+        Assert.Equal(0, restarts);
+    }
+
+    [Theory]
+    [InlineData(CallerKind.Agent)]
+    [InlineData(CallerKind.Other)]
+    [InlineData(CallerKind.HostCli)]
+    public async Task Verification_and_its_cancellation_require_a_fresh_local_app_identity(CallerKind kind)
+    {
+        var ch = await ConnectAsync();
+        Assert.Contains(HostOps.AgentVerificationCapability, (await ch.HelloAsync()).Capabilities);
+        callers.Current = new FixedCallerGuard(new Caller(kind, "test caller"));
+
+        var request = new AgentVerificationRequest(Guid.NewGuid().ToString("D"), "copilot", "Test", Confirmed: true);
+        await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.AgentsVerify, request));
+        await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.AgentsVerifyCancel, new AgentVerificationCancel(request.Request)));
+
+        Assert.Equal(0, verificationLauncher.Calls);
+        Assert.Empty(verification.Snapshot);
+        Assert.DoesNotContain(HostOps.AgentVerificationCapability, (await ch.HelloAsync()).Capabilities);
+    }
+
+    [Theory]
+    [InlineData(CallerKind.Agent)]
+    [InlineData(CallerKind.Other)]
+    [InlineData(CallerKind.HostCli)]
+    public async Task Other_callers_cannot_open_CLI_sign_in(CallerKind kind)
+    {
+        callers.Current = new FixedCallerGuard(new Caller(kind, "test caller"));
+        var ch = await ConnectAsync();
+        Assert.DoesNotContain(HostOps.AgentSignInCapability, (await ch.HelloAsync()).Capabilities);
+        await Assert.ThrowsAsync<HostErrorException>(() =>
+            ch.CallAsync(HostOps.AgentsSignIn, new AgentSignInRequest("claude", true)));
+    }
+
+    [Fact]
+    public async Task CLI_sign_in_reclassifies_the_caller_after_an_app_hello()
+    {
+        var ch = await ConnectAsync();
+        Assert.Contains(HostOps.AgentSignInCapability, (await ch.HelloAsync()).Capabilities);
+        callers.Current = new FixedCallerGuard(new Caller(CallerKind.Agent, "now an agent"));
+        await Assert.ThrowsAsync<HostErrorException>(() =>
+            ch.CallAsync(HostOps.AgentsSignIn, new AgentSignInRequest("claude", true)));
+    }
+
+    sealed class SignInCommands : ICommandRunner
+    {
+        public Task<CommandResult> RunAsync(string program, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken cancellationToken = default)
+        {
+            Assert.Equal(new[] { "--help" }, arguments);
+            return Task.FromResult(new CommandResult(true, false, 0, "Commands:\n  auth  Manage authentication"));
+        }
     }
 
     sealed class SetupAgents : IAgentLocator
@@ -604,10 +696,10 @@ public sealed class LocalApiTests : IAsyncLifetime
 
         var stopping = await ch.CallAsync(HostOps.Stop);
         Assert.True(stopping.GetProperty("stopping").GetBoolean());
-        await Wait.UntilAsync(() => Volatile.Read(ref stops) == 1, "the stop to follow its response", Patience);
+        await HostWait.UntilAsync(() => Volatile.Read(ref stops) == 1, "the stop to follow its response", Patience);
         var restarting = await ch.CallAsync(HostOps.Restart);
         Assert.True(restarting.GetProperty("restarting").GetBoolean());
-        await Wait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the restart to follow its response", Patience);
+        await HostWait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the restart to follow its response", Patience);
     }
 
     [Fact]
@@ -628,6 +720,23 @@ public sealed class LocalApiTests : IAsyncLifetime
             Assert.Equal($"unknown op {op}", response.GetProperty("error").GetString());
         }
         Assert.Equal(0, Volatile.Read(ref stops));
+    }
+
+    [Fact]
+    public async Task A_stop_that_times_out_on_a_delivery_refuses_without_stopping_the_host()
+    {
+        var gate = new DeliveryGate();
+        using var delivery = gate.TryEnterDelivery();
+        Assert.NotNull(delivery);
+        prepareStop = () => gate.PrepareStopAsync(TimeSpan.FromMilliseconds(50));
+        var ch = await ConnectAsync();
+
+        var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Stop));
+
+        Assert.Contains("delivery or typing is still in progress", refused.Message);
+        Assert.Equal(0, Volatile.Read(ref stops));
+        using var next = gate.TryEnterDelivery();
+        Assert.NotNull(next);
     }
 
     // ---- §6.3 invariant 13: no agent session stops or restarts its host ----
@@ -668,7 +777,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         f.Processes.Exit(AgentKind.Copilot, parent.Id);
         await source.RefreshAsync();
         Assert.True((await ch.CallAsync(HostOps.Restart)).GetProperty("restarting").GetBoolean());
-        await Wait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the app's restart", Patience);
+        await HostWait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the app's restart", Patience);
     }
 
     [Fact]
@@ -744,6 +853,26 @@ public sealed class LocalApiTests : IAsyncLifetime
         lock (logged) { Assert.Contains("local pipe: refused session.history from pid 4242, inside the copilot session 77777777", logged); }
     }
 
+    // #1190: a device that says it is in use holds back the person's pushes, so an agent on the pipe
+    // saying so would silence their finished turns and questions; the app still says it.
+    [Fact]
+    public async Task An_agent_on_the_pipe_is_refused_sessions_focus_so_it_cannot_hold_back_pushes_but_the_app_is_not()
+    {
+        callers.Current = new FixedCallerGuard(new Caller(CallerKind.Agent, "pid 4242, inside the copilot session 77777777"));
+        var agent = await ConnectAsync();
+        await agent.CallAsync<SubscribeResult>(Ops.SessionsSubscribe);
+        var refused = await Assert.ThrowsAsync<HostErrorException>(() => agent.CallAsync(Ops.SessionsFocus, new { visible = true, open = Id, openQuestion = "q1", idleMs = 0 }));
+        Assert.Equal("refused: this connection is from pid 4242, inside the copilot session 77777777; telling the host the person is using the app is for the person, from the app or a phone", refused.Message);
+        lock (logged) { Assert.Contains("local pipe: refused sessions.focus from pid 4242, inside the copilot session 77777777", logged); }
+        Assert.Empty(service.Presences());
+
+        callers.Current = new FixedCallerGuard(new Caller(CallerKind.App, "the app"));
+        var app = await ConnectAsync();
+        await app.CallAsync<SubscribeResult>(Ops.SessionsSubscribe);
+        await app.CallAsync(Ops.SessionsFocus, new { visible = true, open = Id, idleMs = 0 });
+        Assert.True(Assert.Single(service.Presences()).Visible);
+    }
+
     [Fact]
     public async Task The_hosts_own_command_line_may_restart_it_to_migrate_but_manage_nothing_else()
     {
@@ -758,7 +887,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal(0, Volatile.Read(ref probeHolds));
         await ch.CallAsync(HostOps.Restart);
 
-        await Wait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the restart to follow its response", Patience);
+        await HostWait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the restart to follow its response", Patience);
         Assert.Equal(0, Volatile.Read(ref stops));
     }
 
@@ -853,6 +982,25 @@ public sealed class LocalApiTests : IAsyncLifetime
             Assert.StartsWith($"refused: this connection is from pid 4242; only the {Product.App}", refused.Message);
         }
         Assert.Equal(state, updates.State());
+    }
+
+    [Fact]
+    public async Task Only_the_app_asks_the_host_to_leave_for_an_Update_now_and_the_hosts_departure_answers_it()
+    {
+        var app = await ConnectAsync();
+        // This host composes no Update now: its departure answers refused, unavailable.
+        var left = await app.CallAsync<UpdateDepartResult>(HostOps.UpdateDepart, new UpdateDepartRequest(Guid.NewGuid().ToString()));
+        Assert.Equal(new UpdateDepartResult(UpdateDepartOutcome.Refused, ManageReason.Unavailable), left);
+        var malformed = await Assert.ThrowsAsync<HostErrorException>(() => app.CallAsync(HostOps.UpdateDepart, new UpdateDepartRequest("not-a-uuid")));
+        Assert.Contains("needs the press's request", malformed.Message, StringComparison.Ordinal);
+
+        foreach (var kind in new[] { CallerKind.Agent, CallerKind.Other })
+        {
+            callers.Current = new FixedCallerGuard(new Caller(kind, "pid 4242"));
+            var other = await ConnectAsync();
+            var refused = await Assert.ThrowsAsync<HostErrorException>(() => other.CallAsync(HostOps.UpdateDepart, new UpdateDepartRequest(Guid.NewGuid().ToString())));
+            Assert.Equal($"refused: this connection is from pid 4242; only the {Product.App} beside this host reports its updates, and takes other devices' presses of Install", refused.Message);
+        }
     }
 
     sealed class Callers : ICallerGuard

@@ -1888,6 +1888,32 @@ public sealed class RelayFleetLinkTests
         Assert.Equal(BlobFormat.Base64Url(phone.Public), command.By);
     }
 
+    // Update now (#1159, v1-update.md "The press"): as the PWA's signUpdateNow signs it, for that
+    // machine alone, no session, args binding now, the release shown and what was confirmed, living
+    // two minutes; its MAC the one the machine computes from its own key and this app's.
+    [Fact]
+    public void The_app_signs_an_Update_now_press_for_that_machine_alone_binding_now_the_release_and_what_was_shown()
+    {
+        var app = P256KeyPair.Generate();
+        var machine = P256KeyPair.Generate();
+        var at = DateTimeOffset.FromUnixTimeSeconds(1_793_300_000);
+        var accept = new UpdateBusy { Working = 1, Waiting = 0, Sessions = [new UpdateBusySession("s1", UpdateBusyState.Working)] };
+
+        var command = Transfers.SignUpdateNow(app, machine.Public, "0.5.0", accept, at, "7d0f3a2e-1c4b-4d5e-8f60-112233445566");
+
+        var body = BlobFormat.FromBase64Url(command.Body)!;
+        var expected = HMACSHA256.HashData(CommandMac.Key(machine, app.Public, Wire.DeviceId(app.Public), Wire.DeviceId(machine.Public)), body);
+        Assert.Equal(BlobFormat.Base64Url(expected), command.Mac);
+        var read = JsonSerializer.Deserialize<CommandBody>(body, ProtocolJson.Options)!;
+        Assert.Equal((UpdateProtocol.NowAction, "user", Wire.DeviceId(app.Public), Wire.DeviceId(machine.Public), (string?)null, Wire.DeviceId(machine.Public)),
+            (read.Action, read.Principal.Kind, read.Principal.Device, read.Target.Machine, read.Target.Session, read.To));
+        Assert.Equal((long)ManageProtocol.MaxLifetime.TotalSeconds, read.ExpiresAt - read.IssuedAt);
+        Assert.Equal("""{"now":true,"release":"0.5.0","accept":{"working":1,"waiting":0,"sessions":[{"id":"s1","state":"working"}]}}""", read.Args!.Value.GetRawText());
+        // On a quiet machine nothing was shown, and the press carries no accept.
+        var quiet = Transfers.SignUpdateNow(app, machine.Public, "0.5.0", null, at, "8e1a4b3f-2d5c-4e6f-9071-223344556677");
+        Assert.Equal("""{"now":true,"release":"0.5.0"}""", JsonSerializer.Deserialize<CommandBody>(BlobFormat.FromBase64Url(quiet.Body)!, ProtocolJson.Options)!.Args!.Value.GetRawText());
+    }
+
     // #603: the app reconnecting after sleep opened each machine's channel with XX and then asked
     // hello, two round trips before anything. To a machine it has had a channel to, hello is
     // answered in the IK handshake, as HostConnection asks it.

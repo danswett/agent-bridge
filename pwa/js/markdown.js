@@ -718,21 +718,25 @@ function notesOf(raw, doc) {
   return notes;
 }
 
-// Puts text on the clipboard; true if it got there. The Clipboard API first. It is missing
-// in older WebViews, and can reject where it exists (iOS Home Screen apps have refused it),
-// so a hidden textarea and execCommand('copy') follow, as clipboard.js does it.
-export async function copyText(text, doc = document) {
-  const clipboard = doc.defaultView?.navigator?.clipboard;
+// Puts text on the clipboard; true if it got there. The selection copy goes first, before
+// anything is awaited, so it runs inside the tap that asked for it. WebKit's Clipboard API
+// resolved writeText with nothing on the clipboard (#1090: the button said Copied, a paste gave
+// nothing), so a resolved promise from it proves little; the selection copy's answer is the
+// engine's own. The Clipboard API follows for where the selection copy is refused.
+// host: where the scratch field goes; inside an open modal <dialog> it must, as the rest of the
+// page is inert there and a field outside it can't take focus or be selected.
+export async function copyText(text, doc = document, clipboard = doc.defaultView?.navigator?.clipboard, host = doc.body) {
+  if (copyBySelection(text, doc, host)) { return true; }
   if (typeof clipboard?.writeText === 'function') {
     try {
       await clipboard.writeText(text);
       return true;
-    } catch { /* refused here; the older way may still be allowed */ }
+    } catch { /* refused: nothing more to try */ }
   }
-  return copyBySelection(text, doc);
+  return false;
 }
 
-function copyBySelection(text, doc) {
+function copyBySelection(text, doc, host) {
   const area = doc.createElement('textarea');
   area.className = 'md-copy-buffer';
   area.value = text;
@@ -741,7 +745,11 @@ function copyBySelection(text, doc) {
   area.setAttribute('aria-hidden', 'true');
   area.tabIndex = -1;
   const before = doc.activeElement;
-  doc.body.append(area);
+  // The copy replaces the page's selection with the field's; it runs on every Copy now, so what
+  // the person had highlighted in the conversation is put back.
+  const selection = doc.getSelection?.();
+  const held = selection ? Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i)) : [];
+  host.append(area);
   try {
     area.focus({ preventScroll: true });
     area.select();
@@ -753,6 +761,10 @@ function copyBySelection(text, doc) {
   } finally {
     area.remove();
     before?.focus?.({ preventScroll: true });
+    if (held.length) {
+      selection.removeAllRanges();
+      for (const range of held) { selection.addRange(range); }
+    }
   }
 }
 

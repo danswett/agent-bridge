@@ -466,6 +466,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         launchServing = launcher?.Available() == true;
         launchOptions = null;
         launchSignature = null;
+        launchOptionsVersion = null;
         launchDefaultsPending = null;
         // A machine published again while this host runs keeps what it has read of Launch: taken
         // anew, the baseline would swallow a press made since the last read.
@@ -579,7 +580,10 @@ public sealed partial class HaConnector : IAsyncDisposable
         // reason: agent-ha-bridge leaves its sensors when told not to publish, but a reading left on
         // the card with nothing to refresh it is the stale figure this exists to prevent.
         if (usage is not null) { served.UnionWith(HaContract.UsageTopics(Slug, [.. HaContract.UsageClients, .. options.UsageAccountSensors])); }
-        return HaContract.MachineTopics(Slug).Where(t => !served.Contains(t));
+        var unserved = HaContract.MachineTopics(Slug).Where(t => !served.Contains(t));
+        // launch_options is ours alone, so it is not in MachineTopics; with launch not served it is
+        // withdrawn like the card, rather than left retained with lists nothing refreshes.
+        return launchServing ? unserved : unserved.Concat([HaContract.LaunchOptionsConfig(Slug, options.MachineName).Topic, HaContract.LaunchOptionsTopic(Slug)]);
     }
 
     // A session's entities this stage does not serve: with answers, only Stop (and two state
@@ -696,6 +700,9 @@ public sealed partial class HaConnector : IAsyncDisposable
             {
                 published.Remove(id, out was);
                 starting.Remove(id);
+                // An ended session's rid history goes with it, unless a delivery is still running
+                // (RepliesDoneAsync drops it then).
+                if (!underWay.ContainsKey(id)) { ridLogs.TryRemove(id, out _); }
                 retiring.TryAdd(node, new Retiring());
                 // Observed here, so forgotten here: one that comes back starts as the person's.
                 if (!drivers.SourceObserves) { drivers.Forget(id); }
@@ -705,6 +712,15 @@ public sealed partial class HaConnector : IAsyncDisposable
             // Its question went with it: withdrawn from the phones (Clear-DaemonAnswerButtons). A
             // phone this does not reach stays on record and the stale sweep tries it again.
             await ClearButtonsAsync(id, was?.Notify, forget: true, ct);
+        }
+        // A session that ended while the connector was reconnecting was never published again, so the
+        // gone loop never saw it: drop any history whose session is neither live nor mid-delivery.
+        lock (gate)
+        {
+            foreach (var id in ridLogs.Keys)
+            {
+                if (!live.ContainsKey(id) && !underWay.ContainsKey(id)) { ridLogs.TryRemove(id, out _); }
+            }
         }
         if (gone.Count > 0) { WatchSetChanged(); }
         for (var i = 0; i < work.Count; i++)
@@ -749,7 +765,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             // while it is down, still retires what that write left behind.
             SaveLedger();
             await PublishEntitiesAsync(t, name, now, ct);
-            p = new Published { Node = node, Name = name, Kind = HaPayloads.Kind(s.Agent), PublishedAt = now, SessionId = s.Id, Drivers = drivers };
+            p = new Published { Node = node, Name = name, Kind = HaPayloads.Kind(s.Agent), PublishedAt = now, SessionId = s.Id, Drivers = drivers, Reply = new ReplyState { Log = ridLogs.GetOrAdd(s.Id, _ => new RidLog()) } };
             lock (gate)
             {
                 starting.Remove(s.Id);
@@ -833,6 +849,8 @@ public sealed partial class HaConnector : IAsyncDisposable
         // Get-DaemonCardSummary: while End session waits for its second press, the card keeps
         // asking for it over whatever the session does meanwhile.
         if (p.Stop.Asking(now)) { summary = HaStop.ConfirmNote; detail["hint"] = p.Stop.Hint; }
+        // The last delivered reply id stays on the card, so a sender can read it after the session moves on.
+        if (p.Reply.Ack is { } replyAck) { detail["reply_ack"] = replyAck.DeepClone(); }
         var activitySignature = summary + "\n" + Signature(detail);
         if (activitySignature != p.Activity)
         {

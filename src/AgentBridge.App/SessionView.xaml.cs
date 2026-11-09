@@ -402,7 +402,8 @@ public sealed partial class SessionView : UserControl
     // question arriving while a long draft is held, always keep the other half.
     void FitComposer(double height)
     {
-        if (height > 0) { Composer.MaxHeight = Math.Floor(height / 2); }
+        // Called at every step of a resize, which mostly changes the width: an unchanged limit is not set again.
+        if (height > 0 && Composer.MaxHeight != Math.Floor(height / 2)) { Composer.MaxHeight = Math.Floor(height / 2); }
     }
 
     void ShowWords()    {
@@ -592,12 +593,7 @@ public sealed partial class SessionView : UserControl
     }
     void OnOrphanClosed(InfoBar sender, InfoBarClosedEventArgs args) => Card?.DismissOrphan();
 
-    void OnCopyOrphan(object sender, RoutedEventArgs e)
-    {
-        var data = new DataPackage();
-        data.SetText(Card?.OrphanText ?? "");
-        Clipboard.SetContent(data);
-    }
+    void OnCopyOrphan(object sender, RoutedEventArgs e) => ClipboardText.Put(Card?.OrphanText ?? "");
 
     void OnEditing(object sender, RoutedEventArgs e) => Editing(true);
     void OnNotEditing(object sender, RoutedEventArgs e) => Editing(false);

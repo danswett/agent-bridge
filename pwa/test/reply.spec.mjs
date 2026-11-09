@@ -187,6 +187,59 @@ test.describe('outcomes', () => {
     await expect(reply).toHaveAttribute('data-reply', 'unconfirmed');
   });
 
+  // Lines that outlive their cause go (#1193): the pause after busy, the next edit of the box, the
+  // next turn of the session. The clock is the page's, so the pause is exact.
+  test('"Try again in a moment" goes when the 2 s pause ends, as Send comes back', async ({ page }) => {
+    await openDemo(page);
+    await page.clock.install();
+    await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
+    await script(page, 'busy');
+    const reply = box(page, IDLE);
+    await reply.getByRole('textbox', { name: 'Reply' }).fill('next step');
+    await reply.getByRole('button', { name: 'Send' }).click();
+    await page.clock.runFor(500);
+    await expect(reply.locator('.reply-status')).toHaveText('Not sent: an answer or another reply to this session is being delivered. Try again in a moment.');
+    await page.clock.runFor(1000);
+    await expect(reply.locator('.reply-status')).toHaveText(/Try again in a moment\.$/);
+    await page.clock.runFor(1500);
+    await expect(reply.locator('.reply-status')).toHaveText('');
+    await expect(reply.getByRole('textbox', { name: 'Reply' })).toHaveValue('next step');
+  });
+
+  for (const [what, scripted, words] of [
+    ['stale', 'stale', 'Not sent: the session has ended.'],
+    ['refused', { outcome: 'refused', reason: 'the session is running elevated' }, 'The machine refused this reply: the session is running elevated.'],
+  ]) {
+    test(`a ${what} reply's line goes with the next edit of the box, with the words kept`, async ({ page }) => {
+      await openDemo(page);
+      await script(page, scripted);
+      const reply = box(page, IDLE);
+      const input = reply.getByRole('textbox', { name: 'Reply' });
+      await input.fill('first try');
+      await reply.getByRole('button', { name: 'Send' }).click();
+      await expect(reply.locator('.reply-status')).toHaveText(words);
+      await input.press('End');
+      await input.pressSequentially(' again');
+      await expect(reply.locator('.reply-status')).toHaveText('');
+      await expect(input).toHaveValue('first try again');
+    });
+  }
+
+  test('a reply not confirmed stays through edits of the box and goes when the next turn starts', async ({ page }) => {
+    await openDemo(page);
+    await script(page, { outcome: 'unconfirmed', reason: 'the session did not record the reply within 60 seconds' });
+    const reply = box(page, IDLE);
+    const input = reply.getByRole('textbox', { name: 'Reply' });
+    await input.fill('did this land?');
+    await reply.getByRole('button', { name: 'Send' }).click();
+    await expect(reply.locator('.reply-status')).toHaveText(/^Sent, but not confirmed\./);
+    await input.pressSequentially(' yes');
+    await expect(reply.locator('.reply-status')).toHaveText(/^Sent, but not confirmed\./);
+    // The session starts a turn: the conversation now shows whether the reply went in.
+    await page.evaluate(({ id, t }) => { const d = window.agentBridgeDemo; d.upsert({ ...d.host.get(id), status: 'working', statusSince: t, updatedAt: t }); }, { id: IDLE, t: new Date(Date.now() + 5000).toISOString() });
+    await expect(reply.locator('.reply-status')).toHaveText('');
+  });
+
   test('busy and stale keep the words; after busy Send comes back in a moment', async ({ page }) => {
     await openDemo(page);
     await script(page, 'busy', 'stale');

@@ -53,6 +53,21 @@ const textFile = (name, size = 40, mimeType = 'text/markdown') => ({ name, mimeT
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
 
+  test('a file read after a reply\'s outcome line has ended leaves no "Reading the attachment…" behind', async ({ page }) => {
+    await openDemo(page);
+    await page.evaluate(() => window.agentBridgeDemo.scriptReplies('stale'));
+    const reply = box(page);
+    const input = reply.getByRole('textbox', { name: 'Reply' });
+    await input.fill('first try');
+    await reply.getByRole('button', { name: 'Send' }).click();
+    await expect(reply.locator('.reply-status')).toHaveText('Not sent: the session has ended.');
+    // The next edit ends the line; then a file is attached.
+    await input.pressSequentially(' again');
+    await expect(reply.locator('.reply-status')).toHaveText('');
+    await pick(page, textFile('notes.md'));
+    await expect(reply.getByRole('button', { name: 'Remove notes.md' })).toBeVisible();
+    await expect(reply.locator('.reply-status')).toHaveText('');
+  });
   test('a file being read is said once on the live line as its reading starts, as well as shown', async ({ page }) => {
     await openDemo(page);
     const reply = box(page);

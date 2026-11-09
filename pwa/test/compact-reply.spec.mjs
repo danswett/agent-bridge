@@ -185,6 +185,63 @@ test.describe('on a phone', () => {
     await expect(box(v).locator('.reply-held')).toBeInViewport();
   });
 
+  // #1078: an app installed on an iPhone keeps the conversation clear of the home indicator (the
+  // session pane's padding), and the compact reply area slides its box down by its room, past
+  // the conversation's foot. Unclipped, the box's lower edge showed in that band under the bar: a
+  // second reply-box outline stacked under the real one.
+  for (const status of ['idle', 'working']) {
+    test(`installed on an iPhone, the ${status} session's compact reply area shows one outline, with the keyboard shut again, and its last line scrolls clear`, async ({ page }) => {
+      const v = await session(page);
+      if (status === 'working') { await upsert(page, IDLE, { status: 'working', statusSince: later(), updatedAt: later(), activity: { currentTool: 'Reading files' } }); }
+      await settle(v);
+      const root = (bottom) => page.evaluate((px) => {
+        const h = document.documentElement;
+        h.dataset.platform = 'ios';
+        h.dataset.standalone = 'true';
+        h.style.setProperty('--env-safe-bottom', px);
+      }, bottom);
+      await root('34px');
+      const sc = v.locator('.stream-scroll');
+      // The keyboard open (it takes the home indicator's band with it), then dismissed.
+      await input(v).click();
+      await root('0px');
+      await page.setViewportSize({ width: 390, height: 500 });
+      await expect(input(v)).toBeFocused();
+      await input(v).blur();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await root('34px');
+      await settle(v);
+      const max = await end(v);
+      await scrollTo(v, max);
+      await scrollTo(v, max - 400);
+      expect(await foot(v)).toMatchObject({ state: 'compact', solid: true });
+      // Compact: the bar's copy is the one outline; nothing of the box itself shows below the conversation.
+      const strays = () => v.evaluate((el) => {
+        const conv = el.querySelector('.conversation').getBoundingClientRect();
+        const slot = el.querySelector('.reply-slot');
+        const hits = [];
+        for (let y = Math.ceil(conv.bottom) + 1; y < innerHeight; y += 2) {
+          for (const x of [30, innerWidth / 2, innerWidth - 40]) {
+            if (slot.contains(document.elementFromPoint(x, y))) { hits.push([x, y]); }
+          }
+        }
+        return { below: innerHeight - conv.bottom, hits: hits.length };
+      });
+      expect(await strays()).toEqual({ below: 34, hits: 0 });
+      await expect(v.locator('.reply-copy')).toBeVisible();
+      // Scrolling down to the end: the area comes back whole, the copy goes, still one outline, and
+      // the last line ends above the box.
+      for (const at of [max - 300, max - 200, max - 100, max - 40, max]) { await scrollTo(v, at); }
+      await settle(v);
+      expect(await foot(v)).toMatchObject({ fy: 0, state: 'rest', solid: false });
+      await expect(v.locator('.reply-copy')).toBeHidden();
+      expect(await strays()).toEqual({ below: 34, hits: 0 });
+      const last = await v.locator('.stream').evaluate((el) => el.lastElementChild.getBoundingClientRect().bottom);
+      expect(last).toBeLessThanOrEqual((await v.locator('.reply-box').boundingBox()).y);
+      expect(await sc.evaluate((el) => Math.round(el.scrollTop) >= el.scrollHeight - el.clientHeight - 1)).toBe(true);
+    });
+  }
+
   test('a session opens with the reply area in full; reading back up it rides down, then is a pinned 48 bar', async ({ page }) => {
     const v = await session(page);
     await settle(v);

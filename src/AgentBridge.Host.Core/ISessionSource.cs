@@ -25,6 +25,9 @@ public interface ISessionSource : IAsyncDisposable
     // session.get: the full session with its tool history, or null once it has gone.
     Session? Get(string id);
 
+    // The question as discovered, before a presentation-only attempt overlay.
+    Session? GetForDelivery(string id) => Get(id);
+
     // The same session before SessionBudget.Fit, within the field limits only, or null once it
     // has gone. For a consumer that sends it on under limits of its own (the HA connector): Fit
     // trims the fields older clients ignore first, activity.own among them, so the budgeted form

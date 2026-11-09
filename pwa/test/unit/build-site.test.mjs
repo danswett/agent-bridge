@@ -77,6 +77,23 @@ test('the page may reach the relay and the one storage account its blob store us
   }
 });
 
+test('the built PWA publishes only validated feedback recipient configuration and its build version', () => {
+  const site = buildSite({
+    out: out('feedback-config'),
+    version: 'a'.repeat(40),
+    feedbackKeyId: 'feedback-v1',
+    feedbackPublicKey: 'A'.repeat(43),
+  });
+  const config = readFileSync(path.join(site, 'config.js'), 'utf8');
+  assert.match(config, /APP_VERSION = "a{40}"/);
+  assert.match(config, /FEEDBACK_KEY_ID = "feedback-v1"/);
+  assert.match(config, /FEEDBACK_PUBLIC_KEY = "A{43}"/);
+  assert.throws(() => buildSite({ out: out('partial-feedback-config'), feedbackKeyId: 'v1' }), /feedback-public-key/);
+  assert.throws(() => buildSite({ out: out('invalid-feedback-config'), feedbackKeyId: 'v1', feedbackPublicKey: 'invalid' }), /base64url-encoded/);
+  assert.throws(() => buildSite({ out: out('noncanonical-feedback-config'), feedbackKeyId: 'v1', feedbackPublicKey: `${'A'.repeat(42)}B` }), /base64url-encoded/);
+  rmSync(scratch, { recursive: true, force: true });
+});
+
 test('the built site carries both families\' WOFF2s and each one\'s OFL licence, and keeps every shell file offline', () => {
   const site = buildSite({ out: out('fonts') });
   const fonts = readdirSync(path.join(site, 'design', 'fonts')).sort();

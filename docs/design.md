@@ -560,6 +560,13 @@ permission to bypass the roster. Current launch behavior is documented in
 | `agent@session` (local, target) | read, reply, launch with `ask` permissions on approved workspaces, subject to owner policy. **No `answer` grant in v1; no approvals or folder trust; no stop, transfer, update, forget, settings, pairing or allow-all launches. Never an unattended reply into an allow-all session** ([G3](design/agent-principals.md#12-goals)). Only launched/adopted sessions receive the proposed short-lived `AGENT_BRIDGE_TOKEN`; it is not HA-token propagation |
 | `agent@session` (remote, target, through its host) | The local agent grants, carried as host-signed principals; blocked on the #55 roster and reviewed #519 implementation, not merely account sign-in |
 
+The owner's opt-ins in [agent-principals §5.7](design/agent-principals.md#57-reaching-allow-all-sessions-the-gate-and-the-owners-opt-ins)
+are the only exceptions to the unattended allow-all rule. One is the **standing
+coordination group** (§5.7 C, #912): a time-limited grant, at most 24 hours, that the
+owner approves with presence. It lets named sessions send each other `session.reply` text
+and nothing else. It is off by default per machine, signed as roster `set grants`
+entries (§5.4), paused by taint or a host restart, and not built before #55.
+
 Unchanged local refusals: elevated sessions are not injected into, control characters
 are collapsed, only approved workspaces can be launched, folder trust is answered
 only at the machine, and nothing restarts the host from a host-launched session (the
@@ -819,6 +826,46 @@ anywhere in it.
   and apps send histogram buckets per period, with no ids and no timestamps finer than
   the period. Users can turn it off in settings; relay-side metrics and synthetic probes
   still give full coverage without it.
+
+**Amendment: optional, opt-in delivery diagnostics (decided 2026-11-07, #732/#741/#1132).**
+The anonymous, aggregated client health above stays as written. A **separate beta tier**
+may send per-event, pseudonymous diagnostics about failed or slow attempts (setup,
+update, answer delivery, connection), so beta reports can be triaged. It is *not*
+anonymous, it carries identifiers, and it is held to its own rules:
+
+* **Opt-in worldwide, off by default.** One genuine choice, no region shortcut. The first
+  run offers "Not now" and "Allow diagnostics", neither preselected. Settings has "Send
+  optional diagnostics" (off).   While it is off nothing is collected, queued or uploaded
+    as a diagnostic event, and refusing costs no functionality. A purely local per-attempt
+    record (#1135) is separate: it holds no install id and no diagnostic id (a diagnostic
+    id exists only once an event is sent), and it never uploads. Withdrawing stops
+    collection and upload and deletes unsent events; re-enabling uploads nothing from the
+    off period. Withdrawal does not erase events already received: they are kept until they
+    expire at 30 days, and the notice says so. Notice text follows Compliance's wording (#741).
+* **Strict versioned allowlist, enforced in CI.** Event type, a finite approved outcome and
+  reason vocabulary (no exception text or stack frames), app and host version, channel,
+  bounded timing and count buckets, and an optional screen outline of locally generated
+  structural enums and buckets. Never prompts, answers, commands, code, titles, paths,
+  names, screen words or pixels, arbitrary strings, or raw exceptions. Daily caps apply.
+* **Identifiers.** The install id is random, created only after opt-in, rotated at least
+  every 30 days and on reset or re-consent, never derived from a device or account id, and
+  no old-to-new mapping is kept. Each attempt has its own random id, never reused and not
+  containing the install id.
+* **Link to manual reports.** An explicit "Report this" may attach the attempt id, shown
+  in the exact send preview, only if a diagnostic was recorded. Reports stay in the
+  encrypted feedback store, never in the telemetry pipeline or a public issue. This join
+  means the records must never be described as "joined to nothing else".
+* **Destination and retention.** A separate Application Insights health-event pipeline,
+  least-privilege access. Application Insights stores client IP and geolocation by
+  default, so none may be stored (disabled or masked at ingestion), and SRE proves this at
+  the upload gate. 30 days is a proposed maximum counted from original collection
+  (not restarted by retry, export or join), covering derived copies, with a bounded local
+  queue. Upload stays disabled until SRE proves per-table and total retention (including
+  the 31-day Log Analytics behaviour), exports and deletion on the real pipeline.
+* **Gates before upload is enabled:** this amendment, the published notice, the two-family
+  #732 technical review, SRE's retention proof, and legal review of the regional rules,
+  which engineering cannot certify. Local allowlisted per-attempt records may ship
+  before then; the beta does not wait on diagnostics.
 
 **What is measured:**
 
@@ -1102,8 +1149,9 @@ signs a roster `remove` for this device.
   asset, plus `SHA256SUMS`. The host's macOS self-updater verifies the attestation
   bundle, not only the hash.
 * **Authenticode signing**, so SmartScreen and Defender do not flag a product people
-  install. Options: SignPath Foundation (free for OSS), Azure Trusted Signing
-  (about $10 per month), or an OV certificate. See §11.
+  install. Decided by the owner (#734): **Azure Artifact Signing** over OIDC from CI, no key or
+  secret on a build agent; built, and off until the owner provisions it
+  ([app-windows.md](app-windows.md#signing)). See §11.
 * Keep the release discipline: one release at a time, draft first, all assets
   attached (now including Velopack packages, mac host builds and hook builds), then
   publish.
@@ -1378,7 +1426,8 @@ through a managed identity. It costs about $14/month plus $5 for the registry; G
 would remove the registry cost. The trial must be converted to pay-as-you-go before it
 ends, or the relay stops. Measured cost confirms the low end of the estimate above.
 
-**Production checklist (before public launch):** Authenticode signing; privacy policy
+**Production checklist (before public launch):** Authenticode signing turned on (Azure
+Artifact Signing, #734) and its first signed release checked; privacy policy
 and terms (the relay sees metadata); account deletion; rate limits and abuse
 controls on sign-in, pairing and frames; relay monitoring (§5.10) and a public status page fed by the synthetic probes;
 crash reporting, opt-in only and never including content; protocol compatibility

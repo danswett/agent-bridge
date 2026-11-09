@@ -44,7 +44,7 @@ public static class SignedCommands
     // not. Its request still has to be remembered by the caller, so it is acted on once.
     public static (CommandBody? Body, string? Problem) Verify(P256KeyPair self, SignedCommand command, string action, DateTimeOffset now)
     {
-        if (TransferProtocol.Check(command) is { } malformed) { return (null, malformed); }
+        if (TransferProtocol.Check(command, action) is { } malformed) { return (null, malformed); }
         var body = BlobFormat.FromBase64Url(command.Body);
         var by = BlobFormat.FromBase64Url(command.By);
         var mac = BlobFormat.FromBase64Url(command.Mac);

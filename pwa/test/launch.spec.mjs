@@ -136,6 +136,34 @@ test.describe('on a phone', () => {
     expect(await log(page)).toEqual([]);
   });
 
+  test('the form\'s own complaint stays through the machine\'s lists and goes when a setting changes', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    await field(page, 'agent').selectOption('codex');
+    await launchButton(page).tap();
+    await expect(status(page)).toHaveText('Not launched: Codex starts its session only on a first message; give it a prompt.');
+    // The machine's list comes in again, redrawing the panel: nothing the person did has changed.
+    await page.evaluate(() => window.agentBridgeDemo.retarget());
+    await page.waitForTimeout(600);
+    await expect(status(page)).toHaveText('Not launched: Codex starts its session only on a first message; give it a prompt.');
+    // The prompt it asked for is typed: what the line was about has changed.
+    await field(page, 'prompt').fill('Add pagination.');
+    await expect(status(page)).toHaveText('');
+    expect(await log(page)).toEqual([]);
+  });
+
+  test('"Try again in a moment" goes once the moment has passed', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    await script(page, 'busy');
+    await launchButton(page).tap();
+    await expect(status(page)).toHaveText(/Try again in a moment\.$/);
+    await page.waitForTimeout(1000);
+    await expect(status(page)).toHaveText(/Try again in a moment\.$/);
+    await expect(status(page)).toHaveText('', { timeout: 4000 });
+    await expect(launchButton(page)).toBeEnabled();
+  });
+
   test('busy says why and starts nothing, and the next press is a new launch', async ({ page }) => {
     await openDemo(page);
     await openPanel(page);
@@ -542,7 +570,7 @@ test.describe('a folder-trust question', () => {
     await expect(card(page).getByRole('button')).toHaveCount(0);
   });
 
-  test('a refused answer to a question that has since gone is not offered again', async ({ page }) => {
+  test('a refused answer to a question that has since gone is not offered again, and says only that the machine no longer lists it, for 5 s', async ({ page }) => {
     await openDemo(page);
     await ask(page, QUESTION);
     await page.evaluate(() => window.agentBridgeDemo.scriptTrust({ outcome: 'refused', reason: 'that question is no longer waiting: it was answered, or the agent closed' }));
@@ -550,9 +578,14 @@ test.describe('a folder-trust question', () => {
     // Answered at the machine meanwhile: the machine no longer lists it.
     await page.evaluate(() => { const h = window.agentBridgeDemo.host; h.launchOptions = { ...h.launchOptions, trust: [] }; });
     await card(page).getByRole('button', { name: 'Trust' }).tap();
-    await expect(card(page).locator('.trust-status')).toHaveText(/^Not answered/);
-    await expect(card(page).locator('.trust-at-machine')).toHaveText('Demo machine no longer lists this question as waiting.');
+    const gone = card(page).locator('.trust-gone');
+    await expect(gone).toHaveText('Demo machine no longer lists this question.');
+    const at = Date.now();
+    // One neutral line: no amber, no "Not answered", nothing to press.
+    await expect(card(page).locator('.trust-status, .trust-at-machine, .warn')).toHaveCount(0);
     await expect(card(page).getByRole('button')).toHaveCount(0);
+    await expect(card(page)).toHaveCount(0, { timeout: 9000 });
+    expect(Date.now() - at).toBeGreaterThanOrEqual(4000);
   });
 
   test('a question a launch met is offered only until the list after it says it no longer waits', async ({ page }) => {
@@ -571,7 +604,8 @@ test.describe('a folder-trust question', () => {
     // outcome alone never offers it again.
     await page.evaluate(() => { const h = window.agentBridgeDemo.host; h.launchOptions = { ...h.launchOptions, trust: [] }; });
     await card(page).getByRole('button', { name: 'Trust' }).tap();
-    await expect(card(page).locator('.trust-status')).toHaveText(/^Not answered/);
+    await expect(card(page).locator('.trust-gone')).toHaveText('Demo machine no longer lists this question.');
+    await expect(card(page).locator('.trust-status')).toHaveCount(0);
     await expect(card(page).getByRole('button')).toHaveCount(0);
   });
 

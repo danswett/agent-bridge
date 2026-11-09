@@ -437,8 +437,8 @@ public sealed class HostManager
         catch (Exception e) when (e is not OutOfMemoryException) { log($"the host stopped for an update did not start again: {e.GetBaseException().Message}"); }
     }
 
-    // Asks the host to stop and waits for its pipe to go; a host that will not go is ended. One
-    // that answers no is not: it is running, and refused this process (one inside an agent
+    // Asks the host to stop and waits for its pipe to go; a host that will not go is left running.
+    // One that answers no is also left running: it refused this process (one inside an agent
     // session, design §6.3 invariant 13), so ending it anyway would be the very thing it refused.
     // The 2026-10-29 review found an agent could run this through the app's uninstall hook.
     // The app quitting gives up the wait for probes, as it does an update's (#238 review).
@@ -452,6 +452,7 @@ public sealed class HostManager
     readonly SemaphoreSlim stopping = new(1, 1);
     // Whether the stop under way wrote the marker: only that one is its to clear.
     bool marked;
+    bool stopPossiblyAccepted;
 
     // hold: gives up the wait for the probes only, before anything is stopped. host: the host this
     // profile ran when an update began (its pid, and when it started), which must not outlive a stop
@@ -465,6 +466,7 @@ public sealed class HostManager
         try
         {
             marked = false;
+            stopPossiblyAccepted = false;
             // A host that answered when the update began but not now (its pipe hung, say) was never
             // held, nor asked to stop: still running, the update would end it, and a standalone Codex
             // probe with it, part-way through refreshing its sign-in (#197 E4). Refused, as a host
@@ -476,12 +478,12 @@ public sealed class HostManager
             }
             await EndLauncherAsync(probeWait, ct, hold);
         }
-        // Not stopped: refused, still finishing a usage probe (#238), or the wait for its probes
-        // given up. It runs on, and is still to be started again should it crash.
+        // A refusal before stop was accepted must not suppress a crash restart. Once accepted,
+        // or if the response was lost, keep the marker: the host may still be on its way out.
         catch (Exception e) when (e is HostRefusedException or HostBusyException
             || (e is OperationCanceledException && hold.IsCancellationRequested && !ct.IsCancellationRequested))
         {
-            if (marked) { ClearStopped(); }
+            if (marked && !stopPossiblyAccepted) { ClearStopped(); }
             throw;
         }
         finally { stopping.Release(); }
@@ -516,8 +518,18 @@ public sealed class HostManager
             // a crashed host down (#238 review). Still before the stop, so a host that crashes while
             // stopping is not started again.
             MarkStopped();
-            try { await ch.CallAsync(HostOps.Stop, ct: ct); }
+            try
+            {
+                await ch.CallAsync(HostOps.Stop, timeout: TimeSpan.FromSeconds(25), ct: ct);
+                stopPossiblyAccepted = true;
+            }
             catch (HostErrorException e) { throw new HostRefusedException(e.Message); }
+            catch (Exception e) when (e is IOException or TimeoutException)
+            {
+                // The reply may have been lost after the host accepted and began stopping.
+                stopPossiblyAccepted = true;
+                throw;
+            }
             reached = true;
         }
         // Refused at the connection (one of the host and this app elevated, the other not): the
@@ -525,16 +537,26 @@ public sealed class HostManager
         catch (LocalRefusedException e) { throw new HostRefusedException(e.Message); }
         // No host answering (none running, a launcher between crash restarts, or one not responding):
         // stopped on purpose all the same, so the launcher starts none (#106).
-        catch (Exception e) when (e is IOException or HostErrorException or TimeoutException) { MarkStopped(); }
+        catch (Exception e) when (e is IOException or HostErrorException or TimeoutException)
+        {
+            if (pid is { } p && processes.IsRunning(p))
+            {
+                throw new HostBusyException("the host did not finish its stop; it was not forcibly ended because a delivery may still be active", e);
+            }
+            MarkStopped();
+        }
         try { await WaitAsync(running: false, StopTimeout, ct); }
         catch (TimeoutException) when (pid is { } p)
         {
-            processes.Kill(p);
-            await WaitAsync(running: false, StopTimeout, ct);
+            throw new HostBusyException($"the host (pid {p}) did not exit after stopping; it was not forcibly ended because a delivery may still be active");
         }
         // Its pipe is gone; wait for the process too, so its files can be replaced (an update).
         var deadline = Time.GetUtcNow() + StopTimeout;
         while (pid is { } p && processes.IsRunning(p) && Time.GetUtcNow() < deadline) { await Task.Delay(Poll, ct); }
+        if (pid is { } stillRunning && processes.IsRunning(stillRunning))
+        {
+            throw new HostBusyException($"the host (pid {stillRunning}) did not exit after stopping; it was not forcibly ended because a delivery may still be active");
+        }
         return reached;
     }
 

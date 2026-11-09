@@ -41,7 +41,7 @@ public static class Answers
             }
             // Other the agent offers and this machine cannot send: the same sentence every client
             // shows beside the disabled Other, so a refusal reads as the field already said (#908).
-            if (field.AllowOther != true && AnswerReasons.Known(field.OtherUnavailable) && HasOther(value)) { return AnswerReasons.Text(field.OtherUnavailable!); }
+            if (field.AllowOther != true && AnswerReasons.OnField(field.OtherUnavailable) && HasOther(value)) { return AnswerReasons.Text(field.OtherUnavailable!); }
             // Empty text is typed as nothing, which a form records as no answer at all, and text of
             // only spaces, or of control characters typed as spaces, might be recorded trimmed to
             // that (review of #844).

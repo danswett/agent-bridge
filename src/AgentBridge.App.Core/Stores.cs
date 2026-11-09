@@ -107,6 +107,13 @@ public sealed record AppPreferences
     // announces it: the version updated from, and the new one's release notes.
     public string? UpdatedFrom { get; init; }
     public string? UpdateNotes { get; init; }
+    // The window was open when that update was handed over (#1167): the next start opens it again,
+    // with Updated or why it couldn't install there rather than a toast. Never set by an update
+    // started while the window was closed, so an unattended machine never gets a window (#1159).
+    public bool UpdateWindowOpen { get; init; }
+    // Update.exe started for that update (AutoUpdater.HandedOver): an install was attempted. Unset,
+    // a next start still on this version says nothing to the person (#1167).
+    public bool UpdateHandedOver { get; init; }
     // The press from another device that update answers, if one asked for it (#51), and how the
     // last update asked for or installed ended, for the host to tell the account's devices.
     public string? UpdateRequest { get; init; }
@@ -125,9 +132,21 @@ public sealed record AppPreferences
     public string? UpdateInstallAsked { get; init; }
     public string? UpdateCheckAsked { get; init; }
     public string? Relay { get; init; }
+    // Send feedback (#738): a staging override of the compiled-in recipient (key id and base64url
+    // public key), used only when both are set; otherwise FeedbackSenderFactory's production key applies.
+    public string? FeedbackKeyId { get; init; }
+    public string? FeedbackPublicKey { get; init; }
+    // Turning this off makes feedback unavailable, whatever else is set.
+    public bool FeedbackUpload { get; init; } = true;
     // The installed app's first run turned on starting at sign-in (the host's logon task and
     // the app's Run entry); after that they are the person's to turn off and stay off.
     public bool SetUp { get; init; }
+    // Set only by a first install (no settings file yet), cleared when Settings has opened on Get
+    // started (#384). Never set for an upgrader, whose file already exists.
+    public bool GuidePending { get; init; }
+
+    // A missing file is a first run. An unreadable one is not: it belongs to someone who has used the app.
+    public static bool IsFirstRun(string path) => !File.Exists(path);
     // Not now on the card for an agent installed after the bridge (#231): the version each agent
     // was dismissed at, by agent id. A different version is a new offer; the row's own Set up stays.
     public IReadOnlyDictionary<string, string>? AgentOffersDismissed { get; init; }

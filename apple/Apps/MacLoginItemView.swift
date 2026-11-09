@@ -1,4 +1,5 @@
 #if os(macOS)
+    import AgentBridgeAppleCore
     import ServiceManagement
     import SwiftUI
 
@@ -38,7 +39,7 @@
                 } else {
                     try SMAppService.mainApp.unregister()
                 }
-            } catch { self.error = "Could not change the login item: \(error.localizedDescription)" }
+            } catch { self.error = "Could not change the login item: \(BridgeShownError.sentence(for: error))" }
             status = SMAppService.mainApp.status
         }
     }

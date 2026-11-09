@@ -159,13 +159,13 @@ struct SessionActions: View {
     private func answer() {
         do {
             guard let question, let session else { return }
-            if let reason = host.readOnlyReason {
-                throw BridgeOperationError(reason)
+            if host.readOnlyReason != nil {
+                throw BridgeOperationError("This machine is read-only. Answer at the machine.")
             }
             let operation = try question.answer(sessionID: sessionID, currentQuestionID: loadedQuestionID,
                                                 values: values, text: question.fields.isEmpty ? answerText : nil, capabilities: host.capabilities, sessionAgent: session.agent)
             Task { await host.perform(operation, slot: slot) }
-        } catch { self.error = error.localizedDescription }
+        } catch { self.error = BridgeShownError.sentence(for: error) }
     }
 
     private func sendReply() {
@@ -177,7 +177,7 @@ struct SessionActions: View {
                 guard host.attempts[slot]?.operation.requestID == operation.requestID else { return }
                 removeSubmittedReplyAttachments()
             }
-        } catch { self.error = error.localizedDescription }
+        } catch { self.error = BridgeShownError.sentence(for: error) }
     }
 
     private func removeSubmittedReplyAttachments() {
@@ -199,7 +199,7 @@ struct SessionActions: View {
                     stopConnection = connection
                 }
             }
-        } catch { self.error = error.localizedDescription }
+        } catch { self.error = BridgeShownError.sentence(for: error) }
     }
 }
 

@@ -30,7 +30,14 @@ Unexpected worker failure makes quiet acquisition fail closed with
 `JournalUncertain` for this process. The shared-gate injector wrapper also marks
 uncertainty before a service can normalize an input-injection exception into a
 result; an unconfirmed helper exit must not become permission to restart. Screen
-reads pass through unmarked: the read-only worker never sends keys.
+reads pass through unmarked: the read-only worker never sends keys. A planned stop
+(`DeliveryGate.PrepareStopAsync`) is not a graceful departure, so the latch alone does
+not refuse it, but it is refused until every injector worker that failed is proven
+exited: the worker injector kills a failed worker's process tree and hands the gate
+its exit (`InjectorWorkerException.Exited`); any other injector exception, or an exit
+that cannot be awaited, refuses stops for the rest of the process. A stop that is
+refused leaves a waiting restart uncancelled; the restart is interrupted only once
+the stop holds the fence.
 
 Quiet means **no delivery/mutation in flight and no typing now**. Running turns,
 questions and session `Working`/`Idle` state are not consulted. #819 and #801
@@ -76,10 +83,16 @@ All conditions run exactly once, even if an earlier one blocks/throws; throws
 and re-entrant coordinator calls become `ConditionFault`, never a deadlock or
 authority to leave. Missing registration also fails closed with `ConditionFault`.
 The real App, other-host, channel and transfer conditions belong to their owners
-and are **not implemented** here. `ServeAsync` registers one condition at
-composition, `RemoteRestartEligibility` for `RemoteRestart` (#801: not read-only,
-`permissions.remoteManage` on, no #800 sign-in entrypoint on); every other purpose has
-none, so its commit fails closed with `ConditionFault`. Before connecting other
+and are **not implemented** here. `ServeAsync` registers two purposes at
+composition (`ManageComposition`): `RemoteRestartEligibility` for `RemoteRestart` (#801: not read-only,
+`permissions.remoteManage` on, no #800 sign-in entrypoint on), and for `Update` (#1159's Update
+now) that same eligibility with `OtherProfileHosts` (no other profile's host running from this
+installation, refreshed outside the fence just before the commit, as the eligibility is). Every other purpose has
+none, so its commit fails closed with `ConditionFault`. A purpose registers only once
+(`DepartureConditions.Register` throws on a second), so another `Update` consumer (#819's
+convergence, #870's departure step) adds its conditions to that one registration rather than
+registering beside it; conditions apply to every departure of their purpose, so one an Update now
+must not meet is that lane's to settle with this one. Before connecting other
 consumers, their owners must register their conditions at composition. No existing command is routed through an incomplete policy.
 
 The provisional lease is nonrenewable, expires after **30 seconds** using
@@ -166,9 +179,14 @@ capability is implemented here. The default `UnnegotiatedPlannedStateTransport`
 makes this absence explicit.
 
 Only the independently authorized person's `RemoteRestart`/`RemoteStop` may
-receive a `PlannedStateReceipt.Legacy` when capability was **not negotiated**.
+receive a `PlannedStateReceipt.Legacy` when capability was **not negotiated**, and an
+`Update` departure a person signed: an Update now (#1159; SRE's settled decision 2 on #1161),
+whose lease was taken with the `SignedPress` its press passed the signed-command gate as
+(`TryAcquireQuiet(maxWait, Update, signedBy)`). Only that gate makes a `SignedPress`, and no
+other purpose may carry one, so an automatic update can't come by one.
 Automatic host updates cannot use Legacy and remain `AnnounceUnavailable` until
-the transport is implemented. A negotiated timeout is `AnnounceUnacked`, never
+the transport is implemented. Once #815's announcement is negotiated, Update now announces
+through it and its Legacy path goes in that same change. A negotiated timeout is `AnnounceUnacked`, never
 Legacy; a sent plan is cancelled on abort, including lost acknowledgement.
 An announced provisional lease also cancels when released or expired without
 commit. **Cancellation is dispatched only after the delivery fence and all

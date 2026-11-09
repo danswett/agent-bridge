@@ -24,8 +24,10 @@ public struct BridgeOperationError: LocalizedError, Sendable, Equatable {
         message
     }
 
-    public init(_ message: String) {
-        self.message = message
+    /// A literal only: text from a host, the relay or the system cannot be interpolated or
+    /// passed in, so no secret can ride a validation error onto the screen (#826).
+    public init(_ message: StaticString) {
+        self.message = "\(message)"
     }
 }
 
@@ -114,7 +116,7 @@ public struct BridgeStopResult: Sendable, Equatable {
 
 enum BridgeOperationValidation {
     static func require(_ capability: String, in capabilities: Set<String>) throws {
-        guard capabilities.contains(capability) else { throw BridgeOperationError("This machine does not offer \(capability).") }
+        guard capabilities.contains(capability) else { throw BridgeOperationError("This machine does not offer that action.") }
     }
 
     static func blank(_ text: String) -> Bool {
@@ -142,7 +144,7 @@ enum BridgeOperationValidation {
 
     static func encodedSize(_ data: [String: JSONValue], maximum: Int) throws {
         guard try JSONEncoder().encode(JSONValue.object(data)).count <= maximum else {
-            throw BridgeOperationError("The request is larger than \(maximum / 1024) KiB.")
+            throw BridgeOperationError("The request is too large.")
         }
     }
 

@@ -87,7 +87,7 @@ struct FolderTrustView: View {
                 if let result = via.attempts[slot]?.result {
                     store.reconcileTrust(questionID: question.id, on: via, result: result)
                 }
-            } catch { self.error = error.localizedDescription }
+            } catch { self.error = BridgeShownError.sentence(for: error) }
         }
     }
 }

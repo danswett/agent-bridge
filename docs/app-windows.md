@@ -22,7 +22,11 @@ A **Get started** list above Settings' **Agents on this machine** section (`#384
 first-time person does: start the bridge, install a CLI, connect its hooks, sign in to the CLI
 (always "Yours to check": the host can't see it until #691), start a new session (Done only once
 a hook has arrived), and an optional phone sign-in. It is read from the same rows, adds no host
-operation, and marks a step Done only on the host's evidence.
+operation, and marks a step Done only on the host's evidence. Slice 2: the installed app (not the demo or a
+development copy) opens on Settings once per profile, the first time the host reports agents and none
+has its hooks connected (`AppPreferences.GuidePending`, `SettingsViewModel.GuideWanted`). It applies
+only to a first install (no settings file existed, so upgraders never see it) and only to a launch that
+shows the window: a start at sign-in or a toast launch leaves it pending for the next one.
 
 ## Decisions
 
@@ -38,7 +42,7 @@ through one adapter, `HookSetups`, which reads a missing field as `unknown`): **
 they aren't set up (`notSetUp`, or this profile's intake off), **Repair** only for `incomplete`, a
 setup that failed after the host saved its record, across fresh checks, and none when nothing
 needs doing: set up (`completed`) but not yet tested by a new session, which the host can't do
-yet, says "Not tested yet" (#705), never "Ready". Removing Copilot CLI's connection can leave its
+yet, says "Not tested yet" (#705) until the host has handled one of its hooks, then "Ready" (#1221; a row with failed hooks, an unknown setup or an older host keeps its own words). Removing Copilot CLI's connection can leave its
 owned record when other entries share the file, which the host reads as a setup that didn't
 finish; that row keeps its removal and offers **Set up** through a fresh check. Agency runs on
 Copilot CLI's hooks (the host sets them up as Copilot's), so what a setup or removal on either row
@@ -96,6 +100,13 @@ up…", "Repairing…", "Removing…") and result stay on its own row (`AgentSta
 live region named for its agent ("Copilot CLI: Setting up…") and raised again as each is drawn,
 once per status: a raise for a status the row has moved on from is skipped. A failure is in Danger. Successful changes refresh
 readiness evidence, and restart remains a separate person's action. No CLI sign-in, hook trust or workspace approval is implied.
+**Sign in / Switch account** separately confirms opening the supported CLI's own browser/
+terminal login flow. It preserves the same agent home and Claude configuration mode as
+future sessions; the refreshed child PATH also includes newly installed runtimes.
+Complete or cancel in that terminal. Credentials stay with the CLI, and opening or closing
+its window never marks account access, entitlement, hooks or trust verified. Older CLI
+versions without a documented standalone login command require an update or direct login.
+Agency sign-in remains organization-managed. Bridge relay sign-in is separate.
 Older hosts explain that an update
 and restart are needed, and disconnected hosts show no stale agent rows. See
 [agent readiness evidence](protocol/local-pipe.md#agent-readiness-evidence) for the contract.
@@ -338,9 +349,16 @@ into one folder with one version. An app update is a host update, so they never 
   is running (up to about 10 minutes for one that is slow to answer, usually under a minute) and
   Codex happens to be refreshing its sign-in, the person may have to sign in to Codex again.
   Keeping the probe alive across those is #974. The same holds for uninstall, whose hook has
-  30 s, and which then goes on;
-  `OnAfterUpdateFastCallback` (the new version, also 15 s) starts it again through its logon
-  task, waiting at most 10 s.
+  30 s, and which then goes on.
+  There is no `OnAfterUpdateFastCallback` (#497, #1167). It used to start the host through its
+  logon task and wait up to 10 s for it, but Velopack 1.2.161 ends every process in the package
+  as soon as a hook exits (`run_hook` in its `windows/util.rs`), so that host never survived.
+  Observed in Velopack's own log on one machine (`velopack_AgentBridgeApp.log`, 49 updates), that
+  hook took 4–15 s: 38 finished in 4.3–14.5 s, and 11 ran into its 15 s limit and were killed.
+  A host it started then ended at once matches the double start #497 reports after an update.
+  Every update here
+  restarts the app, from Restart to update or from the host's own update, and the restarted app
+  starts the host once.
   The app also stops the host itself before it hands an update to `Update.exe`, and starts it on
   launch if it is not running.
 * `OnBeforeUninstallFastCallback` stops the host and attempts bounded cleanup of only the
@@ -381,6 +399,68 @@ into one folder with one version. An app update is a host update, so they never 
   when GitHub last answered, not when the shared copy was read.
   No static feed is published (no Pages copy of `releases.<channel>.json`, and every release is a
   pre-release, so `releases/latest/download` finds nothing), so the API list stays the source.
+* **The release list from the CDN first** (#927, on since the relay went live). Only the list is
+  rate limited, so SRE's relay at `releases.slipgates.com` caches just that response for every
+  machine. `ReleaseDiscovery.ReadCdnFirst` is on (a constant a release flips, never a setting), so
+  discovery asks
+  `https://releases.slipgates.com/repos/danswett/agent-bridge/releases?per_page=10&page=1` (the same
+  page and size as GitHub's request, pinned in code) before GitHub, whenever its shared copy is
+  due again, and GitHub only when the relay's answer isn't used (a 502 from the relay, which is
+  how it answers when it has no copy and GitHub fails, a body that isn't a list, no `Age`, and
+  so on). `feed.txt` always wins over both. The relay is untrusted transport, so its list is used only
+  if it answers 200 itself (no redirect is followed), within 10 seconds, and the list:
+  * is one GitHub could have given (the same checks as GitHub's), with no draft and every
+    release tagged `v<version>`;
+  * names every asset's download under
+    `https://github.com/danswett/agent-bridge/releases/download/<that release's tag>/<asset name>`
+    (and its API `url`, if any, under this repository's release assets), with nothing else in the
+    URL: a checksum only proves a package matches the feed that names it, so a list naming
+    another host's feed could name a hostile package;
+  * has something to install on this machine (a release carrying its channel's
+    `releases.<channel>.json`): an empty list, one cut short or one with nothing for this channel
+    is a failed read, never "nothing newer";
+  * offers this channel nothing older than GitHub's last list here offered it, nor than the
+    version installed. That is judged by the newest release carrying this channel's index (with
+    pre-releases only when they are on), which is what Velopack offers from it, never by the
+    newest tag anywhere in the list: a forged newer release with only another channel's index
+    must not pass while Velopack takes an older one. Only GitHub's own lists set that floor, so a
+    relay's list can't make later ones look old;
+  * says how old its copy is (`Age`, which the relay must send, `0` for a fresh fetch) and that
+    is at most an hour: a copy of unknown age is not used.
+
+  A relay's list kept in the shared file is judged again, the same way, for each check that
+  would be answered from it (its channel, pre-release choice, floor and installed version may
+  differ from the check that fetched it), and by its age then (`Age` at fetch plus the time
+  since), so a copy taken just under the hour isn't served past it; one that fails for that
+  check sends it to GitHub.
+
+  Feeds and packages still download from those GitHub URLs and are still checked against their
+  checksums as before (#719). A list from the relay counts as old as the relay says (`FetchedAt`
+  is when its copy was made, so `UpdateState.CheckedAt` and Settings say that), and it doesn't
+  end GitHub's backoff: only GitHub answering does, and if the relay then fails, the check is
+  held until GitHub's time as before. Which answered is kept with the list (`Source`, `cdn` or
+  `github`) and said in the app's and the host's logs at each ask, with the relay copy's age or
+  the plain reason it wasn't used, never an exception's text.
+
+  **GitHub must answer at least every 6 hours** (`ReleaseDiscovery.GithubRevalidateEvery`). The
+  relay says how old its copy is, so a compromised relay could serve an old but valid list with
+  `Age: 0` for ever, and the floor above only moves when GitHub answers: machines would be frozen
+  on that list and never offered anything newer. So when GitHub last answered a check (a 200, or a
+  304 for its list) is kept in the same state file, `release-discovery.json` (`gitHubAnsweredAt`,
+  written atomically; one file shared by the app and every profile's host, so a GitHub answer to
+  any of them counts for all), and only GitHub's own answer moves it, never the relay's. Once it
+  is 6 hours old, or missing, unreadable or in the future, neither the relay nor a relay's list
+  kept in the file is used for the check: GitHub is asked. If GitHub then fails (limited,
+  offline) the check fails as any GitHub failure does (the hold and backoff of #934), and is never
+  answered from the relay. A machine that has never had an answer from GitHub asks GitHub first.
+  Inside the 6 hours the relay is used as above.
+
+  **What a compromised relay can still do** (a risk both reviewers of #1175 accepted): choose
+  among this repository's genuine releases, whose feeds and packages still come from GitHub and
+  are checked against their checksums, and flip a release's pre-release flag, so a machine with
+  Include pre-releases off could be offered a genuine pre-release. It cannot offer anything older
+  than GitHub's last list here or than the installed version, and it cannot hold a machine on an
+  older genuine list for more than 6 hours.
 * **One channel per architecture** (#222, `build/app-channels.ps1`). x64 is in Velopack's default
   channel, `win`, as every copy installed before Arm64 builds was packed; Arm64 is in
   `win-arm64`. The channel is recorded in the installed package (`current\sq.version`), and
@@ -420,6 +500,24 @@ into one folder with one version. An app update is a host update, so they never 
     update line and the app's machine rows show that line as it is. An Install pressed on another
     device keeps its own rule in either mode (the host idle for two minutes). Changing the setting takes
     effect at once (the app looks again). Setting it from the phone is #801's.
+  * **Update now, from another device** (#1159; design in
+    [v1-update.md](protocol/v1-update.md#update-now-1159); the host's and this app's halves built,
+    the clients' buttons not yet): the
+    person's phone, or this app on another machine, asks for the release ready here to go now,
+    accepting about a minute of downtime. The app then skips its two-minute wait, the backstop
+    and its own "Restart to update now?" dialog (the phone's confirmation stands in), but nothing
+    else: another profile running, a build folder, the probes' hold and the checked package copy
+    all apply, and it leaves only through the host's #805 quiet lease, so it never stops the host
+    while an answer or reply is being typed. If the machine is busier than the person confirmed
+    when it is ready (a turn started during the download), it keeps the download and installs at
+    the next quiet moment, using the settled gap, or when the person confirms again (Product, on
+    #1161), within the press's 15 minutes from its signature; after that the press is dropped and
+    the release stays ready. A press signed on that device within two minutes, `permissions.remoteManage` on, and
+    one restart in six hours of its own, then the two in six hours it shares with a remote restart
+    (owner, #1161). While it waits the devices see why as a code (`waitingCode`: a turn running, a
+    question waiting, the sessions unknown, or a Codex usage check, held at most 11 minutes), and
+    how it ended as one too (`last.code`), which they word themselves; the app's log names the
+    device that pressed it and what it went over.
   * **Ready:** a banner over every page, "Version *v* is ready. Restart to update." with
     **Restart to update** (an `InfoBar` with no close button, like the other app banners, so it
     stays while the release waits), and the same line and button in Settings. No toast: toasts
@@ -468,8 +566,9 @@ into one folder with one version. An app update is a host update, so they never 
     granting this user alone, nothing inherited, `PrivateFolder`), and the copy is checked against
     the same checksum again from a handle that keeps it open, read-only to everyone else, until
     the app exits. The app then starts `Update.exe` itself,
-    as Velopack's `ApplyUpdatesAndRestart` would (`apply --waitPid … --rootDir …`), but with
-    `--package` naming the copy; `--packageDir` stays the shared packages folder, where
+    as Velopack's `ApplyUpdatesAndRestart` would (`--silent apply --waitPid … --rootDir …`), but with
+    `--package` naming the copy, and silent (#1167), so Velopack's own "Installing Update" window
+    never shows: the app's Updating screen stands in for it (below); `--packageDir` stays the shared packages folder, where
     `Update.exe` takes its install lock (`packages\.velopack_lock`), so profiles still can't
     install over each other. The copy goes at the app's next start. What remains: `Update.exe`
     checks nothing itself when it opens the copy (it takes no checksum), so a process running as
@@ -493,8 +592,31 @@ into one folder with one version. An app update is a host update, so they never 
     starts the host again and keeps the release offered, to be tried again only when the person
     presses again. Then the host is stopped over the pipe, and `Update.exe` started with the
     checked copy and `--background --profile <profile>` (above), whose new version
-    starts the host again, and whose first start shows a toast: the version it came from, and the
-    release's notes. The banner's and Settings' take the same path (`AutoUpdater.RestartToUpdateAsync`),
+    starts the host again. **What the person sees** (#1167): with the window open (on screen,
+    neither hidden in the tray nor minimised) as the install begins, its content becomes one
+    centred state while the host stops and `Update.exe` takes over: an indeterminate progress ring,
+    "Updating to version *v*" (a heading, which takes keyboard focus so a screen reader reads it,
+    and a polite live region should focus not be had) and "*Product*
+    closes for a moment and opens again by itself. Your agents keep running.", with no buttons,
+    on the page's layer (the window colour in high contrast). The rail and the pages under it are
+    collapsed meanwhile, out of reach of the pointer, Tab and a screen reader, and search is
+    disabled; should the install not go ahead, they come back and focus returns where it was.
+    It adds no wait. A window hidden in the tray stays hidden, so an update from another
+    device shows nothing on a machine no one is looking at (#1159). The app records, before it
+    hands over, the version it is installing and whether the window was open, and once
+    `Update.exe` has started, that it did (`updateHandedOver`). The new version's
+    first start then opens the window again if it was open and shows "Updated to version *v*." as
+    a closable success bar with **What's new** (the release's notes); otherwise a toast says the
+    version it came from and the release's notes, as before. **A failed install is never
+    silent**: `Update.exe`, silent, shows nothing when it fails and starts the old version again,
+    so a start still on the old version after `Update.exe` started shows the update bar as a
+    warning, "Couldn't install
+    version *v*. *Product* is still on *old*.", with **Try again** while the release is still
+    ready, and a toast as well when the window wasn't open; the words come from the versions,
+    never an error's text, which goes to the log. A newer release ready, or the next press, clears
+    it. Where `Update.exe` never started (the app quit or ended between recording the install and
+    handing it over), nothing was attempted: the log says so, the devices see it as not
+    installed, and the person is told nothing. The banner's and Settings' take the same path (`AutoUpdater.RestartToUpdateAsync`),
     which refuses while another profile's app or host runs from this installation (below), asking
     the host for its own pid first. The banner offers only a release the updater has ready: while a
     newer one found since is still downloading, or held after a failed download, it offers nothing.
@@ -570,7 +692,8 @@ into one folder with one version. An app update is a host update, so they never 
     is a failure like any other); it holds for an hour, then two hours each time, until one
     succeeds, as Velopack's error carries no headers. The next check is made at the hold's end,
     however recently a press was answered. A check from Settings that succeeds meanwhile ends the
-    hold (#934), and a change of source (Include pre-releases, `feed.txt`) drops it. A press from a
+    hold (#934), unless its answer is a copy older than the refusal (the machine's shared one, or
+    the CDN's, #927), and a change of source (Include pre-releases, `feed.txt`) drops it. A press from a
     device in the meantime is answered with
     the reason without asking the feed. The reason goes to the devices as the last update's
     outcome (`failed`), once each time, though never over an update made, or a press answered,
@@ -679,21 +802,33 @@ connector's Install button on a machine the dashboard drives.
   waiting publish (`queue: max`, up to 100; GitHub cancels one arriving to a full queue, never
   one already waiting), where by default the next to arrive would replace the one waiting, so a
   re-run of an old run could leave a newer run's app unpublished; the order waiting publishes
-  start in is not promised, which is why the checks above keep the order.
+  start in is not promised, which is why the checks above keep the order. With signing on, the
+  `sign` job (Signing, above) runs between `publish-gate` and `publish`, and `publish` runs only
+  once `sign` has succeeded, so it never falls back to the unsigned packages.
 * **What:** `build/publish-prerelease.ps1` uploads the x64 app job's folder with `vpk upload github
   --pre` as a draft, then the Arm64 job's into the same draft (`--merge`, its own channel), adds
   each `assets.<channel>.json` and the notes, and only then publishes it, creating the tag
   `v<version>` on the exact commit; a client never sees half a release, nor a release with one
-  architecture (the script refuses to publish without both folders). Assets, x64's exactly as on
-  the first release (`v0.1.583`, published by hand) plus the delta:
+  architecture (the script refuses to publish without both folders). Assets retain x64's original
+  package/feed identities (`v0.1.583`, published by hand), with branded public downloads:
   `AgentBridgeApp-<v>-full.nupkg`, `AgentBridgeApp-<v>-delta.nupkg`,
-  `AgentBridgeApp-win-Setup.exe`, `AgentBridgeApp-win-Portable.zip`, `releases.win.json`
+  `Slipgates-win-Setup.exe`, `Slipgates-win-Portable.zip`, `releases.win.json`
   (this version's packages), `RELEASES` and `assets.win.json`; and Arm64's beside them,
   `AgentBridgeApp-<v>-win-arm64-full.nupkg`, `AgentBridgeApp-<v>-win-arm64-delta.nupkg`,
-  `AgentBridgeApp-win-arm64-Setup.exe`, `AgentBridgeApp-win-arm64-Portable.zip`,
+  `Slipgates-win-arm64-Setup.exe`, `Slipgates-win-arm64-Portable.zip`,
   `releases.win-arm64.json` and `assets.win-arm64.json`. Before anything goes up it checks that
   each folder's app is built for its channel's machine, so an Arm64 package can never land in
   x64's feed.
+  `vpk 1.2.161` derives Setup/Portable names from pack ID, not `--packTitle`, and has no separate
+  filename option. After packing, `pack-app.ps1` renames only those two downloads and their
+  `assets.<channel>.json` upload-index entries, before signature verification or upload.
+  The files' bytes and signatures, pack ID `AgentBridgeApp`, `.nupkg`/delta names, channel feeds
+  and `%LOCALAPPDATA%\AgentBridgeApp` install folder stay unchanged. `releases.<channel>.json`
+  lists only the unchanged packages. Older releases keep their actual historical asset names;
+  do not construct new-name URLs for them or replace historical CDN evidence with invented names.
+  Manifest v1 and site links must use the actual uploaded branded installers together (#1177),
+  with complete dual-architecture metadata and required SHA-256; otherwise keep the release-page
+  fallback rather than a partial or old-name manifest. Portable files do not expand schema v1.
 * **Release notes:** `build/release-notes.ps1` lists the commits since the latest release, newest
   first (GitHub's compare API; the commit alone when that cannot be read), and `pack-app.ps1
   -ReleaseNotes` packs them (`vpk pack --releaseNotes`), so they are in the feed's
@@ -737,7 +872,7 @@ connector's Install button on a machine the dashboard drives.
 * **Pull requests** prove it without publishing: each app job runs the same script with
   `-DryRun` on its own folder, which checks the folder and its delta against the latest release
   as above, has vpk read it into a scratch feed (`vpk upload local`) that must list that
-  channel's packages and nothing else,
+    channel's packages once each, with this pack id, version, type, size and hash, and nothing else,
   and prints what it would upload, publish and prune against the real releases (in the job
   summary too), writing nothing.
 * **Release builds only.** The app job packs with `pack-app.ps1 -Release` exactly when the run
@@ -759,24 +894,24 @@ connector's Install button on a machine the dashboard drives.
     longer gives the G6 refusal.
 
   Nothing else reads it: not updates, delivery, migration or the relay.
-* A pre-release is unsigned (below), but attested: once `publish` has uploaded it (not on a
+* A pre-release is unsigned until the owner turns signing on (Signing, below), but attested: once `publish` has uploaded it (not on a
   re-run that finds it already out, whose rebuilt SBOMs would not be of it), CI's `attest` job downloads
   the release's packages back (the full and delta packages, `Setup.exe` and `Portable.zip` of
   each architecture) and records, in GitHub's attestation store, SLSA build provenance for each
   (the workflow run and commit that built it) and its architecture's CycloneDX SBOM (every
   NuGet package and project in the published folder, read from its `.deps.json` files by Trivy
   in the `app` job, which keeps it as the `sbom-<runtime>-<version>` artifact on every build).
-  To check a download: `gh attestation verify AgentBridgeApp-win-Setup.exe -R
+  To check a download: `gh attestation verify Slipgates-win-Setup.exe -R
   danswett/agent-bridge`, and add `--predicate-type https://cyclonedx.org/bom` for the SBOM.
 
 To install the latest, download the installer for the machine from the newest pre-release at
-<https://github.com/danswett/agent-bridge/releases> and run it (SmartScreen: More info, then Run
-anyway):
+<https://github.com/danswett/agent-bridge/releases> and run it (unsigned, or signed by a publisher
+SmartScreen does not know yet: More info, then Run anyway):
 
 | Machine | Installer |
 |---|---|
-| x64 (Intel or AMD) | `AgentBridgeApp-win-Setup.exe` |
-| Windows on Arm (Snapdragon and other Arm64) | `AgentBridgeApp-win-arm64-Setup.exe` |
+| x64 (Intel or AMD) | `Slipgates-win-Setup.exe` |
+| Windows on Arm (Snapdragon and other Arm64) | `Slipgates-win-arm64-Setup.exe` |
 
 Settings, System, About, "System type" says which. The Arm64 installer refuses an x64 machine.
 The x64 one does install on Windows on Arm, but runs under emulation, which is untested (#222),
@@ -785,7 +920,7 @@ the Arm64 one (the host's profile in `%LOCALAPPDATA%\AgentBridge` stays). From a
 
 ```powershell
 $arm = (Get-CimInstance Win32_Processor | Select-Object -First 1).Architecture -eq 12   # 12: ARM64, also from an emulated shell
-$setup = if ($arm) { 'AgentBridgeApp-win-arm64-Setup.exe' } else { 'AgentBridgeApp-win-Setup.exe' }
+$setup = if ($arm) { 'Slipgates-win-arm64-Setup.exe' } else { 'Slipgates-win-Setup.exe' }
 $tag = gh release list -R danswett/agent-bridge -L 1 --exclude-drafts --json tagName --jq '.[0].tagName'
 gh release download $tag -R danswett/agent-bridge -p $setup
 & ".\$setup"
@@ -797,15 +932,87 @@ offers **Restart to update**, or Settings, **Check for updates**, then **Restart
 takes it there at once; turning off "Include
 pre-releases" in Settings stops it finding them until there are full releases.
 
-### Signing (later)
+### Signing
 
-Releases are unsigned for now. The hook is in place: `build/pack-app.ps1` passes
-`-SignParams` (signtool arguments) or `-AzureTrustedSignFile` (an Azure Trusted Signing
-`metadata.json`) to `vpk pack`, which signs every executable in the package and `Setup.exe`
-before the delta and installer are built. To turn it on, hold the certificate or Trusted Signing
-account as a repository secret and add the argument to the app job's pack step for pushes to
-main only (a pull request from a fork gets no secrets). Until then a downloaded `Setup.exe` meets
-SmartScreen and, where it is on, Smart App Control.
+The owner chose **Azure Artifact Signing** (formerly Trusted Signing), reached from CI over
+OIDC (#734). The code is in place but **off**: until the owner turns it on, every release is
+unsigned, as before, and an unsigned release is a legacy build, not a dogfood-ready one. A
+downloaded `Setup.exe` then meets SmartScreen and, where it is on, Smart App Control.
+
+**How it signs.** In a job of its own, `sign`, which runs only for the commit `main` is at, after
+every check has passed (`publish-gate`), and with signing on. Signing is kept out of the jobs
+that build and run the source: the `app` jobs publish, pack and self-test unsigned, with no
+OIDC token and no Azure session, and with signing on each uploads its publish folder as it
+published it, before anything runs the app from it. The `sign` job builds and runs nothing from
+the source: it downloads both folders and packs each with `build/pack-app.ps1 -PackOnly`, which
+reads the folder it is given, checks its files, host build and architecture, and packs it,
+publishing nothing. There, `azure/login` signs in to Azure with the run's OIDC token: no secret,
+password or certificate is stored anywhere, and the signing key never leaves Artifact Signing's
+HSM. `build/app-signing.ps1` writes the `metadata.json` (endpoint, account and certificate
+profile, and only the Azure CLI credential allowed), and `pack-app.ps1 -AzureTrustedSignFile`
+hands it to `vpk pack`, which signs through signtool and the Artifact Signing plug-in (on .NET
+8), with an RFC 3161 timestamp from `timestamp.acs.microsoft.com`, every executable it packs and
+`Setup.exe`, before it builds the delta and the installer. Both architectures are signed in that
+one job (on x64, since signing only reads the Arm64 files), so a release is signed whole or not
+at all; a signing failure fails the job, and `publish`, which needs it, does not run. The job
+signs out of Azure after it, and `publish` takes the signed packages. With signing off, `sign`
+only notes that on Linux and `publish` takes the `app` jobs' unsigned packages, as before.
+
+**What is checked, and where.** With signing on, nothing unsigned is published:
+
+* `pack-app.ps1 -RequireSignature -SignerEku <eku>` refuses before it builds anything if signing
+  could not happen (`-NoPack`, no signing argument, no metadata file). After `vpk pack` it checks,
+  of the version it just packed: `Setup.exe`; in the full package, every `.exe`, `.dll` and
+  `.node`, which must include `AgentBridge.exe`, `agent-bridge-host.exe`,
+    `agent-bridge-hostw.exe`, the NativeAOT `agent-bridge-host-hook.exe` and
+    `agent-bridge-injector.exe`,     the updater (`Squirrel.exe`) and the one launcher stub vpk names after
+        the pack title, `lib\app\Agent Bridge_ExecutionStub.exe`; and in `Portable.zip`, the same
+        executables under `current\` and, at its root, exactly `Update.exe` and the launcher
+        `Agent Bridge.exe`. Each must have a valid Authenticode signature. Ours (`AgentBridge*`,
+  `agent-bridge*`, the updater, the stub, the launcher and `Setup.exe`) must be signed by the
+  pinned publisher: a certificate with the code-signing EKU, Artifact Signing's Public Trust EKU
+  and the owner's own identity EKU (`1.3.6.1.4.1.311.97.x.y.z.w`, which the owner's validated
+  identity alone has), and a timestamp, so the signature outlives the short-lived certificate.
+  Anything else in the package (the .NET runtime, the Windows App SDK) must carry its vendor's
+  valid signature.
+* `publish-prerelease.ps1 -RequireSignature -SignerEku <eku>` checks each architecture's folder
+  again, and that both have the same signer, before anything is created. Then, with the draft's
+  assets uploaded and before it is published, it downloads each architecture's full and delta
+  packages, `Setup.exe`, `Portable.zip` and feed back from the draft, compares their SHA-256 with
+  what it checked, checks the feed lists only those packages, once each, with this pack id,
+  version and type (full or delta), their sizes and hashes, and
+  checks the signatures once more. Any difference leaves the release a draft.
+* Authenticode covers the executables and `Setup.exe`. The `.nupkg` packages (full and delta) are
+  zip files and carry no Authenticode signature: their integrity is the feed's SHA-256 and size,
+  which the updater checks, the delta's rebuild check, and the release's attestations (above).
+
+**Turning it on** is the owner's, outside this repository, in this order:
+
+1. An Azure subscription with an Artifact Signing account, identity validation of the publisher
+   and a **Public Trust** certificate profile.
+2. An Entra app registration with one federated credential, subject
+   `repo:danswett/agent-bridge:environment:signing`, given the *Artifact Signing Certificate
+   Profile Signer* role on that profile only.
+3. A GitHub environment `signing`, deployable from `main` only, with the variables
+   `APP_SIGNING_CLIENT_ID`, `APP_SIGNING_TENANT_ID`, `APP_SIGNING_ENDPOINT` (for example
+   `https://wus2.codesigning.azure.net/`), `APP_SIGNING_ACCOUNT` and `APP_SIGNING_PROFILE` (or the
+   same as repository variables). None of them is a secret.
+4. Repository variables `APP_SIGNING_IDENTITY_EKU` (the identity's EKU from the certificate
+   profile) and, last, `APP_SIGNING` = `true`. These two are repository variables because the
+   `publish` job, which checks the signatures, has no environment.
+
+From the next push to main, both architectures are signed and checked. If any step fails (a
+missing variable, a refused sign-in, a file the publisher did not sign), that push publishes
+nothing; it never falls back to unsigned. Unsetting `APP_SIGNING` returns to unsigned releases.
+Pull requests and forks never sign, and their OIDC tokens are trusted by no Azure identity.
+
+**Not yet proven.** The tests (`build/test-publish-prerelease.ps1`) use fixture certificates and
+stand-ins for `vpk` and `gh`; they show the checks refuse what they should, not that Azure signs.
+The first signed release must be checked by hand (`Get-AuthenticodeSignature` on an installed
+copy's files) on both architectures; its signed `Setup.exe` is not install-tested in CI, whose
+self-tests run the unsigned package built from the same publish folder. And signing is not reputation: SmartScreen can still warn on
+the first downloads of a new publisher until its reputation builds, so a clean PC installing
+without a SmartScreen prompt (#747) has to be checked on a clean PC, not assumed.
 
 ### Starting with Windows
 
@@ -814,7 +1021,11 @@ entry that starts the app with `--background` into the notification area, so toa
 arriving after a restart. The app needs no restart-on-failure and nothing more than
 Explorer's startup list, so a `Run` entry is enough for it. Either can be turned off in
 Settings, and stays off. Closing the window keeps the app in the notification area; its
-menu quits it, which leaves the host running.
+menu opens the window, quits it (which leaves the host running), or offers Send feedback
+(#738). Send feedback, there and at the top of Settings, opens one dialog saying feedback
+isn't available in the Windows app yet, with only Close: nothing is collected or sent, and
+there is no plaintext fallback until the encrypted upload lands. The self-test opens it from
+both (the tray's choice through `TrayIcon.Run`, from a hidden window).
 
 An elevated app (for example one started by an elevated installer) never starts the host
 directly: the host would be elevated too, unable to type into ordinary consoles and
@@ -849,7 +1060,7 @@ separate, explicit step ([migration.md](migration.md)).
 **The window** ([ui.md](design/ui.md) §7, #180): Mica behind the app's own 48 px title bar, which carries the mark (its native 20 px cut, in Bridge, which is Highlight in high contrast), the product's name and a search box (Ctrl+K), beside the system caption buttons, which the app paints in its theme on the UI thread (not with the title bar's `PreferredTheme`, whose repaint from a thread-pool thread crashed the app on a high-contrast switch, #240) and leaves in the system's colours in high contrast; a compact rail of Sessions, Machines, Launch and Usage, with Settings at its foot and a 3×16 Bridge pill on the page shown; and the pages on a layer with an 8 px top-left radius. Each page has its title in the type ramp's title role. The search box finds sessions on every machine by the words of their title, repository, branch, agent or machine, titles starting with them first, then the most recently updated, whichever machine the list shows, and opens the one chosen as a toast does. The window resizes freely down to 360×600 and opens where it was left (`<profile>-window.json`, maximised too), unless that is off every screen, when it opens centred on the main display at 1280×860 or as large as the display allows. WinUI's controls that follow the system accent (accent buttons, the rail's pill, checked controls, focused fields, selected text and links) are Bridge, from the generated accent palette ([design/README.md](../design/README.md)); high contrast keeps the system's colours.
 | Page | What it has | Parity source |
 |---|---|---|
-| Sessions | Panes by window width ([ui.md](design/ui.md) §5.2, #180), at the PWA's breakpoints: from 1280 px the list (320), the session and an inspector (336, hidden and shown from the session's header) with the delegate selected in the strip, or with none the session's Details and Tools; from 760 the list (320) and the session with Conversation, Delegates and Tools tabs; below, one column, the list or the session with Back. A divider between the list and the session, and between the session and the inspector (#297), drags, moves 16 px with Left and Right when focused, and goes back to the default on a double-click: the list 264–480, the inspector 280–560, the session never under 440, the inspector then the list giving way at a narrower window and the widths kept coming back once it widens; kept in `<profile>-panes.json` (`PaneWidths`). The session open is the selected row (`MainViewModel.Selected`), whatever opened it (a row, search, a toast, the tray, a launch), and stays open through every resize; a machine tab that hides its row closes it. **List** (§6.1): one row per live session of every machine on the account (this one's over the pipe, the others' through the relay), with machine tabs (All, then each machine) and, on the title's row, the sort menu (Your order, Most recent, Machine) and New, which opens Launch. A row is two lines: the status glyph aligned to line 1 ([ui.md](design/ui.md) §2.2: the generated glyphs, turning while working or delegating unless Windows has animations off, stopping and starting as that setting changes, the violet diamond while an agent drives), the title, semibold with the 6 px Bridge dot for unread activity or else the age, then at most two facts on one line (#214): the status's first fact in its tone's colour, and the machine once there is more than one, else the repository. Never the model, counts or pid: those are in Details. Rows keep the person's order, kept in `<profile>-order.json` (#164): a new session goes to the top once and an update never moves a row; Alt+Up/Down on a row, its menu (right-click, press and hold, Shift+F10: Move up, Move down, Pin) and a drag by the grip that shows on hover move and pin rows, with "Pinned" and "Sessions" over each group once anything is pinned; a row whose session updated since it was last open has the dot; sessions a host removed while the app ran fold into Ended · N below the rows. **Session** (§6.2, §6.4, §6.5): the title and one meta line (glyph, the whole status, machine, repository), with Pin, Details and the inspector toggle as icon buttons; the conversation at the reading measure (770 px), centred in the pane: your last message, or a prompt you didn't type (a schedule's or an agent's, `activity.userMessageFrom`, #489) as a collapsed line at the column's start in agent colour, a clock and "Scheduled prompt · #4" or the driven diamond and "Sent by an agent", two lines of it and Show prompt (a compact disclosure, as the PWA's: a chevron leading its words, pointing right shut and down open, at the label's size, opening on all of it inside a thin agent rule), a schedule's repeat folded to "same as last time"; the main agent's response (Markdown) with its age, its code blocks wrapped rather than scrolled, left to right with hidden and bidi characters and right-to-left letters drawn as escapes (#220) (an approval's card draws its whole message as one such block, exactly as written, fence markers included; nothing in it is read as Markdown, and it has no Copy; a block says "Contains hidden characters" or "Contains right-to-left text" when it does), and each with Copy, which copies what is drawn (#296), reasoning behind "Show reasoning", the current tool's glyph named for its state with the call in mono; question forms in the stream headed "Main agent asks" or the delegate's name (single and multi choice, Other, boolean, text, number, Copilot permission Approve once / Deny); and the reply box, centred under it, a card with a 2 px Bridge edge (Ctrl+Enter or the icon Send, paste an image, Attach: up to 100 MiB each in chunks over the pipe, `sessions.attach.direct`, or through the relay's blob store to another machine, `sessions.attach.blob`, or 256 KiB where neither is offered, which shrinks a larger image to fit). **Details** (the header's Details and the inspector): status, agent, machine, model, repository, branch and folder (mono, cut in the middle, whole in the tooltip), driver, turns, compactions, process, for how long, updated, ID (mono), then End session with the host's two-press rule. **Tools** (the inspector and the Tools tab): the tool history, loaded as it comes on screen and kept current only while it is. **Delegates** (§6.3, §6.4, #229; the rules are `Attribution`, the PWA's `pwa/js/attribution.js`, case for case): from 1280 px a strip under the header, one item per delegate the main agent started (glyph, name, how long it has run and "N nested"), the selected one in Bridge, the finished folded into "N finished", and "N more delegates not listed" for what the host left out; below 1280 the Delegates tab, every delegate nested under its parent, the finished under "N finished". Every delegate name is its safe label (`DelegateLabel`, §6.3): invisible and bidi characters removed, cut to 60 characters, and "Delegate “…”" for one that reads as the main agent. A delegate opened (from the strip, the tab, a nested list or the conversation) shows in the inspector, or is pushed in the tab: its name under a fixed "Delegate" overline, and its glyph; Status, Model, Kind and ID (mono); its Task, Latest (its own response, fetched with `session.get { id, agent }` while on screen, again every 10 s while it runs) and Reasoning, collapsed; its Tools, mono, a glyph per call with how long each took; and the delegates it started. Its one action, "Ask main agent to stop it", fills the reply box with a message to the main agent naming it by its id alone ("Please stop your delegate *id*.") and sends nothing: replies only ever go to the main agent, and nothing types to a delegate ([subagents.md](design/subagents.md) §6). The conversation has the main agent's own words only, labelled "Main agent" where the host says whose they are, and one meta line for each of its delegates starting ("Started 2 delegates · 17m") and reporting back ("Delegate *name* reported back · 14m"), the name linking to it. Two or more of these lines fold behind one row, closed (#1063, the PWA's D3 fold, [ui.md](design/ui.md) §6.4): a delegate icon and a button that says how many delegates there were and how they ended ("8 delegates · 5 reported back, 1 failed"; failed and ended are counted apart, a count of none is left out), with a chevron inside the button, then "N still working" as a link of its own (a separate target; with more than one it opens the earliest started, and its name says so). The button has the name and the expanded or collapsed state (`DisclosureButton`), Enter and Space work it, and opening shows every line in place with no change to what they say or their order. It is open or closed for each session while the app runs, a session chosen again keeping it, and is never saved. A delegate's question stays in the stream as its own card, so the fold never hides it. A host that lists no delegates (Claude, Codex, an older host: status rule 8) has no strip or list, only the background agents and commands it counts, in the tab and in Details. While a machine's discovery is held, there is no banner (#1064): its Machines row says "Discovery held" once the hold has lasted two minutes, with the host's reason as the line's tooltip and accessible description ([v1-sessions.md](protocol/v1-sessions.md#discovery-held)), and a resume it holds back says "*machine* is still finding its sessions. Try Launch again in a moment." in the launch form, in secondary text. The banner that says what stops the app from its job (the host not running, refusing the app, connecting, or view only) has no close button, shows only after a 3 s grace and stays at least 10 s, and opens and closes by animating its height with the toast motion (instantly under reduced motion). Each other machine's updates (#51, [v1-update.md](protocol/v1-update.md)) are on the Machines page | PWA cards (`pwa/js/ui`), which mirror `agent-bridge-reply-card.js`; the dashboard's `install_update` and `check_updates` buttons |
+| Sessions | Panes by window width ([ui.md](design/ui.md) §5.2, #180), at the PWA's breakpoints: from 1280 px the list (320), the session and an inspector (336, hidden and shown from the session's header) with the delegate selected in the strip, or with none the session's Details and Tools; from 760 the list (320) and the session with Conversation, Delegates and Tools tabs; below, one column, the list or the session with Back. A divider between the list and the session, and between the session and the inspector (#297), drags, moves 16 px with Left and Right when focused, and goes back to the default on a double-click: the list 264–480, the inspector 280–560, the session never under 440, the inspector then the list giving way at a narrower window and the widths kept coming back once it widens; kept in `<profile>-panes.json` (`PaneWidths`). The session open is the selected row (`MainViewModel.Selected`), whatever opened it (a row, search, a toast, the tray, a launch), and stays open through every resize; a machine tab that hides its row closes it. **List** (§6.1): one row per live session of every machine on the account (this one's over the pipe, the others' through the relay), with machine tabs (All, then each machine) and, on the title's row, the sort menu (Your order, Most recent, Machine) and New, which opens Launch. A row is two lines: the status glyph aligned to line 1 ([ui.md](design/ui.md) §2.2: the generated glyphs, turning while working or delegating unless Windows has animations off, stopping and starting as that setting changes, the violet diamond while an agent drives), the title, semibold with the 6 px Bridge dot for unread activity or else the age, then at most two facts on one line (#214): the status's first fact in its tone's colour, and the machine once there is more than one, else the repository. Never the model, counts or pid: those are in Details. Rows keep the person's order, kept in `<profile>-order.json` (#164): a new session goes to the top once and an update never moves a row; Alt+Up/Down on a row, its menu (right-click, press and hold, Shift+F10: Move up, Move down, Pin) and a drag by the grip that shows on hover move and pin rows, with "Pinned" and "Sessions" over each group once anything is pinned; a row whose session updated since it was last open has the dot; sessions a host removed while the app ran fold into Ended · N below the rows. **Session** (§6.2, §6.4, §6.5): the title and one meta line (glyph, the whole status, machine, repository), with Pin, Details and the inspector toggle as icon buttons; the conversation at the reading measure (770 px), centred in the pane: your last message, or a prompt you didn't type (a schedule's or an agent's, `activity.userMessageFrom`, #489) as a collapsed line at the column's start in agent colour, a clock and "Scheduled prompt · #4" or the driven diamond and "Sent by an agent", two lines of it and Show prompt (a compact disclosure, as the PWA's: a chevron leading its words, pointing right shut and down open, at the label's size, opening on all of it inside a thin agent rule), a schedule's repeat folded to "same as last time"; the main agent's response (Markdown) with its age, its code blocks wrapped rather than scrolled, left to right with hidden and bidi characters and right-to-left letters drawn as escapes (#220) (an approval's card draws its whole message as one such block, exactly as written, fence markers included; nothing in it is read as Markdown, and it has no Copy; a block says "Contains hidden characters" or "Contains right-to-left text" when it does), and each with Copy, which copies what is drawn (#296), reasoning behind "Show reasoning", the current tool's glyph named for its state with the call in mono; question forms in the stream headed "Main agent asks" or the delegate's name (single and multi choice, Other, boolean, text, number, Copilot permission Approve once / Deny); and the reply box, centred under it, a card with a 2 px Bridge edge (Ctrl+Enter or the icon Send, paste an image, Attach: up to 100 MiB each in chunks over the pipe, `sessions.attach.direct`, or through the relay's blob store to another machine, `sessions.attach.blob`, or 256 KiB where neither is offered, which shrinks a larger image to fit). **Details** (the header's Details and the inspector): the rows of the one table both clients follow ([session-details.json](design/session-details.json), [ui.md](design/ui.md) §6.2, #1087), in its order, and a row with no value left out: Status (the status words only, "Not responding" without its time, which Not responding since carries; "Offline · last seen 5m ago" while the machine is away); In this state ("for 12m", not when the session is idle, and not while the machine is away); Message; Not responding since and Driven by (neither while the machine is away); Agent; Model; Machine; Repository; Branch and Folder (mono; the folder cut in the middle, whole in the tooltip); Started (a clock time, with the date on another day, the full timestamp in the tooltip); Updated ("2m ago"); Background; Turns ("12 turns"); Compactions ("3 compactions", not at none); Process ("pid 4312", mono); ID (mono); then End session with the host's two-press rule. A value wraps to as many lines as it needs, so Status, Message and Background are never cut off; only the Folder is shortened (the self-test checks none is trimmed). `DetailsTableTests` checks them against the table, as the PWA's `details-rows.test.mjs` does. **Tools** (the inspector and the Tools tab): the tool history, loaded as it comes on screen and kept current only while it is. **Delegates** (§6.3, §6.4, #229; the rules are `Attribution`, the PWA's `pwa/js/attribution.js`, case for case): from 1280 px a strip under the header, one item per delegate the main agent started (glyph, name, how long it has run and "N nested"), the selected one in Bridge, the finished folded into "N finished", and "N more delegates not listed" for what the host left out; below 1280 the Delegates tab, every delegate nested under its parent, the finished under "N finished". Every delegate name is its safe label (`DelegateLabel`, §6.3): invisible and bidi characters removed, cut to 60 characters, and "Delegate “…”" for one that reads as the main agent. A delegate opened (from the strip, the tab, a nested list or the conversation) shows in the inspector, or is pushed in the tab: its name under a fixed "Delegate" overline, and its glyph; Status, Model, Kind and ID (mono); its Task, Latest (its own response, fetched with `session.get { id, agent }` while on screen, again every 10 s while it runs) and Reasoning, collapsed; its Tools, mono, a glyph per call with how long each took; and the delegates it started. Its one action, "Ask main agent to stop it", fills the reply box with a message to the main agent naming it by its id alone ("Please stop your delegate *id*.") and sends nothing: replies only ever go to the main agent, and nothing types to a delegate ([subagents.md](design/subagents.md) §6). The conversation has the main agent's own words only, labelled "Main agent" where the host says whose they are, and one meta line for each of its delegates starting ("Started 2 delegates · 17m") and reporting back ("Delegate *name* reported back · 14m"), the name linking to it. Two or more of these lines fold behind one row, closed (#1063, the PWA's D3 fold, [ui.md](design/ui.md) §6.4): a delegate icon and a button that says how many delegates there were and how they ended ("8 delegates · 5 reported back, 1 failed"; failed and ended are counted apart, a count of none is left out), with a chevron inside the button, then "N still working" as a link of its own (a separate target; with more than one it opens the earliest started, and its name says so). The button has the name and the expanded or collapsed state (`DisclosureButton`), Enter and Space work it, and opening shows every line in place with no change to what they say or their order. It is open or closed for each session while the app runs, a session chosen again keeping it, and is never saved. A delegate's question stays in the stream as its own card, so the fold never hides it. A host that lists no delegates (Claude, Codex, an older host: status rule 8) has no strip or list, only the background agents and commands it counts, in the tab and in Details. While a machine's discovery is held, there is no banner (#1064): its Machines row says "Discovery held" once the hold has lasted two minutes, with the host's reason as the line's tooltip and accessible description ([v1-sessions.md](protocol/v1-sessions.md#discovery-held)), and a resume it holds back says "*machine* is still finding its sessions. Try Launch again in a moment." in the launch form, in secondary text. The banner that says what stops the app from its job (the host not running, refusing the app, connecting, or view only) has no close button, shows only after a 3 s grace and stays at least 10 s, and opens and closes by animating its height with the toast motion (instantly under reduced motion). Each other machine's updates (#51, [v1-update.md](protocol/v1-update.md)) are on the Machines page | PWA cards (`pwa/js/ui`), which mirror `agent-bridge-reply-card.js`; the dashboard's `install_update` and `check_updates` buttons |
 | Machines | One row per machine on the account (#180, #213): this one first, then the others connected, then those offline from the relay's roster. A row has the machine icon and the name on line 1 with its status trailing it (This machine, Online, Connecting or Offline), and at most two facts on line 2: the session count, and `View only` for a host that takes no answers, replies or End session from here, with the host's reason as the facts' tooltip rather than on the row. A machine offering updates (#51) has what its app is doing and how the last update ended inside its row, with Check and Install; an offline one has when it was last seen and the two-press Forget; one connected has Show sessions, which picks it in the Sessions page's machine tabs. Its buttons share one style, in one column under the text. Check all, beside the page's title, checks every machine listed and this one | PWA machines (pwa/js/ui/views.js) |
 | Launch | Start or resume a session on any machine on the account that offers it (`sessions.launch`): machine, resume, agent, workspace (a new worktree where the folder is isolated), profile, model, effort, context and permissions as that machine offers them, and a first prompt sent whole. Each press is one launch with its own request id, sent again with the same id after a lost connection, so it starts once; the outcome (started, busy with the reason, refused, failed, unconfirmed) is shown and announced to screen readers, and the new session's card opens when it arrives. Try again sends a launch that could not be sent with the same request, but only to the same host process, never to one that restarted since, and only while the host still remembers the request (9 minutes from the first send). An error from the host says the launch may still have started, and a failure says what Try again would send, since the form may have changed since. A launch the machine reports failed is sent again as a new request. A host that names no run in its hello counts each connection as a new run, so a lost launch to it is reported unconfirmed rather than sent again. What was picked on a machine is kept while it drops out and when another machine is picked. A machine's choices are fetched only while the page is open, since that is costly at the host. A machine waiting on a folder-trust question says it is busy when the page opens or its choices are reloaded. Codex is not launched without a first prompt (nor needs one for a session brought over). Where the machine takes sessions from the account's others (`sessions.transfer`), Resume also lists the ended sessions they hand on (`sessions.transfer.serve`), by machine: picking one copies it over and resumes it as a new session in the workspace picked, with a command the app signs with its own device key, as a person's device (kind `app`), for the machine the session is on ([v1-transfer.md](protocol/v1-transfer.md)); the original stays. A transfer to this machine goes to its host through the relay, as the protocol requires, not the pipe; a transfer waits up to 12 minutes for its outcome and is resent for up to 20; why the form cannot go is said beside the Launch button, apart from the last launch's outcome. A launched agent asking whether to trust its folder ([v1-launch.md](protocol/v1-launch.md#folder-trust)), listed by the machine or named in a launch's outcome (which counts only until the machine's next listing, asked for at once), is shown in full (agent, the whole folder path wrapped and selectable, the repository root it applies to, the agent's own words); where the machine allows it and has approved this app, Trust and Quit answer it with `launch.trust.answer` and a command the app signs as a person's device for that machine, question and choice, through the relay only (this machine's own host through its loopback, never the pipe). Otherwise it says to answer at the machine and why; for this machine, "Allow answering from this app" turns the setting on with this app approved. An answer that may have typed is never offered again; an error offers only that same request again. A machine that takes no launches now (agent-ha-bridge runs there) is still listed, to show such a question read-only | PWA launch view (`pwa/js/ui/launch-view.js`), agent-ha-bridge's launch card |
 | Usage | Each agent's windows: percent, amber at 75 %, red at 90 %, pace against the window, "resets in" | PWA usage panel |
@@ -969,7 +1180,8 @@ tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to 
   (`agent-bridge-host migrate` / `rollback`, [migration.md](migration.md)); the page needs
   to show the dry run's report, confirm, and show the result, and it cannot be reached through
   the relay.
-* Code signing.
+* Turning code signing on: the owner's Azure Artifact Signing account, identity validation
+  and the `signing` environment (Signing, above).
 * The first-run wizard's agent detection and winget installs.
 
 ## Testing
@@ -988,7 +1200,10 @@ tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to 
   host through the in-process relay with the host's account), toast plans and activation handling, background updates (`AutoUpdaterTests`: a release downloaded and waiting for Restart to update, a device's Install waiting for the sessions however long that takes, a read-only host beside agent-ha-bridge updating like any other, the other profiles it never stops, the host never left down and never started by it, a lost link made again, "Needs you" past six hours, and the rate-limit hold), host lifecycle with a
   fake task scheduler and launcher, the Markdown model and the demo host. Platform-neutral,
   so they run on Linux too.
-* CI (`app` jobs, one for x64 on `windows-latest` and one for Arm64 on `windows-11-arm`) runs
+* CI (`app` jobs, one for x64 on `windows-latest` and one for Arm64 on `windows-11-arm`) runs on
+  `main` always, and on a pull request only when it changes the app, its packaging inputs or the
+  projects `pack-app.ps1` publishes (`app-package` and `app-package-host` in the quality catalog).
+  Each runs
   `build/pack-app.ps1 -Runtime <win-x64|win-arm64>`: publishes the app, host, launcher, injector
   and hook into one folder for that architecture, checks for the app's `.pri`, the executables
   (each built for that machine) and the bundled Slipgates Sans
@@ -1033,6 +1248,42 @@ tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to 
   the package (`build/publish-prerelease.ps1
   -DryRun`) and uploads `Setup.exe` and the packages as an artifact, which the `publish` job
   publishes for a push to main.
+* Distribution notices (#744): `build/app-notices.ps1` copies the project's `LICENSE` verbatim
+  to `LICENSE.txt`, creates `SOURCE.txt` with exact-commit source/archive/build/install links,
+  and bundles restored, version-specific NuGet licence/copyright/notice files under
+  `ThirdPartyNotices/packages/`, indexed by `THIRD-PARTY-NOTICES.txt`. Its hashed manifest binds
+  those files, including the existing font OFLs, to the build version, architecture and commit.
+  Dependency identities come from the published `.deps.json` files, not a global cache sweep.
+  Missing package metadata, declared licence files or all notice material fails packing.
+  An expression-only package with no notice files may use reviewed, offline material in
+  `build/notices/<lowercase-id>/<version>/`: `provenance.json` must match its exact package
+  identity, declared SPDX expression and repository URL/commit, the restored `.nupkg` SHA-512,
+  and the upstream notice's SHA-256. The notice and provenance are bundled verbatim and hashed;
+  no network lookup or SPDX-only fallback is allowed. Markdig 0.43.0 (BSD-2-Clause) and
+  Velopack 1.2.161 (MIT) supply their upstream notices this way. A package declaring only a
+  licence URL may instead pin the material obtained through that exact declared URL:
+  provenance must match the package's
+  licence URL and copyright, its notice source must be that URL, and both archive and notice
+  hashes are still mandatory. Microsoft.Windows.SDK.NET.Ref 10.0.22621.57 supplies the
+  Microsoft SDK's verbatim RTF terms this way, recording the resolved source URL without
+  inventing an SPDX expression or a repository commit. Its licence remains UNKNOWN in SBOM
+  enrichment rather than being relabelled as an open-source licence.
+  Different versions, unreviewed packages or changed material
+  fail closed; this does not assert licence compatibility or invitation clearance.
+  A pack-only signing operation verifies this bundle without regenerating it or requiring
+  restored packages on the credential-bearing signer.
+  CI checks the actual portable and full-package entries, and the silently installed copy,
+  byte-for-byte against the notice inventory. `app-self-test-<runtime>` includes
+  `installed/distribution-evidence.json`: the installer and archive SHA-256 values, exact archive
+  file lists, installed file hashes and source identity. The SBOM step adds package-declared
+  SPDX expressions or verbatim declared licence-file text where present, and the project's
+  verbatim AGPL text for its published project entries; it retains existing fields and warns
+  rather than inventing a licence for an unmatched component.
+  These checks are packaging evidence, not compatibility certification, an exhaustive native
+  redistribution audit, or invitation clearance. The final candidate still needs Compliance's
+  actual redistributed-file/terms and corresponding-source disposition. In particular, CI's
+  installed proof is of its unsigned installer; it must not be relabelled as proof of the
+  subsequently signed installer described in **Signing** above.
 * The `product` job runs the tests on Linux, Windows x64 and Windows on Arm, including the
   NativeAOT injector typing into a real console and the NativeAOT hook, each built for the
   runner's own architecture.

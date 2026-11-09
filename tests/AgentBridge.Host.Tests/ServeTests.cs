@@ -207,7 +207,7 @@ public sealed class ServeTests : IAsyncLifetime
             ch.RequestAsync(Ops.SessionsSubscribe, new { }),
             ch.RequestAsync(Ops.SessionsSubscribe, new { }));
         Assert.All(both, r => Result(r));
-        await Wait.UntilAsync(() => service.Subscribers == 1, "one subscription");
+        await HostWait.UntilAsync(() => service.Subscribers == 1, "one subscription");
 
         // Drain both snapshots (the first may be cut short by its replacement), then one
         // change must arrive exactly once.
@@ -240,7 +240,7 @@ public sealed class ServeTests : IAsyncLifetime
 
         // Every replaced feed is collectable while the channel stays open; only the current
         // one is still held.
-        await Wait.UntilAsync(() =>
+        await HostWait.UntilAsync(() =>
         {
             GC.Collect();
             GC.WaitForPendingFinalizers();
@@ -260,7 +260,7 @@ public sealed class ServeTests : IAsyncLifetime
 
         await client.DisposeAsync();
 
-        await Wait.UntilAsync(() => service.Subscribers == 0, "the subscription to end with its channel", Patience);
+        await HostWait.UntilAsync(() => service.Subscribers == 0, "the subscription to end with its channel", Patience);
     }
 
     [Fact]
@@ -383,7 +383,7 @@ public sealed class ServeTests : IAsyncLifetime
         var before = source.Revision;
         Fixture.Append(otherEvents, Copilot.Assistant("second", 5));
         await source.RefreshAsync();
-        await Wait.UntilAsync(() => feed!.Held == 1, "the quiet session's next change held", Patience);
+        await HostWait.UntilAsync(() => feed!.Held == 1, "the quiet session's next change held", Patience);
         return (ch, time, feed!, before);
     }
 
@@ -457,7 +457,7 @@ public sealed class ServeTests : IAsyncLifetime
         // releasing the other session or advancing the watermark past that session's floor.
         var held = before with { Title = "A held title" };
         Assert.True(feed.Subscription.Channel.Writer.TryWrite(new SessionEvent(Events.SessionUpsert, held, source.Revision + 2)));
-        await Wait.UntilAsync(() => feed.Held == 2, "both quiet sessions' changes held", Patience);
+        await HostWait.UntilAsync(() => feed.Held == 2, "both quiet sessions' changes held", Patience);
         var after = change(held);
         Assert.True(feed.Subscription.Channel.Writer.TryWrite(new SessionEvent(Events.SessionUpsert, after, source.Revision + 3)));
 
@@ -535,7 +535,7 @@ public sealed class ServeTests : IAsyncLifetime
         }
         Fixture.Append(otherEvents, Copilot.Assistant("held", 6));
         await source.RefreshAsync();
-        await Wait.UntilAsync(() => feed!.Held == 1, "the quiet session's third change held", Patience);
+        await HostWait.UntilAsync(() => feed!.Held == 1, "the quiet session's third change held", Patience);
 
         await ChangeAsync("not sent since the resume", 7);
         Assert.Equal(Id, Received.Read<SessionPatch>((await NextAsync(ch)).Data).Id);
@@ -567,6 +567,71 @@ public sealed class ServeTests : IAsyncLifetime
         Assert.Equal(Id, live.Id);
         Assert.True(ch.IsOpen);
         Assert.Equal(1, service.Subscribers);
+    }
+
+    // #1190: idleMs is an age, so the host keeps its own clock minus it; without it, or with an
+    // openQuestion but no open session, the host knows nothing it could hold a push back for.
+    [Fact]
+    public async Task A_focus_with_idleMs_gives_the_host_the_last_input_by_its_own_clock_and_one_without_it_leaves_it_unknown()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        service = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0")) { Time = time };
+        host.Hub.Handler = service.HandleAsync;
+        var ch = await OpenAsync();
+        Result(await ch.RequestAsync(Ops.SessionsSubscribe, new { patch = true }));
+        await SnapshotAsync(ch);
+
+        Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = Id, openQuestion = "q1", idleMs = 1500 }));
+        var said = Assert.Single(service.Presences());
+        Assert.Equal((true, Id, "q1", (DateTimeOffset?)(time.GetUtcNow() - TimeSpan.FromMilliseconds(1500))), (said.Visible, said.Open, said.OpenQuestion, said.LastInput));
+
+        Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, openQuestion = "q1", idleMs = -5 }));
+        said = Assert.Single(service.Presences());
+        Assert.Equal((true, (string?)null, (string?)null, (DateTimeOffset?)null), (said.Visible, said.Open, said.OpenQuestion, said.LastInput));
+
+        Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = Id }));
+        Assert.Null(Assert.Single(service.Presences()).LastInput);
+    }
+
+    [Fact]
+    public async Task An_idleMs_of_a_day_is_kept_one_past_a_day_is_unknown_and_one_not_whole_fails_the_request_and_keeps_what_was_said()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        service = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0")) { Time = time };
+        host.Hub.Handler = service.HandleAsync;
+        var ch = await OpenAsync();
+        Result(await ch.RequestAsync(Ops.SessionsSubscribe, new { patch = true }));
+        await SnapshotAsync(ch);
+
+        Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = Id, idleMs = 86_400_000 }));
+        Assert.Equal(time.GetUtcNow() - TimeSpan.FromDays(1), Assert.Single(service.Presences()).LastInput);
+
+        Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = Id, idleMs = 86_400_001 }));
+        Assert.Null(Assert.Single(service.Presences()).LastInput);
+
+        Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = Id, idleMs = 1500 }));
+        var refused = await ch.RequestAsync(Ops.SessionsFocus, new { visible = false, idleMs = 1.5 });
+        Assert.False(refused.GetProperty("ok").GetBoolean());
+        Assert.Contains("idleMs only as a whole number", refused.GetRawText());
+        var kept = Assert.Single(service.Presences());
+        Assert.Equal((true, (string?)Id, (DateTimeOffset?)(time.GetUtcNow() - TimeSpan.FromMilliseconds(1500))), (kept.Visible, kept.Open, kept.LastInput));
+    }
+
+    [Fact]
+    public async Task What_a_device_said_it_shows_stops_counting_when_its_channel_closes()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        service = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0")) { Time = time };
+        host.Hub.Handler = service.HandleAsync;
+        var ch = await OpenAsync();
+        Result(await ch.RequestAsync(Ops.SessionsSubscribe, new { patch = true }));
+        await SnapshotAsync(ch);
+        Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = Id, openQuestion = "q1", idleMs = 0 }));
+        Assert.Single(service.Presences());
+
+        await client.DisposeAsync();
+
+        await HostWait.UntilAsync(() => service.Presences().Count == 0, "the device's presence to end with its channel", Patience);
     }
 
     [Fact]

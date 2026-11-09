@@ -309,7 +309,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   body[data-page="sessions"] .content { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
   body[data-page="sessions"] .content > .banner { margin: var(--ab-space-3) var(--ab-space-6) 0; }
   .route-sessions:not([hidden]) { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-  .sessions:not([hidden]) { display: grid; grid-template-columns: clamp(264px, 26vw, 320px) minmax(0, 1fr); flex: 1; min-height: 0; }
+  .sessions:not([hidden]) { --list-w: 320px; --inspector-w: 336px; display: grid; grid-template-columns: var(--list-w) minmax(0, 1fr); position: relative; flex: 1; min-height: 0; }
   .list-pane { min-height: 0; overflow: auto; padding: var(--ab-space-5) var(--ab-space-2) var(--ab-space-4); border-right: 1px solid var(--ab-stroke2); }
   .list-pane > :not(.session-list, .needs-you) { margin-left: var(--ab-space-3); margin-right: var(--ab-space-3); }
   .session-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -318,10 +318,9 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   .session-header .inspector-button { display: none; }
 }
 @media (min-width: 1280px) {
-  .sessions:not([hidden]) { grid-template-columns: 320px minmax(0, 1fr); }
   .session-header .inspector-button { display: inline-grid; }
   body[data-inspector="shown"] .view-tabs { display: none; }
-  body[data-inspector="shown"] .view-body { grid-template-columns: minmax(0, 1fr) 336px; }
+  body[data-inspector="shown"] .view-body { grid-template-columns: minmax(0, 1fr) var(--inspector-w); }
   body[data-inspector="shown"] .session-view .conversation { display: flex; }
   body[data-inspector="shown"] .session-view .inspector { display: grid; border-left: 1px solid var(--ab-stroke2); }
   body[data-inspector="shown"] .session-view .details, body[data-inspector="shown"] .session-view .tools-panel { display: block; }
@@ -331,6 +330,27 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   body[data-inspector="shown"] .session-view[data-delegate="open"] :is(.details, .tools-panel) { display: none; }
   body[data-inspector="shown"] .session-view[data-delegate="open"] .delegate-pane:not([hidden]) { display: block; }
   body[data-inspector="shown"] .delegate-back { display: none; }
+  body[data-inspector="shown"] .pane-divider[data-pane="inspector"] { display: block; right: calc(var(--inspector-w) - var(--divider-hit) / 2); }
+}
+/* The dividers between the panes (ui.md §5.2, #1030): as tall as the page, an 8 px zone (44 px for
+   touch, drawn as the same hairline) over the panes' own edge. Clear at rest, stroke2 pointed at,
+   Bridge dragged or focused (the focused line is the focus indicator: a ring around the zone
+   beside it would draw three lines); the pane follows the pointer, so there is no motion to reduce. */
+.pane-divider {
+  --divider-hit: 8px;
+  display: none; position: absolute; top: 0; bottom: 0; z-index: 1;
+  width: var(--divider-hit); cursor: col-resize; touch-action: none; user-select: none;
+}
+.pane-divider[data-pane="list"] { left: calc(var(--list-w) - var(--divider-hit) / 2); }
+.pane-divider::before { content: ""; position: absolute; top: 0; bottom: 0; left: calc(50% - 1.5px); width: 3px; background: transparent; }
+.pane-divider:hover::before { background: var(--ab-stroke2); }
+.pane-divider:focus-visible::before, .pane-divider[data-dragging]::before { background: var(--ab-bridge); }
+.pane-divider:focus-visible { outline: none; }
+@media (pointer: coarse) and (not (any-pointer: fine)) { .pane-divider { --divider-hit: 44px; } }
+@media (min-width: 760px) { .pane-divider[data-pane="list"] { display: block; } }
+@media (forced-colors: active) {
+  .pane-divider:hover::before { background: ButtonText; }
+  .pane-divider:focus-visible::before, .pane-divider[data-dragging]::before { background: Highlight; }
 }
 /* Whatever scrolls holds what is positioned inside it (#288). Text kept for a screen reader
    (.sr-only, a delegate's "under …") is absolutely positioned; with no positioned ancestor its
@@ -360,6 +380,48 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 }
 .button.secondary { background: transparent; color: var(--ab-bridge); }
 .button:disabled, .button[aria-disabled="true"] { opacity: .55; cursor: default; }
+.feedback-dialog {
+  width: min(720px, calc(100vw - 24px)); max-height: 90vh; overflow: auto; margin: auto;
+  color: var(--ab-text); background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card);
+  padding: 16px 16px 0; scroll-padding-bottom: calc(var(--tap) + 8px + 16px + 1px + 8px);
+}
+.feedback-dialog::backdrop { background: var(--ab-shell); opacity: .85; }
+.feedback-dialog h2 { margin: 0 0 8px; }
+.feedback-label { display: block; margin: 10px 0 4px; font-weight: 600; }
+.feedback-dialog textarea {
+  width: 100%; min-height: 96px; padding: 8px; resize: vertical; font: inherit; font-size: 16px;
+  color: var(--ab-text); background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-control);
+}
+.feedback-included-list { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 8px; }
+.feedback-included-list > li {
+  min-width: 0; padding: 8px 10px; display: grid; grid-template-columns: minmax(8rem, .7fr) minmax(0, 1fr);
+  gap: 8px; border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-control);
+}
+.feedback-included-list > li > details { grid-column: 1 / -1; }
+.feedback-included-list details ul { margin: 4px 0 0; padding-inline-start: 24px; overflow-wrap: anywhere; }
+.feedback-dialog details > summary { min-height: var(--tap); display: flex; align-items: center; cursor: pointer; font-weight: 600; }
+.feedback-dialog details > summary::after {
+  content: ""; flex: 0 0 10px; width: 10px; height: 10px; margin-inline-start: auto;
+  border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(-45deg);
+}
+.feedback-dialog details[open] > summary::after { transform: rotate(45deg); }
+@media (prefers-reduced-motion: no-preference) {
+  .feedback-dialog details > summary::after { transition: transform 120ms ease; }
+}
+.feedback-exact-data { margin-top: 8px; }
+.feedback-preview {
+  max-height: 40vh; overflow: auto; padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere;
+  color: var(--ab-text); background: var(--ab-shell); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-control);
+  font: var(--type-code) / var(--type-code-line) var(--ab-font-mono);
+}
+.feedback-actions {
+  position: sticky; bottom: 0; z-index: 1; justify-content: flex-end;
+  margin: 8px -16px 0; padding: 8px 16px 16px;
+  border-top: 1px solid var(--ab-stroke2); background: var(--ab-card);
+}
+@media (max-width: 420px) {
+  .feedback-included-list > li { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+}
 /* In forced colours the tokens are already system colours (Highlight under HighlightText),
    but the browser still draws its Canvas backplate behind a filled control's label, which
    hid it. These controls keep the pairs exactly as the tokens give them. */
@@ -412,8 +474,9 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   padding: 0 var(--ab-space-3) var(--ab-space-3) calc(var(--ab-space-3) + 20px + var(--ab-space-3));
 }
 .machine-more:empty { display: none; }
-.machine-update, .machine-signin { font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
+.machine-update, .machine-signin, .machine-diagnose-hint { font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
 .machine-update p, .machine-signin p { margin: 0; }
+.machine-diagnose-hint { margin: 0; }
 .machine-actions { display: flex; flex-wrap: wrap; gap: var(--ab-space-2); margin-top: var(--ab-space-2); }
 .machine-update > .machine-actions:first-child, .machine-more > .machine-actions:first-child { margin-top: 0; }
 .machine-error { margin: 0; color: var(--ab-danger-text); font-size: var(--type-meta); line-height: var(--type-meta-line); }
@@ -1161,6 +1224,12 @@ summary {
   border: 1px solid var(--ab-needs); background: var(--ab-needs-fill);
 }
 .question-head { margin: 8px 0 0; font-size: .95rem; color: var(--ab-needs-head); }
+/* A question that is no longer waiting (ui.md §7): the same words, in neutral stroke and text, with
+   nothing in the amber that says it needs you. */
+.question.resolved { border-color: var(--ab-stroke2); background: transparent; }
+.question.resolved .question-head { color: var(--ab-text2); }
+.question.resolved :is(.badge, .badge.req) { color: var(--ab-text2); }
+.question.resolved > .answer-receipt { margin-top: 0; }
 .question[data-kind="approval"] .question-head::before { content: "🔒 "; }
 .fields { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 12px; }
 .field-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
@@ -1326,7 +1395,7 @@ summary {
 :is(form.reply, form.answer) > .answer-status:not(:empty) { display: flow-root; }
 :is(form.reply, form.answer) > .answer-status::before { content: ""; float: left; padding-top: clamp(0px, (639.5px - 100%) * 1000, 2.8em); }
 :is(form.reply, form.answer) > .answer-status.room:empty { display: flow-root; visibility: hidden; }
-.answer-status.progress, .answer-receipt.progress, .answer-status.done, .answer-receipt.done { color: var(--ab-text2); }
+.answer-status.progress, .answer-receipt.progress, .answer-status.done, .answer-receipt.done, .answer-status.closed, .answer-receipt.closed { color: var(--ab-text2); }
 .answer-status.warn, .answer-receipt.warn { color: var(--ab-needs-text); }
 .answer-status.bad, .answer-receipt.bad { color: var(--ab-danger-text); }
 .answer-receipt { padding: 8px 0; }
@@ -1379,14 +1448,16 @@ summary {
 @media (forced-colors: active) {
   /* Every word is CanvasText, so every failure says itself in words. Send's ring and check take
      Send's own colours (currentColor, as its arrow does), a still ring too: it stands still. */
-  :is(.answer-status, .answer-receipt, .needs-status):is(.progress, .done, .warn, .bad), :is(.answer-status, .answer-receipt, .needs-status) .receipt-more { color: CanvasText; }
+  :is(.answer-status, .answer-receipt, .needs-status):is(.progress, .done, .closed, .warn, .bad), :is(.answer-status, .answer-receipt, .needs-status) .receipt-more { color: CanvasText; }
   .reply .button.send[aria-busy="true"]::after,
   .answer[aria-busy="true"]:not(:has(.choice[aria-pressed="true"])) .button.send:not([hidden])::after,
   .answer[aria-busy="true"] .choice[aria-pressed="true"]::after,
   .needs-entry:is([data-answer="sending"], [data-answer="waiting"]) .button[aria-pressed="true"]::after { forced-color-adjust: none; border-color: currentColor; border-right-color: transparent; }
 }
-.question-changed { margin: 8px 0; padding: 4px 12px 10px; border: 1px dashed var(--ab-needs); border-radius: 10px; }
+.question-changed { margin: 8px 0; padding: 4px 12px 10px; border: 1px dashed var(--ab-stroke2); border-radius: 10px; }
 .question-changed .button { margin-top: 8px; }
+.answer-kept { margin: 0 0 8px; }
+.answer-kept .button { margin-top: 8px; }
 @media (prefers-reduced-motion: reduce) {
   .reply .button.send[aria-busy="true"]::after,
   .answer[aria-busy="true"]:not(:has(.choice[aria-pressed="true"])) .button.send:not([hidden])::after,
@@ -1435,9 +1506,19 @@ summary {
 .end-session .resend { margin-bottom: 6px; }
 
 /* ---- settings ---- */
-.notify h3, .text-size h3, .account h3 { margin: 0 0 var(--ab-space-2); font-size: var(--type-section); line-height: var(--type-section-line); font-weight: 600; color: var(--ab-text2); }
+.notify h3, .text-size h3, .account h3, .key-check h3 { margin: 0 0 var(--ab-space-2); font-size: var(--type-section); line-height: var(--type-section-line); font-weight: 600; color: var(--ab-text2); }
 .account p { margin: 0; color: var(--ab-text2); overflow-wrap: anywhere; }
 .segmented { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; max-width: 360px; }
+/* Keyboard check (#1209): a practice box that takes focus as a row does, and the keys as typed. */
+.key-check-box {
+  display: inline-flex; align-items: center; min-height: var(--tap); padding: 0 12px;
+  border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card); color: var(--ab-text);
+}
+.key-check-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
+.key-check-entry { font: .86rem var(--ab-font-mono); overflow-wrap: anywhere; color: var(--ab-text); }
+@media (forced-colors: active) {
+  .key-check-box { border-color: CanvasText; }
+}
 
 /* ---- motion (ui.md §5.3) ----
    Only the generated tokens time anything here, and under prefers-reduced-motion they are 0, so
@@ -1582,6 +1663,11 @@ summary {
   /* Resting values; collapse-foot.js overrides them inline on the view. */
   .session-view { --fy: 0px; --fcovered: 0px; --foot-h: 0px; }
   .conversation { position: relative; }
+  /* The compact area slides its box down by its room, past the conversation's foot. Clipped here
+     it goes under the bar; unclipped, its lower edge showed in the band under the conversation
+     (an installed iPhone's home indicator): a second reply-box outline under the bar's copy
+     (#1078). clip, not hidden: nothing may scroll it. */
+  .conversation { overflow: clip; }
   .stream-scroll {
     padding-bottom: calc(var(--foot-h, 0px) + var(--ab-space-4));
     scroll-padding-bottom: calc(var(--fcovered, 0px) + var(--ab-space-2));
