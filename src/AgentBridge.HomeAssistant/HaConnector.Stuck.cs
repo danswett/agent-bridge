@@ -4,8 +4,8 @@ namespace AgentBridge.HomeAssistant;
 
 // One notice per stuck episode, decided on data (the host's recognised wedge, or Not responding),
 // never on how long the session has been in error. It is withdrawn when the session takes a new
-// event or acknowledgement. The only time limit is a flood guard: a session that gets stuck again
-// within SignInRepeat of its last notice is not told again, and that is logged as a fault.
+// event or acknowledgement. There is no time limit (#1511): a session that gets stuck again is told of
+// again only after a recovery was observed, so one notice per episode bounds a flood.
 // Nothing here restarts anything: the runbook (docs/runbooks/stuck-session.md) is the recovery.
 // This notice rides the HA connector, which #1396 retires; it moves to the Slipgates push path.
 public sealed partial class HaConnector
@@ -13,8 +13,6 @@ public sealed partial class HaConnector
     // By session id. Not kept in the ledger: after a host restart a session still stuck is told of
     // once more, which is wanted.
     readonly Dictionary<string, SignInNotice> stucks = new(StringComparer.Ordinal);
-    // When each session was last told, kept past a withdrawal so the flood guard can see it.
-    readonly Dictionary<string, DateTimeOffset> stuckTold = new(StringComparer.Ordinal);
 
     async Task StuckAsync(DateTimeOffset now, CancellationToken ct)
     {
@@ -25,24 +23,9 @@ public sealed partial class HaConnector
             if (!channels) { break; }
             SignInNotice? n;
             var push = Notify.Enabled && HaNotify.Split(Notify.Service) is not null ? "push:" + Notify.Service : null;
-            bool suppressed = false;
             lock (gate)
             {
-                if (!stucks.TryGetValue(s.Id, out n))
-                {
-                    stucks[s.Id] = n = new SignInNotice { Tag = HaNotify.StuckTag(Slug, s.Id) };
-                    if (stuckTold.TryGetValue(s.Id, out var last) && now - last < options.SignInRepeat)
-                    {
-                        suppressed = true;
-                        foreach (var p in Notify.AnswerButtonServices) { n.Delivered[p] = now; }
-                        if (push is not null) { n.Delivered[push] = now; }
-                    }
-                }
-            }
-            if (suppressed)
-            {
-                log($"Home Assistant connector FAULT: session {s.Id} got stuck again within {options.SignInRepeat} of its last notice, so the flood guard did not tell the owner again");
-                continue;
+                if (!stucks.TryGetValue(s.Id, out n)) { stucks[s.Id] = n = new SignInNotice { Tag = HaNotify.StuckTag(Slug, s.Id) }; }
             }
             // Once told, a destination is not told again for the same episode.
             bool Due(string destination) => !n.Delivered.ContainsKey(destination);
@@ -59,7 +42,7 @@ public sealed partial class HaConnector
             var missed = false;
             void Took(string destination)
             {
-                lock (gate) { n.Delivered[destination] = now; stuckTold[s.Id] = now; }
+                lock (gate) { n.Delivered[destination] = now; }
             }
             if (phones.Count > 0)
             {
