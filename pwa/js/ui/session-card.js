@@ -47,6 +47,7 @@ import { CollapsingFoot } from './collapse-foot.js';
 import { UNSUPPORTED_SESSIONS } from '../brand.js';
 import { PromptMemory, disclosureName, promptOrigin } from '../prompt-origin.js';
 import { holdKey } from './hold.js';
+import { CONNECTION_CHANGED } from '../channels.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 // The Details rows whose values move with the clock: drawn again where they are, not as new nodes.
@@ -1926,7 +1927,14 @@ export class SessionCard {
       this.#history.loaded = true;
       this.#history.at = at;
     } catch (e) {
-      body.replaceChildren(h('p', { class: 'note warn' }, `Couldn't load the history: ${e.message}`));
+      // The connection went under the request, and the next one asks again: not an error to show
+      // as its raw text (#1128), which also named the relay.
+      if (e?.reason === CONNECTION_CHANGED) {
+        body.replaceChildren(h('p', { class: 'note', role: 'status' }, 'Connection changed. Trying again.'));
+        this.#scheduleHistory();
+      } else {
+        body.replaceChildren(h('p', { class: 'note warn' }, `Couldn't load the history: ${e.message}`));
+      }
     } finally {
       this.#history.loading = false;
     }

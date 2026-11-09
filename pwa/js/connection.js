@@ -23,6 +23,17 @@ import { ReconnectBackoff } from './backoff.js';
 // Long enough that switching to another app and back, to copy something, say, keeps everything
 // as it was; short enough that a phone put away stops talking within seconds.
 export const QUIET_AFTER_MS = 15000;
+// A phone that changes networks, or whose radio sleeps, can keep a socket that reads open while
+// nothing gets through either way. The relay closes it only at its pong timeout (30 s after its
+// next ping) and a reply waits 90 s for its answer, so a reply sat at Sending for a minute or more,
+// then went at once after Reconnecting (#1128). So once a message has gone out on a channel and
+// nothing at all has come back for PROBE_AFTER_MS, the relay is asked whether it is still there
+// (Relay.probe), and without an answer in PROBE_TIMEOUT_MS the socket is given up and another
+// opened at once. Whatever was on its way is sent again on it with its same request, which a host
+// carries out once however often it comes (answer-service.js).
+export const PROBE_AFTER_MS = 5000;
+export const PROBE_TIMEOUT_MS = 3000;
+const UNRESPONSIVE = Object.freeze({ code: 1000, reason: 'unresponsive' });
 
 // A window replaced by another one takes the connection back once, on its own. Replaced again
 // within this long of that take-back, it stops for good (two windows in front would otherwise
@@ -53,6 +64,9 @@ export class BridgeConnection {
   // It rests (silently) without the usual wake-and-connect, and takes the connection back once,
   // or stops for good, when it is next in front.
   #yielded = null;
+  // Set while a message sent on the current relay awaits any frame back, then a probe of it.
+  #watchTimer = null;
+  #probing = null;
   relay = null;
   presence = [];
   // The account's machines that are offline (relay.js); null while the relay keeps no roster.
@@ -67,11 +81,12 @@ export class BridgeConnection {
   // anything is on its way that resting would cut off.
   constructor({
     base, key, deviceId, name, account, win = globalThis, quietAfterMs = QUIET_AFTER_MS, busy = () => false,
-    makeRelay = (options) => new Relay(options), now = () => Date.now(),
+    makeRelay = (options) => new Relay(options), now = () => Date.now(), probeAfterMs = PROBE_AFTER_MS, probeTimeoutMs = PROBE_TIMEOUT_MS,
   }) {
-    Object.assign(this, { base, key, deviceId, name, account, win, quietAfterMs, busy, makeRelay, now });
+    Object.assign(this, { base, key, deviceId, name, account, win, quietAfterMs, busy, makeRelay, now, probeAfterMs, probeTimeoutMs });
     this.channels = new ChannelSet({ key, deviceId, name });
     this.channels.onLog = (line) => this.#emit('log', line);
+    this.channels.onSent = () => this.#sent();
   }
 
   on(type, fn) {
@@ -136,6 +151,7 @@ export class BridgeConnection {
     clearTimeout(this.#restTimer);
     this.#restTimer = null;
     this.#yielded = null;
+    this.#unwatch();
     const c = this.#connecting;
     this.#connecting = null;
     this.#attempt = null;
@@ -170,6 +186,7 @@ export class BridgeConnection {
   // they do for a drop, so every channel goes and is opened again on return.
   #sleep() {
     clearTimeout(this.#retryTimer);
+    this.#unwatch();
     // Put away while the relay was still admitting it: that attempt goes too, so the return
     // connects afresh rather than waiting on an admission that may never come.
     const c = this.#connecting;
@@ -213,6 +230,7 @@ export class BridgeConnection {
       this.#emit('presence', list);
     };
     r.onClose = (e) => this.#dropped(r, e);
+    r.onReceive = () => { if (this.relay === r) { this.#unwatch(); } };
     this.#connecting = r;
     const attempt = r.connect(this.account.token).then(() => {
       // Put away while it was connecting (#sleep let it go), or stopped: it never takes over.
@@ -232,9 +250,40 @@ export class BridgeConnection {
     return attempt;
   }
 
-  #dropped(r, e) {
+  // A message went out on a channel: unless a frame of any kind comes back within probeAfterMs,
+  // the relay is probed. One watch at a time, from the first message nothing has answered yet.
+  #sent() {
+    const r = this.relay;
+    if (!r || this.#watchTimer || this.#probing === r || typeof r.probe !== 'function') { return; }
+    this.#watchTimer = setTimeout(() => { this.#watchTimer = null; this.#probe(r); }, this.probeAfterMs);
+  }
+
+  #unwatch() {
+    clearTimeout(this.#watchTimer);
+    this.#watchTimer = null;
+  }
+
+  async #probe(r) {
+    if (this.relay !== r) { return; }
+    this.#probing = r;
+    this.#emit('log', `relay silent ${this.probeAfterMs} ms after a send; probing it`);
+    let alive = false;
+    try { alive = await r.probe(this.probeTimeoutMs); } catch { alive = false; }
+    if (this.#probing === r) { this.#probing = null; }
+    if (alive || this.relay !== r) { return; }
+    // Its close event may come only once the browser gives up on the socket, or never: the
+    // connection is treated as gone first, so its close, whenever it comes, is ignored (#dropped).
+    this.#dropped(r, UNRESPONSIVE, { now: true });
+    r.close(UNRESPONSIVE.code, UNRESPONSIVE.reason);
+  }
+
+  #dropped(r, e, { now = false } = {}) {
     if (r && this.relay !== r) { return; }
     if (r) {
+      this.#unwatch();
+      // So that the next stall is on record (#1128): why it went, and how long it had been quiet.
+      const since = r.lastReceivedAt ? `${Date.now() - r.lastReceivedAt} ms since its last frame` : 'no frame received';
+      this.#emit('log', `relay connection lost (${`${e.code ?? ''} ${e.reason ?? ''}`.trim()}), ${since}`);
       this.relay = null;
       this.channels.attach(null);
       this.#emit('lost', e);
@@ -249,7 +298,8 @@ export class BridgeConnection {
       this.#replaced();
       return;
     }
-    const delay = this.#backoff.next(e.code, e.reason);
+    // Given up for silence: the network is likely there by another route, so no waiting.
+    const delay = now ? 0 : this.#backoff.next(e.code, e.reason);
     this.retryAt = Date.now() + delay;
     this.#setState('reconnecting', `${e.code ?? ''} ${e.reason ?? ''}`.trim());
     this.#retryTimer = setTimeout(() => this.#connect(), delay);
