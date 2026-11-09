@@ -14,19 +14,19 @@ keeps no queue, so a message to an offline host is refused at once as undelivera
 
 Any one of these puts messaging back on HA. None needs a relay deploy or a production
 approval. Host config changes are refused inside an agent session (guard #67), so the
-per-machine step is **Owner**, at the machine, and is handed over as a one-liner.
+`config set` step is **Owner**, at the machine, and is handed over as a one-liner.
 
 | Scope | Do | Takes effect |
 |---|---|---|
-| Whole fleet | Set the fleet repo variable `FLEET_RELAY_MSG` to `ha-first` | The messenger reads it at least every 30 s |
-| One machine (**Owner**) | `agent-bridge-host config set agentMessaging.remote off` on that machine | The next message; no restart |
+| Whole fleet | Set the fleet repo variable `FLEET_RELAY_MSG=off` | Every messenger is back on HA within about a minute (it reads the variable at least every 30 s) |
+| One machine | The per-machine kill command (L6), or, as **Owner** at the machine, `agent-bridge-host config set agentMessaging.remote off` | The next message; no restart |
 
 Then confirm: send one message each way between two sessions and check it arrives once, by HA.
 
 ## Triggers
 
 Roll the affected machine back, or the whole fleet if more than one is affected, when any of
-these holds. Whoever sees it flips the fleet variable first and tells the SG Migration Lead at
+these holds. Whoever sees it sets `FLEET_RELAY_MSG=off` first and tells the SG Migration Lead at
 once.
 
 | Trigger | Measured by |
@@ -49,6 +49,15 @@ pwsh ops/tools/relay-probe.ps1 -Target all
 On a build that includes #1219, `healthz` also lists connection counts by site and kind
 (`kind` = `host` for the machines). One `host` connection per machine is expected; a machine
 whose host is missing there cannot receive over the relay, and its messages go by HA.
+
+## Evidence to switch on, and to call a machine done
+
+Gates are evidence, not clocks (owner rule, 16:36 PT on 2026-11-08; the table is in the fleet
+repo, `docs/messaging-cutover-acceptance.md`, "Soak and rollback"). Pass: at least 25 messages
+for each of the 12 ordered pairs (300 in all, which bounds the loss rate under 1% at 95% when
+none are lost), zero lost or sent to the wrong target, p99 at most 250 ms, and one host restart
+per machine (the replay window and launch record are in memory). Home Assistant can be left
+unused once that evidence is in.
 
 ## Rules during a soak
 
