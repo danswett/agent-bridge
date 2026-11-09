@@ -3,7 +3,7 @@
 A temporary mode (#728, owner decision of 14:06 PT on 2026-11-08) that lets the owner's agents on the owner's
 own machines message each other host to host over the relay, with Home Assistant as the automatic fallback,
 until the signed roster (#55) exists. It is off by default and is removed or folded into the roster path
-when that lands. It is built by slices L1 to L7 (#1349 to #1355, #1369, #1371). The own-peer command name is still to be confirmed by its slice.
+when that lands. It is built by slices L1 to L7 (#1349 to #1355, #1369, #1371).
 
 ## What it trusts, and what it does not
 
@@ -25,7 +25,7 @@ own-agents-only.
 - Text only, at most 4096 characters. Delivery uses the same typing routine the Home Assistant reply path
   uses, and text goes only into an idle session with an empty input box. Delivered text starts with one fixed
   prefix line naming the sending machine and session.
-- allow-all behaviour: pending owner decision
+- Allow-all sessions: `agentMessaging.allowAllTargets` is on for the cut-over machines only (VM1, VM2, VM3 and VM4), by the owner's decision, and off everywhere else including the home and ultra machines. It is the per-machine switch: set to false, that machine refuses allow-all sessions as targets. Delivery into an allow-all session works as Home Assistant does today, only when it is idle.
 - Rate: the receiver allows at most 6 messages a minute and 60 an hour from one sending session to one
   receiving session. The sender side allows 6 a minute per sender-receiver pair, in the messenger script (fleet #56), covering both the relay and Home Assistant routes. Beyond that is refused as `rate`, which is final.
 - The duplicate memory covers the relay route only. The relay and Home Assistant keep separate in-memory stores, so after an `unconfirmed` relay send the Home Assistant fallback can deliver the same message twice. This is rare and a known limit of the first version; a shared store comes after the cut-over.
@@ -36,15 +36,18 @@ own-agents-only.
   named allow-all list (L5b), durable duplicate memory, a full audit log (today there is one delivery log
   line per message), and pushing the kill to connected hosts (it follows the cut-over).
   The owner accepted these skips. Until the roster lands, anyone with access to the owner's relay account
-  could message his sessions, and any message from a pinned own machine is typed into any session there.
+  could message his sessions, and any message from a pinned own machine is typed into any session there that is idle with an empty input box.
 
 ## Turn it on (a person at each machine, in this order: VM3, VM1, VM4, VM2)
 
 1. Set `agentMessaging.remote` to `own-account` ([host-config](../host-config.md)); changes need no restart.
-   For `agentMessaging.allowAllTargets`, see the allow-all line under the limits.
-2. Pin the other machines with the local own-peer command (L2b, #1369; expected
-   `agent-bridge-host agents lite peer add|list|remove`, **to be confirmed by the L2b PR** before merge). It shows each peer's device id and fingerprint; check both against that machine before
-   confirming. Pinning runs only at the machine, never from a remote device or an agent session.
+   On VM1, VM2, VM3 and VM4 also set `agentMessaging.allowAllTargets` to `true`; leave it off on every other machine. Setting it back to `false` makes that machine refuse allow-all sessions as targets.
+2. Pin the other machines (L2b, #1383), typing these at the machine's own command line, never in an agent session or from a remote device. With `agentMessaging.remote` off, `show`, `list` and `pin` refuse.
+   - On the OTHER machine run `agent-bridge-host peers show`. It prints that host's pin code, device id and fingerprint.
+   - On this machine run `agent-bridge-host peers pin <pin-code> [--name <name>]`. It shows the peer's device id and fingerprint; compare both with what `peers show` printed on the other machine, then type `yes`.
+   - `agent-bridge-host peers list` shows the pinned peers.
+   - `agent-bridge-host peers clear [<device-id>]` removes one peer, or all peers without an id. It works even with the mode off and needs no restart.
+   The list is kept in `own-peers.json`, signed by the host key.
 3. After each machine, send one message each way with the machines already on, then do the next.
 
 ## Turn it off
@@ -100,14 +103,14 @@ Run on staging, then production, with VM3 and VM1 first and VM4 and VM2 joining 
 - [ ] A fresh install has the mode off. A 60 KB message is refused at the cap; a one-character message is delivered.
 - [ ] The 7th message in a minute from one pair is refused as `rate` and not retried over Home Assistant; another pair is unaffected.
 - [ ] A deliberate refusal case, a host-down fallback to Home Assistant, and a coordinator and a builder session on each machine each receive a message.
-- [ ] Delivered text carries the prefix line. Allow-all sessions: pending owner decision.
-- [ ] Fleet switch off: every messenger is back on Home Assistant within 60 seconds. Per-machine kill: that machine stops sending and receiving at once.
+- [ ] Delivered text carries the prefix line. An allow-all session on a cut-over machine receives when idle; with `allowAllTargets` false on that machine it is refused.
+- [ ] Fleet switch off: every messenger is back on Home Assistant within 60 seconds. Per-machine kill: that machine stops using the relay at once (it refuses with `off`) and messengers fall back to Home Assistant.
 
 ## Home Assistant retirement checklist (tick after the 24 hour soak of all four machines)
 
 - [ ] Every fleet coordinator machine runs this mode with a passing one-message check each way.
 - [ ] The fleet switch, the per-machine kill and the fallback have each been exercised once.
-- [ ] Allow-all targets: pending owner decision.
+- [ ] `allowAllTargets` is true on VM1, VM2, VM3 and VM4 only, and false on all other machines.
 - [ ] No sender still writes the Home Assistant reply payload.
 - [ ] A week has passed with no Home Assistant reply-path use.
 - [ ] Before any rollout beyond the owner: the roster, allow-all list, durable duplicate memory, full audit log and kill push are built.
