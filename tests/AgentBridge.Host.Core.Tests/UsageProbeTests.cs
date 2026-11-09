@@ -1546,7 +1546,10 @@ public sealed class UsageProbeTests : IDisposable
         // The app-server answers in real time. Stepping the fake clock before it has, on a loaded
         // runner, ran out the probe's 60 s report timeout: a failure, not the sign-out the test needs.
         await Until(() => first.Answered >= 4);
-        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        // Running is complete before a probe starts and after it ends, so it cannot say this one has
+        // ended; the collector's count of finished probes can.
+        await AdvanceUntil(time, () => codex.ProbesFinished >= 1, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        Assert.Equal(1, codex.ProbesFinished);
         await monitor.PassAsync();
         Assert.Equal(CodexUsageProbe.SignedOutError, Assert.Single(monitor.Current.Report.Agents, a => a.Agent == AgentKind.Codex).Error);
         var gone = false;
@@ -1572,13 +1575,19 @@ public sealed class UsageProbeTests : IDisposable
 
         later.SetResult();
         await Until(() => second.Answered >= 4);
-        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        await AdvanceUntil(time, () => codex.ProbesFinished >= 2, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
         await monitor.PassAsync();
 
         var codexEntry = Assert.Single(monitor.Current.Report.Agents, a => a.Agent == AgentKind.Codex);
         if (then == "reading") { Assert.Equal((23.0, (string?)null), (codexEntry.Windows[0].Percent, codexEntry.Error)); }
         else { Assert.Equal(CodexUsageProbe.SignedOutError, codexEntry.Error); }
         Assert.False(gone);
+    }
+
+    [Fact]
+    public void A_Codex_collector_that_has_run_no_probe_counts_none_finished()
+    {
+        Assert.Equal(0, new CodexUsageCollector(Options(), time, Probes(), Log).ProbesFinished);
     }
 
     [Fact]
