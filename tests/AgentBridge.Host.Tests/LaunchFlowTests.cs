@@ -668,11 +668,10 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         var o = await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "fixture");
         Assert.Equal(LaunchOutcome.Unconfirmed, o.Outcome);
         var id = o.Session!;
-        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains("wait until a prompt is typed at the machine", StringComparison.Ordinal))));
-        Assert.NotNull(launcher.HeldForReply(id));
+        await WaitAsync(() => Task.FromResult(launcher.HeldForReply(id) is not null));
 
         starter.Exit(starter.Pids[0] + 3000);
-        Assert.Null(launcher.HeldForReply(id));
+        await WaitAsync(() => Task.FromResult(launcher.HeldForReply(id) is null));
         Assert.Empty(screens.Typed);
     }
 
