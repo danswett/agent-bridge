@@ -62,7 +62,7 @@ public sealed class AgentLiteSender(
         using var watching = new CancellationTokenSource();
         var switchedOff = false;
         // The mode can be turned off while we wait; the receiver may already have typed the text, so that is unconfirmed.
-        _ = Task.Run(async () =>
+        var watcher = Task.Run(async () =>
         {
             try
             {
@@ -91,7 +91,8 @@ public sealed class AgentLiteSender(
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return Out(LiteKind.Unconfirmed, switchedOff ? ModeSwitchedOff : TimedOut); }
         catch (TimeoutException) { return Out(LiteKind.Unconfirmed, TimedOut); }
         catch (Exception e) when (e is not OperationCanceledException) { return Out(LiteKind.Unconfirmed, ChannelLost); }
-        finally { watching.Cancel(); }
+        // The watcher must be finished before the sources are disposed, or its next tick would fault unobserved.
+        finally { watching.Cancel(); await watcher; }
     }
 
     // The host's own sender: the agent signing key is opened once and held, and credentials are judged by the store.

@@ -1275,7 +1275,7 @@ notify that device.
 
 A credentialed agent on one host sends a signed own-agent envelope to another host on the
 same account. Request `data`: `{ "envelope": "<base64url>", "text": "…", "killEpoch": 0 }`;
-the envelope's `dataSha256` binds the exact UTF-8 text, which is at most 4096 bytes. Result:
+the envelope's `dataSha256` binds the exact UTF-8 text, which is at most 4096 characters. Result:
 `{ "status": "delivered" | "refused", "code": "…", "request": "<uuid>", "killEpoch": 0 }`.
 The sender turns that into exactly one outcome:
 

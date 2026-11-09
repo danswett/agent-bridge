@@ -16,7 +16,15 @@ public class AgentLiteSenderTests
 
     sealed class Mode : ILiteMode
     {
-        public bool On { get; set; } = true;
+        bool on = true;
+        public bool Block;
+        public readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly ManualResetEventSlim Gate = new();
+        public bool On
+        {
+            get { if (Block) { Entered.TrySetResult(); Gate.Wait(); } return on; }
+            set => on = value;
+        }
         public long KillEpoch { get; set; }
         public void TurnOff(string why) { On = false; }
         public void RaiseEpoch(long epoch) { KillEpoch = epoch; if (epoch > 0) { On = false; } }
@@ -132,6 +140,24 @@ public class AgentLiteSenderTests
             Assert.Equal((0, 0), (r.Link.Opened, r.Signed));
         }
         finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public async Task The_mode_watcher_has_finished_before_the_send_returns()
+    {
+        using var r = new Rig();
+        var sender = new AgentLiteSender(r.Mode, new Peers(true), r.Link, _ => true, () => new EcdsaEnvelopeSigner(r.Key), OwnStatic, null, TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(1));
+        r.Link.Reply = async (req, _) =>
+        {
+            r.Mode.Block = true;
+            await r.Mode.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            return new LiteAck("delivered", "", "not-the-request", 0);
+        };
+        var send = sender.SendAsync(Caller, new LiteSendInput("vm2", "agent-b2", "hi"), default);
+        await Task.Delay(300);
+        Assert.False(send.IsCompleted);
+        r.Mode.Gate.Set();
+        Assert.Equal(LiteKind.Unconfirmed, (await send.WaitAsync(TimeSpan.FromSeconds(10))).Kind);
     }
 
     [Fact]
