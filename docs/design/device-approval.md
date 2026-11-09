@@ -1430,8 +1430,11 @@ residual is stated at the end.
 
 * **Head attestation.** On request, an active rostered device sends the host its heads, MACed for
   that host as signed commands are: from static-static ECDH between the two device keys,
-  `HMAC-SHA256(k, F("agent-bridge roster head v1", account, generation, heads, host id, nonce))`.
-  `nonce` is a fresh 32-byte value the host chose. No presence is needed; it vouches for a roster,
+  `HMAC-SHA256(k, F("agent-bridge roster head v1", account, generation, heads, host id, nonce, revoked))`.
+  `nonce` is a fresh 32-byte value the host chose. `revoked` is the enrollment adds the host has
+  revoked in its applied state, as one part in head order; it is always present and empty when
+  there are none. The input starts with its own context label, which no signed command begins
+  with, so the MAC never verifies as a signed command or the reverse. No presence is needed; it vouches for a roster,
   not an action. If the heads include entries the host lacks, the host fetches them first.
 * **Sources.** Every rostered peer that opens or answers a channel attests: other hosts (the usage
   exchange every 5 minutes) and person's devices. So does the app on the same machine over the
@@ -2247,7 +2250,8 @@ Each slice adds its own. Together they cover:
   person's one removal of D keeps E and E2, and so takes J and K. On a fork from before it, D confirms J
   and K and adds Y, and J and K cosign a removal of D (rank 2). Y and D's confirms of J and K are
   D's concurrent grants and void; J's and K's removal revokes no signer of the person's, so it
-  shields nothing; E and E2 stay active.
+  shields nothing. E and E2 are void until re-enrolled (§3.5): the removal takes J and K, so they are
+  D's grants concurrent with it.
 * **A quarantined descendant does not block the recovery.** At head P the roster holds G, S, and
   C1 and C2, which G approved and confirmed independently of S. The honest line advances 9
   entries; S then submits `add(J)` on P, which every verifier quarantines. C1 and C2 remove S,
@@ -2607,7 +2611,9 @@ Each slice adds its own. Together they cover:
   simulated partition never confirms, and a roster imported at the machine ends the partition.
 * A removal that names a device's id but revokes only a fabricated duplicate add of that id does
   not make the real device wipe anything: its own enrollment add is still active, and it says the
-  removal is not confirmed.
+  removal is not confirmed. If the copier was active where the real add was made, the §3.5 bar
+  applies and the real add is barred, so the real device reads `not active` and is still not
+  wiped, because the wipe needs a verified removal of its own add.
 * A removed device is told so, wipes its data and push subscriptions, and makes a new key to join
   again, but only after verifying a removal of itself. A relay `removed` close code or a host's
   refusal without one changes nothing it holds. An offline device that was removed gets the
