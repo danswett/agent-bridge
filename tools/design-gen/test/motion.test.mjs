@@ -15,7 +15,8 @@ const entries = Object.keys(tokens.motion.catalogue).filter((k) => !k.startsWith
 const css = read('pwa/design/tokens.css');
 const XAML = 'src/AgentBridge.App/Design/DesignResources.xaml';
 
-const scratch = path.join(repoRoot, 'tools', 'design-gen', '.scratch', 'motion');
+// Per process: two runs in one checkout (#565) deleted each other's scratch folder.
+const scratch = path.join(repoRoot, 'tools', 'design-gen', '.scratch', `motion-${process.pid}`);
 after(() => rmSync(scratch, { recursive: true, force: true }));
 
 // The generator's inputs, with tokens.json changed by edit.
