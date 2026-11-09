@@ -636,6 +636,31 @@ Changes to `merge-rule.yml` are themselves ENTIRE-review changes. The existing
 merge rule and its other gates remain in force; this table does not change the
 App, ruleset or allowed receipt posters.
 
+### Review failover when a quota stalls
+
+Owner standing policy, 2026-11-08 20:33 PT: a quota never stalls a review, and rigor stays the
+same. Copilot's review bot and Codex are tied to the owner's plan and may augment a review, but
+nothing waits on them (the receipts-only waiver above).
+
+- **What fails over is the reviewer's model quota.** Review sessions run under the
+  `dswett_microsoft` (EMU) Copilot entitlement. GitHub refuses that account any write on this
+  repository, so receipts still post only through `independent_review.posters` (`danswett`), and
+  that list does not change.
+- **A quota stall** is any of: a reviewer session returning a quota, rate-limit, billing, 429 or
+  401 error; no receipt on a ready head 20 minutes after it was asked for; no completed Copilot
+  or Codex review within 20 minutes where one is wanted.
+- **Order of fallback.** First the cheap agent reviewer (`claude-sonnet-5.5`, EMU). On a stall,
+  a reviewer of a second family (`gpt-6-luna` or `gemini-3.8-flash`) for the same head. On a
+  stall there too, the same two on the `danswett` Copilot entitlement. A reviewer never waits for
+  a quota to reset.
+- **Rigor does not move.** A sensitive change still needs `independent-review` and
+  `independent-review-2` from two different model families, the depth table above applies, and a
+  security-subject document is read in full by both reviewers, whichever entitlement ran them.
+  Each receipt's description names its model, so a failover is visible afterwards.
+- **The EMU token** (`COPILOT_GITHUB_TOKEN`, a fine-grained PAT) lasts 8 days. When it expires,
+  EMU reviews return 401 and the fallback above moves to the `danswett` entitlement until the
+  owner renews it. Never `/login` per session: EMU sign-ins revoke each other.
+
 ## 5. Coverage, timing, flakes and reports
 
 - **Coverage** (collected since #363, no gates yet): the `dotnet-coverage` tool (Cobertura,
