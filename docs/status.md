@@ -491,8 +491,8 @@ agent-ha-bridge releases from this work:
   ```
   $h="$env:LOCALAPPDATA\AgentBridgeApp\current\agent-bridge-host.exe"; & $h rollback
   ```
-- **Commands for the owner** go as plain text one-liners. They are often read on a phone
-  and copied with the PWA's Copy button. Encoded commands don't wrap, so avoid them.
+- **Commands for the owner** go in fenced blocks in a question; see the rule in
+  [contributor-workflow.md](contributor-workflow.md#commands-and-code-for-the-owner).
 - **Owner-only actions:** config changes, sign-in and `-Install` (the #67 guard refuses
   them from agent sessions); production relay deploys (a required reviewer); Azure
   changes (the owner's personal Visual Studio Enterprise subscription, never a work

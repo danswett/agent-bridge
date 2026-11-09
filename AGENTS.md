@@ -106,7 +106,7 @@ builds, and guard G6 limits their HA connector to a disposable HA.
 
 ## Guards you will meet
 
-- **#67:** host management is refused from inside an agent session (exit 4): config changes, sign-in, `-Install`, host stop and restart. The owner runs those at the machine. Hand them over as plain-text one-liners, since they are read on a phone and copied with the PWA's Copy button; encoded commands don't wrap.
+- **#67:** host management is refused from inside an agent session (exit 4): config changes, sign-in, `-Install`, host stop and restart. The owner runs those at the machine. Hand them over as fenced blocks in a question, per the owner-commands rule in [docs/contributor-workflow.md](docs/contributor-workflow.md#commands-and-code-for-the-owner).
 - **G5:** a host refuses to type into sessions while agent-ha-bridge runs for the same user, so it is read-only beside it.
 - **G6:** a dev build's HA connector writes only to a disposable HA.
 - **G7:** `migrate` refuses on the dashboard publication writer.
