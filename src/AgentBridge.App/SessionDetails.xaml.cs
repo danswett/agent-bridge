@@ -65,6 +65,29 @@ public sealed partial class SessionDetails : UserControl
         }
         block.Text = Words.Middle(full, best);
     }
+    // One state for the control, so "Copied" survives the row being redrawn by an update.
+    readonly DetailCopy copier = new(ClipboardText.Put, new QueueDispatcher(Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread()));
+
+    // The button says what its copy came to; its name stays "Copy session ID" (#1245).
+    void OnCopyLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Content: StackPanel { Children: [_, TextBlock label] } } button) { return; }
+        void Show(object? _, System.ComponentModel.PropertyChangedEventArgs? __) => label.Text = copier.Label;
+        Show(null, null);
+        copier.PropertyChanged += Show;
+        button.Unloaded += (_, _) => copier.PropertyChanged -= Show;
+    }
+
+    void OnCopyId(object sender, RoutedEventArgs e)
+    {
+        if (Card is not { } card || sender is not Button button) { return; }
+        var copied = copier.Copy(card.Id);
+        // Created if need be: FromElement finds only a peer something already asked for.
+        Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(button)?.RaiseNotificationEvent(
+            copied ? Microsoft.UI.Xaml.Automation.Peers.AutomationNotificationKind.ActionCompleted : Microsoft.UI.Xaml.Automation.Peers.AutomationNotificationKind.ActionAborted,
+            Microsoft.UI.Xaml.Automation.Peers.AutomationNotificationProcessing.MostRecent, copier.Label, "AgentBridgeIdCopied");
+    }
+
     void OnEnd(object sender, RoutedEventArgs e) => Card?.End?.Press();
     void OnResendEnd(object sender, RoutedEventArgs e) => Card?.End?.Resend();
 }

@@ -90,6 +90,7 @@ public sealed class DetailsTableTests : IAsyncLifetime
                 if (want[i].TryGetProperty("value", out var value)) { Assert.True(value.GetString() == got[i].Value, $"{label}: \"{got[i].Value}\", not \"{value.GetString()}\""); }
                 else { Assert.True(Regex.IsMatch(got[i].Value, want[i].GetProperty("match").GetString()!), $"{label}: \"{got[i].Value}\""); }
                 Assert.True(mono[label] == got[i].Mono, $"{label} in the mono face");
+                Assert.True(got[i].Copy == (label == "ID"), $"{label}: only the ID row has a Copy button");
             }
             var at = want.Select(w => order.IndexOf(w.GetProperty("row").GetString()!)).ToList();
             Assert.True(at.Select((n, i) => n >= 0 && (i == 0 || n > at[i - 1])).All(ok => ok), "the table's own order: " + string.Join(",", at));
