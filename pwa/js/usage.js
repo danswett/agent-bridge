@@ -9,6 +9,8 @@ export const USAGE = Object.freeze({ capability: 'usage', shared: 'usage.shared'
 // account (#172): a fortnight-old figure is history, not usage.
 export const KEPT_MS = 14 * 86400000;
 export const KEPT_MAX = 32;
+// How far ahead of the device's clock a reading may be stamped, as a host allows peer readings.
+export const MAX_AHEAD_MS = 10 * 60000;
 
 const AGENTS = ['copilot', 'claude', 'codex'];
 const SOURCES = ['api', 'cache', 'transcript', 'none'];
@@ -356,7 +358,9 @@ export class UsageBook {
   // would take a current failure of the same allowance with it.
   #fresh(agents) {
     const oldest = this.now() - KEPT_MS;
-    return agents.filter((a) => (Date.parse(a.measuredAt ?? '') || 0) >= oldest);
+    // One stamped too far ahead is a wrong clock's; it would outrank every genuine reading.
+    const latest = this.now() + MAX_AHEAD_MS;
+    return agents.filter((a) => { const at = Date.parse(a.measuredAt ?? '') || 0; return at >= oldest && at <= latest; });
   }
 
   #current() {
