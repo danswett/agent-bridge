@@ -232,9 +232,15 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
     [Fact]
     public async Task A_Claude_transcript_that_cannot_be_read_types_nothing_and_never_earns_the_review_Enter()
     {
+        // One in-memory ledger for both phases (#1314). Each Answerer() otherwise opens the ledger
+        // file, and the second one read the file the first had just replaced: on Windows a scanner
+        // holding it failed that read, which the service refuses as "couldn't deliver it" before
+        // it ever looks at the transcript. Nothing here asserts on the file, so it is not used.
+        var answerer = Answerer(attempts: new AttemptLedger(null, clock, logged.Enqueue, expire: false));
+
         // Gone after the keys: nothing says the question is still unanswered, so no Enter.
         injector.OnInject = _ => File.Delete(claude);
-        var typed = await Answerer().AnswerAsync(Request(ClaudeId, "toolu_1", Chosen));
+        var typed = await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen));
         Assert.Equal(AnswerOutcome.Unconfirmed, typed.Outcome);
         Assert.Single(injector.Plans);
 
@@ -242,7 +248,7 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         Fixture.Append(claude, Claude.Assistant(second++, "tool_use", Claude.ToolUse("toolu_2", "AskUserQuestion", Input)));
         await source.RefreshAsync();
         File.Delete(claude);
-        var refused = await Answerer().AnswerAsync(Request(ClaudeId, "toolu_2", Chosen));
+        var refused = await answerer.AnswerAsync(Request(ClaudeId, "toolu_2", Chosen));
         Assert.Equal(AnswerOutcome.Refused, refused.Outcome);
         Assert.Contains("could not be read", refused.Reason);
         Assert.Single(injector.Plans);
