@@ -88,10 +88,30 @@ public class MergeRuleTests
     [Fact]
     public void A_reviewed_change_with_green_CodeQL_and_nothing_sensitive_passes()
     {
-        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr())!;
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(statuses: [First()]))!;
 
         Assert.Equal("success", verdict.State);
-        Assert.Equal("Copilot reviewed abcdef0; every check passed", verdict.Description);
+        Assert.Equal("Copilot reviewed abcdef0; every check passed; independent review on file", verdict.Description);
+    }
+
+    [Fact]
+    public void A_completed_Copilot_review_alone_never_replaces_the_receipt()
+    {
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr())!;
+
+        Assert.Equal(("pending", "Waiting for an independent review of abcdef0"), (verdict.State, verdict.Description));
+    }
+
+    [Fact]
+    public void A_completed_Copilot_review_is_the_other_family_on_a_sensitive_change_but_the_first_receipt_is_still_required()
+    {
+        string[] files = [".github/workflows/ci.yml"];
+
+        var copilotOnly = MergeRule.Evaluate(Config, MainGreen, Pr(files))!;
+        var withReceipt = MergeRule.Evaluate(Config, MainGreen, Pr(files, statuses: [First()]))!;
+
+        Assert.Equal("failure", copilotOnly.State);
+        Assert.Equal("success", withReceipt.State);
     }
 
     [Fact]
@@ -132,9 +152,9 @@ public class MergeRuleTests
     [Fact]
     public void A_completed_review_counts_even_beside_a_failed_retry_on_the_same_head()
     {
-        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { Body = BillingError }, Copilot]))!;
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { Body = BillingError }, Copilot], statuses: [First()]))!;
 
-        Assert.Equal(("success", "Copilot reviewed abcdef0; every check passed"), (verdict.State, verdict.Description));
+        Assert.Equal(("success", "Copilot reviewed abcdef0; every check passed; independent review on file"), (verdict.State, verdict.Description));
     }
 
     // As Copilot posted them on #632 (5767545859) and #558 (5767406640): an overview and findings
@@ -421,12 +441,12 @@ public class MergeRuleTests
     [InlineData("IN_PROGRESS", null, null, null, "pending", "CodeQL is running on abcdef0")]
     [InlineData("COMPLETED", "FAILURE", null, null, "failure", "CodeQL ended failure on abcdef0")]
     [InlineData("COMPLETED", "SUCCESS", "COMPLETED", "FAILURE", "failure", "Code scanning's CodeQL check is failure: new alerts?")]
-    [InlineData("COMPLETED", "SUCCESS", "COMPLETED", "NEUTRAL", "success", "Copilot reviewed abcdef0; every check passed")]
+    [InlineData("COMPLETED", "SUCCESS", "COMPLETED", "NEUTRAL", "success", "Copilot reviewed abcdef0; every check passed; independent review on file")]
     [InlineData("COMPLETED", "SUCCESS", "QUEUED", null, "pending", "Code scanning is still comparing abcdef0's CodeQL results")]
     public void CodeQL_must_have_run_green_on_the_head_and_code_scanning_must_not_have_failed(
         string? runStatus, string? runConclusion, string? checkStatus, string? checkConclusion, string state, string description)
     {
-        var pr = Pr(noCodeqlRun: runStatus is null,
+        var pr = Pr(statuses: [First()], noCodeqlRun: runStatus is null,
             codeqlRun: runStatus is null ? null : new RunFact(runStatus, runConclusion),
             codeqlCheck: checkStatus is null ? null : new RunFact(checkStatus, checkConclusion));
 
@@ -635,13 +655,13 @@ public class MergeRuleTests
 
         Assert.Equal(("failure", "Needs an independent review of abcdef0: it's marked as a security change"), (none.State, none.Description));
         Assert.Equal("success", receipted.State);
-        Assert.Equal("success", MergeRule.Evaluate(Config, MainGreen, Pr() with { Title = "Docs: security notes" })!.State);
+        Assert.Equal("success", MergeRule.Evaluate(Config, MainGreen, Pr(statuses: [First()]) with { Title = "Docs: security notes" })!.State);
     }
 
     [Fact]
     public void A_head_whose_facts_cant_be_read_gets_error_not_its_earlier_success_and_a_hold_still_takes_effect()
     {
-        var unread = GraphQLPullRequest(Head, mergeRule: ("success", "Copilot reviewed abcdef0; every check passed"));
+        var unread = GraphQLPullRequest(Head, mergeRule: ("success", "Copilot reviewed abcdef0; every check passed; independent review on file"));
         var held = GraphQLPullRequest(Older, labels: ["hold"], number: 7);
         var github = new FakeGitHub(unread, listed: [unread, held], byNumber: new Dictionary<int, string> { [42] = unread, [7] = held }, failChecks: true);
         var config = WriteConfig();
@@ -694,7 +714,7 @@ public class MergeRuleTests
         {
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
 
-            Assert.Equal([$"{Older} failure merge-rule Held by the label 'hold' ", $"{Head} success merge-rule Copilot reviewed abcdef0; every check passed; independent review on file "], github.Posted);
+            Assert.Equal([$"{Older} failure merge-rule Held by the label 'hold'; waiting for an independent review of 0000000 ", $"{Head} success merge-rule Copilot reviewed abcdef0; every check passed; independent review on file "], github.Posted);
         }
         finally
         {
@@ -795,9 +815,9 @@ public class MergeRuleTests
     [Fact]
     public void Any_red_check_on_the_head_fails_it_and_any_unfinished_one_keeps_it_waiting()
     {
-        var red = MergeRule.Evaluate(Config, MainGreen, Pr() with { Checks = [new("lint", "success", "success"), new("analyze (csharp)", "failure", "failure"), new("native-clients", "failure", "cancelled")] })!;
-        var running = MergeRule.Evaluate(Config, MainGreen, Pr() with { Checks = [new("pwa-ui", "success", "skipped"), new("native-clients", "pending", "in_progress")] })!;
-        var green = MergeRule.Evaluate(Config, MainGreen, Pr() with { Checks = [new("pwa-ui", "success", "skipped"), new("CodeQL", "success", "neutral")] })!;
+        var red = MergeRule.Evaluate(Config, MainGreen, Pr(statuses: [First()]) with { Checks = [new("lint", "success", "success"), new("analyze (csharp)", "failure", "failure"), new("native-clients", "failure", "cancelled")] })!;
+        var running = MergeRule.Evaluate(Config, MainGreen, Pr(statuses: [First()]) with { Checks = [new("pwa-ui", "success", "skipped"), new("native-clients", "pending", "in_progress")] })!;
+        var green = MergeRule.Evaluate(Config, MainGreen, Pr(statuses: [First()]) with { Checks = [new("pwa-ui", "success", "skipped"), new("CodeQL", "success", "neutral")] })!;
 
         Assert.Equal(("failure", "Check analyze (csharp) ended failure on abcdef0 (+1 more)"), (red.State, red.Description));
         Assert.Equal(("pending", "Waiting for native-clients"), (running.State, running.Description));
@@ -807,8 +827,8 @@ public class MergeRuleTests
     [Fact]
     public void Read_without_its_checks_a_pull_request_can_fail_but_never_pass()
     {
-        var unread = MergeRule.Evaluate(Config, MainGreen, Pr() with { FullyRead = false, CodeQlRun = null })!;
-        var draft = MergeRule.Evaluate(Config, MainGreen, Pr(draft: true) with { FullyRead = false, CodeQlRun = null })!;
+        var unread = MergeRule.Evaluate(Config, MainGreen, Pr(statuses: [First()]) with { FullyRead = false, CodeQlRun = null })!;
+        var draft = MergeRule.Evaluate(Config, MainGreen, Pr(draft: true, statuses: [First()]) with { FullyRead = false, CodeQlRun = null })!;
 
         Assert.Equal(("pending", "Its checks and files on abcdef0 aren't read yet"), (unread.State, unread.Description));
         Assert.Equal(("failure", "Draft: mark it ready for review"), (draft.State, draft.Description));

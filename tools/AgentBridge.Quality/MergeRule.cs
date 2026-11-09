@@ -258,9 +258,10 @@ static class MergeRule
         // (sr-962b).
         var second = LatestReceipt(config, pr, config.CopilotWaiver.SecondReview);
         var families = needsSecond && receipt is not null && second is not null && DifferentFamilies(receipt.Description, second.Description);
-        var waived = !copilot && receipt?.State == "success"
-            && (!needsSecond || (second?.State == "success" && families));
-        if (!copilot && !waived)
+        // Copilot never replaces the first receipt; it only stands in for the second.
+        var waived = receipt?.State == "success"
+            && (!needsSecond || copilot || (second?.State == "success" && families));
+        if (!waived)
         {
             if (receipt?.State == "success" && second?.State != "success")
             {
@@ -320,7 +321,7 @@ static class MergeRule
         var reasons = failures.Concat(pending).ToList();
         var state = failures.Count > 0 ? (mainBlocks && main.State == "error" ? "error" : "failure") : pending.Count > 0 ? "pending" : "success";
         var description = state == "success"
-            ? $"{(waived ? (needsSecond ? "Two model families' reviews on file" : "Independent review on file") : $"Copilot reviewed {sha}")}; every check passed{(needsReceipt && !waived ? "; independent review on file" : "")}{(main.State != "success" ? $"; main isn't green, but it's labelled {exemptBy}" : "")}"
+            ? $"{(copilot ? $"Copilot reviewed {sha}" : needsSecond ? "Two model families' reviews on file" : "Independent review on file")}; every check passed{(copilot ? "; independent review on file" : "")}{(main.State != "success" ? $"; main isn't green, but it's labelled {exemptBy}" : "")}"
             : Capitalize(string.Join("; ", reasons));
         return new MergeVerdict(state, Truncate(Printable(description)), reasons, sensitive);
     }

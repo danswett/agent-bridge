@@ -71,7 +71,7 @@ main_green:
 # also needs a success second_review receipt on the same head from a poster, and the two
 # descriptions must each name a model from a different family. Sensitive files under
 # one_review_paths don't call for the second (a status.md row the receipt checked against its
-# decision). A completed Copilot review on the head still counts, as the other family. A Copilot
+# decision). A completed Copilot review on the head still counts, as the other family, but never replaces the first receipt. A Copilot
 # error or timeout review is ignored. A poster's failure in either receipt blocks. Every other
 # requirement stands. labels is still accepted (the older 2026-11-05 label, #955) but changes
 # nothing: no label is needed.

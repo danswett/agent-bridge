@@ -21,7 +21,9 @@
 param(
     [Parameter(Mandatory)][int]$Pr,
     [string]$Repo = 'danswett/agent-bridge',
-    [switch]$Apply
+    [switch]$Apply,
+    [string]$RuleFile = (Join-Path $PSScriptRoot 'merge-rule.yml'),
+    [switch]$ParseRuleOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,11 +36,18 @@ function Get-Family([string]$text) {
         ForEach-Object { $_.Groups[1].Value.ToLowerInvariant() } | Select-Object -Unique
 }
 
-$rule = Get-Content (Join-Path $PSScriptRoot 'merge-rule.yml') -Raw
-if ($rule -notmatch 'posters:\s*\[([^\]]*)\]') { throw 'quality/merge-rule.yml has no independent_review.posters.' }
+# Each key must start its own line at the indent the rule file gives it, so a comment, another
+# section's key, or a longer name (independent-review-2) can't stand in for the one wanted.
+$rule = Get-Content $RuleFile -Raw
+$section = { param($name) if ($rule -match "(?m)^${name}:[ \t]*\r?\n((?:[ \t]+[^\r\n]*\r?\n?|[ \t]*\r?\n)*)") { $Matches[1] } else { '' } }
+$review = & $section 'independent_review'
+if ($review -notmatch '(?m)^[ \t]+posters:[ \t]*\[([^\]\r\n]*)\][ \t]*(#.*)?\r?$') { throw 'quality/merge-rule.yml has no independent_review.posters.' }
 $posters = $Matches[1] -split ',' | ForEach-Object { $_.Trim().Trim('"''') } | Where-Object { $_ }
-if ($rule -notmatch 'context:\s*(independent-review)\b') { throw 'quality/merge-rule.yml has no independent_review.context.' }
-$secondContext = if ($rule -match 'second_review:\s*(\S+)') { $Matches[1] } else { throw 'quality/merge-rule.yml has no copilot_waiver.second_review.' }
+if ($review -notmatch '(?m)^[ \t]+context:[ \t]*independent-review[ \t]*(#.*)?\r?$') { throw 'quality/merge-rule.yml has no independent_review.context of exactly independent-review.' }
+$waiver = & $section 'copilot_waiver'
+if ($waiver -notmatch '(?m)^[ \t]+second_review:[ \t]*independent-review-2[ \t]*(#.*)?\r?$') { throw 'quality/merge-rule.yml has no copilot_waiver.second_review of exactly independent-review-2.' }
+$secondContext = 'independent-review-2'
+if ($ParseRuleOnly) { [pscustomobject]@{ posters = $posters; second = $secondContext } | ConvertTo-Json -Compress; return }
 
 $query = @'
 query($owner:String!,$name:String!,$pr:Int!,$after:String){

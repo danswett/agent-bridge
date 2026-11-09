@@ -510,7 +510,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      whose family the other doesn't share (`claude-opus-5.5` and `gpt-6.1-sol`, say). A sensitive
      file in `copilot_waiver.one_review_paths` (`docs/status.md`, whose row the receipt checks
      against its decision) doesn't call for the second. A completed Copilot review on the head is
-     still the other family when present; a Copilot error or timeout review is ignored. A failed
+     still the other family when present, but never replaces the first receipt; a Copilot error or timeout review is ignored. A failed
      receipt from a poster blocks. The `copilot-waived` label is still accepted and changes
      nothing. Bot-only threads, which would still block the ruleset's 0-unresolved-threads
      requirement, are resolved with `quality/resolve-bot-threads.ps1`.
