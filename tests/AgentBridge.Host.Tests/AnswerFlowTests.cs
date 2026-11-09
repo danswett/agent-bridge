@@ -1827,7 +1827,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     public async Task A_six_field_form_with_long_titles_is_answered_in_a_console_wide_enough_for_its_whole_bar()
     {
         var names = await AskSixAsync(SixAnswer);
-        var columns = AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.WidestWindow;
+        var columns = 250;
         injector.Screen = () => SixScreen(names, columns, at => CliBar(SixTitles, at, columns, marked: true));
         Assert.All(Enumerable.Range(0, SixTitles.Length), at => Assert.DoesNotContain("\u2192", CliBar(SixTitles, at, columns, marked: true)));
         var ch = await OpenAsync();
@@ -1841,28 +1841,68 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task A_six_field_form_whose_tab_bar_hides_titles_gets_no_keys_and_is_named_for_the_machine(bool marked)
+    public async Task A_six_field_form_whose_tab_bar_hides_titles_is_answered_field_by_field(bool marked)
     {
         // At 102 columns the six titles do not fit across the bar: it shows two of them and an
-        // arrow for those hidden (#1123). The hidden titles cannot be read before the first key,
-        // so nothing is typed, and the refusal says why rather than that no form showed.
+        // arrow for those hidden (#1123). That is how the CLI draws a wide form, so each field
+        // is still found by the window around it, and the answer goes (#1554).
         var names = await AskSixAsync(SixAnswer);
         injector.Screen = () => SixScreen(names, 102, at => CliBar(SixTitles, at, 102, marked));
         Assert.Contains("\u2192", CliBar(SixTitles, 0, 102, marked));
         var ch = await OpenAsync();
 
-        var (outcome, reason) = await AnswerAsync(ch, SixAnswer, question: "q2");
+        var result = await AnswerResultAsync(ch, SixAnswer, Guid.NewGuid().ToString());
 
-        var needed = AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.BarColumns(SixTitles);
-        Assert.Equal("refused", outcome);
-        // The owner's six titles need more than a normal screen shows: the refusal leads with the machine.
-        Assert.InRange(needed, AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.NormalScreenColumns + 1, AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.WidestWindow);
-        Assert.Contains($"too narrow for {Product.Name} to check which field this question's form is at; answer it at the machine. Its titles need a window at least {needed} columns wide and a normal screen shows about 200", reason);
-        Assert.Contains("widening the window may not be enough", reason);
-        Assert.DoesNotContain("phone", reason);
-        Assert.Empty(injector.Attempts);
-        Assert.Contains("check=bar-window@", (await AttemptLineAsync()));
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(6, Enters());
     }
+
+    // The nine-field card of #1554, refused live at 13:10 PT with "titles are too long": titles
+    // of 40 to 80 characters, so the bar shows a few of them at a time in any console.
+    static readonly string[] NineTitles =
+    [
+        "1. Should the host launch sessions at a wider console?", "2. Who owns the first diagnosis of a refused answer?",
+        "3. Which model family reviews the second receipt on this change?", "4. Keep the hidden-title check at the first field?",
+        "5. How long may a card wait before it is closed for the person?", "6. Show the reason in the app or only in the log?",
+        "7. Which machines get the fix before the others do today?", "8. Do refused answers also post a short note to the hub?",
+        "9. Anything else the owner wants asked before the work starts?",
+    ];
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_nine_field_card_with_long_titles_is_answered_field_by_field(bool marked)
+    {
+        string[] names = ["a", "b", "c", "d", "e", "f", "g", "h", "i"];
+        await AskFieldsAsync(new
+        {
+            a = new { type = "string", title = NineTitles[0], @enum = new[] { "Yes", "No" } },
+            b = new { type = "string", title = NineTitles[1], @enum = new[] { "Yes", "No" } },
+            c = new { type = "string", title = NineTitles[2], @enum = new[] { "Yes", "No" } },
+            d = new { type = "string", title = NineTitles[3], @enum = new[] { "Yes", "No" } },
+            e = new { type = "string", title = NineTitles[4], @enum = new[] { "Yes", "No" } },
+            f = new { type = "string", title = NineTitles[5], @enum = new[] { "Yes", "No" } },
+            g = new { type = "string", title = NineTitles[6], @enum = new[] { "Yes", "No" } },
+            h = new { type = "string", title = NineTitles[7], @enum = new[] { "Yes", "No" } },
+            i = new { type = "string", title = NineTitles[8], @enum = new[] { "Yes", "No" } },
+        }, 9, new { a = "Yes", b = "No", c = "Yes", d = "No", e = "Yes", f = "No", g = "Yes", h = "No", i = "Yes" }, "Nine decisions.");
+        var columns = 250;
+        injector.Screen = () =>
+        {
+            var rows = FieldsScreen(names, message: "Nine decisions.", labels: NineTitles, wrap: columns - 4);
+            var at = Array.FindIndex(NineTitles, t => rows.Contains($" {t}:"));
+            var whole = TabBar(NineTitles, 0, marked: false);
+            return at < 0 ? rows : [.. rows.Select(r => r.Trim('\u2500').Length == 0 && r.Length > 0 ? new string('\u2500', columns - 2) : r == whole ? $" {CliBar(NineTitles, at, columns, marked)}" : r)];
+        };
+        Assert.Contains("\u2192", CliBar(NineTitles, 0, columns, marked));
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, new { a = "Yes", b = "No", c = "Yes", d = "No", e = "Yes", f = "No", g = "Yes", h = "No", i = "Yes" }, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(9, Enters());
+    }
+
 
     // A form taller than its window, as Copilot CLI drew one in a 120 by 30 console on VM3, read
     // with agent-bridge-injector --screen (#1123, #1193): a question of twelve long paragraphs
@@ -1942,12 +1982,12 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_form_that_differs_from_the_question_only_in_a_title_its_tab_bar_hides_gets_no_keys()
+    public async Task A_form_that_differs_from_the_question_only_in_a_title_its_tab_bar_hides_is_refused_when_the_bar_reaches_it()
     {
         // The question's last title is not the one on screen, but at the first field the bar
         // shows only the first two: message, labels shown, heading and hints all read the same.
-        // Typed into, the first field of a form that is not this question would stay filled
-        // before its last field's heading told them apart (#1137 review).
+        // The first field is answered on that reading; at the last field the bar shows the
+        // differing title, and the form is refused there, never delivered (#1137 review, #1554).
         string[] asked = [.. SixTitles[..5], "5. CLI updates for archived sessions"];
         var names = await AskSixAsync(SixAnswer, asked);
         injector.Screen = () => SixScreen(names, 102, at => CliBar(SixTitles, at, 102, marked: false));
@@ -1956,9 +1996,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
         var (outcome, _) = await AnswerAsync(ch, SixAnswer, question: "q2");
 
-        Assert.Equal("refused", outcome);
-        Assert.Empty(injector.Attempts);
-        Assert.Empty(injector.Plans);
+        Assert.Equal("unconfirmed", outcome);
     }
 
     [Theory]
@@ -1977,7 +2015,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var (outcome, reason) = await AnswerAsync(ch, SixAnswer, question: "q2");
 
         Assert.Equal("refused", outcome);
-        Assert.Contains("too narrow, or the question's titles too long, to check which field is open", reason);
+        Assert.Contains("did not name the question's fields as the form draws them at this field", reason);
         Assert.DoesNotContain("no longer showed", reason);
         Assert.Empty(injector.Attempts);
         Assert.Contains("check=bar@", (await AttemptLineAsync()));
@@ -2026,64 +2064,21 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task A_form_whose_tab_bar_wraps_one_long_title_over_rows_gets_no_keys_and_says_its_titles_are_too_long_to_check(bool marked)
+    public async Task A_form_whose_tab_bar_wraps_one_long_title_over_rows_is_answered_field_by_field(bool marked)
     {
-        // The bar shows the first title alone, over two rows: the other two titles are hidden,
-        // so the form cannot be told from one differing only in them. Read as one row, this was
-        // refused as a form gone (check=bar@29 live); it is the bar's window, named so. The three
-        // titles need more columns than the widest window (WidestWindow), so widening is
-        // not offered: a maximized window did not help (#1123).
+        // The bar shows the field's title alone, over two rows, the others hidden. Read as one
+        // row, this was refused as a form gone (check=bar@29 live, #1123), then as titles too
+        // long to check; it is how the CLI draws the bar, and the answer goes (#1554).
         var answer = new { licence = "Ship", signing = "Hold", support = "Ship" };
         var names = await AskLongAsync(answer);
         injector.Screen = () => LongScreen(names, marked);
         Assert.Equal(2, Wrapped(LongTitles[0], 100).Count());
-        Assert.True(global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.BarColumns(LongTitles) > AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.WidestWindow);
         var ch = await OpenAsync();
 
-        var (outcome, reason) = await AnswerAsync(ch, answer, question: "q2");
+        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
 
-        Assert.Equal("refused", outcome);
-        Assert.Equal($"this question's titles are too long for {Product.Name} to check which field is open; answer it at the machine, or ask with shorter titles", reason);
-        Assert.DoesNotContain("no longer showed", reason);
-        Assert.Empty(injector.Attempts);
-        Assert.Contains("check=bar-window@", (await AttemptLineAsync()));
-    }
-
-    [Fact]
-    public void Titles_that_fit_a_normal_screen_say_widen_it_and_one_column_more_than_the_widest_window_says_they_are_too_long()
-    {
-        // Two titles and a short one, as the owner's form: the bar needs each title, two columns
-        // around it, one between and four beside the bar (`$fn`).
-        string[] Form(int columns)
-        {
-            var room = columns - 4 - 2 - 3 * 2 - 5;
-            string[] titles = [new string('a', room / 2), new string('b', room - room / 2), "Notes"];
-            Assert.Equal(columns, global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.BarColumns(titles));
-            return titles;
-        }
-        var normal = AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.NormalScreenColumns;
-
-        var widen = global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.Narrow(Form(normal));
-        var tooLong = global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.Narrow(Form(AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.WidestWindow + 1));
-
-        Assert.Contains($"at least {normal} columns wide); widen it or make its font smaller", widen);
-        Assert.Contains($"too long for {Product.Name}", tooLong);
-        Assert.DoesNotContain("widen", tooLong);
-        Assert.All(new[] { widen, tooLong }, r => Assert.DoesNotContain("phone", r));
-    }
-
-    [Fact]
-    public void A_form_needing_more_than_a_normal_screen_shows_says_what_the_screen_reaches_and_leads_with_the_machine()
-    {
-        string[] titles = [new string('a', 100), new string('b', 103), "Notes"];
-        Assert.Equal(220, global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.BarColumns(titles));
-
-        var reason = global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.Narrow(titles);
-
-        Assert.Contains("answer it at the machine. Its titles need a window at least 220 columns wide and a normal screen shows about 200", reason);
-        Assert.Contains("widening the window may not be enough", reason);
-        Assert.DoesNotContain("too long", reason);
-        Assert.DoesNotContain("phone", reason);
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(3, Enters());
     }
 
     [Fact]
@@ -2097,7 +2092,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var (outcome, reason) = await AnswerAsync(ch, answer, question: "q2");
 
         Assert.Equal("refused", outcome);
-        Assert.Contains("too narrow, or the question's titles too long, to check which field is open", reason);
+        Assert.Contains("did not name the question's fields as the form draws them at this field", reason);
         Assert.Empty(injector.Attempts);
         Assert.Contains("check=bar@", (await AttemptLineAsync()));
     }

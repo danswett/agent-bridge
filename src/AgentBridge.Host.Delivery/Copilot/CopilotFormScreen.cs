@@ -61,10 +61,6 @@ public enum FormCheck
     Message,
     // The tab bar does not name the fields as the CLI draws them at this field.
     Bar,
-    // The tab bar is the one the CLI draws at this field, but too wide for the console, so it
-    // hides some of the fields' titles (or wraps the one it shows), and the form cannot be told
-    // from another one.
-    BarWindow,
     // The form has no such field, or one the host cannot say how it is headed.
     Field,
     // The field being answered is not the one headed.
@@ -167,7 +163,6 @@ public static partial class CopilotFormScreen
         FormCheck.Under => "under",
         FormCheck.Message => "message",
         FormCheck.Bar => "bar",
-        FormCheck.BarWindow => "bar-window",
         FormCheck.Field => "field",
         FormCheck.FieldHeading => "field-heading",
         FormCheck.Hints => "hints",
@@ -349,39 +344,10 @@ public static partial class CopilotFormScreen
     const string Prompted = "a permission prompt showed on the session's screen in place of the question's form";
     const string NotForm = "the session's screen no longer showed the question's form";
 
-    // A bar windowed to some of the form's titles (bar-window): said with how wide the window
-    // must be for the whole bar, the console's width less four (`$fn`), as a lower bound (each
-    // title counted a column a character; a wide character takes two). Launched sessions take
-    // the window's own width, which on a normal screen is about NormalScreenColumns (1920 px).
-    // Up to that, widening the window is advice that can work. Past it, up to WidestWindow, it
-    // may not (a maximized window on the owner's screen was still too narrow and the card told
-    // him to widen it, #1123), so it says what the screen reaches and leads with answering at the
-    // machine. Past WidestWindow no window helps: ask with shorter titles. It names the product,
-    // never "phone": a browser or the Windows app answers the same way.
-    internal const int NormalScreenColumns = 200;
-    internal const int WidestWindow = 250;
-
-    internal static string Narrow(IReadOnlyList<string> labels)
-    {
-        var needed = BarColumns(labels);
-        if (needed > WidestWindow)
-        {
-            return $"this question's titles are too long for {Product.Name} to check which field is open; answer it at the machine, or ask with shorter titles";
-        }
-        return needed > NormalScreenColumns
-            ? $"the session's window is too narrow for {Product.Name} to check which field this question's form is at; answer it at the machine. Its titles need a window at least {needed} columns wide and a normal screen shows about {NormalScreenColumns}, so widening the window may not be enough (a smaller font may help)"
-            : $"the session's window is too narrow for {Product.Name} to check which field this question's form is at (its titles need a window at least {needed} columns wide); widen it or make its font smaller, then answer again, or answer it at the machine";
-    }
-
-    // The fewest columns a console needs for the bar to show every label: each ` <label> ` (or
-    // `[<label>]`), one column between them, within the console's width less four.
-    internal static int BarColumns(IReadOnlyList<string> labels) =>
-        labels.Sum(l => new System.Globalization.StringInfo(l).LengthInTextElements + 2) + Math.Max(0, labels.Count - 1) + 4;
-
     // The tab bar under the question names other fields, or reads as no bar the CLI draws at
     // this field. A form at this point has its own heading and the question's message, so this
     // is seldom a form gone; it was said so, and a bar too long for its row was read as one (#1123).
-    const string Unchecked = "this window is too narrow, or the question's titles too long, to check which field is open; answer at the machine";
+    const string Unchecked = "the session's tab bar did not name the question's fields as the form draws them at this field; answer at the machine";
     const string Under = "something other than the question's form was drawn under it on the session's screen";
 
     // A form taller than the session's window (Tall): the CLI shows only its bottom, so the
@@ -479,27 +445,25 @@ public static partial class CopilotFormScreen
             // bar fits itself to the console's width less four columns (`$fn`), within the
             // frame, so it is drawn on one row; one read across rows is not taken as the bar.
             // Too wide for the console, it shows only the labels around the field being
-            // answered, between arrows, and is refused below. Copilot CLI 1.0.106's bar (`_l`,
-            // window `kHi`) shows the field's label alone where not even two fit, however long
-            // it is, and a title wider than the row wraps onto as many rows as it takes, the
-            // arrows beside its middle row (Wrapped): always a window, and refused as one; read
-            // as one row, it was no form at all, and the reason said the form had gone (#1123).
+            //             answered, between arrows. Copilot CLI 1.0.106's bar (`_l`, window `kHi`) shows the
+                        // field's label alone where not even two fit, however long it is, and a title wider
+                        // than the row wraps onto as many rows as it takes, the arrows beside its middle row
+                        // (Wrapped); read as one row, it was no form at all (#1123).
             at = Next(rows, at);
             string[] labels = [.. form.Fields.Select(f => f.Label!)];
-            if (at < rows.Count && Bars(labels, index).TryGetValue(rows[at].Trim(' '), out var windowed))
-            {
-                // Windowed, the bar hides some titles, and a form that differs from this question
-                // only in a hidden title reads the same: its message, the labels shown, the
-                // field's heading and hints. Each field's own heading is read before its keys,
-                // but a field typed into stays so, so the keys could fill a form that is not this
-                // question before the one title that tells them apart showed (#1137 review).
-                // Named, it is refused with nothing typed, for the machine, rather than read as
-                // no form at all (#1123).
-                if (windowed) { return found.Fail(FormCheck.BarWindow, at, Narrow(labels)); }
-            }
-            else if (at < rows.Count && Wrapped(rows, at, labels, index)) { return found.Fail(FormCheck.BarWindow, at, Narrow(labels)); }
+            // A wide form's bar is drawn windowed (the labels around the field between arrows, or
+            // the field's own label alone, wrapped over rows): how the CLI draws any form whose
+            // titles do not fit the console, not a sign it is another one. It was refused as
+            // too long to check, so a nine-field card of ordinary titles (about 40 to 80
+            // characters) could never be answered, and the reason blamed the titles (#1554).
+            // What names the field is the window holding its label (Bars, Wrapped), the
+            // question's message above and the field's heading and hints below, each read before
+            // that field's keys. A form differing only in a title the window hides reads the same
+            // here; the bar reaches that title at a later field, whose heading is read before
+            // its keys (#1137 review).
+            if (at < rows.Count && Bars(labels, index).ContainsKey(rows[at].Trim(' '))) { at++; }
+            else if (at < rows.Count && Wrapped(rows, at, labels, index) is var after and > 0) { at = after; }
             else { return found.Fail(FormCheck.Bar, at, Unchecked); }
-            at++;
         }
         // The heading as drawn, its spaces read as they are: with no tab bar (a form of one
         // field), "Pick  one:" or "Pick\u00A0one:" is another form's, not "Pick one:" (#1137
@@ -549,7 +513,7 @@ public static partial class CopilotFormScreen
     // `index - n / 2`, kept inside the list), "← " before it when labels are hidden on the left
     // and " →" after it when on the right. A window is one of these alone: the selected field in
     // it, the arrows saying exactly which ends are hidden, and the labels in it in the form's
-    // order; read so, it is named (bar-window) rather than refused as no form at all. Six long
+    // order; read so, it is the bar at this field. Six long
     // titles at 102 columns showed two and "→" (#1123). Copilot CLI 1.0.106's bar (`_l`) picks
     // its window (`kHi`) as the most labels that fit, trying starts outward from the centred one,
     // so any run of labels holding the selected one may be drawn: each is listed. A label with
@@ -587,13 +551,12 @@ public static partial class CopilotFormScreen
     // however long it is): the label (`[<label>]` without colour) wrapped onto two rows or more,
     // "← " on one of them exactly when fields come before it, and " →" ending one exactly when
     // fields come after it (Ink centres the arrows beside the label's rows). Each row's words in
-    // order, a space or none where a row breaks (a word longer than the row is cut anywhere). It
-    // only names the refusal: such a bar is a window, never taken as the bar, and nothing is
-    // typed on it, so reading a space at a break either way cannot make a key go. 120 columns
-    // and three titles of full sentences showed it, the reason saying the form had gone (#1123).
-    static bool Wrapped(IReadOnlyList<string> rows, int at, IReadOnlyList<string> labels, int index)
+    // order, a space or none where a row breaks (a word longer than the row is cut anywhere).     The row
+        // after the bar, or -1. 120 columns and three titles of full sentences showed it, the
+        // reason saying the form had gone (#1123).
+    static int Wrapped(IReadOnlyList<string> rows, int at, IReadOnlyList<string> labels, int index)
     {
-        if (Arrowed(labels)) { return false; }
+        if (Arrowed(labels)) { return -1; }
         var pieces = new List<string>();
         var (lefts, rights) = (0, 0);
         // The bar's rows are read up to a blank row, or to any row after which they read so: the
@@ -603,15 +566,15 @@ public static partial class CopilotFormScreen
             var piece = rows[r].Trim(' ');
             if (piece.StartsWith('\u2190')) { (piece, lefts) = (piece[1..].TrimStart(' '), lefts + 1); }
             if (piece.EndsWith('\u2192')) { (piece, rights) = (piece[..^1].TrimEnd(' '), rights + 1); }
-            if (piece.Length == 0) { return false; }
+            if (piece.Length == 0) { return -1; }
             pieces.Add(piece);
             if (pieces.Count >= 2 && lefts == (index > 0 ? 1 : 0) && rights == (index < labels.Count - 1 ? 1 : 0)
                 && (Reads(pieces, labels[index]) || Reads(pieces, $"[{labels[index]}]")))
             {
-                return true;
+                return r + 1;
             }
         }
-        return false;
+        return -1;
 
         static bool Reads(List<string> pieces, string text)
         {

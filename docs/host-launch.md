@@ -46,12 +46,8 @@ From `hooks/daemon-launch.ps1` (`Use-DaemonLaunchRequest`, `Resolve-DaemonReques
   kept the console, and the session opened as a bare console window instead of in Windows
   Terminal, without tabs, with a cut-off footer and a stale title, and the owner could not type
   into it. That promise of 250 columns is given up. Where a form's tab bar (the console's width
-  less four) is too wide for the window, the answer is refused before any key, saying how many
-  columns the titles need. Up to about 200 columns, what a normal screen shows (1920 px), it
-  says to widen the window or make its font smaller, or answer at the machine; from 201 to
-  250 it says a normal screen shows about 200, that widening may not be enough, and leads with
-  answering at the machine; where they need more than 250, that the titles are too long for
-  Slipgates to check (host-answers.md).
+  less four) is too wide for the window, Copilot draws a windowed bar and the host checks
+  the labels it shows, answering the form field by field (host-answers.md, #1554).
   The injector still has `--widen` (host-answers.md), which no launch calls.
 * **The command line**, per agent: Copilot `--session-id <id> --banner [--model]
   [--reasoning-effort] [--context] [--allow-all] [extras] [-i <prompt>]`; Agency `copilot
