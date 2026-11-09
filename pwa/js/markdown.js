@@ -607,6 +607,11 @@ function build(node, doc) {
   // The Copy button is made here and never by the parser: 'button' is not in TAGS, so no
   // reply text can produce one, and the only handler on it is ours.
   if (node.tag === 'pre') { return codeBlock(textOf(node), doc); }
+  // A paragraph that is one code span and nothing else is a line the agent wrote as a command on its
+  // own (#1432): it draws as a fenced block does, with wrapping and Copy, through the same codeBlock
+  // so the hidden-character and right-to-left escapes (#220, #423, #429) apply to it. Decided by
+  // shape alone, never by what the words look like.
+  if (node.tag === 'p' && node.children?.length === 1 && node.children[0]?.tag === 'code') { return codeBlock(textOf(node.children[0]), doc); }
   const e = doc.createElement(node.tag);
   const a = node.attrs ?? {};
   if (node.tag === 'code') {

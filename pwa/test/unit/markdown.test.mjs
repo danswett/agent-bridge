@@ -548,3 +548,42 @@ test('a codex approval a host had to cut says that part of it is missing', async
   const cut = { id: 'd1', kind: 'approval', truncated: true, message: 'Allow **Bash**?\n\n```\necho one\necho tw', fields: [{ name: 'decision', type: 'choice', options: [{ value: 'approve', label: 'Approve once' }, { value: 'deny', label: 'Deny' }], required: true }] };
   assert.deepEqual(answerability(cut, caps, 'codex'), { ok: false, why: 'truncated' });
 });
+
+// #1432: a paragraph that is one code span and nothing else draws as a fenced block, with Copy.
+const pageOf = (md) => renderMarkdown(md, fakeDocument());
+const copyButtons = (page) => elements(page).filter((e) => e.attrs.class === 'md-copy').length;
+const blockTexts = (page) => elements(page).filter((e) => e.tag === 'pre').map((e) => textNodes(e).join(''));
+
+test('a paragraph holding only one code span draws as a code block with Copy, and copies exactly the code', () => {
+  const page = pageOf('Run this:\n\n`pwsh -NoProfile -File "C:\\tools\\run.ps1" -Verbose`');
+  assert.equal(copyButtons(page), 1);
+  assert.deepEqual(blockTexts(page), ['pwsh -NoProfile -File "C:\\tools\\run.ps1" -Verbose']);
+  assert.equal(elements(page).filter((e) => e.tag === 'p').length, 1);
+});
+
+test('inline code in a sentence, or two code spans in a paragraph, stays text with no Copy', () => {
+  for (const md of ['Run `git status` now', '`git status` now', '`git status` `git diff`', '`git status`, then more']) {
+    assert.equal(copyButtons(pageOf(md)), 0, md);
+  }
+});
+
+test('a plain paragraph that looks like a command stays a paragraph', () => {
+  const page = pageOf('git status --short');
+  assert.equal(copyButtons(page), 0);
+  assert.equal(blockTexts(page).length, 0);
+});
+
+test('an approval draws its message as written, never as a promoted code span, and has no Copy', () => {
+  const card = cardOf('Codex wants to run:\n\n`git status`');
+  assert.equal(copyButtons(card), 0);
+  assert.deepEqual(cardText(card), ['Codex wants to run:\n\n`git status`']);
+});
+
+test('a promoted code span keeps the hidden-character and right-to-left escapes, and notes them', () => {
+  for (const [raw, drawn] of [[ISOLATED, ISOLATED_DRAWN], [HEBREW, HEBREW_DRAWN], ['echo safe \r#; echo SECOND', 'echo safe \\u000D#; echo SECOND']]) {
+    const page = pageOf(`Run:\n\n\`${raw}\``);
+    assert.deepEqual(blockTexts(page), [drawn]);
+    assert.doesNotMatch(blockTexts(page)[0], /[\u2066-\u2069\u05D0-\u05D1\r]/);
+    assert.equal(elements(page).filter((e) => e.attrs.class === 'md-notes').length, 1);
+  }
+});
