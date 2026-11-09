@@ -17,6 +17,7 @@ public sealed class FeedbackReviewViewModel : Observable
     CancellationTokenSource? running;
     int generation;
     bool closed;
+    bool editedWhileSending;
     string note = "";
     byte[]? screenshot;
     bool includeTurns;
@@ -32,6 +33,7 @@ public sealed class FeedbackReviewViewModel : Observable
         this.ui = ui ?? InlineDispatcher.Instance;
         SessionId = sessionId;
         SessionTitle = sessionTitle;
+        send.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(FeedbackSendViewModel.State)) { RegatherAfterSend(); } };
     }
 
     public string? SessionId { get; }
@@ -91,11 +93,13 @@ public sealed class FeedbackReviewViewModel : Observable
         CancellationTokenSource cancel;
         CancellationTokenSource? previous;
         int mine;
-        // What is being sent, or was sent, is fixed; edits after that don't change the shown rows.
-        if (send.State is FeedbackSendState.Sending or FeedbackSendState.Sent) { return; }
         lock (gate)
         {
             if (closed) { return; }
+            // What is being sent, or was sent, is fixed. An edit during Sending is remembered, so a Cancel or failure gathers again rather than leaving the old bundle sendable.
+            if (send.State == FeedbackSendState.Sending) { editedWhileSending = true; return; }
+            if (send.State == FeedbackSendState.Sent) { return; }
+            editedWhileSending = false;
             mine = ++generation;
             previous = running;
             cancel = running = new CancellationTokenSource();
@@ -104,6 +108,13 @@ public sealed class FeedbackReviewViewModel : Observable
         try { previous?.Cancel(); } catch (ObjectDisposedException) { }
         send.BeginGathering();
         _ = GatherAsync(request, mine, cancel);
+    }
+
+    void RegatherAfterSend()
+    {
+        if (send.IsClosed || send.State is FeedbackSendState.Sending or FeedbackSendState.Sent) { return; }
+        lock (gate) { if (!editedWhileSending) { return; } }
+        Regather();
     }
 
     async Task GatherAsync(FeedbackRequest request, int mine, CancellationTokenSource cancel)

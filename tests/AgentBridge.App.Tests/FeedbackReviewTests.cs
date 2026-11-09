@@ -7,7 +7,9 @@ public sealed class FeedbackReviewTests
     sealed class FakeSender : IFeedbackSender
     {
         public int Calls;
-        public Task<FeedbackSendResult> SendAsync(FeedbackBundle bundle, CancellationToken cancel) { Calls++; return Task.FromResult<FeedbackSendResult>(new FeedbackSendResult.Sent(DateTimeOffset.UnixEpoch)); }
+        public List<FeedbackBundle> Sent = new();
+        public TaskCompletionSource<FeedbackSendResult>? Hold;
+        public Task<FeedbackSendResult> SendAsync(FeedbackBundle bundle, CancellationToken cancel) { Calls++; Sent.Add(bundle); if (Hold is { } hold) { cancel.Register(() => hold.TrySetCanceled(cancel)); return hold.Task; } return Task.FromResult<FeedbackSendResult>(new FeedbackSendResult.Sent(DateTimeOffset.UnixEpoch)); }
     }
 
     sealed class Source : IFeedbackBundleSource
@@ -129,5 +131,39 @@ public sealed class FeedbackReviewTests
         Assert.Equal(0, sender.Calls);
         await send.SendAsync();
         Assert.Equal(1, sender.Calls);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_edit_during_sending_gathers_again_after_cancel_or_failure_so_the_old_bundle_cannot_be_sent(bool fail)
+    {
+        var (vm, send, source, sender) = Make();
+        vm.IncludeSessionTurns = true;
+        vm.Start();
+        await Finish(source.Calls[^1].Done, t => t.SetResult(new FeedbackGatherResult.Ready(Bundle("Versions", "Session turns"))));
+        sender.Hold = new TaskCompletionSource<FeedbackSendResult>();
+        var sending = send.SendAsync();
+        Assert.Equal(FeedbackSendState.Sending, send.State);
+        var gathers = source.Calls.Count;
+
+        vm.IncludeSessionTurns = false;
+        Assert.Equal(gathers, source.Calls.Count);
+
+        if (fail) { sender.Hold.SetResult(new FeedbackSendResult.Failed(FeedbackFailureReason.UploadRejected, FeedbackRetry.Now)); }
+        else { send.Cancel(); }
+        await sending;
+        await Task.Delay(100);
+
+        Assert.Equal(gathers + 1, source.Calls.Count);
+        Assert.Null(source.Calls[^1].Request.SessionTurnsFor);
+        Assert.Equal(FeedbackSendState.Gathering, send.State);
+        Assert.False(send.CanSend);
+        Assert.False(send.CanRetry);
+
+        await Finish(source.Calls[^1].Done, t => t.SetResult(new FeedbackGatherResult.Ready(Bundle("Versions"))));
+        sender.Hold = null;
+        await send.SendAsync();
+        Assert.Equal("Versions", Assert.Single(sender.Sent[^1].Items).Label);
     }
 }

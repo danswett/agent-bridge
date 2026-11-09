@@ -251,7 +251,8 @@ public sealed class FeedbackSendViewModel : Observable
         Raise(nameof(CanSend)); Raise(nameof(CanRetry)); Raise(nameof(RetryAt)); Raise(nameof(RetryHint));
         Raise(nameof(IsSending)); Raise(nameof(IsGathering)); Raise(nameof(IsClosed));
         Raise(nameof(Failed)); Raise(nameof(Speech)); Raise(nameof(FailureReason)); Raise(nameof(Attempts));
-        if (text.Length > 0 && !closed) { announce?.Invoke(text, urgent); }
+        // A listener may have moved the state on (a regather after a cancelled edit); don't announce a line that is gone.
+        if (text.Length > 0 && !closed && state == s) { announce?.Invoke(text, urgent); }
     }
 }
 
