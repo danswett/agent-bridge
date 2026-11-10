@@ -252,6 +252,57 @@ public sealed class AnswerTests : IDisposable
         Assert.Empty(answered);
     }
 
+    // #1636: an agent's words were typed into the owner's open question and nothing said so.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("q0")]
+    public async Task An_agents_message_is_never_the_answer_to_an_open_freeform_question_and_is_refused_loudly(string? tag)
+    {
+        Ask(Form("q1"));
+        await using var c = Connector();
+        await Pass(c);
+        await Do(c, ha.SendFromCard(Node, "agent chatter", decisionId: tag, driver: "agent", rid: "r-1"));
+        Assert.Empty(answered);
+        Assert.Equal("Reply NOT sent", Activity);
+        Assert.Contains(log, m => m.Contains("refused a reply", StringComparison.Ordinal));
+
+        // It is not queued: closing the card later does not answer with it.
+        await Pass(c, 20);
+        Assert.Empty(answered);
+    }
+
+    [Fact]
+    public async Task An_agents_message_is_never_the_answer_to_an_open_text_field_question()
+    {
+        Ask(Form("q1", Release, new Field { Name = "note", Title = "Note", Type = FieldType.Text }));
+        await using var c = Connector();
+        await Pass(c);
+        await Do(c, ha.SendFromCard(Node, "agent chatter", driver: "agent", rid: "r-1"));
+        Assert.Equal("Reply NOT sent", Activity);
+        await Pass(c, 20);
+        Assert.Empty(answered);
+    }
+
+    [Fact]
+    public async Task An_agent_naming_the_open_question_still_answers_it()
+    {
+        Ask(Form("q1"));
+        await using var c = Connector();
+        await Pass(c);
+        await Do(c, ha.SendFromCard(Node, "Call it Aurora", decisionId: "q1", driver: "agent"));
+        Assert.Equal("Call it Aurora", Assert.Single(answered).Text);
+    }
+
+    [Fact]
+    public async Task An_owners_untagged_words_still_answer_an_open_freeform_question()
+    {
+        Ask(Form("q1"));
+        await using var c = Connector();
+        await Pass(c);
+        await Do(c, ha.SendFromCard(Node, "Call it Aurora"));
+        Assert.Equal("Call it Aurora", Assert.Single(answered).Text);
+    }
+
     [Fact]
     public async Task A_lone_choice_takes_words_through_other_and_a_yes_no_does_not()
     {
