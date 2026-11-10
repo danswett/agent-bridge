@@ -324,9 +324,11 @@ load: machine cpu 92% of 8 cores, 310 MiB memory available; sessions: 3f2a9c1d c
 - `unknown` means the host could not read it (for example a process it may not open); it is never
   shown as 0. A session marked `partial` or `unavailable` is missing some or all of its processes.
 - No paths or command lines are read or written. Session ids are cut to 8 characters in the log.
-- The Home Assistant sensor can carry the same figures under a `load` attribute, keyed by node,
-  but that is off (`HaConnectorOptions.PublishLoad`) until Compliance clears sending it off the
-  machine. Until then the figures stay in `host.log`.
+- Sending load off the machine is gated by `HaConnectorOptions.PublishLoad` (#1150). The owner
+  cleared it on 2026-11-09 for **machine totals only**: the fleet load record (#1587), which has
+  no session ids, names, paths, titles or per-session rows. The per-session figures above (the
+  `load` attribute keyed by node) stay off and only reach `host.log`; clearing them needs a new
+  decision from the owner.
 
 ## Notifications in the log
 
