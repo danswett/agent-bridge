@@ -173,7 +173,7 @@ does not delete the others. "Verified" below means SRE has shown it on the real 
 | --- | --- | --- | --- |
 | Sealed upload in the feedback container | Cannot be deleted for 30 days (immutability policy), deleted at day 31 | Time-based retention plus lifecycle rule | Configured per upload doc; lock state and deletion behaviour to be verified by SRE |
 | Decrypted private issue chunks | At most 30 days from the original upload time, sooner on a deletion request | Worker deletion sweep keyed to the upload time | Not implemented; the processor currently uses processing time and its source interface lacks upload time |
-| Receipts, suppression metadata, failure records | Only what idempotent retry and no-replay-after-delete need, at most 90 days, never unbounded | Worker | SRE confirms the value and backup-restore handling |
+| Receipts, suppression metadata, failure records | Only what idempotent retry and no-replay-after-delete need, at most 90 days, never unbounded (owner decision, Nov 10) | Worker | Owner decided 90 days; after any backup restore, deletions are re-applied |
 | Private operational lookup | At most 30 days from the original upload or collection, not extended by joins or retries | SRE mechanism (#1189 item 4) | Owner decided 30 days; SRE confirms how |
 | Diagnostic events | At most 30 days from original collection, not restarted by retry, export or join | Per-table analytics retention, bounded local queue | Proposed maximum; SRE proof required before upload |
 | Relay logs | 7 days, outcomes and sizes only, no account, device or ticket | Existing | Unchanged |
@@ -197,9 +197,8 @@ exactly. No deletion promise is published until the real configuration supports 
 * **A feedback deletion request** goes through a private route that asks for a report
   reference and nothing else about the tester. On a valid request the worker removes the
   decrypted issue chunks and any partial writes, removes the lookup entry, and keeps only
-  minimal suppression metadata, kept at most 90 days (an SRE-owned value that may be
-  raised, never unbounded; backups must not restore a deleted report within it), so a retry or restore does not recreate the
-  report. Closing an issue or destroying a key does not count as deletion.
+  minimal suppression metadata, kept at most 90 days (owner decision, Nov 10), so a retry does not recreate the
+  report. After any backup restore, the deletions are re-applied (owner decision, Nov 10). Closing an issue or destroying a key does not count as deletion.
 * **Limits stated honestly:** the immutable ciphertext remains until day 31; provider
   residuals and backups are described, not denied; whether a legal erasure request can
   override the immutability hold is a recorded residual legal question, not decided here.
