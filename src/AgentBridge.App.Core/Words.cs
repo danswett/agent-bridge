@@ -81,6 +81,18 @@ public static class Words
         return $"{Math.Round(seconds / 86400)}d ago";
     }
 
+    // A usage window that reset after its reading was taken (#499): "Reset 12m ago · no reading since".
+    public static string ResetAgo(DateTimeOffset resetAt, DateTimeOffset now) => $"Reset {ReadingAgo(resetAt, now)} · no reading since";
+
+    // The same for a screen reader, as one sentence: "Claude · max, Session (5h): reset 12 minutes ago, no reading since."
+    public static string ResetSentence(string agent, string account, string window, DateTimeOffset resetAt, DateTimeOffset now)
+    {
+        var minutes = Math.Max(0, Math.Round((now - resetAt).TotalMinutes));
+        var (n, unit) = minutes >= 1440 ? (Math.Round(minutes / 1440), "day") : minutes >= 60 ? (Math.Round(minutes / 60), "hour") : (minutes, "minute");
+        var who = string.Join(" · ", new[] { agent, account }.Where(s => !string.IsNullOrEmpty(s)));
+        return $"{who}, {window}: reset {n} {unit}{(n == 1 ? "" : "s")} ago, no reading since.";
+    }
+
     public static string Amount(double? value) => value is { } v && double.IsFinite(v) ? Math.Round(v).ToString("#,0", CultureInfo.GetCultureInfo("en-US")) : "";
 
     public static string Size(long n) => n < 1024 ? $"{n} bytes" : n < 1024 * 1024 ? $"{Math.Round(n / 1024.0)} KiB" : $"{n / (1024.0 * 1024):F1} MiB";

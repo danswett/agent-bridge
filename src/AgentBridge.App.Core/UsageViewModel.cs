@@ -65,15 +65,20 @@ public sealed class UsageViewModel : Observable
         // newer failure kept beside it along.
         var oldest = now - UsageCache.Kept;
         var shown = cache is null ? report : new UsageReport([.. report.Agents.Where(a => a.MeasuredAt >= oldest)]);
-        foreach (var a in UsageMerge.Merge([shown]).Agents.OrderByDescending(a => Headline(a) ?? 0)) { Rows.Add(new UsageRowViewModel(a, now, here)); }
+        foreach (var a in UsageMerge.Merge([shown]).Agents.OrderByDescending(a => Headline(a, now) ?? 0)) { Rows.Add(new UsageRowViewModel(a, now, here)); }
         // Each figure names its account: two Copilot accounts read "GitHub Copilot · one 12%" and
-        // "GitHub Copilot · other 0%", not the same words twice (#225).
-        var figures = Rows.Where(r => r.Headline is not null).Select(r => $"{r.Label}{(r.Account.Length > 0 ? $" · {r.Account}" : "")} {Math.Round(r.Headline!.Value)}%").ToList();
+        // "GitHub Copilot · other 0%", not the same words twice (#225). A row whose every window has
+        // reset since its reading says "Reset" in place of a figure (#499).
+        var figures = Rows.Where(r => r.Windows.Count > 0).Select(r => $"{r.Label}{(r.Account.Length > 0 ? $" · {r.Account}" : "")} {(r.Headline is { } top ? $"{Math.Round(top)}%" : "Reset")}").ToList();
         Summary = figures.Count > 0 ? string.Join(" · ", figures) : "No usage reported yet";
         Raise(nameof(IsEmpty));
     }
 
-    public static double? Headline(AgentUsage a) => a.Windows.Count > 0 ? a.Windows.Max(w => w.Percent) : null;
+    // The fullest window still open: one whose reset has passed since its reading is the last
+    // period's figure, not today's, and is left out (#499). Null when none is open.
+    public static double? Headline(AgentUsage a, DateTimeOffset now) => a.Windows.Where(w => !Lapsed(w, now)).Select(w => (double?)w.Percent).Max();
+
+    public static bool Lapsed(UsageWindow w, DateTimeOffset now) => w.ResetsAt is { } at && at <= now;
 
     public static string Severity(double percent) => percent >= 90 ? "crit" : percent >= 75 ? "warn" : "";
 }
@@ -94,8 +99,8 @@ public sealed class UsageRowViewModel
         // For diagnosis only, in the age's tooltip and accessible description: which machine read it
         // matters less than whose account it is, and on a phone it pushed the account out (#225).
         ReadOn = a.ReadBy is { } by && by.Id != here ? $"read on {by.Name}" : null;
-        Headline = UsageViewModel.Headline(a);
-        Windows = [.. a.Windows.Select(w => new UsageWindowViewModel(w, now))];
+        Headline = UsageViewModel.Headline(a, now);
+        Windows = [.. a.Windows.Select(w => new UsageWindowViewModel(w, now, Label, Account))];
         // A failed read beside a fresh reading is noise; with no reading, or an old one, it is
         // all there is to say.
         Error = !string.IsNullOrEmpty(a.Error) && !(a.Windows.Count > 0 && !Stale) ? a.Error : null;
@@ -115,9 +120,21 @@ public sealed class UsageRowViewModel
 
 public sealed class UsageWindowViewModel
 {
-    public UsageWindowViewModel(UsageWindow w, DateTimeOffset now)
+    public UsageWindowViewModel(UsageWindow w, DateTimeOffset now, string agent = "", string account = "")
     {
         Label = w.Label;
+        if (UsageViewModel.Lapsed(w, now))
+        {
+            // The old percent is the last period's: no figure, bar, colour, amount or pace, and no
+            // warning styling (#499). Severity "reset" is the secondary text colour.
+            Lapsed = true;
+            Percent = 0;
+            PercentText = "Reset";
+            Severity = "reset";
+            ResetText = Words.ResetAgo(w.ResetsAt!.Value, now);
+            AccessibleText = Words.ResetSentence(agent, account, w.Label, w.ResetsAt.Value, now);
+            return;
+        }
         Percent = Math.Clamp(w.Percent, 0, 100);
         PercentText = $"{w.Percent:0.#}%";
         Severity = UsageViewModel.Severity(w.Percent);
@@ -137,11 +154,15 @@ public sealed class UsageWindowViewModel
     }
 
     public string Label { get; }
+    public bool Lapsed { get; }
+    public bool HasBar => !Lapsed;
+    // The one sentence a screen reader hears for a lapsed window; empty otherwise.
+    public string AccessibleText { get; } = "";
+    public string ResetText { get; }
     public double Percent { get; }
     public string PercentText { get; }
     public string Severity { get; }
-    public string AmountText { get; }
-    public string ResetText { get; }
+    public string AmountText { get; } = "";
     // How far through its window we are, 0-100, or null when either end is unknown.
     public double? Elapsed { get; }
     public string? PaceText { get; }

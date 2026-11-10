@@ -136,6 +136,14 @@ Agent-ha-bridge's usage card, kept exactly:
   line `│ even pace 45%`, and a verdict: more than 10 points ahead is `N% ahead of pace`
   (warning colour), more than 10 under is `N% under pace`, else `on pace`.
 * **Resets:** `resets in 25d`, `in 4h`, `in 12m` (rounded), or `due` once past.
+* **A window that has reset since its reading** (its `resetsAt` is at or before now) is
+  lapsed: its percent is the last period's, not today's. It shows no percent, bar, colour,
+  amount or pace, and substitutes no zero. In the figure's place, in secondary text, it says
+  `Reset`, and its foot says `Reset 12m ago · no reading since`; no warning colour or icon
+  is used. The folded summary and the row order ignore a lapsed window's percent, and a row
+  whose every window has lapsed shows its agent and account, then `Reset`, in the summary too. A
+  screen reader hears one sentence, never a live announcement: `Claude · max, Session (5h):
+  reset 12 minutes ago, no reading since.` The next reading replaces it at once.
 * **Amounts:** `1,183,313 / 1,500,000 AIC` when `used` and `limit` are given.
 * **Age:** `just now` under 90 s, then minutes, hours, days ago. Older than an hour is
   stale, shown in the warning colour.

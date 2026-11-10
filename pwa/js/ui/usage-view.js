@@ -3,7 +3,7 @@
 // when it resets, how old the reading is, and the error when there is nothing fresher to show.
 // Under the sessions, one line of each agent's fullest window, in its own colour, leads to it.
 import { h } from './dom.js';
-import { ago, amount, elapsed, hasReading, headline, isStale, pace, readOn, severity, showsError, until } from '../usage.js';
+import { ago, amount, elapsed, hasReading, headline, isStale, lapsed, pace, readOn, resetAgo, resetSentence, severity, showsError, until } from '../usage.js';
 
 export class UsageView {
   #timer = null;
@@ -41,10 +41,12 @@ export class UsageView {
     // turn every agent beside it amber. Each names its account: two of one agent's accounts are
     // two figures, and only the account tells them apart (#225). A separator stays with the
     // figure before it (ui.md §6.1).
-    const figures = entries.filter((e) => headline(e) !== null);
+    // A row whose every window has reset since its reading says "Reset", not a figure.
+    const figures = entries.filter(hasReading);
+    const figure = (e) => { const top = headline(e, now); return top === null ? ' Reset' : ` ${Math.round(top)}%`; };
     this.summary?.replaceChildren(...(figures.length
-      ? figures.flatMap((e, i) => [i > 0 ? '\u00a0\u00b7 ' : null, h('span', { class: `usage-figure ${severity(headline(e))}`.trim() },
-        e.label, e.account ? ['\u00a0\u00b7 ', h('span', { class: 'usage-who' }, e.account)] : null, ` ${Math.round(headline(e))}%`)]).filter(Boolean)
+      ? figures.flatMap((e, i) => [i > 0 ? '\u00a0\u00b7 ' : null, h('span', { class: `usage-figure ${severity(headline(e, now))}`.trim() },
+        e.label, e.account ? ['\u00a0\u00b7 ', h('span', { class: 'usage-who' }, e.account)] : null, figure(e))]).filter(Boolean)
       : ['No usage reported yet']));
     this.line?.setAttribute('aria-label', `Agent usage: ${this.summary?.textContent ?? ''}`);
 
@@ -63,8 +65,19 @@ export class UsageView {
       by ? h('span', { class: 'usage-by sr-only' }, by) : null);
     return h('div', { class: 'usage-group', dataset: { agent: entry.agent } },
       head,
-      hasReading(entry) ? entry.windows.map((w) => this.#window(w, now)) : null,
+      hasReading(entry) ? entry.windows.map((w) => (lapsed(w, now) ? this.#lapsed(entry, w, now) : this.#window(w, now))) : null,
       showsError(entry, now) ? h('p', { class: 'usage-error' }, entry.error) : null);
+  }
+
+  // No percent, bar, colour, amount or pace, and no warning styling: the old figure is not today's.
+  // One sentence for a screen reader on the group, not a live region; the next reading replaces it.
+  #lapsed(entry, w, now) {
+    const figure = h('span', { class: 'usage-percent' }, 'Reset');
+    figure.style.color = 'var(--ab-text2)';
+    figure.style.fontWeight = 'normal';
+    return h('div', { class: 'usage-window lapsed', role: 'group', 'aria-label': resetSentence(entry, w, now), dataset: { key: w.key } },
+      h('div', { class: 'usage-top', 'aria-hidden': 'true' }, h('span', { class: 'usage-label' }, w.label), figure),
+      h('div', { class: 'usage-foot', 'aria-hidden': 'true' }, h('span', { class: 'usage-reset' }, resetAgo(w.resetsAt, now))));
   }
 
   #window(w, now) {

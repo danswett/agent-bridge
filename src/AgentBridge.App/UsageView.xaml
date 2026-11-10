@@ -52,7 +52,7 @@
                                         </ItemsControl.ItemsPanel>
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate x:DataType="core:UsageWindowViewModel">
-                                                <StackPanel Spacing="3">
+                                                <StackPanel Spacing="3" AutomationProperties.Name="{x:Bind AccessibleText}">
                                                     <Grid>
                                                         <TextBlock FontWeight="SemiBold" Text="{x:Bind Label}" />
                                                         <TextBlock HorizontalAlignment="Right" FontWeight="SemiBold" Text="{x:Bind PercentText}" Foreground="{x:Bind local:UsageView.SeverityTextBrush(Severity)}" />
@@ -60,6 +60,7 @@
                                                     <ProgressBar
                                                         Maximum="100"
                                                         Value="{x:Bind Percent}"
+                                                        Visibility="{x:Bind local:Ui.Show(HasBar)}"
                                                         Foreground="{x:Bind local:UsageView.SeverityBrush(Severity)}"
                                                         AutomationProperties.Name="{x:Bind local:UsageView.BarName(Label, PercentText)}" />
                                                     <TextBlock Style="{StaticResource AbSecondaryText}" FontSize="12" Text="{x:Bind local:UsageView.Line(AmountText, ResetText)}" />

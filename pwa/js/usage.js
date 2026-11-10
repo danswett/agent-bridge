@@ -74,7 +74,15 @@ export const hasReading = (entry) => entry.windows.length > 0;
 
 // The fullest window: what the folded line shows and what the rows are ordered by. A weekly
 // allowance at 90% matters more than a session window at 2%.
-export const headline = (entry) => (entry.windows.length ? Math.max(...entry.windows.map((w) => w.percent)) : null);
+//
+// A window whose reset has come since its reading was taken says nothing about now: its percent is
+// the last period's, so it is shown as "Reset", never as a figure or a zero (#499). The headline
+// leaves lapsed windows out, and is null when every window has lapsed.
+export const lapsed = (w, now = Date.now()) => { const at = Date.parse(w.resetsAt ?? ''); return Number.isFinite(at) && at <= now; };
+export function headline(entry, now = Date.now()) {
+  const open = entry.windows.filter((w) => !lapsed(w, now));
+  return open.length ? Math.max(...open.map((w) => w.percent)) : null;
+}
 
 // One row per allowance, carrying the freshest reading any machine has. An allowance belongs
 // to an account, not a computer, so two machines signed in to one report it twice: a laptop
@@ -202,6 +210,17 @@ export function until(iso, now = Date.now()) {
   if (seconds >= 86400) { return `in ${Math.round(seconds / 86400)}d`; }
   if (seconds >= 3600) { return `in ${Math.round(seconds / 3600)}h`; }
   return `in ${Math.max(1, Math.round(seconds / 60))}m`;
+}
+
+// "Reset 12m ago · no reading since", for a lapsed window's foot.
+export const resetAgo = (iso, now = Date.now()) => `Reset ${ago(Date.parse(iso), now)} \u00b7 no reading since`;
+
+// One sentence for a screen reader: "Claude · max, Session (5h): reset 12 minutes ago, no reading since."
+export function resetSentence(entry, w, now = Date.now()) {
+  const minutes = Math.max(0, Math.round((now - Date.parse(w.resetsAt)) / 60000));
+  const [n, unit] = minutes >= 1440 ? [Math.round(minutes / 1440), 'day'] : minutes >= 60 ? [Math.round(minutes / 60), 'hour'] : [minutes, 'minute'];
+  const who = [entry.label, entry.account].filter(Boolean).join(' \u00b7 ');
+  return `${who}, ${w.label}: reset ${n} ${unit}${n === 1 ? '' : 's'} ago, no reading since.`;
 }
 
 export function ago(at, now = Date.now()) {
