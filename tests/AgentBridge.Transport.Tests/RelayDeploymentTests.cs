@@ -194,6 +194,90 @@ public class RelayDeploymentTests
     }
 
     [Fact]
+    public void Rate_limit_drain_and_gone_instruments_carry_allowlisted_tags_only()
+    {
+        var factory = new ServiceCollection().AddMetrics().BuildServiceProvider().GetRequiredService<IMeterFactory>();
+        var draining = false;
+        var metrics = new RelayMetrics(factory, () => 0, null, () => draining);
+        var seen = new List<(string Instrument, double Value, string[] Keys, string?[] Values)>();
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (i, l) => { if (i.Meter.Name == RelayMetrics.MeterName && ReferenceEquals(i.Meter.Scope, factory)) { l.EnableMeasurementEvents(i); } };
+        listener.SetMeasurementEventCallback<long>((i, v, tags, _) => { lock (seen) { seen.Add((i.Name, v, [.. tags.ToArray().Select(t => t.Key)], [.. tags.ToArray().Select(t => t.Value?.ToString())])); } });
+        listener.SetMeasurementEventCallback<int>((i, v, tags, _) => { lock (seen) { seen.Add((i.Name, v, [.. tags.ToArray().Select(t => t.Key)], [.. tags.ToArray().Select(t => t.Value?.ToString())])); } });
+        listener.SetMeasurementEventCallback<double>((i, v, tags, _) => { lock (seen) { seen.Add((i.Name, v, [.. tags.ToArray().Select(t => t.Key)], [.. tags.ToArray().Select(t => t.Value?.ToString())])); } });
+        listener.Start();
+
+        foreach (var kind in new[] { "auth", "connect", "frames" }) { metrics.RateLimited(kind); }
+        listener.RecordObservableInstruments();
+        draining = true;
+        listener.RecordObservableInstruments();
+        metrics.Drained(TimeSpan.FromMilliseconds(250));
+        foreach (var status in new[] { 404, 410, 400, 429, 500, 201 }) { metrics.Pushed(new PushGateway.Result(status)); }
+        metrics.Pushed(new PushGateway.Result(0, "bad-body"));
+
+        lock (seen)
+        {
+            Assert.Equal(["auth", "connect", "frames"], seen.Where(s => s.Instrument == "relay.ratelimited").Select(s => s.Values[0]).Order());
+            Assert.Equal([0, 1], seen.Where(s => s.Instrument == "relay.draining").Select(s => s.Value));
+            Assert.Contains(seen, s => s.Instrument == "relay.drain.duration" && s.Value == 250);
+            Assert.Equal(["2xx", "4xx", "4xx", "5xx", "bad-body", "gone", "gone"], seen.Where(s => s.Instrument == "relay.pushes").Select(s => s.Values[0]).Order(StringComparer.Ordinal));
+            Assert.All(seen, s => Assert.All(s.Keys, k => Assert.Contains(k, RelayMetrics.AllowedTags)));
+        }
+    }
+
+    [Fact]
+    public void The_runtime_and_Kestrel_meters_are_exported_beside_the_relay_meter_and_nothing_but_metrics()
+    {
+        Assert.Equal([RelayMetrics.MeterName, "System.Runtime", "Microsoft.AspNetCore.Server.Kestrel"], RelayTelemetry.MeterNames);
+
+        var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "AgentBridge.Relay", "RelayTelemetry.cs"));
+        Assert.DoesNotContain("CreateTracerProviderBuilder", source);
+        Assert.DoesNotContain("AddOpenTelemetry", source);
+        Assert.DoesNotContain("AddAzureMonitorTraceExporter", source);
+        Assert.DoesNotContain("AddAzureMonitorLogExporter", source);
+    }
+
+    [Fact]
+    public async Task A_relay_with_Application_Insights_configured_registers_no_tracing_or_logging_provider()
+    {
+        await using var app = RelayApp.Build(["--Relay:ApplicationInsightsConnectionString=InstrumentationKey=00000000-0000-0000-0000-000000000000"], builderHook: b => b.WebHost.UseUrls("http://127.0.0.1:0"));
+
+        Assert.Contains(app.Services.GetServices<Microsoft.Extensions.Hosting.IHostedService>(), s => s is RelayTelemetry);
+        Assert.Null(app.Services.GetService<OpenTelemetry.Trace.TracerProvider>());
+        Assert.Null(app.Services.GetService<OpenTelemetry.Logs.LoggerProvider>());
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_rejected_auth_request_and_a_drain_are_counted()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        var factory = relay.App.Services.GetRequiredService<IMeterFactory>();
+        var seen = new List<(string Instrument, double Value, string?[] Values)>();
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (i, l) => { if (i.Meter.Name == RelayMetrics.MeterName && ReferenceEquals(i.Meter.Scope, factory)) { l.EnableMeasurementEvents(i); } };
+        listener.SetMeasurementEventCallback<long>((i, v, tags, _) => { lock (seen) { seen.Add((i.Name, v, [.. tags.ToArray().Select(t => t.Value?.ToString())])); } });
+        listener.SetMeasurementEventCallback<int>((i, v, tags, _) => { lock (seen) { seen.Add((i.Name, v, [.. tags.ToArray().Select(t => t.Value?.ToString())])); } });
+        listener.SetMeasurementEventCallback<double>((i, v, tags, _) => { lock (seen) { seen.Add((i.Name, v, [.. tags.ToArray().Select(t => t.Value?.ToString())])); } });
+        listener.Start();
+
+        using var http = new HttpClient();
+        for (var i = 0; i < 62; i++)
+        {
+            using var r = await http.PostAsync(new Uri(relay.Url, "/v1/auth/token"), new StringContent("{}", System.Text.Encoding.UTF8, "application/json"));
+        }
+        await relay.App.Services.GetRequiredService<RelayHub>().DrainAsync();
+        listener.RecordObservableInstruments();
+
+        lock (seen)
+        {
+            Assert.Contains(seen, s => s.Instrument == "relay.ratelimited" && s.Values[0] == "auth");
+            Assert.Contains(seen, s => s.Instrument == "relay.drain.duration");
+            Assert.Contains(seen, s => s.Instrument == "relay.draining" && s.Value == 1);
+        }
+    }
+
+    [Fact]
     public void The_metric_tag_allow_list_has_no_id_like_key()
     {
         // A new tag key must be a deliberate, reviewed change: this fails if one that names an
