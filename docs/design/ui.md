@@ -1478,8 +1478,13 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 - **History** (#292). *Proposed: decided by the owner on 2026-11-04, each as recommended
   ([proposals/661-delegate-events.md](proposals/661-delegate-events.md) §3), not yet built
   except as follows: the PWA's card draws the turns before the latest exchange, read-only, above
-  it, and opens at the latest (#1285, first part); loading earlier turns on scroll, and the start
-  line, are still to come.* Today the Windows app shows only the latest exchange. With history, a session's whole conversation is the one
+  it, and opens at the latest (#1285, first part); the start line is still to come in the PWA.*
+  The Windows app now draws the stored turns above the latest exchange, oldest first, read-only,
+  from the session history client (#292 W2a): the response text of each turn with its prompt, at
+  most 500 turns, with the H5 lines below. It opens at the latest exchange once, when the turns are
+  first drawn, and never scrolls to the bottom by itself afterwards. Reasoning, tool lines,
+  delegate events, questions and loading older turns on scroll are still to come. With history, a
+  session's whole conversation is the one
   column, oldest at the top, in the app and the PWA alike.
   - **H0 A turn** is one prompt and everything until the next: the prompt (the person's, or a
     scheduled or agent-sent one, marked as A prompt you didn't type says, above), the main

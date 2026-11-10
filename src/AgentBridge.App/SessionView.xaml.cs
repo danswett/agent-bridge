@@ -238,6 +238,7 @@ public sealed partial class SessionView : UserControl
         ShowWords();
         follow.Reset();
         ShowResponse(reset: true);
+        WatchHistory();
         ConversationScroll?.ChangeView(null, 0, null, disableAnimation: true);
         TakeFocus();
     }
@@ -251,6 +252,7 @@ public sealed partial class SessionView : UserControl
         SyncQuestion();
         ReceiptMarkView.Hushed(Bindings.Update);
         ShowResponse(reset: false);
+        WatchHistory();
         Settle();
         words = null;
         ShowWords();
@@ -264,6 +266,7 @@ public sealed partial class SessionView : UserControl
         if (Card is { } c) { c.PropertyChanged -= OnCardChanged; c.Delegates.ReplyWanted -= OnReplyWanted; c.Delegates.PropertyChanged -= OnDelegatesChanged; }
         // The question goes with the view: its guard's timer has nothing left to let go of.
         guardTimer?.Stop();
+        UnwatchHistory();
         answers.Stop();
         questionView?.Detach();
         questionView = null;
@@ -288,6 +291,8 @@ public sealed partial class SessionView : UserControl
         if (all || e.PropertyName is nameof(SessionCardViewModel.UserMessage) or nameof(SessionCardViewModel.ReceiptText)) { Acknowledge(); }
         if (all || e.PropertyName is nameof(SessionCardViewModel.Response) or nameof(SessionCardViewModel.HasVoice)) { ShowResponse(reset: false); }
         if (all || e.PropertyName == nameof(SessionCardViewModel.PromptOpen)) { Disclose(); }
+        if (all) { RetryHistory(); }
+        if (e.PropertyName == nameof(SessionCardViewModel.UserMessage)) { ShowHistory(); }
         if ((all || e.PropertyName == nameof(SessionCardViewModel.AsksText)) && questionView is not null && Card is { } c && questionView.Heading != c.AsksText)
         {
             // Who asks, drawn by the app in the question: not the person's typing laid out.

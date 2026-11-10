@@ -80,6 +80,9 @@ public sealed partial class SessionCardViewModel : Observable
     }
 
     public Session Session => session;
+    SessionHistory? stored;
+    // The turns the host stores for this session (#292), read as the pane draws them; null with no host to ask.
+    public SessionHistory? Stored => stored ??= ctx.Host is { } host ? new SessionHistory(host, session.Id) : null;
     // Its delegates (ui.md §6.3): the strip, the Delegates tab, the inspector and the
     // conversation's one-line events.
     public DelegatesViewModel Delegates { get; }
