@@ -16,7 +16,11 @@ export default defineConfig({
   timeout: 60000,
   fullyParallel: false,
   workers: process.env.CI ? 2 : undefined,
-  reporter: process.env.CI ? [['list'], ['github']] : [['list']],
+  // CI also writes a JSON report, which tools/flaky-report.mjs reads to list every test that
+  // passed only on a retry (quality/README.md §5): a retry must not hide a flake.
+  reporter: process.env.CI
+    ? [['list'], ['github'], ['json', { outputFile: 'playwright-report/report.json' }]]
+    : [['list']],
   // One picture per engine for every platform (test/glyphs.spec.mjs): CI draws on Linux, and a
   // glyph's snapshot is about its shape and colours, which a tolerance holds across platforms.
   snapshotPathTemplate: '{testDir}/{testFileDir}/{testFileName}-snapshots/{arg}-{projectName}{ext}',
@@ -27,7 +31,15 @@ export default defineConfig({
   },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-    { name: 'webkit', use: { ...devices['Desktop Safari'] } },
+    // One retry in CI for WebKit alone: its shards fail on a loaded runner in tests that then
+    // pass (#1692). Chromium has none, and a pass on retry is listed, never hidden. A tap there
+    // can take over 5 s to land under load (answer.spec, #1690), so its expects wait 10 s.
+    {
+      name: 'webkit',
+      retries: process.env.CI ? 1 : 0,
+      expect: { timeout: 10000 },
+      use: { ...devices['Desktop Safari'] },
+    },
   ],
   webServer: {
     command: `node test/serve.mjs --port ${PORT}`,

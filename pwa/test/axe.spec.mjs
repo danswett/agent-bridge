@@ -154,8 +154,8 @@ for (const layout of LAYOUTS) {
       };
 
       test('the sessions, Needs you, a question, an approval, delegates, details, tools, menus and End session have no serious or critical violations', async ({ page, browserName }) => {
-        // Quarantined on webkit (#1690, #1685): 60 s timeouts under load kept main red; lift when the #1690 shard fix merges and this passes on webkit (2026-11-13 is only a backstop).
-        test.skip(browserName === 'webkit', 'flaky on webkit, #1690');
+        // WebKit on a loaded CI runner took over 60 s to open this page and run the walk (#1690): three times the time there.
+        test.slow(browserName === 'webkit', 'the walk is long and WebKit is slow under load, #1690');
         await openDemo(page, '&machines=3&delegates=1');
         // An approval in Needs you beside the worked example's question.
         await page.evaluate(({ id, q, t }) => {

@@ -6,8 +6,7 @@ import { test, expect } from '@playwright/test';
 import { BRAND } from '../js/brand.js';
 import { open, view } from './nav.mjs';
 
-// Quarantined on webkit (#1690, #1685): tests here time out in pwa-ui webkit 1/3 under load and kept main red. Chromium still runs the file. Lift when the #1690 shard fix merges and the file passes on webkit (2026-11-13 is only a backstop).
-test.skip(({ browserName }) => browserName === 'webkit', 'flaky on webkit, #1690');
+
 
 const COPILOT = '02d9e5d5-6b35-49bd-b083-39572fbff648';
 const CODEX = '019a1b2c-codex-example';
@@ -59,7 +58,9 @@ const choice = (extra = {}) => ({
 // #908: Other the CLI offers and the machine can't send yet, shown disabled with why.
 const OTHER_NOT_SENDABLE = "Your own answer can't be sent from here yet. Pick an option, or answer at the machine.";
 
-test('Other the machine cannot send yet is shown disabled, its label unchanged, with why under the choices and as their description', async ({ page }) => {
+test('Other the machine cannot send yet is shown disabled, its label unchanged, with why under the choices and as their description', async ({ page, browserName }) => {
+  // Quarantined on webkit (#1690): the tap on the option sends nothing on the Linux runner, twice in a row on #1694 and earlier on PRs with no answer change; restore by 2026-11-13.
+  test.skip(browserName === 'webkit', 'the tap sends nothing on webkit in CI, #1690');
   await openDemo(page);
   const q = await ask(page, choice({ required: false, otherUnavailable: 'otherNotSendable' }));
   const other = q.locator('.choices .other-unavailable');
