@@ -8,8 +8,8 @@ still applies.
 
 You work by **pull request only**. You get no fleet nodes, no relay or roster access, no
 secrets and no access to anyone's machine. Your agents may read the public repo and its
-docs, nothing else of the fleet. If a task seems to need more, stop and ask through the
-Chief instead of finding a way around it.
+docs, nothing else of the fleet. If a task seems to need more, stop and comment on your
+PR or issue; the leads route it. Do not look for a way around it.
 
 Fleet access for outside contributors' agents is on the owner's roadmap but has no date
 yet (issue #1607). When it arrives, an approved contributor agent can get a limited,
@@ -25,7 +25,9 @@ says so, nothing here changes.
 - **Pick first:** #1442. Then land the slices it proposes, smallest first, starting from
   the merged foundation (#260; `apple/` and `apple.yml` are on `main`).
 - **Scope:** the Apple clients (macOS, iPhone and iPad apps) under `apple/**`, matching
-  the parity checklist and the design in #665.
+  the parity checklist and the design in #665. Most real Apple slices touch
+  `apple/Sources/**`, `apple/Apps/**`, `apple/Package.swift`, the Apple project file or
+  scripts, which are sensitive, so expect **two receipts** (see Sensitive paths).
 - **No-go:**
   - anything outside `apple/**`;
   - relay, roster, device approval and trust code;
@@ -56,7 +58,8 @@ list, not what the PR says.
 
 ### Sensitive paths (two receipts)
 
-The authoritative list is `sensitive_paths` in `quality/merge-rule.yml`. In plain terms:
+The authoritative list is `sensitive_paths` in `quality/merge-rule.yml`; the plain-terms
+list below is only a summary, and the file is the rule. In plain terms:
 `AGENTS.md`, `.github/**`, `quality/**`, `build/**`, `infra/**`, all project and build
 files (`*.csproj`, `*.props`, `*.targets`, `*.slnx`, `nuget.config`, `global.json`),
 `docs/protocol/**`, the protocol, transport, relay, local and injector projects, host
@@ -79,7 +82,7 @@ lives. A design that cannot answer all three is not ready.
 ### Getting a review
 
 Put the PR number and head SHA in a comment on your PR or issue. The leads read GitHub
-and route through the Chief. Engineering reads it and posts receipts on that exact head.
+The leads read GitHub and route it. Engineering reads it and posts receipts on that exact head.
 For a design question, comment on the issue before writing code.
 
 ## How CI and merging work (Quality)
@@ -124,11 +127,11 @@ For a design question, comment on the issue before writing code.
 - If your PR has conflicts or is behind `main`, rebase onto fresh `origin/main` yourself,
   push once and tell Quality the new head SHA.
 - If you are stuck on a conflict, comment "needs rebase help" with the files in
-  conflict. Quality or the owning lead replies through the Chief.
+  conflict. Quality or the owning lead replies on the PR.
 - After a rebase you get a new head, so receipts are asked for again. That is normal.
 
 ## Who to message
 
 You cannot message fleet sessions directly. Put questions on your PR or issue as a
-comment; the leads read GitHub and route through the Chief. Merging is only by Quality
+comment; the leads read GitHub and route it. Merging is only by Quality
 after CI and receipts.
