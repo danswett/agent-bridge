@@ -81,7 +81,7 @@ lives. A design that cannot answer all three is not ready.
 
 ### Getting a review
 
-Put the PR number and head SHA in a comment on your PR or issue. The leads read GitHub
+Put the PR number and head SHA in a comment on your PR or issue.
 The leads read GitHub and route it. Engineering reads it and posts receipts on that exact head.
 For a design question, comment on the issue before writing code.
 
