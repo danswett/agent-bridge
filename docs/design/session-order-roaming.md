@@ -88,6 +88,12 @@ in `pwa/test/unit/order-merge.test.mjs`. Ties the rules leave open (the same dev
 different values) resolve to a tombstone first, then by the value's JSON, so the merge stays the
 same in either order.
 
+G1 (#1614) keeps group-name and membership registers in the PWA's local order record, using that
+merge schema and increasing counters. `SessionOrder` exposes create, rename, delete and membership
+operations; group headers and move menus follow in G2/G3. Pinning keeps membership, Ended remains
+separate, and membership expires after 30 days without listing the session. This runs only in the
+client: a host leaving does not delete the record. Nothing syncs yet, and no host holds group state.
+
 Required vectors: concurrent move of the same row on two devices; insert at the same position;
 delete against move; rename against delete of a group; a stale write arriving after a newer one;
 equal counters; read marker from two devices; merge is the same in either order and repeating it
