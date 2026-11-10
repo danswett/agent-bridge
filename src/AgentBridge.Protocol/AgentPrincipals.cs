@@ -7,6 +7,19 @@ public static class AgentProtocol
 {
     public const string Hello = "agent.hello";
 
+    // Adopting a session someone started by hand (§3.5). Adopt and Revoke are for the person at
+    // the machine; Credential is the adopted session asking for what it was adopted for. All pipe
+    // only, and the pipe ops themselves come with a later slice.
+    public const string Adopt = "agent.adopt";
+    public const string Revoke = "agent.revoke";
+    public const string Credential = "agent.credential";
+
+    // How long an adoption waits for its session to ask, before it lapses unused.
+    public const int AdoptionMinutes = 10;
+
+    // Adopted at most up to read+reply: launching other sessions is granted by a launch (§3.3).
+    public static readonly IReadOnlyList<string> AdoptableScopes = [ScopeRead, ScopeReadReply];
+
     // The credential's prefix, so secret scanners and log redaction can recognise it (§3.3).
     public const string TokenPrefix = "abat1_";
 
@@ -33,3 +46,22 @@ public sealed record AgentHelloRequest
 }
 
 public sealed record AgentHelloResult(string Principal, string Scope);
+
+// agent.adopt: the person's choice, for one session the host found. Scope defaults to read.
+public sealed record AgentAdoptRequest
+{
+    public required string Session { get; init; }
+    public string? Scope { get; init; }
+}
+
+public sealed record AgentAdoptResult(string Session, string Scope, DateTimeOffset ExpiresAt);
+
+public sealed record AgentRevokeRequest
+{
+    public required string Session { get; init; }
+}
+
+public sealed record AgentRevokeResult(string Session, bool Revoked);
+
+// agent.credential's answer: the token, shown once, to the caller alone.
+public sealed record AgentCredentialResult(string Token, string Principal, string Scope, DateTimeOffset ExpiresAt);

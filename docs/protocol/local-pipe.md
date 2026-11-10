@@ -171,6 +171,18 @@ session replaces its old one, so a resumed session's old token is dead. This sli
 holds a credential; what each scope may do, and minting at launch, follow in later slices. Until
 then an agent connection is refused the acting ops exactly as before.
 
+### Adopting a session the host did not launch (records only)
+
+`agent.adopt` and `agent.revoke` (a person at the machine) and `agent.credential` (the adopted
+session) have records, `AgentAdoptRequest/Result`, `AgentRevokeRequest/Result` and
+`AgentCredentialResult`, but no pipe op serves them yet. The store behind them is in the host:
+an adoption is held in memory for 10 minutes, the session claims it once from inside its own
+process tree (never by `AGENT_BRIDGE_SESSION`), and the credential is then issued as any other.
+Scope is `read` unless the person picks `read+reply`; `read+reply+launch` cannot be adopted.
+Adopting again, or revoking, ends the earlier credential and its open connections at once.
+Adoption alone never makes a manual session a reply target. Known gap: a session nested inside
+an adopted one is covered by the same adoption and can claim it during the window.
+
 ### `fleet.list` and `fleet.find`
 
 Agent-only reads of the account's cross-machine session list, on a connection that has passed `agent.hello` with at least the `read` scope. Described in [agent-operations.md](agent-operations.md).
