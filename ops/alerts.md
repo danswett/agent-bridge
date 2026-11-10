@@ -17,6 +17,9 @@ action group `ag-agent-bridge-ops` (owner's address, email only), App Insights, 
 the seven metric alerts and the $40 budget. The address is not in the repo. Still to do: staging
 alerts, probes for `relay.slipgates.com` and staging, blob alerts, a workbook, and a test email.
 
+Production's relay exports its meter (latency, connect time, live sockets) to this same Application
+Insights component (#1311, [relay-deploy.md](../docs/relay-deploy.md#metrics-export-1134)). That export is the source for the planned metric alerts.
+
 Thresholds are first estimates for one 0.25 vCPU / 0.5 GiB replica, with tens of devices.
 Revisit them after two weeks of data, and when capacity changes (CAP-1).
 

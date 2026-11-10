@@ -62,6 +62,10 @@ jobs:
           persist-credentials: false
       - name: A rollback goes only to an image production ran before
         run: bash infra/test-rollback-target.sh
+      - name: Production's relay gets its Application Insights connection string from infra
+        run: |
+          az bicep install
+          bash infra/test-appinsights-wiring.sh
       - run: |
           az bicep install
           az bicep build -f infra/main.bicep --stdout > /dev/null

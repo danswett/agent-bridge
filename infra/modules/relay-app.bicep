@@ -48,6 +48,9 @@ param deployBlobStore bool = false
 @description('Create this app\'s machine roster store (app.rosterStorageName) and point the relay at it. Production\'s waits for the cutover flag, as the blob store\'s does.')
 param deployRosterStore bool = false
 
+@description('Application Insights connection string for the relay\'s metrics export (#569). Empty: the setting is left out and nothing is exported. An ingestion key only: it can send telemetry, not read it.')
+param appInsightsConnectionString string = ''
+
 @description('Tags for every resource.')
 param tags object
 
@@ -305,6 +308,7 @@ resource relay 'Microsoft.App/containerApps@2025-01-01' = if (deployApp) {
               { name: 'Logging__Console__FormatterName', value: 'json' }
             ],
             app.?githubClientSecret == true ? [{ name: 'Relay__GitHubClientSecret', secretRef: 'github-client-secret' }] : [],
+            empty(appInsightsConnectionString) ? [] : [{ name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }],
             originEnv,
             blobEnv,
             rosterEnv
