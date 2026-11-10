@@ -111,10 +111,6 @@
           <div id="list-pane" class="list-pane">
             <div class="sessions-head">
               <h2 id="sessions-h" class="page-title">Sessions</h2>
-              <div class="count-row">
-                <span id="session-count" class="count"></span>
-                <span id="return-slot" class="return-slot"></span>
-              </div>
               <p id="connection-strip" class="connection-strip" role="status" aria-live="polite" hidden></p>
               <select id="session-sort" class="sort" aria-label="Sort sessions" title="Sort sessions"></select>
               <div class="head-actions">
@@ -126,6 +122,10 @@
                   <span class="new-label">New</span>
                 </a>
               </div>
+            </div>
+            <div class="count-row">
+              <span id="session-count" class="count"></span>
+              <span id="return-slot" class="return-slot"></span>
             </div>
             <div id="machine-tabs" class="machine-tabs" role="tablist" aria-label="Machines" hidden></div>
             <p id="host-state" class="note" role="status" aria-live="polite"></p>
