@@ -27,7 +27,7 @@ cat > "$work/bin/apt-get" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$APT_LOG"
 case "$*" in
-  update) [ -z "${APT_UPDATE_SLOW:-}" ] || exec sleep 30; exit "${APT_UPDATE_EXIT:-0}" ;;
+  update) case "${APT_UPDATE_SLOW:-}" in ignore) trap '' TERM; sleep 30 ;; ?*) exec sleep 30 ;; esac; exit "${APT_UPDATE_EXIT:-0}" ;;
   *--download-only*)
     if [ -n "${APT_SLOW:-}" ] && grep -q 'azure\.archive\.ubuntu\.com' "$PLAYWRIGHT_APT_ETC/apt-mirrors.txt"; then
       exec sleep 30
@@ -102,6 +102,9 @@ reset "$azure" "$canonical"; export APT_UPDATE_SLOW=1
 check "an apt-get update that hangs past the limit is tried once more, then fails the step" \
   124 "$(printf 'update\nupdate')" "$azure" "$canonical"
 
+reset "$azure" "$canonical"; export APT_UPDATE_SLOW=ignore
+check "an apt-get update that ignores TERM and is killed (137) counts as a timeout: one more go, then the step fails" \
+  124 "$(printf 'update\nupdate')" "$azure" "$canonical"
 reset "$azure" "$canonical"; export NPX_OUT='nothing to install'
 check "Playwright naming no packages fails the step before apt runs" 1 "" "$azure" "$canonical"
 

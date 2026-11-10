@@ -61,14 +61,17 @@ if [ "${#pkgs[@]}" -eq 0 ]; then
   echo "::error::playwright install-deps --dry-run named no packages to download"; exit 1
 fi
 
-update() { retry sudo timeout --kill-after=30s "$limit" apt-get update; }
+# timeout returns 137 rather than 124 when the command ignored TERM and --kill-after had to KILL it;
+# that is still a timeout, so it is reported as 124 and gets the same one more try.
+bounded() { local rc=0; sudo timeout --kill-after=30s "$limit" "$@" || rc=$?; [ "$rc" -eq 137 ] && rc=124; return "$rc"; }
+update() { retry bounded apt-get update; }
 # A hung mirror ends the update at the limit (124); one more go, then the step fails, not the job's 35 minutes.
 update || { rc=$?; [ "$rc" -eq 124 ] || exit "$rc"; echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::apt-get update took over $limit; trying once more"; update; }
 rc=0
 if [ "$force" = true ]; then
   echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::force-apt-fallback: taking the Azure mirror off apt's list before downloading anything; nothing timed out"
 else
-  retry sudo timeout --kill-after=30s "$limit" apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" || rc=$?
+  retry bounded apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" || rc=$?
 fi
 if [ "$force" = true ] || [ "$rc" -eq 124 ]; then
   if ! grep -q '^http://azure\.archive\.ubuntu\.com/' "$mirrors" || ! grep -q '^https://archive\.ubuntu\.com/ubuntu/' "$mirrors"; then
@@ -83,7 +86,7 @@ if [ "$force" = true ] || [ "$rc" -eq 124 ]; then
   fi
   if [ "$force" = true ]; then
     got=$(mktemp)
-    retry sudo timeout --kill-after=30s "$limit" apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" | tee "$got"
+    retry bounded apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" | tee "$got"
     if grep -q '^Get:.*azure\.archive\.ubuntu\.com' "$got"; then
       echo "::error::apt still fetched packages from azure.archive.ubuntu.com after it was taken off $mirrors"; exit 1
     fi
@@ -96,7 +99,7 @@ if [ "$force" = true ] || [ "$rc" -eq 124 ]; then
       echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::force-apt-fallback: nothing was downloaded from https://archive.ubuntu.com, so this leg proves nothing about the fallback"
     fi
   else
-    retry sudo timeout --kill-after=30s "$limit" apt-get install -y --download-only --no-install-recommends "${pkgs[@]}"
+    retry bounded apt-get install -y --download-only --no-install-recommends "${pkgs[@]}"
   fi
 elif [ "$rc" -ne 0 ]; then
   exit "$rc"
