@@ -60,9 +60,10 @@ public sealed partial class SessionView
                         bar.Scroll += (_, e) =>
                         {
                             if (e.ScrollEventType == ScrollEventType.EndScroll) { latestReturning = false; return; }
-                            LatestInput(up: e.ScrollEventType is ScrollEventType.SmallDecrement or ScrollEventType.LargeDecrement or ScrollEventType.First
+                            var thumb = e.ScrollEventType is ScrollEventType.ThumbTrack or ScrollEventType.ThumbPosition;
+                            LatestInput(up: thumb || e.ScrollEventType is ScrollEventType.SmallDecrement or ScrollEventType.LargeDecrement or ScrollEventType.First
                                 || e.NewValue < hooked.VerticalOffset - 0.5);
-                            if (latestUsed && latestReturning && e.NewValue >= bar.Maximum - 0.5)
+                            if (latestUsed && (latestReturning || thumb) && e.NewValue >= bar.Maximum - 0.5)
                             { latestPinned = true; pinEnd = true; latestReturning = false; }
                         };
                         break;

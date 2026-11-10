@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using AgentBridge.App.Core;
 using AgentBridge.Protocol;
+using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
@@ -21,6 +22,7 @@ static partial class SelfTest
         // A separate history cache: the 300 turns must not change later demo checks.
         var card = new SessionCardViewModel(original.Session, main.Local.Cards);
         view.Card = card;
+        Action? restoreFocus = null;
         try
         {
             if (card.Stored is not { } stored) { check(false, "latest: has stored history"); return; }
@@ -29,6 +31,9 @@ static partial class SelfTest
             var scroll = ConversationScroller(view);
             if (scroll is null || !await Until(() => scroll.ScrollableHeight > 2000, TimeSpan.FromSeconds(10)))
             { check(false, "latest: lays out 300 stored turns"); return; }
+            var tabStop = scroll.IsTabStop;
+            scroll.IsTabStop = true;
+            restoreFocus = () => scroll.IsTabStop = tabStop;
             var next = 1400;
             bool Bottom() => scroll.ScrollableHeight - scroll.VerticalOffset <= 1.5;
             async Task Jump()
@@ -133,35 +138,45 @@ static partial class SelfTest
                 await Grow(pinned: false, $"inert {modifier}+{down}, then shorter re-render", requireGrowth: true);
             }
         }
-        finally { view.Card = original; }
+        finally { restoreFocus?.Invoke(); view.Card = original; }
     }
 
     static async Task<bool> LatestModifiedKey(MainWindow window, ScrollViewer scroll, VirtualKey key, VirtualKey modifier)
     {
-        scroll.Focus(FocusState.Keyboard);
+        LatestFocus(scroll);
         var saved = new byte[256];
         if (!GetKeyboardState(saved)) { throw new InvalidOperationException("latest: cannot read keyboard modifiers"); }
         var held = saved.ToArray();
         held[(int)modifier] = held[modifier == VirtualKey.Control ? 0xA2 : 0xA0] = 0x80;
         var seen = false;
-        var heard = new KeyEventHandler((_, e) => { if (e.Key == key) { seen = true; } });
+        var finished = false;
+        var heard = new KeyEventHandler((_, e) => { if (e.Key == key) { seen = InputKeyboardSource.GetKeyStateForCurrentThread(modifier).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down); } });
+        var released = new KeyEventHandler((_, e) => { if (e.Key == key) { finished = true; } });
         scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
+        scroll.AddHandler(UIElement.KeyUpEvent, released, true);
         try
         {
             if (!SetKeyboardState(held)) { throw new InvalidOperationException("latest: cannot hold the keyboard modifier"); }
             Press(window.Handle, key, foreground: false);
-            return await Until(() => seen, TimeSpan.FromSeconds(2));
+            return await Until(() => seen && finished, TimeSpan.FromSeconds(2));
         }
         finally
         {
             scroll.RemoveHandler(UIElement.PreviewKeyDownEvent, heard);
+            scroll.RemoveHandler(UIElement.KeyUpEvent, released);
             if (!SetKeyboardState(saved)) { throw new InvalidOperationException("latest: cannot release the keyboard modifier"); }
         }
     }
 
+    static void LatestFocus(ScrollViewer scroll)
+    {
+        if (!scroll.Focus(FocusState.Programmatic) || !ReferenceEquals(FocusManager.GetFocusedElement(scroll.XamlRoot), scroll))
+        { throw new InvalidOperationException("latest: cannot focus the transcript input target"); }
+    }
+
     static async Task<bool> LatestInput(MainWindow window, ScrollViewer scroll, string input, bool up)
     {
-        scroll.Focus(FocusState.Keyboard);
+        LatestFocus(scroll);
         if (input == "key")
         {
             var seen = false;

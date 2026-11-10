@@ -145,6 +145,12 @@
             <!-- Subtle icon buttons with tooltips (§6.2): Pin, Details, and the inspector. -->
             <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Top">
                 <Button
+                    Content="Jump to latest"
+                    AutomationProperties.AutomationId="JumpToLatest"
+                    AutomationProperties.Name="Jump to latest"
+                    Visibility="{x:Bind local:Ui.Show(Layout.ShowConversation), Mode=OneWay}"
+                    Click="OnJumpToLatest" />
+                <Button
                     Style="{StaticResource AbIconButton}"
                     AutomationProperties.AutomationId="HeaderPin"
                     AutomationProperties.Name="{x:Bind local:SessionView.PinName(Card.Pinned), Mode=OneWay}"
@@ -263,10 +269,6 @@
         </ListView>
 
         <Grid x:Name="TabContent" Grid.Row="2">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="*" />
-                <RowDefinition Height="Auto" />
-            </Grid.RowDefinitions>
             <!-- The conversation (§6.4): the main agent only, at the reading measure, centred in the
                  pane as the PWA's is; the scroll bar stays at the pane's edge. A list, so only the
                  response's blocks near the viewport are realised and a live resize re-wraps those
@@ -910,15 +912,6 @@
             <ScrollViewer AutomationProperties.AutomationId="ToolsPanel" Visibility="{x:Bind local:Ui.Show(Layout.ShowTools), Mode=OneWay}">
                 <local:ToolList x:Name="ToolsTabList" Padding="24,8,24,24" />
             </ScrollViewer>
-            <Button
-                Grid.Row="1"
-                HorizontalAlignment="Right"
-                Margin="16,4,16,8"
-                Content="Jump to latest"
-                AutomationProperties.AutomationId="JumpToLatest"
-                AutomationProperties.Name="Jump to latest"
-                Visibility="{x:Bind local:Ui.Show(Layout.ShowConversation), Mode=OneWay}"
-                Click="OnJumpToLatest" />
         </Grid>
 
         <!-- The reply box (§6.5): a card with a 2 px Bridge bottom edge, Attach, and Send. Replies only
