@@ -111,4 +111,33 @@ public sealed class HistoryRowSyncTests
         Assert.Equal(0, HistoryRowSync.Appended(shown, Rows((3, "three"), (4, "four, edited"))));
         Assert.Equal(0, HistoryRowSync.Appended(shown, Rows((7, "seven"))));
         Assert.Equal(0, HistoryRowSync.Appended([], Rows((1, "one"))));
-    }}
+    }
+
+    // #1737: an agent mark arriving after a row was drawn changes that row alone.
+    [Fact]
+    public void A_late_agent_mark_replaces_only_its_own_row_and_nothing_above_it()
+    {
+        HistoryRow[] Marked(bool mark)
+        {
+            var turns = Enumerable.Range(1, 300).Select(n => new HistoryTurn
+            {
+                Id = $"t{n}",
+                At = T0.AddMinutes(n),
+                Prompt = new HistoryPrompt { Text = $"prompt {n}", From = mark && n == 100 ? UserMessageFrom.Agent : null },
+                Parts = [new HistoryPart { Id = $"p{n}", Kind = HistoryPartKind.Response, At = T0.AddMinutes(n), Text = $"reply {n}" }],
+            }).ToArray();
+            return HistoryDraw.Rows(turns, null).ToArray();
+        }
+
+        var (shown, changes) = Shown(Marked(false));
+        var before = shown.ToArray();
+
+        HistoryRowSync.Apply(shown, Marked(true));
+
+        var change = Assert.Single(changes);
+        Assert.Equal(NotifyCollectionChangedAction.Replace, change.Action);
+        Assert.Equal(99, change.NewStartingIndex);
+        Assert.True(before.Take(99).SequenceEqual(shown.Take(99)));
+        Assert.Equal(300, shown.Count);
+    }
+}
