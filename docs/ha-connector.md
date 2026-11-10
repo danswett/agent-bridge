@@ -514,10 +514,19 @@ Publishes without a `rid` behave as before.
 **`tools/agents/reply-session.ps1`** is the in-repo sender. It posts the payload with a rid, waits
 for the reply sensor to show its own stamp (there is one slot per node, so rapid sends can overwrite
 each other), presses Send, then waits for the host's ack for its own rid. It prints `sent to <node>`
-(exit 0) only on `delivered`. Exit 2: `unconfirmed` (it may have arrived). Exit 3: `refused`, or no ack
-within `-AckSeconds` (default 20); retry with `-Rid` so the host drops a duplicate. Exit 1: not sent
-(bad input, no token, Home Assistant unreachable). Exit 4: refused because text is already typed in the
-session's input box (#150); every later reply is refused too, so stop retrying until it is sent or cleared at the machine. Sends from one machine are serialized by a lock.
+(exit 0) only on `delivered` followed by a turn on the session's status sensor within `-StatusSeconds`
+(default 30): `working`, or the state read just before Send with a newer `last_changed` (a turn that came and
+went between reads). Any other change, such as `agents` to `idle`, is not a turn. A session already `working`
+before Send cannot show the reply by its status, so the ack stands for it, and the output says so. The send lock
+is held through this wait, so another send from the machine cannot start a turn taken for this one's. Exit 5:
+the host said `delivered` but no turn showed (or the status could not be read), so the reply is treated as not
+delivered (#150); check the session before resending. Exit 2: `unconfirmed` (it may have arrived), or a
+`duplicate` ack (the host handled the rid earlier and typed nothing now, so it is never reported as sent). Exit 3: `refused`, or no ack within `-AckSeconds` (default 20); retry with `-Rid` so the
+host drops a duplicate. Exit 1: not sent (bad input, no token, Home Assistant unreachable). Exit 4: the reply is
+stuck in the session's input box (#150): refused because text is already typed there, or `unconfirmed` because
+the host typed it but its Enter never went and its words are still in the box. Every later reply is refused
+too, so stop retrying until it is sent or cleared at the machine. Sends from one machine are serialized by a
+lock.
 
 **The reply card** publishes `{at, text, images: [{id, name, content_type}], files: [{name,
 content_type, b64}], driver?}` (not retained) to `copilot/cli/<node>/replypayload/set`, read
