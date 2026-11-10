@@ -209,6 +209,21 @@ test.describe('the top edge of an installed app', () => {
     });
   }
 
+  // The tests above stand in for env() through --env-safe-*. This one has the engine itself report
+  // the insets (CDP safe-area override, Chromium only), so env(safe-area-inset-*) resolves through
+  // app.css as it does on an installed iPad, rather than through the stand-in.
+  test('installed on an iPad with the engine reporting real safe-area insets, the app bar sits under the inset and the strip fills it', async ({ page, browserName }) => {
+    test.skip(browserName !== 'chromium', 'the safe-area override is a Chromium DevTools command');
+    const insets = { top: 24, right: 0, bottom: 20, left: 0 };
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets });
+    await on(page, AS.ipadosInstalled);
+    expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--env-safe-top'))).not.toBe('0px');
+    const e = await edge(page);
+    expect(e.bar).toMatchObject({ position: 'fixed', x: 0, y: insets.top, width: e.innerWidth, height: 56 });
+    expect(e.strip).toMatchObject({ display: 'block', position: 'fixed', bg: e.bar.bg, x: 0, y: 0, width: e.innerWidth, height: insets.top });
+  });
+
   test('in the phone layout, even installed, nothing changes: the app bar is sticky and there is no strip', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await on(page, AS.iosInstalled);
