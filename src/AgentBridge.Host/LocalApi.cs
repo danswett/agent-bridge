@@ -27,6 +27,15 @@ public static class LocalApi
 
     public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,     RemoteAuthorization? authorization = null,     AgentCredentials? credentials = null, AgentBridge.Host.Lite.ILiteSender? lite = null, AgentBridge.Host.Fleet.FleetList? fleet = null) => async (channel, op, data) =>
     {
+        if (op == Fleet.FleetNames.Op)
+        {
+            var caller = callers.Classify(channel, fresh: true);
+            if (caller.Kind is not (CallerKind.App or CallerKind.HostCli))
+            {
+                throw Refuse(op, caller, "only the app or host command line may set a fleet name", log);
+            }
+            return sessions.RenameFleetSession(data);
+        }
             if (op == AgentBridge.Host.Lite.LiteAgentSend.Op) { return await AgentBridge.Host.Lite.LiteAgentSend.HandleAsync(credentials, lite, channel, data); }
             if (op == AgentBridge.Host.Fleet.FleetList.Op) { return await (fleet ?? new AgentBridge.Host.Fleet.FleetList(credentials, null)).HandleAsync(channel, data); }
             if (op == AgentBridge.Host.Fleet.FleetList.FindOp) { return await (fleet ?? new AgentBridge.Host.Fleet.FleetList(credentials, null)).FindAsync(channel, data); }

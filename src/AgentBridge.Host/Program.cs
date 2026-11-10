@@ -153,6 +153,28 @@ switch (command)
             Console.WriteLine(session is null ? "{\"missing\":true}" : JsonSerializer.Serialize(session, pretty));
             return session is null ? 1 : 0;
         }
+    case "rename":
+        {
+            if (Refused("set a session's fleet name")) { return 4; }
+            if (arguments.Count < 3 || !Identity.IsValidProfile(profileName))
+            {
+                Console.Error.WriteLine("usage: agent-bridge-host rename <session-id> \"<fleet name>\" [--profile <name>]; empty name clears");
+                return 2;
+            }
+            try
+            {
+                await using var local = await LocalClient.ConnectAsync(LocalEndpoint.For(Path.Combine(Identity.DefaultRoot, profileName)));
+                await local.HelloAsync();
+                var renamed = await local.CallAsync(AgentBridge.Host.Fleet.FleetNames.Op, new { id = arguments[1], name = arguments[2] });
+                Console.WriteLine(renamed.GetRawText());
+                return 0;
+            }
+            catch (Exception e) when (e is IOException or HostErrorException)
+            {
+                Console.Error.WriteLine($"agent-bridge-host rename: {e.Message}");
+                return 1;
+            }
+        }
     case "watch":
         {
             using var stop = new CancellationTokenSource();
@@ -313,6 +335,7 @@ switch (command)
         }
     default:
         Console.Error.WriteLine("usage: agent-bridge-host sessions [--compact] | get <id> | watch [--json] | usage | sign-in --relay <url> | serve [--relay <url>] [--name <name>] [--local-only] | whoami");
+        Console.Error.WriteLine("       agent-bridge-host rename <session-id> \"<fleet name>\" [--profile <name>] (empty name clears)");
         Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]");
         Console.Error.WriteLine("       " + OwnPeerCommands.Usage);
         Console.Error.WriteLine("       " + AgentBridge.Host.Shadow.ShadowCommand.Usage);
@@ -649,6 +672,7 @@ async Task<int> ServeAsync(HostHandover handover)
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log, peerUsage), launcher, transfers)
     {
         Drivers = drivers,
+        FleetNames = new AgentBridge.Host.Fleet.FleetNames(identity.Folder),
         // Said in hello so a phone shows the machine read-only and why.
         ReadOnly = OfferedReadOnly,
         G5 = g5,

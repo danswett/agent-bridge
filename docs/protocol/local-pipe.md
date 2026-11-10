@@ -100,8 +100,8 @@ host also asks *which* process each request comes from, op by op:
 |---|---|---|
 | **Inside an agent session** | The connecting process, or any process it descends from, is a live session's own process (by id and start time, so a reused id does not count), one a launch started, any agent CLI found running (Copilot, Claude, Codex, including under Node or Bun), or an executable named `copilot`, `claude`, `codex` or `agency` | Read: `hello` (offering only `sessions.read` and `usage`), `sessions.list`, `session.get`, `sessions.subscribe`, `usage.*`, `launch.options`, `host.status`, `host.subscribe`. Everything else is refused: `refused: this connection is from pid 4120, inside the copilot session 1a2b3c4d (pid 3112); …`. That includes `session.history` (`…; reading a session's history is for the person, from the app or a phone`, [v1-history.md](v1-history.md#security-and-authorization)) and `sessions.focus` (`…; telling the host the person is using the app is for the person, from the app or a phone`): a device in use holds back the person's pushes ([v1-sessions.md](v1-sessions.md#while-the-person-uses-a-device-1190)) |
 | **The app** | Not inside an agent session, its whole ancestry read, and its executable is `AgentBridge.exe` (the app) in the host's own folder, which is how the app ships | Everything, `host.manage` included |
-| **The host's command line** | Not inside an agent session, its whole ancestry read, and its executable is this host's own (`agent-bridge-host`, as `migrate` and `rollback` run it) | What anything else may, and `host.restart`, which a migration and a rollback need to hand the hook spool over and back ([migration.md](../migration.md)). Nothing else the app may |
-| **Anything else of the user's** | Neither, a process that could not be traced, or one whose ancestry could be read only in part (an agent may be above what was read) | The sessions ops as before, `host.status` and `host.subscribe`; not the other management ops (`only the Agent Bridge app beside this host may stop, restart, sign in, change settings or read the relay account`) |
+| **The host's command line** | Not inside an agent session, its whole ancestry read, and its executable is this host's own (`agent-bridge-host`, as `migrate` and `rollback` run it) | What anything else may, `session.rename`, and `host.restart`, which a migration and a rollback need to hand the hook spool over and back ([migration.md](../migration.md)). Nothing else the app may |
+| **Anything else of the user's** | Neither, a process that could not be traced, or one whose ancestry could be read only in part (an agent may be above what was read) | The sessions ops as before except `session.rename`, `host.status` and `host.subscribe`; not the other management ops (`only the Agent Bridge app beside this host may stop, restart, sign in, change settings or read the relay account`) |
 
 The ancestry is read when the connection is accepted (`GetNamedPipeClientProcessId`, then one
 process snapshot for every parent and its executable's name, with start times checked so a
@@ -135,16 +135,44 @@ stopped. Sessions acting as an agent rather than as the person (design §5.5) ar
 On macOS and Linux the host cannot trace a socket client yet, so nothing there manages the
 host, and there is no app there to do it.
 
-**The one exception: the host's own command line may restart it.** `agent-bridge-host migrate`
+**The restart exception: the host's own command line may restart it.** `agent-bridge-host migrate`
 and `rollback` must restart the host to hand agent-ha-bridge's hook spool over and back
 ([migration.md](../migration.md)), and they are run by a person, from a terminal of their own.
 So a caller that is this host's own executable, beside it, with its whole ancestry read and no
-agent in it, may call `host.restart` and nothing else the app may. It is the same rail as the
+agent in it, may call `host.restart` (and `session.rename`, below), but no other app-only op. It is the same rail as the
 app's: the same ancestry check refuses it inside an agent session, and the commands themselves
 refuse first, with exit 4, before reading anything. A copy of the program elsewhere, or one whose
 ancestry is read only in part, is anything else of the user's. An agent that starts the program
 detached from itself gets past this as it could past the app's check; restarting is the only
-thing it gains.
+host-management op it gains.
+
+## Person-set fleet names (`session.rename`, #1777)
+
+| Op | Data | Result |
+|---|---|---|
+| `session.rename` | `{ "id": "<listed session id>", "name": "<fleet name>" }` | `{ "id", "name" }`, after saving; empty/blank name clears |
+
+Pipe only, local Windows app or host CLI only, with fresh caller classification on every call.
+Agents (including their MCP children), untraced/partial-ancestry processes and relay channels
+cannot rename. Missing sessions, missing/wrong-type fields and invalid names fail without writing.
+After trimming, nonempty names must be 1 to 64 ASCII characters of `A-Za-z0-9 space _.+()-`.
+The host durably saves `fleet-names.json` in its profile, keyed by session id; unreadable state
+is an error, never an empty store. Titles, transcripts, `workspace.yaml` and folders are not sources.
+This is the same-user host-state safety rail, not tamper-proof identity.
+
+At the Windows machine, open your own terminal (not an agent session), use
+`agent-bridge-host sessions --compact` to find the running session's full id, then run:
+
+```powershell
+agent-bridge-host rename <session-id> "SG Quality Lead" --profile default
+agent-bridge-host rename <session-id> "" --profile default
+```
+
+The second command clears it. The host must already be running; no restart is needed.
+**Windows app steps:** no Rename control ships in this slice. Use the terminal commands above;
+the app Rename entry remains follow-on work on #1777. The local app backend may send the pipe op.
+Registry publication, launch-time `fleetName` and host-linked resume carry-over are also follow-ons;
+setting a name here does not yet make it discoverable through `fleet.find`.
 
 ## Agent principals: `agent.hello`
 

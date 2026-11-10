@@ -25,7 +25,10 @@ public sealed class FleetNamesTests : IAsyncLifetime
         service = MakeService();
     }
 
-    SessionService MakeService() => new(source, new MachineInfo("host", "Fixture", "windows", "0.1.0"));
+    SessionService MakeService() => new(source, new MachineInfo("host", "Fixture", "windows", "0.1.0"))
+    {
+        FleetNames = new AgentBridge.Host.Fleet.FleetNames(fixture.Root),
+    };
 
     async Task<JsonElement> CallAsync(object data)
     {

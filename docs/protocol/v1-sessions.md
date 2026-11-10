@@ -245,6 +245,16 @@ slow link.
 
 ## Ops
 
+### `session.rename` (local pipe only)
+
+| Request data | Result | Caller |
+|---|---|---|
+| `{ "id": "<listed session id>", "name": "<fleet name>" }` | `{ "id", "name" }`; empty/blank clears | Local Windows app or host CLI; fresh classification; never agents, MCP children or relay channels |
+
+This changes only the host-owned fleet-name setting, not `Session.title`.
+See [local-pipe.md](local-pipe.md#person-set-fleet-names-sessionrename-1777) for the exact CLI
+commands, ASCII filter, storage and remaining #1777 work. No registry name is published by this slice.
+
 ### `hello`
 
 Request `data`: `{}`, or `{ "changes": true }` to be told when what hello says changes (below). Result:
