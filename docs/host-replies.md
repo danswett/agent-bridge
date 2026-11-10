@@ -402,3 +402,14 @@ reported apart.
 ## Messages from other own-agents (AP5-lite, #1353)
 
 `LiteDeliver` types a verified lite message into one idle Copilot session behind a one-line provenance marker (sender machine, session, request id). It refuses, typing nothing, with `notReplyTarget` (not launched here in forced-ask mode; allow-all only while `agentMessaging.allowAllTargets` is on; text unbound, empty, over 4096 characters or with a request id that is not a UUID), `busy` (not idle, or over 6 messages a minute per session), `composerNotEmpty` or `noSuchSession`. Idle is re-checked just before the keys go; the window between that check and `ReplyService` taking its typing slot is narrow but not zero. There is no queue and no retry. Gates (`IReplyTargetGate`) are OR-composed in `LiteComposition`; the log line carries sender, target, request id and outcome, never the text.
+
+
+## Agent replies (#720 slice 4, #1335)
+
+`AgentMessageText.Frame` builds the one line typed into a session for another agent's message: `[Slipgates · from an agent on <machine> · not typed by your user] <words>`. It is pure and nothing calls it yet; slice 4's reply wiring will.
+
+- **Header.** Only this host's own machine name goes in, never the sender's session title. The name is cut at 64 characters; `[`, `]`, `"` and `·` (and their look-alike brackets) become `(`, `)`, `'` and `-`, and control, hidden and zero-width characters are removed, so a field cannot close the header or start another.
+- **Words.** NFKC-normalised with control and hidden characters removed; newlines and U+2028/2029 become a space, so the result is one line. A bracket followed by the product name, in any case, full-width, with look-alike brackets or letters (a bounded table, not the UTS #39 data) or zero-width joiners, is typed as `(Slipgates`. Other bracketed words are left alone. A token-initial `@` (start or after a space) is typed as U+FF20; a mid-word `@` is not.
+- **No prefix.** The same escaping applies, and a leading digit or letter gets one leading space so it cannot answer an option prompt.
+
+This is hygiene, not a security boundary: a model may ignore the marker, and a sender's words may still persuade (design/agent-principals.md §6.4).
