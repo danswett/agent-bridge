@@ -169,6 +169,7 @@ export class SessionsPage {
   #syncing = false;
   // From Escape's pop until its popstate lands: a second press then would pop past the list.
   #escaping = false;
+  #timingTimer = null;
 
   // $: getElementById. hosts: a HostSession. connection: presence, known and ready.
   // blobs(): the relay's blob store, or null; relayMax(): the largest blob it takes.
@@ -190,6 +191,7 @@ export class SessionsPage {
     const accepts = (hostId) => !!hosts.route(hostId);
     this.answers = new AnswerService({ current, accepts, ...timing, marks: 'answer' });
     this.turns = new TurnClock();
+    this.#timingTimer = setInterval(() => { void connection.reportTimings?.(() => this.turns.drain()); }, 60000);
     this.replies = new ReplyService({ current, accepts, ...timing, blobs, onTap: (e) => this.turns.sent(e.hostId, e.sessionId) });
     this.stops = new StopService({ current, accepts, ...timing });
     this.launches = new LaunchService({ current, accepts, ...timing });
@@ -765,6 +767,8 @@ export class SessionsPage {
 
   // Everything tied to the signed-in account goes with it.
   clear() {
+    clearInterval(this.#timingTimer);
+    this.#timingTimer = null;
     // The account's session is no longer shown: said before the page lets go of what says it.
     try { this.opened(null); } catch (e) { console.error(e); }
     this.#unroute?.();

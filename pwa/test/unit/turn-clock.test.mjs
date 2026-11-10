@@ -13,7 +13,7 @@ test('a turn is timed from the send to the session settling', () => {
   c.sent('h', 's');
   at(1500); c.seen('h', 's', 'working');
   at(5200); c.seen('h', 's', 'idle');
-  assert.deepEqual(c.recent(), [{ app: 'PWA', ms: 4200 }]);
+  assert.deepEqual(c.recent(), [{ app: 'PWA', ms: 4200, at: 5 }]);
 });
 
 test('a status seen before the session starts working does not settle the turn', () => {
@@ -23,7 +23,7 @@ test('a status seen before the session starts working does not settle the turn',
   assert.deepEqual(c.recent(), []);
   at(2000); c.seen('h', 's', 'working');
   at(3000); c.seen('h', 's', 'waiting');
-  assert.deepEqual(c.recent(), [{ app: 'PWA', ms: 2000 }]);
+  assert.deepEqual(c.recent(), [{ app: 'PWA', ms: 2000, at: 3 }]);
 });
 
 test('a second send before the turn settles keeps the first start', () => {
@@ -31,7 +31,7 @@ test('a second send before the turn settles keeps the first start', () => {
   c.sent('h', 's');
   at(2000); c.sent('h', 's'); c.seen('h', 's', 'working');
   at(4000); c.seen('h', 's', 'idle');
-  assert.deepEqual(c.recent(), [{ app: 'PWA', ms: 3000 }]);
+  assert.deepEqual(c.recent(), [{ app: 'PWA', ms: 3000, at: 4 }]);
 });
 
 test('a session nobody sent to, or one that went away, adds nothing', () => {
@@ -49,12 +49,12 @@ test('a turn left open for over an hour is not a measurement', () => {
   assert.deepEqual(c.recent(), []);
 });
 
-test('a measurement holds only the app and the duration, and drain hands it over once', () => {
+test('a measurement holds only the app, duration and time, and drain hands it over once', () => {
   const { c, at } = clock();
   c.sent('machine-1', 'session-1'); c.seen('machine-1', 'session-1', 'working');
   at(1700); c.seen('machine-1', 'session-1', 'idle');
   const out = c.drain();
-  assert.deepEqual(Object.keys(out[0]).sort(), ['app', 'ms']);
+  assert.deepEqual(Object.keys(out[0]).sort(), ['app', 'at', 'ms']);
   assert.deepEqual(c.drain(), []);
 });
 
@@ -64,5 +64,5 @@ test('a send after a stale unsettled turn starts a fresh measurement', () => {
   at(1000 + 2 * 3600 * 1000); c.sent('h', 's');
   at(1000 + 2 * 3600 * 1000 + 100); c.seen('h', 's', 'working');
   at(1000 + 2 * 3600 * 1000 + 900); c.seen('h', 's', 'idle');
-  assert.deepEqual(c.recent(), [{ app: 'PWA', ms: 900 }]);
+  assert.deepEqual(c.recent(), [{ app: 'PWA', ms: 900, at: 7201 }]);
 });

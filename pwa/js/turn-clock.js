@@ -2,10 +2,10 @@
 // session settles again, as one number. timing.js times the delivery (tap to the machine's
 // outcome); this times what the person waits for, the agent's whole turn.
 //
-// Only the duration and the app's name are ever kept: no text, no machine, no session id. The ids
+// Only the duration, settlement time and app's name are kept: no text, machine or session id. The ids
 // below key a turn still running and are dropped the moment it settles, expires or its session goes.
-// Kept in this page until the relay takes them (the client call lands with the relay's aggregate
-// store, #1599). Where it runs: in the page that sent the reply. If the page closes, turns in
+// Kept in this page until the minute upload to the relay's aggregate store (#1603).
+// Where it runs: in the page that sent the reply. If the page closes, turns in
 // flight are lost and nothing else: no state lives on any machine.
 
 export const APP = 'PWA';
@@ -38,19 +38,20 @@ export class TurnClock {
     const key = this.#key(hostId, sessionId);
     const turn = this.#running.get(key);
     if (!turn) { return; }
-    const ms = this.#now() - turn.start;
+    const now = this.#now();
+    const ms = now - turn.start;
     if (ms > EXPIRE_MS) { this.#running.delete(key); return; }
     if (status === 'working') { turn.working = true; return; }
     if (!turn.working) { return; }
     this.#running.delete(key);
-    this.#done.push({ app: APP, ms: Math.max(0, Math.round(ms)) });
+    this.#done.push({ app: APP, ms: Math.max(0, Math.round(ms)), at: Math.floor(now / 1000) });
     while (this.#done.length > KEEP) { this.#done.shift(); }
   }
 
   // The session is gone: its turn will never settle.
   dropped(hostId, sessionId) { this.#running.delete(this.#key(hostId, sessionId)); }
 
-  // Settled turns, oldest first: [{ app, ms }].
+  // Settled turns, oldest first: [{ app, ms, at }].
   recent() { return this.#done.map((t) => ({ ...t })); }
 
   // Settled turns, handed over once: what a reporter takes and does not take again.

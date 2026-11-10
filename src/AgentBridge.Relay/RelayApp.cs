@@ -114,6 +114,7 @@ public static class RelayApp
         builder.Services.AddCors(o =>
         {
             o.AddPolicy("pwa", p => p.WithOrigins(options.AllowedOrigins).WithMethods("GET", "POST").WithHeaders("content-type"));
+            o.AddPolicy("app-timings", p => p.WithOrigins(options.AllowedOrigins).WithMethods("POST").WithHeaders("authorization", "content-type"));
             // Only a dev stack serves blobs itself; Azure Storage has its own CORS rules (infra/).
             o.AddPolicy("dev-blobs", p => p.WithOrigins(options.AllowedOrigins).WithMethods("GET", "PUT").WithHeaders("content-type", "x-ms-blob-type"));
         });
@@ -198,7 +199,7 @@ public static class RelayApp
                 if (ms.Length > HourlyStats.MaxPostBytes) { return Results.StatusCode(StatusCodes.Status413PayloadTooLarge); }
             }
             return stats.AddTimings(ms.ToArray()) is { } r ? Results.Json(new { accepted = r.Accepted, dropped = r.Dropped }, statusCode: StatusCodes.Status202Accepted) : Results.BadRequest();
-        });
+        }).RequireCors("app-timings");
 
         // The key a browser subscribes with (applicationServerKey). Public by design.
         app.MapGet("/v1/push/key", (PushGateway push) =>

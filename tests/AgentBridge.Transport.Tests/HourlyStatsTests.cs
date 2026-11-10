@@ -253,6 +253,42 @@ public class HourlyStatsTests
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task Browser_timing_posts_allow_the_account_header_only_from_allowlisted_origins()
+    {
+        await using var relay = await TestRelay.StartAsync(o => o.Stats.Store = new MemoryRosterStore());
+        foreach (var origin in new[] { "https://pwa.example", "https://evil.example" })
+        {
+            using var preflight = new HttpRequestMessage(HttpMethod.Options, new Uri(relay.Url, "/v1/stats/app-timings"));
+            preflight.Headers.Add("Origin", origin);
+            preflight.Headers.Add("Access-Control-Request-Method", "POST");
+            preflight.Headers.Add("Access-Control-Request-Headers", "authorization,content-type");
+            using var response = await relay.Http.SendAsync(preflight);
+            if (origin == "https://evil.example")
+            {
+                Assert.False(response.Headers.Contains("Access-Control-Allow-Origin"));
+                Assert.False(response.Headers.Contains("Access-Control-Allow-Headers"));
+                Assert.False(response.Headers.Contains("Access-Control-Allow-Methods"));
+                continue;
+            }
+            Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+            Assert.Equal(origin, Assert.Single(response.Headers.GetValues("Access-Control-Allow-Origin")));
+            Assert.Equal("POST", Assert.Single(response.Headers.GetValues("Access-Control-Allow-Methods")));
+            var headers = string.Join(",", response.Headers.GetValues("Access-Control-Allow-Headers"));
+            Assert.Contains("authorization", headers, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("content-type", headers, StringComparison.OrdinalIgnoreCase);
+        }
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(relay.Url, "/v1/stats/app-timings"));
+        request.Headers.Add("Origin", "https://pwa.example");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", relay.TokenFor(1, "test"));
+        request.Content = new ByteArrayContent(Body(Sample("PWA", 5, DateTimeOffset.UtcNow.ToUnixTimeSeconds())));
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        using var posted = await relay.Http.SendAsync(request);
+        Assert.Equal(HttpStatusCode.Accepted, posted.StatusCode);
+        Assert.Equal("https://pwa.example", Assert.Single(posted.Headers.GetValues("Access-Control-Allow-Origin")));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task The_timings_endpoint_needs_a_token_lands_in_the_hourly_read_and_limits_size_and_rate_with_no_ids_stored()
     {
         var store = new MemoryRosterStore();
