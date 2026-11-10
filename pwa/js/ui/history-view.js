@@ -62,6 +62,12 @@ function when(iso) {
   return b ? h('div', { class: 'msg-time-row' }, b) : null;
 }
 
+function resolvedView(question) {
+  const record = renderResolved(question, { asker: question.kind === 'approval' ? 'Permission request' : 'Main agent asks' });
+  record.summary.prepend(h('p', { class: 'answer-receipt' }, 'Question closed'));
+  return record;
+}
+
 function part(p, inline = null) {
   if (p.kind === 'question' && inline?.kept && p.question?.id !== inline.activeId && !inline.kept.has(p.question?.id)) { return null; }
   if (p.kind === 'question' && inline?.records?.has(p.question?.id)) { return inline.records.get(p.question.id); }
@@ -81,9 +87,7 @@ function part(p, inline = null) {
     return h('p', { class: 'history-meta' }, `Delegate ${d.name ?? ''} ${d.event === 'started' ? 'started' : 'reported'}`.replace('  ', ' '), timeButton(p.at));
   }
   if (p.kind === 'question' && p.question) {
-    const record = renderResolved(p.question, { asker: p.question.kind === 'approval' ? 'Permission request' : 'Main agent asks' });
-    record.summary.prepend(h('p', { class: 'answer-receipt' }, 'Question closed'));
-    return record;
+    return resolvedView(p.question);
   }
   return null;
 }
@@ -136,6 +140,7 @@ export class HistoryView {
   #noteNode = null;
   #ticker;
   #inline = null;
+  #records = new Map();
 
   // opts: now, setTimer, clearTimer, doc (message-time-view's timeTicker), for a test's clock.
   constructor(opts = {}) { this.#ticker = timeTicker(this.element, opts); }
@@ -155,7 +160,20 @@ export class HistoryView {
   render(snapshot, latestId = null, inline = null) {
     const { note, turns } = historyPlan(snapshot, latestId);
     this.latest = turns.find((t) => t.id === latestId) ?? null;
-    inline = { ...inline, kept: new Set(turns.flatMap((t) => t.parts.filter((p) => p.kind === 'question' && p.question && p.question.id !== inline?.activeId).map((p) => p.question.id)).slice(-20)) };
+    const questions = turns.flatMap((t) => t.parts.filter((p) => p.kind === 'question' && p.question));
+    const kept = new Set(questions.filter((p) => p.question.id !== inline?.activeId).map((p) => p.question.id).slice(-20));
+    const records = new Map(inline?.records);
+    const reconstructed = new Map();
+    for (const { question } of questions) {
+      if (!kept.has(question.id) || records.has(question.id) || question.id === inline?.questionId) { continue; }
+      const key = JSON.stringify(question);
+      const old = this.#records.get(question.id);
+      const record = old?.key === key ? old.record : resolvedView(question);
+      reconstructed.set(question.id, { key, record });
+      records.set(question.id, record);
+    }
+    this.#records = reconstructed;
+    inline = { ...inline, kept, records };
     this.#inline = inline;
     // The turns drawn already stay; the newest few are drawn if none is; those older than the
     // oldest drawn wait for their slices.
