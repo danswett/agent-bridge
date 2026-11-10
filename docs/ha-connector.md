@@ -516,7 +516,8 @@ for the reply sensor to show its own stamp (there is one slot per node, so rapid
 each other), presses Send, then waits for the host's ack for its own rid. It prints `sent to <node>`
 (exit 0) only on `delivered`. Exit 2: `unconfirmed` (it may have arrived). Exit 3: `refused`, or no ack
 within `-AckSeconds` (default 20); retry with `-Rid` so the host drops a duplicate. Exit 1: not sent
-(bad input, no token, Home Assistant unreachable). Sends from one machine are serialized by a lock.
+(bad input, no token, Home Assistant unreachable). Exit 4: refused because text is already typed in the
+session's input box (#150); every later reply is refused too, so stop retrying until it is sent or cleared at the machine. Sends from one machine are serialized by a lock.
 
 **The reply card** publishes `{at, text, images: [{id, name, content_type}], files: [{name,
 content_type, b64}], driver?}` (not retained) to `copilot/cli/<node>/replypayload/set`, read
