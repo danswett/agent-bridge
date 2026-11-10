@@ -1,0 +1,54 @@
+name: Upload release halt policy
+
+on:
+  push:
+    branches: [main]
+    paths: [ops/halts.json]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: halts-upload
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      # No checkout, build, install scripts, or persisted git credentials.
+      - name: Validate main's policy and replace the newest release asset
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          # A delayed/retried run must not restore an older policy over a newer main change.
+          $sha = gh api "repos/$env:GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha
+          if ($sha -cnotmatch '^[0-9a-f]{40}$') { throw 'Could not resolve current main.' }
+          foreach ($path in @('build/validate-halt-list.ps1', 'ops/halts.json')) {
+            New-Item -ItemType Directory -Force (Split-Path $path) | Out-Null
+            gh api "repos/$env:GITHUB_REPOSITORY/contents/${path}?ref=$sha" -H 'Accept: application/vnd.github.raw+json' > $path
+          }
+          . ./build/validate-halt-list.ps1
+          Assert-ReleaseHaltList (Join-Path $PWD 'ops/halts.json')
+          Copy-Item 'ops/halts.json' 'halts.json'
+
+          $tag = gh release list --exclude-drafts --limit 1 --repo $env:GITHUB_REPOSITORY --json tagName --jq '.[0].tagName'
+          if (-not $tag) { throw 'No published release exists; halt policy was not uploaded.' }
+          gh release upload $tag halts.json --clobber --repo $env:GITHUB_REPOSITORY
+          $expected = 'sha256:' + (Get-FileHash 'halts.json' -Algorithm SHA256).Hash.ToLowerInvariant()
+          $digests = @(gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" --jq '.assets[] | select(.name == "halts.json") | .digest')
+          if ($digests.Count -ne 1 -or $digests[0] -cne $expected) {
+            throw 'The uploaded halt policy digest does not match the validated file.'
+          }
+          $newest = gh release list --exclude-drafts --limit 1 --repo $env:GITHUB_REPOSITORY --json tagName --jq '.[0].tagName'
+          if ($newest -cne $tag) {
+            throw 'A newer release appeared during upload. Dispatch this workflow from main again; the halt is not confirmed effective.'
+          }
+          Write-Host "Verified halts.json on $tag from main $sha ($expected)."

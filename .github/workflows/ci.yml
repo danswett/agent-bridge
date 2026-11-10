@@ -1299,6 +1299,10 @@ jobs:
         run: |
           pwsh -NoProfile -File quality/test-pages-workflow.ps1
           pwsh -NoProfile -File quality/test-pages-gate.ps1
+      - name: Halt uploads validate before writing and verify the newest release
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'halts-upload-test')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File quality/test-halts-upload.ps1
       - name: The lab nightly's gate refuses every run today, and its verdict passes only a cut both roles pass
         # Offline: nothing reaches Azure or GitHub.
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'lab-nightly')) }}

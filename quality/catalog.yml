@@ -754,6 +754,28 @@ suites:
     where: pages.yml gate, build, deploy
     status: exists
 
+  - id: halts-upload-test
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [.github/workflows/halts-upload.yml, quality/test-halts-upload.ps1, build/validate-halt-list.ps1, ops/halts.json]
+    command: pwsh -NoProfile -File quality/test-halts-upload.ps1
+    where: ci.yml light
+    status: exists
+
+  - id: halts-upload
+    kind: packaging
+    ring: 2
+    select: affected
+    platforms: [linux-x64]
+    runner: hosted
+    triggers: [ops/halts.json, .github/workflows/halts-upload.yml]
+    command: see halts-upload.yml (main policy pushes or manual dispatch from main; no build)
+    where: halts-upload.yml upload
+    status: exists
+
   - id: pwa-iphone
     kind: e2e
     ring: 4

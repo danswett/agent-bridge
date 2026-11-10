@@ -238,21 +238,28 @@ the release that just shipped with it. Changing `ops/halts.json` through the
 normal build/publish path produces a newer release; it is not an emergency
 halt of the current newest release.
 
-**Current emergency path (manual, not performed by this PR):** the owner, or a
-session with release-write authority assigned that maintenance task, may
-re-upload a **validated** `halts.json` asset to the numerically newest published
-`v0.1.<run>` release. The staged file must be named `halts.json`. Add the affected version, validate with the same client
-schema (`. build\validate-halt-list.ps1; Assert-ReleaseHaltList <file>`), then
-replace that release's `halts.json` asset with `gh release upload <tag> <file>
---clobber --repo danswett/agent-bridge`. Re-read the newest tag before/after the
-upload to detect a racing publication, and verify the resulting asset and
-GitHub SHA-256 digest; do not report the halt effective if a newer unmodified
-policy won the race. Keep the prior validated policy for audit/repair, without
-removing existing halts. Review/land the same change to canonical
-`ops/halts.json` so the next build does not overwrite the emergency policy with
-an older list; until then monitor/reapply if publication advances. A reviewed no-build upload workflow is a separate
-Platform-owned follow-up; this PR does not grant live release-write permission
-or execute an upload.
+**Emergency path (#1307):** edit `ops/halts.json` through a reviewed PR, adding the
+affected canonical version without removing existing halts. Quality merges it;
+`.github/workflows/halts-upload.yml` runs on that policy change on `main`, without
+a checkout or build. It fetches the policy and `build/validate-halt-list.ps1` from
+the same current main commit, dot-sources the validator, and runs
+`Assert-ReleaseHaltList` before any release access. Invalid input uploads nothing.
+It replaces the newest non-draft release's `halts.json` with `--clobber`,
+including pre-releases, and verifies the asset's GitHub SHA-256 digest. The reviewed
+Git history retains prior policies; the normal publisher continues shipping the
+canonical file with future releases.
+
+No published release, API/upload failure, digest mismatch, or a newer release
+appearing during the upload fails the GitHub job; never call a failed upload an
+effective halt. After resolving the failure, dispatch **Upload release halt
+policy** from `main` again (other branches are refused). Delayed/retried runs
+read current main rather than restoring their old triggering policy. Check the
+run's verified tag and digest against the current newest release; re-dispatch if
+publication has advanced with an older policy. Failures are recorded in GitHub;
+any escalation goes to the Chief of Staff, never pages or alerts the owner.
+This workflow does not wire new clients, roll back an installed version, or
+authorize a live rehearsal; [the release runbook](../ops/runbooks/windows-release.md)
+retains the roll-forward procedure.
 
 `GitHubHaltListSource(HttpClient)` reads the existing repository's release API,
 selects the numerically newest non-draft `v0.1.<run>` among its newest 100 releases,

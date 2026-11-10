@@ -33,6 +33,21 @@ Mitigate steps below.
 
 ## Mitigate
 
+**Reviewed halt policy (clients that use the halt list, #884 S1 / #1307):**
+add the bad version to `ops/halts.json` in a PR, preserving existing halts.
+Quality merges; **Upload release halt policy** (`halts-upload.yml`) validates
+with the client's exact `Assert-ReleaseHaltList` schema and uploads `halts.json`
+to the newest non-draft release, pre-releases included, without a checkout or
+build. It replaces that asset with `--clobber` and verifies its SHA-256 digest.
+Check the successful run's verified tag against the newest release before calling
+the halt effective. If it failed, or publication advanced with an older policy,
+resolve the failure and dispatch the workflow from `main` again. Invalid policy
+or no published release fails before any upload. Failures stay in GitHub;
+escalate only to the Chief of Staff, with no owner paging or alerting.
+This does not make older clients honor halts or downgrade installed machines;
+use the steps below for those. See [the halt contract](../../docs/host-lifecycle.md)
+for validation and race handling.
+
 1. **Stop more machines taking it (Owner, or a session with the owner's go-ahead).** Turn the
    release back into a draft. Anonymous clients stop seeing it at their next check, and the
    newest published release becomes the latest again.
