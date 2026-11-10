@@ -729,6 +729,124 @@ public class ClaudeSubagentTests
         ["message"] = new JsonObject { ["role"] = "user", ["content"] = NoticeText(task, status) },
     }.ToJsonString();
 
+    // A notice delivered mid-turn, as Claude Code 2.1.317 writes it (mid-turn-queued-command.jsonl):
+    // an attachment entry of type queued_command, marked by commandMode and origin, not a user
+    // entry. The fields are the recorded ones.
+    internal static string Attachment(string task, int s, string status = "completed", string mode = "task-notification", string type = "queued_command", string entry = "attachment", string? text = null) => new JsonObject
+    {
+        ["type"] = entry,
+        ["isSidechain"] = false,
+        ["timestamp"] = Copilot.At(s),
+        ["sessionId"] = Id,
+        ["attachment"] = new JsonObject
+        {
+            ["type"] = type,
+            ["prompt"] = text ?? NoticeText(task, status),
+            ["commandMode"] = mode,
+            ["origin"] = new JsonObject { ["kind"] = "task-notification", ["producer"] = "session-task" },
+            ["timestamp"] = Copilot.At(s),
+        },
+    }.ToJsonString();
+
+    [Fact]
+    public async Task A_notice_delivered_mid_turn_as_a_queued_command_ends_the_delegate_when_it_was_queued()
+    {
+        await using var r = new Replay();
+        await r.Through(7);
+
+        var s = await r.Append(Notice(Files, 8), Attachment(Files, 9));
+
+        Assert.Equal((SubagentStatus.Idle, SubagentOutcome.Done), (Entry(s, Files).Status, Entry(s, Files).Outcome));
+        Assert.Equal(Fixture.T0.AddSeconds(8), Entry(s, Files).EndedAt);
+        Assert.Equal(2, s.Activity.Background!.Agents);
+    }
+
+    [Fact]
+    public async Task A_failed_notice_delivered_mid_turn_fails_the_delegate()
+    {
+        await using var r = new Replay();
+        await r.Through(7);
+
+        var s = await r.Append(Notice(Files, 8, status: "failed"), Attachment(Files, 9, status: "failed"));
+
+        Assert.Equal((SubagentStatus.Idle, SubagentOutcome.Failed), (Entry(s, Files).Status, Entry(s, Files).Outcome));
+    }
+
+    [Theory]
+    [InlineData("other-mode")]
+    [InlineData("prompt")]
+    public async Task A_queued_command_without_Claudes_task_notification_mark_ends_nothing(string mode)
+    {
+        await using var r = new Replay();
+        await r.Through(7);
+
+        var s = await r.Append(Notice(Files, 8), Attachment(Files, 9, mode: mode));
+
+        Assert.Equal((SubagentStatus.Working, (SubagentOutcome?)null), (Entry(s, Files).Status, Entry(s, Files).Outcome));
+        Assert.Equal(3, s.Activity.Background!.Agents);
+    }
+
+    [Fact]
+    public async Task A_notice_in_an_attachment_of_another_type_or_in_a_user_entry_ends_nothing()
+    {
+        await using var r = new Replay();
+        await r.Through(7);
+
+        var s = await r.Append(Notice(Files, 8), Attachment(Files, 9, type: "hook_additional_context"), Attachment(Files, 9, entry: "user"));
+
+        Assert.Equal(SubagentStatus.Working, Entry(s, Files).Status);
+        Assert.Equal(3, s.Activity.Background!.Agents);
+    }
+
+    [Fact]
+    public async Task A_queued_command_whose_notice_was_never_queued_or_differs_from_the_queued_one_ends_nothing()
+    {
+        await using var r = new Replay();
+        await r.Through(7);
+
+        var never = await r.Append(Attachment(Files, 8));
+        Assert.Equal(SubagentStatus.Working, Entry(never, Files).Status);
+
+        // Queued as completed, delivered as failed: another text, so no match.
+        var s = await r.Append(Notice(Files, 9), Attachment(Files, 10, status: "failed"));
+        Assert.Equal((SubagentStatus.Working, (SubagentOutcome?)null), (Entry(s, Files).Status, Entry(s, Files).Outcome));
+        Assert.Equal(3, s.Activity.Background!.Agents);
+    }
+
+    [Fact]
+    public async Task A_queued_command_is_not_a_prompt_or_a_turn()
+    {
+        await using var r = new Replay();
+        await r.Through(7);
+        var before = (await r.Refresh()).Activity.TurnCount;
+
+        var s = await r.Append(Notice(Files, 8), Attachment(Files, 9));
+
+        Assert.Equal(before, s.Activity.TurnCount);
+        Assert.DoesNotContain("task-notification", s.Activity.UserMessage ?? "", StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_command_in_the_background_ends_on_the_recorded_mid_turn_queued_command()
+    {
+        using var f = new Fixture();
+        var lines = File.ReadAllLines(FixturePath("mid-turn-queued-command.jsonl"));
+        var id = JsonNode.Parse(lines[0])!["sessionId"]!.GetValue<string>();
+        var transcript = f.ClaudeTranscript(id);
+        f.ClaudeRegistration(id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        await using var source = f.Source();
+
+        // The attachment is the last line; the command is running until it is read.
+        Fixture.Append(transcript, [.. lines[..^1]]);
+        await source.RefreshAsync();
+        Assert.Equal(1, source.Get(id)!.Activity.Background!.Shells);
+
+        Fixture.Append(transcript, lines[^1]);
+        await source.RefreshAsync();
+        Assert.Null(source.Get(id)!.Activity.Background);
+    }
+
     [Fact]
     public async Task A_notification_the_person_typed_does_not_stop_a_delegate_and_is_their_prompt()
     {
