@@ -1080,6 +1080,17 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 .history-meta { color: var(--ab-text2); font-size: .9rem; margin: 6px 0; }
 .history-cut { font-style: italic; }
 .history-state { text-align: center; }
+/* A message's time (#1619, ui.md §6.4). The owner's row always exists, so a time arriving later moves nothing. */
+.msg-time-row { display: flex; min-height: var(--type-meta-line); }
+.msg-time-owner { justify-content: flex-end; }
+.msg-time { position: relative; margin: 0; padding: 0; border: 0; background: none; font: inherit; font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); font-variant-numeric: tabular-nums; white-space: nowrap; cursor: pointer; text-align: start; }
+/* A 44px target that does not grow the row. */
+.msg-time::after { content: ""; position: absolute; inset: calc((var(--type-meta-line) - 44px) / 2) -8px; }
+.history-origin-label .msg-time { margin-inline-start: var(--ab-space-2); }
+.history-tool .msg-time, .history-meta .msg-time { margin-inline-start: auto; flex: none; }
+.history-meta .msg-time { margin-inline-start: var(--ab-space-2); }
+.msg-time-pop { position: fixed; z-index: 50; padding: var(--ab-space-1) var(--ab-space-2); background: var(--ab-card); color: var(--ab-text); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-control); font-size: var(--type-meta); line-height: var(--type-meta-line); white-space: nowrap; pointer-events: none; }
+.msg-time-pop[hidden] { display: none; }
 .user-message { justify-self: end; max-width: 85%; min-width: 0; }
 .bubble { padding: var(--ab-space-2) var(--ab-space-3); background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card); }
 .bubble .plain { margin: 0; }

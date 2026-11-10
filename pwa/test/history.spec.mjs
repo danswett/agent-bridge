@@ -12,7 +12,8 @@ test('earlier turns are drawn above the latest exchange, which is drawn once', a
   await expect(v.locator('.history-turn')).toHaveCount(2);
   await expect(v.locator('.history-turn').first()).toContainText('Demo prompt 1');
   await expect(v.getByText('Demo prompt 3')).toHaveCount(0);
-  await expect(v.locator('.history-turn button, .history-turn textarea')).toHaveCount(0);
+  await expect(v.locator('.history-turn textarea')).toHaveCount(0);
+  await expect(v.locator('.history-turn button:not(.msg-time)')).toHaveCount(0);
   const scroll = v.locator('.stream-scroll');
   await expect.poll(() => scroll.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(4);
 });

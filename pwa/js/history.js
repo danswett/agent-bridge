@@ -27,7 +27,7 @@ export const HISTORY = Object.freeze({
 });
 
 // The time a required one that is missing or unreadable reads as (Malformed records rule 1).
-const NO_TIME = '0001-01-01T00:00:00.000Z';
+export const NO_TIME = '0001-01-01T00:00:00.000Z';
 
 const str = (v) => (typeof v === 'string' ? v : null);
 const obj = (v) => (v !== null && typeof v === 'object' && !Array.isArray(v) ? v : null);

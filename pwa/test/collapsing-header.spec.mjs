@@ -263,11 +263,11 @@ for (const scheme of ['light', 'dark']) {
 
     test('folded, the header is still read and tabbed to, Back and More, the tabs, then the conversation', async ({ page }) => {
       const v = await session(page);
-      await v.locator('.stream').evaluate((stream) => {
+      await v.locator('.stream-scroll').evaluate((scroll) => {
         const b = document.createElement('button');
         b.id = 'probe';
         b.textContent = 'Probe';
-        stream.prepend(b);
+        scroll.prepend(b);
       });
       await folded(v);
       await expect(v.getByRole('tab', { name: 'Conversation' })).toBeAttached();
@@ -579,14 +579,13 @@ test.describe('on a phone, with the person\'s settings', () => {
   test('Shift+Tab from the conversation onto a folded header\'s tab brings the header back', async ({ page }) => {
     const v = await session(page);
     const { room } = await folded(v);
-    await v.locator('.stream').evaluate((stream) => {
-      const sc = stream.parentElement;
+    await v.locator('.stream-scroll').evaluate((sc) => {
       const b = document.createElement('button');
       b.id = 'probe';
       b.textContent = 'Probe';
       b.style.cssText = `position:absolute;left:16px;height:44px;top:${sc.scrollTop + 300}px`;
-      stream.style.position = 'relative';
-      stream.prepend(b);
+      sc.style.position = 'relative';
+      sc.prepend(b);
       b.focus({ preventScroll: true });
     });
     expect((await read(v)).ty).toBe(-room);
