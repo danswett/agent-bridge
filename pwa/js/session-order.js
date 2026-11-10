@@ -7,7 +7,7 @@
 //     rows once, newest first when several arrive together, and then stays where it is. Nothing
 //     the host sends moves a row. Only a move (Alt+Up/Down, a drag, the row menu) does.
 //   * Pinned rows sit above the rest, in the order they were pinned or moved to.
-//   * Most recent: the old order, last updated first. Machine: by machine name, then your order.
+//   * Most recent: latest activity first (a prompt, a finished turn, a question or an answer, a status change; #628). Machine: by machine name, then your order.
 //   * A session the host removed is kept in memory as ended, for the Ended group, until the page
 //     goes; nothing else about it is kept.
 //   * Activity: a row whose session updated since it was last open on screen is unread. A
@@ -16,6 +16,8 @@
 // It knows nothing of the DOM: the list's markup is rewritten by #179, and this stays.
 // Storage that can't be read or written (a blocked or full localStorage) falls back to Most
 // recent, as the issue asks: an order that can't be kept would be lost at the next reload.
+import { byActivity } from './sessions-store.js';
+
 const KEY = 'agent-bridge.app.order';
 export const SORTS = Object.freeze(['yours', 'recent', 'machine']);
 export const SORT_LABELS = Object.freeze({ yours: 'Your order', recent: 'Most recent', machine: 'Machine' });
@@ -27,14 +29,7 @@ const MAX_ENDED = 20;
 export const orderKey = (hostId, id) => `${hostId ?? ''}\n${id}`;
 const keyOf = (e) => orderKey(e.hostId, e.session.id);
 
-// Last updated first; ties by id, then machine, so the order is stable. Times are in one fixed
-// format, so they compare as strings.
-function newer(a, b) {
-  const x = a.session, y = b.session;
-  if (x.updatedAt !== y.updatedAt) { return x.updatedAt < y.updatedAt ? 1 : -1; }
-  if (x.id !== y.id) { return x.id < y.id ? -1 : 1; }
-  return a.hostId < b.hostId ? -1 : a.hostId > b.hostId ? 1 : 0;
-}
+const newer = byActivity;
 
 const strings = (v) => (Array.isArray(v) ? v.filter((k) => typeof k === 'string') : []);
 

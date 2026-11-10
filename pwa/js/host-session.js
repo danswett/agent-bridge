@@ -27,7 +27,7 @@
 // gate every send goes through) until a channel opened since has delivered a whole snapshot.
 import { HostClient } from './host-client.js';
 import { Capabilities, Events, Ops, PROTOCOL_VERSION } from './protocol.js';
-import { SessionsStore } from './sessions-store.js';
+import { SessionsStore, byActivity } from './sessions-store.js';
 import { UNSUPPORTED_SESSIONS } from './brand.js';
 
 const LAST_HOST = 'agent-bridge.app.lastHost';
@@ -127,7 +127,7 @@ export class HostSession {
     // The sessions on screen, from every machine shown, as one list.
     const self = this;
     this.sessions = {
-      // [{ hostId, session }], most recently updated first, as each store orders them: the Most
+      // [{ hostId, session }], latest activity first, as each store orders them: the Most
       // recent sort. The list on screen is in the person's order (session-order.js).
       list: () => self.#sessionList(),
       get size() { let n = 0; for (const l of self.links()) { n += l.store.size; } return n; },
@@ -288,14 +288,7 @@ export class HostSession {
   #sessionList() {
     const out = [];
     for (const l of this.links()) { for (const session of l.store.list()) { out.push({ hostId: l.id, session }); } }
-    // Times are in one fixed format, so they compare as strings; ties by id, then machine, so
-    // the order is stable.
-    return out.sort((a, b) => {
-      const x = a.session, y = b.session;
-      if (x.updatedAt !== y.updatedAt) { return x.updatedAt < y.updatedAt ? 1 : -1; }
-      if (x.id !== y.id) { return x.id < y.id ? -1 : 1; }
-      return a.hostId < b.hostId ? -1 : a.hostId > b.hostId ? 1 : 0;
-    });
+    return out.sort(byActivity);
   }
 
   // fromLink: the machine a notification's link names. It is shown with every other machine

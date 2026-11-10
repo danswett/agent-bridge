@@ -214,7 +214,7 @@ test('blocked storage lists sessions most recent first, and Your order cannot be
   const sort = page.locator('#session-sort');
   await expect(sort).toHaveValue('recent');
   await expect(sort.locator('option[value="yours"]')).toBeDisabled();
-  await upsert(page, CODEX, { updatedAt: later() });
+  await upsert(page, CODEX, { updatedAt: later(), activity: { userMessage: 'A new prompt' } });
   await expect.poll(() => order(page)).toEqual([CODEX, COPILOT, CLAUDE, DELEGATING]);
 });
 
@@ -231,7 +231,7 @@ test('storage that fills up while a row is drawn turns the list to Most recent a
   await open(page, CODEX);
   await page.evaluate(() => { window.__full = true; });
   // An open session's update marks it seen, and that write is the one that fails.
-  await upsert(page, CODEX, { updatedAt: later() });
+  await upsert(page, CODEX, { updatedAt: later(), activity: { userMessage: 'A new prompt' } });
   await expect(page.locator('#session-sort')).toHaveValue('recent');
   await expect.poll(() => order(page)).toEqual([CODEX, COPILOT, CLAUDE, DELEGATING]);
 });

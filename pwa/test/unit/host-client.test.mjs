@@ -119,8 +119,10 @@ test('live upserts and removes after synced change the list', async () => {
   t.host({ ev: 'session.upsert', seq: 3, data: session('b', { updatedAt: '2026-10-28T04:00:01.000Z' }) });
   assert.deepEqual(store.list().map((s) => s.id), ['b', 'a']);
   t.host({ ev: 'session.upsert', seq: 4, data: session('a', { updatedAt: '2026-10-28T04:00:02.000Z' }) });
-  assert.deepEqual(store.list().map((s) => s.id), ['a', 'b'], 'an update moves a session to the top');
-  t.host({ ev: 'session.remove', seq: 5, data: { id: 'b' } });
+  assert.deepEqual(store.list().map((s) => s.id), ['b', 'a'], 'a tick alone does not move a session');
+  t.host({ ev: 'session.upsert', seq: 5, data: session('a', { status: 'waiting', updatedAt: '2026-10-28T04:00:03.000Z' }) });
+  assert.deepEqual(store.list().map((s) => s.id), ['a', 'b'], 'a change of status moves a session to the top');
+  t.host({ ev: 'session.remove', seq: 6, data: { id: 'b' } });
   assert.deepEqual(store.list().map((s) => s.id), ['a']);
 });
 

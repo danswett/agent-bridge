@@ -446,7 +446,7 @@ export class HostClient {
     const data = m.data !== null && typeof m.data === 'object' ? m.data : {};
     switch (m.ev) {
       case Events.sessionUpsert: {
-        const s = this.store?.upsert(data);
+        const s = this.store?.upsert(data, { snapshot: this.#snapshot !== null });
         if (s) {
           this.#snapshot?.add(s.id);
           this.#raw.set(s.id, { json: data, seq: m.seq });
@@ -523,7 +523,7 @@ export class HostClient {
       try { applied = applyPatch(held?.json ?? null, held?.seq ?? null, patch); }
       catch (e) { if (!(e instanceof PatchError)) { throw e; } }
     }
-    const s = applied ? (this.store ? this.store.upsert(applied) : readSession(applied)) : null;
+    const s = applied ? (this.store ? this.store.upsert(applied, { snapshot: this.#snapshot !== null }) : readSession(applied)) : null;
     if (!s) {
       this.#tracking = false;
       this.#lost();
