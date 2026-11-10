@@ -65,11 +65,7 @@ test('answering turns the card into a one-line record in the same place', async 
   const card = await setup(page);
   const slot = card.locator('.history .question-slot');
   await card.locator(`.question[data-question="${QID}"] .choice[data-value="pg"]`).click();
-  await page.evaluate(({ id }) => {
-    const d = window.agentBridgeDemo;
-    const t = new Date(Date.now() + 2000).toISOString();
-    d.upsert({ ...d.host.get(id), status: 'working', statusSince: t, updatedAt: t, question: null });
-  }, { id: CODEX });
+  await page.waitForFunction((qid) => window.agentBridgeDemo.host.typed.some((t) => t.question === qid), QID);
   await expect(card.locator('.question.resolved')).toHaveCount(1);
   await expect(card.locator('.history .question-slot .question.resolved')).toHaveCount(1);
   await expect(slot).toHaveCount(1);
