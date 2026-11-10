@@ -1376,10 +1376,12 @@ export class SessionCard {
   // first draw, and none after it.
   #unwatch = null;
   #atLatest = false;
+  #openTop = 0;
 
   #openTurns() {
     if (!this.historyStore) { return; }
     if (this.#unwatch) { this.#drawTurns(); return; }
+    this.#openTop = this.els.scroll.scrollTop;
     this.#unwatch = this.historyStore.watch(this.hostId, this.#s.id, () => this.#drawTurns());
     this.historyStore.open(this.hostId, this.#s.id, { session: this.#s }).catch(() => {});
     this.#drawTurns();
@@ -1391,7 +1393,8 @@ export class SessionCard {
     const sc = this.els.scroll;
     if (!this.#atLatest && snapshot.phase !== 'idle' && snapshot.phase !== 'loading' && sc.getClientRects().length) {
       this.#atLatest = true;
-      if (drawn) { sc.scrollTop = sc.scrollHeight; }
+      // Not if the person has already scrolled: the jump would take them from where they are.
+      if (drawn && sc.scrollTop === this.#openTop) { sc.scrollTop = sc.scrollHeight; }
     }
   }
 

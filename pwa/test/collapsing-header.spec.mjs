@@ -52,6 +52,11 @@ async function session(page) {
   await v.locator('.stream').evaluate((el) => { el.style.paddingBottom = '1500px'; });
   await expect.poll(() => v.evaluate((el) => el.style.getPropertyValue('--head-h'))).not.toBe('');
   await settle(v);
+  // A session opens at its latest message; these tests start from the top of the conversation.
+  await expect(v.locator('.history-turn').first()).toBeAttached();
+  await settle(v);
+  await v.locator('.stream-scroll').evaluate((sc) => { sc.scrollTop = 0; });
+  await settle(v);
   return v;
 }
 

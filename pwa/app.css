@@ -1046,7 +1046,11 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 }
 .stream > [hidden] { display: none; }
 /* The conversation before the latest exchange (#1285), in the same column as it, read-only. */
-.stream.history { margin-bottom: var(--ab-space-6); }
+.history {
+  max-width: 770px; margin: 0 auto var(--ab-space-6); display: grid; gap: var(--ab-space-6);
+  font-size: var(--type-reading); line-height: var(--type-reading-line);
+}
+.history[hidden] { display: none; }
 .history-turn { display: grid; gap: var(--ab-space-3); min-width: 0; }
 /* Earlier turns look as the live exchange does, under names of their own. */
 .history-prompt { justify-self: end; max-width: 85%; min-width: 0; }

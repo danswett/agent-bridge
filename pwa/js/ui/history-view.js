@@ -60,7 +60,7 @@ export function turnView(t) {
 }
 
 export class HistoryView {
-  element = h('div', { class: 'stream history', 'aria-label': 'Earlier conversation', hidden: true });
+  element = h('div', { class: 'history', 'aria-label': 'Earlier conversation', hidden: true });
   #drawn = new Map();
 
   // snapshot: the store's. latestId: the turn the card draws live, left out.
