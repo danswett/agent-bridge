@@ -84,4 +84,31 @@ public sealed class HistoryRowSyncTests
         HistoryRowSync.Apply(shown, []);
         Assert.Empty(shown);
     }
-}
+
+    [Fact]
+    public void Three_replies_appended_to_a_long_list_touch_only_three_rows_and_count_as_new()
+    {
+        var turns = Enumerable.Range(1, 300).Select(n => (n, $"reply {n}")).ToArray();
+        var (shown, changes) = Shown(Rows(turns));
+        var before = shown.ToArray();
+        var wanted = Rows([.. turns, (301, "a"), (302, "b"), (303, "c")]);
+
+        var appended = HistoryRowSync.Appended(shown, wanted);
+        HistoryRowSync.Apply(shown, wanted);
+
+        Assert.Equal(3, appended);
+        Assert.Equal(3, changes.Count);
+        Assert.All(changes, c => Assert.Equal(NotifyCollectionChangedAction.Add, c.Action));
+        Assert.True(before.SequenceEqual(shown.Take(300)));
+    }
+
+    [Fact]
+    public void Older_pages_and_edits_and_another_session_are_not_new_messages()
+    {
+        var (shown, _) = Shown(Rows((3, "three"), (4, "four")));
+
+        Assert.Equal(0, HistoryRowSync.Appended(shown, Rows((1, "one"), (2, "two"), (3, "three"), (4, "four"))));
+        Assert.Equal(0, HistoryRowSync.Appended(shown, Rows((3, "three"), (4, "four, edited"))));
+        Assert.Equal(0, HistoryRowSync.Appended(shown, Rows((7, "seven"))));
+        Assert.Equal(0, HistoryRowSync.Appended([], Rows((1, "one"))));
+    }}

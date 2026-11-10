@@ -21,6 +21,19 @@ public static class HistoryRowSync
         return drop > 0 || add > 0;
     }
 
+    // How many rows come after the last one on screen: the messages that arrived under a person who is
+    // reading further up (#1739). Older pages, edits and another session's rows are none.
+    public static int Appended(IReadOnlyList<HistoryRow> shown, IReadOnlyList<HistoryRow> wanted)
+    {
+        if (shown.Count == 0) { return 0; }
+        var last = shown[^1].Id;
+        for (var i = wanted.Count - 1; i >= 0; i--)
+        {
+            if (wanted[i].Id == last) { return wanted.Count - 1 - i; }
+        }
+        return 0;
+    }
+
     // Blocks are compared by what they say: each draw builds new block objects for the same turn.
     static bool Same(HistoryRow a, HistoryRow b)
     {

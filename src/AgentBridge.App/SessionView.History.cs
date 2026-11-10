@@ -24,7 +24,7 @@ public sealed partial class SessionView
     {
         UnwatchHistory();
         history = Card?.Stored;
-        if (shownHistory != Card?.Id) { shownHistory = Card?.Id; pinEnd = true; openPrompts.Clear(); }
+        if (shownHistory != Card?.Id) { shownHistory = Card?.Id; pinEnd = true; openPrompts.Clear(); newMessages = 0; }
         if (history is null) { ShowHistory(); return; }
         history.Changed += OnHistoryChanged;
         ShowHistory();
@@ -55,7 +55,11 @@ public sealed partial class SessionView
         // Measured before the rows change: the pane collapsing under the view must not read as scrolled back.
         var atEnd = pinEnd || scroll is { ScrollableHeight: > 0 } && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack;
         var offset = scroll?.VerticalOffset ?? 0;
+        var arrived = HistoryRowSync.Appended(historyShown, rows);
         var changed = HistoryRowSync.Apply(historyShown, rows);
+        // Scrolled back, a person is never moved; they are told instead (#1739).
+        if (arrived > 0 && !atEnd) { newMessages += arrived; }
+        ShowNewMessages();
         // Nothing moved when no row changed, and a scroller left from another session says nothing of where this one is.
         if (changed) { KeepPlace(atEnd, offset); }
         HistoryLine.Text = line ?? "";
@@ -84,4 +88,22 @@ public sealed partial class SessionView
     }
 
     void OnHistoryRetry(object sender, RoutedEventArgs e) => _ = history?.LoadOlderAsync();
+
+    // Stored turns that arrived while the view was scrolled back, until it is back at the end.
+    int newMessages;
+
+    internal void ShowNewMessages()
+    {
+        if (newMessages > 0 && (pinEnd || follow.AtEnd)) { newMessages = 0; }
+        NewMessages.Content = newMessages == 1 ? "1 new message" : $"{newMessages} new messages";
+        NewMessages.Visibility = newMessages > 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    void OnNewMessages(object sender, RoutedEventArgs e)
+    {
+        newMessages = 0;
+        ShowNewMessages();
+        pinEnd = true;
+        KeepPlace(true, 0);
+    }
 }

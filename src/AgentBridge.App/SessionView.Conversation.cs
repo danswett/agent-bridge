@@ -82,6 +82,7 @@ public sealed partial class SessionView
         scroll.ViewChanged += (_, e) =>
         {
             follow.Scrolled(scroll.VerticalOffset, scroll.ScrollableHeight);
+            if (newMessages > 0 && follow.AtEnd) { ShowNewMessages(); }
             SyncQuestionBar();
             // A question still moving into view is held from the pointer until it has stopped.
             guard.Scrolled(DateTimeOffset.UtcNow);
