@@ -1394,7 +1394,10 @@ export class SessionCard {
     if (!this.#atLatest && snapshot.phase !== 'idle' && snapshot.phase !== 'loading' && sc.getClientRects().length) {
       this.#atLatest = true;
       // Not if the person has already scrolled: the jump would take them from where they are.
-      if (drawn && sc.scrollTop === this.#openTop) { sc.scrollTop = sc.scrollHeight; }
+      if (drawn && sc.scrollTop === this.#openTop) {
+        const toEnd = () => { sc.scrollTop = sc.scrollHeight; };
+        if (this.collapse) { this.collapse.appScroll(toEnd); } else { toEnd(); }
+      }
     }
   }
 

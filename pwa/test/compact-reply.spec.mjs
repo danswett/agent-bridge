@@ -247,8 +247,8 @@ test.describe('on a phone', () => {
     await settle(v);
     const max = await end(v);
     expect(max).toBeGreaterThan(600);
-    // Opened at the conversation's top, far from its end, the area is whole.
-    expect(await foot(v)).toEqual({ fy: 0, room: 25, state: 'returned', solid: false });
+    // A session opens at its latest message, so the reply area is in full, at rest.
+    expect(await foot(v)).toMatchObject({ fy: 0, room: 25, state: 'rest', solid: false });
     await scrollTo(v, max);
     expect(await foot(v)).toMatchObject({ fy: 0, state: 'rest' });
     // The conversation keeps room for the whole area at its end: its last words clear of it.
