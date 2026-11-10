@@ -39,16 +39,35 @@ jobs:
           Assert-ReleaseHaltList (Join-Path $PWD 'ops/halts.json')
           Copy-Item 'ops/halts.json' 'halts.json'
 
-          $tag = gh release list --exclude-drafts --limit 1 --repo $env:GITHUB_REPOSITORY --json tagName --jq '.[0].tagName'
-          if (-not $tag) { throw 'No published release exists; halt policy was not uploaded.' }
+          function Get-HaltPolicyTag {
+            # Match the anonymous client's window: a writer token exposes drafts that move pagination.
+            $uri = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases?per_page=100"
+            $response = Invoke-WebRequest -Uri $uri -Headers @{ 'User-Agent' = 'AgentBridge/1.0'; 'Cache-Control' = 'no-cache' } -TimeoutSec 10
+            $metadata = $response.Content | ConvertFrom-Json -NoEnumerate
+            if ($metadata -isnot [array]) { throw 'Release metadata must be an array.' }
+            [long]$highest = -1
+            $latest = $null
+            foreach ($release in $metadata) {
+              if ($release.draft -isnot [bool] -or $release.draft -or $release.tag_name -isnot [string] -or
+                  $release.tag_name -cnotmatch '^v0\.1\.(0|[1-9][0-9]{0,18})\z') { continue }
+              [long]$run = 0
+              if ([long]::TryParse($Matches[1], [Globalization.NumberStyles]::None, [Globalization.CultureInfo]::InvariantCulture, [ref]$run) -and $run -gt $highest) {
+                $highest = $run
+                $latest = $release.tag_name
+              }
+            }
+            return $latest
+          }
+          $tag = Get-HaltPolicyTag
+          if (-not $tag) { throw 'No published canonical v0.1.N release exists; halt policy was not uploaded.' }
           gh release upload $tag halts.json --clobber --repo $env:GITHUB_REPOSITORY
           $expected = 'sha256:' + (Get-FileHash 'halts.json' -Algorithm SHA256).Hash.ToLowerInvariant()
           $digests = @(gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" --jq '.assets[] | select(.name == "halts.json") | .digest')
           if ($digests.Count -ne 1 -or $digests[0] -cne $expected) {
             throw 'The uploaded halt policy digest does not match the validated file.'
           }
-          $newest = gh release list --exclude-drafts --limit 1 --repo $env:GITHUB_REPOSITORY --json tagName --jq '.[0].tagName'
+          $newest = Get-HaltPolicyTag
           if ($newest -cne $tag) {
-            throw 'A newer release appeared during upload. Dispatch this workflow from main again; the halt is not confirmed effective.'
+            throw 'The client-selected release changed during upload. Dispatch this workflow from main again; the halt is not confirmed effective.'
           }
           Write-Host "Verified halts.json on $tag from main $sha ($expected)."

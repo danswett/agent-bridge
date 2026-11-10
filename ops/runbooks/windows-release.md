@@ -37,8 +37,12 @@ Mitigate steps below.
 add the bad version to `ops/halts.json` in a PR, preserving existing halts.
 Quality merges; **Upload release halt policy** (`halts-upload.yml`) validates
 with the client's exact `Assert-ReleaseHaltList` schema and uploads `halts.json`
-to the newest non-draft release, pre-releases included, without a checkout or
-build. It replaces that asset with `--clobber` and verifies its SHA-256 digest.
+to the release clients select: the highest canonical numeric `v0.1.N` in the
+anonymous API's newest 100 releases, skipping drafts and including pre-releases,
+without a checkout or build. Metadata reads do not use the write token, so private
+drafts cannot shift the client's window. It uses that same selection for the post-upload recheck, so a
+later-created lower or noncanonical tag cannot divert a halt. It replaces the
+asset with `--clobber` and verifies its SHA-256 digest.
 Check the successful run's verified tag against the newest release before calling
 the halt effective. If it failed, or publication advanced with an older policy,
 resolve the failure and dispatch the workflow from `main` again. Invalid policy

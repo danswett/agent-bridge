@@ -244,13 +244,19 @@ affected canonical version without removing existing halts. Quality merges it;
 a checkout or build. It fetches the policy and `build/validate-halt-list.ps1` from
 the same current main commit, dot-sources the validator, and runs
 `Assert-ReleaseHaltList` before any release access. Invalid input uploads nothing.
-It replaces the newest non-draft release's `halts.json` with `--clobber`,
-including pre-releases, and verifies the asset's GitHub SHA-256 digest. The reviewed
+It replaces the client-selected release's `halts.json` with `--clobber`: the highest
+canonical numeric `v0.1.N` among the anonymous API's newest 100 releases, skipping
+drafts and including pre-releases. Metadata reads are deliberately anonymous like
+the client; the write token must not expose drafts that shift that window.
+Creation order is not version order; a later-created lower
+tag or a noncanonical tag must not divert the upload. One shared selector chooses
+both the upload target and the post-upload recheck. It verifies the asset's GitHub
+SHA-256 digest. The reviewed
 Git history retains prior policies; the normal publisher continues shipping the
 canonical file with future releases.
 
-No published release, API/upload failure, digest mismatch, or a newer release
-appearing during the upload fails the GitHub job; never call a failed upload an
+No published canonical release, API/upload failure, digest mismatch, or a changed
+client-selected release during the upload fails the GitHub job; never call a failed upload an
 effective halt. After resolving the failure, dispatch **Upload release halt
 policy** from `main` again (other branches are refused). Delayed/retried runs
 read current main rather than restoring their old triggering policy. Check the
