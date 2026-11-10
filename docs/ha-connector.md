@@ -505,8 +505,18 @@ the cards neither empties it nor loses the rid of a delivery still running; a re
 is still dropped. When a session ends for good its history is dropped with its card (after any
 delivery still running for it finishes); a session that comes back under the same id starts empty.
 `sender` loses control, format and unassigned characters, whitespace is collapsed,
-and the cut at 64 never splits a character. A reply discarded because a question opened gets no ack.
+and the cut at 64 never splits a character. A reply that arrives while a question card is open
+(single choice or field slots) is refused, never queued: the host acks `refused` with the sender's rid,
+logs `refused a reply to <node> from <sender>` and types nothing, so the sender retries after the card
+closes. A reply already waiting when a question opens is refused the same way (#1634).
 Publishes without a `rid` behave as before.
+
+**`tools/agents/reply-session.ps1`** is the in-repo sender. It posts the payload with a rid, waits
+for the reply sensor to show its own stamp (there is one slot per node, so rapid sends can overwrite
+each other), presses Send, then waits for the host's ack for its own rid. It prints `sent to <node>`
+(exit 0) only on `delivered`. Exit 2: `unconfirmed` (it may have arrived). Exit 3: `refused`, or no ack
+within `-AckSeconds` (default 20); retry with `-Rid` so the host drops a duplicate. Exit 1: not sent
+(bad input, no token, Home Assistant unreachable). Sends from one machine are serialized by a lock.
 
 **The reply card** publishes `{at, text, images: [{id, name, content_type}], files: [{name,
 content_type, b64}], driver?}` (not retained) to `copilot/cli/<node>/replypayload/set`, read

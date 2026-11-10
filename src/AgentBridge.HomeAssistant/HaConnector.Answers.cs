@@ -243,7 +243,11 @@ public sealed partial class HaConnector
         if (p.Reply.Waiting.Count > 0)
         {
             var waiting = p.Reply.Waiting.Count;
-            foreach (var w in p.Reply.Waiting) { p.Reply.Handle(w.State); }
+            foreach (var w in p.Reply.Waiting)
+            {
+                p.Reply.Handle(w.State);
+                if (w.Attributes is { ValueKind: JsonValueKind.Object } wa && CleanRid(Str(wa, "rid")) is { } wrid) { p.Reply.Ack = MakeAck(wrid, CleanSender(Str(wa, "sender")), "refused"); }
+            }
             p.Reply.Waiting.Clear();
             await TransientAsync(p, "Reply NOT sent", new JsonObject
             {
@@ -695,7 +699,9 @@ public sealed partial class HaConnector
         // Armed again for what it says now on a later pass: what was given looking at what it said
         // before answers nothing (QuestionAsync).
         if (armed.Superseded) { return; }
-        var since = seen.Where(h => h.Seq > armed.Boundary).Select(h => h.Hit).ToList();
+        // A question that takes no typed answer takes no words from the reply card: said, not left unanswered (#1634).
+        if (ServesReplies && (armed.Plan.UsesFieldSlots || armed.Plan.AnswerOnTap) && !armed.Plan.TakesTypedAnswer) { if (await RefuseReplyAtQuestionAsync(p, armed, ct)) { return; } }
+        var since = seen.Where(h => h.Seq > armed.Boundary && !(h.Hit.EntityId == SessionEntities.ReplyPayload(p.Node) && p.Reply.IsHandled(h.Hit.State.State))).Select(h => h.Hit).ToList();
         var outcome = await ReadAnswerAsync(sessionId, p, armed, since, ct);
         if (outcome is null) { return; }
         if (outcome.Notice is { } notice)
@@ -819,6 +825,14 @@ public sealed partial class HaConnector
         var key = hit.EntityId + "|" + hit.State.State;
         if (p.ToldUnserved == key) { return; }
         p.ToldUnserved = key;
+        // The sender's request id gets its outcome, so a sender that waits for it is told rather than left to guess.
+        string? sender = null;
+        if (hit.EntityId == SessionEntities.ReplyPayload(p.Node) && hit.State.Attributes is { ValueKind: JsonValueKind.Object } at)
+        {
+            sender = CleanSender(Str(at, "sender"));
+            if (CleanRid(Str(at, "rid")) is { } rid) { p.Reply.Ack = MakeAck(rid, sender, "refused"); }
+        }
+        log($"Home Assistant connector refused a reply to {p.Node} from {sender ?? "an unnamed sender"}: " + (ServesReplies ? "the session is waiting on a question" : "replies from the dashboard are not served here"));
         // With the host's reply delivery, a reply waits for no question: this one is being
         // answered at the machine, or its answer is going in, and the reply would land in it.
         await TransientAsync(p, "Reply NOT sent", ServesReplies
@@ -830,6 +844,20 @@ public sealed partial class HaConnector
             }, ct);
     }
 
+    // A reply-card publish made while a form or approval is open. Marked handled, so it is not typed
+    // after the question closes: nothing is queued.
+    async Task<bool> RefuseReplyAtQuestionAsync(Published p, Armed armed, CancellationToken ct)
+    {
+        if (armed.PayloadBaseline.Kind == "unknown") { return false; }
+        var current = await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
+        if (!Changed(armed.PayloadBaseline, current) || !IsStamp(current.Value) || current.Value == armed.UsedStamp) { return false; }
+        if (current.Snapshot is not { Attributes.ValueKind: JsonValueKind.Object } state) { return false; }
+        // Words for a question are that question's own.
+        if (Str(state.Attributes, "decision_id") is { Length: > 0 }) { return false; }
+        p.Reply.Handle(current.Value);
+        await UnservedAsync(p, new HaTrigger(SessionEntities.ReplyPayload(p.Node), state), ct);
+                return true;
+    }
     static bool HasAttachments(HaState state) =>
         state.Attributes is { ValueKind: JsonValueKind.Object } a
         && new[] { "images", "files" }.Any(n => a.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.Array && v.GetArrayLength() > 0);

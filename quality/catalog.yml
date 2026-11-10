@@ -73,7 +73,7 @@ no_test_paths:
   - .gitignore
   - LICENSE
   - tools/design-mockups/**     # renders reference images only; nothing ships or tests from it
-  - tools/agents/**             # session helpers (wake-watch.ps1) that poll GitHub for a team; nothing ships or tests from them
+  - tools/agents/wake-watch.ps1 # session helper that polls GitHub for a team; nothing ships or tests from it
   - ops/**                      # SRE plan, runbooks, KQL and read-only operator probes; nothing ships from it
   - .github/dependabot.yml      # schedules update PRs; each PR's own changes select its tests
   - .github/CODEOWNERS          # who reviews what; CI's plan runs the whole ring for .github/ anyway
@@ -445,6 +445,19 @@ suites:
     runner: local
     triggers: [quality/post-receipt.ps1, quality/test-post-receipt.ps1]
     command: pwsh -NoProfile -File quality/test-post-receipt.ps1
+    where: ci.yml light
+    status: exists
+
+  - id: reply-session-script
+    kind: unit
+    ring: 0
+    select: affected
+    # The session reply sender: 'sent' only on the host's delivered ack, exit 3 on refusal or silence, three rapid sends in order.
+    # Runs against a throwaway fake Home Assistant on localhost (#1634).
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [tools/agents/reply-session.ps1, tools/agents/test-reply-session.ps1]
+    command: pwsh -NoProfile -File tools/agents/test-reply-session.ps1
     where: ci.yml light
     status: exists
 
