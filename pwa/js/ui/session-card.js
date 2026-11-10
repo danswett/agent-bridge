@@ -1564,6 +1564,15 @@ export class SessionCard {
     // A quiet hold starting or turning drawn changes the controls only: the panel stays, with what it says,
     // so a sheet open on it keeps the panel whose hold its signing checks (#950).
     if (!this.#changed('question', [q, answerable, answerable ? ctx.hostId : null, able?.why, ctx?.readOnly ?? null, asker, held?.updating ? '' : holdKey(held), escapedMode])) { this.#panel?.setHeld(held); return; }
+    // The question this panel's answer is on its way for (or has gone for) is listed once more as one
+    // the machine answers, as a host does while it types the answer in (#1572): the panel keeps
+    // saying what became of the answer, and never "can only be answered at the machine".
+    const sent = this.#panel?.entry;
+    if (q && !answerable && ctx?.service && this.#panel?.questionId === q.id && this.#panel.answering.hostId === ctx.hostId
+      && (sent?.state === 'sending' || (sent?.state === 'done' && sent.outcome === 'delivered'))) {
+      this.#panel.setHeld(held);
+      return;
+    }
     // Drawn by the app, not by the person typing in it: whatever this moves counts.
     this.#moves?.notOwn();
     // A new question while the last one's answer is still on its way: that answer goes on as a receipt.

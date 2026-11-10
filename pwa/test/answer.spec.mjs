@@ -794,6 +794,21 @@ test.describe('when the question changes', () => {
     await expect(card(page, CODEX).locator('.question-changed textarea')).toHaveValue('wait, one more thing');
   });
 
+  // #1572: a host typing the answer in can list the question once more as answered at the machine
+  // before it leaves the list; the card must keep saying the answer is being sent.
+  test('a question listed as answered at the machine while its answer is on its way never says so', async ({ page }) => {
+    await openDemo(page);
+    const form = { id: 'q-sent', message: 'Which?', fields: [{ name: 'n', title: 'Notes', type: 'text' }] };
+    const q = await ask(page, form);
+    await q.getByRole('textbox', { name: 'Notes' }).fill('go');
+    await hold(page);
+    await q.getByRole('button', { name: 'Send answer' }).click();
+    await ask(page, { ...form, answerAtMachine: true });
+    await expect(card(page, CODEX).getByText('can only be answered at the machine')).toHaveCount(0);
+    await expect(card(page, CODEX).locator('.question.answerable')).toHaveCount(1);
+    await release(page);
+  });
+
   test('an update to the same question keeps what was entered', async ({ page }) => {
     await openDemo(page);
     const q = await ask(page, { id: 'q-same', message: 'Notes?', fields: [{ name: 'n', title: 'Notes', type: 'text' }, { name: 'b', title: 'Flag', type: 'boolean' }] });
