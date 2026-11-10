@@ -178,6 +178,7 @@ public sealed partial class SessionView
     // Skipped if another session was opened, or the person took the view, meanwhile.
     void KeepPlace(bool atEnd, double offset, (string Id, double Top)? reading = null, double? earlierExtent = null)
     {
+        if (latestUsed) { atEnd = latestPinned; }
         var (session, releases) = (shownHistory, pinReleases);
         void Restore()
         {

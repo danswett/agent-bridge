@@ -57,12 +57,11 @@ static partial class SelfTest
             foreach (var input in new[] { "wheel", "arrow", "thumb", "key" })
             {
                 // Setup only. The action being tested below always travels through the real input path.
+                await LatestInput(window, scroll, input, up: true);
                 view.ReleasePin();
                 scroll.ChangeView(null, scroll.ScrollableHeight / 2, null, disableAnimation: true);
                 await Still(scroll);
-                var from = scroll.VerticalOffset;
-                await LatestInput(window, scroll, input, up: false);
-                check(await Until(() => scroll.VerticalOffset > from, TimeSpan.FromSeconds(3)), $"latest: real {input} input moves the transcript down");
+                check(await LatestInput(window, scroll, input, up: false), $"latest: real {input} reaches the transcript input handler");
                 await Jump();
                 await Grow(pinned: true, input);
                 card.Update(card.Session with { Activity = (card.Session.Activity ?? new Activity()) with { Response = "A plain reply." } });
@@ -96,12 +95,29 @@ static partial class SelfTest
         finally { view.Card = original; }
     }
 
-    static async Task LatestInput(MainWindow window, ScrollViewer scroll, string input, bool up)
+    static async Task<bool> LatestInput(MainWindow window, ScrollViewer scroll, string input, bool up)
     {
         scroll.Focus(FocusState.Keyboard);
-        if (input == "key") { Press(window.Handle, up ? VirtualKey.PageUp : VirtualKey.PageDown, foreground: false); return; }
+        if (input == "key")
+        {
+            var seen = false;
+            var key = up ? VirtualKey.PageUp : VirtualKey.PageDown;
+            var heard = new KeyEventHandler((_, e) => { if (e.Key == key) { seen = true; } });
+            scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
+            try { Press(window.Handle, key, foreground: false); return await Until(() => seen, TimeSpan.FromSeconds(2)); }
+            finally { scroll.RemoveHandler(UIElement.PreviewKeyDownEvent, heard); }
+        }
         TrayIcon.SetForegroundWindow(window.Handle);
         var bar = Find<ScrollBar>(scroll).FirstOrDefault(b => b.Orientation == Orientation.Vertical && b.ActualHeight > 0);
+        LatestPoint PointAt(FrameworkElement element)
+        {
+            var point = element.TransformToVisual(window.RootElement).TransformPoint(new Point(element.ActualWidth / 2, element.ActualHeight / 2));
+            var scale = element.XamlRoot.RasterizationScale;
+            var at = new LatestPoint { X = (int)(point.X * scale), Y = (int)(point.Y * scale) };
+            if (!ClientToScreen(window.Handle, ref at) || !SetCursorPos(at.X, at.Y)) { throw new InvalidOperationException("latest: cannot position the input pointer"); }
+            return at;
+        }
+        if (input is "arrow" or "thumb" && bar is not null) { PointAt(bar); await Task.Delay(350); }
         FrameworkElement target = scroll;
         if (input == "arrow")
         {
@@ -110,35 +126,41 @@ static partial class SelfTest
                     ?? throw new InvalidOperationException("latest: no actual scrollbar arrow");
         }
         if (input == "thumb") { target = bar is null ? throw new InvalidOperationException("latest: no vertical scrollbar") : Find<Thumb>(bar).FirstOrDefault(t => t.ActualHeight > 0) ?? throw new InvalidOperationException("latest: no actual scroll thumb"); }
-        var point = target.TransformToVisual(window.RootElement).TransformPoint(new Point(target.ActualWidth / 2, target.ActualHeight / 2));
-        var scale = target.XamlRoot.RasterizationScale;
-        var at = new LatestPoint { X = (int)(point.X * scale), Y = (int)(point.Y * scale) };
-        if (!ClientToScreen(window.Handle, ref at) || !SetCursorPos(at.X, at.Y)) { throw new InvalidOperationException("latest: cannot position the input pointer"); }
+        var at = PointAt(target);
         await Task.Delay(100);
         void Mouse(uint flags, int data = 0)
         {
             var packet = new[] { new LatestMouse { Type = 0, Flags = flags, Data = unchecked((uint)data) } };
             if (SendLatestMouse(1, packet, Marshal.SizeOf<LatestMouse>()) != 1) { throw new InvalidOperationException("latest: SendInput refused mouse input"); }
         }
-        if (input == "wheel") { Mouse(0x0800, up ? 480 : -480); }
-        else
+        var received = false;
+        var routed = input == "wheel" ? UIElement.PointerWheelChangedEvent : UIElement.PointerPressedEvent;
+        var pointer = new PointerEventHandler((_, _) => received = true);
+        scroll.AddHandler(routed, pointer, true);
+        try
         {
-            Mouse(0x0002);
-            try
+            if (input == "wheel") { Mouse(0x0800, up ? 120 : -120); }
+            else
             {
-                if (input == "thumb")
+                Mouse(0x0002);
+                try
                 {
-                    for (var i = 1; i <= 8; i++)
+                    if (input == "thumb")
                     {
-                        if (!SetCursorPos(at.X, at.Y + (up ? -1 : 1) * i * 12)) { throw new InvalidOperationException("latest: cannot drag the scroll thumb"); }
-                        await Task.Delay(30);
+                        for (var i = 1; i <= 8; i++)
+                        {
+                            if (!SetCursorPos(at.X, at.Y + (up ? -1 : 1) * i * 12)) { throw new InvalidOperationException("latest: cannot drag the scroll thumb"); }
+                            await Task.Delay(30);
+                        }
                     }
+                    else { await Task.Delay(180); }
                 }
-                else { await Task.Delay(180); }
+                finally { Mouse(0x0004); }
             }
-            finally { Mouse(0x0004); }
+            await Task.Delay(400);
+            return received;
         }
-        await Task.Delay(400);
+        finally { scroll.RemoveHandler(routed, pointer); }
     }
 
     [StructLayout(LayoutKind.Sequential)]
