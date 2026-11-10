@@ -1955,6 +1955,83 @@ machine, online ones first, then the account's offline machines (#213):
   - **Refused or unreadable:** one line in the row's error style, in the person's words
     (v1-diagnostics.md "In the clients"), never the host's text; Diagnose stays pressable.
 
+    #### 6.6.1 The machine tile (#1147; accepted by Product 2026-11-10)
+
+    The same tile, sections and words on the phone and iPad PWA, the Windows app and, later, the Apple
+    apps (#260). Health, relief and every figure come from the host; a client never works one out.
+    Counts, sizes and labels only: no session content, no paths, arguments or prompts.
+
+    1. **Five sections, fixed order, on every endpoint:** Header, Health, Can run, Running, Actions.
+       Under them, unchanged: updates, Update now, who can sign Copilot in, Diagnose, Forget. A section
+       whose data the host does not report yet is shown as its "not reported" form below, never
+       removed to make room for another and never filled with a guess.
+    2. **Header (as §6.6 above).** Icon, name, trailing state; line 2 "N sessions · version", or "View
+       only" or "Discovery held" in the version's place. Nothing else moves into it.
+    3. **Health.** One word with a shape-distinct icon, never colour alone: "Healthy", "Tight",
+       "Full", or "Not measured yet" when the host reports none. The word is the host's; two clients
+       showing one machine show one word.
+       - Under it, one line of the host's figures: "CPU 38% · 9.1 GB free of 32 GB", and the age,
+         "Updated 12 s ago" (the #1619 formatter). A figure the host did not send is left out of the
+         line, never shown as 0 (unknown is not zero).
+       - The host's measurement state is shown in words when it is not fresh: "Partial · 4 of 6
+         sessions measured", "Last measured 4 min ago" (figures greyed), or "Can't be measured on this
+         machine". The client never decides a figure is stale from a timer; sampling is event-driven.
+       - **Tight or Full only:** the three heaviest sessions by title, each "612 MB · 11 processes"
+         (the host's working-set sum, labelled "memory in use", not unique RAM). Fewer than three: show
+         those; none: "No session to pause." and no Relieve (rule 7).
+       - A change of the Health word is announced once, politely; refreshed figures are not announced.
+    4. **Can run.** Collapsed line "2 agents · 6 models". Open: each agent with its models, efforts and
+       contexts exactly as the host lists them. Not reported: the section is hidden.
+    5. **Running.** Collapsed line with counts by state, "3 working · 5 idle · 1 needs you", zero
+       counts left out. Open: one session row per session (the §5.1 row: title, state; line 2 "model ·
+       effort · context"), the first five, then "Show all N" in place. Not reported: the count from
+       line 2 only. "Needs you" rows open the session as in the lane (§6.1).
+    6. **Launch here.** In Actions when the machine is Online and not View only. Opens the New
+       session flow with this machine chosen. Offline, View only and "Discovery held" hide it, and a
+       line says why in text, not only a tooltip.
+    7. **Relieve.** Shown only when Health is Tight or Full and a session can be paused. It is always a
+       person's tap and never automatic. It pauses the single heaviest session by the host's memory
+       figure, and never stops one.
+       - The confirmation names the session by title only: "Pause *title*? It resumes when you press
+         Resume." with **Pause** and **Cancel**, focus on Cancel (as Update now).
+       - Where the host cannot pause an agent in a way that frees memory, Relieve is not shown for that
+         machine and the line reads "Can't pause *agent* here." It does not turn into a stop.
+       - After a pause the session's row says "Paused" with **Resume**; the tile's Health word changes
+         only when the host's next figures say so.
+    8. **Move here / away (#1146).** A reserved place after Relieve, shown only once the host offers
+       it. Until then nothing is shown and no space is kept.
+    9. **The page.** One line heads the list: "5 machines · 4 online · 1 tight", text only. The
+       "All machines" row does not exist: it is a filter on the Sessions page, not a machine. The
+       machine rows stay online first, then offline (§6.6).
+    10. **Phone, and any width under 900 px.** One column. Header, Health and Actions always show. Can
+        run and Running are disclosure rows: real buttons, `aria-expanded`, closed by default; a
+        machine's open state is kept while the page is shown, and is not saved. A tablet in portrait
+        uses this layout, centred, at most 640 px wide.
+    11. **900 px and wider (iPad landscape, the Windows app, a browser):** the machine list on the left,
+        its rows as above plus the Health word on line 2; the selected machine's tile on the right with
+        Can run and Running open, in two columns. With none selected, the first machine is. The right
+        pane takes the width the rows do not use.
+    12. **Offline.** Header and Forget only; Health reads "Offline · last seen *time*". No earlier
+        figures are shown as current. A machine whose bridge isn't running keeps §6.14's words, with
+        Health hidden.
+    13. **No sessions:** Running reads "No sessions running", and Launch here shows.
+    14. **Loading and refresh.** The tile frame and every section's fixed-height place show at once;
+        nothing pops in (#659). A refresh changes text only, never a section's height, and does not move
+        the person's scroll position or focus.
+    15. **Accessibility.** Each tile is a region named by the machine. Disclosure rows and actions are
+        buttons with accessible names ("Running, 9 sessions, collapsed"). Tab order: Header, Health,
+        Can run, Running, Actions; the Windows app gives each section a UIA name. Text scales to 200%
+        with no clipping; in high contrast every word and icon uses system colours; touch targets are at
+        least 44 px.
+
+    **Tests (each fails without the change):** the Health word and icon for each of the four states in
+    all three colour modes; a missing figure is omitted, not "0"; Tight with 0, 1 and 3 or more
+    sessions; Relieve hidden when Healthy, Not measured, View only and Offline; Relieve confirmation
+    names only the title and focuses Cancel; Cancel and Escape change nothing; "All machines" absent;
+    900 px layout switch at 899 and 900; disclosure state per machine; no height change on refresh;
+    UIA names and tab order in the Windows app; the same host record gives the same words on the PWA
+    and the Windows app.
+
 ### 6.7 Collaborators (#519)
 
 A collaborator is another GitHub account linked to yours (`agent-principals.md`, #522). Their
