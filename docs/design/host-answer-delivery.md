@@ -856,7 +856,10 @@ Rules:
      before slice 6 ships.** Until then, slice 6 can be built and reviewed but not merged.
 2. **Steady double reads per frame.** #1137 adds the first part: a read that does not show the form
    at the next field is read again at each poll for up to 2 s (`FormRecheck`) before a refusal.
-   Keys go only when a read positively shows the form. This design extends that so settling
+   Keys go only when a read positively shows the form. A refused write's re-read runs once per
+   write from its first refusal (not from when it queued for the typing slot): 2 s, and while the
+   screen keeps changing up to 8 s more (`BusyScreenWait`), so at most 10 s of the typing slot (#1497).
+   This design extends that so settling
    compares the frame only, so a spinner elsewhere does not hold the Enter. The bound is up to 3 s
    per field, then up to 3 more tries before pausing (state "paused", not "failed").
 3. **A normalised comparison of the card against the screen.** #1137 does the first step: the
