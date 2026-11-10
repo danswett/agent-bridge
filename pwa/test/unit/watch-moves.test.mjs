@@ -5,9 +5,10 @@ import { watchMoves } from '../../js/ui/session-card.js';
 // A conversation that scrolls (scroller) holding a question (holder) with one answer (button), on
 // a page whose frames, resize reads and scroll events the test hands out itself. It doesn't lay
 // anything out: where things are is what the test says.
-function page() {
+function page({ answers = true } = {}) {
   const frames = [];
   const on = {};
+  let styleReads = 0;
   let resized = null;
   globalThis.ResizeObserver = class {
     constructor(cb) { resized = cb; }
@@ -21,7 +22,7 @@ function page() {
     requestAnimationFrame: (fn) => frames.push(fn),
     addEventListener: (type, fn) => { on[type] = fn; },
     removeEventListener() {},
-    getComputedStyle: () => ({ position: 'static', overflowAnchor: 'auto' }),
+    getComputedStyle: () => { styleReads += 1; return { position: 'static', overflowAnchor: 'auto' }; },
   };
   // No layout to ask whether the browser anchors: as WebKit, it doesn't.
   const doc = { defaultView: win, createElement() { throw new Error('no layout'); } };
@@ -33,8 +34,9 @@ function page() {
   scroller.contains = (el) => el === scroller || holder.contains(el);
   holder.parentElement = scroller;
   let moves = 0;
-  const watcher = watchMoves({ holder, controls: () => [button], moved: () => { moves += 1; } });
+  const watcher = watchMoves({ holder,   controls: () => (answers ? [button] : []), moved: () => { moves += 1; } });
   return {
+      styleReads: () => styleReads,
     at,
     win,
     holder,
@@ -209,4 +211,14 @@ test('what the conversation shows growing as the person types, its clamp\'s scro
   p.at.top += 20;
   p.read([p.holder, p.scroller]);
   assert.equal(p.moves(), 1);
+});
+test('scrolling a conversation with no answer on screen reads no styles or layout (#1684)', () => {
+  const p = page({ answers: false });
+  p.read();
+  const before = p.styleReads();
+  for (let top = 100; top < 2000; top += 20) {
+    p.scroller.scrollTop = top;
+    p.scroll();
+  }
+  assert.equal(p.styleReads(), before);
 });

@@ -327,6 +327,10 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
   if (live) { track(); }
   const scrolled = (e) => {
     if (!e.target?.contains?.(holder) || !was) { return; }
+    // No answer on screen (most of the time): nothing under a pointer to protect, so no style,
+    // layout or hit-test reads per scroll event (#1684: they stalled a long conversation's scroll
+    // on a phone). A question that appears later is found as new by its own read.
+    if (!was.length) { return; }
     const by = scrolledBy(wasBy);
     const since = scrolledSince(by);
     // Held elsewhere now (moved to another page): left for the next read.
