@@ -129,3 +129,17 @@ _LogOperation
 | where TimeGenerated > ago(7d) and Category == "Ingestion"
 | where Detail has "OverQuota" or Operation has "Data collection"
 | project TimeGenerated, Operation, Level, Detail
+
+// ==== logcap-80: today's billable ingestion above 80% of the daily cap; returns one row when it is (A-LOGCAP)
+// The alert uses this text with capGb set from logDailyCapGb (infra/main.bicep). It counts from
+// midnight UTC; if the workspace's cap resets at another hour (Usage and estimated costs), the
+// alert still warns, a little early or late. Usage lags ingestion by up to an hour.
+let capGb = 0.1;
+Usage
+| where TimeGenerated >= startofday(now()) and IsBillable == true
+| summarize IngestedGb = sum(Quantity) / 1024.0
+| where IngestedGb > 0.8 * capGb
+
+// ==== logcap-overquota: collection stopped because the daily cap was reached; returns a row per event (A-LOGCAP)
+_LogOperation
+| where Category == "Ingestion" and Detail has "OverQuota"

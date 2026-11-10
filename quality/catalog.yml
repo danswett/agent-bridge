@@ -804,8 +804,8 @@ suites:
     select: affected
     platforms: [linux-x64]
     runner: hosted
-    triggers: [infra/**]
-    command: az bicep build -f infra/main.bicep; bash infra/test-rollback-target.sh; bash infra/test-appinsights-wiring.sh
+    triggers: [infra/**, ops/alerts.md, ops/queries/**, ops/tools/test-logcap-alerts.ps1]
+    command: az bicep build -f infra/main.bicep; bash infra/test-rollback-target.sh; bash infra/test-appinsights-wiring.sh; pwsh ops/tools/test-logcap-alerts.ps1
     where: relay.yml infra
     status: exists
 

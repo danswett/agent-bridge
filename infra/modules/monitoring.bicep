@@ -35,6 +35,9 @@ param githubRepository string = 'danswett/agent-bridge'
 @description('A run queued longer than this, in minutes, counts as Actions stalling. Busy hours on the shared runner pool queue runs for a while, so not too low.')
 param githubStallMinutes int = 30
 
+@description('The workspace\'s daily ingestion cap in GB, as main.bicep sets it (A-LOGCAP alerts at 80% of it). A plain number, like 0.1.')
+param logDailyCapGb string
+
 param tags object
 
 var appId = resourceId('Microsoft.App/containerApps', productionAppName)
@@ -491,5 +494,72 @@ resource githubWatchSilent 'Microsoft.Insights/scheduledQueryRules@2022-06-15' =
     actions: { actionGroups: [actionGroup.id] }
   }
 }
+// A-LOGCAP. At the daily cap the workspace stops collecting, which blinds the relay's logs and
+// every log alert for the rest of the day. The queries are the text in ops/queries/relay.kql
+// (the 80% one with the cap from main.bicep), so what a person pastes is what alerts.
+var relayKql = loadTextContent('../../ops/queries/relay.kql')
+var logcap80Query = replace(
+  '// ==== ${first(filter(split(relayKql, '// ==== '), s => startsWith(s, 'logcap-80:')))!}',
+  'let capGb = 0.1;',
+  'let capGb = ${logDailyCapGb};'
+)
+var logcapOverquotaQuery = '// ==== ${first(filter(split(relayKql, '// ==== '), s => startsWith(s, 'logcap-overquota:')))!}'
+
+resource logCapNear 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
+  name: 'A-LOGCAP 80 percent of the daily cap'
+  location: location
+  tags: tags
+  kind: 'LogAlert'
+  properties: {
+    description: 'Today\'s billable Log Analytics ingestion passed 80% of the ${logDailyCapGb} GB daily cap. At the cap, logs and log alerts go blind until the reset. Runbook: ops/runbooks/log-cap.md'
+    severity: 2
+    enabled: true
+    scopes: [appInsights.properties.WorkspaceResourceId]
+    evaluationFrequency: 'PT15M'
+    windowSize: 'P1D'
+    criteria: {
+      allOf: [
+        {
+          query: logcap80Query
+          timeAggregation: 'Count'
+          operator: 'GreaterThan'
+          threshold: 0
+          failingPeriods: { numberOfEvaluationPeriods: 1, minFailingPeriodsToAlert: 1 }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: { actionGroups: [actionGroup.id] }
+  }
+}
+
+resource logCapStopped 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
+  name: 'A-LOGCAP collection stopped'
+  location: location
+  tags: tags
+  kind: 'LogAlert'
+  properties: {
+    description: 'Log Analytics stopped collecting (OverQuota): the daily cap was reached, so nothing more is ingested until the reset. Runbook: ops/runbooks/log-cap.md'
+    severity: 2
+    enabled: true
+    scopes: [appInsights.properties.WorkspaceResourceId]
+    evaluationFrequency: 'PT15M'
+    windowSize: 'PT1H'
+    criteria: {
+      allOf: [
+        {
+          query: logcapOverquotaQuery
+          timeAggregation: 'Count'
+          operator: 'GreaterThan'
+          threshold: 0
+          failingPeriods: { numberOfEvaluationPeriods: 1, minFailingPeriodsToAlert: 1 }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: { actionGroups: [actionGroup.id] }
+  }
+}
+
 output appInsightsId string = appInsights.id
 output actionGroupId string = actionGroup.id
