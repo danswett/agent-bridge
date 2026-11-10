@@ -74,7 +74,7 @@ public sealed class HandoffAdapterTests : IDisposable
         var replier = new Replier(request =>
         {
             Assert.Equal(Id, request.Id);
-            Assert.Equal(HandoffService.Prompt, request.Text);
+            Assert.Equal($"[Handoff request {request.Request}] {HandoffService.Prompt}", request.Text);
             Assert.True(Guid.TryParse(request.Request, out _));
             source.Set(source.Current with { Activity = new Activity { Turn = "new", ResponseTurn = "new",
                 UserMessage = request.Text, Response = "A delegates words", Source = new ActivitySource { Response = "helper" },
@@ -153,7 +153,7 @@ public sealed class HandoffAdapterTests : IDisposable
         Assert.False(pending.IsCompleted);
 
         source.Set(source.Current with { Activity = new Activity { Turn = "new", ResponseTurn = "new",
-            UserMessage = HandoffService.Prompt, Response = "Delegate only", Source = new ActivitySource { Response = "helper" } } });
+            UserMessage = replier.Request?.Text, Response = "Delegate only", Source = new ActivitySource { Response = "helper" } } });
         await Assert.ThrowsAsync<TimeoutException>(() => pending.WaitAsync(TimeSpan.FromMilliseconds(50)));
         source.Set(source.Current with { Activity = source.Current.Activity with { Own = new OwnActivity { Response = "Main note" } } });
 
@@ -175,12 +175,13 @@ public sealed class HandoffAdapterTests : IDisposable
     {
         var source = new Source(AgentKind.Copilot);
         using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        var pending = new ReplyHandoffAgent(source, new Replier(_ => new ReplyResult(AnswerOutcome.Delivered)))
+        var replier = new Replier(_ => new ReplyResult(AnswerOutcome.Delivered));
+        var pending = new ReplyHandoffAgent(source, replier)
             .AskForNoteAsync(Id, HandoffService.Prompt, stop.Token);
         source.Current = source.Current with { Activity = new Activity { Turn = "new", ResponseTurn = "new",
             Response = "Cut", ResponseTruncated = true } };
         source.SetUnbudgeted(source.Current with { Activity = source.Current.Activity with {
-            UserMessage = HandoffService.Prompt, Response = "Complete note", ResponseTruncated = null } });
+            UserMessage = replier.Request?.Text, Response = "Complete note", ResponseTruncated = null } });
 
         Assert.Equal("Complete note", await pending.WaitAsync(stop.Token));
     }
@@ -204,10 +205,11 @@ public sealed class HandoffAdapterTests : IDisposable
     sealed class Replier(Func<ReplyRequest, ReplyResult> answer) : ISessionReplier
     {
         public int Calls;
+        public ReplyRequest? Request;
         public bool Available => true;
         public Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken cancellationToken = default, DeliveryWatch? watch = null)
         {
-            Calls++;
+            Calls++; Request = request;
             return Task.FromResult(answer(request));
         }
     }

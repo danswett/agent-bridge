@@ -153,7 +153,8 @@ summaries, not an inferred completion claim or an exhaustive diff. It reads at m
 The original transcript and artifacts remain untouched.
 
 `ReplyHandoffAgent` sends an idle session's prompt through `ISessionReplier`, never a second
-writer. It observes session changes until a new matching turn has a complete main-agent response;
+writer. It includes a unique request marker in the prompt and waits for that exact prompt's new
+turn to have a complete main-agent response, even if an earlier handoff appears late in the cache;
 old responses and delegate-only text cannot confirm a note. Delivery refusals, questions,
 attention and cancellation stop it without retrying delivery or answering any prompt.
 

@@ -57,7 +57,9 @@ public sealed class ReplyHandoffAgent(ISessionSource source, ISessionReplier rep
                 throw new InvalidOperationException("handoff requires an idle supported agent with no question waiting");
             }
             cancellationToken.ThrowIfCancellationRequested();
-            var result = await replier.ReplyAsync(new ReplyRequest { Id = sessionId, Request = Guid.NewGuid().ToString("D"), Text = prompt },
+            var request = Guid.NewGuid().ToString("D");
+            var text = $"[Handoff request {request}] {prompt}";
+            var result = await replier.ReplyAsync(new ReplyRequest { Id = sessionId, Request = request, Text = text },
                 cancellationToken: cancellationToken).WaitAsync(cancellationToken);
             if (result.Outcome != AnswerOutcome.Delivered) { throw new InvalidOperationException(result.Reason ?? "the handoff prompt was not confirmed delivered"); }
             while (true)
@@ -70,7 +72,7 @@ public sealed class ReplyHandoffAgent(ISessionSource source, ISessionReplier rep
                 }
                 var activity = session.Activity;
                 if (session.Status == SessionStatus.Idle && activity.Turn is { } turn && turn != before.Activity.Turn
-                    && activity.ResponseTurn == turn && CopilotReply.Matches(activity.UserMessage ?? "", prompt))
+                    && activity.ResponseTurn == turn && CopilotReply.Matches(activity.UserMessage ?? "", text))
                 {
                     // A delegate's top-level response is not the main agent's answer.
                     var own = activity.Source?.Response is null;
