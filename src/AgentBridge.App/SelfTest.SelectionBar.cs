@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Shapes;
 using Windows.UI;
 
@@ -19,6 +20,7 @@ static partial class SelfTest
             VerticalAlignment = VerticalAlignment.Top,
             SelectionMode = ListViewSelectionMode.Single,
             SingleSelectionFollowsFocus = false,
+            ItemContainerTransitions = new TransitionCollection(),
             ItemContainerStyle = window.Sessions.Rows.ItemContainerStyle
         };
         var items = new[] { 28, 48, 64, 96 }.Select(height => new ListViewItem
@@ -77,21 +79,30 @@ static partial class SelfTest
             if (candidates.Count == 0) { return []; }
             // Native chrome retains hidden Borders and animates a transition target, not Opacity.
             // Count only a bar whose paint is present in the captured row.
-            var picture = await PicturePixels(item);
-            return candidates.Where(bar =>
+            // The real list disables container transitions too. Capture the fixed viewport,
+            // not a resized item's changing render bounds, and keep sample coordinates with it.
+            var samples = candidates.Select(bar => (Bar: bar, Bounds: bar.TransformToVisual(fixture)
+                .TransformBounds(new Windows.Foundation.Rect(0, 0, bar.ActualWidth, bar.ActualHeight)))).ToList();
+            var picture = await PicturePixels(fixture);
+            return samples.Where(sample =>
             {
-                var bounds = bar.TransformToVisual(item).TransformBounds(new Windows.Foundation.Rect(0, 0, bar.ActualWidth, bar.ActualHeight));
+                var (bar, bounds) = sample;
                 if (bounds.Width <= 0 || bounds.Height <= 0) { return false; }
-                var x = (int)Math.Floor((bounds.X + bounds.Width / 2) * picture.Width / item.ActualWidth);
-                var y = (int)Math.Floor((bounds.Y + bounds.Height / 2) * picture.Height / item.ActualHeight);
+                var x = (int)Math.Floor((bounds.X + bounds.Width / 2) * picture.Width / fixture.ActualWidth);
+                var y = (int)Math.Floor((bounds.Y + bounds.Height / 2) * picture.Height / fixture.ActualHeight);
                 if (x < 0 || y < 0 || x >= picture.Width || y >= picture.Height) { return false; }
                 var brush = bar is Border border ? border.Background : ((Rectangle)bar).Fill;
                 var offset = (y * (int)picture.Width + x) * 4;
-                return brush is SolidColorBrush solid && picture.Pixels[offset + 3] == 255
+                var painted = brush is SolidColorBrush solid && picture.Pixels[offset + 3] == 255
                     && Math.Abs(picture.Pixels[offset] - solid.Color.B) <= 2
                     && Math.Abs(picture.Pixels[offset + 1] - solid.Color.G) <= 2
                     && Math.Abs(picture.Pixels[offset + 2] - solid.Color.R) <= 2;
-            }).ToList();
+                if (!painted)
+                {
+                    AppLog.Write($"self-test: selection bar sample at {x},{y} in {picture.Width}x{picture.Height}, bounds {bounds}, row {item.ActualWidth}x{item.ActualHeight}: painted #{picture.Pixels[offset + 3]:X2}{picture.Pixels[offset + 2]:X2}{picture.Pixels[offset + 1]:X2}{picture.Pixels[offset]:X2}, brush {(brush as SolidColorBrush)?.Color}");
+                }
+                return painted;
+            }).Select(sample => sample.Bar).ToList();
         }
 
         async Task<int> BarCount()
