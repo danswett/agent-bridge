@@ -845,6 +845,7 @@ async Task<int> ServeAsync(HostHandover handover)
     var backoff = new ReconnectBackoff();
     var reconnects = 0;
     var since = Stopwatch.StartNew();
+    var attempt = new Stopwatch();
     while (!stop.IsCancellationRequested)
     {
         var account = identity.Account;
@@ -867,7 +868,9 @@ async Task<int> ServeAsync(HostHandover handover)
         try
         {
             control.SetRelay(RelayState.Connecting, reconnects > 0 ? $"reconnecting (attempt {reconnects})" : null);
+            attempt.Restart();
             await using var relay = await RelayClient.ConnectAsync(relayUri, account.Token, identity.Key, name, "host", current.Token);
+            diagnosticsJournal.Record(JournalEvents.RelayConnected(attempt.Elapsed, HostVersion()));
             var hub = new ChannelHub(relay, identity.Key, name, "host", trustedPeers.Allows)
             {
                 JsonOptions = ProtocolJson.Options,
@@ -895,6 +898,7 @@ async Task<int> ServeAsync(HostHandover handover)
             since.Restart();
             await relay.Completion.WaitAsync(current.Token);
             (endedWith, endedWhy) = ((int?)relay.CloseStatus, relay.CloseReason);
+            diagnosticsJournal.Record(JournalEvents.RelayClosed(endedWith, since.Elapsed, HostVersion()));
             Log($"connection ended after {since.Elapsed.TotalMinutes:F1} min: {(int?)relay.CloseStatus} {relay.CloseReason}");
             if ((int?)relay.CloseStatus == CloseCodes.Replaced)
             {
@@ -911,6 +915,7 @@ async Task<int> ServeAsync(HostHandover handover)
         catch (OperationCanceledException) when (current.IsCancellationRequested) { reconnects = 0; continue; }
         catch (RelayRefusedException e) when (e.Code is CloseCodes.AuthFailed or CloseCodes.ProofFailed)
         {
+            diagnosticsJournal.Record(JournalEvents.RelayConnectFailed(e, e.Code, attempt.Elapsed, HostVersion()));
             Log($"refused: {e.Message}; sign in again");
             control.SetRelay(RelayState.Refused, $"the relay refused this device's sign-in ({e.Message}); sign in again");
             if (!await WaitForSignInAsync()) { break; }
@@ -925,6 +930,7 @@ async Task<int> ServeAsync(HostHandover handover)
         {
             // A relay restarting before ready (1012) still spreads this retry, as after one.
             if (e is RelayRefusedException refused) { (endedWith, endedWhy) = (refused.Code, refused.Reason); }
+            diagnosticsJournal.Record(JournalEvents.RelayConnectFailed(e, (e as RelayRefusedException)?.Code, attempt.Elapsed, HostVersion()));
             Log($"connection failed: {e.GetType().Name}: {e.Message}");
             control.SetRelay(RelayState.Connecting, $"connection failed: {e.Message}");
         }
