@@ -98,6 +98,17 @@ export function setTime(slot, iso) {
   if (openFor === b) { open(b, pinned); }
 }
 
+// Capture before hiding: browsers may clear activeElement as soon as its message disappears.
+export function holdTimeFocus(slot) {
+  if (!slot.contains(slot.ownerDocument.activeElement)) { return null; }
+  return (stored) => {
+    if (slot.getClientRects().length) { return; }
+    const target = stored.querySelector('.msg-time') ?? stored;
+    if (target === stored) { target.tabIndex = -1; }
+    target.focus({ preventScroll: true });
+  };
+}
+
 // Brings every time under root to its text for `now`; returns the wait before the next could
 // change, or null when none will.
 export function refreshTimes(root, now = Date.now()) {

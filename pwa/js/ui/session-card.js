@@ -50,7 +50,7 @@ import { PromptMemory, disclosureName, promptOrigin } from '../prompt-origin.js'
 import { holdKey } from './hold.js';
 import { CONNECTION_CHANGED } from '../channels.js';
 import { HistoryView, liveMessageTimes } from './history-view.js';
-import { setTime, timeRow, timeTicker } from './message-time-view.js';
+import { holdTimeFocus, setTime, timeRow, timeTicker } from './message-time-view.js';
 import { sentMessage, setSentMessage } from './sent-message.js';
 import { HISTORY, closedQuestionIds } from '../history.js';
 import { MoveStrip } from './move-view.js';
@@ -1529,6 +1529,7 @@ export class SessionCard {
     const e = this.els;
     const s = this.#s;
     const t = this.turns.latest;
+    const focus = [e.userTime, e.promptAge, e.agentAge].map(holdTimeFocus);
     const voice = liveVoice(s);
     const recorded = (kind) => t?.parts.filter((p) => p.kind === kind && p.text).at(-1)?.text;
     e.user.hidden = !!t || !s.activity.userMessage || !!promptOrigin(s);
@@ -1539,6 +1540,13 @@ export class SessionCard {
     e.dropped.hidden = !voice.responseDropped;
     e.agentBlock.hidden = e.response.hidden && e.reasoning.hidden && !voice.responseDropped && !s.activity.currentTool && e.events.hidden;
     e.speaker.hidden = e.agentBlock.hidden;
+    if (t && focus.some(Boolean)) {
+      const stored = [...this.turns.element.children].find((n) => n.dataset.turn === t.id) ?? this.turns.element;
+      const prompt = stored.querySelector('.history-prompt, .prompt-origin') ?? stored;
+      focus[0]?.(prompt);
+      focus[1]?.(prompt);
+      focus[2]?.([...stored.querySelectorAll('.history-block')].at(-1) ?? stored);
+    }
   }
 
   // The machine's capabilities changed (a reconnect to another version of its host).

@@ -2,7 +2,7 @@
 // never while hidden. Fake timers and a fake page stand in for the clock.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { setTime, timeTicker } from '../../js/ui/message-time-view.js';
+import { holdTimeFocus, setTime, timeTicker } from '../../js/ui/message-time-view.js';
 
 function setup(iso, nowMs) {
   const t = { textContent: '' };
@@ -71,4 +71,20 @@ test('invalidating a focused time hands focus to its stable slot without scrolli
   assert.equal(attrs.role, 'group');
   assert.equal(attrs['aria-label'], 'Sent time unavailable');
   assert.deepEqual(options, { preventScroll: true });
+});
+
+test('a stored latest turn takes its hidden live time focus without scrolling or stealing focus elsewhere', () => {
+  for (const [focused, hidden] of [[true, true], [false, true], [true, false]]) {
+    const button = {};
+    const doc = { activeElement: focused ? button : {} };
+    const previous = doc.activeElement;
+    const slot = { ownerDocument: doc, contains: (el) => el === button, getClientRects: () => hidden ? [] : [{}] };
+    let options;
+    const storedButton = { focus: (opts) => { options = opts; doc.activeElement = storedButton; } };
+    const restore = holdTimeFocus(slot);
+    if (focused && hidden) { doc.activeElement = null; }
+    restore?.({ querySelector: () => storedButton });
+    assert.equal(doc.activeElement, focused && hidden ? storedButton : previous);
+    assert.deepEqual(options, focused && hidden ? { preventScroll: true } : undefined);
+  }
 });

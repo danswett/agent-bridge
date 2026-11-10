@@ -83,15 +83,18 @@ async function liveCard(page, from = 'person', response = 'Done') {
   return view(page, LIVE_ID);
 }
 
-async function recordLive(page, from = 'person', turnId = 'live-time', response = 'Done', replied = REPLIED) {
-  await page.evaluate(async ({ id, from, turnId, sent, replied, response }) => {
+async function recordLive(page, from = 'person', turnId = 'live-time', response = 'Done', replied = REPLIED, question = false) {
+  await page.evaluate(async ({ id, from, turnId, sent, replied, response, question }) => {
     const d = window.agentBridgeDemo;
     d.host.historyTurns.set(id, [{
       id: turnId, at: sent, prompt: { text: 'Again', from },
-      parts: [{ id: 'reply-time', kind: 'response', text: response, at: replied }],
+      parts: [
+        ...(question ? [{ id: 'closed-time', kind: 'question', at: replied, outcome: 'cancelled', question: { id: 'closed-time', kind: 'form', askedAt: replied, message: 'Continue?', fields: [] } }] : []),
+        { id: 'reply-time', kind: 'response', text: response, at: replied },
+      ],
     }]);
     await d.view.history.open(d.host.machine.id, id);
-  }, { id: LIVE_ID, from, turnId, sent: SENT, replied, response });
+  }, { id: LIVE_ID, from, turnId, sent: SENT, replied, response, question });
 }
 
 test('a late recorded live time preserves message order, focus, layout and reading position through refresh', async ({ page }) => {
@@ -178,3 +181,27 @@ test('invalidating a focused recorded time keeps focus local without scrolling, 
   await expect(slot.locator('time')).toHaveAttribute('datetime', recorded);
   expect(await sc.evaluate((el) => el.scrollTop)).toBe(before);
 });
+
+for (const [from, source, target] of [
+  ['person', '.user-message .msg-time', '.history-prompt .msg-time'],
+  ['agent', '.stream > .prompt-origin .msg-time', '.prompt-origin .msg-time'],
+  ['person', '.speaker .msg-time', '.history-block .msg-time'],
+  ['person', '.reply-slot textarea', null],
+]) {
+  test(`a same-turn recorded question preserves ${source} focus without scrolling`, async ({ page }) => {
+    const response = 'Keep reading this recorded answer.\n\n'.repeat(30);
+    const v = await liveCard(page, from, response);
+    await recordLive(page, from, 'live-time', response);
+    await motionsDone(page);
+    await v.locator(source).focus();
+    const sc = v.locator('.stream-scroll');
+    await sc.evaluate((el) => { el.scrollTop = 100; el.dispatchEvent(new Event('scroll')); });
+    const before = await sc.evaluate((el) => el.scrollTop);
+    expect(before).toBe(100);
+    await recordLive(page, from, 'live-time', response, REPLIED, true);
+    const stored = v.locator('.history-turn[data-turn="live-time"]');
+    await expect(stored.locator('.question.resolved')).toHaveCount(1);
+    await expect(target ? stored.locator(target) : v.locator(source)).toBeFocused();
+    expect(await sc.evaluate((el) => el.scrollTop)).toBe(before);
+  });
+}
