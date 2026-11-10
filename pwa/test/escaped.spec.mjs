@@ -30,7 +30,7 @@ async function ask(page, question) {
     const d = window.agentBridgeDemo;
     d.upsert({ ...d.host.get(id), status: 'waiting', statusSince: t, updatedAt: t, question: { ...question, askedAt: t } });
   }, { id: COPILOT, question, t: later() });
-  const q = view(page, COPILOT).locator('.question');
+  const q = view(page, COPILOT).locator('.question:not(.resolved)');
   await expect(q).toHaveAttribute('data-question', question.id);
   await open(page, COPILOT);
   return q;
