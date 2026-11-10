@@ -198,6 +198,74 @@ public sealed partial class ReplyTests : IDisposable
         Assert.Equal("delivered", Ack.GetProperty("outcome").GetString());
     }
 
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public async Task A_split_payload_update_waits_for_matching_state_and_attributes_before_sending(bool stateFirst, bool watched)
+    {
+        await using var c = await Ready();
+        var previous = ha.SendFromCard(Node, "previous message");
+        await Do(c, previous);
+        replied.Clear();
+        var current = ha.SendFromCard(Node, "current message", rid: "r-current");
+        var split = current with
+        {
+            State = stateFirst
+                ? current.State with { Attributes = previous.State.Attributes }
+                : current.State with { State = previous.State.State },
+        };
+        ha.States[current.EntityId] = split.State;
+        if (watched) { c.Observe(split); }
+
+        await Pass(c, 20);
+        await c.DeliveredAsync();
+        await Pass(c);
+
+        Assert.Empty(replied);
+        Assert.False(Detail.TryGetProperty("reply_ack", out _));
+        ha.States[current.EntityId] = current.State;
+        await Do(c, current);
+        await Pass(c, 20);
+        await c.DeliveredAsync();
+        await Pass(c);
+
+        Assert.Equal("current message", Assert.Single(replied).Text);
+        Assert.Equal("r-current", Ack.GetProperty("rid").GetString());
+        Assert.Equal("delivered", Ack.GetProperty("outcome").GetString());
+    }
+
+    [Fact]
+    public async Task Ten_split_payload_updates_are_each_delivered_once_in_order_with_their_own_acknowledgements()
+    {
+        await using var c = await Ready();
+        var previous = ha.SendFromCard(Node, "previous message");
+        await Do(c, previous);
+        replied.Clear();
+        for (var n = 1; n <= 10; n++)
+        {
+            var current = ha.SendFromCard(Node, "message " + n, rid: "r-" + n);
+            c.Observe(current with { State = current.State with { Attributes = previous.State.Attributes } });
+            c.Observe(current);
+            previous = current;
+        }
+        var acks = new List<string>();
+        for (var n = 0; n < 12; n++)
+        {
+            await Pass(c);
+            await c.DeliveredAsync();
+            if (Detail.TryGetProperty("reply_ack", out var ack) && acks.LastOrDefault() != ack.GetProperty("rid").GetString())
+            {
+                Assert.Equal("delivered", ack.GetProperty("outcome").GetString());
+                acks.Add(ack.GetProperty("rid").GetString()!);
+            }
+        }
+
+        Assert.Equal(Enumerable.Range(1, 10).Select(n => "message " + n), replied.Select(r => r.Text));
+        Assert.Equal(Enumerable.Range(1, 10).Select(n => "r-" + n), acks);
+    }
+
     [Fact]
     public async Task A_rid_repeated_after_a_pause_rebuilt_the_card_mid_delivery_is_still_dropped()
     {

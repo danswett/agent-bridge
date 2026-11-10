@@ -53,6 +53,32 @@ public sealed partial class ReplyTests
         Assert.Empty(answered);
     }
 
+    [Fact]
+    public async Task A_split_payload_at_an_open_question_is_not_refused_using_the_previous_messages_identity()
+    {
+        await using var c = await Ready();
+        var previous = ha.SendFromCard(Node, "previous message", driver: "agent");
+        await Do(c, previous);
+        replied.Clear();
+        Idle(question: Pick());
+        await Pass(c);
+        var current = ha.SendFromCard(Node, "current message", driver: "agent", rid: "r-current");
+        var split = current with { State = current.State with { Attributes = previous.State.Attributes } };
+        ha.States[current.EntityId] = split.State;
+
+        await Do(c, split);
+
+        Assert.False(Detail.TryGetProperty("reply_ack", out _));
+        ha.States[current.EntityId] = current.State;
+        await Do(c, current);
+        Assert.True(Detail.TryGetProperty("reply_ack", out _), "The complete payload must receive its own refusal acknowledgement.");
+        Assert.Equal("r-current", Ack.GetProperty("rid").GetString());
+        Assert.Equal("refused", Ack.GetProperty("outcome").GetString());
+        await CardCloses(c);
+        Assert.Empty(replied);
+        Assert.Empty(answered);
+    }
+
     [Theory]
     [InlineData("timeout")]
     [InlineData("other device")]

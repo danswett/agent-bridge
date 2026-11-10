@@ -532,7 +532,13 @@ lock.
 content_type, b64}], driver?}` (not retained) to `copilot/cli/<node>/replypayload/set`, read
 through the reply payload sensor: its state is `at`, the stamp that makes a publish new. A new
 stamp is one reply. One tagged with a `decision_id` is words for a question, used by stage 2 or
-not at all. One whose `images` or `files` hold an entry the connector cannot read, or are not
+not at all. Home Assistant can update the sensor's state and JSON attributes separately, even
+when both use the same MQTT topic. The host waits until the state stamp matches the attributes'
+own `at` before accepting a watch event or a REST observation (#1770). A mixed snapshot is
+logged and deferred, never delivered, acknowledged or marked handled; the complete update
+is still eligible. This also applies while a question is open, so a stale request id cannot
+take the current message's refusal acknowledgement.
+One whose `images` or `files` hold an entry the connector cannot read, or are not
 lists, says `Reply NOT sent` (`The attachment metadata is incomplete; no reply was sent.`) and sends nothing. The
 images are fetched from Home Assistant's image store (`GET /api/image/serve/<id>/original`,
 ids of letters and digits only, at most 25 MiB, above Home Assistant's own 10 MiB upload
