@@ -110,7 +110,9 @@ export class CollapsingFoot {
     this.#wasFull = null;
     this.#shown = {};
     const v = this.#view;
-    for (const p of ['--fy', '--fcovered', '--foot-h']) { v.style.removeProperty(p); }
+    v.style.removeProperty('--foot-h');
+    this.#slot.style.removeProperty('--fy');
+    this.#scroller.style.removeProperty('--fcovered');
     for (const a of ['data-fsolid', 'data-foot']) { v.removeAttribute(a); }
     v.classList.remove('fanimating', 'ffading');
   }
@@ -210,8 +212,8 @@ export class CollapsingFoot {
     const v = this.#view;
     const fy = paused ? 0 : this.#hidden();
     const p = footParts(fy, this.#room, paused ? 0 : this.#fold.last);
-    this.#set('--fy', `${fy}px`);
-    this.#set('--fcovered', `${this.#footH > 0 ? Math.max(this.#barH, this.#footH - fy) : 0}px`);
+    this.#set('--fy', `${fy}px`, this.#slot);
+    this.#set('--fcovered', `${this.#footH > 0 ? Math.max(this.#barH, this.#footH - fy) : 0}px`, this.#scroller);
     if (this.#shown.solid !== p.solid) { this.#shown.solid = p.solid; v.toggleAttribute('data-fsolid', p.solid); }
     if (this.#shown.state !== p.state) { this.#shown.state = p.state; v.dataset.foot = p.state; }
     if (p.solid) { this.#drawCopy(); }
@@ -220,8 +222,8 @@ export class CollapsingFoot {
   // The box's words changed (typed, put in, or sent).
   changed() { if (this.#on) { this.#drawCopy(); } }
 
-  #set(name, value) {
-    if (this.#shown[name] !== value) { this.#shown[name] = value; this.#view.style.setProperty(name, value); }
+  #set(name, value, el = this.#view) {
+    if (this.#shown[name] !== value) { this.#shown[name] = value; el.style.setProperty(name, value); }
   }
 
   #drawCopy() {

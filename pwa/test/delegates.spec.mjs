@@ -1323,7 +1323,7 @@ test.describe('a pending approval as delegates come and go above it', () => {
           const sc = card.querySelector('.stream-scroll');
           const css = v ? getComputedStyle(v) : null;
           return {
-            top: top?.offsetHeight, headH: css?.getPropertyValue('--head-h').trim(), ty: css?.getPropertyValue('--ty').trim(),
+            top: top?.offsetHeight, headH: css?.getPropertyValue('--head-h').trim(), ty: top ? getComputedStyle(top).getPropertyValue('--ty').trim() : undefined,
             scrollTop: sc?.scrollTop, scrollH: sc?.scrollHeight, clientH: sc?.clientHeight, clientW: sc?.clientWidth,
           };
         });

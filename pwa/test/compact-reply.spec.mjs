@@ -54,7 +54,7 @@ const settle = (v) => v.locator('.stream-scroll').evaluate((sc) => new Promise((
 
 // Where the header is: its slide, and the room it folds by.
 const head = (v) => v.evaluate((el) => ({
-  ty: parseFloat(el.style.getPropertyValue('--ty') || '0'),
+  ty: parseFloat(el.querySelector('.session-top').style.getPropertyValue('--ty') || '0'),
   room: el.querySelector('.session-top').offsetHeight - el.querySelector('.session-bar').offsetHeight,
 }));
 
@@ -68,7 +68,7 @@ const scrollTo = (v, y, input = true) => v.locator('.stream-scroll').evaluate((s
 
 // Where the reply area is: its slide (--fy), the room it folds by, and what the view says of it.
 const foot = (v) => v.evaluate((el) => ({
-  fy: parseFloat(el.style.getPropertyValue('--fy') || '0'),
+  fy: parseFloat(el.querySelector('.reply-slot').style.getPropertyValue('--fy') || '0'),
   room: el.querySelector('.reply-slot').offsetHeight - el.querySelector('.reply-bar').offsetHeight,
   state: el.dataset.foot ?? null,
   solid: el.hasAttribute('data-fsolid'),
@@ -329,7 +329,7 @@ test.describe('on a phone', () => {
     // At once: no slide, the box whole in the same frame.
     const at = await v.evaluate((el) => {
       el.querySelector('form.reply textarea').focus();
-      return { fy: el.style.getPropertyValue('--fy'), sliding: el.classList.contains('fanimating') };
+      return { fy: el.querySelector('.reply-slot').style.getPropertyValue('--fy'), sliding: el.classList.contains('fanimating') };
     });
     expect(at).toEqual({ fy: '0px', sliding: false });
     await scrollTo(v, max - 600);
@@ -391,7 +391,7 @@ test.describe('on a phone', () => {
       const slot = el.querySelector('.reply-slot');
       sc.addEventListener('scroll', () => requestAnimationFrame(() => {
         const s = getComputedStyle(slot);
-        resolve({ fading: el.classList.contains('ffading'), props: s.transitionProperty, fy: el.style.getPropertyValue('--fy') });
+        resolve({ fading: el.classList.contains('ffading'), props: s.transitionProperty, fy: slot.style.getPropertyValue('--fy') });
       }), { once: true });
       sc.scrollTo({ top: sc.scrollTop - 40, behavior: 'instant' });
     }));
@@ -452,7 +452,7 @@ test.describe('from 760 px up', () => {
     const v = await session(page);
     await settle(v);
     await scrollTo(v, (await end(v)) - 400);
-    expect(await v.evaluate((el) => [el.style.getPropertyValue('--fy'), el.style.getPropertyValue('--foot-h'), el.dataset.foot ?? null])).toEqual(['', '', null]);
+    expect(await v.evaluate((el) => [el.querySelector('.reply-slot').style.getPropertyValue('--fy'), el.style.getPropertyValue('--foot-h'), el.dataset.foot ?? null])).toEqual(['', '', null]);
     await expect(v.locator('.reply-bar')).toBeHidden();
     await expect(v.locator('.reply-slot')).toHaveCSS('position', 'static');
     const slot = await v.locator('.reply-slot').boundingBox();

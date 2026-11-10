@@ -23,7 +23,7 @@ test('the PWA\'s stylesheet sets no colour of its own: every colour is a generat
 test('every custom property the PWA\'s stylesheet uses is defined, by it or by the generated tokens', () => {
   // A var() naming a token that was renamed or never existed is no colour at all, silently.
   const css = withoutComments(read('pwa/app.css'));
-  const defined = new Set([...`${css}\n${read('pwa/design/tokens.css')}`.matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1]));
+  const defined = new Set([...`${css}\n${read('pwa/design/tokens.css')}`  .matchAll(/(?:@property\s+)?(--[\w-]+)\s*(?::|\{)/g)].map((m) => m[1]));
   const used = new Set([...css.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1]));
   assert.deepEqual([...used].filter((v) => !defined.has(v)), []);
   assert.ok(used.has('--ab-bridge') && used.has('--ab-shell'), 'it does use the tokens');
