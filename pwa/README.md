@@ -378,6 +378,15 @@ names it), with the machine's own `timings` from the result (ms since it receive
 `agentBridgeDemo.timings()`), and each outcome has a line on the console's verbose level.
 None of it is ever sent anywhere.
 
+### Turn timing
+
+`js/turn-clock.js` (#1600) times what the person waits for: from sending a reply to the session
+settling (it was `working`, and is no longer). Only `{ app: 'PWA', ms }` is kept, in the page
+(`TurnClock.recent()`); no text, machine or session id is ever in a record. A second send before the turn settles keeps
+the first start, and a turn open for over an hour is dropped. It is not wired in yet: that needs the send
+path and the sessions page, and the relay call lands after the relay's aggregate store (#1599). It runs in the page that sent the reply; if the page closes, turns
+in flight are lost and nothing else, because no state lives on any machine.
+
 Demo mode plays a machine with progress: `?progress=0` one from before it,
 `?confirmDelay=<ms>` the wait between typing and the outcome (to see Passed to the agent), and
 `host.holdBefore('typing' | 'result')` with `releaseBefore` hold a delivery at a stage for a test.
