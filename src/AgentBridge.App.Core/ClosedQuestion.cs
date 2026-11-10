@@ -10,7 +10,7 @@ public sealed class ClosedQuestion(Question question, Delivery? delivery = null)
 
     public Question Question { get; } = question;
     public bool Approval => Question.Kind == QuestionKind.Approval;
-    public string Heading => Approval ? "Permission request" : Question.Agent is { } agent ? $"{HiddenText.Reveal(agent)} asked" : "Main agent asked";
+    public string Heading => Approval ? "Permission request" : Question.Agent is { } agent ? $"{DelegateLabel.For(null, agent)} asked" : "Main agent asked";
     public string Message => Approval ? ShownText.Reveal(Question.Message.Replace("\r\n", "\n"), rightToLeft: true) : Question.Message;
     public string Summary => delivery is { State: DeliveryState.Done } && QuestionViewModel.OutlivesQuestion(delivery)
         ? QuestionViewModel.Describe(delivery, null).Whole : "Question closed";
@@ -23,6 +23,8 @@ public sealed class ClosedQuestion(Question question, Delivery? delivery = null)
     }
 
     public string ToggleText => Open ? "Hide question" : "Show question";
+
+    internal ClosedQuestion WithQuestion(Question next) => new(next, delivery) { Open = Open };
 }
 
 public sealed record HistoryItem(ConversationBlock? Response, ClosedQuestion? Question);

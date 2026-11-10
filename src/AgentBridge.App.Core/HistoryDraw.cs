@@ -89,7 +89,7 @@ public static class HistoryDraw
             {
                 if (!closed.TryGetValue(q.Id, out var record) || !QuestionViewModel.SaysTheSame(q, record.Question))
                 {
-                    record = new ClosedQuestion(q) { Open = record?.Open ?? false };
+                    record = record is null ? new ClosedQuestion(q) : record.WithQuestion(q);
                     closed[q.Id] = record;
                 }
                 items.Add(new(null, record));
