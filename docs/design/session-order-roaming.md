@@ -41,7 +41,7 @@ Rules:
 | Thing | Roams | Record |
 |---|---|---|
 | Your order: row positions, pins | yes | order record |
-| Group names and membership (#767) | yes | order record |
+| Group names and membership (#767; at most 32 groups) | yes | order record |
 | Sort choice | no, per device | local |
 | This device's order and the active order | no | local |
 | Collapsed state of a group | no | local |
@@ -55,11 +55,20 @@ Hosts never hold the account key. The #1190 send-time rule reads the host's loca
 
 Two sealed records in the roster storage container, ciphertext only to the relay: the order
 record (written rarely) and the marker record (batched). Limits: 64 KiB per sealed object, 1 MiB
-and 30 writes a minute per account, coalesced.
+and 30 writes a minute per account, coalesced. Each synced order (§9) is its own sealed object,
+so Your order never shares its 64 KiB with another order; 8 orders of at most 64 KiB each stay
+inside the 1 MiB account limit.
 
-If the order record would exceed 64 KiB: keep the newest change on this device, show "Not fully
-synced" (§6), and drop nothing silently. Oldest tombstones are collected first. The order record
-keeps at most 1,500 rows and 8 groups.
+Byte budget for one order object (sealed size, after JSON and encryption overhead): at most 100
+bytes per row on average and **500 rows at most**, about 50 KiB; 32 groups (the `ui.md` limit) of up
+to 40 characters, about 6 KiB at worst; the remaining 8 KiB is for tombstones. A row key is a
+machine id plus a session id. The marker record is separate and sized by Engineering (about 60 KiB
+at 1,500 sessions).
+
+If an order would exceed 64 KiB: tombstones older than 30 days go first, then rows of ended
+sessions, oldest first. If it still does not fit, keep the newest change on this device, show "Not
+fully synced" (§6), and drop nothing else silently. Rows past 500 live only on this device and sort
+below the synced rows in their group.
 
 ## 5. Merge (the function S1 builds, with test vectors)
 
@@ -99,7 +108,7 @@ announced.
 ## 8. Read state (visible behaviour)
 
 1. A session is read when it is open, visible and focused and the newest main-agent message (#521)
-   has been on screen for about 1 s.
+   has been on screen for about 1 s. The dwell reads an injected clock; tests advance it and never sleep.
 2. Reading never answers a Needs-you item.
 3. The unread dot and Activity update fade with `value`. No row move, no announcement.
 4. A session seen for the first time starts read.
