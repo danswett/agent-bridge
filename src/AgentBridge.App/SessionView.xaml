@@ -33,6 +33,23 @@
                 <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" Text="{x:Bind Line, Mode=OneWay}" Visibility="{x:Bind local:Ui.Show(HasLine), Mode=OneWay}" />
             </Grid>
         </DataTemplate>
+
+        <!-- A message's time (#1619, §6.4): the relative or clock text, with the exact time with seconds as
+             the tooltip (hover, keyboard focus), the tap/click popover and the fixed accessible name. -->
+        <DataTemplate x:Key="MessageTimeTemplate" x:DataType="core:MessageStamp">
+            <Button
+                Style="{StaticResource AbTimeButton}"
+                AutomationProperties.Name="{x:Bind Exact}"
+                AutomationProperties.AutomationId="MessageTime"
+                ToolTipService.ToolTip="{x:Bind Exact}">
+                <TextBlock Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind Text}" />
+                <Button.Flyout>
+                    <Flyout>
+                        <TextBlock Style="{StaticResource AbTypeMeta}" IsTextSelectionEnabled="True" Text="{x:Bind Exact}" />
+                    </Flyout>
+                </Button.Flyout>
+            </Button>
+        </DataTemplate>
     </UserControl.Resources>
 
     <Grid x:Name="ViewRoot">
@@ -335,8 +352,13 @@
                         <ItemsRepeater.ItemTemplate>
                             <DataTemplate x:DataType="core:HistoryRow">
                                 <StackPanel Spacing="8" AutomationProperties.AutomationId="HistoryTurn">
-                                    <TextBlock Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind PromptLabel}" Visibility="{x:Bind local:Ui.Some(PromptLabel)}" />
+                                    <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind local:Ui.Some(PromptLabel)}">
+                                        <TextBlock Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind PromptLabel}" />
+                                        <ContentControl IsTabStop="False" Content="{x:Bind PromptBeside}" ContentTemplate="{StaticResource MessageTimeTemplate}" />
+                                    </StackPanel>
                                     <TextBlock Style="{StaticResource AbTypeRow}" TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind Prompt}" Visibility="{x:Bind local:Ui.Some(Prompt)}" />
+                                    <ContentControl IsTabStop="False" HorizontalAlignment="Right" MinHeight="20" Content="{x:Bind PromptUnder}" ContentTemplate="{StaticResource MessageTimeTemplate}" Visibility="{x:Bind local:Ui.Some(Prompt)}" />
+                                    <ContentControl IsTabStop="False" HorizontalAlignment="Left" Content="{x:Bind Reply}" ContentTemplate="{StaticResource MessageTimeTemplate}" />
                                     <ItemsRepeater ItemsSource="{x:Bind Blocks}">
                                         <ItemsRepeater.Layout>
                                             <StackLayout Orientation="Vertical" Spacing="8" />

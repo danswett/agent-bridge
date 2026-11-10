@@ -1219,6 +1219,35 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   own. "Main agent" only where the host says whose the words are (`activity.source`, `own`
   or a delegate list); otherwise the label is the agent's name ("Claude"), as such a host may
   send a delegate's words as the response.
+- **Time on messages** (#1619). Every message says when it was sent, from the times the
+  history already holds; no protocol change. Seven rules, one formatter per app, one shared
+  test table:
+  1. *Which time.* When it was sent, never when it was received or drawn. A prompt takes its
+   turn's time; a reply, its first response part's.
+  2. *Reading it.* Under 10 s `just now`; 10 to 59 s `Ns ago`; 1 to 59 min `N min ago`,
+   rounded down. The relative window wins over the calendar day (11:50 PM reads
+   `20 min ago` at 12:10 AM). From 60 min, the viewer's local clock time (`7:41 PM`),
+   with the date for another day (`Nov 9, 7:41 PM`) and the year for another year. Clock
+   and date order follow the viewer's locale. A time ahead of this machine's clock reads
+   `just now`, never a future time.
+  3. *The exact time.* The local date and time with seconds and the offset (`Mon Nov 9, 2026,
+   7:41:07 PM UTC-08:00`; an offset, as a Windows zone name gives no reliable initials).
+   Hover and keyboard focus show it as a tooltip, and a click or tap opens a small
+   popover; neither moves the message. The accessible name is the exact time, fixed, so a
+   screen reader never hears it tick. The time is a button, in reading order after the
+   sender, with a 44 px target that does not grow the row.
+  4. *Where.* On the label line after the sender for an agent's reply and any prompt you
+   didn't type. For your own prompt, in a meta row under it at the trailing edge, a row
+   that always exists, so a time arriving later pushes nothing.
+  5. *Refresh.* The text changes once a second only while a visible message is under a minute
+   old, otherwise once a minute, and is worked out again when shown. Nothing refreshes
+   while hidden. Changing text must not reflow the label line.
+  6. *No time yet.* The live latest exchange shows none until its history arrives. An
+   unreadable turn, and a question with no outcome time, show none. A time is never
+   guessed.
+  7. *Never order.* Time is a label. Order is by time sent (#1613) and no time moves a message.
+
+  Closed-question and delegate lines move to the same formatter (#1601, #661).
 - **Delegate events** (#661, built in the PWA and the Windows app). A past-tense record of the main agent's own delegates starting and reporting back. The strip, the Delegates tab and
   the chips (§6.3) are the present tense and the only live status, and the
   inspector holds the detail, so a line never says a delegate is working and never shows the

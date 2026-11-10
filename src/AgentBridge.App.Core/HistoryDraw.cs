@@ -4,7 +4,20 @@ namespace AgentBridge.App.Core;
 
 // One stored turn as the conversation draws it (ui.md 6.4 History, H0): what started it, the main
 // agent's response as blocks, and a meta line when the turn could not be read in full.
-public sealed record HistoryRow(string Id, string? PromptLabel, string? Prompt, IReadOnlyList<ConversationBlock> Blocks, string? Note);
+public sealed record HistoryRow(string Id, string? PromptLabel, string? Prompt, IReadOnlyList<ConversationBlock> Blocks, string? Note, HistoryTimes? Times = null)
+{
+    // Where each time is drawn (ui.md 6.4 Time on messages): a prompt you didn't type has its time on
+    // its label line, yours under it at the trailing edge; the reply's is above its text. Null draws nothing.
+    public MessageStamp? PromptBeside => PromptLabel is null ? null : Times?.Prompt;
+    public MessageStamp? PromptUnder => PromptLabel is null ? Times?.Prompt : null;
+    public MessageStamp? Reply => Times?.Reply;
+}
+
+// A message's time as drawn, and its exact local time with seconds: what a tap, hover or focus
+// reveals, and the accessible name (fixed, so a screen reader never hears it tick).
+public sealed record MessageStamp(string Text, string Exact);
+
+public sealed record HistoryTimes(MessageStamp? Prompt, MessageStamp? Reply);
 
 // What the pane draws from SessionHistory, read-only (#292 W2a): the stored turns oldest first, at
 // most HistoryLimits.Kept of them, without the latest exchange the pane already draws from the live card.
@@ -19,25 +32,28 @@ public static class HistoryDraw
 
     // The turns to draw. The newest held turn is the live exchange when its prompt is the card's
     // (the card draws it, so it is not drawn twice); no live prompt, as for a session just begun, drops nothing.
-    public static IReadOnlyList<HistoryRow> Rows(IReadOnlyList<HistoryTurn> turns, string? livePrompt)
+    public static IReadOnlyList<HistoryRow> Rows(IReadOnlyList<HistoryTurn> turns,     string? livePrompt, MessageClock? clock = null)
     {
+            clock ??= MessageClock.Local;
         var count = turns.Count;
         if (count > 0 && !string.IsNullOrWhiteSpace(livePrompt) && turns[^1].Prompt is { } last && last.Text.Trim() == livePrompt.Trim()) { count--; }
         var from = Math.Max(0, count - HistoryLimits.Kept);
         var rows = new List<HistoryRow>(count - from);
-        for (var i = from; i < count; i++) { rows.Add(Row(turns[i])); }
+        for (var i = from; i < count; i++) { rows.Add(Row(turns[i], clock)); }
         return rows;
     }
 
-    static HistoryRow Row(HistoryTurn turn)
+    static HistoryRow Row(HistoryTurn turn, MessageClock clock)
     {
         if (turn.Unreadable == true) { return new(turn.Id, null, null, [], Unreadable); }
         var blocks = new List<ConversationBlock>();
         var cut = turn.Truncated == true || turn.Prompt?.Truncated == true;
+        DateTimeOffset? replyAt = null;
         foreach (var part in turn.Parts)
         {
             if (part.Kind != HistoryPartKind.Response || string.IsNullOrEmpty(part.Text)) { continue; }
             cut |= part.Truncated == true;
+            replyAt ??= part.At;
             blocks.AddRange(MarkdownModel.Parse(part.Text).Select(b => new ConversationBlock(b)));
         }
         var label = turn.Prompt?.From switch
@@ -47,7 +63,9 @@ public static class HistoryDraw
             UserMessageFrom.Other => "Automatic prompt",
             _ => null,
         };
-        return new(turn.Id, label, turn.Prompt?.Text, blocks, cut ? CutShort : null);
+        // A prompt has no time of its own and takes its turn's; a reply takes its first part's.
+        var times = new HistoryTimes(turn.Prompt is null ? null : clock.Stamp(turn.At), replyAt is { } at ? clock.Stamp(at) : null);
+        return new(turn.Id, label, turn.Prompt?.Text, blocks, cut ? CutShort : null, times);
     }
 
     // The one meta line above the stored turns: what the history holds, or why it holds nothing.

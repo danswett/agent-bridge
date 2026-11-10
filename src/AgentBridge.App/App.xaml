@@ -134,6 +134,17 @@
                 <Setter Property="Background" Value="{ThemeResource SubtleFillColorTransparentBrush}" />
                 <Setter Property="CornerRadius" Value="{StaticResource AbRadiusControl}" />
             </Style>
+            <!-- A message's time (#1619): looks like the meta text beside it; the 44 px target comes from
+                 padding that the negative margin takes back, so the row does not grow. -->
+            <Style x:Key="AbTimeButton" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+                <Setter Property="Padding" Value="8,14" />
+                <Setter Property="Margin" Value="-8,-14" />
+                <Setter Property="MinHeight" Value="0" />
+                <Setter Property="MinWidth" Value="0" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Background" Value="{ThemeResource SubtleFillColorTransparentBrush}" />
+                <Setter Property="CornerRadius" Value="{StaticResource AbRadiusControl}" />
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>
