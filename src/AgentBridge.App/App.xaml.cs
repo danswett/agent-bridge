@@ -212,7 +212,13 @@ public partial class App : Application
             autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write, PackageProcesses.Others, ui: ui, preflight: InstallBlockers.Find)
             {
                 WindowOpen = () => shownIn.IsOpen,
+                // After an update that took, the new host is watched for ten minutes (#1308).
+                Watch = announced is { Took: true }
+                    ? new HostWatch(() => connection.Status?.Relay.State, () => manager.StartFailures,
+                        HostWatch.Healthz(() => connection.Status?.Relay.Url, new HttpClient { Timeout = TimeSpan.FromSeconds(10) }))
+                    : null,
             };
+            _ = autoUpdater.WatchHostAsync();
             // The banner's Restart to update, and Settings' (#516): the updater's changes come on
             // whichever thread made them.
             var appUpdate = AppUpdateViewModel.For(autoUpdater);

@@ -275,3 +275,14 @@ Until a release carrying this new asset is actually published, the adapter
 fails closed. Engineering must review the source/trust and build publication
 path before readiness; this draft is not permission to bootstrap a live policy,
 deploy or apply an update.
+
+## Watching the host after an update (#581 S1, #1308)
+
+`HostWatch` (`AgentBridge.App.Core`) runs in the app an update started, for 10 minutes on an injected
+`TimeProvider`. Its seams are the host's relay state, its count of failed starts
+(`HostManager.StartFailures`) and a `GET /healthz` probe of the relay. It ends the watch as failed on
+three failed starts, or when no `Connected` arrives in 10 minutes while the probe answers.
+`AutoUpdater` then records `UpdateOutcome.Failed` with the reason and checks every 5 minutes
+(`CheckAfterFailedHost`) until a newer build is found ready. A host that connects, a relay that does not
+answer and a signed-out host end the watch quietly. There is no protocol change and no automatic
+downgrade (#568).
