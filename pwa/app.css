@@ -286,7 +286,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   }
   /* An installed iPhone can lay the page out a status bar short of the screen (#1620): extend the
      pane by that gap (js/viewport-fit.js), and with the keyboard up keep no home indicator clear. */
-  :root[data-standalone="true"]:is([data-platform="ios"], [data-platform="ipados"]) body[data-page="sessions"][data-session-open="true"] .session-pane {
+  :root[data-standalone="true"][data-platform="ios"] body[data-page="sessions"][data-session-open="true"] .session-pane {
     bottom: calc(-1 * var(--viewport-short, 0px));
   }
   :root[data-keyboard="up"] body[data-page="sessions"][data-session-open="true"] .session-pane { --safe-bottom: 0px; }

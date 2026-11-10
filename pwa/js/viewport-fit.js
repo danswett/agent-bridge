@@ -7,12 +7,14 @@
 
 // A shrunken visual viewport smaller than this is the keyboard, not a pinch or the URL bar.
 const KEYBOARD_MIN = 100;
+const SHORT_MAX = 60;
 
 export function measureViewport({ innerWidth, innerHeight, screen, visualViewport }) {
   const keyboardUp = Boolean(visualViewport) && innerHeight - visualViewport.height > KEYBOARD_MIN;
   // The screen's own height for this orientation: iOS reports screen in portrait terms.
   const screenHeight = innerWidth > innerHeight ? Math.min(screen.width, screen.height) : Math.max(screen.width, screen.height);
-  const short = keyboardUp ? 0 : Math.max(0, Math.round(screenHeight - innerHeight));
+  // A status bar's worth at most: a bigger gap is a windowed iPad (Split View, Stage Manager), not this bug.
+  const short = keyboardUp ? 0 : Math.min(SHORT_MAX, Math.max(0, Math.round(screenHeight - innerHeight)));
   return { short, keyboardUp };
 }
 
