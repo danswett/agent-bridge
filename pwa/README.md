@@ -571,9 +571,12 @@ got there (#1090). It says Copy failed when neither wrote. Inline code has no bu
 What is drawn is what runs (#415, ui.md §6.4, the app's #296): every code block and code span
 reads strictly left to right (`dir="ltr"`, `unicode-bidi: isolate`), with bidi controls,
 zero-width, format and other default-ignorable characters, what draws blank but runs as part of
-a word (every space but U+0020, and U+2800; #546), and right-to-left letters drawn as
+a word (every space but U+0020, and U+2800; #546), combining marks whose base is whitespace
+or a line start (#555), and right-to-left letters drawn as
 `\uXXXX` escapes (`js/hidden-text.js`, the Needs you lane's rule). Copy takes the escapes as
-drawn. A block says what its escapes stand for, beside Copy: "Contains hidden characters",
+drawn. A run of marks on a blank base is all escaped; accents after visible letters stay as
+written. The Needs you lane refuses Approve once for the blank-base marks, including host-written
+escapes, just as the app and host do. A block says what its escapes stand for, beside Copy: "Contains hidden characters",
 "Contains right-to-left text", or both. A bare carriage return (not one of a CRLF), NEL and the
 line and paragraph separators end no line: the parser keeps each in its line as the character it
 is (standing in a private-use character the text does not hold while it parses), so a block can

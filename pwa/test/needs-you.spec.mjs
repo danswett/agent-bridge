@@ -454,6 +454,25 @@ test.describe('what an entry offers', () => {
   const HEBREW = 'echo \u05D0#;\u05D1;rm -rf ~';
   const HEBREW_DRAWN = 'echo \\u05D0#;\\u05D1;rm -rf ~';
 
+  for (const [id, message, shown] of [
+    ['mark-space', 'true \u0307#; echo RAN', 'true \\u0307#; echo RAN'],
+    ['mark-newline', codexSent('echo safe\n\u0307#; echo RAN'), codexSent('echo safe\n\\u0307#; echo RAN')],
+    ['mark-shown', codexSent('true \\u0307#; echo RAN'), codexSent('true \\u0307#; echo RAN')],
+  ]) {
+    test(`a combining mark on a blank base (${id}) is escaped and noted on its card and cannot be approved in the lane`, async ({ page }) => {
+      await openDemo(page);
+      const e = await ask(page, LAND, permission({ id, message }));
+      await expect(e).toHaveAttribute('data-mode', 'open');
+      await expect(e.getByRole('button', { name: /^Approve once/ })).toHaveCount(0);
+      await e.locator('.needs-title').click();
+      const drawn = card(page, LAND).locator('.question-message');
+      await expect(drawn).toBeVisible();
+      expect(await drawn.locator('.md-literal').textContent()).toBe(shown);
+      await expect(drawn.locator('.md-note')).toHaveText(['Contains hidden characters']);
+      expect(await log(page)).toEqual([]);
+    });
+  }
+
   // As a host sends a Codex approval (#209), and as an older host sent it in prose, which is drawn
   // the same way but answered at the machine (its preview could be cut short of what runs).
   test('a Codex approval is drawn on its card escaped and left to right, with Approve once still offered', async ({ page }) => {
