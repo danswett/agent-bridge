@@ -61,7 +61,13 @@ The authoritative list is `sensitive_paths` in `quality/merge-rule.yml`. In plai
 files (`*.csproj`, `*.props`, `*.targets`, `*.slnx`, `nuget.config`, `global.json`),
 `docs/protocol/**`, the protocol, transport, relay, local and injector projects, host
 authorization and call-guard code, the host delivery project, the Windows app's
-remote-action code, and `pwa/css/app.css`. When unsure, assume it is sensitive.
+remote-action code, `pwa/app.css`, anything under `apple/` that is a project, source or
+app file (for example `apple/Sources/**`, `apple/Apps/**`, `apple/Package.swift`), many
+`pwa/js` files (such as `main.js`, `answers.js`, `session-card.js`, `sw.js`, `relay.js`,
+`connection.js`), `pwa/package.json`, and any `src` file whose name contains auth,
+token, secret, trust, roster, permission, identity, install or update. The file is the
+source of truth; when unsure, assume it is sensitive. Most Apple code is therefore
+sensitive and needs two receipts.
 
 ### Machine-free design
 
