@@ -591,17 +591,24 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   .new-session .ab-icon { width: 16px; height: 16px; --ab-icon-stroke: 1.7; }
   .new-session.attention::after { top: -3px; right: -3px; box-shadow: 0 0 0 2px var(--ab-layer); }
 }
-/* The machine tabs (SelectorBar-style): text, the one shown in bold with a Bridge bar under it. */
+/* The machine tabs (SelectorBar-style): text, the one shown in bold with a Bridge bar under it.
+   They never scroll sideways (#351): views.js shows the tabs that fit, and "N more" holds the rest.
+   A name is cut to 128px with an ellipsis; the tab's tooltip and name are the whole of it. */
 .machine-tabs {
-  display: flex; gap: var(--ab-space-5); overflow-x: auto; scrollbar-width: none;
+  position: relative; display: flex; gap: var(--ab-space-5);
   margin: 0 0 var(--ab-space-3); border-bottom: 1px solid var(--ab-stroke2);
 }
-.machine-tabs::-webkit-scrollbar { display: none; }
+.machine-tablist { display: flex; gap: var(--ab-space-5); min-width: 0; }
+.machine-tabs > .row-menu { right: 0; top: calc(100% + 1px); }
 .machine-tab {
-  position: relative; flex: none; min-height: var(--tap); min-width: var(--tap); padding: 0 2px; text-align: center;
+  position: relative; flex: none; max-width: 128px; min-height: var(--tap); min-width: var(--tap); padding: 0 2px; text-align: center;
   font: inherit; font-size: var(--type-row); line-height: var(--type-row-line); color: var(--ab-text2);
   background: none; border: 0; cursor: pointer; white-space: nowrap;
+  display: flex; align-items: center; justify-content: center;
 }
+.machine-tab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.machine-more { max-width: none; }
+.machine-more[aria-expanded="true"] { color: var(--ab-text); }
 .machine-tab:hover { color: var(--ab-text); }
 .machine-tab[aria-selected="true"] { color: var(--ab-text); font-weight: 600; }
 .machine-tab[aria-selected="true"]::after {

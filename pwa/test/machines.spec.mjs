@@ -36,7 +36,13 @@ test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
 test('with more than one machine, every machine is shown at first: one list, newest first, each row naming its machine', async ({ page }) => {
   await openDemo(page);
   await expect(tab(page, 'all')).toHaveAttribute('aria-selected', 'true');
-  await expect(page.locator('#machine-tabs [role="tab"]')).toHaveText(['All', 'Demo machine', 'Laptop', 'DEV-VM1 (shadow)']);
+  // The tabs that fit are drawn; the rest wait under More, and every machine is in one or the other.
+  const shown = await page.locator('#machine-tabs [role="tab"]').evaluateAll((els) => els.map((e) => e.dataset.deviceId));
+  await page.locator('#machine-tabs .machine-more').click();
+  const hidden = await page.locator('#machine-tabs .row-menu [role="menuitem"]').evaluateAll((els) => els.map((e) => e.textContent));
+  expect(shown.length + hidden.length).toBe(4);
+  expect(shown[0]).toBe('all');
+  await page.keyboard.press('Escape');
   await expect(row(page, 'all')).toHaveAttribute('aria-current', 'true');
   await expect(row(page, 'all').locator('.machine-name')).toHaveText('All machines');
   await expect(page.locator('#machine-list li').first()).toHaveAttribute('data-device-id', 'all');
@@ -575,3 +581,32 @@ test('a machine that lets devices sign Copilot in lists who can, read-only, insi
   await expect(rowOf(LAPTOP).locator('.machine-signin button')).toHaveCount(0);
   await expect(rowOf('demo').locator('.machine-signin')).toHaveCount(0);
 });
+for (const width of [390, 900, 1440]) {
+  test(`at ${width}px the machine tabs fit the bar, the rest wait under an "N more" menu, and choosing one there shows it`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await openDemo(page);
+    const bar = page.locator('#machine-tabs');
+    const more = bar.locator('.machine-more');
+    const fits = () => bar.evaluate((el) => el.scrollWidth <= el.clientWidth);
+    expect(await fits()).toBe(true);
+    const shown = await bar.locator('[role="tab"]').count();
+    await expect(more).toHaveText(`${4 - shown} more`);
+    await expect(more).toHaveAttribute('aria-haspopup', 'menu');
+    await expect(more).toHaveAttribute('aria-expanded', 'false');
+    // A name is the whole name and state, whatever is cut.
+    const tabs = bar.locator('[role="tab"]');
+    expect(await tabs.evaluateAll((els) => els.every((e) => e.title && e.title === e.getAttribute('aria-label')))).toBe(true);
+
+    await more.click();
+    await expect(more).toHaveAttribute('aria-expanded', 'true');
+    const items = bar.locator('.row-menu [role="menuitem"]');
+    await expect(items).toHaveCount(4 - shown);
+    await page.keyboard.press('Escape');
+    await expect(more).toHaveAttribute('aria-expanded', 'false');
+
+    await more.click();
+    await items.first().click();
+    await expect(bar.locator('[role="tab"][aria-selected="true"]')).not.toHaveText('All');
+    expect(await fits()).toBe(true);
+  });
+}

@@ -8,14 +8,19 @@ export class RowMenu {
   #el = null;
   #back = null;
   #off = null;
+  #trigger = null;
 
   get open() { return !!this.#el; }
 
   // anchor: the element the menu is drawn in (positioned). items: [{ label, disabled, run }].
   // back: what gets focus when the menu closes.
-  show(anchor, items, { back = null, label = 'Row actions' } = {}) {
+  // trigger: the button that opened it, if it is one (aria-expanded follows the menu, and a press
+  // on it is its own to handle, not an outside press that closes the menu just before it reopens).
+  show(anchor, items, { back = null, label = 'Row actions', trigger = null } = {}) {
     this.close();
     this.#back = back;
+    this.#trigger = trigger;
+    trigger?.setAttribute('aria-expanded', 'true');
     const buttons = items.map((it) => h('button', {
       type: 'button', role: 'menuitem', class: 'row-menu-item', disabled: it.disabled ? true : null,
       onclick: () => { this.close(); it.run(); },
@@ -35,7 +40,7 @@ export class RowMenu {
     anchor.append(el);
     this.#el = el;
     // A press anywhere else closes it, as a native menu does.
-    const outside = (e) => { if (!el.contains(e.target)) { this.close(false); } };
+    const outside = (e) => { if (!el.contains(e.target) && !trigger?.contains(e.target)) { this.close(false); } };
     document.addEventListener('pointerdown', outside, true);
     this.#off = () => document.removeEventListener('pointerdown', outside, true);
     // A row near the foot of a phone's list would put its menu under the bottom navigation, where
@@ -56,6 +61,8 @@ export class RowMenu {
     if (!this.#el) { return; }
     this.#off?.();
     this.#off = null;
+    this.#trigger?.setAttribute('aria-expanded', 'false');
+    this.#trigger = null;
     const had = this.#el.contains(document.activeElement);
     // What was chosen acts at once; the menu fades out where it was.
     leave(this.#el, 'menu');

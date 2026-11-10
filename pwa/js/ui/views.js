@@ -3,6 +3,7 @@ import { h, icon } from './dom.js';
 import { ALL } from '../host-session.js';
 import { SessionCard } from './session-card.js';
 import { RowMenu } from './row-menu.js';
+import { splitTabs } from './machine-tab-fit.js';
 import { SessionOrder } from '../session-order.js';
 import { ReadDwell } from '../read-dwell.js';
 import { ago } from './time.js';
@@ -610,8 +611,8 @@ export class SessionListView {
 // tabs): All, once more than one machine is online or kept on screen, then each online machine,
 // then each machine kept on screen since it left (away: with every machine shown, #269), and a
 // machine still chosen while it is away. Hidden when there is nothing to choose between. Arrow
-// keys, Home and End move between them, choosing as they go, as a SelectorBar does.
-const tabsDrawnAs = new WeakMap();
+// keys, Home and End move between them, choosing as they go, as a SelectorBar does. They never
+// scroll sideways (#351): those that fit show, the rest are under an "N more" menu.
 
 export function renderMachineTabs(bar, { presence, me, current, nameOf = () => null, onSelect, controls = null, away = [], quiet = false }) {
   const hosts = presence.filter((d) => d.id !== me && d.kind === 'host');
@@ -632,49 +633,119 @@ export function renderMachineTabs(bar, { presence, me, current, nameOf = () => n
   // One machine and it is the one shown: there is nothing to choose.
   const show = tabs.length > 1 || (tabs.length === 1 && !chosen(tabs[0]));
   const key = JSON.stringify([show, current, tabs.map((t) => [t.id, t.name, !!t.away])]);
-  if (tabsDrawnAs.get(bar) === key) { return; }
-  tabsDrawnAs.set(bar, key);
+  const s = machineBar(bar);
+  s.onSelect = onSelect;
+  if (s.key === key) { return; }
+  s.key = key;
+  s.menu.close(false);
   // Taken before the bar can hide: a hidden tab loses focus.
-  const had = bar.contains(bar.ownerDocument?.activeElement) ? bar.ownerDocument.activeElement.dataset.deviceId : null;
+  const doc = bar.ownerDocument;
+  const had = bar.contains(doc?.activeElement) ? doc.activeElement : null;
+  s.had = had?.dataset.deviceId ?? (had === s.more ? MORE : null);
   const was = bar.hidden ? null : bar.querySelector('[aria-selected="true"]');
   const from = seen(was);
   bar.hidden = !show;
-  bar.replaceChildren(...tabs.map((t) => {
+  s.tabs = tabs;
+  s.chosen = tabs.findIndex(chosen);
+  s.els = tabs.map((t) => {
     const on = chosen(t);
+    const name = t.away ? `${t.label}, offline` : t.label;
     return h('button', {
       type: 'button', role: 'tab', class: `machine-tab${t.away ? ' away' : ''}`,
       'aria-selected': on ? 'true' : 'false', tabindex: on ? '0' : '-1',
-      'aria-controls': controls, 'aria-label': t.away ? `${t.label}, offline` : t.label,
+      'aria-controls': controls, 'aria-label': name, title: name,
       dataset: { deviceId: t.id, deviceName: t.label },
       // Picked again, a machine that can't be reached is tried again at once.
-      onclick: () => onSelect(t.id),
-    }, t.name);
-  }));
-  if (!bar.querySelector('[tabindex="0"]')) { bar.firstElementChild?.setAttribute('tabindex', '0'); }
+      onclick: () => s.onSelect(t.id),
+    }, h('span', { class: 'machine-tab-name' }, t.name));
+  });
+  layoutMachineTabs(bar, s);
   // Selection (ui.md §5.3): the bar under the tab slides from the one chosen before, or fades in
   // when that one was scrolled out of the bar.
   const now = bar.querySelector('[aria-selected="true"]');
   if (was && now && was.dataset.deviceId !== now.dataset.deviceId) {
     showSelection(now, 'selection', from, { pseudo: '::after', axis: 'x', scaleX: true });
   }
-  // A tab with focus is drawn again with it; when the bar itself went, focus goes to what it
-  // controlled (the sessions), not to the document.
-  if (had && show) { [...bar.children].find((b) => b.dataset.deviceId === had)?.focus(); }
-  if (had && !show) { bar.ownerDocument.getElementById('sessions')?.focus({ preventScroll: true }); }
-  if (!bar.dataset.keys) {
-    bar.dataset.keys = '1';
-    bar.addEventListener('keydown', (e) => {
-      const list = [...bar.querySelectorAll('[role="tab"]')];
-      const i = list.indexOf(e.target);
-      if (i < 0) { return; }
-      const to = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: list.length - 1 }[e.key];
-      if (to === undefined) { return; }
-      e.preventDefault();
-      const next = list[(to + list.length) % list.length];
-      next.focus();
-      next.click();
-    });
+  // When the bar itself went, focus goes to what it controlled (the sessions), not to the document.
+  if (s.had && !show) { doc.getElementById('sessions')?.focus({ preventScroll: true }); s.had = null; }
+}
+
+const MORE = '\0more';
+const machineBars = new WeakMap();
+
+// The bar's parts, made once: the tab list (a tablist holds only tabs, so More sits beside it, not
+// in it), More, and the menu under it. The bar is drawn again when it is resized.
+function machineBar(bar) {
+  let s = machineBars.get(bar);
+  if (s) { return s; }
+  bar.removeAttribute('role');
+  bar.removeAttribute('aria-label');
+  const list = h('div', { class: 'machine-tablist', role: 'tablist', 'aria-label': 'Machines' });
+  s = { key: null, list, more: null, menu: new RowMenu(), tabs: [], els: [], chosen: -1, shown: [], hidden: [], width: -1, had: null, onSelect: () => {} };
+  s.more = h('button', {
+    type: 'button', class: 'machine-tab machine-more', 'aria-haspopup': 'menu', 'aria-expanded': 'false',
+    onclick: () => {
+      if (s.menu.open) { s.menu.close(); return; }
+      s.menu.show(bar, s.hidden.map((t) => ({
+        label: t.away ? `${t.label} · offline` : t.id === ALL ? t.label : `${t.label} · online`,
+        run: () => {
+          s.onSelect(t.id);
+          // Drawn again by now with the machine among the tabs.
+          bar.querySelector(`[role="tab"][data-device-id="${CSS.escape(t.id)}"]`)?.focus();
+        },
+      })), { back: s.more, trigger: s.more, label: 'More machines' });
+    },
+  });
+  bar.replaceChildren(list);
+  machineBars.set(bar, s);
+  bar.addEventListener('keydown', (e) => {
+    const tabs = [...list.querySelectorAll('[role="tab"]')];
+    const i = tabs.indexOf(e.target);
+    if (i < 0) { return; }
+    const to = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: tabs.length - 1 }[e.key];
+    if (to === undefined) { return; }
+    e.preventDefault();
+    const next = tabs[(to + tabs.length) % tabs.length];
+    next.focus();
+    next.click();
+  });
+  if (typeof ResizeObserver === 'function') {
+    new ResizeObserver(() => {
+      if (!bar.hidden && bar.clientWidth !== s.width && s.els.length) { s.menu.close(false); layoutMachineTabs(bar, s); }
+    }).observe(bar);
   }
+  return s;
+}
+
+// Draws the tabs that fit, in order, and More for the rest (machine-tab-fit.js). Every tab is
+// measured at its own width (a name cut at 128 px by CSS), so they go in first and the hidden ones
+// come out. A tab with focus keeps it, or More does when its machine went under it.
+function layoutMachineTabs(bar, s) {
+  const { list, els, more, tabs } = s;
+  const doc = bar.ownerDocument;
+  const focus = s.had ?? (bar.contains(doc.activeElement) ? doc.activeElement.dataset.deviceId ?? (doc.activeElement === more ? MORE : null) : null);
+  els.forEach((el) => { el.style.maxWidth = ''; });
+  list.replaceChildren(...els);
+  more.remove();
+  const room = bar.clientWidth;
+  s.width = room;
+  s.shown = tabs; s.hidden = [];
+  if (bar.hidden || !room) { return; }
+  // Measured with the widest count, so a count that grows a digit cannot push it off the bar.
+  more.textContent = `${Math.max(1, tabs.length - 1)} more`;
+  bar.append(more);
+  const gap = parseFloat(getComputedStyle(bar).columnGap) || 0;
+  const widths = els.map((el) => Math.ceil(el.getBoundingClientRect().width));
+  const split = splitTabs(widths, s.chosen, room, Math.ceil(more.getBoundingClientRect().width), gap);
+  s.shown = split.shown.map((i) => tabs[i]);
+  s.hidden = split.more.map((i) => tabs[i]);
+  list.replaceChildren(...split.shown.map((i) => els[i]));
+  if (split.chosenWidth !== null) { els[s.chosen].style.maxWidth = `${split.chosenWidth}px`; }
+  if (split.more.length) { more.textContent = `${split.more.length} more`; } else { more.remove(); }
+  if (!list.querySelector('[tabindex="0"]')) { list.firstElementChild?.setAttribute('tabindex', '0'); }
+  if (focus === MORE) { (split.more.length ? more : list.querySelector('[tabindex="0"]'))?.focus(); }
+  else if (focus) { [...list.children].find((b) => b.dataset.deviceId === focus)?.focus(); }
+  s.had = null;
 }
 
 // The machines offline, from the relay's roster (docs/protocol/roster.md): not this device,

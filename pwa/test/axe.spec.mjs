@@ -163,6 +163,18 @@ for (const layout of LAYOUTS) {
         await expect(page.locator('#needs-you .needs-you-list > li')).not.toHaveCount(0);
         await check(page, 'the session list with Needs you');
 
+        // The machine tabs that don't fit, and the More menu open (#1324).
+        const more = page.locator('#machine-tabs .machine-more');
+        await expect(more).toHaveText(/^\d+ more$/);
+        await more.click();
+        await expect(page.locator('#machine-tabs .row-menu')).toBeVisible();
+        // Scoped to the bar: the open menu covers part of the list below it, as any menu does.
+        const bar = await scan(page, { include: '#machine-tabs', rules: ['aria-required-children', 'aria-required-parent', 'aria-allowed-role', 'aria-valid-attr-value', 'aria-roles', 'button-name', 'color-contrast', 'nested-interactive'] });
+        expect(bar.failed, 'the machine tabs with More open').toEqual([]);
+        expect(bar.passed.length).toBeGreaterThan(0);
+        await page.keyboard.press('Escape');
+        await expect(page.locator('.row-menu')).toHaveCount(0);
+
         await row(page, COPILOT).locator('.row-main').focus();
         await page.keyboard.press('Shift+F10');
         await expect(page.locator('.row-menu')).toBeVisible();
