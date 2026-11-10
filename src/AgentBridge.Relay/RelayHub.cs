@@ -15,6 +15,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
     // The kinds a person uses. Only these may forget a machine: never a host, which is where an
     // agent acts, nor a test device, nor any kind added later until it is put here.
     static readonly HashSet<string> PersonKinds = ["app", "pwa", "phone"];
+    static readonly JsonSerializerOptions RegistryJson = new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     readonly ConcurrentDictionary<string, ConcurrentDictionary<string, Connection>> accounts = new();
     readonly SessionRegistry registry = new(options.Roster.Time);
     readonly LogSampler socketLog = new(log, options.LogLinesPerMinute, options.LogTime);
@@ -136,7 +137,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             catch (Exception e) when (e is WebSocketException or OperationCanceledException) { }
         }
 
-        public Task SendJsonAsync(object message) => SendAsync(JsonSerializer.SerializeToUtf8Bytes(message), WebSocketMessageType.Text);
+        public Task SendJsonAsync(object message, JsonSerializerOptions? json = null) => SendAsync(JsonSerializer.SerializeToUtf8Bytes(message, json), WebSocketMessageType.Text);
 
         public async Task CloseAsync(int code, string reason)
         {
@@ -402,9 +403,9 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         {
             parts[p]["part"] = p + 1;
             parts[p]["of"] = parts.Count;
-            await conn.SendJsonAsync(parts[p]);
+            await conn.SendJsonAsync(parts[p], RegistryJson);
         }
-        await conn.SendJsonAsync(new { t = "registry", id, known });
+        await conn.SendJsonAsync(new { t = "registry", id, known }, RegistryJson);
     }
 
     // A person's device forgetting one of the account's machines that is gone (docs/protocol/roster.md).

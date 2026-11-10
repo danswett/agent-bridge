@@ -156,7 +156,7 @@ public sealed record HostSettings(bool RemoteApproval)
     // anyway would read a setting meant as off as on.
     static HostSettings Off => Default with
     {
-        RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false }, Push = false, ReadOnly = true,
+        RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false }, Push = false, FleetShare = false, ReadOnly = true,
         Usage = UsageSettings.Default with { Publish = false }, TrustedPeers = true, RemoteManage = false, RestoreOnStart = false, RestoreKept = true,
         EscapedApproval = AgentBridge.Protocol.EscapedApproval.Machine, EscapedApprovalDevices = [],
     };
@@ -264,6 +264,18 @@ public sealed record HostSettings(bool RemoteApproval)
                             _ => throw new JsonException("sessions.restoreOnStart is not true or false"),
                         },
                     };
+                }
+            }
+            if (root.TryGetProperty("fleet", out var fleet))
+            {
+                if (fleet.ValueKind != JsonValueKind.Object) { throw new JsonException("fleet is not an object"); }
+                if (fleet.TryGetProperty("share", out var share))
+                {
+                    settings = settings with { FleetShare = share.ValueKind switch
+                    {
+                        JsonValueKind.True => true, JsonValueKind.False => false,
+                        _ => throw new JsonException("fleet.share is not true or false"),
+                    } };
                 }
             }
             if (!root.TryGetProperty("permissions", out var permissions)) { return (settings, null); }

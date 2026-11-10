@@ -1,9 +1,18 @@
 # Fleet session registry and name lookup
 
-Status: proposed design note (slice 3a of the Home Assistant retirement epic, #1396). Docs only.
+Status: design note (slice 3a of the Home Assistant retirement epic, #1396);
+partially implemented, as recorded below.
 Revised after Engineering and Trust review (PR #1422). Feeds #1400 (roster fields), #1412 (agent
 list operation), #1399 (name lookup) and #1406 (one client protocol). It does not touch the
 messaging cut-over (#728), which stays first.
+
+Implementation update, November 10, 2026 (Pacific), fleet #238: the host now wires the
+#1791 publisher core to each authenticated relay connection, retaining its epoch/sequence
+across reconnects. `fleet.share` is passed explicitly; failed puts use bounded monotonic
+backoff and content-free host status; invalid IDs are skipped and counted. Read replies
+preserve the put path's relaxed escaping and are byte-budget tested. Records are still
+unsigned; signing, name-lookup authority and the 24-hour dual run (slice 11) remain open.
+This is not deployment or live-parity evidence. HA remains the explicit rollback.
 
 All line references are to `main` at 796fbcce1.
 

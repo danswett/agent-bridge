@@ -165,6 +165,7 @@ public sealed class HostControl
             Machine = options.Machine,
             Account = options.Account(),
             Relay = relay,
+            FleetPublication = options.FleetPublication(),
             SignIn = signIn,
             AgentHaBridge = options.AgentHaBridge(),
             HomeAssistant = options.HomeAssistant(),
@@ -189,7 +190,7 @@ public sealed class HostControl
 
     public static HostSettingsView Settings(HostSettings settings, string? name) =>
         new(settings.RemoteApproval, name, settings.Launch.RemoteFolderTrust, settings.Launch.RemoteFolderTrustDevices is { Count: > 0 } d ? d : null, settings.DevBox.KeepAwake,
-            settings.EscapedApproval, settings.EscapedApprovalDevices, settings.PhoneSignIn);
+            settings.EscapedApproval, settings.EscapedApprovalDevices, settings.PhoneSignIn, settings.FleetShare);
 
     // The relay loop reports each change of its connection here.
     public void SetRelay(RelayState state, string? detail = null)

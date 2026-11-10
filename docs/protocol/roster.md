@@ -170,6 +170,14 @@ A host also tells the relay its sessions so one read gives an agent the whole ac
 
 Not yet: `registry-subscribe` / `changed`, a later slice of the design.
 
+The host publishes immediately on each authenticated connection, then polls every two seconds
+with a 20-second heartbeat. Discovery holds publish nothing; `fleet.share=false` explicitly
+publishes an empty list. Invalid session IDs are skipped and counted in `host.status`.
+Failed puts back off to 30 seconds and report closed diagnostics codes, never session content.
+Registry reads use relaxed JSON escaping to keep 64 maximum-length plus names within the
+24 KiB reply-frame budget. Other control messages and the put encoding are unchanged.
+Records remain unsigned display hints; `fleet.find` remains fail-closed.
+
 ## Storage
 
 In memory by default, so a restart forgets every offline machine (online ones are recorded

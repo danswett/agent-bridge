@@ -306,6 +306,7 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `machine` | As in hello: id, name, OS |
 | `account` | `{ login, accountId }` once signed in, else absent |
 | `relay` | `{ state, url?, detail?, since? }`; `state` is `off` (`--local-only`), `signedOut`, `connecting`, `connected` or `refused` (sign in again) |
+| `fleetPublication` | Optional `{ result, skippedInvalidIds, failures, nextRetry?, failure? }`: last registry result (`not-started`, `published`, `sharing-off`, `discovery-held`, `failed`), count skipped in the last examined snapshot, consecutive failures and estimated next retry time. Failure is a closed code (`invalid-snapshot`, `refused`, `timeout`, `transport`), never exception text or session content. Retry waits use monotonic time: 2, 4, 8, 16, then at most 30 seconds; success resets the backoff. Connection state remains in `relay` |
 | `signIn` | `{ state, userCode?, verificationUri?, expiresAt?, error? }`; `state` is `idle`, `pending` or `failed` |
 | `agentHaBridge` | Why answering, replying and stopping are off: agent-ha-bridge runs for this user (design G5). Absent when not |
 | `homeAssistant` | Why the Home Assistant connector is not reaching Home Assistant: it rejected the token, or has banned this machine's address, with what to do and when it is next tried ([ha-connector.md](../ha-connector.md#troubleshooting)). Absent when nothing is refused |
@@ -319,6 +320,9 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `agentInstallation` | Optional `{ agent, inProgress, detail, blocked }`: host-authoritative current or last installation state, recovered on reconnect or by another Settings window. No installer output. A lost request reply does not cancel the operation. WinGet's job cleanup is awaited before admission of another installer and during shutdown/replacement; unconfirmed cleanup sets `blocked` and refuses further installs in this host. Windows deployment services outside the job may already have made partial changes; check installation activity before restarting and retrying |
 | `signInDevices` | **New (#972 slice 2).** Who can sign an agent in on this machine from their device, read-only, for Settings: `{ state: none \| ready \| unreadable, devices: [{ name, kind, platform, thisDevice? }] }`, from the machine's copy of the account's device roster (#55), the same as `signin.devices` ([v1-sessions.md](v1-sessions.md#phone-sign-in-800-slice-2-enabled-per-machine-by-972)). `thisDevice` marks the app's own entry, by the device id it gave `host.relay.account`. Never a device id, key, generation or presence. Absent while this host doesn't run sign-in from devices (the switch off, turned on but not applied until the next start, or unable to run here), and from an older host |
 | `agentVerifications` | Optional current-host-run reports, latest per selected launcher (at most four). Never loaded from disk; absent on older/unsupported hosts |
+
+`settings.fleetShare` reports configured `fleet.share`; changing it requires restart.
+Publication status changes are also announced through `host.subscribe`.
 
 Unknown fields are ignored, and unknown enum values read as the first value listed, as in
 the rest of the protocol.

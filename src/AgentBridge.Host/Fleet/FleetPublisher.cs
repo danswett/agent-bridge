@@ -16,6 +16,7 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
     long sequence;
     long? lastSent;
     string? lastContent;
+    public int SkippedInvalidIds { get; private set; }
 
     // Called at least every two seconds; force the first snapshot on each new connection.
     // Refusals, timeouts and cancellation propagate to the host's diagnostics owner.
@@ -29,15 +30,15 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
             if (share && source.Held is not null) { return false; }
             IReadOnlyList<Session> snapshot = share ? source.Snapshot() : [];
             if (share && source.Held is not null) { return false; }
-            var sessions = snapshot.OrderByDescending(s => s.StatusSince).ThenBy(s => s.Id, StringComparer.Ordinal)
-                .Take(64).Select(s =>
+            var usable = snapshot.Select(s => (Session: s, Node: HaContract.NodeId(s.Id))).Where(entry =>
+                entry.Node["agent_bridge_".Length..] is { Length: 16 } id
+                && id.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f'))).ToArray();
+            SkippedInvalidIds = snapshot.Count - usable.Length;
+            var sessions = usable.OrderByDescending(e => e.Session.StatusSince).ThenBy(e => e.Session.Id, StringComparer.Ordinal)
+                .Take(64).Select(entry =>
                 {
-                    var node = HaContract.NodeId(s.Id);
+                    var (s, node) = entry;
                     var id = node["agent_bridge_".Length..];
-                    if (id.Length != 16 || id.Any(c => c is not (>= '0' and <= '9') and not (>= 'a' and <= 'f')))
-                    {
-                        throw new InvalidDataException("registry publication needs a 16-hex session id");
-                    }
                     var displayName = name?.Invoke(s.Id)?.Trim();
                     return new
                     {
@@ -45,7 +46,7 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
                         state = s.Status, since = s.StatusSince,
                     };
                 }).ToArray();
-            var truncated = snapshot.Count > 64;
+            var truncated = usable.Length > 64;
             int? total = truncated ? snapshot.Count : null;
             var content = JsonSerializer.Serialize(new { truncated, total, sessions }, ProtocolJson.Options);
             if (!force && content == lastContent && elapsed < TimeSpan.FromSeconds(20)) { return false; }

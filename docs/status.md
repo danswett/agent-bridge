@@ -101,6 +101,11 @@ Other raw App/Host task waits are outside this bounded diagnostic slice.
 
 ### Built and merged
 
+Fleet #238 host registry publication is wired with explicit `fleet.share`, bounded failed-put
+backoff, content-free `host.status` and skipped-invalid-ID counts; relay read-side byte
+coverage preserves the 24 KiB budget for maximum plus names. No deployment or live-parity
+claim: records remain unsigned and HA remains the rollback pending the registry dual run.
+
 Fresh Windows hook setup now has an explicit local CLI path (`hooks install|remove`,
 [host-hooks.md](host-hooks.md)) independent of legacy migration. It covers Copilot/Agency,
 Claude and Codex, with ownership checks and a private runtime. Launch workspaces still

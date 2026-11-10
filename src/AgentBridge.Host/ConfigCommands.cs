@@ -28,7 +28,7 @@ public static class ConfigCommands
     static readonly string[] Keys =
     [
         "permissions.remoteApproval", "permissions.trustedPeers", "permissions.remoteManage", "permissions.escapedApproval", "permissions.escapedApprovalDevices", "permissions.phoneSignIn", "push.enabled", "delivery.readOnly",
-        "sessions.restoreOnStart",
+        "sessions.restoreOnStart", "fleet.share",
         "launch.enabled", "launch.defaultWorkspace", "launch.defaultAgent", "launch.permissions",
         "launch.worktrees.root", "launch.worktrees.limit", "launch.worktrees.idleHours",
         "launch.profiles", "launch.defaultProfile", "launch.resumeCount", "launch.remoteFolderTrust", "launch.remoteFolderTrustDevices",
