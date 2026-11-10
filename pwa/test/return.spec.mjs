@@ -242,7 +242,9 @@ test('an offline machine\'s line takes the place of the reply box\'s actions and
   await expect(page.locator('#host-state')).toBeHidden();
 });
 
-test('a question held through a return keeps its row and Needs you\'s count until the grace ends', async ({ page }) => {
+test('a question held through a return keeps its row and Needs you\'s count until the grace ends', async ({ page, browserName }) => {
+  // Quarantined on webkit (#1693, #1692): failed on a PR with no pwa/ change; restore by 2026-11-13.
+  test.skip(browserName === 'webkit', 'flaky on webkit, #1693');
   await openDemo(page);
   const entries = page.locator(`#needs-you .needs-entry[data-host-id="${LAPTOP}"]`);
   await expect(entries).toHaveCount(1);

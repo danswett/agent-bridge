@@ -1432,6 +1432,11 @@ jobs:
           path: ~/.cache/ms-playwright
           key: ${{ steps.browsers.outputs.cache-primary-key }}
       - run: npx playwright test --project="$PROJECT" --shard="$SHARD" --fully-parallel
+      # Every test that failed, then passed on the one WebKit retry (#1692): listed in the run's
+      # summary and as a warning, so a retry never hides a flake. Never fails the job.
+      - name: Flaky report
+        if: ${{ !cancelled() }}
+        run: node tools/flaky-report.mjs playwright-report/report.json --summary "$GITHUB_STEP_SUMMARY"
       # Renders of the demo for design review (pwa/test/renders): captures, not checks, so they
       # never fail the job, and they are kept whatever the tests did. Design signs a state off
       # against what the product draws, and nothing runs on an owner's machine, so CI draws them.

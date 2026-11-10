@@ -699,7 +699,12 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
     UI settlement; it does not extend the wait or replace delivered/byte assertions.
     UI settlement uses the view model's status/tone, independently of the delivery state.
 - **Flakes:** a test that passes and fails on the same code is flaky. It's reported, never
-  silently retried to green. The flake record is the `flaky` label and its issues, one per test,
+  silently retried to green. The one exception is the pwa-ui WebKit shards, which retry a failed
+  test once in CI (Chromium none): a pass on retry is listed on the run's summary and as a
+  warning by `pwa/tools/flaky-report.mjs`, so it is reported, not hidden. A test that flakes more
+  than twice in a week is quarantined with an issue: `test.skip` with the issue number and a
+  restore-by date 3 days out, the `quarantined` label, an owner, as in #1493. The flake record is
+  the `flaky` label and its issues, one per test,
   each with its run links and counts.
   - **The nightly flake hunt** (`flake-hunt`, ring 3, [flake-hunt.yml](../.github/workflows/flake-hunt.yml),
     #509) finds them before they turn a pull request or `main` red. At about 02:30 PT it runs
