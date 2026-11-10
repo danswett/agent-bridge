@@ -79,7 +79,8 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         return new Echo(process.ProcessId, nint.Parse(parts[2], CultureInfo.InvariantCulture), log);
     }
 
-    static T WaitFor<T>(string log, Func<string[], T?> found, int seconds = 15)
+    // 60 s, not 15: a loaded windows-11-arm runner took 11 s for a lone Escape key (#1379).
+    static T WaitFor<T>(string log, Func<string[], T?> found, int seconds = 60)
     {
         var deadline = Stopwatch.StartNew();
         while (true)
@@ -97,7 +98,58 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         }
     }
 
+    // The worker gives a screen read 10 s, and a loaded windows-11-arm runner took longer to start
+    // and attach it, so the read came back with a problem and no rows (#1379). A read types
+    // nothing, so it is safe to ask again until it answers.
+    static async Task<ConsoleScreen> ReadScreen(WorkerInjector injector, int pid)
+    {
+        var deadline = Stopwatch.StartNew();
+        while (true)
+        {
+            var screen = await injector.ReadScreenAsync(pid);
+            if (screen.Rows is not null || deadline.Elapsed > TimeSpan.FromSeconds(90)) { return screen; }
+            await Task.Delay(200);
+        }
+    }
+
+    // The worker gives a widen 10 s, and a loaded runner took longer (#1203, #1199): the answer
+    // was "stopped responding", whatever the console's width. A widen only ever grows the
+    // console, so asking again is safe; every other answer, a refusal included, is final.
+    static async Task<ConsoleWidth> Widen(WorkerInjector injector, int pid, DateTimeOffset createdAt, int columns)
+    {
+        var deadline = Stopwatch.StartNew();
+        while (true)
+        {
+            var width = await injector.WidenAsync(pid, createdAt, columns);
+            if (width.Problem?.Contains("stopped responding", StringComparison.Ordinal) != true || deadline.Elapsed > TimeSpan.FromSeconds(90)) { return width; }
+            await Task.Delay(200);
+        }
+    }
+
     static List<string> Keys(string[] lines) => [.. lines.Where(l => l.StartsWith("key ", StringComparison.Ordinal))];
+
+    // A reply reads the screen first and refuses, typing nothing, when the worker's 10 s read
+    // came back empty on a loaded runner, so the test then waited out its echo log for keys that
+    // were never sent (#1492). A read types nothing, so it is safe to ask again until it answers.
+    sealed class PatientScreens(WorkerInjector inner) : IConsoleInjector
+    {
+        public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default) =>
+            inner.InjectAsync(processId, plan, cancellationToken);
+
+        public Task<ConsoleWidth> WidenAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default) =>
+            inner.WidenAsync(processId, createdAt, columns, cancellationToken);
+
+        public async Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default)
+        {
+            var deadline = Stopwatch.StartNew();
+            while (true)
+            {
+                var screen = await inner.ReadScreenAsync(processId, cancellationToken);
+                if (screen.Rows is not null || deadline.Elapsed > TimeSpan.FromSeconds(90)) { return screen; }
+                await Task.Delay(200, cancellationToken);
+            }
+        }
+    }
 
     static bool Exited(int pid)
     {
@@ -194,7 +246,7 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         string[] draft = ["\u25CF Done.", "", "\u257B\u2584\u2584\u2584\u2584", $"\u2503 {space}", "\u2579\u2580\u2580\u2580\u2580", " Interactive \u00B7 @ files"];
         var echo = StartEcho(show: draft);
 
-        var screen = await new WorkerInjector(Worker).ReadScreenAsync(echo.Pid);
+        var screen = await ReadScreen(new WorkerInjector(Worker), echo.Pid);
 
         Assert.Null(screen.Problem);
         Assert.Equal(draft, screen.Rows!.Take(draft.Length));
@@ -214,12 +266,12 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         var echo = StartEcho(show: PermissionPrompt);
         var injector = new WorkerInjector(Worker);
 
-        var wide = await injector.WidenAsync(echo.Pid, CreatedAt(echo.Pid), 250);
+        var wide = await Widen(injector, echo.Pid, CreatedAt(echo.Pid), 250);
         Assert.Null(wide.Problem);
         Assert.Equal(250, wide.Columns);
 
-        Assert.Equal(250, (await injector.WidenAsync(echo.Pid, CreatedAt(echo.Pid), 120)).Columns);
-        var screen = await injector.ReadScreenAsync(echo.Pid);
+        Assert.Equal(250, (await Widen(injector, echo.Pid, CreatedAt(echo.Pid), 120)).Columns);
+        var screen = await ReadScreen(injector, echo.Pid);
         Assert.Null(screen.Problem);
         Assert.Equal(PermissionPrompt, screen.Rows!.Take(PermissionPrompt.Length));
         Assert.Empty(Keys(WaitFor(echo.Log, lines => lines)));
@@ -232,13 +284,13 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         var injector = new WorkerInjector(Worker);
 
         // As if the launched process had gone and another had been given its id.
-        var other = await injector.WidenAsync(echo.Pid, CreatedAt(echo.Pid).AddSeconds(-5), 250);
+        var other = await Widen(injector, echo.Pid, CreatedAt(echo.Pid).AddSeconds(-5), 250);
         Assert.Null(other.Columns);
         Assert.False(other.NotYet);
         Assert.Contains("no longer the one started", other.Problem);
 
         // Its width as it was (a widen to 1 changes nothing and reads it back).
-        Assert.True((await injector.WidenAsync(echo.Pid, CreatedAt(echo.Pid), 1)).Columns < 250);
+        Assert.True((await Widen(injector, echo.Pid, CreatedAt(echo.Pid), 1)).Columns < 250);
     }
 
     [WindowsFact]
@@ -255,7 +307,7 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         var echo = StartEcho(show: PermissionPrompt);
         var injector = new WorkerInjector(Worker);
 
-        var screen = await injector.ReadScreenAsync(echo.Pid);
+        var screen = await ReadScreen(injector, echo.Pid);
         Assert.Null(screen.Problem);
         Assert.Equal(PermissionPrompt, screen.Rows!.Take(PermissionPrompt.Length));
         var (choice, problem) = AgentBridge.Host.Delivery.Copilot.CopilotPermissionScreen.Locate(screen.Rows!, approve: true, ["git push origin main --force-with-lease"]);
@@ -280,7 +332,9 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
     {
         var echo = StartEcho(show: PermissionPrompt);
         var injector = new WorkerInjector(Worker);
-        var (choice, _) = AgentBridge.Host.Delivery.Copilot.CopilotPermissionScreen.Locate((await injector.ReadScreenAsync(echo.Pid)).Rows!, approve: false, ["git push origin main --force-with-lease"]);
+        var screen = await ReadScreen(injector, echo.Pid);
+        Assert.Null(screen.Problem);
+        var (choice, _) = AgentBridge.Host.Delivery.Copilot.CopilotPermissionScreen.Locate(screen.Rows!, approve: false, ["git push origin main --force-with-lease"]);
 
         var typed = await injector.InjectAsync(echo.Pid, new KeyPlan([new KeySend(choice!.Key, false, 0, 0, choice.Hold)]));
 
@@ -370,12 +424,14 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         f.Processes.Run(AgentBridge.Protocol.AgentKind.Copilot, echo.Pid);
         await using var source = new AgentBridge.Host.Core.SessionSource(f.Options(), f.Processes, TimeProvider.System);
         await source.RefreshAsync();
-        var replies = new ReplyService(source, f.Processes, new NoBridge(), new NoGuard(), new WorkerInjector(Worker),
+        // Patient screens (#1552, as #1492): an empty screen read on a loaded runner refused the reply
+        // with nothing typed. The echo's wait outlasts the 90 s a read may be retried.
+        var replies = new ReplyService(source, f.Processes, new NoBridge(), new NoGuard(), new PatientScreens(new WorkerInjector(Worker)),
             new ReplyOptions { CopilotHome = f.CopilotHome, PlatformSupported = true, ConfirmTimeout = TimeSpan.FromSeconds(60), PollInterval = TimeSpan.FromMilliseconds(50) });
         var keyDowns = text.Length + 1;
         var cli = Task.Run(() =>
         {
-            var downs = WaitFor(echo.Log, lines => Keys(lines).Where(k => k.StartsWith("key 1 ", StringComparison.Ordinal)).ToList() is { } d && d.Count >= keyDowns ? d : null, seconds: 60);
+            var downs = WaitFor(echo.Log, lines => Keys(lines).Where(k => k.StartsWith("key 1 ", StringComparison.Ordinal)).ToList() is { } d && d.Count >= keyDowns ? d : null, seconds: 150);
             Assert.Equal("key 1 13 13", downs[^1]);
             var words = new string([.. downs.SkipLast(1).Select(k => (char)int.Parse(k.Split(' ')[3], CultureInfo.InvariantCulture))]);
             Fixture.Append(events, Copilot.Event("user.message", new { content = words, delivery = "idle" }, 5));
@@ -411,7 +467,7 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         f.Processes.Run(AgentBridge.Protocol.AgentKind.Claude, echo.Pid);
         await using var source = new AgentBridge.Host.Core.SessionSource(f.Options(), f.Processes, TimeProvider.System);
         await source.RefreshAsync();
-        var replies = new ReplyService(source, f.Processes, new NoBridge(), new NoGuard(), new WorkerInjector(Worker),
+                var replies = new ReplyService(source, f.Processes, new NoBridge(), new NoGuard(), new PatientScreens(new WorkerInjector(Worker)),
             new ReplyOptions { CopilotHome = f.CopilotHome, PlatformSupported = true, ConfirmTimeout = TimeSpan.FromSeconds(60), PollInterval = TimeSpan.FromMilliseconds(50) });
         const string Text = "Ship it";
         var cli = typed ? Task.Run(() =>
@@ -498,7 +554,7 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         await using var source = new AgentBridge.Host.Core.SessionSource(f.Options(), f.Processes, TimeProvider.System);
         await source.RefreshAsync();
         using var store = new AgentBridge.Host.Delivery.Staging.AttachmentStore(new() { StagingRoot = Path.Combine(f.Root, "attachments") }, sweep: false);
-        var replies = new ReplyService(source, f.Processes, new NoBridge(), new NoGuard(), new WorkerInjector(Worker),
+                var replies = new ReplyService(source, f.Processes, new NoBridge(), new NoGuard(), new WorkerInjector(Worker),
             new ReplyOptions { CopilotHome = f.CopilotHome, PlatformSupported = true, ConfirmTimeout = TimeSpan.FromSeconds(60), PollInterval = TimeSpan.FromMilliseconds(50) },
             attachments: store);
         byte[] png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3];
@@ -601,6 +657,25 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         static (IHeldProcess?, bool, string?) Shape(HeldOpen o) => (o.Process, o.Gone, o.Refusal);
     }
 
+    [WindowsFact]
+    public void A_session_the_host_terminates_exits_with_zero_so_its_terminal_tab_closes_instead_of_lingering()
+    {
+        if (!OperatingSystem.IsWindows() || Elevated) { return; }
+        var echo = StartEcho();
+        using var process = Process.GetProcessById(echo.Pid);
+        var startedAt = new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero);
+
+        using (var held = new WindowsProcessControl().Open(echo.Pid, startedAt).Process)
+        {
+            Assert.NotNull(held);
+            Assert.Null(held.Terminate());
+            Assert.True(held.WaitForExitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult());
+        }
+
+        Assert.True(GetExitCodeProcess(started[^1], out var code));
+        Assert.Equal(0u, code);
+    }
+
     sealed class NoGuard : ITargetGuard
     {
         public string? Refuse(int processId) => null;
@@ -632,6 +707,9 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
 
     [DllImport("kernel32.dll")]
     static extern bool GetProcessTimes(nint process, out long creation, out long exit, out long kernel, out long user);
+
+    [DllImport("kernel32.dll")]
+    static extern bool GetExitCodeProcess(nint process, out uint exitCode);
 
     [DllImport("kernel32.dll")]
     static extern bool TerminateProcess(nint process, uint exitCode);

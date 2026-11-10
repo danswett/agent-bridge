@@ -41,7 +41,10 @@ static partial class SelfTest
                     wrong.Add($"{card.Id} at {width}: not drawn");
                     continue;
                 }
-                await Task.Delay(300);
+                // Until the layout has settled where it should be, not after a fixed wait: on a slow
+                // runner the pane was still a pixel off its edge when 300 ms were up (#1392). A layout
+                // that never gets there is reported as the last thing seen.
+                await Until(() => Misplaced(view!, scroll, column, bubble, readingMax) is null, TimeSpan.FromSeconds(10));
                 if (Misplaced(view!, scroll, column, bubble, readingMax) is { } misplaced) { wrong.Add($"{card.Id} at {width}: {misplaced}"); }
             }
             // A divider dragged: the column follows the pane's width as it changes, not once let go.
@@ -59,7 +62,7 @@ static partial class SelfTest
                 {
                     divider.Move(x + by);
                     // Measured once the pane has taken the dragged width, rather than after a fixed wait.
-                    await Until(() => Math.Abs(scroll2.ViewportWidth - (before - by)) <= 1, TimeSpan.FromSeconds(5));
+                    await Until(() => Math.Abs(scroll2.ViewportWidth - (before - by)) <= 1 && Misplaced(shown, scroll2, column2, bubble2, readingMax) is null, TimeSpan.FromSeconds(5));
                     var misplaced = Misplaced(shown, scroll2, column2, bubble2, readingMax);
                     if (Math.Abs(scroll2.ViewportWidth - (before - by)) > 1 || misplaced is not null)
                     {

@@ -263,7 +263,7 @@ Rollback: first set `RELAY_SLIPGATES_LIVE` to `false` (otherwise every promotion
 DNS records in place (they are harmless unbound). To delete the leftover certificate:
 `az containerapp env certificate delete -n <environment> -g <resource group> --certificate mc-relay-slipgates-com`.
 
-New pairings and defaults (`S4_RELAY` in `pages.yml`, the app's default relay) moved to `relay.slipgates.com` in #1112, with both names live. Retiring `relay.bad-duck.com` is the owner's later decision.
+New pairings and defaults (`S4_RELAY` in `pages.yml`, the app's default relay) moved to `relay.slipgates.com` in #1112, and the Apple app's default (`BridgeStore.swift`) with it, with both names live. Retiring `relay.bad-duck.com` is the owner's later decision.
 
 The first name's steps work as follows. `deploy.ps1` steps it forward
 as DNS allows: it prints both records while they are missing; once they resolve it puts the
@@ -294,6 +294,7 @@ Production's alerts, its availability test and the resource group's budget are i
 | Metric alerts on `agent-bridge-relay` | Replicas (A-REPLICAS), restarts (A-RESTART, A-CRASHLOOP), memory (A-MEM), CPU (A-CPU), 5xx count (A-5XX) |
 | `budget-agent-bridge-relay` | $40 a month on the whole resource group. Emails at 50%, 80% and 100% actual, and 100% forecast |
 | `ops-probe.yml` (GitHub, daily) | The certificate's remaining life (A-CERT), the CNAME and `asuid` TXT (A-DNS), health, CORS and the push key. Problems go on one `area:ops` issue, which closes itself when clean (not on a run whose DNS lookups couldn't complete) |
+| `logic-agent-bridge-github-watch` | Every 5 min, from Azure: GitHub's status page for Actions and Pages, and this repository's runs queued over 30 min. Records the availability result `github-actions`; alert A-GHA fires when 2 of the last 3 checks found a problem, and A-GHA-SILENT when no fully read result has arrived in 30 min (#658) |
 
 It's applied with production, like any infra change (a person, not CI). The first time, pass the
 address alerts go to; later runs reuse the one in the action group:
@@ -319,9 +320,25 @@ address. The action group and the budget each keep a copy. So:
 The budget's start date can't change once the budget exists, and must be in the current month
 when it's created, so `deploy.ps1` passes the existing budget's date, or the first of this month. If it can't list budgets, a real production run stops rather than guess.
 
-Cost: about $6.50 a month for the availability test ($0.0005 a run, 3 locations every 10 min);
+Cost: about $6.50 a month for the availability test ($0.0005 a run, 3 locations every 10 min),
+and about $2.50 for the GitHub watch (some 90,000 built-in Logic App actions, and its
+A-GHA-SILENT log alert);
 alert rules and the action group's emails cost cents. Availability results go into the
 workspace, a few MB a day against its 0.1 GB daily cap.
+
+## Reading a disconnect
+
+### The disconnect log line and `host-probe` (#970)
+
+Every socket's end is logged as `disconnect <conn> (<end>) after <n>s; frames in .. out .., bytes in .. out ..; cause exception=<type> wserror=<WebSocketError> close=<status|none> keepalive=<timeout|no>`.
+`close=none` means no close frame came (a reset or a dead peer); `keepalive=timeout` means the
+runtime's ping/pong timeout ended it. The runtime words that only in its exception message, so
+`keepalive` is matched on that text. The cause carries no identity, account id, token or message text.
+
+To produce each kind of end against staging, with the token key in `RELAY_SMOKE_TOKEN_KEY` (never echoed):
+`relay-smoke host-probe --relay <url> --mode kill|blackhole|hold --hold <s> [--count N]` prints its
+throwaway account id and device ids with UTC times; it needs https and refuses the production relay hosts unless `--allow-production` is passed; `--mode observe --account <id> --hold <s>`
+prints the roster and presence changes an app of that account sees.
 
 ## History
 
@@ -640,14 +657,32 @@ West US 2 consumption prices; the subscription's monthly free grant is 180,000 v
 | Requests (sign-in, health; probes are free) | $0 | $0 |
 | Egress (first 100 GB/month free) | $0 | ≈ $0 (about 25 GB/month at §5.9's 3-client rate) |
 | Blob store, 2 accounts: hot LRS, blobs kept 1–2 days, no fixed cost; large attachments and session transfers, each deleted once fetched | < $0.05 | ≈ $0.10–2 (storage ≈ $0.06 for ≈ 3 GB held; writes ≈ $0.05; the rest is downloads to hosts, free inside the 100 GB with the relay's egress, ≈ $0.087/GB past it) |
-| Monitoring ([above](#monitoring)): one availability test, alert rules, emails | ≈ $6.50 | ≈ $6.50 |
-| **Total** | **≈ $25/month** | **≈ $26–29/month** |
+| Monitoring ([above](#monitoring)): one availability test, the GitHub watch, alert rules, emails | ≈ $9 | ≈ $9 |
+| **Total** | **≈ $28/month** | **≈ $29–32/month** |
 
 Levers when it matters: GHCR instead of ACR saves the $5 registry; a second region is
 another ≈ $14; the next step up is 0.5 vCPU / 1 GiB (≈ $34) for tens of thousands of sockets.
 
 ## Metrics export (#1134)
 
-The relay's meter (`AgentBridge.Relay`) is exported to Application Insights by the Azure Monitor OpenTelemetry exporter (`RelayTelemetry.cs`), only when `Relay__ApplicationInsightsConnectionString` or `APPLICATIONINSIGHTS_CONNECTION_STRING` is set as an app setting (a connection string, supplied by the deployment, never kept in the repo). Unset, nothing is exported. Instruments added: `relay.forward.latency` (ms, frame received to written to its target), `relay.connect.duration` (ms, socket opened to ready) and `relay.sockets.live` (gauge). Each carries the `kind` tag only; `RelayMetrics.AllowedTags` is the whole tag allow-list and a test fails if an id-like key joins it. Wiring the app setting in `infra/` is a follow-up that needs the owner's deploy approval.
+The relay's meter (`AgentBridge.Relay`) is exported to Application Insights by the Azure Monitor OpenTelemetry exporter (`RelayTelemetry.cs`), only when `Relay__ApplicationInsightsConnectionString` or `APPLICATIONINSIGHTS_CONNECTION_STRING` is set as an app setting (a connection string, supplied by the deployment, never kept in the repo). Unset, nothing is exported. Instruments added: `relay.forward.latency` (ms, frame received to written to its target), `relay.connect.duration` (ms, socket opened to ready) and `relay.sockets.live` (gauge). Each carries the `kind` tag; `relay.sockets.live` and `relay.connects` also carry `site`, the hostname the device connected through, reduced to a configured name (`Relay__KnownHostnames__0..`; unset means `relay.slipgates.com` and `relay.bad-duck.com`, and setting any replaces both) or `other`, so a client cannot mint values. `/healthz` reports the same counts as `sockets: [{site, kind, count}]` (aggregate only), with a 0 for every configured hostname and kind, so an emptied hostname reads 0 rather than disappearing. To retire a hostname, watch `customMetrics` `relay.sockets.live` by `site` until it stays 0 for 24 h. `RelayMetrics.AllowedTags` is the whole tag allow-list and a test fails if an id-like key joins it. Wiring the app setting in `infra/` is a follow-up that needs the owner's deploy approval.
 
 A malformed connection string does not stop the relay: it logs a generic warning (never the string) and runs without export.
+
+## Hourly latency and errors (#1599)
+
+The relay keeps one row per hour per route group, readable by SRE without a deploy approval:
+
+    curl -H "Authorization: Bearer $KEY" "https://<relay>/v1/stats/hourly?hours=24"
+
+Returns `{hours:[{hour, groups:[{group, count, p50Ms, p90Ms, c4xx, c5xx}]}]}`, oldest first (`hours` is 1 to 72, default 24; an hour with no traffic has no groups). Groups are the fixed names `health`, `auth`, `push`, `blobs`, `api` and `other`; WebSocket connections and `/v1/stats` itself are not counted. Rows hold counts and milliseconds only. A 429 counts as a 4xx; an unhandled exception as a 5xx.
+
+It answers 404 until the app setting `Relay__Stats__ReadKey` is set (a secret from the deployment, never in the repo), and 401 for a wrong key. Wiring it in `infra/` needs SRE's deploy approval.
+
+Percentiles are approximate. Medians cannot be merged across replicas, so each replica counts latencies into fixed buckets (1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000 ms) and a percentile is the upper edge of the bucket it falls in; 10000 means 10 s or more.
+
+Design note (nothing tied to a machine):
+
+- Where it runs: on every replica. Each keeps its counts in memory and, every minute, merges them into the hour's row with an ETag conditional write.
+- When a node leaves: it flushes on a clean stop; after a crash at most the last minute of that node's counts is lost. Nothing else depends on it.
+- Where state lives: blobs named `stats/v1/<yyyyMMddHH>.json` in the roster container (UTC hours), which already survives replicas and has a 180-day lifecycle. No state is on any host.

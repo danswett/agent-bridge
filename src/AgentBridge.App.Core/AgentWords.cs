@@ -89,6 +89,15 @@ public static class AgentWords
             : $"{(verb == "Repair" ? "Repaired" : "Set up")} · {(result.RestartRequired ? "restart the bridge, then start a new session to check it" : "start a new session to check it")}"
         : SetupFailed(remove, verb, result.Detail);
 
+    // A press the app refused because this bridge predates agent setup.
+    public static string SetupUnsupported(bool remove, string? verb) =>
+        $"{(remove ? "Removal" : verb == "Repair" ? "Repair" : "Setup")} failed · " + OlderBridge + "; update the app and restart the bridge";
+
+    // A setup that finished but left the row offering the same verb: nothing the host registered
+    // changed what it reports, so "Set up · start a new session" would be a result the row contradicts.
+    public static string SetupChangedNothing(string? verb) =>
+        $"Nothing changed · the bridge still reports this agent needs {(verb == "Repair" ? "repair" : "setup")}. Check again, then start a new session";
+
     // A setup the host refused or that failed part-way, by why (StandaloneHooks.Preflight's refusals).
     public static string SetupFailed(bool remove, string? verb, string raw) =>
         $"{(remove ? "Removal" : verb == "Repair" ? "Repair" : "Setup")} failed · " + (

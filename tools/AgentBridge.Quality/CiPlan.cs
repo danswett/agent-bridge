@@ -30,8 +30,10 @@ static partial class CiPlan
     };
     static readonly HashSet<string> Delivery = new(DeliveryNeeds.Keys, StringComparer.Ordinal);
     static readonly string[] ProductRunners = ["ubuntu-latest", "windows-latest", "windows-11-arm"];
+    // A pull request's whole ring leaves windows-11-arm to main (#1249).
+    static string RunnerList(IEnumerable<string> runners) => $"'[{string.Join(",", runners.Select(r => $"\"{r}\""))}]'";
     static readonly string ProductOsBinding =
-        $"${{{{ steps.{WholeRing}.outputs.{WholeRing} == 'true' && '[{string.Join(",", ProductRunners.Select(r => $"\"{r}\""))}]' || steps.select.outputs.product-os }}}}";
+        $"${{{{ steps.{WholeRing}.outputs.{WholeRing} == 'true' && (github.event_name == 'pull_request' && {RunnerList(ProductRunners.Where(r => r != "windows-11-arm"))} || {RunnerList(ProductRunners)}) || steps.select.outputs.product-os }}}}";
     const string ProductMatrix = "${{ fromJSON(needs.plan.outputs.product-os) }}";
 
     // Any read of the plan in a job's if:, in either property syntax and with or without a
@@ -78,8 +80,12 @@ static partial class CiPlan
     // Main is planned like a pull request (quality/README.md §4.7): only the whole ring, which the
     // plan decides apart from the selector, runs a gated job or step whatever the selector says.
     const string WholeRingBypass = "env.WHOLE_RING == 'true'";
-    static string GatedJobIf(string id) =>
-        $"needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.{id} == 'true'";
+    // The app's packaging legs are the one job the whole ring does not bring to a pull request
+    // (#1249): there its plan output alone says whether the change needs them. Main runs them
+    // whenever it runs the whole ring.
+    static string GatedJobIf(string id) => id == "app"
+        ? $"(needs.plan.outputs.whole-ring == 'true' && github.event_name != 'pull_request') || needs.plan.outputs.app == 'true'"
+        : $"needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.{id} == 'true'";
 
     public static IReadOnlyList<Problem> Check(Catalog catalog, string yaml)
     {

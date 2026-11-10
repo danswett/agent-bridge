@@ -215,6 +215,9 @@ public sealed class LocalMigrationHost(string profileFolder) : IMigrationHost
     // was still to come (#239's review). The 45 s now applies to the new host alone.
     public TimeSpan ShutdownTimeout { get; init; } = TimeSpan.FromMinutes(5);
     public TimeProvider Time { get; init; } = TimeProvider.System;
+    // How long to reach the host's pipe and how long it has to answer each request.
+    public TimeSpan ConnectTimeout { get; init; } = TimeSpan.FromSeconds(2);
+    public TimeSpan CallTimeout { get; init; } = TimeSpan.FromSeconds(15);
     // Called before the host is asked to restart, with its pid and when it said it started: what
     // then waits for that process to end. By handle, so a pid reused once it has gone is never
     // waited on, and only a process that started before the host said it had: one with that pid
@@ -238,10 +241,10 @@ public sealed class LocalMigrationHost(string profileFolder) : IMigrationHost
         Func<CancellationToken, Task> gone;
         try
         {
-            await using var channel = await AgentBridge.Local.LocalClient.ConnectAsync(AgentBridge.Local.LocalEndpoint.For(profileFolder), ct: cancellationToken);
-            var status = await channel.CallAsync<HostStatus>(HostOps.Status, ct: cancellationToken);
+            await using var channel = await AgentBridge.Local.LocalClient.ConnectAsync(AgentBridge.Local.LocalEndpoint.For(profileFolder), ConnectTimeout, cancellationToken);
+            var status = await channel.CallAsync<HostStatus>(HostOps.Status, timeout: CallTimeout, ct: cancellationToken);
             gone = Watch(status.ProcessId, status.StartedAt);
-            await channel.CallAsync(HostOps.Restart, ct: cancellationToken);
+            await channel.CallAsync(HostOps.Restart, timeout: CallTimeout, ct: cancellationToken);
         }
         catch (Exception e) when (e is IOException or AgentBridge.Local.HostErrorException or TimeoutException) { return e.Message; }
         // Given up on by cancelling the wait itself, so nothing is left holding the old host's handle.

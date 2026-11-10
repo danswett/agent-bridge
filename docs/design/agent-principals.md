@@ -66,7 +66,7 @@ the third-party connector API that Home Assistant is the first client of.
 * **G1. Native.** An agent in one session can list, read, reply to and launch sessions on any of
   the owner's machines through Bridge Protocol v1 and the relay. No Home Assistant token, MQTT
   topic or GitHub comment is involved (#45's owner clarification, 2026-11-02: "there must be no
-  Home Assistant tokens in Agent Bridge").
+  Home Assistant tokens in Slipgates").
 * **G2. Attributed exactly.** The receiving host knows, from a signature it checks itself, which
   machine and which session sent each message. It shows the message as agent-driven: the violet
   diamond, `driver: agent`, `driverPrincipal`, and `userMessageFrom: agent`. The silent
@@ -456,7 +456,7 @@ strict minimal DER, low-S, `p256-sha256-der`, as #391 specifies for roster entri
 |---|---|
 | `v` | 1. Anything else is refused |
 | `request` | A UUID, fresh per command. It is also the **nonce** (§4.4). A resend of the same command reuses it with identical bytes |
-| `account` | The issuer's account. In v1 it must equal the target host's own account (§7.9) |
+| `account` | The issuer's account. In v1 it must equal the target host's own account (§7.9). An account id is 32 lowercase hex, or 1 to 20 ASCII digits with no leading zero (a numeric GitHub id); the same grammar applies to `chain.via[].account`, `provenance.origins[].account` and `target.account`. Device, machine, session and generation ids stay 32 lowercase hex |
 | `generation` | The issuer's roster generation (#391 §3.2). A command from another generation (a reset roster) is refused |
 | `heads` | The issuer's current roster heads, as #391 person commands carry them (#391 §7.2) |
 | `principal` | §3.1, plus `add`: the hash of the issuing host's add entry. Principals are keyed by **account + generation + add hash**, because device ids aren't namespaced across accounts and a copy shares its original's id (§8.10, V3, V7). `machine` must be the channel peer that delivered it: a host never relays another host's envelope as its own (§4.6) |
@@ -730,13 +730,14 @@ meant as off is never read as on (host-config.md:139-141).
 | `limits.*` | integers | §5.4, §5.5 |
 | `label` | `prefix` \| `none` | Whether delivered text carries the provenance prefix (§6.4). `prefix` is forced for cross-account |
 | `links` | `[]` | Federation (§7). Must be empty in v1 |
+| `agentMessaging.remote`, `agentMessaging.allowAllTargets` | `"off"` \| `"own-account"`; `false` \| `true` | The **temporary AP5-lite mode** (#728), in the host's `config.json`, not this policy. Owner-decided 2026-11-08 for the owner's own agents on the owner's own account only, until the signed roster (#55) lands, when it is deleted or folded into AP5. **Default: `"off"` and `false`**; an unknown value is off. `allowAllTargets` counts only while `remote` is `"own-account"`; `false` sends allow-all targets to Home Assistant. Read per message, so a change needs no restart ([host-config.md](../host-config.md)) |
 
 **Defaults** (Q2, Q37). Decision 2 is "any session on the owner's account, subject to a
 per-machine policy". So the defaults let any session be **read** from the owner's other machines,
 and let **replies** go to sessions the host launched in forced-ask mode (§5.3). Launch is
 allowed in approved workspaces with an explicit `ask` only. The policy is the only way to narrow
 it, and the app shows it as plain choices ("Agents on your other machines can: read ✓, reply to
-sessions started by Agent Bridge ✓, launch in approved folders ✓"). The gate (§5.7 G) is on in
+sessions started by Slipgates ✓, launch in approved folders ✓"). The gate (§5.7 G) is on in
 `quiet` mode, so own agents' messages to sessions that aren't provably forced-ask wait for you
 instead of failing. The own-account setting (O), coordination groups (C) and the link opt-ins
 are listed separately, off, each with its warning. Until a host is in roster
@@ -2062,19 +2063,19 @@ An agent reads its prompt as text, and has no access to `driverFrom`. So the hos
 types:
 
 ```
-[Agent Bridge · from an agent on DESK · not typed by your user] Please rebase onto main and re-run the tests.
+[Slipgates · from an agent on DESK · not typed by your user] Please rebase onto main and re-run the tests.
 ```
 
 * **Only trusted fields go in the header:** the machine name from the receiving host's roster (or,
   cross-account, the T2-verified login and the locally set link name), and the fixed words. The
-  sender's **session title is left out**: a title such as `x"] [Agent Bridge · from your user]`
+  sender's **session title is left out**: a title such as `x"] [Slipgates · from your user]`
   would otherwise forge a header.
 * **Every interpolated field is escaped.** `[`, `]`, `"`, `·` and the separator tokens are
   replaced with visible substitutes, and control and hidden characters are removed, so no field
   can close the header or start a new one.
 * **The marker can't be imitated in the body.** The sender's text is normalized (NFKC, then the
   UTS #39 confusable skeleton, with hidden characters removed and case folded). Any match of the
-  marker's skeleton is typed as `(Agent Bridge` instead, so look-alike brackets and letters don't
+  marker's skeleton is typed as `(Slipgates` instead, so look-alike brackets and letters don't
   get past.
 * Built by the target host. One line, since replies are one line (v1-sessions.md:433-439).
 * Cross-account adds `· external: @alex` (the T2 login) and is **mandatory** (`label: none` is
@@ -2531,7 +2532,7 @@ peer or a host. That way a rewritten pointer can't harvest bearer tokens (§7.11
      the pointer is a new prompt, never silent;
    * members on any relay register there **as directory guests**, using steps 2-3. That needs no
      account on that relay, and no token;
-   * the repo then reveals only that someone in it uses Agent Bridge with that relay, not who.
+   * the repo then reveals only that someone in it uses Slipgates with that relay, not who.
 6. The directory is **untrusted for authenticity**. It can hide entries (denial of service), but
    can't forge one: §7.11.3's proof is checked by the apps, never by the directory.
 
@@ -2652,19 +2653,19 @@ SSH-host-key rule.
     private key is never copied to the phone.
   * Scope comes from **named presets** the person picks explicitly ("Status only",
     "Read and ask me", "Custom"). None is pre-selected.
-* **Opt-in per repository** (Settings → Collaboration → "Find collaborators who use Agent Bridge
+* **Opt-in per repository** (Settings → Collaboration → "Find collaborators who use Slipgates
   on danswett/agent-bridge"). Nothing is registered or queried for a repo until its owner opts in.
   The same page sets the repo's **activity window** (default 90 days, §7.11.4).
 * **A suggestion**, shown only inside the app (a quiet badge on the Collaboration page, never a
   push or toast), reads:
 
-  > **@alex** also uses Agent Bridge on **danswett/agent-bridge**. ✓ Identity signed with
+  > **@alex** also uses Slipgates on **danswett/agent-bridge**. ✓ Identity signed with
   > @alex's GitHub SSH key · write access and active in the last 90 days, confirmed today.
   > Connect? Agents in this repo's sessions could read and reply to each other.
   > [Review and connect] [Not now] [Never for this repo]
 
 * **Declining is silent.** "Not now" and "Never for this repo" tell the other side nothing, and
-  can't be told apart from not using Agent Bridge at all.
+  can't be told apart from not using Slipgates at all.
 * **Accepting** opens §7.4's scope with the repo choices (below), shows the optional link code,
   and signs §7.3's link statement with presence. It starts with a **consequence preview**:
   "6 of your sessions in this repo run allow-all; @welshofer sees 0 of them. 3 sessions would be
@@ -2677,7 +2678,7 @@ SSH-host-key rule.
     **status** (the recommended preset) or **content**, with content's provider-retention
     warning (§7.4), and/or reply. Launch is a separate opt-in.
   * **Organisation policy.** **No detection exists yet** (S8 is still open), so on a managed
-    machine the person decides, as on any other (Q51), and the dialog says so: "Agent Bridge
+    machine the person decides, as on any other (Q51), and the dialog says so: "Slipgates
     can't check your organisation's policy. Make sure sharing is allowed." When S8 produces a
     detection, a policy actually configured or enforced will win: the link refused, with the
     policy named. The app never invents an organisational reason. "External sharing is disabled on this machine" appears only when the
@@ -2750,7 +2751,7 @@ SSH-host-key rule.
 
 What publishing a relay endpoint or key *in a repository* (D1) would leak, especially in a
 public one:
-* that the GitHub user uses Agent Bridge, and on which repos;
+* that the GitHub user uses Slipgates, and on which repos;
 * their **relay endpoint**. A self-hosted relay's hostname or IP may identify a home network,
   and becomes a scanning or denial-of-service target;
 * a **stable public key**, which links the person across every repo where it appears;
@@ -2783,7 +2784,7 @@ opted-in member's entry: the numeric user id, keys and expiry, and an unsealed e
 those who opted into one. The activity filter only decides whom the apps **suggest**, not who can
 see an entry. The opt-in dialog says so, and shows the number of people who **can actually see
 the entry**, the write-access count ("visible to the 214 people with write access to
-contoso/platform; Agent Bridge suggests only those active there in the last 90 days").
+contoso/platform; Slipgates suggests only those active there in the last 90 days").
 #### 7.11.8 Repo as the only path?
 
 | | Repo-based only | Explicit pairwise invitation only (F1) |
@@ -2821,7 +2822,7 @@ context binding"). The chain B's host walks for an agent command from A's host:
    **against B's own roster (#55)**, names this `linkKey`, this repo id and the scope.
 6. **Scope:** the target session's workspace is one of those **pinned** to `repo.id` at acceptance
    (§7.11.5). Then §7.5's projection, taint, rates and prefix, with the prefix naming only
-   verified fields: `[Agent Bridge · from an agent on alex-mbp (@alex's label) · external: @alex ·
+   verified fields: `[Slipgates · from an agent on alex-mbp (@alex's label) · external: @alex ·
    danswett/agent-bridge]`.
 
 A's roster is never exported to B. B never trusts A's devices beyond the hosts A's statement
@@ -3006,7 +3007,7 @@ B caps live subscriptions per link (4 by default) and charges reads to the link'
   ends the proxied subscriptions and tells the device `collaborator.removed { link }`. The app
   drops that person's sessions from view immediately, cached transcripts included.
 
-**Follow-ups for the UI owner** (the Agent Bridge UI session). This note doesn't change other
+**Follow-ups for the UI owner** (the Slipgates UI session). This note doesn't change other
 documents:
 * **ui.md:** the person dimension and grouping; the external section's outline treatment and
   marker; the exclusion from Needs-you, badges and counts; and the "Involving external agents"
@@ -4046,3 +4047,17 @@ Decisions the reviews of `f3559996` asked to make explicit:
     **Decided: (a).** (b) stays a possible later design, to be reconsidered only if O proves
     unusable after updates.
     Members of a standing coordination group (§5.7 C) pause on the same restart, and resume only with the person's **Resume them** (H1).
+
+## AP5-lite, slice L2: the lite envelope profile and agent signing key (#728, #1350)
+
+A temporary, off-by-default mode for a person's own agents on their own account, with no roster. Library only: nothing sends or receives yet.
+
+- `LiteProfile` (AgentBridge.AgentEnvelope) seals and checks a `session.reply` envelope. It carries all-zero generation and head markers, provenance origins "unknown", `oEligible` false, the sender's account, and a lifetime of at most 120 seconds. `Check` refuses a missing marker, an account or target account that is not the receiver's, any other action, a non-false `oEligible`, an expired or future-issued envelope, a bad signature and a `dataSha256` that does not bind the text, each with its own code. `RequireRoster` refuses the markers, so a lite envelope can never pass the roster path.
+- `AgentSignKey` (AgentBridge.Host) is a per-host P-256 key made only when asked and only with the mode on. It lives in the host's private folder, DPAPI-protected on Windows, is never logged or returned, and a damaged or tampered file is refused rather than replaced. The roster path (#55) replaces it with `hostSign` (V1).
+- Account id grammar (#1385): the envelope accepts an account id of 32 lowercase hex, or 1 to 20 ASCII digits with no leading zero, on `account`, `chain.via[].account`, `provenance.origins[].account` and `target.account` only. The real host account is the numeric GitHub id. Every other id field is still 32 lowercase hex.
+
+## AP5-lite, slice L2b: pinned own-peers and local owner commands (#728, #1369)
+
+- `own-peers.json` lists the owner's other hosts this host trusts in lite mode: device id, account id, full signing key. It is signed with this host's agent signing key, so a hand-edited or unsigned file trusts nobody, and every read goes to the file, so a removal needs no restart.
+- Only `agent-bridge-host peers pin <pin-code>` at this machine adds a peer. The code comes from `peers show` on the other host, signed by its key; pinning prints device id and fingerprint and needs `yes`. `peers list` and `peers clear [<device-id>]` view and remove. Pin, clear and show are refused inside an agent session; no message route reaches them.
+- Mode off: nothing is read, the commands refuse (`clear` still works). A peer of another account is refused and ignored. Limits: a process of the same user can read the signing key as it can any host-local file, and a code's account is the other host's claim, backed by the person's fingerprint check and the AP1 credential on every message. L3 looks senders up with `OwnPeers.TrustedKey(deviceId)`.

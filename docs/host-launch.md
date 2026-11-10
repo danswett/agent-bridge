@@ -8,6 +8,18 @@ launcher, as the peer `home-assistant` ([ha-connector.md](ha-connector.md#stage-
 they draw on are the profile's `config.json` ([host-config.md](host-config.md)). The code is
 `src/AgentBridge.Host.Delivery/Launch/`.
 
+## Answering `launch.options` without waiting for Agency (#1527)
+
+Agency's `hub list-local-sessions --json` took 18.5 s on a cold run against its 20 s cap, so
+`launch.options` no longer waits for it. It answers at once from the last good scan; a host that
+has not scanned yet answers with its other choices and `resumablePending: true`. The scan runs in
+the background when the host starts and when a session registers or ends (data events, never a
+timer, owner rule #1511), one at a time, and an event during a scan asks for one more after it.
+A scan that times out or fails keeps the last good list. `session.launch` and a restore still wait
+for a real scan, so the host validates every launch. Each call logs one line of phase times
+(launcher lookup, profiles, resumable) and each scan one line (count or timed out, milliseconds):
+counts and milliseconds only.
+
 ## What agent-ha-bridge does
 
 From `hooks/daemon-launch.ps1` (`Use-DaemonLaunchRequest`, `Resolve-DaemonRequestedLaunch`,
@@ -25,39 +37,18 @@ From `hooks/daemon-launch.ps1` (`Use-DaemonLaunchRequest`, `Resolve-DaemonReques
   daemon runs unelevated in the user's logon session (a logon task, hidden through a `.vbs`),
   so the agent's console is a normal window on the person's desktop. No window title is set
   on Windows.
-* **Width.** The host's launches (Windows) make the agent's console 250 columns wide, so
-  Copilot's form tab bar (the console's width less four) shows every field's title and the
-  host can tell an answer's form is the question's before it types (#1123; a six-field form
-  with long titles needed about 230). No console host takes a width from the start: with
-  "wrap text output on resize" on (the default) the console host's buffer follows its window,
-  and the screen clamps the window, so STARTUPINFO's count of characters
-  (`STARTF_USECOUNTCHARS`) of 250 gave 75 columns on a 640-pixel screen, and `STARTF_USESIZE`
-  no more (found by #1160's CI). A buffer set wider once the console exists is kept, the window
-  scrolling across it. So the host widens it then: `agent-bridge-injector <pid> --widen 250
-  <created>` holds the process open, checks it is still the one launched (its creation time,
-  so a later process given the same id is never touched), attaches, types nothing, and calls
-  `SetConsoleScreenBufferSize` (its height kept; never narrower), asked again every 100 ms for
-  up to 5 s while the new process has no console yet, and not once it has exited.
-  The log says the width it got, or why not. Windows Terminal, as the default terminal, takes
-  a new console over and sizes it itself (its `ConptyConnection::InitializeFromHandoff`); the
-  console host does not hand over a console started hidden or minimized
-  (`_shouldAttemptHandoff`). So a launch starts minimized without taking the focus
-  (`SW_SHOWMINNOACTIVE`): on the taskbar, in the console host, whatever the default terminal.
-  The agent draws to the buffer's width (libuv's columns, which follow a resize), and the
-  injector reads whole buffer rows. Restoring or resizing the window takes the buffer back to
-  the window's width, as wide as the screen allows (about 200 columns or more at 1920
-  pixels). Maximizing a launched session's window therefore narrows it, from 250 to what the
-  screen allows. Where a form is then too wide (that, a session a person started, or titles
-  longer than 250 columns hold), the answer is refused before any key, saying how many
-  columns the titles need and to widen the window or make its font smaller, or, where they
-  need more than 250, that the titles are too long for Slipgates to check (host-answers.md).
-  Considered and not first: tabs of one Windows Terminal window (`wt -w <name> new-tab`):
-  `wt` returns its own process, not the agent's, and the host reads and types through the
-  agent's console (`AttachConsole` on its process); unproven. Wrapping the agent in
-  `conhost.exe --width`: conhost re-splits and re-quotes the command line, undoing the quoting
-  that keeps an npm `.cmd` shim's arguments safe, and the process started would be conhost.
-  Unverified live: a Copilot session redrawing at the new width on Windows 11 with Windows
-  Terminal as the default terminal, and how a 250-column window looks once restored.
+* **Width.** The host's launches (Windows) open the agent's console in a normal window, shown
+  as any program started from the desktop is, and set no width. When Windows Terminal is the
+  default terminal it takes the console over (tabs, scrollbars, a live title), and the person
+  can type into it at the machine; otherwise the console host shows it. The width is whatever
+  that window gives. #1160 made the host start every launch minimized and widen its console to
+  250 columns, so a long Copilot form's tab bar would show every title; the console host then
+  kept the console, and the session opened as a bare console window instead of in Windows
+  Terminal, without tabs, with a cut-off footer and a stale title, and the owner could not type
+  into it. That promise of 250 columns is given up. Where a form's tab bar (the console's width
+  less four) is too wide for the window, Copilot draws a windowed bar and the host checks
+  the labels it shows, answering the form field by field (host-answers.md, #1554).
+  The injector still has `--widen` (host-answers.md), which no launch calls.
 * **The command line**, per agent: Copilot `--session-id <id> --banner [--model]
   [--reasoning-effort] [--context] [--allow-all] [extras] [-i <prompt>]`; Agency `copilot
   [--profile-only <profile>]` then Copilot's; Claude `--session-id <id>` (`--resume <id>`)
@@ -89,6 +80,8 @@ differences, each deliberate:
 | The prompt | Any length through the payload; line breaks become spaces | At most 16 KiB in the request; every control character becomes a space; one starting with `/` or `!` is refused (the agent would run it as a command, as for a reply); one too long for the command line is refused, not cut |
 | A batch-file agent (npm's `copilot.cmd`, `codex.cmd`) | Quoted for `CommandLineToArgvW` only, so `cmd.exe` acts on `&`, `|`, `%VAR%` in the prompt | `cmd.exe /e:ON /v:OFF /d /c` with each argument quoted as Rust's standard library does since CVE-2024-24576: `%` cannot expand and nothing can leave its quotes. Tested end to end through `cmd.exe` |
 | Folder trust | Answered by the bridge on a person's second press | **Never answered on its own.** The outcome says the agent is asking, with the question (folder, repository root, the agent's words), and a person answers it at the machine or, with `launch.remoteFolderTrust` on, from their phone, browser or Windows app with a command that device signs (`launch.trust.answer`, below). Never on a press of Launch, from Home Assistant, the MCP server or an agent. Copilot's own "Confirm folder trust" is recognised too. Launches are `busy` while it shows, for up to two minutes |
+| Worker MCP servers | Copilot loads every server in the owner's `mcp-config.json` into every session it starts | A direct `copilot` launch that carries a `role` has every owner server not listed for that role in `launch.workerMcp` disabled by name, and the built-in servers off unless listed; a launch without a role is unchanged, and Agency is narrowed by `--profile-only` already. A restore does not carry the role yet, so a restored worker starts with the owner's list ([host-config.md](host-config.md)) |
+| Copilot account | The session uses whichever login Copilot has stored | A Copilot or Agency launch passes the user-level `COPILOT_GITHUB_TOKEN` to the child and first checks the account and quota with the host's own calls, before a worktree or process exists. No token, a bad one, a different login than `launch.copilotAccount`, zero premium interactions, or a check that cannot finish is refused with a plain reason; a stored login is never a fallback ([host-config.md](host-config.md)) |
 | Followed | One launch at a time; a newer press stops following the last | Each launch is followed on its own; starting (worktree, process) is one at a time |
 | Codex binding | The first Codex registration written after the launch | A new Codex session whose process is the one started or runs under it (a process-tree walk, start times checked so a recycled id does not count). Timing alone only when the process cannot be traced and no other Codex launch could claim the session; a session is bound to one launch at most |
 | Resuming twice | Prevented by following one launch at a time | A session a launch started an agent on is not resumable while that agent runs, checked again under the start lock, so two presses from two devices start one agent |
@@ -125,8 +118,7 @@ differences, each deliberate:
    workspace gets its worktree (below), a resume in one of this host's worktrees reuses it;
    either is locked until the session registers. Attachments are staged. The command line is
    built and checked for length (`refused`). The agent is started (`failed` if Windows will
-   not): a new console, minimized, in the console host, then widened to 250 columns (Width,
-   above), the workspace as working directory, the host's environment.
+   not): a new console in a normal window (Width, above), the workspace as working directory, the host's environment.
 7. The launch is followed: every 500 ms, a discovery pass (during the first 60 s) and a look
    for its session; its window read every second for a startup question; its process checked.
    Registered: `started`, except for Copilot, which registers (its `inuse.<pid>.lock`) before
@@ -148,6 +140,14 @@ differences, each deliberate:
    presses Enter; Quit presses Esc. It answers `started` once the session registers (Copilot:
    its window ready), `declined` once the agent closes, and otherwise `unconfirmed`, "Not
    confirmed: answer at the machine", after 60 s. Nothing is typed twice.
+
+### The PWA keeps the last choices
+
+`launch.options` resolves the agent, profiles and resumable sessions afresh on every call, which
+can take up to a minute on a loaded machine. The PWA therefore keeps the last answer from each
+machine (memory only) and shows it at once, with its age, while it asks again in the background
+(#1527). The kept copy is only for display: the host still checks every launch against its own
+options, so a stale choice is refused there, never launched.
 
 ## Isolation
 
@@ -358,6 +358,18 @@ so the host can have run at most that long after it: days it ran with nothing el
 offer goes after 7 days the host saw, however often it crashes. A smaller step counts, as days with the machine off do.
 Anything else that stops the record from starting, or from being looked at later, is logged and keeps
 every worktree for that run; the host goes on serving.
+
+## A Copilot session that stopped taking messages (#687)
+
+Copilot's own host-event watchdog can give up after 120 seconds ("did not acknowledge"), after which the session
+no longer takes messages and a background agent's result may be lost. The host treats a Copilot session as deaf on
+one of three signals: a reply that stayed unconfirmed while the session was idle; two replies in a row that took
+over 20 seconds to be typed; or the "stopped taking messages" attention the host raises for that error.
+It then ends the session through the normal stop path and resumes it through the normal resume path, but only when
+nothing would be lost: the session is idle, no tool is running, no background work or sub-agent is unfinished, no
+question is open, and the screen shows an empty input box. Otherwise it leaves the session alone and logs why.
+A session recovered once is not recovered again until it has taken a reply, with no timer involved. A stop that does not end the session is tried again on the next signal. The session is checked again after the screen is read, just before it is ended. The resumed session gets the machine's default launch settings and asks permission as usual: the old permission mode is not carried over, so it is never given wider rights than before. This restores a session that takes messages; it
+cannot bring back a result that was already lost. The cause is in the Copilot CLI (github/copilot-cli#5395).
 
 ## The log
 

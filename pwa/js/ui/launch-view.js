@@ -21,11 +21,16 @@
 // Where the machine allows it, Trust and Quit answer it with a command this device signs for that
 // choice (../transfer.js); otherwise it says to answer at the machine, and how to allow it.
 import { h } from './dom.js';
+import { ago } from './time.js';
 import { ASK, ALLOW_ALL, MAX_PROMPT, TRUST, checkLaunch } from '../launch.js';
 import { LaunchFollow, sameQuestion, samePrompt } from '../launch-follow.js';
+import { LINGER_READ_MS } from './receipt.js';
 
 export const APPROVE_HINT = 'agent-bridge-host workspace add <folder>';
 const AGENT_DEFAULT = '';
+
+// After busy, a launch's line stays this long: the "Try again in a moment" it says is over then (ui.md §7).
+export const LAUNCH_BUSY_PAUSE_MS = 2000;
 
 const sentence = (s) => (s && !/[.!?]$/.test(s) ? `${s}.` : s);
 const bytes = (s) => new TextEncoder().encode(s).length;
@@ -118,6 +123,8 @@ export class LaunchPanel {
   #probeTimer = null;
   #target = null;
   #options = null;
+  // When #options was read from its machine (ms), for the age shown beside them.
+  #optionsAt = 0;
   // Sessions the account's other machines offer: [{ hostId, machineName, key, resumable }].
   #remote = [];
   #asking = null;
@@ -166,12 +173,32 @@ export class LaunchPanel {
   // By machine, the launch shown as started since its unconfirmed outcome: { request, session },
   // its session's id when it is known: the one its outcome named, or a Trust answered here started.
   #lateStarted = new Map();
+  // The form's own complaint about what is picked (#press): { text, tone }. It stays until a setting
+  // changes, not until the machine's next list redraws the panel (ui.md §7).
+  #localLine = null;
+  // The launch request whose "Try again in a moment" has been timed, and the one whose line is over.
+  #busyFor = null;
+  #busyEnded = null;
+  #busyTimer = null;
+  // Folder-trust questions the machine stopped listing, by machine and id: when the neutral line
+  // saying so began, which is kept LINGER_READ_MS (#trustQuestions).
+  #trustGoneAt = new Map();
+  #trustGoneTimer = null;
 
   // A session registered or changed on a machine shown.
   sessionSeen(hostId, session) { this.#follow.session(hostId, session); }
 
   // Everything tied to the signed-in account goes with it.
   clear() {
+    clearTimeout(this.#busyTimer);
+    clearTimeout(this.#trustGoneTimer);
+    this.#busyTimer = null;
+    this.#busyFor = null;
+    this.#busyEnded = null;
+    this.#trustGoneTimer = null;
+    this.#trustGoneDue = 0;
+    this.#trustGoneAt.clear();
+    this.#localLine = null;
     this.#follow.clear();
     this.#alive.abort();
     this.#cancelJump();
@@ -210,6 +237,8 @@ export class LaunchPanel {
     };
     e.note = h('p', { class: 'note launch-note', role: 'status' });
     e.busy = h('p', { class: 'note warn launch-busy', role: 'status', hidden: true });
+    // How old the choices shown are, and why they could not be renewed. Not a live region: it is rewritten only when a draw finds its words changed.
+    e.age = h('p', { class: 'note launch-age', hidden: true });
     e.trust = h('div', { class: 'launch-trust', hidden: true });
     e.form = h('form', { class: 'launch-form', novalidate: true, onsubmit: (ev) => { ev.preventDefault(); this.#press(); } },
       Object.values(e.fields),
@@ -218,8 +247,10 @@ export class LaunchPanel {
         e.resend = h('button', { type: 'button', class: 'button secondary resend', hidden: true, onclick: () => this.#resend() }, 'Try again'),
         e.open = h('button', { type: 'button', class: 'button secondary launch-open', hidden: true, onclick: () => this.#openSession(true) }, 'Open session')));
     e.reload = h('button', { type: 'button', class: 'button secondary launch-reload', hidden: true, onclick: () => this.refresh() }, 'Reload choices');
+    // The form's own complaint is about what was picked: a change of a setting ends it.
+    for (const type of ['change', 'input']) { e.form.addEventListener(type, () => this.#settingChanged()); }
     e.status = h('p', { class: 'answer-status launch-status', role: 'status', 'aria-live': 'polite' });
-    e.body.replaceChildren(e.machineField, e.note, e.busy, e.trust, e.form, e.status, h('div', { class: 'row' }, e.reload));
+    e.body.replaceChildren(e.machineField, e.note, e.age, e.busy, e.trust, e.form, e.status, h('div', { class: 'row' }, e.reload));
   }
 
   get open() { return this.#open; }
@@ -234,8 +265,10 @@ export class LaunchPanel {
     this.els.body.hidden = !open;
     // Listed again only while it shows: opening it lists it anyway.
     if (!open) { this.#follow.stop(); this.#cancelJump(); }
-    // Every time it opens: a workspace approved or a session ended since.
-    if (open && this.#target && !this.#loading) { this.refresh(); }
+    // Every time it opens: a workspace approved, a session ended, or a folder-trust question
+    // begun at the machine since. The form is already on screen from the cache; this only
+    // renews it, so nothing waits on it.
+    if (open && this.#target && !this.#loading) { this.refresh({ join: true }); }
   }
 
   // The machines it can launch on, when there is a choice: [{ hostId, name }], or null; picked:
@@ -291,11 +324,17 @@ export class LaunchPanel {
     this.#follow.stop();
     this.#cancelJump();
     this.#selection++;
+    this.#localLine = null;
     this.#target = target;
-    this.#options = null;
+    // What the machine last said, kept from a background ask: shown at once, with its age.
+    // A machine held (#269) when picked shows its held note, not a form: its choices are asked
+    // for once it is current again, as before the cache.
+    const cached = target?.held ? null : target?.cached?.() ?? null;
+    this.#options = cached?.options ?? null;
+    this.#optionsAt = cached?.options ? cached.at : 0;
     this.#remote = [];
     this.#asking = null;
-    this.#error = null;
+    this.#error = cached?.error ?? null;
     this.#loading = null;
     // The last machine's questions go at once: their buttons must never act on this one.
     this.els.trust.replaceChildren();
@@ -313,6 +352,10 @@ export class LaunchPanel {
     this.#track(target.hostId, this.service.get(target.hostId));
     this.#title();
     this.setOpen(this.#open);
+    // Choices shown from the cache are not asked for again, but the other machines' sessions
+    // are not cached, so they are read for this pick. Nothing is listed to the follow-up from
+    // them: they may be old, and a busy or a launch is judged only on an answer asked for after it.
+    if (this.#options && !this.#loading) { this.#askRemotes(target); }
     // Its questions are looked for even with the panel closed: it shows only if there is one.
     if (target.inspectOnly && !this.#loading) { this.refresh(); }
     this.#draw();
@@ -363,6 +406,21 @@ export class LaunchPanel {
   // questions, with none shown, is asked for them again; one whose choices could not be read
   // (picked while away, #269) is asked for them now. Not one whose choices are still coming:
   // asking again would start the other machines' lists over.
+  // The cache learned something of a machine in the background (a first answer, or a renewed one after a reconnect).
+  cacheChanged(hostId) {
+    const target = this.#target;
+    if (target?.hostId !== hostId || this.#loading) { return; }
+    const c = target.cached?.();
+    if (!c) { return; }
+    if (c.options && c.at !== this.#optionsAt) {
+      if (!this.#options) { this.#askRemotes(target); }
+      this.#options = c.options;
+      this.#optionsAt = c.at;
+    }
+    this.#error = c.error;
+    this.#draw();
+  }
+
   reopened(hostId) {
     const target = this.#target;
     if (target?.hostId !== hostId || this.#loading) { return; }
@@ -380,27 +438,22 @@ export class LaunchPanel {
     this.waiting([...this.#asks.values()].some(Boolean));
   }
 
-  // launch.options again: a workspace approved, an agent installed, a session ended since.
-  refresh() {
+  // launch.options again: a workspace approved, an agent installed, a session ended since. An ask
+  // already on its way is joined only when join is set (a panel opening, which has no event to
+  // wait for): after a launch outcome or a Reload, an answer asked for before it would be stale.
+  refresh({ join = false } = {}) {
     const target = this.#target;
     if (!target) { return Promise.resolve(); }
     this.#error = null;
+    this.#askRemotes(target);
     // The other machines' sessions are added when they arrive: asking each takes a handshake,
     // and one that is slow to answer must not hold up this machine's own choices.
-    if (target.transfers) {
-      const asking = this.#asking = target.transfers.remotes().catch(() => []).then((remote) => {
-        // Only a newer ask, or another machine picked, makes this one stale: a presence update
-        // hands in a new target object for the same machine.
-        if (this.#asking !== asking) { return; }
-        this.#remote = remote;
-        this.#draw();
-      });
-    }
     const asked = ++this.#loads;
     this.#askedAt = Date.now();
-    const loading = this.#loading = target.load().then((o) => {
+    const loading = this.#loading = target.load({ fresh: !join }).then((o) => {
       if (this.#loading !== loading) { return; }
       this.#options = o;
+      this.#optionsAt = Date.now();
       // Asked for after this machine's last launch outcome: from now on this list says whether
       // the question it met still waits. Only this machine's: another's list says nothing of it.
       const seen = this.#results.get(target.hostId);
@@ -419,6 +472,17 @@ export class LaunchPanel {
     });
     this.#draw();
     return loading;
+  }
+
+  #askRemotes(target) {
+    if (!target.transfers) { return; }
+    const asking = this.#asking = target.transfers.remotes().catch(() => []).then((remote) => {
+      // Only a newer ask, or another machine picked, makes this one stale: a presence update
+      // hands in a new target object for the same machine.
+      if (this.#asking !== asking) { return; }
+      this.#remote = remote;
+      this.#draw();
+    });
   }
 
   #agent(id) { return this.#options?.agents.find((a) => a.id === id) ?? null; }
@@ -472,8 +536,9 @@ export class LaunchPanel {
     // Held (#269): asking would only fail; its choices are asked for once it is current again.
     e.reload.disabled = !!this.#loading || !!this.#target?.held;
     if (!o) {
+      this.#age('');
       e.note.hidden = false;
-      e.note.textContent = this.#target?.held ?? (this.#error ? `Couldn't get the choices from ${name}: ${sentence(this.#error)}` : `Getting the choices from ${name}…`);
+      e.note.textContent = this.#target?.held ?? (this.#error ? `${name} hasn't given its choices yet: ${sentence(this.#error)}` : `Getting the choices from ${name}…`);
       e.note.className = `note launch-note${this.#error || this.#target?.held ? ' warn' : ''}`;
       this.#busy('');
       // An answer pressed here stays in view, with its Try again, while the choices load or
@@ -519,9 +584,18 @@ export class LaunchPanel {
     e.note.hidden = !e.note.textContent;
     // Its machine's channel down, or its list not yet current (#269): nothing goes until it is.
     this.#busy(this.#target?.held || (o.busy ? `${name} is busy: ${sentence(o.busy)}` : ''));
+    this.#age(this.#loading ? `Choices as of ${ago(new Date(this.#optionsAt).toISOString())}, checking for newer ones…` : this.#error
+      ? `Choices as of ${ago(new Date(this.#optionsAt).toISOString())}. Couldn't get newer ones from ${name}: ${sentence(this.#error)} The machine checks every launch itself.`
+      : `Choices as of ${ago(new Date(this.#optionsAt).toISOString())}.`);
     this.#drawTrust();
     this.#drawCount();
     this.#show(this.#target ? this.service.get(this.#target.hostId) : null);
+  }
+
+  #age(text) {
+    const age = this.els.age;
+    if (age.textContent !== text) { age.textContent = text; }
+    age.hidden = !text;
   }
 
   // Written only when it changes: every listing redraws the panel, and the same words written
@@ -595,12 +669,17 @@ export class LaunchPanel {
       if (this.#selection !== selection) { return; }
     }
     this.#jumped = null;
+    this.#localLine = null;
     this.launched(target.hostId);
     this.service.submit({ hostId: target.hostId, launch });
   }
 
 
-  #resend() { if (this.#target && !this.#target.held) { this.service.resend(this.#target.hostId); } }
+  #resend() {
+    if (!this.#target || this.#target.held) { return; }
+    this.#localLine = null;
+    this.service.resend(this.#target.hostId);
+  }
 
   // ---- folder trust ----
 
@@ -615,13 +694,47 @@ export class LaunchPanel {
     const last = this.#target ? this.#results.get(this.#target.hostId) : null;
     if (entry?.state === 'done' && !(last?.request === entry.request && last.superseded)) { add(entry.detail?.trust); }
     // What the machine says waits now: an answer remembered here for a question it no longer
-    // lists is shown for its outcome, but never offered again.
+    // lists is shown for its outcome, but never offered again (and goes, LINGER_READ_MS after the
+    // machine stopped listing it, unless its outcome is one the person's own answer made).
     this.#live = new Set(seen.keys());
-    for (const a of this.#answersFor(this.#target?.hostId).values()) { add(a.question); }
+    const hostId = this.#target?.hostId;
+    for (const a of this.#answersFor(hostId).values()) {
+      if (!this.#trustLapsed(hostId, a)) { add(a.question); }
+    }
     return [...seen.values()];
   }
 
   #live = new Set();
+
+  // Whether a question's answer, remembered here, is for one the machine no longer lists, which
+  // says so in one neutral line (#trustCard): nothing more is said of an answer that did not go
+  // through (ui.md §7). Not while an answer is on its way or can be sent again, nor for the
+  // outcomes of the person's own answer that started or declined.
+  #trustClosing(a) {
+    // What may have gone in is kept in its own words (not confirmed), neutral once the machine stops listing the question.
+    const settled = a.state === 'done' && ['started', 'declined', 'unconfirmed'].includes(a.result?.outcome);
+    const pending = ['signing', 'sending'].includes(a.state);
+    const retry = a.state === 'failed' && !!a.data;
+    return !!this.#options && !this.#live.has(a.question.id) && !settled && !pending && !retry;
+  }
+
+  // Whether that line has been read for LINGER_READ_MS, so the question goes.
+  #trustLapsed(hostId, a) {
+    const key = JSON.stringify([hostId, a.question.id]);
+    if (!this.#trustClosing(a)) { this.#trustGoneAt.delete(key); return false; }
+    const now = Date.now();
+    if (!this.#trustGoneAt.has(key)) { this.#trustGoneAt.set(key, now); }
+    const left = this.#trustGoneAt.get(key) + LINGER_READ_MS - now;
+    if (left <= 0) { return true; }
+    const due = now + left;
+    if (this.#trustGoneTimer === null || due < this.#trustGoneDue) {
+      clearTimeout(this.#trustGoneTimer);
+      this.#trustGoneDue = due;
+      this.#trustGoneTimer = setTimeout(() => { this.#trustGoneTimer = null; this.#draw(); }, left + 10);
+    }
+    return false;
+  }
+  #trustGoneDue = 0;
   // launch.options asked for so far; and by machine, its last launch outcome seen, the count
   // when it came, and whether a list asked for since has superseded it.
   #loads = 0;
@@ -663,6 +776,13 @@ export class LaunchPanel {
     const retry = answer?.state === 'failed' && !!answer.data;
     const canAnswer = q.answerable && this.#live.has(q.id) && !!this.#target?.trust && !settled && !retry;
     const shown = answer ? describeTrust(answer, q) : null;
+    // Not confirmed, for a question the machine no longer lists: its words stay, in neutral tone.
+    if (shown && this.#options && !this.#live.has(q.id) && shown.tone === 'warn') { shown.tone = 'closed'; }
+    // No longer listed by the machine: one neutral line, and nothing of an answer that did not go through.
+    if (answer && this.#trustClosing(answer)) {
+      return h('section', { class: 'trust-question', dataset: { question: q.id, trust: 'gone' }, 'aria-label': `${q.label} folder trust` },
+        h('p', { class: 'note trust-gone', role: 'status' }, `${this.#target?.machineName || 'The machine'} no longer lists this question.`));
+    }
     return h('section', { class: 'trust-question', dataset: { question: q.id, trust: answer ? (answer.state === 'done' ? answer.result.outcome : answer.state) : 'waiting' }, 'aria-label': `${q.label} folder trust` },
       h('h3', { class: 'trust-title' }, `${q.label} on ${name} is asking whether to trust a folder`),
       h('p', { class: 'trust-line' }, h('span', { class: 'launch-label' }, 'Folder'), h('code', { class: 'trust-path trust-folder' }, q.folder)),
@@ -674,7 +794,7 @@ export class LaunchPanel {
           h('button', { type: 'button', class: 'button secondary trust-no', disabled: pending, onclick: () => this.#answerTrust(q, TRUST.quit) }, 'Quit'))
         : retry
           ? h('div', { class: 'row' }, h('button', { type: 'button', class: 'button secondary trust-resend', disabled: !!this.#target?.held, onclick: () => this.#resendTrust(hostId, q.id) }, 'Try again'))
-          : settled ? null : h('p', { class: 'note warn trust-at-machine' }, this.#options && !this.#live.has(q.id) ? `${name} no longer lists this question as waiting.` : q.atMachine ?? (q.answerable ? `Answer at the machine: this app cannot answer it on ${name}.` : 'Answer at the machine.')),
+          : settled || pending ? null : h('p', { class: 'note warn trust-at-machine' }, q.atMachine ?? (q.answerable ? `Answer at the machine: this app cannot answer it on ${name}.` : 'Answer at the machine.')),
       shown ? h('p', { class: `answer-status trust-status ${shown.tone}`, role: 'status', 'aria-live': 'polite' }, shown.text) : null);
   }
 
@@ -755,10 +875,14 @@ export class LaunchPanel {
     this.refresh();
   }
   #local(shown) {
-    const e = this.els;
-    e.status.textContent = shown.text;
-    e.status.className = `answer-status launch-status ${shown.tone}`;
-    this.root.dataset.launch = 'invalid';
+    this.#localLine = shown;
+    this.#show(this.#target ? this.service.get(this.#target.hostId) : null);
+  }
+
+  #settingChanged() {
+    if (!this.#localLine) { return; }
+    this.#localLine = null;
+    this.#show(this.#target ? this.service.get(this.#target.hostId) : null);
   }
 
   // A launch outcome for that machine, remembered from when it came: only a list asked for after
@@ -821,7 +945,8 @@ export class LaunchPanel {
     // What it offers has changed: a resumed session is no longer resumable, a worktree counts. A
     // busy that names a folder-trust question may name one that can be answered now, which the
     // choices shown from before may still list as not.
-    if (['started', 'unconfirmed'].includes(entry.outcome) || (entry.outcome === 'busy' && entry.detail?.trust)) { this.refresh(); }
+    // A refusal or failure may be the host saying the form shown, perhaps from the cache, is out of date.
+    if (['started', 'unconfirmed', 'refused', 'failed'].includes(entry.outcome) || (entry.outcome === 'busy' && entry.detail?.trust)) { this.refresh(); }
   }
 
   // Jumps to the new session's card, which may arrive (session.upsert) after the outcome.
@@ -865,8 +990,21 @@ export class LaunchPanel {
     if (entry?.state === 'done' && entry.outcome === 'unconfirmed' && this.#lateStarted.get(entry.hostId)?.request === entry.request) {
       entry = { ...entry, outcome: 'started', reason: null };
     }
-    const shown = entry ? describeLaunch(entry, { machineName: this.#target?.machineName, session }) : { text: '', tone: '' };
-    this.root.dataset.launch = !entry ? 'none' : entry.state !== 'done' ? entry.state : entry.outcome;
+    const gone = entry?.state === 'done' && entry.request === this.#busyEnded;
+    let shown = entry && !gone ? describeLaunch(entry, { machineName: this.#target?.machineName, session }) : { text: '', tone: '' };
+    // "Try again in a moment" is over once the moment is (LAUNCH_BUSY_PAUSE_MS); a resume held back
+    // while discovery runs is the waiting form (progress), which the machine's own list ends.
+    if (entry?.state === 'done' && entry.outcome === 'busy' && shown.tone === 'warn' && this.#busyFor !== entry.request) {
+      this.#busyFor = entry.request;
+      clearTimeout(this.#busyTimer);
+      this.#busyTimer = setTimeout(() => {
+        this.#busyEnded = entry.request;
+        this.#show(this.#target ? this.service.get(this.#target.hostId) : null);
+      }, LAUNCH_BUSY_PAUSE_MS);
+    }
+    // What the form says of its own settings stands over the last launch's words until one changes.
+    if (this.#localLine) { shown = this.#localLine; }
+    this.root.dataset.launch = this.#localLine ? 'invalid' : !entry ? 'none' : entry.state !== 'done' ? entry.state : entry.outcome;
     // Said once: drawn again unchanged (each listing redraws it), a polite live region would say
     // it again.
     if (e.status.textContent !== shown.text) { e.status.textContent = shown.text; }

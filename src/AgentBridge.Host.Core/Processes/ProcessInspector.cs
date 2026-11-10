@@ -415,6 +415,7 @@ public sealed class SystemProcessInspector : IProcessInspector
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
+            CreateNoWindow = true,
         };
         using var ps = ProcessLaunch.Start(start);
         if (ps is null) { return null; }
@@ -643,6 +644,10 @@ public static partial class CommandLine
                 return At(from);
             }
         }
+        // The wrapper's own name: the program, or under node the script it runs (npx-cli.js, pnpm.cjs).
+        var runner = Path.GetFileNameWithoutExtension(File(arguments[0]));
+        if (runner.Equals("node", StringComparison.OrdinalIgnoreCase) && from < arguments.Count) { runner = Path.GetFileNameWithoutExtension(File(arguments[from])); }
+        runner = runner.Replace("-cli", "", StringComparison.OrdinalIgnoreCase);
         for (var i = from; i < arguments.Count; i++)
         {
             var a = arguments[i];
@@ -660,7 +665,7 @@ public static partial class CommandLine
             {
                 return command;
             }
-            if (WrapperValueOptions.Contains(a) || WrapperCommandOptions.Contains(a)) { i++; }
+            if (WrapperValueOptions.Contains(a) || TakesRunnerValue(runner, a) || WrapperCommandOptions.Contains(a)) { i++; }
         }
         return null;
     }
@@ -668,6 +673,23 @@ public static partial class CommandLine
     // npx's, pnpm's and bunx's options that take the next argument as their value: the package
     // to run, or the folder to run in (pnpm's `--dir /work/codex dlx`), which is not the command.
     static readonly HashSet<string> WrapperValueOptions = new(StringComparer.Ordinal) { "-p", "--package", "--dir", "-C" };
+
+    // Each runner's own value options, chosen by the program's name: pnpm's -w is a flag, npm's
+    // is the workspace, so one global set would swallow a word after a flag. An option in no set
+    // is not skipped, so what follows it that is named codex still reads as Codex: toward holding.
+    static readonly Dictionary<string, HashSet<string>> RunnerValueOptions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["npx"] = new(StringComparer.Ordinal) { "--prefix", "--cache", "--userconfig", "--registry", "-w", "--workspace" },
+        ["npm"] = new(StringComparer.Ordinal) { "--prefix", "--cache", "--userconfig", "--registry", "-w", "--workspace" },
+        ["pnpm"] = new(StringComparer.Ordinal) { "--filter", "--reporter" },
+        ["bunx"] = new(StringComparer.Ordinal) { "--cwd", "--registry" },
+        ["bun"] = new(StringComparer.Ordinal) { "--cwd", "--registry" },
+        ["yarn"] = new(StringComparer.Ordinal) { "--cwd" },
+    };
+
+    static bool TakesRunnerValue(string runner, string option) =>
+        RunnerValueOptions.TryGetValue(runner, out var set) && set.Contains(option)
+        || runner.Equals("pnpm", StringComparison.OrdinalIgnoreCase) && option.StartsWith("--config.", StringComparison.Ordinal) && !option.Contains('=');
 
     // npx's options that take the command to run, as one argument.
     static readonly HashSet<string> WrapperCommandOptions = new(StringComparer.Ordinal) { "-c", "--call" };

@@ -85,6 +85,7 @@ public sealed class RelayClient : IAsyncDisposable
     long nextPush;
     readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement>> blobRequests = new();
     readonly ConcurrentDictionary<long, TaskCompletionSource<string?>> forgets = new();
+    readonly ConcurrentDictionary<long, (List<JsonElement> Machines, TaskCompletionSource<IReadOnlyList<JsonElement>> Done)> registries = new();
 
     // Frames held for a handler that is not attached yet.
     internal int QueuedFrames => inbound.Reader.Count;
@@ -165,6 +166,21 @@ public sealed class RelayClient : IAsyncDisposable
             return await tcs.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
         }
         finally { forgets.TryRemove(id, out _); }
+    }
+
+    // Asks the relay for the account's session registry (docs/protocol/roster.md): one frame per
+    // machine, as the relay sent it. Throws with the relay's reason when it refuses (slow-down).
+    public async Task<IReadOnlyList<JsonElement>> RegistryGetAsync(CancellationToken ct = default)
+    {
+        var id = Interlocked.Increment(ref nextPush);
+        var entry = (Machines: new List<JsonElement>(), Done: new TaskCompletionSource<IReadOnlyList<JsonElement>>(TaskCreationOptions.RunContinuationsAsynchronously));
+        registries[id] = entry;
+        try
+        {
+            await SendTextAsync(new { t = "registry-get", id }, ct);
+            return await entry.Done.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
+        }
+        finally { registries.TryRemove(id, out _); }
     }
 
     // Ends, never faults, when the connection does; the caller then reconnects.
@@ -274,20 +290,23 @@ public sealed class RelayClient : IAsyncDisposable
     // second plus how much later the earliest of them was read than the latest, so spacing N
     // over 1.5 s keeps every window to N while that lag stays under half a second.
     internal static readonly TimeSpan PaceWindow = TimeSpan.FromMilliseconds(1500);
+    // Test use: a window held open, so a send that must wait for it cannot be let through by a
+    // slow machine running past the real one.
+    internal TimeSpan? PaceWindowOverride { get; set; }
     readonly Queue<long> recentSends = new();
 
     // Called under sendLock, so waiting here holds back every later send, in order.
     async Task PaceAsync(CancellationToken ct)
     {
-        while (Pace(recentSends, Environment.TickCount64, MaxFramesPerSecond) is { } wait) { await Task.Delay(wait, ct); }
+        while (Pace(recentSends, Environment.TickCount64, MaxFramesPerSecond, PaceWindowOverride) is { } wait) { await Task.Delay(wait, ct); }
     }
 
     // How long the next send must wait, given when the latest ones went (oldest first); null
     // when it may go now, and then it is counted as sent.
-    internal static TimeSpan? Pace(Queue<long> recentSends, long now, int limit)
+    internal static TimeSpan?     Pace(Queue<long> recentSends, long now, int limit, TimeSpan? windowOverride = null)
     {
         if (limit <= 0) { return null; }
-        var window = (long)PaceWindow.TotalMilliseconds;
+            var window = (long)(windowOverride ?? PaceWindow).TotalMilliseconds;
         while (recentSends.Count > 0 && now - recentSends.Peek() >= window) { recentSends.Dequeue(); }
         if (recentSends.Count < limit) { recentSends.Enqueue(now); return null; }
         return TimeSpan.FromMilliseconds(window - (now - recentSends.Peek()) + 1);
@@ -297,6 +316,9 @@ public sealed class RelayClient : IAsyncDisposable
     internal void AbortSocket() => ws.Abort();
     internal Task Receiving => receiving.Task;
     readonly TaskCompletionSource receiving = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    // Test use: control frames this client has no case for, such as the session registry's.
+    internal event Action<JsonElement>? Unhandled;
 
     // Test use: send raw bytes the relay must refuse.
     internal async Task SendRawAsync(byte[] data, WebSocketMessageType type)
@@ -366,6 +388,16 @@ public sealed class RelayClient : IAsyncDisposable
                                 f.TrySetResult(j.TryGetProperty("error", out var why) && why.ValueKind == JsonValueKind.String ? why.GetString() : null);
                             }
                             break;
+                        case "registry":
+                            if (j.TryGetProperty("id", out var rid) && rid.TryGetInt64(out var rkey) && registries.TryGetValue(rkey, out var r))
+                            {
+                                if (j.TryGetProperty("error", out var rerr)) { r.Done.TrySetException(new InvalidOperationException(rerr.GetString() == "slow-down" ? "refused: the relay allows one registry read every 2 seconds; try again in a few seconds" : "refused: " + rerr.GetString())); }
+                                else if (j.TryGetProperty("known", out _)) { r.Done.TrySetResult(r.Machines); }
+                                else { r.Machines.Add(j.Clone()); }
+                            }
+                            else { Unhandled?.Invoke(j.Clone()); }
+                            break;
+                        default: Unhandled?.Invoke(j.Clone()); break;
                     }
                 }
                 else { Enqueue(data); }
@@ -390,6 +422,7 @@ public sealed class RelayClient : IAsyncDisposable
         foreach (var p in pushes.Values) { p.TrySetException(new IOException("relay connection ended")); }
         foreach (var b in blobRequests.Values) { b.TrySetException(new IOException("relay connection ended")); }
         foreach (var f in forgets.Values) { f.TrySetException(new IOException("relay connection ended")); }
+        foreach (var r in registries.Values) { r.Done.TrySetException(new IOException("relay connection ended")); }
         if (ws.State is WebSocketState.Open or WebSocketState.CloseReceived)
         {
             try { await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, default); }

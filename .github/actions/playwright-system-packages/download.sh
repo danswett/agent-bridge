@@ -37,6 +37,21 @@ limit=${PLAYWRIGHT_APT_LIMIT:-5m}
 mirrors="$apt_etc/apt-mirrors.txt"
 force=false
 [ "${PLAYWRIGHT_APT_FORCE_FALLBACK:-}" != true ] || force=true
+attempts=${PLAYWRIGHT_APT_ATTEMPTS:-3}
+delay=${PLAYWRIGHT_APT_RETRY_DELAY:-10}
+
+# Runs a command up to $attempts times, waiting delay, 2*delay, ... seconds between tries, so a
+# transient mirror error (a 5xx, a reset) costs seconds, not the job. timeout's 124 returns at
+# once: a slow mirror is left for Canonical's archive below, not waited on again.
+retry() {
+  local n=1 rc=0
+  while true; do
+    if "$@"; then return 0; else rc=$?; fi
+    if [ "$rc" -eq 124 ] || [ "$n" -ge "$attempts" ]; then return "$rc"; fi
+    echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::apt step failed (exit $rc, attempt $n of $attempts); retrying"
+    sleep $((delay * n)); n=$((n + 1))
+  done
+}
 
 # install-deps --dry-run prints the apt-get command it would run; the packages follow
 # --no-install-recommends. Every such line counts, should Playwright ever print one per browser.
@@ -46,12 +61,12 @@ if [ "${#pkgs[@]}" -eq 0 ]; then
   echo "::error::playwright install-deps --dry-run named no packages to download"; exit 1
 fi
 
-sudo apt-get update
+retry sudo apt-get update
 rc=0
 if [ "$force" = true ]; then
   echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::force-apt-fallback: taking the Azure mirror off apt's list before downloading anything; nothing timed out"
 else
-  sudo timeout "$limit" apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" || rc=$?
+  retry sudo timeout "$limit" apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" || rc=$?
 fi
 if [ "$force" = true ] || [ "$rc" -eq 124 ]; then
   if ! grep -q '^http://azure\.archive\.ubuntu\.com/' "$mirrors" || ! grep -q '^https://archive\.ubuntu\.com/ubuntu/' "$mirrors"; then
@@ -66,7 +81,7 @@ if [ "$force" = true ] || [ "$rc" -eq 124 ]; then
   fi
   if [ "$force" = true ]; then
     got=$(mktemp)
-    sudo apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" | tee "$got"
+    retry sudo apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" | tee "$got"
     if grep -q '^Get:.*azure\.archive\.ubuntu\.com' "$got"; then
       echo "::error::apt still fetched packages from azure.archive.ubuntu.com after it was taken off $mirrors"; exit 1
     fi
@@ -79,7 +94,7 @@ if [ "$force" = true ] || [ "$rc" -eq 124 ]; then
       echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::force-apt-fallback: nothing was downloaded from https://archive.ubuntu.com, so this leg proves nothing about the fallback"
     fi
   else
-    sudo apt-get install -y --download-only --no-install-recommends "${pkgs[@]}"
+    retry sudo apt-get install -y --download-only --no-install-recommends "${pkgs[@]}"
   fi
 elif [ "$rc" -ne 0 ]; then
   exit "$rc"

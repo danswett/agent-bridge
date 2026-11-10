@@ -395,6 +395,15 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         // Copilot writes a steering prompt when its next round starts, after the running tool.
         injector.OnInject = plan => _ = Task.Delay(700).ContinueWith(_ => Fixture.Append(events,
             Copilot.ToolDone("t1", second++), Copilot.TurnStart(second++), Prompt(plan.Sends[0].Text, "steering")), TaskScheduler.Default);
+        // The prompt lands 700 ms after the send; the shared 2 s confirm left too little on a loaded
+        // windows-11-arm runner (#1477). A passing run confirms at once, so the wait can be long.
+        Serve(Answerer(), new ReplyService(source, f.Processes, probe, new NoGuard(), injector, new ReplyOptions
+        {
+            CopilotHome = f.CopilotHome,
+            PlatformSupported = true,
+            ConfirmTimeout = TimeSpan.FromSeconds(60),
+            PollInterval = TimeSpan.FromMilliseconds(25),
+        }, gate: gate));
         var ch = await OpenAsync();
 
         Assert.Equal(("delivered", (string?)null), await ReplyAsync(ch, "also run the e2e tests"));

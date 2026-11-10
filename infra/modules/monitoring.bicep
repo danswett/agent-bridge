@@ -32,6 +32,12 @@ param budgetAmount int
 @description('First day of the budget\'s first month, yyyy-MM-dd: the existing budget\'s, or the first of the current month (infra/deploy.ps1). Empty: no budget.')
 param budgetStartDate string
 
+@description('The GitHub repository whose queued runs A-GHA watches, owner/name.')
+param githubRepository string = 'danswett/agent-bridge'
+
+@description('A run queued longer than this, in minutes, counts as Actions stalling. Busy hours on the shared runner pool queue runs for a while, so not too low.')
+param githubStallMinutes int = 30
+
 param tags object
 
 var appId = resourceId('Microsoft.App/containerApps', productionAppName)
@@ -253,5 +259,248 @@ resource budget 'Microsoft.Consumption/budgets@2023-11-01' = if (!empty(budgetSt
   }
 }
 
+// A-GHA (#658). On 2026-11-04 a GitHub Actions outage stalled every pipeline (CI, merges, the
+// Windows release, relay deploys, even ops-probe.yml) for hours with no alert. Anything running
+// on Actions can't report that, so this runs in Azure: every 5 minutes it reads GitHub's status
+// page and this repository's queued runs, and records one availability result, `github-actions`,
+// that the alert below watches. About $2 a month (some 90,000 built-in actions).
+//
+// A source it can't reach counts as no evidence, never as an outage: the status page or the
+// API being unreachable from Azure isn't GitHub being down, and the message says which sources
+// answered. Anonymous API calls share a per-address hourly limit with the region's other Logic
+// Apps; if the message shows the runs API failing for long, give it a read-only token (#658).
+var ingestionEndpoint = replace(first(filter(split(appInsights.properties.ConnectionString, ';'), p => startsWith(p, 'IngestionEndpoint=')))!, 'IngestionEndpoint=', '')
+
+resource githubWatch 'Microsoft.Logic/workflows@2019-05-01' = {
+  name: 'logic-agent-bridge-github-watch'
+  location: location
+  tags: tags
+  properties: {
+    state: 'Enabled'
+    parameters: {
+      ingestUrl: { value: '${ingestionEndpoint}v2/track' }
+      iKey: { value: appInsights.properties.InstrumentationKey }
+      repository: { value: githubRepository }
+      stallMinutes: { value: githubStallMinutes }
+    }
+    definition: {
+      '$schema': 'https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#'
+      contentVersion: '1.0.0.0'
+      parameters: {
+        ingestUrl: { type: 'String' }
+        iKey: { type: 'SecureString' }
+        repository: { type: 'String' }
+        stallMinutes: { type: 'Int' }
+      }
+      triggers: {
+        every5: { type: 'Recurrence', recurrence: { frequency: 'Minute', interval: 5 } }
+      }
+      actions: {
+        // Each answer is read only inside a condition on its status code: a 429 or an HTML error
+        // page has no JSON to read, and reading it anyway would fail the run before it reports.
+        components: {
+          type: 'InitializeVariable'
+          runAfter: {}
+          inputs: { variables: [{ name: 'components', type: 'array', value: [] }] }
+        }
+        queued: {
+          type: 'InitializeVariable'
+          runAfter: { components: ['Succeeded'] }
+          inputs: { variables: [{ name: 'queued', type: 'array', value: [] }] }
+        }
+        // True only once the runs answer held a workflow_runs list. A 200 without one (null or
+        // missing) is unreadable, not an empty, healthy queue.
+        runsRead: {
+          type: 'InitializeVariable'
+          runAfter: { queued: ['Succeeded'] }
+          inputs: { variables: [{ name: 'runsRead', type: 'boolean', value: false }] }
+        }
+        status: {
+          type: 'Http'
+          runAfter: { runsRead: ['Succeeded'] }
+          inputs: { method: 'GET', uri: 'https://www.githubstatus.com/api/v2/summary.json', retryPolicy: { type: 'fixed', count: 1, interval: 'PT20S' } }
+        }
+        runs: {
+          type: 'Http'
+          runAfter: { runsRead: ['Succeeded'] }
+          inputs: {
+            method: 'GET'
+            uri: 'https://api.github.com/repos/@{parameters(\'repository\')}/actions/runs?status=queued&per_page=100&created=%3C@{formatDateTime(addMinutes(utcNow(), mul(-1, parameters(\'stallMinutes\'))), \'yyyy-MM-ddTHH:mm:ssZ\')}'
+            headers: { 'User-Agent': 'agent-bridge-ops', Accept: 'application/vnd.github+json' }
+            // Only runs created before the stall threshold, so a page of fresh runs can't hide an old
+            // one (the API lists newest first). One quick retry keeps each check inside its 5 minutes,
+            // so a 15-minute window holds 3.
+            retryPolicy: { type: 'fixed', count: 1, interval: 'PT20S' }
+          }
+        }
+        statusAnswered: {
+          type: 'If'
+          runAfter: { status: ['Succeeded', 'Failed', 'TimedOut'] }
+          expression: { and: [{ equals: ['@outputs(\'status\')?[\'statusCode\']', 200] }] }
+          actions: {
+            keepComponents: {
+              type: 'SetVariable'
+              runAfter: {}
+              inputs: { name: 'components', value: '@coalesce(body(\'status\')?[\'components\'], json(\'[]\'))' }
+            }
+          }
+          else: { actions: {} }
+        }
+        runsAnswered: {
+          type: 'If'
+          runAfter: { runs: ['Succeeded', 'Failed', 'TimedOut'] }
+          expression: { and: [{ equals: ['@outputs(\'runs\')?[\'statusCode\']', 200] }] }
+          actions: {
+            keepQueued: {
+              type: 'SetVariable'
+              runAfter: {}
+              inputs: { name: 'queued', value: '@coalesce(body(\'runs\')?[\'workflow_runs\'], json(\'[]\'))' }
+            }
+            markRunsRead: {
+              type: 'SetVariable'
+              runAfter: { keepQueued: ['Succeeded'] }
+              inputs: { name: 'runsRead', value: '@not(equals(body(\'runs\')?[\'workflow_runs\'], null))' }
+            }
+          }
+          else: { actions: {} }
+        }
+        degraded: {
+          type: 'Query'
+          runAfter: { statusAnswered: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'] }
+          inputs: {
+            from: '@variables(\'components\')'
+            // Only a status GitHub documents as an outage counts; a missing or unknown one is unreadable.
+            where: '@and(contains(createArray(\'Actions\', \'Pages\'), item()?[\'name\']), contains(createArray(\'degraded_performance\', \'partial_outage\', \'major_outage\'), item()?[\'status\']))'
+          }
+        }
+        known: {
+          type: 'Query'
+          runAfter: { statusAnswered: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'] }
+          inputs: {
+            from: '@variables(\'components\')'
+            where: '@and(contains(createArray(\'Actions\', \'Pages\'), item()?[\'name\']), contains(createArray(\'operational\', \'degraded_performance\', \'partial_outage\', \'major_outage\'), item()?[\'status\']))'
+          }
+        }
+        degradedNames: {
+          type: 'Select'
+          runAfter: { degraded: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'] }
+          inputs: { from: '@coalesce(body(\'degraded\'), json(\'[]\'))', select: '@concat(item()?[\'name\'], \' \', item()?[\'status\'])' }
+        }
+        // `queued` is a run waiting for a runner: not `waiting` (an environment approval, such as
+        // the production gate) and not `pending` (a concurrency group), which are normal. Timed from
+        // run_started_at, which each re-run attempt resets; created_at would make a re-run of an old
+        // run look stalled at once.
+        stalled: {
+          type: 'Query'
+          runAfter: { runsAnswered: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'] }
+          inputs: {
+            from: '@variables(\'queued\')'
+            where: '@less(ticks(coalesce(item()?[\'run_started_at\'], item()?[\'created_at\'])), ticks(addMinutes(utcNow(), mul(-1, parameters(\'stallMinutes\')))))'
+          }
+        }
+        report: {
+          type: 'Http'
+          // Runs whatever happened above, so a malformed answer still reports, as no evidence and with
+          // the message saying "unreadable", rather than going silent. A-GHA-SILENT catches the watch
+          // not reporting at all.
+          runAfter: { degradedNames: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'], known: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'], stalled: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'] }
+          // The instrumentation key stays out of run history.
+          runtimeConfiguration: { secureData: { properties: ['inputs'] } }
+          inputs: {
+            method: 'POST'
+            uri: '@parameters(\'ingestUrl\')'
+            headers: { 'Content-Type': 'application/json' }
+            body: [
+              {
+                name: 'Microsoft.ApplicationInsights.Availability'
+                time: '@utcNow()'
+                iKey: '@parameters(\'iKey\')'
+                data: {
+                  baseType: 'AvailabilityData'
+                  baseData: {
+                    ver: 2
+                    id: '@guid()'
+                    name: 'github-actions'
+                    duration: '00:00:01'
+                    runLocation: 'azure-logic-app'
+                    success: '@and(equals(length(coalesce(body(\'degraded\'), json(\'[]\'))), 0), equals(length(coalesce(body(\'stalled\'), json(\'[]\'))), 0))'
+                    message: '@{concat(\'status page: \', if(not(equals(outputs(\'status\')?[\'statusCode\'], 200)), \'unreachable\', if(and(equals(actions(\'statusAnswered\')?[\'status\'], \'Succeeded\'), equals(actions(\'degraded\')?[\'status\'], \'Succeeded\'), equals(length(coalesce(body(\'known\'), json(\'[]\'))), 2)), if(equals(length(coalesce(body(\'degradedNames\'), json(\'[]\'))), 0), \'Actions and Pages operational\', join(coalesce(body(\'degradedNames\'), json(\'[]\')), \', \')), \'unreadable\')), \'; runs queued over \', string(parameters(\'stallMinutes\')), \' min: \', if(not(equals(outputs(\'runs\')?[\'statusCode\'], 200)), concat(\'unknown (API \', string(outputs(\'runs\')?[\'statusCode\']), \')\'), if(and(variables(\'runsRead\'), equals(actions(\'stalled\')?[\'status\'], \'Succeeded\')), string(length(coalesce(body(\'stalled\'), json(\'[]\')))), \'unreadable\')))}'
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}
+
+// One email when it starts and one when it clears (autoMitigate), not one every 5 minutes.
+// Below 50% over 15 minutes: at least two of the three checks in the window found a problem.
+resource githubAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
+  name: 'A-GHA GitHub Actions or Pages degraded'
+  location: 'global'
+  tags: tags
+  properties: {
+    description: 'GitHub reports Actions or Pages degraded, or runs here have sat queued over ${githubStallMinutes} minutes. Runbook: ops/runbooks/github-outage.md'
+    severity: 3
+    enabled: true
+    scopes: [appInsights.id]
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT15M'
+    criteria: {
+      'odata.type': 'Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria'
+      allOf: [
+        {
+          name: 'c1'
+          criterionType: 'StaticThresholdCriterion'
+          metricNamespace: 'microsoft.insights/components'
+          metricName: 'availabilityResults/availabilityPercentage'
+          timeAggregation: 'Average'
+          operator: 'LessThan'
+          threshold: 50
+          dimensions: [{ name: 'availabilityResult/name', operator: 'Include', values: ['github-actions'] }]
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: [{ actionGroupId: actionGroup.id }]
+  }
+}
+// A-GHA-SILENT. A metric alert never fires on missing data, so a watch that stopped (disabled,
+// deleted, or failing before it reports) would look exactly like GitHub being fine. So would one
+// that reports but can't read a source: success counts no evidence as healthy, and the most likely
+// cause, the anonymous runs API's hourly limit on Logic Apps' shared addresses, would blind the
+// queued-run half for good. So this counts only fully read results (no "unreachable",
+// "unreadable" or "unknown" in the message) and fires when none has arrived in 30 minutes. A log alert every 15 minutes costs
+// about $0.50 a month.
+resource githubWatchSilent 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
+  name: 'A-GHA-SILENT GitHub watch blind'
+  location: location
+  tags: tags
+  kind: 'LogAlert'
+  properties: {
+    description: 'No fully read github-actions result from logic-agent-bridge-github-watch in 30 minutes (none arrived, or a source was unreachable or unreadable), so A-GHA is blind. Runbook: ops/runbooks/github-outage.md'
+    severity: 3
+    enabled: true
+    scopes: [appInsights.id]
+    evaluationFrequency: 'PT15M'
+    windowSize: 'PT30M'
+    criteria: {
+      allOf: [
+        {
+          query: 'availabilityResults | where name == "github-actions" | where message !has "unreachable" and message !has "unreadable" and message !has "unknown"'
+          timeAggregation: 'Count'
+          operator: 'LessThan'
+          threshold: 1
+          failingPeriods: { numberOfEvaluationPeriods: 1, minFailingPeriodsToAlert: 1 }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: { actionGroups: [actionGroup.id] }
+  }
+}
 output appInsightsId string = appInsights.id
 output actionGroupId string = actionGroup.id

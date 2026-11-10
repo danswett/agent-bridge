@@ -28,9 +28,13 @@ hold_labels: [hold, do-not-merge]
 # latest from one of these accounts is success (AGENTS.md says how to post it). A status binds to
 # its commit, so any new push drops it. Statuses from anyone else, the workflows' own token above
 # all, are ignored: a pull request's workflow can't post its own receipt.
+# agent-bridge-receipts is the receipts GitHub App (Commit statuses: write only; its key stays on
+# VM4, quality/post-receipt.ps1), named as GraphQL names it, without REST's "[bot]". It has its own
+# rate pool, so danswett's quota running out can't stop receipts. danswett stays as the fallback:
+# the App's key lives on one machine, and a receipt must still be postable when it is down.
 independent_review:
   context: independent-review
-  posters: [danswett]
+  posters: [danswett, agent-bridge-receipts]
 
 # A pull request marked as a security change needs the receipt whatever it touches: a title
 # starting with this word (any case), or one of these labels. #549, a fix to how approvals render,
@@ -64,20 +68,17 @@ main_green:
   workflow: ci.yml
   exempt_labels: [fixes-main]
 
-# The standing rule (owner decision 2026-11-05, #955; it began as a stopgap when Copilot's review
-# quota ran out at about 18:02 PT): Copilot reviews only the security PRs Quality spends the
-# monthly included requests on. A pull request with one of these labels may go without a
-# completed Copilot review on its head, but only with a success independent-review receipt on that
-# head from one of independent_review.posters. One that needs that receipt (a sensitive path, a
-# security mark, an incomplete file list) also needs a success second_review receipt on the same
-# head from a poster, and the two descriptions must each name a model from a different family:
-# Copilot caught #836's HIGH after two claude-opus-5.5 reviews missed it, and the second family is
-# what stands in for that. Sensitive files under one_review_paths don't call for the second
-# (Product, hub 6675322154: a status.md row the receipt checked against its decision). A completed
-# Copilot review on the head is itself the other family, so the label then changes nothing (#962,
-# option a). A poster's failure in second_review blocks whether or not the label is on: taking the
-# label off mustn't discard a reviewer's veto (sr-962b). The label alone waives nothing, and every
-# other requirement stands. Adding a label takes triage rights: the merge coordinator adds it.
+# The standing rule (owner decision 2026-11-08): Copilot and Codex reviews are optional extras and
+# never block a merge; the independent-review receipts are the gate. A pull request needs a success
+# independent-review receipt on its head from one of independent_review.posters, and no Copilot
+# review. One that needs that receipt (a sensitive path, a security mark, an incomplete file list)
+# also needs a success second_review receipt on the same head from a poster, and the two
+# descriptions must each name a model from a different family. Sensitive files under
+# one_review_paths don't call for the second (a status.md row the receipt checked against its
+# decision). A completed Copilot review on the head still counts, as the other family, but never replaces the first receipt. A Copilot
+# error or timeout review is ignored. A poster's failure in either receipt blocks. Every other
+# requirement stands. labels is still accepted (the older 2026-11-05 label, #955) but changes
+# nothing: no label is needed.
 copilot_waiver:
   labels: [copilot-waived]
   second_review: independent-review-2
@@ -111,6 +112,9 @@ sensitive_paths:
   - nuget.config
   - global.json
   - .config/dotnet-tools.json
+  # The shared fleet load limits: they decide which machine a launch is placed on. SRE owns the
+  # numbers, Engineering the schema; the launcher refuses to place on a bad file.
+  - docs/fleet-load-limits.json
   # The wire, the relay and what types into sessions: what lets a remote device act on a machine.
   - docs/protocol/**
   - src/AgentBridge.Protocol/**
@@ -187,6 +191,7 @@ sensitive_paths:
   - apple/scripts/**
   - src/AgentBridge.Host.Delivery/**
   - tools/AgentBridge.RelaySmoke/**
+  - tools/epic-dashboard/**
   - pwa/js/host-client.js
   - pwa/js/protocol.js
   - pwa/js/relay.js

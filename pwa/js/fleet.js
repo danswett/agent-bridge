@@ -169,15 +169,18 @@ export class FleetStatus {
 
   // An op on a machine: on the channel of a machine shown, else on a short one of its own.
   // Counted from the channel's opening to the response, so the connection doesn't rest under a
-  // press (Check, Install) still on its way to a machine not shown (busy).
+  // press (Check, Install) still on its way to a machine not shown (busy). data may be a function
+  // of the machine's static key, as that channel's handshake proved it (null where it has none),
+  // for a press signed for that machine (Update now): made once the channel is open.
   async call(id, op, data) {
     this.#calls += 1;
+    const made = async (channel) => (typeof data === 'function' ? data(channel?.hs?.remoteStatic ? new Uint8Array(channel.hs.remoteStatic) : null) : data);
     try {
       const link = this.#followed(id) ? this.hosts.link(id) : null;
-      if (link?.phase === 'open' && link.client) { return await link.client.request(op, data); }
+      if (link?.phase === 'open' && link.client) { return await link.client.request(op, await made(link.channel)); }
       const channel = await this.connection.openChannel(id, { timeoutMs: 10000 });
       const client = this.makeClient(channel);
-      try { return await client.request(op, data); } finally { client.close(); }
+      try { return await client.request(op, await made(channel)); } finally { client.close(); }
     } finally {
       this.#calls -= 1;
     }

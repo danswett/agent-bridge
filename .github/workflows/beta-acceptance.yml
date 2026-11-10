@@ -1,0 +1,62 @@
+# The Beta acceptance run (#1185, #736): the real published Beta installer on a fresh hosted
+# Windows runner, x64 and native Arm64. Dispatch only: no pull_request trigger, no cron, no secrets.
+# See quality/lab/beta-acceptance.ps1 for the steps.
+name: Beta acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: beta-acceptance
+  cancel-in-progress: false
+
+jobs:
+  accept:
+    name: accept (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, runner: windows-latest }
+          - { arch: arm64, runner: windows-11-arm }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Run the acceptance steps
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./quality/lab/beta-acceptance.ps1 -Arch ${{ matrix.arch }} -Out "$env:RUNNER_TEMP/accept" -Repo ${{ github.repository }}
+      - name: Upload logs and screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: beta-acceptance-${{ matrix.arch }}
+          path: ${{ runner.temp }}/accept
+          if-no-files-found: warn
+
+  # Its own job so the only write permission in this workflow never shares a runner with the
+  # installer or the product.
+  report:
+    name: report a failure
+    needs: accept
+    if: ${{ always() && needs.accept.result != 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: File an issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "Beta acceptance did not fully pass" \
+            --body "The Beta acceptance run did not fully pass (a failed or NOT RUN step on x64 or Arm64). Per-step results are in the run summary and artifacts: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

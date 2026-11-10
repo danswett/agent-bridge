@@ -184,32 +184,36 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     wrap, and a character the console draws other than as written is drawn so in the bar
     too, and refused there. A bar too wide for the console shows only the labels around the
     field being answered, between arrows ("←" when labels are hidden before them, "→" when
-    after, `Da`'s `Hfn` window). Read as exactly such a window at that field, it is refused
-    with nothing typed and named (`bar-window`). Its reason says how wide the window must be
-    for the whole bar ("its titles need a window at least N columns wide"; N each title's
-    characters, two columns around each, one between and the four `$fn` leaves, a lower
-    bound as a wide character takes two), and to widen it or make its font smaller, or answer
-    at the machine. Where N
-    is more than the 250 columns the host launches sessions with, widening is no advice (a
-    maximized window, its buffer then as wide as the screen allows, was still too narrow
-    live, #1123): "this question's titles are too long for Slipgates to check which field is
-    open; answer it at the machine, or ask with shorter titles". Reasons say "Slipgates",
-    never "phone": a browser or the Windows app answers the same way. A form
-    that differs from the question only in a hidden title reads the same, and each field's
-    own heading is read only once the keys reach it, after earlier fields are already filled
-    (#1137 review). A six-field form with long titles at 102 columns showed two labels and
-    "→", and was refused as no form at all, unnamed (#1123). Sessions the host launches open
-    250 columns wide so such a bar shows whole (host-launch.md, Width); the screen read takes
-    each row at the console buffer's full width, the width the CLI draws to. Copilot CLI 1.0.106's bar
-    (`_l`, window `kHi`) shows the most labels that fit around the field (any such run, each
-    read), and where not even one fits, the field's label alone, however long, wrapped over
-    as many rows as it takes with the arrows beside its first row: read across those rows
-    (words in order, a space or none at each break), it is the bar's window too, refused as
-    `bar-window`, never taken as the bar. Three titles of full sentences at 120 columns were
+    after, `Da`'s `Hfn` window). Read as exactly such a window at that field (#1554), it is accepted as the bar: the host
+    checks the labels it shows, the question's message, the field's heading and its hints, and
+    never refuses for width. A form that differs from the question only in a hidden title reads
+    the same at the first field; each later field's bar reaches that title, and the form is
+    refused there (#1137 review). Sessions the host launches open in a normal window, so their
+    width is the window's (host-launch.md, Width); the screen read takes each row at the
+    console buffer's full width. Copilot CLI 1.0.106's bar (`_l`, window `kHi`) shows the most
+    labels that fit around the field, and where not even one fits, the field's label alone,
+    wrapped over as many rows as it takes, with the arrows beside its first row: read across
+    those rows, it is the bar's window too, and accepted the same way. Before #1554 a 9-field
+    card with long titles was refused as `bar-window` with "titles are too long": the check
+    that found the open field was refusing every windowed bar. Three titles of full sentences at 120 columns were
     refused so live as the form gone (`bar@29`). A bar that reads as neither the whole bar
     nor a window at this field is refused (`bar`) as "this window is too narrow, or the
     question's titles too long, to check which field is open", not as the form gone: with
     the question's heading and message above it, it seldom is.
+    A form taller than the session's window shows only its bottom: the CLI draws the question
+    whole, so a long one pushes the heading ("Copilot needs information.") and the top rule
+    above the window, and the screen read takes the visible rows alone. With no heading, the
+    rows are named as such a form (`tall`) when the last row drawn is a rule no row above
+    repeats (a form's top rule would) and above it is one of this question's field headings
+    over the hints that field draws; the answer is refused before any key, and no Esc, with
+    "This question is taller than the session window, so Slipgates cannot check it. Make the
+    window taller, or answer it at the machine." A 120 by 30 console showed so live, a
+    choice, a Yes/No and a text field under a long question, refused as the form gone
+    (#1123, #1193); the same form, read with the injector on another machine, is the test's
+    screen. Naming it lets no key go: what asked, and which question, are above the window.
+    Past the first field (a later field's box growing the form off the window), its reason is
+    "the question's form grew taller than the session window, so Slipgates could not check its
+    next field", inside the unconfirmed answer's reason, which says to finish at the machine.
     What cannot be known beforehand (a permission prompt opening over a later field, or a
     long field scrolling the form's heading off a short window) still stops the keys there:
     the answer is then `unconfirmed`, and its reason names the fields that were answered,
@@ -224,13 +228,16 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     next keys go to is read again, every poll interval for up to 2 s (`FormRecheck`), and
     the keys go held to the first read that does; read in the middle of a redraw (streaming
     output, the conversation scrolling), the form can be half drawn. A write the worker
-    refused because the screen changed, nothing of it typed, is tried again within the same
-    2 s held to a fresh read, but only when that read shows the form at the same field with
+    refused because the screen changed, nothing of it typed, is tried again held to a fresh
+        read. That wait runs from the write's first refusal, not from when it queued for the typing
+        slot, and is one wait for the whole write: 2 s, and while the screen keeps changing up to 8
+        s more (`BusyScreenWait`), 10 s at the longest, ended earlier once the screen stops
+        changing without showing the form. The retry goes only when that read shows the form at the same field with
     the field itself (its options and pointer, or what is typed into it) drawn exactly as in
     the rows the write was held to: what changed was elsewhere on the screen, and the keys do
     the same there. A field drawn otherwise gets nothing more. Each refusal logs which check
-    failed (`heading`, `bottom-rule`, `under`, `message`, `bar`, `bar-window`, `field`,
-    `field-heading`, `hints` or `prompted`, with the row) and the screen's outline (its row count, widest
+    failed (`heading`, `bottom-rule`, `under`, `message`, `bar`, `field`,
+    `field-heading`, `hints`, `prompted` or `tall`, with the row) and the screen's outline (its row count, widest
     row, blank rows, where its rules and form headings are), never what any row says.
   * A form left part answered is not left so if the host can help it (#1123; design #1135,
     section 4). The delivery waits, holding no keys and not the typing slot, while the screen
@@ -257,15 +264,16 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     still-open call, no other question asked), even while the session's listing shows that
     approval as its question or the form as answered at the machine; the question no longer
     asked ends it. What a resume checks is
-    kept in memory for that delivery only, never the answer's words on disk: after a host
-    restart, a resent answer finds the prompt in the attempt ledger and types nothing.
+    kept in memory for that delivery only: after a host restart, a resent answer finds the
+    prompt in the attempt ledger and types nothing (its words kept while it is unconfirmed,
+    step 6 below, are only read again, never resumed or typed).
   * Before the first key goes into a text or number field, on a first pass and a resume alike
     (the first field included), the screen must show that field as it opens
     (`CopilotFormScreen.Untouched`): its input's "❯ " alone, or, for a field that opens with
     its default typed in, exactly that default. Keys typed into a box add to what is there,
     so a "9" typed at the machine and an answer's "0" would be submitted as "90"; a field
     showing anything else gets no keys (`refused` on a first pass with nothing typed; on a
-    resume nothing is typed, and the form is reset as below). An option list or a Yes/No
+    resume nothing is typed, and the form is left as below, never reset). An option list or a Yes/No
     needs no such check: its keys walk from the top whatever row the pointer was left on,
     and nothing typed stays in it. A checkbox list's ticks are not read (see "What no plan
     can see"). Spaces typed at the machine into an empty box are the one thing this check
@@ -278,7 +286,27 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     form is reset). This holds for a number box as well, although the CLI records one as
     `Number(text)`, which would ignore the spaces and record the same number. Only spaces
     after the words stay unseen (above).
-  * Not resumed within `ResumeWait` (or after three resumes that each stopped again), the form
+  * The input box is drawn one of two ways (`Ud`, `iVn` in Copilot CLI 1.0.106 and 1.0.107):
+    between two rules ("─"), the "❯ " at the rule's first column; or, with the CLI's prompt
+    frame on (`PROMPT_FRAME`), between a row of "▄" and a row of "▀" as wide, no sides, the
+    "❯ " one column in. The frame is on with no setting of the person's at all on the
+    account #1123 was reported from (1.0.107; `COPILOT_PROMPT_FRAME=0` turns it off, `=1`
+    on): the main prompt shows it as "▄"/"▀" rows too. Read only as two rules, an empty
+    framed box was no box, so the field read as already typed into and was refused after the
+    choice before it had gone (#1123). Exactly one such pair is a box: rules and frame edges
+    together, two of either edge, edges of different widths, or a caret not where the frame
+    puts it, are none, and the field gets no keys.
+  * Not resumed within `ResumeWait` (or after three resumes that each stopped again), a form
+    showing the field after its whole ones with no key of the answer in it is left as it is,
+    with nothing pressed, not even Esc (#1123): the keys stopped before that field (refused
+    there, typing nothing), so there is nothing in it to take back, and an Esc would only
+    cancel the whole form, the fields the session took with it; on the owner's machine it did
+    so, and the answer was lost. The answer is `unconfirmed` (`resume=left`), with no `code`,
+    its reason naming what went and saying nothing was cancelled: "Slipgates entered
+    "<field>", ... but typed nothing into "<field>", and cancelled nothing; the question is
+    still open at the machine: finish it there" (the product's name from `Product.Name`).
+    Otherwise (the keys or words of a field went but not its Enter, or its Enter went and the
+    form never moved on) the form
     is reset: one Esc (the form's own `esc cancel`), held to rows that show this very form at
     one of its fields with that hint; a screen showing anything else gets nothing, not even
     the Esc, nor does a field whose hints say `esc clear` (1.0.106: the Esc would only empty
@@ -303,7 +331,7 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     request=<8> session=<8> cli=<version> fields=<n> shape=<kind[options]+...>
     reads=<n> rereads=<n> steady=yes|no retries=<n> check=<name@row|none> taken=<k>/<n>
     stages=slot:<ms>,typed:<ms>,confirmed:<ms> total=<ms> outcome=<outcome>
-    resume=<-|resumed|held|gone|redone|redone-<outcome>|replaced|stale|uncancelled> resumes=<n>`, the last two
+    resume=<-|resumed|held|gone|redone|redone-<outcome>|replaced|stale|uncancelled|left> resumes=<n>`, the last two
     saying what became of a form left part answered and how many resumes typed into it (a
     form answered afresh that stopped again keeps what became of that, `redone-held` say,
     never plain `redone`). Its
@@ -321,7 +349,7 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     reported `typed`, not `delivered`; rows are compared whole, so an animated form would be
     refused rather than typed into; a form drawn taller than the console's window, its
     heading or hints scrolled out of sight, is stopped rather than typed into, and so is a
-    form whose tab bar is too wide to name every field (`bar-window`).
+    form whose tab bar is too wide to name every field (answered since #1554).
   * An optional text field left
     out is skipped with Enter; an option list cannot be left out, since Enter commits
     whatever its caret is on.
@@ -674,11 +702,16 @@ In order, for every answer:
    (decided with the admission itself): another sender, or the same id under another question,
    replaying it gets the answer a request of its own would, never the first's outcome or
    progress. That
-   record is the host's memory only, and is kept while the prompt's claim is; it never
-   covers an answer that typed nothing, nor a different answer. A request UUID's own outcome,
-   by contrast, is also kept in the attempt ledger, so that window survives a host restart; those
-   receipts carry the UUID only, with no sender, session or question, so the ownership rule above
-   holds only in memory until receipts are reconciled with #1100's.
+   record is kept while the prompt's claim is, in the host's memory and, since #1159 slice 0, in
+   the attempt ledger (step 6), so it survives a restart: a host that starts finds a prompt's
+   first answer there, with its sender, hash and outcome, and while it is `unconfirmed` reads it
+   again as above, so a retry is told the same before a restart as after it. It never covers an
+   answer that typed nothing, nor a different answer. A request UUID's own outcome is also kept
+   in the ledger for its 15 minutes, with the sender, session and question it was admitted for;
+   after a restart, a UUID the ledger knows (by its receipt, or by a claim with no outcome yet)
+   asked for by anyone else, or under another session or question, is a request of its own as
+   above, so it gets exactly what an unknown UUID with the same answer would and cannot be
+   probed. An entry from before slice 0 has no owner and is nobody's.
 4. The session's process is still the live agent process; it does not run elevated
    (integrity level High or above, or unreadable, is refused).
 5. One answer is typed at a time across sessions, and its turn is taken before these last
@@ -703,8 +736,44 @@ In order, for every answer:
    A failed write is retryable: it refuses that request, the next one re-reads the file and keeps every
    claim held in memory, and only a corrupt file latches refusal until restart. The ledger's
    refusal reasons can name a question's label or field names (never answer text), and its folder's
-   ACL lets the Codex sandbox group read it; the ledger holds no secrets. Receipts are request UUIDs
-   only; reconciling them with #1100's receipts is open.
+   ACL lets the Codex sandbox group read it; the ledger holds no answer's words. Each claim and
+   receipt keeps the sender, session and question it was admitted for (step 3), and a claim keeps
+   a hash of the answer (its fields and text) and the answer's first result (outcome and
+   stage), updated as a read settles it (step 9). The hash is HMAC-SHA-256 under this install's
+   key, `private\answer-key` (below; never in the ledger's folder, never logged), with the key's
+   id beside it, so nobody who can read the ledger can confirm a guess at a short answer (a
+   choice, a yes, a PIN) by hashing it. With no key to be had (it can't be made or read, or the
+   folder is readable by anyone else, when the key is deleted too), nothing may rely on a hash:
+   every answer is `refused` before any key as one the machine can't keep safely (below). A hash
+   made with a key since lost or replaced, or a plain one written by an earlier build, is never
+   taken for the same answer, and its entry is nobody's. A plain hash is also dropped from the
+   file when the ledger is first read, every claim kept; until that write succeeds nothing is
+   typed, and each later look tries it again. A key file that isn't a key is replaced by a new one.
+
+   While a Copilot form's or Claude answer is `unconfirmed`, the claim also keeps what reading
+   it again needs (the agent, transcript path, call or tool-use id and read offset) and a key to
+   the answer's words, which are kept apart, on Trust's conditions (#1161): in
+   `private\answer-words.json` under the profile folder, a folder whose ACL is protected and
+   grants this user and SYSTEM alone (0700, and 0600 for the file, elsewhere), checked before
+   every write; the text as sent and nothing else, written to a temporary file in that folder and
+   renamed over the old one. The words go at the first of: any result but `unconfirmed`; the
+   claim released; its question gone (after one last read of its record, so an answer recorded at
+   the machine still settles); and 24 hours after they were typed. A question is gone on what is
+   known, never on what is missing: its session listed asking another question (unless discovery
+   is held for its agent, `ISessionSource.Held`), or its session removed, as the source announces.
+   A session merely not listed (not yet found after a restart, or unaccounted for while its agent
+   is held) keeps the words, for at most their 24 hours. A host
+   that starts deletes leftover temporary files, words past those exits and words no claim
+   refers to. A delete that fails fails closed: the claim no longer has words, so a retry is told
+   only that nothing was typed again and is never read from them; the delete is tried again at
+   every write, before every bound check and at every start, and until it succeeds the words
+   still count against the bounds. At most 32 answers' words are kept, 16 KiB each and 256 KiB in
+   all; an answer past a bound, or while the folder can be read by anyone else, is `refused`
+   before any key with `DeliveryReasons.CannotHoldAnswer` ("the machine can't keep this answer
+   safely until it's confirmed, so nothing was typed; answer at the machine"), and nothing kept is
+   evicted or cut. Copilot permission prompts and Codex approvals are not read again, so they
+   keep no words. The words go nowhere else: not to a log, an error message, a reply or the
+   relay (the canary test in `AnswerFlowTests`).
 7. The worker types the plan. Nothing written (it could not start, attach or open the
    console input) is `refused`, and releases the claim. Anything after its first write that
    is not a clean finish (the worker died, hung, or the console closed) is `unconfirmed`,
@@ -725,7 +794,8 @@ In order, for every answer:
    Every `unconfirmed` answer says its `stage`: `typed` when nothing was recorded for the
    call (the keys reached the prompt, but it may not have been submitted), `recorded` when
    something else was (#467).
-9. In the same host run, a repeat of a request settled `unconfirmed` (a client's resend after a reconnect) reads
+9. A repeat of a request settled `unconfirmed` (a client's resend after a reconnect), in the
+   same host run or, while its words are kept (step 6), after a restart, reads
    the same call's record again from the same point, and types nothing. An answer recorded
    since, the one typed (submitted at the machine, or recorded late), makes the request
    `delivered` from then on; another makes it `recorded`. Only that call is read, so a newer
@@ -780,8 +850,8 @@ still reads so. `agent-bridge-injector.exe <pid> --screen` types nothing and pri
 visible rows, each at the console buffer's full width (the width the agent draws to, wider
 than the window where a screen clamps it). `agent-bridge-injector.exe <pid> --widen <n> <created>`
 types nothing either: only while the process is still the one created then (held open
-throughout), it makes the console's buffer at least n columns wide (a launch's console,
-host-launch.md, Width) and prints the width. It is a separate process because Windows ends every process attached to
+throughout), it makes the console's buffer at least n columns wide and prints the width (the
+host does not call it now: launches take the window's own width, host-launch.md, Width). It is a separate process because Windows ends every process attached to
 a console when that console's window closes (spike S1). It ignores Ctrl+C, re-registering
 after each attach. One worker runs at a time. The host only reads everything else: it
 never writes, locks, renames or deletes anything the agents or agent-ha-bridge own.

@@ -24,7 +24,9 @@ public interface IUpdater
     // Exits the app, replaces it, and starts the new version: only the release named, the one the
     // person or the updater chose, and only while it is the one ready. Anything else throws before
     // anything is replaced (a check or download meanwhile may have replaced it; r4487830884).
-    void ApplyAndRestart(string version);
+    // handedOver: called once the installer has started, just before the app exits, so the next
+    // start knows an install was attempted (#1167); never when anything threw first.
+    void ApplyAndRestart(string version, Action? handedOver = null);
     // Where releases come from now (the feed, and Include pre-releases): what a check found, or a
     // download fetched, belongs to it.
     string Source => "";
@@ -50,6 +52,7 @@ public sealed partial class SettingsViewModel : Observable
     readonly Func<AppPreferences> prefs;
     readonly Action<AppPreferences> savePrefs;
     string relayUrl;
+    readonly string defaultRelay;
     string machineName = "";
     bool nameEdited;
     string? error;
@@ -66,6 +69,7 @@ public sealed partial class SettingsViewModel : Observable
     int foundAt;
     string log = "";
     string agentInstallStatus = "";
+    string agentSignInStatus = "";
     bool agentInstallInProgress;
     bool installRequestPending;
     string? installing;
@@ -79,7 +83,7 @@ public sealed partial class SettingsViewModel : Observable
     // says nothing on the rows of the host that came back.
     int hostsGone;
 
-    public SettingsViewModel(HostConnection host, HostManager manager, IUpdater updater, IAppAtSignIn appAtSignIn, Func<AppPreferences> prefs, Action<AppPreferences> savePrefs, string appVersion, string defaultRelay)
+    public SettingsViewModel(HostConnection host, HostManager manager, IUpdater updater, IAppAtSignIn appAtSignIn, Func<AppPreferences> prefs, Action<AppPreferences> savePrefs, string appVersion, string defaultRelay, bool relayEditable = true)
     {
         this.host = host;
         this.manager = manager;
@@ -88,7 +92,15 @@ public sealed partial class SettingsViewModel : Observable
         this.prefs = prefs;
         this.savePrefs = savePrefs;
         AppVersion = appVersion;
-        relayUrl = prefs().Relay ?? defaultRelay;
+        this.defaultRelay = defaultRelay;
+        RelayEditable = relayEditable;
+        // A release build signs in to its own build's relay. A saved production name (bad-duck, before the move to slipgates)
+        // gives way to it; any other saved relay (staging, self-hosted) is kept and shown, never swapped for production.
+        // The host's relay.txt is the relay this profile last signed in to, so it counts as saved too (the app's own preference wins).
+        var saved = prefs().Relay;
+        var kept = relayEditable ? null : KeptRelay(saved) ?? KeptRelay(HostRelay(manager.Layout.ProfileFolder));
+        relayUrl = relayEditable ? saved ?? defaultRelay : kept ?? defaultRelay;
+        RelayKept = kept is not null;
         trust = TrustEditor.For(host);
         trust.Changed += Refresh;
         host.Changed += Refresh;
@@ -99,7 +111,7 @@ public sealed partial class SettingsViewModel : Observable
 
     // The same page over another updater: the self-test's stand-in release, for its pictures of
     // the update row (Creative's acceptance on #719). The app itself never uses it.
-    public SettingsViewModel WithUpdater(IUpdater other) => new(host, manager, other, appAtSignIn, prefs, savePrefs, AppVersion, relayUrl);
+    public SettingsViewModel WithUpdater(IUpdater other) => new(host, manager, other, appAtSignIn, prefs, savePrefs, AppVersion, defaultRelay, RelayEditable);
 
     // Done with such a page: it stops following the host.
     public void Detach()
@@ -134,7 +146,7 @@ public sealed partial class SettingsViewModel : Observable
         {
             if (!HostRunning || !host.Can(HostOps.AgentReadinessCapability) || Status?.Agents is not { } report) { return []; }
             AgentReadinessRow[] rows = [.. report.Agents.Select(a => new AgentReadinessRow(a, CanManageAgents, CanInstallAgents, agentNotes.GetValueOrDefault(a.Id),
-                shared: hookResults.GetValueOrDefault(AgentReadinessRow.HooksOf(a.Id)), install: InstallOf(a.Id), installOffered: InstallOffered))];
+                shared: hookResults.GetValueOrDefault(AgentReadinessRow.HooksOf(a.Id)), install: InstallOf(a.Id), installOffered: InstallOffered, canSignIn: CanSignInAgents))];
             // Never on a host that is read-only or beside agent-ha-bridge: the row's own words say why
             // there (Review migration, Read-only), and the card would offer what can't be done.
             var mayOffer = Status?.ReadOnly is null && Status?.AgentHaBridge is null;
@@ -200,6 +212,9 @@ public sealed partial class SettingsViewModel : Observable
     }
     public string AgentInstallStatus { get => agentInstallStatus; private set => Set(ref agentInstallStatus, value); }
     public bool AgentInstallInProgress => agentInstallInProgress || Status?.AgentInstallation?.InProgress == true;
+    public bool CanSignInAgents => HostRunning && host.Can(HostOps.AgentSignInCapability) && !Busy && !AgentInstallInProgress
+        && Status?.ReadOnly is null && Status?.AgentHaBridge is null;
+    public string AgentSignInStatus { get => agentSignInStatus; private set => Set(ref agentSignInStatus, value); }
     public bool CanCheckAgents => HostRunning && host.Can(HostOps.AgentReadinessCapability) && !Busy;
     public string AgentsState => !HostRunning ? "Connect to this machine's bridge to check its agents."
         : !host.Can(HostOps.AgentReadinessCapability) ? "This host does not report agent readiness. Update the app and restart the host."
@@ -222,7 +237,38 @@ public sealed partial class SettingsViewModel : Observable
     public string? SignInError => Status?.SignIn.State == SignInState.Failed ? Status.SignIn.Error : null;
     public bool CanSignIn => HostRunning && !SignInPending && Status?.Relay.State != RelayState.Off;
 
-    public string RelayUrl { get => relayUrl; set => Set(ref relayUrl, value); }
+    // False in an installed release build, where the relay is the build's and shown as text; a development copy can still type one.
+    public bool RelayEditable { get; }
+    public bool RelayFixed => !RelayEditable;
+    public bool RelayKept { get; }
+    public string RelayNote => RelayKept ? $"This install uses {RelayName(relayUrl)}" : "";
+
+    // Host and port, so a relay on another port is not shown as the production one; text that is not an address is shown as typed.
+    static string RelayName(string url) => Uri.TryCreate(url.Trim(), UriKind.Absolute, out var u) ? u.Authority : url.Trim();
+
+    static string? HostRelay(string profileFolder)
+    {
+        try { var file = Path.Combine(profileFolder, "relay.txt"); return File.Exists(file) ? File.ReadAllText(file) : null; }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
+    }
+
+    static readonly string[] ProductionRelayHosts = ["relay.bad-duck.com", "relay.slipgates.com"];
+
+    // The saved relay unless it is one of the two production names (compared by parsed host, never by prefix). Text that
+    // is not an address is kept too: sign-in then fails visibly instead of quietly going to production.
+    static string? KeptRelay(string? saved)
+    {
+        var text = saved?.Trim();
+        if (string.IsNullOrEmpty(text)) { return null; }
+        if (Uri.TryCreate(text, UriKind.Absolute, out var u) && u.Scheme is "https" or "http")
+        {
+            return ProductionRelayHosts.Contains(u.Host, StringComparer.OrdinalIgnoreCase) ? null : text;
+        }
+        return text;
+    }
+    public string RelayUrl { get => relayUrl; set { if (RelayEditable && Set(ref relayUrl, value)) { Raise(nameof(SignInLabel)); } } }
+    public string SignInLabel => Uri.TryCreate(relayUrl.Trim(), UriKind.Absolute, out var u) ? $"Sign in with GitHub to {u.Authority}" : "Sign in with GitHub";
 
     public string MachineName
     {
@@ -562,7 +608,7 @@ public sealed partial class SettingsViewModel : Observable
     public bool Busy
     {
         get => busy;
-        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(Agents)); RaiseOffers(); Raise(nameof(UpdateStatus)); RaiseVerification(); } }
+        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(CanSignInAgents)); Raise(nameof(Agents)); RaiseOffers(); Raise(nameof(UpdateStatus)); RaiseVerification(); } }
     }
     // The card's Set up follows what the row's would (CanManageAgents), so it is drawn again wherever the rows are.
     void RaiseOffers() { Raise(nameof(AgentOffers)); Raise(nameof(HasAgentOffers)); Raise(nameof(AgentsNavName)); }
@@ -769,7 +815,7 @@ public sealed partial class SettingsViewModel : Observable
     public Task SignInAsync() => RunAsync(async () =>
     {
         var url = RelayUrl.Trim();
-        savePrefs(prefs() with { Relay = url });
+        if (RelayEditable) { savePrefs(prefs() with { Relay = url }); }
         await host.CallAsync<SignInStatus>(HostOps.SignIn, new SignInRequest(url.Length > 0 ? url : null), TimeSpan.FromSeconds(40));
     });
 
@@ -806,15 +852,19 @@ public sealed partial class SettingsViewModel : Observable
 
     public Task SetUpAgentAsync(string agent, bool remove = false) => RunAsync(async () =>
     {
+        var verb = Agents.FirstOrDefault(a => a.Id == agent)?.SetUpVerb;
+        // A press refused before the host is asked still ends on its own row, not only in the page's
+        // error bar far above the agents list, where it read as a button that did nothing (#1473).
         if (!HostRunning || !host.Can(HostOps.AgentSetupCapability))
         {
+            if (HostRunning) { Note(agent, new(AgentWords.SetupUnsupported(remove, verb), Tone.Bad)); }
             throw new InvalidOperationException("This host does not support agent setup. Update the app and restart the host.");
         }
         if (Status?.ReadOnly is not null || Status?.AgentHaBridge is not null)
         {
+            Note(agent, new(AgentWords.SetupFailed(remove, verb, Status.AgentHaBridge is not null ? "agent-ha-bridge" : "read-only"), Tone.Bad));
             throw new InvalidOperationException($"Agent setup is unavailable: {Status.ReadOnly ?? Status.AgentHaBridge}");
         }
-        var verb = Agents.FirstOrDefault(a => a.Id == agent)?.SetUpVerb;
         // Agency's removal takes Copilot CLI's hooks, whose card it is that must not come back.
         var offered = AgentReadinessRow.HooksOf(agent);
         var version = Agents.FirstOrDefault(a => a.Id == offered)?.Version;
@@ -854,6 +904,13 @@ public sealed partial class SettingsViewModel : Observable
             catch (Exception e) when (!result.Completed && e is not (OutOfMemoryException or StackOverflowException)) { }
         }
         if (!result.Completed) { throw new InvalidOperationException(result.Detail); }
+        // A press the host called done that left the row offering the same verb changed nothing the
+        // bridge can see; say so instead of a success the row contradicts (#1473). A setup that
+        // needs a restart keeps reporting the old state until then, so that is not "nothing".
+        if (!remove && !result.RestartRequired && verb is not null && gone == hostsGone && Agents.FirstOrDefault(a => a.Id == agent)?.SetUpVerb == verb)
+        {
+            Note(agent, new(AgentWords.SetupChangedNothing(verb), Tone.Warn));
+        }
     });
 
     public Task InstallAgentAsync(string agent) => RunAsync(async () =>
@@ -901,6 +958,32 @@ public sealed partial class SettingsViewModel : Observable
     {
         if (!AgentInstallInProgress) { return; }
         await host.CallAsync(HostOps.AgentsInstallCancel);
+    });
+
+    public Task SignInAgentAsync(string agent) => RunAsync(async () =>
+    {
+        if (!HostRunning || !host.Can(HostOps.AgentSignInCapability))
+        {
+            throw new InvalidOperationException("This host does not support CLI sign-in. Update the app and restart the host.");
+        }
+        if (Status?.ReadOnly is not null || Status?.AgentHaBridge is not null)
+        {
+            throw new InvalidOperationException($"CLI sign-in is unavailable: {Status.ReadOnly ?? Status.AgentHaBridge}");
+        }
+        AgentSignInStatus = "Opening the CLI's own sign-in flow...";
+        var reported = false;
+        try
+        {
+            var result = await host.CallAsync<AgentSignInResult>(HostOps.AgentsSignIn,
+                new AgentSignInRequest(agent, Confirmed: true), TimeSpan.FromSeconds(30));
+            AgentSignInStatus = result.Detail;
+            reported = true;
+            if (!result.Opened) { throw new InvalidOperationException(result.Detail); }
+        }
+        finally
+        {
+            if (!reported) { AgentSignInStatus = "The sign-in window's result is unavailable. Check your desktop before retrying; account access remains unverified."; }
+        }
     });
 
     // How long a setup may take at the host before its row says it took too long (tests shorten it).
@@ -1018,7 +1101,7 @@ public sealed partial class SettingsViewModel : Observable
             await manager.StopAndApplyAsync(() => AutoUpdater.Record(prefs, savePrefs, updater), () =>
             {
                 UpdateStatus = "Restarting…";
-                updater.ApplyAndRestart(updateVersion!);
+                updater.ApplyAndRestart(updateVersion!, AutoUpdater.HandedOver(prefs, savePrefs));
             });
         }
         // The automatic update got there first, and is installing (and recorded) it.

@@ -13,6 +13,7 @@ import { LAUNCH, TRUST, readLaunchOptions, readLaunchResult, readTrustResult } f
 import { SIGN_IN } from './auth-state.js';
 import { Limits, hostJsonBytes } from './answers.js';
 import { checkReply } from './replies.js';
+import { checkHistoryRequest, readHistoryResult } from './history.js';
 
 export class HostError extends Error {
   // fromHost: the host answered with ok:false. Otherwise the request never got an answer
@@ -64,6 +65,16 @@ export class HostClient {
   // saying it resumed, can't be told for a full snapshot's, which would drop every session it didn't
   // send again.
   #askedSince = false;
+  // sessions.focus: the state the page last gave, the one last sent on this channel, when, and
+  // the wait to send the latest after the gap.
+  #focusWant = null;
+  #focusSent = null;
+  #focusAt = 0;
+  #focusTimer = null;
+  #focusForce = false;
+  #focusIdle = null;
+  #focusGapMs;
+  #inputGapMs;
   #usageSubscribed = false;
   #usageShared = false;
   #updateSubscribed = false;
@@ -78,10 +89,12 @@ export class HostClient {
   // than other requests before it counts as lost (and is resent with the same request). A
   // reply to a working session is confirmed only once the agent takes it, which a host
   // waits up to a minute for, so session.reply gets longer still.
-  constructor(transport, { store, timeoutMs = 15000, answerTimeoutMs = Math.max(timeoutMs, 30000), replyTimeoutMs = Math.max(answerTimeoutMs, 90000), stopTimeoutMs = Math.max(answerTimeoutMs, 45000), launchTimeoutMs = Math.max(answerTimeoutMs, 120000), transferTimeoutMs = Math.max(launchTimeoutMs, 12 * 60000) } = {}) {
+  constructor(transport, { store, focusGapMs = 1000, inputGapMs = 2000, timeoutMs = 15000, answerTimeoutMs = Math.max(timeoutMs, 30000), replyTimeoutMs = Math.max(answerTimeoutMs, 90000), stopTimeoutMs = Math.max(answerTimeoutMs, 45000), launchTimeoutMs = Math.max(answerTimeoutMs, 120000), transferTimeoutMs = Math.max(launchTimeoutMs, 12 * 60000) } = {}) {
     this.#transport = transport;
     this.store = store;
     this.#timeoutMs = timeoutMs;
+    this.#focusGapMs = focusGapMs;
+    this.#inputGapMs = Math.max(inputGapMs, focusGapMs);
     this.#answerTimeoutMs = answerTimeoutMs;
     this.#replyTimeoutMs = replyTimeoutMs;
     this.#stopTimeoutMs = stopTimeoutMs;
@@ -178,6 +191,21 @@ export class HostClient {
     return r?.missing === true ? null : readSession(r);
   }
 
+  // A page of a session's earlier turns (session.history, v1-history.md): the newest without
+  // `before`, otherwise the turns before the `before` of the page last received. Resolves to
+  // history.js's readHistoryResult (a page, or missing, stale or unavailable). Rejects when no
+  // result arrived, or the host sent one this app cannot read. It sends nothing a host would
+  // refuse, and does not look at capabilities: the caller asks only a host that offers
+  // sessions.history (history-store.js).
+  async history(id, { before, limit } = {}) {
+    const data = { id, ...(before === undefined || before === null ? {} : { before }), ...(limit === undefined || limit === null ? {} : { limit }) };
+    const refused = checkHistoryRequest(data);
+    if (refused) { throw new HostError(Ops.sessionHistory, refused); }
+    const result = readHistoryResult(await this.request(Ops.sessionHistory, data));
+    if (!result) { throw new HostError(Ops.sessionHistory, 'the machine sent a result this app cannot read'); }
+    return result;
+  }
+
   // One sub-agent in full, with its own response, reasoning and history (session.get with
   // agent), or null once it or its session has gone. A host before sub-agents ignores agent
   // and sends the whole session, which is never taken for the delegate's.
@@ -256,7 +284,62 @@ export class HostClient {
     const data = this.#patch ? { patch: true, ...(since ? { since } : {}) } : {};
     const { id, done } = this.#request(Ops.sessionsSubscribe, data);
     this.#subscribing = id;
-    try { return await done; } finally { if (this.#subscribing === id) { this.#subscribing = null; } }
+    try {
+      const result = await done;
+      // Said again after every subscribe, as the protocol asks: a new channel has been told nothing.
+      this.#queueFocus(true);
+      return result;
+    } finally { if (this.#subscribing === id) { this.#subscribing = null; } }
+  }
+
+  // sessions.focus (#1190): what this page shows, for a host that offers it, so it does not send
+  // a notification for what is being read. visible: the page is on screen; open: the id of the
+  // session shown on this machine, if any; openQuestion: the id of the question its card shows,
+  // if any. Said as it changes and after each subscribe, never
+  // more than once in focusGapMs (the host refuses more than 20 in 10 s on a channel), and only
+  // the latest state goes. A failure is ignored: the host then notifies as it always has.
+  // idle: a function giving the ms since the person's last input in this page, read as each
+  // request is made (an age, so the clocks of phone and host need not agree), or null when no
+  // input has been seen: then idleMs is left out rather than say 0 (it reads as "not active").
+  setFocus({ visible, open = null, openQuestion = null, idle = null } = {}) {
+    this.#focusIdle = typeof idle === 'function' ? idle : null;
+    const session = typeof open === 'string' && open ? open : null;
+    const want = {
+      visible: visible === true,
+      ...(session ? { open: session } : {}),
+      ...(session && typeof openQuestion === 'string' && openQuestion ? { openQuestion } : {}),
+    };
+    if (this.#focusWant && JSON.stringify(want) === JSON.stringify(this.#focusWant)) { return; }
+    this.#focusWant = want;
+    this.#queueFocus();
+  }
+
+  // Says the focus again as it stands, with a fresh idleMs: the person is active again, or still
+  // is. Held to one in inputGapMs, however much input there is, and coalesced with any waiting.
+  refreshFocus() {
+    if (this.#focusWant) { this.#queueFocus(true, this.#inputGapMs); }
+  }
+
+  #queueFocus(force = false, gapMs = this.#focusGapMs) {
+    if (force) { this.#focusForce = true; }
+    if (!this.#focusWant || this.closed || this.#focusTimer !== null || !this.capabilities.includes(Capabilities.sessionsFocus)) { return; }
+    const wait = this.#focusAt + gapMs - Date.now();
+    if (wait <= 0) { this.#sendFocus(); return; }
+    this.#focusTimer = setTimeout(() => { this.#focusTimer = null; this.#sendFocus(); }, wait);
+  }
+
+  #sendFocus() {
+    const want = this.#focusWant;
+    const force = this.#focusForce;
+    this.#focusForce = false;
+    const key = JSON.stringify(want);
+    if (!want || this.closed || !this.capabilities.includes(Capabilities.sessionsFocus) || (!force && key === this.#focusSent)) { return; }
+    this.#focusSent = key;
+    this.#focusAt = Date.now();
+    let idleMs;
+    try { idleMs = this.#focusIdle?.(); } catch { idleMs = null; }
+    const data = Number.isFinite(idleMs) && idleMs >= 0 ? { ...want, idleMs: Math.floor(idleMs) } : want;
+    try { this.#request(Ops.sessionsFocus, data).done.catch(() => {}); } catch { /* never into the page */ }
   }
 
   // usage.get: the machine's latest usage report (docs/protocol/v1-usage.md). shared: with the
@@ -287,6 +370,8 @@ export class HostClient {
   #closed(error) {
     if (this.closed) { return; }
     this.closed = true;
+    clearTimeout(this.#focusTimer);
+    this.#focusTimer = null;
     for (const [, p] of this.#pending) { clearTimeout(p.timer); p.reject(new HostError(p.op, error?.message ?? 'the channel closed')); }
     this.#pending.clear();
     this.#emit('close', error);
@@ -361,7 +446,7 @@ export class HostClient {
     const data = m.data !== null && typeof m.data === 'object' ? m.data : {};
     switch (m.ev) {
       case Events.sessionUpsert: {
-        const s = this.store?.upsert(data);
+        const s = this.store?.upsert(data, { snapshot: this.#snapshot !== null });
         if (s) {
           this.#snapshot?.add(s.id);
           this.#raw.set(s.id, { json: data, seq: m.seq });
@@ -438,7 +523,7 @@ export class HostClient {
       try { applied = applyPatch(held?.json ?? null, held?.seq ?? null, patch); }
       catch (e) { if (!(e instanceof PatchError)) { throw e; } }
     }
-    const s = applied ? (this.store ? this.store.upsert(applied) : readSession(applied)) : null;
+    const s = applied ? (this.store ? this.store.upsert(applied, { snapshot: this.#snapshot !== null }) : readSession(applied)) : null;
     if (!s) {
       this.#tracking = false;
       this.#lost();

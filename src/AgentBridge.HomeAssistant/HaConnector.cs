@@ -15,6 +15,12 @@ public sealed record HaConnectorOptions
     public bool Dev { get; init; }
     // What a card carries when the machine has no Detailed activity switch.
     public bool DetailedActivityFallback { get; init; } = true;
+    // Publishes the machine's load totals as the fleet_load sensor (#1587, #1150). Off until the
+    // owner clears it (cleared 17:39 PT Nov 9 for machine totals only); the host.log line is unaffected.
+    public bool PublishLoad { get; init; }
+    // Also puts per-session load rows on the sessions sensor (needs PublishLoad). Stays off: only
+    // machine totals are cleared.
+    public bool PublishSessionLoad { get; init; }
     public string DashboardUrlPath { get; init; } = HaSettings.DefaultDashboard;
     // Where sessions waiting to be retired are remembered across a restart. None in tests that
     // do not need it.
@@ -189,6 +195,15 @@ public sealed partial class HaConnector : IAsyncDisposable
     Task watch = Task.CompletedTask;
     readonly Func<AnswerRequest, CancellationToken, Task<AnswerResult>>? answer;
 
+    readonly Func<AgentBridge.Host.Core.Load.ProcessLoadReport?>? load;
+    // The load last put on the sensor: the sensor is republished when its figures are this old.
+    static readonly TimeSpan LoadRefresh = TimeSpan.FromSeconds(30);
+    // The fleet load record goes out this often, whether or not a new sample arrived: a stopped
+    // sampler shows as an observedAt that stops moving, which is how a consumer judges it stale.
+    static readonly TimeSpan FleetLoadInterval = TimeSpan.FromSeconds(10);
+    DateTimeOffset fleetLoadAt = DateTimeOffset.MinValue;
+    DateTimeOffset fleetLoadConfigAt = DateTimeOffset.MinValue;
+
     // Whether the cards' answer controls are served: only with the host's answer delivery.
     bool ServesAnswers => answer is not null;
 
@@ -277,8 +292,10 @@ public sealed partial class HaConnector : IAsyncDisposable
         Func<AnswerRequest, CancellationToken, Task<AnswerResult>>? answer = null,
         Func<HaReply, CancellationToken, Task<ReplyResult>>? reply = null,
         Func<StopRequest, CancellationToken, Task<StopResult>>? stop = null,
-        HaLauncher? launch = null, IHostUpdates? updates = null)
+        HaLauncher? launch = null, IHostUpdates? updates = null,
+        Func<AgentBridge.Host.Core.Load.ProcessLoadReport?>? load = null)
     {
+        this.load = load;
         this.options = options;
         drivers = options.Drivers ?? new SessionDrivers { Arm = options.DriverArm };
         launcher = launch;
@@ -387,10 +404,12 @@ public sealed partial class HaConnector : IAsyncDisposable
             await Step("answers", () => AnswersAsync(now, cancellationToken));
             await Step("buttons", () => ButtonsAsync(now, cancellationToken));
             await Step("signin", () => SignInAsync(now, cancellationToken));
+            await Step("stuck", () => StuckAsync(now, cancellationToken));
             await Step("finished", () => FinishedAsync(now, cancellationToken));
             await Step("launch", () => LaunchAsync(now, cancellationToken));
             await Step("update", () => UpdatesAsync(now, cancellationToken));
             await Step("global", () => GlobalAsync(now, cancellationToken));
+            await Step("fleetload", () => FleetLoadAsync(now, cancellationToken));
             await Step("heartbeat", () => HeartbeatAsync(now, cancellationToken));
             await Step("usage", () => UsageAsync(now, cancellationToken));
             await Step("pins", () => PinsAsync(now, cancellationToken));
@@ -466,6 +485,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         launchServing = launcher?.Available() == true;
         launchOptions = null;
         launchSignature = null;
+        launchOptionsVersion = null;
         launchDefaultsPending = null;
         // A machine published again while this host runs keeps what it has read of Launch: taken
         // anew, the baseline would swallow a press made since the last read.
@@ -548,6 +568,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         republishing = false;
         SaveLedger();
         globalSignature = null;
+        fleetLoadConfigAt = fleetLoadAt = DateTimeOffset.MinValue;
         usageVersion = -1;
         nextReconcile = now + options.Reconcile;
         started = true;
@@ -579,7 +600,10 @@ public sealed partial class HaConnector : IAsyncDisposable
         // reason: agent-ha-bridge leaves its sensors when told not to publish, but a reading left on
         // the card with nothing to refresh it is the stale figure this exists to prevent.
         if (usage is not null) { served.UnionWith(HaContract.UsageTopics(Slug, [.. HaContract.UsageClients, .. options.UsageAccountSensors])); }
-        return HaContract.MachineTopics(Slug).Where(t => !served.Contains(t));
+        var unserved = HaContract.MachineTopics(Slug).Where(t => !served.Contains(t));
+        // launch_options is ours alone, so it is not in MachineTopics; with launch not served it is
+        // withdrawn like the card, rather than left retained with lists nothing refreshes.
+        return launchServing ? unserved : unserved.Concat([HaContract.LaunchOptionsConfig(Slug, options.MachineName).Topic, HaContract.LaunchOptionsTopic(Slug)]);
     }
 
     // A session's entities this stage does not serve: with answers, only Stop (and two state
@@ -696,6 +720,9 @@ public sealed partial class HaConnector : IAsyncDisposable
             {
                 published.Remove(id, out was);
                 starting.Remove(id);
+                // An ended session's rid history goes with it, unless a delivery is still running
+                // (RepliesDoneAsync drops it then).
+                if (!underWay.ContainsKey(id)) { ridLogs.TryRemove(id, out _); }
                 retiring.TryAdd(node, new Retiring());
                 // Observed here, so forgotten here: one that comes back starts as the person's.
                 if (!drivers.SourceObserves) { drivers.Forget(id); }
@@ -705,6 +732,15 @@ public sealed partial class HaConnector : IAsyncDisposable
             // Its question went with it: withdrawn from the phones (Clear-DaemonAnswerButtons). A
             // phone this does not reach stays on record and the stale sweep tries it again.
             await ClearButtonsAsync(id, was?.Notify, forget: true, ct);
+        }
+        // A session that ended while the connector was reconnecting was never published again, so the
+        // gone loop never saw it: drop any history whose session is neither live nor mid-delivery.
+        lock (gate)
+        {
+            foreach (var id in ridLogs.Keys)
+            {
+                if (!live.ContainsKey(id) && !underWay.ContainsKey(id)) { ridLogs.TryRemove(id, out _); }
+            }
         }
         if (gone.Count > 0) { WatchSetChanged(); }
         for (var i = 0; i < work.Count; i++)
@@ -749,7 +785,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             // while it is down, still retires what that write left behind.
             SaveLedger();
             await PublishEntitiesAsync(t, name, now, ct);
-            p = new Published { Node = node, Name = name, Kind = HaPayloads.Kind(s.Agent), PublishedAt = now, SessionId = s.Id, Drivers = drivers };
+            p = new Published { Node = node, Name = name, Kind = HaPayloads.Kind(s.Agent), PublishedAt = now, SessionId = s.Id, Drivers = drivers, Reply = new ReplyState { Log = ridLogs.GetOrAdd(s.Id, _ => new RidLog()) } };
             lock (gate)
             {
                 starting.Remove(s.Id);
@@ -833,6 +869,8 @@ public sealed partial class HaConnector : IAsyncDisposable
         // Get-DaemonCardSummary: while End session waits for its second press, the card keeps
         // asking for it over whatever the session does meanwhile.
         if (p.Stop.Asking(now)) { summary = HaStop.ConfirmNote; detail["hint"] = p.Stop.Hint; }
+        // The last delivered reply id stays on the card, so a sender can read it after the session moves on.
+        if (p.Reply.Ack is { } replyAck) { detail["reply_ack"] = replyAck.DeepClone(); }
         var activitySignature = summary + "\n" + Signature(detail);
         if (activitySignature != p.Activity)
         {
@@ -941,15 +979,22 @@ public sealed partial class HaConnector : IAsyncDisposable
     async Task GlobalAsync(DateTimeOffset now, CancellationToken ct)
     {
         List<HaPayloads.Descriptor> descriptors;
+        Dictionary<string, string> nodes;
         lock (gate)
         {
             descriptors = [.. published.Values.OrderBy(p => p.Node, StringComparer.Ordinal)
                 .Select(p => new HaPayloads.Descriptor(p.Name, options.MachineName, p.Node, p.Kind))];
+            nodes = published.ToDictionary(p => p.Key, p => p.Value.Node, StringComparer.Ordinal);
         }
         var capabilities = HaPayloads.Capabilities(helperExists, options.Dev, LaunchCapabilities());
         var attributes = HaPayloads.GlobalAttributes(descriptors, options.MachineName, Slug, capabilities, now, source.Held?.Reason ?? "");
+        // The signature leaves the load out: its figures change every sample and would republish
+        // every pass; they ride along on a change or after LoadRefresh.
         var signature = Signature(attributes);
-        if (signature == globalSignature && now - globalAt < HaContract.GlobalReassert) { return; }
+        var report = options.PublishLoad && options.PublishSessionLoad ? load?.Invoke() : null;
+        var stale = report is not null && now - globalAt >= LoadRefresh;
+        if (signature == globalSignature && now - globalAt < HaContract.GlobalReassert && !stale) { return; }
+        if (report is not null) { attributes["load"] = HaPayloads.Load(report, nodes); }
         var (topic, config) = HaContract.SessionsConfig(Slug, options.MachineName);
         await PublishAsync(topic, config, true, ct);
         await ha.PublishAsync(HaContract.GlobalStateTopic(Slug), descriptors.Count.ToString(System.Globalization.CultureInfo.InvariantCulture), true, ct);
@@ -957,6 +1002,28 @@ public sealed partial class HaConnector : IAsyncDisposable
         if (globalSignature is null) { AddPin($"agent_bridge_{Slug}_sessions", HaContract.MachineEntityId("sensor", "sessions", Slug), now); }
         globalSignature = signature;
         globalAt = now;
+    }
+
+    // The machine's load totals (#1587): the sampler's latest reading, every FleetLoadInterval, on a
+    // sensor of its own. Machine totals and a session count only; nothing per session.
+    async Task FleetLoadAsync(DateTimeOffset now, CancellationToken ct)
+    {
+        if (!options.PublishLoad || now - fleetLoadAt < FleetLoadInterval) { return; }
+        if (load?.Invoke() is not { } report) { return; }
+        int sessions;
+        lock (gate) { sessions = published.Count; }
+        var record = AgentBridge.Host.Core.Load.FleetLoadRecord.From(report, options.MachineName, sessions);
+        if (now - fleetLoadConfigAt >= HaContract.GlobalReassert)
+        {
+            var (topic, config) = HaContract.FleetLoadConfig(Slug, options.MachineName);
+            await PublishAsync(topic, config, true, ct);
+            if (fleetLoadConfigAt == DateTimeOffset.MinValue) { AddPin($"agent_bridge_{Slug}_fleet_load", HaContract.MachineEntityId("sensor", "fleet_load", Slug), now); }
+            fleetLoadConfigAt = now;
+        }
+        var attributes = HaPayloads.FleetLoad(record);
+        await ha.PublishAsync(HaContract.FleetLoadStateTopic(Slug), (string)attributes["observedAt"]!, true, ct);
+        await PublishAsync(HaContract.FleetLoadAttributesTopic(Slug), attributes, true, ct);
+        fleetLoadAt = now;
     }
 
     async Task HeartbeatAsync(DateTimeOffset now, CancellationToken ct)

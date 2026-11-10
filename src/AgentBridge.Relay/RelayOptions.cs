@@ -29,6 +29,14 @@ public sealed class RelayOptions
     // Web origins allowed to call the sign-in API and open sockets, such as the PWA on
     // GitHub Pages. Native clients send no Origin and are unaffected.
     public string[] AllowedOrigins { get; set; } = [];
+    // Hostnames this relay is served under. A socket is counted under the Host it arrived
+    // on if it is listed here, else under "other", so the label set stays small and fixed.
+    // The relay cannot otherwise tell which name a device used; this is how the retirement of
+    // relay.bad-duck.com is measured.
+    // Empty means the two production names; configuring any replaces them (the binder would
+    // otherwise append to a default array and never let one be dropped).
+    public string[] KnownHostnames { get; set; } = [];
+    public IReadOnlyList<string> Hostnames => KnownHostnames.Length > 0 ? KnownHostnames : ["relay.slipgates.com", "relay.bad-duck.com"];
     // Production serves no app code: a relay that could change the PWA it serves could
     // read what the PWA decrypts. A dev stack can serve one same-origin from wwwroot. Off
     // unless asked for, and the product image ships no wwwroot (the spike defaulted to on).
@@ -59,6 +67,9 @@ public sealed class RelayOptions
     // The account's machines, online or not (Roster.cs, docs/protocol/roster.md). In memory
     // unless a store is configured.
     public RosterOptions Roster { get; set; } = new();
+
+    // Hourly request counts and latency per route group (HourlyStats.cs), kept in the roster's store.
+    public StatsOptions Stats { get; set; } = new();
 
     // Test hooks. Tap observes every forwarded payload; Route lets a test play a hostile
     // relay that redirects or forges routing.

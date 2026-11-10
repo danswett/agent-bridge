@@ -37,7 +37,7 @@ public sealed class HostStartGateTests : IDisposable
 
     // As Program runs it, in a host the logon task's launcher started.
     static Task Supervised(Func<HostHandover, Task> serve) =>
-        HostHandover.RunAsync(async h => { await serve(h); return 0; }, () => { }, supervised: true);
+        HostHandover.RunAsync(async h => { await serve(h); return 0; }, _ => { }, supervised: true, checkStop: false);
 
     [Fact]
     public async Task A_host_started_after_the_apps_Stop_starts_no_restore_and_resumes_no_agent()
@@ -95,7 +95,7 @@ public sealed class HostStartGateTests : IDisposable
             var gate = new HostStartGate(h, profile);
             Assert.True(gate.StartRestore(restore, resumer));
             gate.Serving();
-            for (var i = 0; i < 500 && resumer.Asked.IsEmpty; i++) { await Task.Delay(10); }
+            await HostWait.UntilAsync(() => !resumer.Asked.IsEmpty, "the restore to ask for the dead session");
             await restore.DisposeAsync();
         });
 

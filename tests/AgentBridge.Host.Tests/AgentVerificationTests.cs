@@ -22,13 +22,16 @@ public sealed class AgentVerificationTests
         new(source, launcher, hooks, () => blocked, stopping: stopping, time: time, poll: TimeSpan.FromMilliseconds(50));
     static AgentVerificationRequest Request(string agent = "copilot") => new(Guid.NewGuid().ToString("D"), agent, "Test", Confirmed: true);
 
+    // The bound counts polls, not wall-clock seconds: a CI runner that stalls the whole process
+    // for 20 s must not fail a test whose service is merely waiting to be scheduled. A real hang
+    // still ends here, and the CI hang blame covers a wait that never returns at all.
     async Task Wait(Func<bool> done)
     {
-        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        while (!done())
+        for (var polls = 0; !done(); polls++)
         {
+            if (polls == 20_000) { throw new TimeoutException("The awaited condition never held."); }
             time.Advance(TimeSpan.FromMilliseconds(100));
-            await Task.Delay(5, limit.Token);
+            await Task.Delay(5);
         }
     }
 
@@ -62,7 +65,7 @@ public sealed class AgentVerificationTests
         await using var service = Service();
         var request = Request(agent);
         service.Start(request);
-        var launch = await launcher.Called.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var launch = await launcher.Called.Task;
         Assert.Equal(LaunchProtocol.Ask, launch.Permissions);
         Assert.Null(launch.Resume);
         Assert.Null(launch.Transfer);
@@ -103,7 +106,7 @@ public sealed class AgentVerificationTests
         await using var service = Service();
         var request = Request();
         service.Start(request);
-        var launch = await launcher.Called.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var launch = await launcher.Called.Task;
         Answer(launch);
         hooks.Send(Hook());
         launcher.Result.SetResult(new(LaunchOutcome.Unconfirmed, "Answer folder trust in its window."));
@@ -124,7 +127,7 @@ public sealed class AgentVerificationTests
         await using var service = Service();
         var first = Request();
         service.Start(first);
-        var launch = await launcher.Called.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var launch = await launcher.Called.Task;
         Answer(launch);
         hooks.Send(Hook());
         launcher.Result.SetResult(new(LaunchOutcome.Started) { Session = SessionId });
@@ -156,7 +159,7 @@ public sealed class AgentVerificationTests
         await using var service = Service();
         var request = Request();
         service.Start(request);
-        var launch = await launcher.Called.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var launch = await launcher.Called.Task;
         source.Held = new("A new CLI process has not registered its session yet.", [AgentKind.Copilot]);
         launcher.Result.SetResult(new(LaunchOutcome.Unconfirmed, "Answer folder trust in its window."));
         await Wait(() => service.Snapshot.Single().Detail.Contains("Waiting for session discovery", StringComparison.Ordinal));
@@ -195,7 +198,7 @@ public sealed class AgentVerificationTests
     {
         await using var service = Service();
         var started = service.Start(Request());
-        var launch = await launcher.Called.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var launch = await launcher.Called.Task;
         Answer(launch);
         var notice = Hook();
         notice = invalid switch
@@ -223,7 +226,7 @@ public sealed class AgentVerificationTests
     {
         await using var service = Service();
         service.Start(Request());
-        var launch = await launcher.Called.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var launch = await launcher.Called.Task;
         var session = Answer(launch, response: launch.Prompt);
         hooks.Send(Hook());
         launcher.Result.SetResult(new(LaunchOutcome.Started) { Session = SessionId });
@@ -258,9 +261,8 @@ public sealed class AgentVerificationTests
         };
         await using var service = Service();
         service.Start(Request());
-        var launch = await launcher.Called.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        Answer(launch);
-        hooks.Send(Hook());
+        var launch = await launcher.Called.Task;
+        Answer(launch);        hooks.Send(Hook());
         launcher.Result.SetResult(new(LaunchOutcome.Started) { Session = SessionId });
         await Wait(() => service.Snapshot.Single().State == VerificationState.NeedsAction);
         Assert.Contains("existing session", service.Snapshot.Single().Detail);
@@ -277,7 +279,7 @@ public sealed class AgentVerificationTests
         blocked = null;
         var request = Request();
         service.Start(request);
-        await launcher.Called.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await launcher.Called.Task;
         Assert.Throws<InvalidOperationException>(() => service.Start(Request("claude")));
         Assert.Throws<ArgumentException>(() => service.Start(request with { Workspace = "Different" }));
         Assert.Equal(1, launcher.Calls);
@@ -297,7 +299,7 @@ public sealed class AgentVerificationTests
         await using var service = Service(stop.Token);
         var request = Request();
         service.Start(request);
-        await launcher.Called.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await launcher.Called.Task;
         if (shutdown) { stop.Cancel(); }
         else { Assert.Equal(VerificationState.Cancelled, service.Cancel(request.Request).State); }
 
@@ -313,7 +315,7 @@ public sealed class AgentVerificationTests
     {
         await using var service = Service();
         service.Start(Request());
-        await launcher.Called.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await launcher.Called.Task;
         time.Advance(TimeSpan.FromMinutes(9));
         await Wait(() => service.Snapshot.Single().State == VerificationState.NeedsAction);
         Assert.Contains("timed out", service.Snapshot.Single().Detail);

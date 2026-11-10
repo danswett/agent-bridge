@@ -21,6 +21,7 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="104" />
                             <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBlock Style="{StaticResource AbTypeMeta}" LineHeight="20" TextWrapping="Wrap" Foreground="{ThemeResource AbText2}" Text="{x:Bind Label}" />
                         <TextBlock
@@ -32,6 +33,26 @@
                             SizeChanged="OnValueSized"
                             AutomationProperties.AutomationId="{x:Bind local:SessionDetails.ValueId(Label)}"
                             Text="{x:Bind Value}" />
+                        <!-- Only the ID row has one (#1245); it comes after the value in the tab order. -->
+                        <Button
+                            Grid.Column="2"
+                            Style="{StaticResource AbIconButton}"
+                            Width="NaN"
+                            MinWidth="32"
+                            MinHeight="32"
+                            Padding="6,0,8,0"
+                            VerticalAlignment="Top"
+                            Visibility="{x:Bind local:Ui.Show(Copy)}"
+                            ToolTipService.ToolTip="Copy session ID"
+                            AutomationProperties.Name="Copy session ID"
+                            AutomationProperties.AutomationId="CopySessionId"
+                            Loaded="OnCopyLoaded"
+                            Click="OnCopyId">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <ContentControl Style="{StaticResource AbIconCopy}" Width="16" Height="16" VerticalAlignment="Center" />
+                                <TextBlock Style="{StaticResource AbTypeMeta}" Text="Copy" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
                     </Grid>
                 </DataTemplate>
             </ItemsControl.ItemTemplate>

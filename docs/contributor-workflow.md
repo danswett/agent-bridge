@@ -6,6 +6,8 @@ Start with [CONTRIBUTING.md](../CONTRIBUTING.md).
 this page does not create exceptions to them.
 Current role holders and their acceptance links live in
 [status: running work](status.md#running-work), not in this procedure.
+Outside contributors (pull requests only, no fleet access) start with
+[outside-contributors.md](outside-contributors.md).
 
 ## Operational sources of truth
 
@@ -68,12 +70,13 @@ obligations until an explicit handoff or stand-down.
 
 ## Readiness and review evidence
 
-Use [AGENTS.md's current merge requirements](../AGENTS.md#pull-requests), including
-its authorized review-waiver procedure where applicable. This page does not
+Use [AGENTS.md's current merge requirements](../AGENTS.md#pull-requests). Copilot
+and Codex reviews are optional extras and never required; the independent-review
+receipts are the gate. This page does not
 maintain a second merge checklist. A ready packet is not a merge grant.
 
 Every head change needs fresh head-specific evidence under those requirements;
-neither old CI nor an old Copilot review is inherited. Only an **independent**
+neither old CI nor an old receipt is inherited. Only an **independent**
 review may use a bounded delta: the previously reviewed commit must be a proved
 ancestor of the new head, and the independent reviewer must explicitly clear that
 delta at the new head. A rebase without that ancestry needs a full independent
@@ -91,6 +94,33 @@ Verification and exact-head reviews: <commands/results and links>.
 Open findings, dependencies or blockers: <none, or details and needed responder>.
 Next action requested from Quality: <action>.
 ```
+
+## Design notes: nothing tied to a machine
+
+Owner rule (2026-11-09): nothing in Slipgates may be tied to a specific machine. Machines
+join and leave the fleet and the whole system must keep working. A component is either
+distributed, so that one live node is enough, or keeps its state in the relay service,
+protected, and not on a machine. No component names a particular VM as its home.
+
+Every design note, and every PR that adds or moves a long-running component (a watcher,
+scheduler, reader, cache, or state or handover file), answers three questions, and the
+reviewer checks them:
+
+1. Where does it run?
+2. What happens when that node leaves?
+3. Where does its state live?
+
+A note that cannot answer all three is not ready. A component already tied to a machine
+needs a migration plan, not a silent exception.
+
+## Resolving bot-only threads
+
+GitHub's ruleset needs 0 unresolved threads, so threads left only by the Copilot or
+Codex reviewer bots would block a merge. Once the PR has its receipts on the head,
+`pwsh quality/resolve-bot-threads.ps1 -Pr <n>` lists the threads whose every comment
+came from those bots (a dry run); add `-Apply` to resolve them with GraphQL
+`resolveReviewThread`. It refuses without the receipts, and never touches a thread a
+person commented in.
 
 ## Handoffs
 
@@ -119,6 +149,25 @@ Archive old coordination snapshots with their cutoffs, keep their history and
 links, and explicitly supersede old authority instructions during a handoff.
 Do not remove the old tracker until all active rows have a verified destination;
 a Project-permission failure is not an empty queue or a completed migration.
+
+## Commands and code for the owner
+
+In any question or message to the owner, put every command or code line in its own
+fenced block (three backticks, one block per command) so the PWA card shows a Copy
+button. The Windows app shows the same Copy button on fenced blocks. Inline
+backticks and plain paragraphs get no Copy button, and nothing detects commands
+automatically.
+
+````text
+```powershell
+$h = "$env:LOCALAPPDATA\AgentBridgeApp\current\agent-bridge-host.exe"; & $h rollback
+```
+````
+
+The owner often reads on a phone, and encoded commands don't wrap, so avoid them.
+
+Approvals (permission prompts) are drawn as written and never get a Copy button, by
+design. Put commands for the owner in a question, not in an approval.
 
 ## Conflicting or unavailable information
 

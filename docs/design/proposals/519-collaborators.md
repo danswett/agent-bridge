@@ -232,9 +232,9 @@ The card is built to look unlike a tool approval:
   **@welshofer**, with only the login bold, and their session title quoted and secondary;
   *To* your session, agent, machine and its mode.
 - The **full** message **exactly as the host will type it** (agent-principals §5.7): one line,
-  the host-built label first (*[Agent Bridge · from an agent on Wes · not typed by your user ·
+  the host-built label first (*[Slipgates · from an agent on Wes · not typed by your user ·
   external: @welshofer]*, agent-principals §6.4, where *Wes* is the name you gave the link), then the words with the delivery escapes
-  applied, so a copied marker reads *(Agent Bridge* and a mention's @ reads ＠. The label holds
+  applied, so a copied marker reads *(Slipgates* and a mention's @ reads ＠. The label holds
   only fields this host established, the link name and the verified login; *WS-LAPTOP* and
   *@octo-dev*, which @welshofer only reports, stay off it. In
   the mono face, escaped exactly like approval commands (ui.md §6.4), never Markdown-rendered, in
@@ -422,9 +422,9 @@ are emulated, not captured; Mica is drawn as flat surfaces.
   you.
 - The word "gate" appears in no status or error copy.
 
-## 9. Wording to coordinate with Agent Bridge UI
+## 9. Wording to coordinate with Slipgates UI
 
-The strings below are now in ui.md §6.7 and §8. Agent Bridge UI owns them in implementation
+The strings below are now in ui.md §6.7 and §8. Slipgates UI owns them in implementation
 and changes them there, not here:
 
 - Person and filter: **Mine**, **Everyone**, **Show sessions from**, **Manage

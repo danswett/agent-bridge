@@ -444,7 +444,10 @@ press of Send made after the failure, answers again, each as a request of its ow
 does not answer it from the earlier refusal.
 `Not sent - answer every field` (with `waiting_on`), `Not sent - this question takes options`
 and `Not sent - no Send button on this session` say what was wrong with the press itself; such
-a press is spent. A question that ends is cleared (selector `Idle`, attributes `{}`, the slots
+a press is spent. `Not sent - type your answer again` says reply-box words were typed before the
+question was verifiably on screen; they are not sent, the question stays open, and words typed
+after are sent as usual. Identical words are sent too once the person presses Send again after the
+notice (or empties the box and types them again). A re-arm or host restart takes a fresh window check. A question that ends is cleared (selector `Idle`, attributes `{}`, the slots
 it used reset); a question the card still shows when the connector takes over, but which the
 session no longer asks, is cleared too.
 
@@ -474,6 +477,7 @@ Where stage 2 knowingly differs from the daemon:
 | `Cancel request` says `Answer NOT sent` and resets the selector | The host has no way to cancel an agent's question |
 | A reply while a question is open answers the question; at a question only the terminal can answer, it says `Reply NOT sent` (`the session is waiting on a question`) | The host refuses a reply while its session asks a question |
 | A free-text answer from the reply box must differ from the box at arming | The box keeps the previous reply; the daemon reads it the same way through its baseline |
+| Box words that differ from the baseline but were typed before the question is verifiably on screen (selector `Awaiting answer...` under its decision id) are not sent: `Not sent - type your answer again` | Those words were typed looking at something else; the daemon has no such window |
 | An answer from the card makes the turn it answers its sender's (the purple edge for an agent), arming nothing for the next prompt | The daemon attributes only replies and launches, so an agent answering from the card never showed purple. An arm left for the next prompt, as a reply's is, would mark the person's own next prompt at the machine as the agent's |
 | Baselines, `answer_consumed_at` and a pending driver are kept in memory | A host restart re-arms every open question with a fresh baseline, so a press before it is not replayed |
 
@@ -488,6 +492,21 @@ repeated publishes; box words, a refusal, a follow-up typed during delivery, a b
 person, from an agent and given up on, a repeated press) with the daemon's constants. The
 contract tests assert the connector tells the card exactly what the daemon told it, and makes
 the same service calls.
+
+**Request id and acknowledgement.** A sender may add `rid` (1 to 64 letters, digits, `-`, `_`, `.`;
+anything else is ignored) and `sender` (a name, at most 64 characters). The host then publishes
+`reply_ack` `{rid, outcome, at, sender?, duplicate?}` in the session's activity attributes in the same
+update as `Reply sent` / `Reply NOT sent`. `outcome` is `delivered`, `unconfirmed` or `refused`. The ack
+stays until a newer one replaces it, so a sender that finds another rid there knows its message was
+swapped or lost and sends again. A rid seen before (the last 50 per session) is not delivered again; the
+host re-acks it with `duplicate: true`. A `refused` rid is forgotten, so the same rid may be retried.
+The history is kept per session in the connector, not on the card, so a pause or restart that rebuilds
+the cards neither empties it nor loses the rid of a delivery still running; a repeat after the rebuild
+is still dropped. When a session ends for good its history is dropped with its card (after any
+delivery still running for it finishes); a session that comes back under the same id starts empty.
+`sender` loses control, format and unassigned characters, whitespace is collapsed,
+and the cut at 64 never splits a character. A reply discarded because a question opened gets no ack.
+Publishes without a `rid` behave as before.
 
 **The reply card** publishes `{at, text, images: [{id, name, content_type}], files: [{name,
 content_type, b64}], driver?}` (not retained) to `copilot/cli/<node>/replypayload/set`, read
@@ -650,6 +669,18 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   that took a request launches nothing (the daemon's guard against two presses for one request).
   A press whose prompt payload cannot be read waits for the next pass rather than launching from
   the card, since it may carry a request with settings of its own.
+- **Launch options (beyond agent-ha-bridge, #1142).** `sensor.agent_bridge_<machine>_launch_options`
+  is read-only. Its state is a 12-character `version` (a hash of `default_agent` and the lists, so it
+  changes exactly when an answer does); its attributes (`json_attributes_topic` `newsession/options`,
+  retained) are `{version, default_agent, agents: {<id>: {label, models, efforts, contexts,
+  defaults: {model, effort, context}}}}` for every agent the host's launcher offers, whichever
+  agent the card has selected, so choosing another agent on the card never changes it. The lists
+  are the launcher's own (the card's selectors show only the selected agent's, "Agent default"
+  excluded: omit an axis to take it). It is republished on the card's refresh (30 s) when a
+  list changes, and again after a pause. When the host does not serve launch it is withdrawn (its
+  config and state cleared) rather than left with lists nothing refreshes. It is not in
+  agent-ha-bridge's per-machine topic list, so that daemon's Forget does not clear it. `launch-remote.ps1 -Options` prints it and a launch is checked
+  against it before the button is pressed.
 * **The purple edge**: a session an agent's press launched is `agent`-driven from the moment it
   appears, for the turn it was launched with (already under way or still to come); the turn
   after that is whoever's it is.
@@ -777,7 +808,7 @@ settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-r
     own delivery, never sooner, and a failing service is logged once until it works. Once the need
     is over, what was delivered is forgotten at once, even while a withdrawal is still being
     retried, so a need that comes back is told everywhere again.
-  * An error and Not responding send nothing. They show on the status only, as on the clients.
+  * Not responding, and the Copilot wedge the host recognised (`AgentErrors.HostWedgeMessage`), send a "looks stuck" notice (#687) at once to the same phones and push service as a sign-in notice: one per stuck episode, tagged `bridge_stuck_<slug>_<digest of the session id>`, withdrawn when the session takes a new event or acknowledgement, never over an open question, and each notice and withdrawal is written to the host log. Only the wedge is said to not recover by itself. A session that gets stuck again is told again only after a recovery was observed (its notice withdrawn); there is no time limit (#1511, #1542). The notice moves to the Slipgates push path when #1396 retires this connector. It restarts nothing; the owner follows [runbooks/stuck-session.md](runbooks/stuck-session.md). Other errors (rate limit, authorisation, quota) show on the status only, as on the clients.
 
 Where stage 5b knowingly differs from the daemon:
 

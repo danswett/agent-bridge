@@ -21,6 +21,7 @@ param relayPrincipalId string
 param tags object
 
 var container = 'roster'
+var devicesContainer = 'devices'
 
 var roles = {
   // Read, write and delete blobs: given on the one container only.
@@ -55,9 +56,10 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01'
   parent: account
   name: 'default'
   properties: {
-    // A forgotten machine is gone when its roster is rewritten; nothing keeps an old copy.
-    deleteRetentionPolicy: { enabled: false }
-    containerDeleteRetentionPolicy: { enabled: false }
+    // The signed device roster lives in a container of its own, but under this blob service, so
+    // soft delete keeps a deleted or overwritten blob (the trust log included) for 14 days.
+    deleteRetentionPolicy: { enabled: true, days: 14 }
+    containerDeleteRetentionPolicy: { enabled: true, days: 14 }
     isVersioningEnabled: false
     changeFeed: { enabled: false }
     // Only the relay reads and writes here; no browser does.
@@ -68,6 +70,14 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01'
 resource roster 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
   parent: blobService
   name: container
+  properties: { publicAccess: 'None' }
+}
+
+// The signed device roster (docs/protocol/devices.md) is in a container of its own, outside the
+// lifecycle rule below: it is what an account's trust rests on, not a last-seen list.
+resource devices 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: devicesContainer
   properties: { publicAccess: 'None' }
 }
 
@@ -86,7 +96,7 @@ resource lifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05
           enabled: true
           type: 'Lifecycle'
           definition: {
-            filters: { blobTypes: ['blockBlob'] }
+            filters: { blobTypes: ['blockBlob'], prefixMatch: ['roster/'] }
             actions: { baseBlob: { delete: { daysAfterModificationGreaterThan: 180 } } }
           }
         }
@@ -98,6 +108,16 @@ resource lifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05
 resource dataAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(roster.id, relayPrincipalId, roles.blobDataContributor)
   scope: roster
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.blobDataContributor)
+    principalId: relayPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource devicesAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(devices.id, relayPrincipalId, roles.blobDataContributor)
+  scope: devices
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.blobDataContributor)
     principalId: relayPrincipalId

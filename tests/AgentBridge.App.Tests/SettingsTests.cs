@@ -43,12 +43,13 @@ public sealed class SettingsTests : IAsyncLifetime
             Ready = "0.2.0";
             return Task.CompletedTask;
         }
-        public void ApplyAndRestart(string version)
+        public void ApplyAndRestart(string version, Action? handedOver = null)
         {
             OnApply?.Invoke();
             if (ApplyFails is { } e) { throw e; }
             if (Ready != version) { throw new InvalidOperationException($"{version} is no longer the update downloaded"); }
             Applied = true;
+            handedOver?.Invoke();
         }
     }
 
@@ -70,6 +71,7 @@ public sealed class SettingsTests : IAsyncLifetime
         host.Capabilities.Add(HostOps.AgentInstallCapability);
         host.Capabilities.Add(HostOps.AgentVerificationCapability);
         host.Capabilities.Add(LaunchProtocol.Capability);
+        host.Capabilities.Add(HostOps.AgentSignInCapability);
         host.Start();
         connection = host.Connect(ui);
         // Start and stop timeouts on a clock that never moves, as in AutoUpdaterTests: they wait
@@ -332,6 +334,33 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Empty(host.Sent(HostOps.SignIn));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CLI_sign_in_sends_person_confirmation_but_does_not_mark_authentication_or_trust_verified(bool opened)
+    {
+        await Connected();
+        host.Status = host.Status with { Agents = Readiness("1.2.3") };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.Agents.Count == 1, "agent readiness");
+        Assert.True(Assert.Single(settings.Agents).CanSignIn);
+        host.On(HostOps.AgentsSignIn, d =>
+        {
+            var request = d.Deserialize<AgentSignInRequest>(ProtocolJson.Options)!;
+            Assert.Equal("claude", request.Agent);
+            Assert.True(request.Confirmed);
+            return new AgentSignInResult(opened, "Fixture sign-in window outcome; account access remains unverified.");
+        });
+        await settings.SignInAgentAsync("claude");
+        Assert.Contains("account access remains unverified", settings.AgentSignInStatus);
+        Assert.Equal(!opened, settings.HasError);
+        Assert.Contains("Sign-in has not been verified", Assert.Single(settings.Agents).Checks);
+        Assert.Empty(host.Sent(HostOps.SignIn));
+        Assert.Empty(host.Sent(HostOps.AgentsSetup));
+        Assert.Empty(host.Sent(HostOps.Restart));
+        Assert.False(settings.Busy);
+    }
+
     [Fact]
     public async Task Cancelling_installation_does_not_clear_busy_before_the_installer_returns()
     {
@@ -527,6 +556,7 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.True(reopened.AgentInstallInProgress);
         Assert.Contains("another window", reopened.AgentInstallStatus);
         Assert.False(reopened.CanInstallAgents);
+        Assert.False(reopened.CanSignInAgents);
         host.On(HostOps.AgentsInstallCancel, _ => new { cancellationRequested = true });
         await reopened.CancelAgentInstallAsync();
         Assert.Single(host.Sent(HostOps.AgentsInstallCancel));
@@ -828,6 +858,19 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Get_started_points_CLI_sign_in_at_the_Copilot_row_first_and_stays_yours_to_check()
+    {
+        AgentReadinessRow Row(string id, string label) => new(Agent(id, label, ReadinessState.NeedsAction), canManage: true, canInstall: true);
+        SetupStep SignIn(params AgentReadinessRow[] rows) => SetupGuide.Steps(true, rows, false).Single(x => x.Id == "cli-signin");
+
+        var both = SignIn(Row("claude", "Claude Code"), Row("copilot", "Copilot CLI"));
+        Assert.Equal("Yours to check", both.Mark);
+        Assert.Contains("Choose Sign in on the Copilot CLI row below", both.Detail);
+        Assert.Contains("Choose Sign in on the Claude Code row below", SignIn(Row("claude", "Claude Code")).Detail);
+        Assert.Contains("Open the CLI once in a terminal", SignIn().Detail);
+    }
+
+    [Fact]
     public void Get_started_marks_the_new_session_step_done_only_on_a_passed_test_of_an_installed_agent()
     {
         var rows = new[] { new AgentReadinessRow(Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: "owned setup record")) };
@@ -852,6 +895,38 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Equal(Tone.None, row.StatusTone);
     }
 
+    // #1221: QA saw Agency and Copilot CLI read "Not tested yet" after the host had handled their hooks.
+    // Agency has no hooks of its own; the host reports the shared Copilot CLI hook on its row.
+    [Theory]
+    [InlineData("claude", "Claude Code")]
+    [InlineData("codex", "Codex")]
+    [InlineData("copilot", "Copilot CLI")]
+    [InlineData("agency", "Agency")]
+    public void A_handled_hook_flips_a_set_up_agent_from_not_tested_yet_to_ready_and_no_hook_leaves_it_untested(string id, string label)
+    {
+        var none = Agent(id, label, ReadinessState.Unknown, hooksDetail: RecordIntakeOn);
+        var seen = none with { LastHookHandledAt = DateTimeOffset.UtcNow.AddHours(-30) };
+
+        var untested = new AgentReadinessRow(none, canManage: true);
+        var ready = new AgentReadinessRow(seen, canManage: true);
+
+        Assert.True(untested.NotTested);
+        Assert.Equal("Not tested yet", untested.Status);
+        Assert.False(ready.NotTested);
+        Assert.True(ready.HooksWorking);
+        Assert.Equal("Ready", ready.Status);
+        Assert.Null(ready.SetUpVerb);
+    }
+
+    [Fact]
+    public void A_handled_hook_does_not_say_Ready_on_a_row_that_is_not_installed_or_needs_repair()
+    {
+        var heard = DateTimeOffset.UtcNow;
+        Assert.NotEqual("Ready", new AgentReadinessRow(Agent("codex", "Codex", ReadinessState.Unknown, installation: ReadinessState.Missing, hooksDetail: RecordIntakeOn) with { LastHookHandledAt = heard }).Status);
+        Assert.NotEqual("Ready", new AgentReadinessRow(Agent("codex", "Codex", ReadinessState.Failed, hooksDetail: DidNotComplete) with { LastHookHandledAt = heard }, canManage: true).Status);
+        Assert.Equal("Hook ownership couldn't be checked · couldn't read", new AgentReadinessRow(FromWire("failed", UnknownRecord, "unknown") with { LastHookHandledAt = heard }, canManage: true).Status);
+        Assert.Equal(OlderHost, new AgentReadinessRow(FromWire("unknown", RecordIntakeOn, "unknown") with { LastHookHandledAt = heard }, canManage: true).Status);
+    }
     // The host's `hookSetup` (#705 review r4474869190), on the wire beside the hooks state its host
     // sends with it. Until this build's AgentReadiness carries the field, the adapter reads it as
     // missing, and the fixture's value is handed to the row as the adapter will hand it then.
@@ -1644,6 +1719,47 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_press_the_app_refuses_ends_on_the_agents_own_row()
+    {
+        await ConnectedWith(FakeHost.StatusOf() with { Agents = Readiness("1.2.3"), ReadOnly = "fixture legacy host" });
+        await Wait.UntilAsync(() => settings.Agents.Count == 1 && connection.Status?.ReadOnly is not null, "the read-only agent row");
+
+        await settings.SetUpAgentAsync("claude");
+
+        Assert.Equal("Setup failed · this bridge is read-only", settings.Agents.Single().Status);
+        Assert.Equal(Tone.Bad, settings.Agents.Single().StatusTone);
+        Assert.Contains("fixture legacy host", settings.Error);
+        Assert.Empty(host.Sent(HostOps.AgentsSetup));
+    }
+
+    [Fact]
+    public async Task A_press_the_host_calls_done_that_changes_nothing_says_so_on_the_row()
+    {
+        await ConnectedWith(FakeHost.StatusOf() with { Agents = Readiness("1.2.3") });
+        await Wait.UntilAsync(() => settings.Agents.Count == 1, "agent readiness");
+        host.On(HostOps.AgentsSetup, _ => new AgentSetupResult(true, "Registered.", false));
+        host.On(HostOps.AgentsRefresh, _ => new AgentBridge.Transport.ChannelReply(host.Status.Agents!, ch => host.SendAsync(HostOps.StatusEvent, host.Status)));
+
+        await settings.SetUpAgentAsync("claude");
+
+        await Wait.UntilAsync(() => settings.Agents.SingleOrDefault()?.Status.StartsWith("Nothing changed", StringComparison.Ordinal) == true, "the nothing-changed note",
+            why: () => settings.Agents.SingleOrDefault()?.Status ?? "none");
+        Assert.Equal(Tone.Warn, settings.Agents.Single().StatusTone);
+    }
+
+    [Theory]
+    [InlineData(ReadinessState.Unknown, HookSetupState.NotSetUp, "Set up")]
+    [InlineData(ReadinessState.NeedsAction, HookSetupState.NotSetUp, "Set up")]
+    [InlineData(ReadinessState.Failed, HookSetupState.Incomplete, "Repair")]
+    [InlineData(ReadinessState.Working, HookSetupState.Completed, null)]
+    public void A_row_labels_its_button_for_what_the_host_reports(ReadinessState hooks, HookSetupState setup, string? verb)
+    {
+        var row = new AgentReadinessRow(Agent("claude", "Claude Code", hooks, setup: setup), canManage: true);
+
+        Assert.Equal(verb, row.SetUpVerb);
+    }
+
+    [Fact]
     public async Task A_readiness_probe_failure_is_shown_instead_of_reporting_success()
     {
         host.On(HostOps.AgentsRefresh, _ => throw new InvalidOperationException("readiness scan refused"));
@@ -1682,6 +1798,46 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.False(settings.CanSignIn);
     }
 
+    // Only a saved production name gives way to the build's relay; any other saved relay (staging, self-hosted, a
+    // lookalike host) stays, shown as such, so a release build never signs in to production silently.
+    [Theory]
+    [InlineData("https://relay.bad-duck.com", "https://relay.slipgates.com", "")]
+    [InlineData("https://RELAY.Bad-Duck.com/", "https://relay.slipgates.com", "")]
+    [InlineData("https://relay.slipgates.com", "https://relay.slipgates.com", "")]
+    [InlineData("https://staging.relay.example", "https://staging.relay.example", "This install uses staging.relay.example")]
+    [InlineData("https://relay.slipgates.com.evil.example", "https://relay.slipgates.com.evil.example", "This install uses relay.slipgates.com.evil.example")]
+    [InlineData("https://staging.relay.example:8443", "https://staging.relay.example:8443", "This install uses staging.relay.example:8443")]
+    [InlineData("not an address", "not an address", "This install uses not an address")]
+    public async Task A_release_build_replaces_a_saved_production_relay_and_keeps_any_other(string saved, string signedInTo, string note)
+    {
+        host.On(HostOps.SignIn, _ => new SignInStatus(SignInState.Pending));
+        prefs = prefs with { Relay = saved };
+        var release = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.slipgates.com", relayEditable: false);
+        await Connected();
+
+        release.RelayUrl = "https://relay.typed";
+        await release.SignInAsync();
+
+        Assert.False(release.RelayEditable);
+        Assert.Equal(note, release.RelayNote);
+        Assert.Equal(signedInTo, Assert.Single(host.Sent(HostOps.SignIn)).GetProperty("relay").GetString());
+        Assert.Equal(saved, prefs.Relay);
+    }
+
+    // A host that signed in to a staging relay keeps it in relay.txt, and an app with no saved relay of its own must not move it to production.
+    [Fact]
+    public void A_release_build_keeps_the_relay_the_host_last_signed_in_to_and_names_its_port()
+    {
+        var folder = Path.Combine(host.Folder, "test");
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, "relay.txt"), "https://staging.relay.example:8443/\n");
+
+        var release = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.slipgates.com", relayEditable: false);
+
+        Assert.Equal("https://staging.relay.example:8443/", release.RelayUrl);
+        Assert.Equal("This install uses staging.relay.example:8443", release.RelayNote);
+        Assert.Equal("Sign in with GitHub to staging.relay.example:8443", release.SignInLabel);
+    }
     // Home Assistant refusing this machine is shown in the host's words, a rejected token and a ban
     // alike, and goes when the host says it has; each change is announced, so the page redraws.
     [Fact]

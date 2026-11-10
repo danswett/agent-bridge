@@ -69,7 +69,8 @@ follow.
     "idleIntervalSeconds": 900,
     "copilotAccounts": ["dswett_microsoft"]
   },
-  "devBox": { "keepAwake": false, "intervalMinutes": 15 }
+  "devBox": { "keepAwake": false, "intervalMinutes": 15 },
+  "agentMessaging": { "remote": "off", "allowAllTargets": false }
 }
 ```
 
@@ -107,6 +108,8 @@ Comments and trailing commas are allowed. Absent and `null` mean the default.
 | `launch.transfer.maxBytes` | `26214400` (25 MiB) | The largest session bundle, compressed, this machine sends or takes: 1 MiB to 200 MiB. A transfer needs it on both machines |
 | `launch.transfer.maxSourceBytes` | 10 × `maxBytes` | The most read from disk to pack one, and unpacked to install one: from `maxBytes` to 20 GiB |
 | `launch.remoteFolderTrust` | `false` | A person may answer a launched agent's folder-trust question (Trust or Quit) from their phone, browser or Windows app, with a command that device signs ([v1-launch.md](protocol/v1-launch.md#folder-trust)). Off: the question is shown on those devices read-only, to answer at the machine. Set it here, with `agent-bridge-host config set launch.remoteFolderTrust true` (applies when the host restarts), or in the Windows app's Settings (applies at once, so a question already waiting can then be answered); never from another device. Trusting a folder lets the agent run what is in it |
+| `launch.workerMcp` | `{}` | For each `role` a coordinator may pass on a launch, the MCP servers (by name, as in the owner's `<Copilot home>/mcp-config.json`) a worker started for that role keeps, e.g. `{"review":[],"github":["github-mcp-server"],"workiq":["workiq"]}`. A role not listed keeps none. Applies only to a direct `copilot` launch that carries a role, never to a launch without one (the owner's own) and not to Agency, which `--profile-only` already narrows. The host reads the server names from the owner's file at every launch (never cached) and passes `--disable-mcp-server <name>` for each one not listed, and `--disable-builtin-mcps` unless `github-mcp-server` or `githubiq` is listed. The log says counts only, never a name. A file that cannot be read refuses the launch. A server added between the host's read and Copilot's own read of the file (milliseconds) would load. Role names are letters, digits and hyphens, matched exactly |
+| `launch.copilotAccount` | absent | The GitHub login a Copilot or Agency launch must run as. Every such launch (new, resume, restore) gets `COPILOT_GITHUB_TOKEN`, read from the user-level environment when the launch starts, and the host checks it first with its own two calls (`/user`, then `/copilot_internal/user`) before any worktree or process exists. Absent: any valid token with premium quota passes; set: the token's login must match (case-insensitive). Refused with a plain reason when the token is unset or invalid, the login differs, premium interactions are zero, or the check cannot complete ("could not check the account"). Quota not reported is accepted and logged. A stored login (`danswett`) is never used instead. `GH_TOKEN` and `GITHUB_TOKEN` in the session are left alone |
 | `launch.remoteFolderTrustDevices` | `[]` | The devices, by device id (32 hex), a person approved here to answer folder-trust questions from. The relay's kind for a device is self-declared, so this list is what lets one answer: with `launch.remoteFolderTrust` on and none approved, nobody can answer from a device. Approve a device in the Windows app's Settings (applies at once), or with `agent-bridge-host config set launch.remoteFolderTrustDevices '["<id>"]'`; a device that may not answer is told its short id. At most 64; invalid ids are ignored with a problem |
 | `homeAssistant.enabled` | `false` | The Home Assistant connector ([ha-connector.md](ha-connector.md)): this machine's sessions on the existing agent-ha-bridge dashboard. Runs only while agent-ha-bridge does not, and only with a token (`agent-bridge-host ha token set`, kept protected beside the device key, never in this file) |
 | `homeAssistant.baseUrl` | none | The Home Assistant, `http` or `https`, with no credentials in it. Required when enabled |
@@ -131,6 +134,8 @@ Comments and trailing commas are allowed. Absent and `null` mean the default.
 | `usage.copilotAccounts` | `[]` | Further GitHub logins whose Copilot allowance this machine reports beside the account Copilot is signed in as, as agent-ha-bridge's own setting: up to three, each its own row on the phone and the app, under its login, and on the Home Assistant connector's `usage_copilot_2`, `_3` or `_4` by its place in the list. Each is read with the token `gh` holds for exactly that login (`gh auth token --user <login>`) and nothing else, at the idle pace, one at a time; a reading that answers for another login is refused. So `gh auth login` as that account is all the setup there is. Logins only, never tokens |
 | `devBox.keepAwake` | `false` | On a Microsoft Dev Box, keep the machine from hibernating on disconnect while the host runs ([below](#dev-box-keep-awake)), as agent-ha-bridge's own setting. Set it in the Windows app's Settings (shown on a Dev Box only; applies at once) or here (applies when the host restarts). `migrate` carries agent-ha-bridge's. Nothing happens on a machine that is not a Dev Box |
 | `devBox.intervalMinutes` | `15` | How often a pass runs, from 1 to 30. More than 30 is read as 30 and said, and `config set` refuses it: a pass less often than the pool's grace period (never under 60 minutes) can miss the pending stop entirely |
+| `agentMessaging.remote` | `"off"` | The temporary AP5-lite mode (#728): `"off"` or `"own-account"`, for the owner's own agents on the owner's own account, ahead of the signed roster (#55), which still gates everything beyond it. The runbook is [protocol/agent-lite.md](protocol/agent-lite.md). Off means nothing of it is active, and an install or upgrade never writes it. Read afresh for each message, so changing it needs no restart and switching it to `"off"` holds from the next message; a message not sent this way goes over Home Assistant. This slice holds only the setting: nothing sends or receives yet |
+| `agentMessaging.allowAllTargets` | `false` | Counts only while `agentMessaging.remote` is `"own-account"`. `false`: own agents may not type into allow-all sessions, and those targets fall back to Home Assistant. Left `false` until the owner decides otherwise |
 
 How a file that is wrong is read: one that cannot be read or parsed turns remote approval,
 launching, notifications and agent usage off and makes the host read-only ("this host's config.json has a
@@ -146,8 +151,11 @@ one shaped like a token is refused. In `launch`, a workspace entry that is wrong
 that is not `true` or `false`) is left out and said in the log, and any other value that is
 wrong turns launching off. In `homeAssistant`, any value that is wrong turns the connector off
 and is said in the log. In `devBox`, a `keepAwake` that is not `true` or `false`, or a `devBox` that
-is not an object, leaves keep-awake off; an interval that is not a whole number from 1 is 15. A
-setting someone may have meant as off is never read as on.
+is not an object, leaves keep-awake off; an interval that is not a whole number from 1 is 15. In
+`agentMessaging`, a `remote` that is not exactly `"off"` or `"own-account"`, or an `agentMessaging`
+that is not an object, is off, and an `allowAllTargets` that is not `true` or `false` is `false`;
+each is said, and `config set` refuses to write it. A setting
+someone may have meant as off is never read as on.
 
 ## Trusted peers: disposable-host foundation
 
@@ -297,6 +305,58 @@ refused, #67):
 Restart. A value that is not `true` or `false` turns every permission off and is said in the log.
 Devices cannot change it yet; that waits for #801's settings path.
 
+## Machine and session load in the log
+
+So a saturated machine is visible (#1150), the host takes one shared snapshot of the machine's
+processes every 5 seconds and writes a line to `logs\host.log` at most once a minute:
+
+```
+load: machine cpu 92% of 8 cores, 310 MiB memory available; sessions: 3f2a9c1d cpu 41% working set 880 MiB 6 procs; 9be0aa12 cpu 7% working set 420 MiB 3 procs
+```
+
+- Each session's figure covers its process and everything below it, found through the process
+  the host already records for the session (id plus start time, so a reused id is not counted).
+- `cpu` is the processor time used between two snapshots, as a share of the whole machine, so
+  it is a rate over the last 5 seconds, not a point reading. The first snapshot has no earlier
+  one, so it reads `unknown`.
+- `working set` is the memory resident in RAM. Pages shared between processes count once per
+  process, so the sum can overstate.
+- `unknown` means the host could not read it (for example a process it may not open); it is never
+  shown as 0. A session marked `partial` or `unavailable` is missing some or all of its processes.
+- No paths or command lines are read or written. Session ids are cut to 8 characters in the log.
+- The per-session figures can also ride the sessions sensor under a `load` attribute, keyed by
+  node. That stays off: it needs both `HaConnectorOptions.PublishLoad` and
+  `HaConnectorOptions.PublishSessionLoad`, and the host sets only the first.
+
+### Fleet load feed (machine totals only)
+
+The owner cleared `HaConnectorOptions.PublishLoad` for machine totals only (17:39 PT, Nov 9; recorded
+on #1150). With it on, the connector publishes one extra per-machine sensor,
+`sensor.agent_bridge_<machine>_fleet_load`, every 10 seconds (#1587). With it off, nothing is
+published. Its state is `observedAt` (the sample time); its attributes are this record, version 1:
+
+| Field | Meaning |
+|-------|---------|
+| `version` | always `1` |
+| `machine` | the machine's name |
+| `observedAt` | when the sample was taken |
+| `cpuPercent` | mean of the last 10 s (two 5 s samples) |
+| `cpuPeakPercent` | highest single sample in that window |
+| `cores` | processor count |
+| `availableMemoryMiB` | memory available |
+| `sessions` | the host's live-session count |
+| `runQueue` | Processor Queue Length, latest sample |
+| `runQueueAvg`, `runQueueMax` | mean and highest over the window |
+
+Every number is `null` when unknown, never 0. There are no process names, paths, session ids,
+titles or per-session rows. A record is stale when `observedAt` is more than 30 s old; nothing else
+is used to judge it.
+
+`docs/fleet-load-limits.json` holds the limits the fleet judges the record against:
+`maxCpuPercent` (1-100), `minAvailableMemoryMiB` (above 0), `maxRunQueuePerCore` (0 or more),
+`maxAgeSeconds` (above 0) and `nullFails` (true or false; true means an unknown figure fails). A
+test rejects a file with any value out of range or missing.
+
 ## Notifications in the log
 
 Each push the host makes leaves one line in `logs\host.log` for each try, so the time a
@@ -321,11 +381,36 @@ A notice that waits or never goes says so on a line of its own: `held=collapse u
 finished turn held back because the device had one for that session in the last 10 minutes
 (`FinishedCollapse`), and `dropped=…` with `at=+…ms` for one that will not go: `on-screen` (the
 device has the app open and sees it), `collapse-moved-on`, `turn-failed`, `answered`,
-`signed-in`, `expired`, `unsubscribed`, `not-allowed` or `unencryptable`.
+`signed-in`, `expired`, `unsubscribed`, `not-allowed` or `unencryptable`. While the person uses a
+device (#1190; the rule is in [v1-sessions.md](protocol/v1-sessions.md#when-a-host-notifies)), a
+finished turn is `dropped=in-use`, and a question whose card a device in use shows
+`dropped=card-on-screen`; on the other devices the same reason ends in `-elsewhere by=` and the
+device in use.
 
 Sessions and devices are named by the first 8 characters of their ids; the grouped, sign-in,
 restore and machine notices by their own keys. No line has the notice's text, an endpoint or a
 whole id.
+
+## The agent audit log
+
+What agents did on this machine is written one JSON line per event to
+`<profile>\audit\agents-YYYY-MM-DD.jsonl` (#1296, design/agent-principals.md §5.6). The folder
+and files are readable by this user alone, like `agent-credentials.json`. Each line has `at`,
+`direction` (`out`, `in` or `local`), `request`, `principal` (`agent:<machine>/<session>`, never
+the owner), `chain`, `action`, `target`, `outcome`, `reason`, and, when the event carried text,
+`dataSha256` and `textLength`. The text itself is never written; a reason is cut at 200
+characters, every other field at 256, and the chain at 16 entries.
+
+The host keeps at most 30 days and 64 MiB, deleting the oldest day's file first and never the
+file being written. That file is bounded too: once a line would take it past 64 MiB the write
+returns false and the audited action is refused until the next day. A future-dated file (a clock
+stepped back) does not count toward the size. Age pruning never trusts a clock that has jumped ahead of the newest earlier
+file, and size pruning stops at a file it cannot delete. A line torn by a crash is not joined to
+the next event. An unwritable log (a read-only folder, a full disk) refuses the action being
+audited, as the #1401 row in design/agent-launch-scope.md requires: the log says so once in the
+host log and again when writing resumes, and the caller must refuse and release any slot when the
+write returns false. Nothing calls the log yet: the agent operations that write to it arrive with
+#720 slice 4 and #1170.
 
 ## Approving a workspace at the machine
 

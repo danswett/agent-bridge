@@ -67,6 +67,8 @@ public sealed class ToastPlanner
     }
 
     public Func<bool> Enabled { get; init; } = () => true;
+    // A session's question went or was replaced, or the session ended with one open.
+    public Action<string>? QuestionClosed { get; init; }
     public Func<bool> FinishedEnabled { get; init; } = () => true;
     // The app's window is in front: the card shows it, so no toast.
     public Func<bool> WindowActive { get; init; } = () => false;
@@ -102,6 +104,7 @@ public sealed class ToastPlanner
             var was = t.Last;
             t.Last = s;
             Recovered(was, s);
+            if (was?.Question is { } asked && s.Question?.Id != asked.Id) { QuestionClosed?.Invoke(s.Id); }
             if (t.Shown is { } shown && (s.Question?.Id != shown || !MayAsk(s)))
             {
                 sink.Withdraw(TagOf(s.Id));
@@ -153,6 +156,7 @@ public sealed class ToastPlanner
         t.Last = s;
         Recovered(before, s);
         NoteWait(t, before, s);
+        if (before?.Question is { } was && s.Question?.Id != was.Id) { QuestionClosed?.Invoke(s.Id); }
         if (t.Shown is { } shown && (s.Question?.Id != shown || !MayAsk(s)))
         {
             sink.Withdraw(TagOf(s.Id));
@@ -216,6 +220,7 @@ public sealed class ToastPlanner
     {
         if (!sessions.Remove(id, out var t)) { return; }
         Recovered(t.Last, null);
+        if (t.Last?.Question is not null) { QuestionClosed?.Invoke(id); }
         if (t.Shown is not null) { sink.Withdraw(TagOf(id)); }
     }
 
@@ -456,6 +461,11 @@ public static partial class ToastXml
         var body = Plain(notes, 300);
         return End(Start(Args(("action", "open")), $"{Product.Name} updated to {version}", $"from {from}", body.Length > 0 ? body : null));
     }
+
+    // An install that didn't take, its words from versions alone (#1167): opening it shows the
+    // window, which says the same with Try again.
+    public static string CouldNotInstall(string message) =>
+        End(Start(Args(("action", "open")), $"{Product.Name} couldn't update", message, null));
 
     // What became of an answer given on a toast, replacing that toast.
     public static string Outcome(string sessionId, string title, string text, string? machineKey = null) =>

@@ -72,12 +72,17 @@ public static class DelegateLabel
         0xA4FE, 0xA60D, 0xA6F5, 0xFE10, 0xFE11, 0xFE50, 0xFE51, 0xFF0C, 0xFF64,
     ];
 
-    // Words a label reads aloud, with no comma of their own: each becomes a space, and a run of
-    // spaces one.
+    // A semicolon, or a . ! ? run before whitespace or the end, ends a sentence to a screen reader:
+    // a name or title of "Fix. Idle" would read as a fact of its own. A dot inside a word
+    // ("v1.2", "a.b") is not a stop and stays. pwa/js/attribution.js's STOPS.
+    static readonly System.Text.RegularExpressions.Regex Stops = new(@";|[.!?]+(?=[\s”""')\]]|$)", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    // Words a label reads aloud, with no comma, semicolon or sentence stop of their own: each
+    // becomes a space, and a run of spaces one.
     public static string Aloud(string text)
     {
-        var spaced = Replaced(text, r => Commas.Contains(r.Value) ? " " : null);
-        return ReferenceEquals(spaced, text) ? text : string.Join(' ', spaced.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        var spaced = Stops.Replace(Replaced(text, r => Commas.Contains(r.Value) ? " " : null), " ");
+        return spaced == text ? text : string.Join(' ', spaced.Split(' ', StringSplitOptions.RemoveEmptyEntries));
     }
 
     static string Replaced(string s, Func<Rune, string?> with)

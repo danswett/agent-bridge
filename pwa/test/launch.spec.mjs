@@ -34,6 +34,15 @@ async function openPanel(page) {
   await expect(field(page, 'agent')).toBeVisible();
 }
 
+// The background ask made when the machine appears has answered, so what a test then changes at
+// the host is not overtaken by an answer already on its way (#1527).
+async function settled(page) {
+  await expect.poll(() => page.evaluate(() => {
+    const d = window.agentBridgeDemo;
+    return !!d.page.launchOptions.get(d.host.machine.id)?.options;
+  })).toBe(true);
+}
+
 test.afterEach(async ({ page }) => {
   expect(await page.evaluate(() => window.__cspViolations ?? [])).toEqual([]);
 });
@@ -136,6 +145,34 @@ test.describe('on a phone', () => {
     expect(await log(page)).toEqual([]);
   });
 
+  test('the form\'s own complaint stays through the machine\'s lists and goes when a setting changes', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    await field(page, 'agent').selectOption('codex');
+    await launchButton(page).tap();
+    await expect(status(page)).toHaveText('Not launched: Codex starts its session only on a first message; give it a prompt.');
+    // The machine's list comes in again, redrawing the panel: nothing the person did has changed.
+    await page.evaluate(() => window.agentBridgeDemo.retarget());
+    await page.waitForTimeout(600);
+    await expect(status(page)).toHaveText('Not launched: Codex starts its session only on a first message; give it a prompt.');
+    // The prompt it asked for is typed: what the line was about has changed.
+    await field(page, 'prompt').fill('Add pagination.');
+    await expect(status(page)).toHaveText('');
+    expect(await log(page)).toEqual([]);
+  });
+
+  test('"Try again in a moment" goes once the moment has passed', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    await script(page, 'busy');
+    await launchButton(page).tap();
+    await expect(status(page)).toHaveText(/Try again in a moment\.$/);
+    await page.waitForTimeout(1000);
+    await expect(status(page)).toHaveText(/Try again in a moment\.$/);
+    await expect(status(page)).toHaveText('', { timeout: 4000 });
+    await expect(launchButton(page)).toBeEnabled();
+  });
+
   test('busy says why and starts nothing, and the next press is a new launch', async ({ page }) => {
     await openDemo(page);
     await openPanel(page);
@@ -218,9 +255,12 @@ test.describe('bringing a session from another machine', () => {
   });
 
   test("a machine slow to say what it offers does not hold up this one's choices", async ({ page }) => {
-    await openDemo(page);
-    await page.evaluate(() => { window.agentBridgeDemo.host.remoteDelayMs = 2500; });
+    await openDemo(page, '&machines=2');
     await openPanel(page);
+    await field(page, 'machine').selectOption('demo-laptop');
+    await page.evaluate(() => { window.agentBridgeDemo.host.remoteDelayMs = 2500; });
+    // Picked back: its choices come from the cache at once, the other machine's sessions later.
+    await field(page, 'machine').selectOption('demo');
     await expect(field(page, 'resume').locator('option')).toHaveText(['New session', 'Fix the flaky relay test · agent-bridge']);
     await field(page, 'resume').selectOption(RESUMABLE);
     // A presence update for the same machine meanwhile does not lose them.
@@ -527,7 +567,8 @@ test.describe('a folder-trust question', () => {
       d.client.launchOptions = () => new Promise(() => {});
       d.retarget();
     });
-    await expect(panel(page).locator('.launch-note')).toHaveText('Getting the choices from Demo machine…');
+    // The earlier choices stay on screen, with a note that newer ones are being fetched.
+    await expect(panel(page).locator('.launch-age')).toContainText('checking for newer ones');
     await expect(card(page).getByRole('button', { name: 'Try again' })).toBeVisible();
   });
 
@@ -542,7 +583,7 @@ test.describe('a folder-trust question', () => {
     await expect(card(page).getByRole('button')).toHaveCount(0);
   });
 
-  test('a refused answer to a question that has since gone is not offered again', async ({ page }) => {
+  test('a refused answer to a question that has since gone is not offered again, and says only that the machine no longer lists it, for 5 s', async ({ page }) => {
     await openDemo(page);
     await ask(page, QUESTION);
     await page.evaluate(() => window.agentBridgeDemo.scriptTrust({ outcome: 'refused', reason: 'that question is no longer waiting: it was answered, or the agent closed' }));
@@ -550,9 +591,14 @@ test.describe('a folder-trust question', () => {
     // Answered at the machine meanwhile: the machine no longer lists it.
     await page.evaluate(() => { const h = window.agentBridgeDemo.host; h.launchOptions = { ...h.launchOptions, trust: [] }; });
     await card(page).getByRole('button', { name: 'Trust' }).tap();
-    await expect(card(page).locator('.trust-status')).toHaveText(/^Not answered/);
-    await expect(card(page).locator('.trust-at-machine')).toHaveText('Demo machine no longer lists this question as waiting.');
+    const gone = card(page).locator('.trust-gone');
+    await expect(gone).toHaveText('Demo machine no longer lists this question.');
+    const at = Date.now();
+    // One neutral line: no amber, no "Not answered", nothing to press.
+    await expect(card(page).locator('.trust-status, .trust-at-machine, .warn')).toHaveCount(0);
     await expect(card(page).getByRole('button')).toHaveCount(0);
+    await expect(card(page)).toHaveCount(0, { timeout: 9000 });
+    expect(Date.now() - at).toBeGreaterThanOrEqual(4000);
   });
 
   test('a question a launch met is offered only until the list after it says it no longer waits', async ({ page }) => {
@@ -571,7 +617,8 @@ test.describe('a folder-trust question', () => {
     // outcome alone never offers it again.
     await page.evaluate(() => { const h = window.agentBridgeDemo.host; h.launchOptions = { ...h.launchOptions, trust: [] }; });
     await card(page).getByRole('button', { name: 'Trust' }).tap();
-    await expect(card(page).locator('.trust-status')).toHaveText(/^Not answered/);
+    await expect(card(page).locator('.trust-gone')).toHaveText('Demo machine no longer lists this question.');
+    await expect(card(page).locator('.trust-status')).toHaveCount(0);
     await expect(card(page).getByRole('button')).toHaveCount(0);
   });
 
@@ -821,17 +868,19 @@ test.describe('a folder-trust question', () => {
 
   test('a machine shown for its question whose list could not be read is asked again when it reconnects', async ({ page }) => {
     await openDemo(page);
+    await settled(page);
     await ask(page, QUESTION);
     const reason = 'this is a read-only comparison host (delivery.readOnly in its config); answer at the machine';
     await page.evaluate((why) => {
       const d = window.agentBridgeDemo;
       d.launchPanel.setTarget(null);
-      d.launchPanel.setTarget({ ...d.target(), transfers: null, trust: null, inspectOnly: true, readOnly: why, load: () => Promise.reject(new Error('the channel closed')) });
+      d.launchPanel.setTarget({ ...d.target(), cached: () => null, transfers: null, trust: null, inspectOnly: true, readOnly: why, load: () => Promise.reject(new Error('the channel closed')) });
     }, reason);
     await expect(panel(page)).toHaveJSProperty('hidden', true);
 
     // The same machine again, as a reconnect hands it in: its question is asked for once more.
-    await page.evaluate((why) => { const d = window.agentBridgeDemo; d.launchPanel.setTarget({ ...d.target(), transfers: null, trust: null, inspectOnly: true, readOnly: why }); }, reason);
+    // Nothing was kept from the failed read, so there are no choices to show in the meantime.
+    await page.evaluate((why) => { const d = window.agentBridgeDemo; d.launchPanel.setTarget({ ...d.target(), cached: () => null, transfers: null, trust: null, inspectOnly: true, readOnly: why }); }, reason);
     await expect(card(page).locator('.trust-folder')).toHaveText(LONG);
   });
 
@@ -1022,5 +1071,74 @@ test.describe('a launch followed after it was not confirmed', () => {
     await register(page, 'codex');
     await expect.poll(() => listings(page)).toBeGreaterThan(before);
     await expect(busy).toBeHidden();
+  });
+});
+
+// The choices are fetched in the background and kept, so the page never waits on the machine (#1527).
+test.describe('the cached choices', () => {
+  const age = (page) => panel(page).locator('.launch-age');
+
+  test('the form shows at once from the kept choices, with their age, while the machine is slow to answer again', async ({ page }) => {
+    await openDemo(page);
+    await settled(page);
+    await page.evaluate(() => { window.agentBridgeDemo.client.launchOptions = () => new Promise(() => {}); });
+    await openPanel(page);
+    await expect(age(page)).toContainText('Choices as of');
+    await expect(field(page, 'model')).toBeVisible();
+  });
+
+  test('a refresh that fails keeps the old choices and says why, and Launch is still offered', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    await page.evaluate(() => { window.agentBridgeDemo.client.launchOptions = () => Promise.reject(new Error('the channel closed')); });
+    await panel(page).getByRole('button', { name: 'Reload choices' }).click();
+    await expect(age(page)).toContainText("Couldn't get newer ones from Demo machine: the channel closed");
+    await expect(field(page, 'model')).toBeVisible();
+    await expect(launchButton(page)).toBeEnabled();
+  });
+
+  test('a machine that never gave its choices says so, with the reason', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    await page.evaluate(() => {
+      const d = window.agentBridgeDemo;
+      d.launchPanel.setTarget(null);
+      d.launchPanel.setTarget({ ...d.target(), cached: () => null, load: () => Promise.reject(new Error('the channel closed')) });
+    });
+    await expect(panel(page).locator('.launch-note')).toContainText("hasn't given its choices yet: the channel closed");
+  });
+
+  test('a machine whose events had a gap is asked for its choices again once its list is whole, with no other change', async ({ page }) => {
+    await openDemo(page);
+    await settled(page);
+    await page.evaluate(() => {
+      const d = window.agentBridgeDemo;
+      window.__log = [];
+      const lo = d.page.launchOptions;
+      for (const k of ['stale', 'sync']) { const f = lo[k].bind(lo); lo[k] = (...a) => { window.__log.push(k); return f(...a); }; }
+      const rf = d.page.refresh.bind(d.page);
+      d.page.refresh = (...a) => { window.__log.push('refresh'); return rf(...a); };
+      // A jump in seq holds the machine until a new snapshot is whole, with its channel open throughout.
+      d.frame({ ev: 'session.upsert', seq: d.host.seq + 5, data: d.host.get('6f1c2b7e-claude-example') });
+    });
+    // The mark alone asks nothing: a sync has to follow it, or a machine that reconnects with no other change keeps its old choices.
+    await expect.poll(() => page.evaluate(() => {
+      const log = window.__log;
+      return log.includes('stale') && log.slice(log.lastIndexOf('stale')).includes('sync');
+    })).toBe(true);
+  });
+
+  test('a machine held while it reconnects cannot launch, though its form shows from the kept choices', async ({ page }) => {
+    await openDemo(page, '&timeout=1000');
+    await openPanel(page);
+    await settled(page);
+    await expect(launchButton(page)).toBeEnabled();
+    await page.evaluate(() => {
+      const host = window.agentBridgeDemo.host;
+      host.failOpen = 'the handshake timed out';
+      host.disconnect();
+    });
+    await expect(field(page, 'model')).toBeVisible();
+    await expect(launchButton(page)).toBeDisabled();
   });
 });

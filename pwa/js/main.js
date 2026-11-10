@@ -23,6 +23,7 @@
 //   demo.js          ?demo=1: simulated machines (?machines=2 or 3), no relay; loaded only then
 //   brand.js         the product's name, for every place the app shows it
 //   release-watch.js new releases of the app that keep failing to install
+//   key-check.js     Settings > Keyboard check (#1209): what a hardware keyboard's keys reach the app as
 import { APP_VERSION, FEEDBACK_KEY_ID, FEEDBACK_PUBLIC_KEY, RELAY } from '../config.js';
 import { BRAND, NOTIFICATIONS_BLOCKED } from './brand.js';
 import { loadIdentity, deviceName, kvGet, kvPut, kvDelete } from './identity.js';
@@ -30,10 +31,11 @@ import { accountStore, startDeviceFlow } from './signin.js';
 import { BridgeConnection } from './connection.js';
 import { ALL, HostSession } from './host-session.js';
 import { ReturnGrace } from './return-grace.js';
+import { Reading } from './reading.js';
 import { HostClient } from './host-client.js';
 import { TRUST } from './launch.js';
-import { TRANSFER, collectRemote, collectingRemote, signEscapedApproval, signTransfer, signTrust } from './transfer.js';
-import { PushRegistrar, closeMachineNotices, closeNotices, closeStaleNotices, fetchVapidKey } from './push.js';
+import { TRANSFER, collectRemote, collectingRemote, signEscapedApproval, signTransfer, signTrust, signUpdateNow } from './transfer.js';
+import { PushRegistrar, closeMachineNotices, closeNotices, closeReadNotices, closeStaleNotices, fetchVapidKey } from './push.js';
 import { Capabilities, PROTOCOL_VERSION } from './protocol.js';
 import { offlineMachines } from './ui/views.js';
 import { Shell } from './ui/shell.js';
@@ -53,6 +55,7 @@ import { RelayBlobs } from './blobs.js';
 import { recentTimings } from './timing.js';
 import { edgeSwipeBack, installedOnApple, markPlatform } from './platform.js';
 import { applyTextSize, readTextSize, saveTextSize } from './text-size.js';
+import { mountKeyCheck } from './ui/key-check-view.js';
 import { FeedbackDiagnostics, feedbackFailureMessage, isSensitiveFeedbackText, sendFeedbackBundle, serializeFeedbackBundle } from './feedback.js';
 
 // Installed on iOS or iPadOS, the edge swipe walks the same back stack as Android's Back.
@@ -70,6 +73,8 @@ const $ = (id) => document.getElementById(id);
     b.addEventListener('click', () => { applyTextSize(b.dataset.textSize); saveTextSize(b.dataset.textSize); show(b.dataset.textSize); });
   }
 }
+// Settings > Keyboard check (#1209): what a hardware keyboard's keys reach the app as.
+mountKeyCheck();
 const params = new URLSearchParams(location.search);
 const BASE = RELAY || location.origin;
 
@@ -363,7 +368,7 @@ const demoStorage = {
 
 async function startDemo() {
   // Only the demo loads its pretend hosts: the live app never fetches or parses them (#609).
-  const { DemoBlobStore, DemoConnection, DemoHost, demoConfirm, demoDelegating, demoMachines, demoSignIn, demoTransfers, demoTrust, runScript } = await import('./demo.js');
+  const { DemoBlobStore, DemoConnection, DemoHost, demoConfirm, demoDelegating, demoMachines, demoSignIn, demoTransfers, demoTrust, demoUpdateNow, runScript } = await import('./demo.js');
   $('demo-banner').hidden = false;
   $('demo-settings').hidden = false;
   shell.setSignedIn(true);
@@ -400,6 +405,9 @@ async function startDemo() {
     // ?updates=1: a host whose app installs updates asked for from here (#51). Never a
     // read-only one, which offers none.
     updating: params.get('updates') === '1' && !ahb,
+    // ?updateNow=1 with it: Update now offered there too (#1159), with its sessions' busy as a
+    // host would count them.
+    updatingNow: params.get('updateNow') === '1',
     // ?signin=1: a host that runs an agent's own device-code sign-in when asked (#800), with four
     // sessions waiting on one, a quota error and a session not responding (demoSignIn).
     signingIn: params.get('signin') === '1',
@@ -462,7 +470,15 @@ async function startDemo() {
       save: (entries) => { try { demoStorage.setItem(USAGE_KEPT, JSON.stringify({ account: 'demo', entries })); } catch { /* a nicety */ } },
     });
   }
-  const demoUpdates = new UpdateControl({ fleet });
+  // Update now (#1159) signed by a key this page makes for itself, for each demo machine's.
+  const demoUpdates = new UpdateControl({
+    fleet,
+    sign: await demoUpdateNow(machines),
+    session: (hostId, sessionId) => hosts.sessions.get(hostId, sessionId),
+    nameOf: (id) => hosts.nameOf(id),
+    // ?restartMs=: how long a machine that left for an Update now reads "Restarting to update…".
+    ...(Number(params.get('restartMs')) ? { restartMs: Number(params.get('restartMs')) } : {}),
+  });
   // ?diagnose=1: each machine's Diagnose (#802), as a person's device has it.
   const demoDiagnose = params.get('diagnose') === '1' ? new DiagnoseControl({ fleet }) : null;
   const transfers = new Map();
@@ -781,8 +797,18 @@ function begin(account) {
   keepUsage(account);
   // Forgetting an offline machine (#50): what this app keeps about it goes with it. Its push
   // subscription is on that machine, which is gone; the notices it left here are closed.
-  // Each machine's updates (#51): Check and Install, from a person's device, which this is.
-  const updates = new UpdateControl({ fleet });
+  // Each machine's updates (#51): Check and Install, from a person's device, which this is; and
+  // Update now (#1159), signed by this device for the machine on the other end of the channel it
+  // goes on, whose key that channel's handshake proved.
+  const updates = new UpdateControl({
+    fleet,
+    sign: ({ machineKey, release, accept, request }) => {
+      if (!machineKey) { return Promise.reject(new Error('not connected to that machine')); }
+      return signUpdateNow({ key: identity.key, deviceId: identity.deviceId, machinePublic: machineKey, release, accept, request });
+    },
+    session: (hostId, sessionId) => hosts.sessions.get(hostId, sessionId),
+    nameOf: (id) => hosts.nameOf(id),
+  });
   // Each machine's Diagnose (#802): read here, copied only after review.
   const diagnose = new DiagnoseControl({ fleet });
   const dropMachine = (id) => {
@@ -798,8 +824,12 @@ function begin(account) {
   // channel to it is open now: after a reconnect, one still waiting for its outcome is resent
   // with the same request. Large files go through the blob store of the relay this page is
   // connected to, when it has one and the machine fetches from it (sessions.attach.blob).
+  // What this page shows is told to each machine (sessions.focus) and its notices taken down
+  // while it is read (#1190). worker() is defined below; it is only called once a session is open.
+  const reading = new Reading({ hosts, close: (hostId, sessionId, question) => worker().then((r) => closeReadNotices(r, hostId, sessionId, question)) });
   page = new SessionsPage({
     $, hosts, connection, me: identity.deviceId, shell,
+    opened: (open) => reading.open(open),
     blobs: () => (connection.relay ? new RelayBlobs(connection.relay) : null),
     relayMax: () => connection.relay?.blobs?.max ?? 0,
     // The account's other machines' sessions, each signed for when picked.
@@ -961,9 +991,10 @@ function begin(account) {
     feedbackDiagnostics.recordLog(code);
     console.log(line);
   });
-  connection.on('state', ({ state }) => {
+  connection.on('state', ({ state, detail }) => {
     feedbackDiagnostics.recordEvent(`connection.${state}`);
     drawFeedbackAvailability();
+    if (state === 'replaced') { $('replaced-text').textContent = detail; }
     replacedBanner.set(state === 'replaced');
     switch (state) {
       // News, as reconnecting is: the strip shows on a phone, in plain words.
@@ -990,6 +1021,8 @@ function begin(account) {
     diagnose.clear();
     lastKnown = null;
     page.clear();
+    // Its listeners go with the account: the next sign-in begins afresh with a Reading of its own.
+    reading.stop();
     $('feedback').hidden = true;
     if (feedbackDialog.open) { feedbackDialog.close(); }
     // A session's address names this account's machine: the next sign-in, perhaps another
@@ -1014,6 +1047,7 @@ function begin(account) {
     hosts.forget();
     fleet.clear();
     page.clear();
+    reading.stop();
     $('feedback').hidden = true;
     if (feedbackDialog.open) { feedbackDialog.close(); }
     accountStore.clear();

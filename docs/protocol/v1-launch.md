@@ -63,7 +63,8 @@ Request `data`: `{}`. Result, what `session.launch` can name on this machine now
 | `agents[].attachments` | The opening prompt can carry attachments (Copilot and Agency, with `sessions.attach`) |
 | `agents[].needsPrompt` | It creates its session only on a first message (Codex), so a launch must carry a prompt |
 | `workspaces` | The folders approved at the machine that exist now, at most 64. `label` is what a launch names; `isolate` means each new session starts in a git worktree of its own |
-| `resumable` | Sessions that can be resumed, newest first, at most 50 (12 by default): ended (never live), and only those whose folder is in an approved workspace or a worktree the host made for one. None of an agent whose discovery is held ([below](#while-discovery-is-held)). `launcher` resumes it; `title` is at most 120 characters, unique in the list |
+| `resumable` | Sessions that can be resumed, newest first, at most 50 (12 by default): ended (never live), and only those whose folder is in an approved workspace or a worktree the host made for one. None of an agent whose discovery is held ([below](#while-discovery-is-held)). `launcher` resumes it; `title` is at most 120 characters, unique in the list. Whether a folder is approved is checked one session at a time, newest first, and the whole `launch.options` call has a budget of 60 seconds from its start: a session whose folder was not checked by then is left out, never offered unchecked, so a slow folder check (a stuck `git`) shortens this list rather than holding the answer past a client's deadline. The host logs how many were left out. `session.launch` and a restore have no such budget |
+| `resumablePending` | `true` only while this host has not yet finished its first scan of Agency's sessions, so `resumable` may be missing Agency's sessions for now: the list a client shows is not the whole list. Absent otherwise. The host answers `launch.options` at once from its last scan and rescans in the background when it starts and when a session registers or ends (never on a timer); a client lists again later. `session.launch` and a restore still wait for a real scan |
 | `defaults` | `agent` and `workspace` a launch gets when it names none, and `permissions`, `ask` or `allowAll` |
 | `busy` | Present when a launch now would be `busy`, saying why, as what the machine is waiting on rather than as a launch turned away: the person reading it may be the one whose launch is waiting. A folder-trust or Bypass Permissions busy lasts at most two minutes from the newest such question (see `session.launch` below), and ends sooner once its agent starts (for Claude and Codex, when its session registers); a client lists again then |
 | `trust` | Present when launched agents are waiting on folder-trust questions: at most 4 [`TrustQuestion`s](#folder-trust), newest first |
@@ -99,6 +100,7 @@ Request `data`:
 | `profile` | Agency only: one of its `profiles`. Absent: its default |
 | `model`, `effort`, `context` | One of the agent's values, or `""` for the agent's own default over the machine's. Absent: the machine's default (`agents[].defaults`) |
 | `permissions` | `ask` (permission prompts as usual) or `allowAll` (launched without them: Copilot `--allow-all`, Claude `--dangerously-skip-permissions`, Codex `--ask-for-approval never`). Absent: `defaults.permissions` |
+| `role` | Coordinators only: the job a worker is started for (letters, digits and hyphens, at most 64, matched exactly). With a role, a direct `copilot` launch has every MCP server of the machine owner's own list disabled except those `launch.workerMcp` lists for that role (a role not listed keeps none) and Copilot's built-in servers off unless listed; Agency is already narrowed by its profile and is unchanged. Absent: a person's launch, which keeps their own MCP servers. A role the machine cannot narrow for (its server list cannot be read) is `refused` |
 | `prompt` | The opening prompt, at most **16 KiB** of UTF-8. Optional, except for an agent with `needsPrompt` |
 | `attachments` | Optional, for an agent with `attachments`: files the same device sent with `attachment.start` and `attachment.chunk` first, at most 10, as for a reply ([Attachments](v1-sessions.md#attachments)) |
 
@@ -116,7 +118,7 @@ host also refuses a prompt that does not fit the agent's command line on that ma
 
 `LaunchProtocol.Check` in C# is the validation every host applies first. Names are at most
 256 bytes; `model`, `effort` and `context` must look like an agent's own values (letters,
-digits, `.` `_` `-` `:` `[` `]`, not starting with `-`), since they reach a command line.
+digits, `.` `_` `-` `:` `[` `]`, not starting with `-`), since they reach a command line. A `role` is letters, digits and hyphens, not starting with a hyphen, at most 64.
 
 Result: `{ "outcome", "reason", "session", "launched" }`:
 

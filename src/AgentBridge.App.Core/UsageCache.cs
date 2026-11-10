@@ -11,6 +11,8 @@ namespace AgentBridge.App.Core;
 public sealed class UsageCache
 {
     public static readonly TimeSpan Kept = TimeSpan.FromDays(14);
+    // How far ahead of this device's clock a reading may be stamped, as a host allows peer readings.
+    public static readonly TimeSpan MaxAhead = TimeSpan.FromMinutes(10);
     // Allowances kept at most, as a host keeps them (PeerUsage); past this the one read longest ago goes.
     public const int MaxAllowances = 32;
 
@@ -77,7 +79,10 @@ public sealed class UsageCache
         // Whatever passes on a forgotten machine's readings (another host that has not heard yet)
         // brings none of them back; and none past their 14 days takes part. Both are left out before
         // anything is merged: chosen first and dropped after, either would hide one that stands.
-        bool Stands(AgentUsage a) => a.MeasuredAt >= oldest
+        // A reading stamped more than MaxAhead past this clock is a wrong clock's, not a fresh one; it
+        // would otherwise outrank every genuine reading in the merge and be kept.
+        var latest = time.GetUtcNow() + MaxAhead;
+        bool Stands(AgentUsage a) => a.MeasuredAt >= oldest && a.MeasuredAt <= latest
             && (a.ReadBy is not { } by || (!forgotten.Contains(by.Id) && (members is null ? !excluded.Contains(by.Id) : members.Contains(by.Id))));
         live = new UsageReport([.. live.Agents.Where(Stands)]);
         if (account is "" || (account is null && this.account is null)) { return live; }

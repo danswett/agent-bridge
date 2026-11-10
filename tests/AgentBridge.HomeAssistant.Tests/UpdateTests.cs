@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using AgentBridge.HomeAssistant;
 using Microsoft.Extensions.Time.Testing;
@@ -72,23 +74,56 @@ public sealed class UpdateTests : IDisposable
     // The background update has finished what it can do now (a gate holds it, or it is done).
     // Ends as soon as it has: the time allowed is only for a runner under load, where the update's
     // own thread can be held up for seconds (a full solution run, #466).
-    async Task Settle(HaConnector c, Func<bool> until)
+    async Task Settle(HaConnector c, Func<bool> until, [CallerMemberName] string phase = "")
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (!until() && DateTime.UtcNow < deadline) { await Task.Delay(10); }
-        Assert.True(until(), "the update beside the passes did not get there");
+        var started = DateTime.UtcNow;
+        var deadline = started + TimeSpan.FromSeconds(10);
+        long longestGap = 0;
+        var last = Stopwatch.GetTimestamp();
+        while (!until() && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(10);
+            var now = Stopwatch.GetTimestamp();
+            longestGap = Math.Max(longestGap, now - last);
+            last = now;
+        }
+        Assert.True(until(), Diagnosis("Settle", phase, started, longestGap));
         await Pass(c, 0.01);
     }
 
     // Passes until what the passes publish shows the update beside them has got there.
-    async Task PassUntil(HaConnector c, Func<bool> until)
+    async Task PassUntil(HaConnector c, Func<bool> until, [CallerMemberName] string phase = "")
     {
+        var started = DateTime.UtcNow;
+        long longestGap = 0;
+        var last = Stopwatch.GetTimestamp();
         for (var i = 0; i < 200 && !until(); i++)
         {
             await Task.Delay(10);
             await Pass(c, 0.01);
+            var now = Stopwatch.GetTimestamp();
+            longestGap = Math.Max(longestGap, now - last);
+            last = now;
         }
-        Assert.True(until(), "the update beside the passes did not get there");
+        Assert.True(until(), Diagnosis("PassUntil", phase, started, longestGap));
+    }
+
+    string[] LogSnapshot()
+    {
+        lock (log) { return [.. log]; }
+    }
+
+    // What a failed wait reports, so a flip on a runner names its own cause (#409).
+    string Diagnosis(string wait, string phase, DateTime started, long longestGapTicks)
+    {
+        ThreadPool.GetAvailableThreads(out var workers, out _);
+        ThreadPool.GetMaxThreads(out var maxWorkers, out _);
+        var lines = LogSnapshot();
+        return $"the update beside the passes did not get there ({wait} in {phase}, waited {(DateTime.UtcNow - started).TotalSeconds:0.0} s, "
+            + $"longest gap between looks {TimeSpan.FromSeconds((double)longestGapTicks / Stopwatch.Frequency).TotalMilliseconds:0} ms, "
+            + $"thread pool busy {maxWorkers - workers} of {maxWorkers}, queued {ThreadPool.PendingWorkItemCount}, "
+            + $"applied {updates.Applied.Count}, downloaded {updates.Downloaded.Count}). "
+            + $"Connector log ({lines.Length}, last 20):{Environment.NewLine}{string.Join(Environment.NewLine, lines.TakeLast(20))}";
     }
 
     JsonObject State => JsonNode.Parse(ha.Retained[HaContract.UpdateStateTopic(Slug)])!.AsObject();
@@ -415,7 +450,7 @@ public sealed class UpdateTests : IDisposable
             if (topic == HaContract.UpdateStateTopic(Slug) && Interlocked.Exchange(ref timedOut, 1) == 0) { throw new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout of 15 seconds elapsing."); }
         };
         updates.DownloadGate.SetResult();
-        for (var i = 0; i < 200 && updates.Applied.Count == 0 && !log.Any(l => l.Contains("did not start", StringComparison.Ordinal)); i++) { await Task.Delay(10); }
+        for (var i = 0; i < 200 && updates.Applied.Count == 0 && !LogSnapshot().Any(l => l.Contains("did not start", StringComparison.Ordinal)); i++) { await Task.Delay(10); }
         Assert.Equal(1, timedOut);
         Assert.Single(updates.Applied);
         Assert.Empty(ha.NotifiedNow());

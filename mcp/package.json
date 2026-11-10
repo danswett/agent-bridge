@@ -1,0 +1,11 @@
+{
+  "name": "slipgates-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP server for agent sessions: agent-ha-bridge's tool names over the Slipgates host's local pipe.",
+  "bin": { "slipgates-mcp": "src/server.mjs" },
+  "engines": { "node": ">=22" },
+  "scripts": { "test": "node --test \"test/*.test.mjs\"" },
+  "dependencies": { "@modelcontextprotocol/sdk": "^1.32.1" }
+}

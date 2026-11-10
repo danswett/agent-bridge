@@ -351,7 +351,7 @@ Choosing the row already lands on the question, and the header isn't the place f
   `NeedsYouLane.count`). It moves to the pending questions across cards (`MainViewModel.Waiting`,
   and in the PWA a small `attention()` over every machine's sessions), in the same order.
 - **What carries it, unchanged:**
-  - the Windows tray tooltip ("Agent Bridge · 3 need you");
+  - the Windows tray tooltip ("Slipgates · 3 need you");
   - the rail's Sessions badge, and the phone's Sessions tab badge;
   - the PWA's app badge (Badging API);
   - on Apple (#260): the macOS Dock badge, the menu bar extra's label, and the iOS icon badge.
@@ -403,7 +403,7 @@ onto them. It is a design mapping only: #260 decides how, and nothing here is im
 | **The rows** | One per session, as today: the `needs` glyph, then "Waiting on you" or "Delegate *name* asks". #260's separate "Needs you · N" `Section` goes | The same, in the inset grouped list |
 | **Choosing a waiting row** | The detail scrolls to the question (`ScrollViewReader`), and focus moves to its heading (`@AccessibilityFocusState`) | The pushed session opens at the question, with VoiceOver focus on its heading |
 | **The count** | The Dock badge (#260's setting), and the menu bar extra's label | The app icon badge. Its number is N, not the unread notification count |
-| **Menu bar extra** | Its label is N. Its menu lists the waiting sessions by name ("ULTRA: Ship 0.1.691 prerelease", at most 8, oldest first, as #260 has it) and Open Agent Bridge. It is navigation, like the Windows tray: an item opens the session at its question, and never shows the question's words or offers an answer (question 8) | Not applicable |
+| **Menu bar extra** | Its label is N. Its menu lists the waiting sessions by name ("ULTRA: Ship 0.1.691 prerelease", at most 8, oldest first, as #260 has it) and Open Slipgates. It is navigation, like the Windows tray: an item opens the session at its question, and never shows the question's words or offers an answer (question 8) | Not applicable |
 | **Notifications** | Clicking one opens the session at the question. Action buttons: question 7 | Tapping one opens the pushed session at the question. Actions: question 7 |
 | **The question card** | §4.3 and §4.4, including the per-line override, the escapes and the literal shape, all in SwiftUI `Text` | The same |
 | **Tools and the inspector** | §4.5. The inspector's Tools has the linked `ask_user` row | §4.5, in the session's Tools section |
@@ -728,4 +728,4 @@ Answered 2026-11-02: every recommendation was taken (1 A, 2 yes, 3 escape and al
    - (b) keep Approve once wherever the lane's rules pass and the prompt fits the body; or
    - (c) stay as it is?
 8. **The macOS menu bar extra:** should its menu keep naming the waiting sessions, each opening
-   its question (recommended), or show only the count and Open Agent Bridge?
+   its question (recommended), or show only the count and Open Slipgates?

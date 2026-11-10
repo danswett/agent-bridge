@@ -45,7 +45,10 @@ public partial class App : Application
     }
 
     internal static HostManager ManagerFor(string profile, string? dataRoot = null, ILogonTasks? tasks = null, IProcesses? processes = null) =>
-        new(new InstallLayout(AppContext.BaseDirectory, dataRoot ?? Paths.DataRoot, profile), tasks ?? new WindowsLogonTasks(), processes ?? new SystemProcesses());
+        new(new InstallLayout(AppContext.BaseDirectory, dataRoot ?? Paths.DataRoot, profile), tasks ?? new WindowsLogonTasks(), processes ?? new SystemProcesses())
+        {
+            Log = AppLog.Write,
+        };
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
@@ -88,7 +91,7 @@ public partial class App : Application
         // does is what the account's other devices are told (#51).
         var updater = new ObservedUpdater(new VelopackUpdater(() => prefs.Prereleases, ui, options.Profile, manager.Layout.ProfileFolder, AppLog.Write));
         IAppAtSignIn atSignIn = installed ? new RunKey(Paths.Exe) : new NoRunKey();
-        var settings = new SettingsViewModel(connection, manager, updater, atSignIn, Prefs, SavePrefs, version, HostDefaults.Relay) { LogTo = AppLog.Write, OpenGuideAtFirstLaunch = installed && !options.Demo && options.SelfTest is null && !options.Background && !options.ToastActivated };
+        var settings = new SettingsViewModel(connection, manager, updater, atSignIn, Prefs, SavePrefs, version, HostDefaults.Relay, relayEditable: !installed) { LogTo = AppLog.Write, OpenGuideAtFirstLaunch = installed && !options.Demo && options.SelfTest is null && !options.Background && !options.ToastActivated };
 
         if (installed)
         {
@@ -139,6 +142,7 @@ public partial class App : Application
                 Capabilities = () => conn.Capabilities,
                 MachineName = () => m?.Name,
                 MachineKey = key == Machine.LocalKey ? null : key,
+                QuestionClosed = id => responder?.QuestionClosed(key == Machine.LocalKey ? null : key, id),
             };
             return m = new Machine(key, conn, cards, planner);
         }
@@ -203,14 +207,25 @@ public partial class App : Application
         // changed.
         if (!options.Demo && updater.InstalledVersion is not null)
         {
-            AutoUpdater.Announce(Prefs, SavePrefs, updater, sink, AppLog.Write, blockers: InstallBlockers.Find);
-            autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write, PackageProcesses.Others, ui: ui, preflight: InstallBlockers.Find);
+            var announced = AutoUpdater.Announce(Prefs, SavePrefs, updater, sink, AppLog.Write, blockers: InstallBlockers.Find);
+            MainWindow shownIn = window;
+            autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write, PackageProcesses.Others, ui: ui, preflight: InstallBlockers.Find)
+            {
+                WindowOpen = () => shownIn.IsOpen,
+            };
             // The banner's Restart to update, and Settings' (#516): the updater's changes come on
             // whichever thread made them.
             var appUpdate = AppUpdateViewModel.For(autoUpdater);
             autoUpdater.StateChanged += () => ui.Post(appUpdate.Changed);
             updater.Changed += () => ui.Post(settings.UpdatesChanged);
             main.AppUpdate = appUpdate;
+            // How the update went (#1167): where the window was open for it, it opens again and says
+            // so; an install that didn't take is said in the window either way, with Try again.
+            if (announced is { } a)
+            {
+                if (a.WindowOpen) { window.Activate(); }
+                if (a.WindowOpen || !a.Took) { appUpdate.Show(a); }
+            }
             // One restart, with one state, whichever control starts it (Creative, 6676653935).
             settings.ShareRestart(appUpdate);
             // When an update is ready, changed in Settings, is acted on and said to the devices at once.
@@ -382,8 +397,19 @@ public partial class App : Application
             if (d is not null) { await d.DisposeAsync(); }
         });
         if (options.SelfTest is not null) { AppLog.Write("self-test: closing the window and exiting"); }
-        window?.Close();
-        Exit();
+        if (window is null) { Exit(); return; }
+        // Window.Close disconnects UI Automation, and that cross-apartment call pumps messages: a
+        // window-position message still waiting is then handled by a window already half torn down,
+        // and WinUI faults in CWindowChrome::UpdateBridgeWindowSizePosition (0xC0000005, #1537, seen
+        // after a passing self-test). Hidden first and closed once the queue has run down, nothing is
+        // left waiting to be delivered mid-close.
+        var closing = window;
+        closing.AppWindow.Hide();
+        if (!closing.DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => { closing.Close(); Exit(); }))
+        {
+            closing.Close();
+            Exit();
+        }
     }
 }
 
@@ -410,6 +436,7 @@ sealed class NoProcesses : IProcesses
     public int Start(string path, IReadOnlyList<string> arguments) => throw new InvalidOperationException("the demo does not start a host");
     public bool IsRunning(int pid) => false;
     public void Kill(int pid) { }
+    public bool Adopt(int pid, long startedTicks) => false;
 }
 
 sealed class NoRunKey : IAppAtSignIn

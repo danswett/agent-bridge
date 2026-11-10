@@ -67,6 +67,7 @@ public sealed class HostControlOptions
     // Host-only seam for graceful departures; it is not exposed as a pipe/relay operation.
     public LifecycleCoordinator? Lifecycle { get; init; }
     public AgentVerificationService? AgentVerification { get; init; }
+    public AgentCliSignInService? AgentSignIn { get; init; }
 }
 
 // The host's management ops (AgentBridge.Local.HostOps), for the desktop app on the local
@@ -145,6 +146,7 @@ public sealed class HostControl
     public bool HasAgentSetup => options.AgentSetup is not null;
     public bool HasAgentInstall => options.AgentInstall is not null;
     public bool HasAgentVerification => options.AgentVerification is not null;
+    public bool HasAgentSignIn => options.AgentSignIn is not null;
 
     HostStatus StatusLocked(bool fresh = false)
     {
@@ -223,6 +225,9 @@ public sealed class HostControl
             case HostOps.AgentsVerifyCancel when options.AgentVerification is not null:
                 return options.AgentVerification.Cancel((Read<AgentVerificationCancel>(data)
                     ?? throw new ArgumentException("Choose the verification to stop observing.")).Request);
+            case HostOps.AgentsSignIn when options.AgentSignIn is not null:
+                return await options.AgentSignIn.OpenAsync(Read<AgentSignInRequest>(data)
+                    ?? throw new ArgumentException("CLI sign-in needs an agent and explicit confirmation."));
             case HostOps.SignIn:
                 return await SignInAsync(Read<SignInRequest>(data) ?? new SignInRequest());
             case HostOps.SignInCancel:
@@ -250,6 +255,9 @@ public sealed class HostControl
                 return new ChannelReply(new { restarting = true }, _ => { options.Restart(); return Task.CompletedTask; });
             case HostOps.UpdateReport when options.Updates is not null:
                 return options.Updates.Report(channel, Read<UpdateReport>(data) ?? throw new ArgumentException($"{HostOps.UpdateReport} needs the updater's state"));
+            case HostOps.UpdateDepart when options.Updates is not null:
+                return await options.Updates.DepartForAppAsync(Read<UpdateDepartRequest>(data)?.Request
+                    ?? throw new ArgumentException($"{HostOps.UpdateDepart} needs the press's request"));
             case HostOps.ProbeHold:
                 return options.HoldProbes() is { } why ? new ProbeHoldResult(true, why) : new ProbeHoldResult(false);
             default:

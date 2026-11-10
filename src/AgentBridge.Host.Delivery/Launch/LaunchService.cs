@@ -92,6 +92,17 @@ public sealed class LaunchServiceOptions
 
     public TimeProvider Time { get; init; } = TimeProvider.System;
 
+    // The whole of one launch.options call, measured from its start. Each resumable session's folder
+    // is checked one at a time and a git check can take 30 s, so without it the call outlasted a
+    // client's 90 s deadline and the Launch form never loaded. Sessions not checked by then are left out.
+    public TimeSpan OptionsBudget { get; init; } = TimeSpan.FromSeconds(60);
+
+    // Test-only: runs before each folder is checked, where a test holds the pass as a stuck git would.
+    internal Action<string?, CancellationToken>? BeforeFolderCheck { get; init; }
+
+    // Test-only: runs when a pass ends, however it ends.
+    internal Action? PassEnded { get; init; }
+
     // Folders no session is launched in (Folders.IsSystemDirectory). Temp is one, which is
     // where tests keep their workspaces, so they replace it.
     public Func<string, bool> IsSystemDirectory { get; init; } = Folders.IsSystemDirectory;
@@ -157,6 +168,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // Alive: the launcher's process, or, once that handed the session on and exited, the session's own
     // (AgentHeld). Transcript: Copilot's events.jsonl and its length just before the agent was started.
     sealed record Unready(Func<bool> Alive, string Label, bool RegistersBeforeReady, (string Path, long From)? Transcript);
+    readonly ILaunchCredentials? credentials;
+    readonly ILaunchAccount? launchAccount;
     readonly List<Pending> pending = [];
     // Every session id a launch has started an agent on (given, resumed, or the Codex session
     // bound to it), with its process: while that process runs, the session is not resumed
@@ -166,12 +179,21 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     // Test-only compatibility overload; production must pass the shared gate explicitly.
     internal LaunchService(ISessionSource source, IAgentHaBridgeProbe probe, IConsoleInjector injector, IAgentStarter starter, IAgentLocator locator,
-        AgencyCatalog agency, LaunchServiceOptions options, Action<string>? log = null, AttachmentStore? attachments = null, DeliveryGate? gate = null)
-        : this(gate ?? new DeliveryGate(), source, probe, injector, starter, locator, agency, options, log, attachments) { }
+        AgencyCatalog agency, LaunchServiceOptions options, Action<string>? log = null, AttachmentStore?         attachments = null, DeliveryGate? gate = null, ILaunchCredentials? credentials = null, ILaunchAccount? account = null)
+                : this(gate ?? new DeliveryGate(), source, probe, injector, starter, locator, agency, options, log, attachments, credentials, account ?? new AcceptingAccount()) { }
+
+    // Existing launch tests are about other things; they take a fake token. The checks themselves
+    // are tested with their own fakes, and the public constructor has no such default.
+    sealed class AcceptingAccount : ILaunchAccount
+    {
+        public Task<LaunchAccount> CheckAsync(string? expectedLogin, CancellationToken cancellationToken) => Task.FromResult(LaunchAccount.Allowed("fake-test-token"));
+    }
 
     public LaunchService(DeliveryGate gate, ISessionSource source, IAgentHaBridgeProbe probe, IConsoleInjector injector, IAgentStarter starter, IAgentLocator locator,
-        AgencyCatalog agency, LaunchServiceOptions options, Action<string>? log = null, AttachmentStore? attachments = null)
+        AgencyCatalog agency, LaunchServiceOptions options, Action<string>? log = null,         AttachmentStore? attachments = null, ILaunchCredentials? credentials = null, ILaunchAccount? account = null)
     {
+        this.credentials = credentials;
+                launchAccount = account;
         this.source = source;
         this.probe = probe;
         this.injector = new GateTrackedInjector(injector, gate);
@@ -201,14 +223,6 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // agent-ha-bridge's $script:BridgeResumeCacheLimit: how many of the newest sessions in
     // approved folders it caches, and so decides the resume labels over.
     const int KindsAmong = 200;
-
-    // How wide a launched session's console is made (its screen buffer, widened by the injector
-    // once the console exists): wide enough for Copilot's form tab
-    // bar (the console's width less four) to show every field's title, so the host can tell an
-    // answer's form is the question's before typing (#1123; a six-field form with long titles
-    // took about 230). Sessions a person started keep their own width, and a too-narrow
-    // form's refusal.
-    internal const int ConsoleColumns = 250;
 
     public bool Available => Config.Enabled && options.PlatformSupported && probe.Recent() is null && starter.Unavailable() is null;
 
@@ -248,19 +262,37 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     // ---- launch.options ----
 
-    public async Task<LaunchOptions> OptionsAsync(CancellationToken cancellationToken = default) => (await ResolveAsync(cancellationToken)).Options;
+    public async Task<LaunchOptions> OptionsAsync(CancellationToken cancellationToken = default) => (await OptionsResolvedAsync(cancellationToken)).Options;
+
+    // OptionsAsync with what was left out kept on the result (client-visible disclosure is #95 S2 to S4).
+    internal async Task<Resolved> OptionsResolvedAsync(CancellationToken cancellationToken = default)
+    {
+        using var budget = new CancellationTokenSource(options.OptionsBudget, options.Time);
+        return await ResolveAsync(cancellationToken, cached: true, budget.Token);
+    }
+
+    // Resumable sessions left out because their folders were not checked in time.
+    internal sealed record Omission(int Count, string Reason);
 
     // The options, with what a launch needs that a client is not sent: each launcher's
     // executable and each resumable session's entry.
-    sealed record Resolved(LaunchOptions Options, IReadOnlyDictionary<string, string> Executables, IReadOnlyList<ResumeEntry> Resumable);
+    internal sealed record Resolved(LaunchOptions Options, IReadOnlyDictionary<string, string> Executables, IReadOnlyList<ResumeEntry> Resumable, Omission? Omitted = null);
 
-    async Task<Resolved> ResolveAsync(CancellationToken ct)
+    // cached: answer from the last sessions scan without waiting for one (launch.options); a launch
+    // waits for a scan, since it validates a resume against the list. Only launch.options is logged.
+    // budget: expires the folder checks of launch.options; a launch has none.
+    async Task<Resolved> ResolveAsync(CancellationToken ct, bool cached = false, CancellationToken budget = default)
     {
+        var clock = TimeProvider.System;
+        var phase = clock.GetTimestamp();
+        long Lap() { var now = clock.GetTimestamp(); var ms = (long)clock.GetElapsedTime(phase, now).TotalMilliseconds; phase = now; return ms; }
+        long profilesMs = 0;
         var executables = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var l in Launchers.All)
         {
             if (locator.Find(l, Config.Agent(l.Id)) is { } exe) { executables[l.Id] = exe; }
         }
+        var lookupMs = Lap();
         var live = source.Snapshot();
         var agents = new List<LaunchAgent>();
         foreach (var l in Launchers.All.Where(l => executables.ContainsKey(l.Id)))
@@ -270,7 +302,9 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             string? profile = null;
             if (l.TakesProfile)
             {
+                Lap();
                 (profiles, profile) = await ProfilesAsync(executables[l.Id], ct);
+                profilesMs += Lap();
             }
             agents.Add(new LaunchAgent
             {
@@ -292,7 +326,15 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             .Select(w => new LaunchWorkspace { Label = w.Label, Path = w.Path, Isolate = w.Isolate ? true : null })
             .ToList();
 
-        var entries = await ResumableAsync(executables, live, ct);
+        Lap();
+        var (entries, pending, omitted) = await ResumableAsync(executables, live, cached, ct, budget);
+        if (omitted is not null)
+        {
+            // Off the caller's path: a slow log writer must not hold the reply the budget exists to bound.
+            var line = $"launch.options: left out {omitted.Count} resumable sessions whose folders were not checked within {options.OptionsBudget.TotalSeconds:0.#} s (reason: {omitted.Reason})";
+            _ = Task.Run(() => { try { log(line); } catch (Exception e) when (e is not OutOfMemoryException) { } });
+        }
+        var resumableMs = Lap();
         var resumableList = entries.Select(e => new ResumableSession
         {
             Id = e.Entry.Id,
@@ -314,6 +356,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             Defaults = new LaunchDefaults { Agent = defaultAgent, Workspace = defaultWorkspace, Permissions = Config.Permissions },
             Busy = BusyReason(status: true),
             Trust = TrustQuestions() is { Count: > 0 } trust ? trust : null,
+            ResumablePending = pending ? true : null,
         };
         // Within its budget, losing the oldest resumable sessions first, then the longest lists.
         while (ProtocolJson.ByteCount(result) > LaunchProtocol.MaxOptionsBytes && result.Resumable.Count > 0)
@@ -324,7 +367,12 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         {
             result = result with { Agents = [.. result.Agents.Select(a => a with { Models = [.. a.Models.Take(Math.Max(8, a.Models.Count - 8))] })] };
         }
-        return new Resolved(result, executables, [.. entries.Select(e => e.Entry)]);
+        if (cached)
+        {
+            // Counts and milliseconds only, one line per call, so a slow phase can be told from a slow reply.
+            log($"launch.options: lookup {lookupMs} ms ({executables.Count} launchers), profiles {profilesMs} ms, resumable {resumableMs} ms ({result.Resumable.Count} sessions, {(pending ? "scan still running" : "from the last scan")})");
+        }
+        return new Resolved(result, executables, [.. entries.Select(e => e.Entry)], omitted);
     }
 
     // Model, effort and context for a launcher, as agent-ha-bridge's Get-BridgeTuningOptions
@@ -394,26 +442,15 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // when it has any, Copilot's own store otherwise), each once and under its own agent, with
     // the live ones left out (two CLIs on one transcript would corrupt it) and only those in
     // approved folders kept, before the list is cut to resumeCount. Newest first.
-    async Task<List<Offered>> ResumableAsync(IReadOnlyDictionary<string, string> executables, IReadOnlyList<Session> live, CancellationToken ct)
+    async Task<(List<Offered> Offered, bool Pending, Omission? Omitted)> ResumableAsync(IReadOnlyDictionary<string, string> executables, IReadOnlyList<Session> live, bool cached, CancellationToken ct, CancellationToken budget)
     {
-        if (Config.ResumeCount <= 0) { return []; }
-        var candidates = await CandidatesAsync(executables, ct);
+        if (Config.ResumeCount <= 0) { return ([], false, null); }
+        var (candidates, pending) = await CandidatesAsync(executables, cached, ct);
         var once = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        // Approval can ask git (a worktree's top and marker), so each folder is asked once per
-        // pass, and newest first, so the older sessions past the limit are never asked about.
-        var approvals = new Dictionary<string, WorkspaceConfig?>(StringComparer.Ordinal);
-        WorkspaceConfig? ApprovedOnce(string? folder)
-        {
-            if (folder is not { Length: > 0 }) { return null; }
-            if (!approvals.TryGetValue(folder, out var w)) { approvals[folder] = w = Approved(folder); }
-            return w;
-        }
-        var eligible = candidates.Where(e => once.Add(e.Id))
+        var ordered = candidates.Where(e => once.Add(e.Id))
             .OrderByDescending(e => e.Updated ?? DateTimeOffset.MinValue)
-            .Select(e => (Entry: e, Workspace: ApprovedOnce(e.Folder)))
-            .Where(x => x.Workspace is not null)
-            .Take(KindsAmong)
             .ToList();
+        var (eligible, omitted) = await ApprovedWithinBudgetAsync(ordered, ct, budget);
         // The live list read after the hold, not the one taken before the awaits above: a session
         // that discovery found meanwhile is listed before its hold is said to clear, so a clear
         // hold here means it is in this snapshot.
@@ -443,7 +480,86 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             }
             if (!excluded.Contains(e.Id)) { offered.Add(new Offered(e, title, workspace!.Label)); }
         }
-        return offered;
+        return (offered, pending, omitted);
+    }
+
+    // Approval can ask git (a worktree's top and marker), so each folder is asked once per pass,
+    // and newest first, so the older sessions past the limit are never asked about. The pass runs
+    // on a worker: at the budget the caller stops waiting and takes what was checked, and the
+    // worker, which checks its token before each folder and each step, starts nothing more.
+    // A session not checked is never approved. The caller's own cancellation still throws.
+    async Task<(List<(ResumeEntry Entry, WorkspaceConfig? Workspace)> Eligible, Omission? Omitted)> ApprovedWithinBudgetAsync(List<ResumeEntry> ordered, CancellationToken ct, CancellationToken budget)
+    {
+        var checkedSoFar = new List<(ResumeEntry Entry, WorkspaceConfig? Workspace)>();
+        var gate = new object();
+        var closed = false;
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct, budget);
+        var token = stop.Token;
+        void Pass()
+        {
+            try { Walk(); }
+            finally { options.PassEnded?.Invoke(); }
+        }
+        void Walk()
+        {
+            var approvals = new Dictionary<string, WorkspaceConfig?>(StringComparer.Ordinal);
+            var approved = 0;
+            foreach (var e in ordered)
+            {
+                token.ThrowIfCancellationRequested();
+                options.BeforeFolderCheck?.Invoke(e.Folder, token);
+                WorkspaceConfig? w = null;
+                if (e.Folder is { Length: > 0 } folder && !approvals.TryGetValue(folder, out w)) { approvals[folder] = w = Approved(folder, token); }
+                lock (gate)
+                {
+                    if (closed) { return; }
+                    checkedSoFar.Add((e, w));
+                }
+                if (w is not null && ++approved >= KindsAmong) { return; }
+            }
+        }
+        var pass = Task.Run(Pass, CancellationToken.None);
+        // Whatever the abandoned pass ends with is of no interest to anyone.
+        _ = pass.ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        var expired = false;
+        try { await pass.WaitAsync(token); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && budget.IsCancellationRequested) { expired = true; }
+        List<(ResumeEntry Entry, WorkspaceConfig? Workspace)> done;
+        lock (gate)
+        {
+            closed = true;
+            done = [.. checkedSoFar];
+        }
+        var left = ordered.Count - done.Count;
+        return ([.. done.Where(x => x.Workspace is not null).Take(KindsAmong)], expired && left > 0 ? new Omission(left, "deadline") : null);
+    }
+
+    // The sessions scan runs on data events, not a clock: when the host starts and whenever a
+    // session registers or ends, the only times what can be resumed changes. Later calls do nothing.
+    public void StartScanning()
+    {
+        if (Interlocked.Exchange(ref scanStarted, 1) == 1) { return; }
+        lock (knownGate) { foreach (var s in source.Snapshot()) { known.Add(s.Id); } }
+        source.Changed += (_, c) =>
+        {
+            bool registeredOrEnded;
+            lock (knownGate) { registeredOrEnded = c.Kind == SessionChangeKind.Removed ? known.Remove(c.Id) : known.Add(c.Id); }
+            if (registeredOrEnded) { RefreshScan(); }
+        };
+        RefreshScan();
+    }
+
+    int scanStarted;
+    readonly object knownGate = new();
+    readonly HashSet<string> known = new(StringComparer.OrdinalIgnoreCase);
+
+    void RefreshScan()
+    {
+        try
+        {
+            if (Launchers.All.FirstOrDefault(l => l.Id == "agency") is { } launcher && locator.Find(launcher, Config.Agent(launcher.Id)) is { } exe) { agency.Refresh(exe); }
+        }
+        catch (Exception e) when (e is not OutOfMemoryException) { log($"launch.options: the sessions scan could not be started: {e.GetType().Name}"); }
     }
 
     // A label already offered, told apart by the start of its session's id.
@@ -451,12 +567,18 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     // Every installed agent's stored sessions, each under the launcher that resumes it (Agency's own
     // list when it has one, Copilot's store otherwise), before any is checked or cut.
-    async Task<IEnumerable<ResumeEntry>> CandidatesAsync(IReadOnlyDictionary<string, string> executables, CancellationToken ct)
+    async Task<(IEnumerable<ResumeEntry> Entries, bool Pending)> CandidatesAsync(IReadOnlyDictionary<string, string> executables, bool cached, CancellationToken ct)
     {
         var kinds = new HashSet<string>(StringComparer.Ordinal);
         if (executables.ContainsKey("claude")) { kinds.Add("claude"); }
         if (executables.ContainsKey("codex")) { kinds.Add("codex"); }
-        IReadOnlyList<ResumeEntry> fromAgency = executables.TryGetValue("agency", out var a) ? await agency.SessionsAsync(a, ct) : [];
+        IReadOnlyList<ResumeEntry> fromAgency = [];
+        var pending = false;
+        if (executables.TryGetValue("agency", out var a))
+        {
+            if (cached) { var last = agency.CachedSessions(a); fromAgency = last.Entries; pending = !last.Ready; }
+            else { fromAgency = await agency.SessionsAsync(a, ct); }
+        }
         var copilotLauncher = executables.ContainsKey("copilot") ? "copilot" : executables.ContainsKey("agency") ? "agency" : null;
         if (fromAgency.Count == 0 && copilotLauncher is not null) { kinds.Add("copilot"); }
         var stored = await Task.Run(() => resumable.Read(kinds), ct);
@@ -467,7 +589,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         // offering it would put two CLIs on one transcript; none of its sessions is offered
         // until a complete pass (§6.3 invariants 6 and 10).
         if (source.Held is { } held) { candidates = candidates.Where(e => !held.Agents.Contains(e.Agent)); }
-        return candidates;
+        return (candidates, pending);
     }
 
     // One stored session by its id for a restore: among the candidates, else read by its id alone,
@@ -476,7 +598,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     async Task<ResumeEntry?> FindAsync(IReadOnlyDictionary<string, string> executables, string id, CancellationToken ct)
     {
         bool Same(ResumeEntry e) => string.Equals(e.Id, id, StringComparison.OrdinalIgnoreCase);
-        if ((await CandidatesAsync(executables, ct)).FirstOrDefault(Same) is { } listed) { return listed; }
+        if ((await CandidatesAsync(executables, false, ct)).Entries.FirstOrDefault(Same) is { } listed) { return listed; }
         var kinds = new HashSet<string>(StringComparer.Ordinal);
         if (executables.ContainsKey("claude")) { kinds.Add("claude"); }
         if (executables.ContainsKey("codex")) { kinds.Add("codex"); }
@@ -504,10 +626,12 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // isolated one; null when neither. Not a folder below a workspace: approving ~\repos
     // approved resuming every session in every repository under it, which agent-ha-bridge
     // never offered (found by the shadow comparison, #40).
-    WorkspaceConfig? Approved(string folder)
+    WorkspaceConfig? Approved(string folder, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         if (!Path.IsPathFullyQualified(folder) || Folders.Physical(folder) is not { } physical || options.IsSystemDirectory(physical)) { return null; }
-        return Folders.Exactly(Config.Workspaces, physical) ?? Worktrees.Managed(Config.Workspaces, physical)?.Workspace;
+        ct.ThrowIfCancellationRequested();
+        return Folders.Exactly(Config.Workspaces, physical) ?? Worktrees.Managed(Config.Workspaces, physical, ct)?.Workspace;
     }
 
     // ---- session.transfer, the source's half ----
@@ -620,7 +744,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     // Everything a launch was settled on before it starts.
     sealed record Plan(Launcher Launcher, string Executable, string Directory, string? Workspace, WorkspaceConfig? Isolated, ResumeEntry? Resume,
-        string Where, string Profile, string Model, string Effort, string Context, bool AllowAll, string Prompt, LaunchTransfer? Transfer = null);
+        string Where, string Profile, string Model, string Effort, string Context, bool AllowAll, string Prompt, LaunchTransfer? Transfer = null, string? Role = null);
 
     // ct: a restore's, cancelled as the host stops or its caller withdraws it. Honoured until the
     // agent is started, never after: a started session is followed whatever happens.
@@ -822,7 +946,20 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         var allowAll = (r.Permissions ?? Config.Permissions) == LaunchProtocol.AllowAll;
 
         return (new Plan(launcher, resolved.Executables[launcher.Id], directory, workspace?.Label, workspace?.Isolate == true ? workspace : null, resume, where,
-            profile, model, effort, context, allowAll, LaunchProtocol.Flatten(r.Prompt), r.Transfer), null);
+            profile, model, effort, context, allowAll, LaunchProtocol.Flatten(r.Prompt), r.Transfer, r.Role), null);
+    }
+
+    // No account checker is a refusal, not a pass: production always wires one, and a launch must
+    // not start on whatever login the CLI finds.
+    async Task<LaunchAccount> CheckAccount(Guid key, CancellationToken ct)
+    {
+        if (launchAccount is null) { return LaunchAccount.Refuse("this host has no way to check the Copilot account, so no Copilot session was started"); }
+        try { return await launchAccount.CheckAsync(Config.CopilotAccount, ct); }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            log($"launch {Short(key)}: the account check failed: {e.GetType().Name}");
+            return LaunchAccount.Refuse("could not check the account; no Copilot session was started");
+        }
     }
 
     async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false)
@@ -860,6 +997,28 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             if (restoring && Launchers.RestoreRefusal(plan.Launcher, extras) is { } refusal)
             {
                 return Refused($"{plan.Launcher.Label}'s extraArgs in the host's config hold {refusal}, which a restore does not pass on (only options known to start no prompt and widen no permission); resume it from Launch");
+            }
+
+            // Before a worktree or a process exists (#1518): a Copilot session spends the account of the
+            // token it is handed, so one that is missing, rejected, the wrong account or out of
+            // premium quota is refused here and never falls back to a stored login.
+            string? copilotToken = null;
+            if (plan.Launcher.Kind == AgentKind.Copilot)
+            {
+                var account = await CheckAccount(key, ct);
+                if (account.Refusal is { } why) { return Refused(why); }
+                copilotToken = account.Token;
+            }
+
+            // A worker launched for a role keeps only the MCP servers launch.workerMcp lists for it
+            // (#1525). Only the direct copilot launcher: Agency is already narrowed by --profile-only,
+            // and a launch with no role is a person's. Counts only are logged, never names.
+            if (plan.Role is { } role && plan.Launcher.Id == "copilot")
+            {
+                var mcp = WorkerMcp.For(options.CopilotHome, Config.WorkerMcp, role);
+                if (mcp.Refusal is { } mcpWhy) { return Refused(mcpWhy); }
+                extras = [.. extras, .. mcp.Arguments];
+                log($"launch {Short(key)}: worker role MCP: {mcp.Disabled} of the person's servers disabled, {mcp.Kept} kept");
             }
 
             var directory = plan.Directory;
@@ -904,18 +1063,15 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             var sessionId = newId ?? plan.Resume?.Id ?? (plan.Launcher.ChoosesOwnSessionId ? "" : Guid.NewGuid().ToString());
             var args = Launchers.Arguments(plan.Launcher, sessionId, plan.Resume is not null || newId is not null, plan.Model, plan.Effort, plan.Context, plan.AllowAll,
                 extras, plan.Profile, prompt);
-            var environment = new Dictionary<string, string?>
-            {
-                [Launchers.SessionVariable] = sessionId.Length > 0 ? sessionId : "launched",
-            };
-            // CLAUDE_CONFIG_DIR changes the account file even when its path is unchanged.
-            // Restore recorded mode; older records keep the inherited mode when homes match.
-            var inherited = SessionSourceOptions.ForCurrentUser();
-            if (!Folders.Same(options.CopilotHome, inherited.CopilotHome)) { environment["COPILOT_HOME"] = options.CopilotHome; }
-            if (options.ClaudeConfigDirExplicit is { } explicitConfigDir) { environment["CLAUDE_CONFIG_DIR"] = explicitConfigDir ? options.ClaudeHome : null; }
-            else if (!Folders.Same(options.ClaudeHome, inherited.ClaudeHome)) { environment["CLAUDE_CONFIG_DIR"] = options.ClaudeHome; }
-            if (!Folders.Same(options.CodexHome, inherited.CodexHome)) { environment["CODEX_HOME"] = options.CodexHome; }
-            var spec = new StartSpec(plan.Executable, args, directory, environment, ConsoleColumns);
+            var environment = AgentEnvironment.For(options.CopilotHome, options.ClaudeHome,
+                options.CodexHome, options.ClaudeConfigDirExplicit, locator.ChildPath());
+            environment[Launchers.SessionVariable] = sessionId.Length > 0 ? sessionId : "launched";
+            // Set to nothing when none is issued, so a token of the host's own is never inherited.
+            environment[Launchers.TokenVariable] = null;
+            // GH_TOKEN and GITHUB_TOKEN are left alone: the CLI prefers this one, and the session's
+            // own gh work needs them.
+            if (copilotToken is not null) { environment[CopilotLaunchAccount.Variable] = copilotToken; }
+            var spec = new StartSpec(plan.Executable, args, directory, environment);
             if (starter.CommandLine(spec, out var tooLong) is null)
             {
                 return Refused($"the prompt is too long to start {plan.Launcher.Label} with on this machine: {tooLong}; shorten it, or send the rest as a reply once it has started");
@@ -965,13 +1121,26 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             // Where a prompt of the person's would show they got past its startup questions
             // (HeldForReply): what the transcript holds now is from before this agent.
             var transcriptFrom = TranscriptFrom(plan.Launcher, sessionId);
+            // A session whose id the agent chooses (Codex) has none to bind a credential to yet.
+            var launchId = Guid.NewGuid().ToString("N");
+            var credentialIssued = false;
+            if (credentials is not null && sessionId.Length > 0)
+            {
+                try { environment[Launchers.TokenVariable] = credentials.Prepare(sessionId, launchId); credentialIssued = environment[Launchers.TokenVariable] is not null; }
+                catch (Exception e) when (e is InvalidOperationException or ArgumentException or IOException or UnauthorizedAccessException)
+                {
+                    log($"launch {Short(key)}: no agent credential was issued: {e.Message}");
+                }
+            }
             Started started;
             try { started = starter.Start(spec); }
             catch (Exception e)
             {
+                if (credentialIssued) { credentials!.Abandon(launchId); }
                 log($"launch {Short(key)}: {plan.Launcher.Label} could not be started: {e.Message}");
                 return new LaunchResult(LaunchOutcome.Failed, $"{plan.Launcher.Label} couldn't be started") { Launched = launched };
             }
+            if (credentialIssued) { credentials!.Bind(launchId, started.ProcessId, started.StartedAt); }
             if (claim is not null) { attachments!.Consume(claim); handed.Value = true; }
             if (sessionId.Length > 0) { Launched(sessionId, started); }
             log($"launch {Short(key)}: {(plan.Resume is null ? "started" : "resumed")} pid {started.ProcessId} in {directory} via {plan.Launcher.Label} (session {(sessionId.Length > 0 ? sessionId : "id chosen by the agent")})");
@@ -988,7 +1157,6 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         }
 
         _ = Task.Run(() => FollowAsync(follow));
-        _ = Task.Run(() => WidenAsync(follow));
         var waited = await Task.WhenAny(follow.Decided.Task, Task.Delay(options.RegistrationWait, options.Time));
         if (waited == follow.Decided.Task) { return await follow.Decided.Task; }
         // A session that registered but whose window is not yet seen ready (Copilot) did appear;
@@ -1003,43 +1171,6 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         follow.Decided.TrySetResult(unconfirmed);
         return await follow.Decided.Task;
     }
-
-    // A launched session's console made ConsoleColumns wide as soon as it has one (a process just
-    // started may not yet: asked again every WidenEvery, WidenTries times). The console host
-    // takes no width from how it was started (ConsoleStartup), so it is set on the console itself,
-    // by the injector, which types nothing. Not done, the session keeps the console's own width,
-    // and an answer to a form too wide for it is refused as such (#1123).
-    async Task WidenAsync(Pending p)
-    {
-        try
-        {
-            for (var tries = 1; ; tries++)
-            {
-                var widened = await injector.WidenAsync(p.Started.ProcessId, p.Started.StartedAt, ConsoleColumns);
-                if (widened.Columns is { } columns)
-                {
-                    log($"launch {Short(p.Key)}: {p.Launcher.Label}'s console is {columns} columns wide");
-                    return;
-                }
-                if (!widened.NotYet || tries >= WidenTries)
-                {
-                    log($"launch {Short(p.Key)}: {p.Launcher.Label}'s console was not widened: {widened.Problem}");
-                    return;
-                }
-                // Its id may later be another process's: the worker checks that too; this ends the asking.
-                if (!starter.Running(p.Started))
-                {
-                    log($"launch {Short(p.Key)}: {p.Launcher.Label}'s console was not widened: its process (pid {p.Started.ProcessId}) has exited");
-                    return;
-                }
-                await Task.Delay(WidenEvery, options.Time);
-            }
-        }
-        catch (Exception e) { log($"launch {Short(p.Key)}: {p.Launcher.Label}'s console was not widened: {e.GetType().Name}"); }
-    }
-
-    const int WidenTries = 50;
-    static readonly TimeSpan WidenEvery = TimeSpan.FromMilliseconds(100);
 
     // One launch followed from its start until its session registers, its process exits, or
     // FollowFor runs out, a look every PollInterval: agent-ha-bridge's Update-DaemonPendingLaunch.
@@ -1525,8 +1656,13 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             var plan = new KeyPlan([new KeySend(trust ? "" : KeyPlan.Escape, trust, 0, 0, screen.Hold)]) { Proceed = () => Stopped(device) };
             var before = wrote;
             wrote = true;
+            // Said before Esc goes: the agent can close on it while it is still being typed, and the
+            // follow-up look that sees it gone then logs why from this, so a Quit read as a launcher
+            // that exited on its own.
+            if (!trust) { p.Declined = by; }
             var typed = await injector.InjectAsync(window, plan);
             wrote = before || typed.Status != InjectionStatus.NothingTyped;
+            if (!trust && typed.Status == InjectionStatus.NothingTyped) { p.Declined = null; }
             p.TrustTyped |= wrote;
             log($"launch {Short(p.Key)}: folder trust for {by}: {choice}: {plan.Describe()} -> {typed.Status} {typed.Detail}");
             if (typed.Status == InjectionStatus.NothingTyped)

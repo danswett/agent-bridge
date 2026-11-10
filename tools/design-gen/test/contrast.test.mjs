@@ -72,10 +72,16 @@ test('the selected tint is measured over a phone\'s shell too, with every kind o
   const asBridge = structuredClone(tokens);
   asBridge.color.contrast.tints.selected.words.push('bridge');
   assert.ok(failures(contrastPairs(asBridge)).some((p) => p.theme === 'light' && p.fg === 'bridge' && p.bg === 'selected on shell' && p.ratio < 4.1));
-  // danger.text, drawn on it by a selected machine's refused update, is 4.18:1 over the light shell: not yet listed (#858).
+  // danger.text stays off the tint: a refused update's line is drawn under the selected block on the plain row surface (#858), and it is 4.18:1 over the light shell.
   const asDanger = structuredClone(tokens);
   asDanger.color.contrast.tints.selected.words.push('danger.text');
   assert.ok(failures(contrastPairs(asDanger)).some((p) => p.theme === 'light' && p.fg === 'danger.text' && p.bg === 'selected on shell' && p.ratio < 4.2));
+  // The pair it is drawn on instead is listed, and reaches 4.5:1 in both themes.
+  for (const theme of ['light', 'dark']) {
+    const onShell = pairs.filter((p) => p.theme === theme && p.fg === 'danger.text' && p.bg === 'shell' && p.kind === 'text');
+    assert.equal(onShell.length, 1, `danger.text on shell is listed in ${theme}`);
+    assert.ok(onShell[0].ratio >= 4.5, `danger.text on shell is ${onShell[0].ratio} in ${theme}`);
+  }
 });
 test('hyperlinks, words on an accent fill and selected text reach 4.5:1 on the Bridge accent palette, in dark and light', () => {
   const accent = pairs.filter((p) => p.fg.startsWith('accent.'));

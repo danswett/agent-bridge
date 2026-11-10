@@ -9,19 +9,35 @@ namespace AgentBridge.Relay;
 
 // Routes opaque frames between the devices of one account. It sees routing ids, sizes and
 // timing, and nothing a session says: payloads are Noise ciphertext end to end.
-public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway push, BlobService blobs, FeedbackService feedback, MachineRoster roster, RelayMetrics metrics, ILogger<RelayHub> log)
+public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway push, BlobService blobs, FeedbackService feedback, MachineRoster roster, DeviceRoster deviceRoster, RelayMetrics metrics, ILogger<RelayHub> log)
 {
     static readonly HashSet<string> Kinds = ["host", "app", "pwa", "phone", "test"];
     // The kinds a person uses. Only these may forget a machine: never a host, which is where an
     // agent acts, nor a test device, nor any kind added later until it is put here.
     static readonly HashSet<string> PersonKinds = ["app", "pwa", "phone"];
     readonly ConcurrentDictionary<string, ConcurrentDictionary<string, Connection>> accounts = new();
+    readonly SessionRegistry registry = new(options.Roster.Time);
     long presenceVersion;
 
     public int Online => accounts.Values.Sum(a => a.Count);
     // Sockets by device kind, for the live-sockets gauge. Kinds only, never an account or device.
-    public IEnumerable<KeyValuePair<string, int>> OnlineByKind() =>
-        accounts.Values.SelectMany(a => a.Values).GroupBy(c => c.Kind).Select(g => new KeyValuePair<string, int>(g.Key, g.Count())).ToList();
+    // Every configured hostname (and other) x every kind is listed, zero included, so a hostname
+    // that has emptied reads 0 rather than vanishing like a relay that is down.
+    public IEnumerable<(string Kind, string Site, int Count)> OnlineByKind()
+    {
+        var live = accounts.Values.SelectMany(a => a.Values).GroupBy(c => (c.Kind, c.Site)).ToDictionary(g => g.Key, g => g.Count());
+        var sites = options.Hostnames.Select(h => h.ToLowerInvariant()).Append("other").Distinct();
+        return sites.SelectMany(s => Kinds.Select(k => (k, s, live.GetValueOrDefault((k, s))))).ToList();
+    }
+
+    // The Host header reduced to a configured name or "other": never free text, so a client
+    // cannot mint metric labels by sending its own.
+    public string SiteOf(string? host)
+    {
+        if (string.IsNullOrEmpty(host)) { return "other"; }
+        var name = host.Split(":")[0].TrimEnd(".".ToCharArray());
+        return options.Hostnames.FirstOrDefault(h => h.Equals(name, StringComparison.OrdinalIgnoreCase))?.ToLowerInvariant() ?? "other";
+    }
 
     // Set when the process is told to stop. Readiness then fails and new sockets are refused,
     // so a device told to reconnect (1012) lands on a replica that is staying, not this one.
@@ -47,7 +63,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
     // Container Apps) while new devices land on the new one, and neither half sees the other.
     public Task CloseAllAsync() => Task.WhenAll(accounts.Values.SelectMany(a => a.Values).Select(c => c.CloseAsync(CloseCodes.Restarting, "restarting")));
 
-    sealed class Connection(WebSocket ws, Account account, string deviceId, string name, string kind)
+    sealed class Connection(WebSocket ws, Account account, string deviceId, string name, string kind, string site)
     {
         // Correlates one socket's log lines. Random and meaningless outside this process, so
         // logs carry no account, device or name (design §5.10).
@@ -58,10 +74,13 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         public string DeviceId => deviceId;
         public string Name => name;
         public string Kind => kind;
+        public string Site => site;
         public DateTimeOffset Since { get; } = DateTimeOffset.UtcNow;
         public long FramesIn, FramesOut, BytesIn, BytesOut;
         public long WindowStart = Environment.TickCount64;
         public int WindowFrames;
+        public int RosterInFlight;
+        public long RegistryGetAt = -2000;
 
         public async Task SendAsync(byte[] data, WebSocketMessageType type)
         {
@@ -120,13 +139,13 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
     }
 
     // early: the device asked for the challenge with the WebSocket's opening (?admit=1).
-    public async Task RunAsync(WebSocket ws, CancellationToken aborted, bool early = false)
+    public async Task RunAsync(WebSocket ws, CancellationToken aborted, bool early = false, string? host = null)
     {
         var opened = Stopwatch.GetTimestamp();
         using var handshakeTimeout = CancellationTokenSource.CreateLinkedTokenSource(aborted);
         handshakeTimeout.CancelAfter(TimeSpan.FromSeconds(15));
         Connection? conn;
-        try { conn = await AdmitAsync(ws, early && options.EarlyChallenge, handshakeTimeout.Token); }
+        try { conn = await AdmitAsync(ws, early && options.EarlyChallenge, SiteOf(host), handshakeTimeout.Token); }
         catch (Exception e) when (e is OperationCanceledException or WebSocketException or JsonException or FormatException or KeyNotFoundException or InvalidOperationException or FrameTooLargeException)
         {
             await RefuseAsync(ws, CloseCodes.Protocol, "bad-hello");
@@ -154,7 +173,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         // A host is recorded as itself: the id it proved and the name it gave, nothing a message says.
         await roster.ConnectedAsync(conn.Account.Id, conn.DeviceId, conn.Name, conn.Kind);
 
-        metrics.Connected(conn.Kind);
+        metrics.Connected(conn.Kind, conn.Site);
         log.LogInformation("connect {Conn} {Kind}; {Count} online in account", conn.Tag, conn.Kind, devices.Count);
         // Announce before "ready", so peers learn of a device before it can send them anything.
         await RosterChangedAsync(conn.Account.Id);
@@ -163,8 +182,9 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         metrics.ConnectTime(conn.Kind, Stopwatch.GetElapsedTime(opened));
 
         string end = "closed";
+        Exception? endedBy = null;
         try { end = await ForwardAsync(conn, devices, aborted); }
-        catch (Exception e) when (e is WebSocketException or OperationCanceledException) { end = "dropped"; }
+        catch (Exception e) when (e is WebSocketException or OperationCanceledException) { end = "dropped"; endedBy = e; }
         finally
         {
             // Update roster bookkeeping before removing the slot, under the broadcast lock.
@@ -172,12 +192,15 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             lock (devices)
             {
                 roster.Disconnected(conn.Account.Id, conn.DeviceId, conn.Kind);
+                if (conn.Kind == "host" && devices.TryGetValue(conn.DeviceId, out var held) && ReferenceEquals(held, conn)) { registry.Drop(conn.Account.Id, conn.DeviceId); }
                 ((ICollection<KeyValuePair<string, Connection>>)devices).Remove(new(conn.DeviceId, conn));
             }
+            // Read before our own close below: this is what the device sent, not our answer.
+            var cause = DisconnectCause.Describe(endedBy, ws.CloseStatus);
             await conn.CloseAsync((int)WebSocketCloseStatus.NormalClosure, "");
             metrics.Disconnected(end);
-            log.LogInformation("disconnect {Conn} ({End}) after {Seconds:F0}s; frames in {In} out {Out}, bytes in {BytesIn} out {BytesOut}",
-                conn.Tag, end, (DateTimeOffset.UtcNow - conn.Since).TotalSeconds, conn.FramesIn, conn.FramesOut, conn.BytesIn, conn.BytesOut);
+            log.LogInformation("disconnect {Conn} ({End}) after {Seconds:F0}s; frames in {In} out {Out}, bytes in {BytesIn} out {BytesOut}; cause {Cause}",
+                conn.Tag, end, (DateTimeOffset.UtcNow - conn.Since).TotalSeconds, conn.FramesIn, conn.FramesOut, conn.BytesIn, conn.BytesOut, cause);
             await BroadcastPresenceAsync(conn.Account.Id);
         }
     }
@@ -188,7 +211,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
     // no account, since none is known before the token, and the proof is the early one, which
     // leaves the account out (Wire.EarlyProofMac). Either way the relay's ephemeral key and nonce
     // are this connection's alone, so a proof is good for nothing else.
-    async Task<Connection?> AdmitAsync(WebSocket ws, bool early, CancellationToken ct)
+    async Task<Connection?> AdmitAsync(WebSocket ws, bool early, string site, CancellationToken ct)
     {
         using var eph = P256KeyPair.Generate();
         var nonce = RandomNumberGenerator.GetBytes(32);
@@ -213,7 +236,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             await RefuseAsync(ws, CloseCodes.ProofFailed, "proof-failed");
             return null;
         }
-        return new Connection(ws, account, Wire.DeviceId(pub), name, kind);
+        return new Connection(ws, account, Wire.DeviceId(pub), name, kind, site);
     }
 
     async Task<string> ForwardAsync(Connection conn, ConcurrentDictionary<string, Connection> devices, CancellationToken aborted)
@@ -264,9 +287,38 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
                     var message = m.Clone();
                     _ = Task.Run(async () => await c.SendJsonAsync(await feedback.HandleAsync(c.Account, message)));
                 }
+                else if (m.TryGetProperty("t", out var rt) && rt.GetString() is "roster-get" or "roster-append")
+                {
+                    var c = conn;
+                    var message = m.Clone();
+                    var replyType = rt.GetString() == "roster-get" ? "roster" : "roster-append-result";
+                    var rid = m.TryGetProperty("id", out var ridp) && ridp.TryGetInt64(out var rn) ? rn : 0;
+                    if (Interlocked.Increment(ref c.RosterInFlight) > MaxRosterInFlight)
+                    {
+                        Interlocked.Decrement(ref c.RosterInFlight);
+                        _ = Task.Run(async () => await c.SendJsonAsync(new { t = replyType, id = rid, error = "unavailable" }));
+                        continue;
+                    }
+                    _ = Task.Run(async () =>
+                    {
+                        object reply;
+                        try { reply = await RosterMessageAsync(c, message); }
+                        catch (Exception e)
+                        {
+                            log.LogWarning(e, "roster message failed");
+                            reply = new { t = replyType, id = rid, error = "unavailable" };
+                        }
+                        finally { Interlocked.Decrement(ref c.RosterInFlight); }
+                        try { await c.SendJsonAsync(reply); } catch (Exception) { }
+                    });
+                }
                 else if (m.TryGetProperty("t", out var ft) && ft.GetString() == "forget")
                 {
                     await ForgetAsync(conn, devices, m);
+                }
+                else if (m.TryGetProperty("t", out var gt) && gt.GetString() is "registry-put" or "registry-get")
+                {
+                    await RegistryAsync(conn, devices, m, gt.GetString() == "registry-put");
                 }
                 continue;
             }
@@ -305,6 +357,42 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         return "closed";
     }
 
+    // The session registry (docs/protocol/roster.md): a host puts its own machine's snapshot, any
+    // device of the account gets every machine's. Nothing here leaves the sender's account.
+    async Task RegistryAsync(Connection conn, ConcurrentDictionary<string, Connection> devices, JsonElement m, bool put)
+    {
+        var id = m.TryGetProperty("id", out var i) && i.TryGetInt64(out var n) ? n : 0;
+        var account = conn.Account.Id;
+        if (put)
+        {
+            string? error = conn.Kind != "host" ? "not-allowed"
+                : m.TryGetProperty("record", out var rec) ? registry.Put(account, conn.DeviceId, rec) : "bad-record";
+            // Only the outcome is logged, never the record.
+            log.LogInformation("registry-put {Conn}: {Outcome}", conn.Tag, error ?? "ok");
+            await conn.SendJsonAsync(new { t = "registry-result", id, error });
+            return;
+        }
+        var now = Environment.TickCount64;
+        if (now - conn.RegistryGetAt < 2000) { await conn.SendJsonAsync(new { t = "registry", id, error = "slow-down" }); return; }
+        conn.RegistryGetAt = now;
+        var parts = new List<Dictionary<string, object?>>();
+        foreach (var (machine, json, lastSeen, fresh) in registry.Read(account))
+        {
+            var host = devices.TryGetValue(machine, out var d) && d.Kind == "host" ? d : null;
+            var online = host is not null && fresh;
+            parts.Add(new() { ["t"] = "registry", ["id"] = id, ["machine"] = machine, ["name"] = host?.Name, ["online"] = online, ["lastSeen"] = lastSeen, ["record"] = online ? JsonDocument.Parse(json).RootElement : null });
+        }
+        var known = (roster.Known(account, _ => false) ?? [])
+            .Select(k => new { machine = k.Id, name = k.Name, lastSeen = k.LastSeen });
+        for (var p = 0; p < parts.Count; p++)
+        {
+            parts[p]["part"] = p + 1;
+            parts[p]["of"] = parts.Count;
+            await conn.SendJsonAsync(parts[p]);
+        }
+        await conn.SendJsonAsync(new { t = "registry", id, known });
+    }
+
     // A person's device forgetting one of the account's machines that is gone (docs/protocol/roster.md).
     async Task ForgetAsync(Connection conn, ConcurrentDictionary<string, Connection> devices, JsonElement m)
     {
@@ -324,6 +412,34 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         await conn.SendJsonAsync(new { t = "forget-result", id, machine = Wire.IsDeviceId(machine) ? machine!.ToLowerInvariant() : null, error });
         if (error is null) { await RosterChangedAsync(conn.Account.Id); }
     }
+
+    // The signed device roster (docs/protocol/devices.md): read it, or offer entries to it. Open to
+    // every kind of device, host included, because a host needs the log to verify it. The relay
+    // only stores; it enforces nothing.
+    async Task<object> RosterMessageAsync(Connection c, JsonElement m)
+    {
+        var id = m.TryGetProperty("id", out var idp) && idp.TryGetInt64(out var n) ? n : 0;
+        if (m.GetProperty("t").GetString() == "roster-get")
+        {
+            var s = await deviceRoster.GetAsync(c.Account.Id);
+            return s is null
+                ? new { t = "roster", id, error = "unavailable" }
+                : (object)new { t = "roster", id, mode = s.Mode, generation = s.Generation, entries = s.Entries };
+        }
+        if (!m.TryGetProperty("entries", out var arr) || arr.ValueKind != JsonValueKind.Array
+            || arr.GetArrayLength() is 0 or > DeviceRoster.MaxPerAppend
+            || arr.EnumerateArray().Any(e => e.ValueKind != JsonValueKind.String))
+        {
+            return new { t = "roster-append-result", id, error = "bad-request" };
+        }
+        var results = await deviceRoster.AppendAsync(c.Account.Id, [.. arr.EnumerateArray().Select(e => e.GetString()!)]);
+        return results is null
+            ? new { t = "roster-append-result", id, error = "unavailable" }
+            : DeviceRoster.AppendReply(id, results);
+    }
+
+    // Roster requests one connection may have running at once; more get "unavailable" at once.
+    const int MaxRosterInFlight = 2;
 
     bool WithinRate(Connection c)
     {

@@ -16,6 +16,7 @@ import { AnswerService } from '../answer-service.js';
 import { ReplyService } from '../reply-service.js';
 import { StopService } from '../stop-service.js';
 import { LaunchService } from '../launch-service.js';
+import { LaunchOptionsCache } from '../launch-options-cache.js';
 import { LAUNCH, TRUST } from '../launch.js';
 import { TRANSFER } from '../transfer.js';
 import { Capabilities } from '../protocol.js';
@@ -32,6 +33,7 @@ import { stopReceipts } from './receipt.js';
 import { CUE_MS } from '../return-grace.js';
 import { PaneDividers } from './pane-dividers.js';
 import { UPDATING } from './hold.js';
+import { HistoryStore } from '../history-store.js';
 
 // Needs you's answers (Approve once, Deny, Resend) wait as a question's do (ui.md §5.3): any
 // change to the lane can put Approve once under a pointer aimed at something else (an entry
@@ -176,8 +178,8 @@ export class SessionsPage {
   // diagnose: a DiagnoseControl for each machine's Diagnose (#802), or null.
   // shell: the pages and app bar (./shell.js), or null: where a session shown goes, and where
   // machines online and a waiting folder-trust question are said.
-  constructor({ $, hosts, connection, me = null, shell = null, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, trust = () => null, confirm = () => null, status = () => '', facts = null, forget = null, updates = null, signInDevices = null, diagnose = null, storage = globalThis.localStorage, badge = new AppBadge(), onRendered = () => {} }) {
-    Object.assign(this, { $, hosts, connection, me, shell, relayMax, transfers, trust, confirm, status, facts, forget, updates, signInDevices, diagnose, storage, onRendered });
+  constructor({ $, hosts, connection, me = null, shell = null, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, trust = () => null, confirm = () => null, status = () => '', facts = null, forget = null, updates = null, signInDevices = null, diagnose = null, storage = globalThis.localStorage, badge = new AppBadge(), onRendered = () => {}, opened = () => {} }) {
+    Object.assign(this, { $, hosts, connection, me, shell, relayMax, transfers, trust, confirm, status, facts, forget, updates, signInDevices, diagnose, storage, onRendered, opened });
     const current = (hostId) => hosts.route(hostId);
     const timing = retryMs ? { retryMs } : {};
     // One gate for every send (#269): nothing new is given for a machine with no route now (its
@@ -189,6 +191,8 @@ export class SessionsPage {
     this.replies = new ReplyService({ current, accepts, ...timing, blobs });
     this.stops = new StopService({ current, accepts, ...timing });
     this.launches = new LaunchService({ current, accepts, ...timing });
+    // Each machine's last launch.options, asked for in the background, so Start a session shows at once (#1527).
+    this.launchOptions = new LaunchOptionsCache();
     this.launchPanel = new LaunchPanel($('launch'), {
       service: this.launches,
       jump: (id, hostId) => this.showSession(id, hostId),
@@ -201,6 +205,7 @@ export class SessionsPage {
       sessions: (hostId) => hosts.sessions.list().filter((e) => e.hostId === hostId).map((e) => e.session.id),
       session: (hostId, id) => hosts.sessions.get(hostId, id),
     });
+    this.launchOptions.watch((hostId) => this.launchPanel.cacheChanged(hostId));
     this.order = new SessionOrder({ storage });
     const media = (q) => globalThis.matchMedia?.(q) ?? { matches: false, addEventListener() {} };
     this.wide = media(WIDE);
@@ -208,6 +213,7 @@ export class SessionsPage {
     this.#inspectorHidden = this.#read(INSPECTOR) === 'hidden';
     this.view = new SessionListView($('session-list'), hosts.sessions, {
       views: $('session-views'),
+      history: new HistoryStore({ current: (hostId) => { const client = hosts.link(hostId)?.client; return client ? { client } : null; } }),
       layout: () => ({ inspector: this.wide.matches && !this.#inspectorHidden, wide: this.wide.matches }),
       // Only while Sessions shows, in a page that does: news that comes while another page, or
       // the tab or app in the background, waits for it, with no scroll and no question's wait
@@ -273,6 +279,8 @@ export class SessionsPage {
       // A session registered may be the one a launch's machine was busy with, or the one a launch
       // reported unconfirmed started (#896).
       if (c?.type === 'upsert') { this.launchPanel.sessionSeen(c.hostId, hosts.sessions.get(c.hostId, c.id)); }
+      // A question that came or went in the session shown is said again (sessions.focus).
+      if (c?.type === 'upsert') { this.#reportOpen(); }
     });
     const unwatchHosts = hosts.onChange(() => {
       const now = new Set((hosts.shownIds?.() ?? []).filter((id) => !hosts.staleOf?.(id)));
@@ -286,6 +294,10 @@ export class SessionsPage {
     // A new channel to a machine: what waits to be resent to it goes now, and only to it.
     hosts.onOpen((id) => {
       for (const s of [this.answers, this.replies, this.stops, this.launches]) { s.ready(id); }
+      // Marked, then redrawn: sync() must run after the mark, or a machine that reconnects with
+      // no other change is never asked again.
+      this.launchOptions.stale(id);
+      this.refresh();
       this.launchPanel.reopened(id);
     });
     hosts.onChange(() => this.refresh());
@@ -307,6 +319,8 @@ export class SessionsPage {
         this.launchPanel.setOpen(route === 'launch');
         const back = route === 'sessions' && was !== 'sessions';
         was = route;
+        // Sessions reports once its selection is settled, below; another page shows no session.
+        if (route !== 'sessions') { this.#reportOpen(); }
         // Back on Sessions, what it shows is seen now.
         if (route === 'sessions') {
           this.#navigate(() => this.#route(rest));
@@ -697,9 +711,21 @@ export class SessionsPage {
     raf(() => raf(() => { if (this.#frame === frame) { this.#painted = true; } }));
   }
 
+  // The session shown now, if any, said to `opened` (main.js: sessions.focus and the notices of
+  // that session, #1190): the one selected on the Sessions page, which on a phone shows only once
+  // pushed over the list. Another page, or the list, is none.
+  #reportOpen() {
+    const card = this.view?.selected;
+    const showing = card && (!this.shell || this.shell.route === 'sessions') && (!this.phone.matches || this.#open);
+    // The question its card shows is the session's own, as the store has it now.
+    const question = showing ? this.hosts.sessions.get(card.hostId, card.id)?.question?.id ?? null : null;
+    try { this.opened(showing ? { hostId: card.hostId, id: card.id, question } : null); } catch (e) { console.error(e); }
+  }
+
   // Which panes show: on a phone, the list or the session pushed over it; the inspector, as its
   // own pane at the three-pane width unless hidden.
   #drawPanes() {
+    this.#reportOpen();
     const body = globalThis.document?.body;
     if (!body) { return; }
     const was = body.dataset.sessionOpen;
@@ -735,6 +761,8 @@ export class SessionsPage {
 
   // Everything tied to the signed-in account goes with it.
   clear() {
+    // The account's session is no longer shown: said before the page lets go of what says it.
+    try { this.opened(null); } catch (e) { console.error(e); }
     this.#unroute?.();
     this.#unroute = null;
     this.#listening?.abort();
@@ -910,6 +938,9 @@ export class SessionsPage {
     const can = [...launches, ...inspect];
     const has = (id) => !!id && can.some((l) => l.id === id);
     const pick = hosts.all ? [this.#launchHost, this.#read(LAUNCH_HOST), panel.hostId].find(has) ?? can[0]?.id ?? null : can[0]?.id ?? null;
+    // Every machine that launches and is open is asked in the background, so its form is ready before it is picked.
+    // Raw ask, not launchTarget().load: that one goes through the cache, which would wait on itself.
+    this.launchOptions.sync(launches.filter((l) => l.phase === 'open').map((l) => ({ hostId: l.id, load: () => this.#askMachine(l.id) })));
     panel.setMachines(hosts.all ? can.map((l) => ({ hostId: l.id, name: hosts.nameOf(l.id) ?? l.id.slice(0, 8) })) : null, pick);
     panel.setTarget(pick ? this.launchTarget(pick) : null);
     // The others shown only for their questions: a question on one lights the Launch way too.
@@ -930,6 +961,11 @@ export class SessionsPage {
     return l.phase === 'open' ? !!l.machine?.readOnly : l.id === panel.hostId && panel.inspectOnly;
   }
 
+  #askMachine(id) {
+    const client = this.hosts.link(id)?.client;
+    return client ? client.launchOptions() : Promise.reject(new Error('not connected'));
+  }
+
   // What the launch panel is told about a machine: a new object each time, for the same machine,
   // as a presence update hands in. held: why nothing can be sent to it now (#269), or null.
   launchTarget(id) {
@@ -946,7 +982,9 @@ export class SessionsPage {
       hostId: id,
       machineName: name,
       held,
-      load: () => (hosts.link(id)?.client ? hosts.link(id).client.launchOptions() : Promise.reject(new Error('not connected'))),
+      // Through the cache: one ask at a time per machine, and its answer is kept for the next time the page shows.
+      load: ({ fresh = false } = {}) => this.launchOptions.ask(id, () => this.#askMachine(id), { fresh }),
+      cached: () => this.launchOptions.get(id),
     };
     if (link && !this.#launches(link) && this.#inspectOnly(link)) {
       return { ...base, transfers: null, trust: null, inspectOnly: true, readOnly: link.phase === 'open' ? link.machine?.readOnly ?? null : panel.readOnly };

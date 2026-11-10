@@ -452,8 +452,8 @@ test.describe('on a phone', () => {
     await tabTo(page, back, { key: 'Shift+Tab', max: 4 });
     // The box's last control while it is empty: Send waits for something to send.
     const stops = [await focused(page), ...await tabTo(page, v.getByRole('button', { name: 'Attach a file or image' }))];
-    const parts = stops.map((s) => s.region).filter((r, i, all) => r !== all[i - 1]);
-    // Nothing in this session's conversation takes focus, so Tab goes from the tabs to the reply box.
+    // An earlier turn's "Show reasoning" may take a stop in the conversation (chromium does, webkit does not).
+    const parts = stops.map((s) => s.region).filter((r, i, all) => r !== all[i - 1] && r !== 'conversation');
     expect(parts).toEqual(['session header', 'session tabs', 'reply box']);
     expect(readingOrder(stops)).toEqual([]);
   });

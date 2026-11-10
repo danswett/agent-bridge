@@ -31,6 +31,8 @@ Where this file and those comments disagree, the comments win and this file is f
 | `test-provision.ps1`: its checks against a stand-in `az` | **Written**, catalog suite `lab-scripts` (ring 0, ci.yml `light` on Linux, so a draft's fast ring runs it). Never run against Azure | Platform |
 | `run.ps1` (§5) | **Nonexecuting interface draft.** Validates requests and plans only; `-Apply` always refuses. No scenario, result or evidence is produced | Platform |
 | `test-run.ps1`: offline runner-interface checks | **Written**, in the same `lab-scripts` suite; no Azure or product execution | Platform |
+| `beta-acceptance.ps1` and `.github/workflows/beta-acceptance.yml` (#1185): the Beta installer on hosted `windows-latest` and `windows-11-arm`, not the Azure lab | **Draft.** Steps 1, 2, 3, 6 (download and verify, silent install and first run, simulated agent, uninstall); pairing and driving from the PWA (a relay built from the Beta's source against a fake GitHub, no secrets) and feedback are NOT RUN. Not yet dispatched | Engineering |
+| `tools/AgentBridge.AcceptRelay` (#1272): the product relay beside an auto-approving fake GitHub, both on 127.0.0.1, so acceptance signs a host in with no secret or real account. `dotnet run --project tools/AgentBridge.AcceptRelay -- serve --port 0` prints `READY relay=http://127.0.0.1:<port>` | **Written**; catalog `accept-relay-build` builds it. No script uses it yet | Platform |
 | `fleet.yml`, the images and their S0 snapshots | **Unbuilt** | Platform |
 | Scenarios and the simulated agent (`tests/AgentBridge.AgentSim`) | **Unbuilt** | Platform |
 | The `lab` environment, OIDC principal and reusable workflow | **Unbuilt**; nothing is scheduled or dispatchable | Platform, owner (bootstrap) |

@@ -64,7 +64,14 @@ public sealed record PushOptions
     // #913 rule 3: questions of other sessions notified this soon after one that went on its own join
     // one grouped notice instead of going one by one. Zero groups nothing.
     public TimeSpan BurstWindow { get; init; } = TimeSpan.FromSeconds(30);
+    // #1190: a device is in use while it says it is on screen (sessions.focus) with input this recent.
+    public TimeSpan ActiveFor { get; init; } = TimeSpan.FromMinutes(2);
 }
+
+// What one channel of a device last said it shows (sessions.focus, SessionService.Presences): on
+// screen or not, the session open and the question whose card it shows, and when the person last
+// gave input there, by the host's clock (null: unknown).
+public sealed record DevicePresence(string Device, bool Visible, string? Open, string? OpenQuestion, DateTimeOffset? LastInput);
 
 // Notifies the account's phones (Web Push, through the relay) when a session asks a
 // question and when it finishes a turn, as agent-ha-bridge does through Home Assistant:
@@ -98,6 +105,12 @@ public sealed record PushOptions
 // A finished turn is not notified to a device on screen now (Watching), which sees it, and is
 // collapsed to one per session and device per FinishedCollapse, until the device answers or
 // replies to that session again.
+//
+// While a person uses one of their devices (#1190: on screen, input in the last ActiveFor), a
+// finished turn goes to none of them, and a question whose card that device shows goes to none
+// either; any other question still goes. Checked as each notice goes, so a sessions.focus that
+// arrives first wins, with no delay added to wait for one. A device that never said, or says no
+// input time, is not in use: what it would have been sent goes as before.
 //
 // Every notice about a session shares one tag and topic, so a device shows only the
 // latest one per session. Notices are kept per device and session until sent: a newer
@@ -218,6 +231,8 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
 
     // Whether a device has the app on screen now, subscribed to this host (SessionService.Watching).
     public Func<string, bool>? Watching { get; set; }
+    // What the account's devices say they show (SessionService.Presences), for InUse.
+    public Func<IReadOnlyList<DevicePresence>>? Presences { get; set; }
 
     public PushNotifier(ISessionSource source, MachineInfo machine, PushStore store, PushOptions? options = null, Action<string>? log = null, TimeProvider? time = null,
         RemoteAuthorization? trust = null)
@@ -679,6 +694,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                 if (ready.Kind == NoticeKind.Finished && Sees(ready.Device, ready.Session)) { Dropped(ready, "on-screen", now); continue; }
                 if (ready.Kind == NoticeKind.Finished && ready.Collapsed
                     && sessions.GetValueOrDefault(ready.Session) is not { Removed: false, Last: { Status: SessionStatus.Idle, Question: null } }) { Dropped(ready, "collapse-moved-on", now); continue; }
+                if (InUse(ready, now) is { } inUse) { Dropped(ready, inUse, now); continue; }
                 if (!MayNotify(found) || ready.Grant != found.Grant) { Dropped(ready, "not-allowed", now); ready.Settled?.TrySetResult(); continue; }
                 (next, sub, via) = (ready, found, s);
             }
@@ -1124,6 +1140,35 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
     // On screen now, so it sees the turn finish; unless a question notice of the session is still on
     // the device, which the finished notice replaces.
     bool Sees(string device, string session) => Watching?.Invoke(device) == true && !shownOn.ContainsKey((device, session));
+
+    // #1190, the owner's rule: why a notice is not sent while the person uses one of their devices,
+    // or null to send it. A finished turn goes to none of them, the one in use or another (#913
+    // rule 4), unless it replaces a question notice still on the device, as Sees. A question (its
+    // reminder too) goes, since the person may be elsewhere, unless a device in use shows its very
+    // card: seen there, it goes nowhere. Its reminder still comes due, and is checked again. Other
+    // kinds go: a resolved replaces what is shown, the rest need the person. What is already shown
+    // stays (the owner: never push only to say it was read).
+    string? InUse(Outgoing o, DateTimeOffset now)
+    {
+        if (Presences is null || o.Kind is not (NoticeKind.Finished or NoticeKind.Question)) { return null; }
+        var active = Presences().Where(p => Active(p, now)).ToList();
+        if (o.Kind == NoticeKind.Finished)
+        {
+            if (active.Count == 0 || shownOn.ContainsKey((o.Device, o.Session))) { return null; }
+            return Why("in-use", active);
+        }
+        var showing = active.Where(p => p.Open == o.Session && o.Question is { } q && p.OpenQuestion == q).ToList();
+        // Nor one that replaces an earlier question's notice still on the device, whose resolved it
+        // took the place of: held back, that answered question would stay there.
+        if (showing.Count == 0 || shownOn.TryGetValue((o.Device, o.Session), out var shown) && shown != o.Question) { return null; }
+        return Why("card-on-screen", showing);
+
+        string Why(string reason, List<DevicePresence> by) =>
+            by.Any(p => p.Device == o.Device) ? reason : $"{reason}-elsewhere by={ShortId(by[0].Device)}";
+    }
+
+    // On screen, with input recent enough. An input time not given is unknown, never "just now".
+    bool Active(DevicePresence p, DateTimeOffset now) => p.Visible && p.LastInput is { } at && now - at < options.ActiveFor;
 
     // Dedupe, as agent-ha-bridge's: a question id is notified once, for as long as the
     // session lives. Bounded, so a session that asks all day does not grow the host.

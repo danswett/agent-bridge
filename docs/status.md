@@ -27,6 +27,7 @@ prioritised by [#696](https://github.com/danswett/agent-bridge/issues/696) rule 
 | [migration.md](migration.md) | `migrate` and `rollback`: what moves and what doesn't |
 | [/quality](../quality/) | The test plan: rings from inner loop to release, and the catalog of every suite |
 | [/ops](../ops/README.md) | Running the live service: the SRE plan, SLOs, alerts, runbooks and incident process (#568) |
+| [Epic dashboard](../tools/epic-dashboard/README.md) | Hourly #755 body refresh (#756 part 1); main-only environment and owner credential setup required |
 | [/AGENTS.md](../AGENTS.md) | How to work in this repository: rules, merge procedure, releases, relay deploys, guards |
 
 ## 1. Goal
@@ -116,7 +117,7 @@ The work has been built phone-first. All merged PRs are listed in §7.
 | Host (`agent-bridge-host`) | Read-only core, delivery (answers, replies, attachments, stop, launch, resume), worktree reclaim, hook intake, discovery holds, management refused from agent sessions, migrate and rollback, shadow comparison |
 | Windows app | Local and remote machines, Launch page, transfers, toasts, folder trust, Settings, self-update (installs when the host is idle), remote update, Copy button on code blocks |
 | PWA | Cards, answers, replies, attachments, launch, stop, usage, push, All machines view, Machines fold, folder trust, remote update, Copy button on code blocks |
-| Relay | Production at https://relay.bad-duck.com, image `7c17d4a` (2026-11-01), with a roster store. Staging, then production on approval, via `.github/workflows/relay.yml` |
+| Relay | Production at https://relay.bad-duck.com, image `7c17d4a` (2026-11-01), with a roster store; hourly latency and error rows at `/v1/stats/hourly` once the read key is deployed (#1599). Staging, then production on approval, via `.github/workflows/relay.yml` |
 | HA connector | Stages 1–7, so a migrated machine stays on the existing HA dashboard: status, answers, replies, stop, launch, phone notifications, update buttons, upkeep and forget. Contract pinned to agent-ha-bridge v1.33.33 |
 | Releases | Every merge to `main` publishes a release-build pre-release of the Windows app (`v0.1.<run>`, Velopack, with deltas), x64 and, since #222, native Arm64 in a channel of its own. Public release notes automatically include GitHub-generated changes since the previous published version, alongside install instructions and CI provenance. Installed apps check every 30 min and install when idle |
 | Rehearsal (#39) | Done: four runs on a Hyper-V VM and Azure VMs. Verdict: **ready for a supervised migration of one real machine** ([rehearsal-2026-10.md](rehearsal-2026-10.md)) |
@@ -491,8 +492,8 @@ agent-ha-bridge releases from this work:
   ```
   $h="$env:LOCALAPPDATA\AgentBridgeApp\current\agent-bridge-host.exe"; & $h rollback
   ```
-- **Commands for the owner** go as plain text one-liners. They are often read on a phone
-  and copied with the PWA's Copy button. Encoded commands don't wrap, so avoid them.
+- **Commands for the owner** go in fenced blocks in a question; see the rule in
+  [contributor-workflow.md](contributor-workflow.md#commands-and-code-for-the-owner).
 - **Owner-only actions:** config changes, sign-in and `-Install` (the #67 guard refuses
   them from agent sessions); production relay deploys (a required reviewer); Azure
   changes (the owner's personal Visual Studio Enterprise subscription, never a work

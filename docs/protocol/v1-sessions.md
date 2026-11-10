@@ -91,6 +91,7 @@ with the wrong type):
 | `DiscoveryHeld` | `reason` | `agents` (whole) |
 | `SessionList`, `SessionsSynced`, `DiscoveryChanged` | | `discoveryHeld` |
 | `SessionsSynced` | `live` (whole) | |
+| `RestoreRunResult` | `sessions` (whole) | |
 | `SessionPatch` | `id`, `base`, `set`, `append`, `subagents` | |
 | `SubagentsPatch` | `set`, `remove`, `order` (each whole) | |
 | `session.remove` data | `id` | |
@@ -100,7 +101,7 @@ with the wrong type):
 | `LaunchAgent` ([v1-launch.md](v1-launch.md)) | `id` | |
 | `LaunchWorkspace` | `label` | |
 | `ResumableSession` | `id`, `launcher` | |
-| `RestoreSession` | `id` | |
+| `RestoreSession`, `RestoreRunSession` | `id` | |
 | `LaunchDefaults`, `LaunchedWith` | | `permissions` |
 | `LaunchedTransfer` | `from` | |
 | `TrustQuestion` | | `id`, `agent`, `kind`, `folder`, `root`, `rootNote`, `warning`, `answerable` |
@@ -108,6 +109,7 @@ with the wrong type):
 | `TransferResult` | | `blob`, `size`, `sha256`, `agent`, `launcher`, `files` |
 | `ManageCommand` (#801) | | `command` |
 | `ManageHaTokenRequest` (#801, held until #55) | | `command`, `secret` |
+| `UpdateCommand` ([v1-update.md](v1-update.md), #1159) | | `now` |
 | `HistoryResult` ([v1-history.md](v1-history.md)) | `before`, `start` | |
 | `HistoryTurn` | `id` | `prompt` |
 | `HistoryPrompt` | | `from` |
@@ -293,7 +295,7 @@ once whenever `machine.readOnly`, `machine.restore` or `capabilities` would diff
 | `sessions.history` | `session.history`: a session's earlier turns, a page at a time, for the conversation pane ([v1-history.md](v1-history.md)). Offered to a person's devices and the app; never to the HA connector or an agent on the pipe |
 | `sessions.patch` | `sessions.subscribe` takes `patch` and `since`: live changes as `session.patch`, only what changed ([Patches](#patches-sessionpatch)), and a reconnect to the same run of the host sent only the sessions that changed meanwhile ([Resuming](#resuming-without-a-snapshot)). Without it, or without asking, a client gets whole upserts and whole snapshots as before |
 | `hello.changed` | `hello` takes `{ "changes": true }`, and the host then sends `hello.changed` on that channel when its `readOnly` or capabilities change ([Changes](#hello)). Without it, a client asks hello again to see a change |
-| `sessions.focus` | `sessions.focus`: the client says whether it is on screen and which session it shows. Live changes to the others then come together at most every 12 s, and a device on screen is not notified of finished turns ([sessions.focus](#sessionsfocus)). Without it, or until a client says, every change goes at once |
+| `sessions.focus` | `sessions.focus`: the client says whether it is on screen and which session it shows. Live changes to the others then come together at most every 12 s, and a device on screen is not notified of finished turns ([sessions.focus](#sessionsfocus)). With `openQuestion` and `idleMs` it also says which question's card it shows and how long since the person's last input, and while the person uses a device the host holds back some pushes ([While the person uses a device](#while-the-person-uses-a-device-1190)). Without it, or until a client says, every change goes at once |
 | `sessions.answer` | `session.answer`. A host leaves it out when it cannot answer at all, for example while agent-ha-bridge's daemon runs for the same user, or on a platform without delivery yet. A client then shows questions read-only and says to answer at the machine |
 | `sessions.reply` | `session.reply`. Left out on the same terms as `sessions.answer`. A client then offers no reply box |
 | `sessions.progress` | `session.reply` and `session.answer` take `"progress": true`, and then report `received` and `typed` before their result, which carries `timings` ([Progress](#progress)). Offered with `sessions.reply` or `sessions.answer` |
@@ -499,13 +501,17 @@ to 4 s, and with the app open the radio barely rested (#610: the largest battery
 `sessions.focus`, a client says what it shows, and says it again whenever that changes:
 
 ```json
-{ "visible": true, "open": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b" }
+{ "visible": true, "open": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b", "openQuestion": "toolu_01Hx7", "idleMs": 4200 }
 ```
 
 | Field | Notes |
 |---|---|
 | `visible` | Required. Whether the app is on screen now (the page is visible, the window not minimised) |
 | `open` | The session it shows, if any. Absent or `null` on the list, or another machine's session |
+| `openQuestion` | Optional string: the id of the question the card of the `open` session shows, if it has one on screen. Absent means none, or unknown, and is never read as "every question". Only with `open`. A host holding a question push for that id may treat it as read, and must not treat any other question's as read |
+| `idleMs` | Optional integer ≥ 0: milliseconds since the person's last input in the app (pointer, key, touch, wheel), measured when the request is sent. An age, not a time, so the clocks of phone and host need not agree: the host keeps `receivedAt - idleMs`. Absent means unknown, and a host must treat it as **not active**, never as 0 |
+
+A client sends the focus when its page's visibility, open session or `openQuestion` changes (once with `"visible": false` when it goes out of sight), and after every `sessions.subscribe`. While `visible` it also says it again on the first input after a spell without any, and about once a minute while input goes on, so a host's window of recent input stays fresh; never more than once in 2 s on input alone, and nothing periodic while idle or hidden (#1190).
 
 Result: `{}`. A request without `visible`, or with a field of the wrong type, fails as a request, as does one past 20 on a channel in 10 s: a client says it when its page or session changes, not more.
 It is for a person's devices: a pinned `service` or `host` peer is neither offered nor allowed it.
@@ -513,6 +519,17 @@ What it says holds for the channel, across `sessions.subscribe` on it, until it 
 the channel closes; a new channel starts with nothing said, and a client says it again after
 subscribing (it may send both at once). Until a channel has said anything, nothing below applies
 and every live change goes at once, as without the capability.
+
+**How a host reads `openQuestion` and `idleMs` (#1190).** `idleMs` is a whole number of
+milliseconds; the host takes 0 to 86,400,000 (a day), and reads any other whole number, negative or
+larger, as unknown. One that is not a whole number (`1.5`) fails the whole request, as any
+field of the wrong type does, and nothing of it is kept: `sessions.focus needs visible, open and
+openQuestion only as strings, and idleMs only as a whole number`. `openQuestion` without `open` is
+ignored. The host uses the two only to hold back pushes from a person using one of their devices
+([While the person uses a device](#while-the-person-uses-a-device-1190)); what it says about the
+channel's live changes is as above. On the local pipe, a process inside an agent session is refused
+`sessions.focus` ([local-pipe.md](local-pipe.md#who-may-manage-the-host)), so it cannot hold back
+the person's pushes; over the relay only the person's paired devices reach it.
 
 **The open session at once, the rest together.** A live `session.upsert` or `session.patch` of the
 `open` session, while `visible`, goes at once. Of every other session (all of them while not
@@ -674,7 +691,9 @@ in [#908](https://github.com/danswett/agent-bridge/issues/908) does not remove t
 or enable typing ([host answers](../host-answers.md)).
 
 Accepted by the session is `delivered`, never a stage. A stage a client does not know reads as
-`typed`; an older host sends none. In the same host run, a repeat of a request whose outcome was `unconfirmed`
+`typed`; an older host sends none. In the same host run, and after a restart while the host
+still keeps the answer's words ([host answers](../host-answers.md), step 6: at most a day), a
+repeat of a request whose outcome was `unconfirmed`
 reads the session's record of that same question again, typing nothing: an answer recorded
 since (submitted at the machine, or recorded late) comes back `delivered`, and from then on
 stays so, and one recorded differently comes back `recorded`. It never answers a newer
@@ -690,14 +709,15 @@ into that prompt again, whatever the request and across restarts: nobody can say
 half-typed prompt holds, and a second answer would land on top of the first. Only an
 attempt that typed nothing (the session's console could not be reached) leaves the prompt
 answerable. A host records the attempt and request before the first key, and refuses when it cannot.
-If it restarts with a claim but no recorded outcome, a resend within 15 minutes is `unconfirmed`,
-not `refused`; the question is listed `answerAtMachine`. A planned host stop excludes new
+If it restarts with a claim but no recorded outcome, a resend within 15 minutes by the request's
+own sender is `unconfirmed`, not `refused`; the question is listed `answerAtMachine`. A planned host stop excludes new
 deliveries and waits up to 15 seconds for typing and confirmation; on timeout the host stays
 running rather than leaving a worker to type after it exits.
 
 The same answer sent again for such a prompt under a different request UUID by the **same
 sender** (a phone that was reloaded keeps its UUIDs in memory only) is that request sent
-again, not a second attempt: while the host still has the first answer in memory, it gets the
+again, not a second attempt: while the host still keeps the first answer (as long as the
+prompt's claim, across restarts), it gets the
 first outcome and nothing is typed. An `unconfirmed` one is read again from the session as
 above, however long after, so it becomes `delivered` once the session has recorded it; while
 nothing is recorded it stays `unconfirmed`, with a reason that says only that nothing was
@@ -709,8 +729,15 @@ of its own, and nothing of the first's outcome or progress is given. Only a *dif
 is `refused` for a prompt already typed into, and the two are refused alike, so that no
 sender can learn what a first answer said by guessing it. A sender is the channel's peer (a
 device); the host has no person-level identity, so a second device of the same person gets the
-plain refusal. A host that restarted has forgotten the first answer, and refuses any second
-request for the prompt, as the record of attempts alone does.
+plain refusal. A host keeps the first answer's sender, hash and outcome with its record of
+attempts, so all of this holds across a restart as before it: a known request UUID replayed
+after a restart by another sender, or under another session or question, gets exactly what an
+unknown UUID with the same answer would (the plain refusal, or `stale`), never the first's
+outcome. While an answer is `unconfirmed` the host keeps its words, privately, to read the
+session again; when it cannot keep them safely (it already keeps as many as it may, or its
+private folder could be read by others) it refuses the answer before typing anything, with the
+reason "the machine can't keep this answer safely until it's confirmed, so nothing was typed;
+answer at the machine" (no `code`; a client shows the reason as it shows any refusal's).
 
 What a host answers, by agent. agent-ha-bridge is the baseline; answering Copilot
 permission prompts goes beyond it, at the user's request:
@@ -1245,6 +1272,24 @@ Request `data`: `{}`. Result: the devices this host notifies, oldest first:
 `current` marks the calling device. Endpoints are never sent back: one is a capability to
 notify that device.
 
+### `agent.lite.send` (own-agents messaging, #1351)
+
+A credentialed agent on one host sends a signed own-agent envelope to another host on the
+same account. Request `data`: `{ "envelope": "<base64url>", "text": "…", "killEpoch": 0 }`;
+the envelope's `dataSha256` binds the exact UTF-8 text, which is at most 4096 characters. Result:
+`{ "status": "delivered" | "refused", "code": "…", "request": "<uuid>", "killEpoch": 0 }`.
+The sender turns that into exactly one outcome:
+
+| Outcome | When |
+|---|---|
+| `delivered` | The receiver acknowledged delivery into the session. |
+| `refused` | The receiver (or the sender, before signing) said no; `code` carries the reason, for example `notPeer`, `composerNotEmpty`, `malformed`. A failed credential is refused before anything is signed. |
+| `undeliverable` | The relay reports the peer offline, or it is absent from relay presence. Text: "that machine is offline; nothing was queued". |
+| `unconfirmed` | No acknowledgement within 10 s, the channel was lost, or the mode was switched off mid-send ("mode switched off"). The message may or may not have arrived. |
+| `off` | Messaging is off or killed. No channel is opened. |
+
+Each attempt uses a fresh request id. A resend is a new message and is never automatic.
+
 ### Managing a machine
 
 **New (#801 slice A).** A person's phone, browser or Windows app restarts a machine's host, or
@@ -1297,7 +1342,7 @@ machine that became busier meanwhile keeps the download and installs at its next
 Product, #1161), lives at most 15 minutes from its signature (then it is dropped, spending no
 restart and cancelling no sign-in), is still never forced past the lease, and has its own
 allowance of 1 restart in 6 hours (owner, #1161), spent first, then counts against the same cap
-below ([v1-update.md](v1-update.md#update-now-1159-design-not-built-yet); design, not built).
+below ([v1-update.md](v1-update.md#update-now-1159); the host's half built, the app's not yet).
 At most **2 committed restarts
 every 6 hours** per machine until #55 (`rate-limited`), and 3 presses of each kind per device
 every 10 minutes. Once committed, the result is `accepted` with the planned-state
@@ -1327,7 +1372,9 @@ person's carries no `state`.
 
 A host with `push` notifies every subscribed device when one of its sessions needs the
 person or has something to say, whether or not the app is open, the same moments
-agent-ha-bridge notifies a phone through Home Assistant.
+agent-ha-bridge notifies a phone through Home Assistant. While the person uses one of their
+devices, it holds back a finished turn, and a question whose card a device in use shows
+([While the person uses a device](#while-the-person-uses-a-device-1190)).
 
 ### Notification class (#913)
 
@@ -1471,7 +1518,7 @@ silently (ui.md §7.0; later #913 work).
 | `kind` | When | Once per |
 |---|---|---|
 | `question` | A session has a pending `question`, still pending 2 s later. A question already pending when the host starts is notified too, as agent-ha-bridge's daemon does after a restart. Within a burst it goes in the `group` instead. Still pending 15 minutes after the session's first question notice of the episode, it goes once more with `data.reminder` ([Bursts and the reminder](#bursts-and-the-reminder-913)) | Question `id`, for the life of the session: further upserts, or the question briefly reading as pending again after an answer is typed, do not repeat it. The reminder: once per episode |
-| `finished` | A session went from `working` or `waiting` to `idle` with a non-empty response of the main agent's own (a delegate's latest text does not count), and is still idle 3 s later. Not to a device that is on screen now, subscribed to the host on a channel whose [`sessions.focus`](#sessionsfocus) last said `"visible": true`, unless a question notice of that session is still on it (the `finished` replaces it). Waiting on a sub-agent's question (`waitingOn`) counts if the main agent's turn was running when that wait began, or its own response changed from before the wait (for a session the host found already waiting, from what it read at startup): answering a delegate while the main agent stayed idle ends no turn. A turn that carries on within that (the person is at the machine) is not notified. A session already idle when the host starts is not news. A sub-agent finishing is never notified. Nor is a turn that ended on an error or a failed sign-in (`attention` `error` or `signInNeeded`): it is idle with the previous turn's answer still beside it, which a `finished` would quote as the new one's; one already due or held for the session is withdrawn while that attention lasts. A `finished` that would have replaced an answered question and does not go (withdrawn so, or refused by a device) sends that question's `resolved` instead to the devices still showing it, unless it is asked again | Finished turn: the same `turnCount` and response seen ending again is not repeated |
+| `finished` | A session went from `working` or `waiting` to `idle` with a non-empty response of the main agent's own (a delegate's latest text does not count), and is still idle 3 s later. Not to a device that is on screen now, subscribed to the host on a channel whose [`sessions.focus`](#sessionsfocus) last said `"visible": true`, unless a question notice of that session is still on it (the `finished` replaces it). Nor, while the person uses any of their devices, to any of them, with the same exception ([While the person uses a device](#while-the-person-uses-a-device-1190)). Waiting on a sub-agent's question (`waitingOn`) counts if the main agent's turn was running when that wait began, or its own response changed from before the wait (for a session the host found already waiting, from what it read at startup): answering a delegate while the main agent stayed idle ends no turn. A turn that carries on within that (the person is at the machine) is not notified. A session already idle when the host starts is not news. A sub-agent finishing is never notified. Nor is a turn that ended on an error or a failed sign-in (`attention` `error` or `signInNeeded`): it is idle with the previous turn's answer still beside it, which a `finished` would quote as the new one's; one already due or held for the session is withdrawn while that attention lasts. A `finished` that would have replaced an answered question and does not go (withdrawn so, or refused by a device) sends that question's `resolved` instead to the devices still showing it, unless it is asked again | Finished turn: the same `turnCount` and response seen ending again is not repeated |
 | `restored` | With `sessions.restore`: the host started again after a reboot or a crash took sessions with it ([What went](#hello)). Sent once every session it saw live is judged and those that died are restored, or 10 minutes after it started if some are still being judged then; not at all if none of them died. It says how many were restored and counts those offered, naming only the sessions that went mid-turn or with a question waiting and leaving the rest to Launch; sessions an earlier start already offered stay in `machine.restore` but are not notified again. To every subscribed device | Start of the host
 | `resolved` | A question that was notified is no longer pending: answered anywhere, or the session ended. Sent only to devices that were shown the question, and not to the device that answered it with `session.answer` (it was there). A `finished` that follows within 2 s is sent instead. Also withdraws a `group` once none of its questions is pending | Question |
 | `group` | **New (#913 rule 3).** A question of another session comes due within 30 s of one that went as itself, while that one (or one already grouped) is still pending: see [Bursts and the reminder](#bursts-and-the-reminder-913) | Burst |
@@ -1483,6 +1530,28 @@ still idle with no question then and the device is not on screen; a `question` o
 replaces it at once, as always. Answering or replying to the session from a device (with
 `session.answer` or `session.reply`) ends this wait for that device: the person is waiting for the
 turn they started. Agents that finish turn after turn on their own sent 88% of all pushes (#610).
+
+#### While the person uses a device (#1190)
+
+A device is in use while a channel of it subscribed
+to the host last said in [`sessions.focus`](#sessionsfocus) that it is `visible`, with an `idleMs`
+that puts its last input (the host's clock when it was received, less `idleMs`) under 2 minutes
+before the push would go. Then:
+
+- a `finished` goes to none of the person's devices, the one in use or any other, unless it
+  replaces a question notice still on that device;
+- a `question` (its reminder too) still goes, since the person may be in another session, unless
+  a device in use shows its very card (`open` is its session and `openQuestion` its id): then it
+  goes to none of them but a device still showing an earlier question's notice of that session,
+  which it replaces. Its reminder still comes due 15 minutes on and is judged the same way;
+- `resolved`, `group`, `signIn` and `restored` go as before.
+
+This is judged as each push goes, not when it was made, and no delay is added to wait for a
+`sessions.focus`: one that reaches the host first wins. A device that never said, gave no
+`idleMs`, or is hidden, is not in use, and is sent what it was before. Nothing already shown is
+withdrawn for this. The host's log names each push held back so: `dropped=in-use`,
+`dropped=card-on-screen`, or with `-elsewhere by=<device>` when another device was the one in use
+([Notifications in the log](../host-config.md#notifications-in-the-log)).
 
 A question answered before its 2 s are up is never notified. A notice that cannot be sent
 because the host's relay connection is down is sent when it is back; a newer notice about

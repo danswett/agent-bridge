@@ -9,6 +9,15 @@ public static class RestoreProtocol
     // hello's machine.restore, a session's restored field, and the restored push.
     public const string Capability = "sessions.restore";
 
+    // restore.run (docs/protocol/restore-run.md): restore what the notice offers, from a person's device.
+    public const string RunCapability = "sessions.restore.run";
+    public const string RunOp = "restore.run";
+
+    // A run names 1 to this many sessions: the notice names at most MaxOffered. The host's restore.run
+    // enforces the count and the no-repeats rule (restore-run.md); the record, like most requests,
+    // reads any list.
+    public const int MaxRunSessions = MaxOffered;
+
     // At most this many sessions are named in a notice; the rest are counted in offeredMore.
     public const int MaxOffered = 20;
 
@@ -67,6 +76,9 @@ public sealed record RestoreSession
     public string? Title { get; init; }
     public bool? MidTurn { get; init; }
     public bool? QuestionLost { get; init; }
+    // It died again within ten minutes of a restore (one of the notice's Loops): a confirmation says
+    // so before a person restores it once more. Absent otherwise, and ignored by a client that does not know it.
+    public bool? Loop { get; init; }
 }
 
 // A session's restored field: it was restored by its host after a reboot or a crash, left idle.
@@ -100,4 +112,51 @@ public sealed record RestoreNotice
     public RestoreWhy? Why { get; init; }
     public IReadOnlyList<RestoreSession> Offered { get; init; } = [];
     public int? OfferedMore { get; init; }
+}
+
+// restore.run (#948): restore, idle, every session the notice names, through the start-up restore's own
+// path. Request is the client's UUID for this press, with session.launch's semantics. Offer is the
+// notice's At, so a host that started again since refuses the run whole. Sessions are the ids the
+// confirmation listed (1 to MaxRunSessions, in the offer's order, no repeats). Progress asks for a frame
+// as each session's attempt ends.
+public sealed record RestoreRunRequest
+{
+    public required string Request { get; init; }
+    public required DateTimeOffset Offer { get; init; }
+    public required IReadOnlyList<string> Sessions { get; init; }
+    public bool? Progress { get; init; }
+}
+
+// One session's attempt, with session.launch's outcomes and meaning. Reason is present for anything
+// but Started. An outcome a client does not know reads as Unconfirmed: something may have started.
+public sealed record RestoreRunSession
+{
+    [Strict(Strictness.Identity)]
+    public required string Id { get; init; }
+    public required LaunchOutcome Outcome { get; init; }
+    public string? Reason { get; init; }
+}
+
+// The whole run, read first row that holds: Refused (nothing tried), Busy (nothing tried), Restored (every
+// session started), Partial (something started, so any unconfirmed counts), None (no agent started).
+// An outcome a client does not know reads as Partial.
+[UnknownAs(Partial)]
+public enum RestoreRunOutcome { Restored, Partial, None, Busy, Refused }
+
+public sealed record RestoreRunResult
+{
+    public required RestoreRunOutcome Outcome { get; init; }
+    public string? Reason { get; init; }
+    // [Strict]: an entry left out would read as a session the run never touched.
+    [Strict(Strictness.Identity)]
+    public IReadOnlyList<RestoreRunSession> Sessions { get; init; } = [];
+}
+
+// A frame sent as each session's attempt ends, before the response, when the request asked for them.
+public sealed record RestoreRunProgress
+{
+    public required string Session { get; init; }
+    public required LaunchOutcome Outcome { get; init; }
+    public required int Done { get; init; }
+    public required int Of { get; init; }
 }

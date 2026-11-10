@@ -1491,9 +1491,14 @@ public sealed class UsageProbeTests : IDisposable
         await Until(() => server.Received.Any(r => r.Method == "account/rateLimits/read"));
 
         Volatile.Write(ref armed, 1);
-        _ = Task.Run(() => time.Advance(TimeSpan.FromMilliseconds(300)));
+        // Steps the clock until a polling look begins. One advance could come before the watch's
+        // polling had registered its next wait on the fake clock (a loaded runner may not have
+        // started it yet), and that wait would then never end. Off the test's thread, as a look
+        // could run inline and sleeps in it; well inside the 60 s reporting timeout.
+        var advancing = Task.Run(() => AdvanceUntil(time, () => entered.Task.IsCompleted, TimeSpan.FromMilliseconds(50), TimeSpan.FromSeconds(30)));
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
         release.SetResult();
+        await advancing;
         var outcome = await RunToEnd(run);
 
         Assert.Equal(CodexProbeKind.Reading, outcome.Kind);
@@ -1533,12 +1538,18 @@ public sealed class UsageProbeTests : IDisposable
     public async Task A_sign_out_with_no_reading_stands_after_a_Codex_session_opens_until_the_probe_it_allows_says_otherwise(string then)
     {
         CodexUsed();
-        AppServer(s => s.Answers["account/rateLimits/read"] = _ => FakeAppServer.Error("failed to fetch codex rate limits: 401 Unauthorized"));
+        var first = AppServer(s => s.Answers["account/rateLimits/read"] = _ => FakeAppServer.Error("failed to fetch codex rate limits: 401 Unauthorized"));
         var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
         var sessions = new FakeSessions();
         var monitor = new UsageMonitor([codex], sessions, Options(), time, log: Log);
         await monitor.PassAsync();
-        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        // The app-server answers in real time. Stepping the fake clock before it has, on a loaded
+        // runner, ran out the probe's 60 s report timeout: a failure, not the sign-out the test needs.
+        await Until(() => first.Answered >= 4);
+        // Running is complete before a probe starts and after it ends, so it cannot say this one has
+        // ended; the collector's count of finished probes can.
+        await AdvanceUntil(time, () => codex.ProbesFinished >= 1, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        Assert.Equal(1, codex.ProbesFinished);
         await monitor.PassAsync();
         Assert.Equal(CodexUsageProbe.SignedOutError, Assert.Single(monitor.Current.Report.Agents, a => a.Agent == AgentKind.Codex).Error);
         var gone = false;
@@ -1546,7 +1557,7 @@ public sealed class UsageProbeTests : IDisposable
 
         // A Codex session runs here, and the probe its arrival allows is under way at the next look.
         var later = new TaskCompletionSource();
-        AppServer(s =>
+        var second = AppServer(s =>
         {
             s.Before["account/rateLimits/read"] = later.Task;
             if (then != "reading")
@@ -1563,13 +1574,20 @@ public sealed class UsageProbeTests : IDisposable
         Assert.Equal(CodexUsageProbe.SignedOutError, Assert.Single(monitor.Current.Report.Agents, a => a.Agent == AgentKind.Codex).Error);
 
         later.SetResult();
-        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        await Until(() => second.Answered >= 4);
+        await AdvanceUntil(time, () => codex.ProbesFinished >= 2, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
         await monitor.PassAsync();
 
         var codexEntry = Assert.Single(monitor.Current.Report.Agents, a => a.Agent == AgentKind.Codex);
         if (then == "reading") { Assert.Equal((23.0, (string?)null), (codexEntry.Windows[0].Percent, codexEntry.Error)); }
         else { Assert.Equal(CodexUsageProbe.SignedOutError, codexEntry.Error); }
         Assert.False(gone);
+    }
+
+    [Fact]
+    public void A_Codex_collector_that_has_run_no_probe_counts_none_finished()
+    {
+        Assert.Equal(0, new CodexUsageCollector(Options(), time, Probes(), Log).ProbesFinished);
     }
 
     [Fact]

@@ -155,6 +155,11 @@ public sealed class ReplyService : ISessionReplier
     // Ends the late watches of replies that timed out (#1025) when the host stops, so none outlives it.
     public CancellationToken Stopping { get; set; }
 
+    // Told of each reply that reached its confirmation: session, agent, whether it was working when
+    // typed, when typing finished (ms after receipt), and the outcome. For the deaf-session watch
+    // (#687); never the reply's words.
+    public Func<string, AgentKind, bool, long?, AnswerOutcome, Task>? Measured { get; set; }
+
     void OnSessionChanged(object? sender, SessionChange change)
     {
         if (change.Kind == SessionChangeKind.Removed)
@@ -304,6 +309,8 @@ public sealed class ReplyService : ISessionReplier
         var (typedAt, working, recorded) = timeline.Stages();
         var when = recorded is { } r ? Ms(r) : seen.At is { } s ? $"~{Ms(s)}" : "never";
         log(FormattableString.Invariant($"reply {id} to {Short(sessionId)} confirm: {seen.Agent.ToString().ToLowerInvariant()}, {(working ? "working" : "idle")}, typed {(typedAt is { } t ? Ms(t) : "?")}, recorded {when}, timeout {options.ConfirmTimeout.TotalSeconds:0} s, {result.Outcome.ToString().ToLowerInvariant()}"));
+        // Not awaited: a recovery ends and resumes a session, which no reply waits for.
+        if (Measured is { } measured && !seen.Ended) { _ = Task.Run(() => measured(sessionId, seen.Agent, working, typedAt, result.Outcome)); }
         if (result.Outcome == AnswerOutcome.Unconfirmed && recorded is null && seen.At is null && !seen.Ended && options.LateWatch > TimeSpan.Zero)
         {
             _ = Task.Run(() => WatchLateAsync(id, seen, timeline));
@@ -383,7 +390,7 @@ public sealed class ReplyService : ISessionReplier
         // refused here: a screen without one may be asking something (a permission prompt, or
         // the folder-trust question before a transcript exists), which the checks in the turn
         // name better, and still refuse before any key.
-        if (await InputBoxAsync(pid) is { Seen: true, Problem: { } early }) { return Done(Refused(early)); }
+        if (await InputBoxAsync(pid) is { Seen: true, Problem: { } early }) { return Done(Unverified(early)); }
         // Caught up before the typing turn is taken, so the first reply to a session with a
         // long transcript reads it without holding up every other delivery; the read in the
         // turn only covers what has been written since.
@@ -428,7 +435,7 @@ public sealed class ReplyService : ISessionReplier
             else if (!before.Readable) { return Done(Refused("the session's transcript could not be read, so nothing is typed; reply at the machine")); }
             if (before.Resumed)
             {
-                return Done(Refused("the session was resumed in a new Copilot while a question or approval was open, and its window may still show it, where a reply would answer it; answer or dismiss it at the machine (or type there), then reply"));
+                return Done(Refused("the session was resumed in a new Copilot while a question or approval was open, and its window may still show it, where a reply would answer it; answer or dismiss it at the machine (or type there), then reply") with { Refusal = ReplyRefusal.Asking });
             }
             if (before.Asking && !noTranscriptYet) { return Done(Asking()); }
             from = before.ScannedTo;
@@ -440,7 +447,7 @@ public sealed class ReplyService : ISessionReplier
             // of its own, held to the box's bottom edge: a box that moved or went (a dialog drawn
             // in its place while the words were typed) gets no Enter, and the words stay in it.
             var (box, problem, _, _) = await InputBoxAsync(pid);
-            if (box is null) { return Done(Refused(problem!)); }
+            if (box is null) { return Done(Unverified(problem!)); }
             // Both are held to the footer's mode too, in the same read: the box's rows read the same
             // empty, in vim's normal mode, or in shell mode holding only a space ('!' then a space),
             // and only the footer under them says which. The footer must still be there, and show
@@ -587,7 +594,7 @@ public sealed class ReplyService : ISessionReplier
             var box = Find(agent, rows);
             if (box is null)
             {
-                return Done(Refused($"{name}'s input box is not on its screen, so it may be asking something at the machine; answer it there, or reply at the machine"));
+                return Done(Refused($"{name}'s input box is not on its screen, so it may be asking something at the machine; answer it there, or reply at the machine") with { Refusal = ReplyRefusal.Asking });
             }
             // Codex shows whether its box is empty in its footer. Claude shows a suggested next
             // prompt in an empty box, which a screen read cannot tell from typed words, so its
@@ -873,7 +880,8 @@ public sealed class ReplyService : ISessionReplier
 
     // What went wrong goes to the host's log only: the person is given fixed words, never an
     // exception's text (#802, #995).
-    ReplyResult Failed(AnswerOutcome outcome, string what, Exception e) => new(outcome, Logged(what, e));
+    ReplyResult Failed(AnswerOutcome outcome, string what, Exception e) => new(outcome, Logged(what, e)) { Refusal = ReplyRefusal.ComposerUnverified };
+    static ReplyResult Unverified(string reason) => Refused(reason) with { Refusal = ReplyRefusal.ComposerUnverified };
 
     string Logged(string what, Exception e)
     {
@@ -889,7 +897,7 @@ public sealed class ReplyService : ISessionReplier
     // the machine (a permission prompt) says so, since answering it first is done there.
     static ReplyResult Asking(Question? question = null) => new(AnswerOutcome.Refused, question?.AnswerAtMachine == true
         ? "the session is waiting at a prompt that can only be answered at the machine; answer it there first"
-        : "the session is waiting for an answer to its question; answer that first");
+        : "the session is waiting for an answer to its question; answer that first") { Refusal = ReplyRefusal.Asking };
 }
 
 // macOS and Linux, until delivery through tmux exists: hello never offers sessions.reply,

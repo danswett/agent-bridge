@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.HomeAssistant;
+using AgentBridge.Host.Core.AgentMessaging;
 using AgentBridge.Host.Core.DevBox;
 using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery.Launch;
@@ -42,6 +43,10 @@ namespace AgentBridge.Host;
 //
 // devBox: keeping a Microsoft Dev Box from hibernating on disconnect (DevBoxSettings,
 // KeepAwakeService). Off unless turned on; a file that cannot be read leaves it off.
+//
+// agentMessaging (#728): the temporary AP5-lite mode (AgentMessagingSettings). remote "off" (the
+// default) or "own-account"; allowAllTargets false (the default) or true. Anything else, or a file
+// that cannot be read, is off and false. Read afresh by CurrentAgentMessaging: no restart needed.
 //
 // sessions.restoreOnStart: whether sessions a reboot or a crash took are kept offered to resume,
 // and later (#780) resumed, idle, when the host starts again (docs/host-launch.md). On when absent.
@@ -89,8 +94,18 @@ public sealed record HostSettings(bool RemoteApproval)
 
     public IReadOnlyList<string> DevBoxProblems { get; init; } = [];
 
+    // The temporary AP5-lite messaging mode (#728): off unless turned on here, and off whenever
+    // the file cannot be read (Off keeps the default).
+    public AgentMessagingSettings AgentMessaging { get; init; } = AgentMessagingSettings.Default;
+
+    public IReadOnlyList<string> AgentMessagingProblems { get; init; } = [];
+
+    // The AP5-lite settings as config.json says now, for a caller that must not need a restart:
+    // read afresh on each call, and off for anything that cannot be read with confidence.
+    public static AgentMessagingSettings CurrentAgentMessaging(string folder) => Load(folder).Settings.AgentMessaging;
+
     // Every problem a section reported, for the log, config show, and config set's check.
-    public IEnumerable<string> SectionProblems => LaunchProblems.Concat(HomeAssistantProblems).Concat(UsageProblems).Concat(DevBoxProblems).Concat(PermissionProblems);
+    public IEnumerable<string> SectionProblems => LaunchProblems.Concat(HomeAssistantProblems).Concat(UsageProblems).Concat(DevBoxProblems).Concat(AgentMessagingProblems).Concat(PermissionProblems);
 
     public bool Push { get; init; } = true;
 
@@ -166,8 +181,11 @@ public sealed record HostSettings(bool RemoteApproval)
             var (homeAssistant, homeAssistantProblems) = HaSettings.Read(root.TryGetProperty("homeAssistant", out var h) ? h : null);
             var (usage, usageProblems) = UsageSettings.Read(root.TryGetProperty("usage", out var u) ? u : null);
             var (devBox, devBoxProblems) = DevBoxSettings.Read(root.TryGetProperty("devBox", out var d) ? d : null);
+            var (agentMessaging, agentMessagingProblems) = AgentMessagingSettings.Read(root.TryGetProperty("agentMessaging", out var am) ? am : null);
             var settings = Default with
             {
+                AgentMessaging = agentMessaging,
+                AgentMessagingProblems = agentMessagingProblems.Count == 0 ? [] : agentMessagingProblems,
                 Launch = launch,
                 LaunchProblems = launchProblems.Count == 0 ? [] : launchProblems,
                 HomeAssistant = homeAssistant,

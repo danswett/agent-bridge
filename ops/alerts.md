@@ -8,6 +8,15 @@ stands:
   next runs `infra/deploy.ps1 -Production` (docs/relay-deploy.md "Monitoring").
 - **Planned** isn't built yet.
 
+**Deployment record.** The production monitoring module went live on 2026-11-07 (about 01:15 PT),
+deployed by Platform SRE with `az deployment group create` of `infra/modules/monitoring.bicep`
+alone (deployment `relay-monitoring-sre-20261107`, owner approval in the SRE session). A full
+`infra/deploy.ps1 -Production` what-if that day also showed the unapplied feedback containers
+and app updates, so the module went in alone rather than widening the change. It created the
+action group `ag-agent-bridge-ops` (owner's address, email only), App Insights, `wt-relay-healthz`,
+the seven metric alerts and the $40 budget. The address is not in the repo. Still to do: staging
+alerts, probes for `relay.slipgates.com` and staging, blob alerts, a workbook, and a test email.
+
 Thresholds are first estimates for one 0.25 vCPU / 0.5 GiB replica, with tens of devices.
 Revisit them after two weeks of data, and when capacity changes (CAP-1).
 
@@ -27,6 +36,7 @@ Signals:
 - **M:** relay metric (OBS-1);
 - **AL:** activity log;
 - **B:** budget;
+- **W:** the GitHub watch, a Logic App in Azure that records an availability result every 5 min;
 - **P:** the daily probe ([tools/relay-probe.ps1](tools/relay-probe.ps1) in `ops-probe.yml`), which
   opens or updates one `area:ops` issue and closes it when clean.
 
@@ -48,7 +58,7 @@ Signals:
 | A-STORM | 2 | LA `reconnect-storm` (then M) | Disconnects per minute > 5× the hour's median for 3 consecutive minutes, ≥ 20/min, and no deploy in the last 15 min | [reconnect-storm](runbooks/reconnect-storm.md) | #574 | Planned |
 | A-REFUSALS | 3 | M `relay.refusals` only: the relay logs no refusals, so this waits for OBS-1 | Refusals (4000 bad hello, 4001 token, 4003 proof, 4029 too many devices, 403 origin) > 10× the day's hourly median in an hour, ≥ 50 | [reconnect-storm](runbooks/reconnect-storm.md) | #574, after #569 | Planned |
 | A-RATELIMIT | 3 | LA `connections` (disconnect outcome `rate limited`), then M `relay.disconnects` | Admitted sockets closed with 4008 for exceeding the frame limit: ≥ 20 in an hour | [reconnect-storm](runbooks/reconnect-storm.md) | #574 | Planned |
-| A-ROSTER | 3 | LA `dependencies` | ≥ 5 roster failures in 15 min (Sev 2 at ≥ 50) | [relay-dependencies](runbooks/relay-dependencies.md) | #574 | Planned |
+| A-ROSTER | 3 | LA `dependencies` | ≥ 5 roster failures in 15 min (Sev 2 at ≥ 50); a corrupt stored copy ("roster copy unreadable") is counted by the same alert | [relay-dependencies](runbooks/relay-dependencies.md) | #574 | Planned |
 | A-BLOB | 3 | LA `dependencies` | ≥ 5 blob store failures in 15 min | [relay-dependencies](runbooks/relay-dependencies.md) | #574 | Planned |
 | A-PUSH | 3 | LA `dependencies` | Push failures (5xx or exceptions) > 20% of ≥ 10 pushes in 30 min | [relay-dependencies](runbooks/relay-dependencies.md) | #574 | Planned |
 | A-SIGNIN | 3 | M `relay.signins` | `refused` > 50% of ≥ 10 sign-ins in 30 min | [relay-dependencies](runbooks/relay-dependencies.md) | #574 | Planned |
@@ -64,6 +74,8 @@ Signals:
 |---|---|---|---|---|---|---|
 | A-LOGCAP | 2 | LA `ingestion`, `cap-hit` | Today's ingestion > 80% of the daily cap, or collection stopped (OverQuota) | [log-cap](runbooks/log-cap.md) | #571 | Planned |
 | A-BUDGET | 3 | B | The resource group's month at 50%, 80% or 100% of the $40 budget, or forecast over 100%. Emailed by Cost Management, not the action group | [cost](runbooks/cost.md) | #575 | Built |
+| A-GHA | 3 | W `github-actions` | GitHub's status page shows Actions or Pages not operational, or a run here has been queued over 30 min, in 2 of the last 3 checks (every 5 min, from Azure). A source that can't be reached counts as no evidence, not an outage | [github-outage](runbooks/github-outage.md) | #658 | Built |
+| A-GHA-SILENT | 3 | LA `availabilityResults` | No fully read `github-actions` result in 30 min (none arrived, or one said `unreachable`, `unreadable` or `unknown`): the watch stopped or can't read a source, so A-GHA is blind | [github-outage](runbooks/github-outage.md) | #658 | Built |
 
 ## Staging and PPE
 

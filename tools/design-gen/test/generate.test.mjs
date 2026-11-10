@@ -5,7 +5,8 @@ import path from 'node:path';
 import { generate, staleFiles, write, repoRoot } from '../generate.mjs';
 import { parseXml, parsePathData, formatCommands } from '../lib/svg.mjs';
 
-const scratch = path.join(repoRoot, 'tools', 'design-gen', '.scratch', 'generate');
+// Per process: two runs in one checkout (#565) deleted each other's scratch folder.
+const scratch = path.join(repoRoot, 'tools', 'design-gen', '.scratch', `generate-${process.pid}`);
 after(() => rmSync(scratch, { recursive: true, force: true }));
 
 // What the generator reads, in a copy it may change.

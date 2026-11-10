@@ -6,8 +6,8 @@ import { h } from './dom.js';
 import { glyph } from './glyph.js';
 import { needsYou, AppBadge } from '../needs-you.js';
 import { tapState, prepareAnswer } from '../answers.js';
-import { BUSY_PAUSE_MS, answerControls, answerState, describeAnswer } from './question-view.js';
-import { ReceiptClock, ReceiptTiming, drawReceipt, drawn, holdCheck, receiptLive } from './receipt.js';
+import { BUSY_PAUSE_MS, answerControls, answerState, describeAnswer, describeClosed } from './question-view.js';
+import { ReceiptClock, ReceiptTiming, LINGER_READ_MS, drawReceipt, drawn, holdCheck, receiptLive } from './receipt.js';
 import { duration, localTime } from './time.js';
 import { holdOf, UPDATING } from './hold.js';
 import { whileVisible } from './ticker.js';
@@ -19,7 +19,7 @@ import { renderMarkdown } from '../markdown.js';
 // answer service's 9 minutes). Dropped with its question, the ring went and the outcome never came.
 // The outcome can also come first, the machine's update clearing the question after it: the entry
 // then stays for what is left of that same time, as it would the other way round (outcomeUntil).
-const LINGER_READ_MS = 5000;
+// LINGER_READ_MS (receipt.js) is the time a closed line stays everywhere (ui.md §7).
 const LINGER_MAX_MS = 9 * 60 * 1000;
 const inFlight = (entry) => entry?.state === 'sending' || entry?.state === 'waiting';
 
@@ -144,7 +144,10 @@ export class NeedsYouLane {
         view.service = ctx.service;
         // The lane's line keeps the receipt's quiet window, dwell and stalls, as the card's does.
         view.receipt = new ReceiptClock({
-          describe: (entry, { stalled }) => describeAnswer(entry, this.machine(view.entry.hostId).name, { question: view.entry.question, stalled }),
+          // Amber while its question is listed; once the question has gone (lingering) the line is the
+          // closed one, neutral: "Question closed", never amber (ui.md §7).
+          describe: (entry, { stalled }) => (view.lingering ? describeClosed : describeAnswer)(entry, this.machine(view.entry.hostId).name, { question: view.entry.question, stalled }),
+          followDescribe: (entry, { stalled }) => describeClosed(entry, this.machine(view.entry.hostId).name, { question: view.entry.question, stalled }),
           draw: (d) => {
             drawReceipt(els.status, 'needs-status', d);
             // From the tap, its line is there (empty unless something's wrong), so the entry grows
@@ -264,6 +267,8 @@ export class NeedsYouLane {
     view.el.dataset.lingering = 'true';
     view.els.approve.disabled = view.els.deny.disabled = true;
     view.els.resend.hidden = true;
+    // Its question has gone: the line is now the closed one.
+    view.receipt.show(current);
     return true;
   }
 

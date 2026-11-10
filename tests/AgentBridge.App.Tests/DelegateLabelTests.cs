@@ -70,6 +70,10 @@ public class DelegateLabelTests
     [InlineData("x, idle, DEV-VM2", "x idle DEV-VM2")]
     [InlineData("x\uFF0C idle\u3001DEV-VM2", "x idle DEV-VM2")]
     [InlineData("Read logs", "Read logs")]
+    [InlineData("Fix; then. Idle! Done?", "Fix then Idle Done")]
+    [InlineData("Fix... now", "Fix now")]
+    [InlineData("v1.2 a.b", "v1.2 a.b")]
+    [InlineData("Fix (done.) now", "Fix (done ) now")]
     public void A_name_read_aloud_has_no_comma_of_its_own_so_it_cannot_add_a_fact_to_a_screen_readers_label(string name, string aloud)
     {
         Assert.Equal(aloud, DelegateLabel.Aloud(DelegateLabel.For(name, Id)));

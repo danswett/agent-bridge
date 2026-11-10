@@ -200,35 +200,30 @@ public class ChannelTests
     {
         var (relay, host, app) = await PairAsync();
         await using var _ = relay;
-        using var release = new ManualResetEventSlim();
-        var admitting = new TaskCompletionSource<SecureChannel>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var admitting = new TaskCompletionSource<(SecureChannel Channel, bool HasStatic, bool IsOpen, int Checks)>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         var checks = 0;
         host.Hub.PeerAllowed = channel =>
         {
             if (Interlocked.Increment(ref checks) == 1)
             {
-                admitting.TrySetResult(channel);
-                if (!release.Wait(TimeSpan.FromSeconds(10))) { throw new TimeoutException("handshake admission was not released"); }
+                var hasStatic = channel.PeerStatic is not null;
+                var isOpen = channel.IsOpen;
+                // Revalidate with admission on-stack, without blocking a worker needed to release it.
+                host.Hub.RevalidatePeers();
+                admitting.TrySetResult((channel, hasStatic, isOpen, Volatile.Read(ref checks)));
             }
             return true;
         };
         var opening = outbound
             ? host.Hub.OpenAsync(app.Id, TimeSpan.FromSeconds(10))
             : app.Hub.OpenAsync(host.Id, TimeSpan.FromSeconds(10));
-        SecureChannel atHost;
-        int duringAdmission;
-        try
-        {
-            atHost = await admitting.Task.WaitAsync(TimeSpan.FromSeconds(10));
-            Assert.NotNull(atHost.PeerStatic);
-            Assert.False(atHost.IsOpen);
-            host.Hub.RevalidatePeers();
-            duringAdmission = Volatile.Read(ref checks);
-        }
-        finally { release.Set(); }
+        var admission = await admitting.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(admission.HasStatic);
+        Assert.False(admission.IsOpen);
+        Assert.Equal(1, admission.Checks);
         await opening;
-        await Wait.UntilAsync(() => atHost.IsOpen, "handshake admission to finish");
-        Assert.Equal(1, duringAdmission);
+        await Wait.UntilAsync(() => admission.Channel.IsOpen, "handshake admission to finish");
         host.Hub.RevalidatePeers();
         Assert.Equal(2, Volatile.Read(ref checks));
     }

@@ -377,6 +377,31 @@ public class RosterTests
         Assert.Contains("TokenKey", e.Message);
     }
 
+    [Fact]
+    public async Task A_stored_roster_that_cannot_be_read_is_logged_once_by_type_and_loads_as_empty()
+    {
+        var store = new MemoryRosterStore();
+        var lines = new List<string>();
+        var o = new RelayOptions { TokenKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)) };
+        var roster = new MachineRoster(o, Metrics(), new ListLogger(lines), store);
+        await store.WriteAsync(roster.NameOf("octo-account"), Encoding.UTF8.GetBytes("{ secret-body-text"), null, default);
+
+        await roster.ConnectedAsync("octo-account", Id(), "phone", "pwa");
+
+        var line = Assert.Single(lines);
+        Assert.Equal("roster copy unreadable, replaced on next write: JsonException", line);
+        Assert.DoesNotContain("secret-body-text", line);
+        Assert.DoesNotContain("octo-account", line);
+        Assert.Empty(roster.Known("octo-account", _ => false)!);
+    }
+
+    sealed class ListLogger(List<string> lines) : Microsoft.Extensions.Logging.ILogger<MachineRoster>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel level) => true;
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel level, Microsoft.Extensions.Logging.EventId id, TState state, Exception? e, Func<TState, Exception?, string> format) => lines.Add(format(state, e));
+    }
+
     static RelayMetrics Metrics() => new(new TestMeterFactory(), () => 0);
 
     sealed class TestMeterFactory : System.Diagnostics.Metrics.IMeterFactory

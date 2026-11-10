@@ -152,6 +152,172 @@
         "by": "BKzKtn9kLPn5w1wkF1-3gOdtAPCieCpa8m26esY0ZHt_c9CCDcF-wjeuJwqZOyt0ANZiKE0bkhyDwbg5E2FjE48",
         "mac": "OyH56shn-ByowT2uzkpM8MTKYEWa4gy_9HfsmUVkIjo"
       }
+    },
+    {
+      "name": "an-update-now-at-its-longest",
+      "action": "update.install.now",
+      "now": 1793300060,
+      "body": {
+        "v": 1,
+        "action": "update.install.now",
+        "request": "7d0f3a2e-1c4b-4d5e-8f60-112233445566",
+        "principal": {
+          "kind": "user",
+          "device": "8f6549035c05abc0d83d83be0eb9bce6"
+        },
+        "target": {
+          "machine": "31031edf3b6085d01d1c4ba3b34c1274"
+        },
+        "to": "31031edf3b6085d01d1c4ba3b34c1274",
+        "issuedAt": 1793300000,
+        "expiresAt": 1793300300,
+        "args": {
+          "now": true,
+          "release": "1.2.3-9999999999999999999999999999999999999999999999999999999999",
+          "accept": {
+            "working": 1000000,
+            "waiting": 1000000,
+            "unknown": true,
+            "sessions": [
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000000",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000001",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000002",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000003",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000004",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000005",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000006",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000007",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000008",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000009",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000010",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000011",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000012",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000013",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000014",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000015",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000016",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000017",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000018",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000019",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000020",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000021",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000022",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000023",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000024",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000025",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000026",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000027",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000028",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000029",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000030",
+                "state": "approval"
+              },
+              {
+                "id": "ffffffff-ffff-4fff-bfff-000000000031",
+                "state": "approval"
+              }
+            ],
+            "moreApprovals": 1000000,
+            "moreOther": 999968
+          }
+        }
+      },
+      "command": {
+        "body": "eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUuaW5zdGFsbC5ub3ciLCJyZXF1ZXN0IjoiN2QwZjNhMmUtMWM0Yi00ZDVlLThmNjAtMTEyMjMzNDQ1NTY2IiwicHJpbmNpcGFsIjp7ImtpbmQiOiJ1c2VyIiwiZGV2aWNlIjoiOGY2NTQ5MDM1YzA1YWJjMGQ4M2Q4M2JlMGViOWJjZTYifSwidGFyZ2V0Ijp7Im1hY2hpbmUiOiIzMTAzMWVkZjNiNjA4NWQwMWQxYzRiYTNiMzRjMTI3NCJ9LCJ0byI6IjMxMDMxZWRmM2I2MDg1ZDAxZDFjNGJhM2IzNGMxMjc0IiwiaXNzdWVkQXQiOjE3OTMzMDAwMDAsImV4cGlyZXNBdCI6MTc5MzMwMDMwMCwiYXJncyI6eyJub3ciOnRydWUsInJlbGVhc2UiOiIxLjIuMy05OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5IiwiYWNjZXB0Ijp7IndvcmtpbmciOjEwMDAwMDAsIndhaXRpbmciOjEwMDAwMDAsInVua25vd24iOnRydWUsInNlc3Npb25zIjpbeyJpZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLTAwMDAwMDAwMDAwMCIsInN0YXRlIjoiYXBwcm92YWwifSx7ImlkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtMDAwMDAwMDAwMDAxIiwic3RhdGUiOiJhcHByb3ZhbCJ9LHsiaWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi0wMDAwMDAwMDAwMDIiLCJzdGF0ZSI6ImFwcHJvdmFsIn0seyJpZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLTAwMDAwMDAwMDAwMyIsInN0YXRlIjoiYXBwcm92YWwifSx7ImlkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtMDAwMDAwMDAwMDA0Iiwic3RhdGUiOiJhcHByb3ZhbCJ9LHsiaWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi0wMDAwMDAwMDAwMDUiLCJzdGF0ZSI6ImFwcHJvdmFsIn0seyJpZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLTAwMDAwMDAwMDAwNiIsInN0YXRlIjoiYXBwcm92YWwifSx7ImlkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtMDAwMDAwMDAwMDA3Iiwic3RhdGUiOiJhcHByb3ZhbCJ9LHsiaWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi0wMDAwMDAwMDAwMDgiLCJzdGF0ZSI6ImFwcHJvdmFsIn0seyJpZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLTAwMDAwMDAwMDAwOSIsInN0YXRlIjoiYXBwcm92YWwifSx7ImlkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtMDAwMDAwMDAwMDEwIiwic3RhdGUiOiJhcHByb3ZhbCJ9LHsiaWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi0wMDAwMDAwMDAwMTEiLCJzdGF0ZSI6ImFwcHJvdmFsIn0seyJpZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLTAwMDAwMDAwMDAxMiIsInN0YXRlIjoiYXBwcm92YWwifSx7ImlkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtMDAwMDAwMDAwMDEzIiwic3RhdGUiOiJhcHByb3ZhbCJ9LHsiaWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi0wMDAwMDAwMDAwMTQiLCJzdGF0ZSI6ImFwcHJvdmFsIn0seyJpZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLTAwMDAwMDAwMDAxNSIsInN0YXRlIjoiYXBwcm92YWwifSx7ImlkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtMDAwMDAwMDAwMDE2Iiwic3RhdGUiOiJhcHByb3ZhbCJ9LHsiaWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi0wMDAwMDAwMDAwMTciLCJzdGF0ZSI6ImFwcHJvdmFsIn0seyJpZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLTAwMDAwMDAwMDAxOCIsInN0YXRlIjoiYXBwcm92YWwifSx7ImlkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtMDAwMDAwMDAwMDE5Iiwic3RhdGUiOiJhcHByb3ZhbCJ9LHsiaWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi0wMDAwMDAwMDAwMjAiLCJzdGF0ZSI6ImFwcHJvdmFsIn0seyJpZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLTAwMDAwMDAwMDAyMSIsInN0YXRlIjoiYXBwcm92YWwifSx7ImlkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtMDAwMDAwMDAwMDIyIiwic3RhdGUiOiJhcHByb3ZhbCJ9LHsiaWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi0wMDAwMDAwMDAwMjMiLCJzdGF0ZSI6ImFwcHJvdmFsIn0seyJpZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLTAwMDAwMDAwMDAyNCIsInN0YXRlIjoiYXBwcm92YWwifSx7ImlkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtMDAwMDAwMDAwMDI1Iiwic3RhdGUiOiJhcHByb3ZhbCJ9LHsiaWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi0wMDAwMDAwMDAwMjYiLCJzdGF0ZSI6ImFwcHJvdmFsIn0seyJpZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLTAwMDAwMDAwMDAyNyIsInN0YXRlIjoiYXBwcm92YWwifSx7ImlkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtMDAwMDAwMDAwMDI4Iiwic3RhdGUiOiJhcHByb3ZhbCJ9LHsiaWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi0wMDAwMDAwMDAwMjkiLCJzdGF0ZSI6ImFwcHJvdmFsIn0seyJpZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLTAwMDAwMDAwMDAzMCIsInN0YXRlIjoiYXBwcm92YWwifSx7ImlkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtMDAwMDAwMDAwMDMxIiwic3RhdGUiOiJhcHByb3ZhbCJ9XSwibW9yZUFwcHJvdmFscyI6MTAwMDAwMCwibW9yZU90aGVyIjo5OTk5Njh9fX0",
+        "by": "BKzKtn9kLPn5w1wkF1-3gOdtAPCieCpa8m26esY0ZHt_c9CCDcF-wjeuJwqZOyt0ANZiKE0bkhyDwbg5E2FjE48",
+        "mac": "eAJfIn6LYiGNBfcL3XpblmLe-JQ32xzVPrjWEVt6M9E"
+      }
     }
   ],
   "refused": [
@@ -295,6 +461,28 @@
         "body": "eyJ2IjoxLCJhY3Rpb24iOiJzZXNzaW9uLnRyYW5zZmVyIiwicmVxdWVzdCI6IjdkMGYzYTJlLTFjNGItNGQ1ZS04ZjYwLTExMjIzMzQ0NTU2NiIsInByaW5jaXBhbCI6eyJraW5kIjoidXNlciIsImRldmljZSI6IjhmNjU0OTAzNWMwNWFiYzBkODNkODNiZTBlYjliY2U2In0sInRhcmdldCI6eyJtYWNoaW5lIjoiMzEwMzFlZGYzYjYwODVkMDFkMWM0YmEzYjM0YzEyNzQiLCJzZXNzaW9uIjoiMGYzYzRkNWUtNmE3Yi00YzhkLTllMGYtYTFiMmMzZDRlNWY2In0sInRvIjoiMDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmYiLCJpc3N1ZWRBdCI6MTc5MzMwMDAwMCwiZXhwaXJlc0F0IjoxNzkzMzAwMzAwfQ",
         "by": "BKzKtn9kLPn5w1wkF1-3gOdtAPCieCpa8m26esY0ZHt_c9CCDcF-wjeuJwqZOyt0ANZiKE0bkhyDwbg5E2FjE48",
         "mac": "_PJ9LEydaL4_cLc4dUQ-"
+      },
+      "reason": "the signed command is malformed"
+    },
+    {
+      "name": "an-update-now-at-its-longest-sent-as-another-action",
+      "action": "manage.restart",
+      "now": 1793300060,
+      "command": {
+        "body": "eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUuaW5zdGFsbC5ub3ciLCJyZXF1ZXN0IjoiN2QwZjNhMmUtMWM0Yi00ZDVlLThmNjAtMTEyMjMzNDQ1NTY2IiwicHJpbmNpcGFsIjp7ImtpbmQiOiJ1c2VyIiwiZGV2aWNlIjoiOGY2NTQ5MDM1YzA1YWJjMGQ4M2Q4M2JlMGViOWJjZTYifSwidGFyZ2V0Ijp7Im1hY2hpbmUiOiIzMTAzMWVkZjNiNjA4NWQwMWQxYzRiYTNiMzRjMTI3NCJ9LCJ0byI6IjMxMDMxZWRmM2I2MDg1ZDAxZDFjNGJhM2IzNGMxMjc0IiwiaXNzdWVkQXQiOjE3OTMzMDAwMDAsImV4cGlyZXNBdCI6MTc5MzMwMDMwMCwiYXJncyI6eyJub3ciOnRydWUsInJlbGVhc2UiOiIxLjIuMy05OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5IiwiYWNjZXB0Ijp7IndvcmtpbmciOjEwMDAwMDAsIndhaXRpbmciOjEwMDAwMDAsInVua25vd24iOnRydWUsInNlc3Npb25zIjpbeyJpZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLTAwMDAwMDAwMDAwMCIsInN0YXRlIjoiYXBwcm92YWwifSx7ImlkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtMDAwMDAwMDAwMDAxIiwic3RhdGUiOiJhcHByb3ZhbCJ9LHsiaWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi0wMDAwMDAwMDAwMDIiLCJzdGF0ZSI6ImFwcHJvdmFsIn0seyJpZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLTAwMDAwMDAwMDAwMyIsInN0YXRlIjoiYXBwcm92YWwifSx7ImlkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtMDAwMDAwMDAwMDA0Iiwic3RhdGUiOiJhcHByb3ZhbCJ9LHsiaWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi0wMDAwMDAwMDAwMDUiLCJzdGF0ZSI6ImFwcHJvdmFsIn0seyJpZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLTAwMDAwMDAwMDAwNiIsInN0YXRlIjoiYXBwcm92YWwifSx7ImlkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtMDAwMDAwMDAwMDA3Iiwic3RhdGUiOiJhcHByb3ZhbCJ9LHsiaWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi0wMDAwMDAwMDAwMDgiLCJzdGF0ZSI6ImFwcHJvdmFsIn0seyJpZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLTAwMDAwMDAwMDAwOSIsInN0YXRlIjoiYXBwcm92YWwifSx7ImlkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtMDAwMDAwMDAwMDEwIiwic3RhdGUiOiJhcHByb3ZhbCJ9LHsiaWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi0wMDAwMDAwMDAwMTEiLCJzdGF0ZSI6ImFwcHJvdmFsIn0seyJpZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLTAwMDAwMDAwMDAxMiIsInN0YXRlIjoiYXBwcm92YWwifSx7ImlkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtMDAwMDAwMDAwMDEzIiwic3RhdGUiOiJhcHByb3ZhbCJ9LHsiaWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi0wMDAwMDAwMDAwMTQiLCJzdGF0ZSI6ImFwcHJvdmFsIn0seyJpZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLTAwMDAwMDAwMDAxNSIsInN0YXRlIjoiYXBwcm92YWwifSx7ImlkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtMDAwMDAwMDAwMDE2Iiwic3RhdGUiOiJhcHByb3ZhbCJ9LHsiaWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi0wMDAwMDAwMDAwMTciLCJzdGF0ZSI6ImFwcHJvdmFsIn0seyJpZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLTAwMDAwMDAwMDAxOCIsInN0YXRlIjoiYXBwcm92YWwifSx7ImlkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtMDAwMDAwMDAwMDE5Iiwic3RhdGUiOiJhcHByb3ZhbCJ9LHsiaWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi0wMDAwMDAwMDAwMjAiLCJzdGF0ZSI6ImFwcHJvdmFsIn0seyJpZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLTAwMDAwMDAwMDAyMSIsInN0YXRlIjoiYXBwcm92YWwifSx7ImlkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtMDAwMDAwMDAwMDIyIiwic3RhdGUiOiJhcHByb3ZhbCJ9LHsiaWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi0wMDAwMDAwMDAwMjMiLCJzdGF0ZSI6ImFwcHJvdmFsIn0seyJpZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLTAwMDAwMDAwMDAyNCIsInN0YXRlIjoiYXBwcm92YWwifSx7ImlkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtMDAwMDAwMDAwMDI1Iiwic3RhdGUiOiJhcHByb3ZhbCJ9LHsiaWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi0wMDAwMDAwMDAwMjYiLCJzdGF0ZSI6ImFwcHJvdmFsIn0seyJpZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLTAwMDAwMDAwMDAyNyIsInN0YXRlIjoiYXBwcm92YWwifSx7ImlkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtMDAwMDAwMDAwMDI4Iiwic3RhdGUiOiJhcHByb3ZhbCJ9LHsiaWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi0wMDAwMDAwMDAwMjkiLCJzdGF0ZSI6ImFwcHJvdmFsIn0seyJpZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLTAwMDAwMDAwMDAzMCIsInN0YXRlIjoiYXBwcm92YWwifSx7ImlkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtMDAwMDAwMDAwMDMxIiwic3RhdGUiOiJhcHByb3ZhbCJ9XSwibW9yZUFwcHJvdmFscyI6MTAwMDAwMCwibW9yZU90aGVyIjo5OTk5Njh9fX0",
+        "by": "BKzKtn9kLPn5w1wkF1-3gOdtAPCieCpa8m26esY0ZHt_c9CCDcF-wjeuJwqZOyt0ANZiKE0bkhyDwbg5E2FjE48",
+        "mac": "eAJfIn6LYiGNBfcL3XpblmLe-JQ32xzVPrjWEVt6M9E"
+      },
+      "reason": "the signed command is malformed"
+    },
+    {
+      "name": "a-body-over-4096-characters-for-update-now",
+      "action": "update.install.now",
+      "now": 1793300060,
+      "command": {
+        "body": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "by": "BKzKtn9kLPn5w1wkF1-3gOdtAPCieCpa8m26esY0ZHt_c9CCDcF-wjeuJwqZOyt0ANZiKE0bkhyDwbg5E2FjE48",
+        "mac": "eAJfIn6LYiGNBfcL3XpblmLe-JQ32xzVPrjWEVt6M9E"
       },
       "reason": "the signed command is malformed"
     }

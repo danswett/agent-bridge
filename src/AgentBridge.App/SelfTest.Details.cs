@@ -3,6 +3,8 @@ using AgentBridge.App.Core;
 using AgentBridge.Protocol;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
+using Microsoft.UI.Xaml.Automation.Provider;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 
@@ -153,6 +155,26 @@ static partial class SelfTest
         return string.Join("; ", problems);
     }
 
+    // Only the ID row has a Copy button (#1245): named Copy session ID, 32 high, and pressing it puts the id on the clipboard.
+    static async Task CheckCopySessionId(FrameworkElement pane, SessionCardViewModel card, Action<bool, string> check)
+    {
+        var buttons = Find<Button>(pane).Where(b => AutomationProperties.GetAutomationId(b) == "CopySessionId" && Visible(b)).ToList();
+        check(buttons.Count == 1 && AutomationProperties.GetName(buttons[0]) == DetailCopy.Name && buttons[0].IsTabStop && buttons[0].ActualHeight >= 32,
+            "gives only the ID row a Copy button named Copy session ID, 32 px high, that the keyboard reaches");
+        if (buttons.Count != 1) { return; }
+        var before = await ReadClipboardText();
+        try
+        {
+            ((IInvokeProvider)new ButtonAutomationPeer(buttons[0]).GetPattern(PatternInterface.Invoke)).Invoke();
+            var got = "";
+            for (var i = 0; i < 20 && got != card.Id; i++) { got = await ReadClipboardText() ?? ""; if (got != card.Id) { await Task.Delay(100); } }
+            check(got == card.Id, $"copies exactly the session id with Copy session ID (got \"{got}\")");
+            check(Find<TextBlock>(buttons[0]).Any(t => t.Text == DetailCopy.Done) && AutomationProperties.GetName(buttons[0]) == DetailCopy.Name,
+                "says Copied on the button while its name stays Copy session ID");
+        }
+        finally { if (before is not null) { ClipboardText.Put(before); } }
+    }
+
     static async Task CheckSessionDetails(MainWindow window, MainViewModel main, DemoHost demo, Action<bool, string> check, string outFile)
     {
         var page = window.Sessions;
@@ -178,6 +200,7 @@ static partial class SelfTest
                 var problems = DrawnRows(pane, card, name, out var labels);
                 if (expected is not null && !labels.SequenceEqual(expected[name])) { problems += $"{(problems.Length > 0 ? "; " : "")}drawn [{string.Join(", ", labels)}], not the table's [{string.Join(", ", expected[name])}]"; }
                 check(problems.Length == 0, $"draws the {name} session's Details as {(expected is null ? "the card's" : "the table's")} rows, each once and in its order, one under another, none cut off, then End session{(problems.Length > 0 ? $": {problems}" : "")}");
+                if (name == "full") { await CheckCopySessionId(pane, card, check); }
                 foreach (var theme in new[] { ElementTheme.Light, ElementTheme.Dark })
                 {
                     window.RootElement.RequestedTheme = theme;

@@ -131,6 +131,7 @@ public static class ProtocolVectors
         Usage(catalog.File("usage.json", "v1-usage.md", "How much of each agent's allowance is gone."));
         History(catalog.File("history.json", "v1-history.md", "A session's earlier turns, a page at a time, for the conversation pane."));
         Diagnostics(catalog.File("diagnostics.json", "v1-diagnostics.md", "Diagnosing a machine from a person's device: its health and its content-free journal (#737)."));
+        AgentPrincipals(catalog.File("agent-principals.json", "local-pipe.md#agent-principals-agenthello", "An agent session opening its local pipe connection as itself (Windows, local pipe only)."));
         foreach (var d in KnownDifferences.All) { catalog.Differs(d); }
         return catalog.Build();
     }
@@ -401,6 +402,26 @@ public static class ProtocolVectors
         f.Record<SessionRestored>(Host)
             .Valid("after-a-crash", new SessionRestored { At = T1, Cause = RestoreCause.Crash })
             .Valid("mid-turn-with-a-question-lost", new SessionRestored { At = T1, Cause = RestoreCause.Reboot, MidTurn = true, QuestionLost = true });
+        // restore.run (#948; restore-run.md).
+        var runStarted = new RestoreRunSession { Id = RestoredMidTurn.Id, Outcome = LaunchOutcome.Started };
+        var runRefused = new RestoreRunSession { Id = RestoredAsking.Id, Outcome = LaunchOutcome.Refused, Reason = "no longer offered" };
+        f.Record<RestoreRunRequest>(Client)
+            .Valid("two-sessions-with-progress", new RestoreRunRequest { Request = Request, Offer = T1, Sessions = [RestoredMidTurn.Id, RestoredAsking.Id], Progress = true })
+            .Valid("one-session", new RestoreRunRequest { Request = Request, Offer = T1, Sessions = [RestoredMidTurn.Id] });
+        f.Record<RestoreRunSession>(Host)
+            .Valid("started", runStarted)
+            .Valid("refused-no-longer-offered", runRefused)
+            .Reads("an-unknown-outcome-reads-as-unconfirmed", $$"""{"id":"{{SessionId}}","outcome":"queued"}""");
+        f.Record<RestoreRunResult>(Host)
+            .Valid("restored", new RestoreRunResult { Outcome = RestoreRunOutcome.Restored, Sessions = [runStarted] })
+            .Valid("partial", new RestoreRunResult { Outcome = RestoreRunOutcome.Partial, Sessions = [runStarted, runRefused] })
+            .Valid("busy-nothing-tried", new RestoreRunResult { Outcome = RestoreRunOutcome.Busy, Reason = "another restore is under way" })
+            .Reads("an-unknown-outcome-reads-as-partial", """{"outcome":"later"}""")
+            .Refused("a-session-entry-without-an-id", $$"""{"outcome":"partial","sessions":[{"id":"{{SessionId}}","outcome":"started"},{"outcome":"started"}]}""")
+            .Refused("a-session-entry-that-is-not-an-object", $$"""{"outcome":"partial","sessions":[{"id":"{{SessionId}}","outcome":"started"},7]}""");
+        f.Record<RestoreRunProgress>(Host)
+            .Valid("first-of-two", new RestoreRunProgress { Session = RestoredMidTurn.Id, Outcome = LaunchOutcome.Started, Done = 1, Of = 2 })
+            .Valid("a-session-refused", new RestoreRunProgress { Session = RestoredAsking.Id, Outcome = LaunchOutcome.Refused, Done = 2, Of = 2 });
         f.Record<ListRequest>(Client)
             .Valid("first-page", new ListRequest())
             .Valid("next-page", new ListRequest("c2Vzc2lvbnM6Mg"));
@@ -850,21 +871,50 @@ public static class ProtocolVectors
         f.Record<UpdateResult>(Host)
             .Valid("updated", last)
             .Valid("refused", new UpdateResult { Outcome = UpdateOutcome.Refused, Reason = "a session is busy", At = T0 })
+            // Update now (#1159): how it ended as a code, which a client words itself.
+            .Valid("an-update-now-refused-with-a-code", new UpdateResult { Outcome = UpdateOutcome.Refused, Reason = "Update now has used its restarts", Request = Request, Code = UpdateCode.RestartCap, At = T0 })
             .Reads("an-unknown-outcome-reads-as-failed", """{"outcome":"rolledBack","at":"2026-10-28T04:22:43.182Z"}""");
+        // What Update now would go over (#1159): ids and states only, approvals first; past 32, how
+        // many of each kind were left out.
+        var approval = new UpdateBusySession(SessionId, UpdateBusyState.Approval);
+        f.Record<UpdateBusySession>(Host)
+            .Valid("an-approval", approval)
+            .Valid("a-turn", new UpdateBusySession("s-2", UpdateBusyState.Working));
+        var busy = new UpdateBusy { Working = 1, Waiting = 1, Sessions = [approval, new UpdateBusySession("s-2", UpdateBusyState.Working)] };
+        f.Record<UpdateBusy>(Host)
+            .Valid("quiet", new UpdateBusy())
+            .Valid("an-approval-and-a-turn", busy)
+            .Valid("past-32", new UpdateBusy
+            {
+                Working = 2, Waiting = 32, Sessions = [.. Enumerable.Range(0, UpdateProtocol.BusyListed).Select(i => new UpdateBusySession($"s-{i}", UpdateBusyState.Approval))],
+                MoreApprovals = 0, MoreOther = 2,
+            })
+            .Valid("cant-tell", new UpdateBusy { Unknown = true });
+        f.Record<UpdateNowArgs>(Client)
+            .Valid("one-press", new UpdateNowArgs { Now = true, Release = "0.1.201" })
+            .Valid("confirmed", new UpdateNowArgs { Now = true, Release = "0.1.201", Accept = busy });
         var state = new UpdateState
         {
             Current = "0.1.200", Installer = true, Available = "0.1.201", Notes = "Fixes the flaky reconnect.", CheckedAt = T0, Phase = UpdatePhase.Downloading, Progress = 40,
             Request = Request, Automatic = true, Last = last,
         };
+        var offered = state with { Phase = UpdatePhase.Idle, Progress = null, Request = null, CanUpdateNow = true, Busy = busy };
         f.Record<UpdateState>(Host)
             .Valid("downloading", state)
             .Valid("waiting", state with { Phase = UpdatePhase.Waiting, Progress = null, Waiting = "a session is busy" })
             .Valid("no-app", new UpdateState { Unavailable = "the Windows app is not running" })
+            .Valid("update-now-offered", offered)
+            .Valid("update-now-held-by-the-restart-cap", offered with { CanUpdateNow = false, Busy = null, UpdateNowWhy = UpdateNowWhy.RestartCap, UpdateNowAt = T0.AddHours(6) })
+            .Valid("an-update-now-waiting-for-a-turn", state with { Phase = UpdatePhase.Waiting, Progress = null, RequestNow = true, WaitingCode = UpdateWaitingCode.TurnRunning })
             .Reads("an-unknown-phase-reads-as-idle", """{"current":"0.1.200","installer":true,"phase":"verifying","automatic":false}""");
-        f.Record<UpdateCommand>(Client).Valid("a-press", new UpdateCommand(Request));
+        f.Record<UpdateCommand>(Client)
+            .Valid("a-press", new UpdateCommand(Request))
+            .Valid("an-update-now", new UpdateCommand { Now = Signed });
         f.Record<UpdateCommandResult>(Host)
             .Valid("accepted", new UpdateCommandResult(UpdateAck.Accepted) { State = state with { Phase = UpdatePhase.Checking, Progress = null } })
             .Valid("refused", new UpdateCommandResult(UpdateAck.Refused, "the machine is read-only"))
+            .Valid("an-update-now-refused-with-a-code", new UpdateCommandResult(UpdateAck.Refused, "the release offered here is no longer the one the person was shown") { Code = UpdateCode.ReleaseChanged })
+            .Valid("confirm", new UpdateCommandResult(UpdateAck.Confirm, "more is busy here than the confirmation covered") { State = offered })
             .Reads("an-unknown-outcome-reads-as-refused", """{"outcome":"maybe"}""");
     }
 
@@ -1020,6 +1070,14 @@ public static class ProtocolVectors
         f.Record<UsageReport>(Host)
             .Valid("two-agents", new UsageReport([reading, new AgentUsage { Agent = AgentKind.Codex, Label = "Codex", Source = UsageSource.Transcript, Windows = [new UsageWindow { Key = "weekly", Label = "Weekly", Percent = 90 }], MeasuredAt = T0 }]))
             .Valid("none", UsageReport.Empty);
+    }
+
+    static void AgentPrincipals(VectorFileBuilder f)
+    {
+        f.Record<AgentHelloRequest>(Client)
+            .Valid("a-token", new AgentHelloRequest { Token = AgentProtocol.TokenPrefix + Repeat('A', 43) });
+        f.Record<AgentHelloResult>(Host)
+            .Valid("a-reader", new AgentHelloResult("agent:machine1/session-1", AgentProtocol.ScopeRead));
     }
 
     // ---- diagnostics ----

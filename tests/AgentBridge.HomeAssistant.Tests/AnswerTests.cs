@@ -209,6 +209,40 @@ public sealed class AnswerTests : IDisposable
     }
 
     [Fact]
+    public async Task Words_typed_before_the_question_is_on_screen_are_not_sent_and_later_words_are()
+    {
+        Ask(Form("q1"));
+        await using var c = Connector();
+        ha.Unavailable.Add(SessionEntities.Decision(Node));
+        await Pass(c);
+        ha.Type(SessionEntities.Reply(Node), "typed too early");
+        ha.Unavailable.Remove(SessionEntities.Decision(Node));
+        await Pass(c);
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Empty(answered);
+        Assert.Equal("Not sent - type your answer again", Activity);
+        ha.Type(SessionEntities.Reply(Node), "Call it Aurora");
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Single(answered);
+    }
+
+    [Fact]
+    public async Task The_same_words_are_sent_when_Send_is_pressed_again_after_the_notice()
+    {
+        Ask(Form("q1"));
+        await using var c = Connector();
+        ha.Unavailable.Add(SessionEntities.Decision(Node));
+        await Pass(c);
+        ha.Type(SessionEntities.Reply(Node), "typed too early");
+        ha.Unavailable.Remove(SessionEntities.Decision(Node));
+        await Pass(c);
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Empty(answered);
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.True(answered.Count == 1, Activity);
+    }
+
+    [Fact]
     public async Task Words_typed_for_another_question_are_not_this_ones_answer()
     {
         Ask(Form("q1"));
@@ -425,6 +459,25 @@ public sealed class AnswerTests : IDisposable
         Assert.Empty(attributes.GetProperty("choices").EnumerateArray());
         Assert.StartsWith("Delegate etius tset asks:", attributes.GetProperty("question").GetString());
         Assert.Contains("answered in the terminal", attributes.GetProperty("question").GetString());
+    }
+
+    // #1572: a card that flashes "answered at the machine" is told from the log, which says what the
+    // host listed at the moment the connector re-armed it.
+    [Fact]
+    public async Task A_question_armed_again_logs_what_the_host_listed_at_that_moment()
+    {
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { WaitingOn = "agent-3a91", Question = DelegatesApproval });
+        await using var c = Connector();
+        await Pass(c);
+        sessions.Set(sessions.Get(A)! with
+        {
+            Subagents = [new Subagent { Id = "agent-3a91", Kind = SubagentKind.Background, Name = "\u202Eetius tset", Status = SubagentStatus.Waiting }],
+        });
+        await Pass(c);
+
+        var line = Assert.Single(log, m => m.Contains("re-arming"));
+        Assert.Contains("was answerable, answers sent 0, settled False", line);
+        Assert.Contains("waiting on agent-3a91, waiting sub-agents [agent-3a91]", line);
     }
 
     static Question DelegatesApproval => new()

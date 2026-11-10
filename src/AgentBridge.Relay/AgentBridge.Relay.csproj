@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\AgentBridge.Transport\AgentBridge.Transport.csproj" />
+    <ProjectReference Include="..\AgentBridge.Roster\AgentBridge.Roster.csproj" />
     <Using Include="AgentBridge.Transport" />
   </ItemGroup>
 

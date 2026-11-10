@@ -833,15 +833,15 @@ may send per-event, pseudonymous diagnostics about failed or slow attempts (setu
 update, answer delivery, connection), so beta reports can be triaged. It is *not*
 anonymous, it carries identifiers, and it is held to its own rules:
 
-* **Opt-in worldwide, off by default.** One genuine choice, no region shortcut. The first
+* **Opt-in worldwide, off by default, permanently.** Owner decision ([#689](https://github.com/danswett/agent-bridge/issues/689#issuecomment-6711136992)): no default-on revisit and no regional exemption work is planned. One genuine choice, no region shortcut. The first
   run offers "Not now" and "Allow diagnostics", neither preselected. Settings has "Send
-  optional diagnostics" (off).   While it is off nothing is collected, queued or uploaded
-    as a diagnostic event, and refusing costs no functionality. A purely local per-attempt
-    record (#1135) is separate: it holds no install id and no diagnostic id (a diagnostic
-    id exists only once an event is sent), and it never uploads. Withdrawing stops
-    collection and upload and deletes unsent events; re-enabling uploads nothing from the
-    off period. Withdrawal does not erase events already received: they are kept until they
-    expire at 30 days, and the notice says so. Notice text follows Compliance's wording (#741).
+  optional diagnostics" (off). While it is off nothing is collected, queued or uploaded
+  as a diagnostic event, and refusing costs no functionality. A purely local per-attempt
+  record (#1135) is separate: it holds no install id and no diagnostic id (a diagnostic
+  id exists only once an event is sent), and it never uploads. Withdrawing stops
+  collection and upload and deletes unsent events; re-enabling uploads nothing from the
+  off period. Withdrawal does not erase events already received: they are kept until they
+  expire at 30 days, and the notice says so. Notice text follows Compliance's wording (#741).
 * **Strict versioned allowlist, enforced in CI.** Event type, a finite approved outcome and
   reason vocabulary (no exception text or stack frames), app and host version, channel,
   bounded timing and count buckets, and an optional screen outline of locally generated
@@ -863,8 +863,9 @@ anonymous, it carries identifiers, and it is held to its own rules:
   queue. Upload stays disabled until SRE proves per-table and total retention (including
   the 31-day Log Analytics behaviour), exports and deletion on the real pipeline.
 * **Gates before upload is enabled:** this amendment, the published notice, the two-family
-  #732 technical review, SRE's retention proof, and legal review of the regional rules,
-  which engineering cannot certify. Local allowlisted per-attempt records may ship
+  #732 technical review, SRE's retention proof, and the lawful-basis and notice review
+  (#744), which engineering cannot certify. This is not a regional exemption: the tier
+  stays opt-in everywhere. Local allowlisted per-attempt records may ship
   before then; the beta does not wait on diagnostics.
 
 **What is measured:**

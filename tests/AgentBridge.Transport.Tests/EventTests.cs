@@ -10,9 +10,9 @@ namespace AgentBridge.Transport.Tests;
 public class EventTests
 {
     // A host and a client with one open channel, and the host's end of it.
-    static async Task<(TestRelay Relay, Device Host, SecureChannel AtHost, SecureChannel AtClient)> ChannelAsync(Action<ChannelHub>? configureClient = null)
+    static async Task<(TestRelay Relay, Device Host, SecureChannel AtHost, SecureChannel AtClient)>     ChannelAsync(Action<ChannelHub>? configureClient = null, Action<AgentBridge.Relay.RelayOptions>? configureRelay = null)
     {
-        var relay = await TestRelay.StartAsync();
+            var relay = await TestRelay.StartAsync(configureRelay);
         var token = relay.TokenFor(1, "octo");
         var host = await relay.ConnectAsync(token, "host", "host");
         var client = await relay.ConnectAsync(token, "client", "pwa");
@@ -25,11 +25,13 @@ public class EventTests
         return (relay, host, atHost, atClient);
     }
 
-    static async Task<List<ChannelEvent>> ReadAsync(SecureChannel ch, int count)
+    // Within 20 s, or by deadline when one is given.
+    static async Task<List<ChannelEvent>> ReadAsync(SecureChannel ch, int count, CancellationToken deadline = default)
     {
         var got = new List<ChannelEvent>();
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-        while (got.Count < count) { got.Add(await ch.Events.ReadAsync(cts.Token)); }
+        using var cts = deadline.CanBeCanceled ? null : new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var token = cts?.Token ?? deadline;
+        while (got.Count < count) { got.Add(await ch.Events.ReadAsync(token)); }
         return got;
     }
 
@@ -58,10 +60,15 @@ public class EventTests
         Assert.Equal(("session.remove", 1L), (other[0].Name, other[0].Seq));
     }
 
+    const int RelayLimit = 100_000;
+
     [Fact]
     public async Task Events_sent_from_many_threads_interleave_with_concurrent_requests_and_every_response_finds_its_request()
     {
-        var (relay, _, atHost, atClient) = await ChannelAsync();
+        // The relay's frame limit is covered by the pacing tests below. At its default 200 a
+        // runner that starves the relay's read loop for a second reads the host's paced frames
+        // in one fixed window, goes over, and closes the host mid-send (#1157).
+        var (relay, _, atHost, atClient) = await ChannelAsync(configureRelay: o => o.MaxFramesPerSecond = RelayLimit);
         await using var __ = relay;
         const int Events = 400, Requests = 100;
 
@@ -74,9 +81,14 @@ public class EventTests
             var r = await atClient.RequestAsync("echo", new { n }, TimeSpan.FromSeconds(30));
             return (n, echoed: r.GetProperty("result").GetProperty("n").GetInt32());
         })).ToArray();
-        var reading = ReadAsync(atClient, Events);
+        // The deadline starts once everything is sent. The relay paces the host's 500 frames to
+        // about 100 a second, so sending alone takes seconds; on a loaded runner it took the
+        // whole 20 s a deadline counted from here would allow, and every event had been sent.
+        using var delivered = new CancellationTokenSource();
+        var reading = ReadAsync(atClient, Events, delivered.Token);
         await Task.WhenAll(senders);
         var answers = await Task.WhenAll(requests);
+        delivered.CancelAfter(TimeSpan.FromSeconds(20));
         var events = await reading;
 
         Assert.All(answers, a => Assert.Equal(a.n, a.echoed));
@@ -249,9 +261,16 @@ public class EventTests
         await atHost.SendEventAsync("a");
         await atHost.SendEventAsync("b");
 
-        // The pacing window is full, so this one waits for about a second; cancel it first.
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => atHost.SendEventAsync("cancelled", null, cts.Token));
+        // The pacing window is held full, so this one waits and cannot go however slow the machine
+        // is; cancel it while it waits.
+        host.Relay.PaceWindowOverride = TimeSpan.FromHours(1);
+        using var cts = new CancellationTokenSource();
+        var cancelled = atHost.SendEventAsync("cancelled", null, cts.Token);
+        await Task.Delay(100);
+        Assert.False(cancelled.IsCompleted);
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
+        host.Relay.MaxFramesPerSecond = 0;
         var after = await atHost.SendEventAsync("after");
         var got = await ReadAsync(atClient, 3);
 

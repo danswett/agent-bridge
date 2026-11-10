@@ -132,6 +132,7 @@
                 </StackPanel>
 
                 <TextBlock Style="{StaticResource AbSectionTitle}" Text="Agents on this machine" AutomationProperties.HeadingLevel="Level2" />
+                <TextBlock Text="{x:Bind ViewModel.AgentSignInStatus, Mode=OneWay}" TextWrapping="Wrap" IsTextSelectionEnabled="True" AutomationProperties.AutomationId="AgentSignInStatus" />
                 <TextBlock Style="{StaticResource AbSecondaryText}" AutomationProperties.AutomationId="AgentsState" Text="{x:Bind ViewModel.AgentsState, Mode=OneWay}" />
                 <Button x:Name="CheckAgentsButton" Content="Check agents again" AutomationProperties.AutomationId="CheckAgents" Click="OnCheckAgents" IsEnabled="{x:Bind ViewModel.CanCheckAgents, Mode=OneWay}" />
                 <ItemsControl x:Name="AgentList" ItemsSource="{x:Bind ViewModel.Agents, Mode=OneWay}" AutomationProperties.AutomationId="AgentReadiness">
@@ -172,6 +173,14 @@
                                             Click="OnCancelAgentInstall"
                                             AutomationProperties.Name="{x:Bind CancelInstallName}"
                                             AutomationProperties.AutomationId="{x:Bind CancelInstallId}" />
+                                        <Button
+                                            Content="Sign in / Switch account"
+                                            Tag="{x:Bind Id}"
+                                            Visibility="{x:Bind local:Ui.Show(ShowSignIn)}"
+                                            IsEnabled="{x:Bind CanSignIn}"
+                                            Click="OnSignInAgent"
+                                            AutomationProperties.Name="{x:Bind SignInName}"
+                                            AutomationProperties.AutomationId="{x:Bind SignInId}" />
                                         <Button
                                             Style="{StaticResource AccentButtonStyle}"
                                             Content="{x:Bind SetUpVerb}"
@@ -239,10 +248,12 @@
                 <TextBlock Style="{StaticResource AbSectionTitle}" Text="Your devices" />
                 <TextBlock TextWrapping="Wrap" AutomationProperties.AutomationId="Account" Text="{x:Bind ViewModel.AccountText, Mode=OneWay}" />
                 <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind ViewModel.RelayText, Mode=OneWay}" />
-                <TextBox Header="Relay" AutomationProperties.AutomationId="RelayUrl" Text="{x:Bind ViewModel.RelayUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                <TextBox Header="Relay" AutomationProperties.AutomationId="RelayUrl" Text="{x:Bind ViewModel.RelayUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Visibility="{x:Bind local:Ui.Show(ViewModel.RelayEditable)}" />
+                <TextBlock AutomationProperties.AutomationId="RelayFixed" AutomationProperties.Name="Relay" TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind ViewModel.RelayUrl, Mode=OneWay}" Visibility="{x:Bind local:Ui.Show(ViewModel.RelayFixed)}" />
+                <TextBlock Style="{StaticResource AbSecondaryText}" TextWrapping="Wrap" Text="{x:Bind ViewModel.RelayNote}" Visibility="{x:Bind local:Ui.Some(ViewModel.RelayNote)}" />
                 <local:WrapRow Spacing="8">
                     <Button
-                        Content="Sign in with GitHub"
+                        Content="{x:Bind ViewModel.SignInLabel, Mode=OneWay}"
                         Style="{StaticResource AccentButtonStyle}"
                         AutomationProperties.AutomationId="SignIn"
                         IsEnabled="{x:Bind ViewModel.CanSignIn, Mode=OneWay}"

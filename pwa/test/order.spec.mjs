@@ -94,7 +94,8 @@ test('right-click, or Shift+F10, opens the row menu: pin and unpin, with pinned 
   await expect(menu.getByRole('menuitem', { name: 'Move up' })).toBeFocused();
   // With a pointer its rows are a desktop menu's 32px, not a finger's 44 (A11), and a click
   // draws no focus ring (A12).
-  expect((await menu.getByRole('menuitem').first().boundingBox()).height).toBe(32);
+  // boundingBox is fractional: a menu laid out at a subpixel offset reads 31.99994 (#1452).
+  expect((await menu.getByRole('menuitem').first().boundingBox()).height).toBeCloseTo(32, 0);
   await expect(menu.getByRole('menuitem', { name: 'Move up' })).toHaveAttribute('data-focus-quiet', '');
   await menu.getByRole('menuitem', { name: 'Pin' }).click();
   await expect(menu).toHaveCount(0);
@@ -213,7 +214,7 @@ test('blocked storage lists sessions most recent first, and Your order cannot be
   const sort = page.locator('#session-sort');
   await expect(sort).toHaveValue('recent');
   await expect(sort.locator('option[value="yours"]')).toBeDisabled();
-  await upsert(page, CODEX, { updatedAt: later() });
+  await upsert(page, CODEX, { updatedAt: later(), activity: { userMessage: 'A new prompt' } });
   await expect.poll(() => order(page)).toEqual([CODEX, COPILOT, CLAUDE, DELEGATING]);
 });
 
@@ -230,7 +231,7 @@ test('storage that fills up while a row is drawn turns the list to Most recent a
   await open(page, CODEX);
   await page.evaluate(() => { window.__full = true; });
   // An open session's update marks it seen, and that write is the one that fails.
-  await upsert(page, CODEX, { updatedAt: later() });
+  await upsert(page, CODEX, { updatedAt: later(), activity: { userMessage: 'A new prompt' } });
   await expect(page.locator('#session-sort')).toHaveValue('recent');
   await expect.poll(() => order(page)).toEqual([CODEX, COPILOT, CLAUDE, DELEGATING]);
 });

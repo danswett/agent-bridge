@@ -16,8 +16,9 @@ import {
 } from '../../js/protocol.js';
 import { checkAnswer } from '../../js/answers.js';
 import { checkReply } from '../../js/replies.js';
+import { checkHistoryRequest, readDelegateEvent, readHistoryResult, readPart, readPrompt, readStart, readTurn } from '../../js/history.js';
 import { checkLaunch, readLaunchOptions, readLaunchResult, readTrustQuestion, readTrustResult } from '../../js/launch.js';
-import { readUpdateCommandResult, readUpdateState } from '../../js/update.js';
+import { acceptOf, nowArgs, readBusy, readUpdateCommandResult, readUpdateState } from '../../js/update.js';
 import { readSignInDevices } from '../../js/signin-devices.js';
 import { readUsage } from '../../js/usage.js';
 import { readDiagnostics } from '../../js/diagnostics.js';
@@ -45,7 +46,13 @@ const PATCHES = 'session-patches.json';
 const NOISE = 'noise-ik-p256.json';
 // The signed agent-command envelope's vectors (#722) are not records either; C# replays them.
 const ENVELOPE = 'agent-envelope.json';
-const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED && f !== PATCHES && f !== NOISE && f !== ENVELOPE).sort().map((f) => [f, load(f)]);
+// The device roster's encoding, not records: test/unit/roster-vectors.test.mjs replays it.
+const ROSTER = 'roster.json';
+// The roster's acceptance-rule scenarios, not records: test/unit/roster-state.test.mjs replays them.
+const ROSTER_STATE = 'roster-state.json';
+// The roster's vetoes, person commands and attestations: test/unit/roster-commands.test.mjs replays them.
+const ROSTER_COMMANDS = 'roster-commands.json';
+const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED && f !== PATCHES && f !== NOISE && f !== ENVELOPE && f !== ROSTER && f !== ROSTER_STATE && f !== ROSTER_COMMANDS).sort().map((f) => [f, load(f)]);
 const records = new Map(files.flatMap(([file, json]) => Object.entries(json.records).map(([name, r]) => [name, { ...r, file, contexts: json.contexts }])));
 const known = new Map(files.flatMap(([, json]) => json.knownDifferences).filter((d) => d.differs === 'pwa').map((d) => [`${d.vector}:${d.step}`, d]));
 
@@ -223,6 +230,13 @@ const READS = {
   DeliveryTimings: { read: (j) => readAnswerResult({ outcome: 'delivered', timings: j }).timings ?? {} },
   ReplyResult: { read: readAnswerResult },
   StopResult: { read: readStopResult },
+  // session.history's page and the records in it, as the history store gets them (#292).
+  HistoryResult: { read: readHistoryResult },
+  HistoryStart: { read: readStart },
+  HistoryTurn: { read: readTurn },
+  HistoryPrompt: { read: readPrompt },
+  HistoryPart: { read: readPart },
+  DelegateEvent: { read: readDelegateEvent },
   AttachmentState: { read: readAttachmentState },
   AttachmentDiscarded: {
     read: async (j) => {
@@ -243,9 +257,13 @@ const READS = {
   LaunchedTransfer: { read: (j) => readLaunchResult({ launched: { agent: 'claude', transfer: j } }).launched.transfer },
   TrustQuestion: { read: readTrustQuestion },
   TrustAnswerResult: { read: readTrustResult },
+  // Update now's fields (#1159) are read from its client slice (3) on.
   UpdateState: { read: readUpdateState },
   UpdateResult: { read: (j) => readUpdateState({ last: j }).last },
   UpdateCommandResult: { read: readUpdateCommandResult },
+  // What Update now would go over, and one session of it (#1159), as a confirmation shows them.
+  UpdateBusy: { read: readBusy },
+  UpdateBusySession: { read: (j) => readBusy({ working: 1, waiting: 0, sessions: [j] }).sessions[0] ?? null },
   SignInDevices: { read: readSignInDevices },
   SignInDevice: { read: (j) => readSignInDevices({ state: 'ready', devices: [j] })?.devices[0] ?? null },
   UsageReport: { read: readUsage },
@@ -278,6 +296,7 @@ const CHECKS = {
     return checkAnswer(readQuestion(context.question), j);
   },
   ReplyRequest: (j) => checkReply(j),
+  HistoryRequest: checkHistoryRequest,
   LaunchRequest: (j) => checkLaunch(j),
   // A patch the host sends, applied as host-client.js applies it to the session its context holds
   // (from the event at seq), which must then be its context's result exactly.
@@ -338,6 +357,17 @@ const BUILDS = {
       return sentBy(LaunchService, 'launch', j.request, (s) => s.submit({ hostId: 'h', launch }));
     },
   },
+  FocusRequest: {
+    build: async (j) => {
+      const t = fakeTransport();
+      const client = new HostClient(t, { timeoutMs: 1000, focusGapMs: 0 });
+      client.capabilities = ['sessions.focus'];
+      client.setFocus({ visible: j.visible, open: j.open ?? null });
+      await flush();
+      client.close();
+      return t.lastRequest('sessions.focus').data;
+    },
+  },
   ListRequest: {
     build: async (j) => {
       const t = fakeTransport();
@@ -348,6 +378,17 @@ const BUILDS = {
       t.host({ re: t.sent.at(-1).id, ok: true, result: { sessions: [], revision: 1 } });
       await p;
       return sent;
+    },
+  },
+  // As the history store asks: the newest page with no cursor and no limit, an earlier one by the
+  // cursor it was given, each field only when it was named.
+  HistoryRequest: {
+    build: async (j) => {
+      const t = fakeTransport();
+      const p = new HostClient(t, { timeoutMs: 1000 }).history(j.id, { before: j.before, limit: j.limit });
+      await respond(t, 'session.history', { missing: true });
+      await p;
+      return t.lastRequest('session.history').data;
     },
   },
   AttachmentStart: {
@@ -392,13 +433,15 @@ const BUILDS = {
       return t.lastRequest('usage.get').data;
     },
   },
+  // An Update now press's args (#1159): the release shown, and accept exactly as the confirmation
+  // read what the machine said was busy.
+  UpdateNowArgs: { build: (j) => nowArgs({ release: j.release, accept: j.accept ? acceptOf(readBusy(j.accept)) : null }) },
 };
 
 // Records the PWA neither reads nor builds through a function these tests can call, and why.
 const NOT_REPLAYED = {
   SubscribeResult: 'the PWA waits for sessions.synced and uses nothing of this result',
   SubscribeSince: 'built only within SubscribeRequest, from what the store holds',
-  FocusRequest: 'the PWA does not send sessions.focus yet (#610)',
   PushSubscribeRequest: 'PushRegistrar sends the browser\'s own subscription, from a private method',
   PushKeys: 'part of PushSubscribeRequest',
   PushUnsubscribeRequest: 'PushRegistrar sends the browser\'s own endpoint, from a private method',
@@ -417,7 +460,7 @@ const NOT_REPLAYED = {
   CommandTarget: 'replayed by signing signed-command.json\'s commands again',
   TransferRequest: 'host to host: no client sends it',
   TransferResult: 'host to host: no client reads it',
-  UpdateCommand: 'built inside UpdateControl from a fresh request, with nothing else in it',
+  UpdateCommand: 'built inside UpdateControl from a fresh request, or an Update now\'s signed press (its args replayed as UpdateNowArgs, its signing in update.test.mjs)',
   // #801 slice A is the host's half; the PWA's controls wait for ui.md's spec.
   ManageCommand: 'the PWA does not manage machines yet (#801)',
   ManageRepairArgs: 'the PWA does not manage machines yet (#801)',
@@ -435,19 +478,18 @@ const NOT_REPLAYED = {
   RestoreSession: 'the PWA does not read machine.restore yet (#780)',
   SessionRestored: 'no host sends a session\'s restored yet, and the PWA does not read it (#780)',
 
-  // Its client slice is #292's next step; the protocol and host land first (v1-history.md).
-  HistoryRequest: 'the PWA does not page a session\'s history yet (#292)',
-  HistoryResult: 'the PWA does not page a session\'s history yet (#292)',
-  HistoryStart: 'the PWA does not page a session\'s history yet (#292)',
-  HistoryTurn: 'the PWA does not page a session\'s history yet (#292)',
-  HistoryPrompt: 'the PWA does not page a session\'s history yet (#292)',
-  HistoryPart: 'the PWA does not page a session\'s history yet (#292)',
-  DelegateEvent: 'the PWA does not page a session\'s history yet (#292)',
+  AgentHelloRequest: 'agent.hello is local pipe only; no PWA or relay channel serves it (#720)',
+  AgentHelloResult: 'agent.hello is local pipe only; no PWA or relay channel serves it (#720)',
 
   JournalEntry: 'read by readEntry into what Review shows, not as sent; test/unit/diagnostics.test.mjs replays it',
   JournalStage: 'part of JournalEntry, read by readEntry',
   JournalException: 'part of JournalEntry: readEntry keeps a recognized type and a count of frames',
   JournalFrame: 'part of JournalEntry: readEntry keeps only how many frames there were',
+  // restore.run's PWA half is slice 2 of #948.
+  RestoreRunRequest: 'the PWA does not send restore.run yet (#948 slice 2)',
+  RestoreRunSession: 'the PWA does not read restore.run yet (#948 slice 2)',
+  RestoreRunResult: 'the PWA does not read restore.run yet (#948 slice 2)',
+  RestoreRunProgress: 'the PWA does not read restore.run yet (#948 slice 2)',
 };
 
 // ---- the replay ----
@@ -534,6 +576,20 @@ for (const [record, r] of records) {
 }
 
 // ---- recorded sessions, patched ----
+
+// openQuestion and idleMs are the PWA's own additions to sessions.focus (#1190); the vectors do not
+// carry them yet, and a host that does not read them ignores them. Each goes in the request only
+// beside what it belongs to, and the vectors' own two requests are unchanged by them (above).
+test('a FocusRequest with the question on screen and the age of the last input is the vector\'s with those two fields added', async () => {
+  const t = fakeTransport();
+  const client = new HostClient(t, { timeoutMs: 1000, focusGapMs: 0 });
+  client.capabilities = ['sessions.focus'];
+  const open = records.get('FocusRequest').valid.find((v) => v.name === 'a-session-open').json;
+  client.setFocus({ visible: open.visible, open: open.open, openQuestion: 'q1', idle: () => 1500 });
+  await flush();
+  client.close();
+  assert.deepEqual(t.lastRequest('sessions.focus').data, { ...open, openQuestion: 'q1', idleMs: 1500 });
+});
 
 // session-patches.json: each recorded session as a host sends it to a client that asked for
 // patches. Every patch, applied as the PWA applies it, must give exactly the session an upsert of

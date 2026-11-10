@@ -27,11 +27,11 @@
 import { h } from './dom.js';
 import { designIcon, drivenBadge, glyph, setGlyph } from './glyph.js';
 import { ago, localTime } from './time.js';
-import { renderMarkdown } from '../markdown.js';
+import { copyText, renderMarkdown } from '../markdown.js';
 import { ATTENTION_RULES, rowAt, sessionStatus, statusLabel } from '../status.js';
 import { awayWords, detailRows } from '../details-rows.js';
-import { QuestionPanel, describeAnswer, renderQuestion } from './question-view.js';
-import { ReceiptClock, ReceiptTiming, drawReceipt, drawn, receiptLive } from './receipt.js';
+import { QuestionPanel, describeAnswer, describeClosed, renderQuestion, renderResolved } from './question-view.js';
+import { ReceiptClock, ReceiptTiming, LINGER_READ_MS, drawReceipt, drawn, receiptLive } from './receipt.js';
 import { answerability } from '../answers.js';
 import { escapedApprove } from '../escaped.js';
 import { ReplyBox } from './reply-view.js';
@@ -47,6 +47,8 @@ import { CollapsingFoot } from './collapse-foot.js';
 import { UNSUPPORTED_SESSIONS } from '../brand.js';
 import { PromptMemory, disclosureName, promptOrigin } from '../prompt-origin.js';
 import { holdKey } from './hold.js';
+import { CONNECTION_CHANGED } from '../channels.js';
+import { HistoryView } from './history-view.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 // The Details rows whose values move with the clock: drawn again where they are, not as new nodes.
@@ -389,10 +391,14 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
 }
 
 // An answer whose panel stays once its question has gone (SessionCard #leave): one on its way, and
-// any outcome §6.5 draws on the panel. Busy and refused, which would offer its options again for a
-// question that has gone, resolve to the card's receipt at once.
+// any outcome §6.5 draws on the panel. Once it has an outcome other than delivered the card resolves
+// at once to a closed item (SessionCard #leave): "No longer waiting", neutral (ui.md §7).
 const leaves = (entry) => entry.state === 'sending' || entry.state === 'waiting' || entry.state === 'failed'
   || (entry.state === 'done' && entry.outcome !== 'busy' && entry.outcome !== 'refused');
+
+// How many closed items (questions the session stopped asking whose answer did not go through)
+// a card keeps in its conversation, as the history keeps its latest (ui.md §6.4).
+const CLOSED_KEPT = 20;
 
 // Why nothing can be given for a session now, for under its controls, or null (#269): its
 // machine is offline, reconnecting, back and its whole list not yet in, or no longer offering
@@ -421,6 +427,9 @@ export class SessionCard {
   #history = { loaded: false, loading: false };
   #panel = null;
   #receipt = null;
+  // Receipts that closed: the question went and the answer did not go through. They stay, in order,
+  // above the receipt and the question, and are not dropped by the next question (#retireReceipt).
+  #closed = [];
   // The panel of a question its host took away while its answer was still on its way (#leave).
   #leaving = null;
   #orphan = null;
@@ -500,8 +509,8 @@ export class SessionCard {
   // (on a phone) Back. layout() -> { inspector, wide }: whether the inspector is a pane of its own
   // now, and whether the window is wide enough for one (the strip's width).
   // stale: why its machine's sessions can't be acted on now ({ reason, since }), or null.
-  constructor(session, { hostId = null, fetchDetail, fetchDelegate = null, machineName, labelled = false, answering = () => null, onSelect = () => {}, onPin = () => {}, onBack = () => {}, layout = () => ({ inspector: false, wide: false }), viewing = () => true, stale = null }) {
-    Object.assign(this, { hostId, fetchDetail, fetchDelegate, machineName, labelled, answering, onSelect, onPin, onBack, layout, viewing });
+  constructor(session, { hostId = null, history = null, fetchDetail, fetchDelegate = null, machineName, labelled = false, answering = () => null, onSelect = () => {}, onPin = () => {}, onBack = () => {}, layout = () => ({ inspector: false, wide: false }), viewing = () => true, stale = null }) {
+    Object.assign(this, { hostId, historyStore: history, fetchDetail, fetchDelegate, machineName, labelled, answering, onSelect, onPin, onBack, layout, viewing });
     this.#stale = stale;
     const n = ++seq;
     this.ids = { row: `s${n}-row`, glyph: `s${n}-glyph`, unread: `s${n}-unread`, title: `s${n}-title`, conversation: `s${n}-conversation`, tools: `s${n}-tools`, details: `s${n}-details`, tabC: `s${n}-tab-c`, tabD: `s${n}-tab-d`, tabT: `s${n}-tab-t`, delegates: `s${n}-delegates`, delegate: `s${n}-delegate`, prompt: `s${n}-prompt`, events: `s${n}-events` };
@@ -648,7 +657,8 @@ export class SessionCard {
     // box, drawn, not read, and no tab stop; a tap on it brings the box back, focused.
     e.replyCopy = h('div', { class: 'reply-copy', 'aria-hidden': 'true' }, h('span'));
     e.replyBar = h('div', { class: 'reply-bar' }, e.replyCopy);
-    e.scroll = h('div', { class: 'stream-scroll' }, e.stream);
+    this.turns = new HistoryView();
+    e.scroll = h('div', { class: 'stream-scroll' }, this.turns.element, e.stream);
     this.#watchHold(e.scroll);
     e.conversation = h('div', { class: 'conversation', id: this.ids.conversation, role: 'tabpanel', 'aria-labelledby': this.ids.tabC },
       e.scroll, e.reply, e.replyBar);
@@ -723,6 +733,8 @@ export class SessionCard {
     // Whether the conversation is read to its end, before this update draws anything into it.
     const atEnd = this.#reading();
     this.#s = s;
+    this.historyStore?.live(this.hostId, s);
+    if (this.#unwatch) { this.#drawTurns(); }
     const e = this.els;
     const state = sessionStatus(s);
     for (const el of [this.element, this.view]) {
@@ -1212,6 +1224,7 @@ export class SessionCard {
     this.element.classList.toggle('selected', selected);
     if (selected) { this.els.open.setAttribute('aria-current', 'true'); } else { this.els.open.removeAttribute('aria-current'); }
     this.view.hidden = !selected;
+    if (selected) { this.#openTurns(); }
     // Shown again (a row chosen, the browser's Back or Forward): its header whole, the scroll kept.
     if (selected) { this.collapse?.shown(); }
     // Shown now, in the page it was put into: what holds it there can move its question too.
@@ -1347,12 +1360,45 @@ export class SessionCard {
     this.#menu.close(false);
     this.#dropLeaving();
     this.#dropReceipt();
+    for (const r of this.#closed.splice(0)) { this.#destroyReceipt(r); }
     this.delegates.dispose();
     this.detail.dispose();
     this.#moves?.stop();
     this.collapse?.destroy();
     this.#phone?.removeEventListener('change', this.#onPhone);
     clearTimeout(this.#history.timer);
+    this.#unwatch?.();
+    this.#unwatch = null;
+  }
+
+  // The conversation before the latest exchange, from the history store, opened the first time the
+  // session is shown. It opens at the latest message: one scroll to the end, once, when the turns
+  // first draw, and none after it.
+  #unwatch = null;
+  #atLatest = false;
+  #openTop = 0;
+
+  #openTurns() {
+    if (!this.historyStore) { return; }
+    if (this.#unwatch) { this.#drawTurns(); return; }
+    this.#openTop = this.els.scroll.scrollTop;
+    this.#unwatch = this.historyStore.watch(this.hostId, this.#s.id, () => this.#drawTurns());
+    this.historyStore.open(this.hostId, this.#s.id, { session: this.#s }).catch(() => {});
+    this.#drawTurns();
+  }
+
+  #drawTurns() {
+    const snapshot = this.historyStore.get(this.hostId, this.#s.id);
+    const drawn = this.turns.render(snapshot, this.#s.activity?.turn ?? null);
+    const sc = this.els.scroll;
+    if (!this.#atLatest && snapshot.phase !== 'idle' && snapshot.phase !== 'loading' && sc.getClientRects().length) {
+      this.#atLatest = true;
+      // Not if the person has already scrolled: the jump would take them from where they are.
+      if (drawn && sc.scrollTop === this.#openTop) {
+        const toEnd = () => { sc.scrollTop = sc.scrollHeight; };
+        if (this.collapse) { this.collapse.appScroll(toEnd); } else { toEnd(); }
+      }
+    }
   }
 
   // The machine's capabilities changed (a reconnect to another version of its host).
@@ -1424,9 +1470,11 @@ export class SessionCard {
     if (q && this.#leaving) {
       const { panel } = this.#leaving;
       this.#dropLeaving();
-      this.#watchReceipt(panel.answering, panel.q);
+      this.#watchReceipt(panel.answering, panel.q, panel.asker);
     }
     const old = this.#panel;
+    // Focus in the form that is about to collapse into its line moves to the line (#focusLine).
+    const hadFocus = !!old?.element.contains(document.activeElement);
     const sameQuestion = !!(old && q && old.questionId === q.id && answerable && old.answering.hostId === ctx.hostId);
     let leaving = false;
     if (old && !sameQuestion) {
@@ -1444,7 +1492,7 @@ export class SessionCard {
         this.#leave(old);
         leaving = true;
       } else if (entry) {
-        this.#watchReceipt(old.answering, old.q);
+        this.#watchReceipt(old.answering, old.q, old.asker);
       }
     }
     if (!leaving) { old?.destroy(); }
@@ -1455,7 +1503,10 @@ export class SessionCard {
         machineName: this.machineName,
         answering: { service: ctx.service, hostId: ctx.hostId, sessionId: s.id },
         state: sameQuestion ? old.state : null,
+        sentDraft: sameQuestion ? old.sentDraft : null,
         asker,
+        onSend: (typed) => this.#sent(typed),
+        listed: () => this.#s?.question?.id === q.id,
         escaped: escapedMode ? { mode: escapedMode === 'confirm' && !ctx.confirm ? 'device' : escapedMode, sign: ctx.confirm ?? null, title: s.title ?? null } : null,
       });
       this.#panel.setHeld(held);
@@ -1463,18 +1514,18 @@ export class SessionCard {
     } else if (q) {
       view = renderQuestion(q, { machineName: this.machineName, why: able.why, readOnly: ctx?.readOnly ?? null, asker });
     }
-    // A new question replaces a receipt that has said its last word. A question that stays moves
-    // up into its place.
+    // A new question replaces a receipt that has said its last word, unless that word was that the
+    // question it was about is no longer waiting: that stays in the conversation (#retireReceipt). A
+    // question that stays moves up into its place.
     let dropped = false;
-    if (q && this.#receipt?.final) {
-      this.#dropReceipt();
-      dropped = true;
-    }
+    if (q && this.#receipt?.final) { dropped = this.#retireReceipt(); }
     // Scroll to a question (ui.md §5.3): one that arrives is brought into sight once the whole
     // update is drawn (#bringQuestion), as long as the conversation was read to its end.
     const arrived = this.#asked !== undefined && !!q && q.id !== this.#asked;
     this.#asked = q?.id ?? null;
-    this.els.question.replaceChildren(...[this.#orphanView(), this.#receipt?.element, this.#leaving?.panel.element, view].filter(Boolean));
+    this.#receipt?.redraw();
+    this.els.question.replaceChildren(...[this.#orphanView(), ...this.#closed.map((r) => r.element), this.#receipt?.element, this.#leaving?.panel.element, view].filter(Boolean));
+    if (hadFocus && !sameQuestion) { this.#focusLine(); }
     // An approval's command never slides: a push still under way stops travelling.
     if (view) { stopTravel(view); }
     if (this.#receipt?.fresh) {
@@ -1682,46 +1733,111 @@ export class SessionCard {
   }
 
   // question: the one answered, which says what a confirmed answer's value was (answeredValue).
-  #watchReceipt({ service, hostId, sessionId }, question) {
-    this.#dropReceipt();
+  // asker: who asked it, for the question kept once it is no longer waiting (renderResolved).
+  #watchReceipt({ service, hostId, sessionId }, question, asker = null) {
+    this.#retireReceipt();
     const questionId = question.id;
     // The line, and apart from it the one a screen reader hears it on (receipt.js).
-    const line = h('p', { class: 'answer-receipt' });
+    const line = h('p', { class: 'answer-receipt', tabindex: '-1' });
     const live = receiptLive();
     const element = h('div', { class: 'answer-receipt-slot' }, line, live);
+    let resolved = null;
+    // What the person answered, for the record the collapsed question opens to (renderResolved).
+    let answer = null;
+    let resolvedAnswer = null;
+    // What the person typed, kept in view with Copy when the form could not take it (notDelivered).
+    let kept = null;
     // The same request's clock as the form's was: an answer the form left at Passed to the agent
     // still stalls here, and a handoff inside the quiet window or a dwell still waits it out.
     const clock = new ReceiptClock({
-      describe: (entry, { stalled }) => describeAnswer(entry, this.machineName, { question, stalled }),
+      // Closed only once the session no longer lists the question; one still listed (not answerable
+      // from here now) keeps the answer's own words, amber, beside it.
+      describe: (entry, { stalled }) => (this.#s?.question?.id === questionId ? describeAnswer : describeClosed)(entry, this.machineName, { question, stalled }),
       draw: (d) => {
         // Its words change as the answer goes, above a question that may stay: whatever they move counts.
         this.#moves?.notOwn();
-        // "You answered · value" says whose answer it is; anything else says it is about the answer.
-        drawReceipt(line, 'answer-receipt', !d?.text || d.key === 'delivered' ? d : { ...d, text: `Your answer: ${d.text}` }, { enters: false });
+        // A question that is no longer asked is kept as it was asked, collapsed to this line: either
+        // it closed ("Question closed", neutral), or its answer went through and it has left the list.
+        const gone = this.#s?.question?.id !== questionId;
+        const closed = d?.tone === 'closed';
+        const collapsed = closed || (d?.key === 'delivered' && gone);
+        // Only a closed one is kept past the next question (#retireReceipt); an answer that went is
+        // dropped by it, as before.
+        receipt.closed = closed;
+        receipt.collapsed = collapsed;
+        if (collapsed && d.key === 'delivered') {
+          // The collapsed line says the question is answered. Its words never include the approval's
+          // own message (#803): the line carries the decision's label only.
+          d = { ...d, speech: 'Question answered' };
+        }
+        if (resolved && (!collapsed || resolvedAnswer !== answer)) {
+          element.prepend(line);
+          if (kept) { line.after(kept.element); }
+          resolved.remove();
+          resolved = null;
+        }
+        if (collapsed && !resolved) {
+          // Its line is beside the button that opens the record, and what was kept with it under.
+          resolvedAnswer = answer;
+          resolved = renderResolved(question, { asker, answer });
+          element.prepend(resolved);
+          resolved.summary.prepend(line);
+          if (kept) { resolved.append(kept.element); }
+        }
+        const words = d?.key === 'notDelivered' ? d.words ?? null : null;
+        if (words && (!kept || kept.words !== words)) {
+          kept?.element.remove();
+          kept = { words, element: this.#keptWords(words) };
+          if (resolved) { resolved.append(kept.element); } else { line.after(kept.element); }
+        } else if (!words && kept) {
+          kept.element.remove();
+          kept = null;
+        }
+        // "You answered · value" says whose answer it is, and "No longer waiting" is about the question;
+        // anything else says it is about the answer.
+        drawReceipt(line, 'answer-receipt', !d?.text || ['delivered', 'closed', 'notDelivered'].includes(d.key) ? d : { ...d, text: `Your answer: ${d.text}` }, { enters: false });
       },
       say: (text) => { live.textContent = text; },
       heard: () => drawn(live),
       follow: (fn) => service.watch(hostId, sessionId, questionId, fn),
     });
-    const receipt = { element, final: false, unwatch: null, fresh: true, clock };
+    const receipt = { element, line, final: false, closed: false, collapsed: false, unwatch: null, fresh: true, clock, redraw: null };
     const show = (entry) => {
       if (!entry) { return; }
       line.dataset.answer = entry.state === 'done' ? entry.outcome : entry.state;
+      answer = entry.state === 'done' && entry.outcome === 'delivered' ? entry.answer ?? null : null;
       clock.show(entry);
       receipt.final = entry.state === 'done';
     };
+    // Drawn again when the session's list has changed what it says (the question has left since).
+    receipt.redraw = () => show(service.get(hostId, sessionId, questionId));
     receipt.unwatch = service.watch(hostId, sessionId, questionId, show);
     show(service.get(hostId, sessionId, questionId));
     this.#receipt = receipt;
   }
 
+  // What the person typed for an answer that did not go, kept in view to read and copy.
+  #keptWords(words) {
+    const ta = h('textarea', { class: 'text-input', readonly: true, rows: 3, 'aria-label': 'What you typed' });
+    ta.value = words;
+    const copy = h('button', {
+      type: 'button',
+      class: 'button secondary answer-copy',
+      onclick: async () => {
+        const ok = await copyText(words);
+        copy.textContent = ok ? 'Copied' : "Couldn't copy";
+        setTimeout(() => { copy.textContent = 'Copy'; }, LINGER_READ_MS);
+      },
+    }, 'Copy');
+    return h('div', { class: 'answer-kept' }, ta, copy);
+  }
+
   // A host takes a question away as it types the answer, before its result comes back. The panel
   // stays, with its ring on the control that sent the answer (ui.md §6.5, tap to answer, #617):
-  // delivered, its check holds for sendCheckHold, then the card resolves to "You answered". Not
-  // confirmed, stale or failed, it stays as §6.5 draws them: the option that went still pressed, the
-  // rest disabled (answerControls), and the line saying why; a failed one's Try again resends the
-  // same request. Busy or refused would enable its options again for a question that has gone, so
-  // the card resolves to its receipt at once, before one could be tapped.
+  // delivered, its check holds for sendCheckHold, then the card resolves to "You answered". Any
+  // other result resolves the card at once to the question as asked with "No longer waiting" (or,
+  // not confirmed, its words, neutral), kept in the conversation (ui.md §7): the cause of an amber
+  // or red line is gone with the question, and nothing can be tried again for it.
   #leave(panel) {
     this.#dropLeaving();
     const { service, hostId, sessionId } = panel.answering;
@@ -1730,10 +1846,12 @@ export class SessionCard {
       if (this.#leaving !== leaving) { return; }
       this.#leaving = null;
       leaving.unwatch?.();
-      this.#watchReceipt(panel.answering, panel.q);
+      this.#watchReceipt(panel.answering, panel.q, panel.asker);
       if (panel.element.isConnected) {
+        const hadFocus = panel.element.contains(document.activeElement);
         this.#moves?.notOwn();
         panel.element.replaceWith(this.#receipt.element);
+        if (hadFocus) { this.#focusLine(); }
         this.#receipt.fresh = false;
         enter(this.#receipt.element, 'acknowledge', { dy: 1 });
       }
@@ -1746,7 +1864,7 @@ export class SessionCard {
         // For what is left of its check: all of it, unless the result came before the question went.
         const until = panel.checkUntil;
         leaving.timer = setTimeout(resolve, until === null ? ReceiptTiming.sendCheckHoldMs : Math.max(0, until - Date.now()));
-      } else if (entry.state === 'done' && (entry.outcome === 'busy' || entry.outcome === 'refused')) {
+      } else {
         // After the watchers being told now, the panel's own among them: none is told of a view it has left.
         queueMicrotask(resolve);
       }
@@ -1754,6 +1872,11 @@ export class SessionCard {
     this.#leaving = leaving;
     leaving.unwatch = service.watch(hostId, sessionId, panel.questionId, settle);
     settle(service.get(hostId, sessionId, panel.questionId));
+  }
+
+  // The form collapsed into its line while focus was in it: focus goes to the line, not to the page.
+  #focusLine() {
+    if (this.#receipt?.collapsed) { this.#receipt.line.focus({ preventScroll: true }); }
   }
 
   #dropLeaving() {
@@ -1767,24 +1890,61 @@ export class SessionCard {
   }
 
   #dropReceipt() {
-    this.#receipt?.unwatch?.();
-    this.#receipt?.clock.destroy();
-    this.#receipt?.element.remove();
+    this.#destroyReceipt(this.#receipt);
     this.#receipt = null;
   }
 
+  #destroyReceipt(r) {
+    r?.unwatch?.();
+    r?.clock.destroy();
+    r?.element.remove();
+  }
+
+  // The receipt gives way to the next one, or to the next question. One that closed (its question
+  // is no longer waiting) is kept, newest last, up to CLOSED_KEPT; any other is dropped. Whether it
+  // was dropped: the question that follows moves up into its place.
+  #retireReceipt() {
+    const r = this.#receipt;
+    if (!r) { return false; }
+    if (!r.closed) {
+      this.#dropReceipt();
+      return true;
+    }
+    this.#receipt = null;
+    this.#closed.push(r);
+    while (this.#closed.length > CLOSED_KEPT) { this.#destroyReceipt(this.#closed.shift()); }
+    return false;
+  }
+
+  // An answer went from the form: text kept for the person (#orphanView) that is in it has been sent.
+  #sent(typed) {
+    const o = this.#orphan;
+    const text = o?.text.trim();
+    if (text && typed.includes(text)) { this.#dropOrphan(); }
+  }
+
+  #dropOrphan() {
+    const o = this.#orphan;
+    if (!o) { return; }
+    this.#orphan = null;
+    o.element?.remove();
+    this.#movedUnder();
+  }
+
+  // Text the person typed for a question that went, kept until they dismiss it or send it (ui.md §7).
+  // A neutral note: what it says is over, so it isn't amber, and it stays through the next turn.
   #orphanView() {
     const o = this.#orphan;
     if (!o) { return null; }
     if (!o.element) {
       const ta = h('textarea', { class: 'text-input', readonly: true, rows: 3, 'aria-label': 'What you typed' });
       ta.value = o.text;
-      o.element = h('div', { class: 'question-changed', role: 'alert' },
-        h('p', { class: 'note warn' }, o.why === 'changed'
+      o.element = h('div', { class: 'question-changed', role: 'status' },
+        h('p', { class: 'note' }, o.why === 'changed'
           ? 'The question changed before you sent your answer. It was answered at the machine, or the agent moved on. What you typed is kept here.'
           : 'This question can no longer be answered from here. What you typed is kept here.'),
         ta,
-        h('button', { type: 'button', class: 'button secondary', onclick: () => { this.#orphan = null; o.element.remove(); this.#movedUnder(); } }, 'Dismiss'));
+        h('button', { type: 'button', class: 'button secondary', onclick: () => this.#dropOrphan() }, 'Dismiss'));
     }
     return o.element;
   }
@@ -1831,7 +1991,14 @@ export class SessionCard {
       this.#history.loaded = true;
       this.#history.at = at;
     } catch (e) {
-      body.replaceChildren(h('p', { class: 'note warn' }, `Couldn't load the history: ${e.message}`));
+      // The connection went under the request, and the next one asks again: not an error to show
+      // as its raw text (#1128), which also named the relay.
+      if (e?.reason === CONNECTION_CHANGED) {
+        body.replaceChildren(h('p', { class: 'note', role: 'status' }, 'Connection changed. Trying again.'));
+        this.#scheduleHistory();
+      } else {
+        body.replaceChildren(h('p', { class: 'note warn' }, `Couldn't load the history: ${e.message}`));
+      }
     } finally {
       this.#history.loading = false;
     }

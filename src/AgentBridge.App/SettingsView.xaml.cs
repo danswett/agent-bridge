@@ -129,6 +129,21 @@ public sealed partial class SettingsView : UserControl
         if (await dialog.ShowAsync() == ContentDialogResult.Primary) { await v.RunVerificationAsync(selection); }
     }
 
+    async void OnSignInAgent(object sender, RoutedEventArgs e)
+    {
+        if (viewModel is not { CanSignInAgents: true } v || sender is not Button { Tag: string id }) { return; }
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = $"Open {v.Agents.FirstOrDefault(a => a.Id == id)?.Label ?? id} sign-in?",
+            Content = $"Open this CLI's own sign-in flow in a visible terminal, using the same agent home as new sessions. Complete or cancel in that window, including any browser approval. {Product.Name} does not collect credentials. This can change the account used by future sessions, but does not confirm access or entitlement, change hook or folder trust, or sign the bridge in to its relay.",
+            PrimaryButtonText = "Open sign-in",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary) { await v.SignInAgentAsync(id); }
+    }
+
     async void OnInstallAgent(object sender, RoutedEventArgs e)
     {
         if (sender is not Button { Tag: string id }) { return; }

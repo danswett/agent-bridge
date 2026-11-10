@@ -339,7 +339,7 @@ test('a phone answers a question through the relay, and an answer in flight when
   await ask('ask-1', 'q1');
   await signIn(page);
   await page.click('#machine-tabs [data-device-name="fixture-host"]');
-  const q1 = card(page, 'ask-1').locator('.question');
+  const q1 = card(page, 'ask-1').locator('.question:not(.resolved)');
   await expect(q1).toHaveAttribute('data-answerable', 'true', { timeout: 30000 });
   await open(page, 'ask-1');
   await expect(q1.locator('.choice[data-value]').first()).toHaveText('B (Recommended)');

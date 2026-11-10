@@ -206,6 +206,12 @@ test('Read aloud, a delegate\'s name has no comma of its own, so it can\'t add f
   assert.equal(statusLabel(working, { title: 'Fix' }), 'Fix, working · task: Delegate Lint idle');
 });
 
+test('Read aloud, a title cannot end the line early or add a fact: its commas, semicolons and stops are spaces', () => {
+  const idle = sessionStatus(session({}));
+  assert.equal(statusLabel(idle, { title: 'Fix. Idle; done, ok!', machine: 'DEV-VM1' }), 'Fix Idle done ok, idle, DEV-VM1');
+  assert.equal(statusLabel(idle, { title: 'v1.2 fix', machine: 'DEV-VM1' }), 'v1.2 fix, idle, DEV-VM1');
+});
+
 // #800: Session.attention, shown over a truthful status: an agent that can't run until a person
 // signs it in, a turn ended on an error, and a working session the host has heard nothing from.
 // None of them ever reads as idle or working.

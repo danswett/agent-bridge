@@ -73,9 +73,11 @@ no_test_paths:
   - .gitignore
   - LICENSE
   - tools/design-mockups/**     # renders reference images only; nothing ships or tests from it
+  - tools/agents/**             # session helpers (wake-watch.ps1) that poll GitHub for a team; nothing ships or tests from them
   - ops/**                      # SRE plan, runbooks, KQL and read-only operator probes; nothing ships from it
   - .github/dependabot.yml      # schedules update PRs; each PR's own changes select its tests
   - .github/CODEOWNERS          # who reviews what; CI's plan runs the whole ring for .github/ anyway
+  - .github/ISSUE_TEMPLATE/**   # issue forms; GitHub renders them, nothing builds or tests from them
 
 suites:
   # ---------------------------------------------------------------- .NET unit and component
@@ -117,6 +119,17 @@ suites:
     where: ci.yml light
     status: exists
 
+  - id: mcp-server
+    kind: component
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [mcp/**, docs/protocol/local-pipe*]
+    command: node --test "mcp/test/*.test.mjs"
+    where: ci.yml light
+    status: exists
+
   - id: transport
     kind: component
     ring: 0
@@ -142,6 +155,23 @@ suites:
     where: ci.yml product
     status: exists
 
+  - id: roster
+    kind: unit
+    ring: 0
+    select: affected
+    security_sensitive: true  # the signed device roster (#55): AGENTS.md rule 5
+    platforms: [win-x64, linux-x64]
+    runner: local
+    project: tests/AgentBridge.Roster.Tests
+    triggers: [docs/protocol/vectors/roster.json, docs/protocol/vectors/roster-state.json, docs/protocol/vectors/roster-commands.json]
+    # Generates docs/protocol/vectors/roster.json, roster-state.json and roster-commands.json, and
+    # fails while any committed file is stale; pwa-unit replays them (test/unit/roster-vectors,
+    # roster-state and roster-commands.test.mjs).
+    command: dotnet test tests/AgentBridge.Roster.Tests -c Release
+    where: ci.yml product
+    baseline: { tests: 256, seconds: 90 }
+    status: exists
+
   - id: local-api
     kind: component
     ring: 0
@@ -162,6 +192,8 @@ suites:
     platforms: [win-x64, win-arm64, linux-x64]
     runner: local
     project: tests/AgentBridge.Host.Core.Tests
+    # FleetLoadTests reads the shared limits file and checks its schema (#1587), which the graph cannot see.
+    triggers: [docs/fleet-load-limits.json]
     command: dotnet test tests/AgentBridge.Host.Core.Tests -c Release
     where: ci.yml product
     baseline: { tests: 402, seconds: 7 }
@@ -403,6 +435,72 @@ suites:
     where: ci.yml light
     status: exists
 
+  - id: post-receipt-script
+    kind: unit
+    ring: 0
+    select: affected
+    # The receipts App's posting script: argument refusals and a dry run with a throwaway key.
+    # Nothing reaches GitHub and the real key is never read.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/post-receipt.ps1, quality/test-post-receipt.ps1]
+    command: pwsh -NoProfile -File quality/test-post-receipt.ps1
+    where: ci.yml light
+    status: exists
+
+  - id: red-minutes-script
+    kind: unit
+    ring: 0
+    select: affected
+    # The red-minutes figure for the owner's target (p90 of red minutes per hour): spells, clipping and
+    # the cancelled-run rule, on a fixed run list. Nothing reaches GitHub.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/red-minutes.ps1, quality/test-red-minutes.ps1]
+    command: pwsh -NoProfile -File quality/test-red-minutes.ps1
+    where: ci.yml light
+    status: exists
+
+  - id: rerun-known-flakes
+    kind: unit
+    ring: 0
+    select: affected
+    # The automatic re-run of a known flake on main: parsing of failed tests, matching to flake
+    # issues and every refusal, against a stand-in for gh. Nothing reaches GitHub.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/rerun-known-flakes.ps1, quality/test-rerun-known-flakes.ps1, .github/workflows/rerun-known-flakes.yml]
+    command: pwsh -NoProfile -File quality/test-rerun-known-flakes.ps1
+    where: ci.yml light; rerun-known-flakes.yml rerun
+    status: exists
+
+  - id: beta-acceptance
+    kind: e2e
+    ring: 4
+    select: always
+    # The real published Beta installer on a clean hosted Windows runner, x64 and Arm64, through
+    # a working session driven from the PWA (#1185, #736). Dispatched by hand after review: no
+    # pull_request trigger, no cron, no secrets. Pairing and driving from the PWA are not built yet,
+    # so a run reports them NOT RUN and is not a full pass.
+    platforms: [win-x64, win-arm64]
+    runner: device
+    command: gh workflow run beta-acceptance.yml --ref <branch>
+    where: beta-acceptance.yml accept, report
+    status: partial
+  - id: forms-soak-scripts
+    kind: unit
+    ring: 0
+    select: affected
+    # The forms soak rig's redaction checks and a syntax check of its stub server (#1138). The rig
+    # itself, which needs a console, the host's injector and the Copilot CLI, is run by hand on a
+    # lab machine and is not part of this suite.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [tools/lab/forms-soak/**]
+    command: pwsh -NoProfile -File tools/lab/forms-soak/Test-Redaction.ps1; node --check tools/lab/forms-soak/stub-mcp.js
+    where: ci.yml light
+    status: exists
+
   - id: relay-container
     kind: packaging
     ring: 1
@@ -425,7 +523,23 @@ suites:
     # What the app's build takes in from outside src/ (the protocol's example sessions, embedded
     # in App.Core for the demo the self-test runs) reaches it through builds (#487).
     builds: src/AgentBridge.App
-    triggers: [src/**, build/pack-app.ps1, build/app-*.ps1, build/host-identity.ps1, build/publish-prerelease.ps1, build/release-notes.ps1, design/**]
+    # src/** is not a trigger (#1249): the app's folder and what it builds from (builds), the other
+    # projects pack-app.ps1 publishes, and the packaging inputs are. app-package-host adds the
+    # host's own closure.
+    triggers: [src/AgentBridge.App/**, src/AgentBridge.HostLauncher/**, src/AgentBridge.Injector/**, src/AgentBridge.Hook/**, build/pack-app.ps1, build/app-*.ps1, build/host-identity.ps1, build/publish-prerelease.ps1, build/release-notes.ps1, build/notices/**, LICENSE, design/**]
+    command: see ci.yml app job
+    where: ci.yml app
+    status: exists
+
+  - id: app-package-host
+    kind: packaging
+    ring: 1
+    select: affected
+    # The host and every project it builds from ship inside the app's package (pack-app.ps1
+    # publishes it), so a change to any of them packages the app too.
+    platforms: [win-x64, win-arm64]
+    runner: hosted
+    builds: src/AgentBridge.Host
     command: see ci.yml app job
     where: ci.yml app
     status: exists
@@ -682,6 +796,20 @@ suites:
     where: relay.yml infra
     status: exists
 
+  - id: accept-relay-build
+    kind: static
+    ring: 1
+    select: affected
+    # The relay with a fake GitHub on 127.0.0.1 that the clean-install acceptance signs in
+    # against (#1272, #736). It is a tool, not a suite; building it keeps it compiling with the relay.
+    platforms: [linux-x64]
+    runner: hosted
+    builds: tools/AgentBridge.AcceptRelay
+    triggers: [tools/AgentBridge.AcceptRelay/**]
+    command: dotnet build tools/AgentBridge.AcceptRelay -c Release
+    where: ci.yml product
+    status: exists
+
   - id: relay-staging-smoke
     kind: e2e
     ring: 2
@@ -703,6 +831,28 @@ suites:
     # rollback is production's other path: an earlier image, rolled out and smoke-tested the same way.
     command: see relay.yml production and rollback
     where: relay.yml production, rollback
+    status: exists
+
+  - id: epic-dashboard-unit
+    kind: unit
+    ring: 0
+    select: affected
+    security_sensitive: true
+    platforms: [linux-x64]
+    runner: local
+    triggers: [tools/epic-dashboard/**]
+    command: python3 -m unittest discover -s tools/epic-dashboard -v
+    where: ci.yml light
+    status: exists
+
+  - id: epic-dashboard
+    kind: static
+    ring: 4
+    select: always
+    platforms: [linux-x64]
+    runner: hosted
+    command: see epic-dashboard.yml read and write (hourly, issue close/reopen, main-push CI completion and dispatch; rewrites only issue 755's body)
+    where: epic-dashboard.yml read, write
     status: exists
 
   - id: ops-probe

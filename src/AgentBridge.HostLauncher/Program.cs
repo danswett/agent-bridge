@@ -10,11 +10,46 @@ var exe = Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "
 var profileFolder = LauncherLog.ProfileFolder(args);
 var log = LauncherLog.For(profileFolder);
 // The app's Stop (HostLauncherContract.StopMarker): no host is started again while it is there.
-var stopMarker = profileFolder is null ? null : Path.Combine(profileFolder, AgentBridge.Local.HostLauncherContract.StopMarker);
+// And this launcher's record of itself, for an app opened after it started (#420). Only for
+// serve (LauncherFiles.ForServe).
+using var files = LauncherFiles.ForServe(args, profileFolder, log);
+DateTime startedUtc;
+using (var self = Process.GetCurrentProcess()) { startedUtc = self.StartTime.ToUniversalTime(); }
+// The host ends with this launcher (HostJob, #420).
+HostJob? job = null;
+if (OperatingSystem.IsWindows())
+{
+    try { job = HostJob.Create(); }
+    catch (Win32Exception e) { log($"the host cannot be tied to this launcher, so it is started without being watched for host.restart: {e.Message}"); }
+}
 var supervisor = new HostSupervisor
 {
     RunHost = async ct =>
     {
+        // Whether the app's Stop finds this launcher without the logon task. When it may not, the
+        // host looks for the stop marker itself once its pipe is open (CheckStopVariable).
+        var recorded = files is null || files.Holding;
+        if (job is not null && OperatingSystem.IsWindows())
+        {
+            // Watched: host.restart hands its replacement to this launcher, since the host cannot
+            // outlive it and be left believing it is watched.
+            var extra = new Dictionary<string, string> { [AgentBridge.Local.HostLauncherContract.Variable] = "1" };
+            if (!recorded) { extra[AgentBridge.Local.HostLauncherContract.CheckStopVariable] = "1"; }
+            try
+            {
+                using var child = job.Start(exe, args, extra, AppContext.BaseDirectory);
+                return await child.WaitForExitAsync(ct);
+            }
+            // Gone (an update replacing it, say): nothing to start, and not a crash.
+            catch (Win32Exception e) when (e.NativeErrorCode is 2 or 3)
+            {
+                log($"the host could not be started: {e.Message}");
+                return 1;
+            }
+            catch (Win32Exception e) { log($"the host could not be started tied to this launcher, so it is started without being watched for host.restart: {e.Message}"); }
+        }
+        // Not tied to this launcher, so it could outlive it: never told it is watched (it starts
+        // its own replacement after host.restart), and told to look for the app's stop itself.
         var start = new ProcessStartInfo(exe)
         {
             UseShellExecute = false,
@@ -22,10 +57,8 @@ var supervisor = new HostSupervisor
             WorkingDirectory = AppContext.BaseDirectory,
         };
         foreach (var a in args) { start.ArgumentList.Add(a); }
-        // Tells the host it is watched, so host.restart hands its replacement to this launcher.
-        start.Environment[AgentBridge.Local.HostLauncherContract.Variable] = "1";
+        if (files is not null) { start.Environment[AgentBridge.Local.HostLauncherContract.CheckStopVariable] = "1"; }
         Process? host;
-        // Gone or unreadable (an update replacing it, say): nothing to start, and not a crash.
         try { host = Process.Start(start); }
         catch (Exception e) when (e is Win32Exception or IOException)
         {
@@ -44,15 +77,15 @@ var supervisor = new HostSupervisor
         }
     },
     Log = log,
-    Stopped = () => stopMarker is not null && File.Exists(stopMarker),
-    ClearStopped = () =>
-    {
-        try { if (stopMarker is not null) { File.Delete(stopMarker); } }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { log($"an earlier stop could not be cleared: {e.Message}"); }
-    },
+    Stopped = () => files?.Stopped() ?? false,
+    ClearStopped = () => files?.ClearStoppedBefore(startedUtc),
+    BeforeStart = () => files?.HoldRecord(Environment.ProcessId, startedUtc),
 };
-return await supervisor.RunAsync();
-
+try { return await supervisor.RunAsync(); }
+finally
+{
+    if (OperatingSystem.IsWindows()) { job?.Dispose(); }
+}
 // The host's own log (<profile>\logs\host.log), which the app shows, appended a line at a time
 // as the host appends it; written only while no host runs. Its folder by the host's own rule
 // (ProfileFolders, compiled in).

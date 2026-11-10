@@ -997,6 +997,16 @@ static partial class SelfTest
             }
             var picture = Path.ChangeExtension(outFile, $".{tag}.{theme.ToLowerInvariant()}.png");
             await Picture(root, picture);
+            if (theme == "HighContrast" && page is not null)
+            {
+                // Every accent button this page draws: the system pair only, no plate under a label.
+                var accent = (Style)Application.Current.Resources["AccentButtonStyle"];
+                foreach (var button in Find<Button>(page).Where(b => b.Style == accent && b.IsEnabled && b.IsLoaded && Shown(b, page)).ToList())
+                {
+                    var plate = await AccentPlate(button);
+                    check(plate is null, $"draws the {tag} page's accent button in Highlight and HighlightText only ({plate})");
+                }
+            }
             if (theme == nameof(ElementTheme.Dark)) { await CheckDarkPagePicture(window, picture, check); }
         }
         return broken;

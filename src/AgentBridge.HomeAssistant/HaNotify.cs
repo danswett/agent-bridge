@@ -285,6 +285,26 @@ public static partial class HaNotify
 
     public static JsonObject ClearSignIn(string tag) => ClearTag(tag);
 
+    // The stuck-session notice (#687): one per session, tagged by a digest of its id.
+    public static string StuckTag(string slug, string sessionId) => $"bridge_stuck_{slug}_{AccountDigest(sessionId)}";
+
+    // Plain words, no command: the steps are in docs/runbooks/stuck-session.md and the notice opens
+    // the dashboard.
+    // "Won't recover by itself" is said only of the recognised wedge; Not responding may pass.
+    public static (string Title, string Message) Stuck(string machineName, string agentName, string sessionName, bool wedged) =>
+        (NotificationTitle($"{agentName} on {machineName} looks stuck"),
+         Cap(wedged
+             ? $"{sessionName} has stopped taking messages and won't recover by itself. Close that session and resume it in a new window; it keeps its history."
+             : $"{sessionName} is not responding. If it stays that way, close it and resume it in a new window; it keeps its history."));
+
+    public static JsonObject StuckPayload(string tag, string title, string message, string dashboardUrlPath, string machineName,
+        string icon = "mdi:chat-question", string iconColor = "#FFFFFF", string color = "#FF9F0A", string interruptionLevel = "time-sensitive")
+    {
+        var payload = SignInPayload(tag, title, message, dashboardUrlPath, machineName, icon, iconColor, color, interruptionLevel);
+        if (!string.IsNullOrWhiteSpace(machineName)) { payload["data"]!["subtitle"] = $"{machineName} - looks stuck"; }
+        return payload;
+    }
+
     // Get-BridgeAnswerButtonChoice: what a tap means, or null when the event is not one of ours.
     public static TapChoice? Choice(JsonElement data)
     {

@@ -39,6 +39,26 @@ const GROW_MAX = 164;
 // After busy, Send comes back after this long, as for an answer.
 export const REPLY_BUSY_PAUSE_MS = 2000;
 
+// The outcome lines that outlive their cause end when it does (ui.md §7), by what ends them: the
+// pause after busy, the next edit of the box, the next turn of the session. A reply that may have
+// gone in (unconfirmed) is only past once the conversation shows whether it did. Failed, with Try
+// again, is not here: it stays while it can be tried.
+const ENDED_BY = {
+  busy: ['pause', 'edit', 'turn'],
+  stale: ['edit', 'turn'],
+  refused: ['edit', 'turn'],
+  cancelled: ['edit', 'turn'],
+  unconfirmed: ['turn'],
+};
+
+// The key a reply's outcome is by in ENDED_BY, or null while it is on its way or a line that stays.
+function endingKey(entry) {
+  if (!entry) { return null; }
+  if (entry.state === 'failed') { return entry.reason === CANCELLED ? 'cancelled' : null; }
+  if (entry.state !== 'done') { return null; }
+  return OUTCOME_TEXT[entry.outcome] ? entry.outcome : 'unconfirmed';
+}
+
 const OUTCOME_TEXT = {
   delivered: () => 'Delivered',
   unconfirmed: () => 'Sent, but not confirmed. Check the conversation before sending it again.',
@@ -91,6 +111,10 @@ export class ReplyBox {
   // Whether the line says files are being read, which the receipt doesn't know of.
   #reading = false;
   #busyTimer = null;
+  // The request whose line has ended (ENDED_BY): it is not drawn again, and its room stays.
+  #ended = null;
+  // When the session's turn that was running at the last update began, to see the next one start.
+  #turn;
   #sent = null;
   #session = null;
   // The busy outcome whose pause has been started, so a re-render does not start another.
@@ -227,6 +251,7 @@ export class ReplyBox {
     e.input.addEventListener('input', () => {
       this.#clearError();
       // The receipt's room is kept from Send until the box is typed in again (ui.md §6.5).
+      this.#end('edit');
       if (!e.status.textContent) { e.status.classList.remove('room'); }
       this.#sync();
     });
@@ -295,7 +320,21 @@ export class ReplyBox {
     const hold = holdOf(offline);
     this.#offline = hold.text;
     this.#hold = hold;
+    // A turn that began since the last update ends the lines that wait for one.
+    const turn = session.status === 'working' ? session.statusSince ?? null : null;
+    if (turn && this.#turn !== undefined && turn !== this.#turn) { this.#end('turn'); }
+    this.#turn = turn;
     this.#show(this.entry);
+  }
+
+  // The line for the reply as it stands ends if `by` is what ends it (ENDED_BY): its words go and
+  // its room stays, and the same request is not drawn again.
+  #end(by) {
+    const entry = this.entry;
+    if (!ENDED_BY[endingKey(entry)]?.includes(by) || this.#ended === entry.request) { return; }
+    this.#ended = entry.request;
+    drawReceipt(this.els.status, 'answer-status reply-status', { key: 'room', text: '', more: null, tone: 'room', line: false });
+    this.#onChange?.();
   }
 
   #held() { return !!this.#session?.question || !!this.#offline; }
@@ -497,13 +536,15 @@ export class ReplyBox {
     // Send acknowledged (ui.md §5.3): each new state of the reply rises into place (receipt.js).
     // Files still being read, with nothing on its way, say so instead.
     const reading = this.#preparing > 0 && !this.#pending(entry);
-    this.#receipt.show(reading ? null : entry);
+    // A line that has ended (#end) is not drawn again.
+    if (reading || entry?.request !== this.#ended) { this.#receipt.show(reading ? null : entry); }
     if (reading) {
       drawReceipt(e.status, 'answer-status reply-status', { key: 'reading', text: 'Reading the attachment…', more: null, tone: 'progress', line: true });
       // Its words are drawn, not said (the line isn't live): the live line says it once, as it starts.
       if (!this.#reading) { e.live.textContent = 'Reading the attachment'; }
-    } else if (this.#reading && !entry) {
-      drawReceipt(e.status, 'answer-status reply-status', null);
+    } else if (this.#reading && (!entry || entry.request === this.#ended)) {
+      // Reading is over: its line goes, and an outcome line that had ended stays ended (its room stays).
+      drawReceipt(e.status, 'answer-status reply-status', entry ? { key: 'room', text: '', more: null, tone: 'room', line: false } : null);
     }
     this.#reading = reading;
     // Send is busy (ui.md §9), not the form: the receipt's live region is in it, and a reader may
@@ -518,7 +559,7 @@ export class ReplyBox {
     e.cancel.hidden = !(entry?.state === 'sending' && service.cancellable?.(hostId, sessionId));
     if (entry?.state === 'done' && entry.outcome === 'busy' && !this.#busyTimer && this.#busyFor !== entry.request) {
       this.#busyFor = entry.request;
-      this.#busyTimer = setTimeout(() => { this.#busyTimer = null; this.#sync(); }, REPLY_BUSY_PAUSE_MS);
+      this.#busyTimer = setTimeout(() => { this.#busyTimer = null; this.#end('pause'); this.#sync(); }, REPLY_BUSY_PAUSE_MS);
     }
     this.#sync();
   }

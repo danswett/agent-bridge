@@ -89,7 +89,7 @@ jobs:
       test-projects: ${{ steps.select.outputs.test-projects }}
       # The whole ring is the whole solution on all three runners, without asking the selector.
       whole-solution: ${{ steps.whole-ring.outputs.whole-ring == 'true' && 'true' || steps.select.outputs.whole-solution }}
-      product-os: ${{ steps.whole-ring.outputs.whole-ring == 'true' && '["ubuntu-latest","windows-latest","windows-11-arm"]' || steps.select.outputs.product-os }}
+      product-os: ${{ steps.whole-ring.outputs.whole-ring == 'true' && (github.event_name == 'pull_request' && '["ubuntu-latest","windows-latest"]' || '["ubuntu-latest","windows-latest","windows-11-arm"]') || steps.select.outputs.product-os }}
       test-filter: ${{ steps.select.outputs.test-filter }}
     steps:
       # A run by hand exists only to prove pwa-ui's apt fallback (force-apt-fallback), and its
@@ -217,6 +217,11 @@ jobs:
           $jobs = @($env:JOBS -split '\s+' | Where-Object { $_ })
           if ($env:EVENT -eq 'pull_request' -and $env:DRAFT -eq 'true') {
             ./quality/plan.ps1 -FastRing -Base $env:BASE -Head HEAD -Jobs $jobs
+          } elseif ($env:EVENT -eq 'pull_request') {
+            # A pull request: the windows-11-arm product leg and the app's packaging legs run
+            # when the change calls for them (the app only for a reason of its own), and on main.
+            $ring = if ($env:WHOLE_RING -eq 'true') { 2 } else { 1 }
+            ./quality/plan.ps1 -Ring $ring -Base $env:BASE -Head HEAD -CompareRing1:($ring -gt 1) -Narrow app -ExcludePlatform win-arm64 -Jobs $jobs
           } else {
             $ring = if ($env:WHOLE_RING -eq 'true') { 2 } else { 1 }
             ./quality/plan.ps1 -Ring $ring -Base $env:BASE -Head HEAD -CompareRing1:($ring -gt 1) -Jobs $jobs
@@ -563,7 +568,7 @@ jobs:
     # took; Arm64 in `win-arm64` (build/app-channels.ps1), built and self-tested on Arm64.
     name: app (${{ matrix.runtime }})
     needs: plan
-    if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.app == 'true'
+    if: (needs.plan.outputs.whole-ring == 'true' && github.event_name != 'pull_request') || needs.plan.outputs.app == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -623,7 +628,7 @@ jobs:
       - name: The published app draws the demo's cards and answers one
         shell: pwsh
         # build/app-self-test.ps1 says how the app ended when it did not end with 0 (#240).
-        run: ./build/app-self-test.ps1 -Exe ${{ matrix.out }}/publish/AgentBridge.exe -Result "$env:RUNNER_TEMP/selftest/result.json" -TimeoutSeconds ${{ matrix.runtime == 'win-arm64' && 480 || 360 }}
+        run: ./build/app-self-test.ps1 -Exe ${{ matrix.out }}/publish/AgentBridge.exe -Result "$env:RUNNER_TEMP/selftest/result.json" -TimeoutSeconds 480
       - name: The installer installs per user, into its own channel and architecture, and the installed app starts
         # The Setup.exe a person downloads, run silently on this throwaway runner: per user, no
         # admin, into %LOCALAPPDATA%\AgentBridgeApp. A silent install starts nothing, so no host or
@@ -654,7 +659,7 @@ jobs:
           if ($bad) { exit 1 }
           . ./build/app-notices.ps1
           Write-AppDistributionEvidence -Publish '${{ matrix.out }}/publish' -Releases '${{ matrix.out }}/releases' -Version $env:APP_VERSION -Runtime '${{ matrix.runtime }}' -Installed "$root/current" -Out "$logs/distribution-evidence.json"
-          ./build/app-self-test.ps1 -Exe "$root/current/AgentBridge.exe" -Result "$logs/result.json" -TimeoutSeconds ${{ matrix.runtime == 'win-arm64' && 480 || 360 }}
+          ./build/app-self-test.ps1 -Exe "$root/current/AgentBridge.exe" -Result "$logs/result.json" -TimeoutSeconds 480
           exit $LASTEXITCODE
       - name: The release would publish (dry run)
         # What the publish job would upload, publish and prune, against the repository's real
@@ -993,7 +998,7 @@ jobs:
     #    Chromium and WebKit through the same relay, then the container build.
     needs: plan
     if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.spikes-linux == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 35, as every job that runs `playwright install --with-deps` gets (#689): room for the five
     # minutes the download step gives a slow apt mirror and a full download from Canonical's
     # archive, on top of the checks.
@@ -1089,6 +1094,11 @@ jobs:
     #    jobs rather than before them (#457);
     #  - pwa-site-csp: the Pages build's CSP;
     #  - lab-scripts: the clean-VM lab's provisioning and runner-interface drafts, offline;
+    #  - post-receipt-script: the receipts App's posting script, refusals and a dry run, offline;
+    #  - red-minutes-script: the red-minutes figure's spell counting, offline (quality/red-minutes.ps1);
+    #  - rerun-known-flakes: the automatic re-run of a known flake on main, refusals included, offline;
+    #  - forms-soak-scripts: the forms soak rig's redaction checks and a syntax check of its stub
+    #    server, offline (tools/lab/forms-soak);
     #  - playwright-apt: the download of Playwright's system packages leaves a slow apt mirror only
     #    when it should (.github/actions/playwright-system-packages);
     #  - lab-release-verify: the held lab release verification's gate, verdict and workflow shape,
@@ -1123,10 +1133,40 @@ jobs:
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'lab-scripts')) }}
         shell: pwsh
         run: pwsh -NoProfile -File quality/lab/test-scripts.ps1
+      - name: The receipts App's posting script refuses bad input and signs offline
+        # A throwaway key and a dry run: nothing reaches GitHub.
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'post-receipt-script')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File quality/test-post-receipt.ps1
+      - name: The red-minutes figure counts spells the way the guardian does
+        # A fixed run list: nothing reaches GitHub.
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'red-minutes-script')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File quality/test-red-minutes.ps1
+      - name: Known-flake re-runs refuse real failures
+        # Against a stand-in for gh: nothing reaches GitHub.
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'rerun-known-flakes')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File quality/test-rerun-known-flakes.ps1
+      - name: The forms soak rig's redaction masks every secret shape
+        # Offline: no CLI, console, token or model.
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'forms-soak-scripts')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File tools/lab/forms-soak/Test-Redaction.ps1
+      - name: The forms soak rig's stub server parses
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'forms-soak-scripts')) }}
+        run: node --check tools/lab/forms-soak/stub-mcp.js
       - name: Beta download metadata accepts only complete published pre-releases
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'beta-release-manifest')) }}
         shell: pwsh
         run: pwsh -NoProfile -File build/test-release-manifest.ps1
+      - name: The MCP server's packages
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'mcp-server')) }}
+        working-directory: mcp
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: MCP server tests
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'mcp-server')) }}
+        run: node --test "mcp/test/*.test.mjs"
       - name: Playwright's system packages leave a slow apt mirror only for Canonical's archive
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'playwright-apt')) }}
         run: bash .github/actions/playwright-system-packages/test.sh
@@ -1135,6 +1175,9 @@ jobs:
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'lab-release-verify')) }}
         shell: pwsh
         run: pwsh -NoProfile -File quality/lab/test-release-verify.ps1
+      - name: Epic dashboard renders safely from offline fixtures
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'epic-dashboard-unit')) }}
+        run: python3 -m unittest discover -s tools/epic-dashboard -v
       # build-site.mjs bundles the app with esbuild (#609), and the unit tests build the site: the
       # PWA's packages, as locked, without Playwright's browsers (only the pwa-ui jobs fetch those).
       # Without install scripts, as pages.yml builds the published site (#650), so a build that
@@ -1219,17 +1262,37 @@ jobs:
       # fetched by release and checked against its SHA-256 here, rather than through
       # lychee-action, which downloads it by tag alone (#487): a release asset swapped under the
       # same tag fails this step instead of running. To update, take the new release's
-      # lychee-x86_64-unknown-linux-gnu.tar.gz.sha256.
+      # lychee-x86_64-unknown-linux-gnu.tar.gz.sha256. It comes through `gh release download` (the
+      # API) first, as install-trivy's Trivy does: the release's web URL has failed part way
+      # (curl exit 56) and returned HTTP 504 while the API still served the asset.
       - name: Links and anchors in Markdown resolve
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'docs-links')) }}
         env:
           LYCHEE_VERSION: v0.24.2
           LYCHEE_SHA256: 1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a
+          GH_TOKEN: ${{ github.token }}
         run: |
           asset=lychee-x86_64-unknown-linux-gnu
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$asset.tar.gz" "https://github.com/lycheeverse/lychee/releases/download/lychee-$LYCHEE_VERSION/$asset.tar.gz"
-          echo "$LYCHEE_SHA256  $RUNNER_TEMP/$asset.tar.gz" | sha256sum --check --strict -
-          tar -xzf "$RUNNER_TEMP/$asset.tar.gz" -C "$RUNNER_TEMP"
+          file="$RUNNER_TEMP/$asset.tar.gz"
+          # gh a few times, then the web URL. Either way the pinned hash below decides; a mismatch
+          # is a failure, not a cue to retry, and a failed web download fails the step.
+          downloaded=false
+          for attempt in 1 2 3; do
+            # Never let an earlier or partial file pass as this attempt's download.
+            rm -f "$file"
+            if gh release download "lychee-$LYCHEE_VERSION" --repo lycheeverse/lychee --pattern "$asset.tar.gz" --dir "$RUNNER_TEMP" --clobber && [ -f "$file" ]; then
+              downloaded=true; break
+            fi
+            echo "::warning title=docs-links::gh release download of $asset.tar.gz failed (attempt $attempt of 3)"
+            if [ "$attempt" -lt 3 ]; then sleep 5; fi
+          done
+          if [ "$downloaded" != true ]; then
+            echo "::warning title=docs-links::falling back to the release's web URL for $asset.tar.gz"
+            rm -f "$file"
+            curl -fsSL --retry 3 -o "$file" "https://github.com/lycheeverse/lychee/releases/download/lychee-$LYCHEE_VERSION/$asset.tar.gz"
+          fi
+          echo "$LYCHEE_SHA256  $file" | sha256sum --check --strict -
+          tar -xzf "$file" -C "$RUNNER_TEMP"
           rc=0
           "$RUNNER_TEMP/$asset/lychee" --offline --include-fragments --no-progress --format markdown --output "$RUNNER_TEMP/lychee.md" '**/*.md' || rc=$?
           cat "$RUNNER_TEMP/lychee.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
@@ -1266,7 +1329,7 @@ jobs:
           - name: webkit 3/3
             project: webkit
             shard: 3/3
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 35 minutes for every leg, as for every job that runs `playwright install --with-deps`
     # (#689). WebKit needs 181 system packages (114 MB), and on main run 41927187905 a slow apt
     # mirror held webkit 3/3 in that download past 20 minutes, twice, before a test ran; Chromium's
@@ -1360,7 +1423,7 @@ jobs:
     # it (#457): built once, here, rather than in every shard or passed round as an artifact.
     needs: plan
     if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.pwa-e2e == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 35, as every job that runs `playwright install --with-deps` gets (#689): main run
     # 41952998347 cancelled this job at its old 15 inside that install, fetching 126 of Chromium's
     # and WebKit's packages from azure.archive.ubuntu.com at about 100 kB/s. Room for the download
@@ -1450,6 +1513,7 @@ jobs:
       - name: Every job the plan selected passed, and none failed
         env:
           NEEDS: ${{ toJSON(needs) }}
+          EVENT: ${{ github.event_name }}
         run: |
           echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
           bad=$(echo "$NEEDS" | jq -r '[to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key] | join(", ")')
@@ -1470,12 +1534,14 @@ jobs:
             echo "::error title=quality-gate::the plan gave no true or false for: $unknown"
             exit 1
           fi
-          # Selected: every job when the whole ring runs, otherwise those the plan gave true.
-          # Each must have succeeded; a skipped one was meant to run and didn't.
-          missing=$(echo "$NEEDS" | jq -r '
+          # Selected: every job when the whole ring runs, otherwise those the plan gave true. On a
+          # pull request the app is the exception: its output says whether the change needs it,
+          # whole ring or not (#1249). Each must have succeeded; a skipped one was meant to run
+          # and didn't.
+          missing=$(echo "$NEEDS" | jq -r --arg ev "$EVENT" '
             (.plan.outputs // {}) as $plan
             | ($plan["whole-ring"] == "true") as $all
-            | [to_entries[] | select(.key == "plan" or $all or $plan[.key] == "true")
+            | [to_entries[] | select(.key == "plan" or ($all and (.key != "app" or $ev != "pull_request")) or $plan[.key] == "true")
                 | select(.value.result != "success") | "\(.key) (\(.value.result))"]
             | join(", ")')
           if [ -n "$missing" ]; then

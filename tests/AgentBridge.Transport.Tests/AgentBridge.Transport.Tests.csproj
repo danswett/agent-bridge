@@ -19,6 +19,12 @@
     <!-- The fake GitHub and push service, and the relay itself, run in-process on loopback. -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="..\..\src\AgentBridge.Transport\AgentBridge.Transport.csproj" />
+    <!-- Only to check a roster signing key's signatures with the roster's own rules (#55 R1d). -->
+    <ProjectReference Include="..\..\src\AgentBridge.Roster\AgentBridge.Roster.csproj" />
+    <!-- The roster scenarios' signed entries, so the relay is tested against the same bytes as the library. -->
+    <Compile Include="..\AgentBridge.Roster.Tests\World.cs" Link="Roster\World.cs" />
+    <Compile Include="..\AgentBridge.Roster.Tests\RosterFixture.cs" Link="Roster\RosterFixture.cs" />
+    <Compile Include="..\AgentBridge.Roster.Tests\TestKey.cs" Link="Roster\TestKey.cs" />
     <ProjectReference Include="..\..\src\AgentBridge.Relay\AgentBridge.Relay.csproj" />
     <ProjectReference Include="..\..\tools\AgentBridge.RelaySmoke\AgentBridge.RelaySmoke.csproj" />
     <None Include="testdata\**" CopyToOutputDirectory="PreserveNewest" />

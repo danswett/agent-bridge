@@ -5,8 +5,9 @@
 //   and a relay restart's 1012 spread over 0-5 s or the relay's hint)
 // - reconnect at once when the page becomes visible again, is shown from the bfcache, or
 //   the network returns
-// - stop for good when the relay refuses the account (sign in again) or another window has
-//   taken this device over (two would only keep replacing each other)
+// - stop for good when the relay refuses the account (sign in again) or another window keeps
+//   taking this device over (two would only keep replacing each other); a first takeover is
+//   taken back once, silently (#1218)
 // - rest while the app is out of sight (#610): after quietAfterMs hidden, the socket closes, and
 //   with it every channel, subscription and look at a machine. An open socket held the phone's
 //   radio in its high-power state, pinging every 20 s and taking every session's changes, until
@@ -22,6 +23,29 @@ import { ReconnectBackoff } from './backoff.js';
 // Long enough that switching to another app and back, to copy something, say, keeps everything
 // as it was; short enough that a phone put away stops talking within seconds.
 export const QUIET_AFTER_MS = 15000;
+// A phone that changes networks, or whose radio sleeps, can keep a socket that reads open while
+// nothing gets through either way. The relay closes it only at its pong timeout (30 s after its
+// next ping) and a reply waits 90 s for its answer, so a reply sat at Sending for a minute or more,
+// then went at once after Reconnecting (#1128). So once a message has gone out on a channel and
+// nothing at all has come back for PROBE_AFTER_MS, the relay is asked whether it is still there
+// (Relay.probe), and without an answer in PROBE_TIMEOUT_MS the socket is given up and another
+// opened at once. Whatever was on its way is sent again on it with its same request, which a host
+// carries out once however often it comes (answer-service.js).
+export const PROBE_AFTER_MS = 5000;
+export const PROBE_TIMEOUT_MS = 3000;
+const UNRESPONSIVE = Object.freeze({ code: 1000, reason: 'unresponsive' });
+
+// A window replaced by another one takes the connection back once, on its own. Replaced again
+// within this long of that take-back, it stops for good (two windows in front would otherwise
+// replace each other for ever) and says so, with Use here (#1218).
+export const REPLACED_GUARD_MS = 60000;
+
+// Why the connection is stopped for good because another window took it. An installed app has
+// no tabs, so it says window only; the person need not know about sockets.
+export const REPLACED_WORDING = Object.freeze({
+  browser: 'This app is open in another window or tab.',
+  installed: 'This app is open in another window.',
+});
 
 export class BridgeConnection {
   #listeners = new Map();
@@ -33,11 +57,22 @@ export class BridgeConnection {
   #wake = null;
   #rest = null;
   #restTimer = null;
+  // When this window last took the connection back after being replaced (ms), kept across the
+  // take-back: a second replacement within REPLACED_GUARD_MS of it is final. Null before one.
+  #tookBackAt = null;
+  // Replaced while out of sight: 'back' or 'final' (the guard, as it stood when it was replaced).
+  // It rests (silently) without the usual wake-and-connect, and takes the connection back once,
+  // or stops for good, when it is next in front.
+  #yielded = null;
+  // Set while a message sent on the current relay awaits any frame back, then a probe of it.
+  #watchTimer = null;
+  #probing = null;
   relay = null;
   presence = [];
   // The account's machines that are offline (relay.js); null while the relay keeps no roster.
   known = null;
   // 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'resting' | 'replaced' | 'signed-out' | 'stopped'
+  // replaced: stopped for good because another window keeps taking the connection, until Use here.
   state = 'idle';
   detail = '';
   retryAt = 0;
@@ -46,11 +81,12 @@ export class BridgeConnection {
   // anything is on its way that resting would cut off.
   constructor({
     base, key, deviceId, name, account, win = globalThis, quietAfterMs = QUIET_AFTER_MS, busy = () => false,
-    makeRelay = (options) => new Relay(options),
+    makeRelay = (options) => new Relay(options), now = () => Date.now(), probeAfterMs = PROBE_AFTER_MS, probeTimeoutMs = PROBE_TIMEOUT_MS,
   }) {
-    Object.assign(this, { base, key, deviceId, name, account, win, quietAfterMs, busy, makeRelay });
+    Object.assign(this, { base, key, deviceId, name, account, win, quietAfterMs, busy, makeRelay, now, probeAfterMs, probeTimeoutMs });
     this.channels = new ChannelSet({ key, deviceId, name });
     this.channels.onLog = (line) => this.#emit('log', line);
+    this.channels.onSent = () => this.#sent();
   }
 
   on(type, fn) {
@@ -79,7 +115,10 @@ export class BridgeConnection {
         if (this.#hidden()) { return; }
         clearTimeout(this.#restTimer);
         this.#restTimer = null;
-        if (this.state === 'resting') { this.state = 'idle'; }
+        if (this.state === 'resting') {
+          this.state = 'idle';
+          if (this.#yielded) { this.#takeBack(this.#yielded === 'final'); return; }
+        }
         this.#backoff.reset();
         this.#connect();
       };
@@ -89,8 +128,11 @@ export class BridgeConnection {
       this.win.addEventListener?.('pageshow', this.#wake);
       this.win.addEventListener?.('online', this.#wake);
     }
-    // Explicitly restarting (a "Use here" after another window took over) clears the stop.
-    if (this.state === 'replaced' || this.state === 'stopped') { this.state = 'idle'; }
+    // Explicitly restarting (a "Use here" after another window took over) clears the stop, and
+    // the guard: the person has chosen this window.
+    if (this.state === 'replaced' || this.state === 'stopped' || this.#yielded) { this.state = 'idle'; }
+    this.#yielded = null;
+    this.#tookBackAt = null;
     // Started out of sight (opened behind another tab): it rests as it would once put away.
     if (this.#hidden()) { this.#restLater(); }
     return this.#connect();
@@ -108,6 +150,8 @@ export class BridgeConnection {
     }
     clearTimeout(this.#restTimer);
     this.#restTimer = null;
+    this.#yielded = null;
+    this.#unwatch();
     const c = this.#connecting;
     this.#connecting = null;
     this.#attempt = null;
@@ -142,6 +186,7 @@ export class BridgeConnection {
   // they do for a drop, so every channel goes and is opened again on return.
   #sleep() {
     clearTimeout(this.#retryTimer);
+    this.#unwatch();
     // Put away while the relay was still admitting it: that attempt goes too, so the return
     // connects afresh rather than waiting on an admission that may never come.
     const c = this.#connecting;
@@ -185,6 +230,7 @@ export class BridgeConnection {
       this.#emit('presence', list);
     };
     r.onClose = (e) => this.#dropped(r, e);
+    r.onReceive = () => { if (this.relay === r) { this.#unwatch(); } };
     this.#connecting = r;
     const attempt = r.connect(this.account.token).then(() => {
       // Put away while it was connecting (#sleep let it go), or stopped: it never takes over.
@@ -204,9 +250,40 @@ export class BridgeConnection {
     return attempt;
   }
 
-  #dropped(r, e) {
+  // A message went out on a channel: unless a frame of any kind comes back within probeAfterMs,
+  // the relay is probed. One watch at a time, from the first message nothing has answered yet.
+  #sent() {
+    const r = this.relay;
+    if (!r || this.#watchTimer || this.#probing === r || typeof r.probe !== 'function') { return; }
+    this.#watchTimer = setTimeout(() => { this.#watchTimer = null; this.#probe(r); }, this.probeAfterMs);
+  }
+
+  #unwatch() {
+    clearTimeout(this.#watchTimer);
+    this.#watchTimer = null;
+  }
+
+  async #probe(r) {
+    if (this.relay !== r) { return; }
+    this.#probing = r;
+    this.#emit('log', `relay silent ${this.probeAfterMs} ms after a send; probing it`);
+    let alive = false;
+    try { alive = await r.probe(this.probeTimeoutMs); } catch { alive = false; }
+    if (this.#probing === r) { this.#probing = null; }
+    if (alive || this.relay !== r) { return; }
+    // Its close event may come only once the browser gives up on the socket, or never: the
+    // connection is treated as gone first, so its close, whenever it comes, is ignored (#dropped).
+    this.#dropped(r, UNRESPONSIVE, { now: true });
+    r.close(UNRESPONSIVE.code, UNRESPONSIVE.reason);
+  }
+
+  #dropped(r, e, { now = false } = {}) {
     if (r && this.relay !== r) { return; }
     if (r) {
+      this.#unwatch();
+      // So that the next stall is on record (#1128): why it went, and how long it had been quiet.
+      const since = r.lastReceivedAt ? `${Date.now() - r.lastReceivedAt} ms since its last frame` : 'no frame received';
+      this.#emit('log', `relay connection lost (${`${e.code ?? ''} ${e.reason ?? ''}`.trim()}), ${since}`);
       this.relay = null;
       this.channels.attach(null);
       this.#emit('lost', e);
@@ -218,12 +295,51 @@ export class BridgeConnection {
       return;
     }
     if (e.code === CLOSE_CODES.replaced) {
-      this.#setState('replaced', 'This app is open in another window or tab.');
+      this.#replaced();
       return;
     }
-    const delay = this.#backoff.next(e.code, e.reason);
+    // Given up for silence: the network is likely there by another route, so no waiting.
+    const delay = now ? 0 : this.#backoff.next(e.code, e.reason);
     this.retryAt = Date.now() + delay;
     this.#setState('reconnecting', `${e.code ?? ''} ${e.reason ?? ''}`.trim());
     this.#retryTimer = setTimeout(() => this.#connect(), delay);
+  }
+
+  // Another window took the connection. In sight, this one takes it back at once; out of sight,
+  // it rests without a word and does the same when next in front (#wake). Whether the guard
+  // holds is settled now, when it was replaced, not hours later when it is looked at again.
+  #replaced() {
+    const final = this.#tookBackAt !== null && this.now() - this.#tookBackAt < REPLACED_GUARD_MS;
+    if (this.#hidden()) {
+      this.#yielded = final ? 'final' : 'back';
+      this.#setState('resting', 'Another window has the connection.');
+      return;
+    }
+    this.#takeBack(final);
+  }
+
+  // Takes the connection back once, unless it was replaced again within REPLACED_GUARD_MS of a
+  // take-back: two windows in sight would otherwise replace each other for ever, so this one
+  // stops for good (final).
+  #takeBack(final) {
+    this.#yielded = null;
+    if (final) {
+      this.#setState('replaced', this.#installed() ? REPLACED_WORDING.installed : REPLACED_WORDING.browser);
+      return;
+    }
+    this.#tookBackAt = this.now();
+    // Not announced: no banner, no paused strip. The attempt that was refused (when it was the
+    // connecting that was replaced) is finished with, or #connect would join it and stay stopped.
+    this.state = 'idle';
+    this.#attempt = null;
+    this.#backoff.reset();
+    this.#connect();
+  }
+
+  // An installed app has no tabs to speak of.
+  #installed() {
+    try {
+      return this.win.navigator?.standalone === true || this.win.matchMedia?.('(display-mode: standalone)')?.matches === true;
+    } catch { return false; }
   }
 }

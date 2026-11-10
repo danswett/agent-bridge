@@ -87,7 +87,7 @@
         <a class="button secondary" href="./">Leave demo</a>
       </div>
       <div id="replaced-banner" class="banner" role="alert" hidden>
-        <span>This app is open in another window or tab.</span>
+        <span id="replaced-text">This app is open in another window or tab.</span>
         <button type="button" id="use-here" class="button">Use here</button>
       </div>
 
@@ -207,6 +207,25 @@
             <button type="button" class="toggle" data-text-size="default" aria-pressed="true">Default</button>
             <button type="button" class="toggle" data-text-size="larger" aria-pressed="false">Larger</button>
           </div>
+        </section>
+        <section id="key-check" class="panel key-check" aria-labelledby="key-check-h">
+          <h3 id="key-check-h">Keyboard check</h3>
+          <p class="note">See what a hardware keyboard sends to this app. Start it, then press keys here or on the Sessions page, and come back to read them. Nothing is saved or sent anywhere.</p>
+          <p id="key-check-mode" class="note"></p>
+          <div class="row">
+            <button type="button" id="key-check-toggle" class="button secondary">Start keyboard check</button>
+            <button type="button" id="key-check-copy" class="button secondary" hidden>Copy results</button>
+            <button type="button" id="key-check-clear" class="button secondary" hidden>Clear</button>
+          </div>
+          <div id="key-check-targets" class="key-check-targets" hidden>
+            <p class="note">Practice here: move to each with Tab, or tap it, then press Option+Up and Option+Down.</p>
+            <div class="row">
+              <button type="button" class="button secondary key-check-button">Practice button, like a session row</button>
+              <div class="key-check-box" tabindex="0" role="group" aria-label="Practice box">Practice box</div>
+            </div>
+          </div>
+          <p id="key-check-status" class="note" role="status" aria-live="polite"></p>
+          <ul id="key-check-list" class="key-check-list" aria-label="Keys pressed, newest first" hidden></ul>
         </section>
         <section id="demo-settings" class="panel account" aria-labelledby="demo-settings-h" hidden>
           <h3 id="demo-settings-h">Demo</h3>

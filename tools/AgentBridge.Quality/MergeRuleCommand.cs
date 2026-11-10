@@ -252,9 +252,16 @@ static class MergeRuleCommand
         // The status belongs to a commit, not a pull request, and two open pull requests can share
         // a head: so every mode judges all open pull requests on the head it's about, and posts the
         // worst of their verdicts. A held or unreviewed one then can't ride on another's success.
+        // A scoped run that finds main not green judges every open pull request, as --all does: a
+        // run for another pull request or head may have been displaced (GitHub keeps one waiting
+        // run per concurrency group), and its success, posted while main was green, mustn't stand
+        // while main is red. Posts that wouldn't change a verdict are skipped, so this is cheap.
+        var widened = (options.ContainsKey("pr") || options.ContainsKey("sha")) && session.Main.State != "success";
+        if (widened)
+            output.WriteLine($"Main isn't green ({session.Main.State}): judging every open pull request, not only the one asked for.");
         List<PullRequestFacts> prs;
         string? listCut = null;
-        if (options.TryGetValue("pr", out var number))
+        if (!widened && options.TryGetValue("pr", out var number))
         {
             if (!int.TryParse(number, NumberStyles.None, CultureInfo.InvariantCulture, out var n))
                 throw new ArgumentException($"--pr {number} is not a pull request number.");
@@ -277,7 +284,7 @@ static class MergeRuleCommand
         {
             (prs, listCut) = FetchOpen(session);
             problems += Report(output, listCut);
-            if (options.TryGetValue("sha", out var sha))
+            if (!widened && options.TryGetValue("sha", out var sha))
                 prs = prs.Where(p => SameSha(p.HeadSha, sha)).ToList();
         }
 
@@ -333,7 +340,7 @@ static class MergeRuleCommand
             if (judged.Count > 1)
                 output.WriteLine($"    {judged.Count} pull requests share {MergeRule.Short(head.Key)}; its status is the worst verdict, {combined.State}: {combined.Description}");
         }
-        if (prs.Count == 0 && !options.ContainsKey("pr"))
+        if (prs.Count == 0 && !(options.ContainsKey("pr") && !widened))
             output.WriteLine(options.TryGetValue("sha", out var s) ? $"No open pull request into {config.Base} has head {s}." : $"No open pull requests into {config.Base}.");
         output.WriteLine($"API: {session.Cost}.");
         // A run that can't read fails its heads with error, so say why before the budget runs out.
@@ -535,8 +542,15 @@ static class MergeRuleCommand
             || root.GetProperty("total_commits").GetInt32() != commits.GetArrayLength())
             return $"{config.Base}'s commits after CI {MergeRule.Short(sha)} can't all be listed: waiting for {config.Base}'s CI";
         var after = commits.EnumerateArray().Select(c => c.GetProperty("sha").GetString() ?? "").ToList();
+        // A first attempt still queued or running is found, not red: the verdict follows its
+        // finishing (merge-rule runs on that event). Judging only on completion left every armed
+        // pull request failed for the length of a CI run after each merge to main.
+        static bool Pending(JsonElement run) =>
+            run.GetProperty("status").GetString() is "queued" or "in_progress" or "waiting" or "requested" or "pending"
+            && !(run.TryGetProperty("run_attempt", out var a) && a.ValueKind == JsonValueKind.Number && a.GetInt32() > 1);
         string? Red(JsonElement run) =>
             after.Contains(run.GetProperty("head_sha").GetString() ?? "", StringComparer.Ordinal)
+            && !Pending(run)
             && !(run.GetProperty("status").GetString() == "completed" && run.GetProperty("conclusion").GetString() == "success")
                 ? $"{config.Base}'s CI hasn't passed on {MergeRule.Short(run.GetProperty("head_sha").GetString() ?? "")}, a commit after CI {MergeRule.Short(sha)}: waiting for {config.Base} to be green"
                 : null;
@@ -684,7 +698,7 @@ static class MergeRuleCommand
         return facts with { Statuses = facts.Statuses.Where(s => !contexts.Contains(s.Context)).Concat(history).ToList() };
     }
 
-    /// <summary>The receipt contexts: the independent review's, and the waiver's second review's when set.</summary>
+    /// <summary>The receipt contexts: the independent review's, and the second review's.</summary>
     static HashSet<string> ReceiptContexts(MergeRuleConfig config) =>
         new[] { config.IndependentReview.Context, config.CopilotWaiver.SecondReview }
             .Where(c => !string.IsNullOrWhiteSpace(c)).ToHashSet(StringComparer.Ordinal);

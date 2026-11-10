@@ -1092,3 +1092,30 @@ test('a hello that changes while the channel is still subscribing is asked for a
   assert.equal(asked.length, 2, 'asked once it is open: the host says so only once');
   events = [];
 });
+
+test("the page's focus (#1190) is told to a machine's channel as it is made, and to every open one when it changes, the open session only to its own machine", async () => {
+  const connection = fakeConnection([{ id: 'a', kind: 'host' }, { id: 'b', kind: 'host' }]);
+  const told = [];
+  const refreshed = [];
+  const hosts = new HostSession({
+    connection, store: new SessionsStore(), storage: null,
+    makeClient: (ch) => Object.assign(fakeClient(ch), {
+      setFocus: ({ idle, ...f }) => told.push([ch.peerId, { ...f, idle: idle?.() }]),
+      refreshFocus: () => refreshed.push(ch.peerId),
+    }),
+  });
+  hosts.setFocus({ visible: true, hostId: 'b', id: 's1', question: 'q1', idle: () => 4200 });
+  hosts.select(ALL);
+  await flush();
+  connection.opens[0].resolve();
+  await flush();
+  assert.deepEqual(told, [['a', { visible: true, open: null, openQuestion: null, idle: 4200 }]]);
+  connection.opens[1].resolve();
+  await flush();
+  assert.deepEqual(told.at(-1), ['b', { visible: true, open: 's1', openQuestion: 'q1', idle: 4200 }]);
+  told.length = 0;
+  hosts.setFocus({ visible: false, hostId: 'a', id: 's9', question: 'q2', idle: () => 4200 });
+  assert.deepEqual(told, [['a', { visible: false, open: 's9', openQuestion: 'q2', idle: 4200 }], ['b', { visible: false, open: null, openQuestion: null, idle: 4200 }]]);
+  hosts.refreshFocus();
+  assert.deepEqual(refreshed, ['a', 'b']);
+});

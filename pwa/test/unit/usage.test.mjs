@@ -219,6 +219,24 @@ test('a kept reading is not shown once it is two weeks old, though nothing has b
   assert.equal(book.empty, true);
 });
 
+test('a reading stamped more than ten minutes ahead of the clock is refused, live or kept, and never replaces a genuine older one', () => {
+  let kept = null;
+  const book = new UsageBook({ now: () => NOW });
+  book.useCache({ entries: [claude({ measuredAt: iso(-H), readBy: { id: 'vm-id', name: 'VM' } })], save: (e) => { kept = e; } });
+  book.set('desk-id', { agents: [claude({ measuredAt: iso(11 * 60000), windows: [{ key: 'weekly_all', label: 'Weekly', percent: 99 }] })] }, 'Desk');
+  assert.deepEqual(book.entries().map((e) => e.windows[0].percent), [41.3]);
+  assert.ok(kept === null || kept.every((e) => e.windows[0].percent === 41.3));
+  book.set('desk-id', { agents: [claude({ measuredAt: iso(10 * 60000), windows: [{ key: 'weekly_all', label: 'Weekly', percent: 55 }] })] }, 'Desk');
+  assert.deepEqual(book.entries().map((e) => e.windows[0].percent), [55]);
+});
+
+test('with no cache attached (signed out) a reading stamped more than ten minutes ahead is still refused', () => {
+  const book = new UsageBook({ now: () => NOW });
+  book.set('vm-id', { agents: [claude({ measuredAt: iso(-H), windows: [{ key: 'weekly_all', label: 'Weekly', percent: 41.3 }] })] }, 'VM');
+  book.set('desk-id', { agents: [claude({ measuredAt: iso(11 * 60000), windows: [{ key: 'weekly_all', label: 'Weekly', percent: 99 }] })] }, 'Desk');
+  assert.deepEqual(book.entries().map((e) => e.windows[0].percent), [41.3]);
+});
+
 test('a kept reading that names no machine is dropped when the cache loads, and what is kept is saved', () => {
   let kept = null;
   const book = new UsageBook({ now: () => NOW });

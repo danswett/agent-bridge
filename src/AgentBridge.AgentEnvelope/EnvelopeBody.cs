@@ -145,7 +145,7 @@ public sealed record EnvelopeBody(
 
         if (StrictJson.Integer(o.GetProperty("v"), "v") != Version) { throw new EnvelopeException(Refusal.Version, "v"); }
         var request = Uuid(o, "request");
-        var account = Id(o, "account", "account");
+        var account = AccountId(o, "account", "account");
         var generation = Id(o, "generation", "generation");
 
         var heads = new List<string>();
@@ -225,7 +225,7 @@ public sealed record EnvelopeBody(
             var v = StrictJson.Object(item, "chain.via");
             string[] names = ["account", "machine", "session"];
             StrictJson.Members(v, names, names, "chain.via");
-            via.Add(new ChainSender(Id(v, "account", "chain.via.account"), Id(v, "machine", "chain.via.machine"),
+            via.Add(new ChainSender(AccountId(v, "account", "chain.via.account"), Id(v, "machine", "chain.via.machine"),
                 Chars(v, "session", 1, 128, SessionChar, "chain.via.session")));
         }
         // `via` is the distinct sending sessions, this sender included, so it never outgrows
@@ -253,7 +253,7 @@ public sealed record EnvelopeBody(
             {
                 var v = StrictJson.Object(item, "provenance.origins");
                 StrictJson.Members(v, ["account", "category", "firstAt"], ["category", "firstAt"], "provenance.origins");
-                var account = v.TryGetProperty("account", out _) ? Id(v, "account", "provenance.origins.account") : null;
+                var account = v.TryGetProperty("account", out _) ? AccountId(v, "account", "provenance.origins.account") : null;
                 var category = Chars(v, "category", 1, 64, CategoryChar, "provenance.origins.category");
                 if (!(category[0] is >= 'a' and <= 'z')) { throw new EnvelopeException(Refusal.Value, "provenance.origins.category"); }
                 origins.Add(new Origin(account, category, StrictJson.Integer(v.GetProperty("firstAt"), "provenance.origins.firstAt")));
@@ -281,7 +281,7 @@ public sealed record EnvelopeBody(
         // (§7.9): they are unknown members here, so an envelope that names a link can never be
         // mistaken for a same-account one.
         StrictJson.Members(o, ["account", "machine", "session", "instance"], ["account", "machine"], "target");
-        var account = Id(o, "account", "target.account");
+        var account = AccountId(o, "account", "target.account");
         var machine = Id(o, "machine", "target.machine");
         string? session = null, instance = null;
         if (o.TryGetProperty("session", out _)) { session = Chars(o, "session", 1, 128, SessionChar, "target.session"); }
@@ -318,6 +318,12 @@ public sealed record EnvelopeBody(
     {
         var text = StrictJson.String(o.GetProperty(name), where);
         return Codec.IsId(text) ? text : throw new EnvelopeException(Refusal.Value, where);
+    }
+
+    static string AccountId(JsonElement o, string name, string where)
+    {
+        var text = StrictJson.String(o.GetProperty(name), where);
+        return Codec.IsAccountId(text) ? text : throw new EnvelopeException(Refusal.Value, where);
     }
 
     static string Uuid(JsonElement o, string name, string? where = null)

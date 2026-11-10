@@ -324,7 +324,10 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    for reruns with `gh workflow run --ref`, fires only once the file has run or is on `main`), or
    listed in the catalog with `status: planned`. It also checks ci.yml's wiring to the plan, which
    only names hold together: every job whose `if:` reads the plan has exactly the one gate shape
-   (its own output, and it runs in the whole ring whatever the plan says); the plan
+   (its own output, and it runs in the whole ring whatever the plan says, except `app` on a pull
+   request, which runs only when its own output is true: the whole ring alone no longer brings
+   the packaging legs to a pull request, and a pull request's whole ring leaves the
+   `windows-11-arm` product leg to `main`, #1249); the plan
    step's `JOBS`, the jobs gated on the plan and the plan's outputs, bound to the steps that
    compute them, agree; every check job in ci.yml is in `quality-gate`'s needs (all but the
    delivery jobs: `publish-gate`, `publish`, `attest`, `relay-image-sarif`, `sign`, each pinned to
@@ -464,11 +467,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      the rules in [`merge-rule.yml`](merge-rule.yml): main green, that is the latest finished
      push run of `ci.yml` on main (at its latest attempt) passed, unless the pull request has the
      `fixes-main` label; not a draft; no `hold` or `do-not-merge`
-     label; a completed Copilot review whose commit is the head (#706: Copilot posts an error,
-     a billing failure, a diff too large to review or a review that didn't run in full as a
-     review by the same bot on the same commit, so only one that opens with its overview
-     counts, and anything else fails, naming why, even an overview with findings below a
-     notice that the agentic review timed out); CodeQL's latest run on the head green and
+     label; an independent-review receipt on the head (see the standing rule below; a Copilot review is optional and an errored one is ignored, #706); CodeQL's latest run on the head green and
      code scanning's `CodeQL` check not failed; every other check run and status on the head
      passed (success, skipped or neutral), since `apple.yml`, `codeql.yml`, `relay.yml`,
      `dependencies.yml`, `workflow-lint.yml` and `perf.yml` sit outside `quality-gate`, each
@@ -493,7 +492,12 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      whose jobs or compare can't be read, still counts as not green: re-run it. A run that passed
      doesn't vouch for a later commit (by main's compare from it) whose run, older by id since
      runs aren't promised to be created in push order, hasn't passed, nor for one whose run isn't
-     found: a later commit with no run on the first page of 20 is looked for on up to four more,
+     found. A later commit's first-attempt run still queued or running counts as found and as not
+     red: the pass stands, so a pull request can be judged green while main's CI on its newest
+     commit is still running, and the verdict follows that run (merge-rule judges again when
+     main's `CI` push run is requested, starts and finishes), so a red result fails every pull
+     request at once. Only a commit with no run at all is "can't be found", which the run's own
+     `requested` event settles within seconds, without a timer. A later commit with no run on the first page of 20 is looked for on up to four more,
      and one still not found (further back, or never run, as a commit inside a push of several)
      holds main not green until a run on main's head passes. While it
      isn't green, every pull request fails, its description starting `Main is red (CI <sha>)`;
@@ -501,20 +505,20 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      label (`main_green.exempt_labels`) from the merge coordinator, since labels take triage
      rights: it skips this check and nothing else, the independent review included. CI finishing
      on main starts a run, so verdicts follow main to red and back.
-   - The standing rule (owner decision 2026-11-05, #955): Copilot reviews only the security PRs
-     Quality spends the monthly included requests on. A PR labelled `copilot-waived`
-     (`copilot_waiver.labels`; only the merge coordinator adds it) may merge without a Copilot
-     review if it has a success independent-review receipt on its head from a listed poster. A PR
+   - The standing rule (owner decision 2026-11-08, replacing the 2026-11-05 label of #955):
+     Copilot and Codex reviews are optional extras, and the receipts are the gate. A PR needs a
+     success independent-review receipt on its head from a listed poster and no Copilot review,
+     with no label. A PR
      that needs that receipt (a sensitive path, a security mark, or an incomplete file list) also
      needs a second success receipt, `copilot_waiver.second_review` (`independent-review-2`), from
      a listed poster on the same head, and the two receipts' descriptions must each name a model
      whose family the other doesn't share (`claude-opus-5.5` and `gpt-6.1-sol`, say). A sensitive
      file in `copilot_waiver.one_review_paths` (`docs/status.md`, whose row the receipt checks
      against its decision) doesn't call for the second. A completed Copilot review on the head is
-     itself the other family, so with one there the label changes nothing. A failed second receipt
-     from a poster blocks like a failed first one, whether or not the label is on. Without what it
-     needs, the label fails and names the missing receipt; it lifts nothing else, and the verdict
-     says `Copilot review waived (label)`.
+     still the other family when present, but never replaces the first receipt; a Copilot error or timeout review is ignored. A failed
+     receipt from a poster blocks. The `copilot-waived` label is still accepted and changes
+     nothing. Bot-only threads, which would still block the ruleset's 0-unresolved-threads
+     requirement, are resolved with `quality/resolve-bot-threads.ps1`.
    - A pull request can't loosen its own gate (#487, Finding 1): every trigger
      (`pull_request_target`, `status`, `workflow_run` of every other workflow, `check_suite`, a
      10-minute `schedule`, `workflow_dispatch`) runs main's copy of the workflow, which checks out
@@ -546,10 +550,27 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      failing (15 points and 13 REST calls with 25 open on 2026-11-03), plus one REST call for
      main's CI, and prints what it spent. While main is red, every pull request but a
      `fixes-main` one is already failing, so a run costs less.
-     Runs go one at a time, and an event-driven run waits 45 seconds first so a push's burst of
-     events folds into the one run queued behind it: at about 2.5 minutes a run, at most 24 an hour,
-     so under 400 points an hour at worst and nearer 150 usually (the schedule's 6 plus events).
      Below 200 points left, a run warns in its log.
+   - Fast path (#1251): an event about one pull request or head judges only that head
+     (`--pr N` for `pull_request_target`, `--sha` for `status`, `check_suite` and `workflow_run`),
+     with no 45 second wait and no build: the evaluator is restored from a cache keyed by a hash of
+     its source, and built (then saved) only when main changed it. Runs go one at a time in one group, a sweep
+     included, so an older read of main's CI can't land after a newer verdict; nothing cancels, and a
+     burst folds into the one run queued behind the running one (a displaced scoped run leaves its
+     head pending until the next run or the 10 minute sweep). A scoped run that finds main not
+     green judges every open pull request, as `--all` does, so a sweep displaced while main turns
+     red can't leave another pull request's success standing (about 15 points, only while main is
+     red; unchanged verdicts aren't posted again). A scoped run costs about 3 points
+     (the open list, the head's pull request, a re-read before a post); at 15 merges an hour,
+     about 3 pushes each, 45 bursts of at most 6 runs is 810 points at the very worst and about
+     400 at the 3 runs a burst usually folds to, plus the sweeps (6 scheduled and 15 after main's
+     CI, up to 15 points each with 25 pull requests open, 315). Kill switch: set the repository
+     variable `FLEET_MERGERULE` to `off` (`gh variable set FLEET_MERGERULE --body off`); the next
+     run, which reads it, goes back to the earlier path: wait 45 seconds, build main's evaluator,
+     judge every pull request, in one group. Delete the variable to turn the fast path back on.
+   - Before the fast path, runs went one at a time and an event-driven run waited 45 seconds so a
+     push's burst of events folded into the one run queued behind it: at about 2 minutes a run,
+     at most 24 an hour, so under 400 points an hour at worst and nearer 150 usually.
    - The receipts and the status are honest-mistake guards for sessions sharing the owner's
      account, not a defence against that account: it can post any status. A workflow added by a
      same-repo pull request could, with `statuses: write`, post its own `merge-rule` from GitHub
@@ -589,6 +610,70 @@ uses that file: the selector's build and each suite's. NuGet's vulnerability aud
 reads the mirror. Overriding only the package sources (`--source`) isn't enough: audit still
 tries nuget.org from `nuget.config`, and its NU1900 warning is an error here. Unset, nothing
 changes, and the committed `nuget.config`, which CI uses, keeps nuget.org.
+
+### Independent review depth
+
+The [owner-approved #929 rule](https://github.com/danswett/agent-bridge/issues/929#issuecomment-6668478876)
+sets review depth by risk, effective 2026-11-05 12:27 PT:
+
+| What the PR touches | Required review |
+|---|---|
+| A `sensitive_paths` match in [`merge-rule.yml`](merge-rule.yml), a security title or label, or production auth, delivery or lifecycle code | **ENTIRE:** every resulting file, read to EOF after CI is green |
+| Other production code, at first review | **FULL:** the diff plus every changed file in full |
+| A re-push after a CLEAN review | **Delta:** the diff since the last CLEAN head, plus a whole read of only the files touched since |
+| A test-only or docs-only re-push | Delta only |
+
+A rebase may retain its independent review when `git range-diff` shows that the
+PR's own commits are unchanged; the receipt cites that range-diff. Otherwise,
+a carried delta needs a proved previously reviewed ancestor and an explicit
+review of the delta at the new head.
+
+Reduced read depth does not carry CI, Copilot's review or a commit status to a new
+head. The new head still needs fresh CI, a completed Copilot review at that head,
+all substantive findings disposed of, no unresolved threads and, where required,
+an independent-review receipt at that exact head. Retained review evidence belongs
+in that receipt; neither a rebase nor a delta clears a hold or admits the PR.
+Changes to `merge-rule.yml` are themselves ENTIRE-review changes. The existing
+merge rule and its other gates remain in force; this table does not change the
+App, ruleset or allowed receipt posters.
+
+### Review failover when a quota stalls
+
+Owner standing policy, 2026-11-08 20:33 PT: a quota never stalls a review, and rigor stays the
+same. The agent reviewers and their receipts are the review gate. Copilot's review bot is tied to
+the owner's plan and may augment a review, but nothing waits on it (the receipts-only waiver
+above). Automatic Codex reviews are off (owner, 2026-11-08 20:41 PT): nothing waits for, counts
+on or is blocked by a Codex comment, and `@codex review` is used only on demand, when it is
+useful. Open threads left only by a bot are resolved, with a link to the ruling, once the pull
+request is otherwise reviewed.
+
+- **What fails over is the reviewer's model quota.** Review sessions run under the
+  `dswett_microsoft` (EMU) Copilot entitlement. GitHub refuses that account any write on this
+  repository, so receipts post only through `independent_review.posters` (`danswett`, and the
+  receipts App below), and the EMU account is not on that list.
+- **A quota stall** is any of: a reviewer session returning a quota, rate-limit, billing, 429 or
+  401 error; no receipt on a ready head 20 minutes after it was asked for. An optional Copilot
+  review that hasn't completed within 20 minutes is dropped from the wait, never waited for.
+- **Order of fallback.** First the cheap agent reviewer (`claude-sonnet-5.5`, EMU). On a stall,
+  a reviewer of a second family (`gpt-6-luna` or `gemini-3.8-flash`) for the same head. On a
+  stall there too, the same two on the `danswett` Copilot entitlement. A reviewer never waits for
+  a quota to reset.
+- **Rigor does not move.** A sensitive change still needs `independent-review` and
+  `independent-review-2` from two different model families, the depth table above applies, and a
+  security-subject document is read in full by both reviewers, whichever entitlement ran them.
+  Each receipt's description names its model, so a failover is visible afterwards.
+- **The EMU token** (`COPILOT_GITHUB_TOKEN`, a fine-grained PAT) lasts 8 days. When it expires,
+  EMU reviews return 401 and the fallback above moves to the `danswett` entitlement until the
+  owner renews it. Never `/login` per session: EMU sign-ins revoke each other.
+
+### Who posts receipts
+
+Receipts count only from `independent_review.posters` in `quality/merge-rule.yml`: `danswett`
+and the receipts GitHub App `agent-bridge-receipts`, written as GraphQL names it, without REST's
+`[bot]`. The App holds Commit statuses (write), Pull requests (read) and Metadata (read), and
+nothing else; its key stays on VM4. It has its own rate pool, so danswett's quota running out
+doesn't stop receipts. danswett stays a poster as the fallback for when the App's machine is down.
+To roll back, revoke the App's key or suspend it in GitHub settings; nothing else depends on it.
 
 ## 5. Coverage, timing, flakes and reports
 
@@ -644,6 +729,27 @@ changes, and the committed `nuget.config`, which CI uses, keeps nuget.org.
     `gh workflow run flake-hunt.yml --ref <branch> -f runs=50 -f projects=AgentBridge.Host.Tests -f filter="FullyQualifiedName~AnswerFlowTests"`.
   - Nothing is skipped without the owner's say-so (AGENTS.md: never weaken tests).
   - The `--blame-hang` setting stays in place.
+- **Known flakes on `main` are re-run once, automatically**
+  ([rerun-known-flakes.yml](../.github/workflows/rerun-known-flakes.yml), owner decision
+  2026-11-08). When a push run of CI on `main` ends red, `quality/rerun-known-flakes.ps1` reads
+  each failed job's log (not `quality-gate`, the summary job, which fails whenever another does and has no test of its own) and re-runs the failed jobs once only if there is at least one failed
+  job, every failed job shows a failed test, and every failed test is named in an open `flaky`
+  issue by `danswett` or the hunt's bot. It leaves the run red when any failed test has no issue,
+  a job failed without a test failure in its log (a build error, a hang), a job timed out, the run
+  is already a re-run (attempt 2 or later), or a newer push run exists on `main`. Each re-run is
+  a comment on every flake issue it concerned, one line per test
+  (`rerun-known-flakes: test=<name> run=<id> attempt=1 job=<job>`), so the flips of a test can be
+  counted against the quarantine thresholds. The workflow runs main's copy of the script with a
+  token that can re-run workflows and comment on issues, and never runs the failed run's code.
+  Offline test: `quality/test-rerun-known-flakes.ps1` (catalog suite `rerun-known-flakes`).
+- **Red minutes on main** (owner target, 2026-11-09): `pwsh quality/red-minutes.ps1` prints how long
+  main's CI was red over the last 24 h, the same way the main guardian counts it (a spell runs from a
+  failed push run of `ci.yml` to the next success; cancelled and running runs say nothing). Target:
+  p90 of red minutes per hour at most 10 over any rolling 24 h, mean at most 3, no single spell over
+  30 minutes, and every spell gets a named cause. It reads with a cached ETag, so a poll that finds
+  nothing new costs no rate limit. The Quality Lead puts its one-line result in the 08:00 digest and
+  in the weekly report. A failure that went green on a re-run is invisible to it, so it undercounts.
+  Offline test: `quality/test-red-minutes.ps1` (catalog suite `red-minutes-script`).
 - **The weekly report** (`weekly-report`, [weekly-report.yml](../.github/workflows/weekly-report.yml))
   is how the flake record gets read, so flakes are fixed rather than re-run. Every Monday at 08:00
   PT, `agent-bridge-quality report` reads the past 7 days from GitHub and the workflow comments it

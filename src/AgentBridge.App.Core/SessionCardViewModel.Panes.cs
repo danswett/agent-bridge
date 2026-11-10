@@ -4,7 +4,7 @@ namespace AgentBridge.App.Core;
 // code (§4.1, #215: paths, branches, ids, commands). A path is cut in the middle to the width it
 // is shown at, by the view (Words.Middle), keeping the end people tell paths apart by (#214), with
 // the whole of it in the tooltip, or Full when a row's words are short for it (Started's date).
-public sealed record DetailRow(string Label, string Value, bool Mono = false, bool Path = false, string? Full = null)
+public sealed record DetailRow(string Label, string Value, bool Mono = false, bool Path = false, string? Full = null, bool Copy = false)
 {
     public string Tip => Full ?? Value;
 
@@ -128,7 +128,7 @@ public sealed partial class SessionCardViewModel
         if (session.Activity.TurnCount is { } t) { rows.Add(new("Turns", Words.Plural(t, "turn", "turns"))); }
         if (session.Activity.Compactions is > 0 and var c) { rows.Add(new("Compactions", Words.Plural(c, "compaction", "compactions"))); }
         if (session.ProcessId is { } pid) { rows.Add(new("Process", $"pid {pid.ToString(invariant)}", Mono: true)); }
-        rows.Add(new("ID", session.Id, Mono: true));
+        rows.Add(new("ID", session.Id, Mono: true, Copy: true));
         return rows;
     }
 

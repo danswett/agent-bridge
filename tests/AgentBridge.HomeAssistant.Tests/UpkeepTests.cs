@@ -1004,6 +1004,8 @@ public sealed class UpkeepTests : IDisposable
         // topics and the sessions its retained list names.
         var listed = JsonNode.Parse(ha.Retained[HaContract.GlobalAttributesTopic(Slug)])!["sessions"]!.AsArray().Select(s => s!["node"]!.GetValue<string>()).ToList();
         var forget = HaContract.ForgetTopics(Slug, listed).ToHashSet(StringComparer.Ordinal);
+        // launch_options is beyond agent-ha-bridge's list (#1142), so the writer's X does not name it.
+        forget.UnionWith([HaContract.LaunchOptionsConfig(Slug, "").Topic, HaContract.LaunchOptionsTopic(Slug)]);
         Assert.All(ha.Retained.Keys, topic => Assert.Contains(topic, forget));
 
         // So the X, pressed, leaves nothing of the machine but the switch, which is Home

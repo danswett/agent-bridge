@@ -41,12 +41,32 @@ function defaults(field) {
   return new Set((Array.isArray(d) ? d : [d]).map((x) => (typeof x === 'string' ? x : formatValue(x))));
 }
 
-function optionRow(label, { chosen, multi, other }) {
+// A resolved question never shows a default: only what the person answered, with a check and the
+// words "Your answer" so it never rests on colour (ui.md §6.4, Resolved).
+function optionRow(label, { chosen, multi, other, resolved }) {
+  if (resolved) {
+    return h('li', { class: `opt${chosen ? ' chosen' : ''}${other ? ' other' : ''}` },
+      h('span', { class: 'mark', 'aria-hidden': 'true' }, chosen ? '✓' : ''),
+      h('span', { class: 'label' }, label),
+      chosen ? h('span', { class: 'badge answered' }, 'Your answer') : null);
+  }
   const mark = multi ? (chosen ? '☑' : '☐') : (chosen ? '◉' : '○');
   return h('li', { class: `opt${chosen ? ' chosen' : ''}${other ? ' other' : ''}` },
     h('span', { class: 'mark', 'aria-hidden': 'true' }, mark),
     h('span', { class: 'label' }, label),
     chosen ? h('span', { class: 'badge' }, 'default') : null);
+}
+
+// What was answered for one field: the values chosen and any typed words. Nothing for a question
+// that closed without a record of an answer.
+function answeredOf(field, answer) {
+  const v = typeof answer?.text === 'string' ? answer.text : answer?.fields?.[field.name];
+  const values = new Set();
+  let other = null;
+  for (const x of Array.isArray(v) ? v : [v]) {
+    if (typeof x === 'string') { values.add(x); } else if (typeof x === 'number' || typeof x === 'boolean') { values.add(formatValue(x)); } else if (x && typeof x.other === 'string') { other = x.other.trim(); }
+  }
+  return { values, other };
 }
 
 // The field's title, required badge and kind of answer: spans, so it can be a legend.
@@ -58,30 +78,36 @@ function headParts(field, titleId) {
   ];
 }
 
-function readOnlyField(field, idBase) {
+function readOnlyField(field, idBase, resolved = null) {
   const titleId = `${idBase}-t`;
   const parts = [h('div', { class: 'field-head' }, headParts(field, titleId))];
   if (field.description) { parts.push(h('p', { class: 'field-desc' }, field.description)); }
 
-  const chosen = defaults(field);
+  // A resolved question marks what was answered, never its defaults.
+  const done = resolved ? answeredOf(field, resolved.answer) : null;
+  const chosen = done ? done.values : defaults(field);
   if (field.type === 'choice' || field.type === 'multi') {
     const multi = field.type === 'multi';
     const list = h('ul', { class: 'opts', 'aria-labelledby': titleId });
     for (const o of field.options) {
-      list.append(optionRow(o.label, { chosen: chosen.has(o.value), multi }));
+      list.append(optionRow(o.label, { chosen: chosen.has(o.value), multi, resolved: !!resolved }));
     }
     const known = new Set(field.options.map((o) => o.value));
-    const otherDefault = [...chosen].find((v) => !known.has(v));
+    const otherDefault = done ? done.other : [...chosen].find((v) => !known.has(v));
     if (field.allowOther) {
-      list.append(optionRow(otherDefault ? `Other: ${otherDefault}` : 'Other (type your answer)', { chosen: !!otherDefault, multi, other: true }));
+      list.append(optionRow(otherDefault ? `Other: ${otherDefault}` : 'Other (type your answer)', { chosen: !!otherDefault, multi, other: true, resolved: !!resolved }));
     }
     parts.push(list);
   } else if (field.type === 'boolean') {
-    const d = field.default;
+    const d = done ? [...done.values][0] === 'Yes' ? true : [...done.values][0] === 'No' ? false : null : field.default;
     const list = h('ul', { class: 'opts inline', 'aria-labelledby': titleId });
-    list.append(optionRow('Yes', { chosen: d === true, multi: false }));
-    list.append(optionRow('No', { chosen: d === false, multi: false }));
+    list.append(optionRow('Yes', { chosen: d === true, multi: false, resolved: !!resolved }));
+    list.append(optionRow('No', { chosen: d === false, multi: false, resolved: !!resolved }));
     parts.push(list);
+  } else if (done) {
+    const said = done.other ?? [...done.values][0] ?? '';
+    parts.push(h('div', { class: `answer-box${said ? '' : ' empty'}`, 'aria-labelledby': titleId },
+      said ? [h('span', { class: 'badge answered' }, '✓ Your answer'), ' ', said] : (field.type === 'number' ? 'A number' : 'Free text')));
   } else {
     const d = formatValue(field.default);
     parts.push(h('div', { class: `answer-box${d ? '' : ' empty'}`, 'aria-labelledby': titleId },
@@ -155,6 +181,40 @@ export function renderQuestion(q, { machineName, why = 'machine', readOnly = nul
   return section;
 }
 
+// A question its session no longer lists, kept as it was asked: the item that stays in the
+// conversation once the cause of an amber or red line is gone (ui.md §7, "Lines that outlive
+// their cause"). Read-only, with no options chosen for the person: an approval shows its message
+// alone. The line under it (QUESTION_CLOSED) is the card's.
+//
+// It is collapsed: the record (who asked, the question, the options as plain text with what was
+// answered marked) is hidden behind one button, "Show question" or "Hide question", and the card's
+// line sits beside it (section.summary). answer: what the person answered here, if the answer went
+// through; none when it closed without a record. An approval shows its message alone, exactly as
+// shell() draws it, and no option or answer text of the agent's.
+export function renderResolved(q, { asker = null, answer = null } = {}) {
+  const asked = asker ? asker.replace(/ asks$/, ' asked') : (q.kind === 'approval' ? 'Permission requested' : 'Question');
+  const idBase = `q${++seq}`;
+  const section = shell(q, idBase, false, asked);
+  section.classList.add('resolved');
+  section.dataset.resolved = 'true';
+  if (q.fields.length && q.kind !== 'approval') {
+    section.append(h('ol', { class: 'fields' }, q.fields.map((f, k) => readOnlyField(f, `${idBase}-f${k}`, { answer }))));
+  }
+  const record = h('div', { class: 'resolved-record', id: `${idBase}-r`, hidden: true }, [...section.childNodes]);
+  const toggle = h('button', {
+    type: 'button', class: 'button secondary resolved-toggle', 'aria-expanded': 'false', 'aria-controls': record.id,
+    onclick: () => {
+      const open = record.hidden;
+      record.hidden = !open;
+      toggle.setAttribute('aria-expanded', String(open));
+      toggle.textContent = open ? 'Hide question' : 'Show question';
+    },
+  }, 'Show question');
+  section.summary = h('div', { class: 'resolved-summary' }, toggle);
+  section.append(record, section.summary);
+  return section;
+}
+
 // ---- answering ----
 
 const OUTCOME_TEXT = {
@@ -165,6 +225,33 @@ const OUTCOME_TEXT = {
   busy: () => 'Another answer to this session is being delivered. Try again in a moment.',
   refused: () => 'The machine refused this answer.',
 };
+
+// What the host says of a stale answer for a form it left part answered and cancelled (code
+// formReset, #1123): said in this app's own words. The shared sentence for the code (answers.js
+// AnswerReasons) is not used here; see ui.md §7.
+export const NOT_DELIVERED = 'Not delivered: the form could not take your answer at the machine.';
+
+// The words a person gave in an answer, as they would type them again: one line per field for a form
+// of several, the label of a choice and not its value. For keeping them in view when the answer
+// did not go.
+export function answeredWords(question, answer) {
+  if (!question || !answer) { return ''; }
+  if (typeof answer.text === 'string') { return answer.text.trim(); }
+  const said = (field, v) => {
+    if (Array.isArray(v)) { return v.map((x) => said(field, x)).filter(Boolean).join(', '); }
+    if (typeof v === 'boolean') { return v ? 'Yes' : 'No'; }
+    if (typeof v === 'number') { return String(v); }
+    if (v && typeof v.other === 'string') { return v.other.trim(); }
+    if (typeof v === 'string') { return (field.options?.find((o) => o.value === v)?.label ?? v).trim(); }
+    return '';
+  };
+  const lines = [];
+  for (const field of question.fields) {
+    const words = said(field, answer.fields?.[field.name]);
+    if (words) { lines.push(question.fields.length > 1 ? `${field.title ?? field.name}: ${words}` : words); }
+  }
+  return lines.join('\n');
+}
 
 const UNCONFIRMED_STAGE_TEXT = {
   typed: () => 'Typed into the prompt, but not confirmed as submitted. Check the conversation.',
@@ -197,7 +284,16 @@ export function describeAnswer(entry, machineName, { question = null, stalled = 
         };
       }
       let text = OUTCOME_TEXT[outcome]();
-      if (outcome === 'refused' && entry.reason) { text = `The machine refused this answer: ${entry.reason}.`; }
+      // A stale answer from a form the host left part answered and cancelled (code formReset): the
+      // question was not withdrawn or answered elsewhere, the host could not finish typing the answer
+      // into it, so none of it went. Its own words, never "already answered" (ui.md §7).
+      if (outcome === 'stale' && entry.detail?.code === 'formReset') {
+        const words = answeredWords(question, entry.answer);
+        return { key: 'notDelivered', text: NOT_DELIVERED, more: null, tone: 'warn', line: true, speech: `Answer: ${NOT_DELIVERED}`, ...(words ? { words } : {}) };
+      }
+      // The host's own words, as it said them: a sentence of its own already ends with its stop
+      // (the too-tall refusal does, #1213), and gets no second one.
+      if (outcome === 'refused' && entry.reason) { text = `The machine refused this answer: ${entry.reason}${/[.!?]$/.test(entry.reason.trimEnd()) ? '' : '.'}`; }
       // A reason with fixed words of its own, the same in every client (#908).
       if (outcome === 'refused' && AnswerReasons[entry.detail?.code]) { text = NOT_SENT + AnswerReasons[entry.detail.code]; }
       // How far the host knows it got (#467): typed into the prompt, or recorded differently.
@@ -208,6 +304,24 @@ export function describeAnswer(entry, machineName, { question = null, stalled = 
   }
 }
 
+// What a question that has left its session's list says of an answer that did not go through. The
+// host cannot tell a question the agent withdrew from one answered elsewhere, so this is one
+// neutral closed state and no cause is promised (ui.md §7).
+export const QUESTION_CLOSED = 'Question closed';
+
+// describeAnswer for an answer whose question is no longer asked: an answer that was not sent, was
+// refused or came too late is only "No longer waiting" (tone closed, never amber or red); one that
+// may have gone in keeps its words, neutral, and still becomes "You answered" if a recheck finds
+// it delivered. In flight and delivered are as describeAnswer has them.
+export function describeClosed(entry, machineName, opts) {
+  const d = describeAnswer(entry, machineName, opts);
+  const gone = entry.state === 'failed' || (entry.state === 'done' && (['busy', 'refused'].includes(entry.outcome) || (entry.outcome === 'stale' && d.key !== 'notDelivered')));
+  if (gone) { return { key: 'closed', text: QUESTION_CLOSED, more: null, tone: 'closed', line: true, speech: QUESTION_CLOSED }; }
+  // Words the host gave a reason for, or that may have gone in, are kept, neutral.
+  if (d.key === 'unconfirmed' || d.key === 'notDelivered') { return { ...d, tone: 'closed' }; }
+  return d;
+}
+
 // After busy, Send comes back after this long: long enough not to collide again at once.
 export const BUSY_PAUSE_MS = 2000;
 
@@ -216,7 +330,8 @@ export const BUSY_PAUSE_MS = 2000;
 // final. Unconfirmed is final and is never resent, from here or automatically. The card's form
 // and the Needs you lane (#165) both follow this.
 export function answerControls(entry) {
-  const again = !entry || (entry.state === 'done' && ['busy', 'refused'].includes(entry.outcome));
+  // A stale answer from a cancelled form was not delivered, so a question still listed takes it again.
+  const again = !entry || (entry.state === 'done' && (['busy', 'refused'].includes(entry.outcome) || (entry.outcome === 'stale' && entry.detail?.code === 'formReset')));
   const pause = entry?.state === 'done' && entry.outcome === 'busy';
   return { again, pause };
 }
@@ -241,14 +356,22 @@ export class QuestionPanel {
   // A quiet hold while the app catches up after a return (hold.js), or null.
   #quiet = null;
   #receipt = null;
+  // The text the form held when its answer last went (unsentText).
+  #sentDraft = null;
 
   // answering: { service, hostId, sessionId }. state: what a previous panel for the same
   // question held, so a re-render loses nothing. escaped: for an approval the host escaped anything
   // in (#803), { mode, sign, title }: mode 'confirm' opens the confirmation sheet, whose button
   // alone calls sign({ session, question, shown, request }); 'device' or 'machine' offer Deny only,
   // saying why. Null for any other question.
-  constructor(q, { machineName, answering, state = null, asker = null, escaped = null }) {
+  // onSend(typed): called as an answer goes, with the text the form held, so the card can let go of
+  // text it kept for the person once that text is sent. listed(): whether the session still lists
+  // this question, for what is said of its answer once the panel is gone.
+  constructor(q, { machineName, answering, state = null, asker = null, escaped = null, onSend = null, listed = () => false, sentDraft = null }) {
     this.q = q;
+    this.#sentDraft = sentDraft;
+    this.asker = asker;
+    this.onSend = onSend;
     this.machineName = machineName;
     this.answering = answering;
     this.escaped = escaped;
@@ -261,6 +384,8 @@ export class QuestionPanel {
     this.#build();
     this.#receipt = new ReceiptClock({
       describe: (entry, { stalled }) => describeAnswer(entry, this.machineName, { question: this.q, stalled }),
+      // Followed past this panel's going: said as the card's receipt says it (a question that has left is closed).
+      followDescribe: (entry, { stalled }) => (listed() ? describeAnswer : describeClosed)(entry, this.machineName, { question: this.q, stalled }),
       draw: (d) => drawReceipt(this.els.status, 'answer-status', d),
       say: (text) => { this.els.live.textContent = text; },
       heard: () => drawn(this.els.live),
@@ -301,15 +426,22 @@ export class QuestionPanel {
 
   get entry() { const { service, hostId, sessionId } = this.answering; return service.get(hostId, sessionId, this.q.id); }
 
+  // The text the form held when its answer last went, carried to a panel drawn again for the same question.
+  get sentDraft() { return this.#sentDraft; }
+
   // When the check on the control that sent its delivered answer ends, or null.
   get checkUntil() { return this.#receipt.checkUntil; }
 
   // Text the person typed that has not gone to the machine, which would be lost if the
-  // panel went away silently.
+  // panel went away silently. After a stale answer from a cancelled form (formReset) the form takes
+  // an answer again, so what was changed since that answer went is unsent too; what went is kept
+  // by the card's receipt.
   unsentText() {
     const e = this.entry;
+    const reset = e?.state === 'done' && e.outcome === 'stale' && e.detail?.code === 'formReset';
     const unsent = !e || e.state === 'failed' || (e.state === 'done' && ['busy', 'refused'].includes(e.outcome));
-    return unsent ? draftText(this.q, this.state) : '';
+    const text = unsent || reset ? draftText(this.q, this.state) : '';
+    return reset && text === this.#sentDraft ? '' : text;
   }
 
   #build() {
@@ -624,12 +756,17 @@ export class QuestionPanel {
     if (problem) { this.#fail(problem, field); return; }
     this.#clearError();
     tapped?.setAttribute('aria-pressed', 'true');
+    const typed = draftText(q, this.state);
+    this.#sentDraft = typed;
     service.submit({ hostId, sessionId, questionId: q.id, answer });
+    this.onSend?.(typed);
   }
 
   #resend() {
     if (this.#quiet) { this.#updating(); return; }
     if (this.#held) { return; }
+    // A form the host cancelled: nothing went, so what was typed is sent again as a new request.
+    if (this.entry?.state === 'done' && this.entry.outcome === 'stale') { this.#send(); return; }
     const { service, hostId, sessionId } = this.answering;
     service.resend(hostId, sessionId, this.q.id);
   }
@@ -654,7 +791,7 @@ export class QuestionPanel {
       if (this.#quiet && again && !pause) { b.setAttribute('aria-disabled', 'true'); } else { b.removeAttribute('aria-disabled'); }
     }
     if (!this.#quiet) { e.updating.hidden = true; e.updating.textContent = ''; }
-    e.resend.hidden = entry?.state !== 'failed';
+    e.resend.hidden = !(entry?.state === 'failed' || (entry?.state === 'done' && entry.outcome === 'stale' && again));
     e.resend.disabled = held;
     if (pause) { this.#busyTimer = setTimeout(() => { e.controls.disabled = !!this.#held; e.send.disabled = !!this.#held; }, BUSY_PAUSE_MS); }
     // A tap question shows which option went; one that can be answered again shows none.

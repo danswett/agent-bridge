@@ -194,6 +194,18 @@ public static class HaPayloads
     // the session to confirm (recovery pending), which needs nobody.
     public static bool NeedsPerson(Session s) => s.Attention is { Kind: AttentionKind.SignInNeeded } a && a.Recovery != RecoveryState.Pending;
 
+    // A session that looks stuck (#687), decided on data, never on how long it has been in error:
+    // Not responding as the host already decides it, or the wedge the host recognised from Copilot
+    // CLI's own "did not acknowledge/complete" error (AgentErrors.HostWedgeMessage). Any later event
+    // or acknowledgement replaces the attention, so the session stops being stuck at once. Never one
+    // with a question open: it is waiting on the person.
+    public static bool Stuck(Session s) => s.Question is null && s.Attention is { } a && (a.Kind == AttentionKind.NotResponding || IsHostWedge(s));
+
+    // Only the recognised wedge is one the CLI never recovers from by itself; Not responding may pass.
+    public static bool IsHostWedge(Session s) =>
+        s.Attention is { Kind: AttentionKind.Error } a && (a.Agent ?? s.Agent) == AgentKind.Copilot
+        && string.Equals(a.Message, AgentBridge.Host.Core.Parsing.AgentErrors.HostWedgeMessage, StringComparison.Ordinal);
+
     // A turn that ended on an error or a failed sign-in did not finish (#845; PushNotifier.Failed):
     // the reply beside it is the turn before's. A kind not known here is an error.
     public static bool Failed(Session s) => s.Attention is { Kind: not AttentionKind.NotResponding };
@@ -459,8 +471,10 @@ public static class HaPayloads
 
     // Publish-CopilotMqttGlobalStatus's attributes. discoveryHeld is what holds the host's
     // discovery, as Get-DaemonDiscoveryHoldSummary words it for the status line, or "".
-    public static JsonObject GlobalAttributes(IEnumerable<Descriptor> sessions, string machineName, string slug, JsonObject capabilities, DateTimeOffset now, string discoveryHeld = "") => new()
+    public static JsonObject GlobalAttributes(IEnumerable<Descriptor> sessions, string machineName, string slug, JsonObject     capabilities, DateTimeOffset now, string discoveryHeld = "", JsonObject? load = null)
     {
+            var attributes = new JsonObject
+            {
         ["sessions"] = new JsonArray([.. sessions.Select(d => (JsonNode)new JsonObject
         {
             ["name"] = d.Name,
@@ -474,7 +488,54 @@ public static class HaPayloads
         ["resumable"] = new JsonArray(),
         ["discovery_held"] = discoveryHeld,
         ["updated"] = Stamp(now),
+        };
+        if (load is not null) { attributes["load"] = load; }
+        return attributes;
+    }
+
+    // The fleet load record's attributes (#1587): exactly the v1 keys, machine totals only. Unknown
+    // figures are null, never 0; observedAt is the sample time, not the publish time.
+    public static JsonObject FleetLoad(AgentBridge.Host.Core.Load.FleetLoadRecord r) => new()
+    {
+        ["version"] = r.Version,
+        ["machine"] = r.Machine,
+        ["observedAt"] = r.ObservedAt.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
+        ["cpuPercent"] = r.CpuPercent,
+        ["cpuPeakPercent"] = r.CpuPeakPercent,
+        ["cores"] = r.Cores,
+        ["availableMemoryMiB"] = r.AvailableMemoryMiB,
+        ["sessions"] = r.Sessions,
+        ["runQueue"] = r.RunQueue,
+        ["runQueueAvg"] = r.RunQueueAvg,
+        ["runQueueMax"] = r.RunQueueMax,
     };
+
+    // The sessions sensor's resource figures (#1150): counts, percentages and byte sizes only, keyed
+    // by the node ids the sensor already lists. Unknown figures are null, never zero. Held back from
+    // the sensor until Compliance clears it (HaConnectorOptions.PublishLoad).
+    public static JsonObject Load(AgentBridge.Host.Core.Load.ProcessLoadReport report, IReadOnlyDictionary<string, string> nodeBySession)
+    {
+        var sessions = new JsonObject();
+        foreach (var (id, s) in report.Sessions)
+        {
+            if (!nodeBySession.TryGetValue(id, out var node)) { continue; }
+            sessions[node] = new JsonObject
+            {
+                ["state"] = s.State.ToString().ToLowerInvariant(),
+                ["processes"] = s.Processes,
+                ["cpu_percent"] = s.CpuPercent,
+                ["working_set_bytes"] = s.WorkingSetBytes,
+            };
+        }
+        return new JsonObject
+        {
+            ["sampled_at"] = Stamp(report.SampledAt),
+            ["processors"] = report.Machine.Processors,
+            ["machine_cpu_percent"] = report.Machine.CpuPercent,
+            ["machine_available_memory_bytes"] = report.Machine.AvailableMemoryBytes,
+            ["sessions"] = sessions,
+        };
+    }
 
     // New-BridgeUsageRecord and Get-BridgeUsageWindow, from the host's reading. Percent is how
     // much is gone; the state is the window closest to running out, or "unknown" when there is

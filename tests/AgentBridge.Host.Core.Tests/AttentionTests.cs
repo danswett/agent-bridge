@@ -249,6 +249,21 @@ public class AttentionTests
         Assert.Null(session.Attention);
     }
 
+    // #687: the CLI's session host stopped acknowledging events; the notice says to resume, in our words.
+    [Theory]
+    [InlineData("query", "session event delivery failed: session host did not acknowledge the session.background_tasks_changed event within 120s")]
+    [InlineData("execution", "Execution failed: Error: Request session.send failed with message: session event delivery failed: session host did not complete the session.background_tasks_changed event within 120s")]
+    public async Task A_session_host_that_stopped_acknowledging_events_reads_as_needing_a_resume_not_a_generic_error(string type, string message)
+    {
+        await using var s = new Session_();
+
+        var session = await s.After(Copilot.User("Go", 1), Copilot.TurnStart(2), Error(new { errorType = type, message }, 3));
+
+        Assert.Equal(AttentionKind.Error, session.Attention?.Kind);
+        Assert.Equal(AgentErrors.HostWedgeMessage, session.Attention?.Message);
+        Assert.DoesNotContain("background_tasks_changed", session.Attention?.Message);
+    }
+
     // The CLI follows a turn's error with a notice of its own, written as an assistant.message.
     [Fact]
     public async Task Another_error_stays_past_the_clis_turn_error_notice_until_the_next_turn()

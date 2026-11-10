@@ -25,8 +25,27 @@ public static class LocalApi
     // What an agent's hello offers: reading only.
     static readonly HashSet<string> AgentCapabilities = [Capabilities.SessionsRead, UsageProtocol.Capability];
 
-    public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null, RemoteAuthorization? authorization = null) => async (channel, op, data) =>
+    public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,     RemoteAuthorization? authorization = null,     AgentCredentials? credentials = null, AgentBridge.Host.Lite.ILiteSender? lite = null, AgentBridge.Host.Fleet.FleetList? fleet = null) => async (channel, op, data) =>
     {
+            if (op == AgentBridge.Host.Lite.LiteAgentSend.Op) { return await AgentBridge.Host.Lite.LiteAgentSend.HandleAsync(credentials, lite, channel, data); }
+            if (op == AgentBridge.Host.Fleet.FleetList.Op) { return await (fleet ?? new AgentBridge.Host.Fleet.FleetList(credentials, null)).HandleAsync(channel, data); }
+            if (op == AgentBridge.Host.Fleet.FleetList.FindOp) { return await (fleet ?? new AgentBridge.Host.Fleet.FleetList(credentials, null)).FindAsync(channel, data); }
+            // Pipe only, and Windows only for now (§3.4): a relay channel never reaches this handler.
+            if (op == AgentProtocol.Hello)
+            {
+                if (credentials is null || !OperatingSystem.IsWindows()) { throw new InvalidOperationException("refused: agent.hello isn't available on this host"); }
+                AgentHelloRequest request;
+                try { request = data.Deserialize<AgentHelloRequest>(ProtocolJson.Options) ?? throw new ArgumentException("agent.hello needs a token"); }
+                catch (JsonException) { throw new ArgumentException("agent.hello needs a token"); }
+                var ancestry = (channel as LocalChannel)?.Peer?.Ancestry ?? ProcessAncestry.Unknown;
+                var decision = credentials.Check(request.Token, ancestry);
+                if (decision.Accepted is not { } credential)
+                {
+                    log?.Invoke($"local pipe: refused agent.hello: {decision.Refusal}");
+                    throw new InvalidOperationException($"refused: {decision.Refusal}");
+                }
+                return credentials.Accept(channel, credential);
+            }
         // Managing a machine from another device (#801) is for the relay alone. Refused here for
         // every caller, the app included, so nothing on this machine, an agent least of all, can
         // reach it, and the #67 guard below stays exactly as it was.
@@ -39,7 +58,7 @@ public static class LocalApi
             if (!Reads.Contains(op) && callers.Classify(channel, fresh: true) is { Kind: not CallerKind.App } caller
                 && !(caller.Kind == CallerKind.HostCli && op == HostOps.Restart))
             {
-                throw Refuse(op, caller, op == HostOps.UpdateReport
+                throw Refuse(op, caller, op is HostOps.UpdateReport or HostOps.UpdateDepart
                     ? $"only the {Product.App} beside this host reports its updates, and takes other devices' presses of Install"
                     : caller.Kind == CallerKind.Agent
                     ? $"stopping, restarting, signing in, changing settings and reading the relay account are for the person, from the {Product.App}"
@@ -51,6 +70,12 @@ public static class LocalApi
         if (Acts.Contains(op) && callers.Classify(channel) is { Kind: CallerKind.Agent } agent)
         {
             throw Refuse(op, agent, "answering, replying, ending and launching sessions are for the person, from the app or a phone", log);
+        }
+        // What a device says it shows decides whether the person is using it, and a device in use
+        // holds back the person's pushes (#1190): an agent saying it would silence them.
+        if (op == Ops.SessionsFocus && callers.Classify(channel) is { Kind: CallerKind.Agent } focused)
+        {
+            throw Refuse(op, focused, "telling the host the person is using the app is for the person, from the app or a phone", log);
         }
         // A whole past conversation of every session, words the person pasted into other sessions
         // included, is more than an agent reading the latest exchange needs, until agents have a
@@ -66,7 +91,8 @@ public static class LocalApi
                 .. control.HasAgentReadiness ? new[] { HostOps.AgentReadinessCapability } : [],
                 .. control.HasAgentSetup ? new[] { HostOps.AgentSetupCapability } : [],
                 .. control.HasAgentInstall ? new[] { HostOps.AgentInstallCapability } : [],
-                .. control.HasAgentVerification ? new[] { HostOps.AgentVerificationCapability } : []] },
+                .. control.HasAgentVerification ? new[] { HostOps.AgentVerificationCapability } : [],
+                .. control.HasAgentSignIn ? new[] { HostOps.AgentSignInCapability } : []] },
             CallerKind.Agent => hello with { Capabilities = [.. hello.Capabilities.Where(AgentCapabilities.Contains)] },
             _ => hello,
         });
@@ -125,18 +151,21 @@ public sealed class HostHandover
     // Run by the logon task's launcher (#106).
     public bool Supervised { get; private init; }
 
+    bool checkStop;
+
     // Whether the app stopped this host while it was starting, which no pipe could tell it (#106's
     // review): the app's Stop leaves the launcher's stop marker, and a host the launcher started is
-    // to look for it once its pipe is open. If the marker came first, the host sees it then; if
-    // the pipe came first, the app's Stop reaches the host through it. Either way it stops, even
-    // with its launcher gone or unknown to the app. Never for a host started any other way (by
-    // hand, after the app's Stop), which the marker does not concern.
+    // to look for it once its pipe is open, always (#986: a host that skipped the look resumed
+    // agents that outlive it). So is a host its launcher could not vouch for, one started outside
+    // the launcher's kill-on-close job or under a launcher the app cannot find by its record
+    // (HostLauncherContract.CheckStopVariable, #420's review), and its replacement. Never for a
+    // host started any other way (by hand, after the app's Stop), which the marker does not concern.
     public bool StoppedFromTheApp(string profileFolder) =>
-        Supervised && File.Exists(Path.Combine(profileFolder, HostLauncherContract.StopMarker));
+        (Supervised || checkStop) && File.Exists(Path.Combine(profileFolder, HostLauncherContract.StopMarker));
 
-    public static async Task<int> RunAsync(Func<HostHandover, Task<int>> serve, Action startReplacement, bool supervised = false)
+    public static async Task<int> RunAsync(Func<HostHandover, Task<int>> serve, Action<bool> startReplacement, bool supervised = false, bool checkStop = false)
     {
-        var handover = new HostHandover { Supervised = supervised };
+        var handover = new HostHandover { Supervised = supervised, checkStop = checkStop };
         try
         {
             var code = await serve(handover);
@@ -148,7 +177,7 @@ public sealed class HostHandover
         {
             // A supervised host that fails on its way out ends as a crash instead, which the
             // launcher starts again too.
-            if (handover.Requested && !supervised) { startReplacement(); }
+            if (handover.Requested && !supervised) { startReplacement(checkStop); }
         }
     }
 }
