@@ -54,13 +54,12 @@ import { whileVisible } from './ui/ticker.js';
 import { RelayBlobs } from './blobs.js';
 import { recentTimings } from './timing.js';
 import { edgeSwipeBack, installedOnApple, markPlatform } from './platform.js';
-import { fitViewport } from './viewport-fit.js';
 import { applyTextSize, readTextSize, saveTextSize } from './text-size.js';
 import { mountKeyCheck } from './ui/key-check-view.js';
 import { FeedbackDiagnostics, feedbackFailureMessage, isSensitiveFeedbackText, sendFeedbackBundle, serializeFeedbackBundle } from './feedback.js';
 
 // Installed on iOS or iPadOS, the edge swipe walks the same back stack as Android's Back.
-if (installedOnApple(markPlatform())) { edgeSwipeBack(document, () => history.back()); fitViewport(); }
+if (installedOnApple(markPlatform())) { edgeSwipeBack(document, () => history.back()); }
 const $ = (id) => document.getElementById(id);
 
 // Text size (ui.md §4.4): this device's choice, already on the page from text-size-boot.js.
