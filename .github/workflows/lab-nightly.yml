@@ -18,7 +18,7 @@ name: Lab nightly (held)
 # receipt. No input, variable or secret clears one: a dispatch runs the same gate, and the only
 # inputs are the relay and the cut.
 #
-# One nightly source (#849 §6): this is Platform's temporary one. Its schedule below is left
+# One nightly source (#849 §6): this is Engineering's temporary one. Its schedule below is left
 # commented out, so merging this enables nothing; turning it on is its own reviewed change once
 # gate can pass, and it must also give a scheduled run its relay (staging until PPE), since a
 # schedule has no inputs and gate refuses an empty one. SRE's #590 later calls this workflow
