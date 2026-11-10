@@ -100,7 +100,7 @@ The target is an untrusted carrier, so the source acts only on the signed comman
 `to`, in this order: `moveId` (the manifest's) and `withWorkspace` (`true` only when the person
 asked). The person's device signs them. The source adds the workspace part only when the verified
 body says `withWorkspace: true`, and takes `moveId` for the manifest and the telemetry from the
-same body. Any `moveId` or `withWorkspace` the launch request carries is advisory: the target takes both from the manifest, and refuses with `manifest-mismatch` when the launch request disagrees with it. A body without them is today's command and gets no workspace part. They count toward
+same body. Any `moveId` or `withWorkspace` the launch request carries is advisory: the target takes `moveId` from the manifest and refuses with `manifest-mismatch` when the launch request's `moveId` differs. The manifest has no `withWorkspace`: the part exists exactly when `workspaceChanges` is present, so `withWorkspace: true` with no `workspaceChanges` (not a git repository) is not a mismatch and the launch says `workspace: "none"`, while `withWorkspace: false` with a patch present is a `manifest-mismatch`. The target checks this after it unpacks the manifest and before it starts anything. A body without them is today's command and gets no workspace part. They count toward
 the 2048-byte body bound.
 
 ### Handoff package
