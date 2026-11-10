@@ -6,6 +6,20 @@ using Xunit;
 public sealed class RestoreProtocolTests
 {
     [Fact]
+    public void A_session_snapshot_reads_effort_and_context_and_leaves_out_an_empty_or_oversized_one()
+    {
+        static Session Read(string extra) => JsonSerializer.Deserialize<Session>(
+            "{\"id\":\"s1\",\"agent\":\"claude\",\"status\":\"idle\",\"statusSince\":\"2026-11-06T12:00:00Z\",\"updatedAt\":\"2026-11-06T12:00:00Z\",\"activity\":{}" + extra + "}", ProtocolJson.Options)!;
+
+        var sent = Read(",\"effort\":\"high\",\"context\":\"1M\"");
+        Assert.Equal(("high", "1M"), (sent.Effort, sent.Context));
+        var old = Read("");
+        Assert.Equal((null, null), (old.Effort, old.Context));
+        var odd = Read(",\"effort\":\"\",\"context\":\"" + new string('x', Limits.OptionId + 1) + "\"");
+        Assert.Equal((null, null), (odd.Effort, odd.Context));
+    }
+
+    [Fact]
     public void A_cause_or_a_reason_a_client_does_not_know_reads_as_the_one_that_promises_least()
     {
         const string json = """

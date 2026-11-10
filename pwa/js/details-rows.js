@@ -10,6 +10,13 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 // What is code, drawn in the mono face (§4.1, #215).
 const MONO = new Set(['branch', 'folder', 'pid', 'id']);
 
+// The agent's own context option id in words: a size such as "1M" reads "1M tokens", a bare number
+// (a count that says nothing alone) is left out, and anything else (default, long_context) shows as sent.
+export function contextText(id) {
+  if (!id || /^\d+$/.test(id)) { return null; }
+  return /^\d+(\.\d+)?[kKmM]$/.test(id) ? `${id} tokens` : id;
+}
+
 // ui.md §2.2 (#269), as facts: "Offline · last seen 2m ago" while its machine is away,
 // "Reconnecting…" while it has no open channel and is still tried; null otherwise, including
 // while its snapshot is still coming (its rows say what that snapshot says, and still take
@@ -58,6 +65,8 @@ export function detailRows(s, { status = null, machine = null, away = false, now
   add('Driven by', state.driven && !away ? (s.driverPrincipal || 'an agent') : null, 'driver');
   add('Agent', { copilot: 'Copilot', claude: 'Claude', codex: 'Codex' }[s.agent] ?? 'Agent', 'agent');
   add('Model', s.model, 'model');
+  add('Effort', s.effort, 'effort');
+  add('Context', contextText(s.context), 'context');
   add('Machine', machine, 'machine');
   add('Repository', s.repository, 'repo');
   add('Branch', s.branch, 'branch');

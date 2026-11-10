@@ -73,6 +73,7 @@ export const readStopOutcome = tolerant(StopOutcomes, 'failed');
 
 // Absent and null mean the same thing, so anything of the wrong type is treated as absent.
 const str = (v) => (typeof v === 'string' ? v : null);
+const optionId = (v) => (typeof v === 'string' && v.length > 0 && v.length <= 64 ? v : null);
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const obj = (v) => (v !== null && typeof v === 'object' && !Array.isArray(v) ? v : null);
 
@@ -263,6 +264,9 @@ export function readSession(raw) {
     repository: str(s.repository),
     branch: str(s.branch),
     model: str(s.model),
+    // The agent's own option ids (v1-launch.md), when the host sends them; one over 64 characters is left out.
+    effort: optionId(s.effort),
+    context: optionId(s.context),
     status: readStatus(s.status),
     statusSince: str(s.statusSince),
     startedAt: str(s.startedAt),

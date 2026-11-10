@@ -96,6 +96,12 @@ public sealed partial class SessionCardViewModel
         while (rows.Count > want.Count) { rows.RemoveAt(rows.Count - 1); }
     }
 
+    // The agent's own context option id in words: a size such as "1M" reads "1M tokens", a bare number is left out,
+    // and anything else (default, long_context) shows as sent. The PWA's contextText says the same.
+    internal static string? ContextText(string? id) =>
+        string.IsNullOrEmpty(id) || id.All(char.IsAsciiDigit) ? null
+        : System.Text.RegularExpressions.Regex.IsMatch(id, @"^\d+(\.\d+)?[kKmM]$") ? $"{id} tokens" : id;
+
     List<DetailRow> CurrentDetails()
     {
         var now = ctx.Time.GetUtcNow();
@@ -117,6 +123,8 @@ public sealed partial class SessionCardViewModel
         if (Driven) { rows.Add(new("Driven by", DriverPrincipal ?? "an agent")); }
         rows.Add(new("Agent", AgentName));
         if (session.Model is { Length: > 0 } model) { rows.Add(new("Model", model)); }
+        if (session.Effort is { Length: > 0 } effort) { rows.Add(new("Effort", effort)); }
+        if (ContextText(session.Context) is { } context) { rows.Add(new("Context", context)); }
         if (ctx.MachineName() is { Length: > 0 } m) { rows.Add(new("Machine", m)); }
         if (session.Repository is { Length: > 0 } repo) { rows.Add(new("Repository", repo)); }
         if (session.Branch is { Length: > 0 } branch) { rows.Add(new("Branch", branch, Mono: true)); }
