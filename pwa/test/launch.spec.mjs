@@ -588,6 +588,10 @@ test.describe('a folder-trust question', () => {
     await ask(page, QUESTION);
     await page.evaluate(() => window.agentBridgeDemo.scriptTrust({ outcome: 'refused', reason: 'that question is no longer waiting: it was answered, or the agent closed' }));
     await openPanel(page);
+    // The question shows once the list the panel asked for is in. The host takes its list as it
+    // is asked, so what is changed next cannot be overtaken by that ask (which, sent late on a
+    // loaded runner, read the emptied list and left no Trust button to tap).
+    await expect(card(page).getByRole('button', { name: 'Trust' })).toBeVisible();
     // Answered at the machine meanwhile: the machine no longer lists it.
     await page.evaluate(() => { const h = window.agentBridgeDemo.host; h.launchOptions = { ...h.launchOptions, trust: [] }; });
     await card(page).getByRole('button', { name: 'Trust' }).tap();
