@@ -37,13 +37,22 @@ static partial class SelfTest
                 check(button is { IsTabStop: true, Visibility: Visibility.Visible } && AutomationProperties.GetName(button) == "Jump to latest",
                     "latest: offers a keyboard-reachable, screen-reader-named Jump to latest");
                 if (button is null) { return; }
-                check(button.Focus(FocusState.Keyboard), "latest: keyboard can focus Jump to latest");
-                Press(window.Handle, VirtualKey.Enter, foreground: false);
-                check(await Until(Bottom, TimeSpan.FromSeconds(3)), $"latest: Enter reaches the bottom ({scroll.VerticalOffset:0}/{scroll.ScrollableHeight:0})");
+                var activated = false;
+                RoutedEventHandler clicked = (_, _) => activated = true;
+                button.Click += clicked;
+                try
+                {
+                    check(button.Focus(FocusState.Keyboard), "latest: keyboard can focus Jump to latest");
+                    Press(window.Handle, VirtualKey.Enter, foreground: false);
+                    check(await Until(() => activated, TimeSpan.FromSeconds(3)), "latest: Enter activates Jump to latest");
+                    check(await Until(Bottom, TimeSpan.FromSeconds(3)), $"latest: Enter reaches the bottom ({scroll.VerticalOffset:0}/{scroll.ScrollableHeight:0})");
+                }
+                finally { button.Click -= clicked; }
             }
-            async Task Grow(bool pinned, string input)
+            async Task Grow(bool pinned, string input, bool requireGrowth = false)
             {
                 var before = scroll.VerticalOffset;
+                var extent = scroll.ScrollableHeight;
                 var bad = new List<string>();
                 for (var i = 0; i < 20; i++)
                 {
@@ -51,6 +60,12 @@ static partial class SelfTest
                     await Task.Delay(100);
                     AppLog.Write($"latest {input} {i}: {scroll.VerticalOffset:0.##}/{scroll.ScrollableHeight:0.##}");
                     if (pinned ? !Bottom() : Math.Abs(scroll.VerticalOffset - before) > 1.5) { bad.Add($"{i}: {scroll.VerticalOffset:0}/{scroll.ScrollableHeight:0}"); }
+                }
+                if (requireGrowth)
+                {
+                    var grew = scroll.ScrollableHeight > extent + 1.5;
+                    check(grew, $"latest: twenty modifier-case appends grow the extent after {input} ({extent:0}/{scroll.ScrollableHeight:0})");
+                    if (!grew) { return; }
                 }
                 check(bad.Count == 0, $"latest: {(pinned ? "stays pinned" : "stays scrolled back")} through twenty appends after {input} ({string.Join("; ", bad)})");
             }
@@ -95,10 +110,18 @@ static partial class SelfTest
                 (VirtualKey.Control, VirtualKey.PageDown, VirtualKey.Up),
                 (VirtualKey.Shift, VirtualKey.Down, VirtualKey.PageUp) })
             {
+                card = new SessionCardViewModel(original.Session, main.Local.Cards);
+                view.Card = card;
+                stored = card.Stored ?? throw new InvalidOperationException("latest: modifier case has no fresh history");
+                check(await Until(() => stored.State != HistoryLoad.Loading, TimeSpan.FromSeconds(5)), "latest: fresh modifier history finishes loading");
+                for (var n = 0; n < 40; n++) { stored.AddLive(StoredTurn(next++)); }
                 card.Update(card.Session with { Activity = (card.Session.Activity ?? new Activity()) with { Response = string.Join("\n\n", Enumerable.Repeat("A long reply paragraph.", 30)) } });
+                await Still(scroll);
+                check(stored.Turns.Count + 40 < HistoryLimits.Kept, "latest: modifier appends remain below the history retention cap");
                 await Jump();
                 check(await LatestModifiedKey(window, scroll, up, modifier), $"latest: receives inert {modifier}+{up}");
-                await Grow(pinned: true, $"inert {modifier}+{up}");
+                await Grow(pinned: true, $"inert {modifier}+{up}", requireGrowth: true);
+                await Jump();
                 await LatestInput(window, scroll, "wheel", up: true);
                 await Still(scroll);
                 var before = scroll.VerticalOffset;
@@ -107,7 +130,7 @@ static partial class SelfTest
                 card.Update(card.Session with { Activity = (card.Session.Activity ?? new Activity()) with { Response = "A shorter reply." } });
                 await Still(scroll);
                 check(Bottom() && scroll.ScrollableHeight < before - 1.5, $"latest: shorter re-render clamps the released view after inert {modifier}+{down}");
-                await Grow(pinned: false, $"inert {modifier}+{down}, then shorter re-render");
+                await Grow(pinned: false, $"inert {modifier}+{down}, then shorter re-render", requireGrowth: true);
             }
         }
         finally { view.Card = original; }
