@@ -461,6 +461,25 @@ public sealed class AnswerTests : IDisposable
         Assert.Contains("answered in the terminal", attributes.GetProperty("question").GetString());
     }
 
+    // #1572: a card that flashes "answered at the machine" is told from the log, which says what the
+    // host listed at the moment the connector re-armed it.
+    [Fact]
+    public async Task A_question_armed_again_logs_what_the_host_listed_at_that_moment()
+    {
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { WaitingOn = "agent-3a91", Question = DelegatesApproval });
+        await using var c = Connector();
+        await Pass(c);
+        sessions.Set(sessions.Get(A)! with
+        {
+            Subagents = [new Subagent { Id = "agent-3a91", Kind = SubagentKind.Background, Name = "\u202Eetius tset", Status = SubagentStatus.Waiting }],
+        });
+        await Pass(c);
+
+        var line = Assert.Single(log, m => m.Contains("re-arming"));
+        Assert.Contains("was answerable, answers sent 0, settled False", line);
+        Assert.Contains("waiting on agent-3a91, waiting sub-agents [agent-3a91]", line);
+    }
+
     static Question DelegatesApproval => new()
     {
         Id = "p1", Kind = QuestionKind.Approval, Message = "Allow dotnet test?", AskedAt = FakeSessions.T0, Agent = "agent-3a91",
