@@ -9,6 +9,12 @@ public static class Program
 {
     public static int Main(string[] args)
     {
+        if (args.Length == 3 && args[0] == "host-sign-open" && OperatingSystem.IsWindows())
+        {
+            using var hostSign = HostSignKey.LoadOrCreate(args[1]);
+            var digest = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(hostSign.PublicPoint));
+            return digest == args[2] ? 0 : 1;
+        }
         if (args.Length != 3 || args[0] != "agent-sign-child") { return 0; }
         var wait = new DateTime(long.Parse(args[2]), DateTimeKind.Utc) - DateTime.UtcNow;
         if (wait > TimeSpan.Zero) { Thread.Sleep(wait); }
