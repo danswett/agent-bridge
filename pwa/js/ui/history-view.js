@@ -8,6 +8,7 @@ import { renderMarkdown } from '../markdown.js';
 import { timeButton, timeRow, timeTicker } from './message-time-view.js';
 import { sentMessage } from './sent-message.js';
 import { renderResolved } from './question-view.js';
+import { closedQuestionIds } from '../history.js';
 
 export const WORDS = {
   loading: 'Loading conversation\u2026',
@@ -189,7 +190,7 @@ export class HistoryView {
     const { note, turns } = historyPlan(snapshot, latestId);
     this.latest = turns.find((t) => t.id === latestId) ?? null;
     const questions = turns.flatMap((t) => t.parts.filter((p) => p.kind === 'question' && p.question));
-    const kept = new Set(questions.filter((p) => p.question.id !== inline?.activeId).map((p) => p.question.id).slice(-20));
+    const kept = inline?.kept ?? closedQuestionIds(turns, [], inline?.activeId);
     const records = new Map(inline?.records);
     const reconstructed = new Map();
     for (const { question } of questions) {

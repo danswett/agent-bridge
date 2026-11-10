@@ -2,9 +2,36 @@
 // those): the strict fields of v1-sessions.md's Malformed records, and absent and null alike.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkHistoryRequest, readHistoryResult, readTurn } from '../../js/history.js';
+import { checkHistoryRequest, closedQuestionIds, readHistoryResult, readTurn } from '../../js/history.js';
 
 const AT = '2026-10-28T04:22:43.182Z';
+
+const closed = (id, n) => ({ question: { id, askedAt: new Date(Date.parse(AT) + n * 1000).toISOString() } });
+
+test('one newest-20 window interleaves stored and disjoint local closed questions by time', () => {
+  const parts = Array.from({ length: 20 }, (_, i) => ({ kind: 'question', ...closed(`stored-${i}`, i) }));
+  const kept = closedQuestionIds([{ parts }], [closed('local-old', 5.5), closed('local-new', 20), closed('active', 21)], 'active');
+  assert.deepEqual([...kept], [
+    ...Array.from({ length: 4 }, (_, i) => `stored-${i + 2}`), 'local-old',
+    ...Array.from({ length: 14 }, (_, i) => `stored-${i + 6}`), 'local-new',
+  ]);
+});
+
+test('repeated history and local ids are counted once before limiting, and active questions do not count', () => {
+  const parts = Array.from({ length: 21 }, (_, i) => ({ kind: 'question', ...closed(`q${i}`, i) }));
+  parts.push(parts[20], parts[20], parts[20]);
+  assert.deepEqual([...closedQuestionIds([{ parts }], [closed('q20', 99)])], Array.from({ length: 20 }, (_, i) => `q${i + 1}`));
+  assert.deepEqual([...closedQuestionIds([{ parts }], [closed('q20', 99)], 'q20')], Array.from({ length: 20 }, (_, i) => `q${i}`));
+});
+
+test('undated questions use their event time, with unreadable history dates oldest and stable', () => {
+  const parts = [
+    { kind: 'question', question: { id: 'missing' } },
+    { kind: 'question', question: { id: 'bad', askedAt: 'unreadable' }, at: 'unreadable' },
+    { kind: 'question', question: { id: 'stored', askedAt: 'unreadable' }, at: AT },
+  ];
+  assert.deepEqual([...closedQuestionIds([{ parts }], [{ question: { id: 'local' }, at: new Date(Date.parse(AT) + 1000).toISOString() }])], ['missing', 'bad', 'stored', 'local']);
+});
 
 test('a turn whose prompt is not a record is refused, never read as one with no prompt', () => {
   for (const prompt of ['Run the tests', 42, true, ['x']]) {

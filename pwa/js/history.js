@@ -29,6 +29,20 @@ export const HISTORY = Object.freeze({
 // The time a required one that is missing or unreadable reads as (Malformed records rule 1).
 export const NO_TIME = '0001-01-01T00:00:00.000Z';
 
+// History and a local receipt can name the same question. Deduplicate before limiting,
+// using the stored question's time when available; equal times keep their source order.
+export function closedQuestionIds(turns, local = [], activeId = null) {
+  const questions = turns.flatMap((t) => t.parts.filter((p) => p.kind === 'question' && p.question));
+  const times = new Map();
+  for (const { question, at } of [...questions, ...local]) {
+    if (question.id === activeId || times.has(question.id)) { continue; }
+    const asked = Date.parse(question.askedAt);
+    const event = Date.parse(at);
+    times.set(question.id, Number.isFinite(asked) ? asked : Number.isFinite(event) ? event : Date.parse(NO_TIME));
+  }
+  return new Set([...times].sort((a, b) => a[1] - b[1]).slice(-20).map(([id]) => id));
+}
+
 const str = (v) => (typeof v === 'string' ? v : null);
 const obj = (v) => (v !== null && typeof v === 'object' && !Array.isArray(v) ? v : null);
 const present = (v) => v !== undefined && v !== null;

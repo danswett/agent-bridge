@@ -51,7 +51,7 @@ import { holdKey } from './hold.js';
 import { CONNECTION_CHANGED } from '../channels.js';
 import { HistoryView } from './history-view.js';
 import { sentMessage, setSentMessage } from './sent-message.js';
-import { HISTORY } from '../history.js';
+import { HISTORY, closedQuestionIds } from '../history.js';
 import { MoveStrip } from './move-view.js';
 import { moveView, moves } from '../move.js';
 
@@ -407,7 +407,6 @@ const leaves = (entry) => entry.state === 'sending' || entry.state === 'waiting'
 
 // How many closed items (questions the session stopped asking whose answer did not go through)
 // a card keeps in its conversation, as the history keeps its latest (ui.md §6.4).
-const CLOSED_KEPT = 20;
 
 // Why nothing can be given for a session now, for under its controls, or null (#269): its
 // machine is offline, reconnecting, back and its whole list not yet in, or no longer offering
@@ -1491,6 +1490,7 @@ export class SessionCard {
 
   #drawTurns() {
     const snapshot = this.historyStore.get(this.hostId, this.#s.id);
+    const kept = this.#trimClosed(snapshot.turns);
     const slot = this.els.question;
     if (this.#s.question) { this.#slotQuestion = this.#s.question.id; } else if (!slot.hasChildNodes()) { this.#slotQuestion = null; }
     const sc = this.els.scroll;
@@ -1501,7 +1501,7 @@ export class SessionCard {
     const tail = this.turns.element.lastElementChild;
     const records = new Map(this.#closed.map((r) => [r.questionId, r.element]));
     if (this.#receipt && this.#s.question && this.#receipt.questionId !== this.#s.question.id) { records.set(this.#receipt.questionId, this.#receipt.element); }
-    const drawn = this.turns.render(snapshot, this.#s.activity?.turn ?? null, { slot, questionId: this.#slotQuestion, activeId: this.#s.question?.id, records });
+    const drawn = this.turns.render(snapshot, this.#s.activity?.turn ?? null, { slot, questionId: this.#slotQuestion, activeId: this.#s.question?.id, records, kept });
     this.#syncStoredLatest();
     // Not in a turn (none holds it, or the history is not drawn): back where the live exchange ends.
     if (!this.turns.hosted && slot.parentNode !== this.els.stream) { this.els.stream.append(slot); }
@@ -1931,6 +1931,7 @@ export class SessionCard {
         const gone = this.#s?.question?.id !== questionId;
         const closed = d?.tone === 'closed';
         const collapsed = closed || (d?.key === 'delivered' && gone);
+        const closing = collapsed && !receipt.closed;
         receipt.closed = collapsed;
         receipt.collapsed = collapsed;
         if (collapsed && d.key === 'delivered') {
@@ -1964,12 +1965,19 @@ export class SessionCard {
         // "You answered · value" says whose answer it is, and "No longer waiting" is about the question;
         // anything else says it is about the answer.
         drawReceipt(line, 'answer-receipt', !d?.text || ['delivered', 'closed', 'notDelivered'].includes(d.key) ? d : { ...d, text: `Your answer: ${d.text}` }, { enters: false });
+        if (closing) {
+          // A receipt can close after its session update, or before its initial placement.
+          queueMicrotask(() => {
+            if (this.#receipt !== receipt && !this.#closed.includes(receipt)) { return; }
+            if (this.#unwatch) { this.#drawTurns(); } else { this.#trimClosed(); }
+          });
+        }
       },
       say: (text) => { live.textContent = text; },
       heard: () => drawn(live),
       follow: (fn) => service.watch(hostId, sessionId, questionId, fn),
     });
-    const receipt = { questionId, element, line, final: false, closed: false, collapsed: false, unwatch: null, fresh: true, clock, redraw: null };
+    const receipt = { questionId, question, at: new Date().toISOString(), element, line, final: false, closed: false, collapsed: false, unwatch: null, fresh: true, clock, redraw: null };
     const show = (entry) => {
       if (!entry && this.#s?.question?.id !== questionId) { entry = { state: 'done', outcome: 'stale' }; }
       if (!entry) { return; }
@@ -2069,8 +2077,20 @@ export class SessionCard {
     r?.element.remove();
   }
 
+  #trimClosed(turns = this.historyStore?.get(this.hostId, this.#s.id).turns ?? []) {
+    const local = [...this.#closed, this.#receipt].filter((r) => r?.closed);
+    const kept = closedQuestionIds(turns, local, this.#s.question?.id);
+    this.#closed = this.#closed.filter((r) => {
+      if (!r.closed || kept.has(r.questionId)) { return true; }
+      this.#destroyReceipt(r);
+      return false;
+    });
+    if (this.#receipt?.closed && !kept.has(this.#receipt.questionId)) { this.#dropReceipt(); }
+    return kept;
+  }
+
   // The receipt gives way to the next one, or to the next question. One that closed (its question
-  // is no longer waiting) is kept, newest last, up to CLOSED_KEPT; any other is dropped. Whether it
+  // is no longer waiting) shares the history's newest-20 window; any other is dropped. Whether it
   // left the live slot: the question that follows needs its guard, even if the record was kept.
   #retireReceipt() {
     const r = this.#receipt;
@@ -2083,7 +2103,7 @@ export class SessionCard {
     this.#receipt = null;
     if (!r.element.closest('.history-turn')) { this.els.question.before(r.element); }
     this.#closed.push(r);
-    while (this.#closed.length > CLOSED_KEPT) { this.#destroyReceipt(this.#closed.shift()); }
+    this.#trimClosed();
     return shifted;
   }
 
