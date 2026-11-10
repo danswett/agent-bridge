@@ -14,8 +14,9 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0
 # can't carry the fix yet: upgrade just those two in place, as root (the base's default user,
 # before USER below), fail the build if the fixed version didn't arrive, and drop apt's lists.
 # Remove this once an aspnet:10.0 ships 2.8.4ubuntu0.1 or later.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends --only-upgrade apt libapt-pkg6.0t64 \
+# apt retries a mirror that is mid-sync or slow (#1648: "File has unexpected size") instead of failing the build.
+RUN apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=60 update \
+ && apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=60 install -y --no-install-recommends --only-upgrade apt libapt-pkg6.0t64 \
  && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' apt)" ge 2.8.4ubuntu0.1 \
  && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libapt-pkg6.0t64)" ge 2.8.4ubuntu0.1 \
  && rm -rf /var/lib/apt/lists/*
