@@ -8,6 +8,8 @@
 :root {
   color-scheme: light dark;
   --radius: 14px;
+  /* How far short of the screen an installed iPhone lays the page out; js/viewport-fit.js sets it (#1620). */
+  --viewport-short: 0px;
   /* Touch-only sizing is gated on "(pointer: coarse) and (not (any-pointer: fine))", never on
      (pointer: coarse) alone: an iPad's primary pointer stays coarse with a trackpad or mouse
      attached, which only any-pointer reports, so it kept phone-sized controls at a desk. */
@@ -284,6 +286,12 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
     display: flex; flex-direction: column; position: fixed; inset: 0; z-index: 15; background: var(--ab-shell);
     padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
   }
+  /* An installed iPhone can lay the page out a status bar short of the screen (#1620): extend the
+     pane by that gap (js/viewport-fit.js), and with the keyboard up keep no home indicator clear. */
+  :root[data-standalone="true"][data-platform="ios"] body[data-page="sessions"][data-session-open="true"] .session-pane {
+    bottom: calc(-1 * var(--viewport-short, 0px));
+  }
+  :root[data-keyboard="up"] body[data-page="sessions"][data-session-open="true"] .session-pane { --safe-bottom: 0px; }
   body[data-page="sessions"][data-session-open="true"] .nav { display: none; }
   /* Over a session the strip is only the connection's news, never the list's search, and the
      session starts under it rather than behind it: Back and its menu stay in reach. */
