@@ -199,6 +199,24 @@ public static partial class HaContract
     public static string GlobalStateTopic(string slug) => $"{MachineTopicRoot(slug)}/global/state";
     public static string GlobalAttributesTopic(string slug) => $"{MachineTopicRoot(slug)}/global/attr";
 
+    // The fleet load feed (#1587): its own sensor, so the figures republish every few seconds
+    // without touching the slower sessions sensor. The state is the record's observedAt.
+    public static (string Topic, JsonObject Config) FleetLoadConfig(string slug, string machineName) =>
+        (DiscoveryTopic("sensor", MachineNode(slug), "fleet_load"), new JsonObject
+        {
+            ["name"] = "Fleet load",
+            ["unique_id"] = $"agent_bridge_{slug}_fleet_load",
+            ["object_id"] = $"agent_bridge_{slug}_fleet_load",
+            ["state_topic"] = FleetLoadStateTopic(slug),
+            ["json_attributes_topic"] = FleetLoadAttributesTopic(slug),
+            ["device_class"] = "timestamp",
+            ["icon"] = "mdi:gauge",
+            ["device"] = MachineDevice(slug, machineName),
+        });
+
+    public static string FleetLoadStateTopic(string slug) => $"{MachineTopicRoot(slug)}/fleet_load/state";
+    public static string FleetLoadAttributesTopic(string slug) => $"{MachineTopicRoot(slug)}/fleet_load/attr";
+
     // Publish-CopilotMqttUsage: one sensor per agent, so each has its own history, and one per
     // further Copilot login (key copilot_<slot>), named for its account so the two can be told apart.
     public static (string Topic, JsonObject Config) UsageConfig(string slug, string machineName, string client, string label, string? account = null) =>

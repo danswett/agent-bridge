@@ -80,9 +80,10 @@ public sealed class HaRunning : IAsyncDisposable
             UsageAccountSensors = usage is null ? [] : HaContract.UsageAccountSensors(settings.Usage.CopilotAccounts.Select(a => a.Slot)),
             CheckForUpdates = ha.CheckForUpdates,
             UpdateCheck = TimeSpan.FromHours(ha.CheckHours),
-            // Process load leaves the machine only once Compliance clears it (#1150); until then
-            // it is in host.log alone.
-            PublishLoad = false,
+            // Machine load totals leave the machine (the owner cleared that for totals only, 17:39 PT
+            // Nov 9, #1150); per-session rows do not.
+            PublishLoad = true,
+            PublishSessionLoad = false,
         }, new HomeAssistantClient(ha.BaseUrl!, token, http, auth: auth ?? new HaAuthGuard(HaAuthGuard.FileFor(folder), log: log)), source, agentHaBridge!, usage is null ? null : () => usage.Current, log, answer: answer, reply: reply, stop: stop, launch: launch,
             updates: updates, load: load);
         connector.Start();

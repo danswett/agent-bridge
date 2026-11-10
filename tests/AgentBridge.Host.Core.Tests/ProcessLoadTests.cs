@@ -41,7 +41,7 @@ public class ProcessLoadTests
         public readonly Table Table = new();
         public readonly Sessions Source = new();
         public readonly ProcessLoadSampler Sampler;
-        public Rig(int processors = 4) => Sampler = new ProcessLoadSampler(Source, Table, Time, processors, () => 8192 * Mib);
+        public Rig(int processors = 4, Func<int?>? runQueue = null) => Sampler = new ProcessLoadSampler(Source, Table, Time, processors, () => 8192 * Mib, runQueue: runQueue ?? (() => null));
         public void Bind(string id, int pid, DateTimeOffset? start = null) => Source.Roots[id] = new SessionProcess(pid, start ?? T0);
         public ProcessLoadReport Tick(int seconds = 5) { Time.Advance(TimeSpan.FromSeconds(seconds)); return Sampler.Sample(); }
     }
@@ -386,5 +386,50 @@ public class ProcessLoadTests
         Assert.Contains("s7 cpu", line);
         Assert.DoesNotContain("s0 cpu", line);
         Assert.EndsWith("; 5 more", line);
+    }
+
+    [Fact]
+    public void The_ten_second_window_is_the_mean_and_peak_of_the_last_two_samples()
+    {
+        var queue = new Queue<int?>([1, 3, 7]);
+        var r = new Rig(processors: 4, runQueue: () => queue.Dequeue());
+        r.Bind("s1", 10);
+        r.Table.Readings = [P(10, 1, 100, 50)];
+        r.Sampler.Sample();
+        r.Table.Readings = [P(10, 1, 110, 50)];
+        r.Tick();
+        r.Table.Readings = [P(10, 1, 114, 50)];
+        var m = r.Tick().Machine;
+
+        // 10 CPU-seconds then 4 in 5 s each on 4 cores: 50% then 20%.
+        Assert.Equal(20.0, m.CpuPercent);
+        Assert.Equal(35.0, m.WindowCpuMean);
+        Assert.Equal(50.0, m.WindowCpuPeak);
+        Assert.Equal(7, m.RunQueue);
+        Assert.Equal(5.0, m.RunQueueAvg);
+        Assert.Equal(7, m.RunQueueMax);
+    }
+
+    [Fact]
+    public void Unknown_window_figures_stay_null_and_are_never_zero()
+    {
+        var r = new Rig(runQueue: () => null);
+        r.Table.Readings = null;
+
+        var m = r.Sampler.Sample().Machine;
+
+        Assert.Null(m.WindowCpuMean);
+        Assert.Null(m.WindowCpuPeak);
+        Assert.Null(m.RunQueue);
+        Assert.Null(m.RunQueueAvg);
+        Assert.Null(m.RunQueueMax);
+    }
+
+    [Fact]
+    public void A_throwing_run_queue_reading_leaves_the_sample_going()
+    {
+        var r = new Rig(runQueue: () => throw new InvalidOperationException("counter gone"));
+
+        Assert.Null(r.Sampler.Sample().Machine.RunQueue);
     }
 }

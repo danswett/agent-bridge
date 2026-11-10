@@ -33,7 +33,11 @@ public sealed record SessionLoad(LoadState State, int Processes, double? CpuPerc
 // Machine totals. CpuPercent is the readable processes' CPU over the interval, as a percentage of
 // the machine's capacity: processes that exited between samples, and ones the host may not read,
 // are not in it, so it can only under-state a saturated machine.
-public sealed record MachineLoad(int Processors, double? CpuPercent, long? AvailableMemoryBytes);
+// The Window fields are over the last two samples (10 s) for the fleet feed: the mean and the
+// highest single CPU sample, and the Processor Queue Length now, its mean and its highest. Null
+// is unknown, never 0.
+public sealed record MachineLoad(int Processors, double? CpuPercent, long? AvailableMemoryBytes,
+    double? WindowCpuMean = null, double? WindowCpuPeak = null, int? RunQueue = null, double? RunQueueAvg = null, int? RunQueueMax = null);
 
 // SampledAt is when the snapshot was taken; a consumer compares it to its own clock for the age.
 public sealed record ProcessLoadReport(DateTimeOffset SampledAt, MachineLoad Machine, IReadOnlyDictionary<string, SessionLoad> Sessions);
@@ -44,6 +48,8 @@ public sealed record ProcessLoadReport(DateTimeOffset SampledAt, MachineLoad Mac
 public sealed class ProcessLoadSampler : IAsyncDisposable
 {
     public static readonly TimeSpan DefaultInterval = TimeSpan.FromSeconds(5);
+    // Two 5 s samples make the 10 s window.
+    const int WindowSamples = 2;
 
     readonly ISessionSource source;
     readonly IProcessTable table;
@@ -51,7 +57,10 @@ public sealed class ProcessLoadSampler : IAsyncDisposable
     readonly int processors;
     readonly Func<long?> availableMemory;
     readonly TimeSpan interval;
+    readonly Func<int?> runQueue;
     readonly object gate = new();
+    // The last WindowSamples machine readings, oldest first; a null is a sample that knew nothing.
+    readonly List<(double? Cpu, int? Queue)> window = [];
     // The previous sample's counters, replaced whole each time so nothing for a gone process stays.
     Dictionary<(int Id, long Start), TimeSpan> previousCpu = [];
     DateTimeOffset? previousAt;
@@ -60,8 +69,9 @@ public sealed class ProcessLoadSampler : IAsyncDisposable
     Task? loop;
 
     public ProcessLoadSampler(ISessionSource source, IProcessTable table, TimeProvider? time = null, int? processors = null,
-        Func<long?>? availableMemory = null, TimeSpan? interval = null)
+        Func<long?>? availableMemory = null, TimeSpan? interval = null, Func<int?>? runQueue = null)
     {
+        this.runQueue = runQueue ?? SystemRunQueue.Read;
         this.source = source;
         this.table = table;
         this.time = time ?? TimeProvider.System;
@@ -106,6 +116,8 @@ public sealed class ProcessLoadSampler : IAsyncDisposable
         var now = time.GetUtcNow();
         var readings = table.Read();
         var machineMemory = availableMemory();
+        int? queue = null;
+        try { queue = runQueue() is { } q and >= 0 ? q : null; } catch (Exception e) when (e is not OperationCanceledException) { }
         var roots = new List<(string Id, SessionProcess Process)>();
         foreach (var s in source.Snapshot())
         {
@@ -120,7 +132,7 @@ public sealed class ProcessLoadSampler : IAsyncDisposable
             var nextCpu = new Dictionary<(int, long), TimeSpan>();
             if (readings is null)
             {
-                report = new ProcessLoadReport(now, new MachineLoad(processors, null, machineMemory),
+                report = new ProcessLoadReport(now, Machine(null, machineMemory, queue),
                     roots.ToDictionary(r => r.Id, _ => new SessionLoad(LoadState.Unavailable, 0, null, null)));
             }
             else
@@ -161,7 +173,7 @@ public sealed class ProcessLoadSampler : IAsyncDisposable
                     var delta = readings.Sum(r => Delta(r, now)?.TotalSeconds ?? 0);
                     machineCpu = Percent(delta, elapsed);
                 }
-                report = new ProcessLoadReport(now, new MachineLoad(processors, machineCpu, machineMemory), sessions);
+                report = new ProcessLoadReport(now, Machine(machineCpu, machineMemory, queue), sessions);
             }
             previousCpu = nextCpu;
             previousAt = now;
@@ -169,6 +181,18 @@ public sealed class ProcessLoadSampler : IAsyncDisposable
         }
         try { Sampled?.Invoke(report); } catch (Exception) { }
         return report;
+    }
+
+    // Called under the gate. Unknown samples stay in the window but add nothing to its figures.
+    MachineLoad Machine(double? cpu, long? memory, int? queue)
+    {
+        window.Add((cpu, queue));
+        if (window.Count > WindowSamples) { window.RemoveAt(0); }
+        var cpus = window.Where(w => w.Cpu is not null).Select(w => w.Cpu!.Value).ToList();
+        var queues = window.Where(w => w.Queue is not null).Select(w => w.Queue!.Value).ToList();
+        return new MachineLoad(processors, cpu, memory,
+            cpus.Count > 0 ? Math.Round(cpus.Average(), 1) : null, cpus.Count > 0 ? cpus.Max() : null,
+            queue, queues.Count > 0 ? Math.Round(queues.Average(), 1) : null, queues.Count > 0 ? queues.Max() : null);
     }
 
     static bool Reused(ProcessReading parent, ProcessReading child) =>
@@ -281,6 +305,59 @@ public sealed class SystemProcessTable : IProcessTable
         foreach (var key in parents.Keys.Where(k => !seen.Contains(k)).ToList()) { parents.Remove(key); }
         return result;
     }
+}
+
+// Processor Queue Length: the threads ready to run and waiting for a processor. Null where the OS
+// will not say. Windows reads the performance counter through PDH (no package); Linux counts the
+// runnable tasks in /proc/loadavg, less this one.
+static class SystemRunQueue
+{
+    static readonly object gate = new();
+    static IntPtr query, counter;
+    static bool failed;
+
+    public static int? Read()
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows()) { return Pdh(); }
+            if (OperatingSystem.IsLinux())
+            {
+                var running = File.ReadAllText("/proc/loadavg").Split(' ', StringSplitOptions.RemoveEmptyEntries).ElementAtOrDefault(3)?.Split('/')[0];
+                return int.TryParse(running, NumberStyles.None, CultureInfo.InvariantCulture, out var n) ? Math.Max(0, n - 1) : null;
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or DllNotFoundException or EntryPointNotFoundException) { }
+        return null;
+    }
+
+    static int? Pdh()
+    {
+        lock (gate)
+        {
+            if (failed) { return null; }
+            if (query == IntPtr.Zero
+                && (PdhOpenQuery(null, IntPtr.Zero, out query) != 0 || PdhAddEnglishCounterW(query, @"\System\Processor Queue Length", IntPtr.Zero, out counter) != 0))
+            {
+                failed = true;
+                return null;
+            }
+            if (PdhCollectQueryData(query) != 0 || PdhGetFormattedCounterValue(counter, 0x100, out _, out var value) != 0 || value.Status != 0) { return null; }
+            return (int)value.Long;
+        }
+    }
+
+    [StructLayout(LayoutKind.Explicit, Size = 16)]
+    struct CounterValue
+    {
+        [FieldOffset(0)] public uint Status;
+        [FieldOffset(8)] public long Long;
+    }
+
+    [DllImport("pdh.dll")] static extern uint PdhOpenQuery(string? source, IntPtr userData, out IntPtr query);
+    [DllImport("pdh.dll", CharSet = CharSet.Unicode)] static extern uint PdhAddEnglishCounterW(IntPtr query, string path, IntPtr userData, out IntPtr counter);
+    [DllImport("pdh.dll")] static extern uint PdhCollectQueryData(IntPtr query);
+    [DllImport("pdh.dll")] static extern uint PdhGetFormattedCounterValue(IntPtr counter, uint format, out uint type, out CounterValue value);
 }
 
 static class SystemMemory

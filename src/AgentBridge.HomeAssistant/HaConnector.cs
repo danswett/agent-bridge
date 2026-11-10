@@ -15,9 +15,12 @@ public sealed record HaConnectorOptions
     public bool Dev { get; init; }
     // What a card carries when the machine has no Detailed activity switch.
     public bool DetailedActivityFallback { get; init; } = true;
-    // Publishes per-session process load on the sessions sensor (#1150). Off until Compliance clears
-    // sending it off the machine; the host.log line is unaffected.
+    // Publishes the machine's load totals as the fleet_load sensor (#1587, #1150). Off until the
+    // owner clears it (cleared 17:39 PT Nov 9 for machine totals only); the host.log line is unaffected.
     public bool PublishLoad { get; init; }
+    // Also puts per-session load rows on the sessions sensor (needs PublishLoad). Stays off: only
+    // machine totals are cleared.
+    public bool PublishSessionLoad { get; init; }
     public string DashboardUrlPath { get; init; } = HaSettings.DefaultDashboard;
     // Where sessions waiting to be retired are remembered across a restart. None in tests that
     // do not need it.
@@ -195,6 +198,11 @@ public sealed partial class HaConnector : IAsyncDisposable
     readonly Func<AgentBridge.Host.Core.Load.ProcessLoadReport?>? load;
     // The load last put on the sensor: the sensor is republished when its figures are this old.
     static readonly TimeSpan LoadRefresh = TimeSpan.FromSeconds(30);
+    // The fleet load record goes out this often, whether or not a new sample arrived: a stopped
+    // sampler shows as an observedAt that stops moving, which is how a consumer judges it stale.
+    static readonly TimeSpan FleetLoadInterval = TimeSpan.FromSeconds(10);
+    DateTimeOffset fleetLoadAt = DateTimeOffset.MinValue;
+    DateTimeOffset fleetLoadConfigAt = DateTimeOffset.MinValue;
 
     // Whether the cards' answer controls are served: only with the host's answer delivery.
     bool ServesAnswers => answer is not null;
@@ -401,6 +409,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             await Step("launch", () => LaunchAsync(now, cancellationToken));
             await Step("update", () => UpdatesAsync(now, cancellationToken));
             await Step("global", () => GlobalAsync(now, cancellationToken));
+            await Step("fleetload", () => FleetLoadAsync(now, cancellationToken));
             await Step("heartbeat", () => HeartbeatAsync(now, cancellationToken));
             await Step("usage", () => UsageAsync(now, cancellationToken));
             await Step("pins", () => PinsAsync(now, cancellationToken));
@@ -559,6 +568,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         republishing = false;
         SaveLedger();
         globalSignature = null;
+        fleetLoadConfigAt = fleetLoadAt = DateTimeOffset.MinValue;
         usageVersion = -1;
         nextReconcile = now + options.Reconcile;
         started = true;
@@ -981,7 +991,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         // The signature leaves the load out: its figures change every sample and would republish
         // every pass; they ride along on a change or after LoadRefresh.
         var signature = Signature(attributes);
-        var report = options.PublishLoad ? load?.Invoke() : null;
+        var report = options.PublishLoad && options.PublishSessionLoad ? load?.Invoke() : null;
         var stale = report is not null && now - globalAt >= LoadRefresh;
         if (signature == globalSignature && now - globalAt < HaContract.GlobalReassert && !stale) { return; }
         if (report is not null) { attributes["load"] = HaPayloads.Load(report, nodes); }
@@ -992,6 +1002,28 @@ public sealed partial class HaConnector : IAsyncDisposable
         if (globalSignature is null) { AddPin($"agent_bridge_{Slug}_sessions", HaContract.MachineEntityId("sensor", "sessions", Slug), now); }
         globalSignature = signature;
         globalAt = now;
+    }
+
+    // The machine's load totals (#1587): the sampler's latest reading, every FleetLoadInterval, on a
+    // sensor of its own. Machine totals and a session count only; nothing per session.
+    async Task FleetLoadAsync(DateTimeOffset now, CancellationToken ct)
+    {
+        if (!options.PublishLoad || now - fleetLoadAt < FleetLoadInterval) { return; }
+        if (load?.Invoke() is not { } report) { return; }
+        int sessions;
+        lock (gate) { sessions = published.Count; }
+        var record = AgentBridge.Host.Core.Load.FleetLoadRecord.From(report, options.MachineName, sessions);
+        if (now - fleetLoadConfigAt >= HaContract.GlobalReassert)
+        {
+            var (topic, config) = HaContract.FleetLoadConfig(Slug, options.MachineName);
+            await PublishAsync(topic, config, true, ct);
+            if (fleetLoadConfigAt == DateTimeOffset.MinValue) { AddPin($"agent_bridge_{Slug}_fleet_load", HaContract.MachineEntityId("sensor", "fleet_load", Slug), now); }
+            fleetLoadConfigAt = now;
+        }
+        var attributes = HaPayloads.FleetLoad(record);
+        await ha.PublishAsync(HaContract.FleetLoadStateTopic(Slug), (string)attributes["observedAt"]!, true, ct);
+        await PublishAsync(HaContract.FleetLoadAttributesTopic(Slug), attributes, true, ct);
+        fleetLoadAt = now;
     }
 
     async Task HeartbeatAsync(DateTimeOffset now, CancellationToken ct)

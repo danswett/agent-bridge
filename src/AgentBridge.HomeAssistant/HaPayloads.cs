@@ -493,6 +493,23 @@ public static class HaPayloads
         return attributes;
     }
 
+    // The fleet load record's attributes (#1587): exactly the v1 keys, machine totals only. Unknown
+    // figures are null, never 0; observedAt is the sample time, not the publish time.
+    public static JsonObject FleetLoad(AgentBridge.Host.Core.Load.FleetLoadRecord r) => new()
+    {
+        ["version"] = r.Version,
+        ["machine"] = r.Machine,
+        ["observedAt"] = r.ObservedAt.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
+        ["cpuPercent"] = r.CpuPercent,
+        ["cpuPeakPercent"] = r.CpuPeakPercent,
+        ["cores"] = r.Cores,
+        ["availableMemoryMiB"] = r.AvailableMemoryMiB,
+        ["sessions"] = r.Sessions,
+        ["runQueue"] = r.RunQueue,
+        ["runQueueAvg"] = r.RunQueueAvg,
+        ["runQueueMax"] = r.RunQueueMax,
+    };
+
     // The sessions sensor's resource figures (#1150): counts, percentages and byte sizes only, keyed
     // by the node ids the sensor already lists. Unknown figures are null, never zero. Held back from
     // the sensor until Compliance clears it (HaConnectorOptions.PublishLoad).

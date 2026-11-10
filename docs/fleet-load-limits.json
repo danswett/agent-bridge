@@ -1,0 +1,7 @@
+{
+  "maxCpuPercent": 75,
+  "minAvailableMemoryMiB": 9830,
+  "maxRunQueuePerCore": 2,
+  "maxAgeSeconds": 30,
+  "nullFails": true
+}
