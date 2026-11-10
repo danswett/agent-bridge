@@ -1610,6 +1610,15 @@ public sealed class CardTests : IAsyncLifetime
     }
 
     [Fact]
+    public void A_message_sent_mid_turn_stays_below_the_words_still_being_written_until_the_agent_answers_it()
+    {
+        var card = new SessionCardViewModel(Make.Session() with { Activity = new Activity { UserMessage = "Also do this.", Turn = "t2", ResponseTurn = "t1", Response = "Still writing." } }, Context());
+        Assert.Equal((true, false), (card.UserMessageBelow, card.UserMessageAbove));
+        card.Update(Make.Session() with { Activity = new Activity { UserMessage = "Also do this.", Turn = "t2", ResponseTurn = "t2", Response = "On it." } });
+        Assert.Equal((false, true), (card.UserMessageBelow, card.UserMessageAbove));
+    }
+
+    [Fact]
     public void A_folded_card_stays_folded_across_restarts_until_a_new_question_opens_it_once()
     {
         var card = new SessionCardViewModel(Make.Session(), Context()) { Folded = true };

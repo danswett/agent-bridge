@@ -141,6 +141,7 @@ public sealed partial class SessionView : UserControl
         questionSeen = Card?.Question?.Id;
         HeaderGlyph.Settle();
         Motion.Settle(YourMessage);
+        Motion.Settle(YourMessageBelow);
         Motion.Settle(Receipt);
         shownMessage = Card?.UserMessage ?? "";
         shownReceipt = Card?.ReceiptText ?? "";
@@ -171,7 +172,7 @@ public sealed partial class SessionView : UserControl
         if (c.UserMessage != shownMessage)
         {
             shownMessage = c.UserMessage;
-            if (c.HasUserMessage) { Motion.Enter(YourMessage, "Acknowledge", new System.Numerics.Vector2(0, 1)); }
+            if (c.HasUserMessage) { Motion.Enter(c.UserMessageBelow ? YourMessageBelow : YourMessage, "Acknowledge", new System.Numerics.Vector2(0, 1)); }
         }
         if (c.ReceiptText != shownReceipt)
         {

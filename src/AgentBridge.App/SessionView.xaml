@@ -524,7 +524,7 @@
                     </StackPanel>
 
                     <!-- Your message: a bubble at the column's right, at most 85% of it, as in the PWA. -->
-                    <Grid Visibility="{x:Bind local:Ui.Show(Card.HasUserMessage), Mode=OneWay}">
+                    <Grid Visibility="{x:Bind local:Ui.Show(Card.UserMessageAbove), Mode=OneWay}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="15*" />
                             <ColumnDefinition Width="85*" />
@@ -712,6 +712,26 @@
                         <TextBlock Grid.Column="1" Style="{StaticResource InlineMonoMeta}" Foreground="{ThemeResource AbText2}" TextWrapping="Wrap" AutomationProperties.AutomationId="CurrentTool">
                             <Run Text="{x:Bind Card.ToolName, Mode=OneWay}" Foreground="{ThemeResource AbText}" /><Run Text=" " /><Run Text="{x:Bind Card.ToolSummary, Mode=OneWay}" />
                         </TextBlock>
+                    </Grid>
+
+                    <!-- Your message sent mid-turn: below the words still being written, until the agent answers it (#1613). -->
+                    <Grid Visibility="{x:Bind local:Ui.Show(Card.UserMessageBelow), Mode=OneWay}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="15*" />
+                            <ColumnDefinition Width="85*" />
+                        </Grid.ColumnDefinitions>
+                        <Border
+                            x:Name="YourMessageBelow"
+                            Grid.Column="1"
+                            HorizontalAlignment="Right"
+                            Padding="16,10"
+                            Background="{ThemeResource AbCard}"
+                            BorderBrush="{ThemeResource AbStroke}"
+                            BorderThickness="1"
+                            CornerRadius="{StaticResource AbRadiusCard}"
+                            AutomationProperties.AutomationId="YourMessageBelow">
+                            <TextBlock Style="{StaticResource AbTypeReading}" TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind Card.UserMessage, Mode=OneWay}" />
+                        </Border>
                     </Grid>
                 </local:ReadingColumn>
                 </local:ReadingColumn>

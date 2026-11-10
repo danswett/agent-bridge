@@ -166,6 +166,12 @@ public sealed partial class SessionCardViewModel : Observable
     // The person's own last message, as a bubble; a prompt they didn't type is the Prompt line
     // instead (#489).
     public bool HasUserMessage => !string.IsNullOrEmpty(session.Activity.UserMessage) && Prompt is null;
+    // A message sent mid-turn is the latest turn's, but the words still being written answer an
+    // earlier one (ResponseTurn, v1-history): it stays below them, by time sent, until the agent
+    // starts answering it (#1613).
+    public bool UserMessageBelow => HasUserMessage && HasVoice
+        && session.Activity is { Turn: { Length: > 0 } turn, ResponseTurn: { Length: > 0 } answered } && turn != answered;
+    public bool UserMessageAbove => HasUserMessage && !UserMessageBelow;
 
     // A prompt the person didn't type (#489, ui.md §6.4): never a bubble, but a label line in agent
     // colour at the column's start (a clock for a schedule, the driven diamond otherwise), two
