@@ -49,6 +49,13 @@ function part(p) {
   return null;
 }
 
+// A turn only activity has told has no stored parts yet: its reply, the words activity gave it while it
+// was the live turn, stays drawn under it until a page brings the stored ones.
+export function shownParts(t) {
+  if (t.parts.some((p) => p.kind === 'response' && p.text) || !t.live?.response) { return t.parts; }
+  return [...t.parts, { kind: 'response', text: t.live.response, truncated: t.live.responseTruncated === true }];
+}
+
 export function turnView(t) {
   if (t.unreadable) { return h('section', { class: 'history-turn', dataset: { turn: t.id } }, h('p', { class: 'history-meta' }, WORDS.unreadable)); }
   const from = t.prompt?.from ?? 'person';
@@ -56,7 +63,7 @@ export function turnView(t) {
     : from === 'person'
       ? h('div', { class: 'history-prompt' }, h('div', { class: 'history-bubble' }, h('p', { class: 'plain' }, t.prompt.text ?? '')))
       : h('div', { class: 'history-origin' }, h('p', { class: 'history-origin-label' }, t.prompt.label ?? SENDER[from] ?? SENDER.other), h('p', { class: 'plain' }, t.prompt.text ?? ''));
-  return h('section', { class: 'history-turn', dataset: { turn: t.id } }, prompt, t.parts.map(part), t.truncated ? h('p', { class: 'history-meta history-cut' }, WORDS.cut) : null);
+  return h('section', { class: 'history-turn', dataset: { turn: t.id } }, prompt, shownParts(t).map(part), t.truncated ? h('p', { class: 'history-meta history-cut' }, WORDS.cut) : null);
 }
 
 export class HistoryView {
