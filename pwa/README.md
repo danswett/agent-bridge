@@ -657,7 +657,9 @@ route is seen to work before a feature adds its own states.
   width on a phone; the Disclosure token, instant under reduced motion; axe in light and dark.
 * `test/order.spec.mjs`, in demo mode (#164): three sessions updating in turn never move a
   row; a new session at the top once; Alt+Up/Down, a drag by the handle (at 900 and 1440
-  px), and the row menu from a right-click, Shift+F10 and a long press (at 390 px with
+  px), the Move button (#1579: Space or Enter grabs, Up/Down move, Space or Enter drops,
+  Escape cancels, with the exact announcements, held-off remote changes and a grabbed session
+  ending), and the row menu from a right-click, Shift+F10 and a long press (at 390 px with
   touch) moving and pinning rows, each surviving a reload; the new activity dot on a
   folded row; Ended · N; the sort menu; blocked storage falling back to Most recent.
   `test/unit/session-order.test.mjs` covers the same below the page.

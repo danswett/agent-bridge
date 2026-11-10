@@ -33,7 +33,10 @@ const REGIONS = [
 
 // Pairs of stops known to go against the layout, each tracked by an issue: a selector for the
 // earlier stop, then one for the later.
-const KNOWN_ORDER = [];
+const KNOWN_ORDER = [
+  // The Move button follows the row's own button in Tab order (#1579) and sits in its left margin.
+  { from: '.row-main', to: '.drag-handle' },
+];
 
 // Where focus is: which element (an id kept for it), its part of the page, where it sits in that
 // part (scrolled panes counted back, so a pane scrolling to it doesn't reorder it), which of
