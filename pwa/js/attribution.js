@@ -43,6 +43,16 @@ export function mainVoice(session) {
   };
 }
 
+// The words the card draws under the latest turn's header: mainVoice, but without a response the
+// host says is an earlier turn's (responseTurn names another turn than activity.turn). That text is
+// drawn under its own turn by the history; drawn here too it would sit under a later header (#1642).
+export function liveVoice(session) {
+  const voice = mainVoice(session);
+  const a = session?.activity ?? {};
+  if (!a.responseTurn || !a.turn || a.responseTurn === a.turn) { return voice; }
+  return { ...voice, response: null, responseTruncated: false, responseDropped: false };
+}
+
 // A delegate's name, as it is shown everywhere: its rows, the strip, the tab, the inspector, the
 // conversation, a question's heading, Needs you and notifications (ui.md §6.3, §8); where a line
 // says who asks or works, after the word Delegate (delegateTitle). An agent chose it, so it can try

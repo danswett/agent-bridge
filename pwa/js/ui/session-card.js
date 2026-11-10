@@ -39,7 +39,7 @@ import { EndSession } from './stop-view.js';
 import { lastSegment, pathView, setFacts } from './meta.js';
 import { RowMenu } from './row-menu.js';
 import { DelegateDetail, DelegatesBlock, DelegateStrip } from './delegates-view.js';
-import { aloud, backgroundCounts, delegateEvents, delegateFold, delegateList, eventParts, mainVoice } from '../attribution.js';
+import { aloud, backgroundCounts, delegateEvents, delegateFold, delegateList, eventParts, liveVoice, mainVoice } from '../attribution.js';
 import { delegateOf } from '../needs-you.js';
 import { enter, leave, scrollBehavior, slide, stopTravel } from './motion.js';
 import { CollapsingHeader, PHONE } from './collapse-header.js';
@@ -826,7 +826,7 @@ export class SessionCard {
     this.#renderReply(s);
     this.#renderStop(s);
     // The main agent's own words only (ui.md §1 principle 3); a delegate's are on its own row.
-    const voice = mainVoice(s);
+    const voice = liveVoice(s);
     if (this.#changed('response', voice.response ?? '')) {
       e.response.replaceChildren(renderMarkdown(voice.response ?? ''));
     }
