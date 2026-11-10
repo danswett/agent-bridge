@@ -93,6 +93,24 @@ Open findings, dependencies or blockers: <none, or details and needed responder>
 Next action requested from Quality: <action>.
 ```
 
+## Design notes: nothing tied to a machine
+
+Owner rule (2026-11-09): nothing in Slipgates may be tied to a specific machine. Machines
+join and leave the fleet and the whole system must keep working. A component is either
+distributed, so that one live node is enough, or keeps its state in the relay service,
+protected, and not on a machine. No component names a particular VM as its home.
+
+Every design note, and every PR that adds or moves a long-running component (a watcher,
+scheduler, reader, cache, or state or handover file), answers three questions, and the
+reviewer checks them:
+
+1. Where does it run?
+2. What happens when that node leaves?
+3. Where does its state live?
+
+A note that cannot answer all three is not ready. A component already tied to a machine
+needs a migration plan, not a silent exception.
+
 ## Resolving bot-only threads
 
 GitHub's ruleset needs 0 unresolved threads, so threads left only by the Copilot or
