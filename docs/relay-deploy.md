@@ -336,6 +336,10 @@ Every socket's end is logged as `disconnect <conn> (<end>) after <n>s; frames in
 runtime's ping/pong timeout ended it. The runtime words that only in its exception message, so
 `keepalive` is matched on that text. The cause carries no identity, account id, token or message text.
 
+Connect and disconnect lines are sampled (#1310): past `LogLinesPerMinute` (default 120; 0 logs
+all) per minute, the rest are dropped and one `N connect/disconnect lines suppressed` line follows
+in the next window. Counts come from the `relay.connects` and `relay.disconnects` metrics.
+
 To produce each kind of end against staging, with the token key in `RELAY_SMOKE_TOKEN_KEY` (never echoed):
 `relay-smoke host-probe --relay <url> --mode kill|blackhole|hold --hold <s> [--count N]` prints its
 throwaway account id and device ids with UTC times; it needs https and refuses the production relay hosts unless `--allow-production` is passed; `--mode observe --account <id> --hold <s>`
