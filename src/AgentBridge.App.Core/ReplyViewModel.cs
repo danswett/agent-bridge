@@ -67,6 +67,8 @@ public sealed class ReplyViewModel : Observable
     ReceiptMark statusMark;
     // Times the status line's words, as the receipt of the reply (Receipt, #600, #617).
     readonly Receipt receipt;
+    // Send-to-settled timing (#1600): stamped by Send, fed by each session update.
+    public TurnClock Turns { get; }
     readonly string? machineName;
     int preparing;
     (string Request, string Text, List<ReplyAttachment> Files)? sent;
@@ -95,6 +97,7 @@ public sealed class ReplyViewModel : Observable
         sessionId = session.Id;
         this.machineName = machineName;
         receipt = new Receipt(deliveries.Time, deliveries.Ui, Describe, Shown, Said);
+        Turns = new TurnClock(deliveries.Time);
         deliveries.Changed += OnDelivery;
         Refresh();
     }
@@ -255,6 +258,7 @@ public sealed class ReplyViewModel : Observable
     {
         session = next;
         attach = takesFiles;
+        Turns.Seen(next.Status);
         large = takesFiles && takesLarge;
         this.blobMax = takesFiles ? blobMax : 0;
         Refresh();
@@ -367,6 +371,7 @@ public sealed class ReplyViewModel : Observable
         var sentText = text;
         var entry = deliveries.Submit(Key, Ops.SessionReply, r => Request(r, sentText, files), _ => false, payload: files, before: (call, progress) => UploadAsync(call, files, progress), replayAfterRestart: false);
         sent = (entry.Request, sentText, files);
+        Turns.Sent();
         keepRoom = true;
         // Sent inside the last one's check: Send shows this one's ring, not that check.
         checkTimer?.Dispose();

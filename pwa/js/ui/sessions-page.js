@@ -13,6 +13,7 @@ import { h } from './dom.js';
 import { SessionListView, renderMachines, renderMachineTabs } from './views.js';
 import { LaunchPanel } from './launch-view.js';
 import { AnswerService } from '../answer-service.js';
+import { TurnClock } from '../turn-clock.js';
 import { ReplyService } from '../reply-service.js';
 import { StopService } from '../stop-service.js';
 import { LaunchService } from '../launch-service.js';
@@ -188,7 +189,8 @@ export class SessionsPage {
     // checks it against the live question or session.
     const accepts = (hostId) => !!hosts.route(hostId);
     this.answers = new AnswerService({ current, accepts, ...timing, marks: 'answer' });
-    this.replies = new ReplyService({ current, accepts, ...timing, blobs });
+    this.turns = new TurnClock();
+    this.replies = new ReplyService({ current, accepts, ...timing, blobs, onTap: (e) => this.turns.sent(e.hostId, e.sessionId) });
     this.stops = new StopService({ current, accepts, ...timing });
     this.launches = new LaunchService({ current, accepts, ...timing });
     // Each machine's last launch.options, asked for in the background, so Start a session shows at once (#1527).
@@ -276,6 +278,8 @@ export class SessionsPage {
     const unwatchSessions = hosts.sessions.onChange((c) => {
       news = this.view.drawn;
       returned = new Set();
+      if (c?.type === 'remove') { this.turns.dropped(c.hostId, c.id); }
+      if (c?.type === 'upsert') { this.turns.seen(c.hostId, c.id, hosts.sessions.get(c.hostId, c.id)?.status); }
       // A session registered may be the one a launch's machine was busy with, or the one a launch
       // reported unconfirmed started (#896).
       if (c?.type === 'upsert') { this.launchPanel.sessionSeen(c.hostId, hosts.sessions.get(c.hostId, c.id)); }
