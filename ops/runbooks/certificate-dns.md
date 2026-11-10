@@ -3,7 +3,7 @@
 **Alerts:** A-CERT and A-DNS (the daily `ops-probe.yml` opens an `area:ops` issue), or A-AVAIL
 failing while the probe shows the app's own name (`-Url https://agent-bridge-relay.icyflower-4f71155d.westus2.azurecontainerapps.io`) healthy.
 
-`relay.slipgates.com` is served too (same app, own certificate, same DNS-only CNAME and `asuid` rules; see docs/relay-deploy.md). Check both with `relay-probe.ps1 -Target production` and `-Target production-slipgates`.
+`relay.slipgates.com` is served too (same app, own certificate, same DNS-only CNAME and `asuid` rules; see docs/relay-deploy.md). The daily ops-probe checks both names (`-Target production-names`) and the issue table's Target column says which one failed. By hand, use `relay-probe.ps1 -Target production-names`, or `-Target production` and `-Target production-slipgates` one at a time.
 
 `relay.bad-duck.com` is a Cloudflare CNAME, **DNS only (grey cloud)**, to the production app,
 plus a TXT record `asuid.relay` holding the environment's verification id. The certificate is
@@ -14,7 +14,7 @@ both records stay as they are** (docs/relay-deploy.md "Custom domain"). Proxying
 ## Confirm
 
 ```powershell
-pwsh ops/tools/relay-probe.ps1     # dns cname, dns asuid txt, tls certificate rows
+pwsh ops/tools/relay-probe.ps1 -Target production-names     # dns cname, dns asuid txt, tls certificate rows
 az containerapp env certificate list --subscription $sub -g $rg -n cae-agent-bridge-relay-wus2 --managed-certificates-only -o table
 ```
 

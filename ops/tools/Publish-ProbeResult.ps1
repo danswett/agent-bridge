@@ -4,7 +4,7 @@
   Opens, updates or closes the one issue that says production's daily probe found a problem.
 
 .DESCRIPTION
-  ops-probe.yml runs ops/tools/relay-probe.ps1 against production once a day and passes its JSON
+  ops-probe.yml runs ops/tools/relay-probe.ps1 against both production names once a day and passes its JSON
   here. Only actionable results open an issue: any FAIL, and a WARN on the TLS certificate (renewal
   overdue). A slow /healthz from a GitHub runner is a WARN that's only noted in the run summary,
   since one slow request from one runner says little.
@@ -37,7 +37,10 @@ $results = @($probe.results)
 $actionable = @($results | Where-Object { $_.Status -eq 'FAIL' -or ($_.Status -eq 'WARN' -and $_.Check -eq 'tls certificate') })
 $inconclusive = @($results | Where-Object { $_.Status -eq 'WARN' -and $_.Check -eq 'dns' })
 
-$table = @('| Check | Status | Detail |', '|---|---|---|') + @($results | ForEach-Object { "| $($_.Check) | $($_.Status) | $($_.Detail -replace '\|', '\|') |" })
+# The host a row is for, so a failure on one name doesn't read as a failure on the other.
+function Get-TargetName($row) { if ($row.PSObject.Properties['Host'] -and $row.Host) { $row.Host } else { $row.Target } }
+
+$table = @('| Target | Check | Status | Detail |', '|---|---|---|---|') + @($results | ForEach-Object { "| $(Get-TargetName $_) | $($_.Check) | $($_.Status) | $($_.Detail -replace '\|', '\|') |" })
 $body = @(
     "Production probe at $($probe.at) ([run]($RunUrl)):"
     ''
@@ -50,7 +53,7 @@ $open = gh issue list -R $Repository --state open --label area:ops --search "in:
     ConvertFrom-Json | Where-Object title -EQ $title | Select-Object -First 1
 
 if ($actionable.Count -gt 0) {
-    $what = ($actionable | ForEach-Object { "$($_.Check) $($_.Status)" }) -join ', '
+    $what = ($actionable | ForEach-Object { "$(Get-TargetName $_) $($_.Check) $($_.Status)" }) -join ', '
     if ($DryRun) { "would $(if ($open) { "comment on #$($open.number)" } else { 'open an issue' }): $what"; return }
     $file = New-TemporaryFile
     try {

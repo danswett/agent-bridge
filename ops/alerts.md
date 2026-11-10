@@ -45,8 +45,8 @@ Signals:
 | Id | Sev | Signal | Fires when | Runbook | Issue | Status |
 |---|---|---|---|---|---|---|
 | A-AVAIL | 1 | AT | `/healthz` on `relay.bad-duck.com` (answering `"ok":true` with a valid certificate) fails from 2 of 3 locations within 15 min. Tested every 10 min from West US, East US and West Europe | [relay-unavailable](runbooks/relay-unavailable.md) | #573 | Built |
-| A-CERT | 2 | P | The TLS certificate has < 21 days left (renewal should happen about 30 days ahead), or doesn't validate | [certificate-dns](runbooks/certificate-dns.md) | #573 | Built |
-| A-DNS | 2 | P | `relay` isn't a DNS-only CNAME to the production app, or `asuid.relay` doesn't hold the environment's verification id: renewal will fail | [certificate-dns](runbooks/certificate-dns.md) | #573 | Built |
+| A-CERT | 2 | P | The TLS certificate has < 21 days left (renewal should happen about 30 days ahead), or doesn't validate, on `relay.bad-duck.com` or `relay.slipgates.com` (the Target column says which) | [certificate-dns](runbooks/certificate-dns.md) | #573 | Built |
+| A-DNS | 2 | P | `relay` isn't a DNS-only CNAME to the production app, or `asuid.relay` doesn't hold the environment's verification id, on either name (the Target column says which): renewal will fail | [certificate-dns](runbooks/certificate-dns.md) | #573 | Built |
 | A-REPLICAS | 1 | CA `Replicas` | Maximum < 1 over 5 min | [relay-unavailable](runbooks/relay-unavailable.md) | #572 | Built |
 | A-RESTART | 2 | CA `RestartCount` | Maximum > 0 over 15 min. The metric counts restarts since the replica was created, so this means the current replica has restarted, and it clears when a new replica replaces it | [relay-resources](runbooks/relay-resources.md) | #572 | Built |
 | A-CRASHLOOP | 1 | CA `RestartCount` | Maximum > 2 over 15 min: a crash loop | [relay-resources](runbooks/relay-resources.md) | #572 | Built |
