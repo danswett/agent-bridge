@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using AgentBridge.AgentEnvelope;
+using Codec = AgentBridge.Roster.Codec;
 using AgentBridge.Transport;
 
 namespace AgentBridge.Host.Lite;

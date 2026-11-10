@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AgentBridge.AgentEnvelope;
+using Codec = AgentBridge.Roster.Codec;
 using AgentBridge.Transport;
 
 namespace AgentBridge.Host.Lite;

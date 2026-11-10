@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using AgentBridge.AgentEnvelope;
+using Codec = AgentBridge.Roster.Codec;
 using AgentBridge.Host.Lite;
 using AgentBridge.Transport;
 using Microsoft.Extensions.Time.Testing;
