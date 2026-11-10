@@ -6,7 +6,8 @@
 # prints 'sent' only once the host says 'delivered' for its own rid. There is one reply slot per node, so a send that is overwritten
 # by another never gets its ack and is reported, never printed as sent. Nothing is queued: a refusal is final until the sender retries.
 # Exit codes: 0 delivered; 1 not delivered (bad input, no token, Home Assistant unreachable); 2 the host could not confirm
-# the typing (it MAY have been delivered: check before resending); 3 the host refused it or gave no outcome in time (retry).
+# the typing (it MAY have been delivered: check before resending); 3 the host refused it or gave no outcome in time (retry);
+# 4 the host refused because text is already typed in the session's input box (#150): retrying cannot work until someone sends or clears it at the machine.
 # The token is read from the environment and never printed.
 param(
   [Parameter(Mandatory)][string]$Session, [Parameter(Mandatory)][string]$Text, [int]$Attempts = 5,
@@ -99,6 +100,11 @@ try {
         'unconfirmed' { [Console]::Error.WriteLine("The host typed the message into $node but could not confirm it. It MAY have been delivered; check before resending (rid $Rid)."); exit 2 }
         default {
           $why = if ($ack.Error) { $ack.Error } else { 'the host refused it' }
+          # Text left in the box refuses every later reply, so a retry loop would never end (#150).
+          if ($why -match 'already typed in .*input box') {
+            [Console]::Error.WriteLine("Reply NOT sent to ${node}: $why. Every reply to this session will be refused until that text is sent or cleared at the machine; do not keep retrying (rid $Rid).")
+            exit 4
+          }
           [Console]::Error.WriteLine("Reply NOT sent to ${node}: $why. Nothing is queued; retry later (rid $Rid).")
           exit 3
         }

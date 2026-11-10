@@ -37,6 +37,9 @@ $server = Start-ThreadJob -ArgumentList $listener, $fake, $node -ScriptBlock {
             elseif ($slot -and $fake.Mode -eq 'refuse') {
                 $fake.Ack = @{ rid = $slot.rid; outcome = 'refused'; at = [DateTime]::UtcNow.Ticks; error = 'the session is waiting on a question' }
             }
+            elseif ($slot -and $fake.Mode -eq 'refuse-box') {
+                $fake.Ack = @{ rid = $slot.rid; outcome = 'refused'; at = [DateTime]::UtcNow.Ticks; error = "something is already typed in Copilot's input box at the machine (364 characters, not shown here); send or clear it there first" }
+            }
         }
         elseif ($path -eq "states/sensor.${node}_reply_payload") {
             $out = @{ state = 'x'; attributes = @{ at = $fake.Slot.at } }
@@ -74,6 +77,11 @@ try {
     $fake.Mode = 'silent'; $fake.Ack = $null
     $r = Send 'lost' 'r-lost'
     Assert ($r.Exit -eq 3 -and $r.Out -match 'Reply NOT confirmed' -and $r.Out -notmatch "(?m)^sent to $node") 'a message the host never answers exits 3 after the wait'
+
+    # A reply refused because stale text sits in the input box (#150) is a loud, distinct failure, never exit 0.
+    $fake.Mode = 'refuse-box'; $fake.Ack = $null
+    $r = Send 'hello' 'r-box'
+    Assert ($r.Exit -eq 4 -and $r.Out -match 'do not keep retrying' -and $r.Out -match '364 characters' -and $r.Out -notmatch "(?m)^sent to $node") 'a refusal for text left in the input box exits 4 and says so'
 
     # An ack for an earlier send is not this send's outcome.
     $fake.Mode = 'silent'; $fake.Ack = @{ rid = 'someone-else'; outcome = 'delivered' }
