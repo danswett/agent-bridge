@@ -142,19 +142,20 @@ function page({ top = MAX, slotH = 73, reduced = false, value = '' } = {}) {
     value, placeholder: 'Reply to the session', disabled: false, getClientRects: () => [{}],
     focus() { doc.activeElement = textarea; on['slot:focusin']?.({}); },
   };
-  const slot = { offsetHeight: slotH, contains: (el) => el === textarea, querySelector: () => textarea, querySelectorAll: () => [textarea], addEventListener: listen('slot') };
+  const style = { setProperty: (k, v) => props.set(k, v), removeProperty: (k) => props.delete(k) };
+  const slot = { style, offsetHeight: slotH, contains: (el) => el === textarea, querySelector: () => textarea, querySelectorAll: () => [textarea], addEventListener: listen('slot') };
   const span = { textContent: '' };
   const copyClasses = new Set();
   const copy = { firstElementChild: span, classList: { toggle: (c, yes) => (yes ? copyClasses.add(c) : copyClasses.delete(c)) }, addEventListener: listen('copy') };
   const view = {
     ownerDocument: doc,
     dataset: {},
-    style: { setProperty: (k, v) => props.set(k, v), removeProperty: (k) => props.delete(k) },
+    style,
     classList: { add: (c) => classes.add(c), remove: (...c) => c.forEach((x) => classes.delete(x)), contains: (c) => classes.has(c) },
     toggleAttribute: (a, yes) => (yes ? attrs.add(a) : attrs.delete(a)),
     removeAttribute: (a) => { attrs.delete(a); delete view.dataset[a.replace(/^data-/, '')]; },
   };
-  const scroller = { scrollTop: top, scrollHeight: MAX + 700, clientHeight: 700, contains: () => false, getBoundingClientRect: () => ({ top: 0, bottom: 700 }) };
+  const scroller = { style, scrollTop: top, scrollHeight: MAX + 700, clientHeight: 700, contains: () => false, getBoundingClientRect: () => ({ top: 0, bottom: 700 }) };
   const win = { matchMedia: () => ({ matches: reduced }) };
   const foot = new CollapsingFoot({ view, slot, bar: { offsetHeight: 48 }, copy, scroller, win });
   const ctl = new AbortController();

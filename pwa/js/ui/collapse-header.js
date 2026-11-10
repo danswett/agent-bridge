@@ -237,7 +237,9 @@ export class CollapsingHeader {
     this.#shown = {};
     this.#foot?.disable();
     const v = this.#view;
-    for (const p of ['--ty', '--covered', '--head-h', '--stage-h']) { v.style.removeProperty(p); }
+    for (const p of ['--head-h', '--stage-h']) { v.style.removeProperty(p); }
+    this.#top.style.removeProperty('--ty');
+    this.#scroller.style.removeProperty('--covered');
     for (const a of ['data-state', 'data-solid', 'data-titled']) { v.removeAttribute(a); }
     v.classList.remove('animating', 'fading');
     this.#stageH = 0;
@@ -325,11 +327,11 @@ export class CollapsingHeader {
     const v = this.#view;
     const hidden = this.#hidden();
     const p = parts(hidden, this.#room, this.#fold.last > 0 && !this.#paused);
-    const set = (name, value) => {
-      if (this.#shown[name] !== value) { this.#shown[name] = value; v.style.setProperty(name, value); }
+    const set = (name, value, el) => {
+      if (this.#shown[name] !== value) { this.#shown[name] = value; el.style.setProperty(name, value); }
     };
-    set('--ty', `${-hidden}px`);
-    set('--covered', `${Math.max(this.#barH, this.#fullH - hidden)}px`);
+    set('--ty', `${-hidden}px`, this.#top);
+    set('--covered', `${Math.max(this.#barH, this.#fullH - hidden)}px`, this.#scroller);
     const flag = (name, on) => { if (this.#shown[name] !== on) { this.#shown[name] = on; v.toggleAttribute(name, on); } };
     flag('data-solid', p.solid);
     flag('data-titled', p.titled);

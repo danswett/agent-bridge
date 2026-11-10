@@ -1652,9 +1652,14 @@ summary {
 @media (min-width: 760px) {
   .session-head, .session-top { display: contents; }
 }
+/* --ty and --covered change on every scroll step. Not inherited, so they restyle only the element
+   they are set on and not the whole conversation under it (an inherited one cost WebKit 100+ ms
+   on a 500-turn session, #1684). collapse-header.js sets --ty on the header, --covered on the scroller. */
+@property --ty { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --covered { syntax: "<length>"; inherits: false; initial-value: 0px; }
 @media (max-width: 759px) {
   /* Resting values; collapse-header.js overrides them inline on the view. */
-  .session-view { --ty: 0px; --covered: 0px; --head-h: 0px; --stage-h: none; }
+  .session-view { --head-h: 0px; --stage-h: none; }
   .session-view:not([hidden]) { position: relative; grid-template-rows: minmax(0, 1fr); }
   .session-view > .view-body { grid-row: 1; }
   .session-head { position: absolute; top: 0; left: 0; right: 0; z-index: 2; pointer-events: none; }
@@ -1758,9 +1763,13 @@ summary {
    coming into it brings it back at once. The conversation keeps room for all of it at its end, and
    what focus or the app scrolls to stays clear of what covers it. From 760 none of this applies. */
 .reply-bar { display: none; }
+/* Not inherited, for the reason --ty is not (above): collapse-foot.js sets --fy on the reply slot
+   and --fcovered on the scroller; --foot-h changes only with the box's height, so it stays on the view. */
+@property --fy { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --fcovered { syntax: "<length>"; inherits: false; initial-value: 0px; }
 @media (max-width: 759px) {
-  /* Resting values; collapse-foot.js overrides them inline on the view. */
-  .session-view { --fy: 0px; --fcovered: 0px; --foot-h: 0px; }
+  /* Resting value; collapse-foot.js overrides it inline on the view. */
+  .session-view { --foot-h: 0px; }
   .conversation { position: relative; }
   /* The compact area slides its box down by its room, past the conversation's foot. Clipped here
      it goes under the bar; unclipped, its lower edge showed in the band under the conversation

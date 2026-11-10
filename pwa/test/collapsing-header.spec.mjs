@@ -77,9 +77,9 @@ const read = (v) => v.evaluate((el) => {
   const sc = el.querySelector('.stream-scroll');
   const top = el.querySelector('.session-top');
   const bar = el.querySelector('.session-bar');
-  const px = (name) => parseFloat(el.style.getPropertyValue(name) || '0');
+  const px = (on, name) => parseFloat(on.style.getPropertyValue(name) || '0');
   return {
-    ty: px('--ty'), covered: px('--covered'), full: top.offsetHeight, bar: bar.offsetHeight, scroll: sc.scrollTop,
+    ty: px(top, '--ty'), covered: px(sc, '--covered'), full: top.offsetHeight, bar: bar.offsetHeight, scroll: sc.scrollTop,
     room: top.offsetHeight - bar.offsetHeight, solid: el.hasAttribute('data-solid'), titled: el.hasAttribute('data-titled'),
   };
 });
@@ -486,7 +486,7 @@ test.describe('on a phone, with the person\'s settings', () => {
     await expect.poll(() => v.evaluate((el) => {
       const sc = el.querySelector('.stream-scroll').getBoundingClientRect();
       const b = el.querySelector('#probe').getBoundingClientRect();
-      const covered = parseFloat(el.style.getPropertyValue('--covered'));
+      const covered = parseFloat(el.querySelector('.stream-scroll').style.getPropertyValue('--covered'));
       return b.top >= sc.top + covered - 1 && b.bottom <= sc.bottom + 1;
     })).toBe(true);
     expect((await read(v)).ty).toBe(-room);
@@ -509,7 +509,7 @@ test.describe('on a phone, with the person\'s settings', () => {
     await expect.poll(() => v.evaluate((el) => {
       const sc = el.querySelector('.stream-scroll').getBoundingClientRect();
       const b = el.querySelector('#probe').getBoundingClientRect();
-      return b.top >= sc.top + parseFloat(el.style.getPropertyValue('--covered')) - 1;
+      return b.top >= sc.top + parseFloat(el.querySelector('.stream-scroll').style.getPropertyValue('--covered')) - 1;
     })).toBe(true);
   });
 
@@ -735,7 +735,7 @@ test.describe('on a phone, with the person\'s settings', () => {
     await folded(v);
     await page.setViewportSize({ width: 900, height: 800 });
     await expect.poll(() => v.evaluate((el) => el.style.getPropertyValue('--head-h'))).toBe('');
-    expect(await v.evaluate((el) => ({ ty: el.style.getPropertyValue('--ty'), state: el.hasAttribute('data-state') }))).toEqual({ ty: '', state: false });
+    expect(await v.evaluate((el) => ({ ty: el.querySelector('.session-top').style.getPropertyValue('--ty'), state: el.hasAttribute('data-state') }))).toEqual({ ty: '', state: false });
   });
 
   test('under reduced motion the header leaves and returns with the 83 ms cross-fade, and does not slide', async ({ page }) => {
@@ -810,7 +810,11 @@ test.describe('from 760 px up', () => {
     await sc.evaluate((el) => { el.scrollTop = 600; });
     await page.waitForTimeout(150);
     expect(await v.evaluate((el) => ({
-      style: ['--ty', '--covered', '--head-h', '--stage-h'].map((p) => el.style.getPropertyValue(p)),
+      style: [
+        el.querySelector('.session-top').style.getPropertyValue('--ty'),
+        el.querySelector('.stream-scroll').style.getPropertyValue('--covered'),
+        ...['--head-h', '--stage-h'].map((p) => el.style.getPropertyValue(p)),
+      ],
       attributes: ['data-state', 'data-solid', 'data-titled'].filter((a) => el.hasAttribute(a)),
       classes: [...el.classList].filter((c) => c === 'animating' || c === 'fading'),
     }))).toEqual({ style: ['', '', '', ''], attributes: [], classes: [] });
