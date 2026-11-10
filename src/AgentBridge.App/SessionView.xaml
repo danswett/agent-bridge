@@ -84,6 +84,7 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <!-- The header. -->
@@ -382,15 +383,6 @@
                     Padding="24,8,24,0"
                     Spacing="24">
 
-                    <!-- A question, in the stream, in Needs you colours (§6.4). -->
-                    <Border
-                        x:Name="QuestionCard"
-                        Background="{ThemeResource AbNeedsFill}"
-                        CornerRadius="{StaticResource AbRadiusCard}"
-                        Visibility="Collapsed">
-                        <ContentControl x:Name="QuestionHost" HorizontalContentAlignment="Stretch" IsTabStop="False" />
-                    </Border>
-
                     <InfoBar
                         Title="Not sent"
                         Severity="Warning"
@@ -606,6 +598,17 @@
                         <TextBlock Style="{StaticResource AbTypeRow}" TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind Card.Reasoning, Mode=OneWay}" />
                     </Expander>
 
+                    <!-- A question, in the stream, in Needs you colours (§6.4), where it was asked: after
+                         the reply it follows, with what came after it (delegates, the tool) below it
+                         (#1657). It sat in the header, above the user's message and the reply. -->
+                    <Border
+                        x:Name="QuestionCard"
+                        Background="{ThemeResource AbNeedsFill}"
+                        CornerRadius="{StaticResource AbRadiusCard}"
+                        Visibility="Collapsed">
+                        <ContentControl x:Name="QuestionHost" HorizontalContentAlignment="Stretch" IsTabStop="False" />
+                    </Border>
+
                     <!-- Delegates starting and reporting back (§6.4): one meta line each, with an icon,
                          the name linking to the delegate. The main agent's own delegates only. -->
                     <StackPanel Spacing="4" Visibility="{x:Bind local:Ui.Show(Card.Delegates.HasEvents), Mode=OneWay, FallbackValue=Collapsed}">
@@ -797,9 +800,24 @@
              ever go to the main agent. -->
         <!-- Never more than half the pane (FitComposer): at 360×600 a long draft, attachments and
              the notes under them otherwise took every line from the conversation and its question. -->
+        <!-- Over the reply box while an open question is out of view (QuestionBar): one click or
+             Enter on it brings the card into view. Never over the conversation. -->
+        <Button
+            x:Name="QuestionWaiting"
+            Grid.Row="3"
+            HorizontalAlignment="Center"
+            Margin="24,0,24,8"
+            Content="Question waiting"
+            Background="{ThemeResource AbNeedsFill}"
+            Foreground="{ThemeResource AbNeedsText}"
+            AutomationProperties.AutomationId="QuestionBar"
+            AutomationProperties.Name="Question waiting. Go to the question"
+            Visibility="Collapsed"
+            Click="OnQuestionBar" />
+
         <ScrollViewer
             x:Name="Composer"
-            Grid.Row="3"
+            Grid.Row="4"
             VerticalScrollBarVisibility="Auto"
             Visibility="{x:Bind local:Ui.Some(Card.Reply), Mode=OneWay}">
             <local:ReadingColumn

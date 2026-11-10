@@ -82,6 +82,7 @@ public sealed partial class SessionView
         scroll.ViewChanged += (_, e) =>
         {
             follow.Scrolled(scroll.VerticalOffset, scroll.ScrollableHeight);
+            SyncQuestionBar();
             // A question still moving into view is held from the pointer until it has stopped.
             guard.Scrolled(DateTimeOffset.UtcNow);
             if (anchoring is not { } asked || Math.Abs(scroll.VerticalOffset - asked) >= 0.5) { TakeAnchor(); }
