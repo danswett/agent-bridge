@@ -34,6 +34,7 @@ public sealed partial class UsageView : UserControl
     {
         "crit" => Ui.Brush("AbDangerText"),
         "warn" => Ui.Brush("AbNeedsText"),
+        "reset" => Ui.Brush("AbText2"),
         _ => Ui.Brush("AbBridge"),
     };
 

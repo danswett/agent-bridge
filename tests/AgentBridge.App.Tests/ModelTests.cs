@@ -737,6 +737,27 @@ public sealed class UsageTests
     };
 
     [Fact]
+    public void A_window_that_has_reset_since_its_reading_says_Reset_with_no_figure_and_is_left_out_of_the_headline_and_order()
+    {
+        var vm = new UsageViewModel(new FakeTimeProvider(Now));
+        var lapsed = Agent("Lapsed", 96) with
+        {
+            Windows = [new UsageWindow { Key = "session", Label = "Session (5h)", Percent = 96, StartsAt = Now.AddHours(-5), ResetsAt = Now.AddMinutes(-12) }],
+        };
+
+        vm.Update(new UsageReport([lapsed, Agent("Open", 20)]));
+
+        Assert.Equal(["Open", "Lapsed"], vm.Rows.Select(r => r.Label));
+        Assert.Equal("Open · open 20% · Lapsed · lapsed Reset", vm.Summary);
+        var row = vm.Rows[1];
+        Assert.Null(row.Headline);
+        var w = Assert.Single(row.Windows);
+        Assert.True(w.Lapsed);
+        Assert.Equal(("Reset", "Reset 12m ago · no reading since", "", null, null), (w.PercentText, w.ResetText, w.AmountText, w.PaceText, w.EvenPaceText));
+        Assert.Equal("Lapsed · lapsed, Session (5h): reset 12 minutes ago, no reading since.", w.AccessibleText);
+    }
+
+    [Fact]
     public void Rows_are_fullest_first_coloured_at_75_and_90_with_their_pace_and_reset()
     {
         var vm = new UsageViewModel(new FakeTimeProvider(Now));

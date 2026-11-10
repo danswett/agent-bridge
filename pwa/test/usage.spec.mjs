@@ -88,6 +88,24 @@ test('each agent is a row with its windows, fullest first, read as agent-ha-brid
   expect(await page.evaluate(() => window.__cspViolations)).toEqual([]);
 });
 
+test('a window that has reset shows "Reset" with no figure, bar or pace, and a row of only such windows says Reset in the summary', async ({ page }) => {
+  await openDemo(page);
+  await sendUsage(page, (at) => ({
+    agents: [
+      { agent: 'claude', label: 'Claude Code', account: 'max', source: 'cache', measuredAt: at(-11 * 3600000), windows: [{ key: 'session', label: 'Session (5h)', percent: 96, startsAt: at(-5 * 3600000), resetsAt: at(-12 * 60000) }] },
+      { agent: 'copilot', label: 'GitHub Copilot', account: 'danswett', source: 'api', measuredAt: at(-60000), windows: [{ key: 'plan', label: 'Plan', percent: 20, resetsAt: at(3 * 86400000) }] },
+    ],
+  }));
+  await expect(page.locator('#usage-line .usage-summary')).toHaveText('GitHub Copilot \u00b7 danswett 20% \u00b7 Claude Code \u00b7 max Reset');
+  await go(page, 'usage');
+  const win = page.locator('#usage .usage-group[data-agent="claude"] .usage-window');
+  await expect(win.locator('.usage-percent')).toHaveText('Reset');
+  await expect(win.locator('.usage-foot')).toHaveText('Reset 12m ago \u00b7 no reading since');
+  await expect(win.locator('.usage-bar, .usage-pace, .usage-pacefoot, .usage-amount')).toHaveCount(0);
+  await expect(win).toHaveAttribute('aria-label', 'Claude Code \u00b7 max, Session (5h): reset 12 minutes ago, no reading since.');
+  await expect(page.locator('#usage [aria-live]')).toHaveCount(0);
+});
+
 test('an update from the host redraws the bars, and an error shows only when there is no fresh reading', async ({ page }) => {
   await openDemo(page);
   await sendUsage(page, (at) => ({

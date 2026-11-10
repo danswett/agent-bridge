@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readUsage, mergeUsage, latestUsage, usageKey, severity, until, ago, elapsed, pace, showsError, machineStatus, machineFacts, isStale, amount, readOn, UsageBook } from '../../js/usage.js';
+import { readUsage, mergeUsage, latestUsage, usageKey, severity, until, ago, elapsed, pace, showsError, machineStatus, machineFacts, isStale, amount, readOn, headline, lapsed, resetAgo, resetSentence, UsageBook } from '../../js/usage.js';
 
 const NOW = Date.parse('2026-10-28T20:00:00.000Z');
 const iso = (ms) => new Date(NOW + ms).toISOString();
@@ -116,6 +116,19 @@ test('rows come fullest window first', () => {
 
 test('colours turn amber at 75% and red at 90%', () => {
   assert.deepEqual([74.9, 75, 89.9, 90, 120, NaN].map(severity), ['', 'warn', 'warn', 'crit', 'crit', '']);
+});
+
+test('a window that has reset since its reading is lapsed: out of the headline and the row order, and worded as a reset', () => {
+  const old = { key: 'session', label: 'Session (5h)', percent: 96, resetsAt: iso(-12 * 60000) };
+  const open = { key: 'weekly', label: 'Weekly', percent: 30, resetsAt: iso(H) };
+  assert.equal(lapsed(old, NOW), true);
+  assert.equal(lapsed(open, NOW), false);
+  assert.equal(lapsed({ key: 'plan', label: 'Plan', percent: 50 }, NOW), false);
+  assert.equal(headline({ windows: [old, open] }, NOW), 30);
+  assert.equal(headline({ windows: [old] }, NOW), null);
+  assert.equal(resetAgo(old.resetsAt, NOW), 'Reset 12m ago \u00b7 no reading since');
+  assert.equal(resetSentence({ label: 'Claude', account: 'max' }, old, NOW), 'Claude \u00b7 max, Session (5h): reset 12 minutes ago, no reading since.');
+  assert.equal(resetSentence({ label: 'Claude', account: null }, { ...old, resetsAt: iso(-H) }, NOW), 'Claude, Session (5h): reset 1 hour ago, no reading since.');
 });
 
 test('resets read as days, hours or minutes, and a reset gone by is due', () => {
