@@ -35,6 +35,74 @@ public sealed class HistoryDrawTests
         Assert.Equal(["t1"], rows.Select(r => r.Id));
     }
 
+    static HistoryPart Asked(string id, QuestionOutcome? outcome = null) => new()
+    {
+        Id = id, Kind = HistoryPartKind.Question, At = T0,
+        Question = Make.Choice() with { Id = id }, Outcome = outcome,
+    };
+
+    [Theory]
+    [InlineData(QuestionOutcome.Answered)]
+    [InlineData(QuestionOutcome.Approved)]
+    [InlineData(QuestionOutcome.Denied)]
+    [InlineData(QuestionOutcome.Cancelled)]
+    [InlineData(QuestionOutcome.Unknown)]
+    [InlineData(null)]
+    public void Reloaded_questions_stay_between_the_responses_where_asked_without_claiming_who_answered(QuestionOutcome? outcome)
+    {
+        var turn = Turn(1, "before");
+        turn = turn with { Parts = [turn.Parts[0], Asked("q1", outcome) with { Answer = "PostgreSQL" }, turn.Parts[0] with { Id = "after", Text = "after" }] };
+        var kept = new Dictionary<string, ClosedQuestion>();
+
+        var row = Assert.Single(HistoryDraw.Rows([turn], "prompt 1", closed: kept));
+
+        Assert.Equal("before", row.Items[0].Response!.Text);
+        Assert.Equal("Question closed", row.Items[1].Question!.Summary);
+        Assert.Equal("after", row.Items[2].Response!.Text);
+        Assert.Equal("q1", row.Items[1].Question!.Question.Id);
+    }
+
+    [Fact]
+    public void The_current_question_is_not_also_a_closed_record_and_closure_keeps_its_disclosure_open_on_redraw()
+    {
+        var turn = Turn(1) with { Parts = [Asked("q1"), Asked("q2")] };
+        var kept = new Dictionary<string, ClosedQuestion>();
+        var first = Assert.Single(HistoryDraw.Rows([turn], null, closed: kept, activeQuestion: "q2"));
+        var closed = Assert.Single(first.Items).Question!;
+        closed.Open = true;
+
+        var next = Assert.Single(HistoryDraw.Rows([turn], null, closed: kept));
+
+        Assert.Same(closed, next.Items[0].Question);
+        Assert.True(next.Items[0].Question!.Open);
+        Assert.False(next.Items[1].Question!.Open);
+    }
+
+    [Fact]
+    public void Only_the_latest_twenty_questions_are_kept_across_turns_in_record_order_not_clock_order()
+    {
+        var turns = Enumerable.Range(1, 25).Select(n => Turn(n, "reply") with
+        {
+            Parts = [Asked($"q{n}") with { At = T0.AddMinutes(-n) }],
+        }).ToArray();
+        var kept = new Dictionary<string, ClosedQuestion>();
+
+        var rows = HistoryDraw.Rows(turns, null, closed: kept);
+
+        Assert.Equal(Enumerable.Range(6, 20).Select(n => $"q{n}"), rows.SelectMany(r => r.Items).Select(i => i.Question!.Question.Id));
+        Assert.Equal(20, kept.Count);
+    }
+
+    [Fact]
+    public void A_question_part_without_a_question_is_skipped()
+    {
+        var turn = Turn(1) with { Parts = [Asked("missing") with { Question = null }, Asked("q1")] };
+
+        var row = Assert.Single(HistoryDraw.Rows([turn], null, closed: new Dictionary<string, ClosedQuestion>()));
+
+        Assert.Equal("q1", Assert.Single(row.Items).Question!.Question.Id);
+    }
+
     [Fact]
     public void Only_the_newest_five_hundred_turns_are_drawn()
     {
