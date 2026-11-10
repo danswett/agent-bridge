@@ -32,7 +32,7 @@ public sealed class FleetPublisherTests
         Assert.Equal(["at", "epoch", "machine", "seq", "sessions", "truncated", "v"], Fields(record));
         var sessions = record.GetProperty("sessions").EnumerateArray().ToArray();
         Assert.Equal(source.Sessions.Count, sessions.Length);
-        Assert.Single(sessions.Where(s => s.TryGetProperty("name", out _)));
+        Assert.Single(sessions, s => s.TryGetProperty("name", out _));
         Assert.All(sessions, s => Assert.Subset(new HashSet<string> { "id", "node", "name", "state", "since" }, Fields(s).ToHashSet()));
         Assert.DoesNotContain("private", record.GetRawText());
         Assert.False(record.TryGetProperty("sig", out _));
