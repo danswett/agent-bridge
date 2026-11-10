@@ -131,3 +131,16 @@ Known gaps: Codex's version is not compared (agent-ha-bridge only warned). The W
 target; `sent session <id> to <machine> for <device>: <size>, <n> file(s)` or
 `transfer … refused: <why>` on the source. Ids are cut to eight characters; nothing from a
 transcript is logged.
+
+## The handoff step (#1709, #1146 S2)
+
+Before a session is forked to another machine the source writes a handoff note: what was done,
+what is open, the files touched. `HandoffService` (`src/AgentBridge.Host.Delivery/Handoff`)
+asks an idle session's agent for it and waits 30 s; an ended session has no agent to ask, so the
+host builds the note from its transcript. The result is `handoff confirmed` with the note's size
+in bytes, or `failed at handoff` / `failed at write` with a plain reason. The note is saved as
+`<session>.handoff.md` in a folder of its own through a temp file, so a failure leaves nothing
+behind and the transcript is only ever read. Its `handoffRequested` and `handoffConfirmed`
+steps carry the host's time and the milliseconds since the previous step (MoveTelemetry, S5).
+The note names no machine. Wiring it to the agents' own prompt path and transcripts is the
+per-agent work the S1 parity audit lists.
