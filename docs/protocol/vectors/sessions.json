@@ -12,6 +12,8 @@
         "repository": "danswett/agent-bridge",
         "branch": "quality/protocol-vectors",
         "model": "claude-opus-5.5",
+        "effort": "high",
+        "context": "1M",
         "status": "working",
         "statusSince": "2026-10-28T04:25:43.182Z",
         "startedAt": "2026-10-28T04:22:43.182Z",
@@ -103,6 +105,8 @@
         "repository": "danswett/agent-bridge",
         "branch": "quality/protocol-vectors",
         "model": "claude-opus-5.5",
+        "effort": "high",
+        "context": "1M",
         "status": "idle",
         "statusSince": "2026-10-28T04:26:13.182Z",
         "startedAt": "2026-10-28T04:22:43.182Z",
@@ -173,6 +177,8 @@
         "repository": "danswett/agent-bridge",
         "branch": "quality/protocol-vectors",
         "model": "claude-opus-5.5",
+        "effort": "high",
+        "context": "1M",
         "status": "working",
         "statusSince": "2026-10-28T04:25:43.182Z",
         "startedAt": "2026-10-28T04:22:43.182Z",
@@ -264,6 +270,8 @@
         "repository": "danswett/agent-bridge",
         "branch": "quality/protocol-vectors",
         "model": "claude-opus-5.5",
+        "effort": "high",
+        "context": "1M",
         "status": "waiting",
         "statusSince": "2026-10-28T04:25:48.182Z",
         "startedAt": "2026-10-28T04:22:43.182Z",
@@ -378,6 +386,8 @@
         "repository": "danswett/agent-bridge",
         "branch": "quality/protocol-vectors",
         "model": "claude-opus-5.5",
+        "effort": "high",
+        "context": "1M",
         "status": "working",
         "statusSince": "2026-10-28T04:25:43.182Z",
         "startedAt": "2026-10-28T04:22:43.182Z",
@@ -469,6 +479,8 @@
         "repository": "danswett/agent-bridge",
         "branch": "quality/protocol-vectors",
         "model": "claude-opus-5.5",
+        "effort": "high",
+        "context": "1M",
         "status": "working",
         "statusSince": "2026-10-28T04:25:43.182Z",
         "startedAt": "2026-10-28T04:22:43.182Z",
@@ -560,6 +572,193 @@
         "subagentsMore": 2
       }
     },
+    "held-at-41-then-effort-changing": {
+      "session": {
+        "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+        "agent": "copilot",
+        "title": "Protocol vectors",
+        "cwd": "C:\\src\\agent-bridge",
+        "repository": "danswett/agent-bridge",
+        "branch": "quality/protocol-vectors",
+        "model": "claude-opus-5.5",
+        "effort": "high",
+        "context": "1M",
+        "status": "working",
+        "statusSince": "2026-10-28T04:25:43.182Z",
+        "startedAt": "2026-10-28T04:22:43.182Z",
+        "updatedAt": "2026-10-28T04:25:43.182Z",
+        "processId": 4120,
+        "activity": {
+          "response": "All **47** tests pass.",
+          "responseTruncated": true,
+          "reasoning": "The suite is green; summarize.",
+          "currentTool": {
+            "id": "call_7",
+            "name": "powershell",
+            "summary": "Run the protocol tests",
+            "status": "running",
+            "startedAt": "2026-10-28T04:25:43.182Z"
+          },
+          "userMessage": "Run the tests",
+          "turn": "w8Vb3l0V7lH2eQ3c",
+          "responseTurn": "w8Vb3l0V7lH2eQ3c",
+          "turnCount": 4,
+          "compactions": 1,
+          "background": {
+            "agents": 1,
+            "shells": 2
+          },
+          "source": {
+            "reasoning": "agent-1"
+          },
+          "own": {
+            "reasoning": "Waiting on the delegate.",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        "driver": "agent",
+        "driverPrincipal": "homeassistant:0f1e2d3c",
+        "subagents": [
+          {
+            "id": "agent-1",
+            "kind": "background",
+            "name": "Run the suite",
+            "task": "Run every test and report failures",
+            "model": "claude-haiku-5.5",
+            "status": "working",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "line": "Running the protocol tests",
+            "currentTool": {
+              "id": "call_7",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 1
+          },
+          {
+            "id": "agent-2",
+            "parent": "agent-1",
+            "kind": "task",
+            "status": "ended",
+            "outcome": "failed",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "endedAt": "2026-10-28T04:25:43.182Z",
+            "shells": 0
+          },
+          {
+            "id": "agent-3",
+            "kind": "background",
+            "name": "Check the docs",
+            "status": "working",
+            "startedAt": "2026-10-28T04:25:43.182Z",
+            "currentTool": {
+              "id": "call_9",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 0
+          }
+        ],
+        "subagentsMore": 2
+      },
+      "seq": 41,
+      "result": {
+        "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+        "agent": "copilot",
+        "title": "Protocol vectors",
+        "cwd": "C:\\src\\agent-bridge",
+        "repository": "danswett/agent-bridge",
+        "branch": "quality/protocol-vectors",
+        "model": "claude-opus-5.5",
+        "effort": "xhigh",
+        "context": "1M",
+        "status": "working",
+        "statusSince": "2026-10-28T04:25:43.182Z",
+        "startedAt": "2026-10-28T04:22:43.182Z",
+        "updatedAt": "2026-10-28T04:25:55.182Z",
+        "processId": 4120,
+        "activity": {
+          "response": "All **47** tests pass.",
+          "responseTruncated": true,
+          "reasoning": "The suite is green; summarize.",
+          "currentTool": {
+            "id": "call_7",
+            "name": "powershell",
+            "summary": "Run the protocol tests",
+            "status": "running",
+            "startedAt": "2026-10-28T04:25:43.182Z"
+          },
+          "userMessage": "Run the tests",
+          "turn": "w8Vb3l0V7lH2eQ3c",
+          "responseTurn": "w8Vb3l0V7lH2eQ3c",
+          "turnCount": 4,
+          "compactions": 1,
+          "background": {
+            "agents": 1,
+            "shells": 2
+          },
+          "source": {
+            "reasoning": "agent-1"
+          },
+          "own": {
+            "reasoning": "Waiting on the delegate.",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        "driver": "agent",
+        "driverPrincipal": "homeassistant:0f1e2d3c",
+        "subagents": [
+          {
+            "id": "agent-1",
+            "kind": "background",
+            "name": "Run the suite",
+            "task": "Run every test and report failures",
+            "model": "claude-haiku-5.5",
+            "status": "working",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "line": "Running the protocol tests",
+            "currentTool": {
+              "id": "call_7",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 1
+          },
+          {
+            "id": "agent-2",
+            "parent": "agent-1",
+            "kind": "task",
+            "status": "ended",
+            "outcome": "failed",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "endedAt": "2026-10-28T04:25:43.182Z",
+            "shells": 0
+          },
+          {
+            "id": "agent-3",
+            "kind": "background",
+            "name": "Check the docs",
+            "status": "working",
+            "startedAt": "2026-10-28T04:25:43.182Z",
+            "currentTool": {
+              "id": "call_9",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 0
+          }
+        ],
+        "subagentsMore": 2
+      }
+    },
     "none-held-then-the-whole-session": {
       "result": {
         "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
@@ -569,6 +768,8 @@
         "repository": "danswett/agent-bridge",
         "branch": "quality/protocol-vectors",
         "model": "claude-opus-5.5",
+        "effort": "high",
+        "context": "1M",
         "status": "working",
         "statusSince": "2026-10-28T04:25:43.182Z",
         "startedAt": "2026-10-28T04:22:43.182Z",
@@ -661,6 +862,8 @@
         "repository": "danswett/agent-bridge",
         "branch": "quality/protocol-vectors",
         "model": "claude-opus-5.5",
+        "effort": "high",
+        "context": "1M",
         "status": "working",
         "statusSince": "2026-10-28T04:25:43.182Z",
         "startedAt": "2026-10-28T04:22:43.182Z",
@@ -754,6 +957,8 @@
         "repository": "danswett/agent-bridge",
         "branch": "quality/protocol-vectors",
         "model": "claude-opus-5.5",
+        "effort": "high",
+        "context": "1M",
         "status": "working",
         "statusSince": "2026-10-28T04:25:43.182Z",
         "startedAt": "2026-10-28T04:22:43.182Z",
@@ -3245,6 +3450,8 @@
             "repository": "danswett/agent-bridge",
             "branch": "quality/protocol-vectors",
             "model": "claude-opus-5.5",
+            "effort": "high",
+            "context": "1M",
             "status": "waiting",
             "statusSince": "2026-10-28T04:25:43.182Z",
             "startedAt": "2026-10-28T04:22:43.182Z",
@@ -3631,6 +3838,8 @@
             "repository": "danswett/agent-bridge",
             "branch": "quality/protocol-vectors",
             "model": "claude-opus-5.5",
+            "effort": "high",
+            "context": "1M",
             "status": "waiting",
             "statusSince": "2026-10-28T04:25:43.182Z",
             "startedAt": "2026-10-28T04:22:43.182Z",
@@ -3772,6 +3981,8 @@
             "repository": "danswett/agent-bridge",
             "branch": "quality/protocol-vectors",
             "model": "claude-opus-5.5",
+            "effort": "high",
+            "context": "1M",
             "status": "waiting",
             "statusSince": "2026-10-28T04:25:43.182Z",
             "startedAt": "2026-10-28T04:22:43.182Z",
@@ -3916,6 +4127,8 @@
             "repository": "danswett/agent-bridge",
             "branch": "quality/protocol-vectors",
             "model": "claude-opus-5.5",
+            "effort": "high",
+            "context": "1M",
             "statusSince": "2026-10-28T04:25:43.182Z",
             "startedAt": "2026-10-28T04:22:43.182Z",
             "updatedAt": "2026-10-28T04:25:43.182Z",
@@ -4056,6 +4269,8 @@
             "repository": "danswett/agent-bridge",
             "branch": "quality/protocol-vectors",
             "model": "claude-opus-5.5",
+            "effort": "high",
+            "context": "1M",
             "status": "idle",
             "statusSince": "2026-10-28T04:25:43.182Z",
             "startedAt": "2026-10-28T04:22:43.182Z",
@@ -4200,6 +4415,8 @@
             "repository": "danswett/agent-bridge",
             "branch": "quality/protocol-vectors",
             "model": "claude-opus-5.5",
+            "effort": "high",
+            "context": "1M",
             "status": "waiting",
             "startedAt": "2026-10-28T04:22:43.182Z",
             "updatedAt": "2026-10-28T04:25:43.182Z",
@@ -4340,6 +4557,8 @@
             "repository": "danswett/agent-bridge",
             "branch": "quality/protocol-vectors",
             "model": "claude-opus-5.5",
+            "effort": "high",
+            "context": "1M",
             "status": "waiting",
             "statusSince": "0001-01-01T00:00:00.000Z",
             "startedAt": "2026-10-28T04:22:43.182Z",
@@ -4484,6 +4703,8 @@
             "repository": "danswett/agent-bridge",
             "branch": "quality/protocol-vectors",
             "model": "claude-opus-5.5",
+            "effort": "high",
+            "context": "1M",
             "status": "waiting",
             "statusSince": "2026-10-28T04:25:43.182Z",
             "startedAt": "2026-10-28T04:22:43.182Z",
@@ -4624,6 +4845,8 @@
             "repository": "danswett/agent-bridge",
             "branch": "quality/protocol-vectors",
             "model": "claude-opus-5.5",
+            "effort": "high",
+            "context": "1M",
             "status": "waiting",
             "statusSince": "2026-10-28T04:25:43.182Z",
             "startedAt": "2026-10-28T04:22:43.182Z",
@@ -4768,6 +4991,8 @@
             "repository": "danswett/agent-bridge",
             "branch": "quality/protocol-vectors",
             "model": "claude-opus-5.5",
+            "effort": "high",
+            "context": "1M",
             "status": "waiting",
             "statusSince": "2026-10-28T04:25:43.182Z",
             "startedAt": "2026-10-28T04:22:43.182Z",
@@ -4871,6 +5096,8 @@
             "repository": "danswett/agent-bridge",
             "branch": "quality/protocol-vectors",
             "model": "claude-opus-5.5",
+            "effort": "high",
+            "context": "1M",
             "status": "waiting",
             "statusSince": "2026-10-28T04:25:43.182Z",
             "startedAt": "2026-10-28T04:22:43.182Z",
@@ -4991,6 +5218,8 @@
             "repository": "danswett/agent-bridge",
             "branch": "quality/protocol-vectors",
             "model": "claude-opus-5.5",
+            "effort": "high",
+            "context": "1M",
             "status": "waiting",
             "statusSince": "2026-10-28T04:25:43.182Z",
             "startedAt": "2026-10-28T04:22:43.182Z",
@@ -5136,6 +5365,8 @@
             "repository": "danswett/agent-bridge",
             "branch": "quality/protocol-vectors",
             "model": "claude-opus-5.5",
+            "effort": "high",
+            "context": "1M",
             "status": "waiting",
             "statusSince": "2026-10-28T04:25:43.182Z",
             "startedAt": "2026-10-28T04:22:43.182Z",
@@ -5325,6 +5556,8 @@
                 "repository": "danswett/agent-bridge",
                 "branch": "quality/protocol-vectors",
                 "model": "claude-opus-5.5",
+                "effort": "high",
+                "context": "1M",
                 "status": "waiting",
                 "statusSince": "2026-10-28T04:25:43.182Z",
                 "startedAt": "2026-10-28T04:22:43.182Z",
@@ -5502,6 +5735,8 @@
                 "repository": "danswett/agent-bridge",
                 "branch": "quality/protocol-vectors",
                 "model": "claude-opus-5.5",
+                "effort": "high",
+                "context": "1M",
                 "status": "waiting",
                 "statusSince": "2026-10-28T04:25:43.182Z",
                 "startedAt": "2026-10-28T04:22:43.182Z",
@@ -5653,6 +5888,8 @@
                 "repository": "danswett/agent-bridge",
                 "branch": "quality/protocol-vectors",
                 "model": "claude-opus-5.5",
+                "effort": "high",
+                "context": "1M",
                 "status": "waiting",
                 "statusSince": "2026-10-28T04:25:43.182Z",
                 "startedAt": "2026-10-28T04:22:43.182Z",
@@ -6849,6 +7086,18 @@
           "context": "held-at-41-then-a-nested-delegate"
         },
         {
+          "name": "only-the-effort-changing",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "base": 41,
+            "set": {
+              "effort": "xhigh",
+              "updatedAt": "2026-10-28T04:25:55.182Z"
+            }
+          },
+          "context": "held-at-41-then-effort-changing"
+        },
+        {
           "name": "the-whole-session",
           "json": {
             "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
@@ -6861,6 +7110,8 @@
               "repository": "danswett/agent-bridge",
               "branch": "quality/protocol-vectors",
               "model": "claude-opus-5.5",
+              "effort": "high",
+              "context": "1M",
               "status": "working",
               "statusSince": "2026-10-28T04:25:43.182Z",
               "startedAt": "2026-10-28T04:22:43.182Z",

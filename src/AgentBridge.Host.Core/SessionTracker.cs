@@ -57,6 +57,7 @@ internal sealed class SessionTracker
 
     // Tests: the transcript being followed.
     internal TranscriptTail? Tail => _tail;
+    internal SessionState State => _state;
 
     public Session Update(DiscoveredSession discovered)
     {
@@ -334,6 +335,8 @@ internal sealed class SessionTracker
             Repository = ws?.Repository ?? _state.Repository,
             Branch = ws?.Branch ?? _state.Branch,
             Model = _state.Model ?? Text.NonBlank(reg?.Model),
+            Effort = Text.NonBlank(_state.Effort),
+            Context = Text.NonBlank(_state.Context),
             Status = effective,
             StatusSince = since,
             StartedAt = ws?.CreatedAt ?? _state.StartedAt,
