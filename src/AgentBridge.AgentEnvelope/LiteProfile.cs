@@ -1,3 +1,4 @@
+using AgentBridge.Roster;
 namespace AgentBridge.AgentEnvelope;
 
 // The sender of a lite envelope: an agent session's AP1 credential, on a host whose account id

@@ -2,6 +2,9 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
 using AgentBridge.AgentEnvelope;
+using Codec = AgentBridge.Roster.Codec;
+using Framing = AgentBridge.Roster.Framing;
+using P256 = AgentBridge.Roster.P256;
 using Xunit;
 
 public class EnvelopeVectorTests
@@ -54,10 +57,10 @@ public class EnvelopeVectorTests
         Neg("sender entry under another account", Sample.Wrap(key, Sample.Body(edit: b => b with { Chain = b.Chain with { Via = [b.Chain.Via[0] with { Account = new string('c', 32) }] } }).Encode()), Refusal.Chain);
         Neg("high-S signature", Sample.Wrap(key, goodBytes, sig: d => P256.Flip(d)), Refusal.HighS);
         Neg("non-minimal DER", Sample.Wrap(key, goodBytes, sig: d => [d[0], (byte)(d[1] + 1), d[2], (byte)(d[3] + 1), 0, .. d[4..]]), Refusal.Der);
-        Neg("signature over another purpose's label", Sample.Wrap(key, goodBytes, Framing.F(Framing.Label("agent-bridge roster entry v1"), goodBytes)), Refusal.Signature);
+        Neg("signature under the roster entry label", Sample.Wrap(key, goodBytes, Framing.F(Framing.Label(Framing.EntryLabel), goodBytes)), Refusal.Signature);
         Neg("signature over the raw body", Sample.Wrap(key, goodBytes, goodBytes), Refusal.Signature);
         using (var other = Sample.NewKey()) { Neg("signature by another key", Sample.Wrap(other, goodBytes), Refusal.Signature); }
-        Neg("body with padding", Utf8($"{{\"body\":\"{Codec.Base64Url(goodBytes)}=\",\"sig\":\"{Codec.Base64Url(P256.Normalize(key.SignData(Framing.AgentCommand(goodBytes), HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence)))}\"}}"), Refusal.Base64);
+        Neg("body with padding", Utf8($"{{\"body\":\"{Codec.Base64Url(goodBytes)}=\",\"sig\":\"{Codec.Base64Url(P256.Normalize(key.SignData(AgentCommandFraming.AgentCommand(goodBytes), HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence)))}\"}}"), Refusal.Base64);
         Neg("members swapped", SwapMembers(Sample.Wrap(key, goodBytes)), Refusal.NonCanonical);
         Neg("envelope over 2 KiB", new byte[2049].Select(_ => (byte)' ').ToArray(), Refusal.TooLarge);
 

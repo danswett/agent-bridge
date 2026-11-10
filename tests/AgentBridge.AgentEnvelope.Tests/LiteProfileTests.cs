@@ -1,5 +1,8 @@
 using System.Text;
 using AgentBridge.AgentEnvelope;
+using Codec = AgentBridge.Roster.Codec;
+using Framing = AgentBridge.Roster.Framing;
+using P256 = AgentBridge.Roster.P256;
 using Xunit;
 
 public class LiteProfileTests
