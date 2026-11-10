@@ -310,7 +310,9 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   body[data-page="sessions"] .content > .banner { margin: var(--ab-space-3) var(--ab-space-6) 0; }
   .route-sessions:not([hidden]) { display: flex; flex-direction: column; flex: 1; min-height: 0; }
   .sessions:not([hidden]) { --list-w: 320px; --inspector-w: 336px; display: grid; grid-template-columns: var(--list-w) minmax(0, 1fr); position: relative; flex: 1; min-height: 0; }
-  .list-pane { min-height: 0; overflow: auto; padding: var(--ab-space-5) var(--ab-space-2) var(--ab-space-4); border-right: 1px solid var(--ab-stroke2); }
+  body[data-page] .sessions:not([hidden]) { --head-top: 0px; --head-bg: var(--ab-layer); }
+  .sessions-head { margin-top: var(--ab-space-5); box-shadow: none; }
+  .list-pane { min-height: 0; overflow: auto; padding: 0 var(--ab-space-2) var(--ab-space-4); border-right: 1px solid var(--ab-stroke2); }
   .list-pane > :not(.session-list, .needs-you) { margin-left: var(--ab-space-3); margin-right: var(--ab-space-3); }
   .session-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
   .session-views { flex: 1; min-height: 0; }
@@ -539,29 +541,27 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
    row; on a desktop the list's header, with New as an Accent button), all on one line at 390 px
    (#213). The count sits under the title. */
 .sessions-head {
-  display: grid; grid-template-columns: max-content minmax(0, 1fr) auto; grid-template-areas: "title sort actions" "count count count";
-  align-items: center; gap: 0 var(--ab-space-2); margin-bottom: var(--ab-space-2);
+  display: grid; grid-template-columns: max-content minmax(0, 1fr) auto; grid-template-areas: "title sort actions";
+  align-items: center; gap: 0 var(--ab-space-2); height: var(--head-h); margin-bottom: var(--ab-space-1);
+  position: sticky; top: var(--head-top); z-index: 6; background: var(--head-bg);
+  box-shadow: 0 calc(-1 * var(--safe-top)) 0 var(--head-bg);
 }
+.sessions { --head-h: 48px; --head-top: var(--safe-top); --head-bg: var(--ab-shell); }
+body[data-conn="busy"] .sessions, body[data-conn="warn"] .sessions, body[data-conn="bad"] .sessions, body.searching .sessions {
+  --head-top: max(var(--appbar), calc(var(--safe-top) + var(--ab-space-2) * 2 + 32px));
+}
+.count-row { margin-bottom: var(--ab-space-2); }
+.sessions-head[data-strip="true"] + .count-row { visibility: hidden; }
 /* On a phone the title keeps its word whole at every text size (§4.4), and Sort gives up width. */
 .sessions-head .page-title { grid-area: title; overflow-wrap: anywhere; }
 .head-actions { grid-area: actions; display: flex; align-items: center; gap: var(--ab-space-1); }
-.count { grid-area: count; color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-meta-line); font-variant-numeric: tabular-nums; }
+.count { color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-meta-line); font-variant-numeric: tabular-nums; }
 .sort {
-  grid-area: sort; justify-self: end; min-height: 32px; max-width: 9.5rem;
+  grid-area: sort; justify-self: end; min-height: 32px; max-width: 9.5rem; min-width: 0; width: 100%;
   font: inherit; font-size: var(--type-meta); color: var(--ab-text); background: var(--ab-card);
   border: 1px solid var(--ab-field-edge); border-radius: var(--ab-radius-control); padding: 2px 6px;
 }
 @media (pointer: coarse) and (not (any-pointer: fine)) { .sort { min-height: var(--tap); } }
-/* A phone with no room for the title, Sort and the icons on one line takes the list pane's two lines below,
-   keeping Tab's order the order drawn (§9.1 A3). */
-@media (max-width: 369px) {
-  .sessions-head { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title sort" "count actions"; }
-  .head-actions { justify-self: end; }
-}
-@media (max-width: 389px) {
-  [data-text-size="larger"] .sessions-head { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title sort" "count actions"; }
-  [data-text-size="larger"] .head-actions { justify-self: end; }
-}
 .new-session { position: relative; gap: var(--ab-space-1); }
 /* On a phone, New is an icon in the title row, in Bridge, as Search beside it. */
 @media (max-width: 759px) {
@@ -578,7 +578,6 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
      of head. Making the pane a size container to keep one line in a wider one stopped WebKit
      pulling the list's scroll back as rows go (needs-you.spec), so a wider pane is left to the
      change that brings one. */
-  .sessions-head { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title sort" "count actions"; row-gap: var(--ab-space-1); }
   .new-session { min-height: 32px; padding: 0 var(--ab-space-3); border-radius: var(--ab-radius-control); font-size: var(--type-row); }
   .new-session .ab-icon { width: 16px; height: 16px; --ab-icon-stroke: 1.7; }
   .new-session.attention::after { top: -3px; right: -3px; box-shadow: 0 0 0 2px var(--ab-layer); }
@@ -1583,7 +1582,7 @@ summary {
   color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-meta-line);
 }
 .sessions-head .connection-strip {
-  grid-column: 1 / -1; grid-row: 1 / -1; align-self: stretch; display: flex; align-items: center;
+  grid-column: 1 / -1; grid-row: 1; align-self: stretch; display: flex; align-items: center;
   margin: 0; padding: 0; color: var(--ab-text2); font-size: var(--type-meta);
 }
 .sessions-head .connection-strip[hidden] { display: none; }

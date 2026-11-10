@@ -121,8 +121,9 @@ test.describe('a narrow phone', () => {
       const sort = await box('.sort');
       const search = await box('.search-open');
       expect(await page.locator('.sessions-head .sort').evaluate((e) => e.scrollWidth <= e.clientWidth + 1)).toBe(true);
-      expect(sort.width).toBeGreaterThanOrEqual(100);
-      expect(search.y).toBeGreaterThanOrEqual(sort.y + sort.height - 1);
+      expect(sort.width).toBeGreaterThanOrEqual(48);
+      expect(search.x).toBeGreaterThanOrEqual(sort.x + sort.width - 1);
+      expect(title.x + title.width).toBeLessThanOrEqual(sort.x + 1);
     });
   }
 });

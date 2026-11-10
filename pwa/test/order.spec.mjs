@@ -456,7 +456,8 @@ for (const width of [900, 1440]) {
       const head = await page.locator('.sessions-head').boundingBox();
       const sort = await page.locator('#session-sort').boundingBox();
       expect(sort.x + sort.width).toBeLessThanOrEqual(head.x + head.width + 0.5);
-      expect(sort.x).toBeGreaterThan(head.x + head.width / 2);
+      const actions = await page.locator('.sessions-head .head-actions').boundingBox();
+      expect(sort.x + sort.width).toBeLessThanOrEqual(actions.x + 0.5);
     });
 
     test('in high contrast the grip and the drop line keep system colours', async ({ page, browserName }) => {
