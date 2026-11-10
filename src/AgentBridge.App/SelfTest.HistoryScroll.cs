@@ -1,6 +1,11 @@
 using AgentBridge.App.Core;
 using AgentBridge.Protocol;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation.Peers;
+using Microsoft.UI.Xaml.Automation.Provider;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
+using Windows.System;
 
 namespace AgentBridge.App;
 
@@ -91,5 +96,102 @@ static partial class SelfTest
         var left = await Replies(() => scroll.VerticalOffset < scroll.ScrollableHeight - 1.5 ? $"{scroll.VerticalOffset:0} of {scroll.ScrollableHeight:0} px" : null);
         check(left.Count == 0, $"keeps a conversation at its end pinned there when stored turns arrive ({(left.Count == 0 ? "at the end" : string.Join("; ", left))})");
         check(cue is { Visibility: Microsoft.UI.Xaml.Visibility.Collapsed }, $"drops the New messages cue once the conversation is back at its end ({cue?.Visibility})");
+        await CheckHistoryBottom(window, main, check);
+    }
+
+    static async Task CheckHistoryBottom(MainWindow window, MainViewModel main, Action<bool, string> check)
+    {
+        var before = window.Sessions.Rows.SelectedItem;
+        // A separate session keeps these 300 turns out of the existing burst/retention checks.
+        var view = await Choose(window, main, "demo-choice", "Conversation");
+        var stored = view?.Card?.Stored;
+        var scroll = view is null ? null : ConversationScroller(view);
+        if (view?.Card is not { } card || stored is null || scroll is null)
+        {
+            check(false, "has an isolated session for the bottom-settle check");
+            window.Sessions.Rows.SelectedItem = before;
+            return;
+        }
+        var session = card.Session;
+        var selected = window.Sessions.Rows.SelectedItem;
+        try
+        {
+            card.Update(session with
+            {
+                Activity = session.Activity with
+                {
+                    Response = string.Join("\n\n", Enumerable.Range(1, 80).Select(i => $"Bottom-settle paragraph {i}. A [reading link](https://example.test/) in a growing transcript must stay at its latest reply after scrolling to the end.")),
+                },
+            });
+            for (var i = 2000; i < 2300; i++) { stored.AddLive(StoredTurn(i)); }
+            await Task.Delay(1200);
+            var next = 2300;
+            var list = ById<ListView>(view, "Conversation")!;
+            foreach (var keyed in new[] { false, true })
+            {
+                view.ReleasePin();
+                if (keyed)
+                {
+                    list.ScrollIntoView(list.Items[20], ScrollIntoViewAlignment.Leading);
+                    await Still(scroll);
+                    var stop = list.ContainerFromIndex(20) is { } container ? FocusManager.FindFirstFocusableElement(container) : null;
+                    check(stop is not null && (await FocusManager.TryFocusAsync(stop, FocusState.Keyboard)).Succeeded, "focuses a reading link before pressing End");
+                }
+                else { scroll.ChangeView(null, scroll.ScrollableHeight / 2, null, disableAnimation: true); }
+                await Task.Delay(700);
+                stored.AddLive(StoredTurn(next++));
+                await Task.Delay(700);
+
+                var name = keyed ? "End key" : "scroll bar";
+                var cue = ById<Button>(view, "NewMessages");
+                check(cue is { Visibility: Visibility.Visible }, $"has new stored history below the reader before reaching the bottom by {name}");
+                var reached = false;
+                var departures = new List<string>();
+                var changes = new List<long>();
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                var previous = scroll.VerticalOffset;
+                var away = false;
+                void Record(object? sender, object args)
+                {
+                    var offset = scroll.VerticalOffset;
+                    var gap = scroll.ScrollableHeight - offset;
+                    AppLog.Write($"self-test: bottom {name} layout {watch.ElapsedMilliseconds} ms: offset {offset:0.##} of {scroll.ScrollableHeight:0.##}, cue {cue?.Visibility}");
+                    if (gap <= 1.5) { reached = true; away = false; }
+                    else if (reached && !away) { departures.Add($"{watch.ElapsedMilliseconds} ms: gap {gap:0.##}"); away = true; }
+                    if (reached && Math.Abs(offset - previous) > 0.5) { changes.Add(watch.ElapsedMilliseconds); }
+                    previous = offset;
+                }
+                list.LayoutUpdated += Record;
+                try
+                {
+                    if (keyed) { AppLog.Write($"self-test: bottom End pressed by {Press(window.Handle, VirtualKey.End, foreground: false)}"); }
+                    else { ((IScrollProvider)new ScrollViewerAutomationPeer(scroll).GetPattern(PatternInterface.Scroll)).SetScrollPercent(-1, 100); }
+                    await Until(() => reached, TimeSpan.FromSeconds(5));
+                    for (var step = 0; step < 30; step++)
+                    {
+                        await Task.Delay(100);
+                        Record(null, EventArgs.Empty);
+                    }
+                    var most = changes.Count == 0 ? 0 : changes.Max(at => changes.Count(other => other >= at && other < at + 500));
+                    check(reached && departures.Count == 0 && most <= 2 && cue is { Visibility: Visibility.Collapsed },
+                        $"a growing history reaches the bottom by {name} and stays after the cue disappears (reached {reached}; departures {string.Join("; ", departures)}; most changes in 500 ms {most})");
+
+                    departures.Clear();
+                    var growth = new List<string>();
+                    for (var i = 0; i < 20; i++)
+                    {
+                        stored.AddLive(StoredTurn(next++));
+                        await Task.Delay(100);
+                        Record(null, EventArgs.Empty);
+                        if (scroll.ScrollableHeight - scroll.VerticalOffset > 1.5) { growth.Add($"{i}: gap {scroll.ScrollableHeight - scroll.VerticalOffset:0.##}"); }
+                    }
+                    check(growth.Count == 0 && departures.Count == 0,
+                        $"stays at the bottom through 20 stored events arriving every 100 ms after {name} ({string.Join("; ", growth)}; departures {string.Join("; ", departures)})");
+                }
+                finally { list.LayoutUpdated -= Record; }
+            }
+            check(ReferenceEquals(selected, window.Sessions.Rows.SelectedItem), "keeps the selected session while scrolling a growing history to the bottom");
+        }
+        finally { card.Update(session); window.Sessions.Rows.SelectedItem = before; }
     }
 }
