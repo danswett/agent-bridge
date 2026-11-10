@@ -662,6 +662,8 @@ test('a question that arrives after the response has grown, in an update of its 
 
 test('a question that arrives after the reader opened the reasoning leaves the conversation where they are reading', async ({ page }) => {
   await openDemo(page, { height: 900 });
+  // The session has no earlier turns, so the conversation is only what this test puts in it: the demo's made-up history would overflow it.
+  await page.evaluate((id) => window.agentBridgeDemo.host.historyTurns.set(id, []), CODEX);
   const long = Array.from({ length: 60 }, (_, i) => `Thought ${i + 1}.`).join('\n\n');
   await upsert(page, CODEX, { activity: { response: 'Short.', reasoning: long, userMessage: null, currentTool: null }, question: null, updatedAt: later() });
   const v = await open(page, CODEX);
