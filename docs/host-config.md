@@ -373,7 +373,10 @@ is used to judge it.
 `docs/fleet-load-limits.json` holds the limits the fleet judges the record against:
 `maxCpuPercent` (1-100), `minAvailableMemoryMiB` (above 0), `maxRunQueuePerCore` (0 or more),
 `maxAgeSeconds` (above 0) and `nullFails` (true or false; true means an unknown figure fails). A
-test rejects a file with any value out of range or missing.
+test rejects a file with any value out of range or missing. Launch pacing for the fleet governor's
+slot check (slipgates-fleet, F8): `maxLaunchesPerReading` (launches granted on one machine's current record)
+and `maxLaunchesPerMachinePerHour`. The host does not read these two; the governor refuses every launch while
+either is present.
 
 ## Notifications in the log
 
