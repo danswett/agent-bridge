@@ -82,6 +82,7 @@ jobs:
       spikes: ${{ steps.select.outputs.spikes }}
       spikes-linux: ${{ steps.select.outputs.spikes-linux }}
       app: ${{ steps.select.outputs.app }}
+      app-installer: ${{ steps.select.outputs.app-installer }}
       light: ${{ steps.select.outputs.light }}
       pwa-ui: ${{ steps.select.outputs.pwa-ui }}
       pwa-e2e: ${{ steps.select.outputs.pwa-e2e }}
@@ -212,7 +213,7 @@ jobs:
           # The jobs gated below; plan.ps1 gives each a true or false output. The catalog check
           # fails when this list, the jobs whose if: reads the plan, the plan's outputs and
           # quality-gate's needs disagree (quality/README.md §4.7).
-          JOBS: product ha-integration spikes spikes-linux app light pwa-ui pwa-e2e
+          JOBS: product ha-integration spikes spikes-linux app app-installer light pwa-ui pwa-e2e
         run: |
           $jobs = @($env:JOBS -split '\s+' | Where-Object { $_ })
           if ($env:EVENT -eq 'pull_request' -and $env:DRAFT -eq 'true') {
@@ -629,38 +630,6 @@ jobs:
         shell: pwsh
         # build/app-self-test.ps1 says how the app ended when it did not end with 0 (#240).
         run: ./build/app-self-test.ps1 -Exe ${{ matrix.out }}/publish/AgentBridge.exe -Result "$env:RUNNER_TEMP/selftest/result.json" -TimeoutSeconds 480
-      - name: The installer installs per user, into its own channel and architecture, and the installed app starts
-        # The Setup.exe a person downloads, run silently on this throwaway runner: per user, no
-        # admin, into %LOCALAPPDATA%\AgentBridgeApp. A silent install starts nothing, so no host or
-        # logon task is registered; the installed copy then runs the same self-test. The channel it
-        # recorded is the feed it will update from, for good (build/app-channels.ps1).
-        shell: pwsh
-        run: |
-          . ./build/app-channels.ps1
-          $target = Get-AppChannel '${{ matrix.runtime }}'
-          $setup = Join-Path '${{ matrix.out }}/releases' (Get-AppAssetName $target.Channel 'Installer' $env:APP_VERSION)
-          $logs = "$env:RUNNER_TEMP/selftest/installed"
-          New-Item -ItemType Directory -Force $logs | Out-Null
-          $p = Start-Process $setup -ArgumentList '--silent', '--log', "$logs/setup.log" -PassThru
-          if (-not $p.WaitForExit(300000)) { Stop-Process -Id $p.Id; Write-Error 'Setup did not finish'; exit 1 }
-          if ($p.ExitCode) { Get-Content "$logs/setup.log" -ErrorAction SilentlyContinue; Write-Error "Setup exited with $($p.ExitCode)"; exit 1 }
-          $root = "$env:LOCALAPPDATA/AgentBridgeApp"
-          $manifest = Get-Content "$root/current/sq.version" -Raw
-          Write-Output $manifest
-          if ($manifest -notmatch "<channel>$([regex]::Escape($target.Channel))</channel>") { Write-Error "installed into another channel than $($target.Channel)"; exit 1 }
-          # x64's Update.exe is the x86 one vpk gives a pack without --runtime, as installed copies have.
-          $expected = [ordered]@{ 'current/AgentBridge.exe' = $target.Machine; 'current/agent-bridge-host.exe' = $target.Machine; 'current/agent-bridge-injector.exe' = $target.Machine; 'current/agent-bridge-host-hook.exe' = $target.Machine; 'Update.exe' = $(if ($target.Machine -eq 'x64') { 'x86' } else { $target.Machine }) }
-          $bad = 0
-          foreach ($file in $expected.Keys) {
-            $machine = Get-PeMachine ([IO.File]::ReadAllBytes((Join-Path $root $file)))
-            Write-Output "${file}: $machine"
-            if ($machine -ne $expected[$file]) { Write-Error "$file is $machine, not $($expected[$file])"; $bad++ }
-          }
-          if ($bad) { exit 1 }
-          . ./build/app-notices.ps1
-          Write-AppDistributionEvidence -Publish '${{ matrix.out }}/publish' -Releases '${{ matrix.out }}/releases' -Version $env:APP_VERSION -Runtime '${{ matrix.runtime }}' -Installed "$root/current" -Out "$logs/distribution-evidence.json"
-          ./build/app-self-test.ps1 -Exe "$root/current/AgentBridge.exe" -Result "$logs/result.json" -TimeoutSeconds 480
-          exit $LASTEXITCODE
       - name: The release would publish (dry run)
         # What the publish job would upload, publish and prune, against the repository's real
         # releases, with vpk reading the folder into a scratch feed. Read-only: nothing is uploaded.
@@ -696,6 +665,79 @@ jobs:
         if: always()
         with:
           name: app-self-test-${{ matrix.runtime }}
+          path: ${{ runner.temp }}/selftest
+          retention-days: 7
+
+  app-installer:
+    # The installer half of the app's checks, split out of `app` so the two ~6 minute self-tests
+    # run side by side instead of one after the other (#1654). It packs the same commit with the
+    # same script, then installs the Setup.exe it made and starts the installed app. Nothing here
+    # is published or signed: `app` stays the job whose package ships.
+    name: app-installer (${{ matrix.runtime }})
+    needs: plan
+    if: (needs.plan.outputs.whole-ring == 'true' && github.event_name != 'pull_request') || needs.plan.outputs.app-installer == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runtime: win-x64
+            runner: windows-latest
+            out: out/app
+          - runtime: win-arm64
+            runner: windows-11-arm
+            out: out/app-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet tool install -g vpk --version 1.2.161
+      - name: Publish and pack
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./build/release-notes.ps1 -Repository "${{ github.repository }}" -Commit "${{ github.sha }}" -Out out/app/notes.md
+          ./build/pack-app.ps1 -Version $env:APP_VERSION -Runtime ${{ matrix.runtime }} -Out ${{ matrix.out }} -Release:($env:APP_RELEASE -eq 'true') -DeltaFrom "https://github.com/${{ github.repository }}" -ReleaseNotes out/app/notes.md
+      - name: The installer installs per user, into its own channel and architecture, and the installed app starts
+        # The Setup.exe a person downloads, run silently on this throwaway runner: per user, no
+        # admin, into %LOCALAPPDATA%\AgentBridgeApp. A silent install starts nothing, so no host or
+        # logon task is registered; the installed copy then runs the same self-test. The channel it
+        # recorded is the feed it will update from, for good (build/app-channels.ps1).
+        shell: pwsh
+        run: |
+          . ./build/app-channels.ps1
+          $target = Get-AppChannel '${{ matrix.runtime }}'
+          $setup = Join-Path '${{ matrix.out }}/releases' (Get-AppAssetName $target.Channel 'Installer' $env:APP_VERSION)
+          $logs = "$env:RUNNER_TEMP/selftest/installed"
+          New-Item -ItemType Directory -Force $logs | Out-Null
+          $p = Start-Process $setup -ArgumentList '--silent', '--log', "$logs/setup.log" -PassThru
+          if (-not $p.WaitForExit(300000)) { Stop-Process -Id $p.Id; Write-Error 'Setup did not finish'; exit 1 }
+          if ($p.ExitCode) { Get-Content "$logs/setup.log" -ErrorAction SilentlyContinue; Write-Error "Setup exited with $($p.ExitCode)"; exit 1 }
+          $root = "$env:LOCALAPPDATA/AgentBridgeApp"
+          $manifest = Get-Content "$root/current/sq.version" -Raw
+          Write-Output $manifest
+          if ($manifest -notmatch "<channel>$([regex]::Escape($target.Channel))</channel>") { Write-Error "installed into another channel than $($target.Channel)"; exit 1 }
+          # x64's Update.exe is the x86 one vpk gives a pack without --runtime, as installed copies have.
+          $expected = [ordered]@{ 'current/AgentBridge.exe' = $target.Machine; 'current/agent-bridge-host.exe' = $target.Machine; 'current/agent-bridge-injector.exe' = $target.Machine; 'current/agent-bridge-host-hook.exe' = $target.Machine; 'Update.exe' = $(if ($target.Machine -eq 'x64') { 'x86' } else { $target.Machine }) }
+          $bad = 0
+          foreach ($file in $expected.Keys) {
+            $machine = Get-PeMachine ([IO.File]::ReadAllBytes((Join-Path $root $file)))
+            Write-Output "${file}: $machine"
+            if ($machine -ne $expected[$file]) { Write-Error "$file is $machine, not $($expected[$file])"; $bad++ }
+          }
+          if ($bad) { exit 1 }
+          . ./build/app-notices.ps1
+          Write-AppDistributionEvidence -Publish '${{ matrix.out }}/publish' -Releases '${{ matrix.out }}/releases' -Version $env:APP_VERSION -Runtime '${{ matrix.runtime }}' -Installed "$root/current" -Out "$logs/distribution-evidence.json"
+          ./build/app-self-test.ps1 -Exe "$root/current/AgentBridge.exe" -Result "$logs/result.json" -TimeoutSeconds 480
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: app-installer-self-test-${{ matrix.runtime }}
           path: ${{ runner.temp }}/selftest
           retention-days: 7
 
@@ -1508,7 +1550,7 @@ jobs:
     # new gate's check only once every job it needs is done; under the same name, the draft's
     # green gate would stand for the whole head until then, and a merge could go through on it.
     name: ${{ github.event.pull_request.draft && 'quality-gate (fast ring)' || 'quality-gate' }}
-    needs: [plan, product, ha-integration, spikes, spikes-linux, app, light, pwa-ui, pwa-e2e]
+    needs: [plan, product, ha-integration, spikes, spikes-linux, app, app-installer, light, pwa-ui, pwa-e2e]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1547,7 +1589,7 @@ jobs:
           missing=$(echo "$NEEDS" | jq -r --arg ev "$EVENT" '
             (.plan.outputs // {}) as $plan
             | ($plan["whole-ring"] == "true") as $all
-            | [to_entries[] | select(.key == "plan" or ($all and (.key != "app" or $ev != "pull_request")) or $plan[.key] == "true")
+            | [to_entries[] | select(.key == "plan" or ($all and ((.key != "app" and .key != "app-installer") or $ev != "pull_request")) or $plan[.key] == "true")
                 | select(.value.result != "success") | "\(.key) (\(.value.result))"]
             | join(", ")')
           if [ -n "$missing" ]; then
