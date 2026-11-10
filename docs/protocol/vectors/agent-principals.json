@@ -52,6 +52,144 @@
         }
       ],
       "refused": []
+    },
+    "AgentAdoptRequest": {
+      "direction": "client",
+      "valid": [
+        {
+          "name": "read-by-default",
+          "json": {
+            "session": "session-1"
+          }
+        },
+        {
+          "name": "read-and-reply",
+          "json": {
+            "session": "session-1",
+            "scope": "read+reply"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "missing-session",
+          "json": {},
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-session",
+          "json": {
+            "session": 42
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "AgentAdoptResult": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "adopted",
+          "json": {
+            "session": "session-1",
+            "scope": "read",
+            "expiresAt": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        {
+          "name": "wrong-type-session",
+          "json": {
+            "session": 42,
+            "scope": "read",
+            "expiresAt": "2026-10-28T04:22:43.182Z"
+          },
+          "reads": {
+            "session": "",
+            "scope": "read",
+            "expiresAt": "2026-10-28T04:22:43.182Z"
+          }
+        }
+      ],
+      "refused": []
+    },
+    "AgentRevokeRequest": {
+      "direction": "client",
+      "valid": [
+        {
+          "name": "a-session",
+          "json": {
+            "session": "session-1"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "missing-session",
+          "json": {},
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-session",
+          "json": {
+            "session": 42
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "AgentRevokeResult": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "revoked",
+          "json": {
+            "session": "session-1",
+            "revoked": true
+          }
+        },
+        {
+          "name": "wrong-type-session",
+          "json": {
+            "session": 42,
+            "revoked": true
+          },
+          "reads": {
+            "session": "",
+            "revoked": true
+          }
+        }
+      ],
+      "refused": []
+    },
+    "AgentCredentialResult": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "a-credential",
+          "json": {
+            "token": "abat1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "principal": "agent:machine1/session-1",
+            "scope": "read",
+            "expiresAt": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        {
+          "name": "wrong-type-token",
+          "json": {
+            "token": 42,
+            "principal": "agent:machine1/session-1",
+            "scope": "read",
+            "expiresAt": "2026-10-28T04:22:43.182Z"
+          },
+          "reads": {
+            "token": "",
+            "principal": "agent:machine1/session-1",
+            "scope": "read",
+            "expiresAt": "2026-10-28T04:22:43.182Z"
+          }
+        }
+      ],
+      "refused": []
     }
   },
   "knownDifferences": []

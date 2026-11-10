@@ -480,6 +480,11 @@ const NOT_REPLAYED = {
 
   AgentHelloRequest: 'agent.hello is local pipe only; no PWA or relay channel serves it (#720)',
   AgentHelloResult: 'agent.hello is local pipe only; no PWA or relay channel serves it (#720)',
+  AgentAdoptRequest: 'agent.adopt is local pipe only; no PWA or relay channel serves it (#721)',
+  AgentAdoptResult: 'agent.adopt is local pipe only; no PWA or relay channel serves it (#721)',
+  AgentRevokeRequest: 'agent.adopt is local pipe only; no PWA or relay channel serves it (#721)',
+  AgentRevokeResult: 'agent.adopt is local pipe only; no PWA or relay channel serves it (#721)',
+  AgentCredentialResult: 'agent.adopt is local pipe only; no PWA or relay channel serves it (#721)',
 
   JournalEntry: 'read by readEntry into what Review shows, not as sent; test/unit/diagnostics.test.mjs replays it',
   JournalStage: 'part of JournalEntry, read by readEntry',
