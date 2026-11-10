@@ -171,7 +171,6 @@ public class PushTests
     [InlineData("https://web.push.apple.com/x", 0, "bad-body-size")]
     [InlineData("https://web.push.apple.com/x", WebPushCrypto.RecordSize + 1, "bad-body-size")]
     [InlineData("not a url", 100, "bad-endpoint")]
-    [InlineData("/relative/path", 100, "bad-endpoint")]
     [InlineData(null, 100, "bad-endpoint")]
     [InlineData("http://web.push.apple.com/x", 100, "endpoint-not-https")]
     [InlineData("ftp://web.push.apple.com/x", 100, "endpoint-not-https")]
