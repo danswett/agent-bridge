@@ -172,6 +172,69 @@ test('a delayed answer receipt stays once in its own turn when another question 
   await expect(card.locator(`[data-question="${QID}"]`)).toHaveCount(1);
 });
 
+test('delayed history and disjoint local closures share one newest-20 window', async ({ page }) => {
+  const id = 'retention-disjoint';
+  await page.goto('?demo=1&static=1');
+  await page.waitForSelector('html[data-demo-ready]');
+  await page.evaluate(({ id, source }) => {
+    const d = window.agentBridgeDemo;
+    const at = (n) => new Date(Date.now() - 3600000 + n * 1000).toISOString();
+    const question = (id, n) => ({ id, kind: 'form', askedAt: at(n), message: `Question ${id}`, fields: [] });
+    const turns = Array.from({ length: 20 }, (_, i) => ({
+      id: `stored-turn-${i}`, at: at(i), prompt: { text: `Prompt ${i}` },
+      parts: [{ id: `stored-part-${i}`, kind: 'question', at: at(i), question: question(`stored-${i}`, i) }],
+    }));
+    window.retentionCase = { local: [question('local-0', 30), question('local-1', 31)] };
+    d.host.historyTurns.set(id, turns);
+    d.upsert({ ...d.host.get(source), id, question: null, status: 'idle', activity: { turn: 'stored-turn-19', turnCount: 20 } });
+  }, { id, source: CODEX });
+  await open(page, id);
+  const card = view(page, id);
+  const closed = card.locator('.question.resolved');
+  await expect(closed).toHaveCount(20);
+  await page.evaluate((id) => {
+    const d = window.agentBridgeDemo;
+    d.host.holdResponses();
+    window.retentionCase.refresh = d.view.history.open('demo', id, { session: d.host.get(id) });
+  }, id);
+  await expect.poll(() => page.evaluate((id) => window.agentBridgeDemo.view.history.get('demo', id).loading, id)).toBe('newest');
+  for (let i = 0; i < 2; i++) {
+    await page.evaluate(({ id, i }) => {
+      const d = window.agentBridgeDemo;
+      const s = d.host.get(id);
+      d.upsert({ ...s, question: window.retentionCase.local[i], status: 'waiting', activity: { turn: `local-turn-${i}`, turnCount: 21 + i } });
+    }, { id, i });
+    await expect(card.locator('.question:not(.resolved)')).toHaveAttribute('data-question', `local-${i}`);
+    await page.evaluate((id) => {
+      const d = window.agentBridgeDemo;
+      d.upsert({ ...d.host.get(id), question: null, status: 'idle' });
+    }, id);
+    await expect(closed).toHaveCount(20);
+    expect(await closed.evaluateAll((nodes) => nodes.map((n) => n.dataset.question))).toEqual([
+      ...Array.from({ length: 19 - i }, (_, j) => `stored-${j + i + 1}`),
+      ...Array.from({ length: i + 1 }, (_, j) => `local-${j}`),
+    ]);
+  }
+  await page.evaluate(async () => {
+    window.agentBridgeDemo.host.releaseResponses();
+    await window.retentionCase.refresh;
+  });
+  await expect(closed).toHaveCount(20);
+  await page.evaluate(async (id) => {
+    const d = window.agentBridgeDemo;
+    d.host.historyTurns.get(id).push(...window.retentionCase.local.map((question, i) => ({
+      id: `local-turn-${i}`, at: question.askedAt, prompt: { text: `Local prompt ${i}` },
+      parts: [{ id: `local-part-${i}`, kind: 'question', at: question.askedAt, question, outcome: 'cancelled' }],
+    })));
+    await d.view.history.open('demo', id, { session: d.host.get(id) });
+  }, id);
+  await expect(closed).toHaveCount(20);
+  await expect(card.locator('.history .question.resolved[data-question^="local-"]')).toHaveCount(2);
+  expect(await closed.evaluateAll((nodes) => nodes.map((n) => n.dataset.question))).toEqual([
+    ...Array.from({ length: 18 }, (_, i) => `stored-${i + 2}`), 'local-0', 'local-1',
+  ]);
+});
+
 test('malformed question records are tolerated and local records share the latest-20 limit', async ({ page }) => {
   await setup(page);
   const ids = await page.evaluate(async () => {
