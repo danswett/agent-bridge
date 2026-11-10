@@ -287,6 +287,7 @@ public class RelayTests
 
         var root = await relay.Http.GetStringAsync(relay.Url);
 
+        Assert.StartsWith("Slipgates relay.", root);
         Assert.Contains("serves no app code", root);
     }
 

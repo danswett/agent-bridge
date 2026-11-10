@@ -156,7 +156,7 @@ public static class RelayApp
                 },
             });
         }
-        else { app.MapGet("/", () => Results.Text("Agent Bridge relay. It serves no app code; the PWA is published separately.")); }
+        else { app.MapGet("/", () => Results.Text("Slipgates relay. It serves no app code; the PWA is published separately.")); }
 
         // Liveness: the process answers. Version lets a deploy check which build is serving.
         app.MapGet("/healthz", (RelayHub hub) => Results.Ok(new { ok = true, online = hub.Online, version = options.Version, sockets = hub.OnlineByKind().Select(s => new { site = s.Site, kind = s.Kind, count = s.Count }) }));
