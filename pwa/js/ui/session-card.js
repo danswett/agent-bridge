@@ -893,7 +893,9 @@ export class SessionCard {
       this.#renderFacts(rows);
     }
     this.#tickFacts(s, Date.now());
+    const arriving = this.#arrived !== null;
     this.#bringQuestion(atEnd);
+    if (!arriving) { this.#followLive(atEnd); }
 
     // The tools shown follow the session: refetched (at most every 2 s) as it changes.
     if (!first && this.#history.loaded && this.#toolsShown() && this.#changed('historyAt', s.updatedAt)) { this.#scheduleHistory(); }
@@ -1736,6 +1738,17 @@ export class SessionCard {
       this.#readAt = sc.scrollTop;
     }
     return this.#readToEnd;
+  }
+
+  // A live turn growing at the end of a conversation read to its end keeps that end in sight
+  // (#1702): it was left behind as the reply streamed in. atEnd is where the reader was before
+  // this update drew, so a reader who scrolled up is left alone, and one back at the bottom is
+  // followed again. Not under a finger, a pressed mouse or one resting on the view (ui.md §5.3).
+  #followLive(atEnd) {
+    const sc = this.els.scroll;
+    if (!atEnd || this.#touches || this.#pressing || this.#hovering || !this.viewing() || !sc.getClientRects().length) { return; }
+    const toEnd = () => { sc.scrollTop = sc.scrollHeight; this.#stuckAt = sc.scrollTop; };
+    if (this.collapse) { this.collapse.appScroll(toEnd); } else { toEnd(); }
   }
 
   // Smoothly, and never into a conversation scrolled back through or held: atEnd is where the
