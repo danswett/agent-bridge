@@ -48,8 +48,9 @@ export class HistoryStore {
   // current(hostId): { client } for the host if it is connected, else null. keep: turns held per
   // session, about (a page is let go whole at the old end, so a little more may be held). limit:
   // turns asked for a page, 1 to 50; none leaves it to the host (20).
-  constructor({ current, keep = HISTORY.kept, limit = null }) {
-    Object.assign(this, { current, keep, limit });
+  // first: turns the newest page asks for when limit is none.
+  constructor({ current, keep = HISTORY.kept, limit = null, first = HISTORY.firstTurns }) {
+    Object.assign(this, { current, keep, limit, first });
   }
 
   static key(hostId, sessionId) { return JSON.stringify([hostId, sessionId]); }
@@ -170,7 +171,10 @@ export class HistoryStore {
   }
 
   #ask(client, e, cursor) {
-    return client.history(e.sessionId, { ...(cursor ? { before: cursor } : {}), ...(this.limit ? { limit: this.limit } : {}) });
+    // The page with no cursor is the newest, and is kept small (HISTORY.firstTurns); `limit`, when
+    // given, sets every page's size.
+    const limit = this.limit ?? (cursor ? null : this.first);
+    return client.history(e.sessionId, { ...(cursor ? { before: cursor } : {}), ...(limit ? { limit } : {}) });
   }
 
   #fail(e, on, reason, fromHost) {

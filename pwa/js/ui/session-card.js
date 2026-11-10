@@ -50,6 +50,7 @@ import { PromptMemory, disclosureName, promptOrigin } from '../prompt-origin.js'
 import { holdKey } from './hold.js';
 import { CONNECTION_CHANGED } from '../channels.js';
 import { HistoryView } from './history-view.js';
+import { HISTORY } from '../history.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 // The Details rows whose values move with the clock: drawn again where they are, not as new nodes.
@@ -660,6 +661,17 @@ export class SessionCard {
     e.replyCopy = h('div', { class: 'reply-copy', 'aria-hidden': 'true' }, h('span'));
     e.replyBar = h('div', { class: 'reply-bar' }, e.replyCopy);
     this.turns = new HistoryView();
+    this.turns.anchor = (change) => {
+      const sc = this.els.scroll;
+      const before = sc.scrollHeight;
+      change();
+      const grew = sc.scrollHeight - before;
+      if (grew > 0) {
+        const keep = () => { sc.scrollTop += grew; };
+        if (this.collapse) { this.collapse.appScroll(keep); } else { keep(); }
+      }
+    };
+    this.turns.onSettled = () => this.#wantEarlier();
     e.scroll = h('div', { class: 'stream-scroll' }, this.turns.element, e.stream);
     this.#watchHold(e.scroll);
     // An open question out of sight (#1657): one tap brings its card into view.
@@ -1414,6 +1426,21 @@ export class SessionCard {
     this.#drawTurns();
   }
 
+  // Older pages come in the background (#1622), one at a time once the last one is drawn, when
+  // the browser is idle: never while it is busy with a scroll or a key.
+  #wantEarlier() {
+    const snapshot = this.historyStore.get(this.hostId, this.#s.id);
+    // A page let go at the newest end to stay within the limit would take the newest turns with it.
+    if (this.#earlierAsked || snapshot.phase !== 'ready' || !snapshot.more || snapshot.loading || this.turns.pending || snapshot.turns.length + HISTORY.maxTurns > HISTORY.kept) { return; }
+    this.#earlierAsked = true;
+    const go = () => {
+      this.#earlierAsked = false;
+      if (this.#unwatch) { this.historyStore.loadEarlier(this.hostId, this.#s.id).catch(() => {}); }
+    };
+    if (globalThis.requestIdleCallback) { globalThis.requestIdleCallback(go, { timeout: 500 }); } else { setTimeout(go, 50); }
+  }
+  #earlierAsked = false;
+
   // The question the slot holds a place for: the open one, or the one whose record it still shows.
   #slotQuestion = null;
 
@@ -1425,6 +1452,7 @@ export class SessionCard {
     // Not in a turn (none holds it, or the history is not drawn): back where the live exchange ends.
     if (!this.turns.hosted && slot.parentNode !== this.els.stream) { this.els.stream.append(slot); }
     this.#syncWaiting();
+    this.#wantEarlier();
     const sc = this.els.scroll;
     if (!this.#atLatest && snapshot.phase !== 'idle' && snapshot.phase !== 'loading' && sc.getClientRects().length) {
       this.#atLatest = true;
