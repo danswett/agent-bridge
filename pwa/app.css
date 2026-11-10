@@ -494,6 +494,31 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .button.small { min-height: 32px; padding: 0 var(--ab-space-3); border-radius: var(--ab-radius-control); font-size: var(--type-meta); }
 @media (pointer: coarse) and (not (any-pointer: fine)) { .button.small { min-height: var(--tap); padding: 0 var(--ab-space-4); } }
 
+/* The tile (#1147): the same sections in the same order on every width. */
+.machine-summary { margin: 0 0 var(--ab-space-3); color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-meta-line); }
+.machine-tile { display: grid; gap: var(--ab-space-2); padding: 0 var(--ab-space-3) var(--ab-space-3) calc(var(--ab-space-3) + 20px + var(--ab-space-3)); }
+.machine-tile > p, .tile-actions-note { margin: 0; font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
+.tile-label { font-weight: 600; color: var(--ab-text); }
+.tile-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ab-space-2); }
+.tile-actions .button { min-height: var(--tap); }
+.machine-tile .machine-more { padding: 0; }
+.machine-view { display: none; }
+@media (max-width: 899px) { .machines-page { max-width: 640px; margin-inline: auto; } }
+/* From 900 px: the machines on the left, the picked machine's tile on the right. Each row sits in
+   the list column; the tile spans every row of the second, and the last row, 1fr, takes its height. */
+@media (min-width: 900px) {
+  .machines { grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); grid-template-rows: auto 1fr; column-gap: var(--ab-space-4); row-gap: 0; align-items: start; }
+  .machine:not(.offline) { display: contents; }
+  .machine-block { grid-column: 1; background: var(--ab-card); border: 1px solid var(--ab-stroke2); }
+  .machine-block:not(:has(~ .machine-error)), .machine:not(.offline) > .machine-error { margin-bottom: var(--ab-space-2); }
+  .machine.detail > .machine-block { background: var(--ab-selected); }
+  .machine.offline, .machine-updates, .machine:not(.offline) > .machine-error { grid-column: 1; }
+  .machine.offline { margin-bottom: var(--ab-space-2); }
+  .machine-tile { display: none; padding-left: var(--ab-space-4); }
+  .machine.detail .machine-tile { display: grid; grid-column: 2; grid-row: 1 / -1; padding-top: var(--ab-space-4); background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card); }
+  .machine-view { display: inline-flex; }
+}
+
 /* ---- agent usage: agent-ha-bridge's usage card ---- */
 /* Under the sessions: each agent's fullest window, in its own colour, and the way to Usage. */
 .usage-line {

@@ -13,7 +13,7 @@ const SHADOW = 'demo-shadow';
 // A session's row, and (sv) its view, on its machine (#179).
 const card = (page, host, id) => page.locator(`.session[data-host-id="${host}"][data-id="${id}"]`);
 const sv = (page, host, id) => view(page, id, host);
-const row = (page, id) => page.locator(`#machine-list [data-device-id="${id}"] button`);
+const row = (page, id) => page.locator(`#machine-list [data-device-id="${id}"] .machine-button`);
 // The machine tabs above the sessions: All, then each machine.
 const tab = (page, id) => page.locator(`#machine-tabs [data-device-id="${id}"]`);
 const machine = (page, id, field) => page.evaluate(([id, field]) => window.agentBridgeDemo.machines[id][field], [id, field]);
@@ -43,9 +43,6 @@ test('with more than one machine, every machine is shown at first: one list, new
   expect(shown.length + hidden.length).toBe(4);
   expect(shown[0]).toBe('all');
   await page.keyboard.press('Escape');
-  await expect(row(page, 'all')).toHaveAttribute('aria-current', 'true');
-  await expect(row(page, 'all').locator('.machine-name')).toHaveText('All machines');
-  await expect(page.locator('#machine-list li').first()).toHaveAttribute('data-device-id', 'all');
   await expect(page.locator('#sessions-h')).toHaveText('Sessions on all machines');
 
   const all = await page.evaluate(() => window.agentBridgeDemo.store.list().map((e) => ({ host: e.hostId, id: e.session.id })));
@@ -80,6 +77,51 @@ test('with more than one machine, every machine is shown at first: one list, new
   await expect(page.locator('#online')).toHaveAttribute('aria-label', '3 machines online');
 });
 
+// The Machines page's tiles (#1147 S1): a frame per machine in one order, not-reported-yet
+// forms where the host doesn't report a figure, no row for All, and one line for the fleet.
+test('the Machines page has no All machines row, says the fleet in one line, and frames each machine in a tile', async ({ page }) => {
+  await openDemo(page);
+  await go(page, 'machines');
+  await expect(page.locator('#machine-list [data-device-id="all"]')).toHaveCount(0);
+  await expect(page.locator('#machine-summary')).toHaveText('3 machines · 3 online');
+  const laptop = page.locator(`#machine-list [data-device-id="${LAPTOP}"]`);
+  await expect(laptop.getByRole('region', { name: 'Laptop' })).toBeVisible();
+  await expect(laptop.locator('.tile-health')).toHaveText('Health: Not measured yet');
+  await expect(laptop.locator('.tile-running')).toHaveText('Running: 2 sessions');
+  await expect(laptop.getByText('Can run')).toHaveCount(0);
+  await expect(laptop.getByRole('button', { name: 'Launch here' })).toBeVisible();
+  // A machine that is view only says why there is nothing to launch, in text.
+  const shadow = page.locator(`#machine-list [data-device-id="${SHADOW}"]`);
+  await expect(shadow.getByRole('button', { name: 'Launch here' })).toHaveCount(0);
+  await expect(shadow.locator('.tile-actions-note')).toContainText('view only');
+});
+
+test('Launch here opens the launch panel for that machine', async ({ page }) => {
+  await openDemo(page);
+  await go(page, 'machines');
+  await page.locator(`#machine-list [data-device-id="${LAPTOP}"]`).getByRole('button', { name: 'Launch here' }).click();
+  await expect(page.locator('#launch')).toBeVisible();
+});
+
+test.describe('from 900 px', () => {
+  test.use({ viewport: { width: 1000, height: 700 } });
+
+  test('the list is on the left and the picked machine\'s tile on the right, without leaving the page', async ({ page }) => {
+    await openDemo(page);
+    await go(page, 'machines');
+    const tile = (id) => page.locator(`#machine-list [data-device-id="${id}"] .machine-tile`);
+    await expect(tile(LAPTOP)).toBeHidden();
+    await row(page, LAPTOP).click();
+    await expect(tile(LAPTOP)).toBeVisible();
+    await expect(page.locator('#machines')).toBeVisible();
+    const [list, detail] = await Promise.all([row(page, LAPTOP).boundingBox(), tile(LAPTOP).boundingBox()]);
+    expect(detail.x).toBeGreaterThan(list.x + list.width);
+    await row(page, SHADOW).click();
+    await expect(tile(SHADOW)).toBeVisible();
+    await expect(tile(LAPTOP)).toBeHidden();
+  });
+});
+
 test('picking one machine shows only its sessions, unlabelled, and the choice is remembered, as All is', async ({ page }) => {
   await openDemo(page);
   await tab(page, LAPTOP).click();
@@ -92,7 +134,6 @@ test('picking one machine shows only its sessions, unlabelled, and the choice is
   await expect(tab(page, LAPTOP)).toBeFocused();
   await expect(tab(page, 'all')).toHaveAttribute('aria-selected', 'false');
   await expect(row(page, LAPTOP)).toHaveAttribute('aria-current', 'true');
-  await expect(row(page, 'all')).not.toHaveAttribute('aria-current', 'true');
 
   await page.reload();
   await page.waitForSelector('html[data-demo-ready]');
@@ -101,14 +142,13 @@ test('picking one machine shows only its sessions, unlabelled, and the choice is
 
   // Picked on the Machines page, as well: it goes back to the sessions.
   await go(page, 'machines');
-  await row(page, 'all').click();
-  await expect(page.locator('#sessions-h')).toHaveText('Sessions on all machines');
+  await row(page, SHADOW).click();
+  await expect(page.locator('#sessions-h')).toHaveText('Sessions on DEV-VM1 (shadow)');
   await expect(page.locator('#session-list')).toBeVisible();
   await page.reload();
   await page.waitForSelector('html[data-demo-ready]');
-  await expect(row(page, 'all')).toHaveAttribute('aria-current', 'true');
-  await expect(tab(page, 'all')).toHaveAttribute('aria-selected', 'true');
-  await expect(page.locator(`.session[data-host-id="${LAPTOP}"]`)).toHaveCount(2);
+  await expect(row(page, SHADOW)).toHaveAttribute('aria-current', 'true');
+  await expect(tab(page, SHADOW)).toHaveAttribute('aria-selected', 'true');
 });
 
 test('an answer, a reply with files, and End session from a session go to the machine the session is on', async ({ page }) => {
@@ -522,7 +562,7 @@ test('on a phone the Machines page keeps every row to two aligned lines, with it
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
 
   const box = async (l) => (await l.boundingBox());
-  for (const id of ['all', 'demo', LAPTOP, SHADOW, 'd0e1f2a3b4c5d6e7f8091a2b3c4d5e6f']) {
+  for (const id of ['demo', LAPTOP, SHADOW, 'd0e1f2a3b4c5d6e7f8091a2b3c4d5e6f']) {
     const row = rowOf(id);
     const name = await box(row.locator('.machine-name'));
     const icon = await box(row.locator('svg.icon').first());

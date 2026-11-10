@@ -912,9 +912,30 @@ function announceUpdates(list, updates, hosts) {
   region.textContent = said.join('. ');
 }
 
+const MASTER_DETAIL = '(min-width: 900px)';
+// The machine whose tile shows beside the list from 900 px, where a person picked one.
+const picked = new WeakMap();
+
+// A machine's tile (#1147 S1), its sections in one order: Health, Can run, Running, Actions. Only
+// what a host reports today is shown: Health reads "Not measured yet", Can run waits until it is
+// reported, and Running is the session count. Updates, sign-in and Diagnose follow in `more`.
+function machineTile({ name, raw, onSelect, onLaunch, more }) {
+  const why = raw?.held ? `Discovery is held: ${raw.held}` : raw?.readOnly ? `This machine is view only: ${raw.readOnly}` : null;
+  const running = !raw?.sessions ? 'Not reported yet' : raw.sessions.startsWith('0 ') ? 'No sessions running' : raw.sessions;
+  const line = (cls, label, text) => h('p', { class: cls }, h('span', { class: 'tile-label' }, `${label}: `), text);
+  return h('section', { class: 'machine-tile', 'aria-label': name },
+    line('tile-health', 'Health', 'Not measured yet'),
+    line('tile-running', 'Running', running),
+    h('div', { class: 'tile-actions' },
+      why ? h('p', { class: 'tile-actions-note' }, why)
+        : h('button', { type: 'button', class: 'button secondary small machine-launch', 'aria-label': `Launch here on ${name}`, onclick: onLaunch }, 'Launch here'),
+      h('button', { type: 'button', class: 'button secondary small machine-view', 'aria-label': `Show sessions on ${name}`, onclick: onSelect }, 'Show sessions')),
+    h('div', { class: 'machine-more' }, more.filter(Boolean)));
+}
+
 // One row: the icon and the trailing state on line 1 with the name, the facts on line 2, and
 // anything more (updates, Forget, an error) under them in the same text column.
-function machineRow({ id, name, select = null, selected = false, facts, state, offline = false, more = [] }) {
+function machineRow({ id, name, select = null, selected = false, detail = false, facts, state, offline = false, more = [], tile = null }) {
   const parts = [
     icon('machine'),
     h('span', { class: 'machine-name' }, name),
@@ -928,16 +949,17 @@ function machineRow({ id, name, select = null, selected = false, facts, state, o
   const block = h('div', { class: 'machine-block' }, head, extra.length ? h('div', { class: 'machine-more' }, extra) : null);
   // A refusal line is drawn under the block, on the row's plain surface and not on a selected row's
   // tint (#858). It stays in the row, and the buttons that can cause it still point at it.
-  const errors = [...block.querySelectorAll('.machine-error')];
+  const within = [block, tile].filter(Boolean);
+  const errors = within.flatMap((el) => [...el.querySelectorAll('.machine-error')]);
   errors.forEach((p, i) => { p.id = `machine-error-${id}-${i}`; });
   if (errors.length) {
     const ids = errors.map((p) => p.id).join(' ');
-    for (const b of block.querySelectorAll('.machine-more button')) { b.setAttribute('aria-describedby', ids); }
+    for (const b of within.flatMap((el) => [...el.querySelectorAll('.machine-more button')])) { b.setAttribute('aria-describedby', ids); }
   }
-  return h('li', { class: `machine${offline ? ' offline' : ''}${selected ? ' selected' : ''}`, dataset: { deviceId: id, deviceName: name } }, block, errors);
+  return h('li', { class: `machine${offline ? ' offline' : ''}${selected ? ' selected' : ''}${detail ? ' detail' : ''}`, dataset: { deviceId: id, deviceName: name } }, block, tile, errors);
 }
 
-export function renderMachines(list, { presence, me, current, onSelect, status = () => '', facts = null, known = null, forget = null, updates = null, signInDevices = null, diagnose = null, now = Date.now(), allStatus = '' }) {
+export function renderMachines(list, { presence, me, current, onSelect, onLaunch = () => {}, status = () => '', facts = null, known = null, forget = null, updates = null, signInDevices = null, diagnose = null, now = Date.now() }) {
   const hosts = presence.filter((d) => d.id !== me && d.kind === 'host');
   const all = current === ALL;
   const offline = offlineMachines({ presence, known, me });
@@ -959,10 +981,23 @@ export function renderMachines(list, { presence, me, current, onSelect, status =
     return { el: h('span', { class: 'machine-status' }, said), key: said };
   };
   const lines = new Map(hosts.map((d) => [d.id, lineOf(d.id)]));
+  const summary = list.parentElement?.querySelector(':scope > .machine-summary');
+  if (summary) {
+    const total = hosts.length + offline.length;
+    summary.textContent = total ? `${total} machine${total === 1 ? '' : 's'} \u00b7 ${hosts.length} online` : '';
+    summary.hidden = total === 0;
+  }
+  // From 900 px the tile beside the list is the one picked there, else the machine viewed, else the first.
+  const detailId = hosts.some((d) => d.id === picked.get(list)) ? picked.get(list) : (hosts.find((d) => d.id === current) ?? hosts[0])?.id;
+  const pick = (id) => {
+    if (!list.ownerDocument?.defaultView?.matchMedia?.(MASTER_DETAIL).matches) { return onSelect(id); }
+    picked.set(list, id);
+    for (const li of list.children) { li.classList.toggle('detail', li.dataset.deviceId === id); }
+  };
   // Drawn again only when something in it changes. It is asked to redraw on every session
   // update of every machine shown, and a button replaced between a tap's touch and its release
   // takes no click: a tap at startup, with every machine sending its sessions, was lost.
-  const key = JSON.stringify([current, allStatus, hosts.map((d) => [d.id, d.name, lines.get(d.id).key, rows.get(d.id).key, signInRows.get(d.id).key, diagnoses.get(d.id).key]),
+  const key = JSON.stringify([current, detailId, hosts.map((d) => [d.id, d.name, lines.get(d.id).key, rows.get(d.id).key, signInRows.get(d.id).key, diagnoses.get(d.id).key]),
     // lastSeen itself, not only how it reads: Forget sends it, to tell a machine that came back.
     offline.map((k) => [k.id, k.name, k.lastSeen, k.start ?? null, ago(k.lastSeen, now), forget?.stateOf(k.id) ?? null]), !!forget, [...restarting]]);
   if (drawnAs.get(list) === key) { return hosts.length; }
@@ -970,17 +1005,16 @@ export function renderMachines(list, { presence, me, current, onSelect, status =
   // Every change redraws the list, so the button that had focus is replaced: Forget's first
   // press redraws it armed, and a keyboard's second press must land on the new one.
   const active = list.ownerDocument?.activeElement;
-  const had = active && list.contains(active) ? { id: active.closest('li')?.dataset.deviceId, cls: ['machine-forget', 'machine-button', 'machine-update-check', 'machine-update-install', 'machine-update-now', 'machine-check-all', 'machine-diagnose', 'machine-diagnose-close', 'machine-diagnose-review', 'machine-diagnose-copy', 'machine-diagnostics'].find((c) => active.classList.contains(c)) } : null;
-  const everyMachine = hosts.length > 1 ? [machineRow({
-    id: ALL, name: 'All machines', select: () => onSelect(ALL), selected: all,
-    facts: h('span', { class: 'machine-status' }, allStatus || `${hosts.length} machines`),
-    state: all ? 'Viewing' : '',
-  })] : [];
-  list.replaceChildren(...everyMachine, ...hosts.map((d) => {
+  const had = active && list.contains(active) ? { id: active.closest('li')?.dataset.deviceId, cls: ['machine-forget', 'machine-button', 'machine-update-check', 'machine-update-install', 'machine-update-now', 'machine-check-all', 'machine-diagnose', 'machine-diagnose-close', 'machine-diagnose-review', 'machine-diagnose-copy', 'machine-diagnostics', 'machine-launch', 'machine-view'].find((c) => active.classList.contains(c)) } : null;
+  list.replaceChildren(...hosts.map((d) => {
     const selected = d.id === current || (all && hosts.length === 1);
     return machineRow({
-      id: d.id, name: d.name, select: () => onSelect(d.id), selected,
-      facts: lines.get(d.id).el, state: selected ? 'Viewing' : 'Online', more: [rows.get(d.id).el, signInRows.get(d.id).el, diagnoses.get(d.id).el],
+      id: d.id, name: d.name, select: () => pick(d.id), selected, detail: d.id === detailId,
+      facts: lines.get(d.id).el, state: selected ? 'Viewing' : 'Online',
+      tile: machineTile({
+        name: d.name, raw: facts?.(d.id) ?? null, onSelect: () => onSelect(d.id), onLaunch: () => onLaunch(d.id),
+        more: [rows.get(d.id).el, signInRows.get(d.id).el, diagnoses.get(d.id).el],
+      }),
     });
   }), ...leftNow.map((id) => machineRow({
     id, name: updates.nameOf?.(id) ?? 'This machine', offline: true,

@@ -147,9 +147,12 @@ on screen. Unknown events still count for `seq`.
 
 ### Every machine at once
 
-As the Windows app's **All machines**, the machine tabs over the sessions (and the **Machines**
-page) list **All** first once more than one machine is online, and show every online machine's
-sessions in one list. It is what the app shows when nothing has been chosen; picking one
+As the Windows app's **All machines**, the machine tabs over the sessions list **All** first once
+more than one machine is online, and show every online machine's
+sessions in one list. The **Machines** page has no All row: a one-line summary ("3 machines · 3
+online") and a tile per machine (Health, Running and Actions, "Not measured yet" or "Not
+reported yet" until the machine reports them), one column on a phone and, from 900 px, the
+machines on the left and the picked one's tile on the right. It is what the app shows when nothing has been chosen; picking one
 machine shows that one alone, as before; and the choice, one machine or All, is remembered on
 the device. A notification's link (`?host=`) shows its machine among the others when All was
 chosen, and alone otherwise, or when its machine turns out to be offline; either way what is

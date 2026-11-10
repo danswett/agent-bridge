@@ -1010,6 +1010,7 @@ export class SessionsPage {
     const n = renderMachines($('machine-list'), {
       presence, me: this.me, current: hosts.selection,
       onSelect: (id) => { hosts.select(id); this.shell?.go('sessions'); $('sessions').focus(); },
+      onLaunch: (id) => { this.#rememberLaunch(id); this.shell?.go('launch'); },
       status: (id) => this.status(id),
       facts: this.facts,
       known: connection.known ?? null,
@@ -1017,7 +1018,6 @@ export class SessionsPage {
       updates: this.updates,
       signInDevices: this.signInDevices,
       diagnose: this.diagnose,
-      allStatus: hosts.all ? plural(hosts.sessions.size, 'session', 'sessions') : '',
     });
     $('machines-empty').hidden = n !== 0 || !connection.ready;
     // The machine tabs above the sessions: picking one there keeps focus on the tabs. The machine
