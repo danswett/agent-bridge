@@ -1484,8 +1484,9 @@ test('a click that lands on a question\'s choice as the question appears is igno
   expect(clicked).toBe(true);
   await page.waitForTimeout(100);
   expect(await answers()).toBe(before);
-  // Past the guard, the same click answers.
-  await page.waitForTimeout(600);
+  // Past the guard, the same click answers. The guard restarts when the answers move under it, so
+  // on a slow runner a fixed 600 ms can end inside it: wait for the mark to go, as the tests above do.
+  await expect(v.locator('.question-slot .question[data-arriving]')).toHaveCount(0);
   await v.locator('.question-slot .choice').first().click();
   await expect.poll(answers).toBe(before + 1);
   // A key needs no wait: nothing moves the focus to a question, so a key is meant for it.
