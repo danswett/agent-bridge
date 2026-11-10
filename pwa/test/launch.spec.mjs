@@ -478,7 +478,7 @@ test.describe('a folder-trust question', () => {
 
   test('where the machine does not allow it, it is shown to answer at the machine, with how to allow it', async ({ page }) => {
     await openDemo(page);
-    const atMachine = 'Answer at the machine. To answer from your devices, turn on "Answer folder-trust questions from my devices" in the Agent Bridge app\'s Settings on that machine, or run agent-bridge-host config set launch.remoteFolderTrust true there and restart the host.';
+    const atMachine = 'Answer at the machine. To answer from your devices, turn on "Answer folder-trust questions from my devices" in the Slipgates app\'s Settings on that machine, or run agent-bridge-host config set launch.remoteFolderTrust true there and restart the host.';
     await ask(page, { ...QUESTION, answerable: false, atMachine });
     await openPanel(page);
     await expect(card(page).locator('.trust-folder')).toHaveText(LONG);

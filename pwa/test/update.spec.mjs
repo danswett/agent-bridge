@@ -79,10 +79,10 @@ test("a press the machine refuses says why on the machine's row, and Check all a
 
 test("a machine's app that is not running is said, with nothing to press", async ({ page }) => {
   await openDemo(page);
-  await page.evaluate(() => window.agentBridgeDemo.setUpdate({ current: '0.1.0', installer: false, unavailable: 'the Agent Bridge app is not running on this machine, and it is what installs updates', phase: 'idle' }));
+  await page.evaluate(() => window.agentBridgeDemo.setUpdate({ current: '0.1.0', installer: false, unavailable: 'the Slipgates app is not running on this machine, and it is what installs updates', phase: 'idle' }));
   const block = updateOf(page);
 
-  await expect(block.locator('.machine-update-line')).toHaveText('The Agent Bridge app is not running on this machine, and it is what installs updates.');
+  await expect(block.locator('.machine-update-line')).toHaveText('The Slipgates app is not running on this machine, and it is what installs updates.');
   await expect(block.getByRole('button')).toHaveCount(0);
 });
 

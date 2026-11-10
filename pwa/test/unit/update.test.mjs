@@ -36,8 +36,8 @@ test('each phase reads as a line, and Install is offered only when a release is 
   assert.equal(updateLine({ ...found, available: null }, NOW), 'Up to date: 0.4.0, checked 5m ago.');
   // No check finished yet: not called up to date.
   assert.equal(updateLine({ ...found, available: null, checkedAt: null }, NOW), 'Running 0.4.0; not checked for updates yet.');
-  const noApp = readUpdateState({ current: '0.4.0', installer: false, unavailable: 'the Agent Bridge app is not running on this machine, and it is what installs updates' });
-  assert.equal(updateLine(noApp, NOW), 'The Agent Bridge app is not running on this machine, and it is what installs updates.');
+  const noApp = readUpdateState({ current: '0.4.0', installer: false, unavailable: 'the Slipgates app is not running on this machine, and it is what installs updates' });
+  assert.equal(updateLine(noApp, NOW), 'The Slipgates app is not running on this machine, and it is what installs updates.');
   assert.ok(!canCheck(noApp));
 });
 
