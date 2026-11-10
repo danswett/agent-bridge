@@ -7,12 +7,12 @@ public sealed class HistoryDrawTests
 {
     static readonly DateTimeOffset T0 = new(2026, 11, 9, 8, 31, 0, TimeSpan.Zero);
 
-    static HistoryTurn Turn(int n, string? response = null, bool truncated = false, bool unreadable = false, UserMessageFrom? from = null) => new()
+    static HistoryTurn Turn(int n, string? response = null, bool truncated = false, bool unreadable = false, UserMessageFrom? from = null, DateTimeOffset? replyAt = null) => new()
     {
         Id = $"t{n}",
         At = T0.AddMinutes(n),
         Prompt = unreadable ? null : new HistoryPrompt { Text = $"prompt {n}", From = from },
-        Parts = response is null ? [] : [new HistoryPart { Id = $"p{n}", Kind = HistoryPartKind.Response, At = T0.AddMinutes(n), Text = response }],
+        Parts = response is null ? [] : [new HistoryPart { Id = $"p{n}", Kind = HistoryPartKind.Response, At = replyAt ?? T0.AddMinutes(n), Text = response }],
         Truncated = truncated ? true : null,
         Unreadable = unreadable ? true : null,
     };
@@ -95,6 +95,54 @@ public sealed class HistoryDrawTests
         Assert.Equal("Start of available history", HistoryDraw.Line(HistoryLoad.StartReached, 5, true, new HistoryStart { Limited = true }));
         var line = HistoryDraw.Line(HistoryLoad.StartReached, 5, true, new HistoryStart { At = T0 });
         Assert.StartsWith("Start of session · ", line);
+    }
+
+    [Fact]
+    public void A_turns_prompt_and_reply_carry_their_own_sent_times()
+    {
+        var clock = new MessageClock(T0.AddMinutes(30), TimeZoneInfo.Utc, System.Globalization.CultureInfo.GetCultureInfo("en-US"));
+        var turn = Turn(1, "one", replyAt: T0.AddMinutes(5));
+
+        var row = Assert.Single(HistoryDraw.Rows([turn], null, clock));
+
+        Assert.Equal("29 min ago", row.Times!.Prompt!.Text);
+        Assert.Equal("25 min ago", row.Times.Reply!.Text);
+        Assert.StartsWith("Mon Nov 9, 2026, ", row.Times.Prompt.Exact);
+    }
+
+    [Fact]
+    public void A_person_prompt_has_its_time_under_it_and_any_other_beside_its_label()
+    {
+        var clock = new MessageClock(T0.AddMinutes(30), TimeZoneInfo.Utc, System.Globalization.CultureInfo.GetCultureInfo("en-US"));
+        var mine = Assert.Single(HistoryDraw.Rows([Turn(1, "x")], null, clock));
+        var scheduled = Assert.Single(HistoryDraw.Rows([Turn(1, "x", from: UserMessageFrom.Schedule)], null, clock));
+
+        Assert.NotNull(mine.PromptUnder);
+        Assert.Null(mine.PromptBeside);
+        Assert.NotNull(scheduled.PromptBeside);
+        Assert.Null(scheduled.PromptUnder);
+    }
+
+    [Fact]
+    public void An_unreadable_turn_and_a_turn_with_no_reply_show_no_guessed_time()
+    {
+        var clock = new MessageClock(T0.AddMinutes(30), TimeZoneInfo.Utc, System.Globalization.CultureInfo.GetCultureInfo("en-US"));
+        var rows = HistoryDraw.Rows([Turn(1, unreadable: true), Turn(2)], null, clock);
+
+        Assert.Null(rows[0].Times);
+        Assert.Null(rows[0].PromptUnder);
+        Assert.Null(rows[0].Reply);
+        Assert.NotNull(rows[1].Times!.Prompt);
+        Assert.Null(rows[1].Times!.Reply);
+    }
+
+    [Fact]
+    public void Time_never_changes_the_order_of_the_turns()
+    {
+        var late = Turn(1, "a", replyAt: T0.AddDays(3));
+        var rows = HistoryDraw.Rows([late, Turn(2, "b")], null);
+
+        Assert.Equal(["t1", "t2"], rows.Select(r => r.Id));
     }
 
     [Fact]
