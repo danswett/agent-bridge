@@ -15,6 +15,120 @@ public sealed class FleetPublisherTests
     readonly FakeTimeProvider time = new(DateTimeOffset.UtcNow);
     readonly Source source = new();
     readonly List<JsonElement> sent = [];
+    [Theory]
+    [InlineData("{}", true, false)]
+    [InlineData("{\"fleet\":{\"share\":false}}", false, false)]
+    [InlineData("{\"fleet\":{\"share\":true}}", true, false)]
+    [InlineData("{\"fleet\":{\"share\":null}}", false, true)]
+    [InlineData("{\"fleet\":false}", false, true)]
+    [InlineData("{\"version\":999}", false, true)]
+    [InlineData("broken", false, true)]
+    public void Sharing_is_explicit_and_unreadable_settings_never_enable_it(string json, bool share, bool problem)
+    {
+        var parsed = HostSettings.Parse(json, "config.json");
+        Assert.Equal(share, parsed.Settings.FleetShare);
+        Assert.Equal(problem, parsed.Problem is not null);
+    }
+
+    [Fact]
+    public void The_existing_config_command_can_disable_sharing_and_rejects_an_invalid_value()
+    {
+        using var fixture = new Fixture();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        Assert.Equal(0, ConfigCommands.Run(["config", "set", "fleet.share", "false"], fixture.Root, output, error));
+        Assert.False(HostSettings.Load(fixture.Root).Settings.FleetShare);
+        Assert.Equal(1, ConfigCommands.Run(["config", "set", "fleet.share", "maybe"], fixture.Root, output, error));
+        Assert.False(HostSettings.Load(fixture.Root).Settings.FleetShare);
+    }
+
+    [Fact]
+    public async Task Connection_publication_is_immediate_reconnect_keeps_sequence_and_disconnect_stops_the_loop()
+    {
+        var publication = new FleetPublication(source, "machine", share: true, time: time);
+        for (var i = 1; i <= 2; i++)
+        {
+            var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var run = publication.RunAsync(Put, disconnected.Task);
+            Assert.Equal(i, sent.Count);
+            Assert.Equal(i, sent[^1].GetProperty("seq").GetInt64());
+            Assert.Equal("published", publication.Status.Result);
+            disconnected.SetResult();
+            await run.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        time.Advance(TimeSpan.FromMinutes(1));
+        Assert.Equal(2, sent.Count);
+        Assert.Single(sent.Select(r => r.GetProperty("epoch").GetString()).Distinct());
+        using var stop = new CancellationTokenSource();
+        stop.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => publication.RunAsync(Put, Task.Delay(Timeout.Infinite), stop.Token));
+        Assert.Equal(2, sent.Count);
+    }
+
+    [Fact]
+    public async Task Sharing_off_clears_the_roster_even_during_a_hold_but_sharing_on_never_claims_false_absence()
+    {
+        source.Held = new DiscoveryHeld("private reason", [AgentKind.Copilot]);
+        var off = new FleetPublication(source, "machine", share: false, time: time);
+        Assert.True(await off.PollAsync(Put));
+        Assert.Empty(Assert.Single(sent).GetProperty("sessions").EnumerateArray());
+        Assert.Equal("sharing-off", off.Status.Result);
+        var on = new FleetPublication(source, "machine", share: true, time: time);
+        Assert.False(await on.PollAsync(Put));
+        Assert.Equal("discovery-held", on.Status.Result);
+        source.Held = null;
+        Assert.True(await on.PollAsync(Put));
+        Assert.Equal(source.Sessions.Count, sent[^1].GetProperty("sessions").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task Sustained_failures_back_off_monotonically_cap_at_thirty_seconds_and_reset_on_success()
+    {
+        var logs = new List<string>();
+        var publication = new FleetPublication(source, "machine", share: true, time: time, log: logs.Add);
+        var calls = 0;
+        Task Fail(JsonElement _, CancellationToken ct) { calls++; throw new IOException("private prompt path token"); }
+        foreach (var seconds in new[] { 2, 4, 8, 16, 30, 30 })
+        {
+            Assert.False(await publication.PollAsync(Fail, force: true));
+            Assert.Equal("failed", publication.Status.Result);
+            Assert.Equal(time.GetUtcNow().AddSeconds(seconds), publication.Status.NextRetry);
+            var before = calls;
+            time.AdjustTime(time.GetUtcNow().AddDays(1));
+            Assert.False(await publication.PollAsync(Fail, force: true));
+            time.Advance(TimeSpan.FromSeconds(seconds - 1));
+            Assert.False(await publication.PollAsync(Fail));
+            Assert.Equal(before, calls);
+            time.Advance(TimeSpan.FromSeconds(1));
+        }
+        Assert.True(await publication.PollAsync(Put));
+        Assert.Equal(0, publication.Status.Failures);
+        Assert.Null(publication.Status.NextRetry);
+        Assert.DoesNotContain("private", string.Join("|", logs));
+        Assert.Single(sent);
+    }
+
+    [Fact]
+    public async Task A_bad_id_is_skipped_counted_in_host_status_and_does_not_refuse_healthy_sessions()
+    {
+        using var fixture = new Fixture();
+        source.Sessions.Add(NewSession(4) with { Id = "bad-id" });
+        var publication = new FleetPublication(source, "machine", share: true, time: time);
+        Assert.True(await publication.PollAsync(Put));
+        Assert.Equal(3, Assert.Single(sent).GetProperty("sessions").GetArrayLength());
+        var control = new HostControl(new HostControlOptions
+        {
+            Profile = "test", Folder = fixture.Root, Version = "0.1.0", Running = new(false),
+            Machine = new("machine", "Fixture", "windows", "0.1.0"), FleetPublication = () => publication.Status,
+            SignIn = (_, _, _) => throw new NotSupportedException(), SignedIn = (_, _) => { }, Stop = () => { }, Restart = () => { },
+        });
+        Assert.Equal(1, control.Status().FleetPublication?.SkippedInvalidIds);
+        time.Advance(TimeSpan.FromSeconds(2));
+        source.Sessions.RemoveAt(3);
+        await publication.PollAsync(Put);
+        Assert.Equal(0, control.Status().FleetPublication?.SkippedInvalidIds);
+    }
+
     Task Put(JsonElement record, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();

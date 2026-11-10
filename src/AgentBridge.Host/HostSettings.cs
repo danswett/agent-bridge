@@ -124,6 +124,7 @@ public sealed record HostSettings(bool RemoteApproval)
     public IEnumerable<string> SectionProblems => LaunchProblems.Concat(HomeAssistantProblems).Concat(UsageProblems).Concat(DevBoxProblems).Concat(AgentMessagingProblems).Concat(AgentsProblems).Concat(PermissionProblems).Concat(SecurityProblems);
 
     public bool Push { get; init; } = true;
+    public bool FleetShare { get; init; } = true;
 
     public bool ReadOnly { get; init; }
     public bool TrustedPeers { get; init; }

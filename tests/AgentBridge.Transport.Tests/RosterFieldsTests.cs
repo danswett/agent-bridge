@@ -55,6 +55,27 @@ public sealed class RosterFieldsTests
     }
 
     [Fact]
+    public async Task Registry_replies_keep_sixty_four_maximum_plus_names_below_the_actual_reply_byte_budget()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        await using var host = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "publisher", "host");
+        var record = Record(host.Id, name: new string('+', 64));
+        var sessions = record["sessions"]!.AsArray();
+        var first = sessions[0]!.DeepClone();
+        for (var i = 1; i < 64; i++) { sessions.Add(first.DeepClone()); }
+        var json = new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+        await host.Relay.RegistryPutAsync(JsonSerializer.SerializeToElement(record, json));
+        var frames = await new Wirer(host).GetAsync(host);
+        Assert.All(frames, frame =>
+        {
+            // GetRawText preserves the received frame's escapes, unlike reserialization.
+            var bytes = System.Text.Encoding.UTF8.GetByteCount(frame.GetRawText());
+            Assert.True(bytes <= AgentBridge.Relay.RosterFields.MaxFrameBytes, $"received {bytes} bytes");
+        });
+        Assert.Equal(64, Assert.Single(frames, f => f.TryGetProperty("record", out _)).GetProperty("record").GetProperty("sessions").GetArrayLength());
+    }
+
+    [Fact]
     public async Task RegistryPutAsync_publishes_its_hosts_record_and_refuses_a_different_machine()
     {
         await using var relay = await TestRelay.StartAsync();

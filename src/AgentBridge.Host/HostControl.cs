@@ -31,6 +31,7 @@ public sealed class HostControlOptions
     public Func<string?> AgentHaBridge { get; init; } = () => null;
     // What Home Assistant's refusals of this machine say now (HaAuthGuard.Problem), or null.
     public Func<string?> HomeAssistant { get; init; } = () => null;
+    public Func<FleetPublicationStatus?> FleetPublication { get; init; } = () => null;
     // GitHub's device flow through a relay: (relay, show(code, uri), ct) -> the account.
     public required Func<Uri, Action<string, string>, CancellationToken, Task<SignInResult>> SignIn { get; init; }
     // Keeps a finished sign-in (the profile's account and relay) and starts using it.
