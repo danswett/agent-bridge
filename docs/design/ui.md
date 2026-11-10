@@ -1184,7 +1184,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     list item numbered 1 to N in a set of N, none -1 ([app-windows.md](../app-windows.md)).
 - **Your messages:** a bubble at the right edge of the conversation's column (card fill,
   platform radius), at most 85% of the column's width, so a short message beside a short reply
-  is still at the right (#255).
+  is still at the right (#255). The same in the stored turns above the live exchange, in the
+  Windows app as in the PWA (#1735).
 - **A prompt you didn't type** (#489): a schedule's (`activity.userMessageFrom` `schedule`), another
   agent's (`agent`), or one the host knows only as not yours (`other`, and any other text a
   client doesn't know). It is **never a bubble**, and never at the right, which is yours only.
