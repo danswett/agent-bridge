@@ -62,6 +62,23 @@
 }
 /* Installed on iOS or iPadOS, a tap is a tap: no wait to see whether it is a double tap. */
 :root[data-standalone="true"]:is([data-platform="ios"], [data-platform="ipados"]) { touch-action: manipulation; }
+/* The top edge. iOS and iPadOS 26.1 and later blur the top of an installed web app, and a page
+   cannot switch that off. WebKit leaves it out when the page's top edge is a real, fixed, opaque
+   element at the top, at least 6 px tall and most of the window wide. On a phone the sticky app
+   bar is that edge. In the wide layout it was static in the grid, so on an iPad its mark, search
+   and status were blurred: there, installed, it is fixed in the very box it had, so nothing moves,
+   and a strip in the shell's colour fills any inset above it. The threshold comes from field
+   reports (WebKit bugs 295569 and 317153), not an Apple document. */
+.top-edge { display: none; }
+@media (min-width: 760px) {
+  :root[data-standalone="true"]:is([data-platform="ios"], [data-platform="ipados"]) .appbar {
+    position: fixed; top: var(--safe-top); left: var(--safe-left); right: var(--safe-right);
+  }
+  :root[data-standalone="true"]:is([data-platform="ios"], [data-platform="ipados"]) .top-edge {
+    display: block; position: fixed; top: 0; left: 0; right: 0; z-index: 20;
+    height: var(--safe-top); background: var(--ab-shell); pointer-events: none;
+  }
+}
 @media (max-width: 759px) {
   :root {
     --type-title: max(11px, calc(24px * var(--text-scale)));
