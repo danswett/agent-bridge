@@ -20,13 +20,23 @@ public static partial class ShownText
     // paragraph separators, and every default-ignorable code point.
     public static bool HasHidden(string text)
     {
+        var blankBase = true;
         for (var i = 0; i < text.Length;)
         {
-            if (Rune.DecodeFromUtf16(text.AsSpan(i), out var r, out var n) != OperationStatus.Done || Hidden(r)) { return true; }
+            if (Rune.DecodeFromUtf16(text.AsSpan(i), out var r, out var n) != OperationStatus.Done || Hidden(r) || (blankBase && IsMark(r))) { return true; }
+            blankBase = NextBase(r, blankBase);
             i += n;
         }
         return false;
     }
+
+    // A combining mark whose base is whitespace or the start of a line draws on nothing, or on a
+    // neighbour, as the app's HiddenText: `true \u0307#; echo RAN` (#555). A mark after a visible
+    // character is an accent and stays as written.
+    static bool IsMark(Rune r) => Rune.GetUnicodeCategory(r) is UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark;
+
+    // What the next mark would sit on: a mark keeps the base it had, so a run of them after a space is all hidden.
+    static bool NextBase(Rune r, bool blankBase) => IsMark(r) ? blankBase : Rune.IsWhiteSpace(r);
 
     // Letters of the right-to-left scripts reorder what is drawn around them without any control:
     // three Hebrew letters before `; rm -rf / #` show its comment marker first.
@@ -108,6 +118,7 @@ public static partial class ShownText
         if (!HasHidden(text) && !(rightToLeft && HasRightToLeft(text))) { return text; }
         var b = new StringBuilder(text.Length + 16);
         void Mark(int start) => marks?.Add((start, b.Length - start));
+        var blankBase = true;
         for (var i = 0; i < text.Length;)
         {
             var at = b.Length;
@@ -118,12 +129,13 @@ public static partial class ShownText
                 i += Math.Max(n, 1);
                 continue;
             }
-            if (Hidden(r) || (rightToLeft && HasRightToLeft(r.ToString())))
+            if (Hidden(r) || (blankBase && IsMark(r)) || (rightToLeft && HasRightToLeft(r.ToString())))
             {
                 b.Append(r.Value > 0xFFFF ? $"\\u{{{r.Value:X}}}" : $"\\u{r.Value:X4}");
                 Mark(at);
             }
             else { b.Append(r.ToString()); }
+            blankBase = NextBase(r, blankBase);
             i += n;
         }
         return b.ToString();
@@ -149,20 +161,36 @@ public static partial class ShownText
     // A pair of surrogate escapes is one character, as JSON writes one past the first plane
     // (`\uD83D\uDE00` in a tool's arguments): read as that character, not as two unpaired halves, which
     // would refuse an emoji. A half on its own still stands for itself.
-    public static string Unreveal(string text) => !text.Contains("\\u", StringComparison.Ordinal) ? text : Escape().Replace(text, m =>
+    public static string Unreveal(string text) => !text.Contains("\\u", StringComparison.Ordinal) ? text : Unreveal(text, Escape());
+
+    // A mark's escape is read back only where the mark would be hidden: after whitespace, a line
+    // start, or another such mark, judged on the text as it reads back (#555).
+    static string Unreveal(string text, Regex escape)
     {
-        if (m.Groups["high"].Success)
+        var prevEnd = -1;
+        var prevBlank = true;
+        return escape.Replace(text, m =>
         {
-            var pair = char.ConvertToUtf32((char)int.Parse(m.Groups["high"].Value, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture),
-                (char)int.Parse(m.Groups["low"].Value, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture));
-            var c = new Rune(pair);
-            return Hidden(c) || HasRightToLeft(c.ToString()) ? c.ToString() : m.Value;
-        }
-        return !int.TryParse(m.Groups["hex"].Value, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var v) ? m.Value
-            : v is >= 0xD800 and <= 0xDFFF ? ((char)v).ToString()
-            : Rune.TryCreate(v, out var r) && (Hidden(r) || HasRightToLeft(r.ToString())) ? r.ToString()
-            : m.Value;
-    });
+            var blankBase = m.Index == prevEnd ? prevBlank : m.Index == 0 || (Rune.DecodeLastFromUtf16(text.AsSpan(0, m.Index), out var before, out _) == OperationStatus.Done && Rune.IsWhiteSpace(before));
+            prevEnd = m.Index + m.Length;
+            prevBlank = blankBase;
+            if (m.Groups["high"].Success)
+            {
+                var pair = char.ConvertToUtf32((char)int.Parse(m.Groups["high"].Value, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture),
+                    (char)int.Parse(m.Groups["low"].Value, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture));
+                var c = new Rune(pair);
+                var hiddenPair = Hidden(c) || (blankBase && IsMark(c)) || HasRightToLeft(c.ToString());
+                prevBlank = hiddenPair ? NextBase(c, blankBase) : false;
+                return hiddenPair ? c.ToString() : m.Value;
+            }
+            if (!int.TryParse(m.Groups["hex"].Value, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var v)) { prevBlank = false; return m.Value; }
+            if (v is >= 0xD800 and <= 0xDFFF) { prevBlank = false; return ((char)v).ToString(); }
+            if (!Rune.TryCreate(v, out var r)) { prevBlank = false; return m.Value; }
+            var hiddenOne = Hidden(r) || (blankBase && IsMark(r)) || HasRightToLeft(r.ToString());
+            prevBlank = hiddenOne ? NextBase(r, blankBase) : false;
+            return hiddenOne ? r.ToString() : m.Value;
+        });
+    }
 
     public const string HiddenNote = "Contains hidden characters";
     public const string RightToLeftNote = "Contains right-to-left text";

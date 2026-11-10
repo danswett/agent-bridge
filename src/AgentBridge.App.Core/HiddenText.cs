@@ -17,13 +17,23 @@ public static class HiddenText
     // U+0020, and U+2800 (pwa/js/hidden-text.js HIDDEN).
     public static bool HasHidden(string text)
     {
+        var blankBase = true;
         for (var i = 0; i < text.Length;)
         {
-            if (Rune.DecodeFromUtf16(text.AsSpan(i), out var r, out var n) != OperationStatus.Done || Hidden(r)) { return true; }
+            if (Rune.DecodeFromUtf16(text.AsSpan(i), out var r, out var n) != OperationStatus.Done || Hidden(r) || (blankBase && IsMark(r))) { return true; }
+            blankBase = NextBase(r, blankBase);
             i += n;
         }
         return false;
     }
+
+    // A combining mark whose base is whitespace or the start of a line draws on nothing, or on a
+    // neighbour: `true \u0307#; echo RAN` drew its `#` as part of a comment while a shell ran the
+    // echo. A mark after a visible character is an accent and stays as written (ui.md §6.4).
+    static bool IsMark(Rune r) => Rune.GetUnicodeCategory(r) is UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark;
+
+    // What the next mark would sit on: a mark keeps the base it had, so a run of them after a space is all hidden.
+    static bool NextBase(Rune r, bool blankBase) => IsMark(r) ? blankBase : Rune.IsWhiteSpace(r);
 
     // The right-to-left blocks: Hebrew to Arabic Extended, their presentation forms, and the
     // supplementary planes' right-to-left ranges (pwa/js/needs-you.js RTL).
@@ -80,6 +90,7 @@ public static class HiddenText
     public static string Reveal(string text, bool rightToLeft = false)
     {
         var b = new StringBuilder(text.Length);
+        var blankBase = true;
         for (var i = 0; i < text.Length;)
         {
             if (Rune.DecodeFromUtf16(text.AsSpan(i), out var r, out var n) != OperationStatus.Done)
@@ -88,7 +99,8 @@ public static class HiddenText
                 i += Math.Max(n, 1);
                 continue;
             }
-            if (Hidden(r) || (rightToLeft && RightToLeft(r))) { b.Append(r.Value > 0xFFFF ? $"\\u{{{r.Value:X}}}" : $"\\u{r.Value:X4}"); } else { b.Append(r.ToString()); }
+            if (Hidden(r) || (blankBase && IsMark(r)) || (rightToLeft && RightToLeft(r))) { b.Append(r.Value > 0xFFFF ? $"\\u{{{r.Value:X}}}" : $"\\u{r.Value:X4}"); } else { b.Append(r.ToString()); }
+            blankBase = NextBase(r, blankBase);
             i += n;
         }
         return b.ToString();

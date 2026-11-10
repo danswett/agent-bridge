@@ -1587,7 +1587,13 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   Unicode space but the space itself (U+00A0, U+1680, U+2000–U+200A, U+202F, U+205F, U+3000) and
   the braille blank U+2800, besides the Hangul fillers and U+17B4/U+17B5, which are
   default-ignorable. Drawn blank, `true\u00A0#; curl … | sh` read as a comment, and bash ran the
-  `curl`. A tab is drawn as a tab. A look-alike that draws visibly, such as the fullwidth `＃`
+  `curl`. A tab is drawn as a tab. A combining mark (Unicode `\p{M}`) whose base is whitespace
+  or the start of a line is hidden too, and drawn as an escape (#555): it has no visible base to
+  draw on, so it draws as nothing or on a neighbour, and `true \u0307#; echo RAN` read as a
+  comment while a shell ran the `echo`. A run of marks after such a base is all hidden; a mark
+  after a visible character, such as an accented `é`, is drawn as itself. This is the one narrow
+  exception to the look-alike rule that follows: a mark with no visible base is not a visible
+  look-alike. A look-alike that draws visibly, such as the fullwidth `＃`
   (U+FF03), is drawn as itself: no list of them is complete, and escaping every one would make
   Chinese, Japanese and Korean text in code unreadable, so reading them is the person's, as
   telling `0` from `O` is.
