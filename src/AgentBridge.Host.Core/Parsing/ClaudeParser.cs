@@ -39,7 +39,11 @@ namespace AgentBridge.Host.Core.Parsing;
 //     queue's "remove" (reason "delivered_to_agent"). The delivery is marked as Claude's
 //     (origin.kind "task-notification", turnOrigin "task_notification"); the queue is not, and a
 //     prompt the person types while the agent works is queued too, as "human" when delivered.
-//     So only a marked delivery, or a remove delivering a notice queued earlier, ends anything.
+//     A notice that reaches the main agent mid-turn is written as an attachment entry instead
+//     (type "queued_command", commandMode "task-notification", 2.1.317), after a remove with
+//     reason "absorbed_mid_turn" that is not read.
+//     So only a marked delivery, or a remove or marked attachment delivering a notice queued
+//     earlier, ends anything.
 //     An agent notifies only once none of its own background agents is
 //     live, and notifies again each time a message (SendMessage, as its launch says) has
 //     woken it and it stops.
@@ -58,6 +62,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         // A delegate's or a background command's end, and a message waking a delegate: an
         // agent started long before the window is still listed as it is now.
         Marker("\"queue-operation\""),
+        Marker("\"queued_command\""),
         Marker("\"SendMessage\""),
     ];
 
@@ -193,6 +198,12 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                     // Delivered to the sub-agent that started it, not to the main agent.
                     case "remove" when Json.Str(e, "reason") == "delivered_to_agent": Delivered(queued, at, confirmed: false); break;
                 }
+                break;
+            // A notice delivered mid-turn (2.1.317): no user entry, an attachment marked by both its
+            // type and commandMode. Like a remove, it ends only a notice queued earlier.
+            case "attachment" when Json.Obj(e, "attachment") is { } a && Json.Str(a, "type") == "queued_command"
+                && Json.Str(a, "commandMode") == "task-notification" && Json.Str(a, "prompt") is { } prompt && IsNoticeText(prompt):
+                Delivered(prompt, at, confirmed: false);
                 break;
             case "user":
                 {

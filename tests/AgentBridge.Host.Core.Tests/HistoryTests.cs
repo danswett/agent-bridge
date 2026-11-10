@@ -1742,7 +1742,7 @@ public class HistoryTests
             case "claude":
                 transcript = f.ClaudeTranscript(Id);
                 Directory.CreateDirectory(Path.GetDirectoryName(transcript)!);
-                File.Copy(Directory.GetFiles(recorded, "*.jsonl").Single(), transcript);
+                File.Copy(Directory.GetFiles(recorded, "0e0fb277-*.jsonl").Single(), transcript);
                 f.ClaudeRegistration(Id, 900, transcript);
                 f.Processes.Run(AgentKind.Claude, 900);
                 break;
