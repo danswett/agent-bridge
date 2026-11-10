@@ -113,6 +113,19 @@ public sealed class FleetPublisherTests
         Assert.Empty(expired.Sessions);
     }
 
+    [Fact, Trait("Category", "Network")]
+    public async Task A_fully_named_snapshot_survives_transport_encoding_within_the_relays_record_limit()
+    {
+        source.Sessions = Enumerable.Range(1, 64).Select(NewSession).ToList();
+        await using var relay = await TestRelay.StartAsync();
+        await using var host = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "publisher", "host");
+        var displayName = new string('+', 64);
+        Assert.True(await new FleetPublisher(source, host.Id, _ => displayName, time).PublishAsync(host.Relay.RegistryPutAsync));
+        var sessions = Assert.Single(await host.Relay.RegistryGetAsync()).GetProperty("record").GetProperty("sessions");
+        Assert.Equal(64, sessions.GetArrayLength());
+        Assert.All(sessions.EnumerateArray(), s => Assert.Equal(displayName, s.GetProperty("name").GetString()));
+    }
+
     [WindowsFact("FleetList agent credentials use Windows process attribution")]
     public async Task The_real_fleet_list_returns_every_published_session_including_unnamed_ones()
     {
