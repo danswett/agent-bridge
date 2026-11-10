@@ -50,6 +50,7 @@ import { PromptMemory, disclosureName, promptOrigin } from '../prompt-origin.js'
 import { holdKey } from './hold.js';
 import { CONNECTION_CHANGED } from '../channels.js';
 import { HistoryView } from './history-view.js';
+import { sentMessage, setSentMessage } from './sent-message.js';
 import { HISTORY } from '../history.js';
 import { MoveStrip } from './move-view.js';
 import { moveView, moves } from '../move.js';
@@ -610,8 +611,9 @@ export class SessionCard {
     });
 
     // The conversation (ui.md §6.4): one voice per line, the main agent's.
-    e.userText = h('p', { class: 'plain' });
-    e.user = h('div', { class: 'user-message', hidden: true }, h('span', { class: 'sr-only' }, 'Your last message: '), h('div', { class: 'bubble' }, e.userText));
+    e.userBubble = sentMessage('', 'bubble');
+    e.userText = e.userBubble.querySelector('.plain');
+    e.user = h('div', { class: 'user-message', hidden: true }, h('span', { class: 'sr-only' }, 'Your last message: '), e.userBubble);
     // A prompt the person didn't type (#489, §6.4): never a bubble. At the column's start, a label
     // line in agent colour (a clock for a schedule, the driven diamond for an agent), read before
     // the prompt; then two lines of it, and Show prompt for the rest, inside an agent rule.
@@ -890,9 +892,9 @@ export class SessionCard {
     e.agentLabel.textContent = AGENT_NAME[s.agent] ?? AGENT_NAME.unknown;
     this.#renderDelegates(s);
     e.agentBlock.hidden = !voice.response && !voice.responseDropped && !voice.reasoning && !t && e.events.hidden;
-    const echoed = (s.activity.userMessage ?? '') !== e.userText.textContent;
+    const echoed = this.#changed('userMessage', s.activity.userMessage ?? '');
     e.user.hidden = !s.activity.userMessage;
-    e.userText.textContent = s.activity.userMessage ?? '';
+    setSentMessage(e.userBubble, s.activity.userMessage ?? '');
     this.#renderPrompt(s);
     // Send acknowledged (ui.md §5.3): your message, back from the machine, rises into place; a
     // prompt you didn't type is no bubble of yours and never rises.
