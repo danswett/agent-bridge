@@ -2,9 +2,9 @@
 // in the order the C# library (src/AgentBridge.Roster/Entry.cs, EntryBody.cs) runs them, so an
 // input with one defect is refused with the same code by both. Async only because WebCrypto is.
 import { RosterFormatError, REFUSAL } from './refusal.js';
-import { base64Url, fromBase64Url, tryBase64Url, isId, hex, compare } from './codec.js';
+import { base64Url, fromBase64Url, tryBase64Url, isId, hex, compare, equal } from './codec.js';
 import { frame, utf8, sha256, LABEL } from './framing.js';
-import { point, checkRosterSignature } from './p256.js';
+import { point, verify, checkRosterSignature } from './p256.js';
 import { parseStrict, members, object, string, bool, integer, scalars, utf8Bytes, hasControl } from './strict-json.js';
 
 export const MAX_BYTES = 8 * 1024;
@@ -57,10 +57,13 @@ export async function parseBody(bytes) {
   const root = object(parseStrict(bytes, 'body'), 'body');
   if (!root.has('v')) throw new RosterFormatError(REFUSAL.missing, 'body.v');
   const v = root.get('v');
-  if (v.t !== 'number' || v.raw !== '1') throw new RosterFormatError(REFUSAL.version, 'body.v');
+  // Version 2 is a host's add carrying a `hostSign` key (agent-principals.md §8.10, V1).
+  if (v.t !== 'number' || (v.raw !== '1' && v.raw !== '2')) throw new RosterFormatError(REFUSAL.version, 'body.v');
+  const version = v.raw === '2' ? 2 : 1;
   if (!root.has('op')) throw new RosterFormatError(REFUSAL.missing, 'body.op');
   const op = string(root.get('op'), 'body.op');
   if (!Object.hasOwn(FIELDS, op)) throw new RosterFormatError(REFUSAL.value, 'body.op');
+  if (version === 2 && op !== 'add') throw new RosterFormatError(REFUSAL.version, 'body.v: 2 is only for a host\'s add');
   const [required, optional] = FIELDS[op];
   members(root, [...required, ...optional], ORDER.filter((f) => required.includes(f)), 'body');
 
@@ -75,7 +78,7 @@ export async function parseBody(bytes) {
   const cosigner = root.has('cosigner') ? id(root.get('cosigner'), 'body.cosigner') : null;
   const at = string(root.get('at'), 'body.at');
   if (!isUtc(at)) throw new RosterFormatError(REFUSAL.time, 'body.at');
-  const device = root.has('device') ? await parseDevice(root.get('device')) : null;
+  const device = root.has('device') ? await parseDevice(root.get('device'), version, account, generation) : null;
   const approval = root.has('approval') ? parseApproval(root.get('approval'), op) : null;
   const target = root.has('target') ? parseTarget(root.get('target')) : null;
   const keep = root.has('keep') ? hashes(root.get('keep'), 'body.keep', 0, MAX_KEEP) : [];
@@ -94,7 +97,7 @@ export async function parseBody(bytes) {
     if (target.id === by && (keep.length > 0 || cosigner !== null)) throw new RosterFormatError(REFUSAL.signer, 'a self-removal keeps nothing and has no cosigner');
     if (cosigner !== null && (cosigner === by || cosigner === target.id)) throw new RosterFormatError(REFUSAL.signer, 'a cosigner is neither the signer nor the target');
   }
-  return { op, account, generation, seq, prev, by, cosigner, at, device, approval, target, keep, name, adopt };
+  return { op, version, account, generation, seq, prev, by, cosigner, at, device, approval, target, keep, name, adopt };
 }
 
 export function id(node, what) {
@@ -133,19 +136,25 @@ function deviceName(node, what) {
 
 const DEVICE_ORDER = ['id', 'dh', 'sign', 'signAlg', 'presence', 'webauthn', 'kind', 'platform', 'name'];
 
-async function parseDevice(node) {
+const HOST_V2_ORDER = ['id', 'dh', 'hostSign', 'hostSignAlg', 'hostSignProof', 'kind', 'platform', 'name'];
+
+// What `hostSignProof` signs: F("agent-bridge host key binding v1", account, generation, dh).
+export const hostKeyBinding = (account, generation, dh) => frame(utf8(LABEL.hostKeyBinding), utf8(account), utf8(generation), dh);
+
+async function parseDevice(node, version, account, generation) {
   const d = object(node, 'body.device');
   if (!d.has('kind')) throw new RosterFormatError(REFUSAL.missing, 'body.device.kind');
   const kind = string(d.get('kind'), 'body.device.kind');
   if (!KINDS.includes(kind)) throw new RosterFormatError(REFUSAL.value, 'body.device.kind');
   const person = isPerson(kind);
+  if (version === 2 && person) throw new RosterFormatError(REFUSAL.version, 'body.v: 2 is only for a host\'s add');
   let presence = null;
   if (person) {
     if (!d.has('presence')) throw new RosterFormatError(REFUSAL.missing, 'body.device.presence');
     presence = string(d.get('presence'), 'body.device.presence');
     if (!PRESENCE.includes(presence)) throw new RosterFormatError(REFUSAL.value, 'body.device.presence');
   }
-  const fields = !person ? ['id', 'dh', 'kind', 'platform', 'name']
+  const fields = !person ? (version === 2 ? HOST_V2_ORDER : ['id', 'dh', 'kind', 'platform', 'name'])
     : presence === 'webauthn' ? DEVICE_ORDER
       : ['id', 'dh', 'sign', 'signAlg', 'presence', 'kind', 'platform', 'name'];
   members(d, fields, fields, 'body.device');
@@ -162,10 +171,22 @@ async function parseDevice(node) {
     if (signAlg !== SIGN_ALGORITHM) throw new RosterFormatError(REFUSAL.value, 'body.device.signAlg');
     if (presence === 'webauthn') webauthn = parseCredential(d.get('webauthn'));
   }
+  let hostSign = null;
+  let hostSignAlg = null;
+  let hostSignProof = null;
+  if (version === 2) {
+    hostSign = point(string(d.get('hostSign'), 'body.device.hostSign'), 'body.device.hostSign');
+    hostSignAlg = string(d.get('hostSignAlg'), 'body.device.hostSignAlg');
+    if (hostSignAlg !== SIGN_ALGORITHM) throw new RosterFormatError(REFUSAL.value, 'body.device.hostSignAlg');
+    hostSignProof = fromBase64Url(string(d.get('hostSignProof'), 'body.device.hostSignProof'), 'body.device.hostSignProof');
+    checkRosterSignature(hostSignProof, 'body.device.hostSignProof');
+    if (equal(hostSign, dh)) throw new RosterFormatError(REFUSAL.device, 'body.device.hostSign is its dh key');
+  }
   const platform = string(d.get('platform'), 'body.device.platform');
   if (!PLATFORMS.includes(platform)) throw new RosterFormatError(REFUSAL.value, 'body.device.platform');
   const name = deviceName(d.get('name'), 'body.device.name');
-  return { id: deviceIdText, dh, sign, signAlg, presence, webauthn, kind, platform, name };
+  if (hostSign && !(await verify(hostSign, hostKeyBinding(account, generation, dh), hostSignProof))) throw new RosterFormatError(REFUSAL.hostProof, 'body.device.hostSignProof');
+  return { id: deviceIdText, dh, sign, signAlg, presence, webauthn, kind, platform, name, hostSign, hostSignAlg, hostSignProof };
 }
 
 const CREDENTIAL_FIELDS = ['rpId', 'credentialId', 'key', 'attested', 'backupEligible'];

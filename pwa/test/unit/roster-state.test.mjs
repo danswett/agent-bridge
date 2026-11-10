@@ -25,7 +25,7 @@ async function replay(scenario) {
     labelOf.set(hex(parsed.hash), e.label);
   }
   let now = 0;
-  const v = new RosterVerifier(vectors.account, vectors.generation, () => now, { addCap: scenario.limits?.addCap });
+  const v = new RosterVerifier(vectors.account, vectors.generation, () => now, { addCap: scenario.limits?.addCap, acceptHostSign: scenario.acceptHostSign === true });
   const servingNames = () => sorted([...v.serving.keys()].map((id) => nameOf.get(id)));
   const steps = [];
   for (const step of scenario.steps) {

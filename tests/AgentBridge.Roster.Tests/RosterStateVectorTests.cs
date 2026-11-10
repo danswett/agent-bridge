@@ -13,7 +13,7 @@ public sealed class RosterStateVectorTests
 
     sealed record Step(string? Offer = null, double? Hours = null, string? Adopt = null);
 
-    sealed record Scenario(string Name, string About, Func<World> Build, Func<World, Step[]>? Steps = null, int? AddCap = null);
+    sealed record Scenario(string Name, string About, Func<World> Build, Func<World, Step[]>? Steps = null, int? AddCap = null, bool AcceptHostSign = false);
 
     static Step[] All(World w) => [.. w.Labels.Select(l => new Step(l))];
 
@@ -75,6 +75,61 @@ public sealed class RosterStateVectorTests
                 return w;
             },
             w => [.. All(w), new Step(Hours: 0), new Step(Hours: 73)]);
+        // A host's hostSign key (agent-principals.md §8.10, V1) is a verifier's choice to accept, and
+        // never another device's key.
+        World HostBase()
+        {
+            var w = new World();
+            w.Genesis();
+            w.Add("+A", "G", "A", "G");
+            return w;
+        }
+        yield return new("host-sign-off", "a v2 host add is refused while the verifier has not switched v2 on",
+            () => { var w = HostBase(); w.AddHostV2("+H", "G", "H", "+A"); return w; });
+        yield return new("host-sign", "a v2 host add with its own hostSign is accepted once v2 is on",
+            () => { var w = HostBase(); w.AddHostV2("+H", "G", "H", "+A"); return w; }, AcceptHostSign: true);
+        yield return new("host-sign-is-a-person-sign", "a hostSign equal to a person's sign key is refused",
+            () => { var w = HostBase(); w.AddHostV2("+H", "G", "H", "+A", hostSignOf: "A"); return w; }, AcceptHostSign: true);
+        yield return new("host-sign-is-a-person-dh", "a hostSign equal to a person's dh key is refused",
+            () => { var w = HostBase(); w.AddHostV2("+H", "G", "H", "+A", hostSignOf: "A", hostSignIsDh: true); return w; }, AcceptHostSign: true);
+        yield return new("host-sign-is-another-hosts", "a hostSign equal to another host's hostSign is refused",
+            () => { var w = HostBase(); w.AddHostV2("+H", "G", "H", "+A"); w.AddHostV2("+I", "G", "I", "+H", hostSignOf: "H"); return w; }, AcceptHostSign: true);
+        yield return new("later-key-is-a-host-sign", "a person's add whose sign key is an active host's hostSign is refused",
+            () => { var w = HostBase(); w.AddHostV2("+H", "G", "H", "+A"); w.Add("+P", "G", "P", "+H", signWith: "H"); return w; }, AcceptHostSign: true);
+        yield return new("sibling-key-is-a-host-sign", "sibling adds, a host and a person sharing its hostSign as a sign key, are each accepted but cannot be merged",
+            () => { var w = HostBase(); w.AddHostV2("+H", "G", "H", "+A"); w.Add("+P", "G", "P", "+A", signWith: "H"); w.Merge("m", "G", ["+H", "+P"]); return w; }, AcceptHostSign: true);
+        yield return new("readded-and-host-key", "an add that is both a re-add and shares a hostSign is refused as readded",
+            () => { var w = HostBase(); w.AddHostV2("+H", "G", "H", "+A"); w.Add("+A2", "G", "A", "+H", signWith: "H"); return w; }, AcceptHostSign: true);
+        yield return new("readded-and-host-key-host-first", "a re-add that shares a hostSign is refused as readded even when the host's add comes before the re-added device's",
+            () =>
+            {
+                var w = new World();
+                w.Genesis();
+                w.AddHostV2("+H", "G", "H", "G");
+                w.Add("+A", "G", "A", "+H");
+                w.Add("+A2", "G", "A", "+A", signWith: "H");
+                return w;
+            }, AcceptHostSign: true);
+        yield return new("sibling-person-signs-after-host", "once both siblings have arrived, the person holding a host's hostSign key can sign nothing; the roster's other devices still can",
+            () =>
+            {
+                var w = HostBase();
+                w.AddHostV2("+H", "G", "H", "+A");
+                w.Add("+P", "G", "P", "+A", signWith: "H");
+                w.Rename("nP", "P", "+P", "+P", "Laptop", signAs: "H");
+                w.Rename("nA", "G", "+A", "+A", "Desk");
+                return w;
+            }, AcceptHostSign: true);
+        yield return new("sibling-person-signs-after-host-reversed", "the same, with the person's add delivered before the host's",
+            () =>
+            {
+                var w = HostBase();
+                w.Add("+P", "G", "P", "+A", signWith: "H");
+                w.AddHostV2("+H", "G", "H", "+A");
+                w.Rename("nP", "P", "+P", "+P", "Laptop", signAs: "H");
+                w.Rename("nA", "G", "+A", "+A", "Desk");
+                return w;
+            }, AcceptHostSign: true);
         yield return new("ninth-rename", "the ninth rename of one add is refused",
             () =>
             {
@@ -205,7 +260,7 @@ public sealed class RosterStateVectorTests
     {
         var w = scenario.Build();
         var steps = (scenario.Steps ?? All)(w);
-        var v = new RosterVerifier(Account, Generation, () => w.Now) { AddCap = scenario.AddCap ?? RosterVerifier.MaxAdds };
+        var v = new RosterVerifier(Account, Generation, () => w.Now) { AddCap = scenario.AddCap ?? RosterVerifier.MaxAdds, AcceptHostSign = scenario.AcceptHostSign };
         var devices = new JsonObject();
         var entries = new JsonArray();
         foreach (var l in w.Labels)
@@ -254,6 +309,7 @@ public sealed class RosterStateVectorTests
             ["state"] = Snapshot(w, v),
         };
         if (scenario.AddCap is { } cap) { result.Insert(3, "limits", new JsonObject { ["addCap"] = cap }); }
+        if (scenario.AcceptHostSign) { result.Insert(2, "acceptHostSign", true); }
         return result;
     }
 
@@ -290,7 +346,7 @@ public sealed class RosterStateVectorTests
 
         // Every refusal reason of the acceptance rule, each shown by a step: one added to the verifier needs a scenario and a place here.
         // The person commands' and vetoes' reasons (R1c) have their own vectors, roster-commands.json.
-        string[] reasons = ["parent", "account", "generation", "genesis", "seq", "signer", "signature", "presence", "readded", "target", "seniority", "cosign", "keep", "confirm", "merge", "active-cap", "cap", "budget", "evidence"];
+        string[] reasons = ["parent", "account", "generation", "genesis", "seq", "signer", "signature", "presence", "readded", "target", "seniority", "cosign", "keep", "confirm", "merge", "active-cap", "cap", "budget", "evidence", "host-key", "version"];
         Assert.Equal(reasons.Order(StringComparer.Ordinal), typeof(Invalid).GetFields().Where(f => !CommandReasons.Contains(f.Name)).Select(f => (string)f.GetRawConstantValue()!).Order(StringComparer.Ordinal));
         var shown = byName.Values.SelectMany(s => s["steps"]!.AsArray()).Select(s => s!["reason"]?.GetValue<string>()).Where(r => r is not null).Distinct().Order(StringComparer.Ordinal);
         Assert.Equal(reasons.Order(StringComparer.Ordinal), shown);

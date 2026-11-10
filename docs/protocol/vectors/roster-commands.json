@@ -559,6 +559,164 @@
       "refusal": "time"
     }
   ],
+  "collisions": [
+    {
+      "name": "host-first",
+      "about": "the host's add arrives before the person's, which shares its hostSign as a sign key",
+      "checkedAfterHours": 80,
+      "devices": {
+        "G": "425207365333a6bd3e6ba85b37981cee",
+        "A": "0d78e6f5de08cfe1e2bfa6a4e5065024",
+        "H": "c69c83474da2ac399b19623b26479f44",
+        "Q": "0f782d49ffc8082b3d17ab24a76c7095"
+      },
+      "entries": [
+        {
+          "label": "G",
+          "hash": "h8R764RL38lL-BgC_2L3XwtFJaMhF_hrSWHv_2LOCtI",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImdlbmVzaXMiLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInNlcSI6MCwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowMFoiLCJkZXZpY2UiOnsiaWQiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImRoIjoiQkE4c0VkZ2JuYU52NDdqMUlRYkxCR2JUNXZnekhQMnFYT1l4OXl5Q040MFNuUVpjSXVyVE43Y1hMclFuZ2Nyc0J6VS1HRzFFa3pnUGRhdTltclVoTTFzIiwic2lnbiI6IkJJRW1Lb0REWk9zZHFqMVMxLTFrZ0d5b2k2ZHJnUVE1RExYaFd3LXJvdWdfck40SXBfT0VXaDNHYUhRTEpKUUJVM0lwWG9hZVZfNUsyZlJKYWtGM2lIcyIsInNpZ25BbGciOiJwMjU2LXNoYTI1Ni1kZXIiLCJwcmVzZW5jZSI6ImtleSIsImtpbmQiOiJwaG9uZSIsInBsYXRmb3JtIjoiaW9zIiwibmFtZSI6IkcifSwiYXBwcm92YWwiOnsibWV0aG9kIjoiZ2VuZXNpcyJ9fQ\",\"sig\":\"MEUCIQDwJYK2Bw7DzqfsYaTjisdFiC5BCAodf9r-8WDE0osTxgIgdKd19XOoaKbIr233x6H54hK_y_kXT3z-qaigvVMdlDg\"}"
+        },
+        {
+          "label": "+A",
+          "hash": "VQc-MnMuaqySdka1x2KgzE880wz0SUNPpxd2jlvrxfk",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImFkZCIsImFjY291bnQiOiJvd25lckBleGFtcGxlIiwiZ2VuZXJhdGlvbiI6ImFiNGZiM2NjMjRhM2NjOTkyNDlhYjA2OTRjMzYxYTg4Iiwic2VxIjoxLCJwcmV2IjpbImg4Ujc2NFJMMzhsTC1CZ0NfMkwzWHd0RkphTWhGX2hyU1dIdl8yTE9DdEkiXSwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowMVoiLCJkZXZpY2UiOnsiaWQiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsImRoIjoiQkRlclJQcUI0anYycjFjRUFtNDBkaUoxR2xQdHFpd0lad2tkcnphNnppTkpIUGhMaWdRMEVsdjBnTkxxU3lHV3ZMX0gwUnNqU2piOHpBSWV1NVdXa2NJIiwic2lnbiI6IkJGckVLRmM5WTJONEJJNVE3TndtbmE4WnhCaFlnUjFGQmN5SktqZjZOWUFCeUlMaHZtX2x3UHpfVFpMalRRSWQ1NHRhUlZYcXlDc0d4SDR0UzYxb3ZtYyIsInNpZ25BbGciOiJwMjU2LXNoYTI1Ni1kZXIiLCJwcmVzZW5jZSI6ImtleSIsImtpbmQiOiJwaG9uZSIsInBsYXRmb3JtIjoiaW9zIiwibmFtZSI6IkEifSwiYXBwcm92YWwiOnsibWV0aG9kIjoiY29kZSIsInRyYW5zY3JpcHQiOiJGZXdvZ21fanZSeFN2b3d3TzRnQllzeURCcnpBV0FvMnlTdFR4MVoxLVlRIn19\",\"sig\":\"MEUCIQC7Q_App61I6SMYEt0OMis4UEab78ORtDNVX5PSL5DlDQIgdIfcopwNLlRg7xEQcISRnu69w3_LyBakWHMRk-4r3oc\"}"
+        },
+        {
+          "label": "cA",
+          "hash": "Jq3Zmgv8Pq_DfBXXfI4_duMWu4nlNuGlxvUuud9kdr4",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImNvbmZpcm0iLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInNlcSI6MiwicHJldiI6WyJWUWMtTW5NdWFxeVNka2ExeDJLZ3pFODgwd3owU1VOUHB4ZDJqbHZyeGZrIl0sImJ5IjoiNDI1MjA3MzY1MzMzYTZiZDNlNmJhODViMzc5ODFjZWUiLCJhdCI6IjIwMjYtMTEtMDRUMTA6MDA6MDJaIiwidGFyZ2V0Ijp7ImlkIjoiMGQ3OGU2ZjVkZTA4Y2ZlMWUyYmZhNmE0ZTUwNjUwMjQiLCJhZGQiOiJWUWMtTW5NdWFxeVNka2ExeDJLZ3pFODgwd3owU1VOUHB4ZDJqbHZyeGZrIn19\",\"sig\":\"MEMCIE8i5zvB8deOxnbD8yGsKri0i5URJv4X2wyo2J-aKTHXAh9MBUKEN1WzF3YY76RE3h9NPHBxrVxe295Y3l_ahzfX\"}"
+        },
+        {
+          "label": "+H",
+          "hash": "1txbtX-eRGKYlMk4OMdb8X2Uw4n54wwS-NLnEuF7tWA",
+          "wrapper": "{\"body\":\"eyJ2IjoyLCJvcCI6ImFkZCIsImFjY291bnQiOiJvd25lckBleGFtcGxlIiwiZ2VuZXJhdGlvbiI6ImFiNGZiM2NjMjRhM2NjOTkyNDlhYjA2OTRjMzYxYTg4Iiwic2VxIjozLCJwcmV2IjpbIkpxM1ptZ3Y4UHFfRGZCWFhmSTRfZHVNV3U0bmxOdUdseHZVdXVkOWtkcjQiXSwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowM1oiLCJkZXZpY2UiOnsiaWQiOiJjNjljODM0NzRkYTJhYzM5OWIxOTYyM2IyNjQ3OWY0NCIsImRoIjoiQkVMb2tEdHljR01FeHpVNlo1d3J4RDlvZFdlT2RRa2Yyb2N3dktlNnEtRzV4Rmx1Mkx4dDVEellqOVlWREFVbmlkbEthTldDVGJRcFA0SG5XcE5qdWZJIiwiaG9zdFNpZ24iOiJCRkhyOGFjTWJiamlHVkd3T1NJemxkQTZVUDA0aWZzLTFxNXU4NzhpaUgwLVFRQTJJenhoRmc2OGNEMG9jTU1ROWJiRzZtZGdwY0Nfd3JJRkk5ZVBSeW8iLCJob3N0U2lnbkFsZyI6InAyNTYtc2hhMjU2LWRlciIsImhvc3RTaWduUHJvb2YiOiJNRVVDSVFDazU2bWwwN1FIRVE1LURadWtJR1M0Q2ZpY0dKc1hXT1BsWnNlVF80THMtZ0lnQ3I2MjlzeDdlYzR2NS0zN1U0X3hRX0xkVFZsUVl1ZTZBb3pzR0tXc09wVSIsImtpbmQiOiJob3N0IiwicGxhdGZvcm0iOiJsaW51eCIsIm5hbWUiOiJIIn0sImFwcHJvdmFsIjp7Im1ldGhvZCI6ImNvZGUiLCJ0cmFuc2NyaXB0IjoiamUwN3ZTajhvVnpEN3dNTWd0MzY0Z0lNenhla0NSdXFMZEVRQ0NkY3dRNCJ9fQ\",\"sig\":\"MEQCIA8VaMXvOiD8s-Acck0N_xH4vDojWXWBi7MX56dr9DO-AiA1YUAR5h3CZPURLAlCOqfX1Z8ldgtJtIMedjZVYO5Y1g\"}"
+        },
+        {
+          "label": "+Q",
+          "hash": "pqVOSBEfFHsdgWr9FalaMMurValNQCV70Nu6XU4HxGE",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImFkZCIsImFjY291bnQiOiJvd25lckBleGFtcGxlIiwiZ2VuZXJhdGlvbiI6ImFiNGZiM2NjMjRhM2NjOTkyNDlhYjA2OTRjMzYxYTg4Iiwic2VxIjozLCJwcmV2IjpbIkpxM1ptZ3Y4UHFfRGZCWFhmSTRfZHVNV3U0bmxOdUdseHZVdXVkOWtkcjQiXSwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowNFoiLCJkZXZpY2UiOnsiaWQiOiIwZjc4MmQ0OWZmYzgwODJiM2QxN2FiMjRhNzZjNzA5NSIsImRoIjoiQkpTQUpSbGVRdzJvSTAxWGJxV1lUQWx3VzVMV3c1aFRMb3NzSFdIemx6dkdQU3Rsc1BmMDdsR2k1X2FXR0U1UWdKdUZHMlZ5QUdaR3FGUm5XU09VNWtvIiwic2lnbiI6IkJGSHI4YWNNYmJqaUdWR3dPU0l6bGRBNlVQMDRpZnMtMXE1dTg3OGlpSDAtUVFBMkl6eGhGZzY4Y0Qwb2NNTVE5YmJHNm1kZ3BjQ193cklGSTllUFJ5byIsInNpZ25BbGciOiJwMjU2LXNoYTI1Ni1kZXIiLCJwcmVzZW5jZSI6ImtleSIsImtpbmQiOiJwaG9uZSIsInBsYXRmb3JtIjoiaW9zIiwibmFtZSI6IlEifSwiYXBwcm92YWwiOnsibWV0aG9kIjoiY29kZSIsInRyYW5zY3JpcHQiOiJaRm9KVFFJcXcxaGJER0d4dXF5bm9QZFRWVkhNYnR2N3BKejNCN2d2dzlzIn19\",\"sig\":\"MEQCIEF2vvnHOSSbHW4ndcFVLuctnmDy0NvWfxFgybrI7MAFAiATexc1tX_Dp84kD4zFPalzr9j-3BBK4zDY8OMaP_Ywpw\"}"
+        }
+      ],
+      "vetoes": [
+        {
+          "name": "by-a-key-shared-with-a-host",
+          "about": "a person's veto signed with the key a sibling host holds as its hostSign",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6InZldG8iLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInJlc2V0IjoiSnNnM21NOU1hRFZpU2JmdGdrcUZ6REhwTDB0ZkdxZVBIUFZBYmQ4LTYtVSIsImJ5IjoiMGY3ODJkNDlmZmM4MDgyYjNkMTdhYjI0YTc2YzcwOTUiLCJhdCI6IjIwMjYtMTEtMDRUMTE6MDA6MDBaIn0\",\"sig\":\"MEQCICKope4ckAmdgKsNvCXcuqPfo5VHuq8v2nEro3Ch-odfAiBmWW51VEP0_g445UexMwrfA2P5UdQbokCN2Dj5hLD9DQ\"}",
+          "code": "host-key"
+        },
+        {
+          "name": "by-a-key-of-its-own",
+          "about": "another person's veto, in the same roster",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6InZldG8iLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInJlc2V0IjoiSnNnM21NOU1hRFZpU2JmdGdrcUZ6REhwTDB0ZkdxZVBIUFZBYmQ4LTYtVSIsImJ5IjoiMGQ3OGU2ZjVkZTA4Y2ZlMWUyYmZhNmE0ZTUwNjUwMjQiLCJhdCI6IjIwMjYtMTEtMDRUMTE6MDA6MDBaIn0\",\"sig\":\"MEUCIQCOm1nmVsCqLhNSk9u2lOTpQCufF2muATiOl_yIIIqHVgIgLrw_q5Xw6PeHrqZPcAbSCy2tRB4KQAFm4x_uftCl9jU\"}",
+          "code": null
+        }
+      ],
+      "commands": [
+        {
+          "name": "update-by-a-key-shared-with-a-host",
+          "about": "a person's update command signed with the key a sibling host holds as its hostSign, after probation",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZjc4MmQ0OWZmYzgwODJiM2QxN2FiMjRhNzZjNzA5NSIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsiSnEzWm1ndjhQcV9EZkJYWGZJNF9kdU1XdTRubE51R2x4dlV1dWQ5a2RyNCJdfQ\",\"sig\":\"MEQCIF3hv0ZEF2uJD91AO4kcX4WV8OTOrtWY2CwAQi9LsXzoAiBkYcCz74Fq3Cg23-2THhW6QiM1isZ4a4-oytG3WouqHQ\"}",
+          "context": {
+            "host": "c69c83474da2ac399b19623b26479f44",
+            "action": "update",
+            "now": "2026-11-04T12:00:00Z",
+            "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+          },
+          "code": "host-key"
+        },
+        {
+          "name": "update-by-a-key-of-its-own",
+          "about": "another person's update command, in the same roster",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsiSnEzWm1ndjhQcV9EZkJYWGZJNF9kdU1XdTRubE51R2x4dlV1dWQ5a2RyNCJdfQ\",\"sig\":\"MEQCIAE-iaa2uXcZOEg0kLVv6l1gGFLPaG6wh3g87Fc6RS0KAiBkWJDb1QfSNKCeB6tkeJVvF20Nz-rEzQ9tGNslnv2lSg\"}",
+          "context": {
+            "host": "c69c83474da2ac399b19623b26479f44",
+            "action": "update",
+            "now": "2026-11-04T12:00:00Z",
+            "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+          },
+          "code": null
+        }
+      ]
+    },
+    {
+      "name": "person-first",
+      "about": "the person's add arrives before the host's",
+      "checkedAfterHours": 80,
+      "devices": {
+        "G": "425207365333a6bd3e6ba85b37981cee",
+        "A": "0d78e6f5de08cfe1e2bfa6a4e5065024",
+        "H": "c69c83474da2ac399b19623b26479f44",
+        "Q": "0f782d49ffc8082b3d17ab24a76c7095"
+      },
+      "entries": [
+        {
+          "label": "G",
+          "hash": "h8R764RL38lL-BgC_2L3XwtFJaMhF_hrSWHv_2LOCtI",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImdlbmVzaXMiLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInNlcSI6MCwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowMFoiLCJkZXZpY2UiOnsiaWQiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImRoIjoiQkE4c0VkZ2JuYU52NDdqMUlRYkxCR2JUNXZnekhQMnFYT1l4OXl5Q040MFNuUVpjSXVyVE43Y1hMclFuZ2Nyc0J6VS1HRzFFa3pnUGRhdTltclVoTTFzIiwic2lnbiI6IkJJRW1Lb0REWk9zZHFqMVMxLTFrZ0d5b2k2ZHJnUVE1RExYaFd3LXJvdWdfck40SXBfT0VXaDNHYUhRTEpKUUJVM0lwWG9hZVZfNUsyZlJKYWtGM2lIcyIsInNpZ25BbGciOiJwMjU2LXNoYTI1Ni1kZXIiLCJwcmVzZW5jZSI6ImtleSIsImtpbmQiOiJwaG9uZSIsInBsYXRmb3JtIjoiaW9zIiwibmFtZSI6IkcifSwiYXBwcm92YWwiOnsibWV0aG9kIjoiZ2VuZXNpcyJ9fQ\",\"sig\":\"MEUCIQDwJYK2Bw7DzqfsYaTjisdFiC5BCAodf9r-8WDE0osTxgIgdKd19XOoaKbIr233x6H54hK_y_kXT3z-qaigvVMdlDg\"}"
+        },
+        {
+          "label": "+A",
+          "hash": "VQc-MnMuaqySdka1x2KgzE880wz0SUNPpxd2jlvrxfk",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImFkZCIsImFjY291bnQiOiJvd25lckBleGFtcGxlIiwiZ2VuZXJhdGlvbiI6ImFiNGZiM2NjMjRhM2NjOTkyNDlhYjA2OTRjMzYxYTg4Iiwic2VxIjoxLCJwcmV2IjpbImg4Ujc2NFJMMzhsTC1CZ0NfMkwzWHd0RkphTWhGX2hyU1dIdl8yTE9DdEkiXSwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowMVoiLCJkZXZpY2UiOnsiaWQiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsImRoIjoiQkRlclJQcUI0anYycjFjRUFtNDBkaUoxR2xQdHFpd0lad2tkcnphNnppTkpIUGhMaWdRMEVsdjBnTkxxU3lHV3ZMX0gwUnNqU2piOHpBSWV1NVdXa2NJIiwic2lnbiI6IkJGckVLRmM5WTJONEJJNVE3TndtbmE4WnhCaFlnUjFGQmN5SktqZjZOWUFCeUlMaHZtX2x3UHpfVFpMalRRSWQ1NHRhUlZYcXlDc0d4SDR0UzYxb3ZtYyIsInNpZ25BbGciOiJwMjU2LXNoYTI1Ni1kZXIiLCJwcmVzZW5jZSI6ImtleSIsImtpbmQiOiJwaG9uZSIsInBsYXRmb3JtIjoiaW9zIiwibmFtZSI6IkEifSwiYXBwcm92YWwiOnsibWV0aG9kIjoiY29kZSIsInRyYW5zY3JpcHQiOiJGZXdvZ21fanZSeFN2b3d3TzRnQllzeURCcnpBV0FvMnlTdFR4MVoxLVlRIn19\",\"sig\":\"MEUCIQC7Q_App61I6SMYEt0OMis4UEab78ORtDNVX5PSL5DlDQIgdIfcopwNLlRg7xEQcISRnu69w3_LyBakWHMRk-4r3oc\"}"
+        },
+        {
+          "label": "cA",
+          "hash": "Jq3Zmgv8Pq_DfBXXfI4_duMWu4nlNuGlxvUuud9kdr4",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImNvbmZpcm0iLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInNlcSI6MiwicHJldiI6WyJWUWMtTW5NdWFxeVNka2ExeDJLZ3pFODgwd3owU1VOUHB4ZDJqbHZyeGZrIl0sImJ5IjoiNDI1MjA3MzY1MzMzYTZiZDNlNmJhODViMzc5ODFjZWUiLCJhdCI6IjIwMjYtMTEtMDRUMTA6MDA6MDJaIiwidGFyZ2V0Ijp7ImlkIjoiMGQ3OGU2ZjVkZTA4Y2ZlMWUyYmZhNmE0ZTUwNjUwMjQiLCJhZGQiOiJWUWMtTW5NdWFxeVNka2ExeDJLZ3pFODgwd3owU1VOUHB4ZDJqbHZyeGZrIn19\",\"sig\":\"MEMCIE8i5zvB8deOxnbD8yGsKri0i5URJv4X2wyo2J-aKTHXAh9MBUKEN1WzF3YY76RE3h9NPHBxrVxe295Y3l_ahzfX\"}"
+        },
+        {
+          "label": "+Q",
+          "hash": "LABhC14rHtAqYUTBS0_XVNij0J9K-_7K17cGjMhgZrw",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImFkZCIsImFjY291bnQiOiJvd25lckBleGFtcGxlIiwiZ2VuZXJhdGlvbiI6ImFiNGZiM2NjMjRhM2NjOTkyNDlhYjA2OTRjMzYxYTg4Iiwic2VxIjozLCJwcmV2IjpbIkpxM1ptZ3Y4UHFfRGZCWFhmSTRfZHVNV3U0bmxOdUdseHZVdXVkOWtkcjQiXSwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowM1oiLCJkZXZpY2UiOnsiaWQiOiIwZjc4MmQ0OWZmYzgwODJiM2QxN2FiMjRhNzZjNzA5NSIsImRoIjoiQkpTQUpSbGVRdzJvSTAxWGJxV1lUQWx3VzVMV3c1aFRMb3NzSFdIemx6dkdQU3Rsc1BmMDdsR2k1X2FXR0U1UWdKdUZHMlZ5QUdaR3FGUm5XU09VNWtvIiwic2lnbiI6IkJGSHI4YWNNYmJqaUdWR3dPU0l6bGRBNlVQMDRpZnMtMXE1dTg3OGlpSDAtUVFBMkl6eGhGZzY4Y0Qwb2NNTVE5YmJHNm1kZ3BjQ193cklGSTllUFJ5byIsInNpZ25BbGciOiJwMjU2LXNoYTI1Ni1kZXIiLCJwcmVzZW5jZSI6ImtleSIsImtpbmQiOiJwaG9uZSIsInBsYXRmb3JtIjoiaW9zIiwibmFtZSI6IlEifSwiYXBwcm92YWwiOnsibWV0aG9kIjoiY29kZSIsInRyYW5zY3JpcHQiOiJaRm9KVFFJcXcxaGJER0d4dXF5bm9QZFRWVkhNYnR2N3BKejNCN2d2dzlzIn19\",\"sig\":\"MEQCIAvCUBL1G-7kHjKqZHfBN4waZRjHASmL5UQR91NKUNBOAiANJ-gy5lq1Z7IzuTc1fT8SG0QnJqffQLcimGd2opaEbA\"}"
+        },
+        {
+          "label": "+H",
+          "hash": "u9hR-0dyTnIWwR4EqRvhmBRerFrGZz1FFaTdpVBTi_s",
+          "wrapper": "{\"body\":\"eyJ2IjoyLCJvcCI6ImFkZCIsImFjY291bnQiOiJvd25lckBleGFtcGxlIiwiZ2VuZXJhdGlvbiI6ImFiNGZiM2NjMjRhM2NjOTkyNDlhYjA2OTRjMzYxYTg4Iiwic2VxIjozLCJwcmV2IjpbIkpxM1ptZ3Y4UHFfRGZCWFhmSTRfZHVNV3U0bmxOdUdseHZVdXVkOWtkcjQiXSwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowNFoiLCJkZXZpY2UiOnsiaWQiOiJjNjljODM0NzRkYTJhYzM5OWIxOTYyM2IyNjQ3OWY0NCIsImRoIjoiQkVMb2tEdHljR01FeHpVNlo1d3J4RDlvZFdlT2RRa2Yyb2N3dktlNnEtRzV4Rmx1Mkx4dDVEellqOVlWREFVbmlkbEthTldDVGJRcFA0SG5XcE5qdWZJIiwiaG9zdFNpZ24iOiJCRkhyOGFjTWJiamlHVkd3T1NJemxkQTZVUDA0aWZzLTFxNXU4NzhpaUgwLVFRQTJJenhoRmc2OGNEMG9jTU1ROWJiRzZtZGdwY0Nfd3JJRkk5ZVBSeW8iLCJob3N0U2lnbkFsZyI6InAyNTYtc2hhMjU2LWRlciIsImhvc3RTaWduUHJvb2YiOiJNRVVDSVFDazU2bWwwN1FIRVE1LURadWtJR1M0Q2ZpY0dKc1hXT1BsWnNlVF80THMtZ0lnQ3I2MjlzeDdlYzR2NS0zN1U0X3hRX0xkVFZsUVl1ZTZBb3pzR0tXc09wVSIsImtpbmQiOiJob3N0IiwicGxhdGZvcm0iOiJsaW51eCIsIm5hbWUiOiJIIn0sImFwcHJvdmFsIjp7Im1ldGhvZCI6ImNvZGUiLCJ0cmFuc2NyaXB0IjoiamUwN3ZTajhvVnpEN3dNTWd0MzY0Z0lNenhla0NSdXFMZEVRQ0NkY3dRNCJ9fQ\",\"sig\":\"MEQCIGPrWXLfO27V5gn1b7uIRJwYdVVRkVLmKjfFJ4v498n0AiBUb-g9rGYKWLWvJ8Rot02_WHzuPDhAo-g3R5Q37L36Vg\"}"
+        }
+      ],
+      "vetoes": [
+        {
+          "name": "by-a-key-shared-with-a-host",
+          "about": "a person's veto signed with the key a sibling host holds as its hostSign",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6InZldG8iLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInJlc2V0IjoiSnNnM21NOU1hRFZpU2JmdGdrcUZ6REhwTDB0ZkdxZVBIUFZBYmQ4LTYtVSIsImJ5IjoiMGY3ODJkNDlmZmM4MDgyYjNkMTdhYjI0YTc2YzcwOTUiLCJhdCI6IjIwMjYtMTEtMDRUMTE6MDA6MDBaIn0\",\"sig\":\"MEQCICKope4ckAmdgKsNvCXcuqPfo5VHuq8v2nEro3Ch-odfAiBmWW51VEP0_g445UexMwrfA2P5UdQbokCN2Dj5hLD9DQ\"}",
+          "code": "host-key"
+        },
+        {
+          "name": "by-a-key-of-its-own",
+          "about": "another person's veto, in the same roster",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6InZldG8iLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInJlc2V0IjoiSnNnM21NOU1hRFZpU2JmdGdrcUZ6REhwTDB0ZkdxZVBIUFZBYmQ4LTYtVSIsImJ5IjoiMGQ3OGU2ZjVkZTA4Y2ZlMWUyYmZhNmE0ZTUwNjUwMjQiLCJhdCI6IjIwMjYtMTEtMDRUMTE6MDA6MDBaIn0\",\"sig\":\"MEUCIQCOm1nmVsCqLhNSk9u2lOTpQCufF2muATiOl_yIIIqHVgIgLrw_q5Xw6PeHrqZPcAbSCy2tRB4KQAFm4x_uftCl9jU\"}",
+          "code": null
+        }
+      ],
+      "commands": [
+        {
+          "name": "update-by-a-key-shared-with-a-host",
+          "about": "a person's update command signed with the key a sibling host holds as its hostSign, after probation",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZjc4MmQ0OWZmYzgwODJiM2QxN2FiMjRhNzZjNzA5NSIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsiSnEzWm1ndjhQcV9EZkJYWGZJNF9kdU1XdTRubE51R2x4dlV1dWQ5a2RyNCJdfQ\",\"sig\":\"MEQCIF3hv0ZEF2uJD91AO4kcX4WV8OTOrtWY2CwAQi9LsXzoAiBkYcCz74Fq3Cg23-2THhW6QiM1isZ4a4-oytG3WouqHQ\"}",
+          "context": {
+            "host": "c69c83474da2ac399b19623b26479f44",
+            "action": "update",
+            "now": "2026-11-04T12:00:00Z",
+            "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+          },
+          "code": "host-key"
+        },
+        {
+          "name": "update-by-a-key-of-its-own",
+          "about": "another person's update command, in the same roster",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsiSnEzWm1ndjhQcV9EZkJYWGZJNF9kdU1XdTRubE51R2x4dlV1dWQ5a2RyNCJdfQ\",\"sig\":\"MEQCIAE-iaa2uXcZOEg0kLVv6l1gGFLPaG6wh3g87Fc6RS0KAiBkWJDb1QfSNKCeB6tkeJVvF20Nz-rEzQ9tGNslnv2lSg\"}",
+          "context": {
+            "host": "c69c83474da2ac399b19623b26479f44",
+            "action": "update",
+            "now": "2026-11-04T12:00:00Z",
+            "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+          },
+          "code": null
+        }
+      ]
+    }
+  ],
   "attestation": {
     "attester": "0d78e6f5de08cfe1e2bfa6a4e5065024",
     "attesterPrivate": "sRLn6tayINRUme00Qc9CBm2NsrA1sVNJJZtEFiFyANY",

@@ -38,6 +38,10 @@ public static class Invalid
     public const string Cap = "cap";
     public const string Budget = "budget";
     public const string Evidence = "evidence";
+    // A v2 host add on a roster whose verifier has not switched v2 on.
+    public const string Version = "version";
+    // A hostSign key that is, or is made by this add the same as, another device's key of any kind.
+    public const string HostKey = "host-key";
 
     // A veto (§5.6) naming another reset than the one held.
     public const string Reset = "reset";
@@ -72,6 +76,24 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
 
     // The generation's caps and the evidence limits as this verifier applies them: always the
     // constants, except in tests that fill a smaller cap rather than write thousands of entries.
+    // Roster v2 (a host add with hostSign) is switched on per roster, never inferred (§8.10, V1);
+    // until then a v2 add is refused.
+    public bool AcceptHostSign { get; init; }
+
+    // A hostSign is for nothing but its host's own statements: it equals no other device's dh,
+    // sign, webauthn key or hostSign, whichever add came first.
+    static bool HostKeyCollides(DeviceDescriptor added, DeviceDescriptor other)
+    {
+        static IEnumerable<byte[]> Keys(DeviceDescriptor d)
+        {
+            yield return d.Dh;
+            if (d.Sign is not null) { yield return d.Sign; }
+            if (d.WebAuthn is not null) { yield return d.WebAuthn.Key; }
+        }
+        bool Hit(byte[]? hostSign, DeviceDescriptor d) =>
+            hostSign is not null && (Keys(d).Any(k => k.AsSpan().SequenceEqual(hostSign)) || (d.HostSign is not null && d.HostSign.AsSpan().SequenceEqual(hostSign)));
+        return Hit(added.HostSign, other) || Hit(other.HostSign, added);
+    }
     internal int AddCap { get; init; } = MaxAdds;
     internal int EntryCap { get; init; } = MaxEntries;
     internal int EvidenceSignerCap { get; init; } = EvidencePerSigner;
@@ -290,6 +312,17 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
     // The history state an entry was judged in.
     public RosterState HistoryState(byte[] hash) => _g.Find(hash) is { } i ? ClosureState(i) : RosterState.Empty;
 
+    // Whether the device of this add holds a key that collides with another add the verifier holds,
+    // in any branch: such a key confers no authority (entries, person commands and vetoes alike).
+    public bool SignerKeyCollides(int add)
+    {
+        for (var i = 0; i < _g.Count; i++)
+        {
+            if (i != add && _g[i].IsAdd && !_candidate[i] && HostKeyCollides(_g[add].Body.Device!, _g[i].Body.Device!)) { return true; }
+        }
+        return false;
+    }
+
     // ---- validity (§3.3) ----
 
     record struct Facts(int Signer, int Cosigner, int Target, int[] Keep, int Rank);
@@ -322,14 +355,24 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
             if (PresenceProof.Check(e.BodyBytes, cd, Roster.Presence.RoleCosigner, e.UvCosigner) is { } noCoPresence) { return noCoPresence; }
         }
         facts = facts with { Signer = signer, Cosigner = cosigner };
+        // A key held by a host and by a person confers no authority while both adds are known.
+        foreach (var s in cosigner >= 0 ? new[] { signer, cosigner } : [signer])
+        {
+            if (SignerKeyCollides(s)) { return Invalid.HostKey; }
+        }
 
         switch (body.Op)
         {
             case EntryOp.Add:
                 {
+                    if (body.Version == 2 && !AcceptHostSign) { return Invalid.Version; }
                     foreach (var a in ancestors.Members())
                     {
                         if (_g[a].IsAdd && _g[a].DeviceId == body.Device!.Id) { return Invalid.Readded; }
+                    }
+                    foreach (var a in ancestors.Members())
+                    {
+                        if (_g[a].IsAdd && HostKeyCollides(body.Device!, _g[a].Body.Device!)) { return Invalid.HostKey; }
                     }
                     if (p.ActiveCount >= MaxActive) { return Invalid.ActiveCap; }
                     if (_adds >= AddCap || _nonRemovals >= EntryCap) { return Invalid.Cap; }
@@ -392,6 +435,15 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
                         if (parents.Any(b => _g.IsAncestor(a, b))) { return Invalid.Merge; }
                     }
                     if (_nonRemovals >= EntryCap) { return Invalid.Cap; }
+                    // Branches that each admitted a key the other holds as a hostSign cannot join.
+                    var adds = ancestors.Members().Where(a => _g[a].IsAdd).ToList();
+                    for (var i = 0; i < adds.Count; i++)
+                    {
+                        for (var j = i + 1; j < adds.Count; j++)
+                        {
+                            if (HostKeyCollides(_g[adds[i]].Body.Device!, _g[adds[j]].Body.Device!)) { return Invalid.HostKey; }
+                        }
+                    }
                     return OverBudget(signer, EntryOp.Merge);
                 }
         }

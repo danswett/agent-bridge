@@ -3,7 +3,7 @@
 // The set of accepted entries, which are quarantined, what has been adopted, and the state it
 // applies. It decides each offered entry by the acceptance rule, in the order offered; nothing
 // accepted is ever dropped.
-import { compare } from './codec.js';
+import { compare, equal } from './codec.js';
 import { isPerson, signedBy, signedByCosigner } from './entry.js';
 import { verify } from './p256.js';
 import { Bits, RosterGraph } from './graph.js';
@@ -35,6 +35,14 @@ export const EVIDENCE_PER_SIGNER = 256;
 export const EVIDENCE_TOTAL = 1024;
 export const PROBATION_MS = 72 * 3600 * 1000;
 
+// A hostSign is for nothing but its host's own statements: it equals no other device's dh, sign,
+// webauthn key or hostSign, whichever add came first.
+function hostKeyCollides(added, other) {
+  const keys = (d) => [d.dh, d.sign, d.webauthn && d.webauthn.key, d.hostSign].filter(Boolean);
+  const hit = (hostSign, d) => Boolean(hostSign) && keys(d).some((k) => equal(k, hostSign));
+  return hit(added.hostSign, other) || hit(other.hostSign, added);
+}
+
 // `clock` is the verifier's persisted monotonic running time in milliseconds (§3.4): it moves
 // only while the verifier runs, never with the wall clock, and survives restarts.
 export class RosterVerifier {
@@ -59,8 +67,11 @@ export class RosterVerifier {
   #addCap;
 
   // addCap is for the vectors' shrunken cap; a real verifier keeps MAX_ADDS.
-  constructor(account, generation, clock, { addCap = MAX_ADDS } = {}) {
+  // acceptHostSign: roster v2 (a host add with hostSign) is switched on per roster, never inferred
+  // (agent-principals.md §8.10, V1); until then a v2 add is refused.
+  constructor(account, generation, clock, { addCap = MAX_ADDS, acceptHostSign = false } = {}) {
     this.#addCap = addCap;
+    this.acceptHostSign = acceptHostSign;
     this.account = account;
     this.generation = generation;
     this.#clock = clock;
@@ -84,6 +95,16 @@ export class RosterVerifier {
   holds(hash) {
     const i = this.#g.find(hash);
     return i !== null && !this.#candidate.has(i);
+  }
+
+  // Whether the device of this add holds a key that collides with another add held, in any
+  // branch: such a key confers no authority (entries, person commands and vetoes alike).
+  signerKeyCollides(add) {
+    const g = this.#g;
+    for (let i = 0; i < g.count; i++) {
+      if (i !== add && g.at(i).isAdd && !this.#candidate.has(i) && hostKeyCollides(g.at(add).body.device, g.at(i).body.device)) return true;
+    }
+    return false;
   }
 
   // Parsed entries (js/roster/entry.js parseEntry) in an order where each comes after its
@@ -291,11 +312,19 @@ export class RosterVerifier {
     }
     facts.signer = signer;
     facts.cosigner = cosigner;
+    // A key held by a host and by a person confers no authority while both adds are known.
+    for (const s of cosigner >= 0 ? [signer, cosigner] : [signer]) {
+      if (this.signerKeyCollides(s)) return INVALID.hostKey;
+    }
 
     switch (body.op) {
       case 'add': {
+        if (body.version === 2 && !this.acceptHostSign) return INVALID.version;
         for (const a of ancestors.members()) {
           if (g.at(a).isAdd && g.at(a).deviceId === body.device.id) return INVALID.readded;
+        }
+        for (const a of ancestors.members()) {
+          if (g.at(a).isAdd && hostKeyCollides(body.device, g.at(a).body.device)) return INVALID.hostKey;
         }
         if (p.activeCount >= MAX_ACTIVE) return INVALID.activeCap;
         if (this.#adds >= this.#addCap || this.#nonRemovals >= MAX_ENTRIES) return INVALID.cap;
@@ -353,6 +382,13 @@ export class RosterVerifier {
           if (parents.some((b) => g.isAncestor(a, b))) return INVALID.merge;
         }
         if (this.#nonRemovals >= MAX_ENTRIES) return INVALID.cap;
+        // Branches that each admitted a key the other holds as a hostSign cannot join.
+        const adds = [...ancestors.members()].filter((a) => g.at(a).isAdd);
+        for (let i = 0; i < adds.length; i++) {
+          for (let j = i + 1; j < adds.length; j++) {
+            if (hostKeyCollides(g.at(adds[i]).body.device, g.at(adds[j]).body.device)) return INVALID.hostKey;
+          }
+        }
         return this.#overBudget(signer, 'merge');
       }
       default:

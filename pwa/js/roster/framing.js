@@ -15,6 +15,7 @@ export const LABEL = Object.freeze({
   head: 'agent-bridge roster head v1',
   personCommand: 'agent-bridge person command v1',
   veto: 'agent-bridge reset veto v1',
+  hostKeyBinding: 'agent-bridge host key binding v1',
 });
 
 const encoder = new TextEncoder();

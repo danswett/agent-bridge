@@ -141,7 +141,8 @@ public sealed class Veto
         if (current.State.ActiveAdd(b.By) is not { } add || !current.Graph[add].Body.Device!.IsPerson) { return Invalid.Signer; }
         var d = current.Graph[add].Body.Device!;
         if (!P256.Verify(d.Sign!, Signed(veto.BodyBytes), veto.Sig)) { return Invalid.Signature; }
-        return PresenceProof.Check(veto.BodyBytes, d, Presence.RoleVeto, veto.Uv);
+        if (PresenceProof.Check(veto.BodyBytes, d, Presence.RoleVeto, veto.Uv) is { } noPresence) { return noPresence; }
+        return current.SignerKeyCollides(add) ? Invalid.HostKey : null;
     }
 }
 
@@ -274,6 +275,7 @@ public sealed partial class PersonCommand
         var d = roster.Graph[add].Body.Device!;
         if (!P256.Verify(d.Sign!, Signed(command.BodyBytes), command.Sig)) { return Invalid.Signature; }
         if (PresenceProof.Check(command.BodyBytes, d, Presence.RoleCommand, command.Uv) is { } noPresence) { return noPresence; }
+        if (roster.SignerKeyCollides(add)) { return Invalid.HostKey; }
 
         var issued = Instant.Parse(b.IssuedAt);
         var expires = Instant.Parse(b.ExpiresAt);

@@ -124,7 +124,9 @@ export async function checkVeto(veto, current, held) {
   if (add === null) return INVALID.signer;
   const d = current.graph.at(add).body.device;
   if (!(await verify(d.sign, vetoSigned(veto.bodyBytes), veto.sig))) return INVALID.signature;
-  return presenceProof(veto.bodyBytes, d, ROLE.veto, veto.uv);
+  const noPresence = await presenceProof(veto.bodyBytes, d, ROLE.veto, veto.uv);
+  if (noPresence !== null) return noPresence;
+  return current.signerKeyCollides(add) ? INVALID.hostKey : null;
 }
 
 // ---- person commands ----
@@ -220,6 +222,7 @@ export async function checkPersonCommand(command, roster, context) {
   if (!(await verify(d.sign, commandSigned(command.bodyBytes), command.sig))) return INVALID.signature;
   const noPresence = await presenceProof(command.bodyBytes, d, ROLE.command, command.uv);
   if (noPresence !== null) return noPresence;
+  if (roster.signerKeyCollides(add)) return INVALID.hostKey;
 
   const issued = instant(b.issuedAt);
   const expires = instant(b.expiresAt);

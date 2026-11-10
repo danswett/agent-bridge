@@ -67,6 +67,32 @@ for (const c of vectors.commands) {
   });
 }
 
+// A person whose sign key is a sibling host's hostSign, after probation, in both arrival orders.
+for (const k of vectors.collisions) {
+  async function collided() {
+    let now = 0;
+    const v = new RosterVerifier(vectors.account, vectors.generation, () => now, { acceptHostSign: true });
+    const offered = await v.offer(await Promise.all(k.entries.map((e) => parseEntry(utf8(e.wrapper)))));
+    assert.deepEqual(offered.map((o) => o.verdict), k.entries.map(() => 'accepted'));
+    now = k.checkedAfterHours * 3600 * 1000;
+    return v;
+  }
+  for (const c of k.vetoes) {
+    test(`collision ${k.name} veto ${c.name}: ${c.about}`, async () => {
+      const v = await collided();
+      assert.deepEqual(await outcome(() => parseVeto(utf8(c.wrapper)), (veto) => checkVeto(veto, v, b64(vectors.heldReset))), expected(c));
+    });
+  }
+  for (const c of k.commands) {
+    test(`collision ${k.name} person command ${c.name}: ${c.about}`, async () => {
+      const v = await collided();
+      const x = c.context;
+      const context = { host: x.host, action: x.action, now: instant(x.now), floor: null, nonce: x.nonce ? b64(x.nonce) : null, previous: null };
+      assert.deepEqual(await outcome(() => parsePersonCommand(utf8(c.wrapper)), (command) => checkPersonCommand(command, v, context)), expected(c));
+    });
+  }
+}
+
 test('a time in milliseconds is the instant its RFC 3339 form is', () => {
   assert.deepEqual(instantOfMs(Date.UTC(2026, 10, 4, 12, 0, 0, 123)), instant('2026-11-04T12:00:00.123Z'));
   assert.deepEqual(instant('2000-02-29T00:00:00Z'), { seconds: 951782400, nanos: 0 });

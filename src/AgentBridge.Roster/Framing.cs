@@ -24,6 +24,7 @@ public static class Framing
     public const string HeadLabel = "agent-bridge roster head v1";
     public const string PersonCommandLabel = "agent-bridge person command v1";
     public const string VetoLabel = "agent-bridge reset veto v1";
+    public const string HostKeyBindingLabel = "agent-bridge host key binding v1";
 
     public static byte[] F(params byte[][] parts)
     {
