@@ -1014,6 +1014,13 @@ export class SessionsPage {
     const n = renderMachines($('machine-list'), {
       presence, me: this.me, current: hosts.selection,
       onSelect: (id) => { hosts.select(id); this.shell?.go('sessions'); $('sessions').focus(); },
+      // With every machine shown the panel's picker moves to this one; with another machine shown
+      // the panel only takes that machine's, so that machine becomes the one shown.
+      onLaunch: (id) => {
+        this.#rememberLaunch(id);
+        if (hosts.all) { this.#drawLaunch(); } else if (hosts.selection !== id) { hosts.select(id); }
+        this.shell?.go('launch');
+      },
       status: (id) => this.status(id),
       facts: this.facts,
       known: connection.known ?? null,
@@ -1021,7 +1028,6 @@ export class SessionsPage {
       updates: this.updates,
       signInDevices: this.signInDevices,
       diagnose: this.diagnose,
-      allStatus: hosts.all ? plural(hosts.sessions.size, 'session', 'sessions') : '',
     });
     $('machines-empty').hidden = n !== 0 || !connection.ready;
     // The machine tabs above the sessions: picking one there keeps focus on the tabs. The machine
