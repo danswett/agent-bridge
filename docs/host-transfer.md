@@ -142,5 +142,24 @@ in bytes, or `failed at handoff` / `failed at write` with a plain reason. The no
 `<session>.handoff.md` in a folder of its own through a temp file, so a failure leaves nothing
 behind and the transcript is only ever read. Its `handoffRequested` and `handoffConfirmed`
 steps carry the host's time and the milliseconds since the previous step (MoveTelemetry, S5).
-The note names no machine. Wiring it to the agents' own prompt path and transcripts is the
-per-agent work the S1 parity audit lists.
+The note names no machine.
+
+`FileHandoffTranscript` reads ended sessions through the existing history dialects: Copilot
+and Agency share `events.jsonl`, Claude has its project transcript, and Codex its rollout.
+It uses the bundle resolver and checked read-only file handle; a changed file fails the read.
+The note contains the latest recorded response, last request to verify and successful file-tool
+summaries, not an inferred completion claim or an exhaustive diff. It reads at most the newest
+20 turns under the history reader's byte limits and explicitly marks incomplete history.
+The original transcript and artifacts remain untouched.
+
+`ReplyHandoffAgent` sends an idle session's prompt through `ISessionReplier`, never a second
+writer. It observes session changes until a new matching turn has a complete main-agent response;
+old responses and delegate-only text cannot confirm a note. Delivery refusals, questions,
+attention and cancellation stop it without retrying delivery or answering any prompt.
+
+These are adapters only, not a new host operation. v1 transfers remain ended-only. Packing and
+protocol wiring follow separately: Product's #1709 ruling makes the note an inner part of
+packing, so the move's `handoffConfirmed` must wait for both the note and the pack, not use
+the service's note-confirmation time directly. No UI event or transfer-result field is added here.
+The S1 audit (#1708) marks legacy Copilot transfer Verified live and Agency/Claude/Codex Code only;
+these hermetic adapter tests do not establish a successful live two-machine transfer.

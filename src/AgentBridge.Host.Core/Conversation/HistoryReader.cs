@@ -60,21 +60,24 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
     // running never stopped for it (Engineering's second-family review of #686).
     public HistoryResult Read(string sessionId, AgentKind agent, string? path, string? before, int limit, HistorySeed seed, bool remoteApproval, CancellationToken cancellationToken = default)
     {
-        if (HistoryDialect.For(agent) is not { } dialect) { return HistoryResult.NotAvailable(NoHistory); }
+        if (HistoryDialect.For(agent) is null) { return HistoryResult.NotAvailable(NoHistory); }
         if (path is null) { return HistoryResult.NotAvailable(NotFound); }
         SafeFileHandle handle;
         try { handle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete); }
         catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return HistoryResult.NotAvailable(NotFound); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return HistoryResult.NotAvailable(NotRead); }
-        using (handle)
+        using (handle) { return Read(sessionId, agent, handle, before, limit, seed, remoteApproval, cancellationToken); }
+    }
+
+    internal HistoryResult Read(string sessionId, AgentKind agent, SafeFileHandle handle, string? before, int limit, HistorySeed seed, bool remoteApproval, CancellationToken cancellationToken)
+    {
+        if (HistoryDialect.For(agent) is not { } dialect) { return HistoryResult.NotAvailable(NoHistory); }
+        try
         {
-            try
-            {
-                var context = new HistoryContext(seed.Delegates, seed.Calls, remoteApproval, seed.CallOwners, seed.SyncAgents, seed.Parents) { Patterns = new PatternBudget(_budgets.PatternTime) };
-                return new Pass(this, handle, sessionId, dialect, context, seed.AgentTurns, cancellationToken).Page(before, limit);
-            }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return HistoryResult.NotAvailable(NotRead); }
+            var context = new HistoryContext(seed.Delegates, seed.Calls, remoteApproval, seed.CallOwners, seed.SyncAgents, seed.Parents) { Patterns = new PatternBudget(_budgets.PatternTime) };
+            return new Pass(this, handle, sessionId, dialect, context, seed.AgentTurns, cancellationToken).Page(before, limit);
         }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return HistoryResult.NotAvailable(NotRead); }
     }
 
     // A record that may start a turn, found going back: where its line starts and ends (past its

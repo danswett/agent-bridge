@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using AgentBridge.Host.Core.Conversation;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Delivery.Launch;
@@ -86,6 +87,21 @@ public static class SessionBundles
     }
 
     public static bool Exists(AgentKind kind, AgentHomes homes, string id) => Find(kind, homes, id) is not null;
+
+    internal static HistoryResult ReadHistory(AgentKind kind, AgentHomes homes, string id, CancellationToken cancellationToken)
+    {
+        var spec = Find(kind, homes, id);
+        if (spec is null) { return HistoryResult.NotAvailable(HistoryReader.NotFound); }
+        var path = kind == AgentKind.Copilot ? Path.Combine(spec.Root, "events.jsonl") : spec.Files.Single();
+        var witness = Witness(path);
+        using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        Opened(file, spec.Root, Path.GetRelativePath(spec.Root, path), null);
+        var reader = new HistoryReader(new HistoryBudgets(), RandomNumberGenerator.GetBytes(32));
+        var result = reader.Read(id, kind, file.SafeFileHandle, null, HistoryLimits.DefaultTurns,
+            new HistorySeed(new Dictionary<string, string?>(), new Dictionary<string, string>()), false, cancellationToken);
+        if (Witness(path) != witness) { throw new InvalidOperationException(Changed); }
+        return result;
+    }
 
     static bool Linked(string path)
     {

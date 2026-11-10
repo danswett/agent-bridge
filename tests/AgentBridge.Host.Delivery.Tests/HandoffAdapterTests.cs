@@ -135,6 +135,31 @@ public sealed class HandoffAdapterTests : IDisposable
     }
 
     [Fact]
+    public async Task Cancellation_bounds_delivery_even_when_the_existing_replier_ignores_the_token()
+    {
+        var replier = new StalledReplier();
+        using var stop = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            new ReplyHandoffAgent(new Source(AgentKind.Copilot), replier).AskForNoteAsync(Id, HandoffService.Prompt, stop.Token));
+        Assert.Equal(1, replier.Calls);
+    }
+
+    [Fact]
+    public async Task A_note_trimmed_only_for_the_protocol_is_read_on_its_unbudgeted_change_event()
+    {
+        var source = new Source(AgentKind.Copilot);
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var pending = new ReplyHandoffAgent(source, new Replier(_ => new ReplyResult(AnswerOutcome.Delivered)))
+            .AskForNoteAsync(Id, HandoffService.Prompt, stop.Token);
+        source.Current = source.Current with { Activity = new Activity { Turn = "new", ResponseTurn = "new",
+            Response = "Cut", ResponseTruncated = true } };
+        source.SetUnbudgeted(source.Current with { Activity = source.Current.Activity with {
+            UserMessage = HandoffService.Prompt, Response = "Complete note", ResponseTruncated = null } });
+
+        Assert.Equal("Complete note", await pending.WaitAsync(stop.Token));
+    }
+
+    [Fact]
     public async Task A_missing_or_unreadable_transcript_never_confirms_an_empty_handoff()
     {
         var adapter = new FileHandoffTranscript(AgentKind.Copilot, Homes);
@@ -161,11 +186,23 @@ public sealed class HandoffAdapterTests : IDisposable
         }
     }
 
+    sealed class StalledReplier : ISessionReplier
+    {
+        public int Calls;
+        public bool Available => true;
+        public Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken cancellationToken = default, DeliveryWatch? watch = null)
+        { Calls++; return new TaskCompletionSource<ReplyResult>().Task; }
+    }
+
     sealed class Source(AgentKind kind) : ISessionSource
     {
         public Session Current = new() { Id = Id, Agent = kind, Status = SessionStatus.Idle,
             StatusSince = Fixture.T0, UpdatedAt = Fixture.T0, Activity = new Activity() };
         public event EventHandler<SessionChange>? Changed;
+        public event EventHandler<string>? UnbudgetedChanged;
+        Session? unbudgeted;
+        public void SetUnbudgeted(Session session) { unbudgeted = session; UnbudgetedChanged?.Invoke(this, Id); }
+        public Session? GetUnbudgeted(string id) => id == Id ? unbudgeted ?? Current : null;
         public void Set(Session session) { Current = session; Changed?.Invoke(this, new(SessionChangeKind.Upserted, Id, session, ++revision)); }
         long revision;
         public long Revision => revision;
