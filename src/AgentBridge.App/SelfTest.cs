@@ -287,6 +287,7 @@ static partial class SelfTest
             await CheckDelegates(window, main, demo, Check, outFile);
             await CheckSessionDetails(window, main, demo, Check, outFile);
             await CheckAnswerMoves(window, main, Check, outFile);
+            await CheckHistoryInput(window, main, Check, outFile);
             await CheckHistoryScroll(window, main, Check);
             await CheckHistoryYourMessages(window, main, Check);
 
