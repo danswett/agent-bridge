@@ -1354,7 +1354,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
       the delegate's entry there. With one still working, it opens that delegate. With more,
       "*n* still working" opens the earliest started of them, with the others beside it in
       the same strip or list, and its accessible name says so ("2 still working, opens the
-      first").
+      first"). The visible text stays "2 still working"; with one, both the text and the
+      accessible name are "1 still working". The name updates with the count in both clients.
   - **Earlier (D4):** until history loads (below, #292), the events older than the oldest message
     shown fold into one line at the top of the conversation, "Earlier · 4 delegates started, 3
     reported back ›". It expands to their lines, in time order, which don't fold again.

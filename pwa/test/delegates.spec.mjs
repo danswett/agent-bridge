@@ -1137,6 +1137,32 @@ test.describe('at three panes', () => {
     await expect(fold).toBeFocused();
   });
 
+  test('the working link names its count and opens the first of several, updating as delegates finish and resume', async ({ page }) => {
+    await openDemo(page);
+    await listOnly(page, [
+      { id: 'named-later', name: 'Write the notes', status: 'waiting', startedAt: 5 },
+      { id: 'named-first', name: 'Check the changelog', status: 'working', startedAt: 10 },
+    ]);
+    const working = card(page).locator('.delegate-fold-working');
+    await expect(working).toHaveText('2 still working');
+    await expect(working).toHaveAccessibleName('2 still working, opens the first');
+    await working.focus();
+    await page.keyboard.press('Enter');
+    await expect(pane(page)).toHaveAttribute('data-id', 'named-first');
+
+    await change(page, 'named-first', { status: 'ended', outcome: 'done', endedAt: later() });
+    await expect(working).toHaveText('1 still working');
+    await expect(working).toHaveAccessibleName('1 still working');
+    await working.click();
+    await expect(pane(page)).toHaveAttribute('data-id', 'named-later');
+
+    await change(page, 'named-later', { status: 'ended', outcome: 'done', endedAt: later() });
+    await expect(working).toBeHidden();
+    await change(page, 'named-later', { status: 'working', outcome: undefined, endedAt: undefined });
+    await change(page, 'named-first', { status: 'working', outcome: undefined, endedAt: undefined });
+    await expect(working).toHaveAccessibleName('2 still working, opens the first');
+  });
+
   // Two reported back, a and b started within a minute of each other, and b still working when
   // `working`: a and b waking share a line again, so one line is left and the fold goes from
   // under the keyboard.

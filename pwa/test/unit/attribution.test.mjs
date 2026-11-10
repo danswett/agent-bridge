@@ -418,19 +418,20 @@ test('two or more lines in a row fold into one that counts failed and ended apar
   ]);
   assert.equal(run.length, 7);
   // The button is the counts alone, its chevron ending it; its name reads on to the link, as drawn.
-  assert.deepEqual(delegateFold(run), { button: '7 delegates · 3 reported back, 1 failed, 1 ended', link: '2 still working', workingId: 'e', label: '7 delegates · 3 reported back, 1 failed, 1 ended, 2 still working' });
+  assert.deepEqual(delegateFold(run), { button: '7 delegates · 3 reported back, 1 failed, 1 ended', link: '2 still working', linkName: '2 still working, opens the first', workingId: 'e', label: '7 delegates · 3 reported back, 1 failed, 1 ended, 2 still working' });
   // One line stays a line, as short as the fold; two fold.
   assert.equal(delegateFold(run.slice(0, FOLD_AFTER)), null);
-  assert.deepEqual(delegateFold(run.slice(0, 2)), { button: '2 delegates · 2 reported back', link: null, workingId: null, label: '2 delegates · 2 reported back' });
+  assert.deepEqual(delegateFold(run.slice(0, 2)), { button: '2 delegates · 2 reported back', link: null, linkName: null, workingId: null, label: '2 delegates · 2 reported back' });
   // With none still working there is no link: the line is the button alone, and a count of 0 is left out.
   const done = run.slice(0, 4);
-  assert.deepEqual(delegateFold(done), { button: '4 delegates · 3 reported back, 1 failed', link: null, workingId: null, label: '4 delegates · 3 reported back, 1 failed' });
+  assert.deepEqual(delegateFold(done), { button: '4 delegates · 3 reported back, 1 failed', link: null, linkName: null, workingId: null, label: '4 delegates · 3 reported back, 1 failed' });
+  assert.equal(delegateFold(run.slice(0, -1)).linkName, '1 still working');
   // A fold counts delegates, not lines, and never says "working" without a link to one.
   const shared = lines([
     ...['a', 'b', 'c'].map((id, i) => ({ id, name: id, status: 'working', startedAt: minsAgo(50 - i * 5) })),
     { id: 'd', name: 'd', status: 'working', startedAt: minsAgo(30) }, { id: 'x', name: 'x', status: 'waiting', startedAt: minsAgo(29.5) },
   ]);
-  assert.deepEqual(delegateFold(shared), { button: '5 delegates', link: '5 still working', workingId: 'a', label: '5 delegates · 5 still working' });
+  assert.deepEqual(delegateFold(shared), { button: '5 delegates', link: '5 still working', linkName: '5 still working, opens the first', workingId: 'a', label: '5 delegates · 5 still working' });
 });
 
 test('a fold counts a stopped delegate by its outcome, or as ended with none, even with no end time, so its counts add up to its total', () => {
@@ -449,7 +450,7 @@ test('a fold counts a stopped delegate by its outcome, or as ended with none, ev
     ['start', null, 'Started delegate y · 20m'],
     ['start', null, 'Started delegate z · 15m'],
   ]);
-  assert.deepEqual(delegateFold(run), { button: '8 delegates · 5 reported back, 1 failed, 2 ended', link: null, workingId: null, label: '8 delegates · 5 reported back, 1 failed, 2 ended' });
+  assert.deepEqual(delegateFold(run), { button: '8 delegates · 5 reported back, 1 failed, 2 ended', link: null, linkName: null, workingId: null, label: '8 delegates · 5 reported back, 1 failed, 2 ended' });
 });
 
 test('a delegate that names itself its parent, from a broken host, is the main agent\'s own in the conversation', () => {
