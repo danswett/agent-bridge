@@ -441,13 +441,13 @@ test.describe('a machine back from offline', () => {
     await page.evaluate(() => { const m = window.agentBridgeDemo.machines['demo-laptop']; const s = m.get('laptop-gone-q'); m.upsert({ ...s, status: 'idle', question: null }); });
     // Still as it was last sent, offline.
     await expect(card(page, LAPTOP, IDLE)).toHaveCount(1);
-    await expect(sv(page, LAPTOP, 'laptop-gone-q').locator('.question .choice').first()).toBeDisabled();
+    await expect(sv(page, LAPTOP, 'laptop-gone-q').locator('.question:not(.resolved) .choice').first()).toBeDisabled();
 
     await laptop(page, 'holdSnapshot');
     await setOnline(page, true);
     await expect(card(page, LAPTOP, ASK)).toHaveAttribute('data-stale', 'confirming');
     // The question that ended goes with the session's own new state, never answerable on the way.
-    await expect(sv(page, LAPTOP, 'laptop-gone-q').locator('.question')).toHaveCount(0);
+    await expect(sv(page, LAPTOP, 'laptop-gone-q').locator('.question:not(.resolved)')).toHaveCount(0);
     await laptop(page, 'releaseSnapshot');
     await expect(card(page, LAPTOP, IDLE)).toHaveCount(0);
     await expect(page.locator('.ended[data-id="laptop-copilot-1"]')).toHaveCount(1);

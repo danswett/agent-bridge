@@ -2071,7 +2071,7 @@ export class SessionCard {
 
   // The receipt gives way to the next one, or to the next question. One that closed (its question
   // is no longer waiting) is kept, newest last, up to CLOSED_KEPT; any other is dropped. Whether it
-  // was dropped: the question that follows moves up into its place.
+  // left the live slot: the question that follows needs its guard, even if the record was kept.
   #retireReceipt() {
     const r = this.#receipt;
     if (!r) { return false; }
@@ -2079,11 +2079,12 @@ export class SessionCard {
       this.#dropReceipt();
       return true;
     }
+    const shifted = this.els.question.contains(r.element);
     this.#receipt = null;
     if (!r.element.closest('.history-turn')) { this.els.question.before(r.element); }
     this.#closed.push(r);
     while (this.#closed.length > CLOSED_KEPT) { this.#destroyReceipt(this.#closed.shift()); }
-    return false;
+    return shifted;
   }
 
   // An answer went from the form: text kept for the person (#orphanView) that is in it has been sent.

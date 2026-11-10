@@ -412,7 +412,7 @@ test.describe('what an entry offers', () => {
     expect(await e.locator('.needs-prompt').textContent()).toBe(fence.message);
     const l = await ask(page, COPILOT, permission({ id: 'r2#link', message: link.message }));
     await l.locator('.needs-title').click();
-    const q = card(page, COPILOT).locator('.question');
+    const q = card(page, COPILOT).locator('.question:not(.resolved)[data-question="r2#link"]');
     await expect(q.locator('.question-message a')).toHaveCount(0);
     expect(await q.locator('.question-message').textContent()).toBe(link.message);
     await expect(q.locator('.choice[data-value="approve"]')).toBeEnabled();
@@ -544,7 +544,7 @@ test.describe('what an entry offers', () => {
     const message = 'Allow **shell**?\n\nTidy up\n```\n\n```\nrm -rf build\n```\necho done\n```';
     const e = await ask(page, COPILOT, permission({ message }));
     await e.locator('.needs-title').click();
-    expect(await card(page, COPILOT).locator('.question-message').textContent()).toBe(message);
+    expect(await card(page, COPILOT).locator('.question:not(.resolved) .question-message').textContent()).toBe(message);
   });
 
   test('a bare carriage return in an approval\'s command is drawn on its card as an escape on its line, and the card says it contains hidden characters', async ({ page }) => {
