@@ -50,6 +50,14 @@ test('an answer is sent once with a fresh request, and its outcome is kept', asy
   assert.equal(conn.client.calls.length, 1);
 });
 
+test('onTap hears each new send once, not a second tap while it is on its way', () => {
+  const taps = [];
+  const { submit } = setup({ onTap: (e) => taps.push([e.hostId, e.sessionId]) });
+  submit();
+  submit();
+  assert.deepEqual(taps, [['h1', 's1']]);
+});
+
 test('a stale answer from a form the host cancelled never went in, so it can be given again as a new request', async () => {
   const { conn, service, submit } = setup();
   submit();

@@ -383,9 +383,11 @@ None of it is ever sent anywhere.
 `js/turn-clock.js` (#1600) times what the person waits for: from sending a reply to the session
 settling (it was `working`, and is no longer). Only `{ app: 'PWA', ms }` is kept, in the page
 (`TurnClock.recent()`); no text, machine or session id is ever in a record. A second send before the turn settles keeps
-the first start, and a turn open for over an hour is dropped. It is not wired in yet: that needs the send
-path and the sessions page, and the relay call lands after the relay's aggregate store (#1599). It runs in the page that sent the reply; if the page closes, turns
+the first start, and a turn open for over an hour is dropped. The sessions page feeds it: the reply service's `onTap` stamps the send, and the session list's changes
+say when it is working and settled. Nothing is sent anywhere yet; the relay call is a later change (#1603). It runs in the page that sent the reply; if the page closes, turns
 in flight are lost and nothing else, because no state lives on any machine.
+
+The Windows app does the same in `AgentBridge.App.Core/TurnClock.cs` (app name `Windows`): each reply box owns a clock, stamped when `Send()` runs and fed by the session's status updates. It lives in memory, so a card that is rebuilt or parked loses a turn in flight and nothing else.
 
 Demo mode plays a machine with progress: `?progress=0` one from before it,
 `?confirmDelay=<ms>` the wait between typing and the outcome (to see Passed to the agent), and

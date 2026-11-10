@@ -82,8 +82,9 @@ export class AnswerService {
     // showed before it went could act on a question or session that has gone since.
     accepts = () => true,
     marks = null,
+    onTap = null,
   }) {
-    Object.assign(this, { current, uuid, now, retryMs, giveUpMs, send, payload, final, resendOnBusy, accepts, marks });
+    Object.assign(this, { current, uuid, now, retryMs, giveUpMs, send, payload, final, resendOnBusy, accepts, marks, onTap });
     this.giveUpFor = giveUpFor ?? (() => this.giveUpMs);
   }
 
@@ -128,6 +129,7 @@ export class AnswerService {
     };
     this.#entries.set(key, entry);
     if (this.marks) { tapped(this.marks, entry.request); }
+    this.onTap?.(entry);
     this.#attempt(entry);
     return this.#snapshot(entry);
   }
