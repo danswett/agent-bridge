@@ -431,7 +431,24 @@
                                                 Text="{x:Bind Disclosure.Origin.Text}" />
                                         </Border>
                                     </StackPanel>
-                                    <TextBlock Style="{StaticResource AbTypeRow}" TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind Prompt}" Visibility="{x:Bind local:Ui.Some(Prompt)}" />
+                                    <!-- The person's own prompt: a bubble at the right, at most 85% of the column, as the live one is (ui.md §6.4, #1735). -->
+                                    <Grid Visibility="{x:Bind local:Ui.Some(Prompt)}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="15*" />
+                                            <ColumnDefinition Width="85*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border
+                                            x:Name="HistoryYourMessage"
+                                            Grid.Column="1"
+                                            HorizontalAlignment="Right"
+                                            Padding="16,10"
+                                            Background="{ThemeResource AbCard}"
+                                            BorderBrush="{ThemeResource AbStroke}"
+                                            BorderThickness="1"
+                                            CornerRadius="{StaticResource AbRadiusCard}">
+                                            <TextBlock Style="{StaticResource AbTypeRow}" TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind Prompt}" />
+                                        </Border>
+                                    </Grid>
                                     <ContentControl IsTabStop="False" HorizontalAlignment="Right" MinHeight="20" Content="{x:Bind PromptUnder}" ContentTemplate="{StaticResource MessageTimeTemplate}" Visibility="{x:Bind local:Ui.Some(Prompt)}" />
                                     <ContentControl IsTabStop="False" HorizontalAlignment="Left" Content="{x:Bind Reply}" ContentTemplate="{StaticResource MessageTimeTemplate}" />
                                     <ItemsRepeater ItemsSource="{x:Bind Blocks}">

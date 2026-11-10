@@ -289,6 +289,7 @@ static partial class SelfTest
             await CheckAnswerMoves(window, main, Check, outFile);
             await CheckHistoryScroll(window, main, Check);
             await CheckHistoryStable(window, main, Check);
+            await CheckHistoryYourMessages(window, main, Check);
 
             // Launch a session from the Launch page: it starts, its row appears, and Open goes to it.
             window.ShowPage("launch");
