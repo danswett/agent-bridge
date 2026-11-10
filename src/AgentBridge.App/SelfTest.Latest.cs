@@ -91,8 +91,49 @@ static partial class SelfTest
             await Task.Delay(3000);
             scroll.LayoutUpdated -= Layout;
             check(Bottom() && departures == 0, $"latest: stays at the bottom for three seconds ({departures} layout departures)");
+            foreach (var (modifier, down, up) in new[] {
+                (VirtualKey.Control, VirtualKey.PageDown, VirtualKey.Up),
+                (VirtualKey.Shift, VirtualKey.Down, VirtualKey.PageUp) })
+            {
+                card.Update(card.Session with { Activity = (card.Session.Activity ?? new Activity()) with { Response = string.Join("\n\n", Enumerable.Repeat("A long reply paragraph.", 30)) } });
+                await Jump();
+                check(await LatestModifiedKey(window, scroll, up, modifier), $"latest: receives inert {modifier}+{up}");
+                await Grow(pinned: true, $"inert {modifier}+{up}");
+                await LatestInput(window, scroll, "wheel", up: true);
+                await Still(scroll);
+                var before = scroll.VerticalOffset;
+                check(await LatestModifiedKey(window, scroll, down, modifier), $"latest: receives inert {modifier}+{down}");
+                check(Math.Abs(scroll.VerticalOffset - before) <= 0.5, $"latest: inert {modifier}+{down} does not scroll");
+                card.Update(card.Session with { Activity = (card.Session.Activity ?? new Activity()) with { Response = "A shorter reply." } });
+                await Still(scroll);
+                check(Bottom() && scroll.ScrollableHeight < before - 1.5, $"latest: shorter re-render clamps the released view after inert {modifier}+{down}");
+                await Grow(pinned: false, $"inert {modifier}+{down}, then shorter re-render");
+            }
         }
         finally { view.Card = original; }
+    }
+
+    static async Task<bool> LatestModifiedKey(MainWindow window, ScrollViewer scroll, VirtualKey key, VirtualKey modifier)
+    {
+        scroll.Focus(FocusState.Keyboard);
+        var saved = new byte[256];
+        if (!GetKeyboardState(saved)) { throw new InvalidOperationException("latest: cannot read keyboard modifiers"); }
+        var held = saved.ToArray();
+        held[(int)modifier] = held[modifier == VirtualKey.Control ? 0xA2 : 0xA0] = 0x80;
+        var seen = false;
+        var heard = new KeyEventHandler((_, e) => { if (e.Key == key) { seen = true; } });
+        scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
+        try
+        {
+            if (!SetKeyboardState(held)) { throw new InvalidOperationException("latest: cannot hold the keyboard modifier"); }
+            Press(window.Handle, key, foreground: false);
+            return await Until(() => seen, TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            scroll.RemoveHandler(UIElement.PreviewKeyDownEvent, heard);
+            if (!SetKeyboardState(saved)) { throw new InvalidOperationException("latest: cannot release the keyboard modifier"); }
+        }
     }
 
     static async Task<bool> LatestInput(MainWindow window, ScrollViewer scroll, string input, bool up)
