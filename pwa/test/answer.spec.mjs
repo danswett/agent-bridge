@@ -151,7 +151,9 @@ test.describe('on a phone', () => {
     await expect(card(page, CODEX)).toHaveAttribute('data-status', 'working');
   });
 
-  test('an option\'s ring has a slot of its own at its end, clear of its words and its badge, so the option never resizes as it comes', async ({ page }) => {
+  test('an option\'s ring has a slot of its own at its end, clear of its words and its badge,   so the option never resizes as it comes', async ({ page, browserName }) => {
+      // Quarantined on webkit (#1690): the tap did not register in CI run 42809334870; lift when the #1690 shard fix merges and this passes on webkit.
+      test.skip(browserName === 'webkit', 'flaky on webkit, #1690');
     await openDemo(page);
     const q = await ask(page, choice({ default: 'pg' }));
     const pg = q.locator('.choice[data-value="pg"]');
