@@ -57,7 +57,7 @@ const choice = (extra = {}) => ({
 const OTHER_NOT_SENDABLE = "Your own answer can't be sent from here yet. Pick an option, or answer at the machine.";
 
 test('Other the machine cannot send yet is shown disabled, its label unchanged, with why under the choices and as their description', async ({ page, browserName }) => {
-  // Quarantined on webkit (#1690, #1685): 60 s timeouts under load kept main red; restore by 2026-11-13.
+  // Quarantined on webkit (#1690, #1685): 60 s timeouts under load kept main red; lift when the #1690 shard fix merges and this passes on webkit (2026-11-13 is only a backstop).
   test.skip(browserName === 'webkit', 'flaky on webkit, #1690');
   await openDemo(page);
   const q = await ask(page, choice({ required: false, otherUnavailable: 'otherNotSendable' }));
