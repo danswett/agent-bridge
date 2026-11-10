@@ -8,6 +8,8 @@
 :root {
   color-scheme: light dark;
   --radius: 14px;
+  /* How far short of the screen an installed iPhone lays the page out; js/viewport-fit.js sets it (#1620). */
+  --viewport-short: 0px;
   /* Touch-only sizing is gated on "(pointer: coarse) and (not (any-pointer: fine))", never on
      (pointer: coarse) alone: an iPad's primary pointer stays coarse with a trackpad or mouse
      attached, which only any-pointer reports, so it kept phone-sized controls at a desk. */
