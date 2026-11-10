@@ -37,5 +37,9 @@ Queries `ingestion` (which table is loud) and `cap-hit` in [queries/relay.kql](.
 ## Afterwards
 
 OBS-3 (#571) samples connect and disconnect lines during a storm, so one storm can't cap the
-workspace. If the cap is hit in normal use, raise `logDailyCapGb` in a PR, with the measured
+workspace: past `Relay__LogLinesPerMinute` lines in a minute (default 120, 0 logs every line) the
+relay drops the rest and writes one `N connect/disconnect lines suppressed in the last minute`
+line when the next window's first line arrives (#1310). Warnings, errors and the `relay.connects`
+and `relay.disconnects` counters are never sampled, so use the counters for a storm's true size.
+If the cap is hit in normal use, raise `logDailyCapGb` in a PR, with the measured
 daily volume.

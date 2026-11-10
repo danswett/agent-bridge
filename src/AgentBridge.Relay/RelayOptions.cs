@@ -19,6 +19,11 @@ public sealed class RelayOptions
     // New sockets per client address per minute. Devices reconnect with backoff, so this
     // only bites a reconnect loop or abuse.
     public int MaxConnectsPerMinutePerIp { get; set; } = 120;
+    // Per-socket connect and disconnect log lines let through each minute; the rest become one
+    // summary line (LogSampler, #571). Metrics still count every socket. 0 logs every line.
+    public int LogLinesPerMinute { get; set; } = 120;
+    // Test hook: the clock the log sampler's one-minute windows run on.
+    public TimeProvider LogTime { get; set; } = TimeProvider.System;
     // Admission in one flight (#603): to a device that asks (?admit=1), the challenge goes with the
     // WebSocket's opening, so its hello and proof leave together and ready comes back once. Off
     // plays a relay from before it, which every device still connects to.

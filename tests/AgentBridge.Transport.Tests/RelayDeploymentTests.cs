@@ -373,6 +373,78 @@ public class RelayDeploymentTests
         Assert.DoesNotContain("secret-value", warning);
     }
 
+    [Fact]
+    public void A_burst_of_ten_thousand_connects_and_disconnects_in_one_minute_logs_the_threshold_plus_one_summary()
+    {
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var lines = new List<string>();
+        var sampler = new LogSampler(new ListLogger<RelayHub>(lines), 120, time);
+
+        for (var i = 0; i < 10_000; i++)
+        {
+            sampler.Information("connect {Conn} {Kind}", i, "host");
+            sampler.Information("disconnect {Conn}", i);
+        }
+        Assert.Equal(120, lines.Count);
+
+        time.Advance(TimeSpan.FromMinutes(1));
+        sampler.Information("connect {Conn} {Kind}", -1, "host");
+
+        Assert.Equal(122, lines.Count);
+        Assert.Equal("19880 connect/disconnect lines suppressed in the last minute (limit 120 per minute)", lines[120]);
+        Assert.StartsWith("connect -1", lines[121]);
+    }
+
+    [Fact]
+    public void A_minute_with_nothing_suppressed_logs_no_summary_and_zero_turns_sampling_off()
+    {
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var lines = new List<string>();
+        var sampler = new LogSampler(new ListLogger<RelayHub>(lines), 3, time);
+        for (var i = 0; i < 3; i++) { sampler.Information("connect {Conn}", i); }
+        time.Advance(TimeSpan.FromMinutes(2));
+        sampler.Information("connect {Conn}", 9);
+        Assert.Equal(4, lines.Count);
+
+        var all = new List<string>();
+        var off = new LogSampler(new ListLogger<RelayHub>(all), 0, time);
+        for (var i = 0; i < 1_000; i++) { off.Information("connect {Conn}", i); }
+        Assert.Equal(1_000, all.Count);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task The_relay_samples_per_socket_lines_past_the_threshold_while_metrics_count_every_socket()
+    {
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(DateTimeOffset.UtcNow);
+        long connects = 0, disconnects = 0;
+        object? scope = null;
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (i, l) => { if (i.Meter.Name == RelayMetrics.MeterName) { l.EnableMeasurementEvents(i); } };
+        listener.SetMeasurementEventCallback<long>((i, v, _, _) =>
+        {
+            if (i.Meter.Scope != Volatile.Read(ref scope)) { return; }
+            if (i.Name == "relay.connects") { Interlocked.Add(ref connects, v); }
+            if (i.Name == "relay.disconnects") { Interlocked.Add(ref disconnects, v); }
+        });
+        listener.Start();
+        await using var relay = await TestRelay.StartAsync(o => { o.LogLinesPerMinute = 3; o.LogTime = time; });
+        Volatile.Write(ref scope, relay.App.Services.GetRequiredService<IMeterFactory>());
+        var token = relay.TokenFor(1, "octo");
+
+        var devices = new List<Device>();
+        for (var i = 0; i < 5; i++) { devices.Add(await relay.ConnectAsync(token, $"host-{i}", "host")); }
+        foreach (var d in devices) { await d.DisposeAsync(); }
+        await Wait.UntilAsync(() => Interlocked.Read(ref disconnects) == 5, "five disconnects counted");
+
+        Assert.Equal(5, Interlocked.Read(ref connects));
+        Assert.Equal(3, relay.Logs.Count(l => l.StartsWith("connect ") || l.StartsWith("disconnect ")));
+
+        time.Advance(TimeSpan.FromMinutes(1));
+        await using var late = await relay.ConnectAsync(token, "host-late", "host");
+        Assert.Contains(relay.Logs, l => l.StartsWith("7 connect/disconnect lines suppressed"));
+    }
+
     sealed class ListLogger<T>(List<string> lines) : Microsoft.Extensions.Logging.ILogger<T>
     {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;

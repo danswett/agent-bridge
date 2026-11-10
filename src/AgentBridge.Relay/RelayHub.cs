@@ -17,6 +17,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
     static readonly HashSet<string> PersonKinds = ["app", "pwa", "phone"];
     readonly ConcurrentDictionary<string, ConcurrentDictionary<string, Connection>> accounts = new();
     readonly SessionRegistry registry = new(options.Roster.Time);
+    readonly LogSampler socketLog = new(log, options.LogLinesPerMinute, options.LogTime);
     long presenceVersion;
 
     public int Online => accounts.Values.Sum(a => a.Count);
@@ -182,7 +183,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         await roster.ConnectedAsync(conn.Account.Id, conn.DeviceId, conn.Name, conn.Kind, conn.Start);
 
         metrics.Connected(conn.Kind, conn.Site);
-        log.LogInformation("connect {Conn} {Kind}; {Count} online in account", conn.Tag, conn.Kind, devices.Count);
+        socketLog.Information("connect {Conn} {Kind}; {Count} online in account", conn.Tag, conn.Kind, devices.Count);
         // Announce before "ready", so peers learn of a device before it can send them anything.
         await RosterChangedAsync(conn.Account.Id);
         // blobs: present only with a blob store, so a device knows whether files over 256 KiB can go.
@@ -207,7 +208,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             var cause = DisconnectCause.Describe(endedBy, ws.CloseStatus);
             await conn.CloseAsync((int)WebSocketCloseStatus.NormalClosure, "");
             metrics.Disconnected(end);
-            log.LogInformation("disconnect {Conn} ({End}) after {Seconds:F0}s; frames in {In} out {Out}, bytes in {BytesIn} out {BytesOut}; cause {Cause}",
+            socketLog.Information("disconnect {Conn} ({End}) after {Seconds:F0}s; frames in {In} out {Out}, bytes in {BytesIn} out {BytesOut}; cause {Cause}",
                 conn.Tag, end, (DateTimeOffset.UtcNow - conn.Since).TotalSeconds, conn.FramesIn, conn.FramesOut, conn.BytesIn, conn.BytesOut, cause);
             await BroadcastPresenceAsync(conn.Account.Id);
         }
