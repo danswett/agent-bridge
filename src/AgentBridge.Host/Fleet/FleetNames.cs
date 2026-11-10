@@ -47,12 +47,15 @@ public sealed class FleetNames
     static string Normalize(string name)
     {
         var value = name.Trim();
-        if (value.Length > 64 || value.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not (' ' or '_' or '.' or '+' or '(' or ')' or '-')))
+        if (value.Length > 0 && !IsValidName(value))
         {
             throw new ArgumentException("session.rename name must be 1 to 64 of A-Za-z0-9 space _.+()-; empty clears it");
         }
         return value;
     }
+
+    internal static bool IsValidName(string value) => value.Length is > 0 and <= 64
+        && value.All(c => char.IsAsciiLetterOrDigit(c) || c is ' ' or '_' or '.' or '+' or '(' or ')' or '-');
 
     static Dictionary<string, string> Load(string path)
     {

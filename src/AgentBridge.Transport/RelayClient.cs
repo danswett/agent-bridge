@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Threading.Channels;
 
@@ -104,6 +105,9 @@ public sealed class RelayClient : IAsyncDisposable
     readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement>> blobRequests = new();
     readonly ConcurrentDictionary<long, TaskCompletionSource<string?>> forgets = new();
     readonly ConcurrentDictionary<long, (List<JsonElement> Machines, TaskCompletionSource<IReadOnlyList<JsonElement>> Done)> registries = new();
+    readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement>> registryPuts = new();
+    // Match the publisher's record sizing; escaping valid '+' names can double the record.
+    static readonly JsonSerializerOptions RegistryJson = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement>> rosterReads = new();
 
     // Frames held for a handler that is not attached yet.
@@ -185,6 +189,25 @@ public sealed class RelayClient : IAsyncDisposable
             return await tcs.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
         }
         finally { forgets.TryRemove(id, out _); }
+    }
+
+    // A full snapshot for this host alone; the relay binds it to the authenticated device.
+    public async Task RegistryPutAsync(JsonElement record, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var id = Interlocked.Increment(ref nextPush);
+        var done = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        registryPuts[id] = done;
+        try
+        {
+            await SendTextAsync(new { t = "registry-put", id, record }, ct, RegistryJson);
+            var result = await done.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
+            if (result.TryGetProperty("error", out var error) && error.GetString() is { } why)
+            {
+                throw new InvalidOperationException("registry publication refused: " + why);
+            }
+        }
+        finally { registryPuts.TryRemove(id, out _); }
     }
 
     // Asks the relay for the account's session registry (docs/protocol/roster.md): one frame per
@@ -368,9 +391,9 @@ public sealed class RelayClient : IAsyncDisposable
         finally { sendLock.Release(); }
     }
 
-    async Task SendTextAsync(object message, CancellationToken ct)
+    async Task SendTextAsync(object message, CancellationToken ct, JsonSerializerOptions? options = null)
     {
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(message);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(message, options);
         await sendLock.WaitAsync(ct);
         try
         {
@@ -435,6 +458,10 @@ public sealed class RelayClient : IAsyncDisposable
                                 f.TrySetResult(j.TryGetProperty("error", out var why) && why.ValueKind == JsonValueKind.String ? why.GetString() : null);
                             }
                             break;
+                        case "registry-result":
+                            if (j.TryGetProperty("id", out var pid) && pid.TryGetInt64(out var pkey) && registryPuts.TryRemove(pkey, out var put)) { put.TrySetResult(j.Clone()); }
+                            else { Unhandled?.Invoke(j.Clone()); }
+                            break;
                         case "registry":
                             if (j.TryGetProperty("id", out var rid) && rid.TryGetInt64(out var rkey) && registries.TryGetValue(rkey, out var r))
                             {
@@ -470,6 +497,7 @@ public sealed class RelayClient : IAsyncDisposable
         foreach (var b in blobRequests.Values) { b.TrySetException(new IOException("relay connection ended")); }
         foreach (var f in forgets.Values) { f.TrySetException(new IOException("relay connection ended")); }
         foreach (var r in registries.Values) { r.Done.TrySetException(new IOException("relay connection ended")); }
+        foreach (var p in registryPuts.Values) { p.TrySetException(new IOException("relay connection ended before registry publication completed")); }
         foreach (var r in rosterReads.Values) { r.TrySetException(new IOException("relay connection ended")); }
         if (ws.State is WebSocketState.Open or WebSocketState.CloseReceived)
         {

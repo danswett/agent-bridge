@@ -55,6 +55,22 @@ public sealed class RosterFieldsTests
     }
 
     [Fact]
+    public async Task RegistryPutAsync_publishes_its_hosts_record_and_refuses_a_different_machine()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        await using var host = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "publisher", "host");
+        await host.Relay.RegistryPutAsync(JsonSerializer.SerializeToElement(Record(host.Id)));
+        var records = await host.Relay.RegistryGetAsync();
+        Assert.Equal(host.Id, Assert.Single(records).GetProperty("machine").GetString());
+        var wrong = JsonSerializer.SerializeToElement(Record(new string('f', 32)));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => host.Relay.RegistryPutAsync(wrong));
+        Assert.Contains("bad-record", error.Message);
+        using var stop = new CancellationTokenSource();
+        stop.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => host.Relay.RegistryPutAsync(wrong, stop.Token));
+    }
+
+    [Fact]
     public async Task A_machine_record_carries_only_the_allow_listed_fields_and_is_read_by_the_same_account()
     {
         await using var relay = await TestRelay.StartAsync();
