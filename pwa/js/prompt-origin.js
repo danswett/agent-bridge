@@ -68,6 +68,12 @@ export function promptOrigin(session, { repeat = false } = {}) {
     : { from: 'other', icon: 'driven', by: null, repeat: false, text, preview, facts: ['Automatic prompt'], spoken: 'Automatic prompt' };
 }
 
+// The same, for the prompt of a turn in the stored conversation ({ text, from, label }, as
+// session.history sends it): an earlier prompt from an agent reads as the live one does.
+export const historyPromptOrigin = (prompt) => (prompt?.text
+  ? promptOrigin({ activity: { userMessage: prompt.text, userMessageFrom: prompt.from, userMessageLabel: prompt.label } })
+  : null);
+
 // The disclosure's name (ui.md §9): whose prompt, then the words on it, "Scheduled prompt 4, Show
 // prompt", and aria-expanded says collapsed or expanded after it. The words shown stay in the name
 // (WCAG 2.5.3, label in name), so speech input can say "Show prompt", and the state is said once.

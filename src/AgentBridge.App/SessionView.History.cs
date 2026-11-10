@@ -16,6 +16,7 @@ public sealed partial class SessionView
     int pinReleases;
     string? shownHistory;
     readonly System.Collections.ObjectModel.ObservableCollection<HistoryRow> historyShown = [];
+    readonly Dictionary<string, HistoryDisclosure> openPrompts = [];
 
     // The session shown is another: its turns replace the last one's, and it opens at its end.
     // The same session shown again (the view re-attached) keeps what it has and does not scroll.
@@ -23,7 +24,7 @@ public sealed partial class SessionView
     {
         UnwatchHistory();
         history = Card?.Stored;
-        if (shownHistory != Card?.Id) { shownHistory = Card?.Id; pinEnd = true; }
+        if (shownHistory != Card?.Id) { shownHistory = Card?.Id; pinEnd = true; openPrompts.Clear(); }
         if (history is null) { ShowHistory(); return; }
         history.Changed += OnHistoryChanged;
         ShowHistory();
@@ -48,7 +49,7 @@ public sealed partial class SessionView
     void ShowHistory()
     {
         var turns = history?.Turns ?? [];
-        var rows = HistoryDraw.Rows(turns, Card?.UserMessage);
+        var rows = HistoryDraw.Rows(turns, Card?.UserMessage, openPrompts);
         var line = history is null ? null : HistoryDraw.Line(history.State, rows.Count, !string.IsNullOrEmpty(Card?.UserMessage), history.Start);
         var scroll = ConversationScroll;
         // Measured before the rows change: the pane collapsing under the view must not read as scrolled back.

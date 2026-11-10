@@ -30,23 +30,34 @@ public sealed record PromptOrigin(UserMessageFrom From, IReadOnlyList<string> Fa
     // name (WCAG 2.5.3, label in name), and the state is said once.
     public string DisclosureName(bool open) => $"{Spoken}, {(open ? "Hide prompt" : "Show prompt")}";
 
+    // The prompt of a turn in the stored conversation, drawn as the live one is (#1611); the
+    // session's driver isn't known of an earlier turn, so no "by".
+    public static PromptOrigin? OfHistory(HistoryPrompt? prompt) => prompt is { Text.Length: > 0 }
+        ? Build(prompt.From ?? UserMessageFrom.Person, prompt.Text, prompt.Label, null, false)
+        : null;
+
     public static PromptOrigin? Of(Session s, bool repeat = false)
     {
         var a = s.Activity;
-        var from = a.UserMessageFrom ?? UserMessageFrom.Person;
-        if (from == UserMessageFrom.Person || string.IsNullOrEmpty(a.UserMessage)) { return null; }
-        var text = HiddenText.Reveal(a.UserMessage);
+        var by = s.Driver == DriverKind.Agent ? s.DriverPrincipal : null;
+        return string.IsNullOrEmpty(a.UserMessage) ? null : Build(a.UserMessageFrom ?? UserMessageFrom.Person, a.UserMessage, a.UserMessageLabel, by, repeat);
+    }
+
+    static PromptOrigin? Build(UserMessageFrom from, string message, string? label, string? driver, bool repeat)
+    {
+        if (from == UserMessageFrom.Person) { return null; }
+        var text = HiddenText.Reveal(message);
         var preview = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         switch (from)
         {
             case UserMessageFrom.Schedule:
-                var name = ScheduleName(a.UserMessageLabel);
+                var name = ScheduleName(label);
                 var facts = new List<string> { "Scheduled prompt" };
                 if (name is not null) { facts.Add(name); }
                 if (repeat) { facts.Add("same as last time"); }
                 return new(from, facts, null, DelegateLabel.Aloud(name is null ? "Scheduled prompt" : $"Scheduled prompt {name.TrimStart('#')}"), repeat, text, preview);
             case UserMessageFrom.Agent:
-                var by = s.Driver == DriverKind.Agent && Fact(s.DriverPrincipal, 128) is { Length: > 0 } p ? p : null;
+                var by = driver is not null && Fact(driver, 128) is { Length: > 0 } p ? p : null;
                 return new(from, ["Sent by an agent"], by, "Prompt sent by an agent", false, text, preview);
             default:
                 return new(UserMessageFrom.Other, ["Automatic prompt"], null, "Automatic prompt", false, text, preview);

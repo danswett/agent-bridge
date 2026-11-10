@@ -58,7 +58,7 @@ test('a scheduled prompt is not a bubble: a clock and "Scheduled prompt · #4" i
   await openDemo(page);
   await upsert(page, CODEX, scheduled());
   const v = await open(page, CODEX);
-  const p = v.locator('.prompt-origin');
+  const p = v.locator('.prompt-origin:not(.history-turn *)');
   await expect(p).toBeVisible();
   await expect(v.locator('.user-message')).toBeHidden();
   await expect(p).toHaveAttribute('data-from', 'schedule');
@@ -88,7 +88,7 @@ test('Show prompt opens with Enter and closes with Space: the full text in readi
   await openDemo(page);
   await upsert(page, CODEX, scheduled());
   const v = await open(page, CODEX);
-  const p = v.locator('.prompt-origin');
+  const p = v.locator('.prompt-origin:not(.history-turn *)');
   const toggle = p.locator('.prompt-toggle');
   await toggle.focus();
   await page.keyboard.press('Enter');
@@ -116,7 +116,7 @@ test('the label is read before the prompt, and nothing presents it as the person
   await openDemo(page);
   await upsert(page, CODEX, scheduled());
   const v = await open(page, CODEX);
-  const p = v.locator('.prompt-origin');
+  const p = v.locator('.prompt-origin:not(.history-turn *)');
   // Document order is reading and focus order: the label line, the preview, then the button.
   expect(await p.evaluate((el) => Array.from(el.children, (c) => c.className))).toEqual(['prompt-label', 'prompt-preview', 'prompt-toggle', 'prompt-full']);
   await expect(p).not.toContainText('Your last message');
@@ -129,7 +129,7 @@ test('a schedule firing again with the same words folds to "same as last time" w
   await openDemo(page);
   await upsert(page, CODEX, scheduled());
   const v = await open(page, CODEX);
-  const p = v.locator('.prompt-origin');
+  const p = v.locator('.prompt-origin:not(.history-turn *)');
   await p.locator('.prompt-toggle').click();
   await expect(p.locator('.prompt-toggle')).toHaveAttribute('aria-expanded', 'true');
   // The schedule fires again: its turn starts with the same words, and once it is done the host
@@ -155,7 +155,7 @@ test('an agent\'s prompt has the driven diamond and "Sent by an agent", with the
   await openDemo(page);
   await upsert(page, CODEX, { driver: 'agent', driverPrincipal: 'homeassistant:0f1e2d3c', updatedAt: later(), activity: { userMessage: 'Run the nightly check.', userMessageFrom: 'agent', turnCount: 2 } });
   const v = await open(page, CODEX);
-  const p = v.locator('.prompt-origin');
+  const p = v.locator('.prompt-origin:not(.history-turn *)');
   await expect(p.locator('.prompt-facts')).toHaveText('Sent by an agent');
   await expect(p.locator('.prompt-icon .driven-diamond use')).toHaveAttribute('href', /#glyph-driven-badge$/);
   await expect(p.locator('.prompt-by')).toHaveText('homeassistant:0f1e2d3c');
@@ -172,7 +172,7 @@ test('a prompt from a host that doesn\'t say who sent it, or that says the perso
   await expect(bubble).toBeVisible();
   await expect(bubble.locator('.plain')).toHaveText('Looks good, ship it.');
   await expect(bubble.locator('.sr-only')).toHaveText('Your last message: ');
-  await expect(v.locator('.prompt-origin')).toBeHidden();
+  await expect(v.locator('.prompt-origin:not(.history-turn *)')).toBeHidden();
   const column = await v.locator('.stream').boundingBox();
   const box = await bubble.boundingBox();
   expect(Math.abs(box.x + box.width - (column.x + column.width))).toBeLessThan(1);
@@ -186,13 +186,13 @@ test('a prompt from a host that doesn\'t say who sent it, or that says the perso
   // motion.js names each animation just after making it, so the names are read here, later.
   const rises = () => bubble.evaluate((el) => el.rises.filter((a) => a.id === 'ab-motion-acknowledge').length);
   await upsert(page, CODEX, scheduled({ turnCount: 3 }));
-  await expect(v.locator('.prompt-origin')).toBeVisible();
+  await expect(v.locator('.prompt-origin:not(.history-turn *)')).toBeVisible();
   await expect(bubble).toBeHidden();
   expect(await rises()).toBe(0);
   await upsert(page, CODEX, { status: 'working', statusSince: later(), updatedAt: later(), activity: { userMessage: 'Stop that.', userMessageFrom: 'person', userMessageLabel: null, turnCount: 3 } });
   await expect(bubble).toBeVisible();
   await expect(bubble.locator('.plain')).toHaveText('Stop that.');
-  await expect(v.locator('.prompt-origin')).toBeHidden();
+  await expect(v.locator('.prompt-origin:not(.history-turn *)')).toBeHidden();
   expect(await rises()).toBe(1);
 });
 
@@ -200,7 +200,7 @@ test('a label is text: no markup, no hidden characters, no fact of its own, and 
   await openDemo(page);
   await upsert(page, CODEX, scheduled({ userMessageLabel: '<img src=x onerror="window.__xss=1">\u202E', userMessage: '<script>window.__xss=2</script>\u200B' }));
   const v = await open(page, CODEX);
-  const p = v.locator('.prompt-origin');
+  const p = v.locator('.prompt-origin:not(.history-turn *)');
   await expect(p.locator('img, script')).toHaveCount(0);
   await expect(p.locator('.prompt-facts')).toHaveText('Scheduled prompt · \u201c<img src=x onerror=\'window.__xss=1\'>\u201d');
   await expect(p.locator('.prompt-preview')).toHaveText('<script>window.__xss=2</script>\\u200B');
@@ -216,7 +216,7 @@ test('on a phone the prompt is a full-width row', async ({ page }) => {
   await openDemo(page);
   await upsert(page, CODEX, scheduled());
   const v = await open(page, CODEX);
-  const p = v.locator('.prompt-origin');
+  const p = v.locator('.prompt-origin:not(.history-turn *)');
   const column = await v.locator('.stream').boundingBox();
   const box = await p.boundingBox();
   expect(Math.abs(box.x - column.x)).toBeLessThan(1);
@@ -231,7 +231,7 @@ for (const reduced of [true, false]) {
     await openDemo(page);
     await upsert(page, CODEX, scheduled());
     const v = await open(page, CODEX);
-    const p = v.locator('.prompt-origin');
+    const p = v.locator('.prompt-origin:not(.history-turn *)');
     await p.locator('.prompt-toggle').click();
     const ms = (s) => (s.endsWith('ms') ? parseFloat(s) : parseFloat(s) * 1000);
     const chevron = ms(await style(p.locator('.prompt-chevron'), 'transitionDuration'));

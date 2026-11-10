@@ -16,3 +16,21 @@ test('earlier turns are drawn above the latest exchange, which is drawn once', a
   const scroll = v.locator('.stream-scroll');
   await expect.poll(() => scroll.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(4);
 });
+
+test('an earlier prompt an agent sent is collapsed with its title and a preview, and opens on Show prompt', async ({ page }) => {
+  await page.goto('?demo=1&static=1&signin=1&name=DEV-VM1#/sessions');
+  await page.waitForSelector('html[data-demo-ready]');
+  await open(page, 'error-quota');
+  const turn = view(page, 'error-quota').locator('.history-turn').first();
+  const prompt = turn.locator('.prompt-origin');
+  await expect(prompt.locator('.prompt-facts')).toHaveText('Sent by an agent');
+  await expect(prompt.locator('.prompt-preview')).toHaveText('Demo prompt 1');
+  await expect(prompt.locator('.prompt-full')).toBeHidden();
+  await expect(turn.locator('.history-origin-label')).toHaveCount(0);
+  const toggle = prompt.getByRole('button', { name: 'Prompt sent by an agent, Show prompt' });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await toggle.click();
+  await expect(prompt.getByRole('button', { name: 'Prompt sent by an agent, Hide prompt' })).toHaveAttribute('aria-expanded', 'true');
+  await expect(prompt.locator('.prompt-full')).toHaveText('Demo prompt 1');
+  await expect(prompt.locator('.prompt-preview')).toBeHidden();
+});

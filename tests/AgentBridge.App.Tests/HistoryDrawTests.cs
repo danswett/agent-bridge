@@ -65,13 +65,52 @@ public sealed class HistoryDrawTests
     }
 
     [Fact]
-    public void A_prompt_the_person_did_not_type_is_labelled()
+    public void A_prompt_the_person_did_not_type_is_collapsed_as_the_live_one_is()
     {
-        var row = Assert.Single(HistoryDraw.Rows([Turn(1, "x", from: UserMessageFrom.Schedule)], null));
+        var row = Assert.Single(HistoryDraw.Rows([Turn(1, "x", from: UserMessageFrom.Agent)], null));
 
-        Assert.Equal("Scheduled prompt", row.PromptLabel);
+        var d = Assert.IsType<HistoryDisclosure>(row.Disclosure);
+        Assert.Equal("Sent by an agent", d.Origin.Label);
+        Assert.Equal("prompt 1", d.Origin.Preview);
+        Assert.False(d.Open);
+        Assert.Equal("Prompt sent by an agent, Show prompt", d.ToggleName);
+        Assert.Equal("Show prompt", d.ToggleText);
+
+        d.Open = true;
+
+        Assert.Equal("Prompt sent by an agent, Hide prompt", d.ToggleName);
+        Assert.Equal("Hide prompt", d.ToggleText);
     }
 
+    [Theory]
+    [InlineData(UserMessageFrom.Schedule, "Scheduled prompt")]
+    [InlineData(UserMessageFrom.Other, "Automatic prompt")]
+    public void A_schedules_or_other_prompt_is_collapsed_too(UserMessageFrom from, string label)
+    {
+        var row = Assert.Single(HistoryDraw.Rows([Turn(1, "x", from: from)], null));
+
+        Assert.Equal(label, row.Disclosure!.Origin.Label);
+    }
+
+    [Fact]
+    public void The_persons_prompt_has_no_disclosure_and_is_drawn_as_text()
+    {
+        var row = Assert.Single(HistoryDraw.Rows([Turn(1, "x"), Turn(2, "y", from: UserMessageFrom.Person)], null).Take(1));
+
+        Assert.Null(row.Disclosure);
+        Assert.Equal("prompt 1", row.Prompt);
+        Assert.Null(HistoryDraw.Rows([Turn(2, "y", from: UserMessageFrom.Person)], null)[0].Disclosure);
+    }
+
+    [Fact]
+    public void A_turn_drawn_again_keeps_its_prompt_open()
+    {
+        var turns = new[] { Turn(1, "x", from: UserMessageFrom.Agent) };
+        var kept = new Dictionary<string, HistoryDisclosure>();
+        HistoryDraw.Rows(turns, null, kept)[0].Disclosure!.Open = true;
+
+        Assert.True(HistoryDraw.Rows(turns, null, kept)[0].Disclosure!.Open);
+    }
     [Theory]
     [InlineData(HistoryLoad.Loading, 0, "Loading conversation…")]
     [InlineData(HistoryLoad.Loading, 3, null)]
@@ -103,7 +142,7 @@ public sealed class HistoryDrawTests
         var clock = new MessageClock(T0.AddMinutes(30), TimeZoneInfo.Utc, System.Globalization.CultureInfo.GetCultureInfo("en-US"));
         var turn = Turn(1, "one", replyAt: T0.AddMinutes(5));
 
-        var row = Assert.Single(HistoryDraw.Rows([turn], null, clock));
+        var row = Assert.Single(HistoryDraw.Rows([turn], null, clock: clock));
 
         Assert.Equal("29 min ago", row.Times!.Prompt!.Text);
         Assert.Equal("25 min ago", row.Times.Reply!.Text);
@@ -114,8 +153,8 @@ public sealed class HistoryDrawTests
     public void A_person_prompt_has_its_time_under_it_and_any_other_beside_its_label()
     {
         var clock = new MessageClock(T0.AddMinutes(30), TimeZoneInfo.Utc, System.Globalization.CultureInfo.GetCultureInfo("en-US"));
-        var mine = Assert.Single(HistoryDraw.Rows([Turn(1, "x")], null, clock));
-        var scheduled = Assert.Single(HistoryDraw.Rows([Turn(1, "x", from: UserMessageFrom.Schedule)], null, clock));
+        var mine = Assert.Single(HistoryDraw.Rows([Turn(1, "x")], null, clock: clock));
+        var scheduled = Assert.Single(HistoryDraw.Rows([Turn(1, "x", from: UserMessageFrom.Schedule)], null, clock: clock));
 
         Assert.NotNull(mine.PromptUnder);
         Assert.Null(mine.PromptBeside);
@@ -127,7 +166,7 @@ public sealed class HistoryDrawTests
     public void An_unreadable_turn_and_a_turn_with_no_reply_show_no_guessed_time()
     {
         var clock = new MessageClock(T0.AddMinutes(30), TimeZoneInfo.Utc, System.Globalization.CultureInfo.GetCultureInfo("en-US"));
-        var rows = HistoryDraw.Rows([Turn(1, unreadable: true), Turn(2)], null, clock);
+        var rows = HistoryDraw.Rows([Turn(1, unreadable: true), Turn(2)], null, clock: clock);
 
         Assert.Null(rows[0].Times);
         Assert.Null(rows[0].PromptUnder);
