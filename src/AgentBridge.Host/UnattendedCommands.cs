@@ -1,17 +1,11 @@
 namespace AgentBridge.Host;
 
 // Unattended start of a VM (decision D3, #1595, #1623): the dedicated host account's password
-// kept as an LSA secret so Windows can sign that account in by itself after a reboot, and the
-// way to take that away again. A person runs it at the machine, elevated, once; it is off until
-// they do (#801), and nothing the relay sends can run it.
-//
-//   agent-bridge-host setup-unattended --user <[DOMAIN\]account>   the password is asked for, never an argument
-//   agent-bridge-host disable-unattended [--user <[DOMAIN\]account>]
-//
-// The password is stored only as the LSA "DefaultPassword" secret (readable by SYSTEM), never as
-// the plaintext Winlogon DefaultPassword value, and is never printed, logged or sent anywhere.
-// The account must not be an administrator, and is refused remote and network logon. Whether
-// the host can type into consoles in the session this creates is not assumed here.
+// kept as an LSA secret so Windows can sign it in after a reboot, and the way to take that away.
+// A person runs it at the machine, elevated; it is off until they do (#801), and nothing the
+// relay sends can run it. The password is asked for, never an argument, is stored only as the
+// LSA "DefaultPassword" secret (never the plaintext Winlogon value) and is never printed or sent.
+// The account must not be an administrator, and is refused remote and network logon.
 public interface IUnattendedSystem
 {
     bool IsElevated { get; }
@@ -34,8 +28,7 @@ public static class UnattendedCommands
     public const string Interactive = "SeInteractiveLogonRight";
     public static readonly string[] Denied = ["SeDenyNetworkLogonRight", "SeDenyRemoteInteractiveLogonRight"];
 
-    // Everything setup may leave in Winlogon. Disable removes all of it, DefaultPassword (the
-    // plaintext value, which setup never writes) included, so a hand-made one cannot survive a revoke.
+    // Everything setup may leave in Winlogon, plus a hand-made plaintext DefaultPassword, so none survives a revoke.
     static readonly string[] WinlogonValues = ["AutoAdminLogon", "DefaultUserName", "DefaultDomainName", "DefaultPassword", "AutoLogonCount", "ForceAutoLogon"];
 
     public static int Run(IReadOnlyList<string> args, IUnattendedSystem system, Func<string?> readPassword, TextWriter output, TextWriter error)
@@ -82,8 +75,7 @@ public static class UnattendedCommands
         return 0;
     }
 
-    // Removing what is already gone is not an error, so running it again, or after a half-done
-    // setup, finishes the job.
+    // Removing what is already gone is not an error, so running it again finishes the job.
     static int Disable(string? user, IUnattendedSystem system, TextWriter output, TextWriter error)
     {
         if (!system.IsElevated) { return Fail(error, "disable-unattended needs an elevated terminal to remove the secret and the auto-logon values."); }
@@ -91,15 +83,17 @@ public static class UnattendedCommands
         var domain = system.GetWinlogon("DefaultDomainName");
         var account = user ?? (string.IsNullOrEmpty(current) ? null : string.IsNullOrEmpty(domain) ? current : $"{domain}\\{current}");
 
-        // Switch off first: if a later step fails, the machine already stops signing in by itself.
+        // Switch off first. The user and domain values go last, so a failed RemoveRight can be rerun without --user.
         system.SetWinlogon("AutoAdminLogon", "0");
         system.StorePassword(null);
-        foreach (var value in WinlogonValues) { system.DeleteWinlogon(value); }
+        foreach (var value in WinlogonValues.Where(v => v is not ("DefaultUserName" or "DefaultDomainName"))) { system.DeleteWinlogon(value); }
         if (account is not null)
         {
             system.RemoveRight(account, Interactive);
             foreach (var right in Denied) { system.RemoveRight(account, right); }
         }
+        system.DeleteWinlogon("DefaultUserName");
+        system.DeleteWinlogon("DefaultDomainName");
         output.WriteLine(account is null
             ? "Unattended start is off: the secret and the auto-logon values are removed. No account was named or recorded, so its logon rights are untouched; run again with --user to remove them."
             : $"Unattended start is off for {account}: the secret, the auto-logon values and the logon rights this tool set are removed. The next restart stops at the normal sign-in.");
@@ -109,17 +103,9 @@ public static class UnattendedCommands
     static (string Domain, string Name) Split(string user) =>
         user.Split('\\', 2) is [var d, var n] ? (d, n) : (Environment.MachineName, user);
 
-    static int Fail(TextWriter error, string message)
-    {
-        error.WriteLine($"agent-bridge-host: {message}");
-        return 1;
-    }
+    static int Fail(TextWriter error, string message) { error.WriteLine($"agent-bridge-host: {message}"); return 1; }
 
-    static int UsageError(TextWriter error)
-    {
-        error.WriteLine($"usage: {Usage}");
-        return 2;
-    }
+    static int UsageError(TextWriter error) { error.WriteLine($"usage: {Usage}"); return 2; }
 
     static string? Option(IReadOnlyList<string> args, string name)
     {

@@ -297,7 +297,6 @@ switch (command)
         }
     case "setup-unattended" or "disable-unattended":
         {
-            // At the machine only: this keeps a password for Windows to sign the host's account in by itself (#1623).
             if (!OperatingSystem.IsWindows()) { Console.Error.WriteLine("agent-bridge-host: unattended start is for Windows machines"); return 2; }
             if (Refused("change unattended start")) { return 4; }
             return UnattendedCommands.Run(arguments, new WindowsUnattendedSystem(), ReadMaskedPassword, Console.Out, Console.Error);
@@ -327,8 +326,6 @@ switch (command)
 
 Identity LoadIdentity() => Identity.Load(Option("--profile") ?? "default");
 
-// What may only be done by a person never runs inside an agent session (§6.3 invariant 13): the
-// host's own command line refuses it there, as the pipe does.
 // The password is typed or piped in, never an argument, which a process list or history would keep.
 static string? ReadMaskedPassword()
 {
@@ -342,6 +339,8 @@ static string? ReadMaskedPassword()
     return typed.ToString();
 }
 
+// What may only be done by a person never runs inside an agent session (§6.3 invariant 13): the
+// host's own command line refuses it there, as the pipe does.
 static bool Refused(string what)
 {
     var inside = AgentAncestry.Inside(Environment.GetEnvironmentVariable(Launchers.SessionVariable), ProcessChain.Read(Environment.ProcessId), () => KnownAgents.Running(new SystemProcessInspector()));

@@ -14,7 +14,7 @@ public sealed class UnattendedCommandsTests
         public string? Secret;
         public readonly Dictionary<string, string> Winlogon = [];
         public readonly HashSet<string> Rights = [];
-
+        public bool FailRemove;
         public string? AutoLogonBlockedReason() => Blocked;
         public bool IsAdministrator(string account) => Admin;
         public void StorePassword(string? password) => Secret = password;
@@ -22,7 +22,7 @@ public sealed class UnattendedCommandsTests
         public void SetWinlogon(string name, string value) => Winlogon[name] = value;
         public void DeleteWinlogon(string name) => Winlogon.Remove(name);
         public void AddRight(string account, string right) => Rights.Add($"{account}:{right}");
-        public void RemoveRight(string account, string right) => Rights.Remove($"{account}:{right}");
+        public void RemoveRight(string account, string right) => Rights.Remove(FailRemove ? throw new InvalidOperationException("account not found") : $"{account}:{right}");
     }
 
     static (int Code, string Text) Run(FakeSystem system, params string[] args)
@@ -91,6 +91,19 @@ public sealed class UnattendedCommandsTests
         Assert.Equal(0, Run(system, "disable-unattended", "--user", @"VM\hostuser").Code);
         Assert.Empty(system.Rights);
         Assert.Null(system.Secret);
+    }
+
+    [Fact]
+    public void Disable_after_a_failed_right_removal_still_finds_the_account_when_run_again()
+    {
+        var system = SetUp();
+        system.FailRemove = true;
+        Assert.Equal(1, Run(system, "disable-unattended").Code);
+        Assert.Null(system.Secret);
+        system.FailRemove = false;
+        Assert.Equal(0, Run(system, "disable-unattended").Code);
+        Assert.Empty(system.Rights);
+        Assert.Empty(system.Winlogon);
     }
 
     [Fact]

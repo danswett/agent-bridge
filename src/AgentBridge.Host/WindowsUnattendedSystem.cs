@@ -12,8 +12,7 @@ namespace AgentBridge.Host;
 public sealed class WindowsUnattendedSystem : IUnattendedSystem
 {
     const string Winlogon = @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon";
-    // The name Winlogon looks the stored password up under.
-    const string SecretName = "DefaultPassword";
+    const string SecretName = "DefaultPassword"; // the name Winlogon looks the stored password up under
     const uint LookupNames = 0x800, CreateAccount = 0x10, CreateSecret = 0x20;
     const uint NotFound = 0xC0000034;
 
@@ -80,7 +79,6 @@ public sealed class WindowsUnattendedSystem : IUnattendedSystem
     }
 
     public void AddRight(string account, string right) => Rights(account, right, add: true);
-
     public void RemoveRight(string account, string right) => Rights(account, right, add: false);
 
     static void Rights(string account, string right, bool add)
