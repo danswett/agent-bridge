@@ -64,6 +64,19 @@ public static class HiddenText
     // draws as `echo ב;#א;rm -rf ~`, commented out, and runs `rm -rf ~`. The owner's rule (#253,
     // decision 3) is to escape them and still offer Approve once; Hebrew or Arabic in a code block
     // or an approval is the harder to read for it.
+    // Only NEL, LS and PS drawn as escapes, for prose: the PWA's revealLineSeparators. Prose's CR is
+    // left alone, because Markdig ends the line at a bare CR before the text reaches here (ui.md §6.4).
+    public static string RevealLineSeparators(string text)
+    {
+        if (text.AsSpan().IndexOfAny('\u0085', '\u2028', '\u2029') < 0) { return text; }
+        var b = new StringBuilder(text.Length + 8);
+        foreach (var c in text)
+        {
+            if (c is '\u0085' or '\u2028' or '\u2029') { b.Append($"\\u{(int)c:X4}"); } else { b.Append(c); }
+        }
+        return b.ToString();
+    }
+
     public static string Reveal(string text, bool rightToLeft = false)
     {
         var b = new StringBuilder(text.Length);
