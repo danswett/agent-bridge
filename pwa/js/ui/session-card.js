@@ -1436,6 +1436,8 @@ export class SessionCard {
       this.#watchReceipt(panel.answering, panel.q, panel.asker);
     }
     const old = this.#panel;
+    // Focus in the form that is about to collapse into its line moves to the line (#focusLine).
+    const hadFocus = !!old?.element.contains(document.activeElement);
     const sameQuestion = !!(old && q && old.questionId === q.id && answerable && old.answering.hostId === ctx.hostId);
     let leaving = false;
     if (old && !sameQuestion) {
@@ -1486,6 +1488,7 @@ export class SessionCard {
     this.#asked = q?.id ?? null;
     this.#receipt?.redraw();
     this.els.question.replaceChildren(...[this.#orphanView(), ...this.#closed.map((r) => r.element), this.#receipt?.element, this.#leaving?.panel.element, view].filter(Boolean));
+    if (hadFocus && !sameQuestion) { this.#focusLine(); }
     // An approval's command never slides: a push still under way stops travelling.
     if (view) { stopTravel(view); }
     if (this.#receipt?.fresh) {
@@ -1698,10 +1701,13 @@ export class SessionCard {
     this.#retireReceipt();
     const questionId = question.id;
     // The line, and apart from it the one a screen reader hears it on (receipt.js).
-    const line = h('p', { class: 'answer-receipt' });
+    const line = h('p', { class: 'answer-receipt', tabindex: '-1' });
     const live = receiptLive();
     const element = h('div', { class: 'answer-receipt-slot' }, line, live);
     let resolved = null;
+    // What the person answered, for the record the collapsed question opens to (renderResolved).
+    let answer = null;
+    let resolvedAnswer = null;
     // What the person typed, kept in view with Copy when the form could not take it (notDelivered).
     let kept = null;
     // The same request's clock as the form's was: an answer the form left at Passed to the agent
@@ -1713,26 +1719,39 @@ export class SessionCard {
       draw: (d) => {
         // Its words change as the answer goes, above a question that may stay: whatever they move counts.
         this.#moves?.notOwn();
-        // A closed answer is the question as it was asked with "No longer waiting" under it, neutral.
+        // A question that is no longer asked is kept as it was asked, collapsed to this line: either
+        // it closed ("Question closed", neutral), or its answer went through and it has left the list.
+        const gone = this.#s?.question?.id !== questionId;
         const closed = d?.tone === 'closed';
+        const collapsed = closed || (d?.key === 'delivered' && gone);
+        // Only a closed one is kept past the next question (#retireReceipt); an answer that went is
+        // dropped by it, as before.
         receipt.closed = closed;
-        if (closed && !resolved) {
-          // Its line is under the question it is about, inside it, and what was kept with it.
-          resolved = renderResolved(question, { asker });
-          element.prepend(resolved);
-          resolved.append(line);
-          if (kept) { line.after(kept.element); }
-        } else if (!closed && resolved) {
+        receipt.collapsed = collapsed;
+        if (collapsed && d.key === 'delivered') {
+          // The collapsed line says the question is answered. Its words never include the approval's
+          // own message (#803): the line carries the decision's label only.
+          d = { ...d, speech: 'Question answered' };
+        }
+        if (resolved && (!collapsed || resolvedAnswer !== answer)) {
           element.prepend(line);
           if (kept) { line.after(kept.element); }
           resolved.remove();
           resolved = null;
         }
+        if (collapsed && !resolved) {
+          // Its line is beside the button that opens the record, and what was kept with it under.
+          resolvedAnswer = answer;
+          resolved = renderResolved(question, { asker, answer });
+          element.prepend(resolved);
+          resolved.summary.prepend(line);
+          if (kept) { resolved.append(kept.element); }
+        }
         const words = d?.key === 'notDelivered' ? d.words ?? null : null;
         if (words && (!kept || kept.words !== words)) {
           kept?.element.remove();
           kept = { words, element: this.#keptWords(words) };
-          line.after(kept.element);
+          if (resolved) { resolved.append(kept.element); } else { line.after(kept.element); }
         } else if (!words && kept) {
           kept.element.remove();
           kept = null;
@@ -1745,10 +1764,11 @@ export class SessionCard {
       heard: () => drawn(live),
       follow: (fn) => service.watch(hostId, sessionId, questionId, fn),
     });
-    const receipt = { element, final: false, closed: false, unwatch: null, fresh: true, clock, redraw: null };
+    const receipt = { element, line, final: false, closed: false, collapsed: false, unwatch: null, fresh: true, clock, redraw: null };
     const show = (entry) => {
       if (!entry) { return; }
       line.dataset.answer = entry.state === 'done' ? entry.outcome : entry.state;
+      answer = entry.state === 'done' && entry.outcome === 'delivered' ? entry.answer ?? null : null;
       clock.show(entry);
       receipt.final = entry.state === 'done';
     };
@@ -1791,8 +1811,10 @@ export class SessionCard {
       leaving.unwatch?.();
       this.#watchReceipt(panel.answering, panel.q, panel.asker);
       if (panel.element.isConnected) {
+        const hadFocus = panel.element.contains(document.activeElement);
         this.#moves?.notOwn();
         panel.element.replaceWith(this.#receipt.element);
+        if (hadFocus) { this.#focusLine(); }
         this.#receipt.fresh = false;
         enter(this.#receipt.element, 'acknowledge', { dy: 1 });
       }
@@ -1813,6 +1835,11 @@ export class SessionCard {
     this.#leaving = leaving;
     leaving.unwatch = service.watch(hostId, sessionId, panel.questionId, settle);
     settle(service.get(hostId, sessionId, panel.questionId));
+  }
+
+  // The form collapsed into its line while focus was in it: focus goes to the line, not to the page.
+  #focusLine() {
+    if (this.#receipt?.collapsed) { this.#receipt.line.focus({ preventScroll: true }); }
   }
 
   #dropLeaving() {

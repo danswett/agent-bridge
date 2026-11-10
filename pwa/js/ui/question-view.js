@@ -41,12 +41,32 @@ function defaults(field) {
   return new Set((Array.isArray(d) ? d : [d]).map((x) => (typeof x === 'string' ? x : formatValue(x))));
 }
 
-function optionRow(label, { chosen, multi, other }) {
+// A resolved question never shows a default: only what the person answered, with a check and the
+// words "Your answer" so it never rests on colour (ui.md §6.4, Resolved).
+function optionRow(label, { chosen, multi, other, resolved }) {
+  if (resolved) {
+    return h('li', { class: `opt${chosen ? ' chosen' : ''}${other ? ' other' : ''}` },
+      h('span', { class: 'mark', 'aria-hidden': 'true' }, chosen ? '✓' : ''),
+      h('span', { class: 'label' }, label),
+      chosen ? h('span', { class: 'badge answered' }, 'Your answer') : null);
+  }
   const mark = multi ? (chosen ? '☑' : '☐') : (chosen ? '◉' : '○');
   return h('li', { class: `opt${chosen ? ' chosen' : ''}${other ? ' other' : ''}` },
     h('span', { class: 'mark', 'aria-hidden': 'true' }, mark),
     h('span', { class: 'label' }, label),
     chosen ? h('span', { class: 'badge' }, 'default') : null);
+}
+
+// What was answered for one field: the values chosen and any typed words. Nothing for a question
+// that closed without a record of an answer.
+function answeredOf(field, answer) {
+  const v = typeof answer?.text === 'string' ? answer.text : answer?.fields?.[field.name];
+  const values = new Set();
+  let other = null;
+  for (const x of Array.isArray(v) ? v : [v]) {
+    if (typeof x === 'string') { values.add(x); } else if (typeof x === 'number' || typeof x === 'boolean') { values.add(formatValue(x)); } else if (x && typeof x.other === 'string') { other = x.other.trim(); }
+  }
+  return { values, other };
 }
 
 // The field's title, required badge and kind of answer: spans, so it can be a legend.
@@ -58,30 +78,36 @@ function headParts(field, titleId) {
   ];
 }
 
-function readOnlyField(field, idBase) {
+function readOnlyField(field, idBase, resolved = null) {
   const titleId = `${idBase}-t`;
   const parts = [h('div', { class: 'field-head' }, headParts(field, titleId))];
   if (field.description) { parts.push(h('p', { class: 'field-desc' }, field.description)); }
 
-  const chosen = defaults(field);
+  // A resolved question marks what was answered, never its defaults.
+  const done = resolved ? answeredOf(field, resolved.answer) : null;
+  const chosen = done ? done.values : defaults(field);
   if (field.type === 'choice' || field.type === 'multi') {
     const multi = field.type === 'multi';
     const list = h('ul', { class: 'opts', 'aria-labelledby': titleId });
     for (const o of field.options) {
-      list.append(optionRow(o.label, { chosen: chosen.has(o.value), multi }));
+      list.append(optionRow(o.label, { chosen: chosen.has(o.value), multi, resolved: !!resolved }));
     }
     const known = new Set(field.options.map((o) => o.value));
-    const otherDefault = [...chosen].find((v) => !known.has(v));
+    const otherDefault = done ? done.other : [...chosen].find((v) => !known.has(v));
     if (field.allowOther) {
-      list.append(optionRow(otherDefault ? `Other: ${otherDefault}` : 'Other (type your answer)', { chosen: !!otherDefault, multi, other: true }));
+      list.append(optionRow(otherDefault ? `Other: ${otherDefault}` : 'Other (type your answer)', { chosen: !!otherDefault, multi, other: true, resolved: !!resolved }));
     }
     parts.push(list);
   } else if (field.type === 'boolean') {
-    const d = field.default;
+    const d = done ? [...done.values][0] === 'Yes' ? true : [...done.values][0] === 'No' ? false : null : field.default;
     const list = h('ul', { class: 'opts inline', 'aria-labelledby': titleId });
-    list.append(optionRow('Yes', { chosen: d === true, multi: false }));
-    list.append(optionRow('No', { chosen: d === false, multi: false }));
+    list.append(optionRow('Yes', { chosen: d === true, multi: false, resolved: !!resolved }));
+    list.append(optionRow('No', { chosen: d === false, multi: false, resolved: !!resolved }));
     parts.push(list);
+  } else if (done) {
+    const said = done.other ?? [...done.values][0] ?? '';
+    parts.push(h('div', { class: `answer-box${said ? '' : ' empty'}`, 'aria-labelledby': titleId },
+      said ? [h('span', { class: 'badge answered' }, '✓ Your answer'), ' ', said] : (field.type === 'number' ? 'A number' : 'Free text')));
   } else {
     const d = formatValue(field.default);
     parts.push(h('div', { class: `answer-box${d ? '' : ' empty'}`, 'aria-labelledby': titleId },
@@ -158,16 +184,34 @@ export function renderQuestion(q, { machineName, why = 'machine', readOnly = nul
 // A question its session no longer lists, kept as it was asked: the item that stays in the
 // conversation once the cause of an amber or red line is gone (ui.md §7, "Lines that outlive
 // their cause"). Read-only, with no options chosen for the person: an approval shows its message
-// alone. The line under it (NO_LONGER_WAITING) is the card's.
-export function renderResolved(q, { asker = null } = {}) {
+// alone. The line under it (QUESTION_CLOSED) is the card's.
+//
+// It is collapsed: the record (who asked, the question, the options as plain text with what was
+// answered marked) is hidden behind one button, "Show question" or "Hide question", and the card's
+// line sits beside it (section.summary). answer: what the person answered here, if the answer went
+// through; none when it closed without a record. An approval shows its message alone, exactly as
+// shell() draws it, and no option or answer text of the agent's.
+export function renderResolved(q, { asker = null, answer = null } = {}) {
   const asked = asker ? asker.replace(/ asks$/, ' asked') : (q.kind === 'approval' ? 'Permission requested' : 'Question');
   const idBase = `q${++seq}`;
   const section = shell(q, idBase, false, asked);
   section.classList.add('resolved');
   section.dataset.resolved = 'true';
   if (q.fields.length && q.kind !== 'approval') {
-    section.append(h('ol', { class: 'fields' }, q.fields.map((f, k) => readOnlyField(f, `${idBase}-f${k}`))));
+    section.append(h('ol', { class: 'fields' }, q.fields.map((f, k) => readOnlyField(f, `${idBase}-f${k}`, { answer }))));
   }
+  const record = h('div', { class: 'resolved-record', id: `${idBase}-r`, hidden: true }, [...section.childNodes]);
+  const toggle = h('button', {
+    type: 'button', class: 'button secondary resolved-toggle', 'aria-expanded': 'false', 'aria-controls': record.id,
+    onclick: () => {
+      const open = record.hidden;
+      record.hidden = !open;
+      toggle.setAttribute('aria-expanded', String(open));
+      toggle.textContent = open ? 'Hide question' : 'Show question';
+    },
+  }, 'Show question');
+  section.summary = h('div', { class: 'resolved-summary' }, toggle);
+  section.append(record, section.summary);
   return section;
 }
 
@@ -263,7 +307,7 @@ export function describeAnswer(entry, machineName, { question = null, stalled = 
 // What a question that has left its session's list says of an answer that did not go through. The
 // host cannot tell a question the agent withdrew from one answered elsewhere, so this is one
 // neutral closed state and no cause is promised (ui.md §7).
-export const NO_LONGER_WAITING = 'No longer waiting';
+export const QUESTION_CLOSED = 'Question closed';
 
 // describeAnswer for an answer whose question is no longer asked: an answer that was not sent, was
 // refused or came too late is only "No longer waiting" (tone closed, never amber or red); one that
@@ -272,7 +316,7 @@ export const NO_LONGER_WAITING = 'No longer waiting';
 export function describeClosed(entry, machineName, opts) {
   const d = describeAnswer(entry, machineName, opts);
   const gone = entry.state === 'failed' || (entry.state === 'done' && (['busy', 'refused'].includes(entry.outcome) || (entry.outcome === 'stale' && d.key !== 'notDelivered')));
-  if (gone) { return { key: 'closed', text: NO_LONGER_WAITING, more: null, tone: 'closed', line: true, speech: NO_LONGER_WAITING }; }
+  if (gone) { return { key: 'closed', text: QUESTION_CLOSED, more: null, tone: 'closed', line: true, speech: QUESTION_CLOSED }; }
   // Words the host gave a reason for, or that may have gone in, are kept, neutral.
   if (d.key === 'unconfirmed' || d.key === 'notDelivered') { return { ...d, tone: 'closed' }; }
   return d;

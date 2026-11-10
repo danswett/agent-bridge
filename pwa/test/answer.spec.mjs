@@ -536,7 +536,7 @@ test.describe('outcomes', () => {
   });
 
   // The question leaves the session list after an answer that did not go through (#1193): the line
-  // is about a question that is gone, so it is the question as it was asked with "No longer waiting"
+  // is about a question that is gone, so it is the question as it was asked with "Question closed"
   // under it, in neutral words, kept in the conversation. Never amber or red, never "Try again",
   // never "Your answer:", never a cause the host cannot prove.
   for (const [what, scripted, live] of [
@@ -544,7 +544,7 @@ test.describe('outcomes', () => {
     ['busy', 'busy', 'Another answer to this session is being delivered. Try again in a moment.'],
     ['refused', { outcome: 'refused', reason: 'the session is running elevated' }, 'The machine refused this answer: the session is running elevated.'],
   ]) {
-    test(`a ${what} answer whose question has left the list leaves no warning, only "No longer waiting" under the question`, async ({ page }) => {
+    test(`a ${what} answer whose question has left the list leaves no warning, only "Question closed" under the question`, async ({ page }) => {
       await openDemo(page);
       await script(page, scripted);
       const q = await ask(page, choice());
@@ -552,7 +552,7 @@ test.describe('outcomes', () => {
       await expect(q.locator('.answer-status')).toHaveText(live);
       await withdraw(page);
       const line = card(page, CODEX).locator('.answer-receipt');
-      await expect(line).toHaveText('No longer waiting');
+      await expect(line).toHaveText('Question closed');
       await expect(line).toHaveClass(/\bclosed\b/);
       await expect(line).not.toHaveClass(/\b(warn|bad)\b/);
       const resolved = card(page, CODEX).locator('.question.resolved');
@@ -575,11 +575,11 @@ test.describe('outcomes', () => {
     await ask(page, { id: 'q-next', message: 'Run the tests now?', fields: [{ name: 'ok', type: 'boolean', default: true }] });
     await release(page);
     const line = card(page, CODEX).locator('.answer-receipt');
-    await expect(line).toHaveText('No longer waiting');
+    await expect(line).toHaveText('Question closed');
     await expect(page.locator('.receipt-live, .receipt-alert').filter({ hasText: /already answered/i })).toHaveCount(0);
     // The closed question stays in the conversation, above the new one.
     await page.waitForTimeout(5500);
-    await expect(line).toHaveText('No longer waiting');
+    await expect(line).toHaveText('Question closed');
     await expect(card(page, CODEX).locator('.question.resolved')).toHaveCount(1);
   });
 
@@ -589,12 +589,12 @@ test.describe('outcomes', () => {
     const q = await ask(page, choice());
     await q.locator('.choice[data-value="pg"]').click();
     await withdraw(page);
-    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveText('No longer waiting');
+    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveText('Question closed');
     // The session asks again, and works again: the closed question is still there above it.
     await script(page, 'delivered');
     const next = await ask(page, { id: 'q-next', message: 'And the **cache**?', fields: [{ name: 'c', title: 'Cache', type: 'choice', required: true, options: [{ value: 'redis', label: 'Redis' }, { value: 'none', label: 'None' }] }] });
     await expect(card(page, CODEX).locator('.question.resolved')).toHaveCount(1);
-    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveText('No longer waiting');
+    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveText('Question closed');
     await next.locator('.choice[data-value="redis"]').click();
     await expect(card(page, CODEX).locator('.answer-receipt').last()).toHaveText('You answered · Redis');
     await expect(card(page, CODEX).locator('.answer-receipt')).toHaveCount(2);
@@ -675,7 +675,7 @@ test.describe('outcomes', () => {
     await expect(card(page, CODEX).locator('.question-changed')).toHaveCount(0);
   });
 
-  test('a form the host cancelled, its question gone from the list, keeps what the person typed to read and copy, and is not "No longer waiting"', async ({ page, context }) => {
+  test('a form the host cancelled, its question gone from the list, keeps what the person typed to read and copy, and is not "Question closed"', async ({ page, context }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write']).catch(() => {});
     await openDemo(page);
     await script(page, FORM_RESET);
@@ -688,7 +688,7 @@ test.describe('outcomes', () => {
     const line = card(page, CODEX).locator('.answer-receipt');
     await expect(line).toHaveText(NOT_DELIVERED);
     await expect(line).toHaveClass(/\bclosed\b/);
-    await expect(card(page, CODEX)).not.toContainText(/No longer waiting|already answered|Your answer:/i);
+    await expect(card(page, CODEX)).not.toContainText(/Question closed|already answered|Your answer:/i);
     const kept = card(page, CODEX).locator('.answer-kept');
     await expect(kept.getByRole('textbox', { name: 'What you typed' })).toHaveValue('Database: PostgreSQL\nWhy: it has the JSON I need');
     await expect(kept.getByRole('button', { name: 'Copy' })).toBeVisible();

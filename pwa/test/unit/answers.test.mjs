@@ -127,13 +127,13 @@ test('an unconfirmed answer says how far it got: typed into the prompt, or recor
   assert.match(describeAnswer(done(null), 'DEV-VM1').text, /^Sent, but not confirmed\./);
 });
 
-// #1193: a question that left the list is "No longer waiting" for any answer that did not go through,
+// #1193: a question that left the list is "Question closed" for any answer that did not go through,
 // and never a cause the host cannot prove; a form the host cancelled (formReset) says it was not delivered.
-test('a closed answer is "No longer waiting" unless it may have gone in or the host says why it did not', () => {
+test('a closed answer is "Question closed" unless it may have gone in or the host says why it did not', () => {
   const done = (outcome, extra = {}) => ({ state: 'done', outcome, reason: 'r', ...extra });
   for (const entry of [done('stale'), done('busy'), done('refused'), { state: 'failed', reason: 'offline' }]) {
     const d = describeClosed(entry, 'DEV-VM1');
-    assert.deepEqual([d.key, d.text, d.tone], ['closed', 'No longer waiting', 'closed']);
+    assert.deepEqual([d.key, d.text, d.tone], ['closed', 'Question closed', 'closed']);
   }
   // May have gone in: its words, neutral.
   const unconfirmed = describeClosed(done('unconfirmed'), 'DEV-VM1');
@@ -155,11 +155,11 @@ test('a refusal says the host\'s own words as they came, never "Already answered
   // The host's sentence already ends with its stop: no second one.
   assert.equal(d.text, `The machine refused this answer: ${tall}`);
   assert.deepEqual([d.key, d.tone], ['refused', 'bad']);
-  assert.doesNotMatch(d.text, /Already answered|No longer waiting/);
+  assert.doesNotMatch(d.text, /Already answered|Question closed/);
   // A reason with no stop of its own gets one.
   assert.equal(describeAnswer(refused('the session is running elevated'), 'DEV-VM1').text, 'The machine refused this answer: the session is running elevated.');
   // Once the question has left the list there is nothing to refuse: the neutral closed line.
-  assert.deepEqual([describeClosed(refused(tall), 'DEV-VM1').text, describeClosed(refused(tall), 'DEV-VM1').tone], ['No longer waiting', 'closed']);
+  assert.deepEqual([describeClosed(refused(tall), 'DEV-VM1').text, describeClosed(refused(tall), 'DEV-VM1').tone], ['Question closed', 'closed']);
 });
 
 test('a stale answer can be given again only when the host cancelled its form, and what was typed is read back as typed', () => {

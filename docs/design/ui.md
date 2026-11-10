@@ -1459,7 +1459,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     colour, after "Answer at the machine · *machine*". Both lines are accessible text, not a live
     region. No reason, or an unknown one, keeps today's single line; no client guesses the reason.
     This does not change the row, attention or HA text.
-  - **Resolved:** the card quietens, with no Needs you fill, and reads "Main agent asked"
+  - **Resolved:** the card is one line (#1281): "✓ You answered · *value*" or "Question closed", with a
+    "Show question" button (`aria-expanded`) that opens the record below in place; "Hide question"
+    closes it. The line has no controls and no default chip, and for an approval never carries
+    the approval's text. A "Question answered" or "Question closed" is announced once as it collapses.
+    Focus stays on the button, and moves to the line when the card collapses. The record: the card quietens, with no Needs you fill, and reads "Main agent asked"
     (or "Delegate *name* asked") over the question as it was shown. Below that:
     - with this device's answer record for the question, the record's progress and outcome as
       the card shows them: "You answered · *value*" once confirmed; "Sent, but not confirmed.

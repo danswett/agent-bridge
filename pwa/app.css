@@ -1253,6 +1253,15 @@ summary {
 .question.resolved .question-head { color: var(--ab-text2); }
 .question.resolved :is(.badge, .badge.req) { color: var(--ab-text2); }
 .question.resolved > .answer-receipt { margin-top: 0; }
+/* A resolved question is one line: its words beside the button that opens the record (#1281). */
+.question.resolved { padding-block: 2px; }
+.resolved-summary { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.resolved-summary .answer-receipt { margin: 0; flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.resolved-summary .answer-receipt:focus-visible { outline: 2px solid var(--ab-bridge); outline-offset: 2px; border-radius: 4px; }
+.resolved-toggle { flex: none; min-height: var(--tap); }
+.resolved-record { padding-bottom: 6px; }
+.question.resolved .opt.chosen { border-color: var(--ab-stroke2); box-shadow: none; }
+.question.resolved .opt .badge.answered { margin-left: auto; color: var(--ab-text2); font-weight: 600; }
 .question[data-kind="approval"] .question-head::before { content: "🔒 "; }
 .fields { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 12px; }
 .field-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }

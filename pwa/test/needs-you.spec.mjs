@@ -274,12 +274,12 @@ test.describe('outcomes, as the card\'s buttons have them', () => {
     await page.evaluate(({ id, t }) => { const d = window.agentBridgeDemo; d.upsert({ ...d.host.get(id), status: 'working', statusSince: t, updatedAt: t, question: null }); }, { id: LAND, t: later() });
     await expect(e).toHaveAttribute('data-lingering', 'true');
     const status = e.locator('.needs-status');
-    await expect(status).toHaveText('No longer waiting');
+    await expect(status).toHaveText('Question closed');
     await expect(status).toHaveClass(/\bclosed\b/);
     await expect(status).not.toHaveClass(/\b(warn|bad)\b/);
     await page.waitForTimeout(3000);
     await expect(entryFor(page, LAND)).toHaveCount(1);
-    await expect(status).toHaveText('No longer waiting');
+    await expect(status).toHaveText('Question closed');
     await expect(entryFor(page, LAND)).toHaveCount(0, { timeout: 5000 });
   });
 
