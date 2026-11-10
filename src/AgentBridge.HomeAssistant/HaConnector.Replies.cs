@@ -356,6 +356,16 @@ public sealed partial class HaConnector
 
     static bool IsStamp(string state) => !string.IsNullOrWhiteSpace(state) && state is not ("unknown" or "unavailable");
 
+    bool MixedReplyPayload(string entityId, HaState state)
+    {
+        // MQTT updates state and JSON attributes separately, even on the same topic. Taking the
+        // first half would deliver the previous words and spend the new publish's stamp (#1770).
+        if (!entityId.EndsWith("_reply_payload", StringComparison.Ordinal) || !IsStamp(state.State)
+            || Str(state.Attributes, "at") == state.State) { return false; }
+        log("Home Assistant connector deferred a reply payload whose stamp and attributes do not match");
+        return true;
+    }
+
     // Send-DaemonCardPayload: one publish from the reply card, unless it was read before. Says
     // whether it was nothing to send, taken without a delivery (refused, or words for a question),
     // or is being delivered.

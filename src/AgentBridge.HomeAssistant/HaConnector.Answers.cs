@@ -98,6 +98,7 @@ public sealed partial class HaConnector
     internal void Observe(HaTrigger hit)
     {
         if (LaunchHit(hit) || UpdateHit(hit)) { return; }
+        if (MixedReplyPayload(hit.EntityId, hit.State)) { return; }
         hits.Enqueue((Interlocked.Increment(ref hitSeq), hit));
     }
 
@@ -577,6 +578,11 @@ public sealed partial class HaConnector
             return new Observation("unknown", "", state, true);
         }
         if (state.State == "unknown" || string.IsNullOrWhiteSpace(state.State)) { return new Observation("absent", "", state, true); }
+        if (MixedReplyPayload(entityId, state))
+        {
+            Interlocked.Increment(ref indeterminate);
+            return Observation.Unknown;
+        }
         return new Observation("present", state.State, state, true);
     }
 
