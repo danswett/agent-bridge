@@ -6,8 +6,7 @@ import { test, expect } from '@playwright/test';
 import { BRAND } from '../js/brand.js';
 import { open, view } from './nav.mjs';
 
-// Quarantined on webkit (#1690, #1685): tests here time out in pwa-ui webkit 1/3 under load and kept main red. Chromium still runs the file. Lift when the #1690 shard fix merges and the file passes on webkit (2026-11-13 is only a backstop).
-test.skip(({ browserName }) => browserName === 'webkit', 'flaky on webkit, #1690');
+
 
 const COPILOT = '02d9e5d5-6b35-49bd-b083-39572fbff648';
 const CODEX = '019a1b2c-codex-example';

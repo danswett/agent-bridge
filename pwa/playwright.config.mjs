@@ -32,8 +32,14 @@ export default defineConfig({
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
     // One retry in CI for WebKit alone: its shards fail on a loaded runner in tests that then
-    // pass (#1692). Chromium has none, and a pass on retry is listed, never hidden.
-    { name: 'webkit', retries: process.env.CI ? 1 : 0, use: { ...devices['Desktop Safari'] } },
+    // pass (#1692). Chromium has none, and a pass on retry is listed, never hidden. A tap there
+    // can take over 5 s to land under load (answer.spec, #1690), so its expects wait 10 s.
+    {
+      name: 'webkit',
+      retries: process.env.CI ? 1 : 0,
+      expect: { timeout: 10000 },
+      use: { ...devices['Desktop Safari'] },
+    },
   ],
   webServer: {
     command: `node test/serve.mjs --port ${PORT}`,
