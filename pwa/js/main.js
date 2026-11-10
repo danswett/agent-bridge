@@ -443,7 +443,7 @@ async function startDemo() {
   // which Forget takes off as the relay would. ?forgetMs= shortens how long an arm lasts.
   const connection = new DemoConnection(machines, {
     known: params.get('offline') === '1'
-      ? [{ id: 'd0e1f2a3b4c5d6e7f8091a2b3c4d5e6f', name: 'Travel laptop', kind: 'host', lastSeen: new Date(Date.now() - 3 * 86400000).toISOString() }]
+      ? [{ id: 'd0e1f2a3b4c5d6e7f8091a2b3c4d5e6f', name: 'Travel laptop', kind: 'host', lastSeen: new Date(Date.now() - 3 * 86400000).toISOString(), start: params.get('start') || undefined }]
       : null,
   });
   // ?timeout= shortens how long a request waits for its response, for the tests of resends.

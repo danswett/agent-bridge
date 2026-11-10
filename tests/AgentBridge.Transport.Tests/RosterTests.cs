@@ -51,6 +51,29 @@ public class RosterTests
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task A_host_that_says_how_it_starts_is_listed_with_it_and_a_word_the_relay_does_not_know_is_dropped()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        var token = relay.TokenFor(1, "octo");
+        var vm = await relay.ConnectAsync(token, "vm", "host", start: StartModes.Boot);
+        var laptop = await relay.ConnectAsync(token, "laptop", "host", start: StartModes.Logon);
+        var odd = await relay.ConnectAsync(token, "odd", "host", start: "sleeping");
+        var plain = await relay.ConnectAsync(token, "plain", "host");
+        var app = await relay.ConnectAsync(token, "app", "app");
+        foreach (var h in new[] { vm, laptop, odd, plain }) { await app.Relay.WaitForPeerAsync(p => p.Id == h.Id, Patience); }
+        foreach (var h in new[] { vm, laptop, odd, plain }) { await LeaveAsync(relay, h, app); }
+
+        Assert.Equal(StartModes.Boot, (await UntilKnownAsync(app, vm.Id)).Start);
+        Assert.Equal(StartModes.Logon, (await UntilKnownAsync(app, laptop.Id)).Start);
+        Assert.Null((await UntilKnownAsync(app, odd.Id)).Start);
+        var none = await UntilKnownAsync(app, plain.Id);
+        Assert.Equal("Offline", none.StatusWords);
+        Assert.Equal("Signed out: waiting for sign-in", (await UntilKnownAsync(app, vm.Id)).StatusWords);
+        Assert.Equal("Logon only: starts when you sign in", (await UntilKnownAsync(app, laptop.Id)).StatusWords);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task A_host_that_has_left_is_listed_as_offline_with_when_it_was_last_seen_and_one_online_is_not()
     {
         await using var relay = await TestRelay.StartAsync();

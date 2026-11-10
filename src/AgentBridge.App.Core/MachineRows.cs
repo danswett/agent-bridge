@@ -124,7 +124,7 @@ public sealed partial class MainViewModel
             var key = $"offline:{o.Id}";
             var row = MachineRows.FirstOrDefault(r => r.Key == key && r.Offline == o) ?? new MachineRowViewModel(key, o);
             row.Name = o.Name;
-            row.Status = "Offline";
+            row.Status = o.Status;
             want.Add(row);
         }
         foreach (var gone in MachineRows.Except(want).ToList()) { MachineRows.Remove(gone); }

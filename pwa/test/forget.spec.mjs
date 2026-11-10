@@ -40,6 +40,15 @@ test('an offline machine is listed after the online ones with when it was last s
   expect(await page.evaluate(() => window.__cspViolations)).toEqual([]);
 });
 
+test('an offline machine says whether it is signed out or logon only, and otherwise just Offline', async ({ page }) => {
+  await openDemo(page, '&offline=1');
+  await expect(offline(page).locator('.machine-state')).toHaveText('Offline');
+  await openDemo(page, '&offline=1&start=boot');
+  await expect(offline(page).locator('.machine-state')).toHaveText('Signed out: waiting for sign-in');
+  await openDemo(page, '&offline=1&start=logon');
+  await expect(offline(page).locator('.machine-state')).toHaveText('Logon only: starts when you sign in');
+});
+
 test('a keyboard forgets with two presses on the same button, which keeps focus while it is redrawn', async ({ page }) => {
   await openDemo(page, '&offline=1');
   await offline(page).locator('.machine-forget').focus();

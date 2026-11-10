@@ -10,7 +10,25 @@ public sealed record PresenceEntry(string Id, string Name, string Kind, DateTime
 
 // One of the account's machines that is not connected, as the relay's roster remembers it
 // (docs/protocol/roster.md).
-public sealed record KnownMachine(string Id, string Name, string Kind, DateTimeOffset LastSeen);
+public sealed record KnownMachine(string Id, string Name, string Kind, DateTimeOffset LastSeen, string? Start = null)
+{
+    // The words for an offline machine whose start mode is recorded; "Offline" when it is not.
+    public string StatusWords => StartModes.Words(Start);
+}
+
+// How a host starts, as it declares it in hello (docs/protocol/roster.md): "boot" starts without
+// anyone signed in, "logon" only when a person signs in. Anything else is not recorded.
+public static class StartModes
+{
+    public const string Boot = "boot", Logon = "logon";
+    public static string? Clean(string? s) => s is Boot or Logon ? s : null;
+    public static string Words(string? s) => s switch
+    {
+        Boot => "Signed out: waiting for sign-in",
+        Logon => "Logon only: starts when you sign in",
+        _ => "Offline",
+    };
+}
 
 // One presence message's lists, published together (#206), never mixed across messages.
 public sealed record PresenceSnapshot(IReadOnlyList<PresenceEntry> Presence, IReadOnlyList<KnownMachine>? Known)
@@ -197,7 +215,7 @@ public sealed class RelayClient : IAsyncDisposable
     }.Uri;
 
     // kind is one of the relay's device kinds: host, app, pwa, phone or test.
-    public static async Task<RelayClient> ConnectAsync(Uri relay, string token, P256KeyPair key, string name, string kind, CancellationToken ct = default)
+    public static async Task<RelayClient> ConnectAsync(Uri relay, string token, P256KeyPair key, string name, string kind, CancellationToken ct = default, string? start = null)
     {
         var ws = new ClientWebSocket();
         // Keeps NATs, proxies and the hosting ingress from timing out an idle host. The timeout
@@ -213,7 +231,7 @@ public sealed class RelayClient : IAsyncDisposable
             // challenge after the hello, as always.
             await ws.ConnectAsync(new UriBuilder(SocketUri(relay)) { Query = "admit=1" }.Uri, ct);
             c = new RelayClient(ws, Wire.DeviceId(key.Public), relay);
-            await c.SendTextAsync(new { t = "hello", token, pub = Wire.Hex(key.Public), name, kind }, ct);
+            await c.SendTextAsync(new { t = "hello", token, pub = Wire.Hex(key.Public), name, kind, start = StartModes.Clean(start) }, ct);
             var challenge = await c.ReceiveControlAsync("challenge", ct);
             var eph = Wire.Unhex(challenge.GetProperty("eph").GetString()!);
             var nonce = Wire.Unhex(challenge.GetProperty("nonce").GetString()!);
@@ -438,7 +456,8 @@ public sealed class RelayClient : IAsyncDisposable
         IReadOnlyList<KnownMachine>? known = j.TryGetProperty("known", out var k) && k.ValueKind == JsonValueKind.Array
             ? [.. k.EnumerateArray().Select(d => new KnownMachine(
                 d.GetProperty("id").GetString()!, d.GetProperty("name").GetString()!,
-                d.GetProperty("kind").GetString()!, d.GetProperty("lastSeen").GetDateTimeOffset()))]
+                d.GetProperty("kind").GetString()!, d.GetProperty("lastSeen").GetDateTimeOffset(),
+                d.TryGetProperty("start", out var st) && st.ValueKind == JsonValueKind.String ? StartModes.Clean(st.GetString()) : null))]
             : null;
         var previous = Snapshot with { Previous = null };
         Volatile.Write(ref snapshot, new PresenceSnapshot(presence, known) { Previous = previous });

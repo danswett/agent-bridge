@@ -184,10 +184,10 @@ public sealed class TestRelay : IAsyncDisposable
     public Task<SignInResult> SignInAsync(GitHubUser user) =>
         SignIn.DeviceFlowAsync(Http, Url, (code, _) => GitHub.Approve(code, user));
 
-    public async Task<Device> ConnectAsync(string token, string name, string kind = "test", P256KeyPair? key = null)
+    public async Task<Device> ConnectAsync(string token, string name,     string kind = "test", P256KeyPair? key = null, string? start = null)
     {
         key ??= P256KeyPair.Generate();
-        var relay = await RelayClient.ConnectAsync(Url, token, key, name, kind);
+            var relay = await RelayClient.ConnectAsync(Url, token, key, name, kind, start: start);
         var hub = new ChannelHub(relay, key, name, kind) { Handler = (_, op, data) => Demo(op, data) };
         var d = new Device(key, relay, hub);
         devices.Add(d);

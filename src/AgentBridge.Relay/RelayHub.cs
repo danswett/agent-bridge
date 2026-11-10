@@ -63,8 +63,9 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
     // Container Apps) while new devices land on the new one, and neither half sees the other.
     public Task CloseAllAsync() => Task.WhenAll(accounts.Values.SelectMany(a => a.Values).Select(c => c.CloseAsync(CloseCodes.Restarting, "restarting")));
 
-    sealed class Connection(WebSocket ws, Account account, string deviceId, string name, string kind, string site)
+    sealed class Connection(WebSocket ws, Account account, string deviceId, string name, string kind, string site, string? start = null)
     {
+        public string? Start => start;
         // Correlates one socket's log lines. Random and meaningless outside this process, so
         // logs carry no account, device or name (design §5.10).
         public string Tag { get; } = Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant();
@@ -171,7 +172,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         }
         if (replaced != null) { await replaced.CloseAsync(CloseCodes.Replaced, "replaced"); }
         // A host is recorded as itself: the id it proved and the name it gave, nothing a message says.
-        await roster.ConnectedAsync(conn.Account.Id, conn.DeviceId, conn.Name, conn.Kind);
+        await roster.ConnectedAsync(conn.Account.Id, conn.DeviceId, conn.Name, conn.Kind, conn.Start);
 
         metrics.Connected(conn.Kind, conn.Site);
         log.LogInformation("connect {Conn} {Kind}; {Count} online in account", conn.Tag, conn.Kind, devices.Count);
@@ -226,6 +227,9 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         var kind = hello.GetProperty("kind").GetString() ?? "";
         if (!Kinds.Contains(kind)) { await RefuseAsync(ws, CloseCodes.Protocol, "bad-kind"); return null; }
         var name = Clean(hello.GetProperty("name").GetString());
+        // Only a host records how it starts, and only the two known words are kept.
+        var start = kind == "host" && hello.TryGetProperty("start", out var st) && st.ValueKind == JsonValueKind.String ? st.GetString() : null;
+        if (start is not ("boot" or "logon")) { start = null; }
 
         if (!early) { await SendJsonAsync(ws, new { t = "challenge", eph = Wire.Hex(eph.Public), nonce = Wire.Hex(nonce), account = account.Id }, ct); }
         var proof = await ReceiveControlAsync(ws, ct);
@@ -236,7 +240,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             await RefuseAsync(ws, CloseCodes.ProofFailed, "proof-failed");
             return null;
         }
-        return new Connection(ws, account, Wire.DeviceId(pub), name, kind, site);
+        return new Connection(ws, account, Wire.DeviceId(pub), name, kind, site, start);
     }
 
     async Task<string> ForwardAsync(Connection conn, ConcurrentDictionary<string, Connection> devices, CancellationToken aborted)
@@ -485,7 +489,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             var known = roster.Known(accountId, devices.ContainsKey);
             hasRoster = known is not null;
             object snapshot = known is not null
-                ? new { t = "presence", devices = list, known = known.Select(k => new { id = k.Id, name = k.Name, kind = k.Kind, lastSeen = k.LastSeen }).ToArray() }
+                ? new { t = "presence", devices = list, known = known.Select(k => new { id = k.Id, name = k.Name, kind = k.Kind, lastSeen = k.LastSeen, start = k.Start }).ToArray() }
                 : new { t = "presence", devices = list };
             message = JsonSerializer.SerializeToUtf8Bytes(snapshot);
         }

@@ -15,6 +15,7 @@ public sealed class OfflineMachineViewModel : Observable
     readonly TimeProvider time;
     string name;
     DateTimeOffset lastSeen;
+    string? start;
     DateTimeOffset? armedAt;
     bool busy;
     string? error;
@@ -24,6 +25,7 @@ public sealed class OfflineMachineViewModel : Observable
         Id = m.Id;
         name = m.Name;
         lastSeen = m.LastSeen;
+        start = m.Start;
         this.forget = forget;
         this.time = time;
     }
@@ -31,8 +33,11 @@ public sealed class OfflineMachineViewModel : Observable
     public string Id { get; }
     public string Name => name;
     public DateTimeOffset LastSeen => lastSeen;
-    public string LastSeenText => $"Offline \u00b7 last seen {Words.Ago(lastSeen, time.GetUtcNow())}";
-    // The Machines page's row says "Offline" as its status, so its facts start at when.
+    // "Offline", or the plain words for a machine that said how it starts (a VM with no one
+    // signed in; a laptop that starts only at sign-in).
+    public string Status => StartModes.Words(start);
+    public string LastSeenText => $"{Status} \u00b7 last seen {Words.Ago(lastSeen, time.GetUtcNow())}";
+    // The Machines page's row says its status above, so its facts start at when.
     public string SeenText => $"Last seen {Words.Ago(lastSeen, time.GetUtcNow())}";
     public bool Armed => armedAt is not null;
     public bool Busy => busy;
@@ -46,6 +51,7 @@ public sealed class OfflineMachineViewModel : Observable
     internal void Update(KnownMachine m)
     {
         if (name != m.Name) { name = m.Name; Raise(nameof(Name)); Raise(nameof(ForgetName)); }
+        if (start != m.Start) { start = m.Start; Raise(nameof(Status)); Raise(nameof(LastSeenText)); }
         if (lastSeen == m.LastSeen) { return; }
         lastSeen = m.LastSeen;
         Raise(nameof(LastSeen));
