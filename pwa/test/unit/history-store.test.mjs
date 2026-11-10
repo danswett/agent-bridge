@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { DemoHost } from '../../js/demo.js';
 import { HostClient } from '../../js/host-client.js';
 import { HistoryStore } from '../../js/history-store.js';
+import { HISTORY } from '../../js/history.js';
 import { readSession } from '../../js/protocol.js';
 
 const ID = 's1';
@@ -18,9 +19,19 @@ async function setup(t, { count = 45, history = true, ...options } = {}) {
   const client = new HostClient(host.connect(), { timeoutMs: 2000 });
   t.after(() => client.close());
   await client.hello();
-  const store = new HistoryStore({ current: () => ({ client }), ...options });
+  // first: null asks the host's default page, which the older tests were written for.
+  const store = new HistoryStore({ current: () => ({ client }), first: null, ...options });
   return { host, client, store };
 }
+
+test('opening a session asks for a small newest page, and earlier pages are the full size (#1622)', async (t) => {
+  const { store } = await setup(t, { count: 100, first: HISTORY.firstTurns });
+  const first = await store.open('h', ID);
+  assert.deepEqual(nums(first), range(96, 100));
+  assert.equal(first.more, true);
+  const second = await store.loadEarlier('h', ID);
+  assert.deepEqual(nums(second), range(76, 100));
+});
 
 // A session as the sessions store gives it, whose latest turn is `turn`.
 const session = (activity) => readSession({ id: ID, agent: 'copilot', status: 'working', updatedAt: new Date().toISOString(), activity });

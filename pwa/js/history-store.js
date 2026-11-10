@@ -48,8 +48,9 @@ export class HistoryStore {
   // current(hostId): { client } for the host if it is connected, else null. keep: turns held per
   // session, about (a page is let go whole at the old end, so a little more may be held). limit:
   // turns asked for a page, 1 to 50; none leaves it to the host (20).
-  constructor({ current, keep = HISTORY.kept, limit = null }) {
-    Object.assign(this, { current, keep, limit });
+  // first: turns the newest page asks for when limit is none.
+  constructor({ current, keep = HISTORY.kept, limit = null, first = HISTORY.firstTurns }) {
+    Object.assign(this, { current, keep, limit, first });
   }
 
   static key(hostId, sessionId) { return JSON.stringify([hostId, sessionId]); }
@@ -170,7 +171,10 @@ export class HistoryStore {
   }
 
   #ask(client, e, cursor) {
-    return client.history(e.sessionId, { ...(cursor ? { before: cursor } : {}), ...(this.limit ? { limit: this.limit } : {}) });
+    // The page with no cursor is the newest, and is kept small (HISTORY.firstTurns); `limit`, when
+    // given, sets every page's size.
+    const limit = this.limit ?? (cursor ? null : this.first);
+    return client.history(e.sessionId, { ...(cursor ? { before: cursor } : {}), ...(limit ? { limit } : {}) });
   }
 
   #fail(e, on, reason, fromHost) {
@@ -350,7 +354,11 @@ export class HistoryStore {
     // only those with what is held takes its place.
     if (!P.some((t) => out.some((h) => h.id === t.id && !h.provisional))) {
       const ids = new Set(P.map((t) => t.id));
-      return [...P.map((t) => { const h = held.find((x) => x.id === t.id); return h ? adopt(t, h) : t; }), ...this.#tail(e, ids)];
+      // A small page can start at the first turn activity said, right after turns the host served:
+      // those are the page's older neighbours, and stay below it (#1628).
+      const pos = P[0] ? held.findIndex((x) => x.id === P[0].id) : -1;
+      const older = pos > 0 && !held[pos - 1].provisional ? held.slice(0, pos) : [];
+      return [...older, ...P.map((t) => { const h = held.find((x) => x.id === t.id); return h ? adopt(t, h) : t; }), ...this.#tail(e, ids)];
     }
     let last = -1;
     P.forEach((t, i) => {

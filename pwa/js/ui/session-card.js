@@ -50,6 +50,7 @@ import { PromptMemory, disclosureName, promptOrigin } from '../prompt-origin.js'
 import { holdKey } from './hold.js';
 import { CONNECTION_CHANGED } from '../channels.js';
 import { HistoryView } from './history-view.js';
+import { HISTORY } from '../history.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 // The Details rows whose values move with the clock: drawn again where they are, not as new nodes.
@@ -480,7 +481,7 @@ export class SessionCard {
   #guardTimer = null;
   // Listening for the end of a smooth scroll to the question, until it ends or is replaced.
   #scrollEnd = null;
-  // A question that arrived in the drawing under way, to bring into sight once it is all drawn.
+  #revealing = null;  // A question that arrived in the drawing under way, to bring into sight once it is all drawn.
   #arrived = null;
   // What moves the guarded question's answers on screen while it stays (#491).
   #moves = null;
@@ -660,6 +661,29 @@ export class SessionCard {
     e.replyCopy = h('div', { class: 'reply-copy', 'aria-hidden': 'true' }, h('span'));
     e.replyBar = h('div', { class: 'reply-bar' }, e.replyCopy);
     this.turns = new HistoryView();
+    this.turns.anchor = (change) => {
+      const sc = this.els.scroll;
+      const before = sc.scrollHeight;
+      const was = sc.scrollTop;
+      const follow = this.#sticking();
+      change();
+      const grew = sc.scrollHeight - before;
+      if (grew > 0) {
+        // Following the end, to the end (whatever has grown below it too); reading, by what grew above.
+        // A smooth scroll to a question is cut short by setting scrollTop, so it is started again.
+        const keep = () => {
+          // Set from where it was, not added to where it is: the browser may have kept the place already.
+          if (follow) { sc.scrollTop = sc.scrollHeight; } else { sc.scrollTop = was + grew; }
+          const r = this.#revealing;
+          if (r?.view.isConnected) { r.view.scrollIntoView({ block: 'nearest', behavior: r.behavior }); }
+        };
+        if (this.collapse) { this.collapse.appScroll(keep); } else { keep(); }
+        if (follow) { this.#stuckAt = sc.scrollTop; }
+        // Our own scroll, keeping what is read where it was: not a move under a pointer.
+        this.#moves?.settle();
+      }
+    };
+    this.turns.onSettled = () => this.#wantEarlier();
     e.scroll = h('div', { class: 'stream-scroll' }, this.turns.element, e.stream);
     this.#watchHold(e.scroll);
     // An open question out of sight (#1657): one tap brings its card into view.
@@ -1399,20 +1423,47 @@ export class SessionCard {
   }
 
   // The conversation before the latest exchange, from the history store, opened the first time the
-  // session is shown. It opens at the latest message: one scroll to the end, once, when the turns
-  // first draw, and none after it.
+  // session is shown. It opens at the latest message:   kept at the end while it fills, until the
+    // person scrolls.
   #unwatch = null;
-  #atLatest = false;
-  #openTop = 0;
+  #stick = true;
+  #stuckAt = -1;
+  #placed = false;
+
+  // Still following the end: until the scroll is somewhere we did not put it and not at the end,
+  // which is checked here as well as on the scroll event, since a draw can come before the event.
+  #sticking() {
+    if (this.#stick && this.els.scroll.scrollTop !== this.#stuckAt && !this.#atEnd()) { this.#stick = false; }
+    return this.#stick;
+  }
 
   #openTurns() {
     if (!this.historyStore) { return; }
     if (this.#unwatch) { this.#drawTurns(); return; }
-    this.#openTop = this.els.scroll.scrollTop;
+    this.#stuckAt = this.els.scroll.scrollTop;
+    // A scroll that is not ours and leaves the end: the person has taken over.
+    this.els.scroll.addEventListener('scroll', () => { this.#sticking(); }, { passive: true });
     this.#unwatch = this.historyStore.watch(this.hostId, this.#s.id, () => this.#drawTurns());
     this.historyStore.open(this.hostId, this.#s.id, { session: this.#s }).catch(() => {});
     this.#drawTurns();
   }
+
+  // Older pages come in the background (#1622), one at a time once the last one is drawn, when
+  // the browser is idle: never while it is busy with a scroll or a key.
+  #wantEarlier() {
+    // A view that is not shown does not fill in: it would grow every page's cost (and goes on
+    // when it is shown again).
+    const snapshot = this.historyStore.get(this.hostId, this.#s.id);
+    // A page let go at the newest end to stay within the limit would take the newest turns with it.
+    if (this.#earlierAsked || snapshot.phase !== 'ready' || !snapshot.more || snapshot.loading || this.turns.pending || snapshot.turns.length >= HISTORY.fillTurns || snapshot.turns.length + HISTORY.maxTurns > HISTORY.kept) { return; }
+    this.#earlierAsked = true;
+    const go = () => {
+      this.#earlierAsked = false;
+      if (this.#unwatch) { this.historyStore.loadEarlier(this.hostId, this.#s.id).catch(() => {}); }
+    };
+    if (globalThis.requestIdleCallback) { globalThis.requestIdleCallback(go, { timeout: 500 }); } else { setTimeout(go, 50); }
+  }
+  #earlierAsked = false;
 
   // The question the slot holds a place for: the open one, or the one whose record it still shows.
   #slotQuestion = null;
@@ -1421,18 +1472,28 @@ export class SessionCard {
     const snapshot = this.historyStore.get(this.hostId, this.#s.id);
     const slot = this.els.question;
     if (this.#s.question) { this.#slotQuestion = this.#s.question.id; } else if (!slot.hasChildNodes()) { this.#slotQuestion = null; }
+    const sc = this.els.scroll;
+    // Not at the end before this draw (the person read on, or something grew with no scroll):
+    // nothing here takes them from where they are.
+    // A newer turn than the last drawn is the reply the person is waiting for: it is followed.
+    const away = this.#sticking() && sc.getClientRects().length > 0 && !this.#atEnd();
+    const tail = this.turns.element.lastElementChild;
     const drawn = this.turns.render(snapshot, this.#s.activity?.turn ?? null, { slot, questionId: this.#slotQuestion });
     // Not in a turn (none holds it, or the history is not drawn): back where the live exchange ends.
     if (!this.turns.hosted && slot.parentNode !== this.els.stream) { this.els.stream.append(slot); }
     this.#syncWaiting();
-    const sc = this.els.scroll;
-    if (!this.#atLatest && snapshot.phase !== 'idle' && snapshot.phase !== 'loading' && sc.getClientRects().length) {
-      this.#atLatest = true;
-      // Not if the person has already scrolled: the jump would take them from where they are.
-      if (drawn && sc.scrollTop === this.#openTop) {
-        const toEnd = () => { sc.scrollTop = sc.scrollHeight; };
-        if (this.collapse) { this.collapse.appScroll(toEnd); } else { toEnd(); }
-      }
+    if (away && drawn && tail === this.turns.element.lastElementChild) { this.#stick = false; }
+    this.#wantEarlier();
+    // Latest at the bottom, kept there until the person scrolls (#1646). A draw that showed
+    // nothing does not count, so turns arriving later still scroll.
+    // Not under a finger, a pressed mouse or one resting on it (ui.md §5.3): the view stays put.
+    // The first jump to the latest is made wherever the pointer rests; after it, not under a finger,
+    // a pressed mouse or one resting on the view (ui.md §5.3): the view stays put.
+    const held = this.#placed && (this.#touches || this.#pressing || this.#hovering);
+    if (this.#sticking() && drawn && sc.getClientRects().length && !held) {
+      this.#placed = true;
+      const toEnd = () => { sc.scrollTop = sc.scrollHeight; this.#stuckAt = sc.scrollTop; };
+      if (this.collapse) { this.collapse.appScroll(toEnd); } else { toEnd(); }
     }
   }
 
@@ -1715,6 +1776,7 @@ export class SessionCard {
     const sc = this.els.scroll;
     this.#scrollEnd?.abort();
     this.#scrollEnd = null;
+    this.#revealing = null;
     const v = view.getBoundingClientRect();
     const box = sc.getBoundingClientRect();
     // What the floating header covers, and the room the scroll leaves below it (scroll-padding-top).
@@ -1737,15 +1799,21 @@ export class SessionCard {
     const ended = this.#scrollEnd = new AbortController();
     const { signal } = ended;
     let settle = 0;
-    const done = () => { clearTimeout(settle); ended.abort(); };
+    this.#revealing = { view, behavior };
+    const done = (still) => {
+      clearTimeout(settle);
+      ended.abort();
+      if (still !== true && this.#revealing?.view === view) { this.#revealing = null; }
+    };
     sc.addEventListener('scroll', () => {
       this.#guard();
       clearTimeout(settle);
-      settle = setTimeout(done, SCROLL_SETTLED_MS);
+      // Stopped for now (a slow frame looks like that): the question is still being brought, until scrollend.
+      settle = setTimeout(() => done(true), SCROLL_SETTLED_MS);
     }, { signal, passive: true });
     sc.addEventListener('scrollend', () => { this.#guard(); done(); }, { signal });
-    for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) { sc.addEventListener(type, done, { signal, passive: true }); }
-    setTimeout(done, 3 * QUESTION_ARRIVAL_GUARD_MS);
+    for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) { sc.addEventListener(type, () => done(), { signal, passive: true }); }
+    setTimeout(() => done(), 3 * QUESTION_ARRIVAL_GUARD_MS);
   }
 
   // A finger on the conversation holds it until the last finger lifts. Touch events, not pointer

@@ -155,6 +155,9 @@ test.describe('on a phone', () => {
   test('an option\'s ring has a slot of its own at its end, clear of its words and its badge, so the option never resizes as it comes', async ({ page }) => {
     await openDemo(page);
     const q = await ask(page, choice({ default: 'pg' }));
+    // The latest is at the bottom once the history is drawn (#1646); measure after that.
+    await expect(card(page, CODEX).locator('.history-turn').first()).toBeVisible();
+    await expect.poll(() => card(page, CODEX).locator('.stream-scroll').evaluate((s) => s.scrollHeight - s.scrollTop - s.clientHeight)).toBeLessThan(2);
     const pg = q.locator('.choice[data-value="pg"]');
     const before = await pg.boundingBox();
     await hold(page);

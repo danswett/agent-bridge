@@ -95,21 +95,47 @@ export function turnView(t, inline = null) {
   return h('section', { class: 'history-turn', dataset: { turn: t.id } }, prompt, shownParts(t).map((p) => part(p, inline)), t.truncated ? h('p', { class: 'history-meta history-cut' }, WORDS.cut) : null);
 }
 
+// Turns drawn in one go when nothing is drawn yet (the newest, so the pane scrolls at once), and
+// older turns drawn per frame after that (#1622). Building a turn (markdown, tool rows) is what
+// costs; 500 of them in one task was the hang.
+export const FIRST_DRAW = 5;
+export const SLICE = 2;
+// A frame's share for drawing older turns, past the first SLICE: the load ends sooner, and no
+// frame is held up for long.
+const SLICE_MS = 6;
+
+const nextFrame = (fn) => (globalThis.requestAnimationFrame ? globalThis.requestAnimationFrame(fn) : setTimeout(fn, 16));
+
 export class HistoryView {
   element = h('div', { class: 'history', 'aria-label': 'Earlier conversation', hidden: true });
   #drawn = new Map();
   // Whether the question's slot was drawn inside a turn, where the agent asked it (#1657).
   hosted = false;
+  #backlog = [];
+  #framing = false;
+
+  // anchor(change): runs change() so that what the person is looking at stays where it is while
+  // turns are put in above it. onSettled(): the older turns held are all drawn.
+  anchor = (change) => change();
+  onSettled = () => {};
+
+  // True while older turns held are waiting to be drawn.
+  get pending() { return this.#backlog.length > 0; }
 
   // snapshot: the store's. latestId: the turn the card draws live, left out. inline: the question
   // slot and the id of the question in it, drawn at that question's place in its turn.
   render(snapshot, latestId = null, inline = null) {
     const { note, turns } = historyPlan(snapshot, latestId);
+    // The turns drawn already stay; the newest few are drawn if none is; those older than the
+    // oldest drawn wait for their slices.
+    const oldest = turns.findIndex((t) => this.#drawn.has(t.id));
+    const from = oldest < 0 ? Math.max(0, turns.length - FIRST_DRAW) : oldest;
+    this.#backlog = turns.slice(0, from);
     const keep = new Map();
     const nodes = [];
     this.hosted = false;
     if (note) { nodes.push(h('p', { class: 'history-meta history-state' }, note)); }
-    for (const t of turns) {
+    for (const t of turns.slice(from)) {
       // Turns are replaced when they change, so the same object is the same drawing.
       const holds = !!inline?.questionId && t.parts.some((p) => p.kind === 'question' && p.question?.id === inline.questionId);
       this.hosted ||= holds;
@@ -121,6 +147,30 @@ export class HistoryView {
     this.#drawn = keep;
     this.element.replaceChildren(...nodes);
     this.element.hidden = !nodes.length;
+    if (this.#backlog.length) { this.#schedule(); }
     return nodes.length > 0;
+  }
+
+  #schedule() {
+    if (this.#framing) { return; }
+    this.#framing = true;
+    nextFrame(() => { this.#framing = false; this.#slice(); });
+  }
+
+  // The newest of the waiting turns, a few at a time, above what is drawn.
+  #slice() {
+    const started = performance.now();
+    const batch = [];
+    while (this.#backlog.length && (batch.length < SLICE || performance.now() - started < SLICE_MS)) {
+      const t = this.#backlog.pop();
+      batch.unshift(t);
+      this.#drawn.set(t.id, { turn: t, node: turnView(t) });
+    }
+    if (batch.length) {
+      const nodes = batch.map((t) => this.#drawn.get(t.id).node);
+      const top = this.element.querySelector(':scope > .history-turn');
+      this.anchor(() => { if (top) { top.before(...nodes); } else { this.element.append(...nodes); } this.element.hidden = false; });
+    }
+    if (this.#backlog.length) { this.#schedule(); } else { this.onSettled(); }
   }
 }

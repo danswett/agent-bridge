@@ -1094,6 +1094,13 @@ function stagedName(name) {
 
 // session.history's turns for a session that has none named: one per turn it reports (at least
 // one), the latest from its own activity, each with a prompt, a tool and a reply.
+// A reply with what a real one has, for a long session whose cost to draw is the point (#1622).
+function longReply(n) {
+  const items = Array.from({ length: 5 }, (_, i) => `- **Step ${i + 1}** of reply ${n}: change \`file${i}.js\`, see [the notes](https://example.com/${n}/${i}).`).join('\n');
+  const code = Array.from({ length: 8 }, (_, i) => `const value${i} = compute(${n}, ${i});`).join('\n');
+  return `Reply ${n} starts here, with a few words of *explanation* before the list.\n\n${items}\n\n\`\`\`js\n${code}\n\`\`\`\n\nAnd a closing paragraph for reply ${n}, with \`inline code\` and **bold**.`;
+}
+
 function demoTurns(s) {
   const count = Math.max(1, s.activity?.turnCount ?? 1);
   const base = Date.parse(s.updatedAt) || Date.now();
@@ -1106,7 +1113,7 @@ function demoTurns(s) {
       prompt: { text: (latest && s.activity?.userMessage) || `Demo prompt ${k + 1}`, ...(!latest && k === 0 && s.driver === 'agent' ? { from: 'agent' } : {}) },
       parts: [
         { id: `${s.id}-turn-${k + 1}.0`, kind: 'tool', at: at(1000), tool: { id: `${s.id}-turn-${k + 1}-t`, name: 'view', summary: 'docs/protocol/v1-history.md', status: 'done', startedAt: at(1000), endedAt: at(2000) } },
-        { id: `${s.id}-turn-${k + 1}.1`, kind: 'response', at: at(3000), text: (latest && s.activity?.response) || `Demo reply ${k + 1}.` },
+        { id: `${s.id}-turn-${k + 1}.1`, kind: 'response', at: at(3000), text: (latest && s.activity?.response) || (s.activity?.longReplies ? longReply(k + 1) : `Demo reply ${k + 1}.`) },
       ],
     };
   });
