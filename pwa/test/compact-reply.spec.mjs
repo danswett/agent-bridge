@@ -242,6 +242,60 @@ test.describe('on a phone', () => {
     });
   }
 
+  // #1620: an installed iPhone can lay the page out a status bar (47) short of the screen, so the
+  // fixed pane ended early and the box floated above the edge. The screen is faked taller than the
+  // page, and the keyboard by a shrunken visual viewport; the gap is read after a frame, since
+  // visualViewport's resize can fire before layout settles.
+  for (const long of [true, false]) {
+    test(`installed on an iPhone with the page a status bar short, a ${long ? 'long' : 'short'} conversation's reply area stays pinned: 46 above the screen edge, 12 above the keyboard bar, at any scroll and after 8 lines`, async ({ page }) => {
+      await page.addInitScript(() => {
+        Object.defineProperty(navigator, 'standalone', { value: true });
+        Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)' });
+        Object.defineProperty(navigator, 'userAgentData', { value: undefined });
+        Object.defineProperty(window.screen, 'width', { value: 390 });
+        Object.defineProperty(window.screen, 'height', { value: 891 });
+        const vv = window.visualViewport;
+        window.__vvHeight = null;
+        Object.defineProperty(vv, 'height', { get: () => window.__vvHeight ?? window.innerHeight });
+      });
+      const v = await session(page, { long });
+      await page.evaluate(() => document.documentElement.style.setProperty('--env-safe-bottom', '34px'));
+      const frame = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      // The foot's bar never slides with the fold (#935): it ends at the pane's padding edge, the safe area (34) above the screen's edge, or none above the keyboard.
+      const slotGap = (edge) => v.locator('.reply-bar').evaluate((el, edge) => edge - el.getBoundingClientRect().bottom, edge);
+      const boxGap = (edge) => v.locator('.reply-box').evaluate((el, edge) => edge - el.getBoundingClientRect().bottom, edge);
+      await frame();
+      expect(await slotGap(891)).toBe(34);
+      expect(await boxGap(891)).toBe(46);
+      if (long) {
+        await settle(v);
+        const max = await end(v);
+        for (const at of [0, Math.round(max / 2), max]) {
+          await scrollTo(v, at);
+          await frame();
+          expect(await slotGap(891)).toBe(34);
+        }
+      }
+      await page.evaluate(() => { window.__vvHeight = 500; window.visualViewport.dispatchEvent(new Event('resize')); });
+      await frame();
+      expect(await slotGap(844)).toBe(0);
+      expect(await boxGap(844)).toBe(12);
+      await page.evaluate(() => { window.__vvHeight = null; window.visualViewport.dispatchEvent(new Event('resize')); });
+      await frame();
+      expect(await boxGap(891)).toBe(46);
+      // Eight lines: the box grows upward, never past the bottom edge.
+      await input(v).fill(Array.from({ length: 8 }, (_, i) => `line ${i + 1}`).join('\n'));
+      await frame();
+      expect(await slotGap(891)).toBe(34);
+      await page.evaluate(() => { window.__vvHeight = 500; window.visualViewport.dispatchEvent(new Event('resize')); });
+      await frame();
+      expect(await slotGap(844)).toBe(0);
+      await page.evaluate(() => { window.__vvHeight = null; window.visualViewport.dispatchEvent(new Event('resize')); });
+      await frame();
+      expect(await slotGap(891)).toBe(34);
+    });
+  }
+
   test('a session opens with the reply area in full; reading back up it rides down, then is a pinned 48 bar', async ({ page }) => {
     const v = await session(page);
     await settle(v);
