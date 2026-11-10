@@ -115,7 +115,7 @@ public sealed partial class SessionView
             if (session != shownHistory || releases != pinReleases || ConversationScroll is not { } scroll) { return; }
             HistoryColumn.UpdateLayout();
             var target = atEnd || pinEnd ? scroll.ScrollableHeight : Math.Min(offset, scroll.ScrollableHeight);
-            if (!atEnd && !pinEnd && reading is { } kept)
+            if (!latestUsed && !atEnd && !pinEnd && reading is { } kept)
             {
                 var index = historyShown.ToList().FindIndex(r => r.Id == kept.Id);
                 if (index >= 0 && HistoryRows.GetOrCreateElement(index) is FrameworkElement row)
@@ -124,7 +124,7 @@ public sealed partial class SessionView
                     target = Math.Clamp(scroll.VerticalOffset + Top(row, scroll) - kept.Top, 0, scroll.ScrollableHeight);
                 }
             }
-            var off = reading is not null || atEnd || pinEnd ? Math.Abs(scroll.VerticalOffset - target) > 0.5 : scroll.VerticalOffset < target - 0.5;
+            var off = reading is not null || atEnd || pinEnd || latestUsed ? Math.Abs(scroll.VerticalOffset - target) > 0.5 : scroll.VerticalOffset < target - 0.5;
             if (off) { scroll.ChangeView(null, target, null, disableAnimation: true); }
         });
     }
