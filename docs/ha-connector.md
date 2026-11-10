@@ -35,8 +35,8 @@ affect any other client's operation. The same ClientConformance suite (#1407)
 must record a result per client/capability; missing or unsupported required rows
 do not pass.
 
-**Registry publication is not yet live:** publisher core #1791 is in review,
-host wiring is later work and
+**Registry publication is not yet live:** publisher core #1791 is merged,
+but host wiring is later work and
 [fleet #238](https://github.com/danswett/slipgates-fleet/issues/238) stays open.
 HA remains the explicit rollback until the 24-hour dual run in
 [fleet-session-registry.md](design/fleet-session-registry.md), slice 11, passes.

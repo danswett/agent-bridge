@@ -214,7 +214,7 @@ and outcome rules; an unconfirmed outcome is never "not sent" or permission to
 duplicate a side effect. No HA-specific cap or privileged bypass is added.
 
 **Current blocker:** registry publication is not yet live. Publisher core #1791
-is in review; host wiring is later work and
+is merged, but host wiring is later work and
 [fleet #238](https://github.com/danswett/slipgates-fleet/issues/238) remains open.
 HA remains the explicit rollback until the **24-hour dual run** in
 [fleet-session-registry.md](fleet-session-registry.md), slice 11, passes: at most
