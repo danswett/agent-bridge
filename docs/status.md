@@ -114,7 +114,7 @@ The work has been built phone-first. All merged PRs are listed in §7.
 |---|---|
 | Spikes S1–S6 | Done. S7 (macOS), S8 (corporate policy, parked) and S9 (relay at scale) not started |
 | Protocol v1 | sessions, answer, reply, attachments, stop, usage, launch, transfer, blobs, feedback upload (#739), roster, update, folder trust. Specs in `docs/protocol/` |
-| Host (`agent-bridge-host`) | Read-only core, delivery (answers, replies, attachments, stop, launch, resume), worktree reclaim, hook intake, discovery holds, management refused from agent sessions, migrate and rollback, shadow comparison; the diagnostics journal records `HostStarted` and `HostStopped` (#1270, #737) |
+| Host (`agent-bridge-host`) | Read-only core, delivery (answers, replies, attachments, stop, launch, resume), worktree reclaim, hook intake, discovery holds, management refused from agent sessions, migrate and rollback, shadow comparison; the diagnostics journal records `HostStarted` and `HostStopped` (#1270, #737) and each finished launch (`LaunchRequested`, #1271, #737) |
 | Windows app | Local and remote machines, Launch page, transfers, toasts, folder trust, Settings, self-update (installs when the host is idle), remote update, Copy button on code blocks |
 | PWA | Cards, answers, replies, attachments, launch, stop, usage, push, All machines view, Machines fold, folder trust, remote update, Copy button on code blocks |
 | Relay | Production at https://relay.bad-duck.com, image `7c17d4a` (2026-11-01), with a roster store; hourly latency and error rows at `/v1/stats/hourly` once the read key is deployed (#1599), with app send-to-settled timings accepted at `POST /v1/stats/app-timings` (#1603). Staging, then production on approval, via `.github/workflows/relay.yml` |

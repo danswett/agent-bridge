@@ -521,7 +521,9 @@ async Task<int> ServeAsync(HostHandover handover)
     // private folder, never a shared temporary one.
     using var transfers = new SessionTransfers(identity.Key, Path.Combine(identity.Folder, "transfers"), Log) { Trust = trustedPeers };
     var agentCredentials = OperatingSystem.IsWindows() ? new AgentCredentials(identity.Folder, machine.Id, log: Log, rootAlive: AgentCredentials.SameProcessAlive) : null;
-    var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore, agentCredentials);
+    // Made here, not beside RemoteDiagnostics, because launches record into it too (#737).
+    var diagnosticsJournal = new DiagnosticsJournal(TimeProvider.System, Path.Combine(identity.Folder, "diagnostics-journal.jsonl"));
+    var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore, agentCredentials, diagnosticsJournal);
     launcher.SessionStarted += restore.Launched;
     launcher.StartScanning();
     var liteDeliver = AgentBridge.Host.Lite.LiteComposition.Create(source, replies, OperatingSystem.IsWindows() ? new WorkerInjector(log: Log) : new NoScreens(), () => settings.AgentMessaging.AllowAllTargets, launcher, Log);
@@ -639,7 +641,6 @@ async Task<int> ServeAsync(HostHandover handover)
     // snapshot lists too; this executable's own read as <external> where they are captured. G5
     // there is only reported, from the last look something else made, never a look of its own
     // (RemoteDiagnostics.AgentHaBridge).
-    var diagnosticsJournal = new DiagnosticsJournal(TimeProvider.System, Path.Combine(identity.Folder, "diagnostics-journal.jsonl"));
     var diagnostics = new RemoteDiagnostics(trustedPeers.IsPinnedPerson, diagnosticsJournal, HostVersion(), IsDevBuild(),
         () => source.Held,
         () => settings.ReadOnly ? (settingsProblem is null ? DiagnosticsReadOnly.ConfigReadOnly : DiagnosticsReadOnly.ConfigProblem, null)
@@ -998,7 +999,7 @@ async Task<int> ServeAsync(HostHandover handover)
 // Launching and resuming sessions from other devices (docs/host-launch.md): only in the folders
 // the profile's config.json approves, and on Windows only for now. The agent starts in a console
 // of its own on this desktop, so the host must run here, as the user, unelevated.
-LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, AttachmentStore? attachments, SessionTransfers transfers, DeliveryGate deliveryGate, IRestorePending restore, ILaunchCredentials? credentials)
+LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, AttachmentStore? attachments, SessionTransfers transfers, DeliveryGate deliveryGate, IRestorePending restore, ILaunchCredentials? credentials, IDiagnosticsJournal journal)
 {
     foreach (var problem in settings.LaunchProblems) { Log($"config.json: {problem}"); }
     IAgentStarter starter = OperatingSystem.IsWindows() ? new WindowsAgentStarter() : new UnsupportedPlatformStarter();
@@ -1017,6 +1018,7 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
         WorktreeUsage = new RestoreWorktreeUsage(restore, new AgentWorktreeUsage(new SystemProcessInspector(), options.CopilotHome, options.ClaudeRegistrationRoots, options.CodexRegistrationRoots)),
         Transfers = transfers,
         TransferStaging = transfers.Staging,
+        Journal = journal,
     }, Log, attachments, credentials: credentials, account: new CopilotLaunchAccount(launchHttp, log: Log));
     var why = !settings.Launch.Enabled ? "turned off (launch.enabled)" : starter.Unavailable() ?? probe.Active();
     var count = settings.Launch.Workspaces.Count;
