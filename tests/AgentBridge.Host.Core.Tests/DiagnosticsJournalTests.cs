@@ -77,6 +77,64 @@ public sealed class DiagnosticsJournalTests : IDisposable
         Assert.Null(JournalIdentifiers.TypeName(typeof(CanaryException)));
     }
 
+    [Fact]
+    public void HostStarted_is_a_lifecycle_record_with_the_release_and_nothing_else()
+    {
+        var journal = new DiagnosticsJournal(time, File());
+
+        Assert.True(journal.Record(JournalEvents.HostStarted("1.2.3")));
+
+        var entry = Assert.Single(journal.Read(10, JournalContract.MaxTotalBytes).Entries);
+        Assert.Equal(JournalKind.HostStarted, entry.Kind);
+        Assert.Equal(JournalFamily.HostLifecycle, entry.Family);
+        Assert.Equal(JournalOutcome.Ok, entry.Outcome);
+        Assert.Equal("1.2.3", entry.Version);
+        Assert.Null(entry.Exception);
+        Assert.Equal(JournalOmissions.None, entry.Omitted);
+        // A version that is not numbers (a machine name, a path) is dropped, never kept.
+        Assert.True(journal.Record(JournalEvents.HostStarted(@"C:\Users\canary-alice\host.exe")));
+        AssertClean(System.IO.File.ReadAllBytes(File()));
+    }
+
+    [Fact]
+    public void HostStopped_without_a_failure_is_ok_and_a_cancelled_stop_is_cancelled()
+    {
+        var journal = new DiagnosticsJournal(time, File());
+
+        Assert.True(journal.Record(JournalEvents.HostStopped(null, "1.2.3")));
+        Assert.True(journal.Record(JournalEvents.HostStopped(new OperationCanceledException(Prompt), "1.2.3")));
+
+        var entries = journal.Read(10, JournalContract.MaxTotalBytes).Entries;
+        Assert.All(entries, e => Assert.Equal(JournalKind.HostStopped, e.Kind));
+        // Newest first.
+        Assert.Equal(JournalOutcome.Cancelled, entries[0].Outcome);
+        Assert.Equal(JournalOutcome.Ok, entries[1].Outcome);
+        Assert.Null(entries[1].Exception);
+        AssertClean(System.IO.File.ReadAllBytes(File()));
+    }
+
+    [Fact]
+    public void HostStopped_after_a_thrown_exception_keeps_its_type_and_frames_but_not_its_message()
+    {
+        var unfit = JournalContract.Draft(JournalKind.HostStarted, JournalOutcome.Ok);
+        var e = Assert.Throws<ArgumentException>(() => JournalCodec.Write(unfit));
+        var withMessage = Thrown(() => new ArgumentException($"{Prompt} {Token} {FilePath} {Account}", e));
+        var journal = new DiagnosticsJournal(time, File());
+
+        Assert.True(journal.Record(JournalEvents.HostStopped(e, "1.2.3")));
+        Assert.True(journal.Record(JournalEvents.HostStopped(withMessage, "1.2.3")));
+
+        var entries = journal.Read(10, JournalContract.MaxTotalBytes).Entries;
+        Assert.All(entries, entry =>
+        {
+            Assert.Equal(JournalOutcome.Failed, entry.Outcome);
+            Assert.Equal("System.ArgumentException", entry.Exception!.Type);
+        });
+        Assert.Contains(new JournalFrame("AgentBridge.Protocol.JournalCodec", "Write"), entries[1].Exception!.Frames);
+        Assert.DoesNotContain(e.Message, Encoding.UTF8.GetString(System.IO.File.ReadAllBytes(File())), StringComparison.Ordinal);
+        AssertClean(System.IO.File.ReadAllBytes(File()));
+    }
+
     // A type anyone can name System.Anything, in an assembly anyone can name AgentBridge.Anything.
     static Exception Impostor()
     {

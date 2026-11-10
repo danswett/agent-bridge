@@ -839,13 +839,20 @@ async Task<int> ServeAsync(HostHandover handover)
     // Only now: a host stopped while starting, whose pipe the app could not reach, must start no
     // usage probe it would cut short on its way out, past the app's probe hold (#238 review).
     usageMonitor?.Start();
-    startGate.Serving();
-    Log($"watching {source.Snapshot().Count} live session(s) as \"{name}\" ({machine.Id[..8]}); local {(local is null ? "API off" : $"pipe {local.Endpoint.Address}")}; {(push is null ? "notifications off (push.enabled)" : $"{push.Subscribers} device(s) to notify")}");
-
+    var hostVersion = HostVersion();
+    diagnosticsJournal.Record(JournalEvents.HostStarted(hostVersion));
     var backoff = new ReconnectBackoff();
     var reconnects = 0;
     var since = Stopwatch.StartNew();
     var attempt = new Stopwatch();
+    // What ended serving, for the journal's HostStopped: nothing on a normal stop.
+    Exception? stoppedBy = null;
+    startGate.Serving();
+    // The try covers the loop below; its body is left at its old indent so this stays a small diff.
+    try
+    {
+    Log($"watching {source.Snapshot().Count} live session(s) as \"{name}\" ({machine.Id[..8]}); local {(local is null ? "API off" : $"pipe {local.Endpoint.Address}")}; {(push is null ? "notifications off (push.enabled)" : $"{push.Subscribers} device(s) to notify")}");
+
     while (!stop.IsCancellationRequested)
     {
         var account = identity.Account;
@@ -953,6 +960,9 @@ async Task<int> ServeAsync(HostHandover handover)
         try { await wake.WaitAsync(backoff.Next(endedWith, endedWhy), stop.Token); }
         catch (OperationCanceledException) { break; }
     }
+    }
+    catch (Exception e) { stoppedBy = e; throw; }
+    finally { diagnosticsJournal.Record(JournalEvents.HostStopped(stoppedBy, hostVersion)); }
     Log("stopped");
     return 0;
 
