@@ -383,6 +383,7 @@ static partial class SelfTest
             // The receipt's states (ui.md §6.5) in each theme and at the narrowest width; high
             // contrast's pass draws them too.
             await ProgressPasses(window, main, demo, Check, outFile, result);
+            await CheckMoveStrip(window, main, demo, Check, outFile, result);
             // The gallery's sessions are gone, and the one open with them: high contrast's pass
             // draws the Sessions page as the theme passes did, a delegate in its strip and inspector.
             await ShowADelegate(window, main, Check);

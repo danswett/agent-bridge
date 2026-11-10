@@ -113,6 +113,7 @@
                     AutomationProperties.HeadingLevel="Level1"
                     AutomationProperties.AutomationId="SessionTitle"
                     Text="{x:Bind Card.Title, Mode=OneWay}" />
+                <local:MoveStripView Move="{x:Bind Card.Move, Mode=OneWay}" />
                 <!-- One meta line (§6.2): glyph · status · machine · repository, on one line so no
                      separator starts a line (#214); the names in the text face (#215). -->
                 <Grid ColumnSpacing="8">
