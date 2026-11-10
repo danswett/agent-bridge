@@ -187,6 +187,9 @@ public sealed class RelayClient : IAsyncDisposable
         finally { forgets.TryRemove(id, out _); }
     }
 
+    // Red-proof stub: no publication until the failing-first hosted run is saved.
+    public Task RegistryPutAsync(JsonElement record, CancellationToken ct = default) => Task.CompletedTask;
+
     // Asks the relay for the account's session registry (docs/protocol/roster.md): one frame per
     // machine, as the relay sent it. Throws with the relay's reason when it refuses (slow-down).
     public async Task<IReadOnlyList<JsonElement>> RegistryGetAsync(CancellationToken ct = default)
