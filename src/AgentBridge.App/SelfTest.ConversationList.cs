@@ -39,7 +39,8 @@ static partial class SelfTest
         list.ScrollIntoView(list.Items[index], ScrollIntoViewAlignment.Leading);
         if (!await Until(() => list.ContainerFromIndex(index) is FrameworkElement { ActualHeight: > 0 }, TimeSpan.FromSeconds(5))) { return null; }
         await Task.Delay(300);
-        var by = Math.Min(24, ((FrameworkElement)list.ContainerFromIndex(index)).ActualHeight / 2);
+        if (list.ContainerFromIndex(index) is not FrameworkElement placed) { return null; }
+        var by = Math.Min(24, placed.ActualHeight / 2);
         scroll.ChangeView(null, scroll.VerticalOffset + by, null, disableAnimation: true);
         await Task.Delay(700);
         if (list.ContainerFromIndex(index) is not FrameworkElement block) { return null; }

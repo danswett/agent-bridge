@@ -1520,8 +1520,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   it, and opens at the latest (#1285, first part); the start line is still to come in the PWA.*
   The Windows app now draws the stored turns above the latest exchange, oldest first, read-only,
   from the session history client (#292 W2a): the response text of each turn with its prompt, at
-  most 500 turns, with the H5 lines below. It opens at the latest exchange once, when the turns are
-  first drawn, and never scrolls to the bottom by itself afterwards. Reasoning, tool lines,
+  most 500 turns, with the H5 lines below.   It opens at the end, on the latest reply, once the turns are
+    drawn, and stays at the end as replies arrive until the person scrolls; once they scroll, a
+    new reply never moves the view (#1635, #1646). Reasoning, tool lines,
   delegate events, questions and loading older turns on scroll are still to come. With history, a
   session's whole conversation is the one
   column, oldest at the top, in the app and the PWA alike.

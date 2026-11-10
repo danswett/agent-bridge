@@ -69,6 +69,8 @@ public sealed partial class SessionView
         // Indexes have moved: the anchor taken again once the list has laid them out.
         anchor = null;
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, TakeAnchor);
+        // A reply arriving or growing under a view still at the end (#1646); a view a key or focus moved away is left.
+        if (pinEnd && follow.AtEnd) { KeepPlace(true, 0); }
         // The response's empty view held 8 under its label, as its first block does.
         FooterLead.Height = card is { HasVoice: true } && blocks.Count == 0 ? 8 : 0;
     }
@@ -86,8 +88,9 @@ public sealed partial class SessionView
             scrolling = e.IsIntermediate;
             if (!e.IsIntermediate) { anchoring = null; keyTarget = null; }
         };
-        scroll.DirectManipulationStarted += (_, _) => { keyTarget = null; panning = true; follow.PanStarted(); };
+        scroll.DirectManipulationStarted += (_, _) => { keyTarget = null; panning = true; follow.PanStarted(); ReleasePin(); };
         scroll.DirectManipulationCompleted += (_, _) => { panning = false; follow.PanEnded(); };
+        scroll.PointerWheelChanged += (_, _) => ReleasePin();
         ConversationList.LayoutUpdated += OnConversationLaidOut;
         // Tunnelling, so the keys reach this before anything inside the list can take them: the list
         // would move between its items, a child might handle a key first (ui.md §6.4). What has focus
@@ -109,7 +112,7 @@ public sealed partial class SessionView
         // From where the last key is taking it, so a key pressed while that scroll still moves adds to it.
         var from = keyTarget ?? scroll.VerticalOffset;
         var to = ConversationKeyboard.Offset(key, from, scroll.ViewportHeight, scroll.ScrollableHeight);
-        if (Math.Abs(to - from) >= 0.5 && scroll.ChangeView(null, to, null, disableAnimation: !Motion.Scrolls)) { keyTarget = to; }
+        if (Math.Abs(to - from) >= 0.5 && scroll.ChangeView(null, to, null, disableAnimation: !Motion.Scrolls)) { keyTarget = to; ReleasePin(); }
     }
 
     // What had focus when a key reached the conversation, from it up to the list: a text input, a
