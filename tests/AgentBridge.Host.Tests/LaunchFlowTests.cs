@@ -706,7 +706,7 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         var launcher = Launcher(Config(), follow: TimeSpan.FromSeconds(1));
 
         Assert.Equal(LaunchOutcome.Unconfirmed, (await launcher.ResumeAsync(new ResumeAsk(Id, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal))).Outcome);
-        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains("wait until a prompt is typed at the machine", StringComparison.Ordinal))));
+        await WaitWhileClockRunsAsync(() => Task.FromResult(logged.Any(l => l.Contains("wait until a prompt is typed at the machine", StringComparison.Ordinal))));
         Assert.NotNull(launcher.HeldForReply(Id));
 
         Fixture.Append(Path.Combine(f.CopilotHome, "session-state", Id, "events.jsonl"),
@@ -728,7 +728,7 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         var launcher = Launcher(Config(), follow: TimeSpan.FromSeconds(1));
 
         Assert.Equal(LaunchOutcome.Unconfirmed, (await launcher.ResumeAsync(new ResumeAsk(Id, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal))).Outcome);
-        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains("wait until a prompt is typed at the machine", StringComparison.Ordinal))));
+        await WaitWhileClockRunsAsync(() => Task.FromResult(logged.Any(l => l.Contains("wait until a prompt is typed at the machine", StringComparison.Ordinal))));
         Fixture.Append(events, Copilot.Event("session.resume", new { }, 30));
         await source.RefreshAsync();
         Assert.NotNull(launcher.HeldForReply(Id));
@@ -1449,6 +1449,23 @@ public abstract partial class LaunchFlowFixture
         while (!await done())
         {
             Assert.True(DateTime.UtcNow < until, "timed out");
+            await Task.Delay(25);
+        }
+    }
+
+    // For what waits on the launch's follow, which runs on the clock's time: one look every 25 ms of it
+    // for the whole follow, each real work, so how long it takes on the wall clock grows with the load
+    // (#1563: 1 in 300 runs with the cores busy ran out the 10 s before the follow ended). It is
+    // patient while the clock moves on, and gives up only once it has stood still for Patience.
+    private protected async Task WaitWhileClockRunsAsync(Func<Task<bool>> done)
+    {
+        var seen = clock.GetTimestamp();
+        var until = DateTime.UtcNow + Patience;
+        while (!await done())
+        {
+            var at = clock.GetTimestamp();
+            if (at != seen) { (seen, until) = (at, DateTime.UtcNow + Patience); }
+            Assert.True(DateTime.UtcNow < until, "timed out: the clock stood still");
             await Task.Delay(25);
         }
     }
