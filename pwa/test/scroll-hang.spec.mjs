@@ -1,17 +1,28 @@
-// A long session that is already open keeps scrolling while a turn is live (#1684, #1702 C).
-// The owner's iPhone stopped scrolling for almost 10 s in such a session, so this opens 500 turns
-// on an iPhone-sized touch viewport, lets every older turn in, then scrolls the whole conversation
-// while live updates arrive, and fails on any main-thread task over 50 ms. WebKit has no Long Tasks
-// API, so a task is seen as the longest a timer tick was held up (what a scroll waits on).
-import { test, expect, devices } from '@playwright/test';
+// Scrolling a long conversation on an iPhone never holds the page up (#1684, part C of #1702).
+// The owner's phone hung periodically while scrolling a long session; #1687 removed the per-scroll
+// layout reads and #1719 the custom-property relayout. The last test keeps that proven: a 500-turn
+// session, an iPhone's WebKit viewport, the whole history drawn, then the pane is scrolled to the top
+// and back and no task may run over 50 ms. The first two are the owner's case: idle on a long session,
+// a live update or a new turn lands, then a scroll must answer, and the turns already drawn must not
+// be taken out and put back.
+// WebKit has no long-task observer, so a heartbeat (one message-channel task after another) is
+// timed instead: a task that runs long shows as a gap between two beats. The page is drawn at 1x:
+// a headless host paints 3x in software and its raster stalls, which are not the page's, would
+// show as gaps of their own.
+import { test, expect } from '@playwright/test';
 import { go } from './nav.mjs';
 import { HISTORY } from '../js/history.js';
 
 const TURNS = 500;
 const BUDGET_MS = 50;
-const phone = devices['iPhone 13'];
 
-test.use({ viewport: phone.viewport, userAgent: phone.userAgent, deviceScaleFactor: phone.deviceScaleFactor, hasTouch: true, isMobile: true });
+test.use({
+  viewport: { width: 390, height: 844 },
+  deviceScaleFactor: 1,
+  isMobile: true,
+  hasTouch: true,
+  userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',
+});
 
 async function openLong(page) {
   await page.goto('?demo=1&static=1&signin=1&name=DEV-VM1#/sessions');
@@ -93,41 +104,55 @@ test('a scroll right after a new turn arrives responds within 100 ms', async ({ 
   }
 });
 
-test(`scrolling a ${TURNS}-turn session while a turn is live never holds the main thread over ${BUDGET_MS} ms`, async ({ page, browserName }) => {
-  // Headless WebKit stalls ~300 ms on first layout of the long turns (unexplained); the idle-update test covers WebKit.
-  test.skip(browserName === 'webkit', 'WebKit first-layout stall, see PR');
-  const pane = await openLong(page);
-  // One update first: the first one after the history fills redraws once for real; it is the repeats that must be free.
-  await page.evaluate(() => { const s = window.agentBridgeDemo.host.get('long-1'); window.agentBridgeDemo.upsert({ ...s, updatedAt: new Date().toISOString() }); });
-  await page.waitForTimeout(1500);
-  await page.evaluate(() => {
-    window.__stalls = [];
-    window.__longTasks = [];
-    try {
-      new PerformanceObserver((list) => { for (const e of list.getEntries()) { window.__longTasks.push(Math.round(e.duration)); } }).observe({ entryTypes: ['longtask'] });
-    } catch { /* WebKit: no Long Tasks API */ }
+test(`scrolling a ${TURNS}-turn session on an iPhone never runs a task over ${BUDGET_MS} ms`, async ({ page }) => {
+  await page.goto('?demo=1&static=1&signin=1&name=DEV-VM1#/sessions');
+  await page.waitForSelector('html[data-demo-ready]');
+  await page.evaluate((turnCount) => {
+    const at = new Date().toISOString();
+    window.agentBridgeDemo.upsert({ id: 'long-1', agent: 'copilot', title: 'A long one.', cwd: 'C:\\Users\\demo\\repos\\agent-bridge', status: 'idle', statusSince: at, startedAt: at, updatedAt: at, processId: 4300, activity: { userMessage: 'A long one.', turnCount, longReplies: true } });
+  }, TURNS);
+  await go(page, 'sessions');
+  await page.locator('.session[data-id="long-1"] .row-main').click();
+  const pane = page.locator('.session-view[data-id="long-1"] .stream-scroll');
+  // Wait until the history has stopped filling in (it is drawn a few turns a frame), so the scroll
+  // is over as much of the 500 turns as the app draws.
+  let drawn = 0;
+  let stableFor = 0;
+  await expect.poll(async () => {
+    const n = await pane.locator('.history-turn').count();
+    stableFor = n === drawn ? stableFor + 1 : 0;
+    drawn = n;
+    return stableFor >= 4 && n > 100;
+  }, { timeout: 30000, intervals: [500] }).toBe(true);
+
+  const m = await pane.evaluate((el) => new Promise((resolve) => {
+    let running = true;
+    let worstMs = 0;
     let last = performance.now();
-    const tick = () => { const now = performance.now(); window.__stalls.push(now - last); last = now; setTimeout(tick, 0); };
-    setTimeout(tick, 0);
-    window.__live = setInterval(() => {
-      const s = window.agentBridgeDemo.host.get('long-1');
-      window.agentBridgeDemo.upsert({ ...s, updatedAt: new Date().toISOString(), activity: { ...s.activity, turnCount: s.activity.turnCount } });
-    }, 250);
-  });
-  // Up through the whole conversation and back down, as a thumb would, a step per frame.
-  await pane.evaluate((el) => new Promise((resolve) => {
-    el.dispatchEvent(new Event('touchstart'));
-    let dir = -1;
-    const next = () => {
-      el.scrollTop += dir * 400;
-      if (dir < 0 && el.scrollTop <= 0) { dir = 1; }
-      if (dir > 0 && el.scrollTop + el.clientHeight >= el.scrollHeight - 1) { resolve(); return; }
-      requestAnimationFrame(next);
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => {
+      const now = performance.now();
+      worstMs = Math.max(worstMs, now - last);
+      last = now;
+      if (running) { channel.port2.postMessage(0); }
     };
-    requestAnimationFrame(next);
+    channel.port2.postMessage(0);
+    const frame = () => new Promise((r) => { requestAnimationFrame(() => r()); });
+    (async () => {
+      const STEPS = 80;
+      const range = () => el.scrollHeight - el.clientHeight;
+      const startAt = el.scrollTop;
+      let scrollEvents = 0;
+      el.addEventListener('scroll', () => { scrollEvents++; }, { passive: true });
+      for (let i = 1; i <= STEPS; i++) { el.scrollTop = startAt - (startAt * i) / STEPS; await frame(); }
+      for (let i = 1; i <= STEPS; i++) { el.scrollTop = (range() * i) / STEPS; await frame(); }
+      running = false;
+      await frame();
+      resolve({ worstMs, scrollEvents, range: range() });
+    })();
   }));
-  const { stalls, longTasks } = await page.evaluate(() => { clearInterval(window.__live); return { stalls: window.__stalls, longTasks: window.__longTasks }; });
-  const worst = Math.round(Math.max(0, ...stalls));
-  expect(worst, `worst main-thread stall ${worst} ms; long tasks ${JSON.stringify(longTasks)}`).toBeLessThan(BUDGET_MS);
-  expect(longTasks.filter((d) => d > BUDGET_MS)).toEqual([]);
+
+  expect(m.range).toBeGreaterThan(10000);
+  expect(m.scrollEvents).toBeGreaterThan(50);
+  expect(m.worstMs).toBeLessThan(BUDGET_MS);
 });
