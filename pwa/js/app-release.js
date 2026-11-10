@@ -74,9 +74,9 @@ export class AppRelease {
   }
 
   dispose() {
+    this.disposed = true;
     this.registration?.removeEventListener('updatefound', this.found);
     this.#watch(null);
-    this.disposed = true;
   }
 
   #watch(worker) {

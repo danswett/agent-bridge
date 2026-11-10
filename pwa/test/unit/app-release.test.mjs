@@ -206,6 +206,17 @@ test('disposing during a pending update never reattaches a worker listener', asy
   assert.equal(listeners, detached);
 });
 
+test('disposing while installing publishes no teardown state', async () => {
+  const { app, registration, phases } = setup();
+  await app.check();
+  const worker = registration.found();
+  const before = [...phases];
+  app.dispose();
+  worker.to('activated');
+  registration.found();
+  assert.deepEqual(phases, before);
+});
+
 test('replacing a registration and disposing remove obsolete listeners and suppress late check results', async () => {
   let resolve;
   const { app, registration } = setup(() => new Promise((done) => { resolve = done; }));
