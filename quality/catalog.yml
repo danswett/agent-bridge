@@ -716,7 +716,7 @@ suites:
     select: affected
     platforms: [linux-x64]
     runner: hosted
-    triggers: [pwa/tools/**, pwa/index.html, .github/workflows/pages.yml]
+    triggers: [pwa/tools/**, pwa/index.html, .github/workflows/pages.yml, quality/test-pages-workflow.ps1, quality/test-pages-gate.ps1, quality/pages-gate.ps1]
     command: see ci.yml light "The Pages build accepts the live relay and its blob store, and refuses bad ones"
     where: ci.yml light
     status: exists
@@ -739,14 +739,18 @@ suites:
     kind: packaging
     ring: 2
     select: affected
-    # pages.yml on main: builds the site (the PWA at /app/ and the spikes' pages), checks its CSP
-    # names the relay and blob store, and publishes it to GitHub Pages: built in one job, with no
-    # install scripts and no token that can publish, and deployed by another (#650).
+    # pages.yml after a green main CI run (workflow_run, or by hand with a ref to roll back): builds
+    # that commit's site (the PWA at /app/ and the spikes' pages), checks its CSP
+    # names the relay and blob store, publishes it to GitHub Pages: built in one job, with no
+    # install scripts and no token that can publish, and deployed by another (#650), which then
+    # checks the live config.js and sw.js against the build's sha256 (#1313). Offline,
+    # quality/test-pages-workflow.ps1 and test-pages-gate.ps1 fail if the deploy stops waiting for
+    # green main CI, or skips the newest green commit.
     platforms: [linux-x64]
     runner: hosted
     triggers: ['spikes/**/web/**', pwa/**, design/fonts/**, .github/workflows/pages.yml]
-    command: see pages.yml build, deploy
-    where: pages.yml build, deploy
+    command: see pages.yml build, deploy; the deploy gate is checked by pwa-site-csp (quality/test-pages-workflow.ps1)
+    where: pages.yml gate, build, deploy
     status: exists
 
   - id: pwa-iphone

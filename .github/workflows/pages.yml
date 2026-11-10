@@ -4,11 +4,22 @@ name: Pages
 # iPhone's Safari in particular) without any server: https://danswett.github.io/agent-bridge/
 # From the move to https://app.slipgates.com/ (#393) the PWA is the site's root and the spikes stay
 # under /s2/ and /s4/.
+# Deploys only the commit a green main CI run tested (#1313, #582): workflow_run of ci.yml,
+# whatever the push touched, so a rebase race that breaks main ships nothing. Rollback is a manual
+# run with ref=<last good sha> (ops/runbooks/pwa.md).
 on:
-  push:
+  # Accepted: the build runs only a commit proven to be an ancestor of origin/main after a green
+  # CI run on main, never checks out an event-supplied ref, and holds no publish token.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
+    workflows: [CI]
+    types: [completed]
     branches: [main]
-    paths: ['spikes/**/web/**', 'pwa/**', 'design/fonts/**', '.github/workflows/pages.yml']
   workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit to build and deploy (a rollback); empty builds the ref the run was started on
+        required: false
+        type: string
 
 env:
   # The PWAs' relay. The pages are served from here, not by the relay, so a relay operator
@@ -31,17 +42,74 @@ permissions: {}
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  # Every CI completion starts a run here, including red ones that deploy nothing: cancelling
+  # would let a red run kill a deploy in progress.
+  cancel-in-progress: false
 
 jobs:
-  build:
+  # CI runs can finish out of push order, and main moves faster than CI finishes. So the newest
+  # green commit deploys, and a run is skipped only when its commit is already live or older than
+  # the live one (quality/pages-gate.ps1). The live commit is the APP_VERSION its config.js serves.
+  gate:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pages: read
+    outputs:
+      deploy: ${{ steps.decide.outputs.deploy }}
     steps:
+      # The default branch's copy of the gate script, never the commit being judged.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+      - id: decide
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          APP_AT_ROOT: ${{ vars.PAGES_APP_AT_ROOT }}
+        run: |
+          $live = ''; $status = ''
+          if ($env:HEAD_SHA) {
+            try {
+              $site = (gh api "repos/$env:GITHUB_REPOSITORY/pages" --jq .html_url).Trim().TrimEnd('/')
+              $prefix = if ($env:APP_AT_ROOT -eq 'true') { '' } else { '/app' }
+              $config = Invoke-RestMethod -Uri "$site$prefix/config.js?gate=$env:GITHUB_RUN_ID" -Headers @{ 'Cache-Control' = 'no-cache' }
+              if ($config -match 'APP_VERSION = "([0-9a-f]{40})"') { $live = $Matches[1] }
+              if ($live) { $status = (gh api "repos/$env:GITHUB_REPOSITORY/compare/$live...$env:HEAD_SHA" --jq .status 2>$null) }
+            } catch { Write-Host "Live version unreadable: $($_.Exception.Message)" }
+            $verdict = & quality/pages-gate.ps1 -Head $env:HEAD_SHA -Live $live -Status "$status"
+            Write-Host $verdict[1]
+            "deploy=$($verdict[0] -eq 'deploy')".ToLower() >> $env:GITHUB_OUTPUT
+          } else {
+            'deploy=true' >> $env:GITHUB_OUTPUT
+          }
+
+  build:
+    needs: gate
+    # A CI run that did not succeed, or was not a push to main, deploys nothing.
+    if: needs.gate.outputs.deploy == 'true' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      app-path: ${{ steps.hashes.outputs.app-path }}
+      config-sha256: ${{ steps.hashes.outputs.config-sha256 }}
+      sw-sha256: ${{ steps.hashes.outputs.sw-sha256 }}
+    steps:
+      # Check out the default branch, then move to the commit CI tested (a rollback names its own)
+      # only once it is proven to be on main, so no step runs code from an unverified ref.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Move to the verified commit
+        env:
+          TARGET_SHA: ${{ github.event.workflow_run.head_sha || inputs.ref || github.sha }}
+        run: |
+          git rev-parse --verify --quiet "$TARGET_SHA^{commit}" > /dev/null
+          git merge-base --is-ancestor "$TARGET_SHA" origin/main || { echo "::error::$TARGET_SHA is not on main"; exit 1; }
+          git checkout --detach "$TARGET_SHA"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
@@ -57,7 +125,7 @@ jobs:
           # output directory. APP_AT_ROOT is set only for the move to app.slipgates.com (#393), when
           # the PWA takes the site's root; until then it stays at /app/, where installed apps are.
           if [ "$APP_AT_ROOT" = 'true' ]; then app=_site; else app=_site/app; fi
-          node pwa/tools/build-site.mjs --out "$app" --relay "$S4_RELAY" --blob-origin "$BLOB_ORIGIN" --version "$GITHUB_SHA" --built-at "$(git show -s --format=%cI HEAD)" --feedback-key-id "$FEEDBACK_KEY_ID" --feedback-public-key "$FEEDBACK_PUBLIC_KEY"
+          node pwa/tools/build-site.mjs --out "$app" --relay "$S4_RELAY" --blob-origin "$BLOB_ORIGIN" --version "$(git rev-parse HEAD)" --built-at "$(git show -s --format=%cI HEAD)" --feedback-key-id "$FEEDBACK_KEY_ID" --feedback-public-key "$FEEDBACK_PUBLIC_KEY"
           grep -q 'Content-Security-Policy' "$app/index.html"
           grep -q "$BLOB_ORIGIN" "$app/index.html"
           grep -q "$S4_RELAY" "$app/config.js"
@@ -95,6 +163,15 @@ jobs:
           </ul>
           EOF
           fi
+      # What the deploy job compares the live site against.
+      - id: hashes
+        run: |
+          if [ "$APP_AT_ROOT" = 'true' ]; then app=_site; prefix=''; else app=_site/app; prefix='app/'; fi
+          {
+            echo "app-path=$prefix"
+            echo "config-sha256=$(sha256sum "$app/config.js" | cut -d' ' -f1)"
+            echo "sw-sha256=$(sha256sum "$app/sw.js" | cut -d' ' -f1)"
+          } >> "$GITHUB_OUTPUT"
       - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
         with:
           path: _site
@@ -112,3 +189,24 @@ jobs:
       - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
       - id: deploy
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
+      # The live config.js and sw.js must be the built ones. Pages' CDN can lag the deploy, so
+      # retry for about five minutes; a mismatch after that fails the job (alert A-PAGES).
+      - name: The live site serves what was built
+        env:
+          PAGE_URL: ${{ steps.deploy.outputs.page_url }}
+          APP_PATH: ${{ needs.build.outputs.app-path }}
+          CONFIG_SHA256: ${{ needs.build.outputs.config-sha256 }}
+          SW_SHA256: ${{ needs.build.outputs.sw-sha256 }}
+        run: |
+          base="${PAGE_URL%/}/$APP_PATH"
+          live() { curl -fsS -H 'Cache-Control: no-cache' "$base$1?verify=$GITHUB_RUN_ID-$2" | sha256sum | cut -d' ' -f1; }
+          for attempt in $(seq 1 30); do
+            config=$(live config.js "$attempt" || true)
+            sw=$(live sw.js "$attempt" || true)
+            if [ "$config" = "$CONFIG_SHA256" ] && [ "$sw" = "$SW_SHA256" ]; then
+              echo "Live config.js and sw.js match the build (attempt $attempt)."; exit 0
+            fi
+            echo "Attempt $attempt: live files differ from the build; waiting."; sleep 10
+          done
+          echo "::error::The live config.js or sw.js still differs from the build after 5 minutes. Roll back: ops/runbooks/pwa.md"
+          exit 1

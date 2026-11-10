@@ -1092,7 +1092,7 @@ jobs:
     #  - lab-nightly: the held nightly lab run's gate and cut verdict, offline (lab-nightly.yml);
     #  - pwa-unit: the PWA's unit tests in Node, then again for coverage, beside the Playwright
     #    jobs rather than before them (#457);
-    #  - pwa-site-csp: the Pages build's CSP;
+    #  - pwa-site-csp: the Pages build's CSP, and that the Pages deploy waits for green main CI;
     #  - lab-scripts: the clean-VM lab's provisioning and runner-interface drafts, offline;
     #  - post-receipt-script: the receipts App's posting script, refusals and a dry run, offline;
     #  - red-minutes-script: the red-minutes figure's spell counting, offline (quality/red-minutes.ps1);
@@ -1251,6 +1251,12 @@ jobs:
             echo "::error::build-site.mjs accepted a blob origin that is not an Azure blob store"; exit 1
           fi
           grep -q -- '--blob-origin must be an origin' "$RUNNER_TEMP/bad-blobs.err" || { cat "$RUNNER_TEMP/bad-blobs.err"; echo "::error::build-site.mjs failed, but not by refusing the blob origin"; exit 1; }
+      - name: The Pages deploy waits for green main CI and checks the live site
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' ||         contains(fromJSON(env.SUITES), 'pwa-site-csp')) }}
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File quality/test-pages-workflow.ps1
+          pwsh -NoProfile -File quality/test-pages-gate.ps1
       - name: The lab nightly's gate refuses every run today, and its verdict passes only a cut both roles pass
         # Offline: nothing reaches Azure or GitHub.
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'lab-nightly')) }}
