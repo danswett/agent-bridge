@@ -1103,7 +1103,7 @@ function demoTurns(s) {
     return {
       id: `${s.id}-turn-${k + 1}`,
       at: at(0),
-      prompt: { text: (latest && s.activity?.userMessage) || `Demo prompt ${k + 1}` },
+      prompt: { text: (latest && s.activity?.userMessage) || `Demo prompt ${k + 1}`, ...(!latest && k === 0 && s.driver === 'agent' ? { from: 'agent' } : {}) },
       parts: [
         { id: `${s.id}-turn-${k + 1}.0`, kind: 'tool', at: at(1000), tool: { id: `${s.id}-turn-${k + 1}-t`, name: 'view', summary: 'docs/protocol/v1-history.md', status: 'done', startedAt: at(1000), endedAt: at(2000) } },
         { id: `${s.id}-turn-${k + 1}.1`, kind: 'response', at: at(3000), text: (latest && s.activity?.response) || `Demo reply ${k + 1}.` },

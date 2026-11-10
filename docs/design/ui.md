@@ -1205,6 +1205,12 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     reads "Hide prompt" and shows all of it in reading
     style inside a thin (2 px) agent-colour rule on the leading edge, not a filled card. A new
     prompt starts collapsed; an update to the same one leaves it as the person left it.
+  - **Earlier turns draw it the same way** (#1611). A prompt in the conversation's history that an
+    agent, a schedule or another source sent is the same collapsed form: the agent-colour label
+    line (no age, since a history turn has none, and no "same as last time"), a two-line preview,
+    then Show prompt. Each turn opens and closes on its own, and one the person opened stays open
+    when the history is drawn again. A prompt you typed stays plain text. The PWA and the Windows app
+    do this; a history turn from a host that doesn't send the sender keeps the plain text.
   - **Repeats fold.** When a schedule's prompt has the same words as the last one shown under the
     same label as drawn (two labels an agent wrote apart but drawn alike are one),
     the line says "Scheduled prompt · #4 · same as last time" and has no preview; Show prompt still

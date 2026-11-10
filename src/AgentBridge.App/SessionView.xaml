@@ -353,9 +353,82 @@
                         <ItemsRepeater.ItemTemplate>
                             <DataTemplate x:DataType="core:HistoryRow">
                                 <StackPanel Spacing="8" AutomationProperties.AutomationId="HistoryTurn">
-                                    <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind local:Ui.Some(PromptLabel)}">
-                                        <TextBlock Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind PromptLabel}" />
-                                        <ContentControl IsTabStop="False" Content="{x:Bind PromptBeside}" ContentTemplate="{StaticResource MessageTimeTemplate}" />
+                                    <!-- A prompt the person didn't type, collapsed as the live card draws it (#1611). -->
+                                    <StackPanel Spacing="4" AutomationProperties.AutomationId="HistoryPrompt" Visibility="{x:Bind local:Ui.Some(Disclosure)}">
+                                        <local:FlowPanel Spacing="8" LineSpacing="0">
+                                            <Grid Width="16" Height="16" VerticalAlignment="Center">
+                                                <ContentControl
+                                                    Style="{StaticResource AbIconClock}"
+                                                    Width="16"
+                                                    Height="16"
+                                                    Foreground="{ThemeResource AbAgent}"
+                                                    AutomationProperties.AccessibilityView="Raw"
+                                                    Visibility="{x:Bind local:Ui.Show(Disclosure.Origin.Schedule)}" />
+                                                <ContentControl
+                                                    Style="{StaticResource AbGlyphDrivenBadge}"
+                                                    Width="16"
+                                                    Height="16"
+                                                    Foreground="{ThemeResource AbAgent}"
+                                                    Background="Transparent"
+                                                    AutomationProperties.AccessibilityView="Raw"
+                                                    Visibility="{x:Bind local:Ui.Show(Disclosure.IsDriven)}">
+                                                    <ContentControl.RenderTransform>
+                                                        <CompositeTransform CenterX="13.3" CenterY="13.3" ScaleX="1.7" ScaleY="1.7" TranslateX="-5.3" TranslateY="-5.3" />
+                                                    </ContentControl.RenderTransform>
+                                                </ContentControl>
+                                            </Grid>
+                                            <TextBlock
+                                                VerticalAlignment="Center"
+                                                Style="{StaticResource AbTypeMeta}"
+                                                Foreground="{ThemeResource AbAgentText}"
+                                                TextWrapping="Wrap"
+                                                Text="{x:Bind Disclosure.Origin.Label}" />
+                                            <ContentControl IsTabStop="False" VerticalAlignment="Center" Content="{x:Bind PromptBeside}" ContentTemplate="{StaticResource MessageTimeTemplate}" />
+                                        </local:FlowPanel>
+                                        <TextBlock
+                                            Style="{StaticResource AbTypeRow}"
+                                            Foreground="{ThemeResource AbText2}"
+                                            TextWrapping="Wrap"
+                                            MaxLines="2"
+                                            TextTrimming="CharacterEllipsis"
+                                            Text="{x:Bind Disclosure.Origin.Preview}" />
+                                        <local:DisclosureButton
+                                            HorizontalAlignment="Left"
+                                            MinHeight="32"
+                                            Margin="-4,0,0,0"
+                                            Padding="4,4"
+                                            BorderThickness="0"
+                                            Background="{ThemeResource SubtleFillColorTransparentBrush}"
+                                            Foreground="{ThemeResource AbText}"
+                                            CornerRadius="{StaticResource AbRadiusControl}"
+                                            AutomationProperties.Name="{x:Bind Disclosure.ToggleName, Mode=OneWay}"
+                                            IsExpanded="{x:Bind Disclosure.Open, Mode=TwoWay}">
+                                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                                <ContentControl
+                                                    Style="{StaticResource AbIconChevron}"
+                                                    Width="16"
+                                                    Height="16"
+                                                    VerticalAlignment="Center"
+                                                    Foreground="{ThemeResource AbText2}"
+                                                    AutomationProperties.AccessibilityView="Raw" />
+                                                <TextBlock
+                                                    VerticalAlignment="Center"
+                                                    Style="{StaticResource AbTypeMeta}"
+                                                    Text="{x:Bind Disclosure.ToggleText, Mode=OneWay}" />
+                                            </StackPanel>
+                                        </local:DisclosureButton>
+                                        <Border
+                                            Margin="0,4,0,0"
+                                            Padding="12,0,0,0"
+                                            BorderBrush="{ThemeResource AbAgent}"
+                                            BorderThickness="2,0,0,0"
+                                            Visibility="{x:Bind local:Ui.Show(Disclosure.Open), Mode=OneWay}">
+                                            <TextBlock
+                                                Style="{StaticResource AbTypeReading}"
+                                                TextWrapping="Wrap"
+                                                IsTextSelectionEnabled="True"
+                                                Text="{x:Bind Disclosure.Origin.Text}" />
+                                        </Border>
                                     </StackPanel>
                                     <TextBlock Style="{StaticResource AbTypeRow}" TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind Prompt}" Visibility="{x:Bind local:Ui.Some(Prompt)}" />
                                     <ContentControl IsTabStop="False" HorizontalAlignment="Right" MinHeight="20" Content="{x:Bind PromptUnder}" ContentTemplate="{StaticResource MessageTimeTemplate}" Visibility="{x:Bind local:Ui.Some(Prompt)}" />

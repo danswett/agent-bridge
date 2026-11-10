@@ -24,7 +24,7 @@ public static class HistoryRowSync
     // Blocks are compared by what they say: each draw builds new block objects for the same turn.
     static bool Same(HistoryRow a, HistoryRow b)
     {
-        if (a.Id != b.Id || a.PromptLabel != b.PromptLabel || a.Prompt != b.Prompt || a.Note != b.Note || a.Blocks.Count != b.Blocks.Count) { return false; }
+        if (a.Id != b.Id || !ReferenceEquals(a.Disclosure, b.Disclosure) || a.Prompt != b.Prompt || a.Note != b.Note || a.Blocks.Count != b.Blocks.Count) { return false; }
         for (var i = 0; i < a.Blocks.Count; i++)
         {
             if (a.Blocks[i].Text != b.Blocks[i].Text) { return false; }

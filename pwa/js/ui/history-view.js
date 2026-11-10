@@ -1,7 +1,9 @@
 // The conversation before the latest exchange (ui.md §6.4), drawn read-only from the history
 // store's turns. The latest turn is the card's own live exchange, so it is left out here.
 import { h } from './dom.js';
-import { glyph } from './glyph.js';
+import { designIcon, drivenBadge, glyph } from './glyph.js';
+import { setFacts } from './meta.js';
+import { disclosureName, historyPromptOrigin } from '../prompt-origin.js';
 import { renderMarkdown } from '../markdown.js';
 
 export const WORDS = {
@@ -13,6 +15,32 @@ export const WORDS = {
 };
 
 const SENDER = { schedule: 'Scheduled prompt', agent: 'Prompt sent by an agent', other: 'Prompt from another source' };
+let promptIds = 0;
+
+// A prompt the person didn't type, collapsed as the live card draws it (#1611): its title in agent
+// colour, who sent it, one line of it, and Show prompt for the rest. Open or shut is kept by the
+// node, which a render reuses while the turn is the same.
+function originView(origin) {
+  const full = h('div', { class: 'prompt-full', id: `history-prompt-${++promptIds}`, hidden: true }, h('p', { class: 'plain' }, origin.text));
+  const words = h('span', null, 'Show prompt');
+  const toggle = h('button', { type: 'button', class: 'prompt-toggle', 'aria-expanded': 'false', 'aria-controls': full.id, 'aria-label': disclosureName(origin, false) },
+    designIcon('chevron', { size: 16, cls: 'prompt-chevron' }), words);
+  const facts = h('span', { class: 'prompt-facts' });
+  setFacts(facts, origin.facts);
+  const root = h('div', { class: 'prompt-origin', dataset: { from: origin.from } },
+    h('p', { class: 'prompt-label' }, h('span', { class: 'prompt-icon' }, origin.icon === 'clock' ? designIcon('clock', { size: 16 }) : drivenBadge()), facts, origin.by ? h('span', { class: 'prompt-by' }, origin.by) : null),
+    h('p', { class: 'prompt-preview' }, origin.preview), toggle, full);
+  toggle.addEventListener('click', () => {
+    const open = toggle.getAttribute('aria-expanded') !== 'true';
+    full.hidden = !open;
+    root.toggleAttribute('data-open', open);
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.setAttribute('aria-label', disclosureName(origin, open));
+    words.textContent = open ? 'Hide prompt' : 'Show prompt';
+  });
+  return root;
+}
+
 const OUTCOME = { answered: 'Answered', approved: 'Approved', denied: 'Denied', cancelled: 'Not answered' };
 const TOOL_GLYPH = { running: 'working', done: 'done', failed: 'failed' };
 
@@ -63,7 +91,7 @@ export function turnView(t, inline = null) {
   const prompt = !t.prompt ? null
     : from === 'person'
       ? h('div', { class: 'history-prompt' }, h('div', { class: 'history-bubble' }, h('p', { class: 'plain' }, t.prompt.text ?? '')))
-      : h('div', { class: 'history-origin' }, h('p', { class: 'history-origin-label' }, t.prompt.label ?? SENDER[from] ?? SENDER.other), h('p', { class: 'plain' }, t.prompt.text ?? ''));
+      : (() => { const o = historyPromptOrigin(t.prompt); return o ? originView(o) : null; })();
   return h('section', { class: 'history-turn', dataset: { turn: t.id } }, prompt, shownParts(t).map((p) => part(p, inline)), t.truncated ? h('p', { class: 'history-meta history-cut' }, WORDS.cut) : null);
 }
 

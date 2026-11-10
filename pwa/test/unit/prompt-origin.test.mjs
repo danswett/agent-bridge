@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readSession } from '../../js/protocol.js';
-import { LABEL_MAX_BYTES, PromptMemory, disclosureName, promptFact, promptOrigin } from '../../js/prompt-origin.js';
+import { LABEL_MAX_BYTES, PromptMemory, disclosureName, historyPromptOrigin, promptFact, promptOrigin } from '../../js/prompt-origin.js';
 
 const MONITOR = 'Check the build.\nIf it is red, look at the failing job\n\nand say which test.';
 const session = ({ from, label, text = MONITOR, status = 'idle', turns = 3, since = '2026-11-03T19:00:00Z', ...rest } = {}) => readSession({
@@ -171,4 +171,19 @@ test('a turn no prompt started, begun with the idle before it missed, does not d
   // Claude's turn for a delegate's notice: the count rises as it runs, but it was no prompt's.
   m.observe(session({ from: 'schedule', label: '4', status: 'working', turns: 4, since: '2026-11-03T19:05:00Z' }));
   assert.deepEqual(m.observe(session({ from: 'schedule', label: '4', turns: 4 })), { repeat: true, at: '2026-11-03T19:01:00Z', fresh: true });
+});
+test('an earlier turn\'s prompt from an agent, a schedule or another source reads as the live one does', () => {
+  const agent = historyPromptOrigin({ text: MONITOR, from: 'agent' });
+  assert.deepEqual([agent.from, agent.icon, agent.facts, agent.by, agent.spoken], ['agent', 'driven', ['Sent by an agent'], null, 'Prompt sent by an agent']);
+  assert.equal(agent.preview, 'Check the build. If it is red, look at the failing job and say which test.');
+  const schedule = historyPromptOrigin({ text: 'Go', from: 'schedule', label: '4' });
+  assert.deepEqual([schedule.icon, schedule.facts, schedule.repeat], ['clock', ['Scheduled prompt', '#4'], false]);
+  assert.deepEqual(historyPromptOrigin({ text: 'Go', from: 'other' }).facts, ['Automatic prompt']);
+});
+
+test('an earlier turn\'s prompt the person typed, or without words, has no origin', () => {
+  assert.equal(historyPromptOrigin({ text: 'Hi' }), null);
+  assert.equal(historyPromptOrigin({ text: 'Hi', from: 'person' }), null);
+  assert.equal(historyPromptOrigin({ text: '', from: 'agent' }), null);
+  assert.equal(historyPromptOrigin(null), null);
 });
