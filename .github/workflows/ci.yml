@@ -122,7 +122,7 @@ jobs:
             [[ "$head" =~ ^[0-9a-f]{40}$ ]] || fail "couldn't read the open pull requests' heads"
             [ "$head" != "$SHA" ] || fail "$SHA is an open pull request's head; prove on a new commit of its own"
           done < "$RUNNER_TEMP/pr-heads"
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           # A pull request's checkout is its merge commit, whose first parent is the base it merges
@@ -130,7 +130,7 @@ jobs:
           # two commits are enough. Main diffs from its last passed commit, which may be any
           # number of commits back, so it fetches the whole history.
           fetch-depth: ${{ github.event_name == 'push' && '0' || '2' }}
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
       # Before anything from the change runs. A selector, catalog or workflow under change must not
@@ -252,10 +252,10 @@ jobs:
       # Ring 0's filter on a draft's fast ring, and nothing anywhere else, whatever the plan said.
       TEST_FILTER: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && needs.plan.outputs.test-filter || '' }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
       - name: Choose what to test
@@ -336,7 +336,7 @@ jobs:
           pwsh -NoProfile -File build/test-report.ps1 -CoverageSummary TestResults/coverage-report/Summary.json -TestResults TestResults -Title ".NET tests: $env:MATRIX_OS" >> $env:GITHUB_STEP_SUMMARY
       - name: Keep the coverage report and test results
         if: success() || failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-${{ matrix.os }}
           path: |
@@ -346,7 +346,7 @@ jobs:
           retention-days: 14
       - name: Keep the hang dumps
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-hang-${{ matrix.os }}
           path: |
@@ -419,7 +419,7 @@ jobs:
         run: trivy image --scanners vuln --skip-db-update --severity HIGH,CRITICAL --format sarif --output "$RUNNER_TEMP/relay-image.sarif" agent-bridge-relay
       - name: Keep the relay image's SARIF
         if: runner.os == 'Linux' && !cancelled() && steps.relay-scan.outcome != 'skipped'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: relay-image-sarif
           path: ${{ runner.temp }}/relay-image.sarif
@@ -441,18 +441,18 @@ jobs:
       contents: read
       security-events: write # upload the SARIF
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - id: sarif
         # Absent when product failed before the image was built; nothing to send then.
         continue-on-error: true
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: relay-image-sarif
           path: ${{ runner.temp }}/sarif
       - if: steps.sarif.outcome == 'success'
-        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
         with:
           sarif_file: ${{ runner.temp }}/sarif/relay-image.sarif
           category: relay-image
@@ -470,10 +470,10 @@ jobs:
       HA_IMAGE: ghcr.io/home-assistant/home-assistant:2026.10.4
       MOSQUITTO_IMAGE: eclipse-mosquitto:2.0
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
       - name: Start a disposable Home Assistant and Mosquitto
@@ -507,10 +507,10 @@ jobs:
     if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.spikes == 'true'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
       - name: NuGet packages from main's cache
@@ -584,10 +584,10 @@ jobs:
             artifact: agent-bridge-windows-arm64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
       - run: dotnet tool install -g vpk --version 1.2.161
@@ -605,7 +605,7 @@ jobs:
         # Uploaded as published, before anything below runs the app from it, so the sign job packs
         # exactly the files this job built and then tested in the unsigned package.
         if: env.APP_SIGNING == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact }}-publish-${{ env.APP_VERSION }}
           path: ${{ matrix.out }}/publish
@@ -637,7 +637,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./build/publish-prerelease.ps1 -Version $env:APP_VERSION -ReleasesDir ${{ matrix.out }}/releases -Repository "${{ github.repository }}" -Commit "${{ github.sha }}" -DryRun
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact }}-${{ env.APP_VERSION }}
           path: ${{ matrix.out }}/releases
@@ -655,13 +655,13 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           . ./build/app-notices.ps1
           Add-AppSbomLicences -Publish '${{ matrix.out }}/publish' -Version $env:APP_VERSION -Runtime '${{ matrix.runtime }}' -Sbom "$env:RUNNER_TEMP/sbom/agent-bridge-windows-${{ matrix.runtime }}-$env:APP_VERSION.cdx.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sbom-${{ matrix.runtime }}-${{ env.APP_VERSION }}
           path: ${{ runner.temp }}/sbom
           if-no-files-found: error
           retention-days: 30
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: app-self-test-${{ matrix.runtime }}
@@ -688,10 +688,10 @@ jobs:
             out: out/app-arm64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
       - run: dotnet tool install -g vpk --version 1.2.161
@@ -734,7 +734,7 @@ jobs:
           Write-AppDistributionEvidence -Publish '${{ matrix.out }}/publish' -Releases '${{ matrix.out }}/releases' -Version $env:APP_VERSION -Runtime '${{ matrix.runtime }}' -Installed "$root/current" -Out "$logs/distribution-evidence.json"
           ./build/app-self-test.ps1 -Exe "$root/current/AgentBridge.exe" -Result "$logs/result.json" -TimeoutSeconds 480
           exit $LASTEXITCODE
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: app-installer-self-test-${{ matrix.runtime }}
@@ -800,29 +800,29 @@ jobs:
       - name: Unsigned
         if: env.APP_SIGNING != 'true'
         run: echo "APP_SIGNING is not set, so publish takes the app jobs' unsigned packages"
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.APP_SIGNING == 'true'
         with:
           persist-credentials: false
       - name: .NET 8 runtime for Artifact Signing's signtool plug-in
         # vpk signs through signtool and the Azure.CodeSigning dlib, which runs on .NET 8.
         if: env.APP_SIGNING == 'true'
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '8.0.x'
       - if: env.APP_SIGNING == 'true'
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
       - if: env.APP_SIGNING == 'true'
         run: dotnet tool install -g vpk --version 1.2.161
       - if: env.APP_SIGNING == 'true'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: agent-bridge-windows-publish-${{ env.APP_VERSION }}
           path: out/app/publish
       - if: env.APP_SIGNING == 'true'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: agent-bridge-windows-arm64-publish-${{ env.APP_VERSION }}
           path: out/app-arm64/publish
@@ -847,7 +847,7 @@ jobs:
           ./build/release-notes.ps1 -Repository "${{ github.repository }}" -Commit "${{ github.sha }}" -Out out/app/notes.md
       - name: Sign in to Azure (OIDC, no secret)
         if: env.APP_SIGNING == 'true'
-        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ vars.APP_SIGNING_CLIENT_ID }}
           tenant-id: ${{ vars.APP_SIGNING_TENANT_ID }}
@@ -873,14 +873,14 @@ jobs:
           az account clear 2>$null
           exit 0
       - if: env.APP_SIGNING == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: agent-bridge-windows-signed-${{ env.APP_VERSION }}
           path: out/app/releases
           if-no-files-found: error
           retention-days: 30
       - if: env.APP_SIGNING == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: agent-bridge-windows-arm64-signed-${{ env.APP_VERSION }}
           path: out/app-arm64/releases
@@ -920,30 +920,30 @@ jobs:
       # 'true' only when this run uploaded the release: attest then signs it.
       published: ${{ steps.publish.outputs.published }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Main's head now, under the publish lock, with its history: publish-prerelease.ps1 doesn't
       # publish a commit main has since changed the app past (main's later run publishes that),
       # read with main's own selector and catalog, as that run plans. A second clone, since the
       # first one's origin/main is this run's commit.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0
           path: main-head
           persist-credentials: false
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
       - name: Build main's selector
         run: dotnet build main-head/tools/AgentBridge.Quality -c Release --nologo -v q
       - run: dotnet tool install -g vpk --version 1.2.161
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ env.APP_SIGNING == 'true' && 'agent-bridge-windows-signed' || 'agent-bridge-windows' }}-${{ env.APP_VERSION }}
           path: out/app/releases
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ env.APP_SIGNING == 'true' && 'agent-bridge-windows-arm64-signed' || 'agent-bridge-windows-arm64' }}-${{ env.APP_VERSION }}
           path: out/app-arm64/releases
@@ -1011,7 +1011,7 @@ jobs:
             done
           done
           ls -l "$RUNNER_TEMP"/release/*
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: sbom-*-${{ env.APP_VERSION }}
           path: ${{ runner.temp }}/sbom
@@ -1046,13 +1046,13 @@ jobs:
     # archive, on top of the checks.
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
       - name: S2 builds and checks its vectors
@@ -1155,10 +1155,10 @@ jobs:
       SUITES: ${{ needs.plan.outputs.suites }}
       WHOLE_RING: ${{ needs.plan.outputs.whole-ring }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
       - name: Every generated file matches design/
@@ -1265,7 +1265,7 @@ jobs:
               print "## PWA unit test coverage\n\n| Lines % | Branches % | Functions % |\n|---:|---:|---:|"
               print "| " pct(lh, lf) " | " pct(bh, bf) " | " pct(fh, ff) " |"
             }' "$out/lcov.info" >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() && steps.pwa-unit.outcome != 'skipped' }}
         with:
           name: pwa-coverage
@@ -1393,10 +1393,10 @@ jobs:
       PROJECT: ${{ matrix.project }}
       SHARD: ${{ matrix.shard }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
       - run: npm ci
@@ -1440,14 +1440,14 @@ jobs:
         if: ${{ !cancelled() && matrix.project == 'chromium' && hashFiles('pwa/test/renders/*.render.mjs') != '' }}
         continue-on-error: true
         run: npx playwright test --config playwright.renders.config.mjs
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() && matrix.project == 'chromium' }}
         with:
           name: pwa-renders
           path: pwa/renders/
           if-no-files-found: ignore
           retention-days: 14
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: pwa-test-results-${{ matrix.project }}-${{ strategy.job-index }}
@@ -1455,7 +1455,7 @@ jobs:
           retention-days: 7
       # The sign-in captures test/sign-in.spec.mjs takes in Chromium (#800, #963), for Creative to
       # look at on every run, not only a failed one.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() && matrix.project == 'chromium' }}
         with:
           name: pwa-captures
@@ -1481,13 +1481,13 @@ jobs:
       run:
         working-directory: pwa
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
       - name: Build the dev stack
@@ -1519,14 +1519,14 @@ jobs:
           path: ~/.cache/ms-playwright
           key: ${{ steps.browsers.outputs.cache-primary-key }}
       - run: npx playwright test test/e2e
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: pwa-test-results-e2e
           path: pwa/test-results
           retention-days: 7
       # The sign-in link's capture (test/e2e/e2e.spec.mjs, #969), for Creative on every run.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
         with:
           name: pwa-captures-e2e
