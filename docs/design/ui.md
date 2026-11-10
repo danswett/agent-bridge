@@ -1262,7 +1262,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   history already holds; no protocol change. Seven rules, one formatter per app, one shared
   test table:
   1. *Which time.* When it was sent, never when it was received or drawn. A prompt takes its
-   turn's time; a reply, its first response part's.
+   turn's time; a live reply, its matching latest response part's.
   2. *Reading it.* Under 10 s `just now`; 10 to 59 s `Ns ago`; 1 to 59 min `N min ago`,
    rounded down. The relative window wins over the calendar day (11:50 PM reads
    `20 min ago` at 12:10 AM). From 60 min, the viewer's local clock time (`7:41 PM`),
@@ -1281,7 +1281,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   5. *Refresh.* The text changes once a second only while a visible message is under a minute
    old, otherwise once a minute, and is worked out again when shown. Nothing refreshes
    while hidden. Changing text must not reflow the label line.
-  6. *No time yet.* The live latest exchange shows none until its history arrives. An
+  6. *No time yet.* The live latest exchange shows none until history for that exact turn
+   arrives and matches the displayed prompt or latest response. Repeated text in another turn,
+   provisional activity and session update/status times cannot supply a sent time. An
    unreadable turn, and a question with no outcome time, show none. A time is never
    guessed.
   7. *Never order.* Time is a label. Order is by time sent (#1613) and no time moves a message.

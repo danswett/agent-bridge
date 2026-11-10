@@ -40,7 +40,7 @@ import { EndSession } from './stop-view.js';
 import { lastSegment, pathView, setFacts } from './meta.js';
 import { RowMenu } from './row-menu.js';
 import { DelegateDetail, DelegatesBlock, DelegateStrip } from './delegates-view.js';
-import { aloud, backgroundCounts, delegateEvents, delegateFold, delegateList, eventParts, liveVoice, mainVoice } from '../attribution.js';
+import { aloud, backgroundCounts, delegateEvents, delegateFold, delegateList, eventParts, liveVoice } from '../attribution.js';
 import { delegateOf } from '../needs-you.js';
 import { enter, leave, scrollBehavior, slide, stopTravel } from './motion.js';
 import { CollapsingHeader, PHONE } from './collapse-header.js';
@@ -49,7 +49,8 @@ import { UNSUPPORTED_SESSIONS } from '../brand.js';
 import { PromptMemory, disclosureName, promptOrigin } from '../prompt-origin.js';
 import { holdKey } from './hold.js';
 import { CONNECTION_CHANGED } from '../channels.js';
-import { HistoryView } from './history-view.js';
+import { HistoryView, liveMessageTimes } from './history-view.js';
+import { setTime, timeRow, timeTicker } from './message-time-view.js';
 import { sentMessage, setSentMessage } from './sent-message.js';
 import { HISTORY, closedQuestionIds } from '../history.js';
 import { MoveStrip } from './move-view.js';
@@ -495,15 +496,13 @@ export class SessionCard {
   #delegate = null;
   // Whether the inspector was a pane of its own at the last layout.
   #wasInspector = false;
-  // A prompt the person didn't type (#489): what this view saw of the session's prompts, to fold
-  // a schedule's repeats and date them; whether Show prompt is open, and when the prompt shown
-  // began (null where unknown).
+  // A prompt the person didn't type (#489): remember a schedule's repeats and the disclosure state.
   #prompts = new PromptMemory();
   #promptOpen = false;
   // The keys of the delegate event lines drawn, or null before the first: only a line arriving
   // after that fades in.
   #eventKeys = null;
-  #promptAt = null;
+  #messageTimes;
   // The Delegates tab's count on a phone (#629): what the last update counted, and the width that shows it.
   #tabCounts = { running: 0, asking: 0 };
   #phone = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia(PHONE) : null;
@@ -611,14 +610,15 @@ export class SessionCard {
     // The conversation (ui.md §6.4): one voice per line, the main agent's.
     e.userBubble = sentMessage('', 'bubble');
     e.userText = e.userBubble.querySelector('.plain');
-    e.user = h('div', { class: 'user-message', hidden: true }, h('span', { class: 'sr-only' }, 'Your last message: '), e.userBubble);
+    e.userTime = timeRow(null, 'msg-time-owner');
+    e.user = h('div', { class: 'user-message', hidden: true }, h('span', { class: 'sr-only' }, 'Your last message: '), e.userBubble, e.userTime);
     // A prompt the person didn't type (#489, §6.4): never a bubble. At the column's start, a label
     // line in agent colour (a clock for a schedule, the driven diamond for an agent), read before
     // the prompt; then two lines of it, and Show prompt for the rest, inside an agent rule.
     e.promptIcon = h('span', { class: 'prompt-icon' });
     e.promptFacts = h('span', { class: 'prompt-facts' });
     e.promptBy = h('span', { class: 'prompt-by', hidden: true });
-    e.promptAge = h('time', { class: 'prompt-age' });
+    e.promptAge = h('span', { class: 'prompt-age' });
     e.promptLabel = h('p', { class: 'prompt-label' }, e.promptIcon, e.promptFacts, e.promptBy, e.promptAge);
     e.promptPreview = h('p', { class: 'prompt-preview' });
     e.promptToggleText = h('span', null, 'Show prompt');
@@ -627,7 +627,7 @@ export class SessionCard {
     e.promptText = h('p', { class: 'plain' });
     e.promptFull = h('div', { class: 'prompt-full', id: this.ids.prompt, hidden: true }, e.promptText);
     e.prompt = h('div', { class: 'prompt-origin', hidden: true }, e.promptLabel, e.promptPreview, e.promptToggle, e.promptFull);
-    e.agentAge = h('time', { class: 'speaker-age' });
+    e.agentAge = h('span', { class: 'speaker-age' });
     // "Main agent" where the host says whose words these are (attribution.js); a host that doesn't
     // may have a delegate's here, so they are only the agent's, by its name.
     e.voice = h('span', { class: 'speaker-name voice-label', hidden: true }, 'Main agent');
@@ -663,6 +663,7 @@ export class SessionCard {
     e.question = h('div', { class: 'question-slot' });
     this.#guardQuestion(e.question);
     e.stream = h('div', { class: 'stream' }, e.user, e.prompt, e.agentBlock, e.question);
+    this.#messageTimes = timeTicker(e.stream);
     e.reply = h('div', { class: 'reply-slot' });
     // A phone's compact reply area (CollapsingFoot, ui.md §6.5): a pinned bar holding a copy of the
     // box, drawn, not read, and no tab stop; a tap on it brings the box back, focused.
@@ -852,10 +853,6 @@ export class SessionCard {
       const driver = words.driven ? h('span', { class: 'driver', title: s.driverPrincipal ?? null }, 'Driven by an agent') : null;
       setFacts(e.meta, [e.statusText, driver, this.machineName ? h('span', { class: 'session-machine' }, this.machineName) : null, whereView()]);
     }
-    // The main agent's words dated by when it wrote them, not by a delegate's later update.
-    const said = mainVoice(s).at ?? s.updatedAt;
-    e.agentAge.dateTime = said;
-    e.agentAge.title = localTime(said);
     e.rowAge.dateTime = rowAt(s);
     e.rowAge.title = localTime(rowAt(s));
     this.refreshTimes();
@@ -895,6 +892,7 @@ export class SessionCard {
     setSentMessage(e.userBubble, s.activity.userMessage ?? '');
     this.#renderPrompt(s);
     this.#syncStoredLatest();
+    this.#renderMessageTimes();
     // Send acknowledged (ui.md §5.3): your message, back from the machine, rises into place; a
     // prompt you didn't type is no bubble of yours and never rises.
     if (!first && echoed && !e.user.hidden) { enter(e.user, 'acknowledge', { dy: 1 }); }
@@ -1127,7 +1125,6 @@ export class SessionCard {
     const seen = this.#prompts.observe(s);
     // A new prompt starts collapsed; an update to the same one keeps it as the person left it.
     if (seen.fresh) { this.#promptOpen = false; }
-    this.#promptAt = seen.at;
     const origin = promptOrigin(s, { repeat: seen.repeat });
     e.prompt.hidden = !origin;
     if (!origin) { return; }
@@ -1145,13 +1142,15 @@ export class SessionCard {
     e.promptPreview.textContent = origin.repeat ? '' : origin.preview;
     e.promptPreview.hidden = origin.repeat;
     e.promptText.textContent = origin.text;
-    e.promptAge.hidden = !this.#promptAt;
-    if (this.#promptAt) {
-      e.promptAge.dateTime = this.#promptAt;
-      e.promptAge.title = localTime(this.#promptAt);
-      e.promptAge.textContent = ago(this.#promptAt);
-    }
     this.#setPromptOpen(this.#promptOpen);
+  }
+
+  #renderMessageTimes(snapshot = this.historyStore?.get(this.hostId, this.#s.id)) {
+    const times = liveMessageTimes(snapshot, this.#s);
+    setTime(this.els.userTime, times.prompt);
+    setTime(this.els.promptAge, times.prompt);
+    setTime(this.els.agentAge, times.response);
+    this.#messageTimes.refresh();
   }
 
   // Show prompt (ui.md §6.4, §9): a real button, named for the prompt and its state. Its space
@@ -1434,6 +1433,7 @@ export class SessionCard {
     for (const r of this.#closed.splice(0)) { this.#destroyReceipt(r); }
     this.delegates.dispose();
     this.turns.dispose();
+    this.#messageTimes.stop();
     this.detail.dispose();
     this.#moves?.stop();
     this.collapse?.destroy();
@@ -1492,6 +1492,7 @@ export class SessionCard {
   #drawTurns() {
     const snapshot = this.historyStore.get(this.hostId, this.#s.id);
     const kept = this.#trimClosed(snapshot.turns);
+    this.#renderMessageTimes(snapshot);
     const slot = this.els.question;
     if (this.#s.question) { this.#slotQuestion = this.#s.question.id; } else if (!slot.hasChildNodes()) { this.#slotQuestion = null; }
     const sc = this.els.scroll;
@@ -2147,8 +2148,6 @@ export class SessionCard {
     this.#tickFacts(s, now);
     e.rowAge.textContent = ago(rowAt(s), now);
     this.#nameRow();
-    e.agentAge.textContent = ago(mainVoice(s).at ?? s.updatedAt, now);
-    if (this.#promptAt) { e.promptAge.textContent = ago(this.#promptAt, now); }
     this.delegates.refreshTimes(now);
     this.strip.refreshTimes(now);
     this.detail.refreshTimes(now);

@@ -62,6 +62,7 @@ test('live times appear only when recorded history for that turn arrives', () =>
   assert.deepEqual(liveMessageTimes(snap('ready', [recorded()]), live()), { prompt: SENT, response: REPLIED });
   assert.deepEqual(liveMessageTimes(snap('ready', [recorded()]), live({ turn: null })), none);
   assert.deepEqual(liveMessageTimes(snap('ready', [recorded({ id: 'earlier' })]), live()), none);
+  assert.deepEqual(liveMessageTimes(snap('ready', [recorded({ prompt: null, parts: [] })]), live()), none);
 });
 
 test('provisional, unreadable and missing times never borrow a browser or session time', () => {
@@ -79,6 +80,7 @@ test('stale words within the same turn cannot date a newer live message', () => 
   assert.deepEqual(liveMessageTimes(snap('ready', [t]), live({ userMessage: 'New prompt', response: 'New answer' })), none);
   assert.deepEqual(liveMessageTimes(snap('ready', [t]), live({ responseTurn: 'earlier' })), { prompt: SENT, response: null });
   assert.deepEqual(liveMessageTimes(snap('ready', [t]), live({ responseTurn: null })), { prompt: SENT, response: null });
+  assert.deepEqual(liveMessageTimes(snap('ready', [t]), live({ source: { response: 'delegate' }, own: { response: 'Main answer', at: SENT } })), { prompt: SENT, response: null });
   t.parts.push({ kind: 'response', text: 'Later answer', at: SENT });
   assert.deepEqual(liveMessageTimes(snap('ready', [t]), live()), { prompt: SENT, response: null });
 });

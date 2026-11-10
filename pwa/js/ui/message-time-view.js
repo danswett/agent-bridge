@@ -64,6 +64,20 @@ export function timeRow(iso, cls = '') {
   return h('div', { class: `msg-time-row ${cls}`.trim() }, timeButton(iso));
 }
 
+// Keep a focused time button when history is refreshed or corrects its recorded instant.
+export function setTime(slot, iso) {
+  const b = slot.firstElementChild;
+  if (messageInstant(iso) === null) { if (b) { slot.replaceChildren(); } return; }
+  if (!b) { slot.append(timeButton(iso)); return; }
+  if (b.dataset.at === iso) { return; }
+  b.dataset.at = iso;
+  b.firstElementChild.dateTime = iso;
+  const shown = messageTime(iso);
+  b.firstElementChild.textContent = shown;
+  b.setAttribute('aria-label', timeName(shown, iso));
+  if (openFor === b) { open(b, pinned); }
+}
+
 // Brings every time under root to its text for `now`; returns the wait before the next could
 // change, or null when none will.
 export function refreshTimes(root, now = Date.now()) {

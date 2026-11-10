@@ -2,7 +2,7 @@
 // hover, focus, tap and keyboard, and nothing moving when it refreshes. The page clock is the
 // test's, so no test waits on a real timer.
 import { test, expect } from '@playwright/test';
-import { open, view } from './nav.mjs';
+import { motionsDone, open, view } from './nav.mjs';
 
 const EXACT = /\d{1,2}:\d{2}:\d{2}/;
 
@@ -67,38 +67,41 @@ const LIVE_ID = '019a1b2c-codex-example';
 const SENT = '2026-11-10T20:00:00Z';
 const REPLIED = '2026-11-10T20:00:10Z';
 
-async function liveCard(page, from = 'person') {
+async function liveCard(page, from = 'person', response = 'Done') {
   await page.clock.install({ time: new Date('2026-11-10T20:00:30Z') });
   await page.goto('?demo=1&static=1');
   await page.waitForSelector('html[data-demo-ready]');
-  await page.evaluate(({ id, from }) => {
+  await page.evaluate(({ id, from, response }) => {
     const d = window.agentBridgeDemo;
     d.host.historyTurns.set(id, []);
     d.upsert({
       ...d.host.get(id), status: 'idle', question: null, updatedAt: new Date().toISOString(),
-      activity: { turn: 'live-time', responseTurn: 'live-time', userMessage: 'Again', userMessageFrom: from, response: 'Done' },
+      activity: { turn: 'live-time', responseTurn: 'live-time', userMessage: 'Again', userMessageFrom: from, response },
     });
-  }, { id: LIVE_ID, from });
+  }, { id: LIVE_ID, from, response });
   await open(page, LIVE_ID);
   return view(page, LIVE_ID);
 }
 
-async function recordLive(page, from = 'person', turnId = 'live-time') {
-  await page.evaluate(async ({ id, from, turnId, sent, replied }) => {
+async function recordLive(page, from = 'person', turnId = 'live-time', response = 'Done', replied = REPLIED) {
+  await page.evaluate(async ({ id, from, turnId, sent, replied, response }) => {
     const d = window.agentBridgeDemo;
     d.host.historyTurns.set(id, [{
       id: turnId, at: sent, prompt: { text: 'Again', from },
-      parts: [{ id: 'reply-time', kind: 'response', text: 'Done', at: replied }],
+      parts: [{ id: 'reply-time', kind: 'response', text: response, at: replied }],
     }]);
     await d.view.history.open(d.host.machine.id, id);
-  }, { id: LIVE_ID, from, turnId, sent: SENT, replied: REPLIED });
+  }, { id: LIVE_ID, from, turnId, sent: SENT, replied, response });
 }
 
 test('a late recorded live time preserves message order, focus, layout and reading position through refresh', async ({ page }) => {
-  const v = await liveCard(page);
+  const response = Array.from({ length: 30 }, (_, i) => `Paragraph ${i}. Keep this reading position.`).join('\n\n');
+  const v = await liveCard(page, 'person', response);
   const stream = v.locator('.stream');
   await expect(stream.locator('.msg-time')).toHaveCount(0);
+  await motionsDone(page);
   await v.locator('.reply-slot textarea').focus();
+  await v.locator('.stream-scroll').evaluate((el) => { el.scrollTop = 100; el.dispatchEvent(new Event('scroll')); });
   const geometry = () => v.evaluate((el) => {
     const sc = el.querySelector('.stream-scroll');
     return [sc.scrollTop, sc.scrollHeight, ...['.user-message', '.speaker', '.response'].flatMap((s) => {
@@ -107,16 +110,21 @@ test('a late recorded live time preserves message order, focus, layout and readi
     })];
   });
   const before = await geometry();
-  await recordLive(page);
+  await recordLive(page, 'person', 'live-time', response);
   await expect(stream.locator('.user-message .msg-time time')).toHaveAttribute('datetime', SENT);
   const reply = stream.locator('.speaker .msg-time');
   await expect(reply.locator('time')).toHaveAttribute('datetime', REPLIED);
   await expect(v.locator('.reply-slot textarea')).toBeFocused();
   expect(await geometry()).toEqual(before);
   await expect(v.locator('.history-turn')).toHaveCount(0);
-  await expect(stream.locator('.response')).toHaveText('Done');
+  await expect(stream.locator('.response')).toContainText('Paragraph 0.');
   await reply.focus();
-  await recordLive(page);
+  const focused = await geometry();
+  await recordLive(page, 'person', 'live-time', response);
+  await expect(reply).toBeFocused();
+  const corrected = '2026-11-10T20:00:11Z';
+  await recordLive(page, 'person', 'live-time', response, corrected);
+  await expect(reply.locator('time')).toHaveAttribute('datetime', corrected);
   await expect(reply).toBeFocused();
   await page.keyboard.press('Enter');
   const shown = await reply.locator('time').innerText();
@@ -124,7 +132,7 @@ test('a late recorded live time preserves message order, focus, layout and readi
   await page.keyboard.press('Escape');
   await expect(page.locator('.msg-time-pop')).toBeHidden();
   await page.clock.fastForward('02:00:00');
-  expect(await geometry()).toEqual(before);
+  expect(await geometry()).toEqual(focused);
   await expect(reply).toBeFocused();
 });
 
