@@ -21,19 +21,28 @@ async function longSession(page, browserName) {
   await expect(page.locator('.session[data-id="long-1"]')).toBeVisible();
 }
 
-// Clicks the row in the page itself and reads, frame by frame, how long until the pane has turns
-// to scroll, and the longest a frame was held up from then until the older turns were all in.
+// Clicks the row in the page itself and reads how long until the pane has turns to scroll (seen
+// as they are put in, not at the next frame), and the longest a frame was held up from then until
+// the older turns were all in, beyond the longest an idle frame took (a slow host's frame rate is not
+// the page's).
 function openAndTime(page) {
   return page.evaluate(() => new Promise((resolve) => {
     const frame = () => new Promise((r) => { requestAnimationFrame(() => r()); });
     (async () => {
-      const t0 = performance.now();
-      document.querySelector('.session[data-id="long-1"] .row-main').click();
+      let idleFrameMs = 0;
+      let at = performance.now();
+      for (let i = 0; i < 8; i++) { await frame(); const n = performance.now(); idleFrameMs = Math.max(idleFrameMs, n - at); at = n; }
       const pane = () => document.querySelector('.session-view[data-id="long-1"] .stream-scroll');
       const turns = () => pane()?.querySelectorAll('.history-turn').length ?? 0;
-      while (turns() === 0) { await frame(); }
-      const firstScrollMs = performance.now() - t0;
-      const firstTurns = turns();
+      const t0 = performance.now();
+      let firstScrollMs = null;
+      let firstTurns = 0;
+      const seen = new MutationObserver(() => {
+        if (firstScrollMs === null && turns() > 0) { firstScrollMs = performance.now() - t0; firstTurns = turns(); seen.disconnect(); }
+      });
+      seen.observe(document.body, { childList: true, subtree: true });
+      document.querySelector('.session[data-id="long-1"] .row-main').click();
+      while (firstScrollMs === null) { await frame(); }
       let worstFrameMs = 0;
       let last = performance.now();
       while (turns() < 60) {
@@ -42,11 +51,10 @@ function openAndTime(page) {
         worstFrameMs = Math.max(worstFrameMs, now - last);
         last = now;
       }
-      resolve({ firstScrollMs, firstTurns, worstFrameMs, scrollGap: pane().scrollHeight - pane().scrollTop - pane().clientHeight });
+      resolve({ firstScrollMs, firstTurns, worstFrameMs: worstFrameMs - idleFrameMs, scrollGap: pane().scrollHeight - pane().scrollTop - pane().clientHeight });
     })();
   }));
 }
-
 test(`a ${TURNS}-turn session scrolls within ${BUDGET_MS} ms of opening, and older turns fill in without holding up a frame`, async ({ page, browserName }) => {
   await longSession(page, browserName);
   await go(page, 'sessions');

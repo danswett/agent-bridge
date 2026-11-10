@@ -1448,9 +1448,11 @@ export class SessionCard {
   // Older pages come in the background (#1622), one at a time once the last one is drawn, when
   // the browser is idle: never while it is busy with a scroll or a key.
   #wantEarlier() {
+    // A view that is not shown does not fill in: it would grow every page's cost (and goes on
+    // when it is shown again).
     const snapshot = this.historyStore.get(this.hostId, this.#s.id);
     // A page let go at the newest end to stay within the limit would take the newest turns with it.
-    if (this.#earlierAsked || snapshot.phase !== 'ready' || !snapshot.more || snapshot.loading || this.turns.pending || snapshot.turns.length + HISTORY.maxTurns > HISTORY.kept) { return; }
+    if (this.#earlierAsked || snapshot.phase !== 'ready' || !snapshot.more || snapshot.loading || this.turns.pending || snapshot.turns.length >= HISTORY.fillTurns || snapshot.turns.length + HISTORY.maxTurns > HISTORY.kept) { return; }
     this.#earlierAsked = true;
     const go = () => {
       this.#earlierAsked = false;
