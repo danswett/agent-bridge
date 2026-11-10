@@ -1426,6 +1426,7 @@ export class SessionCard {
   #unwatch = null;
   #stick = true;
   #stuckAt = -1;
+  #placed = false;
 
   // Still following the end: until the scroll is somewhere we did not put it and not at the end,
   // which is checked here as well as on the scroll event, since a draw can come before the event.
@@ -1484,7 +1485,11 @@ export class SessionCard {
     // Latest at the bottom, kept there until the person scrolls (#1646). A draw that showed
     // nothing does not count, so turns arriving later still scroll.
     // Not under a finger, a pressed mouse or one resting on it (ui.md §5.3): the view stays put.
-    if (this.#stick && drawn && sc.getClientRects().length && !this.#touches && !this.#pressing && !this.#hovering) {
+    // The first jump to the latest is made wherever the pointer rests; after it, not under a finger,
+    // a pressed mouse or one resting on the view (ui.md §5.3): the view stays put.
+    const held = this.#placed && (this.#touches || this.#pressing || this.#hovering);
+    if (this.#stick && drawn && sc.getClientRects().length && !held) {
+      this.#placed = true;
       const toEnd = () => { sc.scrollTop = sc.scrollHeight; this.#stuckAt = sc.scrollTop; };
       if (this.collapse) { this.collapse.appScroll(toEnd); } else { toEnd(); }
     }
