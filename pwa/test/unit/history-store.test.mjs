@@ -164,6 +164,67 @@ test('a stale cursor with new turns past what was drawn walks back to the turns 
   assert.equal(after.more, true);
 });
 
+test('exhausting a stale-cursor walk keeps the held turns and reading anchor, with a recoverable failure (#1437)', async (t) => {
+  const { host, store } = await setup(t, { count: 100, limit: 1 });
+  await store.open('h', ID);
+  const held = await store.loadEarlier('h', ID);
+  assert.deepEqual(nums(held), [99, 100]);
+  const seen = [];
+  store.watch('h', ID, (snapshot, change) => seen.push({ snapshot, change }));
+  host.sessions.get(ID).activity.turnCount = 300;
+  host.historyStale = 1;
+  host.historyLog.length = 0;
+
+  const failed = await store.loadEarlier('h', ID);
+  assert.deepEqual(nums(failed), [99, 100]);
+  assert.equal(failed.phase, 'ready');
+  assert.equal(failed.loading, null);
+  assert.equal(failed.error.on, 'earlier');
+  assert.equal(failed.error.fromHost, false);
+  assert.equal(failed.more, held.more);
+  assert.deepEqual(failed.start, held.start);
+  assert.equal(failed.partial, held.partial);
+  assert.equal(failed.atLatest, held.atLatest);
+  assert.equal(host.historyLog.length, 100);
+  for (const { snapshot, change } of seen) {
+    assert.deepEqual(ids(snapshot), ids(held));
+    snapshot.turns.forEach((turn, i) => assert.equal(turn, held.turns[i]));
+    assert.deepEqual(change, { kind: 'state', above: 0, below: 0 });
+  }
+
+  // The held cursor still asks for its earlier neighbour; an explicit open can choose newest.
+  host.historyLog.length = 0;
+  const retried = await store.loadEarlier('h', ID);
+  assert.deepEqual(host.historyLog, [{ id: ID, before: 'h1.98', limit: 1 }]);
+  assert.deepEqual(nums(retried), [98, 99, 100]);
+  assert.equal(retried.error, null);
+  const newest = await store.open('h', ID);
+  assert.deepEqual(nums(newest), [300]);
+  assert.equal(newest.error, null);
+});
+
+for (const end of ['overlap', 'start']) {
+  test(`a stale-cursor walk reaching ${end} on its final allowed page still recovers (#1437)`, async (t) => {
+    const { host, store } = await setup(t, { count: 100, limit: 1 });
+    await store.open('h', ID);
+    await store.loadEarlier('h', ID);
+    if (end === 'overlap') {
+      host.sessions.get(ID).activity.turnCount = 198;
+    } else {
+      host.historyTurns.set(ID, range(201, 299).map((n) => ({ id: `${ID}-turn-${n}`, at: new Date().toISOString(), prompt: { text: `p${n}` }, parts: [] })));
+    }
+    host.historyStale = 1;
+    host.historyLog.length = 0;
+    const after = await store.loadEarlier('h', ID);
+    assert.equal(host.historyLog.length, 100);
+    assert.deepEqual(nums(after), end === 'overlap' ? range(99, 198) : range(201, 299));
+    assert.equal(after.error, null);
+    assert.equal(after.loading, null);
+    assert.equal(after.more, end === 'overlap');
+    if (end === 'start') { assert.ok(after.start.at); }
+  });
+}
+
 test('a stale cursor with nothing held in reach lets what the host serves take its place', async (t) => {
   const { host, store } = await setup(t, { count: 70, limit: 10 });
   await store.open('h', ID);

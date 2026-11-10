@@ -33,8 +33,8 @@
 import { mainVoice } from './attribution.js';
 import { HISTORY } from './history.js';
 
-// Pages one walk back may ask for after a stale cursor, before it leaves the rest to the next
-// loadEarlier: a page holds at least one turn, and a host serves 500.
+// Pages one walk back may ask for after a stale cursor, before reporting a recoverable failure:
+// a page holds at least one turn, and a host serves 500.
 const MAX_WALK = 100;
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -238,7 +238,11 @@ export class HistoryStore {
       if (collecting) {
         pending.push(result);
         const reached = result.turns.some((t) => e.turns.some((h) => h.id === t.id && !h.provisional));
-        if (!reached && result.before && walked + 1 < MAX_WALK) { cursor = result.before; continue; }
+        if (!reached && result.before) {
+          if (walked + 1 < MAX_WALK) { cursor = result.before; continue; }
+          this.#fail(e, 'earlier', 'history moved on before earlier messages could be loaded', false);
+          return;
+        }
         oldest = this.#join(e, pending, reached);
         collecting = false;
         // Nothing held is within reach: what the host serves now takes its place.
