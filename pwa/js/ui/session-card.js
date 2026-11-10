@@ -805,7 +805,10 @@ export class SessionCard {
     const move = moves.get(s.id);
     const moving = move && !moveView(move).failed ? (moveView(move).moved ? `Moved to ${move.to}` : `Moving to ${move.to}`) : null;
     this.move.set(move);
-    const rw = moving && !stale ? { ...words, glyph: 'working', driven: false, facts: [moving, ...words.facts.slice(1)], text: moving, tone: 'muted', spoken: moving.charAt(0).toLowerCase() + moving.slice(1) } : words;
+    // Never over a status that needs the person (a question, a permission, sign-in, an error): the
+    // original stays answerable, so its ask stays on the row. A finished move is settled, not spinning.
+    const asks = words.tone === 'needs' || ATTENTION_RULES.has(words.rule);
+    const rw = moving && !stale && !asks ? { ...words, glyph: moveView(move).moved ? 'idle' : 'working', driven: false, facts: [moving, ...words.facts.slice(1)], text: moving, tone: 'muted', spoken: moving.charAt(0).toLowerCase() + moving.slice(1) } : words;
     this.#detailsStatus = stale ? words.text : null;
     this.#detailsAway = !!stale;
 
@@ -821,7 +824,7 @@ export class SessionCard {
         : h('span', { class: 'row-status', dataset: { tone: rw.tone } }, rw.facts[0]);
       setFacts(e.rowFacts, [status, this.labelled && this.machineName ? h('span', { class: 'machine-label' }, this.machineName) : whereView()]);
     }
-    // The row's name (ui.md §9.1 A1, #365) starts with the rw it draws, in the order drawn:
+    // The row's name (ui.md §9.1 A1, #365) starts with the words it draws, in the order drawn:
     // its title, its second line's facts, then its age (#nameRow). What else §9.2's name holds
     // follows, so nothing it said before goes unsaid: the status's later facts, or all of it
     // under "Driven by an agent", the driver under a rule 10-12 status drawn in its place, and

@@ -93,5 +93,16 @@ for (const size of [{ name: 'phone', width: 390, height: 700 }, { name: '900 px'
       await expect(strip(page).getByRole('button', { name: 'Go to it' })).toBeVisible();
       await expect(row(page, ID)).toContainText('Moved to Studio PC');
     });
+
+    test('a session that asks a question keeps that on its row while it moves', async ({ page }) => {
+      await page.goto('?demo=1&static=1&machines=2');
+      await page.waitForSelector('html[data-demo-ready]');
+      const ask = 'laptop-ask-1';
+      await expect(row(page, ask)).toContainText('Waiting on you');
+      await page.evaluate((id) => window.agentBridgeDemo.moves.set(id, { moveId: 'm2', from: 'Laptop', to: 'Studio PC', session: id, steps: [] }), ask);
+      await expect(row(page, ask)).toContainText('Waiting on you');
+      await expect(row(page, ask)).not.toContainText('Moving to');
+      await expect(row(page, ask).locator('.row-status')).toHaveAttribute('data-tone', 'needs');
+    });
   });
 }
