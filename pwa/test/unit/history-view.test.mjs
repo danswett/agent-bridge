@@ -2,7 +2,7 @@
 // meta line when there is nothing to show.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { WORDS, historyPlan, shownParts, liveMessageTimes } from '../../js/ui/history-view.js';
+import { WORDS, historyPlan, shownParts, liveMessageTimes, topPlan } from '../../js/ui/history-view.js';
 import { HistoryStore } from '../../js/history-store.js';
 import { readSession } from '../../js/protocol.js';
 import { NO_TIME } from '../../js/history.js';
@@ -83,4 +83,17 @@ test('stale words within the same turn cannot date a newer live message', () => 
   assert.deepEqual(liveMessageTimes(snap('ready', [t]), live({ source: { response: 'delegate' }, own: { response: 'Main answer', at: SENT } })), { prompt: SENT, response: null });
   t.parts.push({ kind: 'response', text: 'Later answer', at: SENT });
   assert.deepEqual(liveMessageTimes(snap('ready', [t]), live()), { prompt: SENT, response: null });
+});
+
+test('the line above the oldest turn follows the store: load, loading, failed, start', () => {
+  const base = { phase: 'ready', turns: [{ id: 't1' }], more: true, loading: null, error: null, start: null };
+  assert.deepEqual(topPlan(base), { kind: 'load', text: WORDS.loadEarlier });
+  assert.equal(topPlan({ ...base, loading: 'earlier' }).text, WORDS.loadingEarlier);
+  assert.equal(topPlan({ ...base, error: { on: 'earlier', reason: 'x', fromHost: false } }).text, WORDS.earlierFailed);
+  // A failed newest page is not this line's to show.
+  assert.equal(topPlan({ ...base, error: { on: 'newest' } }).kind, 'load');
+  assert.match(topPlan({ ...base, more: false, start: { at: '2026-11-01T12:00:00Z' } }).text, /^Start of session \u00b7 /);
+  assert.equal(topPlan({ ...base, more: false, start: { limited: true } }).text, WORDS.limited);
+  assert.equal(topPlan({ ...base, more: false }), null);
+  assert.equal(topPlan({ ...base, turns: [] }), null);
 });

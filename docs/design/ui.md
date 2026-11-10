@@ -1579,7 +1579,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 - **History** (#292). *Proposed: decided by the owner on 2026-11-04, each as recommended
   ([proposals/661-delegate-events.md](proposals/661-delegate-events.md) §3), not yet built
   except as follows: the PWA's card draws the turns before the latest exchange, read-only, above
-  it, and opens at the latest (#1285, first part); the start line is still to come in the PWA.*
+  it, opens at the latest, loads earlier pages as the reader nears the top or presses "Load
+  earlier messages", and says "Loading earlier messages…", "Couldn't load earlier messages" with
+  Try again, and the start line (#1285).*
   The Windows app now draws the stored turns above the latest exchange, oldest first, read-only,
   from the session history client (#292 W2a): the response text of each turn with its prompt, at
   most 500 turns, with the H5 lines below.   It opens at the end, on the latest reply, once the turns are

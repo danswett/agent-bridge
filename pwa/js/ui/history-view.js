@@ -18,6 +18,12 @@ export const WORDS = {
   unavailable: 'Earlier messages aren\u2019t available from this machine',
   unreadable: 'A turn here couldn\u2019t be read',
   cut: 'Cut short \u00b7 see the machine',
+  loadEarlier: 'Load earlier messages',
+  loadingEarlier: 'Loading earlier messages\u2026',
+  earlierFailed: 'Couldn\u2019t load earlier messages',
+  retry: 'Try again',
+  start: 'Start of session',
+  limited: 'Start of available history',
 };
 
 let promptIds = 0;
@@ -47,6 +53,20 @@ function originView(origin, at = null) {
 }
 
 const TOOL_GLYPH = { running: 'working', done: 'done', failed: 'failed' };
+
+// The line above the oldest turn (ui.md §6.4): a way to load earlier turns, or what stands there
+// instead. Null when the machine holds nothing yet.
+export function topPlan(snapshot) {
+  if (snapshot.phase !== 'ready' || !snapshot.turns.length) { return null; }
+  if (snapshot.loading === 'earlier') { return { kind: 'loading', text: WORDS.loadingEarlier }; }
+  if (snapshot.error?.on === 'earlier') { return { kind: 'error', text: WORDS.earlierFailed }; }
+  if (snapshot.more) { return { kind: 'load', text: WORDS.loadEarlier }; }
+  const s = snapshot.start;
+  if (!s) { return null; }
+  if (s.limited) { return { kind: 'start', text: WORDS.limited }; }
+  const day = s.at ? new Date(s.at) : null;
+  return { kind: 'start', text: day && !Number.isNaN(day.getTime()) ? `${WORDS.start} \u00b7 ${day.toLocaleDateString(undefined, { dateStyle: 'medium' })}` : WORDS.start };
+}
 
 // What to draw for a snapshot: a meta line saying why there is nothing (or null), and the turns
 // before the latest one.
@@ -163,9 +183,32 @@ export class HistoryView {
   #backlog = [];
   #framing = false;
   #noteNode = null;
+  #top = h('div', { class: 'history-top', hidden: true });
+  #topKind = null;
+  #topText = null;
   #ticker;
   #inline = null;
   #records = new Map();
+
+  // onLoadEarlier(): the person asked for the page before the oldest turn (the button, or Try again).
+  onLoadEarlier = () => {};
+
+  // Draws the line above the oldest turn; the turns below stay where they are on screen.
+  #drawTop(plan) {
+    if ((plan?.kind ?? null) === this.#topKind && (plan?.text ?? null) === this.#topText) { return; }
+    this.#topKind = plan?.kind ?? null;
+    this.#topText = plan?.text ?? null;
+    this.anchor(() => {
+      this.#top.hidden = !plan;
+      this.#top.dataset.state = plan?.kind ?? '';
+      if (!plan) { this.#top.replaceChildren(); return; }
+      const label = h('span', { class: 'history-meta history-state', role: plan.kind === 'loading' ? 'status' : null }, plan.text);
+      const button = plan.kind === 'load' || plan.kind === 'error'
+        ? h('button', { type: 'button', class: 'history-load', onclick: () => this.onLoadEarlier() }, plan.kind === 'load' ? plan.text : WORDS.retry)
+        : null;
+      this.#top.replaceChildren(...(plan.kind === 'load' ? [button] : [label, button].filter(Boolean)));
+    });
+  }
 
   // opts: now, setTimer, clearTimer, doc (message-time-view's timeTicker), for a test's clock.
   constructor(opts = {}) { this.#ticker = timeTicker(this.element, opts); }
@@ -226,7 +269,7 @@ export class HistoryView {
     const from = oldest < 0 ? Math.max(0, turns.length - FIRST_DRAW) : oldest;
     this.#backlog = turns.slice(0, from);
     const keep = new Map();
-    const nodes = [];
+    const nodes = [this.#top];
     this.hosted = false;
     if (note) {
       if (this.#noteNode?.textContent !== note) { this.#noteNode = h('p', { class: 'history-meta history-state' }, note); }
@@ -256,10 +299,12 @@ export class HistoryView {
     // drawn stay where they are; only turns that are gone (or rebuilt) are taken out, and the new
     // ones put in their place.
     syncChildren(this.element, nodes);
-    this.element.hidden = !nodes.length;
+    const shown = nodes.length > 1;
+    this.#drawTop(topPlan(snapshot));
+    this.element.hidden = !shown && this.#top.hidden;
     this.#ticker.refresh();
     if (this.#backlog.length) { this.#schedule(); }
-    return nodes.length > 0;
+    return shown;
   }
 
   #schedule() {
