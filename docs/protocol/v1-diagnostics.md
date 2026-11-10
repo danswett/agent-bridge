@@ -102,6 +102,11 @@ never the relay's address, a token or an exception's message:
 
 No new code is added, so `vectors/diagnostics.json` is unchanged.
 
+The host also records `HostStarted` (with its release, just before it starts serving) and
+`HostStopped` (when its serve loop ends: `ok` on a normal stop, `cancelled` or `failed` with the
+exception's type and frames, never its message, when something escaped). These are produced now
+(#1270, #737).
+
 The Windows app's crash records go to the app's own journal file, which is not part of this snapshot.
 
 ## Bounds

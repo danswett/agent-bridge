@@ -79,6 +79,16 @@ public static class JournalEvents
 
     static long Millis(TimeSpan t) => (long)t.TotalMilliseconds;
 
+    // The host is serving. Only the release, never a machine name or path.
+    public static JournalEntry HostStarted(string? version) =>
+        JournalContract.Draft(JournalKind.HostStarted, JournalOutcome.Ok, version: version);
+
+    // The serve loop ended: normally (no failure), by a cancellation nobody caught, or by an
+    // exception, kept as its type and frames only.
+    public static JournalEntry HostStopped(Exception? failure, string? version) =>
+        failure is null
+            ? JournalContract.Draft(JournalKind.HostStopped, JournalOutcome.Ok, version: version)
+            : Failure(JournalKind.HostStopped, failure, failure is OperationCanceledException ? JournalOutcome.Cancelled : JournalOutcome.Failed, version);
     // An assembly's release, as its informational version without build metadata; null when it
     // has none the journal can keep.
     public static string? Version(Assembly assembly)
