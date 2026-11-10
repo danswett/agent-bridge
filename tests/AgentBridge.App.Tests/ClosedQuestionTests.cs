@@ -32,6 +32,14 @@ public sealed class ClosedQuestionTests
     }
 
     [Fact]
+    public void A_delegates_record_cannot_pose_as_the_main_agents_question()
+    {
+        var closed = new ClosedQuestion(Make.Choice() with { Agent = "Main agent" });
+
+        Assert.StartsWith("Delegate ", closed.Heading, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void An_approvals_collapsed_line_contains_none_of_its_message_and_its_record_uses_the_existing_literal_renderer()
     {
         var asked = Make.Choice() with { Kind = QuestionKind.Approval, Message = "**shell**\n```\nrun\u202Ethis\n```" };
@@ -40,7 +48,7 @@ public sealed class ClosedQuestionTests
         Assert.Equal("Question closed", closed.Summary);
         Assert.Equal("Permission request", closed.Heading);
         Assert.True(closed.Approval);
-        Assert.DoesNotContain("\u202E", closed.Message);
+        Assert.DoesNotContain("\u202E", closed.Message, StringComparison.Ordinal);
         Assert.Contains("\\u202E", closed.Message);
         var block = Assert.IsType<MdCode>(Assert.Single(MarkdownModel.Approval(closed.Message)));
         Assert.Contains("**shell**", block.Text);

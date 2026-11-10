@@ -103,6 +103,27 @@ public sealed class HistoryDrawTests
         Assert.Equal("q1", Assert.Single(row.Items).Question!.Question.Id);
     }
 
+    [Theory]
+    [InlineData("delivered")]
+    [InlineData("unconfirmed")]
+    public void A_host_budget_refresh_keeps_the_local_delivery_words_and_disclosure_state(string outcome)
+    {
+        var asked = Asked("q1");
+        var delivery = new Delivery { Key = "answer|s1|q1", Request = "r1", State = DeliveryState.Done, Outcome = outcome, Chosen = "PostgreSQL" };
+        var original = new ClosedQuestion(asked.Question!, delivery) { Open = true };
+        var kept = new Dictionary<string, ClosedQuestion> { ["q1"] = original };
+        var trimmed = asked.Question! with { Message = "cut short", Fields = [], Truncated = true };
+        var turn = Turn(1) with { Parts = [asked with { Question = trimmed }] };
+
+        var row = Assert.Single(HistoryDraw.Rows([turn], null, closed: kept));
+        var refreshed = Assert.Single(row.Items).Question!;
+
+        Assert.Equal(original.Summary, refreshed.Summary);
+        Assert.True(refreshed.Open);
+        Assert.Equal("cut short", refreshed.Message);
+        Assert.Empty(refreshed.Question.Fields);
+    }
+
     [Fact]
     public void Only_the_newest_five_hundred_turns_are_drawn()
     {
