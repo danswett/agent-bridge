@@ -770,3 +770,5 @@ Not covered end to end: the C# Bridge Host (it is not wired yet; the fixture hos
 the same contract; `tests/AgentBridge.Host.Tests` drives its notifications through the
 in-process relay to a fake push service), the live relay and GitHub, real phones, and
 real push services.
+
+<!-- baseline probe -->
