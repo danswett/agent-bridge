@@ -2,7 +2,7 @@
 // never while hidden. Fake timers and a fake page stand in for the clock.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { timeTicker } from '../../js/ui/message-time-view.js';
+import { setTime, timeTicker } from '../../js/ui/message-time-view.js';
 
 function setup(iso, nowMs) {
   const t = { textContent: '' };
@@ -51,4 +51,24 @@ test('it does not run while hidden and catches up when shown', () => {
   s.listeners.visibilitychange();
   assert.equal(s.t.textContent, '30s ago');
   assert.equal(s.live().length, 1);
+});
+
+test('invalidating a focused time hands focus to its stable slot without scrolling or retaining stale text', () => {
+  const button = {};
+  const doc = { activeElement: button };
+  const attrs = {};
+  let options;
+  const slot = {
+    ownerDocument: doc, firstElementChild: button,
+    setAttribute: (name, value) => { attrs[name] = value; },
+    focus: (opts) => { options = opts; doc.activeElement = slot; },
+    replaceChildren() { this.firstElementChild = null; if (doc.activeElement === button) { doc.activeElement = null; } },
+  };
+  setTime(slot, null);
+  assert.equal(slot.firstElementChild, null);
+  assert.equal(doc.activeElement, slot);
+  assert.equal(slot.tabIndex, -1);
+  assert.equal(attrs.role, 'group');
+  assert.equal(attrs['aria-label'], 'Sent time unavailable');
+  assert.deepEqual(options, { preventScroll: true });
 });

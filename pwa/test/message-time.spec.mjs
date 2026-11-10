@@ -150,3 +150,31 @@ test('a collapsed live agent prompt ignores same-text other turns and reveals it
   await expect(prompt.locator('.prompt-toggle')).toHaveAttribute('aria-expanded', 'false');
   expect(await prompt.evaluate((el) => el.offsetHeight)).toBe(height);
 });
+
+test('invalidating a focused recorded time keeps focus local without scrolling, then restores its time control', async ({ page }) => {
+  const response = Array.from({ length: 30 }, (_, i) => `First paragraph ${i}. Keep reading here.`).join('\n\n');
+  const next = response.replaceAll('First', 'Later');
+  const v = await liveCard(page, 'person', response);
+  await recordLive(page, 'person', 'live-time', response);
+  await motionsDone(page);
+  const slot = v.locator('.speaker-age');
+  await slot.locator('.msg-time').focus();
+  const sc = v.locator('.stream-scroll');
+  await sc.evaluate((el) => { el.scrollTop = 100; el.dispatchEvent(new Event('scroll')); });
+  const before = await sc.evaluate((el) => el.scrollTop);
+  expect(before).toBe(100);
+  await page.evaluate(({ id, next }) => {
+    const d = window.agentBridgeDemo;
+    const s = d.host.get(id);
+    d.upsert({ ...s, activity: { ...s.activity, response: next } });
+  }, { id: LIVE_ID, next });
+  await expect(slot.locator('.msg-time')).toHaveCount(0);
+  await expect(slot).toBeFocused();
+  await expect(slot).toHaveAccessibleName('Sent time unavailable');
+  expect(await sc.evaluate((el) => el.scrollTop)).toBe(before);
+  const recorded = '2026-11-10T20:00:20Z';
+  await recordLive(page, 'person', 'live-time', next, recorded);
+  await expect(slot.locator('.msg-time')).toBeFocused();
+  await expect(slot.locator('time')).toHaveAttribute('datetime', recorded);
+  expect(await sc.evaluate((el) => el.scrollTop)).toBe(before);
+});

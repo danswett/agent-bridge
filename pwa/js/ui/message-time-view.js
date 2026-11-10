@@ -67,8 +67,28 @@ export function timeRow(iso, cls = '') {
 // Keep a focused time button when history is refreshed or corrects its recorded instant.
 export function setTime(slot, iso) {
   const b = slot.firstElementChild;
-  if (messageInstant(iso) === null) { if (b) { slot.replaceChildren(); } return; }
-  if (!b) { slot.append(timeButton(iso)); return; }
+  if (messageInstant(iso) === null) {
+    if (b) {
+      if (slot.ownerDocument.activeElement === b) {
+        slot.tabIndex = -1;
+        slot.setAttribute('role', 'group');
+        slot.setAttribute('aria-label', 'Sent time unavailable');
+        slot.focus({ preventScroll: true });
+      }
+      slot.replaceChildren();
+    }
+    return;
+  }
+  if (!b) {
+    const restore = slot.ownerDocument.activeElement === slot;
+    const next = timeButton(iso);
+    slot.append(next);
+    slot.removeAttribute('tabindex');
+    slot.removeAttribute('role');
+    slot.removeAttribute('aria-label');
+    if (restore) { next.focus({ preventScroll: true }); }
+    return;
+  }
   if (b.dataset.at === iso) { return; }
   b.dataset.at = iso;
   b.firstElementChild.dateTime = iso;
