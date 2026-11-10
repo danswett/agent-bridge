@@ -664,6 +664,7 @@ export class SessionCard {
     this.turns.anchor = (change) => {
       const sc = this.els.scroll;
       const before = sc.scrollHeight;
+      const was = sc.scrollTop;
       const follow = this.#sticking();
       change();
       const grew = sc.scrollHeight - before;
@@ -671,7 +672,8 @@ export class SessionCard {
         // Following the end, to the end (whatever has grown below it too); reading, by what grew above.
         // A smooth scroll to a question is cut short by setting scrollTop, so it is started again.
         const keep = () => {
-          if (follow) { sc.scrollTop = sc.scrollHeight; } else { sc.scrollTop += grew; }
+          // Set from where it was, not added to where it is: the browser may have kept the place already.
+          if (follow) { sc.scrollTop = sc.scrollHeight; } else { sc.scrollTop = was + grew; }
           const r = this.#revealing;
           if (r?.view.isConnected) { r.view.scrollIntoView({ block: 'nearest', behavior: r.behavior }); }
         };
@@ -1474,7 +1476,7 @@ export class SessionCard {
     // Not at the end before this draw (the person read on, or something grew with no scroll):
     // nothing here takes them from where they are.
     // A newer turn than the last drawn is the reply the person is waiting for: it is followed.
-    const away = this.#stick && sc.getClientRects().length > 0 && !this.#atEnd();
+    const away = this.#sticking() && sc.getClientRects().length > 0 && !this.#atEnd();
     const tail = this.turns.element.lastElementChild;
     const drawn = this.turns.render(snapshot, this.#s.activity?.turn ?? null, { slot, questionId: this.#slotQuestion });
     // Not in a turn (none holds it, or the history is not drawn): back where the live exchange ends.
@@ -1488,7 +1490,7 @@ export class SessionCard {
     // The first jump to the latest is made wherever the pointer rests; after it, not under a finger,
     // a pressed mouse or one resting on the view (ui.md §5.3): the view stays put.
     const held = this.#placed && (this.#touches || this.#pressing || this.#hovering);
-    if (this.#stick && drawn && sc.getClientRects().length && !held) {
+    if (this.#sticking() && drawn && sc.getClientRects().length && !held) {
       this.#placed = true;
       const toEnd = () => { sc.scrollTop = sc.scrollHeight; this.#stuckAt = sc.scrollTop; };
       if (this.collapse) { this.collapse.appScroll(toEnd); } else { toEnd(); }
