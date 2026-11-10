@@ -8,7 +8,7 @@ messaging cut-over (#728), which stays first.
 
 Implementation update, November 10, 2026 (Pacific), fleet #238: the host now wires the
 #1791 publisher core to each authenticated relay connection, retaining its epoch/sequence
-across reconnects. `fleet.share` is passed explicitly; failed puts use bounded monotonic
+and pending failed-put backoff across reconnects. `fleet.share` is passed explicitly; failed puts use bounded monotonic
 backoff and content-free host status; invalid IDs are skipped and counted. Read replies
 preserve the put path's relaxed escaping and are byte-budget tested. Records are still
 unsigned; signing, name-lookup authority and the 24-hour dual run (slice 11) remain open.
@@ -167,8 +167,9 @@ The host publishes one snapshot of its own sessions. All members are required un
 * **epoch and seq.** `epoch` is 16 random hex digits chosen when the host process starts; `seq`
   starts at 1 in each epoch and rises by one per snapshot. Neither needs to be stored across a
   restart (see "Freshness and replay").
-* **truncated and total.** `truncated: true` when the host has more live sessions than it may
-  publish; `total` is then the real count. See "Size and paging".
+* **truncated and total.** `truncated: true` when the host has more usable live session IDs than it may
+  publish; `total` is then the usable count. Invalid IDs are skipped and counted in host status.
+  See "Size and paging".
 * **sig.** Optional in `v: 1`. Absent until `hostSign` exists; see "Signing".
 * **machine online.** Not in the host's record: the relay adds it from its own socket knowledge
   (see "Freshness and replay").
@@ -196,8 +197,8 @@ socket (`RelayHub.cs:245-250`). So no frame may ever be built from "all machines
   24 KiB or a record over 16 KiB is refused with `too-large` as a text reply; the socket stays
   open and the old record stays in place. (A frame above 65,561 bytes still closes the socket,
   as today, but a conforming host never builds one.)
-* **More than 64 sessions.** The host publishes the 64 with the most recent state change, sets
-  `truncated: true` and `total` to the real count (both signed once signing exists). Nothing is
+* **More than 64 usable sessions.** The host publishes the 64 with the most recent state change, sets
+  `truncated: true` and `total` to the usable count (both signed once signing exists). Nothing is
   silently dropped: see "Names and lookup" for how `fleet.find` reports an incomplete list.
   Hitting the cap is logged on the host as a count, never a name.
 

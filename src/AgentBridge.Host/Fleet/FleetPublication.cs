@@ -44,7 +44,7 @@ public sealed class FleetPublication
             else { Set(Status with { SkippedInvalidIds = publisher.SkippedInvalidIds }); }
             return sent;
         }
-        catch (Exception e) when (e is IOException or InvalidOperationException or TimeoutException or WebSocketException or JsonException
+        catch (Exception e) when (e is InvalidDataException or IOException or InvalidOperationException or TimeoutException or WebSocketException or JsonException
             || e is OperationCanceledException && !ct.IsCancellationRequested)
         {
             var failures = Status.Failures < int.MaxValue ? Status.Failures + 1 : int.MaxValue;

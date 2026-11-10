@@ -47,7 +47,7 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
                     };
                 }).ToArray();
             var truncated = usable.Length > 64;
-            int? total = truncated ? snapshot.Count : null;
+            int? total = truncated ? usable.Length : null;
             var content = JsonSerializer.Serialize(new { truncated, total, sessions }, ProtocolJson.Options);
             if (!force && content == lastContent && elapsed < TimeSpan.FromSeconds(20)) { return false; }
             var record = JsonSerializer.SerializeToElement(new
