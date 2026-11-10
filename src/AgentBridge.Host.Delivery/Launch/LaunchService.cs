@@ -361,6 +361,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             Busy = BusyReason(status: true),
             Trust = TrustQuestions() is { Count: > 0 } trust ? trust : null,
             ResumablePending = pending ? true : null,
+            ResumableIncomplete = omitted is { Count: >= 1 } ? new ResumableIncomplete(omitted.Count, omitted.Reason) : null,
         };
         // Within its budget, losing the oldest resumable sessions first, then the longest lists.
         while (ProtocolJson.ByteCount(result) > LaunchProtocol.MaxOptionsBytes && result.Resumable.Count > 0)

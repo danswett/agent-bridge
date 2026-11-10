@@ -1,5 +1,6 @@
 using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Launch;
+using AgentBridge.Protocol;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
@@ -69,6 +70,8 @@ public sealed partial class LaunchFlowTests
             var resolved = await call.WaitAsync(Patience);
 
             Assert.Equal([Newest], resolved.Options.Resumable.Select(r => r.Id));
+            Assert.Equal(new ResumableIncomplete(2, "deadline"), resolved.Options.ResumableIncomplete);
+            Assert.DoesNotContain("Stuck", System.Text.Json.JsonSerializer.Serialize(resolved.Options.ResumableIncomplete, AgentBridge.Protocol.ProtocolJson.Options));
             Assert.Equal(new LaunchService.Omission(2, "deadline"), resolved.Omitted);
             Assert.Contains("left out 2 resumable sessions", await held.Logged.Task.WaitAsync(Patience));
         }
@@ -99,6 +102,7 @@ public sealed partial class LaunchFlowTests
 
         Assert.Equal([Newest, Stuck, Oldest], resolved.Options.Resumable.Select(r => r.Id));
         Assert.Null(resolved.Omitted);
+        Assert.Null(resolved.Options.ResumableIncomplete);
         Assert.False(held.Logged.Task.IsCompleted);
     }
 

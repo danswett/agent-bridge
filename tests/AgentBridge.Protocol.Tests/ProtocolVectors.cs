@@ -807,7 +807,13 @@ public static class ProtocolVectors
         f.Record<LaunchDefaults>(Host).Valid("full", defaults).Valid("permissions-only", new LaunchDefaults { Permissions = LaunchProtocol.AllowAll });
         f.Record<LaunchOptions>(Host)
             .Valid("full", new LaunchOptions { Agents = [copilot, codex], Workspaces = [workspace], Resumable = [resumable], Defaults = defaults, Busy = "a launch is starting", Trust = [Trust] })
-            .Valid("nothing-offered", new LaunchOptions { Defaults = new LaunchDefaults { Permissions = LaunchProtocol.Ask } });
+            .Valid("nothing-offered", new LaunchOptions { Defaults = new LaunchDefaults { Permissions = LaunchProtocol.Ask } })
+            .Valid("some-resumable-sessions-left-out", new LaunchOptions { Agents = [copilot], Workspaces = [workspace], Resumable = [resumable], Defaults = defaults, ResumableIncomplete = new ResumableIncomplete(2, "deadline") })
+            .Reads("a-count-left-out-of-zero-reads-as-absent", """{"defaults":{"permissions":"ask"},"resumableIncomplete":{"omitted":0,"reason":"deadline"}}""");
+        f.Record<ResumableIncomplete>(Host)
+            .Valid("deadline", new ResumableIncomplete(2, "deadline"))
+            .Refused("none-left-out", """{"omitted":0,"reason":"deadline"}""")
+            .Refused("a-negative-count", """{"omitted":-1,"reason":"deadline"}""");
 
         f.Record<TrustQuestion>(Host)
             .Valid("full", Trust)

@@ -108,4 +108,29 @@ public class LaunchTests
         Assert.Equal("""{"agents":[{"id":"agency","label":"Agency","kind":"copilot","models":["auto"],"efforts":[],"contexts":[],"profiles":["home"],"defaults":{"profile":"home"}}],"workspaces":[{"label":"Bridge","path":"C:\\repos\\bridge","isolate":true}],"resumable":[],"defaults":{"agent":"agency","workspace":"Bridge","permissions":"ask"}}""",
             JsonSerializer.Serialize(options, ProtocolJson.Options));
     }
-}
+
+    [Fact]
+    public void Launch_options_say_when_resumable_sessions_were_left_out_and_say_nothing_otherwise()
+    {
+        var defaults = new LaunchDefaults { Permissions = "ask" };
+        Assert.DoesNotContain("resumableIncomplete", JsonSerializer.Serialize(new LaunchOptions { Defaults = defaults }, ProtocolJson.Options));
+        var partial = JsonSerializer.Serialize(new LaunchOptions { Defaults = defaults, ResumableIncomplete = new ResumableIncomplete(2, "deadline") }, ProtocolJson.Options);
+        Assert.Contains("""
+            "resumableIncomplete":{"omitted":2,"reason":"deadline"}
+            """.Trim(), partial);
+        var read = JsonSerializer.Deserialize<LaunchOptions>(partial, ProtocolJson.Options)!;
+        Assert.Equal(new ResumableIncomplete(2, "deadline"), read.ResumableIncomplete);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-3)]
+    public void A_count_left_out_of_less_than_one_is_not_a_resumable_incomplete(int omitted)
+    {
+        var json = $$"""{"omitted":{{omitted}},"reason":"deadline"}""";
+        Assert.ThrowsAny<JsonException>(() => JsonSerializer.Deserialize<ResumableIncomplete>(json, ProtocolJson.Options));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ResumableIncomplete(omitted, "deadline"));
+        // Inside the options it is read as absent: the rest of the answer is still good.
+        var options = $$"""{"defaults":{"permissions":"ask"},"resumableIncomplete":{{json}}}""";
+        Assert.Null(Received.Read<LaunchOptions>(JsonSerializer.Deserialize<JsonElement>(options), out _).ResumableIncomplete);
+    }}
