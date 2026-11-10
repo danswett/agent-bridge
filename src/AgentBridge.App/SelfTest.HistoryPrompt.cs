@@ -42,7 +42,7 @@ static partial class SelfTest
             var column = ById<StackPanel>(view, "HistoryColumn");
             await Until(() =>
             {
-                bubbles = Find<Border>(view).Where(b => b.Name == "HistoryYourMessage").ToList();
+                bubbles = Find<Border>(view).Where(b => b.Name == "HistoryYourMessage" && b.Child is TextBlock t && (t.Text == "Yes" || t.Text == longText)).ToList();
                 return column is not null && bubbles.Count >= 2 && bubbles.All(b => b.ActualWidth > 0);
             }, TimeSpan.FromSeconds(10));
             if (column is null || bubbles.Count != 2) { wrong.Add($"{width}: {bubbles.Count} bubbles of 2"); continue; }
