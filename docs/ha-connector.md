@@ -26,7 +26,8 @@ An HA login, service event or `driver` claim cannot make a service into a person
 or authorize an approval. Non-person enrollment and the person UI path remain
 design/build work in #1418/#1419; until implemented, the component is read-only.
 
-The target consumes the normal registry/session subscriptions and ordinary ops
+The target consumes the **planned registry change feed** and existing
+host-session subscriptions, plus ordinary ops
 such as `session.answer`, `session.reply`, `session.stop`, `session.launch`,
 `usage.get` and `update.install`, only when its caller is authorized. It adds no
 private host action ingress, HA image-store dependency, per-host HA token grant

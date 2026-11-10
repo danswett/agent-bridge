@@ -78,13 +78,14 @@ person-facing clients when offered. Each must support the capability for an
 authorized person. `Agent` means the narrower credential/projection above, not all
 operations in that row. `Host` is infrastructure, not a new UI permission.
 Intentional drops and unresolved inventory are explicit rather than invented ops.
-Names below reuse existing contracts unless marked **proposed** or **gated**.
+Names below reuse operation contracts, not evidence that every operation is live.
+Unimplemented work is marked **proposed**, **planned** or **gated**.
 
 | Row | Parity capability | Common operation or explicit disposition | Required clients/callers |
 |---|---|---|---|
 | 1 | Whole-message reply and acknowledgement | `session.reply`; agents use scoped `agent.send`, preserving its narrower message limit/outcomes | All; Agent |
 | 2 | Machine presence | Relay `presence` and `known` roster, with freshness/offline state | All; Agent via host |
-| 3 | Fleet sessions, status and name lookup | `registry-get`, `registry-subscribe`, `registry-changed`; `fleet.list`/`fleet.find` agent projections; full detail via `session.get` | All; Agent |
+| 3 | Fleet sessions, status and name lookup | `registry-get`; **planned** `registry-subscribe`/`registry-changed`; `fleet.list`/`fleet.find` agent projections; full detail via `session.get` | All; Agent |
 | 4 | End session | `session.stop`; host owns idle/confirmation policy and target-process checks | All; never Agent |
 | 5 | Questions and permission approvals | `session.answer`, question id and typed fields; approval uses the same op with the host's additional person checks | All; never Agent/service |
 | 6 | Launch, resume and tuning | `session.launch`; scoped agent launch is gated by #1404/#1413 and the owner-approved design | All; Agent only within its launch grant |
@@ -105,7 +106,7 @@ Names below reuse existing contracts unless marked **proposed** or **gated**.
 | 21 | Legacy daemon and hook migration | Explicit migration/rollback procedure, not a remote agent management permission | Host, person-operated migration |
 | 22 | Launch-helper launch ledger and idle end | `launch.options`, `session.launch`, correlated outcomes, `session.stop` and proposed audit read | Person CLI/client; no unattended person impersonation |
 | 23 | Dispatcher launch and registration check | Same launch operations under the separate fleet grant, then the verified fleet registry | Credentialed dispatcher; gated, not ordinary Agent |
-| 24 | Live-board roster snapshot | Same registry subscription and verified typed projection; no HA state scan or fixed collector machine | Client/service within read grant |
+| 24 | Live-board roster snapshot | Same **planned registry subscription** and verified typed projection; no HA state scan or fixed collector machine | Client/service within read grant |
 | 25 | Pump wake | Scoped `agent.send` using the canonical lookup, not an HA reply script | Credentialed agent/script once supported |
 | 26 | Messenger lookup, busy check and send | `fleet.find`, typed status, scoped `agent.send`; preserve refusal/uncertainty instead of guessing delivery | Credentialed agent/script once supported |
 | 27 | Dashboard and cards | `sessions.subscribe`, `session.get`, usage/update subscriptions and ordinary action ops above | All, including optional HA presentation |
@@ -140,8 +141,15 @@ UI gap. Non-person reads remain limited by
 
 **Existing:** host `hello` returns protocol version and caller-filtered
 `capabilities`; `hello.changed` asks the client to refresh them. Capabilities are
-features, **not permission grants**. Registry delivery is opt-in through
-`registry-get`/`registry-subscribe`, not a new relay-hello flag.
+features, **not permission grants**.
+Only `registry-put` and `registry-get` are implemented in the relay. Registry
+reads are opt-in through `registry-get`, not a new relay-hello flag.
+
+**Planned registry change feed:** `registry-subscribe` and `registry-changed`
+are not implemented; [roster.md](../protocol/roster.md) records them as later
+work (registry design slice 2b). The subscription portions of rows 3, 24 and 30
+and the optional-HA target depend on that future feed, not current
+`registry-get` responses.
 
 **Proposed additive client announcement (implementation after design review):**
 the encrypted host `hello` request gains optional
