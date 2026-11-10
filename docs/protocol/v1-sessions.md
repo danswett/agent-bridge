@@ -452,6 +452,16 @@ its tool history moved, say). An `append` is used only where the old text is all
 start of the new: a `response` cut to its last 16 KiB has moved, and is `set`. Hosts choose
 freely between a patch and a whole session; a client applies either.
 
+**Measured wire cost (#1334).** `WireBytesTests` replays 40 s of changes through the real host to a
+subscriber that asked for `patch`, sent `sessions.focus` and negotiated deflate: one focused
+session changing every second and four quiet ones changing every 250 ms. It counts each event as
+the `MessageDeflate.Pack` length of its `{ev, seq, data}` envelope plus 42 bytes (16 AEAD tag, 9
+channel header, 17 relay data frame). Result: **13,140 bytes**, all 53 of them `session.patch`
+(none a whole upsert), against #597's goal of 5 KB, so the goal is **not met**: 8,020 bytes over.
+The focused session's 40 patches are about 9.5 KB of it, each a ~240-byte message that is too
+small for deflate (under 512 bytes) and carries 42 of overhead. The test's budget is 14,500 bytes
+(the measurement plus about 10%) so that a regression fails; it is not a claim that 5 KB is met.
+
 #### Resuming without a snapshot
 
 A reconnect took a whole snapshot, and #427 holds everything a client sends that machine until it
