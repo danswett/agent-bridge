@@ -326,14 +326,14 @@ test('a machine from before the sessions protocol is reported, ?host= opens a ma
   await machineListed(opened, 'fixture-host');
   // The new sign-in starts where one with nothing remembered does, at every machine, not at
   // the machine the last one chose.
-  await expect(opened.locator('[data-device-id="all"] button')).toHaveAttribute('aria-current', 'true');
+  await expect(opened.locator('[role="tab"][data-device-id="all"]')).toHaveAttribute('aria-selected', 'true');
   await expect(opened.locator('[data-device-name="fixture-host"] button.machine-button')).not.toHaveAttribute('aria-current', 'true');
   await expect(opened.locator('#sessions-h')).toHaveText('Sessions on all machines');
 });
 
 test('with every machine shown, a machine\'s sessions come over its own channel, labelled, and one that can\'t show them says so beside them', async ({ page }) => {
   await signIn(page);
-  await expect(page.locator('[data-device-id="all"] button')).toHaveAttribute('aria-current', 'true');
+  await expect(page.locator('[role="tab"][data-device-id="all"]')).toHaveAttribute('aria-selected', 'true');
   await expect(page.locator('#sessions-h')).toHaveText('Sessions on all machines');
   await expect(page.locator('.session').first()).toBeVisible({ timeout: 30000 });
   await expect(page.locator(`.session[data-host-id="${host.deviceId}"]`).first().locator('.machine-label')).toHaveText('fixture-host');
