@@ -1756,6 +1756,8 @@ is for disposable evaluation, not production service enrollment.
 | `repository` | string? | `owner/name`, if known |
 | `branch` | string? | |
 | `model` | string? | The model used for the latest turn, e.g. `claude-opus-5.5` |
+| `effort` | string? | The agent's own effort option id for the running session (as in `v1-launch.md` `efforts`), when the host knows it: at most 64 characters, plain text. Absent rather than empty or too long; older hosts send none, and older clients ignore it (#1327) |
+| `context` | string? | The agent's own context option id (as in `v1-launch.md` `contexts`, e.g. `1000000` or `long_context`), under the same rules as `effort`. Clients show it in Details after Model; a bare number is left out of the row, and a size such as `1M` reads `1M tokens` |
 | `status` | `"working"` \| `"waiting"` \| `"idle"` \| `"ending"` | `waiting` exactly when `question` is present, unless `ending`. `ending`: the host is ending the session (`session.stop`); it is removed once its process has gone, or shows its own status again if that fails. A client that does not know `ending` reads it as `idle` |
 | `statusSince` | time | When `status` last changed |
 | `startedAt` | time? | |

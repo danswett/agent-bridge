@@ -106,6 +106,8 @@ public static class Limits
     public const int UserMessageLabel = 64;
     public const int ToolSummary = 200;
     public const int DriverPrincipal = 128;
+    // session.effort and session.context: an agent's own option id (v1-launch.md); a longer one is left out.
+    public const int OptionId = 64;
     public const int QuestionMessage = 8 * 1024;
     public const int History = 50;
     // Free text in an answer (session.answer's text, or a field's other), and the request.
@@ -367,6 +369,12 @@ public sealed record Session
     public string? Repository { get; init; }
     public string? Branch { get; init; }
     public string? Model { get; init; }
+    // The agent's own option ids for effort and context (v1-launch.md), when the host reports them: absent,
+    // never empty, and absent when longer than Limits.OptionId. Older hosts send neither; older clients ignore them.
+    public string? Effort { get => effort; init => effort = OptionId(value); }
+    public string? Context { get => context; init => context = OptionId(value); }
+    string? effort, context;
+    static string? OptionId(string? v) => v is { Length: > 0 and <= Limits.OptionId } ? v : null;
     public required SessionStatus Status { get; init; }
     public required DateTimeOffset StatusSince { get; init; }
     public DateTimeOffset? StartedAt { get; init; }

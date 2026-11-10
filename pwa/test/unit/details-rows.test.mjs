@@ -41,3 +41,12 @@ test('Started gains its date once local midnight has passed, with no new start',
   assert.notEqual(after, before);
   assert.ok(after.includes(before), `${after} holds ${before}`);
 });
+
+test('Effort and Context read from the snapshot, a size gains "tokens", and a bare number or an oversized id is left out', () => {
+  const base = { id: 's1', agent: 'claude', status: 'idle', updatedAt: '2026-11-06T12:00:00Z' };
+  const rows = (extra) => detailRows(readSession({ ...base, ...extra }), { now }).map((r) => [r.term, r.text]);
+  assert.deepEqual(rows({ effort: 'high', context: '1M' }).slice(2, 4), [['Effort', 'high'], ['Context', '1M tokens']]);
+  assert.deepEqual(rows({ context: 'long_context' }).filter(([t]) => t === 'Context'), [['Context', 'long_context']]);
+  assert.deepEqual(rows({ context: '1000000', effort: 'x'.repeat(65) }).filter(([t]) => t === 'Context' || t === 'Effort'), []);
+  assert.deepEqual(rows({ effort: '', context: 5 }).filter(([t]) => t === 'Context' || t === 'Effort'), []);
+});
