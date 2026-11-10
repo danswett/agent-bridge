@@ -1004,6 +1004,7 @@ export class SessionCard {
       e.foldToggle.setAttribute('aria-expanded', String(st.open));
       e.foldWorking.hidden = !fold.link;
       e.foldWorking.textContent = fold.link ?? '';
+      e.foldWorking.setAttribute('aria-label', fold.linkName ?? '');
       e.foldWorking.dataset.id = fold.workingId ?? '';
       e.fold.toggleAttribute('data-open', st.open);
       e.foldLines.hidden = !st.open;

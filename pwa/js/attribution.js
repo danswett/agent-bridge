@@ -390,7 +390,8 @@ export function delegateFold(lines) {
     if (i >= 0) { workingId = l.names[i]?.id ?? null; break; }
   }
   const link = working ? `${working} still working` : null;
-  return { button: head, link, workingId, label: link ? `${head}${said.length ? ',' : ' ·'} ${link}` : head };
+  const linkName = working > 1 ? `${link}, opens the first` : link;
+  return { button: head, link, linkName, workingId, label: link ? `${head}${said.length ? ',' : ' ·'} ${link}` : head };
 }
 // "Ask main agent to stop it" (ui.md §6.3, subagents.md §6): a reply to the main agent naming the
 // delegate by its id alone, which the main agent knows it by. Its name is an agent's words, and
