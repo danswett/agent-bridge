@@ -139,7 +139,7 @@ test('only the host shape reason adds a quiet explanation after the at-machine l
     fields: [{ name: 'answer', type: 'choice', options: [{ value: 'Yes' }, { value: 'No' }], allowOther: true, required: true }],
   };
   await upsert(page, COPILOT, { question: prompt, updatedAt: later() });
-  const q = (await open(page, COPILOT)).locator('.question');
+  const q = (await open(page, COPILOT)).locator('.question:not(.resolved)[data-question="legacy-887"]');
   const rowStatus = await row(page, COPILOT).locator('.row-status').innerText();
   for (const reason of [null, 'future', 'shape', null]) {
     await upsert(page, COPILOT, { question: { ...prompt, answerAtMachineReason: reason }, updatedAt: later() });
@@ -535,14 +535,15 @@ test('a permission prompt only the machine can answer shows no buttons and says 
     },
   });
   const c = card(page, COPILOT);
+  const q = c.locator('.question:not(.resolved)[data-question="perm-1"]');
   await expect(c.locator('.status-text')).toHaveText('Waiting on you · answer at the machine');
-  await expect(c.locator('.question')).toHaveAttribute('data-answerable', 'false');
+  await expect(q).toHaveAttribute('data-answerable', 'false');
   // Who asks, in the stream (ui.md §6.4).
-  await expect(c.locator('.question .question-head')).toHaveText('Main agent asks');
-  await expect(c.locator('.question .question-message')).toContainText('rm -rf build');
-  await expect(c.locator('.question .read-only-why')).toHaveText('This prompt can only be answered at the machine on Demo machine.');
-  await expect(c.locator('.question .field')).toHaveCount(0);
-  await expect(c.locator('.question').locator('button, input, select, textarea')).toHaveCount(0);
+  await expect(q.locator('.question-head')).toHaveText('Main agent asks');
+  await expect(q.locator('.question-message')).toContainText('rm -rf build');
+  await expect(q.locator('.read-only-why')).toHaveText('This prompt can only be answered at the machine on Demo machine.');
+  await expect(q.locator('.field')).toHaveCount(0);
+  await expect(q.locator('button, input, select, textarea')).toHaveCount(0);
   // Typed words would answer it, so the reply box is held, and says where to go.
   await expect(c.locator('.reply-held')).toHaveText('The session is waiting at the machine for a prompt only it can answer. Answer it there first, then reply.');
   await expect(c.locator('.reply-input')).toBeDisabled();

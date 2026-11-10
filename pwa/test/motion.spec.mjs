@@ -272,16 +272,16 @@ test('a question that arrives is scrolled to while the conversation is read to i
   // Read back to the top: a question that comes leaves the place alone.
   await scroller.evaluate((el) => { el.scrollTop = 0; });
   await ask('q-motion-1', 2000);
-  await expect(v.locator('.question-slot .question')).toHaveCount(1);
+  await expect(v.locator('.question-slot .question:not(.resolved)')).toHaveCount(1);
   await page.waitForTimeout(400);
   expect(await scroller.evaluate((el) => el.scrollTop)).toBe(0);
   // At the end: the next question comes into sight.
   await scroller.evaluate((el) => { el.scrollTop = el.scrollHeight; });
   await page.evaluate(() => window.agentBridgeDemo.upsert({ ...window.agentBridgeDemo.host.get('019a1b2c-codex-example'), question: null, updatedAt: new Date(Date.now() + 3000).toISOString() }));
-  await expect(v.locator('.question-slot .question')).toHaveCount(0);
+  await expect(v.locator('.question-slot .question:not(.resolved)')).toHaveCount(0);
   await scroller.evaluate((el) => { el.scrollTop = el.scrollHeight; });
   await ask('q-motion-2', 4000);
-  await expect(v.locator('.question-slot .question')).toBeInViewport();
+  await expect(v.locator('.question-slot .question:not(.resolved)')).toBeInViewport();
 });
 
 test('a control eases back to its fill only when a press lets go: a row selected, or the theme changing, takes its fill at once', async ({ page }) => {
@@ -680,16 +680,16 @@ test('where the reader is is read when a question comes, though the scroll that 
   await upsert(page, CODEX, { activity: { response: `${long}\n\nOne more.` }, updatedAt: later(2000) });
   await expect(scroller).toContainText('One more.');
   await ask('q-race-end', 'end', 3000);
-  await expect(v.locator('.question-slot .question')).toBeInViewport();
+  await expect(v.locator('.question-slot .question:not(.resolved)')).toBeInViewport();
   // At the end when last measured; back at the top, just now, when a question comes: left there.
   await clear(4000);
-  await expect(v.locator('.question-slot .question')).toHaveCount(0);
+  await expect(v.locator('.question-slot .question:not(.resolved)')).toHaveCount(0);
   await scroller.evaluate((el) => { el.scrollTop = el.scrollHeight; });
   await upsert(page, CODEX, { activity: { response: `${long}\n\nOne more, and another.` }, updatedAt: later(5000) });
   await expect(scroller).toContainText('and another.');
   await settle();
   await ask('q-race-top', 0, 6000);
-  await expect(v.locator('.question-slot .question')).toHaveCount(1);
+  await expect(v.locator('.question-slot .question:not(.resolved)')).toHaveCount(1);
   await page.waitForTimeout(400);
   expect(await scroller.evaluate((el) => el.scrollTop)).toBe(0);
 });

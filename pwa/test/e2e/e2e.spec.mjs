@@ -668,13 +668,19 @@ test.describe('notifications', () => {
   test('a question answered at the machine and replaced while its list was held takes no focus once the list is whole', async ({ page }) => {
     await host.upsert(asking('held-1', 'q-held-a', 'Approve A?'));
     const release = await heldOpen(page, 'held-1', 'q-held-a');
+    const live = card(page, 'held-1').locator('.question:not(.resolved)[data-question="q-held-b"]');
+    const closed = card(page, 'held-1').locator('.question.resolved[data-question="q-held-a"]');
     try {
       await host.upsert(asking('held-1', 'q-held-b', 'Approve B?'));
-      await expect(card(page, 'held-1').locator('.question-message')).toContainText('Approve B?');
+      await expect(live).toHaveCount(1);
+      await expect(live.locator('.question-message')).toContainText('Approve B?');
+      await expect(closed).toHaveCount(1);
+      await expect(closed.locator('.resolved-record')).toBeHidden();
+      await expect(closed.locator('input, textarea, .choice')).toHaveCount(0);
     } finally {
       release();
     }
-    const choice = card(page, 'held-1').locator('.question-slot button:not(.md-copy)').first();
+    const choice = live.locator('button:not(.md-copy)').first();
     await expect(card(page, 'held-1')).not.toHaveAttribute('data-stale', /./);
     await expect(choice).toBeEnabled();
     await expect(choice).not.toBeFocused();

@@ -51,7 +51,7 @@ import { holdKey } from './hold.js';
 import { CONNECTION_CHANGED } from '../channels.js';
 import { HistoryView } from './history-view.js';
 import { sentMessage, setSentMessage } from './sent-message.js';
-import { HISTORY } from '../history.js';
+import { HISTORY, closedQuestionIds } from '../history.js';
 import { MoveStrip } from './move-view.js';
 import { moveView, moves } from '../move.js';
 
@@ -407,7 +407,6 @@ const leaves = (entry) => entry.state === 'sending' || entry.state === 'waiting'
 
 // How many closed items (questions the session stopped asking whose answer did not go through)
 // a card keeps in its conversation, as the history keeps its latest (ui.md §6.4).
-const CLOSED_KEPT = 20;
 
 // Why nothing can be given for a session now, for under its controls, or null (#269): its
 // machine is offline, reconnecting, back and its whole list not yet in, or no longer offering
@@ -436,8 +435,7 @@ export class SessionCard {
   #history = { loaded: false, loading: false };
   #panel = null;
   #receipt = null;
-  // Receipts that closed: the question went and the answer did not go through. They stay, in order,
-  // above the receipt and the question, and are not dropped by the next question (#retireReceipt).
+  // Closed records keep their question's place, including when another question arrives.
   #closed = [];
   // The panel of a question its host took away while its answer was still on its way (#leave).
   #leaving = null;
@@ -896,6 +894,7 @@ export class SessionCard {
     e.user.hidden = !s.activity.userMessage;
     setSentMessage(e.userBubble, s.activity.userMessage ?? '');
     this.#renderPrompt(s);
+    this.#syncStoredLatest();
     // Send acknowledged (ui.md §5.3): your message, back from the machine, rises into place; a
     // prompt you didn't type is no bubble of yours and never rises.
     if (!first && echoed && !e.user.hidden) { enter(e.user, 'acknowledge', { dy: 1 }); }
@@ -1492,6 +1491,7 @@ export class SessionCard {
 
   #drawTurns() {
     const snapshot = this.historyStore.get(this.hostId, this.#s.id);
+    const kept = this.#trimClosed(snapshot.turns);
     const slot = this.els.question;
     if (this.#s.question) { this.#slotQuestion = this.#s.question.id; } else if (!slot.hasChildNodes()) { this.#slotQuestion = null; }
     const sc = this.els.scroll;
@@ -1500,7 +1500,10 @@ export class SessionCard {
     // A newer turn than the last drawn is the reply the person is waiting for: it is followed.
     const away = this.#sticking() && sc.getClientRects().length > 0 && !this.#atEnd();
     const tail = this.turns.element.lastElementChild;
-    const drawn = this.turns.render(snapshot, this.#s.activity?.turn ?? null, { slot, questionId: this.#slotQuestion });
+    const records = new Map(this.#closed.map((r) => [r.questionId, r.element]));
+    if (this.#receipt && this.#s.question && this.#receipt.questionId !== this.#s.question.id) { records.set(this.#receipt.questionId, this.#receipt.element); }
+    const drawn = this.turns.render(snapshot, this.#s.activity?.turn ?? null, { slot, questionId: this.#slotQuestion, activeId: this.#s.question?.id, records, kept });
+    this.#syncStoredLatest();
     // Not in a turn (none holds it, or the history is not drawn): back where the live exchange ends.
     if (!this.turns.hosted && slot.parentNode !== this.els.stream) { this.els.stream.append(slot); }
     this.#syncWaiting();
@@ -1517,6 +1520,24 @@ export class SessionCard {
       const toEnd = () => { sc.scrollTop = sc.scrollHeight; this.#stuckAt = sc.scrollTop; };
       if (this.collapse) { this.collapse.appScroll(toEnd); } else { toEnd(); }
     }
+  }
+
+  // A stored latest turn with questions supplies their order, including after reload. Only words
+  // not in that record still need the live exchange below it.
+  #syncStoredLatest() {
+    const e = this.els;
+    const s = this.#s;
+    const t = this.turns.latest;
+    const voice = liveVoice(s);
+    const recorded = (kind) => t?.parts.filter((p) => p.kind === kind && p.text).at(-1)?.text;
+    e.user.hidden = !!t || !s.activity.userMessage || !!promptOrigin(s);
+    e.prompt.hidden = !!t || !promptOrigin(s);
+    e.response.hidden = !voice.response || (!!t && voice.response === (recorded('response') ?? t.live?.response));
+    e.reasoning.hidden = !voice.reasoning || (!!t && voice.reasoning === recorded('reasoning'));
+    e.truncated.hidden = e.response.hidden || !voice.responseTruncated;
+    e.dropped.hidden = !voice.responseDropped;
+    e.agentBlock.hidden = e.response.hidden && e.reasoning.hidden && !voice.responseDropped && !s.activity.currentTool && e.events.hidden;
+    e.speaker.hidden = e.agentBlock.hidden;
   }
 
   // The machine's capabilities changed (a reconnect to another version of its host).
@@ -1612,6 +1633,7 @@ export class SessionCard {
       const entry = old.entry;
       if (draft) {
         this.#orphan = { text: draft, why: !q || q.id !== old.questionId ? 'changed' : 'unanswerable' };
+        if (!q || q.id !== old.questionId) { this.#watchReceipt(old.answering, old.q, old.asker); }
       } else if (entry && !q && leaves(entry)) {
         // Whichever came first, the question going or the answer's result: the same panel, so a
         // result that arrived first keeps its check, or its pressed option and its words, as the
@@ -1619,6 +1641,8 @@ export class SessionCard {
         this.#leave(old);
         leaving = true;
       } else if (entry) {
+        this.#watchReceipt(old.answering, old.q, old.asker);
+      } else if (!q || q.id !== old.questionId) {
         this.#watchReceipt(old.answering, old.q, old.asker);
       }
     }
@@ -1651,7 +1675,9 @@ export class SessionCard {
     const arrived = this.#asked !== undefined && !!q && q.id !== this.#asked;
     this.#asked = q?.id ?? null;
     this.#receipt?.redraw();
-    this.els.question.replaceChildren(...[this.#orphanView(), ...this.#closed.map((r) => r.element), this.#receipt?.element, this.#leaving?.panel.element, view].filter(Boolean));
+    const receipt = this.#receipt?.element;
+    this.els.question.replaceChildren(...[this.#orphanView(), receipt?.closest('.history-turn') && !this.els.question.contains(receipt) ? null : receipt, this.#leaving?.panel.element, view].filter(Boolean));
+    if (this.#unwatch) { this.#drawTurns(); }
     if (hadFocus && !sameQuestion) { this.#focusLine(); }
     // An approval's command never slides: a push still under way stops travelling.
     if (view) { stopTravel(view); }
@@ -1906,9 +1932,8 @@ export class SessionCard {
         const gone = this.#s?.question?.id !== questionId;
         const closed = d?.tone === 'closed';
         const collapsed = closed || (d?.key === 'delivered' && gone);
-        // Only a closed one is kept past the next question (#retireReceipt); an answer that went is
-        // dropped by it, as before.
-        receipt.closed = closed;
+        const closing = collapsed && !receipt.closed;
+        receipt.closed = collapsed;
         receipt.collapsed = collapsed;
         if (collapsed && d.key === 'delivered') {
           // The collapsed line says the question is answered. Its words never include the approval's
@@ -1941,13 +1966,21 @@ export class SessionCard {
         // "You answered · value" says whose answer it is, and "No longer waiting" is about the question;
         // anything else says it is about the answer.
         drawReceipt(line, 'answer-receipt', !d?.text || ['delivered', 'closed', 'notDelivered'].includes(d.key) ? d : { ...d, text: `Your answer: ${d.text}` }, { enters: false });
+        if (closing) {
+          // A receipt can close after its session update, or before its initial placement.
+          queueMicrotask(() => {
+            if (this.#receipt !== receipt && !this.#closed.includes(receipt)) { return; }
+            if (this.#unwatch) { this.#drawTurns(); } else { this.#trimClosed(); }
+          });
+        }
       },
       say: (text) => { live.textContent = text; },
       heard: () => drawn(live),
       follow: (fn) => service.watch(hostId, sessionId, questionId, fn),
     });
-    const receipt = { element, line, final: false, closed: false, collapsed: false, unwatch: null, fresh: true, clock, redraw: null };
+    const receipt = { questionId, question, at: new Date().toISOString(), element, line, final: false, closed: false, collapsed: false, unwatch: null, fresh: true, clock, redraw: null };
     const show = (entry) => {
+      if (!entry && this.#s?.question?.id !== questionId) { entry = { state: 'done', outcome: 'stale' }; }
       if (!entry) { return; }
       line.dataset.answer = entry.state === 'done' ? entry.outcome : entry.state;
       answer = entry.state === 'done' && entry.outcome === 'delivered' ? entry.answer ?? null : null;
@@ -2045,9 +2078,21 @@ export class SessionCard {
     r?.element.remove();
   }
 
+  #trimClosed(turns = this.historyStore?.get(this.hostId, this.#s.id).turns ?? []) {
+    const local = [...this.#closed, this.#receipt].filter((r) => r?.closed);
+    const kept = closedQuestionIds(turns, local, this.#s.question?.id);
+    this.#closed = this.#closed.filter((r) => {
+      if (!r.closed || kept.has(r.questionId)) { return true; }
+      this.#destroyReceipt(r);
+      return false;
+    });
+    if (this.#receipt?.closed && !kept.has(this.#receipt.questionId)) { this.#dropReceipt(); }
+    return kept;
+  }
+
   // The receipt gives way to the next one, or to the next question. One that closed (its question
-  // is no longer waiting) is kept, newest last, up to CLOSED_KEPT; any other is dropped. Whether it
-  // was dropped: the question that follows moves up into its place.
+  // is no longer waiting) shares the history's newest-20 window; any other is dropped. Whether it
+  // left the live slot: the question that follows needs its guard, even if the record was kept.
   #retireReceipt() {
     const r = this.#receipt;
     if (!r) { return false; }
@@ -2055,10 +2100,12 @@ export class SessionCard {
       this.#dropReceipt();
       return true;
     }
+    const shifted = this.els.question.contains(r.element);
     this.#receipt = null;
+    if (!r.element.closest('.history-turn')) { this.els.question.before(r.element); }
     this.#closed.push(r);
-    while (this.#closed.length > CLOSED_KEPT) { this.#destroyReceipt(this.#closed.shift()); }
-    return false;
+    this.#trimClosed();
+    return shifted;
   }
 
   // An answer went from the form: text kept for the person (#orphanView) that is in it has been sent.

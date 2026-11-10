@@ -69,3 +69,18 @@ test('a closed approval says only that it closed, never the agent\'s words', asy
   await expect(resolved.locator('.answer-receipt')).toHaveText('Question closed');
   await expect(resolved.locator('.resolved-summary')).not.toContainText('rm -rf');
 });
+
+test('a question answered elsewhere after a refusal drops the refusal text and unlocks the reply box', async ({ page }) => {
+  const q = await ask(page, {
+    id: 'q-elsewhere', message: 'Which **database**?',
+    fields: [{ name: 'answer', title: 'Database', type: 'choice', required: true, options: [{ value: 'sqlite', label: 'SQLite' }, { value: 'pg', label: 'PostgreSQL' }] }],
+  });
+  await page.evaluate(() => window.agentBridgeDemo.script('refused'));
+  await q.locator('.choice[data-value="pg"]').click();
+  await expect(card(page, CODEX)).toContainText('The machine refused this answer');
+  await expect(card(page, CODEX).locator('.reply textarea')).toBeDisabled();
+  await withdraw(page);
+  await expect(card(page, CODEX).locator('.question:not(.resolved)')).toHaveCount(0);
+  await expect(card(page, CODEX)).not.toContainText('The machine refused this answer');
+  await expect(card(page, CODEX).locator('.reply textarea')).toBeEnabled();
+});
