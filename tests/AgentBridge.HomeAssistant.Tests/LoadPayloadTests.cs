@@ -13,7 +13,7 @@ public sealed class LoadPayloadTests : IDisposable
         if (Directory.Exists(folder)) { Directory.Delete(folder, true); }
     }
 
-    async Task<string?> SensorLoadAsync(bool publish, int sampleCalls = 1)
+    async Task<FakeHomeAssistant> RunAsync(bool publishLoad, bool sessionRows, Func<ProcessLoadReport?>? report = null, int seconds = 25)
     {
         Directory.CreateDirectory(folder);
         var ha = new FakeHomeAssistant();
@@ -22,11 +22,17 @@ public sealed class LoadPayloadTests : IDisposable
         var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(FakeSessions.T0);
         await using var c = new HaConnector(new HaConnectorOptions
         {
-            MachineName = "M", Version = "0.1.0", StateFile = Path.Combine(folder, "c.json"), PublishLoad = publish,
+            MachineName = "M", Version = "0.1.0", StateFile = Path.Combine(folder, "c.json"), PublishLoad = publishLoad, PublishSessionLoad = sessionRows,
             FieldPinDelay = TimeSpan.Zero, SelectDelay = TimeSpan.Zero, DiscoveryReset = TimeSpan.Zero,
             RegisteredDelay = TimeSpan.Zero, HelperStateDelay = TimeSpan.Zero,
-        }, ha, sessions, () => null, null, null, time, load: Report);
-        for (var i = 0; i < 10; i++) { time.Advance(TimeSpan.FromSeconds(1)); await c.TickAsync(); }
+        }, ha, sessions, () => null, null, null, time, load: report ?? Report);
+        for (var i = 0; i < seconds; i++) { time.Advance(TimeSpan.FromSeconds(1)); await c.TickAsync(); }
+        return ha;
+    }
+
+    async Task<string?> SensorLoadAsync(bool publish)
+    {
+        var ha = await RunAsync(publish, publish, seconds: 10);
         var attributes = System.Text.Json.Nodes.JsonNode.Parse(ha.Retained[HaContract.GlobalAttributesTopic(HaContract.MachineSlug("M"))])!;
         return attributes["load"]?.ToJsonString();
     }
@@ -41,6 +47,58 @@ public sealed class LoadPayloadTests : IDisposable
     public async Task The_sensor_carries_the_load_once_publishing_it_is_switched_on()
     {
         Assert.NotNull(await SensorLoadAsync(publish: true));
+    }
+
+    static readonly string[] V1Keys = ["version", "machine", "observedAt", "cpuPercent", "cpuPeakPercent", "cores", "availableMemoryMiB", "sessions", "runQueue", "runQueueAvg", "runQueueMax"];
+
+    [Fact]
+    public async Task Nothing_of_the_fleet_load_is_published_while_publishing_load_is_off()
+    {
+        var ha = await RunAsync(publishLoad: false, sessionRows: true);
+        var slug = HaContract.MachineSlug("M");
+
+        Assert.DoesNotContain(HaContract.FleetLoadAttributesTopic(slug), ha.Retained.Keys);
+        Assert.DoesNotContain(HaContract.FleetLoadConfig(slug, "M").Topic, ha.Retained.Keys);
+    }
+
+    [Fact]
+    public async Task The_fleet_load_goes_on_its_own_sensor_every_ten_seconds_with_no_session_rows()
+    {
+        var ha = await RunAsync(publishLoad: true, sessionRows: false);
+        var slug = HaContract.MachineSlug("M");
+        var attributes = System.Text.Json.Nodes.JsonNode.Parse(ha.Retained[HaContract.FleetLoadAttributesTopic(slug)])!.AsObject();
+
+        Assert.Equal(V1Keys, attributes.Select(p => p.Key));
+        Assert.Equal(At.ToString("o"), (string?)attributes["observedAt"]);
+        Assert.Equal(At.ToString("o"), ha.Retained[HaContract.FleetLoadStateTopic(slug)]);
+        Assert.Equal(1, (int?)attributes["sessions"]);
+        Assert.Null(attributes["cpuPercent"]);
+        var global = System.Text.Json.Nodes.JsonNode.Parse(ha.Retained[HaContract.GlobalAttributesTopic(slug)])!.AsObject();
+        Assert.False(global.ContainsKey("load"));
+        // 25 s of ticks: the first at once, then every 10 s.
+        Assert.Equal(3, ha.To(HaContract.FleetLoadAttributesTopic(slug)).Count);
+    }
+
+    [Fact]
+    public async Task A_fault_in_the_load_reading_does_not_stop_the_rest_of_the_connector()
+    {
+        var calls = 0;
+        var ha = await RunAsync(true, false, () => ++calls == 1 ? throw new InvalidOperationException("sampler fault") : Report());
+        var slug = HaContract.MachineSlug("M");
+
+        Assert.Contains(HaContract.FleetLoadAttributesTopic(slug), ha.Retained.Keys);
+        Assert.Contains(HaContract.GlobalAttributesTopic(slug), ha.Retained.Keys);
+    }
+
+    [Fact]
+    public async Task A_stopped_sampler_leaves_observedAt_where_it_was_so_the_record_reads_stale()
+    {
+        var ha = await RunAsync(true, false, () => new ProcessLoadReport(At, new MachineLoad(8, 10, 4096L * 1024 * 1024, 10, 12, 1, 1, 1), new Dictionary<string, SessionLoad>()), seconds: 40);
+        var slug = HaContract.MachineSlug("M");
+        var observed = ha.To(HaContract.FleetLoadAttributesTopic(slug))
+            .Select(m => (string?)System.Text.Json.Nodes.JsonNode.Parse(m.Payload)!["observedAt"]).Distinct().ToList();
+
+        Assert.Equal([At.ToString("o")], observed);
     }
 
     static ProcessLoadReport Report() => new(At, new MachineLoad(8, null, 4096L * 1024 * 1024), new Dictionary<string, SessionLoad>

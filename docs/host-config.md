@@ -324,9 +324,38 @@ load: machine cpu 92% of 8 cores, 310 MiB memory available; sessions: 3f2a9c1d c
 - `unknown` means the host could not read it (for example a process it may not open); it is never
   shown as 0. A session marked `partial` or `unavailable` is missing some or all of its processes.
 - No paths or command lines are read or written. Session ids are cut to 8 characters in the log.
-- The Home Assistant sensor can carry the same figures under a `load` attribute, keyed by node,
-  but that is off (`HaConnectorOptions.PublishLoad`) until Compliance clears sending it off the
-  machine. Until then the figures stay in `host.log`.
+- The per-session figures can also ride the sessions sensor under a `load` attribute, keyed by
+  node. That stays off: it needs both `HaConnectorOptions.PublishLoad` and
+  `HaConnectorOptions.PublishSessionLoad`, and the host sets only the first.
+
+### Fleet load feed (machine totals only)
+
+The owner cleared `HaConnectorOptions.PublishLoad` for machine totals only (17:39 PT, Nov 9; recorded
+on #1150). With it on, the connector publishes one extra per-machine sensor,
+`sensor.agent_bridge_<machine>_fleet_load`, every 10 seconds (#1587). With it off, nothing is
+published. Its state is `observedAt` (the sample time); its attributes are this record, version 1:
+
+| Field | Meaning |
+|-------|---------|
+| `version` | always `1` |
+| `machine` | the machine's name |
+| `observedAt` | when the sample was taken |
+| `cpuPercent` | mean of the last 10 s (two 5 s samples) |
+| `cpuPeakPercent` | highest single sample in that window |
+| `cores` | processor count |
+| `availableMemoryMiB` | memory available |
+| `sessions` | the host's live-session count |
+| `runQueue` | Processor Queue Length, latest sample |
+| `runQueueAvg`, `runQueueMax` | mean and highest over the window |
+
+Every number is `null` when unknown, never 0. There are no process names, paths, session ids,
+titles or per-session rows. A record is stale when `observedAt` is more than 30 s old; nothing else
+is used to judge it.
+
+`docs/fleet-load-limits.json` holds the limits the fleet judges the record against:
+`maxCpuPercent` (1-100), `minAvailableMemoryMiB` (above 0), `maxRunQueuePerCore` (0 or more),
+`maxAgeSeconds` (above 0) and `nullFails` (true or false; true means an unknown figure fails). A
+test rejects a file with any value out of range or missing.
 
 ## Notifications in the log
 
