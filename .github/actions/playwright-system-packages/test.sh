@@ -27,7 +27,7 @@ cat > "$work/bin/apt-get" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$APT_LOG"
 case "$*" in
-  update) exit "${APT_UPDATE_EXIT:-0}" ;;
+  update) [ -z "${APT_UPDATE_SLOW:-}" ] || exec sleep 30; exit "${APT_UPDATE_EXIT:-0}" ;;
   *--download-only*)
     if [ -n "${APT_SLOW:-}" ] && grep -q 'azure\.archive\.ubuntu\.com' "$PLAYWRIGHT_APT_ETC/apt-mirrors.txt"; then
       exec sleep 30
@@ -55,7 +55,7 @@ reset() {
   printf 'Types: deb\nURIs: mirror+file:/etc/apt/apt-mirrors.txt\n' > "$PLAYWRIGHT_APT_ETC/sources.list.d/ubuntu.sources"
   : > "$NPX_LOG"; : > "$APT_LOG"
   export NPX_OUT='sudo -- sh -c "apt-get update&& apt-get install -y --no-install-recommends libasound2t64 libgtk-4-1 xvfb"'
-  unset APT_SLOW APT_UPDATE_EXIT APT_DOWNLOAD_EXIT APT_GETS PLAYWRIGHT_APT_FORCE_FALLBACK CHECK_BROWSERS
+  unset APT_SLOW APT_UPDATE_SLOW APT_UPDATE_EXIT APT_DOWNLOAD_EXIT APT_GETS PLAYWRIGHT_APT_FORCE_FALLBACK CHECK_BROWSERS
 }
 # check <name> <expected exit> <expected apt-get calls, one per line> [expected mirror list lines...]
 # download.sh is given CHECK_BROWSERS, chromium and webkit unless set.
@@ -97,6 +97,10 @@ check "an apt failure that isn't the limit fails the step, and the mirror list i
 
 reset "$azure" "$canonical"; export APT_UPDATE_EXIT=100
 check "a failed apt-get update fails the step before anything is downloaded" 100 "update" "$azure" "$canonical"
+
+reset "$azure" "$canonical"; export APT_UPDATE_SLOW=1
+check "an apt-get update that hangs past the limit is tried once more, then fails the step" \
+  124 "$(printf 'update\nupdate')" "$azure" "$canonical"
 
 reset "$azure" "$canonical"; export NPX_OUT='nothing to install'
 check "Playwright naming no packages fails the step before apt runs" 1 "" "$azure" "$canonical"
