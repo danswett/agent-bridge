@@ -119,6 +119,7 @@ export class HistoryView {
   hosted = false;
   #backlog = [];
   #framing = false;
+  #noteNode = null;
   #ticker;
 
   // opts: now, setTimer, clearTimer, doc (message-time-view's timeTicker), for a test's clock.
@@ -146,7 +147,10 @@ export class HistoryView {
     const keep = new Map();
     const nodes = [];
     this.hosted = false;
-    if (note) { nodes.push(h('p', { class: 'history-meta history-state' }, note)); }
+    if (note) {
+      if (this.#noteNode?.textContent !== note) { this.#noteNode = h('p', { class: 'history-meta history-state' }, note); }
+      nodes.push(this.#noteNode);
+    }
     for (const t of turns.slice(from)) {
       // Turns are replaced when they change, so the same object is the same drawing.
       const holds = !!inline?.questionId && t.parts.some((p) => p.kind === 'question' && p.question?.id === inline.questionId);
@@ -157,7 +161,11 @@ export class HistoryView {
       nodes.push(node);
     }
     this.#drawn = keep;
-    this.element.replaceChildren(...nodes);
+    // A live exchange re-renders this on every update with the same drawn turns. Re-inserting
+    // them all dirtied the layout of every turn, so the next scroll read (scrollTop) cost ~100 ms
+    // on 100 turns, per update: the stalls in #1684. Untouched when nothing differs.
+    const held = this.element.children;
+    if (held.length !== nodes.length || nodes.some((n, i) => held[i] !== n)) { this.element.replaceChildren(...nodes); }
     this.element.hidden = !nodes.length;
     this.#ticker.refresh();
     if (this.#backlog.length) { this.#schedule(); }
