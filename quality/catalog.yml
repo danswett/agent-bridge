@@ -1056,8 +1056,8 @@ suites:
     select: affected
     platforms: [linux-x64]
     runner: hosted
-    triggers: [.github/workflows/**, .github/actions/**, build/actionlint-findings.ps1, build/test-actionlint-findings.ps1]
-    # actionlint blocks; shellcheck and zizmor are advisory until their existing findings (#360) are fixed.
+    triggers: [.github/workflows/**, .github/actions/**, .zizmor.yml, build/actionlint-findings.ps1, build/test-actionlint-findings.ps1]
+    # actionlint, shellcheck (through actionlint) and zizmor all block; zizmor's exceptions are in .zizmor.yml, each with its reason (#1306).
     # Drafts run it too: it's part of the fast ring (quality/README.md §2).
     command: see workflow-lint.yml (actionlint, its one exception and pwsh build/test-actionlint-findings.ps1, shellcheck, zizmor)
     where: workflow-lint.yml lint

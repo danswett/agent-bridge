@@ -46,7 +46,8 @@ runs:
         TRIVY_WINDOWS_X64_SHA256: 1051f49cb22d5284f43425f72aad9cda63ca12ceb92e7caa06903490c82dc9bf
         VULNERABILITY_DB: ${{ inputs.vulnerability-db }}
         GH_TOKEN: ${{ github.token }}
-      run: |
+      # Writes only a directory it created under RUNNER_TEMP to PATH and TRIVY_CACHE_DIR; no untrusted value reaches either file.
+      run: | # zizmor: ignore[github-env]
         $ErrorActionPreference = 'Stop'
         if ($env:RUNNER_OS -eq 'Linux' -and $env:RUNNER_ARCH -eq 'X64') {
           $asset = "trivy_${env:TRIVY_VERSION}_Linux-64bit.tar.gz"; $sha = $env:TRIVY_LINUX_X64_SHA256
