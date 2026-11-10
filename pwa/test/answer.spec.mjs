@@ -58,7 +58,9 @@ const choice = (extra = {}) => ({
 // #908: Other the CLI offers and the machine can't send yet, shown disabled with why.
 const OTHER_NOT_SENDABLE = "Your own answer can't be sent from here yet. Pick an option, or answer at the machine.";
 
-test('Other the machine cannot send yet is shown disabled, its label unchanged, with why under the choices and as their description', async ({ page }) => {
+test('Other the machine cannot send yet is shown disabled, its label unchanged, with why under the choices and as their description', async ({ page, browserName }) => {
+  // Quarantined on webkit (#1690): the tap on the option sends nothing on the Linux runner, twice in a row on #1694 and earlier on PRs with no answer change; restore by 2026-11-13.
+  test.skip(browserName === 'webkit', 'the tap sends nothing on webkit in CI, #1690');
   await openDemo(page);
   const q = await ask(page, choice({ required: false, otherUnavailable: 'otherNotSendable' }));
   const other = q.locator('.choices .other-unavailable');
