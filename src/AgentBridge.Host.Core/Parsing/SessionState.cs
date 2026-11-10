@@ -36,6 +36,9 @@ internal sealed class SessionState
     public string? OwnReasoning;
     public DateTimeOffset? OwnAt;
     public string? Model;
+    // The agent's own effort and context option ids. No parser sets them yet (#1142 R2): null is unknown.
+    public string? Effort;
+    public string? Context;
     public string? Cwd;
     public string? Branch;
     public string? Repository;
@@ -127,7 +130,7 @@ internal sealed class SessionState
     public void Reset()
     {
         FirstUserMessage = null;
-        AgentTitle = null; UserMessage = null; UserMessageFrom = null; UserMessageLabel = null; UserMessageKey = null; TurnId = null; ResponseTurn = null; Response = null; Reasoning = null; Model = null;
+        AgentTitle = null; UserMessage = null; UserMessageFrom = null; UserMessageLabel = null; UserMessageKey = null; TurnId = null; ResponseTurn = null; Response = null; Reasoning = null; Model = null; Effort = null; Context = null;
         ResponseBy = null; ReasoningBy = null; OwnResponse = null; OwnResponseCut = false; OwnReasoning = null; OwnAt = null;
         Cwd = null; Branch = null; Repository = null; StartedAt = null; UpdatedAt = null; LastActivityAt = null; LastEventAt = null;
         Prompts = 0; LastPromptAt = null; Compactions = 0; Seen = false; UncountedTurn = false;

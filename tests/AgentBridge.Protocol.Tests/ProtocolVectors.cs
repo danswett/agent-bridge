@@ -209,7 +209,7 @@ public static class ProtocolVectors
     static readonly Session FullSession = new()
     {
         Id = SessionId, Agent = AgentKind.Copilot, Title = "Protocol vectors", Cwd = @"C:\src\agent-bridge", Repository = "danswett/agent-bridge", Branch = "quality/protocol-vectors",
-        Model = "claude-opus-5.5", Status = SessionStatus.Waiting, StatusSince = T1, StartedAt = T0, UpdatedAt = T1, ProcessId = 4120, Activity = FullActivity,
+        Model = "claude-opus-5.5", Effort = "high", Context = "1M", Status = SessionStatus.Waiting, StatusSince = T1, StartedAt = T0, UpdatedAt = T1, ProcessId = 4120, Activity = FullActivity,
         Question = Form, Driver = DriverKind.Agent, DriverPrincipal = "homeassistant:0f1e2d3c", Subagents = [Delegate, Nested], SubagentsMore = 2, WaitingOn = null,
     };
     // #800: VM1's sign-in failure as a host shows it, with the sentence the host composes (#841).
@@ -237,11 +237,14 @@ public static class ProtocolVectors
         var asked = Working with { Status = SessionStatus.Waiting, StatusSince = T1.AddSeconds(5), UpdatedAt = T1.AddSeconds(5), Question = Approval };
         var added = Working with { UpdatedAt = T1.AddSeconds(9), Subagents = [.. Working.Subagents!, new Subagent { Id = "agent-4", Kind = SubagentKind.Task, Parent = "agent-3", Status = SubagentStatus.Working, StartedAt = T1.AddSeconds(9) }] };
 
+        var retuned = Working with { Effort = "xhigh", UpdatedAt = T1.AddSeconds(12) };
+
         JsonObject Json(Session s) => SessionPatches.Json(s);
         SessionPatch Diff(Session to) => SessionPatches.Diff(Json(Working), 41, Json(to))!;
         f.Context("held-at-41-then-a-turn-ending", new { session = Json(Working), seq = 41, result = Json(ended) })
             .Context("held-at-41-then-a-question", new { session = Json(Working), seq = 41, result = Json(asked) })
             .Context("held-at-41-then-a-nested-delegate", new { session = Json(Working), seq = 41, result = Json(added) })
+            .Context("held-at-41-then-effort-changing", new { session = Json(Working), seq = 41, result = Json(retuned) })
             .Context("none-held-then-the-whole-session", new { result = Json(Working) })
             .Context("held-at-40", new { session = Json(Working), seq = 40 })
             .Context("held-at-41", new { session = Json(Working), seq = 41 })
@@ -251,6 +254,7 @@ public static class ProtocolVectors
             .Valid("a-turn-ending", turn, "held-at-41-then-a-turn-ending")
             .Valid("a-question-asked", Diff(asked), "held-at-41-then-a-question")
             .Valid("a-delegate-added-at-the-end", Diff(added), "held-at-41-then-a-nested-delegate")
+            .Valid("only-the-effort-changing", Diff(retuned), "held-at-41-then-effort-changing")
             .Valid("the-whole-session", SessionPatches.Whole(Json(Working), 131), "none-held-then-the-whole-session")
             .Refused("on-another-event-than-the-one-held", turn, "held-at-40")
             .Refused("on-a-session-not-held", turn, "none-held")

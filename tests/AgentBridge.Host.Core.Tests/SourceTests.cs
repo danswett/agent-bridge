@@ -167,6 +167,25 @@ public class SourceTests
     }
 
     [Fact]
+    public void A_session_carries_the_effort_and_context_its_state_holds_and_leaves_them_out_when_unknown()
+    {
+        using var f = new Fixture();
+        var events = f.CopilotSession(Id, 100);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Assistant("working on it", 3));
+        var discovered = new DiscoveredSession(Id, AgentKind.Copilot, events, Path.GetDirectoryName(events), 100);
+        var tracker = new SessionTracker(discovered, f.Options(), f.Time);
+        var unknown = tracker.Update(discovered);
+
+        tracker.State.Effort = "high";
+        tracker.State.Context = " ";
+        Fixture.Append(events, Copilot.Assistant("done", 4));
+        var known = tracker.Update(discovered);
+
+        Assert.Equal((null, null), (unknown.Effort, unknown.Context));
+        Assert.Equal(("high", null), (known.Effort, known.Context));
+    }
+
+    [Fact]
     public async Task An_event_of_a_visible_kind_that_changes_nothing_does_not_move_updatedAt()
     {
         using var f = new Fixture();
