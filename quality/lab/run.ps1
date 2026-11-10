@@ -56,9 +56,9 @@ if (Test-Path Env:LAB_GITHUB_TOKEN) {
 $provision = & (Join-Path $PSScriptRoot 'provision.ps1') -Subscription $Subscription -Role $Role -RunId $RunId
 $buildParts = $Build -csplit '@', 2
 $unmet = @($provision.unmet) + @(
-    'build-provenance (Platform): Protected main CI/release provenance and installer bytes must be verified; syntax is not verification.'
-    'scenario-execution (Platform): The real interactive nightly-v1 steps and AgentSim are unbuilt; planning is not coverage.'
-    'transport-evidence (Platform): Guest transport, sanitized evidence and result.json production are unbuilt.'
+    'build-provenance (Engineering): Protected main CI/release provenance and installer bytes must be verified; syntax is not verification.'
+    'scenario-execution (Engineering): The real interactive nightly-v1 steps and AgentSim are unbuilt; planning is not coverage.'
+    'transport-evidence (Engineering): Guest transport, sanitized evidence and result.json production are unbuilt.'
     'owner-device-flow (owner): Each fresh VM/run needs owner-only Slipgates-lab-bot device flow within its original expiry; no saved signed-in image.'
 )
 if ($Relay -ceq 'ppe') { $unmet += 'ppe (SRE): PPE is unavailable; never substitute staging or production.' }

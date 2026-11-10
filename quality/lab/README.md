@@ -13,10 +13,10 @@ The agreement it records:
   and [the joint ACK](https://github.com/danswett/agent-bridge/issues/357#issuecomment-6644696961).
 - Coverage: [Product's v1 and v2](https://github.com/danswett/agent-bridge/issues/736#issuecomment-6644011273).
 - The owner's decisions B1, B3 and B4: [#357](https://github.com/danswett/agent-bridge/issues/357#issuecomment-6645343882),
-  accepted by Platform [here](https://github.com/danswett/agent-bridge/issues/357#issuecomment-6646500327).
+  accepted by Engineering [here](https://github.com/danswett/agent-bridge/issues/357#issuecomment-6646500327).
   B3's lab-token plan is superseded by Trust's choice A, device flow, recorded in §8.
 - Current source routing: [Engineering's assignment](https://github.com/danswett/agent-bridge/issues/689#issuecomment-6705673879).
-  Platform delivers the runner first, then rebases the held #854 nightly and advances #863.
+  Engineering delivers the runner first, then rebases the held #854 nightly and advances #863.
   SRE supplies inventory/sweeper and cost fences; the owner supplies contract/S0 approval and
   per-run device flow. Source ownership does not authorize execution or spend.
 
@@ -26,33 +26,33 @@ Where this file and those comments disagree, the comments win and this file is f
 
 | Piece | State | Owner |
 |---|---|---|
-| This contract | **Written** (this file) | Platform |
-| `provision.ps1`: the resources of one run of one role | **Draft.** Plans only; `-Apply` refuses before any Azure call until §10's prerequisites are met. Never run against Azure | Platform |
-| `test-provision.ps1`: its checks against a stand-in `az` | **Written**, catalog suite `lab-scripts` (ring 0, ci.yml `light` on Linux, so a draft's fast ring runs it). Never run against Azure | Platform |
-| `run.ps1` (§5) | **Nonexecuting interface draft.** Validates requests and plans only; `-Apply` always refuses. No scenario, result or evidence is produced | Platform |
-| `test-run.ps1`: offline runner-interface checks | **Written**, in the same `lab-scripts` suite; no Azure or product execution | Platform |
+| This contract | **Written** (this file) | Engineering |
+| `provision.ps1`: the resources of one run of one role | **Draft.** Plans only; `-Apply` refuses before any Azure call until §10's prerequisites are met. Never run against Azure | Engineering |
+| `test-provision.ps1`: its checks against a stand-in `az` | **Written**, catalog suite `lab-scripts` (ring 0, ci.yml `light` on Linux, so a draft's fast ring runs it). Never run against Azure | Engineering |
+| `run.ps1` (§5) | **Nonexecuting interface draft.** Validates requests and plans only; `-Apply` always refuses. No scenario, result or evidence is produced | Engineering |
+| `test-run.ps1`: offline runner-interface checks | **Written**, in the same `lab-scripts` suite; no Azure or product execution | Engineering |
 | `beta-acceptance.ps1` and `.github/workflows/beta-acceptance.yml` (#1185): the Beta installer on hosted `windows-latest` and `windows-11-arm`, not the Azure lab | **Draft.** Steps 1, 2, 3, 6 (download and verify, silent install and first run, simulated agent, uninstall); pairing and driving from the PWA (a relay built from the Beta's source against a fake GitHub, no secrets) and feedback are NOT RUN. Not yet dispatched | Engineering |
-| `tools/AgentBridge.AcceptRelay` (#1272): the product relay beside an auto-approving fake GitHub, both on 127.0.0.1, so acceptance signs a host in with no secret or real account. `dotnet run --project tools/AgentBridge.AcceptRelay -- serve --port 0` prints `READY relay=http://127.0.0.1:<port>` | **Written**; catalog `accept-relay-build` builds it. No script uses it yet | Platform |
-| `fleet.yml`, the images and their S0 snapshots | **Unbuilt** | Platform |
-| Scenarios and the simulated agent (`tests/AgentBridge.AgentSim`) | **Unbuilt** | Platform |
-| The `lab` environment, OIDC principal and reusable workflow | **Unbuilt**; nothing is scheduled or dispatchable | Platform, owner (bootstrap) |
+| `tools/AgentBridge.AcceptRelay` (#1272): the product relay beside an auto-approving fake GitHub, both on 127.0.0.1, so acceptance signs a host in with no secret or real account. `dotnet run --project tools/AgentBridge.AcceptRelay -- serve --port 0` prints `READY relay=http://127.0.0.1:<port>` | **Written**; catalog `accept-relay-build` builds it. No script uses it yet | Engineering |
+| `fleet.yml`, the images and their S0 snapshots | **Unbuilt** | SRE |
+| Scenarios and the simulated agent (`tests/AgentBridge.AgentSim`) | **Unbuilt** | Engineering |
+| The `lab` environment, OIDC principal and reusable workflow | **Unbuilt**; nothing is scheduled or dispatchable | SRE, owner (bootstrap) |
 | The trusted inventory and expiry sweeper (§4) | **Unbuilt**, and required before anything is created | SRE |
-| Run registration in the sweeper's inventory, before the first create (§4) | **Unbuilt**: `provision.ps1`'s `Register-LabRun` refuses | Platform (`provision.ps1`), using SRE's inventory |
-| The temporary nightly cut and schedule (§6) | **Unbuilt**; no cron is enabled | Platform, until SRE's #590 replaces it |
+| Run registration in the sweeper's inventory, before the first create (§4) | **Unbuilt**: `provision.ps1`'s `Register-LabRun` refuses | Engineering (`provision.ps1`), using SRE's inventory |
+| The temporary nightly cut and schedule (§6) | **Unbuilt**; no cron is enabled | Engineering, until SRE's #590 replaces it |
 | PPE, cut freeze, promotion and monitoring (#590, #451) | **Pending**, not part of this folder | SRE |
 | Lab cost and age alerts (`infra/modules/monitoring.bicep`) | **Unbuilt** | SRE |
 | Dogfood's checks (#736) | Consume this same lab, never a second lab or runner | Dogfood |
 | Admission of lab evidence | Quality alone | Quality |
-| Audio-endpoint acceptance (§12) | **Unbuilt**: future, separate and non-gating; no lab machine has a proven audio endpoint | Platform |
+| Audio-endpoint acceptance (§12) | **Unbuilt**: future, separate and non-gating; no lab machine has a proven audio endpoint | Engineering |
 
 The catalog's `lab-e2e-simulated` stays `planned` and `lab-e2e-agents` stays `partial` (the
 shadow soak, not this lab) until a scenario runs here.
 
 ## 2. Ownership
 
-- **Platform** owns the fleet, images and S0 snapshots, `run.ps1`, the scenarios, the `lab`
-  environment, its OIDC principal and reusable workflow, and the run's bounded cleanup.
-- **SRE** owns PPE (#590), the cut, freeze and promotion consumers (Dev to Beta, #451), and
+- **Engineering** owns `run.ps1`, the scenarios and the run's bounded cleanup.
+- **SRE** owns the fleet, images and S0 snapshots, the `lab`
+  environment, its OIDC principal and reusable workflow, PPE (#590), the cut, freeze and promotion consumers (Dev to Beta, #451), and
   the trusted inventory, independent expiry sweeper, and lab cost and age fences.
 - **Dogfood** consumes the same lab and its results. There is never a second lab, runner or
   set of timers.
@@ -163,7 +163,7 @@ Both roles of a nightly run test **one** cut: the same immutable, provenance-ver
 from a protected CI run or release, against the same relay digest. A PR's or a dispatched
 run's artifacts are never a cut.
 
-There is one nightly source. Until SRE's #590 delivers the cut and promotion path, Platform
+There is one nightly source. Until SRE's #590 delivers the cut and promotion path, Engineering
 may add one temporary default-branch schedule and cut resolver; #590 replaces it in one
 coordinated change, so there are never two timers or two cuts. The orchestration draft is
 `.github/workflows/lab-nightly.yml`: its cron is commented out and its fixed source gate always
@@ -235,7 +235,7 @@ One per run per role. Fields are only ever added to version 1, never renamed or 
   - After sign-in the app keeps its normal local relay credential on that VM, as any
     installation does, only on that run's OS disk. The disk stays private inside
     `rg-agent-bridge-lab` and is already named in the sweeper's inventory before creation
-    (§4). Platform deletes it by exact name at run end; SRE's independent sweeper
+    (§4). Engineering deletes it by exact name at run end; SRE's independent sweeper
     deletes it by that same name after expiry even if the run crashes. No credential-bearing
     disk is kept between runs, exported, shared, snapshotted or made into an image; S0 stays
     credential-free. Cleanup never depends on deleting the shared resource group.
@@ -257,7 +257,7 @@ SRE's review, and unbuilt:
 - **Public:** `result.json` (§7) and the weekly #357 summary, which carry no recording, raw log,
   account, token, IP, host name beyond `lab-<role>-<runId>`, or private path.
 - **Private:** recordings and raw logs in a private container in `rg-agent-bridge-lab`, with no
-  anonymous access, read by the owner, Platform and SRE.
+  anonymous access, read by the owner, Engineering and SRE.
 - **Retention:** 14 days for a `pass`, 30 for a `fail` or `invalid`, then deleted by policy. A
   Beta1 record keeps `result.json` and the artifacts' digests, not the recordings.
 - **Redaction:** recording starts after sign-in and never shows a sign-in, token, device code
@@ -277,13 +277,13 @@ execution gates.
 |---|---|---|
 | Owner authorization to execute and spend | **Absent**. Accepting the contract and this draft authorized neither | owner |
 | Cadence and budget (B1) | **Decided**: nightly, both roles, $75/month. Cost unmeasured | owner |
-| Native Windows Arm64: image, size, Trusted Launch, licence billing in this subscription | **Unproven** | Platform, owner |
-| Bootstrap (B2): `rg-agent-bridge-lab`, its network, the `lab` environment, an OIDC principal scoped to that group only, a subscription receipt | **Absent** | owner, Platform |
+| Native Windows Arm64: image, size, Trusted Launch, licence billing in this subscription | **Unproven** | SRE, owner |
+| Bootstrap (B2): `rg-agent-bridge-lab`, its network, the `lab` environment, an OIDC principal scoped to that group only, a subscription receipt | **Absent** | owner, SRE |
 | S0 snapshots per role, with the restore proof (§4) | **Absent** | owner |
 | Durable expiry sweeper and trusted inventory (§4) | **Absent** | SRE |
-| Run registration before the first create (§4): the trusted inventory, `provision.ps1` writing each run's exact names and expiry to it, and a verified read-back receipt | **Absent**; `Register-LabRun` refuses | Platform |
+| Run registration before the first create (§4): the trusted inventory, `provision.ps1` writing each run's exact names and expiry to it, and a verified read-back receipt | **Absent**; `Register-LabRun` refuses | Engineering |
 | Cost and age alerts | **Absent** | SRE |
-| B3 sign-in (§8): the relay OAuth app's device flow enabled with no organization-membership scope, the owner's device-flow sign-in as `Slipgates-lab-bot` on each role's fresh VM in every run, and proof the credential, relay and device guards hold. No lab token, secret or signed-in image | **Absent**: account named, OAuth settings unverified, per-run sign-in not done | owner, Platform |
+| B3 sign-in (§8): the relay OAuth app's device flow enabled with no organization-membership scope, the owner's device-flow sign-in as `Slipgates-lab-bot` on each role's fresh VM in every run, and proof the credential, relay and device guards hold. No lab token, secret or signed-in image | **Absent**: account named, OAuth settings unverified, per-run sign-in not done | owner, SRE |
 | PPE (B4, #590): **population decided**, the lab and the owner's Beta machines | Enrollment, keys, DNS and deploy **pending**; staging until then | SRE, owner |
 | Relay churn (B5) | **Open**: makes runs `invalid` | SRE |
 
