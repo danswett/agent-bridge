@@ -24,7 +24,7 @@
 //   brand.js         the product's name, for every place the app shows it
 //   release-watch.js new releases of the app that keep failing to install
 //   key-check.js     Settings > Keyboard check (#1209): what a hardware keyboard's keys reach the app as
-import { APP_VERSION, FEEDBACK_KEY_ID, FEEDBACK_PUBLIC_KEY, RELAY } from '../config.js';
+import { APP_VERSION, BUILT_AT, FEEDBACK_KEY_ID, FEEDBACK_PUBLIC_KEY, RELAY } from '../config.js';
 import { BRAND, NOTIFICATIONS_BLOCKED } from './brand.js';
 import { loadIdentity, deviceName, kvGet, kvPut, kvDelete } from './identity.js';
 import { accountStore, startDeviceFlow } from './signin.js';
@@ -56,6 +56,7 @@ import { recentTimings } from './timing.js';
 import { edgeSwipeBack, installedOnApple, markPlatform } from './platform.js';
 import { applyTextSize, readTextSize, saveTextSize } from './text-size.js';
 import { mountKeyCheck } from './ui/key-check-view.js';
+import { mountRelease } from './ui/release-view.js';
 import { FeedbackDiagnostics, feedbackFailureMessage, isSensitiveFeedbackText, sendFeedbackBundle, serializeFeedbackBundle } from './feedback.js';
 
 // Installed on iOS or iPadOS, the edge swipe walks the same back stack as Android's Back.
@@ -75,6 +76,7 @@ const $ = (id) => document.getElementById(id);
 }
 // Settings > Keyboard check (#1209): what a hardware keyboard's keys reach the app as.
 mountKeyCheck();
+mountRelease({ version: APP_VERSION, builtAt: BUILT_AT });
 const params = new URLSearchParams(location.search);
 const BASE = RELAY || location.origin;
 

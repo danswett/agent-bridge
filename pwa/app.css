@@ -1574,9 +1574,11 @@ summary {
 .end-session .resend { margin-bottom: 6px; }
 
 /* ---- settings ---- */
-.notify h3, .text-size h3, .account h3, .key-check h3 { margin: 0 0 var(--ab-space-2); font-size: var(--type-section); line-height: var(--type-section-line); font-weight: 600; color: var(--ab-text2); }
+.notify h3, .text-size h3, .account h3, .key-check h3, .release h3 { margin: 0 0 var(--ab-space-2); font-size: var(--type-section); line-height: var(--type-section-line); font-weight: 600; color: var(--ab-text2); }
 .account p { margin: 0; color: var(--ab-text2); overflow-wrap: anywhere; }
 .segmented { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; max-width: 360px; }
+.release-line { margin: 0; }
+.release-id { font: 600 1rem var(--ab-font-mono); -webkit-user-select: all; user-select: all; color: var(--ab-text); }
 /* Keyboard check (#1209): a practice box that takes focus as a row does, and the keys as typed. */
 .key-check-box {
   display: inline-flex; align-items: center; min-height: var(--tap); padding: 0 12px;

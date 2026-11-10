@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { cpSync, existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildSite, contentSecurityPolicy } from '../../tools/build-site.mjs';
+import { buildSite, builtAt, contentSecurityPolicy } from '../../tools/build-site.mjs';
 
 const pwa = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const scratch = path.join(pwa, '.site', 'unit-build');
@@ -109,5 +109,29 @@ test('the built site carries both families\' WOFF2s and each one\'s OFL licence,
   const faces = [...css.matchAll(/url\("(fonts\/[^"]+)"\)/g)].map((m) => m[1]);
   assert.equal(faces.length, 10);
   assert.deepEqual(faces.filter((f) => !existsSync(path.join(site, 'design', f))), []);
+  rmSync(scratch, { recursive: true, force: true });
+});
+
+test('the build stamp is a validated ISO time, written to config.js and version.json, and a build with none says dev with no date', () => {
+  assert.equal(builtAt('2026-11-07T12:30:00-08:00'), '2026-11-07T20:30:00.000Z');
+  assert.equal(builtAt(''), '');
+  for (const bad of ['yesterday', '2026-11-07', '2026-13-45T00:00:00Z', '2026-11-07T20:30:00', '"; evil']) {
+    assert.throws(() => builtAt(bad), /--built-at/, bad);
+  }
+  const stamped = buildSite({ out: out('stamped'), version: 'a'.repeat(40), builtAt: '2026-11-07T20:30:00Z' });
+  assert.match(readFileSync(path.join(stamped, 'config.js'), 'utf8'), /BUILT_AT = "2026-11-07T20:30:00.000Z"/);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(stamped, 'version.json'), 'utf8')), { version: 'a'.repeat(40), builtAt: '2026-11-07T20:30:00.000Z' });
+  const plain = buildSite({ out: out('unstamped') });
+  assert.match(readFileSync(path.join(plain, 'config.js'), 'utf8'), /BUILT_AT = ""/);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(plain, 'version.json'), 'utf8')), { version: 'dev', builtAt: '' });
+  rmSync(scratch, { recursive: true, force: true });
+});
+
+test('a shell list that names version.json fails the build, since a kept copy would hide a newer release', () => {
+  rmSync(scratch, { recursive: true, force: true });
+  const root = appCopy('kept-version');
+  const worker = path.join(root, 'sw.js');
+  writeFileSync(worker, readFileSync(worker, 'utf8').replace("'./app.css',", "'./app.css', './version.json',"));
+  assert.throws(() => buildSite({ root, out: out('kept-version-site') }), /version\.json/);
   rmSync(scratch, { recursive: true, force: true });
 });

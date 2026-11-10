@@ -2175,7 +2175,11 @@ agent's connection also holds its card at that version. The PWA's Settings also 
 (§4.4), on this device only, and **Keyboard check** (#1209): while on, each key pressed anywhere
 in the app is listed (key, code, Option, Control, Command, Shift, what had focus, never its words,
 and whether the app used it), so a hardware keyboard can be read back on a real device; nothing is
-saved or sent.
+saved or sent. The last section, **This app** (#1246), shows the release id (the first seven
+characters of the commit the build was made from, `dev` for a local build) and the date it was
+built, in the person's locale, with a Copy button; the build writes both to `config.js` and to a
+`version.json` the worker always fetches from the network, so Quality and the owner can say which
+build was tested.
 
 **An agent's row today** (the creative director's #784 words; #705's per-row names and
 verbs). Every state is words on the row, with at most one verb:
