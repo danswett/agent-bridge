@@ -129,6 +129,44 @@ public sealed class FleetPublisherTests
         Assert.Equal(0, control.Status().FleetPublication?.SkippedInvalidIds);
     }
 
+    [Fact]
+    public async Task Oversized_snapshots_report_invalid_snapshot_and_back_off_without_ending_the_connection()
+    {
+        // Valid session fields are bounded; oversize the fixture header to reach the defensive byte guard.
+        var publication = new FleetPublication(source, new string('m', 16 * 1024), share: true, time: time);
+        Assert.False(await publication.PollAsync(Put));
+        Assert.Equal(("failed", "invalid-snapshot", 1), (publication.Status.Result, publication.Status.Failure, publication.Status.Failures));
+        Assert.Equal(time.GetUtcNow().AddSeconds(2), publication.Status.NextRetry);
+        var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var run = publication.RunAsync(Put, disconnected.Task);
+        try
+        {
+            Assert.False(run.IsCompleted);
+            Assert.False(await publication.PollAsync(Put, force: true));
+            Assert.Equal(1, publication.Status.Failures);
+            Assert.Empty(sent);
+        }
+        finally
+        {
+            disconnected.SetResult();
+            await run.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
+    public async Task A_truncated_total_counts_usable_ids_and_reports_skipped_ids_separately()
+    {
+        source.Sessions = Enumerable.Range(1, 65).Select(NewSession).ToList();
+        source.Sessions.Add(NewSession(66) with { Id = "bad-id" });
+        var publication = new FleetPublication(source, "machine", share: true, time: time);
+        Assert.True(await publication.PollAsync(Put));
+        var record = Assert.Single(sent);
+        Assert.True(record.GetProperty("truncated").GetBoolean());
+        Assert.Equal(65, record.GetProperty("total").GetInt32());
+        Assert.Equal(64, record.GetProperty("sessions").GetArrayLength());
+        Assert.Equal(1, publication.Status.SkippedInvalidIds);
+    }
+
     Task Put(JsonElement record, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
