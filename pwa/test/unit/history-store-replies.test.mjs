@@ -81,3 +81,21 @@ test('a turn activity skipped over is filled in by the next page, in its place',
   assert.deepEqual(nums(after), [1, 2, 3, 4, 5, 6, 7, 8]);
   assert.deepEqual(prompts(after).slice(5), ['ok 6', 'ok 7', 'ok 8']);
 });
+
+// The owner's PWA, 21:16 PT 9 Nov: A is streaming, B and C arrive within a second, then A's final text.
+test('late text of turn A stays under A, in order, while B and C arrive; B and C hold none of it', async (t) => {
+  const { store } = await setup(t, { count: 5 });
+  await store.open('h', ID);
+  const say = (n, replyTo, response, userMessage) => readSession({
+    id: ID, agent: 'copilot', status: 'working', updatedAt: new Date().toISOString(),
+    activity: { turn: turn(n), responseTurn: turn(replyTo), userMessage, response },
+  });
+  store.live('h', say(6, 6, 'Messages are conf', 'did my message arrive?'));
+  store.live('h', say(7, 6, 'Messages are confirmed once', 'and this one'));
+  store.live('h', say(8, 6, 'Messages are confirmed once the host reads them.', 'and this'));
+  const held = store.get('h', ID).turns.slice(-3);
+  assert.deepEqual(held.map((x) => x.id), [turn(6), turn(7), turn(8)]);
+  assert.equal(held[0].live.response, 'Messages are confirmed once the host reads them.');
+  assert.equal(held[1].live.response ?? null, null);
+  assert.equal(held[2].live.response ?? null, null);
+});
