@@ -61,3 +61,42 @@ for (const width of [390, 1440]) test(`scrolling to the top loads earlier turns 
   await page.mouse.wheel(0, -100000);
   await expect.poll(() => held(v)).toBeGreaterThan(before);
 });
+
+test('pressing Load earlier messages from the keyboard keeps focus on it through loading and the next page', async ({ page }) => {
+  await start(page, 160, 1440);
+  const v = view(page, ID);
+  const button = v.getByRole('button', { name: 'Load earlier messages' });
+  await expect(button).toBeVisible({ timeout: 20000 });
+  const before = await held(v);
+  await button.focus();
+  await page.keyboard.press('Enter');
+  await expect.poll(() => held(v)).toBeGreaterThan(before);
+  await expect(button).toBeVisible();
+  await expect(button).toBeFocused();
+  // And again: the same button is still the one with focus.
+  const second = await held(v);
+  await page.keyboard.press('Enter');
+  await expect.poll(() => held(v)).toBeGreaterThan(second);
+  await expect(button).toBeFocused();
+});
+
+test('past the 500-turn limit a person asking for more is told history stops there and keeps the newest turns', async ({ page }) => {
+  test.setTimeout(120000);
+  await start(page, 700, 1440);
+  const v = view(page, ID);
+  const top = v.locator('.history-top');
+  const button = v.getByRole('button', { name: 'Load earlier messages' });
+  await expect(button).toBeVisible({ timeout: 20000 });
+  const load = v.locator('.history-top .history-load');
+  for (let i = 0; i < 40 && !(await top.innerText()).includes('Start of available history'); i += 1) {
+    await expect(button).toBeVisible();
+    const n = await held(v);
+    await button.evaluate((b) => b.click());
+    await expect.poll(async () => (await held(v)) > n || await load.isHidden(), { timeout: 15000 }).toBe(true);
+    await expect(load).not.toHaveAttribute('aria-disabled', 'true');
+  }
+  await expect(top).toContainText('Start of available history');
+  expect(await held(v)).toBeLessThanOrEqual(500);
+  // The newest end is still held, so live turns still merge: the newest seeded turn is still drawn.
+  await expect(v.locator('.history-turn', { hasText: 'Earlier prompt 700' })).toHaveCount(1);
+});

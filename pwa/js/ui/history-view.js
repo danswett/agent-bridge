@@ -183,7 +183,9 @@ export class HistoryView {
   #backlog = [];
   #framing = false;
   #noteNode = null;
-  #top = h('div', { class: 'history-top', hidden: true });
+  #label = h('span', { class: 'history-meta history-state', tabindex: '-1', role: 'status', hidden: true });
+  #button = h('button', { type: 'button', class: 'history-load', hidden: true, onclick: () => { if (this.#button.getAttribute('aria-disabled') !== 'true') { this.onLoadEarlier(); } } });
+  #top = h('div', { class: 'history-top', hidden: true }, this.#label, this.#button);
   #topKind = null;
   #topText = null;
   #ticker;
@@ -201,13 +203,17 @@ export class HistoryView {
     this.anchor(() => {
       this.#top.hidden = !plan;
       this.#top.dataset.state = plan?.kind ?? '';
-      if (!plan) { this.#top.replaceChildren(); return; }
-      const label = h('span', { class: 'history-meta history-state', role: plan.kind === 'loading' ? 'status' : null }, plan.text);
-      const button = plan.kind === 'load' || plan.kind === 'error'
-        ? h('button', { type: 'button', class: 'history-load', onclick: () => this.onLoadEarlier() }, plan.kind === 'load' ? plan.text : WORDS.retry)
-        : null;
-      this.#top.replaceChildren(...(plan.kind === 'load' ? [button] : [label, button].filter(Boolean)));
-    });
+      if (!plan) { return; }
+      // One button and one status line live across the states, so keyboard focus stays on the
+      // button while it loads, fails and retries.
+      const hadFocus = this.#button.ownerDocument.activeElement === this.#button;
+      const asks = plan.kind === 'load' || plan.kind === 'error';
+      this.#label.textContent = plan.kind === 'error' || plan.kind === 'start' ? plan.text : '';
+      this.#label.hidden = !this.#label.textContent;
+      this.#button.hidden = !(asks || plan.kind === 'loading');
+      this.#button.textContent = plan.kind === 'error' ? WORDS.retry : plan.text;
+      if (plan.kind === 'loading') { this.#button.setAttribute('aria-disabled', 'true'); } else { this.#button.removeAttribute('aria-disabled'); }
+      if (hadFocus && this.#button.hidden) { this.#label.focus(); }    });
   }
 
   // opts: now, setTimer, clearTimer, doc (message-time-view's timeTicker), for a test's clock.

@@ -1183,6 +1183,7 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 .history-top { display: flex; justify-content: center; align-items: center; gap: var(--ab-space-3); padding: var(--ab-space-2) 0; min-width: 0; }
 .history-top[hidden] { display: none; }
 .history-top .history-meta { margin: 0; }
+.history-top [hidden] { display: none; }
 .history-load { min-height: 44px; padding: 0 var(--ab-space-4); font: inherit; color: inherit; background: none; border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card); cursor: pointer; }
 .history-load:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 /* A message's time (#1619, ui.md §6.4). The owner's row always exists, so a time arriving later moves nothing. */

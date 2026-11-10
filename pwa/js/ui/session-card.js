@@ -1503,9 +1503,13 @@ export class SessionCard {
   }
   #earlierAsked = false;
 
+  // Another page would be let go at the newest end to stay within the limit, taking the newest turns
+  // (and live merging) with it: no more is offered, and the top reads as the start of what is held.
+  #atCap(snapshot) { return snapshot.turns.length + HISTORY.maxTurns > HISTORY.kept; }
+
   // The person asked for earlier turns (the button, Try again) or came within a screen of the top.
   #loadEarlier() {
-    if (!this.#unwatch) { return; }
+    if (!this.#unwatch || this.#atCap(this.historyStore.get(this.hostId, this.#s.id))) { return; }
     this.historyStore.loadEarlier(this.hostId, this.#s.id).catch(() => {});
   }
 
@@ -1534,7 +1538,8 @@ export class SessionCard {
     if (this.#receipt && this.#s.question && this.#receipt.questionId !== this.#s.question.id) { records.set(this.#receipt.questionId, this.#receipt.element); }
     const inline = { slot, questionId: this.#slotQuestion, activeId: this.#s.question?.id, records, kept };
     const snapshot = this.#follow.snapshot(full, inline);
-    const drawn = this.turns.render(snapshot, this.#follow.shown?.activity.turn ?? null, inline);
+    const shown = snapshot.more && this.#atCap(snapshot) ? { ...snapshot, more: false, start: { limited: true } } : snapshot;
+    const drawn = this.turns.render(shown, this.#follow.shown?.activity.turn ?? null, inline);
     this.#syncStoredLatest();
     // Not in a turn (none holds it, or the history is not drawn): back where the live exchange ends.
     const questionHost = this.#follow.questionHost ?? this.els.stream;
