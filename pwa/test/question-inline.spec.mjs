@@ -204,6 +204,17 @@ for (const [cause, outcome, answer, latest] of [
     if (latest) {
       await expect(card.getByText('Reply after the closed question', { exact: true }).filter({ visible: true })).toHaveCount(1);
       expect(await closed.evaluate((el) => !!el.nextElementSibling?.textContent.includes('Reply after the closed question'))).toBe(true);
+      const toggle = closed.getByRole('button', { name: 'Hide question' });
+      await toggle.focus();
+      await page.evaluate(({ id }) => {
+        const d = window.agentBridgeDemo;
+        const s = d.host.get(id);
+        d.upsert({ ...s, updatedAt: new Date(Date.now() + 5000).toISOString(), activity: { ...s.activity, responseTurn: s.activity.turn, response: 'A new live reply after reload' } });
+      }, { id: CODEX });
+      await expect(card.getByText('A new live reply after reload', { exact: true }).filter({ visible: true })).toHaveCount(1);
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+      await expect(closed.locator('.resolved-record')).toBeVisible();
+      await expect(toggle).toBeFocused();
     }
   });
 }
