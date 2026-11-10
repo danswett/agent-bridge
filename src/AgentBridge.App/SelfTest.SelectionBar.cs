@@ -128,7 +128,7 @@ static partial class SelfTest
             fixture.SelectedIndex = 2;
             fixture.UpdateLayout();
             await CaptureFrame(fixture);
-            await Picture(fixture, Path.ChangeExtension(outFile, $".selection-bar.{theme.ToLowerInvariant()}.png"));
+            await Picture(fixture, System.IO.Path.ChangeExtension(outFile, $".selection-bar.{theme.ToLowerInvariant()}.png"));
         }
 
         static async Task<uint> FillPixel(ListViewItem item)
