@@ -146,18 +146,18 @@ remain routing references until every active destination is verified.
 - **Quality is the sole merge coordinator**, accepted in
   [the takeover receipt](https://github.com/danswett/agent-bridge/issues/170#issuecomment-6617409924).
   Implementation coordinators, delegates and triage do not merge independently.
-- **A, overall implementation coordinator** (session 50e5b45a, DEV-VM1), retains
+- **A, overall implementation coordinator** retains
   backend implementation, delegates and reviews. Its former merge role ended in
   [the stand-down receipt](https://github.com/danswett/agent-bridge/issues/170#issuecomment-6617290473).
-- **B, UI implementation coordinator** (session 4d05d459, DEV-VM2), retains track B
+- **B, UI implementation coordinator** retains track B
   and client integration, yielding merge order to Quality.
-- **Triage/readiness** (session 3e736b53, DEV-VM1) maintains canonical routing,
+- **Triage/readiness** maintains canonical routing,
   verifies owner acceptance and consumes the existing single collector. It has no
   merge authority and must not create another periodic GitHub poller.
-- **Creative director** (session c187cf6c; formerly titled VP of Design) is additive: audits, proposals and design review
+- **Creative director** (formerly titled VP of Design) is additive: audits, proposals and design review
   under [#477](https://github.com/danswett/agent-bridge/issues/477). Material design
   changes still require owner approval; design leadership is not merge authority.
-- **Head of Product** (session 3dad9c05) owns the order of work: the epics and each
+- **Product** owns the order of work: the epics and each
   item's Epic and Horizon, including those TPM/triage sets on new issues under
   [#696](https://github.com/danswett/agent-bridge/issues/696)'s intake rule. Issue
   triage itself stays with TPM. Changes to the order are decided on #696 with the owner.
@@ -311,8 +311,8 @@ closed. The steps below are the machine and migration steps within it.
 The design session's output is in the repository (#182). The owner **signed off ui.md on
 2026-11-01**; subagents.md's sign-off and its §8 questions sit with the overall coordinator
 (track A). A UI coordinator session runs track B and keeps this section
-current. Since 2026-11-02 13:10 PT that is Copilot session 4d05d459 on a Cloud PC, which
-took over from f7ba0bcc when DEV-VM1 began migrating. Quality now owns all merges
+current. Since 2026-11-02 13:10 PT that is a Copilot session on a Cloud PC, which
+took over when DEV-VM1 began migrating. Quality now owns all merges
 (see Running work above). The sources:
 
 - [design/ui.md](design/ui.md): the spec for every client (status language, colour, type,
@@ -523,7 +523,7 @@ agent-ha-bridge releases from this work:
 | 11-01 | Remote update: only a person's device presses it; it obeys the same idle rules; read-only hosts don't offer it |
 | 11-01 | VM01 is left down |
 | 11-01 | Design, status and handoff live in this repository (this page, design.md, AGENTS.md) |
-| 11-01 | A new coordinator session took over (bridge session a6ed320ca83044c5, DEV-VM1) |
+| 11-01 | A new coordinator session took over |
 | 11-01 | UI track order: #164, #165, #167, #166, #168, after the design session signs off |
 | 11-01 | UI design proposed (docs/design/ui.md): system text faces with one licensed monospace, status glyphs instead of coloured edges, panes by window width, the PWA following the Windows design. Awaiting sign-off |
 | 11-01 | ui.md signed off by the owner as written ("build the new UI as designed"); #182 merged. A UI coordinator session runs track B |
@@ -550,7 +550,7 @@ agent-ha-bridge releases from this work:
 | 11-03 | Type width (#544 §11): Slipgates Sans was asked whether it reads condensed, and is tuned rather than replaced: the text cut (opsz 14) at every size on every platform, +2% tracking on the Title role and the wordmark only (`type.tracking`; body text untracked), and the wordmark in Slipgates Sans SemiBold |
 | 11-03 | First-run setup and Settings (#384), option (a) in all 13 decisions: Working is the neutral ring with a check, with no success colour; readiness rows reuse the `done`, `idle`, `ended` and `failed` glyphs; one-line consent, security and cost lines are allowed in Settings and setup only; setup's stepper replaces Settings' pane with the rail kept; Overview is the health list; device approval of permission prompts stays On by default, and folder-trust answers from devices Off; Subfolders is per folder, Off, once the host supports it; test sessions close afterwards by default; Local only is a neutral chip; the PWA shows Settings read only; Install Node.js goes through the same consent card; Agency is its own agent sharing Copilot CLI's hooks and sign-in. Spec in ui.md §6.8–§6.10 (#532); reasoning and boards in docs/design/proposals/384-first-run.md |
 | 11-04 | An agent installed after the bridge (#231), option (a): offered as Collaboration's discovery is (§6.7), with a grey dot on Settings › Agents and an Overview card, "*Agent* *version* is installed · Set it up to see its sessions in Slipgates", with Set up and Not now. Not now holds per agent and version. Never a toast, a push or a count, and never on a read-only host. Spec in ui.md §6.9 and §9 (#532) |
-| 11-04 | Product priorities (#696), signed off by the owner. A Head of Product owns the order of work. **Now:** Trust (input integrity and approval safety; #662 raised to P0) and Daily-use reliability. **Next:** Migration, Setup, Rebrand, Ops basics. **Later:** Performance, Conversation UI. **Parked:** Polish and motion (accessibility bugs exempt), Apple/macOS, Federation (#519). The P0 PRs land first, and no new slice starts in a Later or Parked epic until #209, #212, #220 and #662 close. New features start Parked |
+| 11-04 | Product priorities (#696), signed off by the owner. Product owns the order of work. **Now:** Trust (input integrity and approval safety; #662 raised to P0) and Daily-use reliability. **Next:** Migration, Setup, Rebrand, Ops basics. **Later:** Performance, Conversation UI. **Parked:** Polish and motion (accessibility bugs exempt), Apple/macOS, Federation (#519). The P0 PRs land first, and no new slice starts in a Later or Parked epic until #209, #212, #220 and #662 close. New features start Parked |
 | 11-04 | Agent messaging on the relay, same account only, becomes its own goal (#728, Next, first), split from #519's cross-account federation, which stays Parked. It is gated on #55, and #55 moves up to sixth in Trust |
 | 11-04 | Dogfood readiness (#747, Next, second; absorbs Setup): 5 beta testers on Windows and the phone PWA, an opt-in beta telemetry tier with a pseudonymous install id (an amendment to design.md §5.10, written in #732), feedback in a private repository, and #55 not required before the first tester. Entry gates are on #731 |
 | 11-04 | Each Now and Next goal has an `epic` tracker with sub-issues; the Project gains **Stage**, **Rank** and **Shipped in** fields; the **Beta 1** milestone holds the first tester's gates; the epic dashboard is #755 (automated by #756) |
