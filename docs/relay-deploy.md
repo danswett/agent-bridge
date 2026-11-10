@@ -706,3 +706,6 @@ Apps report how long a turn took from send to settled; it lands in the same hour
 - Nothing identifying is stored: only the fixed group name, the hour and bucket counts. No account, device, session, text or machine.
 - Where it runs, when a node leaves, where state lives: as above. The samples join the replica's in-memory hour and go out on the same minute flush, so a leaving node flushes them on stop and a crash loses at most a minute.
 - Deploy: no new setting. The route is live as soon as the relay is; reading still needs the read key.
+- The PWA's authenticated JSON POST needs preflight: this endpoint uses the same
+  `AllowedOrigins` list as sign-in, permitting only POST and `authorization`/`content-type`,
+  without credentials or wildcard origins. Deploy this policy before expecting PWA samples.
