@@ -1149,6 +1149,16 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 .fact { display: contents; }
 .fact dt { color: var(--ab-text2); }
 .fact dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+/* The ID's Copy: the same size at every width, straight after the id; its words go beside it. */
+.fact-id-value { display: flex; flex-wrap: wrap; align-items: center; column-gap: var(--ab-space-2); }
+.fact-copy {
+  flex: none; width: var(--tap); height: var(--tap); padding: 0; border: 1px solid var(--ab-stroke2); border-radius: 8px;
+  background: var(--ab-card); color: var(--ab-text2); font: inherit; font-size: .8rem; font-weight: 600; cursor: pointer;
+}
+.fact-copy:focus-visible:not([data-focus-quiet]) { outline: 2px solid var(--ab-bridge); outline-offset: 2px; }
+.fact-copy-note { color: var(--ab-text2); }
+.fact-copy-note[data-copy="done"] { color: var(--ab-bridge); }
+.fact-copy-note[data-copy="failed"] { color: var(--ab-danger-text); }
 .agent-name { color: var(--ab-text); }
 /* A path gives up its middle, not a word: the start shortens to an ellipsis, the last part stays. */
 .path { display: inline-flex; max-width: 100%; min-width: 0; vertical-align: bottom; overflow: hidden; }

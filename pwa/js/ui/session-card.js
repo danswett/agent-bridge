@@ -28,6 +28,7 @@ import { h } from './dom.js';
 import { designIcon, drivenBadge, glyph, setGlyph } from './glyph.js';
 import { ago, localTime } from './time.js';
 import { copyText, renderMarkdown } from '../markdown.js';
+import { copyFeedback } from './copy-feedback.js';
 import { ATTENTION_RULES, rowAt, sessionStatus, statusLabel } from '../status.js';
 import { awayWords, detailRows } from '../details-rows.js';
 import { QuestionPanel, describeAnswer, describeClosed, renderQuestion, renderResolved } from './question-view.js';
@@ -449,6 +450,7 @@ export class SessionCard {
   #shownStale = null;
   // Details' value cells by row, and the status words the header shows, which its Status row says.
   #factCells = null;
+  #idCopy = null;
   #detailsStatus = null;
   #detailsAway = false;
   // The row's name but for its age, as #nameRow puts it together: { drawn, unsaid }.
@@ -1128,7 +1130,8 @@ export class SessionCard {
         case 'branch': return h('span', { class: 'branch' }, row.text);
         case 'folder': return pathView(row.text);
         case 'attention': return h('span', { class: 'attention-message', dir: 'ltr' }, row.text);
-        case 'pid': case 'id': return h('span', { class: 'mono' }, row.text);
+        case 'pid': return h('span', { class: 'mono' }, row.text);
+        case 'id': return this.#idValue(row.text);
         case 'started': return h('time', { datetime: row.at, title: localTime(row.at) }, row.text);
         default: return row.text;
       }
@@ -1141,6 +1144,23 @@ export class SessionCard {
     this.#factCells = cells;
     e.facts.replaceChildren(...rows);
     this.refreshTimes();
+  }
+
+  // The ID and its Copy button (#1279): the one Details value with a button, for pasting the id
+  // into a bug report from a phone. The button keeps its name and size; "Copied" and "Couldn't
+  // copy" go to a polite status beside it (copy-feedback.js).
+  #idValue(id) {
+    this.#idCopy?.cancel();
+    const note = h('span', { class: 'fact-copy-note', role: 'status' });
+    this.#idCopy = copyFeedback({
+      copy: () => copyText(id),
+      say: (text, ok) => { note.textContent = text; note.dataset.copy = text ? (ok ? 'done' : 'failed') : ''; },
+    });
+    const button = h('button', {
+      type: 'button', class: 'fact-copy', 'aria-label': 'Copy session ID', title: 'Copy session ID',
+      onclick: () => this.#idCopy.press(),
+    }, 'Copy');
+    return h('span', { class: 'fact-id-value' }, h('span', { class: 'mono' }, id), button, note);
   }
 
   // The values that move with the clock (and the status words, which "last seen 2m ago" is one of

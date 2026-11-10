@@ -630,7 +630,7 @@ test('Details lists the shared table\'s rows in its order: Status, how long, Age
   await expect(facts.locator('.fact-since dd')).toHaveText(/^for \d/);
   await expect(facts.locator('.fact-updated dd')).toHaveText(/ago$|just now$/);
   await expect(facts.locator('.fact-turns dd')).toHaveText('412 turns');
-  await expect(facts.locator('.fact-id dd')).toHaveText('02d9e5d5-6b35-49bd-b083-39572fbff648');
+  await expect(facts.locator('.fact-id dd .mono')).toHaveText('02d9e5d5-6b35-49bd-b083-39572fbff648');
   // A tick or an update that changes only the clocks leaves the other rows' nodes where they are,
   // so a selection in the ID or the folder survives it.
   const id = await facts.locator('.fact-id dd .mono').elementHandle();
