@@ -6,12 +6,12 @@ const PREFIX = '0123456789abcdef0123456789abcdef';
 const WINDOWS = `@C:\\Users\\demo\\AppData\\Local\\AgentBridge\\default\\attachments\\${PREFIX}-`;
 const UNIX = `@/home/demo/.agent-bridge/default/attachments/${PREFIX}-`;
 
-async function message(page, text) {
-  await page.evaluate(({ id, text }) => {
+async function message(page, text, turn = null) {
+  await page.evaluate(({ id, text, turn }) => {
     const demo = window.agentBridgeDemo;
     const session = demo.host.get(id);
-    demo.upsert({ ...session, updatedAt: new Date().toISOString(), activity: { ...session.activity, userMessage: text } });
-  }, { id: IDLE, text });
+    demo.upsert({ ...session, updatedAt: new Date().toISOString(), activity: { ...session.activity, userMessage: text, ...(turn ? { turn } : {}) } });
+  }, { id: IDLE, text, turn });
 }
 
 for (const width of [390, 820]) {
@@ -49,6 +49,15 @@ for (const width of [390, 820]) {
         await expect(bubble.locator('.plain')).toHaveText(ordinary);
         await expect(chips).toHaveCount(0);
         await expect(bubble.locator('b')).toHaveCount(0);
+
+        await message(page, `${WINDOWS}earlier.pdf Earlier words.`, 'attachment-history');
+        await message(page, 'Next message.', 'after-attachment');
+        const earlier = view.locator('.history-turn[data-turn="attachment-history"] .history-bubble');
+        await expect(earlier).toBeVisible();
+        await expect(earlier).not.toContainText('\\attachments\\');
+        await expect(earlier).not.toContainText(PREFIX);
+        await expect(earlier.getByRole('listitem')).toHaveText('earlier.pdf');
+        await expect(earlier.locator('.plain')).toHaveText('Earlier words.');
         expect(await page.evaluate(() => window.__cspViolations)).toEqual([]);
       });
     });

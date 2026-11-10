@@ -1156,6 +1156,17 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 .user-message { justify-self: end; max-width: 85%; min-width: 0; }
 .bubble { padding: var(--ab-space-2) var(--ab-space-3); background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card); }
 .bubble .plain { margin: 0; }
+.sent-attachments { list-style: none; display: grid; gap: var(--ab-space-1); margin: 0; padding: 0; }
+.sent-attachments[hidden] { display: none; }
+.sent-attachments + .plain:not([hidden]) { margin-top: var(--ab-space-2); }
+.sent-attachment {
+  display: flex; align-items: center; box-sizing: border-box; min-height: 48px; min-width: 0;
+  width: fit-content; max-width: min(280px, 100%); padding: var(--ab-space-2);
+  background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card);
+  font-size: 14px; line-height: 20px; overflow: hidden;
+}
+.sent-file-start { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sent-file-end { flex: none; white-space: nowrap; }
 /* A prompt the person didn't type (#489, §6.4): never a bubble, and never at the right, which is
    the person's. At the column's start and across it: a label line in agent colour (a clock or the
    driven diamond, then its facts, then who sent it and its age in meta style), two lines of the

@@ -6,6 +6,7 @@ import { setFacts } from './meta.js';
 import { disclosureName, historyPromptOrigin } from '../prompt-origin.js';
 import { renderMarkdown } from '../markdown.js';
 import { timeButton, timeRow, timeTicker } from './message-time-view.js';
+import { sentMessage } from './sent-message.js';
 
 export const WORDS = {
   loading: 'Loading conversation\u2026',
@@ -96,7 +97,7 @@ export function turnView(t, inline = null) {
   const from = t.prompt?.from ?? 'person';
   const prompt = !t.prompt ? null
     : from === 'person'
-      ? h('div', { class: 'history-prompt' }, h('div', { class: 'history-bubble' }, h('p', { class: 'plain' }, t.prompt.text ?? '')), timeRow(t.at, 'msg-time-owner'))
+      ? h('div', { class: 'history-prompt' }, sentMessage(t.prompt.text ?? '', 'history-bubble'), timeRow(t.at, 'msg-time-owner'))
       : (() => { const o = historyPromptOrigin(t.prompt); return o ? originView(o, t.at) : null; })();
   return h('section', { class: 'history-turn', dataset: { turn: t.id } }, prompt, shownParts(t).map((p) => part(p, inline)), t.truncated ? h('p', { class: 'history-meta history-cut' }, WORDS.cut) : null);
 }
