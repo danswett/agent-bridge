@@ -54,9 +54,10 @@ static partial class SelfTest
                 var at = Centre(approve);
                 banner.Message = "Lost the connection to the demo machine's host.";
                 banner.IsOpen = true;
+                await Task.Delay(500);
+                var moved = Math.Abs(Centre(Choices()[0]).Y - at.Y) > 1;
                 var let = view.PointerLets(approve);
-                var moved = await Moved(Choices, [at]);
-                check(ready && moved && !let, $"drops a pointer's press on Approve once in the same task as a banner opening above it, before any layout pass ({size}; moved: {moved}; let through: {let})");
+                check(ready && !moved && let, $"leaves the question's answers where they are, and pressable, as a banner opens above it, since it sits below the list ({size}; moved: {moved}; let through: {let})");
             }
             else { check(false, $"finds Approve once on the permission prompt ({size})"); }
 
@@ -67,9 +68,10 @@ static partial class SelfTest
             ready = await Takes();
             var before = Choices().Select(Centre).ToList();
             banner.Message = Longer(root);
-            var grew = await Moved(Choices, before);
+            await Task.Delay(500);
+            var grew = Choices().Select(Centre).Zip(before).Any(p => Math.Abs(p.First.Y - p.Second.Y) > 1);
             var pressed = Pressed(before);
-            check(ready && grew && Stopped(pressed), $"holds the question's answers from a pointer resting where they moved as a banner above them grows ({size}; moved: {grew}; the press: {pressed})");
+            check(ready && !grew && !Stopped(pressed), $"leaves the question's answers where they are, and pressable, as a banner above grows, since it sits below the list ({size}; moved: {grew}; the press: {pressed})");
             banner.IsOpen = false;
             banner.Message = "";
 
@@ -149,12 +151,12 @@ static partial class SelfTest
                 {
                     var at = Centre(sendButton);
                     box.Text += ".";
-                    var margin = box.Margin;
-                    box.Margin = new Thickness(margin.Left, margin.Top, margin.Right, margin.Bottom + 80);
+                    var margin = sendButton.Margin;
+                    sendButton.Margin = new Thickness(margin.Left, margin.Top, margin.Right, margin.Bottom + 80);
                     var clear = view.QuestionShown is { IsHitTestVisible: true };
                     var let = view.PointerLets(sendButton);
                     var moved = await Moved(() => [sendButton], [at]);
-                    box.Margin = margin;
+                    sendButton.Margin = margin;
                     check(settled && clear && moved && !let, $"drops a pointer's press on Send as the person's question, theirs a moment ago, grows above it before any layout pass (held before: {!clear}; moved: {moved}; let through: {let})");
                 }
                 else { check(false, $"shows Send under Other's box ({size})"); }

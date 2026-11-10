@@ -386,9 +386,14 @@ public sealed class AnswerMoves
     {
         if (now.Question is not { } q || before.Question is not { } wq) { return false; }
         if (Math.Abs(q.Width - wq.Width) <= Slack && Math.Abs(q.Height - wq.Height) <= Slack) { return false; }
-        if (Math.Abs(q.X - wq.X) > Slack || Math.Abs(q.Y - wq.Y) > Slack) { return false; }
+        if (Math.Abs(q.X - wq.X) > Slack) { return false; }
         if (now.WindowWidth != before.WindowWidth || now.WindowHeight != before.WindowHeight) { return false; }
         if (now.Scrollers.Count != before.Scrollers.Count || now.Scrollers.Count == 0) { return false; }
+        // The question sits below the list, so it may grow up from its bottom edge instead of down
+        // from its top, in a scroller whose content was already as tall as its view.
+        var dh = q.Height - wq.Height;
+        var bottom = Math.Abs(q.Y + q.Height - wq.Y - wq.Height) <= Slack;
+        if (Math.Abs(q.Y - wq.Y) > Slack && !bottom) { return false; }
         for (var i = 0; i < now.Scrollers.Count; i++)
         {
             var (s, w) = (now.Scrollers[i], before.Scrollers[i]);
@@ -397,7 +402,8 @@ public sealed class AnswerMoves
         }
         // The innermost: what it scrolls is the question's, and grew or shrank only as it did.
         var (inner, wasInner) = (now.Scrollers[0], before.Scrollers[0]);
+        var grew = inner.MeasuredHeight - wasInner.MeasuredHeight;
         return Math.Abs(inner.MeasuredWidth - wasInner.MeasuredWidth) <= Slack
-            && Math.Abs(inner.MeasuredHeight - wasInner.MeasuredHeight - (q.Height - wq.Height)) <= Slack;
+            && (Math.Abs(grew - dh) <= Slack || bottom && Math.Abs(grew) <= Slack);
     }
 }

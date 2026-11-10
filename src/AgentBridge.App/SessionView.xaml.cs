@@ -423,6 +423,7 @@ public sealed partial class SessionView : UserControl
     void OnLayout(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(PaneLayoutViewModel.ShownTab) or "" or null) { ShowTab(); }
+        if (e.PropertyName is nameof(PaneLayoutViewModel.ViewingConversation) or "" or null) { SyncQuestionBar(); }
         // The conversation back (its tab picked again, the session pushed in, the window shown):
         // its question is under a pointer aimed at what was there, motion or none.
         if (e.PropertyName is (nameof(PaneLayoutViewModel.ViewingConversation) or "" or null) && layout is not null
@@ -591,6 +592,27 @@ public sealed partial class SessionView : UserControl
         answers.Forget();
         if (questionView is not null) { GuardAnswer(); }
         QuestionCard.Visibility = Ui.Some(questionView);
+        SyncQuestionBar();
+    }
+
+    // "Question waiting" over the reply box while an open question is scrolled out of view.
+    void SyncQuestionBar()
+    {
+        double top = 0, height = 0, viewport = 0;
+        var asked = QuestionCard.Visibility == Visibility.Visible;
+        if (asked && ConversationScroll is { } scroll && QuestionCard.IsLoaded)
+        {
+            try { top = QuestionCard.TransformToVisual(scroll).TransformPoint(default).Y; }
+            catch (ArgumentException) { asked = false; }
+            height = QuestionCard.ActualHeight;
+            viewport = scroll.ViewportHeight;
+        }
+        QuestionWaiting.Visibility = Ui.Some(QuestionBar.Shows(asked, layout?.ViewingConversation == true, top, height, viewport) ? this : null);
+    }
+
+    void OnQuestionBar(object sender, RoutedEventArgs e)
+    {
+        QuestionCard.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = true });
     }
 
     void Editing(bool on)
