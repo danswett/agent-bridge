@@ -41,9 +41,7 @@ static partial class SelfTest
             {
                 root.RequestedTheme = theme;
                 await Task.Delay(300);
-                await Inspect(theme.ToString(), theme == ElementTheme.Dark
-                    ? Color.FromArgb(255, 0x2D, 0xD4, 0xBF)
-                    : Color.FromArgb(255, 0x0B, 0x7A, 0x6E));
+                await Inspect(theme.ToString(), ((SolidColorBrush)Ui.ThemedBrush("AbBridge", theme)).Color);
             }
             root.RequestedTheme = ElementTheme.Default;
             var contrast = await HighContrastPass.BeginAsync();
@@ -72,9 +70,36 @@ static partial class SelfTest
         }
 
         static bool Near(double a, double b) => Math.Abs(a - b) <= 0.1;
-        List<FrameworkElement> Bars(ListViewItem item) => Find<FrameworkElement>(item)
-            .Where(e => e is Border or Rectangle && Near(e.ActualWidth, 3) && e.ActualHeight > 0
-                && Shown(e, item) && e.Opacity > 0).ToList();
+        async Task<List<FrameworkElement>> Bars(ListViewItem item)
+        {
+            var candidates = Find<FrameworkElement>(item).Where(e => e is Border or Rectangle
+                && Near(e.ActualWidth, 3) && e.ActualHeight > 0 && Shown(e, item) && e.Opacity > 0).ToList();
+            if (candidates.Count == 0) { return []; }
+            // Native chrome retains hidden Borders and animates a transition target, not Opacity.
+            // Count only a bar whose paint is present in the captured row.
+            var picture = await PicturePixels(item);
+            return candidates.Where(bar =>
+            {
+                var bounds = bar.TransformToVisual(item).TransformBounds(new Windows.Foundation.Rect(0, 0, bar.ActualWidth, bar.ActualHeight));
+                if (bounds.Width <= 0 || bounds.Height <= 0) { return false; }
+                var x = (int)Math.Floor((bounds.X + bounds.Width / 2) * picture.Width / item.ActualWidth);
+                var y = (int)Math.Floor((bounds.Y + bounds.Height / 2) * picture.Height / item.ActualHeight);
+                if (x < 0 || y < 0 || x >= picture.Width || y >= picture.Height) { return false; }
+                var brush = bar is Border border ? border.Background : ((Rectangle)bar).Fill;
+                var offset = (y * (int)picture.Width + x) * 4;
+                return brush is SolidColorBrush solid && picture.Pixels[offset + 3] == 255
+                    && Math.Abs(picture.Pixels[offset] - solid.Color.B) <= 2
+                    && Math.Abs(picture.Pixels[offset + 1] - solid.Color.G) <= 2
+                    && Math.Abs(picture.Pixels[offset + 2] - solid.Color.R) <= 2;
+            }).ToList();
+        }
+
+        async Task<int> BarCount()
+        {
+            var count = 0;
+            foreach (var item in items) { count += (await Bars(item)).Count; }
+            return count;
+        }
 
         async Task Inspect(string theme, Color expected)
         {
@@ -84,7 +109,7 @@ static partial class SelfTest
                 fixture.UpdateLayout();
                 await CaptureFrame(fixture);
                 await Measure(items[index], $"{theme}, row {items[index].Height:0}", expected);
-                check(items.Sum(item => Bars(item).Count) == 1,
+                check(await BarCount() == 1,
                     $"selection bar is unique after selection moves in {theme} to row {index}");
             }
             // Reuse the same selected container with new content and a different height.
@@ -122,7 +147,7 @@ static partial class SelfTest
                 VisualStateManager.GoToState(items[0], state, false);
                 fixture.UpdateLayout();
                 await CaptureFrame(fixture);
-                check(items.All(item => Bars(item).Count == 0),
+                check(await BarCount() == 0,
                     $"selection bar is absent on unselected focused or {state} rows in {theme}");
             }
             fixture.SelectedIndex = 2;
@@ -141,7 +166,7 @@ static partial class SelfTest
 
         async Task Measure(ListViewItem item, string label, Color expected)
         {
-            var bars = Bars(item);
+            var bars = await Bars(item);
             if (bars.Count != 1)
             {
                 check(false, $"selection bar has one rendered 3 px bar ({label}; found {bars.Count})");
