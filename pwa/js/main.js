@@ -26,6 +26,7 @@
 //   key-check.js     Settings > Keyboard check (#1209): what a hardware keyboard's keys reach the app as
 import { APP_VERSION, BUILT_AT, FEEDBACK_KEY_ID, FEEDBACK_PUBLIC_KEY, RELAY } from '../config.js';
 import { BRAND, NOTIFICATIONS_BLOCKED } from './brand.js';
+import { fakeMove, moves } from './move.js';
 import { loadIdentity, deviceName, kvGet, kvPut, kvDelete } from './identity.js';
 import { accountStore, startDeviceFlow } from './signin.js';
 import { BridgeConnection } from './connection.js';
@@ -526,8 +527,11 @@ async function startDemo() {
     check();
   });
   const script = params.get('static') === '1' ? null : runScript(host, { tickMs: Number(params.get('tick')) || 4000 });
+  // A fake step stream for a move, until the host sends the real events (#1712): ?move=ok or ?move=fail.
+  if (params.get('move')) { fakeMove(moves, '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35', params.get('move') === 'fail'); }
   const { answers, replies, stops, launches, launchPanel, view } = page;
   window.agentBridgeDemo = {
+    moves,
     host, hosts, grace, connection, store: hosts.sessions, view, answers, replies, stops, launches, launchPanel, book, blobs: blobStore, page,
     // This device's timing marks for its last answers and replies (timing.js).
     timings: recentTimings,
