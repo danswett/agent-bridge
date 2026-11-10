@@ -346,7 +346,7 @@ public sealed class RosterStateVectorTests
 
         // Every refusal reason of the acceptance rule, each shown by a step: one added to the verifier needs a scenario and a place here.
         // The person commands' and vetoes' reasons (R1c) have their own vectors, roster-commands.json.
-        string[] reasons = ["parent", "account", "generation", "genesis", "seq", "signer", "signature", "presence", "readded", "target", "seniority", "cosign", "keep", "confirm", "merge", "active-cap", "cap", "budget", "evidence"];
+        string[] reasons = ["parent", "account", "generation", "genesis", "seq", "signer", "signature", "presence", "readded", "target", "seniority", "cosign", "keep", "confirm", "merge", "active-cap", "cap", "budget", "evidence", "host-key", "version"];
         Assert.Equal(reasons.Order(StringComparer.Ordinal), typeof(Invalid).GetFields().Where(f => !CommandReasons.Contains(f.Name)).Select(f => (string)f.GetRawConstantValue()!).Order(StringComparer.Ordinal));
         var shown = byName.Values.SelectMany(s => s["steps"]!.AsArray()).Select(s => s!["reason"]?.GetValue<string>()).Where(r => r is not null).Distinct().Order(StringComparer.Ordinal);
         Assert.Equal(reasons.Order(StringComparer.Ordinal), shown);
