@@ -48,6 +48,9 @@ namespace AgentBridge.Host;
 // default) or "own-account"; allowAllTargets false (the default) or true. Anything else, or a file
 // that cannot be read, is off and false. Read afresh by CurrentAgentMessaging: no restart needed.
 //
+// agents (#1295): the agents policy (AgentPolicy, docs/host-config.md). Absent means agents are off;
+// a section that cannot be read denies everything and is said; a bad key takes its narrowest value.
+//
 // sessions.restoreOnStart: whether sessions a reboot or a crash took are kept offered to resume,
 // and later (#780) resumed, idle, when the host starts again (docs/host-launch.md). On when absent.
 // A value that is not true or false, or a file that cannot be read, turns it off: nothing is started.
@@ -104,8 +107,15 @@ public sealed record HostSettings(bool RemoteApproval)
     // read afresh on each call, and off for anything that cannot be read with confidence.
     public static AgentMessagingSettings CurrentAgentMessaging(string folder) => Load(folder).Settings.AgentMessaging;
 
+    // What agents may do on this machine (#1295, design/agent-principals.md 5.1): off unless
+    // turned on here, and off for everything whenever the section or the file cannot be read.
+    // Changed only at the machine; nothing consumes it yet.
+    public AgentPolicy Agents { get; init; } = AgentPolicy.Off;
+
+    public IReadOnlyList<string> AgentsProblems { get; init; } = [];
+
     // Every problem a section reported, for the log, config show, and config set's check.
-    public IEnumerable<string> SectionProblems => LaunchProblems.Concat(HomeAssistantProblems).Concat(UsageProblems).Concat(DevBoxProblems).Concat(AgentMessagingProblems).Concat(PermissionProblems);
+    public IEnumerable<string> SectionProblems => LaunchProblems.Concat(HomeAssistantProblems).Concat(UsageProblems).Concat(DevBoxProblems).Concat(AgentMessagingProblems).Concat(AgentsProblems).Concat(PermissionProblems);
 
     public bool Push { get; init; } = true;
 
@@ -182,8 +192,11 @@ public sealed record HostSettings(bool RemoteApproval)
             var (usage, usageProblems) = UsageSettings.Read(root.TryGetProperty("usage", out var u) ? u : null);
             var (devBox, devBoxProblems) = DevBoxSettings.Read(root.TryGetProperty("devBox", out var d) ? d : null);
             var (agentMessaging, agentMessagingProblems) = AgentMessagingSettings.Read(root.TryGetProperty("agentMessaging", out var am) ? am : null);
+            var (agents, agentsProblems) = AgentPolicy.Read(root.TryGetProperty("agents", out var ag) ? ag : null);
             var settings = Default with
             {
+                Agents = agents,
+                AgentsProblems = agentsProblems.Count == 0 ? [] : agentsProblems,
                 AgentMessaging = agentMessaging,
                 AgentMessagingProblems = agentMessagingProblems.Count == 0 ? [] : agentMessagingProblems,
                 Launch = launch,
