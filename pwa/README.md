@@ -37,6 +37,9 @@ makes it a new device, signed in and approved again, so keeping it is fine.
 
 ## Modules
 
+If a stale-cursor recovery walk runs out of its budget before finding held turns or the start,
+the history store keeps the held turns and reports a recoverable earlier-load error (#1437).
+
 | File | What it does |
 |---|---|
 | `js/main.js` | Boot and wiring: demo or live, sign-in, the views |
