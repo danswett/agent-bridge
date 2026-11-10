@@ -74,6 +74,22 @@ public sealed class HistoryRowSyncTests
     }
 
     [Fact]
+    public void Moving_a_closed_question_past_a_response_changes_the_row_even_when_the_response_text_is_unchanged()
+    {
+        var asked = new HistoryPart { Id = "q1", Kind = HistoryPartKind.Question, At = T0, Question = Make.Choice() };
+        var reply = new HistoryPart { Id = "r1", Kind = HistoryPartKind.Response, At = T0, Text = "reply" };
+        var turn = new HistoryTurn { Id = "t1", At = T0, Parts = [asked, reply] };
+        var kept = new Dictionary<string, ClosedQuestion>();
+        var (shown, changes) = Shown(HistoryDraw.Rows([turn], null, closed: kept).ToArray());
+
+        HistoryRowSync.Apply(shown, HistoryDraw.Rows([turn with { Parts = [reply, asked] }], null, closed: kept));
+
+        Assert.Single(changes);
+        Assert.NotNull(shown[0].Items[0].Response);
+        Assert.NotNull(shown[0].Items[1].Question);
+    }
+
+    [Fact]
     public void Another_session_replaces_every_row_and_fewer_rows_remove_the_rest()
     {
         var (shown, _) = Shown(Rows((1, "one"), (2, "two"), (3, "three")));
