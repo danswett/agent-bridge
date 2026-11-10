@@ -17,6 +17,7 @@
 // Storage that can't be read or written (a blocked or full localStorage) falls back to Most
 // recent, as the issue asks: an order that can't be kept would be lost at the next reload.
 import { byActivity } from './sessions-store.js';
+import { groupOf, mergeOrder, nextCounter } from './order-merge.js';
 
 const KEY = 'agent-bridge.app.order';
 export const SORTS = Object.freeze(['yours', 'recent', 'machine']);
@@ -27,6 +28,7 @@ export const YOUR_ORDER_NAME = 'Your order, on this device';
 // every session of a few busy machines, and bounded so the record never grows without end.
 const MAX_KEYS = 300;
 const MAX_ENDED = 20;
+const GROUP_RETENTION = 30 * 86400000;
 
 export const orderKey = (hostId, id) => `${hostId ?? ''}\n${id}`;
 const keyOf = (e) => orderKey(e.hostId, e.session.id);
@@ -44,11 +46,20 @@ function read(raw) {
   }
   const pinned = [...new Set(strings(v?.pinned))];
   const pins = new Set(pinned);
+  const groupRecords = mergeOrder(v?.groupRecords);
+  for (const [id, r] of Object.entries(groupRecords.groups)) {
+    if (!r.tombstone && (typeof r.value !== 'string' || !r.value.trim() || [...r.value].length > 40)) {
+      delete groupRecords.groups[id];
+    }
+  }
   return {
     sort: SORTS.includes(v?.sort) ? v.sort : 'yours',
     pinned,
     order: [...new Set(strings(v?.order))].filter((k) => !pins.has(k)),
     seen,
+    groupRecords,
+    groupListed: Object.assign(Object.create(null), v?.groupListed),
+    groupDeviceTag: typeof v?.groupDeviceTag === 'string' && /^[0-9a-f]{32}$/.test(v.groupDeviceTag) ? v.groupDeviceTag : null,
   };
 }
 
@@ -83,6 +94,95 @@ export class SessionOrder {
   }
 
   isPinned(key) { return this.#state.pinned.includes(key); }
+
+  get groups() {
+    return Object.entries(this.#state.groupRecords.groups)
+      .filter(([, r]) => !r.tombstone)
+      .map(([id, r]) => ({ id, name: r.value }));
+  }
+
+  groupFor(key) { return groupOf(this.#state.groupRecords, key); }
+
+  #groupName(name, except = null) {
+    const trimmed = typeof name === 'string' ? name.trim() : '';
+    if (!trimmed || [...trimmed].length > 40) { throw new RangeError('Group name must be 1 to 40 characters.'); }
+    if (this.groups.some((g) => g.id !== except && g.name.toLowerCase() === trimmed.toLowerCase())) {
+      throw new RangeError('A group with that name already exists.');
+    }
+    return trimmed;
+  }
+
+  #requireGroup(id) {
+    if (!this.groups.some((g) => g.id === id)) { throw new RangeError('Group does not exist.'); }
+  }
+
+  #writeGroup(map, key, value, tombstone = false) {
+    const s = this.#state;
+    s.groupDeviceTag ??= globalThis.crypto.randomUUID().replaceAll('-', '');
+    s.groupRecords[map][key] = {
+      ...(tombstone ? { tombstone: true } : { value }),
+      counter: nextCounter(s.groupRecords),
+      deviceTag: s.groupDeviceTag,
+    };
+  }
+
+  createGroup(name) {
+    const clean = this.#groupName(name);
+    if (this.groups.length >= 32) { throw new RangeError('At most 32 groups can be kept.'); }
+    const id = globalThis.crypto.randomUUID();
+    this.#writeGroup('groups', id, clean);
+    this.#save();
+    return id;
+  }
+
+  renameGroup(id, name) {
+    this.#requireGroup(id);
+    this.#writeGroup('groups', id, this.#groupName(name, id));
+    this.#save();
+  }
+
+  setGroup(key, id) {
+    if (typeof key !== 'string' || !key) { throw new RangeError('A session key is required.'); }
+    if (id !== null) { this.#requireGroup(id); }
+    if (this.groupFor(key) === id) { return; }
+    this.#writeGroup('membership', key, id);
+    if (id === null) { delete this.#state.groupListed[key]; }
+    else { this.#state.groupListed[key] = this.now(); }
+    if (!this.isPinned(key)) { this.#drop(key); this.#state.order.unshift(key); }
+    this.#save();
+  }
+
+  deleteGroup(id) {
+    this.#requireGroup(id);
+    const s = this.#state;
+    const members = new Set(Object.keys(s.groupRecords.membership).filter((k) => this.groupFor(k) === id));
+    const moved = s.order.filter((k) => members.has(k));
+    s.order = [...moved, ...s.order.filter((k) => !members.has(k))];
+    for (const k of members) {
+      this.#writeGroup('membership', k, null);
+      delete s.groupListed[k];
+    }
+    this.#writeGroup('groups', id, null, true);
+    this.#save();
+  }
+
+  #rememberGroups(entries) {
+    const s = this.#state;
+    const live = new Set(entries.map(keyOf));
+    const now = this.now();
+    let changed = false;
+    for (const k of Object.keys(s.groupRecords.membership)) {
+      if (this.groupFor(k) === null) { continue; }
+      if (Number.isFinite(s.groupListed[k]) && now - s.groupListed[k] > GROUP_RETENTION) {
+        this.#writeGroup('membership', k, null);
+        delete s.groupListed[k];
+        changed = true;
+      } else if (live.has(k)) {
+        if (s.groupListed[k] !== now) { s.groupListed[k] = now; changed = true; }
+      }
+    }
+    return changed;
+  }
 
   // entries: [{ hostId, session }], every live session shown. nameOf(hostId): a machine's name,
   // for the Machine sort. shows(hostId): whether a machine is shown, for the Ended group.
@@ -119,8 +219,8 @@ export class SessionOrder {
     const s = this.#state;
     const placed = new Set([...s.pinned, ...s.order]);
     const fresh = entries.filter((e) => !placed.has(keyOf(e))).sort(newer).map(keyOf);
-    let changed = fresh.length > 0;
-    if (changed) { s.order.unshift(...fresh); }
+    let changed = this.#rememberGroups(all) || fresh.length > 0;
+    if (fresh.length) { s.order.unshift(...fresh); }
     for (const e of all) {
       const k = keyOf(e);
       if (s.seen[k] === undefined) { s.seen[k] = e.session.updatedAt; changed = true; }
