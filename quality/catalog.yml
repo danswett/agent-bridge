@@ -192,6 +192,8 @@ suites:
     platforms: [win-x64, win-arm64, linux-x64]
     runner: local
     project: tests/AgentBridge.Host.Core.Tests
+    # FleetLoadTests reads the shared limits file and checks its schema (#1587), which the graph cannot see.
+    triggers: [docs/fleet-load-limits.json]
     command: dotnet test tests/AgentBridge.Host.Core.Tests -c Release
     where: ci.yml product
     baseline: { tests: 402, seconds: 7 }
