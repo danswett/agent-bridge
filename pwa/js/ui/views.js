@@ -15,6 +15,7 @@ import { BRAND } from '../brand.js';
 const LONG_PRESS_MS = 500;
 // A finger that moves further than this is scrolling, not pressing.
 const LONG_PRESS_SLOP = 10;
+const titleOf = (card) => card.session.title || 'Untitled session';
 
 // Keeps one row per session, from every machine shown, in the person's order (session-order.js):
 // Pinned, then the rest, then an Ended group (ui.md §6.1); and each session's view in the session
@@ -35,6 +36,8 @@ export class SessionListView {
   #press = null;
   #swallowClick = false;
   #selected = null;
+  #grab = null;
+  #held = false;
   // Drawn once: what comes after is news, and may move.
   #drawn = false;
 
@@ -105,7 +108,19 @@ export class SessionListView {
 
   get moving() { return !this.filter && this.order.sort === 'yours'; }
 
+  // While a row is grabbed nothing else rearranges: a redraw waits for the drop. The one thing
+  // that doesn't wait is the grabbed session ending, or the list no longer being movable.
   render() {
+    if (this.#grab) {
+      const gone = !this.sessions.list().some((e) => SessionListView.key(e.hostId, e.session.id) === this.#grab.key);
+      if (!gone && this.moving) { this.#held = true; return; }
+      this.#grab = null;
+      this.#say('Move cancelled.');
+    }
+    this.#draw();
+  }
+
+  #draw() {
     const entries = this.sessions.list();
     const sort = this.order.sort;
     const arranged = this.order.arrange(entries, { nameOf: (id) => this.machine(id).name, shows: this.shows, settled: this.settled });
@@ -158,13 +173,16 @@ export class SessionListView {
           card.onDelegate = () => this.onDelegate?.(card);
           card.element.dataset.key = key;
           card.view.dataset.key = key;
-          card.element.prepend(h('span', { class: 'drag-handle', 'aria-hidden': 'true', title: 'Drag to move' }));
+          // A real button, right after the row's button in the tab order: Space or Enter grabs the row.
+          card.handle = h('button', { type: 'button', class: 'drag-handle', title: 'Drag to move' });
+          card.element.append(card.handle);
           this.views.append(card.view);
           this.#cards.set(key, card);
         } else if (card.session !== s) {
           card.update(s);
         }
         card.setPinned(isPinned);
+        card.handle.setAttribute('aria-label', `Move ${titleOf(card)}`);
         card.setStale(this.stale(hostId));
         // On screen, its news is seen as it comes; otherwise its row gets the dot. A session's
         // view stays on screen while search hides its row, so this comes before search's say.
@@ -320,6 +338,17 @@ export class SessionListView {
   #listen() {
     const c = this.container;
     c.addEventListener('keydown', (e) => {
+      const handle = e.target.closest?.('.drag-handle');
+      if (handle) {
+        const card = this.#cardOf(handle);
+        if (!card || !this.#grabbed(card)) { return; }
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.#endGrab(card, false); return; }
+        if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+          e.preventDefault();
+          this.#grabStep(card, e.key === 'ArrowUp' ? -1 : 1);
+        }
+        return;
+      }
       const card = e.target.closest?.('.row-main') ? this.#cardOf(e.target) : null;
       if (!card) { return; }
       // The context-menu key, or Shift+F10: Safari has neither as a contextmenu event.
@@ -330,10 +359,27 @@ export class SessionListView {
       }
       if (e.ctrlKey || e.metaKey || e.shiftKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) { return; }
       e.preventDefault();
-      if (e.altKey) { this.#move(card, e.key === 'ArrowUp' ? -1 : 1); return; }
+      if (e.altKey) { if (!this.#grab) { this.#move(card, e.key === 'ArrowUp' ? -1 : 1); } return; }
       // Up and Down alone go between rows, as a list does (ui.md §9).
       const rows = [...this.container.querySelectorAll('.session > .row-main')];
       rows[rows.indexOf(card.els.open) + (e.key === 'ArrowUp' ? -1 : 1)]?.focus();
+    });
+    // Enter, and Space on its key-up, arrive as a click with no pointer (detail 0). A mouse click is
+    // not a grab: the handle is also where a drag starts.
+    c.addEventListener('click', (e) => {
+      const handle = e.target.closest?.('.drag-handle');
+      const card = handle ? this.#cardOf(handle) : null;
+      if (card && e.detail === 0) { this.#toggleGrab(card); }
+    });
+    // Focus going elsewhere drops the row where it is, so a grab never holds the list for good.
+    c.addEventListener('focusout', (e) => {
+      const handle = e.target.closest?.('.drag-handle');
+      const card = handle ? this.#cardOf(handle) : null;
+      if (!card || !this.#grabbed(card)) { return; }
+      setTimeout(() => {
+        const now = document.activeElement;
+        if (this.#grabbed(card) && now !== handle && now !== document.body) { this.#endGrab(card, true); }
+      }, 0);
     });
     c.addEventListener('contextmenu', (e) => {
       const card = e.target.closest?.('.row-main') ? this.#cardOf(e.target) : null;
@@ -443,6 +489,55 @@ export class SessionListView {
     document.addEventListener('pointerup', up);
     document.addEventListener('pointercancel', cancel);
     document.addEventListener('keydown', esc, true);
+  }
+
+  // Grab, move, drop (ui.md §6.1): Space or Enter on the Move button grabs its row, Up and Down
+  // move it one place in its group, Space or Enter drops it, Escape puts it back. Focus stays
+  // on the button, and each step is said once, politely.
+  #grabbed(card) { return this.#grab?.key === this.#keyOf(card); }
+
+  #where(card) {
+    const p = this.order.position(this.#keyOf(card));
+    return p ? { ...p, text: `position ${p.at} of ${p.of}` } : null;
+  }
+
+  #toggleGrab(card) {
+    if (this.#grabbed(card)) { this.#endGrab(card, true); return; }
+    const key = this.#keyOf(card);
+    const where = this.#where(card);
+    if (this.#grab || !this.moving || !where) { return; }
+    this.#grab = { key, from: this.order.neighbours(key), edge: null };
+    this.#say(`Grabbed ${titleOf(card)}. Position ${where.at} of ${where.of} in ${where.group}. Use Up and Down to move, Space to drop, Escape to cancel.`);
+  }
+
+  #grabStep(card, delta) {
+    if (!this.order.move(this.#keyOf(card), delta)) {
+      const where = this.#where(card);
+      const edge = delta < 0 || where?.of === 1 ? 'First' : 'Last';
+      if (this.#grab.edge !== edge) { this.#say(`${edge} in ${where?.group ?? 'Sessions'}.`); }
+      this.#grab.edge = edge;
+      return;
+    }
+    this.#grab.edge = null;
+    this.#moved(card.element, () => { this.#draw(); card.element.scrollIntoView({ block: 'nearest' }); });
+    card.handle.focus({ preventScroll: true });
+    const where = this.#where(card);
+    this.#say(`Position ${where.at} of ${where.of}.`);
+  }
+
+  #endGrab(card, drop) {
+    const { key, from } = this.#grab;
+    this.#grab = null;
+    if (!drop && from) {
+      if (from.next) { this.order.place(key, from.next, false); } else if (from.prev) { this.order.place(key, from.prev, true); }
+    }
+    // The redraw the grab held off and this one are the same.
+    this.#held = false;
+    this.#moved(card.element, () => this.#draw());
+    card.handle.focus({ preventScroll: true });
+    const where = this.#where(card);
+    if (!where) { return; }
+    this.#say(drop ? `Dropped ${titleOf(card)} at ${where.text} in ${where.group}.` : `Move cancelled. ${titleOf(card)} is back at ${where.text}.`);
   }
 
   // Whether a machine takes answers may have changed: every question of its sessions (of every

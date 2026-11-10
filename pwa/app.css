@@ -737,16 +737,20 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   .sign-in-banner { border-color: Highlight; }
   .sign-in-session { color: LinkText; }
 }
-/* Moving rows: a grip on hover with a mouse, and a line where a dragged row will go. */
+/* Moving rows: a Move button, shown while its row is hovered (a mouse) or has focus (the keyboard),
+   and a line where a dragged row will go. Only in Your order with no filter. */
 .drag-handle { display: none; }
+.session-list[data-sort="yours"]:not([data-filtered="true"]) .session:focus-within .drag-handle,
+.session-list[data-sort="yours"]:not([data-filtered="true"]) .session .drag-handle:focus-visible { display: block; opacity: 1; }
 @media (hover: hover) and (pointer: fine) {
-  .session-list[data-sort="yours"]:not([data-filtered="true"]) .drag-handle {
-    display: block; position: absolute; left: 0; top: 8px; width: 12px; height: 24px; z-index: 1;
-    cursor: grab; opacity: 0; color: var(--ab-text2);
-    background-image: radial-gradient(circle, currentColor 1.5px, transparent 1.6px);
-    background-size: 6px 6px; background-position: center;
-  }
+  .session-list[data-sort="yours"]:not([data-filtered="true"]) .drag-handle { display: block; opacity: 0; }
   .session-list[data-sort="yours"]:not([data-filtered="true"]) .session:hover .drag-handle { opacity: 1; }
+}
+.session-list[data-sort="yours"]:not([data-filtered="true"]) .drag-handle {
+  position: absolute; left: 0; top: 8px; width: 24px; min-width: 0; min-height: 0; height: 24px; padding: 0; z-index: 1;
+  border: 0; border-radius: 2px; cursor: grab; color: var(--ab-text2); background-color: transparent;
+  background-image: radial-gradient(circle, currentColor 1.5px, transparent 1.6px);
+  background-size: 6px 6px; background-position: center;
 }
 .session.dragging { opacity: .6; }
 .session.dragging .drag-handle { cursor: grabbing; }

@@ -145,6 +145,20 @@ export class SessionOrder {
     return i >= 0 && i < this.#shown[g].length && !this.#shown.pending.has(this.#shown[g][i]);
   }
 
+  // Where a row on screen stands in its group (1-based), for what a grab says; null if not shown.
+  position(key) {
+    const g = this.#group(key);
+    return g ? { group: g === 'pinned' ? 'Pinned' : 'Sessions', at: this.#shown[g].indexOf(key) + 1, of: this.#shown[g].length } : null;
+  }
+
+  // The rows either side of a shown one in its group, so a cancelled move can put it back.
+  neighbours(key) {
+    const g = this.#group(key);
+    if (!g) { return null; }
+    const i = this.#shown[g].indexOf(key);
+    return { prev: this.#shown[g][i - 1] ?? null, next: this.#shown[g][i + 1] ?? null };
+  }
+
   // Moves a row past its neighbour on screen. Rows remembered for sessions not shown keep
   // their places relative to each other.
   move(key, delta) {

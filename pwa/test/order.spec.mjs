@@ -201,6 +201,110 @@ test('the sort menu offers Most recent and Machine, and remembers the choice', a
   await expect(sort).toHaveValue('machine');
 });
 
+// The Move button (#1579, ui.md §6.1): grab, move, drop and cancel from the keyboard.
+const mover = (page, id) => card(page, id).getByRole('button', { name: /^Move / });
+const said = (page) => page.locator('#session-list + [role="status"]');
+const titleOf = async (page, id) => (await mover(page, id).getAttribute('aria-label')).replace(/^Move /, '');
+
+test('Move button: Space grabs, Down moves one place, Space drops; focus stays on the button', async ({ page }) => {
+  await openDemo(page);
+  const title = await titleOf(page, COPILOT);
+  const move = mover(page, COPILOT);
+  await card(page, COPILOT).locator('.row-main').focus();
+  await page.keyboard.press('Tab');
+  await expect(move).toBeFocused();
+  await expect(move).toBeVisible();
+  await page.keyboard.press('Space');
+  await expect(said(page)).toHaveText(`Grabbed ${title}. Position 1 of 4 in Sessions. Use Up and Down to move, Space to drop, Escape to cancel.`);
+  await page.keyboard.press('ArrowDown');
+  expect(await order(page)).toEqual([CLAUDE, COPILOT, CODEX, DELEGATING]);
+  await expect(said(page)).toHaveText('Position 2 of 4.');
+  await expect(move).toBeFocused();
+  await page.keyboard.press('Space');
+  await expect(said(page)).toHaveText(`Dropped ${title} at position 2 of 4 in Sessions.`);
+  await expect(move).toBeFocused();
+  await reload(page);
+  await expect.poll(() => order(page)).toEqual([CLAUDE, COPILOT, CODEX, DELEGATING]);
+});
+
+test('Move button: Enter grabs, Escape puts the row back, and an edge is said once', async ({ page }) => {
+  await openDemo(page);
+  const title = await titleOf(page, CODEX);
+  const move = mover(page, CODEX);
+  await move.focus();
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  expect(await order(page)).toEqual([COPILOT, CLAUDE, DELEGATING, CODEX]);
+  await expect(said(page)).toHaveText('Last in Sessions.');
+  await page.keyboard.press('ArrowUp');
+  await expect(said(page)).toHaveText('Position 3 of 4.');
+  await page.keyboard.press('Escape');
+  expect(await order(page)).toEqual(FIRST);
+  await expect(said(page)).toHaveText(`Move cancelled. ${title} is back at position 3 of 4.`);
+  await expect(move).toBeFocused();
+  await reload(page);
+  await expect.poll(() => order(page)).toEqual(FIRST);
+});
+
+test('Move button: a grab holds off remote changes until the drop', async ({ page }) => {
+  await openDemo(page);
+  await mover(page, CLAUDE).focus();
+  await page.keyboard.press('Space');
+  await upsert(page, 'demo-fresh', { agent: 'copilot', title: 'Fresh session', status: 'idle', startedAt: later(), updatedAt: later() });
+  await page.waitForTimeout(200);
+  expect(await order(page)).toEqual(FIRST);
+  await page.keyboard.press('Space');
+  await expect.poll(() => order(page)).toEqual(['demo-fresh', ...FIRST]);
+});
+
+test('Move button: the grabbed session ending cancels the grab and focus goes to the next row', async ({ page }) => {
+  await openDemo(page);
+  await mover(page, CLAUDE).focus();
+  await page.keyboard.press('Space');
+  await page.evaluate((id) => window.agentBridgeDemo.remove(id), CLAUDE);
+  await expect(said(page)).toHaveText('Move cancelled.');
+  await expect(card(page, CLAUDE)).toHaveCount(0);
+  await expect(card(page, CODEX).locator('.row-main')).toBeFocused();
+});
+
+test('Move button: with one row, Up says First in Sessions', async ({ page }) => {
+  await openDemo(page, '', null);
+  await page.evaluate((ids) => { for (const id of ids) { window.agentBridgeDemo.remove(id); } }, [CLAUDE, CODEX, DELEGATING]);
+  await expect(page.locator('.session')).toHaveCount(1);
+  await mover(page, COPILOT).focus();
+  await page.keyboard.press('Space');
+  await page.keyboard.press('ArrowUp');
+  await expect(said(page)).toHaveText('First in Sessions.');
+});
+
+test('Move button: absent in Most recent, Machine and while a search filters', async ({ page }) => {
+  await openDemo(page, '&machines=2', null);
+  await expect(page.getByRole('button', { name: /^Move / }).first()).toBeAttached();
+  await page.locator('#session-sort').selectOption('recent');
+  await expect(page.locator('.drag-handle').first()).toBeHidden();
+  await page.locator('#session-sort').selectOption('machine');
+  await expect(page.locator('.drag-handle').first()).toBeHidden();
+  await page.locator('#session-sort').selectOption('yours');
+  await page.getByRole('searchbox', { name: 'Search sessions' }).fill('a');
+  await expect(page.locator('.session[data-id]').first()).toBeVisible();
+  await expect(page.locator('.drag-handle').first()).toBeHidden();
+  await page.getByRole('searchbox', { name: 'Search sessions' }).fill('');
+
+  await page.locator('.session').first().locator('.row-main').focus();
+  await expect(page.locator('.session').first().locator('.drag-handle')).toBeVisible();
+});
+
+test('Move button: with reduced motion a move is instant', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await openDemo(page);
+  await mover(page, COPILOT).focus();
+  await page.keyboard.press('Space');
+  await page.keyboard.press('ArrowDown');
+  expect(await page.evaluate(() => document.getAnimations().length)).toBe(0);
+  expect(await order(page)).toEqual([CLAUDE, COPILOT, CODEX, DELEGATING]);
+});
+
 test('blocked storage lists sessions most recent first, and Your order cannot be picked', async ({ page }) => {
   await page.addInitScript(() => {
     const get = Storage.prototype.getItem;
