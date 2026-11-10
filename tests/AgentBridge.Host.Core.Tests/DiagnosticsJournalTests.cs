@@ -416,4 +416,78 @@ public sealed class DiagnosticsJournalTests : IDisposable
             }
         }
     }
+
+    [Fact]
+    public void A_relay_connect_is_kept_as_an_outcome_and_a_duration_only()
+    {
+        var journal = new DiagnosticsJournal(time, File());
+
+        Assert.True(journal.Record(JournalEvents.RelayConnected(TimeSpan.FromMilliseconds(250), "1.2.3")));
+
+        var entry = Assert.Single(journal.Read(10, JournalContract.MaxTotalBytes).Entries);
+        Assert.Equal(JournalKind.RelayConnected, entry.Kind);
+        Assert.Equal(JournalOutcome.Ok, entry.Outcome);
+        Assert.Equal(250, entry.DurationMs);
+        Assert.Null(entry.Exception);
+        Assert.Equal(JournalOmissions.None, entry.Omitted);
+    }
+
+    [Fact]
+    public void A_refused_connect_keeps_the_close_code_and_no_exception_text()
+    {
+        var journal = new DiagnosticsJournal(time, File());
+        var refused = Thrown(() => new InvalidOperationException($"relay closed the connection: 4001 {Token} https://relay.canary.invalid/{Prompt}"));
+
+        Assert.True(journal.Record(JournalEvents.RelayConnectFailed(refused, 4001, TimeSpan.FromSeconds(1))));
+
+        var entry = Assert.Single(journal.Read(10, JournalContract.MaxTotalBytes).Entries);
+        Assert.Equal((JournalKind.RelayConnectFailed, JournalOutcome.Refused, 4001), (entry.Kind, entry.Outcome, entry.Code));
+        Assert.Null(entry.Exception);
+        AssertClean(System.IO.File.ReadAllBytes(File()));
+        Assert.DoesNotContain("relay.canary", Encoding.UTF8.GetString(System.IO.File.ReadAllBytes(File())), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void A_failed_connect_stores_the_exception_type_and_never_its_message_even_with_a_secret_in_it()
+    {
+        var journal = new DiagnosticsJournal(time, File());
+        var e = Thrown(() => new CanaryException($"{Token} {Account} wss://relay.canary.invalid/ws?token={Token}"));
+
+        Assert.True(journal.Record(JournalEvents.RelayConnectFailed(e, null, TimeSpan.FromMilliseconds(40))));
+
+        var entry = Assert.Single(journal.Read(10, JournalContract.MaxTotalBytes).Entries);
+        Assert.Equal(JournalOutcome.Failed, entry.Outcome);
+        Assert.Null(entry.Code);
+        Assert.Equal(JournalContract.Unrecognized, entry.Exception!.Type);
+        var stored = Encoding.UTF8.GetString(System.IO.File.ReadAllBytes(File()));
+        Assert.DoesNotContain("canary.invalid", stored, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("wss://", stored, StringComparison.OrdinalIgnoreCase);
+        AssertClean(System.IO.File.ReadAllBytes(File()));
+    }
+
+    [Fact]
+    public void A_cancelled_connect_is_cancelled_with_no_exception()
+    {
+        var entry = JournalEvents.RelayConnectFailed(new OperationCanceledException(Token), null, TimeSpan.Zero);
+
+        Assert.Equal(JournalOutcome.Cancelled, entry.Outcome);
+        Assert.Null(entry.Exception);
+        Assert.NotNull(JournalContract.Fit(entry));
+    }
+
+    [Theory]
+    [InlineData(1000, JournalOutcome.Ok)]
+    [InlineData(4009, JournalOutcome.Refused)]
+    [InlineData(1012, JournalOutcome.Unavailable)]
+    [InlineData(null, JournalOutcome.Unavailable)]
+    public void A_relay_close_keeps_its_status_as_the_code_and_how_long_it_was_connected(int? status, JournalOutcome outcome)
+    {
+        var journal = new DiagnosticsJournal(time, File());
+
+        Assert.True(journal.Record(JournalEvents.RelayClosed(status, TimeSpan.FromMinutes(3))));
+
+        var entry = Assert.Single(journal.Read(10, JournalContract.MaxTotalBytes).Entries);
+        Assert.Equal((JournalKind.RelayClosed, JournalFamily.RelayDrop, outcome, status, 180_000L), (entry.Kind, entry.Family, entry.Outcome, entry.Code, entry.DurationMs));
+        Assert.True(JournalContract.IsFit(entry));
+    }
 }

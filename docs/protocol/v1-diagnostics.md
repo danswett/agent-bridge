@@ -91,7 +91,18 @@ The counters say what is not shown, so a short list never reads as a quiet machi
   `rejectedMalformed`, `droppedOnLoad`, `loadFailed` and `persistFailures`.
 
 What the journal covers is only what its producers record into the host's own journal file. The
-Windows app's crash records go to the app's own journal file, which is not part of this snapshot.
+relay's connection is one producer (#737 S2). Each record is only an outcome, a code and a duration;
+never the relay's address, a token or an exception's message:
+
+| Kind | Outcome | Code | Duration |
+|---|---|---|---|
+| `RelayConnected` | `Ok` | none | How long the connect took |
+| `RelayConnectFailed` | `Refused` when the relay refused: the code is its close code, with no exception. `Cancelled` when the attempt was cancelled. `Failed` for any other error: no code, and the exception's type and frames only | The close code if refused | How long the attempt took |
+| `RelayClosed` | `Ok` for close status 1000, `Refused` for a status in 4000-4999, otherwise `Unavailable` | The relay's close status, or none | How long the connection was up |
+
+No new code is added, so `vectors/diagnostics.json` is unchanged.
+
+The Windows app's crash records go to the app's own journal file, which is not part of this snapshot.
 
 ## Bounds
 

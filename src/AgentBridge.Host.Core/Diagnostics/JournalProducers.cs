@@ -54,6 +54,31 @@ public static class JournalEvents
             : JournalContract.Draft(JournalKind.UnhandledException, JournalOutcome.Failed, version: version,
                 exception: new JournalException(JournalContract.Unrecognized, []));
 
+    // The relay connection (#737 S2): an outcome, a close code and a duration, never the relay's
+    // address, a token or an exception's message.
+    public static JournalEntry RelayConnected(TimeSpan connectTook, string? version = null) =>
+        JournalContract.Draft(JournalKind.RelayConnected, JournalOutcome.Ok, version: version, durationMs: Millis(connectTook));
+
+    // A refusal by the relay is its close code alone. Any other failure is its type and frames
+    // (ExceptionShape.Project), or only Cancelled when the attempt was cancelled.
+    public static JournalEntry RelayConnectFailed(Exception e, int? refusedCode, TimeSpan took, string? version = null)
+    {
+        ArgumentNullException.ThrowIfNull(e);
+        var duration = Millis(took);
+        if (refusedCode is not null) { return JournalContract.Draft(JournalKind.RelayConnectFailed, JournalOutcome.Refused, refusedCode, version, duration); }
+        if (e is OperationCanceledException) { return JournalContract.Draft(JournalKind.RelayConnectFailed, JournalOutcome.Cancelled, version: version, durationMs: duration); }
+        return JournalContract.Draft(JournalKind.RelayConnectFailed, JournalOutcome.Failed, version: version, durationMs: duration, exception: ExceptionShape.Project(e));
+    }
+
+    // An established connection ending: a normal close is Ok, a close code the relay chose
+    // (4000s) Refused, and anything else (none, or the transport's) Unavailable.
+    public static JournalEntry RelayClosed(int? closeCode, TimeSpan connectedFor, string? version = null) =>
+        JournalContract.Draft(JournalKind.RelayClosed,
+            closeCode switch { 1000 => JournalOutcome.Ok, >= 4000 and <= 4999 => JournalOutcome.Refused, _ => JournalOutcome.Unavailable },
+            closeCode, version, Millis(connectedFor));
+
+    static long Millis(TimeSpan t) => (long)t.TotalMilliseconds;
+
     // An assembly's release, as its informational version without build metadata; null when it
     // has none the journal can keep.
     public static string? Version(Assembly assembly)
