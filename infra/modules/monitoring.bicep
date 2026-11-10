@@ -21,9 +21,6 @@ param productionAppName string
 @description('Public hostname the availability test checks, the one devices use.')
 param productionHostname string
 
-@description('Log Analytics workspace that Application Insights writes into.')
-param workspaceId string
-
 param appInsightsName string
 
 @description('Monthly budget for the resource group, in the billing currency (USD).')
@@ -56,18 +53,10 @@ resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
   }
 }
 
-// Workspace-based, so its data counts against the workspace's daily cap. The test's results are
-// a few MB a day.
-resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
+// Declared in main.bicep (#1311), since the relay app needs its connection string. This refers to
+// the same resource, so it is not recreated.
+resource appInsights 'Microsoft.Insights/components@2020-02-02' existing = {
   name: appInsightsName
-  location: location
-  tags: tags
-  kind: 'web'
-  properties: {
-    Application_Type: 'web'
-    WorkspaceResourceId: workspaceId
-    IngestionMode: 'LogAnalytics'
-  }
 }
 
 // A-AVAIL: what a device sees, through DNS, the certificate and ingress. SSLCheck fails the test

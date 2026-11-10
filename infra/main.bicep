@@ -80,7 +80,7 @@ param operatorPrincipalId string = ''
 @secure()
 param alertEmail string = ''
 
-@description('Application Insights resource for production\'s availability test, and later its metrics (#569).')
+@description('Application Insights resource for production: its availability test and the relay\'s metrics export (#569). Declared in this file; empty: none.')
 param appInsightsName string = ''
 
 @description('Monthly budget for the resource group, in USD (owner, #568).')
@@ -165,6 +165,25 @@ resource deployersRead 'Microsoft.Authorization/roleAssignments@2022-04-01' = [f
   }
 }]
 
+// Production's Application Insights: the relay's meter exports here (#569) and monitoring.bicep's
+// availability test and alerts use it. Declared here, before the apps, because the app needs its
+// connection string and monitoring needs the app's hostname; declared in monitoring.bicep it
+// would be circular. Workspace-based, so its data counts against the workspace's daily cap
+// (logDailyCapGb); it has no cap of its own. Staging gets none, so staging exports nothing.
+var deployInsights = deployApps && deployProduction && !empty(appInsightsName)
+
+resource appInsights 'Microsoft.Insights/components@2020-02-02' = if (deployInsights) {
+  name: appInsightsName
+  location: location
+  tags: union(tags, { 'agent-bridge-env': 'production' })
+  kind: 'web'
+  properties: {
+    Application_Type: 'web'
+    WorkspaceResourceId: logs.id
+    IngestionMode: 'LogAnalytics'
+  }
+}
+
 // By id, not by symbol: the environment may be one this deployment leaves alone.
 var environmentId = resourceId('Microsoft.App/managedEnvironments', environmentName)
 var workloadProfileName = empty(workloadProfiles) ? '' : workloadProfiles[0].name
@@ -210,6 +229,7 @@ module productionApp 'modules/relay-app.bicep' = {
     domainState: productionDomainState
     extraDomainStates: productionExtraDomainStates
     operatorPrincipalId: operatorPrincipalId
+    appInsightsConnectionString: deployInsights ? appInsights!.properties.ConnectionString : ''
     tags: union(tags, { 'agent-bridge-env': 'production' })
   }
   dependsOn: [environment]
@@ -224,7 +244,6 @@ module monitoring 'modules/monitoring.bicep' = if (deployApps && deployProductio
     alertEmail: alertEmail
     productionAppName: production.name
     productionHostname: production.?customDomain ?? productionApp.outputs.fqdn
-    workspaceId: logs.id
     appInsightsName: appInsightsName
     budgetAmount: budgetAmount
     budgetStartDate: budgetStartDate
