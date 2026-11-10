@@ -453,6 +453,19 @@ public class SubagentTests
     }
 
     [Fact]
+    public async Task An_answered_form_is_never_listed_at_the_machine_while_a_delegates_permission_prompt_is_still_pending()
+    {
+        await using var s = new Live();
+        await s.After(Delegate("t1", "a1", 1));
+        await s.After(Copilot.User("ask me", 10), Copilot.ToolStart("own", "ask_user", Ask, 10),
+            Copilot.ToolStart("c9", "powershell", new { command = "gh pr checks" }, 11, "a1"), Copilot.Permission("r1", "c9", Copilot.Prompts["commands"], 11));
+
+        var answered = await s.After(Copilot.Answered("own", 12));
+
+        Assert.False(answered.Question is { Id: "own", AnswerAtMachine: true });
+    }
+
+    [Fact]
     public async Task Aborting_the_main_turn_ends_its_task_agents_but_not_one_a_background_agent_started()
     {
         await using var s = new Live();

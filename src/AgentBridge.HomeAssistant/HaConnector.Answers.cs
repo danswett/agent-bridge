@@ -183,7 +183,7 @@ public sealed partial class HaConnector
             // An answer that reached the terminal, or may have: nothing on the card is taken for it
             // again, and the card keeps saying to check the terminal rather than offering it afresh.
             if (p.Armed.Settled) { return; }
-            if (!p.Armed.Superseded) { log($"Home Assistant connector re-arming {p.Node}: its question now reads or is answered differently"); }
+            if (!p.Armed.Superseded) { log($"Home Assistant connector re-arming {p.Node}: its question now reads or is answered differently ({Listing(full, p.Armed)})"); }
             // Taken for nothing from now: the card may not be armed again on this pass (a channel
             // Home Assistant cannot read now), and a tap on what it said before is not an answer to
             // what it says now.
@@ -265,6 +265,17 @@ public sealed partial class HaConnector
         await CheckWindowAsync(p.Armed, p.Node, onScreen, ct);
         if (was is not null) { Again(was, p.Armed); }
         log($"Home Assistant connector armed {p.Node} for its question{(plan.TerminalOnly ? " (answered at the machine)" : "")}");
+    }
+
+    // What the host lists at a re-arm, with what the card was armed for, so a question that flips to
+    // answered-at-the-machine right after an answer (#1572) shows which pending entry or hold did it.
+    static string Listing(Session full, Armed was)
+    {
+        var q = full.Question!;
+        var waiting = full.Subagents?.Where(s => s.Status == SubagentStatus.Waiting).Select(s => s.Id).ToList() ?? [];
+        return $"was {(was.Plan.TerminalOnly ? "terminal-only" : "answerable")}, answers sent {was.Attempts}, settled {was.Settled}; "
+            + $"now {q.Kind} agent {q.Agent ?? "none"} at-machine {q.AnswerAtMachine == true} waiting {q.Waiting?.ToString() ?? "none"}; "
+            + $"session {full.Status}, waiting on {full.WaitingOn ?? "none"}, waiting sub-agents [{string.Join(",", waiting)}]";
     }
 
     // The same question armed for what it says now keeps what it has been through, as a re-arm does
