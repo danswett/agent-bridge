@@ -802,18 +802,18 @@ test.describe('when the question changes', () => {
 
 test('a card that moves to the top while you type keeps your place', async ({ page }) => {
   await openDemo(page);
-  // Cards move on an update only in Most recent; in your order they never do (#164).
+  // Cards move on a prompt, a finished turn, a question or a status change only in Most recent; in your order they never do (#164, #628).
   await page.locator('#session-sort').selectOption('recent');
   const q = await ask(page, { id: 'q-move', message: 'Notes?', fields: [{ name: 'n', title: 'Notes', type: 'text' }] });
   // Other sessions update, so this one is no longer first.
   for (const id of ['6f1c2b7e-claude-example', COPILOT]) {
-    await page.evaluate(({ id, t }) => { const d = window.agentBridgeDemo; d.upsert({ ...d.host.get(id), updatedAt: t }); }, { id, t: later() });
+    await page.evaluate(({ id, t }) => { const d = window.agentBridgeDemo; d.upsert({ ...d.host.get(id), updatedAt: t, activity: { ...d.host.get(id).activity, userMessage: 'Another prompt' } }); }, { id, t: later() });
   }
   await expect(page.locator('.session').first()).not.toHaveAttribute('data-id', CODEX);
   const box = q.getByRole('textbox', { name: 'Notes' });
   await box.click();
   await page.keyboard.type('abc');
-  await page.evaluate(({ id, t }) => { const d = window.agentBridgeDemo; d.upsert({ ...d.host.get(id), updatedAt: t, activity: { ...d.host.get(id).activity, response: 'Still waiting on you.' } }); }, { id: CODEX, t: new Date(Date.now() + 5000).toISOString() });
+  await page.evaluate(({ id, t }) => { const d = window.agentBridgeDemo; d.upsert({ ...d.host.get(id), updatedAt: t, activity: { ...d.host.get(id).activity, response: 'Still waiting on you.', userMessage: 'Nudge' } }); }, { id: CODEX, t: new Date(Date.now() + 5000).toISOString() });
   await expect(page.locator('.session').first()).toHaveAttribute('data-id', CODEX);
   await expect(box).toBeFocused();
   await page.keyboard.type('def');
