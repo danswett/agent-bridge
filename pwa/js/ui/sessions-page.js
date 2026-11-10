@@ -23,7 +23,7 @@ import { Capabilities } from '../protocol.js';
 import { AttachmentLimits } from '../attachments.js';
 import { maxPlain } from '../blobs.js';
 import { UNSUPPORTED_SESSIONS } from '../brand.js';
-import { SessionOrder, SORTS, SORT_LABELS } from '../session-order.js';
+import { SessionOrder, SORTS, SORT_LABELS, YOUR_ORDER_NAME } from '../session-order.js';
 import { NeedsYouLane } from './needs-you-view.js';
 import { SignInBanners } from './sign-in-view.js';
 import { AppBadge } from '../needs-you.js';
@@ -792,7 +792,7 @@ export class SessionsPage {
   // is Most recent and Your order can't be picked.
   #sortMenu(select) {
     if (!select) { return; }
-    select.replaceChildren(...SORTS.map((s) => h('option', { value: s, disabled: s === 'yours' && !this.order.usable ? true : null }, SORT_LABELS[s])));
+    select.replaceChildren(...SORTS.map((s) => h('option', { value: s, disabled: s === 'yours' && !this.order.usable ? true : null, 'aria-label': s === 'yours' ? YOUR_ORDER_NAME : null }, SORT_LABELS[s])));
     const show = () => {
       select.value = this.order.sort;
       select.options[0].disabled = !this.order.usable;

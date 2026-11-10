@@ -21,6 +21,8 @@ import { byActivity } from './sessions-store.js';
 const KEY = 'agent-bridge.app.order';
 export const SORTS = Object.freeze(['yours', 'recent', 'machine']);
 export const SORT_LABELS = Object.freeze({ yours: 'Your order', recent: 'Most recent', machine: 'Machine' });
+// Group 1 of the Sort menu before sync exists (session-order-roaming.md §2 rule 1): only this, named for what it is. The option's visible words stay short; its accessible name says where.
+export const YOUR_ORDER_NAME = 'Your order, on this device';
 // Rows remembered whose sessions aren't shown now (another machine's, one offline): enough for
 // every session of a few busy machines, and bounded so the record never grows without end.
 const MAX_KEYS = 300;

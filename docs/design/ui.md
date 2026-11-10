@@ -669,7 +669,7 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
 - **Pins:** a pinned row goes to the foot of Pinned, and an unpinned one to the top of
   its group, or of Sessions when it is in none. Pinning keeps a row's group: it shows in
   Pinned only, and comes back to its group when unpinned.
-- **Sort menu:** "Your order" (the default), "Most recent" and "Machine" (by machine name,
+- **Sort menu:** "Your order" (the default; its accessible name is "Your order, on this device", since nothing syncs it yet), "Most recent" and "Machine" (by machine name,
   then your order). It sorts within Pinned, within each group and within Sessions; the groups
   themselves stay in your order. Rows move only in Your order.
   Where the order can't be kept (storage blocked or full), the list is Most recent and Your
@@ -679,7 +679,10 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
   or out of view ends nothing. An ended session leaves its group for Ended, which is never
   grouped, and keeps its membership for a resume ("Groups", below).
 - **Unread:** a row whose session updated since the row was last open: the selected row (an
-  unfolded card in the PWA until #179 lands). A session seen for the first time starts read.
+  unfolded card in the PWA until #179 lands), once it has been open, visible and the window focused with its newest
+  main-agent message on screen for about a second (#1584). News arriving during that second restarts it;
+  reading never answers a Needs you question, and never re-sorts Most recent. A session seen for the first
+  time starts read.
 
 **Groups (#767).** *Decided by the owner on 2026-11-04 (#767): groups the person makes; their
 names and membership roam; collapsed or expanded is per device; a new group starts expanded.*
