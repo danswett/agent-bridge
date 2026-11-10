@@ -10,12 +10,15 @@ public sealed class RelayMetrics
     public const string MeterName = "AgentBridge.Relay";
     public static readonly IReadOnlySet<string> AllowedTags = new HashSet<string> { "kind", "outcome", "code", "site" };
 
-    readonly Histogram<double> forwardLatency, connectTime;
-    readonly Counter<long> connects, disconnects, refusals, frames, bytes, undeliverable, pushes, signIns, blobs, blobBytes, roster;
+    readonly Histogram<double> forwardLatency, connectTime, drainDuration;
+    readonly Counter<long> connects, disconnects, refusals, frames, bytes, undeliverable, pushes, signIns, blobs, blobBytes, roster, rateLimited;
 
-    public RelayMetrics(IMeterFactory factory, Func<int> online, Func<IEnumerable<(string Kind, string Site, int Count)>>? onlineByKind = null)
+    public RelayMetrics(IMeterFactory factory, Func<int> online, Func<IEnumerable<(string Kind, string Site, int Count)>>? onlineByKind = null, Func<bool>? draining = null)
     {
         var meter = factory.Create(MeterName);
+        meter.CreateObservableGauge("relay.draining", () => draining?.Invoke() == true ? 1 : 0, description: "1 while this replica is draining for shutdown, else 0");
+        drainDuration = meter.CreateHistogram<double>("relay.drain.duration", unit: "ms", description: "Time to tell every socket to reconnect when this replica drains");
+        rateLimited = meter.CreateCounter<long>("relay.ratelimited", description: "Requests and frames refused by a rate limit, by kind (auth, connect, frames)");
         meter.CreateObservableGauge("relay.connections", online, description: "Admitted sockets on this replica");
         meter.CreateObservableGauge("relay.sockets.live", () => (onlineByKind?.Invoke() ?? []).Select(k => new Measurement<int>(k.Count, new KeyValuePair<string, object?>("kind", k.Kind), new KeyValuePair<string, object?>("site", k.Site))), description: "Admitted sockets on this replica, by device kind and the configured hostname they arrived on (or other)");
         forwardLatency = meter.CreateHistogram<double>("relay.forward.latency", unit: "ms", description: "Data frame received to written to its target, by the sender's device kind");
@@ -40,8 +43,11 @@ public sealed class RelayMetrics
     public void ForwardLatency(string kind, TimeSpan elapsed) => forwardLatency.Record(elapsed.TotalMilliseconds, new KeyValuePair<string, object?>("kind", kind));
     public void ConnectTime(string kind, TimeSpan elapsed) => connectTime.Record(elapsed.TotalMilliseconds, new KeyValuePair<string, object?>("kind", kind));
     public void Undeliverable() => undeliverable.Add(1);
-    // Push outcomes: the HTTP status class from the push service, or the relay's refusal.
-    public void Pushed(PushGateway.Result r) => pushes.Add(1, new KeyValuePair<string, object?>("outcome", r.Error ?? (r.Status / 100) + "xx"));
+    public void RateLimited(string kind) => rateLimited.Add(1, new KeyValuePair<string, object?>("kind", kind));
+    public void Drained(TimeSpan elapsed) => drainDuration.Record(elapsed.TotalMilliseconds);
+    // Push outcomes: "gone" for 404 and 410 (the subscription is dead, which an alert wants apart
+    // from other 4xx), else the HTTP status class from the push service, or the relay's refusal.
+    public void Pushed(PushGateway.Result r) => pushes.Add(1, new KeyValuePair<string, object?>("outcome", r.Error ?? (r.Status is 404 or 410 ? "gone" : (r.Status / 100) + "xx")));
     public void SignedIn(string outcome) => signIns.Add(1, new KeyValuePair<string, object?>("outcome", outcome));
 
     public void Roster(string kind, string outcome) =>

@@ -10,6 +10,10 @@ namespace AgentBridge.Relay;
 // meter carries no ids (RelayMetrics.AllowedTags), so nothing exported identifies a person.
 public sealed class RelayTelemetry(string connectionString, ILogger<RelayTelemetry> log) : IHostedService
 {
+    // The runtime and Kestrel meters are built in to .NET and carry their own tags, outside
+    // RelayMetrics.AllowedTags; none of them carries an account, device or address.
+    public static readonly string[] MeterNames = [RelayMetrics.MeterName, "System.Runtime", "Microsoft.AspNetCore.Server.Kestrel"];
+
     MeterProvider? provider;
 
     public Task StartAsync(CancellationToken ct)
@@ -20,7 +24,7 @@ public sealed class RelayTelemetry(string connectionString, ILogger<RelayTelemet
         try
         {
             provider = Sdk.CreateMeterProviderBuilder()
-                .AddMeter(RelayMetrics.MeterName)
+                .AddMeter(MeterNames)
                 .AddAzureMonitorMetricExporter(o => o.ConnectionString = connectionString)
                 .Build();
         }

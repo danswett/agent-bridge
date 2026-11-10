@@ -47,7 +47,14 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
     public Task DrainAsync()
     {
         Draining = true;
-        return CloseAllAsync();
+        return TimedCloseAllAsync();
+    }
+
+    async Task TimedCloseAllAsync()
+    {
+        var start = Stopwatch.GetTimestamp();
+        try { await CloseAllAsync(); }
+        finally { metrics.Drained(Stopwatch.GetElapsedTime(start)); }
     }
 
     // Confirm removals from storage, explicit forgets, or admission's roster cap. Existing
@@ -263,6 +270,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
                 // blob store for a URL (Blobs.cs). Each counts against the frame rate.
                 if (!WithinRate(conn))
                 {
+                    metrics.RateLimited("frames");
                     await CloseAndDrainAsync(conn, CloseCodes.RateLimited, "rate-limited");
                     return "rate limited";
                 }
@@ -329,6 +337,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             if (type != WebSocketMessageType.Binary) { continue; }
             if (!WithinRate(conn))
             {
+                metrics.RateLimited("frames");
                 await CloseAndDrainAsync(conn, CloseCodes.RateLimited, "rate-limited");
                 return "rate limited";
             }

@@ -49,7 +49,7 @@ public static class RelayApp
         builder.Services.AddHostedService<StatsWriter>();
         var insights = options.ApplicationInsightsConnectionString ?? builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
         if (!string.IsNullOrWhiteSpace(insights)) { builder.Services.AddSingleton<IHostedService>(sp => new RelayTelemetry(insights, sp.GetRequiredService<ILogger<RelayTelemetry>>())); }
-        builder.Services.AddSingleton(sp => new RelayMetrics(sp.GetRequiredService<System.Diagnostics.Metrics.IMeterFactory>(), () => Volatile.Read(ref theHub)?.Online ?? 0, () => Volatile.Read(ref theHub)?.OnlineByKind() ?? []));
+        builder.Services.AddSingleton(sp => new RelayMetrics(sp.GetRequiredService<System.Diagnostics.Metrics.IMeterFactory>(), () => Volatile.Read(ref theHub)?.Online ?? 0, () => Volatile.Read(ref theHub)?.OnlineByKind() ?? [], () => Volatile.Read(ref theHub)?.Draining ?? false));
         var devicesStore = DeviceRoster.CreateStore(options.Roster);
         builder.Services.AddSingleton(sp => new DeviceRoster(options, sp.GetRequiredService<RelayMetrics>(), sp.GetRequiredService<ILogger<DeviceRoster>>(), devicesStore));
         // The slim builder's console logger stays on the simple formatter whatever the configuration
@@ -95,6 +95,13 @@ public static class RelayApp
         builder.Services.AddRateLimiter(o =>
         {
             o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+            o.OnRejected = (ctx, _) =>
+            {
+                // The policy name is one of our two fixed names, never request text.
+                var policy = ctx.HttpContext.GetEndpoint()?.Metadata.GetMetadata<Microsoft.AspNetCore.RateLimiting.EnableRateLimitingAttribute>()?.PolicyName;
+                ctx.HttpContext.RequestServices.GetRequiredService<RelayMetrics>().RateLimited(policy == "connect" ? "connect" : "auth");
+                return ValueTask.CompletedTask;
+            };
             o.AddPolicy("auth", ctx => RateLimitPartition.GetFixedWindowLimiter(
                 ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
                 _ => new FixedWindowRateLimiterOptions { PermitLimit = 60, Window = TimeSpan.FromMinutes(1) }));
