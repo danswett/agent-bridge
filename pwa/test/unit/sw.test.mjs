@@ -440,3 +440,10 @@ test('a tap brings an open app forward and tells it where to go, keeping its con
   await sw.fire('notificationclick', tapped({ url: 'https://evil.example/' }));
   assert.equal(messages[1].url, scope);
 });
+
+test('version.json is always asked of the network, even when a release has kept a copy', async () => {
+  const sw = cachingWorker({ [CURRENT]: { [`${scope}version.json`]: 'stale' } });
+  assert.equal((await sw.get(`${scope}version.json`)).body, 'network');
+  assert.deepEqual(plain(sw.fetched), [{ input: `${scope}version.json`, init: { cache: 'no-cache', credentials: 'same-origin' } }]);
+  assert.equal(sw.kept(CURRENT)[`${scope}version.json`], 'stale', 'and never kept');
+});

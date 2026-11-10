@@ -1567,10 +1567,12 @@ summary {
 .end-session .resend { margin-bottom: 6px; }
 
 /* ---- settings ---- */
-.notify h3, .text-size h3, .account h3, .key-check h3 { margin: 0 0 var(--ab-space-2); font-size: var(--type-section); line-height: var(--type-section-line); font-weight: 600; color: var(--ab-text2); }
+.notify h3, .text-size h3, .account h3, .key-check h3, .release h3 { margin: 0 0 var(--ab-space-2); font-size: var(--type-section); line-height: var(--type-section-line); font-weight: 600; color: var(--ab-text2); }
 .account p { margin: 0; color: var(--ab-text2); overflow-wrap: anywhere; }
 .segmented { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; max-width: 360px; }
 /* Keyboard check (#1209): a practice box that takes focus as a row does, and the keys as typed. */
+.release-line { margin: 0; }
+.release-id { font: 600 1rem var(--ab-font-mono); -webkit-user-select: all; user-select: all; color: var(--ab-text); }
 .key-check-box {
   display: inline-flex; align-items: center; min-height: var(--tap); padding: 0 12px;
   border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card); color: var(--ab-text);
@@ -1578,7 +1580,9 @@ summary {
 .key-check-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
 .key-check-entry { font: .86rem var(--ab-font-mono); overflow-wrap: anywhere; color: var(--ab-text); }
 @media (forced-colors: active) {
-  .key-check-box { border-color: CanvasText; }
+  .release-line { margin: 0; }
+.release-id { font: 600 1rem var(--ab-font-mono); -webkit-user-select: all; user-select: all; color: var(--ab-text); }
+.key-check-box { border-color: CanvasText; }
 }
 
 /* ---- motion (ui.md §5.3) ----

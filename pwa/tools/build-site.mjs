@@ -50,6 +50,15 @@ function feedbackConfiguration(keyId, publicKey) {
   return { keyId, publicKey };
 }
 
+// The build's time, from the commit's committer date: written to config.js and version.json for
+// Settings to show. An ISO time with a zone, or nothing (a local build, shown as dev).
+export function builtAt(value) {
+  if (!value) { return ''; }
+  const when = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:\d\d)$/.test(value) ? new Date(value) : null;
+  if (!when || Number.isNaN(when.getTime())) { throw new Error(`--built-at must be an ISO time with a zone like 2026-11-07T12:30:00-08:00, not ${value}`); }
+  return when.toISOString();
+}
+
 export function contentSecurityPolicy(relay, blobOrigins = []) {
   const origin = relayOrigin(relay);
   // 'self' does not cover WebSockets in every Safari, so the socket origin is named too.
@@ -83,9 +92,10 @@ export function copyFonts(out, repo = path.dirname(appRoot)) {
   return copied;
 }
 
-export function buildSite({ out, relay = '', blobOrigins = [], version = 'dev', feedbackKeyId = '', feedbackPublicKey = '', root = appRoot }) {
+export function buildSite({ out, relay = '', blobOrigins = [], version = 'dev', builtAt: stamp = '', feedbackKeyId = '', feedbackPublicKey = '', root = appRoot }) {
   const origin = relayOrigin(relay);
   const feedback = feedbackConfiguration(feedbackKeyId, feedbackPublicKey);
+  const built = builtAt(stamp);
   if (typeof version !== 'string' || !version || version.length > 128) { throw new Error('--version must be 1-128 characters'); }
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
@@ -94,10 +104,13 @@ export function buildSite({ out, relay = '', blobOrigins = [], version = 'dev', 
   writeFileSync(path.join(out, 'config.js'), [
     `export const RELAY = ${JSON.stringify(origin)};`,
     `export const APP_VERSION = ${JSON.stringify(version)};`,
+    `export const BUILT_AT = ${JSON.stringify(built)};`,
     `export const FEEDBACK_KEY_ID = ${JSON.stringify(feedback.keyId)};`,
     `export const FEEDBACK_PUBLIC_KEY = ${JSON.stringify(feedback.publicKey)};`,
     '',
   ].join('\n'));
+  // Read by people and tools; sw.js answers it from the network only and never keeps it.
+  writeFileSync(path.join(out, 'version.json'), `${JSON.stringify({ version, builtAt: built })}\n`);
   const index = path.join(out, 'index.html');
   const html = readFileSync(index, 'utf8');
   const marker = '<meta charset="utf-8">';
@@ -123,7 +136,10 @@ export function shellFiles(source) {
 const isFile = (p) => { try { return statSync(p).isFile(); } catch { return false; } };
 
 function checkShell(out) {
-  const missing = shellFiles(readFileSync(path.join(out, 'sw.js'), 'utf8')).filter((f) => !isFile(path.join(out, f || 'index.html')));
+  const listed = shellFiles(readFileSync(path.join(out, 'sw.js'), 'utf8'));
+  // A kept copy would show the release that installed, never the one now published.
+  if (listed.includes('version.json')) { throw new Error('sw.js keeps version.json in its shell, so it could never tell a newer release: it must be fetched from the network only'); }
+  const missing = listed.filter((f) => !isFile(path.join(out, f || 'index.html')));
   if (missing.length) { throw new Error(`sw.js keeps files the site lacks, so no release could install: ${missing.join(', ')}`); }
 }
 
@@ -217,12 +233,13 @@ function stampWorker(out) {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const arg = (name) => { const k = process.argv.indexOf(name); return k > 0 ? process.argv[k + 1] : undefined; };
   const out = arg('--out');
-  if (!out) { console.error('usage: build-site.mjs --out <dir> [--relay <origin>] [--blob-origin <origin>] [--version <id>] [--feedback-key-id <id> --feedback-public-key <base64url>]'); process.exit(2); }
+  if (!out) { console.error('usage: build-site.mjs --out <dir> [--relay <origin>] [--blob-origin <origin>] [--version <id>] [--built-at <ISO time>] [--feedback-key-id <id> --feedback-public-key <base64url>]'); process.exit(2); }
   buildSite({
     out: path.resolve(out),
     relay: arg('--relay') ?? '',
     blobOrigins: arg('--blob-origin') ? [arg('--blob-origin')] : [],
     version: arg('--version') ?? 'dev',
+    builtAt: arg('--built-at') ?? '',
     feedbackKeyId: arg('--feedback-key-id') ?? '',
     feedbackPublicKey: arg('--feedback-public-key') ?? '',
   });

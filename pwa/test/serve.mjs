@@ -38,7 +38,7 @@ export function startStaticServer({ dir, port = 0, prefix = APP_PATH }) {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const arg = (name) => { const k = process.argv.indexOf(name); return k > 0 ? process.argv[k + 1] : undefined; };
   const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-  const dir = buildSite({ out: path.join(root, '.site', 'demo'), relay: arg('--relay') ?? '' });
+  const dir = buildSite({ out: path.join(root, '.site', 'demo'), relay: arg('--relay') ?? '', version: '64a4019c0ffee0123456789abcdef0123456789a', builtAt: '2026-11-07T20:15:00Z' });
   const server = await startStaticServer({ dir, port: Number(arg('--port') ?? 8790) });
   console.log(`serving ${dir} at http://127.0.0.1:${server.address().port}${APP_PATH}`);
 }
