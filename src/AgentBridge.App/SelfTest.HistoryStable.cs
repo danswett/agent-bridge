@@ -113,7 +113,7 @@ static partial class SelfTest
         }
         check(cue is { Visibility: Visibility.Visible } && question is { Visibility: Visibility.Visible } && !overlap && Math.Abs(scroll.VerticalOffset - middle) < 0.5,
             $"shows the cue and the question bar together, neither covered, offset kept ({cue?.Visibility}, {question?.Visibility}, overlap {overlap}; {Step("cue with question")})");
-        card.Update(card.Session with { Question = null });
+        card.Update(session);
 
         // 6 and 10: a reply growing by 20 text updates is the same row element throughout; scrolled back nothing moves, at the bottom it follows.
         var list = ById<ListView>(view, "Conversation");
@@ -148,5 +148,7 @@ static partial class SelfTest
         var low = await Grow(atBottom: true);
         check(low.same && low.followed, $"a growing reply keeps its row element and the view follows it at the bottom (same row {low.same}, followed {low.followed})");
         check(ReferenceEquals(selectedBefore, window.Sessions.Rows.SelectedItem), "keeps the selected session while a reply grows");
+        // The demo's card is shared with the checks after this one.
+        card.Update(session);
     }
 }
