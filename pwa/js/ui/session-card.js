@@ -851,6 +851,14 @@ export class SessionCard {
     e.user.hidden = !s.activity.userMessage;
     e.userText.textContent = s.activity.userMessage ?? '';
     this.#renderPrompt(s);
+    // A prompt sent mid-turn is the latest turn's, but the words still being written answer an
+    // earlier one (responseTurn, protocol v1-history): it stays below them, by time sent, until the
+    // agent starts answering it (#1613).
+    const { turn, responseTurn } = s.activity;
+    const sentLater = !!turn && !!responseTurn && turn !== responseTurn && !e.agentBlock.hidden;
+    if (sentLater !== (e.agentBlock.nextElementSibling === e.user)) {
+      if (sentLater) { e.agentBlock.after(e.user, e.prompt); } else { e.stream.prepend(e.user, e.prompt); }
+    }
     // Send acknowledged (ui.md §5.3): your message, back from the machine, rises into place; a
     // prompt you didn't type is no bubble of yours and never rises.
     if (!first && echoed && !e.user.hidden) { enter(e.user, 'acknowledge', { dy: 1 }); }
