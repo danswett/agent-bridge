@@ -518,6 +518,7 @@ suites:
     select: affected
     # Publish, pack, release-vs-dev host identity, the published app's self-test, the
     # installer's silent per-user install and the installed copy's self-test, publish dry run.
+    # The installer half runs in the parallel app-installer job, on its own pack of the same commit.
     platforms: [win-x64, win-arm64]
     runner: hosted
     # What the app's build takes in from outside src/ (the protocol's example sessions, embedded
@@ -527,8 +528,8 @@ suites:
     # projects pack-app.ps1 publishes, and the packaging inputs are. app-package-host adds the
     # host's own closure.
     triggers: [src/AgentBridge.App/**, src/AgentBridge.HostLauncher/**, src/AgentBridge.Injector/**, src/AgentBridge.Hook/**, build/pack-app.ps1, build/app-*.ps1, build/host-identity.ps1, build/publish-prerelease.ps1, build/release-notes.ps1, build/notices/**, LICENSE, design/**]
-    command: see ci.yml app job
-    where: ci.yml app
+    command: see ci.yml app and app-installer jobs
+    where: ci.yml app, app-installer
     status: exists
 
   - id: app-package-host
@@ -540,8 +541,8 @@ suites:
     platforms: [win-x64, win-arm64]
     runner: hosted
     builds: src/AgentBridge.Host
-    command: see ci.yml app job
-    where: ci.yml app
+    command: see ci.yml app and app-installer jobs
+    where: ci.yml app, app-installer
     status: exists
 
   - id: app-publish

@@ -108,7 +108,7 @@ if ($ring1) {
     $packagingEdited = @($edited | Where-Object { $_ -eq '.github/workflows/ci.yml' -or $_ -like '.github/actions/install-trivy/*' }).Count -gt 0
 }
 function Test-OwnReason([string] $job) {
-    if ($packagingEdited -and $job -eq 'app') { return $true }
+    if ($packagingEdited -and $job -in 'app', 'app-installer') { return $true }
     $own = @($ring1Ci[$job] ?? @())
     @($ring1.suites | Where-Object { $_.id -in $own -and @($_.reasons | Where-Object { -not (Test-NotOwn $_.rule) }).Count -gt 0 }).Count -gt 0
 }

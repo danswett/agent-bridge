@@ -82,6 +82,7 @@ jobs:
       spikes: ${{ steps.select.outputs.spikes }}
       spikes-linux: ${{ steps.select.outputs.spikes-linux }}
       app: ${{ steps.select.outputs.app }}
+      app-installer: ${{ steps.select.outputs.app-installer }}
       light: ${{ steps.select.outputs.light }}
       pwa-ui: ${{ steps.select.outputs.pwa-ui }}
       pwa-e2e: ${{ steps.select.outputs.pwa-e2e }}
@@ -212,7 +213,7 @@ jobs:
           # The jobs gated below; plan.ps1 gives each a true or false output. The catalog check
           # fails when this list, the jobs whose if: reads the plan, the plan's outputs and
           # quality-gate's needs disagree (quality/README.md §4.7).
-          JOBS: product ha-integration spikes spikes-linux app light pwa-ui pwa-e2e
+          JOBS: product ha-integration spikes spikes-linux app app-installer light pwa-ui pwa-e2e
         run: |
           $jobs = @($env:JOBS -split '\s+' | Where-Object { $_ })
           if ($env:EVENT -eq 'pull_request' -and $env:DRAFT -eq 'true') {
@@ -674,7 +675,7 @@ jobs:
     # is published or signed: `app` stays the job whose package ships.
     name: app-installer (${{ matrix.runtime }})
     needs: plan
-    if: (needs.plan.outputs.whole-ring == 'true' && github.event_name != 'pull_request') || needs.plan.outputs.app == 'true'
+    if: (needs.plan.outputs.whole-ring == 'true' && github.event_name != 'pull_request') || needs.plan.outputs.app-installer == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -1582,7 +1583,7 @@ jobs:
           missing=$(echo "$NEEDS" | jq -r --arg ev "$EVENT" '
             (.plan.outputs // {}) as $plan
             | ($plan["whole-ring"] == "true") as $all
-            | [to_entries[] | select(.key == "plan" or ($all and (.key != "app" or $ev != "pull_request")) or $plan[.key] == "true")
+            | [to_entries[] | select(.key == "plan" or ($all and ((.key != "app" and .key != "app-installer") or $ev != "pull_request")) or $plan[.key] == "true")
                 | select(.value.result != "success") | "\(.key) (\(.value.result))"]
             | join(", ")')
           if [ -n "$missing" ]; then
