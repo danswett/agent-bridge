@@ -1955,6 +1955,211 @@ machine, online ones first, then the account's offline machines (#213):
   - **Refused or unreadable:** one line in the row's error style, in the person's words
     (v1-diagnostics.md "In the clients"), never the host's text; Diagnose stays pressable.
 
+    #### 6.6.1 The machine tile (#1147; accepted by Product 2026-11-10)
+
+    The same tile, sections and words on the phone and iPad PWA, the Windows app and, later, the Apple
+    apps (#260). Health, relief and every figure come from the host; a client never works one out.
+    Counts, sizes and labels only: no session content, no paths, arguments or prompts.
+
+    1. **Five sections, fixed order, on every endpoint:** Header, Health, Can run, Running, Actions.
+       Under them, unchanged: updates, Update now, who can sign Copilot in, Diagnose, Forget. A section
+       whose data the host does not report yet is shown as its "not reported" form below, never
+       removed to make room for another and never filled with a guess.
+    2. **Header (as §6.6 above).** Icon, name, trailing state; line 2 "N sessions · version", or "View
+       only" or "Discovery held" in the version's place. Nothing else moves into it.
+    3. **Health.** One word with a shape-distinct icon, never colour alone: "Healthy", "Tight",
+       "Full", or "Not measured yet" when the host reports none. The word is the host's; two clients
+       showing one machine show one word.
+       - Under it, one line of the host's figures: "CPU 38% · 9.1 GB free of 32 GB", and the age,
+         "Updated 12 s ago" (the #1619 formatter). A figure the host did not send is left out of the
+         line, never shown as 0 (unknown is not zero).
+       - The host's measurement state is shown in words when it is not fresh: "Partial · 4 of 6
+         sessions measured", "Last measured 4 min ago" (figures greyed), or "Can't be measured on this
+         machine". The client never decides a figure is stale from a timer; sampling is event-driven.
+       - **Tight or Full only:** the three heaviest sessions by title, each "612 MB · 11 processes"
+         (the host's working-set sum, labelled "memory in use", not unique RAM). Fewer than three: show
+         those; none: "No session to pause." and no Relieve (rule 7).
+       - A change of the Health word is announced once, politely; refreshed figures are not announced.
+    4. **Can run.** Collapsed line "2 agents · 6 models". Open: each agent with its models, efforts and
+       contexts exactly as the host lists them. Not reported: the section is hidden.
+    5. **Running.** Collapsed line with counts by state, "3 working · 5 idle · 1 needs you", zero
+       counts left out. Open: one session row per session (the §5.1 row: title, state; line 2 "model ·
+       effort · context"), the first five, then "Show all N" in place. Not reported: the count from
+       line 2 only. "Needs you" rows open the session as in the lane (§6.1).
+    6. **Launch here.** In Actions when the machine is Online and not View only. Opens the New
+       session flow with this machine chosen. Offline, View only and "Discovery held" hide it, and a
+       line says why in text, not only a tooltip.
+    7. **Relieve.** Shown only when Health is Tight or Full and a session can be paused. It is always a
+       person's tap and never automatic. It pauses the single heaviest session by the host's memory
+       figure, and never stops one.
+       - The confirmation names the session by title only: "Pause *title*? It resumes when you press
+         Resume." with **Pause** and **Cancel**, focus on Cancel (as Update now).
+       - Where the host cannot pause an agent in a way that frees memory, Relieve is not shown for that
+         machine and the line reads "Can't pause *agent* here." It does not turn into a stop.
+       - After a pause the session's row says "Paused" with **Resume**; the tile's Health word changes
+         only when the host's next figures say so.
+    8. **Move here / away (#1146).** A reserved place after Relieve, shown only once the host offers
+       it (see §6.6.2). Until then nothing is shown and no space is kept.
+    9. **The page.** One line heads the list: "5 machines · 4 online · 1 tight", text only. The
+       "All machines" row does not exist: it is a filter on the Sessions page, not a machine. The
+       machine rows stay online first, then offline (§6.6).
+    10. **Phone, and any width under 900 px.** One column. Header, Health and Actions always show. Can
+        run and Running are disclosure rows: real buttons, `aria-expanded`, closed by default; a
+        machine's open state is kept while the page is shown, and is not saved. A tablet in portrait
+        uses this layout, centred, at most 640 px wide.
+    11. **900 px and wider (iPad landscape, the Windows app, a browser):** the machine list on the left,
+        its rows as above plus the Health word on line 2; the selected machine's tile on the right with
+        Can run and Running open, in two columns. With none selected, the first machine is. The right
+        pane takes the width the rows do not use.
+    12. **Offline.** Header and Forget only; Health reads "Offline · last seen *time*". No earlier
+        figures are shown as current. A machine whose bridge isn't running keeps §6.14's words, with
+        Health hidden.
+    13. **No sessions:** Running reads "No sessions running", and Launch here shows.
+    14. **Loading and refresh.** The tile frame and every section's fixed-height place show at once;
+        nothing pops in (#659). A refresh changes text only, never a section's height, and does not move
+        the person's scroll position or focus.
+    15. **Accessibility.** Each tile is a region named by the machine. Disclosure rows and actions are
+        buttons with accessible names ("Running, 9 sessions, collapsed"). Tab order: Header, Health,
+        Can run, Running, Actions; the Windows app gives each section a UIA name. Text scales to 200%
+        with no clipping; in high contrast every word and icon uses system colours; touch targets are at
+        least 44 px.
+
+    **Tests (each fails without the change):** the Health word and icon for each of the four states in
+    all three colour modes; a missing figure is omitted, not "0"; Tight with 0, 1 and 3 or more
+    sessions; Relieve hidden when Healthy, Not measured, View only and Offline; Relieve confirmation
+    names only the title and focuses Cancel; Cancel and Escape change nothing; "All machines" absent;
+    900 px layout switch at 899 and 900; disclosure state per machine; no height change on refresh;
+    UIA names and tab order in the Windows app; the same host record gives the same words on the PWA
+    and the Windows app.
+
+#### 6.6.2 Moving a session to another machine (#1146; draft, written against the epic as filed)
+
+Owner decision (2026-11-10, #1146): v1 is a **handoff, then a fork/resume on another machine**. The
+old session is told to hand off; its transcript and artifacts are sent to the other machine; a new
+session starts there. Forking a session that has ended is allowed. Moving a session that is running
+live is a later phase, not in v1. The main use is relieving an overloaded machine (§6.6.1, #165,
+#1144), so the dialog is also opened from a Tight or Full tile. Move duration is measured per step
+(rule 12); the person sees the same steps.
+
+Status: the epic's slices are not started. Everything marked **Open (Engineering)** is a question the
+host must answer before a builder starts; where the answer is "no", the rule beside it says what the
+person sees instead. Nothing here changes a protocol or sends session content anywhere new.
+
+1. **Where it starts.** A session's menu (long-press on a phone, right-click or the menu key on
+   Windows and a browser) has **Continue on another machine…**, shown only on a session that can be
+   moved (rule 6). It is never on a tile's Actions until rule 8 of §6.6.1 is switched on, and then
+   only as the same dialog opened from the heaviest session of a Tight or Full machine.
+2. **The dialog.** A sheet on a phone, a centred dialog at 900 px and wider. Title: "Continue
+   *session title* on…". One row per machine, in §6.6 order, each a radio with the machine name,
+   its Health word, and one line: "Ready" or the reason it can't be chosen ("No *agent*", "No
+   *workspace* here", "Offline", "View only", "Can't take more"). A machine that can't be chosen
+   is shown, dimmed, not hidden, so the person sees why. The current machine is not listed. The
+   recommended machine (lowest load that can take it, #1144) is first and marked "Suggested"; the
+   person's pick always wins. Buttons: **Continue** (disabled until a ready machine is chosen) and
+   **Cancel**, focus on the first ready machine.
+3. **What it says it will do.** Under the list, one plain sentence that is true for the chosen
+   machine: "A copy of the conversation and its files start on *machine*. This one is marked moved
+   and stops taking answers." If the files can't be sent (Open (Engineering): size or type limits),
+   the machine reads "Can't carry its files", is not choosable, and nothing is lost.
+4. **Starting and cancelling.** **Continue** closes the dialog at once and the person lands on the
+   session being moved (rule 13), where the progress lives; nothing is shown only in the dialog.
+   Cancel is on the session's move strip until step 4 starts; after that the strip reads "Starting;
+   this can't be cancelled" and Cancel is off. A move is all or nothing: the old session is marked
+   moved only after step 5. A step that takes over 60 s says "Still working" and keeps going; it
+   never ends silently.
+   The five steps, in order, each with a state (waiting, working, done, failed) as text plus an icon,
+   never colour alone: 1 "Hand-off requested", 2 "Hand-off confirmed", 3 "Files sent to *machine*",
+   4 "New session launched", 5 "New session online". The working step shows its elapsed time
+   ("12 s").
+   On success the strip says "Moved to *machine*" (rule 5) and the new session shows "Moved from
+   *machine*. *time*." The five steps and their durations stay in each session's details.
+5. **The old session.** Its row and conversation say "Moved to *machine*" with a **Go to it**
+   button. It takes no answers and no Send; a question card still showing on it is replaced by that
+   line. It leaves Needs you at once. It follows the usual retention.
+6. **Which sessions can move (v1).** A session that is idle or has ended (including one that has
+   ended) is offered. A session that is working right now is not: its item is dimmed with "Wait for
+   it to finish a turn". A session waiting on a question can't move ("Answer or dismiss the question
+   first"). A session whose agent has no resume is not offered, with "*Agent* can't continue
+   elsewhere". Because the new session is a fork, the dialog says so: "This starts a copy there; the
+   original stays here, marked moved." Moving a session that is mid-turn is a later phase and has no
+   v1 control. Open (Engineering): per agent, what a hand-off can carry.
+7. **Who may.** Only a person who may answer the session. The target applies the same owner
+   re-admission as any resume (#912); if it asks, the dialog says "Sign in on *machine* to
+   continue" and keeps its place. A person with View only sees no menu item.
+8. **Cost and model.** The model and context shown on the target are the ones #1142 offers there.
+   If the session's model is not offered on the target, the dialog says so on that row ("Uses
+   *model* instead") before Continue, and never switches silently.
+9. **The record.** The new session's details show "Moved from *machine*, *time*" and the audit line
+   (who, from, to, when). No session text appears in the record.
+10. **Per endpoint.** Phone and iPad portrait: bottom sheet, rows at least 44 px, whole row
+    tappable. Windows and browser: dialog with arrow keys moving the radio, Enter on Continue, Escape
+    cancels. The Windows app exposes the dialog with a name, each row's reason in its UIA help text,
+    and announces the result once, politely. Reduced motion: no slide. Text scales to 200%.
+    High contrast uses system colours.
+11. **Refusals, in words.** Every refusal is a sentence naming the machine and the one thing to do;
+    never a code. Two moves of the same session at once: the second reads "Already moving".
+12. **Timings.** Each move records the time of each of the five steps (asked to hand off, hand-off
+    confirmed, files sent, new session launched, new session confirmed online) and the total, with
+    the machines and agent, no session text. The details show the durations; Engineering owns the
+    telemetry name and where it goes. A step with no time reads "–", not 0 s.
+13. **The move strip, on the session itself (#1146).** While a move runs, and until it succeeds or
+    the person closes a failure, the session being moved carries a **move strip** directly under
+    its title row, above the conversation. It is part of the page, not a toast or a dialog, and
+    survives leaving and returning to the session, a reload, and a different device opening it.
+    - **Head line:** "Moving from *source* to *target*" (machine names, in full, wrapping; never
+      truncated to hide a name). The session's row in the list shows "Moving to *target*" as its
+      status line and a Working-style indicator; it does not leave Needs you until step 5.
+    - **The five steps,** as in rule 4, as a vertical list with a step number, its words, its state
+      word and its elapsed or final time ("done · 3 s"). Steps not yet reached read "waiting".
+      The strip's height is the same for every state, so nothing below it moves; on a phone it is
+      collapsed by default to the head line and the current step ("Step 3 of 5: Files sent to
+      *target*"), a real button with `aria-expanded` that opens the list.
+    - **Failure:** the failed step shows "failed" with an error icon and, directly under it, one plain
+      sentence naming the machine and what to do ("*Target* is offline. Pick another machine or try
+      again when it is back."); never a code. Steps after it read "not started". The head line reads
+      "Move to *target* didn't finish". **Try again** (restarts at the failed step where the host
+      can, otherwise from step 1) and **Choose another machine** and **Close** are buttons. Close
+      removes the strip; the session stays as it was.
+    - **Answerable again after a failure:** the original is untouched and takes Send, answers and cards
+      again as soon as a step fails or the move is cancelled. During a move, Open (Engineering):
+      whether an answer given during steps 1 to 3 can be lost. Until answered, Send is disabled from
+      step 1 with "Hand-off in progress", and the strip says so in one line.
+    - **On the target:** when step 4 completes the target's session list shows the new session as
+      "Starting, moved from *source*" in the same strip form (steps 4 and 5 working); it can't be
+      answered until step 5, then shows rule 5's banner. A person who opens the new session before
+      step 5 sees the same strip.
+    - **Announcement:** a step change is announced once, politely ("Hand-off confirmed"); a failure is
+      announced assertively, once. Nothing repeats on a refresh.
+    - **Endpoints:** phone and iPad portrait: the strip is full width and the step list opens
+      in place; 44 px targets. 900 px and wider (iPad landscape, browser, Windows app): the strip is
+      full width above the conversation with the five steps in a single row when there is room
+      (number, words, state), wrapping to the list below 700 px. Windows app: the strip is a region
+      named "Moving from *source* to *target*"; each step has a UIA name with its state; focus never
+      moves unasked. Reduced motion: no animation beyond the working indicator, which is static
+      text "working" plus a still icon. High contrast uses system colours; text scales to 200%.
+    - **When a person returns:** a move that finished while the person was away shows the success line
+      once and a failure stays until closed.
+
+**Open (Engineering):** (a) which agents can resume on another machine and what state moves for each
+(slice 1, the parity audit); (b) how the transcript and artifacts reach the target, and the size
+at which a step is slow; (c) whether the host can say "can't take more" before a move starts;
+(d) whether the old session can be marked moved atomically once the new one is confirmed;
+(e) which host events give each of the five step times.
+
+**Tests (each fails without the change):** only machines with the agent and workspace are
+choosable, the rest dimmed with their reason; the current machine isn't listed; Continue is disabled
+until a ready machine is chosen; the suggested machine is first and the pick overrides it; failure
+leaves the old session answerable and unchanged with the failed step marked; the five steps show in
+order with elapsed time and no height change; Cancel is off from step 4; an ended session can be moved;
+the move strip is under the title, survives a reload and another device, names source and target in
+full, collapses to "Step n of 5" on a phone, shows the failed step with its reason and the later steps
+"not started", Try again and Choose another machine work, Close leaves the session as it was; Send
+is off from step 1 until success or failure; target shows "Starting, moved from" until step 5;
+a working session can't; success marks it moved only after step 5; durations recorded per step;
+the moved session takes no answer or Send and leaves Needs you; a session with a question open can't
+move; View only sees no item; a different model on the target is stated before Continue; the same
+words on the PWA and the Windows app; 44 px targets; UIA names; Escape cancels.
+
 ### 6.7 Collaborators (#519)
 
 A collaborator is another GitHub account linked to yours (`agent-principals.md`, #522). Their
