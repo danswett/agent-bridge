@@ -45,6 +45,8 @@ public static class RelayApp
         var rosterStore = MachineRoster.CreateStore(options.Roster);
         builder.Services.AddSingleton(sp => new MachineRoster(options, sp.GetRequiredService<RelayMetrics>(), sp.GetRequiredService<ILogger<MachineRoster>>(), rosterStore));
         builder.Services.AddHostedService<RosterWriter>();
+        builder.Services.AddSingleton<HourlyStats>();
+        builder.Services.AddHostedService<StatsWriter>();
         var insights = options.ApplicationInsightsConnectionString ?? builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
         if (!string.IsNullOrWhiteSpace(insights)) { builder.Services.AddSingleton<IHostedService>(sp => new RelayTelemetry(insights, sp.GetRequiredService<ILogger<RelayTelemetry>>())); }
         builder.Services.AddSingleton(sp => new RelayMetrics(sp.GetRequiredService<System.Diagnostics.Metrics.IMeterFactory>(), () => Volatile.Read(ref theHub)?.Online ?? 0, () => Volatile.Read(ref theHub)?.OnlineByKind() ?? []));
@@ -112,6 +114,17 @@ public static class RelayApp
 
         var app = builder.Build();
         app.UseForwardedHeaders();
+        // Before the rate limiter, so a 429 counts. Only a fixed group name and status are kept.
+        app.Use(async (ctx, next) =>
+        {
+            var stats = ctx.RequestServices.GetRequiredService<HourlyStats>();
+            var group = HourlyStats.GroupOf(ctx.Request.Path, ctx.Request.Headers.Upgrade.ToString().Contains("websocket", StringComparison.OrdinalIgnoreCase));
+            if (group is null || !stats.Enabled) { await next(); return; }
+            var start = System.Diagnostics.Stopwatch.GetTimestamp();
+            var status = StatusCodes.Status500InternalServerError;
+            try { await next(); status = ctx.Response.StatusCode; }
+            finally { stats.Record(group, System.Diagnostics.Stopwatch.GetElapsedTime(start), status); }
+        });
         app.Use(async (ctx, next) =>
         {
             var h = ctx.Response.Headers;
@@ -151,6 +164,15 @@ public static class RelayApp
         app.MapGet("/readyz", (RelayHub hub) => hub.Draining
             ? Results.Json(new { ready = false }, statusCode: StatusCodes.Status503ServiceUnavailable)
             : Results.Ok(new { ready = true }));
+
+        // SRE's hourly rows: off (404) until a read key is set; a wrong key gets 401.
+        app.MapGet("/v1/stats/hourly", async (HttpContext ctx, HourlyStats stats, int? hours) =>
+        {
+            if (!stats.Readable) { return Results.NotFound(); }
+            if (!stats.KeyMatches(ctx.Request.Headers.Authorization.ToString())) { return Results.Unauthorized(); }
+            var read = await stats.ReadAsync(Math.Clamp(hours ?? 24, 1, 72), ctx.RequestAborted);
+            return Results.Ok(new { hours = read.Select(h => new { hour = h.Hour.UtcDateTime.ToString("yyyy-MM-ddTHH:00:00Z"), groups = h.Rows.Select(r => new { group = r.Group, count = r.Count, p50Ms = r.P50Ms, p90Ms = r.P90Ms, c4xx = r.C4xx, c5xx = r.C5xx }) }) });
+        });
 
         // The key a browser subscribes with (applicationServerKey). Public by design.
         app.MapGet("/v1/push/key", (PushGateway push) =>

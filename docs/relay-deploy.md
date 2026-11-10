@@ -668,3 +668,21 @@ another ≈ $14; the next step up is 0.5 vCPU / 1 GiB (≈ $34) for tens of thou
 The relay's meter (`AgentBridge.Relay`) is exported to Application Insights by the Azure Monitor OpenTelemetry exporter (`RelayTelemetry.cs`), only when `Relay__ApplicationInsightsConnectionString` or `APPLICATIONINSIGHTS_CONNECTION_STRING` is set as an app setting (a connection string, supplied by the deployment, never kept in the repo). Unset, nothing is exported. Instruments added: `relay.forward.latency` (ms, frame received to written to its target), `relay.connect.duration` (ms, socket opened to ready) and `relay.sockets.live` (gauge). Each carries the `kind` tag; `relay.sockets.live` and `relay.connects` also carry `site`, the hostname the device connected through, reduced to a configured name (`Relay__KnownHostnames__0..`; unset means `relay.slipgates.com` and `relay.bad-duck.com`, and setting any replaces both) or `other`, so a client cannot mint values. `/healthz` reports the same counts as `sockets: [{site, kind, count}]` (aggregate only), with a 0 for every configured hostname and kind, so an emptied hostname reads 0 rather than disappearing. To retire a hostname, watch `customMetrics` `relay.sockets.live` by `site` until it stays 0 for 24 h. `RelayMetrics.AllowedTags` is the whole tag allow-list and a test fails if an id-like key joins it. Wiring the app setting in `infra/` is a follow-up that needs the owner's deploy approval.
 
 A malformed connection string does not stop the relay: it logs a generic warning (never the string) and runs without export.
+
+## Hourly latency and errors (#1599)
+
+The relay keeps one row per hour per route group, readable by SRE without a deploy approval:
+
+    curl -H "Authorization: Bearer $KEY" "https://<relay>/v1/stats/hourly?hours=24"
+
+Returns `{hours:[{hour, groups:[{group, count, p50Ms, p90Ms, c4xx, c5xx}]}]}`, oldest first (`hours` is 1 to 72, default 24; an hour with no traffic has no groups). Groups are the fixed names `health`, `auth`, `push`, `blobs`, `api` and `other`; WebSocket connections and `/v1/stats` itself are not counted. Rows hold counts and milliseconds only. A 429 counts as a 4xx; an unhandled exception as a 5xx.
+
+It answers 404 until the app setting `Relay__Stats__ReadKey` is set (a secret from the deployment, never in the repo), and 401 for a wrong key. Wiring it in `infra/` needs SRE's deploy approval.
+
+Percentiles are approximate. Medians cannot be merged across replicas, so each replica counts latencies into fixed buckets (1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000 ms) and a percentile is the upper edge of the bucket it falls in; 10000 means 10 s or more.
+
+Design note (nothing tied to a machine):
+
+- Where it runs: on every replica. Each keeps its counts in memory and, every minute, merges them into the hour's row with an ETag conditional write.
+- When a node leaves: it flushes on a clean stop; after a crash at most the last minute of that node's counts is lost. Nothing else depends on it.
+- Where state lives: blobs named `stats/v1/<yyyyMMddHH>.json` in the roster container (UTC hours), which already survives replicas and has a 180-day lifecycle. No state is on any host.

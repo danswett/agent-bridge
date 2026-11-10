@@ -68,6 +68,9 @@ public sealed class RelayOptions
     // unless a store is configured.
     public RosterOptions Roster { get; set; } = new();
 
+    // Hourly request counts and latency per route group (HourlyStats.cs), kept in the roster's store.
+    public StatsOptions Stats { get; set; } = new();
+
     // Test hooks. Tap observes every forwarded payload; Route lets a test play a hostile
     // relay that redirects or forges routing.
     public Action<string, string, byte[]>? Tap { get; set; }
