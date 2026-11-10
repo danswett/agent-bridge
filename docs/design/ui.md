@@ -1999,7 +1999,7 @@ machine, online ones first, then the account's offline machines (#213):
        - After a pause the session's row says "Paused" with **Resume**; the tile's Health word changes
          only when the host's next figures say so.
     8. **Move here / away (#1146).** A reserved place after Relieve, shown only once the host offers
-       it. Until then nothing is shown and no space is kept.
+       it (see §6.6.2). Until then nothing is shown and no space is kept.
     9. **The page.** One line heads the list: "5 machines · 4 online · 1 tight", text only. The
        "All machines" row does not exist: it is a filter on the Sessions page, not a machine. The
        machine rows stay online first, then offline (§6.6).
@@ -2031,6 +2031,73 @@ machine, online ones first, then the account's offline machines (#213):
     900 px layout switch at 899 and 900; disclosure state per machine; no height change on refresh;
     UIA names and tab order in the Windows app; the same host record gives the same words on the PWA
     and the Windows app.
+
+#### 6.6.2 Moving a session to another machine (#1146; draft, written against the epic as filed)
+
+Status: the epic's slices are not started. Everything marked **Open (Engineering)** is a question the
+host must answer before a builder starts; where the answer is "no", the rule beside it says what the
+person sees instead. Nothing here changes a protocol or sends session content anywhere new.
+
+1. **Where it starts.** A session's menu (long-press on a phone, right-click or the menu key on
+   Windows and a browser) has **Continue on another machine…**, shown only on a session that can be
+   moved (rule 6). It is never on a tile's Actions until rule 8 of §6.6.1 is switched on, and then
+   only as the same dialog opened from the heaviest session of a Tight or Full machine.
+2. **The dialog.** A sheet on a phone, a centred dialog at 900 px and wider. Title: "Continue
+   *session title* on…". One row per machine, in §6.6 order, each a radio with the machine name,
+   its Health word, and one line: "Ready" or the reason it can't be chosen ("No *agent*", "No
+   *workspace* here", "Offline", "View only", "Can't take more"). A machine that can't be chosen
+   is shown, dimmed, not hidden, so the person sees why. The current machine is not listed. The
+   recommended machine (lowest load that can take it, #1144) is first and marked "Suggested"; the
+   person's pick always wins. Buttons: **Continue** (disabled until a ready machine is chosen) and
+   **Cancel**, focus on the first ready machine.
+3. **What it says it will do.** Under the list, one plain sentence that is true for the chosen
+   machine: "The conversation continues there. This one is marked moved and stops taking answers."
+   Where files move (**Open (Engineering):** branch plus uncommitted changes, or same checkout
+   required), a second sentence names which: "Your uncommitted changes go with it." or "It opens
+   the same folder on *machine*." If neither is possible the machine reads "Can't carry your
+   changes", is not choosable, and nothing is lost.
+4. **Progress and result.** After Continue the dialog shows one line that changes in place
+   ("Preparing", "Sending", "Starting on *machine*"), with **Cancel** until the target starts. On
+   success it closes and opens the new session (§6.4) with a one-line banner: "Moved from *machine*.
+   *time*." On failure it stays open with the reason in text and the old session is untouched and
+   still answerable. A move is all or nothing: the old session is marked moved only after the new
+   one is running.
+5. **The old session.** Its row and conversation say "Moved to *machine*" with a **Go to it**
+   button. It takes no answers and no Send; a question card still showing on it is replaced by that
+   line. It leaves Needs you at once. It follows the usual retention.
+6. **Which sessions can move.** Open (Engineering): a running session, a paused one, and a finished
+   one, per agent. Until answered: only finished and paused sessions are offered, and a running
+   session's menu item is dimmed with "Pause it first". A session waiting on a question can't move
+   ("Answer or dismiss the question first"). A session whose agent has no resume is not offered, with
+   "*Agent* can't continue elsewhere".
+7. **Who may.** Only a person who may answer the session. The target applies the same owner
+   re-admission as any resume (#912); if it asks, the dialog says "Sign in on *machine* to
+   continue" and keeps its place. A person with View only sees no menu item.
+8. **Cost and model.** The model and context shown on the target are the ones #1142 offers there.
+   If the session's model is not offered on the target, the dialog says so on that row ("Uses
+   *model* instead") before Continue, and never switches silently.
+9. **The record.** The new session's details show "Moved from *machine*, *time*" and the audit line
+   (who, from, to, when). No session text appears in the record.
+10. **Per endpoint.** Phone and iPad portrait: bottom sheet, rows at least 44 px, whole row
+    tappable. Windows and browser: dialog with arrow keys moving the radio, Enter on Continue, Escape
+    cancels. The Windows app exposes the dialog with a name, each row's reason in its UIA help text,
+    and announces the result once, politely. Reduced motion: no slide. Text scales to 200%.
+    High contrast uses system colours.
+11. **Refusals, in words.** Every refusal is a sentence naming the machine and the one thing to do;
+    never a code. Two moves of the same session at once: the second reads "Already moving".
+
+**Open (Engineering):** (a) which agents can resume on another machine and what state moves for each
+(slice 1, the parity audit); (b) whether a running session can move or must be paused first; (c) how
+the workspace reaches the target; (d) whether the host can say "can't take more" before a move
+starts; (e) whether the old session can be marked moved atomically with the new one starting.
+
+**Tests (each fails without the change):** only machines with the agent and workspace are
+choosable, the rest dimmed with their reason; the current machine isn't listed; Continue is disabled
+until a ready machine is chosen; the suggested machine is first and the pick overrides it; failure
+leaves the old session answerable and unchanged; success marks it moved only after the new one runs;
+the moved session takes no answer or Send and leaves Needs you; a session with a question open can't
+move; View only sees no item; a different model on the target is stated before Continue; the same
+words on the PWA and the Windows app; 44 px targets; UIA names; Escape cancels.
 
 ### 6.7 Collaborators (#519)
 
