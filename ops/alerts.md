@@ -100,7 +100,7 @@ isn't built), so client health is read on the relay:
 | Id | Sev | Signal | Fires when | Runbook | Issue | Status |
 |---|---|---|---|---|---|---|
 | A-RELEASE | 2 | M connects and refusals by `version` (OBS-2) | The Dev build has refusals or disconnects per device > 3× the Beta build's. This also blocks its promotion (plan §6.3) | [windows-release](runbooks/windows-release.md) | #451, #570 | Planned |
-| A-PAGES | 3 | pages.yml | The Pages deploy fails, or its post-deploy hash check fails (REL-4) | [pwa](runbooks/pwa.md) | #582 | Planned |
+| A-PAGES | 3 | pages.yml | The Pages deploy fails, or its post-deploy hash check fails (REL-4) | [pwa](runbooks/pwa.md) | #582 | Built |
 
 ## Rules for adding an alert
 
