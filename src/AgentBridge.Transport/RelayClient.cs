@@ -104,6 +104,7 @@ public sealed class RelayClient : IAsyncDisposable
     readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement>> blobRequests = new();
     readonly ConcurrentDictionary<long, TaskCompletionSource<string?>> forgets = new();
     readonly ConcurrentDictionary<long, (List<JsonElement> Machines, TaskCompletionSource<IReadOnlyList<JsonElement>> Done)> registries = new();
+    readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement>> rosterReads = new();
 
     // Frames held for a handler that is not attached yet.
     internal int QueuedFrames => inbound.Reader.Count;
@@ -199,6 +200,27 @@ public sealed class RelayClient : IAsyncDisposable
             return await entry.Done.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
         }
         finally { registries.TryRemove(id, out _); }
+    }
+
+    // The relay's copy of the account's signed device roster (docs/protocol/devices.md), as the
+    // relay sent it and nothing more: the entries are untrusted text the caller must verify itself.
+    // Null when the relay has no roster to give (an older relay, or its store is unavailable).
+    public async Task<RelayRoster?> GetRosterAsync(CancellationToken ct = default)
+    {
+        var id = Interlocked.Increment(ref nextPush);
+        var tcs = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        rosterReads[id] = tcs;
+        try
+        {
+            await SendTextAsync(new { t = "roster-get", id }, ct);
+            var r = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
+            if (r.TryGetProperty("error", out _) || !r.TryGetProperty("entries", out var entries) || entries.ValueKind != JsonValueKind.Array) { return null; }
+            return new RelayRoster(
+                r.TryGetProperty("mode", out var mode) && mode.ValueKind == JsonValueKind.String ? mode.GetString()! : "unknown",
+                r.TryGetProperty("generation", out var g) && g.ValueKind == JsonValueKind.String ? g.GetString() : null,
+                [.. entries.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!)]);
+        }
+        finally { rosterReads.TryRemove(id, out _); }
     }
 
     // Ends, never faults, when the connection does; the caller then reconnects.
@@ -378,14 +400,18 @@ public sealed class RelayClient : IAsyncDisposable
         {
             while (ws.State == WebSocketState.Open)
             {
-                var pending = Wire.ReceiveAsync(ws, Wire.MaxFrame, default);
+                var pending = Wire.ReceiveAsync(ws, Wire.MaxFrame, Wire.MaxRosterFrame, default, discardOversizeText: true);
                 if (!pending.IsCompleted) { receiving.TrySetResult(); }
                 var frame = await pending;
                 if (frame is null) { break; }
                 var (type, data) = frame.Value;
                 if (type == WebSocketMessageType.Text)
                 {
+                    // Empty: a text frame past even the roster's bound, dropped on the way in.
+                    if (data.Length == 0) { continue; }
                     var j = JsonDocument.Parse(data).RootElement;
+                    // Only the roster reply may pass the ordinary bound.
+                    if (data.Length > Wire.MaxFrame && j.GetProperty("t").GetString() != "roster") { throw new FrameTooLargeException(); }
                     switch (j.GetProperty("t").GetString())
                     {
                         case "presence": ApplyPresence(j); break;
@@ -399,6 +425,9 @@ public sealed class RelayClient : IAsyncDisposable
                         case "blob-result":
                         case "feedback-result":
                             if (blobRequests.TryRemove(j.GetProperty("id").GetInt64(), out var b)) { b.TrySetResult(j.Clone()); }
+                            break;
+                        case "roster":
+                            if (rosterReads.TryRemove(j.GetProperty("id").GetInt64(), out var rr)) { rr.TrySetResult(j.Clone()); }
                             break;
                         case "forget-result":
                             if (forgets.TryRemove(j.GetProperty("id").GetInt64(), out var f))
@@ -441,6 +470,7 @@ public sealed class RelayClient : IAsyncDisposable
         foreach (var b in blobRequests.Values) { b.TrySetException(new IOException("relay connection ended")); }
         foreach (var f in forgets.Values) { f.TrySetException(new IOException("relay connection ended")); }
         foreach (var r in registries.Values) { r.Done.TrySetException(new IOException("relay connection ended")); }
+        foreach (var r in rosterReads.Values) { r.TrySetException(new IOException("relay connection ended")); }
         if (ws.State is WebSocketState.Open or WebSocketState.CloseReceived)
         {
             try { await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, default); }
@@ -496,3 +526,6 @@ public sealed class RelayClient : IAsyncDisposable
         ws.Dispose();
     }
 }
+
+// What the relay says its roster copy is: untrusted until a host verifies it.
+public sealed record RelayRoster(string Mode, string? Generation, IReadOnlyList<string> Entries);

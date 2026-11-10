@@ -382,6 +382,17 @@ Both messages are text frames from an admitted device of any kind, counted again
 * `roster-get` is `{"error":"unavailable"}` too when the store cannot be reached. A stored log that does not decode or rebuild is never added to: an append says `unavailable`. So does an append that finds more than four others waiting on the account, and a request while the connection already has two roster requests running. Offering only entries already kept answers `duplicate` without replaying the log.
 * The log is bounded at 224 KiB stored; an append that would pass it is refused `cap`.
 * The relay judges time by its own clock. That is defence in depth: a host applies the same rules on its own clock.
+
+## Pinned person devices
+
+A read-only query over a verifier (`PinnedDevices.Query`), for #972 slice 2 and Daily's lists. It returns each person device the verifier serves (active, §3.5, and not held, §3.4; hosts are left out), in id order, as `id`, `name`, `kind`, `platform`, `presence`, `confirmed` and `quarantined`. `presence` is the declared level; only `key` and `webauthn` prove a person verified (§4.6), and `none` is listed so a client can say why a device cannot be offered. A Windows device stays `none` until R4 proves its mechanism. The query changes nothing and enforces nothing; the host verifier (OFF mode, next section) is what feeds it.
+
+## The host's verifier (OFF mode)
+
+A host reads the relay's copy with `roster-get` once after each connection and verifies it for itself, on its own clock: the generation is taken from the first genesis the relay holds for the account, every entry is offered to a `RosterVerifier`, and the host logs one line: entries read, how many were accepted, quarantined, refused or unreadable, and the head hashes (first 12 hex digits). It is `security.roster` = `off` (the only value this slice reads; anything else is reported in the log and read as `off`).
+
+Off mode enforces nothing. No connection, command or approval is refused or changed because of what the roster holds or fails to hold, and a relay that does not answer, or answers with no roster, costs one log line. The roster reply is the one text frame the host reads past the ordinary frame bound (up to six times the relay's 224 KiB stored cap, for JSON escaping); a reply past even that is discarded as no roster, and the relay connection stays up (up to 4 MiB drained; beyond that, or for any other oversized text frame, the connection is closed as for any oversized frame). The generation is not pinned, so against a hostile relay this check protects nothing yet; observe and enforce modes, pinning and the ChannelHub gate are later slices.
+
 ## Vectors
 
 [vectors/roster.json](vectors/roster.json) holds fixed test keys (`d`, `public`, `device`) and:
