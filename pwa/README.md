@@ -62,6 +62,7 @@ makes it a new device, signed in and approved again, so keeping it is fine.
 | `js/answers.js` | An answer as the form holds it, as the request sends it, and checked first: `checkAnswer` mirrors the C# `Answers.Check` case for case, with its wording |
 | `js/answer-service.js` | Sending answers, one outcome each: a fresh request UUID per answer, resent with the **same** request after a lost response or a reconnect; how far each has got where the machine says (`sessions.progress`: received, typed, queued) |
 | `js/ui/receipt.js` | The receipt of a reply or an answer (#600, #617): its words at each stage, the quiet window, the dwell, the stalls and what a screen reader hears. The timing is tested on a mocked clock in `test/unit/receipt.test.mjs` |
+| `js/ui/copy-feedback.js` | What a Copy button says after a press (#1279): "Copied" or "Couldn't copy" for the standard linger, then nothing; used by the ID row in Details. Tested in `test/unit/copy-feedback.test.mjs` and `test/details-copy.spec.mjs` |
 | `js/timing.js` | Timing marks for each answer and reply (#600), kept on this device only: tap, each send, each progress stage and the outcome as `performance` marks and measures, with the machine's own `timings` beside them |
 | `js/replies.js` | A reply checked before it goes: `checkReply` mirrors the C# `Replies.Check`, with its wording |
 | `js/reply-service.js` | Sending replies: `answer-service.js` with `session.reply`, one reply on its way per session, its files sent first |

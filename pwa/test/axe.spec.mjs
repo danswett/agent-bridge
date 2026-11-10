@@ -195,6 +195,16 @@ for (const layout of LAYOUTS) {
         await expect(copilot.locator('.question')).toBeVisible();
         await check(page, 'a session asking a question');
 
+        // Details' ID row with its Copy pressed: the button and its status are in the page.
+        if (layout.phone) {
+          await copilot.locator('.more').click();
+          await page.locator('.row-menu').getByRole('menuitem', { name: 'Details' }).click();
+        }
+        await page.evaluate(() => { document.execCommand = () => true; });
+        await copilot.locator('.fact-id').getByRole('button', { name: 'Copy session ID' }).click();
+        await expect(copilot.locator('.fact-id [role="status"]')).toHaveText('Copied');
+        await check(page, 'Details\' ID row after Copy');
+
         const land = await open(page, LAND);
         await check(page, 'a session asking for approval');
         await land.getByRole('button', { name: /^Approve once/ }).click();

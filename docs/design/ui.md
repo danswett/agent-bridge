@@ -981,7 +981,12 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   | 15 | Turns | "12 turns", "1 turn" | When sent |
   | 16 | Compactions | "3 compactions" | When more than 0 |
   | 17 | Process | "pid 4312", mono | When sent |
-  | 18 | ID | The full session id, mono | Always |
+  | 18 | ID | The full session id, mono, then a Copy button | Always |
+
+  The ID row's Copy button (#1279) is named "Copy session ID", a tap-sized square that keeps its
+  size at every width and is reached by keyboard with the usual focus ring. Pressing it puts
+  the id alone on the clipboard and says "Copied" beside it, or "Couldn't copy" if both routes
+  refuse, in one polite status line for the standard linger (5 s), then nothing.
 
   The groups run state (1-5), who (6-7), where (8-11), when (12-13), activity (14-16), then
   identifiers (17-18). Agent and Model sit together because the model is part of who is
