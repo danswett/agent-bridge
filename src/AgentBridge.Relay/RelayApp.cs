@@ -174,6 +174,25 @@ public static class RelayApp
             return Results.Ok(new { hours = read.Select(h => new { hour = h.Hour.UtcDateTime.ToString("yyyy-MM-ddTHH:00:00Z"), groups = h.Rows.Select(r => new { group = r.Group, count = r.Count, p50Ms = r.P50Ms, p90Ms = r.P90Ms, c4xx = r.C4xx, c5xx = r.C5xx }) }) });
         });
 
+        // App send-to-settled timings (#1603): the account token, a small body, no use of the relay write budget.
+        app.MapPost("/v1/stats/app-timings", async (HttpContext ctx, HourlyStats stats, Tokens tokens) =>
+        {
+            if (!stats.Enabled) { return Results.NotFound(); }
+            var auth = ctx.Request.Headers.Authorization.ToString();
+            var account = auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? tokens.Validate(auth[7..].Trim()) : null;
+            if (account is null) { return Results.Unauthorized(); }
+            if (!stats.AdmitPost(account.Id)) { return Results.StatusCode(StatusCodes.Status429TooManyRequests); }
+            if (ctx.Request.ContentLength > HourlyStats.MaxPostBytes) { return Results.StatusCode(StatusCodes.Status413PayloadTooLarge); }
+            using var ms = new MemoryStream();
+            var buf = new byte[1024]; int n;
+            while ((n = await ctx.Request.Body.ReadAsync(buf, ctx.RequestAborted)) > 0)
+            {
+                ms.Write(buf, 0, n);
+                if (ms.Length > HourlyStats.MaxPostBytes) { return Results.StatusCode(StatusCodes.Status413PayloadTooLarge); }
+            }
+            return stats.AddTimings(ms.ToArray()) is { } r ? Results.Json(new { accepted = r.Accepted, dropped = r.Dropped }, statusCode: StatusCodes.Status202Accepted) : Results.BadRequest();
+        });
+
         // The key a browser subscribes with (applicationServerKey). Public by design.
         app.MapGet("/v1/push/key", (PushGateway push) =>
             push.PublicKey is { } k ? Results.Ok(new { key = k }) : Results.NotFound()).RequireCors("pwa");

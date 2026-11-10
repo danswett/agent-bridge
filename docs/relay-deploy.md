@@ -677,12 +677,28 @@ The relay keeps one row per hour per route group, readable by SRE without a depl
 
 Returns `{hours:[{hour, groups:[{group, count, p50Ms, p90Ms, c4xx, c5xx}]}]}`, oldest first (`hours` is 1 to 72, default 24; an hour with no traffic has no groups). Groups are the fixed names `health`, `auth`, `push`, `blobs`, `api` and `other`; WebSocket connections and `/v1/stats` itself are not counted. Rows hold counts and milliseconds only. A 429 counts as a 4xx; an unhandled exception as a 5xx.
 
-It answers 404 until the app setting `Relay__Stats__ReadKey` is set (a secret from the deployment, never in the repo), and 401 for a wrong key. Wiring it in `infra/` needs SRE's deploy approval.
+The writer runs on every replica whether or not a read key is set, so rows are already collecting when SRE gets the key. It answers 404 until the app setting `Relay__Stats__ReadKey` is set (a secret from the deployment, never in the repo), and 401 for a wrong key. Wiring it in `infra/` needs SRE's deploy approval.
 
-Percentiles are approximate. Medians cannot be merged across replicas, so each replica counts latencies into fixed buckets (1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000 ms) and a percentile is the upper edge of the bucket it falls in; 10000 means 10 s or more.
+Percentiles are approximate. Medians cannot be merged across replicas, so each replica counts latencies into fixed buckets (1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 60000, 120000, 300000, 600000 ms) and a percentile is the upper edge of the bucket it falls in; 600000 means 10 minutes or more. Hours written before the wider buckets are read from `stats/v1/` with their over-10 s requests in the top bucket.
 
 Design note (nothing tied to a machine):
 
 - Where it runs: on every replica. Each keeps its counts in memory and, every minute, merges them into the hour's row with an ETag conditional write.
 - When a node leaves: it flushes on a clean stop; after a crash at most the last minute of that node's counts is lost. Nothing else depends on it.
-- Where state lives: blobs named `stats/v1/<yyyyMMddHH>.json` in the roster container (UTC hours), which already survives replicas and has a 180-day lifecycle. No state is on any host.
+- Where state lives: blobs named `stats/v2/<yyyyMMddHH>.json` in the roster container (UTC hours), which already survives replicas and has a 180-day lifecycle. No state is on any host. `v2` holds the wider buckets; replicas still on the earlier build keep writing `stats/v1/`, which a rolling deploy cannot overwrite, and the read adds both.
+
+## App send-to-settled timings (#1603)
+
+Apps report how long a turn took from send to settled; it lands in the same hourly rows, per app.
+
+    POST /v1/stats/app-timings
+    Authorization: Bearer <the account token the app sends in its WebSocket hello>
+    {"samples":[{"app":"PWA","route":"send-to-settled","ms":1234,"at":1762740000}]}
+
+- `app` is exactly `PWA`, `Windows` or `Phone`; `route` is exactly `send-to-settled`; `ms` is an integer clamped to 0..600000; `at` is unix seconds. Up to 50 samples and 4096 bytes. Anything else in the post (another app or route, a missing field, too many samples, bad JSON) is a 400 for the whole post and nothing is counted.
+- A sample older than one hour or in the future is dropped, not refused. Reply `202 {accepted, dropped}`; `401` for a missing or bad token; `413` over 4096 bytes; `429` beyond 2 posts a minute per account. Clients send at most one post a minute, never retry on a 429, and treat any failure as fire-and-forget.
+- SRE reads it in `GET /v1/stats/hourly` as the groups `app-send-to-settled-pwa`, `-windows` and `-phone` (`count`, `p50Ms`, `p90Ms`; the error counts stay 0).
+- The post is not a relay write: it does not use the per-account blob, roster or push budgets, and `/v1/stats` is not counted in the request rows. The 2-a-minute limit is per replica and kept in memory (the account id is held for a minute, never stored).
+- Nothing identifying is stored: only the fixed group name, the hour and bucket counts. No account, device, session, text or machine.
+- Where it runs, when a node leaves, where state lives: as above. The samples join the replica's in-memory hour and go out on the same minute flush, so a leaving node flushes them on stop and a crash loses at most a minute.
+- Deploy: no new setting. The route is live as soon as the relay is; reading still needs the read key.
