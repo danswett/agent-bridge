@@ -252,6 +252,14 @@ module monitoring 'modules/monitoring.bicep' = if (deployApps && deployProductio
   }
 }
 
+// The relay queries in ops/queries/relay.kql, as saved searches in the workspace.
+module savedSearches 'modules/saved-searches.bicep' = {
+  name: 'relay-saved-searches'
+  params: {
+    workspaceName: logs.name
+  }
+}
+
 output stagingFqdn string = stagingApp.outputs.fqdn
 output productionFqdn string = productionApp.outputs.fqdn
 output environmentDomain string = manageEnvironment ? environment!.properties.defaultDomain : ''

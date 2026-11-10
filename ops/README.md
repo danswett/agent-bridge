@@ -12,7 +12,7 @@ The SRE plan, and the tools to carry it out, for the relay and everything else w
 | [incidents.md](incidents.md) | Severities, roles, the first 15 minutes, reviews |
 | [runbooks/](runbooks/README.md) | One page per kind of alert |
 | [templates/](templates/) | Incident and review templates |
-| [queries/relay.kql](queries/relay.kql) | Saved Log Analytics queries for the relay |
+| [queries/relay.kql](queries/relay.kql) | The relay's Log Analytics queries: the one source, deployed as saved searches under the category `Slipgates relay` (`infra/modules/saved-searches.bicep`). Edit the file, never a copy in the portal; adding or removing a `// ==== <id>: <description>` block needs no other edit |
 | [tools/relay-probe.ps1](tools/relay-probe.ps1) | Read-only outside-in check of a relay |
 
 ## The probe
