@@ -6,6 +6,8 @@ Start with [CONTRIBUTING.md](../CONTRIBUTING.md).
 this page does not create exceptions to them.
 Current role holders and their acceptance links live in
 [status: running work](status.md#running-work), not in this procedure.
+Outside contributors (pull requests only, no fleet access) start with
+[outside-contributors.md](outside-contributors.md).
 
 ## Operational sources of truth
 
