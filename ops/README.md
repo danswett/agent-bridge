@@ -18,15 +18,16 @@ The SRE plan, and the tools to carry it out, for the relay and everything else w
 ## The probe
 
 ```powershell
-pwsh ops/tools/relay-probe.ps1                   # production
+pwsh ops/tools/relay-probe.ps1                   # production (relay.bad-duck.com)
+pwsh ops/tools/relay-probe.ps1 -Target production-names   # both production names; the daily ops-probe runs this
 pwsh ops/tools/relay-probe.ps1 -Target all       # production, staging and the old stamp
 pwsh ops/tools/relay-probe.ps1 -ExpectVersion <sha>   # after a deploy
 ```
 
-It checks health, readiness, the serving version, the push key, CORS for the PWA's origin, the
-TLS certificate's expiry, and, for `relay.bad-duck.com`, the CNAME and `asuid` TXT records that
+It checks health, readiness, the serving version, the push key, CORS for the PWA's two origins (danswett.github.io and app.slipgates.com), the
+TLS certificate's expiry, and, for each production name, the CNAME and `asuid` TXT records that
 the certificate's renewal depends on. It sends only anonymous requests, prints no addresses, and
-exits 0 (pass), 1 (fail) or 2 (warnings). Any session can run it against production.
+exits 0 (pass), 1 (fail) or 2 (warnings). Every row names its Target (the host). The daily run shows it in the run summary and the `area:ops` issue table. Any session can run it against production.
 
 ## Rules here
 

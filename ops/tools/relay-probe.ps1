@@ -15,7 +15,7 @@
   alert can be confirmed or ruled out by hand in seconds.
 
 .PARAMETER Target
-  production (default), production-slipgates (the same app at relay.slipgates.com), staging, old (the retired free-trial stamp), or all.
+  production (default; relay.bad-duck.com), production-slipgates (the same app at relay.slipgates.com), production-names (both of those, which is what the daily ops-probe runs), staging, old (the retired free-trial stamp), or all.
 
 .PARAMETER Url
   Probe this base URL instead of a named target.
@@ -39,7 +39,7 @@
 [CmdletBinding(DefaultParameterSetName = 'Named')]
 param(
     [Parameter(ParameterSetName = 'Named')]
-    [ValidateSet('production', 'production-slipgates', 'staging', 'old', 'all')]
+    [ValidateSet('production', 'production-slipgates', 'production-names', 'staging', 'old', 'all')]
     [string] $Target = 'production',
 
     [Parameter(ParameterSetName = 'Url', Mandatory)]
@@ -82,7 +82,8 @@ $targets = [ordered]@{
         Timeout = 30
     }
 }
-$pwaOrigin = 'https://danswett.github.io'
+$corsOrigins = [ordered]@{ 'cors (pwa origin)' = 'https://danswett.github.io'; 'cors (app origin)' = 'https://app.slipgates.com' }   # production allowedOrigins in infra/regions/westus2.bicepparam
+$script:currentHost = ''
 $certWarnDays = 21    # matches A-CERT in ops/alerts.md
 $latencyWarnMs = 1500
 
@@ -90,6 +91,7 @@ $selected = if ($PSCmdlet.ParameterSetName -eq 'Url') {
     [ordered]@{ custom = @{ Url = $Url.AbsoluteUri.TrimEnd('/'); Timeout = 30 } }
 }
 elseif ($Target -eq 'all') { $targets }
+elseif ($Target -eq 'production-names') { [ordered]@{ production = $targets.production; 'production-slipgates' = $targets['production-slipgates'] } }
 else { [ordered]@{ $Target = $targets[$Target] } }
 
 $pacific = [TimeZoneInfo]::FindSystemTimeZoneById($(if ($IsWindows) { 'Pacific Standard Time' } else { 'America/Los_Angeles' }))
@@ -103,7 +105,7 @@ function Add-Result([string] $name, [string] $check, [ValidateSet('PASS', 'WARN'
     # can put an address in output that's pasted into public incident issues.
     $detail = $detail -replace '\b\d{1,3}(\.\d{1,3}){3}(:\d+)?\b', '<address>' -replace '(?i)\[?(?<![\w:.])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![\w:])\]?(:\d+)?', '<address>'
     if ($detail.Length -gt 200) { $detail = $detail.Substring(0, 200) + '…' }
-    $results.Add([pscustomobject]@{ Target = $name; Check = $check; Status = $status; Detail = $detail })
+    $results.Add([pscustomobject]@{ Target = $name; Host = $script:currentHost; Check = $check; Status = $status; Detail = $detail })
 }
 
 function Invoke-Probe([string] $uri, [int] $timeout, [hashtable] $headers = @{}, [string] $method = 'GET') {
@@ -185,6 +187,7 @@ foreach ($entry in $selected.GetEnumerator()) {
     $name = $entry.Key
     $t = $entry.Value
     $base = [uri]$t.Url
+    $script:currentHost = $base.Host
 
     $h = Invoke-Probe "$($t.Url)/healthz" $t.Timeout
     if ($h.Status -ne 200) {
@@ -236,13 +239,15 @@ foreach ($entry in $selected.GetEnumerator()) {
     if ($keyLength -eq 87) { Add-Result $name 'push key' 'PASS' 'VAPID public key served (87 chars)' }
     else { Add-Result $name 'push key' 'FAIL' "HTTP $($k.Status), key length $keyLength; push subscriptions can't be made" }
 
-    $c = Invoke-Probe "$($t.Url)/v1/auth/device" $t.Timeout @{
-        Origin = $pwaOrigin; 'Access-Control-Request-Method' = 'POST'; 'Access-Control-Request-Headers' = 'content-type'
-    } 'OPTIONS'
-    $allow = Get-Header $c.Headers 'Access-Control-Allow-Origin'
-    if ($c.Status -in 200, 204 -and $allow -eq $pwaOrigin) { Add-Result $name 'cors (pwa origin)' 'PASS' "preflight allows $pwaOrigin" }
-    else { Add-Result $name 'cors (pwa origin)' 'FAIL' "preflight HTTP $($c.Status), allow-origin '$allow': the PWA can't sign in" }
-
+    foreach ($corsCheck in $corsOrigins.GetEnumerator()) {
+        $origin = $corsCheck.Value
+        $c = Invoke-Probe "$($t.Url)/v1/auth/device" $t.Timeout @{
+            Origin = $origin; 'Access-Control-Request-Method' = 'POST'; 'Access-Control-Request-Headers' = 'content-type'
+        } 'OPTIONS'
+        $allow = Get-Header $c.Headers 'Access-Control-Allow-Origin'
+        if ($c.Status -in 200, 204 -and $allow -eq $origin) { Add-Result $name $corsCheck.Key 'PASS' "preflight allows $origin" }
+        else { Add-Result $name $corsCheck.Key 'FAIL' "preflight HTTP $($c.Status), allow-origin '$allow': $origin can't sign in" }
+    }
     if ($base.Scheme -eq 'https') { Test-Certificate $name $base }
     else { Add-Result $name 'tls certificate' 'WARN' "not checked: $($base.Scheme), not https" }
     if ($t.ContainsKey('CnameTarget')) { Test-Dns $name $base $t.CnameTarget $t.AsuidValue }

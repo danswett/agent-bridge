@@ -1,6 +1,7 @@
 name: Ops probe
 
-# Once a day, the read-only outside-in check of production (ops/tools/relay-probe.ps1): health,
+# Once a day, the read-only outside-in check of both production names, relay.bad-duck.com and
+# relay.slipgates.com (ops/tools/relay-probe.ps1 -Target production-names): health,
 # readiness, the push key, CORS for the PWA, the TLS certificate's remaining life, and the DNS
 # records its renewal depends on (docs/relay-deploy.md "Custom domain": a proxied or moved record
 # makes renewal fail silently until the certificate expires). Problems go on one issue labelled
@@ -36,14 +37,14 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - name: Probe production
+      - name: Probe production names
         id: probe
         shell: pwsh
         run: |
-          pwsh -NoProfile -File ops/tools/relay-probe.ps1 -Target production -Json > "$env:RUNNER_TEMP/probe.json"
+          pwsh -NoProfile -File ops/tools/relay-probe.ps1 -Target production-names -Json > "$env:RUNNER_TEMP/probe.json"
           "code=$LASTEXITCODE" >> $env:GITHUB_OUTPUT
           $r = Get-Content "$env:RUNNER_TEMP/probe.json" -Raw | ConvertFrom-Json
-          @("Production probe at $($r.at)", '', '| Check | Status | Detail |', '|---|---|---|') + @($r.results | ForEach-Object { "| $($_.Check) | $($_.Status) | $($_.Detail) |" }) >> $env:GITHUB_STEP_SUMMARY
+          @("Production probe (both names) at $($r.at)", '', '| Target | Check | Status | Detail |', '|---|---|---|---|') + @($r.results | ForEach-Object { "| $($_.Host) | $($_.Check) | $($_.Status) | $($_.Detail) |" }) >> $env:GITHUB_STEP_SUMMARY
           exit 0
       - name: Open, update or close the ops issue
         shell: pwsh
