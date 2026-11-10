@@ -700,7 +700,8 @@ public sealed partial class HaConnector
         // before answers nothing (QuestionAsync).
         if (armed.Superseded) { return; }
         // A question that takes no typed answer takes no words from the reply card: said, not left unanswered (#1634).
-        if (ServesReplies && (armed.Plan.UsesFieldSlots || armed.Plan.AnswerOnTap) && !armed.Plan.TakesTypedAnswer) { if (await RefuseReplyAtQuestionAsync(p, armed, ct)) { return; } }
+        // An agent's words are never an owner's answer: only a payload naming this very question is (#1636).
+        if (await RefuseReplyAtQuestionAsync(p, armed, ct)) { return; }
         var since = seen.Where(h => h.Seq > armed.Boundary && !(h.Hit.EntityId == SessionEntities.ReplyPayload(p.Node) && p.Reply.IsHandled(h.Hit.State.State))).Select(h => h.Hit).ToList();
         var outcome = await ReadAnswerAsync(sessionId, p, armed, since, ct);
         if (outcome is null) { return; }
@@ -852,8 +853,11 @@ public sealed partial class HaConnector
         var current = await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
         if (!Changed(armed.PayloadBaseline, current) || !IsStamp(current.Value) || current.Value == armed.UsedStamp) { return false; }
         if (current.Snapshot is not { Attributes.ValueKind: JsonValueKind.Object } state) { return false; }
-        // Words for a question are that question's own.
-        if (Str(state.Attributes, "decision_id") is { Length: > 0 }) { return false; }
+        var tag = Str(state.Attributes, "decision_id");
+        var fromAgent = Str(state.Attributes, "driver") == SessionDrivers.Agent;
+        var takesNoWords = ServesReplies && (armed.Plan.UsesFieldSlots || armed.Plan.AnswerOnTap) && !armed.Plan.TakesTypedAnswer;
+        // Words tagged for a question are that question's own. An agent's are also refused when untagged or tagged for another card.
+        if (tag is { Length: > 0 } ? !(fromAgent && tag != armed.Question.Id) : !(takesNoWords || fromAgent)) { return false; }
         p.Reply.Handle(current.Value);
         await UnservedAsync(p, new HaTrigger(SessionEntities.ReplyPayload(p.Node), state), ct);
                 return true;
