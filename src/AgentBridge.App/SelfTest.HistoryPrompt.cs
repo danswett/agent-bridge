@@ -39,9 +39,10 @@ static partial class SelfTest
             view = await Choose(window, main, "demo-approval", "Response");
             if (view is null) { wrong.Add($"{width}: not drawn"); continue; }
             var bubbles = new List<Border>();
-            var column = ById<StackPanel>(view, "HistoryColumn");
+            StackPanel? column = null;
             await Until(() =>
             {
+                column = Find<StackPanel>(view).FirstOrDefault(s => s.Name == "HistoryColumn");
                 bubbles = Find<Border>(view).Where(b => b.Name == "HistoryYourMessage" && b.Child is TextBlock t && (t.Text == "Yes" || t.Text == longText)).ToList();
                 return column is not null && bubbles.Count >= 2 && bubbles.All(b => b.ActualWidth > 0);
             }, TimeSpan.FromSeconds(10));
