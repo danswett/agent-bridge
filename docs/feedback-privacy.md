@@ -125,7 +125,7 @@ Order, for manual feedback, on the tester's machine:
 4. On Send, re-scan the final bytes with the same patterns, decoding escapes (up to four
    passes). A hit refuses locally with no network request and tells the tester which
    field to change.
-5. Seal, then upload.
+5. Seal exactly those bytes, then upload with the single-use upload reference issued after Send.
 
 The check at step 4 uses the same pattern source as step 2, so the two cannot disagree.
 Redaction failures fail closed: a scan error is a refusal, never a send.
@@ -145,9 +145,8 @@ team's decryption tool (the inbox worker, per [custody](feedback-custody.md)). R
 * Production key, key ID and the key handoff packet remain the custody document's pending
   items. Nothing here reads, creates or moves key material.
 
-The exact order of preview, sealing, upload-slot request, expiry and retry is
-[a #1189 open decision](#dependencies-on-1189-open-decisions); the constraints this note
-places on it are listed there.
+The order is preview, then seal exactly those bytes, then upload; the upload reference,
+its expiry and retry are in [the dependencies on #1189](#dependencies-on-1189-open-decisions).
 
 ## Storage
 
@@ -295,14 +294,24 @@ This note does not decide these. It records the constraint each places on the an
 the two documents do not diverge.
 
 1. **Upload reference issuance and the order of preview, sealing, expiry and retry**
-   (Relay and Send Feedback). Constraints from here: the preview precedes sealing; the
-   plaintext sealed equals the previewed bytes; the tester approves any reference before it
-   is sealed in; if a slot is requested before sealing, the exact size must already be
-   determinable from the approved bytes; an expired ticket needs a new slot without
-   changing approved content; a retry never discloses plaintext to the relay; the bearer
-   ticket or URL never enters the bundle, preview, logs or issues. The existing flow
-   (seal, then request a slot) is the baseline until revised.
-2. **Ambiguous PUT success** must be handled idempotently. Requirement on the outcome:
+   (Relay and Send Feedback). Product's answer, posted on #1189 on Nov 10, is adopted here
+   as the contract:
+   * One random, single-use, per-device, content-free upload reference per report, issued
+     only after the person has seen the preview and tapped Send. It carries no feedback
+     content, tester identity or request ID, and never enters the bundle, preview, logs or
+     public issues.
+   * Short expiry: Product proposes 15 minutes; Engineering confirms the value in one
+     comment on #1189. Until then 15 minutes is a proposal (the current slot ticket
+     expires in 10).
+   * A retry reuses the same reference. If it has expired, the person is told and sends
+     again; nothing is retried silently with a new reference.
+   * Order: preview exactly what will be sent, then seal exactly those bytes, then upload.
+     Any edit after the preview restarts at the preview. Nothing leaves the device before
+     Send.
+   * A retry never discloses plaintext to the relay, and the relay stays blind.
+
+   Still for Relay and Send Feedback to specify, not decided here: how the reference maps
+   to the existing slot request, since the slot needs the exact sealed size.2. **Ambiguous PUT success** must be handled idempotently. Requirement on the outcome:
    a retry after a lost response leaves one private record, not two, and a deletion request
    removes every copy. This requirement fails today: a retry gets a new slot and blob name,
    so one report can leave two sealed blobs and two readable copies, and only a key that
@@ -343,7 +352,7 @@ in the product or notice claims end-to-end tracing.
 
 This is a sensitive documentation change. It needs two independent receipts from different
 model families and an independent security review of the exact head, plus Engineering's
-review, before it leaves draft. It stays a draft until the upload-reference issuance and
-the preview and sealing order (dependency 1) are settled by the Quality, Relay and Send
-Feedback leads. Quality owns
+review, before it leaves draft. Product has answered the upload-reference and preview/sealing-order questions (dependency 1);
+it stays a draft until Engineering confirms the expiry value and Quality and the Relay and Send
+Feedback leads agree. Quality owns
 admission of any actual build; this document approves nothing for collection.
