@@ -481,7 +481,8 @@ not the PWA.
 **Principles:**
 1. **Motion answers something:** a tap, a key, a drag, or a change worth noticing, such as
    a question arriving or a session ending. Nothing moves as decoration. Nothing loops but
-   the two glyphs (§2.1) and a progress ring while a request the person made is in flight.
+   the two glyphs (§2.1) and a progress ring while a request the person made is in flight,
+   with one owner-approved exception (11-10): the signed-out page's background ripple (below).
 2. **It orients.** Whatever enters comes from where it lives (the inspector from the
    trailing edge, a pushed screen from the trailing side, a toast from its edge), and
    whatever leaves goes back the way it came.
@@ -512,6 +513,22 @@ not the PWA.
    A platform's own transition keeps the platform's timing. An app that moves at a
    different pace from every other app on the device feels foreign (§1, principle 1).
    The tokens time what a client draws itself.
+
+**The one decorative loop (owner decision 2026-11-10 13:37 PT, studio PR #15, M1 "gate ripple").**
+The signed-out page may draw a quiet background ripple: a ring leaves the gate every 5 s
+and fades out over 20 s. It is the only decorative loop in the product, and only here:
+- **Where:** the signed-out screen only. No other screen, banner or dialog may loop as
+  decoration, and no other platform draws it until its own sign-in screen exists (Windows
+  with #384 first-run; Apple with #260).
+- **Off:** with reduced motion (the page stays still) and in high contrast (no ring; verified
+  still). It also stops when the page is hidden or the window is in the background, and
+  resumes when it is shown again.
+- **Start:** only after the page's arrival motion has finished, never during it.
+- **Never carries meaning:** no text, state or control depends on it, and it never sits
+  under text at less than AA contrast.
+- **Test:** a check that under `prefers-reduced-motion` and forced colours the ripple element
+  has no running animation, that none runs while the document is hidden, and that none starts
+  before the arrival has ended.
 
 **Tokens** (`motion.platform`; the PWA inherits Windows):
 
