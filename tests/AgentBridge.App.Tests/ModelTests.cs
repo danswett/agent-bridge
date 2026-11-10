@@ -276,6 +276,28 @@ public sealed class MarkdownTests
         Assert.True(HiddenText.HasHidden(command));
     }
 
+    [Theory]
+    [InlineData("true \u0307#; echo RAN", "true \\u0307#; echo RAN")]
+    [InlineData("true\n\u0307#; echo RAN", "true\n\\u0307#; echo RAN")]
+    [InlineData("\u0307true", "\\u0307true")]
+    [InlineData("true \u0307\u0301#", "true \\u0307\\u0301#")]
+    public void A_combining_mark_on_whitespace_or_a_line_start_is_drawn_as_an_escape_with_its_note(string command, string drawn)
+    {
+        Assert.True(HiddenText.HasHidden(command));
+        Assert.Equal(drawn, HiddenText.Reveal(command));
+        Assert.Equal(drawn, CopyOf($"```\n{command}\n```"));
+        Assert.True(new CodeCopy(new MdCode(command, null), _ => true).Hidden);
+    }
+
+    [Fact]
+    public void A_combining_mark_after_a_visible_letter_stays_as_written()
+    {
+        const string accented = "caf\u0065\u0301 na\u00EFve a\u20DD";
+        Assert.False(HiddenText.HasHidden(accented));
+        Assert.Equal(accented, HiddenText.Reveal(accented));
+        Assert.False(new CodeCopy(new MdCode(accented, null), _ => true).Hidden);
+    }
+
     [Fact]
     public void A_blank_looking_command_from_the_issue_draws_its_escapes_and_spaces_and_tabs_stay_as_they_are()
     {

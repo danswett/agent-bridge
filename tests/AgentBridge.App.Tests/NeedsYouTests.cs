@@ -421,6 +421,9 @@ public sealed class NeedsYouTests : IAsyncLifetime
     [InlineData("printf '\\uD83D\\uDE00'", true)]
     [InlineData("echo ok \\uDB40\\uDC41", false)]
     [InlineData("echo ok \\uD83D x", false)]
+    // A host's escape of a mark on a space is hidden; an accent's escape on a letter is not (#555).
+    [InlineData("true \\u0307#; echo RAN", false)]
+    [InlineData("caf\\u0065\\u0301", true)]
     public void A_hosts_escape_of_a_hidden_or_right_to_left_character_keeps_a_prompt_from_the_lanes_approve_once(string command, bool whole) =>
         Assert.Equal(whole, NeedsYouEntry.WholePrompt(Make.Approval() with { Message = Shell(command) }));
 
@@ -443,6 +446,9 @@ public sealed class NeedsYouTests : IAsyncLifetime
     [InlineData("ok\u2800#; echo RAN")]
     [InlineData("true\u2007#; echo RAN")]
     [InlineData("true\u3000#; echo RAN")]
+    // A combining mark on whitespace or a line start draws on nothing (#555).
+    [InlineData("true \u0307#; echo RAN")]
+    [InlineData("true\n\u0307#; echo RAN")]
     public async Task A_command_with_a_character_not_drawn_where_it_runs_makes_the_lane_refuse_approve_once(string command)
     {
         await SnapshotAsync();

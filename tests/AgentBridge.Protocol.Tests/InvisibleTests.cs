@@ -45,6 +45,31 @@ public class InvisibleTests
     });
 
     [Theory]
+    [InlineData("true \u0307#; echo RAN", "true \\u0307#; echo RAN")]
+    [InlineData("true\n\u0307#; echo RAN", "true\n\\u0307#; echo RAN")]
+    [InlineData("\u0307true", "\\u0307true")]
+    [InlineData("true \u0307\u0301#", "true \\u0307\\u0301#")]
+    public void A_combining_mark_on_whitespace_or_a_line_start_is_escaped_noted_and_read_back_as_hidden(string text, string shown)
+    {
+        Assert.True(ShownText.HasHidden(text));
+        Assert.Equal(shown, ShownText.Reveal(text));
+        Assert.Equal([ShownText.HiddenNote], ShownText.Notes(text));
+        Assert.Equal([ShownText.HiddenNote], ShownText.Notes(shown));
+        Assert.Equal(text, ShownText.Unreveal(shown));
+        Assert.True(ShownText.HasRevealed(shown));
+    }
+
+    [Fact]
+    public void A_combining_mark_after_a_visible_letter_is_not_hidden_and_its_escape_is_left_as_it_is()
+    {
+        const string accented = "caf\u0065\u0301 a\u20DD";
+        Assert.False(ShownText.HasHidden(accented));
+        Assert.Equal(accented, ShownText.Reveal(accented));
+        Assert.Empty(ShownText.Notes(accented));
+        Assert.Equal("e\\u0301", ShownText.Unreveal("e\\u0301"));
+    }
+
+    [Theory]
     [MemberData(nameof(LeadIns))]
     public void A_reply_or_prompt_starting_a_command_behind_invisible_characters_is_refused(string lead)
     {
