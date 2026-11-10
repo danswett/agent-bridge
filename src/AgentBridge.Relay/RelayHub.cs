@@ -63,9 +63,9 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
     // Container Apps) while new devices land on the new one, and neither half sees the other.
     public Task CloseAllAsync() => Task.WhenAll(accounts.Values.SelectMany(a => a.Values).Select(c => c.CloseAsync(CloseCodes.Restarting, "restarting")));
 
-    sealed class Connection(WebSocket ws, Account account, string deviceId, string name,     string kind, string site, string? start = null)
+    sealed class Connection(WebSocket ws, Account account, string deviceId, string name, string kind, string site, string? start = null)
     {
-            public string? Start => start;
+        public string? Start => start;
         // Correlates one socket's log lines. Random and meaningless outside this process, so
         // logs carry no account, device or name (design §5.10).
         public string Tag { get; } = Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant();
@@ -240,7 +240,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             await RefuseAsync(ws, CloseCodes.ProofFailed, "proof-failed");
             return null;
         }
-        return new Connection(ws, account, Wire.DeviceId(pub),         name, kind, site, start);
+        return new Connection(ws, account, Wire.DeviceId(pub), name, kind, site, start);
     }
 
     async Task<string> ForwardAsync(Connection conn, ConcurrentDictionary<string, Connection> devices, CancellationToken aborted)

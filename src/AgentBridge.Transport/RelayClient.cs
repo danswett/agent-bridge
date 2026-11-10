@@ -215,7 +215,7 @@ public sealed class RelayClient : IAsyncDisposable
     }.Uri;
 
     // kind is one of the relay's device kinds: host, app, pwa, phone or test.
-    public static async Task<RelayClient> ConnectAsync(Uri relay, string token, P256KeyPair key, string name,     string kind, CancellationToken ct = default, string? start = null)
+    public static async Task<RelayClient> ConnectAsync(Uri relay, string token, P256KeyPair key, string name, string kind, CancellationToken ct = default, string? start = null)
     {
         var ws = new ClientWebSocket();
         // Keeps NATs, proxies and the hosting ingress from timing out an idle host. The timeout
