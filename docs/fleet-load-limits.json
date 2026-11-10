@@ -3,5 +3,7 @@
   "minAvailableMemoryMiB": 9830,
   "maxRunQueuePerCore": 2,
   "maxAgeSeconds": 30,
-  "nullFails": true
+  "nullFails": true,
+  "maxLaunchesPerReading": 2,
+  "maxLaunchesPerMachinePerHour": 10
 }
