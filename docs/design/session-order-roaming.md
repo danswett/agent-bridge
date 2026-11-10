@@ -83,6 +83,11 @@ every counter it has seen before writing.
   tombstones the group; its sessions fall back to Sessions in their place.
 - Read marker: `max(turn)`. Never moves backward. Merging a marker for a session with no row is kept.
 
+Built in S1a (#1583) as `pwa/js/order-merge.js` (pure: no UI, storage or network), with every vector
+in `pwa/test/unit/order-merge.test.mjs`. Ties the rules leave open (the same device and counter with
+different values) resolve to a tombstone first, then by the value's JSON, so the merge stays the
+same in either order.
+
 Required vectors: concurrent move of the same row on two devices; insert at the same position;
 delete against move; rename against delete of a group; a stale write arriving after a newer one;
 equal counters; read marker from two devices; merge is the same in either order and repeating it
