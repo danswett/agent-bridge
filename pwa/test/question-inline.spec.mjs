@@ -7,18 +7,20 @@ const CODEX = '019a1b2c-codex-example';
 const QID = 'q-inline';
 const long = 'Lorem ipsum dolor sit amet. '.repeat(120);
 
-async function setup(page) {
+async function setup(page, { holdHistory = false } = {}) {
   await page.setViewportSize({ width: 900, height: 700 });
   await page.goto('?demo=1&static=1&answerDelay=300');
   await page.waitForSelector('html[data-demo-ready]');
-  await page.evaluate(({ id, qid, long }) => {
+  await page.evaluate(({ id, qid, long, holdHistory }) => {
     const d = window.agentBridgeDemo;
+    if (holdHistory) { d.host.holdResponses(); }
     const t = new Date(Date.now() + 1000).toISOString();
     const base = Date.now() - 3600000;
     const at = (n) => new Date(base + n * 1000).toISOString();
     const question = {
       id: qid, kind: 'form', askedAt: at(100), message: 'Which database?',
-      fields: [{ name: 'answer', title: 'Database', type: 'choice', required: true, options: [{ value: 'sqlite', label: 'SQLite' }, { value: 'pg', label: 'PostgreSQL' }] }],
+      fields: holdHistory ? [{ name: 'answer', title: 'Answer', type: 'text' }]
+        : [{ name: 'answer', title: 'Database', type: 'choice', required: true, options: [{ value: 'sqlite', label: 'SQLite' }, { value: 'pg', label: 'PostgreSQL' }] }],
     };
     const turn = (k, parts) => ({ id: `${id}-turn-${k}`, at: at(k * 100), prompt: { text: `Prompt ${k}` }, parts });
     const say = (k) => ({ id: `${id}-turn-${k}.1`, kind: 'response', at: at(k * 100 + 1), text: `Reply ${k}. ${long}` });
@@ -29,15 +31,16 @@ async function setup(page) {
       turn(4, [say(4)]),
       turn(5, [say(5)]),
     ]);
+    if (holdHistory) { d.host.historyTurns.get(id).splice(2); }
     const s = d.host.get(id);
     d.upsert({
       ...s, status: 'waiting', statusSince: t, updatedAt: t, question,
-      activity: { ...(s.activity ?? {}), turnCount: 6, turn: `${id}-turn-6` },
+      activity: { ...(s.activity ?? {}), turnCount: holdHistory ? 2 : 6, turn: `${id}-turn-${holdHistory ? 2 : 6}` },
     });
-  }, { id: CODEX, qid: QID, long });
+  }, { id: CODEX, qid: QID, long, holdHistory });
   await open(page, CODEX);
   const card = view(page, CODEX);
-  await expect(card.locator('.history .history-turn')).not.toHaveCount(0);
+  if (!holdHistory) { await expect(card.locator('.history .history-turn')).not.toHaveCount(0); }
   return card;
 }
 
@@ -118,6 +121,35 @@ test('live reply updates keep focus in an unchanged latest-turn question', async
     d.upsert({ ...s, updatedAt: new Date(Date.now() + 5000).toISOString(), activity: { ...s.activity, responseTurn: s.activity.turn, response: 'A new live reply' } });
   }, { id: CODEX });
   await expect(input).toBeFocused();
+  await expect(input).toHaveValue('My draft');
+});
+
+test('first history attachment keeps the live question draft, focus and caret', async ({ page }) => {
+  const card = await setup(page, { holdHistory: true });
+  const input = card.locator('.question:not(.resolved) textarea');
+  await expect(card.locator('.history .question-slot')).toHaveCount(0);
+  await input.focus();
+  await page.keyboard.type('Before after');
+  await input.evaluate((el) => el.setSelectionRange(7, 7));
+  await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
+  await expect(card.locator('.history .question-slot')).toHaveCount(1);
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue('Before after');
+  expect(await input.evaluate((el) => [el.selectionStart, el.selectionEnd])).toEqual([7, 7]);
+  await page.keyboard.type('still ');
+  await expect(input).toHaveValue('Before still after');
+});
+
+test('first history attachment does not take focus moved away from the live question', async ({ page }) => {
+  const card = await setup(page, { holdHistory: true });
+  const input = card.locator('.question:not(.resolved) textarea');
+  await input.focus();
+  await page.keyboard.type('My draft');
+  const elsewhere = page.locator('#nav [data-nav="sessions"]');
+  await elsewhere.focus();
+  await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
+  await expect(card.locator('.history .question-slot')).toHaveCount(1);
+  await expect(elsewhere).toBeFocused();
   await expect(input).toHaveValue('My draft');
 });
 
