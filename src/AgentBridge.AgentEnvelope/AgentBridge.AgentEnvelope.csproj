@@ -3,7 +3,8 @@
   <!-- The signed agent-command envelope (#722, AP4; docs/design/agent-principals.md §4.2-§4.3):
        its canonical encoding, signing, strict parser and verification. A library only: nothing
        here is wired into a host, the relay or a client (AP5), and it depends on nothing but the
-       base class library, so every verifier computes from the same code. -->
+       base class library and AgentBridge.Roster (#1338), whose framing, base64url and P-256 code it
+       uses rather than copies, so every verifier computes from the same code. -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
@@ -11,6 +12,10 @@
     <RootNamespace>AgentBridge.AgentEnvelope</RootNamespace>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AgentBridge.Roster\AgentBridge.Roster.csproj" />
+  </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="AgentBridge.AgentEnvelope.Tests" />

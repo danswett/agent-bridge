@@ -1,3 +1,4 @@
+using AgentBridge.Roster;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -45,7 +46,7 @@ public sealed class UnverifiedEnvelope
     public VerifiedEnvelope Verify(ReadOnlySpan<byte> hostSignPoint, long nowSeconds)
     {
         if (!P256.IsPoint(hostSignPoint)) { throw new EnvelopeException(Refusal.Point, "hostSign"); }
-        if (!P256.Verify(hostSignPoint, Framing.AgentCommand(BodyBytes), Signature)) { throw new EnvelopeException(Refusal.Signature, "sig"); }
+        if (!P256.Verify(hostSignPoint, AgentCommandFraming.AgentCommand(BodyBytes), Signature)) { throw new EnvelopeException(Refusal.Signature, "sig"); }
         if (nowSeconds >= Body.ExpiresAt) { throw new EnvelopeException(Refusal.Lifetime, "expiresAt"); }
         if (Body.IssuedAt > nowSeconds + MaxSkewSeconds) { throw new EnvelopeException(Refusal.Lifetime, "issuedAt"); }
         return new VerifiedEnvelope(Body, BodyBytes);
@@ -73,7 +74,7 @@ public static class Envelope
         // The outer object is itself canonical, so one envelope has one spelling.
         if (!Encode(bodyBytes, sig).AsSpan().SequenceEqual(bytes.Span)) { throw new EnvelopeException(Refusal.NonCanonical, "envelope"); }
 
-        P256.CheckSignatureShape(sig, "sig");
+        EnvelopeChecks.CheckSignatureShape(sig, "sig");
         var body = EnvelopeBody.Parse(bodyBytes);
         return new UnverifiedEnvelope(bodyBytes, sig, body);
     }
@@ -87,7 +88,7 @@ public static class Envelope
         // Encode does not escape (every valid field is plain ASCII), so a body that is not valid
         // would sign to bytes no verifier accepts, or to a different structure. Read it back first.
         EnvelopeBody.Parse(bodyBytes);
-        var sig = P256.Normalize(signer.Sign(Framing.AgentCommand(bodyBytes)));
+        var sig = P256.Normalize(signer.Sign(AgentCommandFraming.AgentCommand(bodyBytes)));
         var envelope = Encode(bodyBytes, sig);
         if (envelope.Length > MaxBytes) { throw new EnvelopeException(Refusal.TooLarge, "envelope"); }
         return envelope;

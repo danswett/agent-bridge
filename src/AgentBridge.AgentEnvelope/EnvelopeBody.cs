@@ -1,3 +1,4 @@
+using AgentBridge.Roster;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -152,7 +153,7 @@ public sealed record EnvelopeBody(
         foreach (var h in StrictJson.Array(o.GetProperty("heads"), "heads"))
         {
             var text = StrictJson.String(h, "heads");
-            Codec.CheckBytes(text, 32, "heads");
+            EnvelopeChecks.CheckBytes(text, 32, "heads");
             heads.Add(text);
         }
         if (heads.Count is 0 or > MaxHeads) { throw new EnvelopeException(Refusal.Length, "heads"); }
@@ -166,7 +167,7 @@ public sealed record EnvelopeBody(
         var target = ReadTarget(o.GetProperty("target"), needs);
 
         var dataSha256 = StrictJson.String(o.GetProperty("dataSha256"), "dataSha256");
-        Codec.CheckBytes(dataSha256, 32, "dataSha256");
+        EnvelopeChecks.CheckBytes(dataSha256, 32, "dataSha256");
 
         var issuedAt = StrictJson.Integer(o.GetProperty("issuedAt"), "issuedAt");
         var expiresAt = StrictJson.Integer(o.GetProperty("expiresAt"), "expiresAt");
@@ -212,7 +213,7 @@ public sealed record EnvelopeBody(
         if (o.TryGetProperty("prev", out var p))
         {
             prev = StrictJson.String(p, "chain.prev");
-            Codec.CheckBytes(prev, 32, "chain.prev");
+            EnvelopeChecks.CheckBytes(prev, 32, "chain.prev");
         }
         var depth = StrictJson.Integer(o.GetProperty("depth"), "chain.depth");
         var messages = StrictJson.Integer(o.GetProperty("messages"), "chain.messages");
@@ -323,7 +324,7 @@ public sealed record EnvelopeBody(
     static string AccountId(JsonElement o, string name, string where)
     {
         var text = StrictJson.String(o.GetProperty(name), where);
-        return Codec.IsAccountId(text) ? text : throw new EnvelopeException(Refusal.Value, where);
+        return EnvelopeChecks.IsAccountId(text) ? text : throw new EnvelopeException(Refusal.Value, where);
     }
 
     static string Uuid(JsonElement o, string name, string? where = null)
@@ -336,7 +337,7 @@ public sealed record EnvelopeBody(
     static string Bytes(JsonElement o, string name, int length, string where)
     {
         var text = StrictJson.String(o.GetProperty(name), where);
-        Codec.CheckBytes(text, length, where);
+        EnvelopeChecks.CheckBytes(text, length, where);
         return text;
     }
 }

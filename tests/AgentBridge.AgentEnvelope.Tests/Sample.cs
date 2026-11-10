@@ -2,6 +2,9 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
 using AgentBridge.AgentEnvelope;
+using Codec = AgentBridge.Roster.Codec;
+using Framing = AgentBridge.Roster.Framing;
+using P256 = AgentBridge.Roster.P256;
 
 // Shared by the tests and the vector generator: one valid command and the key that signs it.
 static class Sample
@@ -44,7 +47,7 @@ static class Sample
     // Signs `bodyBytes` as an envelope: over the agent-command framing unless `message` says otherwise.
     public static byte[] Wrap(ECDsa key, byte[] bodyBytes, byte[]? message = null, Func<byte[], byte[]>? sig = null)
     {
-        var der = P256.Normalize(key.SignData(message ?? Framing.AgentCommand(bodyBytes), HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence));
+        var der = P256.Normalize(key.SignData(message ?? AgentCommandFraming.AgentCommand(bodyBytes), HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence));
         return Envelope.Encode(bodyBytes, sig is null ? der : sig(der));
     }
 
