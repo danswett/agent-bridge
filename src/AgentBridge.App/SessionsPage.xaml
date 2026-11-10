@@ -201,6 +201,90 @@
                     <Style TargetType="ListViewItem" BasedOn="{StaticResource DefaultListViewItemStyle}">
                         <Setter Property="Padding" Value="8,0,4,0" />
                         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <!-- Studio #19: the bar follows the container, not its content padding or
+                             the native presenter's centred, animated selection pill. -->
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ListViewItem">
+                                    <Grid
+                                        x:Name="RowChrome"
+                                        Background="Transparent"
+                                        UseLayoutRounding="True"
+                                        Control.IsTemplateFocusTarget="True"
+                                        FocusVisualMargin="{TemplateBinding FocusVisualMargin}"
+                                        FocusVisualPrimaryBrush="{TemplateBinding FocusVisualPrimaryBrush}"
+                                        FocusVisualPrimaryThickness="{TemplateBinding FocusVisualPrimaryThickness}"
+                                        FocusVisualSecondaryBrush="{TemplateBinding FocusVisualSecondaryBrush}"
+                                        FocusVisualSecondaryThickness="{TemplateBinding FocusVisualSecondaryThickness}">
+                                        <VisualStateManager.VisualStateGroups>
+                                            <VisualStateGroup x:Name="CommonStates">
+                                                <VisualState x:Name="Normal" />
+                                                <VisualState x:Name="PointerOver">
+                                                    <VisualState.Setters>
+                                                        <Setter Target="RowContent.Background" Value="{ThemeResource ListViewItemBackgroundPointerOver}" />
+                                                    </VisualState.Setters>
+                                                </VisualState>
+                                                <VisualState x:Name="Pressed">
+                                                    <VisualState.Setters>
+                                                        <Setter Target="RowContent.Background" Value="{ThemeResource ListViewItemBackgroundPressed}" />
+                                                    </VisualState.Setters>
+                                                </VisualState>
+                                                <VisualState x:Name="Selected">
+                                                    <VisualState.Setters>
+                                                        <Setter Target="RowContent.Background" Value="{ThemeResource AbSelected}" />
+                                                        <Setter Target="SelectionBar.Visibility" Value="Visible" />
+                                                    </VisualState.Setters>
+                                                </VisualState>
+                                                <VisualState x:Name="PointerOverSelected">
+                                                    <VisualState.Setters>
+                                                        <Setter Target="RowContent.Background" Value="{ThemeResource AbSelected}" />
+                                                        <Setter Target="SelectionBar.Visibility" Value="Visible" />
+                                                    </VisualState.Setters>
+                                                </VisualState>
+                                                <VisualState x:Name="PressedSelected">
+                                                    <VisualState.Setters>
+                                                        <Setter Target="RowContent.Background" Value="{ThemeResource AbSelected}" />
+                                                        <Setter Target="SelectionBar.Visibility" Value="Visible" />
+                                                    </VisualState.Setters>
+                                                </VisualState>
+                                            </VisualStateGroup>
+                                            <VisualStateGroup x:Name="DisabledStates">
+                                                <VisualState x:Name="Enabled" />
+                                                <VisualState x:Name="Disabled">
+                                                    <VisualState.Setters>
+                                                        <Setter Target="RowChrome.Opacity" Value="{ThemeResource ListViewItemDisabledThemeOpacity}" />
+                                                    </VisualState.Setters>
+                                                </VisualState>
+                                            </VisualStateGroup>
+                                        </VisualStateManager.VisualStateGroups>
+                                        <ContentPresenter
+                                            x:Name="RowContent"
+                                            Content="{TemplateBinding Content}"
+                                            ContentTemplate="{TemplateBinding ContentTemplate}"
+                                            ContentTransitions="{TemplateBinding ContentTransitions}"
+                                            Padding="{TemplateBinding Padding}"
+                                            Background="{TemplateBinding Background}"
+                                            BorderBrush="{TemplateBinding BorderBrush}"
+                                            BorderThickness="{TemplateBinding BorderThickness}"
+                                            CornerRadius="{ThemeResource ListViewItemCornerRadius}"
+                                            Foreground="{TemplateBinding Foreground}"
+                                            HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                            VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
+                                        <Border
+                                            x:Name="SelectionBar"
+                                            Width="3"
+                                            Margin="4"
+                                            HorizontalAlignment="Left"
+                                            VerticalAlignment="Stretch"
+                                            CornerRadius="1.5"
+                                            Background="{ThemeResource AbBridge}"
+                                            Visibility="Collapsed"
+                                            IsHitTestVisible="False"
+                                            AutomationProperties.AccessibilityView="Raw" />
+                                    </Grid>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
                     </Style>
                 </ListView.ItemContainerStyle>
                 <ListView.Header>

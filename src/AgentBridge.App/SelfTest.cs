@@ -61,6 +61,7 @@ static partial class SelfTest
             Check(remoteFacts is not null && Text(remoteFacts).EndsWith(" · " + remote.MachineName, StringComparison.Ordinal), $"names the machine on another machine's row ({(remoteFacts is null ? "none" : Text(remoteFacts))})");
             await CheckRowAnatomy(rows, Check);
             CheckRowNames(window, rows, Check);
+            await CheckSelectionBar(window, Check, outFile);
 
             // A session chosen in the list is the session pane's, with its question's controls.
             var approval = await Choose(window, main, "demo-approval", "Option:approve");
