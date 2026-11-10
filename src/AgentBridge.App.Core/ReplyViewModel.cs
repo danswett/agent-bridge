@@ -216,7 +216,9 @@ public sealed class ReplyViewModel : Observable
     }
 
     public bool Pending => deliveries.Get(Key)?.State is DeliveryState.Sending or DeliveryState.Waiting;
-    public bool CanSend => current() && !Held && !Pending && !pausedAfterBusy && preparing == 0 && (!string.IsNullOrWhiteSpace(text) || Attachments.Count > 0);
+    public Func<bool>? Moving { get; set; }
+    public void RefreshSend() { Raise(nameof(CanSend)); Raise(nameof(SendEnabled)); }
+    public bool CanSend => current() && !(Moving?.Invoke() ?? false) && !Held && !Pending && !pausedAfterBusy && preparing == 0 && (!string.IsNullOrWhiteSpace(text) || Attachments.Count > 0);
     public bool ShowResend => current() && deliveries.Get(Key)?.State == DeliveryState.Failed;
     public string? Error { get => error; private set { if (Set(ref error, value)) { Raise(nameof(HasError)); } } }
     public bool HasError => error is not null;

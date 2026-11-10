@@ -61,6 +61,7 @@ public static class StatusRules
     public const int SignIn = 10;
     public const int Error = 11;
     public const int NotResponding = 12;
+    public const int Moving = 13;
 
     public static StatusLine Offline(DateTimeOffset since, DateTimeOffset now) =>
         Line(Away, StatusGlyph.Failed, "offline", StatusTone.Muted, "Offline", $"last seen {Words.Ago(since, now)}");

@@ -95,7 +95,21 @@ public sealed partial class SessionCardViewModel : Observable
     // What the card says about the session: ui.md §2.2's glyph and words (StatusRules); while its
     // machine is away, that it is offline (or reconnecting) instead, since what it last said may
     // no longer be so (#269).
-    public StatusLine Line => ctx.Away(ctx.Time.GetUtcNow()) ?? StatusRules.For(session);
+    public StatusLine Line => ctx.Away(ctx.Time.GetUtcNow()) ?? MovingLine ?? StatusRules.For(session);
+
+    StatusLine? MovingLine => move is { IsMoving: true } m ? new StatusLine(StatusRules.Moving, StatusGlyph.Working, "working", [m.RowText], StatusTone.Plain, false) : null;
+    MoveProgressViewModel? move;
+    public MoveProgressViewModel? Move
+    {
+        get => move;
+        set { if (move is not null) { move.PropertyChanged -= OnMoveChanged; } if (!Set(ref move, value)) { return; } if (move is not null) { move.PropertyChanged += OnMoveChanged; } OnMoveChanged(null, null!); }
+    }
+
+    void OnMoveChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        RaiseStatus();
+        if (Reply is { } r) { r.RefreshSend(); }
+    }
     // Its machine is away: the row is what the session last said, and nothing on it can be done.
     public bool Away => Line.Rule == StatusRules.Away;
     public (string View, string Text) State => (Line.View, Line.Text);
@@ -399,7 +413,7 @@ public sealed partial class SessionCardViewModel : Observable
         var blobMax = files && ctx.BlobsFor is not null ? LargeAttachments.Max(caps, ctx.Blobs) : 0;
         if (replies && reply is null)
         {
-            Reply = new ReplyViewModel(session, files, ctx.Deliveries, ctx.Host, ctx.Shrinker, name, large, ctx.Current) { Blobs = ctx.Blobs, BlobsFor = ctx.BlobsFor };
+            Reply = new ReplyViewModel(session, files, ctx.Deliveries, ctx.Host, ctx.Shrinker, name, large, ctx.Current) { Blobs = ctx.Blobs, BlobsFor = ctx.BlobsFor, Moving = () => move?.IsMoving == true };
             if (parkedReply is not null) { reply!.TakeDraft(parkedReply); parkedReply = null; }
         }
         else if (!replies && reply is not null)
