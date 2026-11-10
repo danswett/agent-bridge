@@ -246,7 +246,8 @@ const READS = {
       return { discarded: await p };
     },
   },
-  LaunchOptions: { read: readLaunchOptions },
+  // The notice for a partial list is #95 S3's; until then the PWA does not read it.
+  LaunchOptions: { read: readLaunchOptions, unread: ['resumableIncomplete'] },
   LaunchAgent: { read: (j) => readLaunchOptions({ agents: [j] }).agents[0] ?? null },
   LaunchTuning: { read: (j) => readLaunchOptions({ agents: [{ id: 'copilot', label: 'Copilot', kind: 'copilot', defaults: j }] }).agents[0].defaults },
   LaunchWorkspace: { read: (j) => readLaunchOptions({ workspaces: [j] }).workspaces[0] ?? null },
@@ -451,6 +452,7 @@ const NOT_REPLAYED = {
   PushDevice: 'the PWA does not call push.list',
   AttachmentRef: 'written as ReplyRequest\'s attachments, replayed there',
   BlobRef: 'written by the blob-store path of uploadAttachment, which needs a relay',
+  ResumableIncomplete: 'read only within LaunchOptions, and not yet by the PWA (#95 S3)',
   LaunchDefaults: 'read only within LaunchOptions, where it must name an agent and a workspace offered',
   TrustAnswerRequest: 'built in ui/launch-view.js; its command is replayed in signed-command.json',
   LaunchTransfer: 'built in ui/launch-view.js; its command is replayed in signed-command.json',

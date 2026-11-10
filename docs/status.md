@@ -389,7 +389,7 @@ ui.md §2.2 rule 7 becomes an overlay after rules 1–6 while rule 8 refines rul
   - #56: cancel a question from another device;
   - #78: launched sessions get the agent HA token;
   - #93: migrate carries `usage.*`;
-  - #95: bound the resumable sessions' folder checks;
+  - #95: bound the resumable sessions' folder checks (S1 #1291 done; S2 #1292 adds `resumableIncomplete` to `launch.options`; client lines are S3 and S4);
   - #172: usage per account, shared between hosts (merged in #186; follow-ups #206, #207).
 - **Bugs and follow-ups from live use:**
   - #101: app test timing races, fixed by #401 (each app test runs on a UI thread of its own); #241, a DevBox keep-awake fake-time race, is separate;

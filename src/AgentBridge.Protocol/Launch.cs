@@ -2,6 +2,8 @@
 // docs/protocol/v1-launch.md; these records mirror it and serialize to exactly that JSON with
 // ProtocolJson.Options.
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 namespace AgentBridge.Protocol;
@@ -192,6 +194,50 @@ public sealed record LaunchOptions
     public bool? ResumablePending { get; init; }
     // Folder-trust questions launched agents are waiting on (launch.trust). Absent when none.
     public IReadOnlyList<TrustQuestion>? Trust { get; init; }
+    // Set only when resumable sessions were left out of this answer (#1292), so a client can tell a
+    // partial list from a full one. A count and a reason, never a title, folder or path.
+    public ResumableIncomplete? ResumableIncomplete { get; init; }
+}
+
+// Resumable sessions the host did not check in time. Reason is "deadline", the only value v1
+// sends; a client treats any value the same. Omitted is at least 1: a record saying 0 or fewer
+// is unreadable (absent, inside launch.options), as a count of nothing left out is no omission.
+[JsonConverter(typeof(ResumableIncompleteConverter))]
+public sealed record ResumableIncomplete
+{
+    public ResumableIncomplete(int omitted, string reason)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(omitted, 1);
+        Omitted = omitted;
+        Reason = reason ?? throw new ArgumentNullException(nameof(reason));
+    }
+
+    public int Omitted { get; }
+    public string Reason { get; }
+}
+
+sealed class ResumableIncompleteConverter : JsonConverter<ResumableIncomplete>
+{
+    public override ResumableIncomplete Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        using var doc = JsonDocument.ParseValue(ref reader);
+        var o = doc.RootElement;
+        if (o.ValueKind != JsonValueKind.Object
+            || !o.TryGetProperty("omitted", out var n) || n.ValueKind != JsonValueKind.Number || !n.TryGetInt32(out var omitted) || omitted < 1
+            || !o.TryGetProperty("reason", out var r) || r.ValueKind != JsonValueKind.String)
+        {
+            throw new JsonException("not a resumableIncomplete");
+        }
+        return new ResumableIncomplete(omitted, r.GetString()!);
+    }
+
+    public override void Write(Utf8JsonWriter writer, ResumableIncomplete value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        writer.WriteNumber("omitted", value.Omitted);
+        writer.WriteString("reason", value.Reason);
+        writer.WriteEndObject();
+    }
 }
 
 // One launcher. Models, efforts and contexts are the values it takes; none of them is the
