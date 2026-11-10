@@ -49,6 +49,10 @@ public sealed class SessionService
     // may have arrived takes the session back from an agent at once, as one typed at the machine.
     public SessionDrivers? Drivers { get; init; }
     public TimeProvider Time { get; init; } = TimeProvider.System;
+    public Fleet.FleetNames? FleetNames { get; init; }
+
+    internal object RenameFleetSession(JsonElement data) =>
+        (FleetNames ?? throw new InvalidOperationException("refused: fleet-name storage is not available on this host")).Rename(source, data);
 
     // hello's machine.restore (#780): what went with the machine or the host when it last stopped, or
     // null. Set, it offers sessions.restore.
