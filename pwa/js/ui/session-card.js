@@ -662,9 +662,10 @@ export class SessionCard {
     this.#watchHold(e.scroll);
     // An open question out of sight (#1657): one tap brings its card into view.
     e.waiting = h('button', { type: 'button', class: 'question-waiting', hidden: true, onclick: () => this.#showWaiting() }, 'Question waiting');
-    e.scroll.addEventListener('scroll', () => this.#syncWaiting(), { passive: true });
-    // A tab shown again, a resized pane or a history drawn late moves the card with no scroll.
-    if (typeof ResizeObserver === 'function') { new ResizeObserver(() => this.#syncWaiting()).observe(e.scroll); }
+    // Watched, not measured: a read of the layout here would spend the one the move watch owes.
+    if (typeof IntersectionObserver === 'function') {
+      new IntersectionObserver((entries) => { this.#questionSeen = entries.at(-1).isIntersecting; this.#syncWaiting(); }, { root: e.scroll }).observe(e.question);
+    }
     e.conversation = h('div', { class: 'conversation', id: this.ids.conversation, role: 'tabpanel', 'aria-labelledby': this.ids.tabC },
       e.scroll, e.waiting, e.reply, e.replyBar);
 
@@ -1613,15 +1614,10 @@ export class SessionCard {
     }
   }
 
+  #questionSeen = true;
+
   #syncWaiting() {
-    const { waiting, question, scroll } = this.els;
-    let away = false;
-    if (this.#s?.question && question.isConnected && scroll.getClientRects().length) {
-      const q = question.getBoundingClientRect();
-      const box = scroll.getBoundingClientRect();
-      away = q.bottom < box.top || q.top > box.bottom;
-    }
-    waiting.hidden = !away;
+    this.els.waiting.hidden = !this.#s?.question || this.#questionSeen;
   }
 
   #showWaiting() {
