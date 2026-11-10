@@ -394,6 +394,20 @@ dotnet test tests/AgentBridge.Transport.Tests -c Release --filter "FullyQualifie
 # A_TPM_signing_key_… must pass, not be skipped. Then no test key may be left in the TPM:
 certutil -user -csp "Microsoft Platform Crypto Provider" -key | Select-String agent-bridge-roster-sign
 ```
+
+### Host key custody (unused primitive, #1776 PR 1a)
+
+`HostSignKey` in `src/AgentBridge.Host` reuses the Windows TPM-first/DPAPI CurrentUser
+store in a separate owner-only `host-sign` profile folder. This is a new identity, not
+the person's `sign`, the ECDH key or AP5-lite's `AgentSignKey`. It reports its storage tier
+and exposes only its public point and low-S signing operation, never private material.
+A flushed `host-sign.public` record commits that identity. Missing, damaged, mismatched
+or inaccessible state is refused with a fixed, content-free error, not replaced or
+auto-repaired. Concurrent first callers serialize through a profile-local file lock.
+Other platforms are not implemented by this primitive. Nothing calls it at startup:
+there is no enrollment, roster-v2 switch, registry signing or reader change. The #55
+trusted-state and person-authorized enrollment prerequisites still block those slices.
+
 ## The relay's copy
 
 The relay keeps one append-only log per account and is an untrusted store (design §3.6): it keeps an entry only if the entry is valid against the relay's own copy, and a host verifies what it reads for itself and never takes the relay's word. Mode is `observe`: the relay serves every account's log and enforces nothing; no connection is refused for want of a roster entry.

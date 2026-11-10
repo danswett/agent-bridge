@@ -6,8 +6,9 @@
 //   DPAPI  No TPM that can sign with P-256: a software key, encrypted to the Windows user.
 //
 // It is a separate key from the device's ECDH key: the roster names both (`dh` and `sign`), and a
-// key used for one never signs or agrees for the other. Elsewhere there is no store yet (the
-// Apple client's Secure Enclave comes with A1, and a host has no signing key at all).
+// key used for one never signs or agrees for the other. HostSignKey reuses this storage in a
+// separate folder for a distinct hostSign key, never the person's key. Elsewhere there is no
+// store yet (the Apple client's Secure Enclave comes with A1).
 //
 // A roster signature is minimal DER with a low S (§3.2): CNG and .NET sign in IEEE P1363 (r ‖ s),
 // and either S of a pair verifies, so S is replaced by n − S when it is the high one.

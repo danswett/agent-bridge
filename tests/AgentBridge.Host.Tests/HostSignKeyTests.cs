@@ -33,7 +33,11 @@ public sealed class HostSignKeyTests : IDisposable
         using var child = Process.Start(info)!;
         var output = child.StandardOutput.ReadToEndAsync();
         var error = child.StandardError.ReadToEndAsync();
-        await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        try { await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30)); }
+        finally
+        {
+            if (!child.HasExited) { child.Kill(entireProcessTree: true); await child.WaitForExitAsync(); }
+        }
         Assert.True(child.ExitCode == 0, "the fresh process did not reopen the committed identity");
         Assert.True((await output).Length == 0 && (await error).Length == 0, "custody emitted diagnostics");
         using var again = HostSignKey.LoadOrCreate(profile);
