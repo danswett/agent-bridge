@@ -3,6 +3,7 @@ using AgentBridge.Protocol;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media;
 
 namespace AgentBridge.App;
@@ -18,7 +19,8 @@ static partial class SelfTest
         await demo.PutAsync(DemoHost.Examples().First() with { Id = session, Title = "Transcript paint", Question = null });
         await Until(() => main.AllCards.Any(c => c.Id == session), TimeSpan.FromSeconds(10));
         var view = await Choose(window, main, session, "Response");
-        if (view?.Card is not { Stored: { } stored } card || ById<ItemsRepeater>(view, "History") is not { } rows)
+        if (view?.Card is not { Stored: { } stored } card || ById<ItemsRepeater>(view, "History") is not { } rows
+            || ConversationScroller(view) is not { } viewport)
         {
             check(false, "finds stored turns for the transcript first-paint check");
             Away(window, main);
@@ -56,8 +58,17 @@ static partial class SelfTest
         bool Drawn(FrameworkElement element)
         {
             if (!Shown(element)) { return false; }
-            var bounds = element.TransformToVisual(view).TransformBounds(new Windows.Foundation.Rect(0, 0, element.ActualWidth, element.ActualHeight));
-            return bounds.Bottom > 0 && bounds.Top < view.ActualHeight;
+            var bounds = element.TransformToVisual(viewport).TransformBounds(new Windows.Foundation.Rect(0, 0, element.ActualWidth, element.ActualHeight));
+            return bounds.Bottom > 0 && bounds.Top < viewport.ViewportHeight;
+        }
+
+        var mono = ((FontFamily)Application.Current.Resources["MonoFontFamily"]).Source;
+        bool Formatted(MarkdownView markdown)
+        {
+            var runs = markdown.Children.OfType<RichTextBlock>().SelectMany(r => r.Blocks.OfType<Paragraph>())
+                .SelectMany(p => p.Inlines.OfType<Run>()).ToList();
+            return runs.Any(r => r.Text.StartsWith("Formatted reply ", StringComparison.Ordinal) && r.FontWeight.Weight == Microsoft.UI.Text.FontWeights.SemiBold.Weight)
+                && runs.Any(r => r.Text == "code" && r.FontFamily?.Source == mono);
         }
 
         var phase = "first paint";
@@ -77,13 +88,18 @@ static partial class SelfTest
                 {
                     failures.Add($"{phase}, frame {frames}, {row.Id}: missing collapsed agent presentation");
                 }
+                var label = prompt is null ? null : Find<TextBlock>(prompt).FirstOrDefault(t => t.Text == row.Disclosure?.Origin.Label);
+                if (label?.Foreground is not SolidColorBrush colour || Ui.ThemedBrush("AbAgentText", element.ActualTheme) is not SolidColorBrush expected || colour.Color != expected.Color)
+                {
+                    failures.Add($"{phase}, frame {frames}, {row.Id}: agent label not in its formatted colour");
+                }
                 if (Find<Border>(element).Any(b => b.Name == "HistoryYourMessage" && Drawn(b))
                     || Find<TextBlock>(element).Any(t => t.Text == row.Disclosure?.Origin.Text && Drawn(t)))
                 {
                     failures.Add($"{phase}, frame {frames}, {row.Id}: unformatted full prompt visible");
                 }
                 var markdown = Find<MarkdownView>(element);
-                if (markdown.Count != row.Blocks.Count || markdown.Any(m => m.Block is null || m.Children.Count == 0))
+                if (markdown.Count != row.Blocks.Count || markdown.Any(m => !Formatted(m)))
                 {
                     failures.Add($"{phase}, frame {frames}, {row.Id}: reply not formatted");
                 }
