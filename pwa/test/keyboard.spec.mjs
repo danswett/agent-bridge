@@ -17,6 +17,23 @@ async function openDemo(page, query = '') {
   await page.waitForSelector('html[data-demo-ready]');
 }
 
+// Older turns are drawn a few a frame (#1622) and each carries time buttons that are Tab stops, so
+// a walk started while they land would see stops move. Waits, by frames and not a timer, until the
+// count of drawn turns has held for 20 frames.
+async function historyDrawn(page) {
+  await page.evaluate(() => new Promise((done) => {
+    let last = -1;
+    let held = 0;
+    const tick = () => {
+      const n = document.querySelectorAll('.history-turn').length;
+      held = n === last ? held + 1 : 0;
+      last = n;
+      if (held >= 20) { done(); } else { requestAnimationFrame(tick); }
+    };
+    tick();
+  }));
+}
+
 test.afterEach(async ({ page }) => {
   expect(await page.evaluate(() => window.__cspViolations ?? [])).toEqual([]);
 });
@@ -139,8 +156,9 @@ test.describe('on a desktop', () => {
     // from the conversation to the inspector.
     const v = view(page, COPILOT);
     await expect(v).toBeVisible();
+    await historyDrawn(page);
     const last = v.locator('.end-session').getByRole('button', { name: 'End session' });
-    const stops = await tabTo(page, last, { max: 200 });
+    const stops = await tabTo(page, last, { max: 400 });
     // The parts in the order they are laid out, each once: focus never leaves one and comes back.
     // Where WebKit doesn't tab to links (reachLink), there is no skip link, rail or banner.
     const parts = stops.map((s) => s.region).filter((r, i, all) => r !== all[i - 1]);
@@ -450,6 +468,7 @@ test.describe('on a phone', () => {
     await page.keyboard.press('Enter');
     const v = view(page, CLAUDE);
     await expect(v.locator('.session-title')).toBeFocused();
+    await historyDrawn(page);
     // The pinned bar's Back and More come first (ui.md §6.2): back from the title to Back.
     const back = v.getByRole('button', { name: 'Sessions' });
     await tabTo(page, back, { key: 'Shift+Tab', max: 4 });

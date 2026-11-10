@@ -1417,6 +1417,7 @@ export class SessionCard {
     this.#dropReceipt();
     for (const r of this.#closed.splice(0)) { this.#destroyReceipt(r); }
     this.delegates.dispose();
+    this.turns.dispose();
     this.detail.dispose();
     this.#moves?.stop();
     this.collapse?.destroy();
