@@ -228,8 +228,11 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     next keys go to is read again, every poll interval for up to 2 s (`FormRecheck`), and
     the keys go held to the first read that does; read in the middle of a redraw (streaming
     output, the conversation scrolling), the form can be half drawn. A write the worker
-    refused because the screen changed, nothing of it typed, is tried again within the same
-    2 s held to a fresh read, but only when that read shows the form at the same field with
+    refused because the screen changed, nothing of it typed, is tried again held to a fresh
+        read. That wait runs from the write's first refusal, not from when it queued for the typing
+        slot, and is one wait for the whole write: 2 s, and while the screen keeps changing up to 8
+        s more (`BusyScreenWait`), 10 s at the longest, ended earlier once the screen stops
+        changing without showing the form. The retry goes only when that read shows the form at the same field with
     the field itself (its options and pointer, or what is typed into it) drawn exactly as in
     the rows the write was held to: what changed was elsewhere on the screen, and the keys do
     the same there. A field drawn otherwise gets nothing more. Each refusal logs which check

@@ -1178,7 +1178,9 @@ public sealed class AnswerService : ISessionAnswerer
         // above; one cut short is interrupted. Null when it went.
         async Task<(InjectionResult, string?)?> WriteAsync(List<KeySend> sends, bool last, IReadOnlyList<string> rows)
         {
-            var started = options.Time.GetTimestamp();
+            // The re-read window runs from the first refusal, once for the whole write, not from
+            // when it queued: a write held behind another delivery's typing slot would find it spent.
+            long? refusedAt = null;
             while (true)
             {
                 if (stillAsked() is { } gone) { return Stop(gone); }
@@ -1200,7 +1202,7 @@ public sealed class AnswerService : ISessionAnswerer
                 // Nothing typed yet, for a reason of the injector's own (an elevated session, say):
                 // said as the injector says it, as any other answer refused there is.
                 if (!typedAny && !changed) { return (result, null); }
-                if (changed && await SameFieldAsync(rows, started) is { } again)
+                if (changed && await SameFieldAsync(rows, refusedAt ??= options.Time.GetTimestamp()) is { } again)
                 {
                     log($"the screen of {Short(sessionId)} (pid {pid}) changed before {(sends is [{ Text: "", Enter: true }] ? "an Enter" : "its next keys")}, and read again shows the form at the same field as it was; they are held to it and typed again");
                     CopilotAnswerTrace.Current.Value?.Retried();
@@ -1216,7 +1218,8 @@ public sealed class AnswerService : ISessionAnswerer
             }
         }
 
-        // The screen read again, within FormRecheck of started, once it shows the form at the
+        // The screen read again, within FormRecheck of started (the write's first refusal; more
+        // while the screen keeps changing, up to BusyScreenWait), once it shows the form at the
         // field the next keys go to, that field drawn exactly as in rows (its options and where
         // the pointer is, or what is typed into it); null if it does not by then.
         async Task<IReadOnlyList<string>?> SameFieldAsync(IReadOnlyList<string> rows, long started)

@@ -2282,6 +2282,41 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Keys_that_waited_for_the_typing_slot_past_the_recheck_window_are_still_read_again_and_typed()
+    {
+        // Another delivery's reply held the typing slot for longer than FormRecheck and drew output
+        // into the session meanwhile: the keys were then refused and found the re-read window
+        // already spent, so a phone answer failed with "the session's screen changed before the
+        // next key could go" (#1497). The window runs from the refusal. The queue wait is on the
+        // answerer's clock, moved on by hand.
+        var clock = new SkewClock();
+        Serve(Answerer(time: clock));
+        var scrolled = false;
+        injector.Screen = () => scrolled ? ["\u25CF a reply landed", .. WhichOne] : WhichOne;
+        injector.Holding = _ =>
+        {
+            if (injector.Attempts.Count != 1) { return; }
+            clock.Skew = TimeSpan.FromSeconds(11);
+            scrolled = true;
+        };
+        injector.OnInject = () => { if (Enters() == 1) { Fixture.Append(events, Recorded("q1", new { pick = "b" })); } };
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal(("delivered", (string?)null), (outcome, reason));
+        Assert.Single(injector.Refused);
+        Assert.Equal(1, Enters());
+    }
+
+    sealed class SkewClock : TimeProvider
+    {
+        long skew;
+        public TimeSpan Skew { set => Interlocked.Exchange(ref skew, (long)(value.TotalSeconds * TimestampFrequency)); }
+        public override long GetTimestamp() => base.GetTimestamp() + Interlocked.Read(ref skew);
+    }
+
+    [Fact]
     public async Task A_field_drawn_differently_when_its_Enter_was_refused_gets_no_Enter()
     {
         // The pointer moved off the option the keys walked to before its Enter (something else
