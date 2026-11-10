@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Diagnostics;
 using AgentBridge.Host.Core.Restore;
 using AgentBridge.Host.Delivery.Copilot;
 using AgentBridge.Host.Delivery.Staging;
@@ -91,6 +92,9 @@ public sealed class LaunchServiceOptions
     public TimeSpan RememberFor { get; init; } = TimeSpan.FromMinutes(25);
 
     public TimeProvider Time { get; init; } = TimeProvider.System;
+
+    // Where each finished launch or resume leaves one content-free entry (#737); null records nothing.
+    public IDiagnosticsJournal? Journal { get; init; }
 
     // The whole of one launch.options call, measured from its start. Each resumable session's folder
     // is checked one at a time and a git check can take 30 s, so without it the call outlasted a
@@ -691,7 +695,17 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key)) { return Task.FromResult(Refused("request must be a UUID")); }
         return requests.Once(key, () => RunAsync(request, key, peer), result =>
-            log($"launch {Short(key)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Session is { } s ? $" session {Short(s)}" : "")}{(result.Reason is null ? "" : $" ({result.Reason})")}"));
+            Settled(request, result, $"launch {Short(key)}"));
+    }
+
+    // Once per finished request, never for a repeat answered from the remembered outcome (that
+    // is what requests.Once's settled callback guarantees).
+    void Settled(LaunchRequest request, LaunchResult result, string who)
+    {
+        log($"{who}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Session is { } s ? $" session {Short(s)}" : "")}{(result.Reason is null ? "" : $" ({result.Reason})")}");
+        var index = Launchers.All.ToList().FindIndex(l => l.Id == request.Agent);
+        try { options.Journal?.Record(JournalEvents.LaunchRequested(result.Outcome, index < 0 ? null : index + 1)); }
+        catch { /* the journal never decides a launch */ }
     }
 
     // A restore after a reboot or a crash (#780, RestoreRecorder): a resume like any other, through
@@ -720,7 +734,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             Permissions = l?.Permissions == LaunchProtocol.AllowAll ? LaunchProtocol.AllowAll : LaunchProtocol.Ask,
         };
         return requests.Once(key, () => RunAsync(request, key, ask.By, restoring: true, cancellationToken), result =>
-            log($"launch {Short(key)} ({ask.By}): {result.Outcome.ToString().ToLowerInvariant()}{(result.Session is { } s ? $" session {Short(s)}" : "")}{(result.Reason is null ? "" : $" ({result.Reason})")}"));
+            Settled(request, result, $"launch {Short(key)} ({ask.By})"));
     }
 
     // A restore's settings, each kept only while this machine still offers it (else its default),

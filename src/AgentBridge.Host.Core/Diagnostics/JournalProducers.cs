@@ -89,6 +89,22 @@ public static class JournalEvents
         failure is null
             ? JournalContract.Draft(JournalKind.HostStopped, JournalOutcome.Ok, version: version)
             : Failure(JournalKind.HostStopped, failure, failure is OperationCanceledException ? JournalOutcome.Cancelled : JournalOutcome.Failed, version);
+
+    // A finished launch or resume (#737 S4): its outcome, and as the code the agent's place in
+    // the launcher list (1 is the first), none when the request named no known agent. Never the
+    // workspace, prompt, arguments or the outcome's free-text reason.
+    public static JournalEntry LaunchRequested(LaunchOutcome outcome, int? agentIndex)
+    {
+        return JournalContract.Draft(JournalKind.LaunchRequested, outcome switch
+        {
+            LaunchOutcome.Started => JournalOutcome.Ok,
+            LaunchOutcome.Unconfirmed => JournalOutcome.TimedOut,
+            LaunchOutcome.Busy => JournalOutcome.Unavailable,
+            LaunchOutcome.Refused => JournalOutcome.Refused,
+            _ => JournalOutcome.Failed,
+        }, agentIndex);
+    }
+
     // An assembly's release, as its informational version without build metadata; null when it
     // has none the journal can keep.
     public static string? Version(Assembly assembly)

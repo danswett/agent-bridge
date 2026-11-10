@@ -107,6 +107,14 @@ The host also records `HostStarted` (with its release, just before it starts ser
 exception's type and frames, never its message, when something escaped). These are produced now
 (#1270, #737).
 
+The host also records `LaunchRequested` once for each launch or resume request that finishes (#1271,
+#737). The outcome is `Ok` for started, `TimedOut` for unconfirmed, `Unavailable` for busy,
+`Refused` for refused and `Failed` for anything else. The code is the agent's 1-based place in the
+launcher list (agency 1, copilot 2, claude 3, codex 4), or none for an unknown agent. There is no
+duration. A repeat of a request answered from the remembered outcome adds nothing, and neither does
+a request that is invalid or blocked before it runs. The journal never records the workspace, the
+prompt, the reason or an exception.
+
 The Windows app's crash records go to the app's own journal file, which is not part of this snapshot.
 
 ## Bounds
