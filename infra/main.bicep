@@ -247,6 +247,7 @@ module monitoring 'modules/monitoring.bicep' = if (deployApps && deployProductio
     appInsightsName: appInsightsName
     budgetAmount: budgetAmount
     budgetStartDate: budgetStartDate
+    logDailyCapGb: logDailyCapGb
     tags: union(tags, { 'agent-bridge-env': 'production' })
   }
 }
