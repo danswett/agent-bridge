@@ -90,12 +90,16 @@ jobs:
         # Runs after a failed actionlint step too, but not in a cancelled job: there is no one
         # left to read it.
         if: success() || failure()
-        # actionlint exits 1 for findings and above 1 when it could not run; either fails the
-        # step, after the findings are printed as annotations.
+        # actionlint exits 1 for any finding, including the #951 `queue` one the actionlint step
+        # lets through, so this step judges by what it printed: it fails when a shellcheck
+        # finding was printed, or when actionlint could not run (exit above 1).
         run: |
+          code=0
           # shellcheck disable=SC2016 # the template is actionlint's to expand, not the shell's
-          actionlint -shellcheck="$RUNNER_TEMP/lint-tools/shellcheck" -pyflakes= \
-            -format '{{range $err := .}}{{if eq $err.Kind "shellcheck"}}::warning file={{replace $err.Filepath "%" "%25" "\\r" "%0D" "\\n" "%0A" ":" "%3A" "," "%2C"}},line={{$err.Line}},col={{$err.Column}},title={{$err.Kind}}::{{replace $err.Message "%" "%25" "\\r" "%0D" "\\n" "%0A"}}\n{{end}}{{end}}'
+          out=$(actionlint -shellcheck="$RUNNER_TEMP/lint-tools/shellcheck" -pyflakes= \
+            -format '{{range $err := .}}{{if eq $err.Kind "shellcheck"}}::warning file={{replace $err.Filepath "%" "%25" "\\r" "%0D" "\\n" "%0A" ":" "%3A" "," "%2C"}},line={{$err.Line}},col={{$err.Column}},title={{$err.Kind}}::{{replace $err.Message "%" "%25" "\\r" "%0D" "\\n" "%0A"}}\n{{end}}{{end}}') || code=$?
+          if [ -n "$out" ]; then printf '%s\n' "$out"; exit 1; fi
+          if [ "$code" -gt 1 ]; then exit "$code"; fi
       - name: zizmor
         if: success() || failure()
         uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
