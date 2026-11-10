@@ -129,6 +129,14 @@ function syncChildren(parent, nodes) {
   }
 }
 
+function questionPlaces(t, inline) {
+  const questions = t.parts.filter((p) => p.kind === 'question' && p.question);
+  return {
+    placements: questions.filter((p) => p.question.id === inline.activeId || inline.kept.has(p.question.id)).map((p) => inline.records.get(p.question.id) ?? (p.question.id === inline.questionId ? inline.slot : null)).filter(Boolean),
+    keptQuestions: questions.filter((p) => inline.kept.has(p.question.id)).map((p) => p.question.id).join('\n'),
+  };
+}
+
 export class HistoryView {
   element = h('div', { class: 'history', 'aria-label': 'Earlier conversation', hidden: true });
   #drawn = new Map();
@@ -158,6 +166,26 @@ export class HistoryView {
   // snapshot: the store's. latestId: the turn the card draws live, left out. inline: the question
   // slot and the id of the question in it, drawn at that question's place in its turn.
   render(snapshot, latestId = null, inline = null) {
+    return this.#withFocus(inline, () => this.#render(snapshot, latestId, inline));
+  }
+
+  // First placement can move a focused form through a detached turn before attaching it.
+  #withFocus(inline, change) {
+    const doc = this.element.ownerDocument;
+    const focused = doc.activeElement;
+    const root = [inline?.slot, ...(inline?.records?.values() ?? []), ...(this.#inline?.records?.values() ?? [])].find((p) => p?.contains(focused));
+    const parent = root?.parentNode;
+    const caret = root && typeof focused.selectionStart === 'number' ? [focused.selectionStart, focused.selectionEnd, focused.selectionDirection ?? 'none'] : null;
+    const result = change();
+    const displaced = !doc.activeElement || doc.activeElement === doc.body || (doc.activeElement === focused && root?.parentNode !== parent);
+    if (root && focused.isConnected && displaced && focused.getClientRects().length) {
+      focused.focus({ preventScroll: true });
+      if (caret) { focused.setSelectionRange(...caret); }
+    }
+    return result;
+  }
+
+  #render(snapshot, latestId, inline) {
     const { note, turns } = historyPlan(snapshot, latestId);
     this.latest = turns.find((t) => t.id === latestId) ?? null;
     const questions = turns.flatMap((t) => t.parts.filter((p) => p.kind === 'question' && p.question));
@@ -189,8 +217,7 @@ export class HistoryView {
     }
     for (const t of turns.slice(from)) {
       // Turns are replaced when they change, so the same object is the same drawing.
-      const placements = t.parts.filter((p) => p.kind === 'question' && p.question && (p.question.id === inline.activeId || inline.kept.has(p.question.id))).map((p) => inline.records?.get(p.question.id) ?? (p.question.id === inline.questionId ? inline.slot : null)).filter(Boolean);
-      const keptQuestions = t.parts.filter((p) => p.kind === 'question' && p.question && inline.kept.has(p.question.id)).map((p) => p.question.id).join('\n');
+      const { placements, keptQuestions } = questionPlaces(t, inline);
       this.hosted ||= placements.includes(inline.slot);
       const old = this.#drawn.get(t.id);
       let node = old?.node;
@@ -226,12 +253,18 @@ export class HistoryView {
 
   // The newest of the waiting turns, a few at a time, above what is drawn.
   #slice() {
+    this.#withFocus(this.#inline, () => this.#drawSlice());
+  }
+
+  #drawSlice() {
     const started = performance.now();
     const batch = [];
     while (this.#backlog.length && (batch.length < SLICE || performance.now() - started < SLICE_MS)) {
       const t = this.#backlog.pop();
       batch.unshift(t);
-      this.#drawn.set(t.id, { turn: t, node: turnView(t, this.#inline) });
+      const places = questionPlaces(t, this.#inline);
+      this.hosted ||= places.placements.includes(this.#inline.slot);
+      this.#drawn.set(t.id, { turn: t, node: turnView(t, this.#inline), ...places });
     }
     if (batch.length) {
       const nodes = batch.map((t) => this.#drawn.get(t.id).node);
