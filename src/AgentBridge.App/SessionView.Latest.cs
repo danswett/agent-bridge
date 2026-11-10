@@ -41,10 +41,11 @@ public sealed partial class SessionView
                 }), true);
                 scroll.AddHandler(PreviewKeyDownEvent, new KeyEventHandler((_, e) =>
                 {
-                    if (KeyUserOf(e.OriginalSource as DependencyObject) != KeyUser.None) { return; }
-                    if (e.Key is VirtualKey.Up or VirtualKey.PageUp or VirtualKey.Home) { LatestInput(up: true); }
-                    else if (e.Key == VirtualKey.Space) { LatestInput(up: InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down)); }
-                    else if (e.Key is VirtualKey.Down or VirtualKey.PageDown or VirtualKey.End) { LatestInput(up: false); }
+                    static bool Down(VirtualKey k) => InputKeyboardSource.GetKeyStateForCurrentThread(k).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+                    var key = ConversationKeyboard.Key((int)e.Key, Down(VirtualKey.Control), Down(VirtualKey.Shift),
+                        e.KeyStatus.IsMenuKeyDown || Down(VirtualKey.Menu), KeyUserOf(e.OriginalSource as DependencyObject));
+                    if (key is ReadingKey.LineUp or ReadingKey.PageUp or ReadingKey.Top) { LatestInput(up: true); }
+                    else if (key is ReadingKey.LineDown or ReadingKey.PageDown or ReadingKey.End) { LatestInput(up: false); }
                 }), true);
                 scroll.DirectManipulationStarted += (_, _) => LatestInput(up: true);
             }
