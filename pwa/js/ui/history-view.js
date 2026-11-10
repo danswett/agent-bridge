@@ -161,11 +161,14 @@ export class HistoryView {
       nodes.push(node);
     }
     this.#drawn = keep;
-    // A live exchange re-renders this on every update with the same drawn turns. Re-inserting
-    // them all dirtied the layout of every turn, so the next scroll read (scrollTop) cost ~100 ms
-    // on 100 turns, per update: the stalls in #1684. Untouched when nothing differs.
+    // A live exchange re-renders this on every update with the same drawn turns, and a new message
+    // adds one at the end. Re-inserting them all dirtied the layout of every turn, so the next scroll
+    // read (scrollTop) cost ~100 ms on 100 turns, per update: the stalls in #1684. Turns already
+    // drawn stay where they are; only a new tail is appended.
     const held = this.element.children;
-    if (held.length !== nodes.length || nodes.some((n, i) => held[i] !== n)) { this.element.replaceChildren(...nodes); }
+    const prefix = held.length <= nodes.length && Array.prototype.every.call(held, (n, i) => nodes[i] === n);
+    if (prefix) { this.element.append(...nodes.slice(held.length)); }
+    else { this.element.replaceChildren(...nodes); }
     this.element.hidden = !nodes.length;
     this.#ticker.refresh();
     if (this.#backlog.length) { this.#schedule(); }

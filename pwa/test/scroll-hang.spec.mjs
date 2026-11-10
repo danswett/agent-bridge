@@ -49,6 +49,28 @@ test('a scroll right after one live update lands responds within 100 ms', async 
   expect(Math.max(...costs.slice(2)), `scroll after update took ${JSON.stringify(costs)} ms`).toBeLessThan(100);
 });
 
+// A new message adds a turn: the turns already drawn must not be redrawn (Engineering review of #1707).
+test('a scroll right after a new turn arrives responds within 100 ms', async ({ page }) => {
+  const pane = await openLong(page);
+  await page.waitForTimeout(1500);
+  const costs = [];
+  for (let i = 0; i < 6; i += 1) {
+    costs.push(await pane.evaluate(async (el) => {
+      const s = window.agentBridgeDemo.host.get('long-1');
+      const turnCount = s.activity.turnCount + 1;
+      window.agentBridgeDemo.upsert({ ...s, updatedAt: new Date().toISOString(), activity: { ...s.activity, turnCount, turn: `long-1-turn-${turnCount}` } });
+      const start = performance.now();
+      await new Promise((r) => setTimeout(r, 0));
+      el.scrollTop -= 300;
+      void el.scrollTop;
+      await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+      return Math.round(performance.now() - start);
+    }));
+    await page.waitForTimeout(600);
+  }
+  expect(Math.max(...costs.slice(2)), `scroll after a new turn took ${JSON.stringify(costs)} ms`).toBeLessThan(100);
+});
+
 test(`scrolling a ${TURNS}-turn session while a turn is live never holds the main thread over ${BUDGET_MS} ms`, async ({ page, browserName }) => {
   // Headless WebKit stalls ~300 ms on first layout of the long turns (unexplained); the idle-update test covers WebKit.
   test.skip(browserName === 'webkit', 'WebKit first-layout stall, see PR');
