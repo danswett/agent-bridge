@@ -172,7 +172,7 @@ does not delete the others. "Verified" below means SRE has shown it on the real 
 | --- | --- | --- | --- |
 | Sealed upload in the feedback container | Cannot be deleted for 30 days (immutability policy), deleted at day 31 | Time-based retention plus lifecycle rule | Configured per upload doc; lock state and deletion behaviour to be verified by SRE |
 | Decrypted private issue chunks | At most 30 days from the original upload time, sooner on a deletion request | Worker deletion sweep keyed to the upload time | Not implemented; the processor currently uses processing time and its source interface lacks upload time |
-| Receipts, suppression metadata, failure records | Only what idempotent retry and no-replay-after-delete need, at most 90 days, never unbounded (owner decision, Nov 10) | Worker | Owner decided 90 days; after any backup restore, deletions are re-applied |
+| Receipts, suppression metadata, failure records | Only what idempotent retry and no-replay-after-delete need, at most 90 days, never unbounded (owner decision, Nov 10) | Worker | Owner decided 90 days; after any backup restore, deletions are re-applied from tombstones kept outside the restore scope |
 | Private operational lookup | At most 30 days from the original upload or collection, not extended by joins or retries | SRE mechanism (#1189 item 4) | Owner decided 30 days; SRE confirms how |
 | Diagnostic events | At most 30 days from original collection, not restarted by retry, export or join | Per-table analytics retention, bounded local queue | Proposed maximum; SRE proof required before upload |
 | Relay logs | 7 days, outcomes and sizes only, no account, device or ticket | Existing | Unchanged |
@@ -196,15 +196,24 @@ exactly. No deletion promise is published until the real configuration supports 
 * **A feedback deletion request** goes through a private route that asks for a report
   reference and nothing else about the tester. On a valid request the worker removes the
   decrypted issue chunks and any partial writes, removes the lookup entry, and keeps only
-  minimal suppression metadata, kept at most 90 days (owner decision, Nov 10), so a retry does not recreate the
-  report. After any backup restore, the deletions are re-applied (owner decision, Nov 10). Closing an issue or destroying a key does not count as deletion.
+  minimal suppression metadata, kept at most 90 days (owner decision, Nov 10), so a retry
+  does not recreate the report. After any backup restore, the deletions are re-applied
+  (owner decision, Nov 10). Closing an issue or destroying a key does not count as deletion.
+* **Restore controls (design requirements, to be built and verified by SRE):** deletion
+  tombstones are kept outside the scope of any restore and are the source of truth for
+  re-applying deletions; the post-restore sweep runs before reads are enabled; and backup
+  retention is capped at the 90-day suppression period, so no backup can hold a deleted
+  report longer than a tombstone outlives it. The 30-day limit on readable copies is the
+  backstop, not the mechanism.
 * **Limits stated honestly:** the immutable ciphertext remains until day 31; provider
   residuals and backups are described, not denied; whether a legal erasure request can
   override the immutability hold is a recorded residual legal question, not decided here.
 * **This request path is not usable until the Sent-screen reference is decided.** A tester who
   closed the window has no reference. The published tester notice must not promise
-  self-service deletion until then. See the conflict list
-  for the proposal that the Sent screen offers a copyable report reference.
+  self-service deletion until then. See the conflict list for the proposal that the Sent
+  screen offers a copyable report reference.\n* **Controls on the deletion route**, which is bearer-only: the report reference is high
+  entropy and distinct from the upload reference; a valid and an invalid reference get the
+  same response; the route is rate-limited; and the relay and worker never log the reference.
 
 ## Per-account quota
 
@@ -296,28 +305,34 @@ the two documents do not diverge.
 1. **Upload reference issuance and the order of preview, sealing, expiry and retry**
    (Relay and Send Feedback). Product's answer, posted on #1189 on Nov 10, is adopted here
    as the contract:
-   * One random, single-use, per-device, content-free upload reference per report, issued
-     only after the person has seen the preview and tapped Send. It carries no feedback
-     content, tester identity or request ID, and never enters the bundle, preview, logs or
-     public issues.
-   * Short expiry: Product proposes 15 minutes; Engineering confirms the value in one
-     comment on #1189. Until then 15 minutes is a proposal (the current slot ticket
-     expires in 10).
-   * A retry reuses the same reference. If it has expired, the person is told and sends
-     again; nothing is retried silently with a new reference.
+   * One random, per-device, content-free upload reference per report, issued only after
+     the person has seen the preview and tapped Send. It carries no feedback content,
+     tester identity or request ID, and never enters the bundle, preview, logs or public
+     issues.
+   * Single use means one report: the reference is spent when the first complete upload is
+     committed (not at the first byte). The relay binds it to the authenticated device, the
+     exact padded sealed size and one slot. A repeat of the same ciphertext with the same
+     reference returns the original result and makes no second copy, so a retry after a lost
+     response is safe. Any other use of a spent reference (a different device, size or
+     body) is refused with a generic error that reveals nothing about the report.
+   * Expiry is 15 minutes (proposed by Product, confirmed by Engineering on #1189; the older
+     slot ticket expired in 10). A retry before expiry reuses the same reference. If it has
+     expired, the person is told and sends again; nothing is retried silently with a new
+     reference.
    * Order: preview exactly what will be sent, then seal exactly those bytes, then upload.
      Any edit after the preview restarts at the preview. Nothing leaves the device before
      Send.
+   * The slot request carries the reference and the exact padded sealed size. A retry with
+     the same reference returns the same slot and blob name, so one report cannot make two
+     blobs (Engineering, #1189).
    * A retry never discloses plaintext to the relay, and the relay stays blind.
 
-   Still for Relay and Send Feedback to specify, not decided here: how the reference maps
-   to the existing slot request, since the slot needs the exact sealed size.2. **Ambiguous PUT success** must be handled idempotently. Requirement on the outcome:
+2. **Ambiguous PUT success** must be handled idempotently. Requirement on the outcome:
    a retry after a lost response leaves one private record, not two, and a deletion request
-   removes every copy. This requirement fails today: a retry gets a new slot and blob name,
-   so one report can leave two sealed blobs and two readable copies, and only a key that
-   joins them, which #1189 must supply, fixes it. How uploads are keyed or deduplicated is #1189's decision; today's
-   inbox keys on blob name, and a retry gets a new slot and name.
-3. **Connection's request-ID sources and retention.** Requirement on the outcome: nothing
+   removes every copy. Under today's flow this fails: a retry gets a new slot and blob name,
+   so one report can leave two sealed blobs and two readable copies. The reference binding
+   in item 1 removes that, because a retry returns the same slot and blob name. Whether the
+   inbox keys on blob name or bundle ID remains #1189's decision.3. **Connection's request-ID sources and retention.** Requirement on the outcome: nothing
    from them is added to a report unless it was actually recorded and is shown in the
    preview, and any retention is within the 30-day maximum above. Their storage, lifetime
    and ID form stay Connection's decision.
@@ -352,7 +367,6 @@ in the product or notice claims end-to-end tracing.
 
 This is a sensitive documentation change. It needs two independent receipts from different
 model families and an independent security review of the exact head, plus Engineering's
-review, before it leaves draft. Product has answered the upload-reference and preview/sealing-order questions (dependency 1);
-it stays a draft until Engineering confirms the expiry value and Quality and the Relay and Send
-Feedback leads agree. Quality owns
+review, before it leaves draft. Product and Engineering have answered the upload-reference and preview/sealing-order
+questions (dependency 1); Quality decides when it leaves draft. Quality owns
 admission of any actual build; this document approves nothing for collection.
