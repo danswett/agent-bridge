@@ -136,6 +136,23 @@ Comments and trailing commas are allowed. Absent and `null` mean the default.
 | `devBox.intervalMinutes` | `15` | How often a pass runs, from 1 to 30. More than 30 is read as 30 and said, and `config set` refuses it: a pass less often than the pool's grace period (never under 60 minutes) can miss the pending stop entirely |
 | `agentMessaging.remote` | `"off"` | The temporary AP5-lite mode (#728): `"off"` or `"own-account"`, for the owner's own agents on the owner's own account, ahead of the signed roster (#55), which still gates everything beyond it. The runbook is [protocol/agent-lite.md](protocol/agent-lite.md). Off means nothing of it is active, and an install or upgrade never writes it. Read afresh for each message, so changing it needs no restart and switching it to `"off"` holds from the next message; a message not sent this way goes over Home Assistant. This slice holds only the setting: nothing sends or receives yet |
 | `agentMessaging.allowAllTargets` | `false` | Counts only while `agentMessaging.remote` is `"own-account"`. `false`: own agents may not type into allow-all sessions, and those targets fall back to Home Assistant. Left `false` until the owner decides otherwise |
+| `agents.enabled` | `false` | The agents policy (#720, [design](design/agent-principals.md), "The per-machine policy"): master switch for agent-to-agent commands on this machine, both directions. **Changed only at the machine**, in this file or with `agent-bridge-host config` (refused inside agent sessions); no request from another device or an agent reads or changes it. Absent section: agents are off, every grant below is off, and the limits are the defaults. This slice only parses and validates it; nothing consumes it yet |
+| `agents.credentialDays` | `7` | How long an agent's credential lives, from 1 to 7 |
+| `agents.issue.launched`, `agents.issue.adopted` | `none` | The scope a credential gets at issue: `none`, `read`, `read+reply` or `read+reply+launch` |
+| `agents.outbound.remote` | `false` | Whether this machine's agents may reach other machines |
+| `agents.outbound.allowAgentLaunchedToLaunch` | `false` | Whether a session an agent launched may itself launch |
+| `agents.inbound.local.*`, `agents.inbound.remote.*` | all off | Agents on this machine, and on the account's other machines. `read`: `any`, `agent-launched` or `none` (`none`). `reply`: `forced-ask`, `agent-launched` or `none` (`none`). `gate`: `off`, `quiet` or `push` (`off`). `allowAllTargets`: `false` or `{ "workspaces": "same" or "any" }` (`false`). `coordinationGroups`: `false` or `{ "maxHours": 4 to 24, "perMemberPerDay", "perGroupPerMinute" }` (`false`). `launch`: `false` or `{ "workspaces": "approved" or [labels], "permissions": "ask", "agents": [ids], "profiles": [names] }`, with `permissions` stated (`false`). `inbound.remote.fromMachines`: `"any"` or a list; none by default |
+| `agents.inbound.exclude` | `{ "sessions": [], "workspaces": [] }` | Session ids and workspace labels no agent may reach |
+| `agents.limits.*` | `maxDepth` 3, `conversationMessages` 20, `conversationMinutes` 60, `perPairPerMinute` 6, `perTargetPerMinute` 12, `launchesPerOriginPerHour` 3, `launchesPerMachinePerHour` 10 | Each can only be lowered: the default is also the ceiling, and zero, a negative, or a larger number is read as the default and said |
+| `agents.label` | `prefix` | `prefix` or `none` |
+| `agents.links` | `[]` | Must be empty in this version |
+
+Reading `agents` fails closed. A section that is not an object, or a nested object (`issue`, `outbound`,
+`inbound`, `inbound.local`, `inbound.remote`, `inbound.exclude`, `limits`) that is not one, denies everything
+(the policy is off) and is said. A value of the wrong type or out of range takes that key's narrowest
+default, never a wider grant, and is said; an unknown key is ignored and said. A `config.json` that cannot
+be read or parsed leaves agents off. Each problem is listed with the other section problems in the log, `config show` and
+`config set`'s check. Other sections still load.
 
 How a file that is wrong is read: one that cannot be read or parsed turns remote approval,
 launching, notifications and agent usage off and makes the host read-only ("this host's config.json has a
