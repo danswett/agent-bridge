@@ -42,6 +42,8 @@ static partial class SelfTest
         Resize(window, SweepWide, SweepHeight);
         var view = await Choose(window, main, DemoHost.HeavyId, "Response");
         layout.CloseDelegate();
+        // The pass scrolls by code, which a person's wheel or touch would have ended the pin at the end for.
+        view?.ReleasePin();
         var card = view?.Card;
         var list = view is null ? null : ById<ListView>(view, "Conversation");
         // The strip with every delegate in it, the finished ones unfolded, not six and "14 finished".

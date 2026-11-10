@@ -287,6 +287,7 @@ static partial class SelfTest
             await CheckDelegates(window, main, demo, Check, outFile);
             await CheckSessionDetails(window, main, demo, Check, outFile);
             await CheckAnswerMoves(window, main, Check, outFile);
+            await CheckHistoryScroll(window, main, Check);
 
             // Launch a session from the Launch page: it starts, its row appears, and Open goes to it.
             window.ShowPage("launch");
