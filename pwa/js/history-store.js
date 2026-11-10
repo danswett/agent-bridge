@@ -354,7 +354,11 @@ export class HistoryStore {
     // only those with what is held takes its place.
     if (!P.some((t) => out.some((h) => h.id === t.id && !h.provisional))) {
       const ids = new Set(P.map((t) => t.id));
-      return [...P.map((t) => { const h = held.find((x) => x.id === t.id); return h ? adopt(t, h) : t; }), ...this.#tail(e, ids)];
+      // A small page can start at the first turn activity said, right after turns the host served:
+      // those are the page's older neighbours, and stay below it (#1628).
+      const pos = P[0] ? held.findIndex((x) => x.id === P[0].id) : -1;
+      const older = pos > 0 && !held[pos - 1].provisional ? held.slice(0, pos) : [];
+      return [...older, ...P.map((t) => { const h = held.find((x) => x.id === t.id); return h ? adopt(t, h) : t; }), ...this.#tail(e, ids)];
     }
     let last = -1;
     P.forEach((t, i) => {
