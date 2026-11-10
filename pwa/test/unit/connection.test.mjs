@@ -43,6 +43,25 @@ function connected({ busy = () => false, winExtra = {}, now = undefined, refuse 
   return { conn, relays, show, lost, states };
 }
 
+test('timings use the connected account token and discard disconnected measurements', async (t) => {
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async (url, request) => { requests.push({ url, request }); return { status: 202 }; });
+  const { conn } = connected();
+  let drains = 0;
+  const drain = () => { drains++; return [{ app: 'PWA', ms: 10, at: 1700000000 }]; };
+  await conn.reportTimings(drain);
+  assert.equal(drains, 1);
+  assert.equal(requests.length, 0);
+  await conn.start();
+  await conn.reportTimings(drain);
+  assert.equal(requests[0].url, 'http://relay.invalid/v1/stats/app-timings');
+  assert.equal(requests[0].request.headers.Authorization, 'Bearer t');
+  conn.stop();
+  await conn.reportTimings(drain);
+  assert.equal(drains, 3);
+  assert.equal(requests.length, 1);
+});
+
 test('out of sight for 15 s, the app closes its relay connection, stays closed, and connects again at once when back', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const { conn, relays, show, lost } = connected();

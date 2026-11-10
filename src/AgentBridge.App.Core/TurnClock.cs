@@ -2,9 +2,11 @@ using AgentBridge.Protocol;
 
 namespace AgentBridge.App.Core;
 
+public sealed record TurnTiming(int Ms, long At);
+
 // How long the person waits: from sending a reply to the session settling (#1600). The turn is
 // stamped when the reply is sent, goes on to Working, and settles at the first status after that
-// which is not Working. Only the duration is kept (the app name goes with it when it is reported);
+// which is not Working. Only duration and settlement time are kept (the app name is added on upload);
 // no text, session or machine is in a record. It lives in memory with the reply box that sent the
 // reply, so a turn in flight when the app closes is lost and nothing else: no state is on a machine.
 public sealed class TurnClock
@@ -14,7 +16,7 @@ public sealed class TurnClock
     public static readonly TimeSpan Expire = TimeSpan.FromHours(1);
 
     readonly TimeProvider time;
-    readonly List<int> done = [];
+    readonly List<TurnTiming> done = [];
     long? start;
     bool working;
 
@@ -39,7 +41,7 @@ public sealed class TurnClock
         if (status == SessionStatus.Working) { working = true; return; }
         if (!working) { return; }
         Dropped();
-        done.Add((int)Math.Max(0, Math.Round(elapsed.TotalMilliseconds)));
+        done.Add(new((int)Math.Max(0, Math.Round(elapsed.TotalMilliseconds)), time.GetUtcNow().ToUnixTimeSeconds()));
         if (done.Count > Keep) { done.RemoveAt(0); }
     }
 
@@ -51,10 +53,10 @@ public sealed class TurnClock
     }
 
     // Milliseconds of each settled turn, oldest first.
-    public IReadOnlyList<int> Recent => done.ToArray();
+    public IReadOnlyList<int> Recent => done.Select(t => t.Ms).ToArray();
 
     // Takes the settled turns out, for the call that reports them.
-    public IReadOnlyList<int> Drain()
+    public IReadOnlyList<TurnTiming> Drain()
     {
         var all = done.ToArray();
         done.Clear();

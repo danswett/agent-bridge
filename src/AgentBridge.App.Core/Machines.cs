@@ -489,11 +489,12 @@ public sealed class RelayFleetLink : IFleetLink
     // Hosts' keys from earlier channels, kept across relay connections, so a reconnect after sleep
     // opens each with IK and has its hello answered in the handshake (#603).
     readonly KnownResponders responders = new();
+    readonly AppTimings timings;
     Task loop = Task.CompletedTask;
     volatile Current? current;
     volatile StateNow state = new(FleetState.SignedOut, null);
 
-    sealed record Current(RelayClient Relay, ChannelHub Hub, string AccountId);
+    sealed record Current(RelayClient Relay, ChannelHub Hub, string AccountId, string Token);
     sealed record StateNow(FleetState State, string? Detail);
 
     // claim: whether this copy of the app may hold the relay link, which one copy per person may
@@ -505,6 +506,7 @@ public sealed class RelayFleetLink : IFleetLink
         this.name = name;
         this.log = log ?? (_ => { });
         this.claim = claim ?? (() => true);
+        timings = new AppTimings(log: this.log);
         Blobs = new RelayBlobStore(() => current?.Relay);
     }
 
@@ -528,6 +530,12 @@ public sealed class RelayFleetLink : IFleetLink
 
     // The connected relay client, or null while there is none (Send feedback's sender).
     public RelayClient? Relay => current?.Relay;
+
+    public Task ReportTimingsAsync(Func<IReadOnlyList<TurnTiming>> drain)
+    {
+        var c = current;
+        return timings.PostAsync(c?.Relay.Relay, c?.Token, drain, stop.Token);
+    }
 
     public IReadOnlyList<FleetHost> Hosts => current is { } c ? HostsOf(c, c.Relay.Presence) : [];
 
@@ -612,7 +620,7 @@ public sealed class RelayFleetLink : IFleetLink
                 await using var relay = await RelayClient.ConnectAsync(relayUri, a.Token, key, name, "app", ct);
                 var hub = new ChannelHub(relay, key, name, "app") { JsonOptions = ProtocolJson.Options, KnownPeers = responders };
                 relay.PresenceChanged += _ => Changed?.Invoke();
-                current = new Current(relay, hub, a.AccountId);
+                current = new Current(relay, hub, a.AccountId, a.Token);
                 Set(FleetState.Connected, $"as {relay.Login}");
                 log($"connected to the relay as {relay.Login} ({Wire.DeviceId(key.Public)[..8]})");
                 backoff.Reset();

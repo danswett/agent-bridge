@@ -387,13 +387,25 @@ None of it is ever sent anywhere.
 ### Turn timing
 
 `js/turn-clock.js` (#1600) times what the person waits for: from sending a reply to the session
-settling (it was `working`, and is no longer). Only `{ app: 'PWA', ms }` is kept, in the page
+settling (it was `working`, and is no longer). Only `{ app: 'PWA', ms, at }` is kept, in the page
 (`TurnClock.recent()`); no text, machine or session id is ever in a record. A second send before the turn settles keeps
 the first start, and a turn open for over an hour is dropped. The sessions page feeds it: the reply service's `onTap` stamps the send, and the session list's changes
-say when it is working and settled. Nothing is sent anywhere yet; the relay call is a later change (#1603). It runs in the page that sent the reply; if the page closes, turns
+say when it is working and settled. `at` is the settlement time in Unix seconds.
+The page drains settled turns every minute through `BridgeConnection.reportTimings` and
+`js/app-timings.js`, using the connected relay's URL and account token (#1603).
+It runs in the page that sent the reply; if the page closes, turns
 in flight are lost and nothing else, because no state lives on any machine.
 
 The Windows app does the same in `AgentBridge.App.Core/TurnClock.cs` (app name `Windows`): each reply box owns a clock, stamped when `Send()` runs and fed by the session's status updates. It lives in memory, so a card that is rebuilt or parked loses a turn in flight and nothing else.
+
+Its existing UI tick drains clocks through `RelayFleetLink.ReportTimingsAsync` at most once
+per minute. Both clients POST only `{ app, route: 'send-to-settled', ms, at }` to
+`/v1/stats/app-timings`: at most 50 samples and 4096 bytes, with durations capped at 600000 ms.
+Excess samples, disconnected batches and failed requests are dropped; failures are logged
+without tokens, response bodies or identifiers. There is no retry queue (including on 429),
+requests time out after ten seconds, and redirects are refused. No durable state lives on
+any machine; only hourly aggregates live in the relay. The phone client is not wired yet.
+The relay must include the timing endpoint's allowlisted CORS policy for cross-origin PWA uploads.
 
 Demo mode plays a machine with progress: `?progress=0` one from before it,
 `?confirmDelay=<ms>` the wait between typing and the outcome (to see Passed to the agent), and

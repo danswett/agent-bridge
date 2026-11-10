@@ -19,6 +19,7 @@
 import { CLOSE_CODES, Relay } from './relay.js';
 import { ChannelSet } from './channels.js';
 import { ReconnectBackoff } from './backoff.js';
+import { AppTimings } from './app-timings.js';
 
 // Long enough that switching to another app and back, to copy something, say, keeps everything
 // as it was; short enough that a phone put away stops talking within seconds.
@@ -67,6 +68,7 @@ export class BridgeConnection {
   // Set while a message sent on the current relay awaits any frame back, then a probe of it.
   #watchTimer = null;
   #probing = null;
+  #timings = new AppTimings({ log: (line) => this.#emit('log', line) });
   relay = null;
   presence = [];
   // The account's machines that are offline (relay.js); null while the relay keeps no roster.
@@ -108,6 +110,10 @@ export class BridgeConnection {
   }
 
   get ready() { return !!this.relay?.open; }
+
+  reportTimings(drain) {
+    return this.#timings.post(this.ready ? this.base : null, this.ready ? this.account.token : null, drain);
+  }
 
   start() {
     if (!this.#wake) {

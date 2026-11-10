@@ -191,6 +191,10 @@ public partial class App : Application
         timer.Tick += (_, _) =>
         {
             main.Tick();
+            if (link is RelayFleetLink relay)
+            {
+                _ = relay.ReportTimingsAsync(() => main.AllCards.SelectMany(c => c.Reply?.Turns.Drain() ?? []).ToArray());
+            }
             tray?.SetTip(MainViewModel.TrayTip(main.Waiting));
         };
         timer.Start();
