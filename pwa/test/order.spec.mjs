@@ -484,3 +484,48 @@ for (const width of [900, 1440]) {
     });
   });
 }
+
+test('the sort menu names the order for this device, with no sync item', async ({ page }) => {
+  await openDemo(page, '', null);
+  const sort = page.locator('#session-sort');
+  await expect(sort.locator('option')).toHaveCount(3);
+  await expect(sort.getByRole('option', { name: 'Your order, on this device' })).toHaveCount(1);
+});
+
+for (const width of [390, 1440]) {
+test.describe(`reading at ${width} px`, () => {
+test.use({ viewport: { width, height: 900 } });
+test('news on the open session is read after it has been on screen for a second, and a read does not move a row', async ({ page }) => {
+  await page.clock.install();
+  await openDemo(page);
+  await page.clock.pauseAt(new Date(Date.now() + 10_000));
+  await page.getByRole('combobox', { name: /sort/i }).selectOption('recent');
+  await open(page, CLAUDE);
+  await page.clock.runFor(1500);
+  await upsert(page, CLAUDE, { updatedAt: later() });
+  await page.clock.runFor(50);
+  await expect(card(page, CLAUDE).locator('.unread-dot')).toHaveCount(1);
+  const before = await order(page);
+  await page.clock.runFor(900);
+  await expect(card(page, CLAUDE).locator('.unread-dot')).toHaveCount(1);
+  await page.clock.runFor(100);
+  await expect(card(page, CLAUDE).locator('.unread-dot')).toHaveCount(0);
+  expect(await order(page)).toEqual(before);
+});
+});
+}
+
+test('news that comes while the window is not focused is not read until it is focused again', async ({ page }) => {
+  await page.clock.install();
+  await openDemo(page);
+  await page.clock.pauseAt(new Date(Date.now() + 10_000));
+  await open(page, CLAUDE);
+  await page.clock.runFor(1500);
+  await page.evaluate(() => { document.hasFocus = () => false; window.dispatchEvent(new Event('blur')); });
+  await upsert(page, CLAUDE, { updatedAt: later() });
+  await page.clock.runFor(3000);
+  await expect(card(page, CLAUDE).locator('.unread-dot')).toHaveCount(1);
+  await page.evaluate(() => { document.hasFocus = () => true; window.dispatchEvent(new Event('focus')); });
+  await page.clock.runFor(1100);
+  await expect(card(page, CLAUDE).locator('.unread-dot')).toHaveCount(0);
+});

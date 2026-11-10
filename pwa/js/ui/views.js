@@ -4,6 +4,7 @@ import { ALL } from '../host-session.js';
 import { SessionCard } from './session-card.js';
 import { RowMenu } from './row-menu.js';
 import { SessionOrder } from '../session-order.js';
+import { ReadDwell } from '../read-dwell.js';
 import { ago } from './time.js';
 import { whileVisible } from './ticker.js';
 import { enter, leave, seen, select as showSelection, slide } from './motion.js';
@@ -56,8 +57,11 @@ export class SessionListView {
   // heading() -> the list's heading, where focus goes when a session that had it ends with no
   // row left to take it.
   // history: the HistoryStore the cards draw their earlier conversation from, or null.
-  constructor(container, sessions, { history = null, fetchDetail, fetchDelegate = null, machine = () => ({ name: '', show: false }), answering = () => null, order = new SessionOrder(), shows = () => true, settled = () => true, views = null, layout = () => ({ inspector: false }), viewing = () => true, stale = () => null, heading = () => null } = {}) {
-    Object.assign(this, { container, sessions, history, fetchDetail, fetchDelegate, machine, answering, order, shows, settled, layout, viewing, stale, heading });
+  constructor(container, sessions, { history = null, fetchDetail, fetchDelegate = null, machine = () => ({ name: '', show: false }), answering = () => null, order = new SessionOrder(), shows = () => true, settled = () => true, views = null, layout = () => ({ inspector: false }), viewing = () => true, stale = () => null, heading = () => null, awake = () => globalThis.document?.hasFocus?.() !== false, timers = null } = {}) {
+    Object.assign(this, { container, sessions, history, fetchDetail, fetchDelegate, machine, answering, order, shows, settled, layout, viewing, stale, heading, awake });
+    // A session is read once open, visible and focused for about a second (session-order-roaming.md section 8).
+    this.dwell = new ReadDwell({ mark: (key, at) => { this.order.markSeen(key, at); this.render(); }, timers });
+    for (const [target, event] of [[globalThis.window, 'focus'], [globalThis.window, 'blur'], [globalThis.document, 'visibilitychange']]) { target?.addEventListener?.(event, () => this.schedule()); }
     this.views = views ?? h('div');
     sessions.onChange((change) => {
       this.order.observe(change);
@@ -150,6 +154,7 @@ export class SessionListView {
     for (const [key, card] of this.#cards) {
       if (!live.has(key) && this.#drawn && this.shows(card.hostId) && this.settled(card.hostId)) { leave(card.element, 'listItem'); }
     }
+    let reading = false;
     const cards = (list, isPinned) => {
       for (const entry of list) {
         const { hostId, session: s } = entry;
@@ -186,13 +191,14 @@ export class SessionListView {
         card.setStale(this.stale(hostId));
         // On screen, its news is seen as it comes; otherwise its row gets the dot. A session's
         // view stays on screen while search hides its row, so this comes before search's say.
-        if (card.selected && this.viewing()) { this.order.markSeen(key, s.updatedAt); }
+        if (card.selected) { reading = true; this.dwell.watch(key, s.updatedAt, this.order.unread(key, s.updatedAt) && this.viewing() && this.awake()); }
         if (!keep(entry)) { continue; }
         card.setUnread(this.order.unread(key, s.updatedAt));
         want.push(card.element);
         shown += 1;
       }
     };
+    if (!reading) { this.dwell.cancel(); }
     const pinnedShown = arranged.pinned.some(keep);
     const sessionsShown = arranged.sessions.some(keep);
     if (pinnedShown) { want.push(this.#head('pinned', 'Pinned')); }
