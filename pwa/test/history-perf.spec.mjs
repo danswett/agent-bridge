@@ -57,3 +57,36 @@ test(`a ${TURNS}-turn session scrolls within ${BUDGET_MS} ms of opening, and old
   // Older turns arrived above, and the view stayed at the latest, not moved by them.
   expect(m.scrollGap).toBeLessThan(4);
 });
+
+// Opening shows the latest at the bottom and stays there until the person scrolls (#1646).
+const gap = (page) => page.evaluate(() => { const p = document.querySelector('.session-view[data-id="long-1"] .stream-scroll'); return p.scrollHeight - p.scrollTop - p.clientHeight; });
+
+test('a long session opens at the bottom, and stays there while older turns and a late reply arrive (#1646)', async ({ page, browserName }) => {
+  await longSession(page, browserName);
+  await page.evaluate(() => { window.agentBridgeDemo.host.historyDelayMs = 300; });
+  await go(page, 'sessions');
+  await page.locator('.session[data-id="long-1"] .row-main').click();
+  const pane = page.locator('.session-view[data-id="long-1"] .stream-scroll');
+  await expect(pane.locator('.history-turn')).not.toHaveCount(0);
+  await expect.poll(() => pane.locator('.history-turn').count()).toBeGreaterThan(30);
+  expect(await gap(page)).toBeLessThan(4);
+  await page.evaluate(() => {
+    const host = window.agentBridgeDemo.host;
+    const s = host.get('long-1');
+    window.agentBridgeDemo.upsert({ ...s, updatedAt: new Date(Date.now() + 1000).toISOString(), activity: { ...s.activity, turnCount: s.activity.turnCount + 1 } });
+  });
+  await expect.poll(() => pane.locator('.history-turn').count()).toBeGreaterThan(30);
+  await expect.poll(() => gap(page)).toBeLessThan(4);
+});
+
+test('a person who scrolled up is not taken back to the bottom as older turns arrive (#1646)', async ({ page, browserName }) => {
+  await longSession(page, browserName);
+  await go(page, 'sessions');
+  await page.locator('.session[data-id="long-1"] .row-main').click();
+  const pane = page.locator('.session-view[data-id="long-1"] .stream-scroll');
+  await expect.poll(() => pane.locator('.history-turn').count()).toBeGreaterThan(12);
+  await pane.evaluate((el) => { el.dispatchEvent(new Event('wheel')); el.scrollTop = 0; });
+  const before = await pane.locator('.history-turn').count();
+  await expect.poll(() => pane.locator('.history-turn').count()).toBeGreaterThan(before + 20);
+  expect(await gap(page)).toBeGreaterThan(200);
+});

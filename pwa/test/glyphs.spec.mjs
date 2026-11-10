@@ -180,7 +180,19 @@ test('turning glyphs cost the page no style or layout work from frame to frame',
   expect(await page.evaluate(() => document.getAnimations().filter((a) => a.playState === 'running').length)).toBeGreaterThan(10);
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Performance.enable');
-  // Past the gallery's own drawing.
+  // Past the gallery's own drawing, and past the older turns the open session draws a few at a
+  // time (#1622): the same turns, frame after frame.
+  await page.evaluate(() => new Promise((done) => {
+    let last = -1;
+    let same = 0;
+    const frame = () => {
+      const n = document.querySelectorAll('.history-turn').length;
+      same = n === last ? same + 1 : 0;
+      last = n;
+      if (same >= 30) { done(); } else { requestAnimationFrame(frame); }
+    };
+    frame();
+  }));
   await page.waitForTimeout(500);
   const count = async () => Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map((m) => [m.name, m.value]));
   const before = await count();

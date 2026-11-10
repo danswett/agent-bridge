@@ -100,6 +100,9 @@ export function turnView(t, inline = null) {
 // costs; 500 of them in one task was the hang.
 export const FIRST_DRAW = 5;
 export const SLICE = 2;
+// A frame's share for drawing older turns, past the first SLICE: the load ends sooner, and no
+// frame is held up for long.
+const SLICE_MS = 6;
 
 const nextFrame = (fn) => (globalThis.requestAnimationFrame ? globalThis.requestAnimationFrame(fn) : setTimeout(fn, 16));
 
@@ -156,13 +159,15 @@ export class HistoryView {
 
   // The newest of the waiting turns, a few at a time, above what is drawn.
   #slice() {
-    const batch = this.#backlog.splice(-SLICE);
+    const started = performance.now();
+    const batch = [];
+    while (this.#backlog.length && (batch.length < SLICE || performance.now() - started < SLICE_MS)) {
+      const t = this.#backlog.pop();
+      batch.unshift(t);
+      this.#drawn.set(t.id, { turn: t, node: turnView(t) });
+    }
     if (batch.length) {
-      const nodes = batch.map((t) => {
-        const node = turnView(t);
-        this.#drawn.set(t.id, { turn: t, node });
-        return node;
-      });
+      const nodes = batch.map((t) => this.#drawn.get(t.id).node);
       const top = this.element.querySelector(':scope > .history-turn');
       this.anchor(() => { if (top) { top.before(...nodes); } else { this.element.append(...nodes); } this.element.hidden = false; });
     }

@@ -481,7 +481,7 @@ export class SessionCard {
   #guardTimer = null;
   // Listening for the end of a smooth scroll to the question, until it ends or is replaced.
   #scrollEnd = null;
-  // A question that arrived in the drawing under way, to bring into sight once it is all drawn.
+  #revealing = null;  // A question that arrived in the drawing under way, to bring into sight once it is all drawn.
   #arrived = null;
   // What moves the guarded question's answers on screen while it stays (#491).
   #moves = null;
@@ -664,11 +664,21 @@ export class SessionCard {
     this.turns.anchor = (change) => {
       const sc = this.els.scroll;
       const before = sc.scrollHeight;
+      const follow = this.#sticking();
       change();
       const grew = sc.scrollHeight - before;
       if (grew > 0) {
-        const keep = () => { sc.scrollTop += grew; };
+        // Following the end, to the end (whatever has grown below it too); reading, by what grew above.
+        // A smooth scroll to a question is cut short by setting scrollTop, so it is started again.
+        const keep = () => {
+          if (follow) { sc.scrollTop = sc.scrollHeight; } else { sc.scrollTop += grew; }
+          const r = this.#revealing;
+          if (r?.view.isConnected) { r.view.scrollIntoView({ block: 'nearest', behavior: r.behavior }); }
+        };
         if (this.collapse) { this.collapse.appScroll(keep); } else { keep(); }
+        if (follow) { this.#stuckAt = sc.scrollTop; }
+        // Our own scroll, keeping what is read where it was: not a move under a pointer.
+        this.#moves?.settle();
       }
     };
     this.turns.onSettled = () => this.#wantEarlier();
@@ -1411,16 +1421,25 @@ export class SessionCard {
   }
 
   // The conversation before the latest exchange, from the history store, opened the first time the
-  // session is shown. It opens at the latest message: one scroll to the end, once, when the turns
-  // first draw, and none after it.
+  // session is shown. It opens at the latest message:   kept at the end while it fills, until the
+    // person scrolls.
   #unwatch = null;
-  #atLatest = false;
-  #openTop = 0;
+  #stick = true;
+  #stuckAt = -1;
+
+  // Still following the end: until the scroll is somewhere we did not put it and not at the end,
+  // which is checked here as well as on the scroll event, since a draw can come before the event.
+  #sticking() {
+    if (this.#stick && this.els.scroll.scrollTop !== this.#stuckAt && !this.#atEnd()) { this.#stick = false; }
+    return this.#stick;
+  }
 
   #openTurns() {
     if (!this.historyStore) { return; }
     if (this.#unwatch) { this.#drawTurns(); return; }
-    this.#openTop = this.els.scroll.scrollTop;
+    this.#stuckAt = this.els.scroll.scrollTop;
+    // A scroll that is not ours and leaves the end: the person has taken over.
+    this.els.scroll.addEventListener('scroll', () => { this.#sticking(); }, { passive: true });
     this.#unwatch = this.historyStore.watch(this.hostId, this.#s.id, () => this.#drawTurns());
     this.historyStore.open(this.hostId, this.#s.id, { session: this.#s }).catch(() => {});
     this.#drawTurns();
@@ -1448,19 +1467,23 @@ export class SessionCard {
     const snapshot = this.historyStore.get(this.hostId, this.#s.id);
     const slot = this.els.question;
     if (this.#s.question) { this.#slotQuestion = this.#s.question.id; } else if (!slot.hasChildNodes()) { this.#slotQuestion = null; }
+    const sc = this.els.scroll;
+    // Not at the end before this draw (the person read on, or something grew with no scroll):
+    // nothing here takes them from where they are.
+    // A newer turn than the last drawn is the reply the person is waiting for: it is followed.
+    const away = this.#stick && sc.getClientRects().length > 0 && !this.#atEnd();
+    const tail = this.turns.element.lastElementChild;
     const drawn = this.turns.render(snapshot, this.#s.activity?.turn ?? null, { slot, questionId: this.#slotQuestion });
     // Not in a turn (none holds it, or the history is not drawn): back where the live exchange ends.
     if (!this.turns.hosted && slot.parentNode !== this.els.stream) { this.els.stream.append(slot); }
     this.#syncWaiting();
+    if (away && drawn && tail === this.turns.element.lastElementChild) { this.#stick = false; }
     this.#wantEarlier();
-    const sc = this.els.scroll;
-    if (!this.#atLatest && snapshot.phase !== 'idle' && snapshot.phase !== 'loading' && sc.getClientRects().length) {
-      this.#atLatest = true;
-      // Not if the person has already scrolled: the jump would take them from where they are.
-      if (drawn && sc.scrollTop === this.#openTop) {
-        const toEnd = () => { sc.scrollTop = sc.scrollHeight; };
-        if (this.collapse) { this.collapse.appScroll(toEnd); } else { toEnd(); }
-      }
+    // Latest at the bottom, kept there until the person scrolls (#1646). A draw that showed
+    // nothing does not count, so turns arriving later still scroll.
+    if (this.#stick && drawn && sc.getClientRects().length) {
+      const toEnd = () => { sc.scrollTop = sc.scrollHeight; this.#stuckAt = sc.scrollTop; };
+      if (this.collapse) { this.collapse.appScroll(toEnd); } else { toEnd(); }
     }
   }
 
@@ -1743,6 +1766,7 @@ export class SessionCard {
     const sc = this.els.scroll;
     this.#scrollEnd?.abort();
     this.#scrollEnd = null;
+    this.#revealing = null;
     const v = view.getBoundingClientRect();
     const box = sc.getBoundingClientRect();
     // What the floating header covers, and the room the scroll leaves below it (scroll-padding-top).
@@ -1765,15 +1789,21 @@ export class SessionCard {
     const ended = this.#scrollEnd = new AbortController();
     const { signal } = ended;
     let settle = 0;
-    const done = () => { clearTimeout(settle); ended.abort(); };
+    this.#revealing = { view, behavior };
+    const done = (still) => {
+      clearTimeout(settle);
+      ended.abort();
+      if (still !== true && this.#revealing?.view === view) { this.#revealing = null; }
+    };
     sc.addEventListener('scroll', () => {
       this.#guard();
       clearTimeout(settle);
-      settle = setTimeout(done, SCROLL_SETTLED_MS);
+      // Stopped for now (a slow frame looks like that): the question is still being brought, until scrollend.
+      settle = setTimeout(() => done(true), SCROLL_SETTLED_MS);
     }, { signal, passive: true });
     sc.addEventListener('scrollend', () => { this.#guard(); done(); }, { signal });
-    for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) { sc.addEventListener(type, done, { signal, passive: true }); }
-    setTimeout(done, 3 * QUESTION_ARRIVAL_GUARD_MS);
+    for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) { sc.addEventListener(type, () => done(), { signal, passive: true }); }
+    setTimeout(() => done(), 3 * QUESTION_ARRIVAL_GUARD_MS);
   }
 
   // A finger on the conversation holds it until the last finger lifts. Touch events, not pointer
