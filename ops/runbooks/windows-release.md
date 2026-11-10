@@ -23,6 +23,14 @@ src/AgentBridge.Host/HostUpdates.cs), so they never see draft releases. Until th
 channels (#451) and the halt list (REL-2) exist, that's the only lever. Once they do, a bad
 build is stopped by not promoting it past Dev, and machines on Beta never see it.
 
+**After an update, the app watches its host for 10 minutes** (HostWatch, #1308). If the host fails to
+start three times, or has not connected to the relay in that time while the relay's `/healthz` answers,
+the update is recorded as `failed` with a plain-sentence reason (Settings and the banner show it).
+A host that connects, a relay that does not answer, and a signed-out host are not blamed. While the
+host has failed, the app looks for a newer build every 5 minutes instead of 30, until one is found
+ready. It never rolls back by itself (owner decision, #568): the fix is a newer build, or the
+Mitigate steps below.
+
 ## Mitigate
 
 1. **Stop more machines taking it (Owner, or a session with the owner's go-ahead).** Turn the

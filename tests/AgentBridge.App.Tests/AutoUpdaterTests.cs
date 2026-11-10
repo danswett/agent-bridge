@@ -1112,6 +1112,77 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         await Wait.UntilAsync(() => updater.Applied, "the install between turns", TimeSpan.FromSeconds(5));
     }
 
+    // #1308: a host that fails after an update is reported as failed, and a newer build is looked for
+    // every 5 minutes (roll forward only) until one is found ready.
+    // The fake host for Failed crashes three more starts every time it is asked, so the watch ends on its first look.
+    AutoUpdater Watching(HostWatchEnd end)
+    {
+        var starts = 0;
+        return new(updater, connection, manager, () => prefs, p => prefs = p, log.Add, _ => null, time)
+        {
+            Watch = new HostWatch(() => end switch { HostWatchEnd.Connected => RelayState.Connected, HostWatchEnd.Quiet => RelayState.SignedOut, _ => null },
+                () => end == HostWatchEnd.Failed ? starts += HostWatch.FailedStarts : 0, _ => Task.FromResult(true), time),
+        };
+    }
+
+    [Fact]
+    public async Task A_host_that_failed_after_the_update_is_recorded_as_failed_with_its_reason_and_nothing_is_downgraded()
+    {
+        await StartAsync();
+        auto = Watching(HostWatchEnd.Failed);
+
+        await auto.WatchHostAsync();
+
+        var last = prefs.LastUpdate!;
+        Assert.Equal(UpdateOutcome.Failed, last.Outcome);
+        Assert.Contains("3 times", last.Reason);
+        Assert.False(updater.Applied);
+    }
+
+    [Theory]
+    [InlineData(HostWatchEnd.Connected)]
+    [InlineData(HostWatchEnd.Quiet)]
+    public async Task A_host_that_connected_or_had_no_relay_to_reach_leaves_no_failed_outcome(HostWatchEnd end)
+    {
+        await StartAsync();
+        auto = Watching(end);
+
+        await auto.WatchHostAsync();
+
+        Assert.Null(prefs.LastUpdate);
+    }
+
+    [Fact]
+    public async Task While_the_host_has_failed_a_newer_build_is_looked_for_every_five_minutes_until_one_is_ready()
+    {
+        await StartAsync();
+        updater.Found = null;
+        auto = Watching(HostWatchEnd.Failed);
+        await auto.TickAsync();
+        Assert.Equal(1, updater.Checks);
+        time.Advance(AutoUpdater.CheckEvery / 6);
+        await auto.TickAsync();
+        Assert.Equal(1, updater.Checks);
+
+        await auto.WatchHostAsync();
+        time.Advance(AutoUpdater.CheckAfterFailedHost);
+        await auto.TickAsync();
+        Assert.Equal(2, updater.Checks);
+        updater.Found = "0.3.0";
+        time.Advance(AutoUpdater.CheckAfterFailedHost);
+        await auto.TickAsync();
+        await Wait.UntilAsync(() => auto.Pending == "0.3.0", "the newer build ready", TimeSpan.FromSeconds(5));
+        var checks = updater.Checks;
+
+        // Found ready, the usual half hour is back.
+        time.Advance(AutoUpdater.CheckAfterFailedHost);
+        await auto.TickAsync();
+        Assert.Equal(checks, updater.Checks);
+        time.Advance(AutoUpdater.CheckEvery);
+        await auto.TickAsync();
+        Assert.Equal(checks + 1, updater.Checks);
+    }
+
     sealed class Recording(List<Action> posted) : IUiDispatcher
     {
         public void Post(Action action) { lock (posted) { posted.Add(action); } }

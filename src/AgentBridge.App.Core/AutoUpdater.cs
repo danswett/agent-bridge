@@ -70,6 +70,25 @@ namespace AgentBridge.App.Core;
 public sealed class AutoUpdater
 {
     public static readonly TimeSpan CheckEvery = TimeSpan.FromMinutes(30);
+    // While the host the last update installed has failed (HostWatch), a fix is looked for this
+    // often instead: roll forward only, nothing is downgraded (#568).
+    public static readonly TimeSpan CheckAfterFailedHost = TimeSpan.FromMinutes(5);
+
+    // Set after an update: watched when WatchHostAsync is called, by the app that update started.
+    public HostWatch? Watch { get; init; }
+    volatile bool hostFailed;
+
+    // Watches the host for HostWatch.Window; if it failed, records the update as Failed with the
+    // reason and moves to the faster checks. A host that connected, or one with no relay to reach, says nothing.
+    public async Task WatchHostAsync(CancellationToken ct = default)
+    {
+        if (Watch is null) { return; }
+        var result = await Watch.RunAsync(ct);
+        if (result.End != HostWatchEnd.Failed) { return; }
+        hostFailed = true;
+        log($"update: the host failed after the update: {result.Reason}");
+        Remember(UpdateOutcome.Failed, result.Reason, null, null);
+    }
     // How long the host must have been idle, seen at every tick and every session change, before
     // an Install pressed on another device goes ahead: long past the moment a snapshot is replaced
     // (sessions.subscribe again after a gap), whose upserts arrive within seconds even if an
@@ -785,7 +804,7 @@ public sealed class AutoUpdater
                 // CheckEvery more.
                 if (checkDue) { (checksHeldUntil, checksHeld, lastCheckAt, lastCheckFailed) = (null, null, null, null); }
             }
-            else { checkDue = checkedAt is null || now - checkedAt >= CheckEvery; }
+            else { checkDue = checkedAt is null || now - checkedAt >= (hostFailed ? CheckAfterFailedHost : CheckEvery); }
             if (checkNow || checkDue)
             {
                 checkNow = false;
@@ -1048,6 +1067,7 @@ public sealed class AutoUpdater
         // without it, and offering it would invite a restart that installs nothing.
         if (updater.Ready != found || found == Pending) { return; }
         Pending = found;
+        hostFailed = false;
         log($"auto-update: {found} downloaded; it waits for Restart to update");
     }
 

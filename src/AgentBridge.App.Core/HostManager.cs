@@ -310,7 +310,12 @@ public sealed class HostManager
         try
         {
             await turn;
-            try { await StartNowAsync(both.Token); }
+            try
+            {
+                await StartNowAsync(both.Token);
+                Interlocked.Exchange(ref startFailures, 0);
+            }
+            catch (Exception e) when (e is TimeoutException or InvalidOperationException) { Interlocked.Increment(ref startFailures); throw; }
             finally { lifecycle.Release(); }
         }
         // Whatever the cancelled wait ended with: a look at the pipe cancelled mid-way can end in
@@ -320,6 +325,10 @@ public sealed class HostManager
             throw new OperationCanceledException(StoppedWhileStarting);
         }
     }
+
+    // Starts that failed in a row (a stop is not a failure); HostWatch reads it after an update.
+    int startFailures;
+    public int StartFailures => Volatile.Read(ref startFailures);
 
     const string StoppedWhileStarting = "a stop was asked for while the host was starting";
 
