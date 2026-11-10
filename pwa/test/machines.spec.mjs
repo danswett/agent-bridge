@@ -96,11 +96,35 @@ test('the Machines page has no All machines row, says the fleet in one line, and
   await expect(shadow.locator('.tile-actions-note')).toContainText('view only');
 });
 
-test('Launch here opens the launch panel for that machine', async ({ page }) => {
+const launchHere = async (page) => {
+  const panel = page.locator('#launch');
+  await expect(panel.locator('.launch-title')).toHaveText('Start a session on Laptop');
+  await expect(panel.locator('[name="agent"]')).toBeVisible();
+  await panel.locator('[name="prompt"]').fill('From the tile');
+  await panel.getByRole('button', { name: 'Launch' }).click();
+  await expect(panel.locator('.launch-status')).toHaveText('Session started in a new worktree.');
+  expect((await machine(page, LAPTOP, 'launchLog')).length).toBe(1);
+  expect(await machine(page, 'demo', 'launchLog')).toEqual([]);
+};
+
+test('Launch here, with every machine shown, opens the panel on that machine and launches there, not on the one last used', async ({ page }) => {
   await openDemo(page);
+  // The panel starts on the demo machine, so a press that did not move it would launch there.
+  await go(page, 'launch');
+  await expect(page.locator('#launch select[name="machine"]')).toHaveValue('demo');
+  await go(page, 'machines');
+  await page.locator(`#machine-list [data-device-id="${LAPTOP}"]`).getByRole('button', { name: 'Launch here' }).click();
+  await expect(page.locator('#launch select[name="machine"]')).toHaveValue(LAPTOP);
+  await launchHere(page);
+});
+
+test('Launch here, with another machine shown, opens the panel on the pressed machine and launches there', async ({ page }) => {
+  await openDemo(page);
+  await tab(page, 'demo').click();
   await go(page, 'machines');
   await page.locator(`#machine-list [data-device-id="${LAPTOP}"]`).getByRole('button', { name: 'Launch here' }).click();
   await expect(page.locator('#launch')).toBeVisible();
+  await launchHere(page);
 });
 
 test.describe('from 900 px', () => {
