@@ -6,8 +6,6 @@ using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Protocol;
 using Xunit;
 
-namespace AgentBridge.Host.Delivery.Tests;
-
 public sealed class HandoffAdapterTests : IDisposable
 {
     const string Id = "55555555-5555-4555-8555-555555555555";
