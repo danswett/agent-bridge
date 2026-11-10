@@ -61,16 +61,26 @@ public sealed partial class SessionView
         blocksOf = card;
         blocksFrom = from;
         IReadOnlyList<MdBlock> next = from is null ? [] : MarkdownModel.Parse(from);
+        // Measured before the list changes: a reply that replaces the last one wholesale resets the list,
+        // its height drops to nothing for a frame, and the scroller clamps to the top (#1739).
+        var scroll = ConversationScroll;
+        var wasEnd = pinEnd || scroll is { ScrollableHeight: > 0 } && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack;
+        var was = scroll?.VerticalOffset ?? 0;
+        var replaced = false;
         if (reset || !ConversationBlocks.Update(blocks, next))
         {
             blocks = new ConversationItems(next.Select(b => new ConversationBlock(b)));
             ConversationList.ItemsSource = blocks;
+            replaced = true;
         }
         // Indexes have moved: the anchor taken again once the list has laid them out.
         anchor = null;
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, TakeAnchor);
         // A reply arriving or growing under a view still at the end (#1646); a view a key or focus moved away is left.
         if (pinEnd && follow.AtEnd) { KeepPlace(true, 0); }
+        // Another session starts from its top. A person at the end follows a reply that grows, scrolled or not (#1739);
+        // a reply that replaced the last one keeps the place of a person scrolled back.
+        else if (!reset && (wasEnd || replaced)) { KeepPlace(wasEnd, was); }
         // The response's empty view held 8 under its label, as its first block does.
         FooterLead.Height = card is { HasVoice: true } && blocks.Count == 0 ? 8 : 0;
     }
