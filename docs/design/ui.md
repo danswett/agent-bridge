@@ -2034,6 +2034,13 @@ machine, online ones first, then the account's offline machines (#213):
 
 #### 6.6.2 Moving a session to another machine (#1146; draft, written against the epic as filed)
 
+Owner decision (2026-11-10, #1146): v1 is a **handoff, then a fork/resume on another machine**. The
+old session is told to hand off; its transcript and artifacts are sent to the other machine; a new
+session starts there. Forking a session that has ended is allowed. Moving a session that is running
+live is a later phase, not in v1. The main use is relieving an overloaded machine (§6.6.1, #165,
+#1144), so the dialog is also opened from a Tight or Full tile. Move duration is measured per step
+(rule 12); the person sees the same steps.
+
 Status: the epic's slices are not started. Everything marked **Open (Engineering)** is a question the
 host must answer before a builder starts; where the answer is "no", the rule beside it says what the
 person sees instead. Nothing here changes a protocol or sends session content anywhere new.
@@ -2051,25 +2058,31 @@ person sees instead. Nothing here changes a protocol or sends session content an
    person's pick always wins. Buttons: **Continue** (disabled until a ready machine is chosen) and
    **Cancel**, focus on the first ready machine.
 3. **What it says it will do.** Under the list, one plain sentence that is true for the chosen
-   machine: "The conversation continues there. This one is marked moved and stops taking answers."
-   Where files move (**Open (Engineering):** branch plus uncommitted changes, or same checkout
-   required), a second sentence names which: "Your uncommitted changes go with it." or "It opens
-   the same folder on *machine*." If neither is possible the machine reads "Can't carry your
-   changes", is not choosable, and nothing is lost.
-4. **Progress and result.** After Continue the dialog shows one line that changes in place
-   ("Preparing", "Sending", "Starting on *machine*"), with **Cancel** until the target starts. On
-   success it closes and opens the new session (§6.4) with a one-line banner: "Moved from *machine*.
-   *time*." On failure it stays open with the reason in text and the old session is untouched and
-   still answerable. A move is all or nothing: the old session is marked moved only after the new
-   one is running.
+   machine: "A copy of the conversation and its files start on *machine*. This one is marked moved
+   and stops taking answers." If the files can't be sent (Open (Engineering): size or type limits),
+   the machine reads "Can't carry its files", is not choosable, and nothing is lost.
+4. **Starting and cancelling.** **Continue** closes the dialog at once and the person lands on the
+   session being moved (rule 13), where the progress lives; nothing is shown only in the dialog.
+   Cancel is on the session's move strip until step 4 starts; after that the strip reads "Starting;
+   this can't be cancelled" and Cancel is off. A move is all or nothing: the old session is marked
+   moved only after step 5. A step that takes over 60 s says "Still working" and keeps going; it
+   never ends silently.
+   The five steps, in order, each with a state (waiting, working, done, failed) as text plus an icon,
+   never colour alone: 1 "Hand-off requested", 2 "Hand-off confirmed", 3 "Files sent to *machine*",
+   4 "New session launched", 5 "New session online". The working step shows its elapsed time
+   ("12 s").
+   On success the strip says "Moved to *machine*" (rule 5) and the new session shows "Moved from
+   *machine*. *time*." The five steps and their durations stay in each session's details.
 5. **The old session.** Its row and conversation say "Moved to *machine*" with a **Go to it**
    button. It takes no answers and no Send; a question card still showing on it is replaced by that
    line. It leaves Needs you at once. It follows the usual retention.
-6. **Which sessions can move.** Open (Engineering): a running session, a paused one, and a finished
-   one, per agent. Until answered: only finished and paused sessions are offered, and a running
-   session's menu item is dimmed with "Pause it first". A session waiting on a question can't move
-   ("Answer or dismiss the question first"). A session whose agent has no resume is not offered, with
-   "*Agent* can't continue elsewhere".
+6. **Which sessions can move (v1).** A session that is idle or has ended (including one that has
+   ended) is offered. A session that is working right now is not: its item is dimmed with "Wait for
+   it to finish a turn". A session waiting on a question can't move ("Answer or dismiss the question
+   first"). A session whose agent has no resume is not offered, with "*Agent* can't continue
+   elsewhere". Because the new session is a fork, the dialog says so: "This starts a copy there; the
+   original stays here, marked moved." Moving a session that is mid-turn is a later phase and has no
+   v1 control. Open (Engineering): per agent, what a hand-off can carry.
 7. **Who may.** Only a person who may answer the session. The target applies the same owner
    re-admission as any resume (#912); if it asks, the dialog says "Sign in on *machine* to
    continue" and keeps its place. A person with View only sees no menu item.
@@ -2085,16 +2098,64 @@ person sees instead. Nothing here changes a protocol or sends session content an
     High contrast uses system colours.
 11. **Refusals, in words.** Every refusal is a sentence naming the machine and the one thing to do;
     never a code. Two moves of the same session at once: the second reads "Already moving".
+12. **Timings.** Each move records the time of each of the five steps (asked to hand off, hand-off
+    confirmed, files sent, new session launched, new session confirmed online) and the total, with
+    the machines and agent, no session text. The details show the durations; Engineering owns the
+    telemetry name and where it goes. A step with no time reads "–", not 0 s.
+13. **The move strip, on the session itself (#1146).** While a move runs, and until it succeeds or
+    the person closes a failure, the session being moved carries a **move strip** directly under
+    its title row, above the conversation. It is part of the page, not a toast or a dialog, and
+    survives leaving and returning to the session, a reload, and a different device opening it.
+    - **Head line:** "Moving from *source* to *target*" (machine names, in full, wrapping; never
+      truncated to hide a name). The session's row in the list shows "Moving to *target*" as its
+      status line and a Working-style indicator; it does not leave Needs you until step 5.
+    - **The five steps,** as in rule 4, as a vertical list with a step number, its words, its state
+      word and its elapsed or final time ("done · 3 s"). Steps not yet reached read "waiting".
+      The strip's height is the same for every state, so nothing below it moves; on a phone it is
+      collapsed by default to the head line and the current step ("Step 3 of 5: Files sent to
+      *target*"), a real button with `aria-expanded` that opens the list.
+    - **Failure:** the failed step shows "failed" with an error icon and, directly under it, one plain
+      sentence naming the machine and what to do ("*Target* is offline. Pick another machine or try
+      again when it is back."); never a code. Steps after it read "not started". The head line reads
+      "Move to *target* didn't finish". **Try again** (restarts at the failed step where the host
+      can, otherwise from step 1) and **Choose another machine** and **Close** are buttons. Close
+      removes the strip; the session stays as it was.
+    - **Answerable again after a failure:** the original is untouched and takes Send, answers and cards
+      again as soon as a step fails or the move is cancelled. During a move, Open (Engineering):
+      whether an answer given during steps 1 to 3 can be lost. Until answered, Send is disabled from
+      step 1 with "Hand-off in progress", and the strip says so in one line.
+    - **On the target:** when step 4 completes the target's session list shows the new session as
+      "Starting, moved from *source*" in the same strip form (steps 4 and 5 working); it can't be
+      answered until step 5, then shows rule 5's banner. A person who opens the new session before
+      step 5 sees the same strip.
+    - **Announcement:** a step change is announced once, politely ("Hand-off confirmed"); a failure is
+      announced assertively, once. Nothing repeats on a refresh.
+    - **Endpoints:** phone and iPad portrait: the strip is full width and the step list opens
+      in place; 44 px targets. 900 px and wider (iPad landscape, browser, Windows app): the strip is
+      full width above the conversation with the five steps in a single row when there is room
+      (number, words, state), wrapping to the list below 700 px. Windows app: the strip is a region
+      named "Moving from *source* to *target*"; each step has a UIA name with its state; focus never
+      moves unasked. Reduced motion: no animation beyond the working indicator, which is static
+      text "working" plus a still icon. High contrast uses system colours; text scales to 200%.
+    - **When a person returns:** a move that finished while the person was away shows the success line
+      once and a failure stays until closed.
 
 **Open (Engineering):** (a) which agents can resume on another machine and what state moves for each
-(slice 1, the parity audit); (b) whether a running session can move or must be paused first; (c) how
-the workspace reaches the target; (d) whether the host can say "can't take more" before a move
-starts; (e) whether the old session can be marked moved atomically with the new one starting.
+(slice 1, the parity audit); (b) how the transcript and artifacts reach the target, and the size
+at which a step is slow; (c) whether the host can say "can't take more" before a move starts;
+(d) whether the old session can be marked moved atomically once the new one is confirmed;
+(e) which host events give each of the five step times.
 
 **Tests (each fails without the change):** only machines with the agent and workspace are
 choosable, the rest dimmed with their reason; the current machine isn't listed; Continue is disabled
 until a ready machine is chosen; the suggested machine is first and the pick overrides it; failure
-leaves the old session answerable and unchanged; success marks it moved only after the new one runs;
+leaves the old session answerable and unchanged with the failed step marked; the five steps show in
+order with elapsed time and no height change; Cancel is off from step 4; an ended session can be moved;
+the move strip is under the title, survives a reload and another device, names source and target in
+full, collapses to "Step n of 5" on a phone, shows the failed step with its reason and the later steps
+"not started", Try again and Choose another machine work, Close leaves the session as it was; Send
+is off from step 1 until success or failure; target shows "Starting, moved from" until step 5;
+a working session can't; success marks it moved only after step 5; durations recorded per step;
 the moved session takes no answer or Send and leaves Needs you; a session with a question open can't
 move; View only sees no item; a different model on the target is stated before Continue; the same
 words on the PWA and the Windows app; 44 px targets; UIA names; Escape cancels.
