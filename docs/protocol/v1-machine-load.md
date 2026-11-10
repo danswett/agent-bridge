@@ -51,7 +51,7 @@ Disk is not in this record: SRE ruled it out of this slice. A later contract add
 | `workingSetBytes` | number? | The **sum of working sets** of the tree. It double-counts shared pages, so it is labelled so and is never a headroom figure |
 | `handles` | number? | Windows handles, or open descriptors on macOS and Linux |
 | `handleKind` | `"handles"` \| `"fds"`? | Says which `handles` is. Present with `handles` |
-| `state` | `"ok"` \| `"partial"` \| `"unavailable"` | `partial`: a process of the tree exited or could not be read mid-sample |
+| `state` | `"fresh"` \| `"partial"` \| `"unavailable"` | `partial`: a process of the tree exited or could not be read mid-sample |
 
 Not in v1 of this record: disk growth per session. Process I/O write bytes are not retained disk
 size and a recursive workspace scan per tick is not allowed, so the field is absent until a
@@ -100,7 +100,7 @@ The target is an untrusted carrier, so the source acts only on the signed comman
 `to`, in this order: `moveId` (the manifest's) and `withWorkspace` (`true` only when the person
 asked). The person's device signs them. The source adds the workspace part only when the verified
 body says `withWorkspace: true`, and takes `moveId` for the manifest and the telemetry from the
-same body. A body without them is today's command and gets no workspace part. They count toward
+same body. Any `moveId` or `withWorkspace` the launch request carries is advisory: the target takes both from the manifest, and refuses with `manifest-mismatch` when the launch request disagrees with it. A body without them is today's command and gets no workspace part. They count toward
 the 2048-byte body bound.
 
 ### Handoff package
@@ -127,7 +127,7 @@ the unknown entries and the move is `refused`, never half-applied.
 | `session` | string | The source session's id |
 | `workspace` | string? | The workspace *name* (never the path) |
 | `files`, `bytes`, `sha256` | number, number, string | Of the **session files only**, not of the zip (a zip cannot hold its own hash): the entry count, their total uncompressed bytes, and the SHA-256 (base64url, no padding) over the entries in name order, each as its name, a zero byte, then its content. `session.transfer`'s own `size` and `sha256` still describe the sealed zip |
-| `workspaceChanges` | object? | Present only with the second part: `{ branch, baseCommit, patchBytes, untracked, skipped, truncated }`. `branch` and `baseCommit` are names and hashes; `untracked` and `skipped` count files, and an untracked file's body is in the patch as an added file. A count that is not known is absent, never `0`. `baseCommit` is the commit the diff is against, even when it was never pushed (then the target cannot have it and the part is `not-applied`). Symlinks are recorded as the link and never followed; submodules appear as their commit hash only |
+| `workspaceChanges` | object? | Present when the person asked and the workspace is a git repository, even if the patch was dropped (then `truncated` is `true`, `patchBytes` is absent and there is no `workspace.patch`): `{ branch, baseCommit, patchBytes, untracked, skipped, truncated }`. `branch` and `baseCommit` are names and hashes; `untracked` and `skipped` count files, and an untracked file's body is in the patch as an added file. A count that is not known is absent, never `0`. `baseCommit` is the commit the diff is against, even when it was never pushed (then the target cannot have it and the part is `not-applied`). Symlinks are recorded as the link and never followed; submodules appear as their commit hash only |
 
 ### Workspace changes
 
@@ -163,6 +163,7 @@ in ui.md 6.6.2 map from the code):
 | `no-matching-agent` | The target has no launcher for the agent | "No agent" |
 | `workspace-required` | The launch named no workspace | "No workspace here" |
 | `hash-mismatch` | The blob's hash did not match | |
+| `manifest-mismatch` | The launch request's `moveId` or `withWorkspace` disagrees with the manifest | |
 | `blob-expired` | The relay store dropped the blob | |
 | `target-full` | Afterwards only: the target is at its session limit | "Can't take more" |
 | `timeout` | A step did not finish in time | |
@@ -176,7 +177,7 @@ and the source returns steps 2 and 3 (their `at` and `ms` on the source's clock)
 `session.transfer` result as an optional `steps` list, which the target merges. The source keeps
 no record beyond its `host.log` line. The target keeps the merged record for 30 days and sends
 it, content-free, over the relay channel to the signing person's device (`by` in the command)
-and, if the owner enabled it, to the SRE collector. No other device is sent it or may ask for it.
+and, if the owner set `telemetry.collect` to `true` in host settings (default `false`, beside `load.enabled`), to the SRE collector. No other device is sent it or may ask for it.
 
 ### MoveTelemetry
 
