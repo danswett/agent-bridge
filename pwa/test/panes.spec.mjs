@@ -516,7 +516,9 @@ test('an address naming a session that has not arrived yet shows no other sessio
 
 test('news a session\'s view showed while search hid its row gets no dot once search lets the row back', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
+  await page.clock.install();
   await openDemo(page);
+  await page.clock.pauseAt(new Date(Date.now() + 10_000));
   await open(page, CODEX);
   await page.keyboard.press('Control+k');
   await page.keyboard.type('relay');
@@ -524,7 +526,10 @@ test('news a session\'s view showed while search hid its row gets no dot once se
   await expect(view(page, CODEX)).toBeVisible();
   // It changes while its view is the one on screen.
   await upsert(page, CODEX, { updatedAt: later(), activity: { response: 'Shown as it came.' } });
+  await page.clock.runFor(50);
   await expect(view(page, CODEX).locator('.response')).toContainText('Shown as it came.');
+  // On screen for the read dwell, so it counts as read.
+  await page.clock.runFor(1100);
   // Another chosen from the search, then search cleared.
   await page.locator('.session .row-main').first().click();
   await expect(view(page, CODEX)).toBeHidden();
