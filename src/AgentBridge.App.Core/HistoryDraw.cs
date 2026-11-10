@@ -6,6 +6,7 @@ namespace AgentBridge.App.Core;
 // agent's response as blocks, and a meta line when the turn could not be read in full.
 public sealed record HistoryRow(string Id, HistoryDisclosure? Disclosure, string? Prompt, IReadOnlyList<ConversationBlock> Blocks, string? Note, HistoryTimes? Times = null)
 {
+    public IReadOnlyList<HistoryItem> Items { get; init; } = [];
     // Where each time is drawn (ui.md 6.4 Time on messages): a prompt you didn't type has its time on
     // its label line, yours under it at the trailing edge; the reply's is above its text. Null draws nothing.
     public MessageStamp? PromptBeside => Disclosure is null ? null : Times?.Prompt;
@@ -52,39 +53,65 @@ public static class HistoryDraw
 
     // The turns to draw. The newest held turn is the live exchange when its prompt is the card's
     // (the card draws it, so it is not drawn twice); no live prompt, as for a session just begun, drops nothing.
-    public static IReadOnlyList<HistoryRow> Rows(IReadOnlyList<HistoryTurn> turns, string? livePrompt, IDictionary<string, HistoryDisclosure>? kept = null, MessageClock? clock = null)
+    public static IReadOnlyList<HistoryRow> Rows(IReadOnlyList<HistoryTurn> turns, string? livePrompt, IDictionary<string, HistoryDisclosure>? kept = null, MessageClock? clock = null,
+        IDictionary<string, ClosedQuestion>? closed = null, string? activeQuestion = null)
     {
         clock ??= MessageClock.Local;
         var count = turns.Count;
-        if (count > 0 && !string.IsNullOrWhiteSpace(livePrompt) && turns[^1].Prompt is { } last && last.Text.Trim() == livePrompt.Trim()) { count--; }
+        bool IsClosed(HistoryPart part) => part.Kind == HistoryPartKind.Question && part.Question is { } q && q.Id != activeQuestion;
+        // The current view still draws Blocks. A mixed-items view opts in with its disclosure cache.
+        if (count > 0 && !string.IsNullOrWhiteSpace(livePrompt) && turns[^1].Prompt is { } last && last.Text.Trim() == livePrompt.Trim()
+            && (closed is null || !turns[^1].Parts.Any(IsClosed))) { count--; }
         var from = Math.Max(0, count - HistoryLimits.Kept);
+        var retained = closed is null ? new HashSet<string>() : turns.Skip(from).Take(count - from).Where(t => t.Unreadable != true)
+            .SelectMany(t => t.Parts).Where(IsClosed).Select(p => p.Question!.Id).Reverse().Distinct().Take(ClosedQuestion.Kept).ToHashSet();
+        if (closed is not null)
+        {
+            foreach (var id in closed.Keys.Where(id => !retained.Contains(id)).ToArray()) { closed.Remove(id); }
+        }
         var rows = new List<HistoryRow>(count - from);
-        for (var i = from; i < count; i++) { rows.Add(Row(turns[i], kept, clock)); }
+        var drawn = new HashSet<string>();
+        for (var i = from; i < count; i++) { rows.Add(Row(turns[i], kept, clock, closed, retained, drawn)); }
         return rows;
     }
 
-    static HistoryRow Row(HistoryTurn turn, IDictionary<string, HistoryDisclosure>? kept, MessageClock clock)
+    static HistoryRow Row(HistoryTurn turn, IDictionary<string, HistoryDisclosure>? kept, MessageClock clock,
+        IDictionary<string, ClosedQuestion>? closed, HashSet<string> retained, HashSet<string> drawn)
     {
         if (turn.Unreadable == true) { return new(turn.Id, null, null, [], Unreadable); }
         var blocks = new List<ConversationBlock>();
+        var items = new List<HistoryItem>();
         var cut = turn.Truncated == true || turn.Prompt?.Truncated == true;
         DateTimeOffset? replyAt = null;
         foreach (var part in turn.Parts)
         {
+            if (closed is not null && part.Kind == HistoryPartKind.Question && part.Question is { } q && retained.Contains(q.Id) && drawn.Add(q.Id))
+            {
+                if (!closed.TryGetValue(q.Id, out var record) || !QuestionViewModel.SaysTheSame(q, record.Question))
+                {
+                    record = new ClosedQuestion(q) { Open = record?.Open ?? false };
+                    closed[q.Id] = record;
+                }
+                items.Add(new(null, record));
+            }
             if (part.Kind != HistoryPartKind.Response || string.IsNullOrEmpty(part.Text)) { continue; }
             cut |= part.Truncated == true;
             replyAt ??= part.At;
-            blocks.AddRange(MarkdownModel.Parse(part.Text).Select(b => new ConversationBlock(b)));
+            foreach (var block in MarkdownModel.Parse(part.Text).Select(b => new ConversationBlock(b)))
+            {
+                blocks.Add(block);
+                items.Add(new(block, null));
+            }
         }
         // A prompt has no time of its own and takes its turn's; a reply takes its first part's.
         var times = new HistoryTimes(turn.Prompt is null ? null : clock.Stamp(turn.At), replyAt is { } at ? clock.Stamp(at) : null);
-        if (PromptOrigin.OfHistory(turn.Prompt) is not { } origin) { return new(turn.Id, null, turn.Prompt?.Text, blocks, cut ? CutShort : null, times); }
+        if (PromptOrigin.OfHistory(turn.Prompt) is not { } origin) { return new(turn.Id, null, turn.Prompt?.Text, blocks, cut ? CutShort : null, times) { Items = items }; }
         if (kept is null || !kept.TryGetValue(turn.Id, out var disclosure) || disclosure.Origin.Text != origin.Text || disclosure.Origin.Label != origin.Label)
         {
             disclosure = new HistoryDisclosure(origin);
             if (kept is not null) { kept[turn.Id] = disclosure; }
         }
-        return new(turn.Id, disclosure, null, blocks, cut ? CutShort : null, times);
+        return new(turn.Id, disclosure, null, blocks, cut ? CutShort : null, times) { Items = items };
     }
 
     // The one meta line above the stored turns: what the history holds, or why it holds nothing.
