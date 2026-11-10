@@ -57,7 +57,8 @@ public sealed class RosterOptions
 }
 
 // A machine the account has had: always a host, the only kind recorded.
-public sealed record RosterMachine(string Id, string Name, string Kind, DateTimeOffset LastSeen);
+// Start: how the host said it starts ("boot" or "logon"); null when it never said.
+public sealed record RosterMachine(string Id, string Name, string Kind, DateTimeOffset LastSeen, string? Start = null);
 
 // What is stored for an account: its machines, and the ones forgotten lately, each with when.
 // A machine shows while it was seen after it was last forgotten, so copies merge whichever
@@ -282,7 +283,7 @@ public sealed class MachineRoster
 
     // An admitted device; a host is recorded as itself. Waits (briefly) for the stored roster,
     // so the first presence an account's device sees already lists its offline machines.
-    public async Task ConnectedAsync(string accountId, string device, string name, string kind)
+    public async Task ConnectedAsync(string accountId, string device, string name, string kind, string? start = null)
     {
         if (!Enabled) { return; }
         var a = Hold(accountId, r =>
@@ -290,7 +291,7 @@ public sealed class MachineRoster
             r.Connections++;
             if (kind != "host") { return; }
             r.Online[device] = r.Online.GetValueOrDefault(device) + 1;
-            r.Machines[device] = new RosterMachine(device, name, kind, Now);
+            r.Machines[device] = new RosterMachine(device, name, kind, Now, start);
             // A machine that comes back after being forgotten is the account's again.
             r.Forgotten.Remove(device);
             r.Dirty = true;
@@ -590,11 +591,11 @@ public sealed class MachineRoster
                 if (a.Online.ContainsKey(id)) { continue; }
                 if (a.Machines.TryGetValue(id, out var mine))
                 {
-                    if (m.LastSeen > mine.LastSeen) { a.Machines[id] = new RosterMachine(id, Clean(m.Name), "host", m.LastSeen); }
+                    if (m.LastSeen > mine.LastSeen) { a.Machines[id] = new RosterMachine(id, Clean(m.Name), "host", m.LastSeen, m.Start); }
                 }
                 else if (!a.Base.TryGetValue(id, out var based) || m.LastSeen > based)
                 {
-                    a.Machines[id] = new RosterMachine(id, Clean(m.Name), "host", m.LastSeen);
+                    a.Machines[id] = new RosterMachine(id, Clean(m.Name), "host", m.LastSeen, m.Start);
                 }
             }
             foreach (var (id, m) in a.Machines.ToList())

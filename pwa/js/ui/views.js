@@ -677,6 +677,14 @@ export function offlineMachines({ presence, known, me }) {
   return (known ?? []).filter((k) => k && typeof k.id === 'string' && k.id !== me && k.kind === 'host' && !presence.some((d) => d.id === k.id));
 }
 
+// What an offline machine's row says. The relay passes on how the host said it starts (hello's
+// start); a machine that never said is plainly offline.
+export function startWords(start) {
+  if (start === 'boot') { return 'Signed out: waiting for sign-in'; }
+  if (start === 'logon') { return 'Logon only: starts when you sign in'; }
+  return 'Offline';
+}
+
 // current: the machine chosen, or ALL. With more than one machine online, All machines is listed
 // first, as the Windows app's picker lists it; allStatus says what it shows. With one, that one
 // is the one viewed when every machine is.
@@ -879,7 +887,7 @@ export function renderMachines(list, { presence, me, current, onSelect, status =
   // takes no click: a tap at startup, with every machine sending its sessions, was lost.
   const key = JSON.stringify([current, allStatus, hosts.map((d) => [d.id, d.name, lines.get(d.id).key, rows.get(d.id).key, signInRows.get(d.id).key, diagnoses.get(d.id).key]),
     // lastSeen itself, not only how it reads: Forget sends it, to tell a machine that came back.
-    offline.map((k) => [k.id, k.name, k.lastSeen, ago(k.lastSeen, now), forget?.stateOf(k.id) ?? null]), !!forget, [...restarting]]);
+    offline.map((k) => [k.id, k.name, k.lastSeen, k.start ?? null, ago(k.lastSeen, now), forget?.stateOf(k.id) ?? null]), !!forget, [...restarting]]);
   if (drawnAs.get(list) === key) { return hosts.length; }
   drawnAs.set(list, key);
   // Every change redraws the list, so the button that had focus is replaced: Forget's first
@@ -907,7 +915,7 @@ export function renderMachines(list, { presence, me, current, onSelect, status =
     return machineRow({
       id: k.id, name, offline: true,
       facts: h('span', { class: 'machine-seen' }, `Last seen ${seen || 'a while ago'}`),
-      state: restarting.has(k.id) ? RESTARTING : 'Offline',
+      state: restarting.has(k.id) ? RESTARTING : startWords(k.start),
       more: [
         forget ? h('div', { class: 'machine-actions' }, h('button', {
           type: 'button', class: `button secondary small machine-forget${s.armed ? ' armed' : ''}`,

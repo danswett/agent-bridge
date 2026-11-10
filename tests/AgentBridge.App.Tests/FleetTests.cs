@@ -1268,6 +1268,21 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_offline_machine_says_whether_it_is_signed_out_or_logon_only_and_otherwise_just_offline()
+    {
+        await BothMachinesAsync();
+        link.Known = [Gone("vm-id", "Build VM", 5) with { Start = "boot" }, Gone("laptop-id", "Travel laptop", 5) with { Start = "logon" }, Gone("old-id", "Old PC", 5)];
+        link.Raise();
+        await Wait.UntilAsync(() => Rows().Length == 5, "every machine's row");
+
+        var rows = Rows().Where(r => r.Offline is not null).ToDictionary(r => r.Name);
+        Assert.Equal("Signed out: waiting for sign-in", rows["Build VM"].Status);
+        Assert.Equal("Logon only: starts when you sign in", rows["Travel laptop"].Status);
+        Assert.Equal("Offline", rows["Old PC"].Status);
+        Assert.Equal("Logon only: starts when you sign in \u00b7 last seen 5m ago", rows["Travel laptop"].Offline!.LastSeenText);
+    }
+
+    [Fact]
     public async Task A_read_only_machines_row_says_view_only_and_keeps_the_hosts_reason_for_its_tooltip_not_the_row()
     {
         const string why = "read-only: this is a read-only comparison host (delivery.readOnly in its config); answer at the machine";

@@ -14,7 +14,7 @@ Everything here is relay text control messages, outside any channel, as for the 
 
 * **Hosts only.** When a socket of kind `host` is admitted, the relay records the device id
   it proved and the name it gave in `hello` (control characters dropped, at most 64
-  characters), and when it was seen. When its last socket ends, the relay records that time
+  characters), the `start` it declared there if it is `boot` or `logon`, and when it was seen. When its last socket ends, the relay records that time
   as when it was last seen. While it stays connected, the relay refreshes that time in
   storage every 10 minutes.
 * **Nothing else adds or changes an entry.** No message names a machine to record: a host
@@ -38,7 +38,7 @@ are **not** connected now, most recently seen first.
 {
   "t": "presence",
   "devices": [{ "id": "…", "name": "Desk", "kind": "host", "since": "2026-10-31T17:02:11Z" }],
-  "known": [{ "id": "3f9a…", "name": "Travel laptop", "kind": "host", "lastSeen": "2026-10-28T08:15:40Z" }]
+  "known": [{ "id": "3f9a…", "name": "Travel laptop", "kind": "host", "lastSeen": "2026-10-28T08:15:40Z", "start": "logon" }]
 }
 ```
 
@@ -48,6 +48,12 @@ are **not** connected now, most recently seen first.
 | `name` | What it called itself when it last connected |
 | `kind` | Always `host` |
 | `lastSeen` | When it was last connected (ISO 8601, UTC) |
+| `start` | Optional. How the host said it starts, in `hello`: `boot` (a VM that starts with no one signed in) or `logon` (a laptop that starts only when a person signs in). Absent when it never said. Any other value is dropped by the relay |
+
+A client reads `start` only to word an offline machine plainly: `boot` is "Signed out: waiting
+for sign-in", `logon` is "Logon only: starts when you sign in", and absent is "Offline". The
+Windows app, the PWA and the alert text use the same words. `start` is not a promise that the
+machine will come back, and says nothing about the machine's load, which goes stale as before.
 
 Proposed, not implemented: #805's draft ([#815](https://github.com/danswett/agent-bridge/pull/815))
 adds an optional `offline` object saying how and why the machine went, and #970 adds `gone`
@@ -177,7 +183,7 @@ with no key.
   roster requires the token key: a per-process key could not find it again after a restart.
   Rotating the token key (which signs everyone out anyway) orphans every roster; they then age
   out under the lifecycle rule.
-* **Contents.** `{ "v": 1, "machines": [{ "id", "name", "kind", "lastSeen" }], "forgotten": { "<id>": "<when>" } }`.
+* **Contents.** `{ "v": 1, "machines": [{ "id", "name", "kind", "lastSeen", "start"? }], "forgotten": { "<id>": "<when>" } }`.
 * **Two relays at once.** Writes are conditional on the blob's ETag, so a draining relay and
   its replacement cannot lose each other's changes: a write against a copy that has changed is
   refused, and the writer reads, merges and writes again. The merge is three-way, against the

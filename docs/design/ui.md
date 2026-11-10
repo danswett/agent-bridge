@@ -1874,7 +1874,11 @@ machine, online ones first, then the account's offline machines (#213):
     in" instead, in the same place. Trust accepted the lists with names (6700902097).
 - **A machine away (§6.1):** listed once, as offline ("Offline", and "Last seen 2m ago" on line
   2), with Forget, both while its rows are kept and after they have gone. A client whose relay
-  keeps no roster lists it so only while its rows are kept.
+  keeps no roster lists it so only while its rows are kept. A machine that told the relay how it
+  starts says so in place of "Offline" on line 1: "Signed out: waiting for sign-in" for a VM that
+  starts with no one signed in (`start: boot`), "Logon only: starts when you sign in" for a laptop
+  that starts only at sign-in (`start: logon`), the same on the roster, the Windows app and the PWA
+  (roster.md). The alert for a machine in the first state says "signed out", not "offline".
 - **A machine whose bridge isn't running (§6.14, proposed):** still "Offline" on line 1, and
   line 2 says "Bridge isn't running · since *time*" in place of "Last seen…".
 - **Diagnose (#802, v1-diagnostics.md):** in another connected machine's row, after its updates,
@@ -3028,6 +3032,7 @@ episode (A6). The row's accessible name reads "*machine*, offline, bridge isn't 
 | Use | Text |
 |---|---|
 | Machines row, line 2 | "Bridge isn't running · since *time*" |
+| Same, a machine that starts only at sign-in (`start` is `boot` or `logon`) | Line 1 keeps "Signed out: waiting for sign-in" / "Logon only: starts when you sign in"; no bridge alert is raised for it, as it is expected to be down until someone signs in |
 | Banner | "*machine*'s bridge isn't running · since *time*" |
 | Machine tab tooltip and "N more" entry | "*machine* · bridge isn't running" |
 | Push and toast title | "*machine*'s bridge isn't running" |
