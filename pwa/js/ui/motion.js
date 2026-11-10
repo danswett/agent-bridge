@@ -250,7 +250,7 @@ export function select(to, entry, from, { pseudo = null, axis = 'xy', scaleX = f
 export function leave(el, entry, { dy = 0 } = {}) {
   const doc = el?.ownerDocument;
   const t = timing(entry, { exit: true, doc });
-  if (!el?.isConnected || !(t.duration > 0) || !doc?.body?.attachShadow) { return null; }
+  if (!el?.isConnected || !(t.duration > 0) || !doc?.body?.attachShadow || doc.visibilityState === 'hidden') { return null; }
   const r = el.getBoundingClientRect();
   if (!r.width || !r.height) { return null; }
   // Only what showed of it: a row half scrolled out of its list, or a glyph under the end of a
@@ -270,13 +270,31 @@ export function leave(el, entry, { dy = 0 } = {}) {
   });
   host.attachShadow({ mode: 'closed' }).append(inlineCopy(el));
   doc.body.append(host);
+  copies.add(host);
+  sweepOn(doc);
   const y = dy * t.distance;
   const frames = y ? [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: `translate(0px, ${y}px)` }] : [{ opacity: 1 }, { opacity: 0 }];
   const a = run(host, frames, entry, t, { fill: 'forwards' });
-  if (!a) { host.remove(); return null; }
-  const done = () => host.remove();
+  if (!a) { host.remove(); copies.delete(host); return null; }
+  const done = () => { host.remove(); copies.delete(host); };
   a.finished.then(done, done);
   return a;
+}
+
+// Every copy still on the page. A browser may hold or drop an exit fade while the app is
+// backgrounded or navigated (WebKit on a phone), so `finished` never settles and the copy would
+// stay over the row it was drawn for (#1641). A copy is a still picture of what has already
+// changed, so it goes whenever the app is hidden or navigated.
+const copies = new Set();
+const swept = new WeakSet();
+function sweepOn(doc) {
+  const win = doc.defaultView;
+  if (swept.has(doc) || !win) { return; }
+  swept.add(doc);
+  const sweep = () => { for (const c of copies) { c.remove(); } copies.clear(); };
+  doc.addEventListener('visibilitychange', () => { if (doc.visibilityState === 'hidden') { sweep(); } });
+  win.addEventListener('pagehide', sweep);
+  win.addEventListener('popstate', sweep);
 }
 
 // The part of r (el's box) that shows: inside the viewport and every ancestor that clips el, or

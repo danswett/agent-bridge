@@ -384,6 +384,39 @@ test('a glyph that changes fades out as it was, in its own colour, not in the co
   }
 });
 
+test('a glyph copy whose fade a browser never finishes is gone when the app is hidden or Back shows the list (#1641)', async ({ page }) => {
+  await openDemo(page, { width: 390, height: 844 });
+  // As a browser does that holds or drops an exit fade while the page is backgrounded or navigated.
+  const strays = () => page.evaluate(() => [...document.body.children].filter((c) => c.matches('div[aria-hidden="true"]') && c.inert && getComputedStyle(c).position === 'fixed').length);
+  const hold = () => page.evaluate(() => {
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (...args) {
+      const a = animate.apply(this, args);
+      if (this.parentElement === document.body && this.inert) { a.pause(); }
+      return a;
+    };
+  });
+  await hold();
+  await upsert(page, CODEX, { status: 'working', statusSince: later(), updatedAt: later() });
+  await expect.poll(strays).toBe(1);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  expect(await strays()).toBe(0);
+  await page.evaluate(() => {
+    delete document.visibilityState;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await open(page, CLAUDE);
+  await upsert(page, CODEX, { status: 'idle', statusSince: later(2000), updatedAt: later(2000) });
+  await view(page, CLAUDE).locator('.session-bar .back').click();
+  await upsert(page, CODEX, { status: 'working', statusSince: later(4000), updatedAt: later(4000) });
+  await expect.poll(strays).toBe(1);
+  await page.evaluate(() => dispatchEvent(new PopStateEvent('popstate')));
+  expect(await strays()).toBe(0);
+});
+
 test('what leaves is a copy with nothing in it to find, use or run: text stays text, and no id, link, control or script is carried', async ({ page }) => {
   await openDemo(page);
   const copy = await page.evaluate(async () => {
