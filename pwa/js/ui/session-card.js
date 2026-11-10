@@ -51,6 +51,8 @@ import { holdKey } from './hold.js';
 import { CONNECTION_CHANGED } from '../channels.js';
 import { HistoryView } from './history-view.js';
 import { HISTORY } from '../history.js';
+import { MoveStrip } from './move-view.js';
+import { moveView, moves } from '../move.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 // The Details rows whose values move with the clock: drawn again where they are, not as new nodes.
@@ -524,7 +526,9 @@ export class SessionCard {
     this.#buildRow();
     this.#buildView();
     this.update(session);
+    this.#unmove = moves.subscribe((id) => { if (id === this.#s?.id) { this.update(this.#s); } });
   }
+  #unmove = null;
 
   get id() { return this.#s.id; }
   get session() { return this.#s; }
@@ -728,7 +732,8 @@ export class SessionCard {
 
     // The header floats over the conversation on a phone (CollapsingHeader); the bar first, so Back and
     // More come before the tabs.
-    e.top = h('div', { class: 'session-top' }, e.header, this.strip.element, e.tabs);
+    this.move = new MoveStrip();
+    e.top = h('div', { class: 'session-top' }, e.header, this.move.element, this.strip.element, e.tabs);
     e.head = h('div', { class: 'session-head' }, e.bar, e.top);
     this.view = h('section', { class: 'session-view', 'aria-labelledby': this.ids.title, hidden: true, dataset: { tab: 'conversation' } },
       e.head, h('div', { class: 'view-body' }, e.conversation, e.inspector));
@@ -796,19 +801,27 @@ export class SessionCard {
     }
     const away = stale?.join(' \u00b7 ');
     const words = stale ? { ...state, glyph: 'failed', driven: false, facts: stale, text: away, tone: 'muted', spoken: away.charAt(0).toLowerCase() + away.slice(1) } : state;
+    // Moving to another machine (#1715): the row says so in words, with the working glyph, until it ends badly.
+    const move = moves.get(s.id);
+    const moving = move && !moveView(move).failed ? (moveView(move).moved ? `Moved to ${move.to}` : `Moving to ${move.to}`) : null;
+    this.move.set(move);
+    // Never over a status that needs the person (a question, a permission, sign-in, an error): the
+    // original stays answerable, so its ask stays on the row. A finished move is settled, not spinning.
+    const asks = words.tone === 'needs' || ATTENTION_RULES.has(words.rule);
+    const rw = moving && !stale && !asks ? { ...words, glyph: moveView(move).moved ? 'idle' : 'working', driven: false, facts: [moving, ...words.facts.slice(1)], text: moving, tone: 'muted', spoken: moving.charAt(0).toLowerCase() + moving.slice(1) } : words;
     this.#detailsStatus = stale ? words.text : null;
     this.#detailsAway = !!stale;
 
     // The row.
     e.rowTitle.textContent = title;
-    setGlyph(e.rowGlyph, words.glyph, { size: 16, driven: words.driven, label: statusLabel(words, { title: s.title, machine: this.machineName }) });
+    setGlyph(e.rowGlyph, rw.glyph, { size: 16, driven: rw.driven, label: statusLabel(rw, { title: s.title, machine: this.machineName }) });
     // Rule 7 on a row: "Driven by an agent" in agent colour, in place of the status words; not over
     // rules 10-12 (#800), which say what is wrong. The glyph keeps the driven badge either way.
-    const drivenDrawn = words.driven && !ATTENTION_RULES.has(words.rule);
-    if (this.#changed('row', [words.text, words.tone, words.driven, words.rule, s.driverPrincipal, where, s.repository, this.labelled ? this.machineName : null])) {
+    const drivenDrawn = rw.driven && !ATTENTION_RULES.has(rw.rule);
+    if (this.#changed('row', [rw.text, rw.tone, rw.driven, rw.rule, s.driverPrincipal, where, s.repository, this.labelled ? this.machineName : null])) {
       const status = drivenDrawn
         ? h('span', { class: 'row-status driver', dataset: { tone: 'agent' }, title: s.driverPrincipal ?? null }, 'Driven by an agent')
-        : h('span', { class: 'row-status', dataset: { tone: words.tone } }, words.facts[0]);
+        : h('span', { class: 'row-status', dataset: { tone: rw.tone } }, rw.facts[0]);
       setFacts(e.rowFacts, [status, this.labelled && this.machineName ? h('span', { class: 'machine-label' }, this.machineName) : whereView()]);
     }
     // The row's name (ui.md §9.1 A1, #365) starts with the words it draws, in the order drawn:
@@ -820,10 +833,10 @@ export class SessionCard {
     // A status fact can carry a delegate's name, read without its commas there, as in the
     // glyph's name (§9.2).
     this.#rowName = {
-      drawn: [title, drivenDrawn ? 'Driven by an agent' : aloud(words.facts[0]), this.labelled && this.machineName ? this.machineName : where],
+      drawn: [title, drivenDrawn ? 'Driven by an agent' : aloud(rw.facts[0]), this.labelled && this.machineName ? this.machineName : where],
       unsaid: [
-        drivenDrawn ? words.spoken : words.facts.slice(1).map(aloud).join(' \u00b7 '),
-        words.driven && !drivenDrawn ? 'driven by an agent' : null,
+        drivenDrawn ? rw.spoken : rw.facts.slice(1).map(aloud).join(' \u00b7 '),
+        rw.driven && !drivenDrawn ? 'driven by an agent' : null,
         this.labelled ? null : this.machineName,
       ],
     };
@@ -1406,6 +1419,7 @@ export class SessionCard {
 
   // The session is going: it ended, or its machine is no longer shown.
   dispose() {
+    this.#unmove?.();
     this.#panel?.destroy();
     this.#panel = null;
     this.#reply?.destroy();

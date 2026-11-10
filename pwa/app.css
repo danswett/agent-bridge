@@ -876,6 +876,26 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
   padding: var(--ab-space-4) var(--ab-space-6) var(--ab-space-3); border-bottom: 1px solid var(--ab-stroke2);
 }
 .header-main { grid-column: 2; min-width: 0; }
+/* The move strip (#1715): fixed rows, so no step changes its height; state is a word and an icon, colour only adds. */
+.move-strip { display: grid; gap: var(--ab-space-1); padding: var(--ab-space-2) var(--ab-space-6); border-bottom: 1px solid var(--ab-stroke2); font-size: var(--type-meta); line-height: var(--type-meta-line); }
+.move-strip[hidden] { display: none; }
+.move-head, .move-note { margin: 0; color: var(--ab-text2); }
+.move-head, .move-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.move-summary { min-height: var(--tap); display: flex; align-items: center; cursor: pointer; color: var(--ab-text); font-weight: 600; }
+.move-note:empty { display: none; }
+.move-steps { display: grid; gap: var(--ab-space-1); margin: 0; padding: 0; list-style: none; }
+.move-step-item { display: flex; align-items: center; gap: var(--ab-space-2); min-height: 20px; }
+.move-word { margin-inline-start: auto; color: var(--ab-text2); }
+.move-step-item[data-state="current"] .move-label, .move-step-item[data-state="failed"] .move-label { font-weight: 600; }
+.move-go { justify-self: start; min-height: var(--tap); }
+@media (min-width: 760px) {
+  .move-summary { min-height: 0; cursor: default; pointer-events: none; }
+  .move-summary::marker, .move-summary::-webkit-details-marker { display: none; content: ""; }
+  .move-steps { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .move-step-item { flex-direction: column; align-items: flex-start; gap: 0; }
+  .move-word { margin-inline-start: 0; }
+  .move-go { min-height: 32px; }
+}
 .session-title { margin: 0; font-size: var(--type-title); line-height: var(--type-title-line); font-weight: 600; letter-spacing: var(--ab-tracking-title); overflow-wrap: anywhere; }
 .header-actions { grid-column: 3; display: flex; align-items: center; gap: var(--ab-space-1); }
 .session-header .icon-button[aria-pressed="true"] { color: var(--ab-bridge); background: var(--ab-selected); }
