@@ -233,6 +233,28 @@ public sealed class HostManager
     public bool HostInstalled => File.Exists(layout.HostExe) && File.Exists(layout.LauncherExe);
     public bool StartsAtSignIn => tasks.Exists(TaskName);
 
+    // The unattended-start switch (#1624). Null where it is not offered, which refuses like a laptop.
+    public IUnattendedStart? Unattended { get; init; }
+    // Why this machine cannot start unattended (a laptop), or null; the default asks Windows.
+    public Func<string?> LaptopReason { get; init; } = () => OperatingSystem.IsWindows() ? MachineKind.LaptopReasonOnThisMachine() : "unattended start is Windows only";
+    public bool StartsUnattended => Unattended?.IsOn ?? false;
+
+    // Turning it on is only ever an approved person's action (#801): approvedBy names who, and a
+    // blank one is refused, so nothing in the app turns it on by itself. The logon-trigger task
+    // stays either way, so a machine that is switched off is back to start-at-sign-in.
+    public void SetStartUnattended(bool on, string? account = null, string? approvedBy = null)
+    {
+        if (Unattended is not { } unattended) { throw new HostRefusedException("unattended start is not available on this machine"); }
+        if (!on) { unattended.Disable(); return; }
+        if (string.IsNullOrWhiteSpace(approvedBy)) { throw new HostRefusedException("unattended start is turned on only by an approved person"); }
+        if (string.IsNullOrWhiteSpace(account)) { throw new HostRefusedException("name the dedicated standard account the host signs in as"); }
+        if (LaptopReason() is { } reason) { throw new HostRefusedException($"unattended start is refused: {reason}"); }
+        if (!Elevated()) { throw new HostRefusedException("unattended start needs an elevated app, once, to store the password for Windows"); }
+        if (!StartsAtSignIn) { SetStartAtSignIn(true); }
+        unattended.Enable(account);
+        Log($"unattended start turned on for {account}, approved by {approvedBy}");
+    }
+
     public async Task<string> RemoveOwnedHooksAsync(ICommandRunner commands, CancellationToken ct = default)
     {
         var result = await commands.RunAsync(layout.HostExe, ["hooks", "cleanup", "--profile", layout.Profile], TimeSpan.FromSeconds(10), ct);

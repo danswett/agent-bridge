@@ -107,6 +107,88 @@ public sealed class HostManagerTests : IAsyncLifetime
         Assert.Empty(tasks.Registered);
     }
 
+    sealed class FakeUnattended : IUnattendedStart
+    {
+        public bool IsOn { get; private set; }
+        public string? Account;
+        public void Enable(string account) { IsOn = true; Account = account; }
+        public void Disable() { IsOn = false; }
+    }
+
+    HostManager UnattendedManager(FakeUnattended fake, string? laptop = null) =>
+        new(new InstallLayout(app, host.Folder, "test"), tasks, processes, userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            PackageHosts = () => [],
+            Elevated = () => elevated,
+            Unattended = fake,
+            LaptopReason = () => laptop,
+        };
+
+    [Fact]
+    public void Start_unattended_is_off_until_an_approved_person_turns_it_on_and_keeps_the_logon_task()
+    {
+        var fake = new FakeUnattended();
+        var m = UnattendedManager(fake);
+        elevated = true;
+        Assert.False(m.StartsUnattended);
+
+        Assert.Throws<HostRefusedException>(() => m.SetStartUnattended(true, @"PC\svc", approvedBy: " "));
+        Assert.False(fake.IsOn);
+
+        m.SetStartUnattended(true, @"PC\svc", approvedBy: "dana");
+
+        Assert.True(m.StartsUnattended);
+        Assert.Equal(@"PC\svc", fake.Account);
+        Assert.True(m.StartsAtSignIn);
+    }
+
+    [Fact]
+    public void Turning_start_unattended_off_leaves_the_logon_task_so_the_machine_is_logon_only()
+    {
+        var fake = new FakeUnattended();
+        var m = UnattendedManager(fake);
+        elevated = true;
+        m.SetStartUnattended(true, @"PC\svc", approvedBy: "dana");
+
+        m.SetStartUnattended(false);
+
+        Assert.False(m.StartsUnattended);
+        Assert.True(m.StartsAtSignIn);
+    }
+
+    [Theory]
+    [InlineData("this machine has a battery")]
+    [InlineData("Windows Hello or PIN-only sign-in is required")]
+    public void Start_unattended_is_refused_on_a_laptop_with_the_reason_and_changes_nothing(string reason)
+    {
+        var fake = new FakeUnattended();
+        var m = UnattendedManager(fake, laptop: reason);
+        elevated = true;
+
+        var error = Assert.Throws<HostRefusedException>(() => m.SetStartUnattended(true, @"PC\svc", approvedBy: "dana"));
+
+        Assert.Contains(reason, error.Message);
+        Assert.False(fake.IsOn);
+        Assert.False(m.StartsAtSignIn);
+    }
+
+    [Fact]
+    public void Start_unattended_is_refused_without_elevation_or_where_it_is_not_offered()
+    {
+        var fake = new FakeUnattended();
+        elevated = false;
+        Assert.Throws<HostRefusedException>(() => UnattendedManager(fake).SetStartUnattended(true, @"PC\svc", approvedBy: "dana"));
+        Assert.False(fake.IsOn);
+        Assert.Throws<HostRefusedException>(() => manager.SetStartUnattended(true, @"PC\svc", approvedBy: "dana"));
+    }
+
+    [Theory]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(false, false, false)]
+    public void A_battery_or_hello_only_sign_in_makes_a_machine_a_laptop(bool battery, bool hello, bool refused) =>
+        Assert.Equal(refused, MachineKind.LaptopReason(battery, hello) is not null);
+
     [Fact]
     public void The_task_is_named_for_this_product_profile_and_user_and_never_like_agent_ha_bridges()
     {
