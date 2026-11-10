@@ -57,7 +57,7 @@ jobs:
           # output directory. APP_AT_ROOT is set only for the move to app.slipgates.com (#393), when
           # the PWA takes the site's root; until then it stays at /app/, where installed apps are.
           if [ "$APP_AT_ROOT" = 'true' ]; then app=_site; else app=_site/app; fi
-          node pwa/tools/build-site.mjs --out "$app" --relay "$S4_RELAY" --blob-origin "$BLOB_ORIGIN" --version "$GITHUB_SHA" --built-at "$(git show -s --format=%cI "$GITHUB_SHA")" --feedback-key-id "$FEEDBACK_KEY_ID" --feedback-public-key "$FEEDBACK_PUBLIC_KEY"
+          node pwa/tools/build-site.mjs --out "$app" --relay "$S4_RELAY" --blob-origin "$BLOB_ORIGIN" --version "$GITHUB_SHA" --built-at "$(git show -s --format=%cI HEAD)" --feedback-key-id "$FEEDBACK_KEY_ID" --feedback-public-key "$FEEDBACK_PUBLIC_KEY"
           grep -q 'Content-Security-Policy' "$app/index.html"
           grep -q "$BLOB_ORIGIN" "$app/index.html"
           grep -q "$S4_RELAY" "$app/config.js"
