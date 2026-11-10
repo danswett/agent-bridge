@@ -1536,10 +1536,12 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     - with this device's answer record for the question, the record's progress and outcome as
       the card shows them: "You answered · *value*" once confirmed; "Sent, but not confirmed.
             Check the conversation." for `unconfirmed`; refused, failed and stale as they are;
-    - with no record (answered elsewhere, or the call ended without an answer), "No longer
-      waiting", since the protocol doesn't say what was answered elsewhere.
+    - without this device's confirmed answer, "Question closed": never claim who answered
+      from a host history record, and never keep an earlier refusal after the question ends.
   - **History:** a resolved question stays as a read-only item where it was asked, across later
-    turns: the latest 20 per session, for as long as the client runs, none across a restart.
+    turns, never in a bottom group: the latest 20 per session, with no expiry timer. Reloads
+    reconstruct the line from host history (#1601, Product ruling Nov 9); terminal answers,
+    answers on another device, agent cancellation and session end follow the same rule.
 - **Now:** the tool the main agent is running, as a meta line under its reply (glyph, then the
   tool's name and arguments in mono). Not while the session waits on a question: the card says
   what is happening.

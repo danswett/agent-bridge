@@ -790,7 +790,8 @@ test.describe('when the question changes', () => {
     const q = await ask(page, { id: 'q-gone', message: 'Anything?', fields: [] });
     await q.getByRole('textbox', { name: 'Your answer' }).fill('wait, one more thing');
     await page.evaluate((id) => { const d = window.agentBridgeDemo; d.upsert({ ...d.host.get(id), status: 'idle', question: null }); }, CODEX);
-    await expect(card(page, CODEX).locator('.question')).toHaveCount(0);
+    await expect(card(page, CODEX).locator('.question:not(.resolved)')).toHaveCount(0);
+    await expect(card(page, CODEX).locator('.question.resolved')).toContainText('Question closed');
     await expect(card(page, CODEX).locator('.question-changed textarea')).toHaveValue('wait, one more thing');
   });
 

@@ -591,6 +591,12 @@ span in a sentence this way, and NEL and the separators in prose.
 
 ## Tests
 
+Closed questions keep one read-only disclosure at the question's place in the conversation,
+including answers at the terminal or another device, cancellation and session end (#1601).
+The latest 20 stay without a timer; reloading uses the host's history, never a cached refusal.
+`test/question-inline.spec.mjs` covers those records, reload and a later question; the refusal
+and reply-box regression is in `test/closed-question.spec.mjs`.
+
 ```
 npm ci                                    # esbuild for the build (the unit tests build the site too), and Playwright
 node --test "test/unit/*.test.mjs"       # protocol client, tolerant reader, Markdown
