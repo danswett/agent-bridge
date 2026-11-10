@@ -62,3 +62,83 @@ test('a refreshed time does not move or resize anything', async ({ page }) => {
   await expect(turn.locator('.history-prompt .msg-time time')).not.toHaveText(text);
   expect(await box()).toEqual(before);
 });
+
+const LIVE_ID = '019a1b2c-codex-example';
+const SENT = '2026-11-10T20:00:00Z';
+const REPLIED = '2026-11-10T20:00:10Z';
+
+async function liveCard(page, from = 'person') {
+  await page.clock.install({ time: new Date('2026-11-10T20:00:30Z') });
+  await page.goto('?demo=1&static=1');
+  await page.waitForSelector('html[data-demo-ready]');
+  await page.evaluate(({ id, from }) => {
+    const d = window.agentBridgeDemo;
+    d.host.historyTurns.set(id, []);
+    d.upsert({
+      ...d.host.get(id), status: 'idle', question: null, updatedAt: new Date().toISOString(),
+      activity: { turn: 'live-time', responseTurn: 'live-time', userMessage: 'Again', userMessageFrom: from, response: 'Done' },
+    });
+  }, { id: LIVE_ID, from });
+  await open(page, LIVE_ID);
+  return view(page, LIVE_ID);
+}
+
+async function recordLive(page, from = 'person', turnId = 'live-time') {
+  await page.evaluate(async ({ id, from, turnId, sent, replied }) => {
+    const d = window.agentBridgeDemo;
+    d.host.historyTurns.set(id, [{
+      id: turnId, at: sent, prompt: { text: 'Again', from },
+      parts: [{ id: 'reply-time', kind: 'response', text: 'Done', at: replied }],
+    }]);
+    await d.view.history.open(d.host.machine.id, id);
+  }, { id: LIVE_ID, from, turnId, sent: SENT, replied: REPLIED });
+}
+
+test('a late recorded live time preserves message order, focus, layout and reading position through refresh', async ({ page }) => {
+  const v = await liveCard(page);
+  const stream = v.locator('.stream');
+  await expect(stream.locator('.msg-time')).toHaveCount(0);
+  await v.locator('.reply-slot textarea').focus();
+  const geometry = () => v.evaluate((el) => {
+    const sc = el.querySelector('.stream-scroll');
+    return [sc.scrollTop, sc.scrollHeight, ...['.user-message', '.speaker', '.response'].flatMap((s) => {
+      const r = el.querySelector(s).getBoundingClientRect();
+      return [r.x, r.y, r.width, r.height];
+    })];
+  });
+  const before = await geometry();
+  await recordLive(page);
+  await expect(stream.locator('.user-message .msg-time time')).toHaveAttribute('datetime', SENT);
+  const reply = stream.locator('.speaker .msg-time');
+  await expect(reply.locator('time')).toHaveAttribute('datetime', REPLIED);
+  await expect(v.locator('.reply-slot textarea')).toBeFocused();
+  expect(await geometry()).toEqual(before);
+  await expect(v.locator('.history-turn')).toHaveCount(0);
+  await expect(stream.locator('.response')).toHaveText('Done');
+  await reply.focus();
+  await recordLive(page);
+  await expect(reply).toBeFocused();
+  await page.keyboard.press('Enter');
+  const shown = await reply.locator('time').innerText();
+  await expect(page.locator('.msg-time-pop')).toHaveText((await reply.getAttribute('aria-label')).slice(shown.length + 2));
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.msg-time-pop')).toBeHidden();
+  await page.clock.fastForward('02:00:00');
+  expect(await geometry()).toEqual(before);
+  await expect(reply).toBeFocused();
+});
+
+test('a collapsed live agent prompt ignores same-text other turns and reveals its recorded time without expanding', async ({ page }) => {
+  const v = await liveCard(page, 'agent');
+  const prompt = v.locator('.stream > .prompt-origin');
+  await recordLive(page, 'agent', 'older-time');
+  await expect(prompt.locator('.msg-time')).toHaveCount(0);
+  const height = await prompt.evaluate((el) => el.offsetHeight);
+  await recordLive(page, 'agent');
+  const time = prompt.locator('.msg-time');
+  await expect(time.locator('time')).toHaveAttribute('datetime', SENT);
+  await time.click();
+  await expect(page.locator('.msg-time-pop')).toBeVisible();
+  await expect(prompt.locator('.prompt-toggle')).toHaveAttribute('aria-expanded', 'false');
+  expect(await prompt.evaluate((el) => el.offsetHeight)).toBe(height);
+});

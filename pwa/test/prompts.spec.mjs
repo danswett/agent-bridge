@@ -142,9 +142,8 @@ test('a schedule firing again with the same words folds to "same as last time" w
   await expect(p).toHaveAttribute('data-repeat', '');
   await expect(p.locator('.prompt-preview')).toBeHidden();
   await expect(p.locator('.prompt-toggle')).toHaveAttribute('aria-expanded', 'false');
-  // Dated by when its turn began, in meta style.
-  await expect(p.locator('.prompt-age')).toHaveAttribute('datetime', since);
-  await expect(p.locator('.prompt-age')).toBeVisible();
+  // A turn's status time is not its recorded sent time.
+  await expect(p.locator('.prompt-age .msg-time')).toHaveCount(0);
   // New words from the same schedule are not a repeat.
   await upsert(page, CODEX, { status: 'working', statusSince: later(), updatedAt: later(), activity: { userMessage: 'Check the relay instead.', turnCount: 8 } });
   await expect(p.locator('.prompt-facts')).toHaveText('Scheduled prompt · #4');
