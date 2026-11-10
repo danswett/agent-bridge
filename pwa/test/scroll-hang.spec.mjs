@@ -27,11 +27,20 @@ async function openLong(page) {
   return pane;
 }
 
+// Turns already drawn must never be taken out and put back: that dirties the layout of every one.
+const watchRemoved = (pane) => pane.evaluate((el) => {
+  const history = el.querySelector('.history');
+  window.__out = new Set();
+  new MutationObserver((records) => { for (const r of records) { for (const n of r.removedNodes) { window.__out.add(n); } } }).observe(history, { childList: true });
+});
+const putBack = (page) => page.evaluate(() => [...window.__out].filter((n) => n.isConnected).length);
+
 // The owner's case: idle on a long session, one message lands, then he scrolls.
-test('a scroll right after one live update lands responds within 100 ms', async ({ page }) => {
+test('a scroll right after one live update lands responds within 100 ms', async ({ page, browserName }) => {
   const pane = await openLong(page);
   await page.evaluate(() => { const s = window.agentBridgeDemo.host.get('long-1'); window.agentBridgeDemo.upsert({ ...s, updatedAt: new Date().toISOString() }); });
   await page.waitForTimeout(1500);
+  await watchRemoved(pane);
   const costs = [];
   for (let i = 0; i < 7; i += 1) {
     costs.push(await pane.evaluate(async (el) => {
@@ -45,14 +54,21 @@ test('a scroll right after one live update lands responds within 100 ms', async 
     }));
     await page.waitForTimeout(400);
   }
-  // The first two scrolls pay for first layout of the long turns; the budget covers the repeats.
-  expect(Math.max(...costs.slice(2)), `scroll after update took ${JSON.stringify(costs)} ms`).toBeLessThan(100);
+  expect(await putBack(page), 'drawn turns taken out and put back').toBe(0);
+  // Timing is only held on Chromium: CI's WebKit runs in software and is several times slower.
+  if (browserName === 'chromium') {
+    // The first two scrolls pay for first layout of the long turns; the budget covers the repeats.
+    expect(Math.max(...costs.slice(2)), `scroll after update took ${JSON.stringify(costs)} ms`).toBeLessThan(100);
+  } else {
+    expect(Math.max(...costs), `scroll after update took ${JSON.stringify(costs)} ms`).toBeLessThan(1000);
+  }
 });
 
 // A new message adds a turn: the turns already drawn must not be redrawn (Engineering review of #1707).
-test('a scroll right after a new turn arrives responds within 100 ms', async ({ page }) => {
+test('a scroll right after a new turn arrives responds within 100 ms', async ({ page, browserName }) => {
   const pane = await openLong(page);
   await page.waitForTimeout(1500);
+  await watchRemoved(pane);
   const costs = [];
   for (let i = 0; i < 6; i += 1) {
     costs.push(await pane.evaluate(async (el) => {
@@ -68,7 +84,13 @@ test('a scroll right after a new turn arrives responds within 100 ms', async ({ 
     }));
     await page.waitForTimeout(600);
   }
-  expect(Math.max(...costs.slice(2)), `scroll after a new turn took ${JSON.stringify(costs)} ms`).toBeLessThan(100);
+  expect(await putBack(page), 'drawn turns taken out and put back').toBe(0);
+  if (browserName === 'chromium') {
+    expect(Math.max(...costs.slice(2)), `scroll after a new turn took ${JSON.stringify(costs)} ms`).toBeLessThan(100);
+  } else {
+    // A loose bound so a real hang still fails on WebKit: no scroll waits over 1 s.
+    expect(Math.max(...costs), `scroll after a new turn took ${JSON.stringify(costs)} ms`).toBeLessThan(1000);
+  }
 });
 
 test(`scrolling a ${TURNS}-turn session while a turn is live never holds the main thread over ${BUDGET_MS} ms`, async ({ page, browserName }) => {

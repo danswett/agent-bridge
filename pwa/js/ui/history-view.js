@@ -164,11 +164,14 @@ export class HistoryView {
     // A live exchange re-renders this on every update with the same drawn turns, and a new message
     // adds one at the end. Re-inserting them all dirtied the layout of every turn, so the next scroll
     // read (scrollTop) cost ~100 ms on 100 turns, per update: the stalls in #1684. Turns already
-    // drawn stay where they are; only a new tail is appended.
-    const held = this.element.children;
-    const prefix = held.length <= nodes.length && Array.prototype.every.call(held, (n, i) => nodes[i] === n);
-    if (prefix) { this.element.append(...nodes.slice(held.length)); }
-    else { this.element.replaceChildren(...nodes); }
+    // drawn stay where they are; only turns that are gone (or rebuilt) are taken out, and the new
+    // ones put in their place.
+    const wanted = new Set(nodes);
+    for (const n of [...this.element.children]) { if (!wanted.has(n)) { n.remove(); } }
+    let at = this.element.firstElementChild;
+    for (const n of nodes) {
+      if (n === at) { at = at.nextElementSibling; } else { this.element.insertBefore(n, at); }
+    }
     this.element.hidden = !nodes.length;
     this.#ticker.refresh();
     if (this.#backlog.length) { this.#schedule(); }
