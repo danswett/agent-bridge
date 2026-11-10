@@ -8,6 +8,47 @@ and host-enforced authorization. The stages, settings and operator procedures
 below describe the existing compatibility connector unless explicitly labeled
 target or historical; they are not installation instructions for its successor.
 
+**HA retirement target (#1396/#1406, 2026-11-10 PT).** Nothing in Slipgates is to
+depend on HA. HA becomes an optional client, not a special bus, trust authority or
+command path. [One client protocol](design/client-protocol.md) maps the parity
+inventory, caller authority, capability negotiation and shared conformance gate
+for PWA, Windows, Mac, iOS, Android and Linux when shipped, the optional HA client
+and future third parties. This is a proposed design, not live parity or permission
+to remove the compatibility connector described below.
+
+### Optional-client target and retained rollback
+
+The component's service identity is read-only under the existing
+[connector read profile](protocol/connector-read.md). A person using its companion
+card must act through a separately paired person-client channel with the same
+host-verified signatures/confirmations, limits and operations as another client.
+An HA login, service event or `driver` claim cannot make a service into a person
+or authorize an approval. Non-person enrollment and the person UI path remain
+design/build work in #1418/#1419; until implemented, the component is read-only.
+
+The target consumes the **planned registry change feed** and existing
+host-session subscriptions, plus ordinary ops
+such as `session.answer`, `session.reply`, `session.stop`, `session.launch`,
+`usage.get` and `update.install`, only when its caller is authorized. It adds no
+private host action ingress, HA image-store dependency, per-host HA token grant
+or permanent native dashboard writer. Removing the optional component must not
+affect any other client's operation. The same ClientConformance suite (#1407)
+must record a result per client/capability; missing or unsupported required rows
+do not pass.
+
+**Registry publication is not yet live:** publisher core #1791 is merged,
+but host wiring is later work and
+[fleet #238](https://github.com/danswett/slipgates-fleet/issues/238) stays open.
+HA remains the explicit rollback until the 24-hour dual run in
+[fleet-session-registry.md](design/fleet-session-registry.md), slice 11, passes.
+That does not replace #1396's per-client evidence, counted zero-fallback run,
+HA-off rehearsal and owner sign-off. Keep current credentials, contract fixtures,
+reversible migration and G5/G6/G7 until their replacement/cutover gates pass;
+retirement and removal are not completed by this design.
+
+Everything below remains the **current compatibility contract**, not an
+alternative authorization path for the optional client.
+
 A machine moved off agent-ha-bridge's PowerShell daemon onto `agent-bridge-host` stays on the
 existing Home Assistant dashboard: its cards, answering, replies, attachments, launch, stop,
 usage, fleet status, update buttons and phone notifications, as today (decided 2026-10-29;
