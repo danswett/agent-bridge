@@ -909,6 +909,19 @@
             Visibility="Collapsed"
             Click="OnQuestionBar" />
 
+        <Button
+            x:Name="NewMessages"
+            Grid.Row="3"
+            HorizontalAlignment="Center"
+            Margin="24,0,24,8"
+            Content="New messages"
+            Background="{ThemeResource AbNeedsFill}"
+            Foreground="{ThemeResource AbNeedsText}"
+            AutomationProperties.AutomationId="NewMessages"
+            AutomationProperties.Name="New messages. Go to the latest"
+            Visibility="Collapsed"
+            Click="OnNewMessages" />
+
         <ScrollViewer
             x:Name="Composer"
             Grid.Row="4"

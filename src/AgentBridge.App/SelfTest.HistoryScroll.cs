@@ -82,10 +82,14 @@ static partial class SelfTest
         var kept = scroll.VerticalOffset;
         var moved = await Replies(() => Math.Abs(scroll.VerticalOffset - kept) > 1 ? $"{scroll.VerticalOffset:0} px, not {kept:0}" : null);
         check(moved.Count == 0, $"keeps the scroll position of a conversation scrolled back when stored turns arrive ({(moved.Count == 0 ? $"{kept:0} px" : string.Join("; ", moved))})");
+        var cue = ById<Microsoft.UI.Xaml.Controls.Button>(view, "NewMessages");
+        check(cue is { Visibility: Microsoft.UI.Xaml.Visibility.Visible, Content: "3 new messages" },
+            $"shows a New messages cue with the count when stored turns arrive under a scrolled-back conversation ({cue?.Visibility}, {cue?.Content})");
 
         scroll.ChangeView(null, scroll.ScrollableHeight, null, disableAnimation: true);
         await Task.Delay(700);
         var left = await Replies(() => scroll.VerticalOffset < scroll.ScrollableHeight - 1.5 ? $"{scroll.VerticalOffset:0} of {scroll.ScrollableHeight:0} px" : null);
         check(left.Count == 0, $"keeps a conversation at its end pinned there when stored turns arrive ({(left.Count == 0 ? "at the end" : string.Join("; ", left))})");
+        check(cue is { Visibility: Microsoft.UI.Xaml.Visibility.Collapsed }, $"drops the New messages cue once the conversation is back at its end ({cue?.Visibility})");
     }
 }
