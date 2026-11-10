@@ -51,7 +51,8 @@ public sealed class HourlyStats
     readonly TimeSpan storeTimeout;
     readonly IRosterStore? store;
     readonly ILogger<HourlyStats> log;
-    readonly object gate = new(); Dictionary<long, Dictionary<string, StatsCell>> pending = [];
+    readonly object gate = new();
+    Dictionary<long, Dictionary<string, StatsCell>> pending = [];
 
     public HourlyStats(RelayOptions options, ILogger<HourlyStats> log)
     {
@@ -100,7 +101,8 @@ public sealed class HourlyStats
 
     public static StatsRow RowOf(string group, StatsCell c) =>
         new(group, c.Count, Percentile(c.Buckets, 0.5), Percentile(c.Buckets, 0.9), c.Client, c.Server);
-    static long HourOf(DateTimeOffset t) => t.ToUnixTimeSeconds() / 3600; static string NameOf(long hour) => $"stats/v1/{DateTimeOffset.FromUnixTimeSeconds(hour * 3600):yyyyMMddHH}.json";
+    static long HourOf(DateTimeOffset t) => t.ToUnixTimeSeconds() / 3600;
+    static string NameOf(long hour) => $"stats/v1/{DateTimeOffset.FromUnixTimeSeconds(hour * 3600):yyyyMMddHH}.json";
 
     public void Record(string group, TimeSpan elapsed, int status)
     {

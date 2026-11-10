@@ -102,6 +102,63 @@ public class HourlyStatsTests
         Assert.Equal(["Group", "Count", "P50Ms", "P90Ms", "C4xx", "C5xx"], row.EnumerateObject().Select(p => p.Name));
     }
 
+    // A store whose writes fail once, either by refusing or by a stop cancelling the flush.
+    sealed class FlakyStore(MemoryRosterStore inner, CancellationTokenSource? stop = null, bool conflict = false) : IRosterStore
+    {
+        public bool Fail = true;
+        public Task<StoredRoster?> ReadAsync(string name, CancellationToken ct) => inner.ReadAsync(name, ct);
+        public Task<bool> DeleteAsync(string name, string etag, CancellationToken ct) => inner.DeleteAsync(name, etag, ct);
+        public Task<string?> WriteAsync(string name, byte[] body, string? etag, CancellationToken ct)
+        {
+            if (!Fail) { return inner.WriteAsync(name, body, etag, ct); }
+            Fail = false;
+            if (conflict) { return Task.FromResult<string?>(null); }
+            if (stop is null) { throw new IOException("refused"); }
+            stop.Cancel();
+            ct.ThrowIfCancellationRequested();
+            return inner.WriteAsync(name, body, etag, ct);
+        }
+    }
+
+    [Fact]
+    public async Task A_conflicting_write_is_read_again_and_merged_once_in_the_same_flush()
+    {
+        var mem = new MemoryRosterStore();
+        var other = new HourlyStats(new RelayOptions { Stats = { Store = mem, Time = new Clock(Noon), ReadKey = "k" } }, NullLogger<HourlyStats>.Instance);
+        other.Record("api", TimeSpan.FromMilliseconds(5), 200);
+        await other.FlushAsync();
+        var stats = new HourlyStats(new RelayOptions { Stats = { Store = new FlakyStore(mem, null, true), Time = new Clock(Noon), ReadKey = "k" } }, NullLogger<HourlyStats>.Instance);
+        stats.Record("api", TimeSpan.FromMilliseconds(5), 200);
+
+        await stats.FlushAsync();
+
+        Assert.Equal(2, Assert.Single(await stats.ReadAsync(1, default)).Rows.Single().Count);
+        await stats.FlushAsync();
+        Assert.Equal(2, Assert.Single(await stats.ReadAsync(1, default)).Rows.Single().Count);
+    }
+
+    [Fact]
+    public async Task Counts_survive_a_refused_write_and_a_flush_cancelled_by_a_stop_and_land_on_the_next_flush()
+    {
+        foreach (var cancelled in new[] { false, true })
+        {
+            var cts = new CancellationTokenSource();
+            var mem = new MemoryRosterStore();
+            var clock = new Clock(Noon);
+            var stats = new HourlyStats(new RelayOptions { Stats = { Store = new FlakyStore(mem, cancelled ? cts : null), Time = clock, ReadKey = "k" } }, NullLogger<HourlyStats>.Instance);
+            stats.Record("api", TimeSpan.FromMilliseconds(5), 200);
+            clock.Now = Noon.AddHours(1);
+            stats.Record("api", TimeSpan.FromMilliseconds(5), 500);
+
+            if (cancelled) { await Assert.ThrowsAnyAsync<OperationCanceledException>(() => stats.FlushAsync(cts.Token)); } else { await stats.FlushAsync(); }
+            await stats.FlushAsync();
+
+            var hours = await stats.ReadAsync(2, default);
+            Assert.Equal([1L, 1L], hours.Select(h => h.Rows.Sum(r => r.Count)));
+            Assert.Equal(1, hours[1].Rows[0].C5xx);
+        }
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task The_endpoint_is_off_without_a_key_refuses_a_wrong_key_and_serves_the_hour_to_the_right_one()

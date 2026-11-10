@@ -677,7 +677,7 @@ The relay keeps one row per hour per route group, readable by SRE without a depl
 
 Returns `{hours:[{hour, groups:[{group, count, p50Ms, p90Ms, c4xx, c5xx}]}]}`, oldest first (`hours` is 1 to 72, default 24; an hour with no traffic has no groups). Groups are the fixed names `health`, `auth`, `push`, `blobs`, `api` and `other`; WebSocket connections and `/v1/stats` itself are not counted. Rows hold counts and milliseconds only. A 429 counts as a 4xx; an unhandled exception as a 5xx.
 
-It answers 404 until the app setting `Relay__Stats__ReadKey` is set (a secret from the deployment, never in the repo), and 401 for a wrong key. Wiring it in `infra/` needs SRE's deploy approval.
+The writer runs on every replica whether or not a read key is set, so rows are already collecting when SRE gets the key. It answers 404 until the app setting `Relay__Stats__ReadKey` is set (a secret from the deployment, never in the repo), and 401 for a wrong key. Wiring it in `infra/` needs SRE's deploy approval.
 
 Percentiles are approximate. Medians cannot be merged across replicas, so each replica counts latencies into fixed buckets (1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000 ms) and a percentile is the upper edge of the bucket it falls in; 10000 means 10 s or more.
 
