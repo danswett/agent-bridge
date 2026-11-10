@@ -19,14 +19,18 @@ coordinator owns a lane, and you reach it by putting its tag in a GitHub comment
 | Role | Owns | Tag |
 |---|---|---|
 | Owner | Every decision of scope, priority and policy. Anything the owner said is the final word. | |
-| Head of Product | What gets built and in what order: the epics and their rank in [#696](https://github.com/danswett/agent-bridge/issues/696). Exceptions to the freeze. | `[to:product]` |
-| Head of Engineering | How the work gets done: grants for new work, staffing, and **every independent review and its receipt**. | `[to:engineering]` |
+| SG Chief of Staff | Coordination across the roles below, and the owner's single point of contact. Not a merge authority. | |
+| Product | What gets built and in what order: the epics and their rank in [#696](https://github.com/danswett/agent-bridge/issues/696). Exceptions to the freeze. | `[to:product]` |
+| Engineering | How the work gets done: grants for new work, staffing, and **every independent review and its receipt**. | `[to:engineering]` |
 | Quality | Merge coordination: admitting PRs to auto-merge, the landing order, holds, and keeping main green. | `[to:quality]` |
-| TPM | Issue triage, an hourly plain-English digest, and pipeline speed. | `[to:tpm]` |
-| Creative director | Words, visual design and accessibility rulings ([#477](https://github.com/danswett/agent-bridge/issues/477)). Not a merge authority. | `[to:creative]` |
-| Build teams | Daily, Client Experience (CX), Connection, Trust, Platform, SRE and **Apple** (the Mac host and Apple clients). Each has a lead session and its own delegates. | `[to:daily]`, `[to:cx]`, `[to:connection]`, `[to:trust]`, `[to:platform]`, `[to:sre]`, `[to:apple]` |
+| Creative | Words, visual design and accessibility rulings ([#477](https://github.com/danswett/agent-bridge/issues/477)). Not a merge authority. | `[to:creative]` |
+| SRE | The fleet and its hosts: placing builders on machines, runners, and keeping the machines healthy. | `[to:sre]` |
+| Migration | Moving machines from the old agent-ha-bridge to agent-bridge. | |
+| Builders | Delegate sessions that do the host-side and implementation work. SRE places them on machines; they report to the lead that assigned the work. | |
 
 `[to:all]` reaches every session. Use it rarely.
+
+Never hard-code a session or node id in a doc, script or message you keep. Sessions come and go; look the id up by name in the fleet roster each time.
 
 ## 2. Where things live
 
