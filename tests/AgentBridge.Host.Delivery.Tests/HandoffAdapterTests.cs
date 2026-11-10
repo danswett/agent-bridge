@@ -118,6 +118,32 @@ public sealed class HandoffAdapterTests : IDisposable
     }
 
     [Fact]
+    public async Task A_late_previous_handoff_cannot_answer_the_current_request()
+    {
+        var source = new Source(AgentKind.Copilot);
+        string? earlier = null;
+        ReplyRequest? current = null;
+        var replier = new Replier(request =>
+        {
+            current = request;
+            source.Set(source.Current with { Activity = new Activity { Turn = "previous", ResponseTurn = "previous",
+                UserMessage = earlier ?? request.Text, Response = "Old note" } });
+            earlier ??= request.Text;
+            return new ReplyResult(AnswerOutcome.Delivered);
+        });
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var agent = new ReplyHandoffAgent(source, replier);
+        Assert.Equal("Old note", await agent.AskForNoteAsync(Id, HandoffService.Prompt, stop.Token));
+        source.Set(source.Current with { Activity = new Activity { Turn = "baseline" } });
+
+        var pending = agent.AskForNoteAsync(Id, HandoffService.Prompt, stop.Token);
+        Assert.False(pending.IsCompleted);
+        source.Set(source.Current with { Activity = new Activity { Turn = "current", ResponseTurn = "current",
+            UserMessage = current?.Text, Response = "Current note" } });
+        Assert.Equal("Current note", await pending.WaitAsync(stop.Token));
+    }
+
+    [Fact]
     public async Task A_later_response_event_completes_the_handoff_only_when_the_main_agent_answers()
     {
         var source = new Source(AgentKind.Copilot);
