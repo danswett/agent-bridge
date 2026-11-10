@@ -298,7 +298,7 @@ test('a control eases back to its fill only when a press lets go: a row selected
   expect(await cssMotions(page)).toEqual([]);
   const main = row(page, CODEX).locator('.row-main');
   const b = await main.boundingBox();
-  await page.mouse.move(b.x + 20, b.y + b.height / 2);
+  await page.mouse.move(b.x + 60, b.y + b.height / 2);
   // The page's clock held while the release is read, so a slow runner can't let it run out first.
   await holdClock(page);
   await page.mouse.down();
@@ -1287,7 +1287,7 @@ test('a second press inside the last one\'s release shows its fill at once', asy
   await page.evaluate(() => document.documentElement.style.setProperty('--ab-motion-press-duration', '5000ms'));
   const main = row(page, CODEX).locator('.row-main');
   const b = await main.boundingBox();
-  await page.mouse.move(b.x + 20, b.y + b.height / 2);
+  await page.mouse.move(b.x + 60, b.y + b.height / 2);
   await page.mouse.down();
   await page.mouse.up();
   await expect(main).toHaveAttribute('data-press', 'released');
