@@ -39,6 +39,7 @@ runs:
       env:
         BROWSERS: ${{ inputs.browsers }}
         PLAYWRIGHT_APT_FORCE_FALLBACK: ${{ inputs.force-apt-fallback }}
+        DEBS_CACHE_HIT: ${{ steps.debs.outputs.cache-hit }}
       run: |
         # A forced fallback proves the mirror switch, so it must really download.
         if [ "$PLAYWRIGHT_APT_FORCE_FALLBACK" != true ] && compgen -G "$HOME/.cache/playwright-apt-debs/*.deb" > /dev/null; then
@@ -46,7 +47,7 @@ runs:
         fi
         read -ra browsers <<< "$BROWSERS"
         bash "$GITHUB_ACTION_PATH/download.sh" "${browsers[@]}"
-        if [ "${{ steps.debs.outputs.cache-hit }}" != true ] && compgen -G "/var/cache/apt/archives/*.deb" > /dev/null; then
+        if [ "$DEBS_CACHE_HIT" != true ] && compgen -G "/var/cache/apt/archives/*.deb" > /dev/null; then
           mkdir -p "$HOME/.cache/playwright-apt-debs"
           cp /var/cache/apt/archives/*.deb "$HOME/.cache/playwright-apt-debs/"
         fi

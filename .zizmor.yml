@@ -1,0 +1,23 @@
+# zizmor's configuration (#1306, part of #360). workflow-lint.yml blocks on any finding that
+# is not fixed or listed here, and each entry says why it is let through. An ignore names a
+# file and line, so a moved line shows up again and has to be looked at.
+rules:
+  self-repository:
+    # Suggests `$/.github/actions/...` for local actions. The `./` form works on the runner and
+    # in actionlint 1.7.12, so this style-only hint is off.
+    disable: true
+  dangerous-triggers:
+    ignore:
+      # Reads a finished CI run on main only; runs main's copy of the script and never checks
+      # out or runs the triggering run's code (see the workflow's header).
+      - rerun-known-flakes.yml:14
+  impostor-commit:
+    ignore:
+      # Deliberately pinned to #854's reviewed head, which lives on a branch rather than main,
+      # until the change that marks nightly-landed met re-points it at the local workflow.
+      - lab-release-verify.yml:106
+  artipacked:
+    ignore:
+      # No later step in the macOS job reads the stored token or uploads the checkout; apple/**
+      # is outside this slice, so its workflow is left unchanged.
+      - apple.yml:25
