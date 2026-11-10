@@ -788,7 +788,7 @@ body[data-conn="busy"] .sessions, body[data-conn="warn"] .sessions, body[data-co
 /* Moving rows: a Move button, shown while its row is hovered (a mouse) or has focus (the keyboard),
    and a line where a dragged row will go. Only in Your order with no filter. */
 .drag-handle { display: none; }
-.session-list[data-sort="yours"]:not([data-filtered="true"]) .session:focus-within .drag-handle,
+.session-list[data-sort="yours"]:not([data-filtered="true"]) .session:has(:focus-visible:not([data-focus-quiet])) .drag-handle,
 .session-list[data-sort="yours"]:not([data-filtered="true"]) .session .drag-handle:focus-visible { display: block; opacity: 1; }
 @media (hover: hover) and (pointer: fine) {
   .session-list[data-sort="yours"]:not([data-filtered="true"]) .drag-handle { display: block; opacity: 0; }

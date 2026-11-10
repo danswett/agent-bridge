@@ -295,6 +295,18 @@ test('Move button: absent in Most recent, Machine and while a search filters', a
   await expect(page.locator('.session').first().locator('.drag-handle')).toBeVisible();
 });
 
+test.describe('on a touch phone', () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+
+  test('a row opened by a tap and returned to by Back shows no Move grip over its glyph (#1641)', async ({ page }) => {
+    await openDemo(page);
+    await card(page, CLAUDE).locator('.row-main').tap();
+    await view(page, CLAUDE).locator('.session-bar .back').tap();
+    await expect(card(page, CLAUDE)).toBeVisible();
+    await expect(card(page, CLAUDE).locator('.drag-handle')).toHaveCSS('display', 'none');
+  });
+});
+
 test('Move button: with reduced motion a move is instant', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await openDemo(page);
