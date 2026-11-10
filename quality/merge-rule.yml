@@ -112,6 +112,9 @@ sensitive_paths:
   - nuget.config
   - global.json
   - .config/dotnet-tools.json
+  # The shared fleet load limits: they decide which machine a launch is placed on. SRE owns the
+  # numbers, Engineering the schema; the launcher refuses to place on a bad file.
+  - docs/fleet-load-limits.json
   # The wire, the relay and what types into sessions: what lets a remote device act on a machine.
   - docs/protocol/**
   - src/AgentBridge.Protocol/**
