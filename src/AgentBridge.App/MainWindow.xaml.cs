@@ -279,6 +279,13 @@ public sealed partial class MainWindow : Window
         ShowPage("sessions");
     }
 
+    void OnLaunchHere(object sender, RoutedEventArgs e)
+    {
+        if (RowOf(sender) is not { } row) { return; }
+        Launch.Select(row.Key);
+        ShowPage("launch");
+    }
+
     static MachineRowViewModel? RowOf(object sender) => (sender as FrameworkElement)?.Tag as MachineRowViewModel;
     // This machine's updates are Settings': its check, progress, outcome and Update and restart.
     void OnCheckHere(object sender, RoutedEventArgs e)

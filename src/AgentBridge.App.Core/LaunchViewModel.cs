@@ -190,6 +190,13 @@ public sealed partial class LaunchViewModel : Observable
         }
     }
 
+    // Launch here (#1147): the page opens with this machine chosen, as far as it is offered.
+    public void Select(string key)
+    {
+        wanted = key;
+        if (Machines.FirstOrDefault(c => c.Value == key) is { } choice) { SelectedMachine = choice; }
+    }
+
     public string Title => machine is null ? "Start a session" : InspectOnly ? $"Waiting on {machine.Name}" : $"Start a session on {machine.Name}";
 
     // Why a machine takes nothing from other devices now (agent-ha-bridge runs there), as its
