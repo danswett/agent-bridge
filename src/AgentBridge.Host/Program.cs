@@ -295,6 +295,13 @@ switch (command)
                 ? new AgentBridge.Host.Migration.Migrator(o, new AgentBridge.Host.Migration.WindowsAgentHaBridgeRuntime(), new AgentBridge.Host.Migration.LocalMigrationHost(o.ProfileFolder), new AgentBridge.Host.Migration.ProcessHookRunner())
                 : throw new PlatformNotSupportedException(), stop.Token);
         }
+    case "setup-unattended" or "disable-unattended":
+        {
+            // At the machine only: this keeps a password for Windows to sign the host's account in by itself (#1623).
+            if (!OperatingSystem.IsWindows()) { Console.Error.WriteLine("agent-bridge-host: unattended start is for Windows machines"); return 2; }
+            if (Refused("change unattended start")) { return 4; }
+            return UnattendedCommands.Run(arguments, new WindowsUnattendedSystem(), ReadMaskedPassword, Console.Out, Console.Error);
+        }
     case "devbox":
         {
             if (!Identity.IsValidProfile(profileName)) { Console.Error.WriteLine($"\"{profileName}\" is not a profile name: use letters, digits, '-', '_' and '.'"); return 2; }
@@ -313,6 +320,7 @@ switch (command)
         Console.Error.WriteLine("       agent-bridge-host hooks cleanup [--profile <name>]");
         Console.Error.WriteLine("       agent-bridge-host migrate [--dry-run] [--bridge-home <dir>] [--hook <file>] | rollback [--dry-run] | migration status");
         Console.Error.WriteLine("       agent-bridge-host devbox status | devbox dry-run");
+        Console.Error.WriteLine("       " + UnattendedCommands.Usage);
         Console.Error.WriteLine("       [--copilot-home <dir>] [--claude-home <dir>] [--codex-home <dir>] [--profile <name>]");
         return command == "help" ? 0 : 2;
 }
@@ -321,6 +329,19 @@ Identity LoadIdentity() => Identity.Load(Option("--profile") ?? "default");
 
 // What may only be done by a person never runs inside an agent session (§6.3 invariant 13): the
 // host's own command line refuses it there, as the pipe does.
+// The password is typed or piped in, never an argument, which a process list or history would keep.
+static string? ReadMaskedPassword()
+{
+    if (Console.IsInputRedirected) { return Console.In.ReadLine(); }
+    var typed = new System.Text.StringBuilder();
+    while (Console.ReadKey(intercept: true) is var key && key.Key != ConsoleKey.Enter)
+    {
+        if (key.Key == ConsoleKey.Backspace) { if (typed.Length > 0) { typed.Length--; } }
+        else if (!char.IsControl(key.KeyChar)) { typed.Append(key.KeyChar); }
+    }
+    return typed.ToString();
+}
+
 static bool Refused(string what)
 {
     var inside = AgentAncestry.Inside(Environment.GetEnvironmentVariable(Launchers.SessionVariable), ProcessChain.Read(Environment.ProcessId), () => KnownAgents.Running(new SystemProcessInspector()));
