@@ -26,11 +26,12 @@ public static class AgentMessageText
     // A bracket, then the product name, however spelled; matched on the folded copy of the words.
     static readonly Regex Imitation = new(@"\[\s*" + Regex.Escape(Product.Name.ToLowerInvariant()), RegexOptions.CultureInvariant);
 
-    // Brackets that read as '[' and letters of the marker that read as ASCII, after NFKC (which
+    // Brackets that read as '[' or ']' and letters of the marker that read as ASCII, after NFKC (which
     // already takes the full-width and mathematical forms) and lower-casing.
     static readonly Dictionary<char, char> Lookalikes = new()
     {
         ['⁅'] = '[', ['〔'] = '[', ['【'] = '[', ['〖'] = '[', ['〚'] = '[', ['⟦'] = '[', ['❲'] = '[', ['⟬'] = '[', ['⦋'] = '[', ['﹝'] = '[', ['［'] = '[',
+        ['⁆'] = ']', ['〕'] = ']', ['】'] = ']', ['〗'] = ']', ['〛'] = ']', ['⟧'] = ']', ['❳'] = ']', ['⟭'] = ']', ['⦌'] = ']', ['﹞'] = ']', ['］'] = ']',
         ['ѕ'] = 's', ['ꜱ'] = 's', ['ʂ'] = 's',
         ['ӏ'] = 'l', ['ǀ'] = 'l', ['|'] = 'l', ['ⅼ'] = 'l',
         ['і'] = 'i', ['ı'] = 'i', ['ι'] = 'i', ['ɩ'] = 'i', ['ⅰ'] = 'i',
@@ -62,7 +63,7 @@ public static class AgentMessageText
         var sb = new StringBuilder();
         foreach (var c in text)
         {
-            sb.Append(Lookalikes.TryGetValue(c, out var look) && look == '[' ? '[' : c);
+            sb.Append(Lookalikes.TryGetValue(c, out var look) && look is '[' or ']' ? look : c);
         }
         var escaped = sb.ToString()
             .Replace('[', '(').Replace(']', ')').Replace('"', '\'').Replace('·', '-')
