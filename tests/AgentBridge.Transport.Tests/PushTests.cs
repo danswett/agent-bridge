@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using AgentBridge.Relay;
 using Xunit;
 
 namespace AgentBridge.Transport.Tests;
@@ -137,6 +138,86 @@ public class PushTests
         // The limit is 20 a minute for the account, whichever of its devices asks.
         Assert.Equal(Enumerable.Repeat("201", 19).Concat(Enumerable.Repeat("rate-limited", 5)), statuses);
         Assert.Equal(201, otherAccount.Status);
+    }
+
+    static PushGateway Gateway(bool key = true, HttpMessageHandler? handler = null)
+    {
+        using var k = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var options = new RelayOptions { VapidPrivateKey = key ? Convert.ToBase64String(k.ExportPkcs8PrivateKey()) : null };
+        return new PushGateway(options, new FakeFactory(handler ?? new CapturingHandler()), Microsoft.Extensions.Logging.Abstractions.NullLogger<PushGateway>.Instance);
+    }
+
+    sealed class FakeFactory(HttpMessageHandler handler) : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);
+    }
+
+    sealed class CapturingHandler : HttpMessageHandler
+    {
+        public List<HttpRequestMessage> Sent { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Sent.Add(request);
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.Created));
+        }
+    }
+
+    [Theory]
+    [InlineData("https://web.push.apple.com/x", 100, null)]
+    [InlineData("https://WEB.PUSH.APPLE.COM/x", 100, null)]
+    [InlineData("https://eu.web.push.apple.com/x", 100, null)]
+    [InlineData("https://web.push.apple.com/x", WebPushCrypto.RecordSize, null)]
+    [InlineData("https://web.push.apple.com/x", 0, "bad-body-size")]
+    [InlineData("https://web.push.apple.com/x", WebPushCrypto.RecordSize + 1, "bad-body-size")]
+    [InlineData("not a url", 100, "bad-endpoint")]
+    [InlineData(null, 100, "bad-endpoint")]
+    [InlineData("http://web.push.apple.com/x", 100, "endpoint-not-https")]
+    [InlineData("ftp://web.push.apple.com/x", 100, "endpoint-not-https")]
+    [InlineData("https://web.push.apple.com:8443/x", 100, "endpoint-port")]
+    [InlineData("https://evil.example/push", 100, "endpoint-not-allowed")]
+    [InlineData("https://evilweb.push.apple.com/x", 100, "endpoint-not-allowed")]
+    [InlineData("https://web.push.apple.com.evil.example/x", 100, "endpoint-not-allowed")]
+    [InlineData("https://web.push.apple.com@evil.example/", 100, "endpoint-not-allowed")]
+    public void The_gateway_gives_the_exact_reason_for_each_refusal(string? endpoint, int bodyLength, string? reason)
+    {
+        Assert.Equal(reason, Gateway().Refusal(endpoint, bodyLength));
+    }
+
+    [Fact]
+    public void Without_a_VAPID_key_every_push_is_refused_as_push_disabled()
+    {
+        Assert.Equal("push-disabled", Gateway(key: false).Refusal("https://web.push.apple.com/x", 100));
+    }
+
+    [Fact]
+    public async Task A_body_that_is_not_base64_is_answered_bad_body_without_a_request()
+    {
+        var handler = new CapturingHandler();
+
+        var r = await Gateway(handler: handler).SendAsync("1", JsonDocument.Parse("""{"endpoint":"https://web.push.apple.com/x","body":"***"}""").RootElement);
+
+        Assert.Equal(new PushGateway.Result(0, "bad-body"), r);
+        Assert.Empty(handler.Sent);
+    }
+
+    [Theory]
+    [InlineData("\"ttl\":-5,\"urgency\":\"high\"", "0", "high")]
+    [InlineData("\"ttl\":86400,\"urgency\":\"very-low\"", "86400", "very-low")]
+    [InlineData("\"ttl\":86401,\"urgency\":\"low\"", "86400", "low")]
+    [InlineData("\"ttl\":\"soon\",\"urgency\":\"urgent\"", "3600", "normal")]
+    [InlineData("\"urgency\":\"HIGH\"", "3600", "normal")]
+    [InlineData("\"x\":1", "3600", "normal")]
+    public async Task A_ttl_outside_its_range_is_clamped_and_an_unknown_urgency_falls_back_to_normal(string extras, string ttl, string urgency)
+    {
+        var handler = new CapturingHandler();
+        var message = "{\"endpoint\":\"https://web.push.apple.com/x\",\"body\":\"AAAA\"," + extras + "}";
+
+        var r = await Gateway(handler: handler).SendAsync("1", JsonDocument.Parse(message).RootElement);
+
+        Assert.Equal(201, r.Status);
+        var sent = Assert.Single(handler.Sent);
+        Assert.Equal((ttl, urgency), (sent.Headers.GetValues("TTL").Single(), sent.Headers.GetValues("Urgency").Single()));
     }
 
     [Fact]

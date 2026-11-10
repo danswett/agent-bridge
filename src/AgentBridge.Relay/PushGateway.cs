@@ -55,8 +55,8 @@ public sealed class PushGateway(RelayOptions options, IHttpClientFactory http, I
         if (Refusal(endpoint, body.Length) is { } why) { return new Result(0, why); }
         if (!WithinRate(accountId)) { return new Result(0, "rate-limited"); }
 
-        var ttl = message.TryGetProperty("ttl", out var t) && t.TryGetInt32(out var tv) ? Math.Clamp(tv, 0, 86_400) : 3600;
-        var urgency = message.TryGetProperty("urgency", out var ug) && Urgencies.Contains(ug.GetString() ?? "") ? ug.GetString()! : "normal";
+        var ttl = message.TryGetProperty("ttl", out var t) && t.ValueKind == JsonValueKind.Number && t.TryGetInt32(out var tv) ? Math.Clamp(tv, 0, 86_400) : 3600;
+        var urgency = message.TryGetProperty("urgency", out var ug) && ug.ValueKind == JsonValueKind.String && Urgencies.Contains(ug.GetString() ?? "") ? ug.GetString()! : "normal";
         var uri = new Uri(endpoint!);
         using var req = new HttpRequestMessage(HttpMethod.Post, uri) { Content = new ByteArrayContent(body) };
         req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
