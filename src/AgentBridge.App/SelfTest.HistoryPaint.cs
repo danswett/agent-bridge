@@ -48,6 +48,7 @@ static partial class SelfTest
 
         bool Shown(FrameworkElement element)
         {
+            if (!element.IsLoaded) { return false; }
             for (DependencyObject? at = element; at is not null; at = VisualTreeHelper.GetParent(at))
             {
                 if (at is UIElement { Visibility: Visibility.Collapsed }) { return false; }
@@ -146,11 +147,13 @@ static partial class SelfTest
             }
             else { check(false, "finds the scroller for an offscreen reply"); }
 
+            CompositionTarget.Rendering -= Frame;
+            Away(window, main);
+            await Task.Delay(300);
             phase = "restored view";
             failures.Clear();
             seen.Clear();
-            Away(window, main);
-            await Task.Delay(300);
+            CompositionTarget.Rendering += Frame;
             window.Sessions.Rows.SelectedItem = card;
             await Until(() => seen.Contains("paint312"), TimeSpan.FromSeconds(10));
             check(seen.Contains("paint312") && failures.Count == 0,
