@@ -117,6 +117,15 @@ function browserAnchors(doc) {
 // their own right. Only answers shown are read: a hidden one has no place to keep. The guards'
 // own attribute changes no size, so a guard can't feed itself; a read is one per frame at most.
 // paused: nothing read or watched until track() (pause() again stops it).
+// The main agent's words for the live bubble. A reply that is an earlier turn's is drawn under that
+// turn by the history, so it is not drawn again under the prompt that arrived while it was underway.
+export function liveVoice(s) {
+  const voice = mainVoice(s);
+  const a = s.activity;
+  if (!a.responseTurn || !a.turn || a.responseTurn === a.turn) { return voice; }
+  return { ...voice, response: null, responseTruncated: false, responseDropped: false };
+}
+
 export function watchMoves({ holder, controls, also = [], skip = () => false, moved, paused = false }) {
   const win = holder.ownerDocument?.defaultView ?? globalThis;
   let live = !paused;
@@ -826,7 +835,7 @@ export class SessionCard {
     this.#renderReply(s);
     this.#renderStop(s);
     // The main agent's own words only (ui.md §1 principle 3); a delegate's are on its own row.
-    const voice = mainVoice(s);
+    const voice = liveVoice(s);
     if (this.#changed('response', voice.response ?? '')) {
       e.response.replaceChildren(renderMarkdown(voice.response ?? ''));
     }

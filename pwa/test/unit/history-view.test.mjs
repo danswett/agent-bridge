@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { WORDS, historyPlan, shownParts } from '../../js/ui/history-view.js';
+import { liveVoice } from '../../js/ui/session-card.js';
 import { HistoryStore } from '../../js/history-store.js';
 import { readSession } from '../../js/protocol.js';
 
@@ -45,4 +46,19 @@ test('a turn only activity has told keeps its reply once the next turn is the li
 test('a stored reply is drawn as it is, and the live words are not drawn beside it', () => {
   const stored = { id: 'a', parts: [{ kind: 'response', text: 'stored' }], live: { response: 'live' } };
   assert.deepEqual(shownParts(stored).map((p) => p.text), ['stored']);
+});
+
+// #1642: the owner's message arrived while a reply was still underway. The card's live bubble shows
+// that message, so the earlier turn's reply (drawn under its own prompt by the history) must not be
+// drawn again under it, ahead of the new turn's own reasoning.
+test('the live bubble draws only the reply of the turn it shows, and keeps that turn\'s reasoning', () => {
+  const session = (over) => readSession({
+    id: 's1', agent: 'copilot', status: 'working', updatedAt: new Date().toISOString(),
+    activity: { turn: 't2', responseTurn: 't1', userMessage: 'and also this', response: 'still answering the first', reasoning: 'thinking about the second', ...over },
+  });
+  const midReply = liveVoice(session());
+  assert.equal(midReply.response, null);
+  assert.equal(midReply.reasoning, 'thinking about the second');
+  assert.equal(liveVoice(session({ responseTurn: 't2' })).response, 'still answering the first');
+  assert.equal(liveVoice(session({ responseTurn: undefined })).response, 'still answering the first');
 });
