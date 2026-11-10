@@ -1247,6 +1247,15 @@ tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to 
   and the `signing` environment (Signing, above).
 * The first-run wizard's agent detection and winget installs.
 
+## Interim transcript escape hatch (#1756)
+
+The conversation's **Jump to latest** button stays outside its scrolling content.
+Enter or Space jumps instantly to the bottom and pins it across incoming rows and
+re-renders. Upward wheel, scrollbar arrow, thumb or reading-key input releases that
+pin; returning to the bottom by those inputs re-engages it. The button has the same
+screen-reader name, and its scroll never animates, including under reduced motion.
+This is an interim escape hatch, not the underlying #1756/#1739 scroll fix.
+
 ## Testing
 
 * `tests/AgentBridge.Local.Tests`: framing, the server and client over a real pipe (or
