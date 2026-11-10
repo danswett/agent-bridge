@@ -313,6 +313,46 @@
                 <ListView.Header>
                 <!-- The pane's width, whatever the header's host gives it, so the column centres in the pane. -->
                 <local:ReadingColumn x:Name="ConversationHeader">
+                <!-- The stored turns, oldest first, above the latest exchange (#292, §6.4 History). -->
+                <local:ReadingColumn
+                    x:Name="HistoryColumn"
+                    MaxWidth="{StaticResource AbLayoutReadingMax}"
+                    HorizontalAlignment="Center"
+                    Padding="24,8,24,0"
+                    Spacing="16">
+                    <TextBlock
+                        x:Name="HistoryLine"
+                        Style="{StaticResource AbTypeMeta}"
+                        Foreground="{ThemeResource AbText2}"
+                        TextWrapping="Wrap"
+                        AutomationProperties.AutomationId="HistoryLine"
+                        Visibility="Collapsed" />
+                    <Button x:Name="HistoryRetry" Content="Try again" Click="OnHistoryRetry" Visibility="Collapsed" />
+                    <ItemsRepeater x:Name="HistoryRows" AutomationProperties.AutomationId="History">
+                        <ItemsRepeater.Layout>
+                            <StackLayout Orientation="Vertical" Spacing="16" />
+                        </ItemsRepeater.Layout>
+                        <ItemsRepeater.ItemTemplate>
+                            <DataTemplate x:DataType="core:HistoryRow">
+                                <StackPanel Spacing="8" AutomationProperties.AutomationId="HistoryTurn">
+                                    <TextBlock Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind PromptLabel}" Visibility="{x:Bind local:Ui.Some(PromptLabel)}" />
+                                    <TextBlock Style="{StaticResource AbTypeRow}" TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind Prompt}" Visibility="{x:Bind local:Ui.Some(Prompt)}" />
+                                    <ItemsRepeater ItemsSource="{x:Bind Blocks}">
+                                        <ItemsRepeater.Layout>
+                                            <StackLayout Orientation="Vertical" Spacing="8" />
+                                        </ItemsRepeater.Layout>
+                                        <ItemsRepeater.ItemTemplate>
+                                            <DataTemplate x:DataType="core:ConversationBlock">
+                                                <local:MarkdownView Reading="True" Block="{x:Bind Block}" />
+                                            </DataTemplate>
+                                        </ItemsRepeater.ItemTemplate>
+                                    </ItemsRepeater>
+                                    <TextBlock Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind Note}" Visibility="{x:Bind local:Ui.Some(Note)}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsRepeater.ItemTemplate>
+                    </ItemsRepeater>
+                </local:ReadingColumn>
                 <local:ReadingColumn
                     x:Name="Conversation"
                     MaxWidth="{StaticResource AbLayoutReadingMax}"
