@@ -1483,7 +1483,8 @@ export class SessionCard {
     this.#wantEarlier();
     // Latest at the bottom, kept there until the person scrolls (#1646). A draw that showed
     // nothing does not count, so turns arriving later still scroll.
-    if (this.#stick && drawn && sc.getClientRects().length) {
+    // Not under a finger, a pressed mouse or one resting on it (ui.md §5.3): the view stays put.
+    if (this.#stick && drawn && sc.getClientRects().length && !this.#touches && !this.#pressing && !this.#hovering) {
       const toEnd = () => { sc.scrollTop = sc.scrollHeight; this.#stuckAt = sc.scrollTop; };
       if (this.collapse) { this.collapse.appScroll(toEnd); } else { toEnd(); }
     }
