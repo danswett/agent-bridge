@@ -46,7 +46,7 @@ public class HourlyStatsTests
     [Fact]
     public void A_request_slower_than_the_last_edge_reports_that_edge_and_an_empty_hour_reports_nothing()
     {
-        Assert.Equal(10000, HourlyStats.Percentile(Buckets((HourlyStats.EdgesMs.Length, 3)), 0.9));
+        Assert.Equal(600000, HourlyStats.Percentile(Buckets((HourlyStats.EdgesMs.Length, 3)), 0.9));
         Assert.Null(HourlyStats.Percentile(Buckets(), 0.5));
     }
 
@@ -184,6 +184,110 @@ public class HourlyStatsTests
             var req = new HttpRequestMessage(HttpMethod.Get, new Uri(relay.Url, "/v1/stats/hourly?hours=2"));
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
             return relay.Http.SendAsync(req);
+        }
+    }
+
+    static byte[] Body(params string[] samples) => Encoding.UTF8.GetBytes("{\"samples\":[" + string.Join(",", samples) + "]}");
+    static string Sample(string app, long ms, long at, string route = "send-to-settled") => $"{{\"app\":\"{app}\",\"route\":\"{route}\",\"ms\":{ms},\"at\":{at}}}";
+
+    [Fact]
+    public async Task App_timings_count_per_app_drop_stale_and_future_samples_and_clamp_ms()
+    {
+        var (s, store, _) = Make();
+        var now = Noon.ToUnixTimeSeconds();
+
+        var r = s.AddTimings(Body(Sample("PWA", 30_000, now - 5), Sample("PWA", 9_999_999, now - 5), Sample("Windows", 40, now - 7200), Sample("Phone", 40, now + 60)));
+        await s.FlushAsync();
+
+        Assert.Equal((2, 2), r);
+        var hours = await s.ReadAsync(1, default);
+        var row = Assert.Single(hours[0].Rows);
+        Assert.Equal("app-send-to-settled-pwa", row.Group);
+        Assert.Equal(2, row.Count);
+        Assert.Equal(60000, row.P50Ms);
+        Assert.Equal(600000, row.P90Ms);
+        Assert.Equal(0, row.C4xx);
+    }
+
+    [Theory]
+    [InlineData("{\"samples\":[]}")]
+    [InlineData("not json")]
+    [InlineData("{\"samples\":[{\"app\":\"PWA\",\"route\":\"send-to-settled\",\"ms\":1.5,\"at\":1}]}")]
+    public void A_malformed_post_is_refused_whole(string body)
+    {
+        Assert.Null(Make().Stats.AddTimings(Encoding.UTF8.GetBytes(body)));
+    }
+
+    [Fact]
+    public void One_bad_app_or_route_or_too_many_samples_refuses_the_whole_post()
+    {
+        var (s, _, _) = Make();
+        var now = Noon.ToUnixTimeSeconds();
+        Assert.Null(s.AddTimings(Body(Sample("PWA", 1, now), Sample("Laptop-17", 1, now))));
+        Assert.Null(s.AddTimings(Body(Sample("PWA", 1, now, "other"))));
+        Assert.Null(s.AddTimings(Body(Enumerable.Repeat(Sample("PWA", 1, now), HourlyStats.MaxSamples + 1).ToArray())));
+        Assert.NotNull(s.AddTimings(Body(Enumerable.Repeat(Sample("PWA", 1, now), HourlyStats.MaxSamples).ToArray())));
+    }
+
+    [Fact]
+    public async Task An_hour_written_with_the_old_edges_is_read_with_its_slow_requests_in_the_top_bucket()
+    {
+        var (s, store, _) = Make();
+        var old = new long[14]; old[2] = 1; old[13] = 3;
+        var doc = new Dictionary<string, object> { ["v"] = 1, ["groups"] = new Dictionary<string, object> { ["api"] = new { n = 4, b = old, c4 = 0, c5 = 0 } } };
+        await store.WriteAsync("stats/v1/2026110912.json", JsonSerializer.SerializeToUtf8Bytes(doc), null, default);
+
+        var row = Assert.Single((await s.ReadAsync(1, default))[0].Rows);
+
+        Assert.Equal(4, row.Count);
+        Assert.Equal(600000, row.P90Ms);
+
+        s.Record("api", TimeSpan.FromMilliseconds(3), 200);
+        await s.FlushAsync();
+        Assert.Equal(5, Assert.Single((await s.ReadAsync(1, default))[0].Rows).Count);
+        Assert.NotNull(await store.ReadAsync("stats/v2/2026110912.json", default));
+        Assert.Equal(old.Length, Parse14(await store.ReadAsync("stats/v1/2026110912.json", default)));
+
+        static int Parse14(StoredRoster? b) => JsonDocument.Parse(b!.Body).RootElement.GetProperty("groups").GetProperty("api").GetProperty("b").GetArrayLength();
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task The_timings_endpoint_needs_a_token_lands_in_the_hourly_read_and_limits_size_and_rate_with_no_ids_stored()
+    {
+        var store = new MemoryRosterStore();
+        await using var relay = await TestRelay.StartAsync(o => { o.Stats.Store = store; o.Stats.ReadKey = "sre-key"; });
+        var token = relay.TokenFor(424242, "private-login");
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await Post(null, Body(Sample("PWA", 5, now)))).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await Post("bad", Body(Sample("PWA", 5, now)))).StatusCode);
+        var ok = await Post(token, Body(Sample("PWA", 2500, now), Sample("Windows", 70000, now)));
+        Assert.Equal(HttpStatusCode.Accepted, ok.StatusCode);
+        Assert.Equal(2, JsonDocument.Parse(await ok.Content.ReadAsStringAsync()).RootElement.GetProperty("accepted").GetInt32());
+        Assert.Equal(HttpStatusCode.BadRequest, (await Post(token, Body(Sample("Toaster", 5, now)))).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await Post(token, Body(Sample("PWA", 5, now)))).StatusCode);
+
+        var other = relay.TokenFor(7, "someone-else");
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, (await Post(other, new byte[HourlyStats.MaxPostBytes + 1])).StatusCode);
+
+        await relay.App.Services.GetRequiredService<HourlyStats>().FlushAsync();
+        var req = new HttpRequestMessage(HttpMethod.Get, new Uri(relay.Url, "/v1/stats/hourly?hours=2"));
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "sre-key");
+        var json = await (await relay.Http.SendAsync(req)).Content.ReadAsStringAsync();
+        Assert.Contains("app-send-to-settled-pwa", json);
+        Assert.Contains("app-send-to-settled-windows", json);
+        Assert.DoesNotContain("app-send-to-settled-phone", json);
+        // The stored hour and the read rows hold no account id or login.
+        var stored = string.Concat(await Task.WhenAll(new[] { 0, 1 }.Select(async h => Encoding.UTF8.GetString((await store.ReadAsync($"stats/v2/{DateTimeOffset.UtcNow.AddHours(-h):yyyyMMddHH}.json", default))?.Body ?? []))));
+        foreach (var text in new[] { json, stored }) { Assert.DoesNotContain("424242", text); Assert.DoesNotContain("private-login", text); }
+
+        Task<HttpResponseMessage> Post(string? bearer, byte[] body)
+        {
+            var r = new HttpRequestMessage(HttpMethod.Post, new Uri(relay.Url, "/v1/stats/app-timings")) { Content = new ByteArrayContent(body) };
+            r.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            if (bearer is not null) { r.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer); }
+            return relay.Http.SendAsync(r);
         }
     }
 }

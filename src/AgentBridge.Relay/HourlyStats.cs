@@ -44,9 +44,9 @@ public sealed record StatsRow(string Group, long Count, int? P50Ms, int? P90Ms, 
 public sealed class HourlyStats
 {
     // Upper edges of the latency buckets. A percentile is the edge of the bucket it falls in, so
-    // it is an upper bound; 10000 means ten seconds or more.
-    public static readonly int[] EdgesMs = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000];
-    const int MaxAttempts = 5;
+    // it is an upper bound; the top edge is ten minutes (send-to-settled timings run long).
+    public static readonly int[] EdgesMs =     [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 60000, 120000, 300000, 600000];
+        const int MaxAttempts = 5, OldEdges = 13;
     readonly StatsOptions o;
     readonly TimeSpan storeTimeout;
     readonly IRosterStore? store;
@@ -102,7 +102,8 @@ public sealed class HourlyStats
     public static StatsRow RowOf(string group, StatsCell c) =>
         new(group, c.Count, Percentile(c.Buckets, 0.5), Percentile(c.Buckets, 0.9), c.Client, c.Server);
     static long HourOf(DateTimeOffset t) => t.ToUnixTimeSeconds() / 3600;
-    static string NameOf(long hour) => $"stats/v1/{DateTimeOffset.FromUnixTimeSeconds(hour * 3600):yyyyMMddHH}.json";
+    // v2 holds the wider buckets. An old replica keeps writing v1 and never sees v2, so a rolling deploy cannot overwrite it.
+    static string NameOf(long hour, string version = "v2") => $"stats/{version}/{DateTimeOffset.FromUnixTimeSeconds(hour * 3600):yyyyMMddHH}.json";
 
     public void Record(string group, TimeSpan elapsed, int status)
     {
@@ -118,6 +119,60 @@ public sealed class HourlyStats
             else if (status >= 500) { c.Server++; }
         }
     }
+
+    // App-reported send-to-settled timings (#1603). Samples carry no account, device or machine,
+    // and fold into the same pending hours, so they ride the existing flush.
+    public const string AppGroupPrefix = "app-send-to-settled-";
+    public static readonly string[] Apps = ["PWA", "Windows", "Phone"];
+    public const string AppRoute = "send-to-settled";
+    public const int MaxPostBytes = 4096, MaxSamples = 50, MaxMs = 600_000, MaxPostsPerMinute = 2;
+    readonly Dictionary<string, Queue<DateTimeOffset>> posts = [];
+
+    // At most MaxPostsPerMinute per account on this replica. The account id is held in memory only,
+    // for a minute, and never stored.
+    public bool AdmitPost(string accountId)
+    {
+        var now = o.Time.GetUtcNow();
+        lock (gate)
+        {
+            if (posts.Count > 10_000) { foreach (var k in posts.Where(p => p.Value.All(t => now - t >= TimeSpan.FromMinutes(1))).Select(p => p.Key).ToList()) { posts.Remove(k); } }
+            if (!posts.TryGetValue(accountId, out var q)) { posts[accountId] = q = new Queue<DateTimeOffset>(); }
+            while (q.Count > 0 && now - q.Peek() >= TimeSpan.FromMinutes(1)) { q.Dequeue(); }
+            if (q.Count >= MaxPostsPerMinute) { return false; }
+            q.Enqueue(now);
+            return true;
+        }
+    }
+
+    // Null when the body is not valid. Otherwise how many samples were counted and dropped
+    // (older than an hour or in the future).
+    public (int Accepted, int Dropped)? AddTimings(byte[] body)
+    {
+        TimingsBody? t;
+        try { t = JsonSerializer.Deserialize<TimingsBody>(body); } catch (JsonException) { return null; }
+        if (t?.Samples is not { Count: > 0 and <= MaxSamples } list || list.Any(s => s is null || s.Route != AppRoute || !Apps.Contains(s.App) || s.Ms is null || s.At is null)) { return null; }
+        var now = o.Time.GetUtcNow();
+        int accepted = 0;
+        lock (gate)
+        {
+            foreach (var s in list.OfType<TimingSample>())
+            {
+                var at = DateTimeOffset.FromUnixTimeSeconds(Math.Clamp(s.At!.Value, 0, 253402300799));
+                if (at > now || now - at > TimeSpan.FromHours(1)) { continue; }
+                var hour = HourOf(at);
+                if (!pending.TryGetValue(hour, out var groups)) { pending[hour] = groups = []; }
+                var group = AppGroupPrefix + s.App!.ToLowerInvariant();
+                if (!groups.TryGetValue(group, out var c)) { groups[group] = c = new StatsCell(); }
+                c.Count++;
+                c.Buckets[Bucket(Math.Clamp(s.Ms!.Value, 0, MaxMs))]++;
+                accepted++;
+            }
+        }
+        return (accepted, list.Count - accepted);
+    }
+
+    sealed record TimingSample([property: JsonPropertyName("app")] string? App, [property: JsonPropertyName("route")] string? Route, [property: JsonPropertyName("ms")] long? Ms, [property: JsonPropertyName("at")] long? At);
+    sealed record TimingsBody([property: JsonPropertyName("samples")] List<TimingSample?>? Samples);
 
     // Merges what this replica has counted into the stored hours. A hour that cannot be written
     // is kept for the next flush.
@@ -175,7 +230,16 @@ public sealed class HourlyStats
         try
         {
             var d = JsonSerializer.Deserialize<StatsHour>(body);
-            return d is { V: 1 } && d.Groups.Values.All(c => c.Buckets.Length == EdgesMs.Length + 1) ? d : null;
+            if (d is not { V: 1 }) { return null; }
+            // An hour written before the wider edges: its overflow bucket (over ten seconds) moves to the new top.
+            foreach (var c in d.Groups.Values.Where(c => c.Buckets.Length == OldEdges + 1))
+            {
+                var b = new long[EdgesMs.Length + 1];
+                Array.Copy(c.Buckets, b, OldEdges);
+                b[^1] = c.Buckets[OldEdges];
+                c.Buckets = b;
+            }
+            return d.Groups.Values.All(c => c.Buckets.Length == EdgesMs.Length + 1) ? d : null;
         }
         catch (JsonException) { return null; }
     }
@@ -189,7 +253,11 @@ public sealed class HourlyStats
         for (var h = now - hours + 1; h <= now; h++)
         {
             var stored = await store.ReadAsync(NameOf(h), ct);
-            var rows = Parse(stored?.Body)?.Groups.OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => RowOf(g.Key, g.Value)).ToList() ?? [];
+            var groups = Parse(stored?.Body)?.Groups ?? [];
+            // What replicas still on the old layout wrote to v1 counts too, until they are gone.
+            var legacy = Parse((await store.ReadAsync(NameOf(h, "v1"), ct))?.Body);
+            foreach (var (g, c) in legacy?.Groups ?? []) { if (groups.TryGetValue(g, out var have)) { have.Add(c); } else { groups[g] = c; } }
+            var rows = groups.OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => RowOf(g.Key, g.Value)).ToList();
             result.Add((DateTimeOffset.FromUnixTimeSeconds(h * 3600), rows));
         }
         return result;
