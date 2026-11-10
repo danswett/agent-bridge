@@ -660,8 +660,14 @@ export class SessionCard {
     this.turns = new HistoryView();
     e.scroll = h('div', { class: 'stream-scroll' }, this.turns.element, e.stream);
     this.#watchHold(e.scroll);
+    // An open question out of sight (#1657): one tap brings its card into view.
+    e.waiting = h('button', { type: 'button', class: 'question-waiting', hidden: true, onclick: () => this.#showWaiting() }, 'Question waiting');
+    // Watched, not measured: a read of the layout here would spend the one the move watch owes.
+    if (typeof IntersectionObserver === 'function') {
+      new IntersectionObserver((entries) => { this.#questionSeen = entries.at(-1).isIntersecting; this.#syncWaiting(); }, { root: e.scroll }).observe(e.question);
+    }
     e.conversation = h('div', { class: 'conversation', id: this.ids.conversation, role: 'tabpanel', 'aria-labelledby': this.ids.tabC },
-      e.scroll, e.reply, e.replyBar);
+      e.scroll, e.waiting, e.reply, e.replyBar);
 
     // The inspector: Details, then Tools.
     e.facts = h('dl', { class: 'facts' });
@@ -823,6 +829,7 @@ export class SessionCard {
     }
 
     this.#renderQuestion(s);
+    this.#syncWaiting();
     this.#renderReply(s);
     this.#renderStop(s);
     // The main agent's own words only (ui.md §1 principle 3); a delegate's are on its own row.
@@ -1387,9 +1394,17 @@ export class SessionCard {
     this.#drawTurns();
   }
 
+  // The question the slot holds a place for: the open one, or the one whose record it still shows.
+  #slotQuestion = null;
+
   #drawTurns() {
     const snapshot = this.historyStore.get(this.hostId, this.#s.id);
-    const drawn = this.turns.render(snapshot, this.#s.activity?.turn ?? null);
+    const slot = this.els.question;
+    if (this.#s.question) { this.#slotQuestion = this.#s.question.id; } else if (!slot.hasChildNodes()) { this.#slotQuestion = null; }
+    const drawn = this.turns.render(snapshot, this.#s.activity?.turn ?? null, { slot, questionId: this.#slotQuestion });
+    // Not in a turn (none holds it, or the history is not drawn): back where the live exchange ends.
+    if (!this.turns.hosted && slot.parentNode !== this.els.stream) { this.els.stream.append(slot); }
+    this.#syncWaiting();
     const sc = this.els.scroll;
     if (!this.#atLatest && snapshot.phase !== 'idle' && snapshot.phase !== 'loading' && sc.getClientRects().length) {
       this.#atLatest = true;
@@ -1597,6 +1612,17 @@ export class SessionCard {
     for (const type of ['click', 'keydown', 'input', 'change']) {
       slot.addEventListener(type, (e) => { if (this.#guarded?.contains(e.target)) { this.#moves?.own(); } }, true);
     }
+  }
+
+  #questionSeen = true;
+
+  #syncWaiting() {
+    this.els.waiting.hidden = !this.#s?.question || this.#questionSeen;
+  }
+
+  #showWaiting() {
+    this.revealQuestion();
+    this.#syncWaiting();
   }
 
   #atEnd() {

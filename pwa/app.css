@@ -1125,6 +1125,15 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 .response > :last-child { margin-bottom: 0; }
 .question-slot:empty { display: none; }
 .question-slot > .question { margin: 0; }
+/* The bar over the reply box while an open question is scrolled out of sight (#1657). */
+.question-waiting {
+  flex: none; align-self: center; min-height: 36px; margin: var(--ab-space-2) var(--ab-space-4) 0; padding: 0 var(--ab-space-4);
+  border: 1px solid currentColor; border-radius: 999px; background: Canvas; color: inherit; font: inherit; font-weight: 600; cursor: pointer;
+}
+.question-waiting[hidden] { display: none; }
+@media (max-width: 759px) {
+  .question-waiting { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(var(--foot-h) + var(--ab-space-2)); margin: 0; z-index: 3; }
+}
 /* What the main agent is doing now: the tool's glyph, its name and arguments, in mono. */
 .tool-line { margin: var(--ab-space-2) 0 0; display: flex; gap: var(--ab-space-2); align-items: baseline; min-width: 0; font-size: var(--type-meta); line-height: var(--type-meta-line); }
 .tool-line .glyph { align-self: center; }

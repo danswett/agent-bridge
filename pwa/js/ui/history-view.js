@@ -27,7 +27,8 @@ export function historyPlan(snapshot, latestId = null) {
   return { note, turns };
 }
 
-function part(p) {
+function part(p, inline = null) {
+  if (inline && p.kind === 'question' && p.question?.id === inline.questionId) { return inline.slot; }
   if (p.kind === 'response' && p.text) {
     return h('div', { class: 'history-block' }, h('div', { class: 'md history-reply' }, renderMarkdown(p.text)), p.truncated ? h('p', { class: 'history-meta history-cut' }, WORDS.cut) : null);
   }
@@ -56,31 +57,37 @@ export function shownParts(t) {
   return [...t.parts, { kind: 'response', text: t.live.response, truncated: t.live.responseTruncated === true }];
 }
 
-export function turnView(t) {
+export function turnView(t, inline = null) {
   if (t.unreadable) { return h('section', { class: 'history-turn', dataset: { turn: t.id } }, h('p', { class: 'history-meta' }, WORDS.unreadable)); }
   const from = t.prompt?.from ?? 'person';
   const prompt = !t.prompt ? null
     : from === 'person'
       ? h('div', { class: 'history-prompt' }, h('div', { class: 'history-bubble' }, h('p', { class: 'plain' }, t.prompt.text ?? '')))
       : h('div', { class: 'history-origin' }, h('p', { class: 'history-origin-label' }, t.prompt.label ?? SENDER[from] ?? SENDER.other), h('p', { class: 'plain' }, t.prompt.text ?? ''));
-  return h('section', { class: 'history-turn', dataset: { turn: t.id } }, prompt, shownParts(t).map(part), t.truncated ? h('p', { class: 'history-meta history-cut' }, WORDS.cut) : null);
+  return h('section', { class: 'history-turn', dataset: { turn: t.id } }, prompt, shownParts(t).map((p) => part(p, inline)), t.truncated ? h('p', { class: 'history-meta history-cut' }, WORDS.cut) : null);
 }
 
 export class HistoryView {
   element = h('div', { class: 'history', 'aria-label': 'Earlier conversation', hidden: true });
   #drawn = new Map();
+  // Whether the question's slot was drawn inside a turn, where the agent asked it (#1657).
+  hosted = false;
 
-  // snapshot: the store's. latestId: the turn the card draws live, left out.
-  render(snapshot, latestId = null) {
+  // snapshot: the store's. latestId: the turn the card draws live, left out. inline: the question
+  // slot and the id of the question in it, drawn at that question's place in its turn.
+  render(snapshot, latestId = null, inline = null) {
     const { note, turns } = historyPlan(snapshot, latestId);
     const keep = new Map();
     const nodes = [];
+    this.hosted = false;
     if (note) { nodes.push(h('p', { class: 'history-meta history-state' }, note)); }
     for (const t of turns) {
       // Turns are replaced when they change, so the same object is the same drawing.
+      const holds = !!inline?.questionId && t.parts.some((p) => p.kind === 'question' && p.question?.id === inline.questionId);
+      this.hosted ||= holds;
       const old = this.#drawn.get(t.id);
-      const node = old?.turn === t ? old.node : turnView(t);
-      keep.set(t.id, { turn: t, node });
+      const node = old?.turn === t && old.holds === holds ? old.node : turnView(t, holds ? inline : null);
+      keep.set(t.id, { turn: t, node, holds });
       nodes.push(node);
     }
     this.#drawn = keep;
