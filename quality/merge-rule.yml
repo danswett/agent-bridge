@@ -60,13 +60,17 @@ ignore_workflows: [Merge rule]
 # Main must be green. GitHub's auto-merge doesn't pause while main's CI is red, and would keep
 # landing pull requests on a broken main, each making the breakage harder to untangle. So while
 # this workflow's latest finished push run on main (at its latest attempt) isn't a success, every
-# pull request fails; a newer run still going doesn't count, so main stays red until the fix's run
-# passes. A pull request with one of these labels is the fix, and skips this check alone: every
+# pull request fails, except the bounded, merge-rule-covered fallback below. A newer active run
+# doesn't free a red main. A pull request with one of these labels is the fix, and skips this check alone: every
 # other requirement, the independent review included, still applies. Adding a label takes triage
 # rights, so a pull request's author can't exempt their own from a fork: ask the merge coordinator.
 main_green:
   workflow: ci.yml
   exempt_labels: [fixes-main]
+  # A missing run or a newest first attempt cancelled before starting can use a green ancestor
+  # within this many commits, only with a passing merge-rule on every later commit's merged PR.
+  # Finished failures and unreadable ancestry still block. Active runs and fixes-main are unchanged.
+  fallback_commits: 6
 
 # The standing rule (owner decision 2026-11-08): Copilot and Codex reviews are optional extras and
 # never block a merge; the independent-review receipts are the gate. A pull request needs a success
