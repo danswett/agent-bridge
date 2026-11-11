@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using AgentBridge.Local;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.App.Core;
 
@@ -39,20 +40,49 @@ public sealed class MachineRowViewModel : Observable
         }
     }
     public string Facts { get => facts; internal set => Set(ref facts, value); }
-    public string Status { get => status; internal set => Set(ref status, value); }
+    public string Status { get => status; internal set { if (Set(ref status, value)) { RaiseTile(); } } }
+    int sessions;
+    string? seenAgo;
+    bool offersLaunch;
+    // What the tile reads from the fields above (#1147): see MachineTile.
+    internal void Tile(int count, string? seen, bool launch)
+    {
+        (sessions, seenAgo, offersLaunch) = (count, seen, launch);
+        RaiseTile();
+    }
+    void RaiseTile()
+    {
+        Raise(nameof(HealthText));
+        Raise(nameof(HealthIcon));
+        Raise(nameof(RunningText));
+        Raise(nameof(CanLaunchHere));
+        Raise(nameof(LaunchWhy));
+        Raise(nameof(HasLaunchWhy));
+        Raise(nameof(ShowTile));
+    }
+    public string HealthText => MachineTile.Health(status == "Offline", seenAgo).Text;
+    public string HealthIcon => MachineTile.Health(status == "Offline", seenAgo).Icon;
+    public string RunningText => MachineTile.Running(sessions);
+    public bool CanLaunchHere => !IsOffline && offersLaunch && MachineTile.CanLaunchHere(status, ViewOnly, Held);
+    public string? LaunchWhy => MachineTile.LaunchWhy(status, ViewOnly, Held);
+    public bool HasLaunchWhy => LaunchWhy is not null;
+    // An offline machine shows its header and Forget only.
+    public bool ShowTile => !IsOffline && status != "Offline";
+    public bool ShowHealth => !IsOffline;
+    public string LaunchHereName => $"Launch a session on {name}";
     public bool ViewOnly => viewOnlyWhy is not null;
     // Why the machine takes no answers, replies or End session from here: the host's words.
     public string? ViewOnlyWhy
     {
         get => viewOnlyWhy;
-        internal set { if (Set(ref viewOnlyWhy, value)) { Raise(nameof(ViewOnly)); Raise(nameof(FactsWhy)); } }
+        internal set { if (Set(ref viewOnlyWhy, value)) { RaiseTile(); Raise(nameof(ViewOnly)); Raise(nameof(FactsWhy)); } }
     }
     // What holds the machine's discovery, once the hold has lasted two minutes: the host's words
     // (#788, #1064). Its row is the only place the app says so.
     public string? HeldWhy
     {
         get => heldWhy;
-        internal set { if (Set(ref heldWhy, value)) { Raise(nameof(Held)); Raise(nameof(FactsWhy)); } }
+        internal set { if (Set(ref heldWhy, value)) { RaiseTile(); Raise(nameof(Held)); Raise(nameof(FactsWhy)); } }
     }
     public bool Held => heldWhy is not null;
     // The reasons behind line 2's flag, never on the row (ui.md §6.6): its tooltip and its
@@ -90,6 +120,9 @@ public sealed partial class MainViewModel
 {
     public ObservableCollection<MachineRowViewModel> MachineRows { get; } = [];
 
+    // One line heading the page: text only, no health figure until one is reported.
+    public string FleetSummary => MachineTile.Fleet(MachineRows.Count, MachineRows.Count(r => r.Status is "Online" or "This machine"));
+
     // Called whenever a machine, its sessions, its update or the offline list may have changed.
     void SyncMachineRows()
     {
@@ -110,6 +143,7 @@ public sealed partial class MainViewModel
             row.Facts = m.OfflineSince is { } since ? $"Last seen {Words.Ago(since, Time.GetUtcNow())}"
                 : string.Join(" · ", new[] { connected ? Words.Plural(count, "session", "sessions") : null, row.Held ? "Discovery held" : row.ViewOnly ? "View only" : null }.Where(s => s is not null));
             row.Status = m.Offline ? "Offline" : !connected ? "Connecting" : m.IsLocal ? "This machine" : "Online";
+            row.Tile(count, m.OfflineSince is { } off ? Words.Ago(off, Time.GetUtcNow()) : null, m.Host.Can(LaunchProtocol.Capability));
             row.CanShowSessions = connected && !m.Offline && machines.Count > 1;
             row.CanCheckHere = m.IsLocal && CheckLocal is not null;
             row.Update = MachineUpdates.FirstOrDefault(u => u.Key == m.Key);
@@ -134,6 +168,7 @@ public sealed partial class MainViewModel
             if (at < 0) { MachineRows.Insert(i, want[i]); }
             else if (at != i) { MachineRows.Move(at, i); }
         }
+        Raise(nameof(FleetSummary));
     }
 
     // How long a discovery hold must last before its machine's row says so: a hold that starts and

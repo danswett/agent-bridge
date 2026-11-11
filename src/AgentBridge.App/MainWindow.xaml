@@ -203,6 +203,11 @@
                      line 1, at most two facts on line 2, the machine's update inside its own row, and its buttons,
                      all one style, in one column under the text. -->
                 <ScrollViewer x:Name="MachinesPage" Grid.Row="1" Visibility="Collapsed" AutomationProperties.AutomationId="MachinesPane">
+                    <ScrollViewer.Resources>
+                        <Style TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+                            <Setter Property="MinHeight" Value="44" />
+                        </Style>
+                    </ScrollViewer.Resources>
                     <Grid>
                         <StackPanel MaxWidth="920" Padding="24,20,24,24" Spacing="12">
                             <Grid ColumnSpacing="12">
@@ -222,6 +227,11 @@
                                     Visibility="{x:Bind local:Ui.Show(ViewModel.ShowMachineUpdates), Mode=OneWay}"
                                     Click="{x:Bind ViewModel.CheckAll}" />
                             </Grid>
+                            <TextBlock
+                                Style="{StaticResource AbTypeMeta}"
+                                Foreground="{ThemeResource AbText2}"
+                                AutomationProperties.AutomationId="MachinesFleetSummary"
+                                Text="{x:Bind ViewModel.FleetSummary, Mode=OneWay}" />
                             <InfoBar
                                 AutomationProperties.AutomationId="MachinesFleetNote"
                                 IsClosable="False"
@@ -267,6 +277,30 @@
                                                         ToolTipService.ToolTip="{x:Bind FactsWhy, Mode=OneWay}"
                                                         Text="{x:Bind Facts, Mode=OneWay}"
                                                         Visibility="{x:Bind local:Ui.Some(Facts), Mode=OneWay}" />
+                                                    <!-- The tile's sections, in order (#1147, ui.md §6.6.1): Health, then Running; Can run
+                                                         waits for #1142. Words, never a bare 0 or colour alone. -->
+                                                    <StackPanel
+                                                        Orientation="Horizontal"
+                                                        Spacing="6"
+                                                        AutomationProperties.AutomationId="MachineHealth"
+                                                        AutomationProperties.Name="{x:Bind HealthText, Mode=OneWay}"
+                                                        Visibility="{x:Bind local:Ui.Show(ShowHealth), Mode=OneWay}">
+                                                        <FontIcon Glyph="{x:Bind HealthIcon, Mode=OneWay}" FontSize="14" Foreground="{ThemeResource AbText2}" AutomationProperties.AccessibilityView="Raw" />
+                                                        <TextBlock Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind HealthText, Mode=OneWay}" />
+                                                    </StackPanel>
+                                                    <TextBlock
+                                                        Style="{StaticResource AbTypeMeta}"
+                                                        Foreground="{ThemeResource AbText2}"
+                                                        AutomationProperties.AutomationId="MachineRunning"
+                                                        Text="{x:Bind RunningText, Mode=OneWay}"
+                                                        Visibility="{x:Bind local:Ui.Show(ShowTile), Mode=OneWay}" />
+                                                    <TextBlock
+                                                        Style="{StaticResource AbTypeMeta}"
+                                                        Foreground="{ThemeResource AbText2}"
+                                                        TextWrapping="Wrap"
+                                                        AutomationProperties.AutomationId="MachineLaunchWhy"
+                                                        Text="{x:Bind LaunchWhy, Mode=OneWay}"
+                                                        Visibility="{x:Bind local:Ui.Show(HasLaunchWhy), Mode=OneWay}" />
                                                     <TextBlock
                                                         Style="{StaticResource AbTypeMeta}"
                                                         Foreground="{ThemeResource AbText2}"
@@ -329,6 +363,13 @@
                                                             Visibility="{x:Bind local:Ui.Show(Diagnosis.HasText), Mode=OneWay, FallbackValue=Collapsed}" />
                                                     </StackPanel>
                                                     <local:WrapRow Spacing="8" Margin="0,8,0,0" Tag="{x:Bind}" AutomationProperties.AutomationId="MachineButtons" KeyDown="OnMachineDiagnosisKeyDown">
+                                                        <Button
+                                                            Content="Launch here"
+                                                            Tag="{x:Bind}"
+                                                            AutomationProperties.AutomationId="LaunchHere"
+                                                            AutomationProperties.Name="{x:Bind LaunchHereName, Mode=OneWay}"
+                                                            Visibility="{x:Bind local:Ui.Show(CanLaunchHere), Mode=OneWay}"
+                                                            Click="OnLaunchHere" />
                                                         <Button
                                                             Content="Show sessions"
                                                             Tag="{x:Bind}"

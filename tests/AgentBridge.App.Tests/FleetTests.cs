@@ -1268,7 +1268,7 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task An_offline_machine_says_whether_it_is_signed_out_or_logon_only_and_otherwise_just_offline()
+    public async Task An_offline_machine_says_its_start_mode_and_shows_no_running_tile()
     {
         await BothMachinesAsync();
         link.Known = [Gone("vm-id", "Build VM", 5) with { Start = "boot" }, Gone("laptop-id", "Travel laptop", 5) with { Start = "logon" }, Gone("old-id", "Old PC", 5)];
@@ -1280,6 +1280,19 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Equal("Logon only: starts when you sign in", rows["Travel laptop"].Status);
         Assert.Equal("Offline", rows["Old PC"].Status);
         Assert.Equal("Logon only: starts when you sign in \u00b7 last seen 5m ago", rows["Travel laptop"].Offline!.LastSeenText);
+        Assert.All(rows.Values, row => Assert.False(row.ShowTile));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Launch_here_is_shown_only_when_the_host_offers_launch(bool offered)
+    {
+        remoteHost.On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("remote-id", "Build server", "windows", "0.1.0", Instance: "run-7"),
+            offered ? [Capabilities.SessionsRead, LaunchProtocol.Capability] : [Capabilities.SessionsRead]));
+        await BothMachinesAsync();
+
+        Assert.Equal(offered, Rows().Single(r => r.Name == "Build server").CanLaunchHere);
     }
 
     [Fact]
