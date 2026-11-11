@@ -43,6 +43,7 @@ public interface ISessionLauncher
 
 public sealed class LaunchServiceOptions
 {
+    public string MachineName { get; init; } = "this machine";
     public required string CopilotHome { get; init; }
     public required string ClaudeHome { get; init; }
     public bool? ClaudeConfigDirExplicit { get; init; }
@@ -850,6 +851,15 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     const string Withdrawn = "the restore was withdrawn (the host is stopping, or its caller cancelled it) before anything started";
 
+    string NotOffered(string cause, string? value, IReadOnlyList<string> offered, string? agent = null)
+    {
+        var choices = offered.Count == 0 ? "only its own default" : string.Join(", ", offered);
+        var shown = Limits.KeepStart(choices, 512)!;
+        if (shown != choices) { shown += $"... (see launch.options for all {offered.Count} choices)"; }
+        var machine = Limits.KeepStart(LaunchProtocol.Flatten(options.MachineName), 64);
+        return $"{cause} not offered by {machine}: '{Limits.KeepStart(value, 64)}'{(agent is null ? "" : $" for {agent}")}; it offers {shown}";
+    }
+
     // agent-ha-bridge's Resolve-DaemonRequestedLaunch: what the request names, against what this
     // machine offers, with its defaults filling what the request leaves out.
     (Plan?, string?) Settle(LaunchRequest r, Resolved resolved)
@@ -874,7 +884,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             }
             if (o.Workspaces.Count == 0) { return (null, "no workspace is approved on this machine yet; approve one at the machine (agent-bridge-host workspace add <folder>)"); }
             workspace = Config.Workspaces.FirstOrDefault(w => w.Label == r.Workspace && o.Workspaces.Any(x => x.Label == w.Label));
-            if (workspace is null) { return (null, $"Unknown workspace '{Limits.KeepStart(r.Workspace, 64)}'; this machine has {string.Join(", ", o.Workspaces.Select(w => w.Label))}"); }
+            if (workspace is null) { return (null, NotOffered("workspace", r.Workspace, [.. o.Workspaces.Select(w => w.Label)])); }
             if (Folders.Physical(workspace.Path) is not { } physical) { return (null, "Launch refused: select a currently configured workspace."); }
             directory = physical;
             where = workspace.Label;
@@ -913,7 +923,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             launcher = Launchers.Find(agentId);
             if (launcher is null || !resolved.Executables.ContainsKey(launcher.Id))
             {
-                return (null, $"Unknown agent '{agentId}'; this machine has {string.Join(", ", o.Agents.Select(a => a.Id))}");
+                return (null, NotOffered("agent", agentId, [.. o.Agents.Select(a => a.Id)]));
             }
             if (o.Workspaces.Count == 0)
             {
@@ -921,7 +931,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             }
             var label = r.Workspace ?? o.Defaults.Workspace;
             workspace = Config.Workspaces.FirstOrDefault(w => w.Label == label && o.Workspaces.Any(x => x.Label == w.Label));
-            if (workspace is null) { return (null, $"Unknown workspace '{Limits.KeepStart(label, 64)}'; this machine has {string.Join(", ", o.Workspaces.Select(w => w.Label))}"); }
+            if (workspace is null) { return (null, NotOffered("workspace", label, [.. o.Workspaces.Select(w => w.Label)])); }
             if (Folders.Physical(workspace.Path) is not { } physical) { return (null, "Launch refused: select a currently configured workspace."); }
             directory = physical;
             where = workspace.Label;
@@ -949,7 +959,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             var value = asked ?? configured ?? "";
             if (value.Length == 0) { return ""; }
             if (offered.Contains(value, StringComparer.Ordinal)) { return value; }
-            why = $"Unknown {name} '{Limits.KeepStart(value, 64)}' for {launcher!.Label}; it offers {(offered.Count == 0 ? "only its own default" : string.Join(", ", offered))}";
+            why = name == "model" ? NotOffered(name, value, offered, launcher!.Label)
+                : $"Unknown {name} '{Limits.KeepStart(value, 64)}' for {launcher!.Label}; it offers {(offered.Count == 0 ? "only its own default" : string.Join(", ", offered))}";
             return null;
         }
         var model = Axis("model", r.Model, agent.Defaults?.Model, agent.Models, out var badModel);
