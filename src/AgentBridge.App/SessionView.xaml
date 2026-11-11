@@ -452,16 +452,16 @@
                                     </Grid>
                                     <ContentControl IsTabStop="False" HorizontalAlignment="Right" MinHeight="20" Content="{x:Bind PromptUnder}" ContentTemplate="{StaticResource MessageTimeTemplate}" Visibility="{x:Bind local:Ui.Some(Prompt)}" />
                                     <ContentControl IsTabStop="False" HorizontalAlignment="Left" Content="{x:Bind Reply}" ContentTemplate="{StaticResource MessageTimeTemplate}" />
-                                    <ItemsRepeater ItemsSource="{x:Bind Blocks}">
-                                        <ItemsRepeater.Layout>
-                                            <StackLayout Orientation="Vertical" Spacing="8" />
-                                        </ItemsRepeater.Layout>
-                                        <ItemsRepeater.ItemTemplate>
+                                    <ItemsControl ItemsSource="{x:Bind Blocks}" IsTabStop="False" HorizontalContentAlignment="Stretch">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate><StackPanel Spacing="8" /></ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
                                             <DataTemplate x:DataType="core:ConversationBlock">
                                                 <local:MarkdownView Reading="True" Block="{x:Bind Block}" />
                                             </DataTemplate>
-                                        </ItemsRepeater.ItemTemplate>
-                                    </ItemsRepeater>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
                                     <TextBlock Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind Note}" Visibility="{x:Bind local:Ui.Some(Note)}" />
                                 </StackPanel>
                             </DataTemplate>

@@ -100,9 +100,9 @@ static partial class SelfTest
             var done = new TaskCompletionSource<bool>();
             var heard = new KeyEventHandler((_, e) =>
             {
+                if (e.Key == VirtualKey.PageUp && from is not null) { receivedMs ??= watch.Elapsed.TotalMilliseconds; }
                 if (e.Key == VirtualKey.PageUp && fillingStartedMs is { } sent) { fillingInputMs ??= watch.Elapsed.TotalMilliseconds - sent; }
             });
-            var wheeled = new PointerEventHandler((_, _) => receivedMs ??= watch.Elapsed.TotalMilliseconds);
             void Changed(object? sender, ScrollViewerViewChangedEventArgs e)
             {
                 moving = e.IsIntermediate;
@@ -121,16 +121,9 @@ static partial class SelfTest
                 openedAtBottom = true;
                 if (!list.Focus(FocusState.Programmatic)) { return; }
                 from = scroll.VerticalOffset;
-                var point = list.TransformToVisual(window.RootElement).TransformPoint(new Windows.Foundation.Point(list.ActualWidth / 2, list.ActualHeight / 2));
-                var scale = list.XamlRoot.RasterizationScale;
-                var mouse = new WheelPoint { X = (int)(point.X * scale), Y = (int)(point.Y * scale) };
-                if (ClientToScreen(window.Handle, ref mouse) == 0) { throw new InvalidOperationException("The wheel target could not be located."); }
-                var target = GetFocus() is var focus && focus != 0 ? focus : window.Handle;
-                if (!PostMessageW(target, 0x020A, (nint)(120 << 16), (mouse.Y << 16) | (mouse.X & 0xffff))) { throw new InvalidOperationException("The native wheel message could not be posted."); }
-                method = $"PostMessage wheel ({watch.Elapsed.TotalMilliseconds:0.0} ms queued)";
+                method = Press(window.Handle, VirtualKey.PageUp, foreground: false);
             };
             scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
-            scroll.AddHandler(UIElement.PointerWheelChangedEvent, wheeled, true);
             scroll.ViewChanged += Changed;
             try
             {
@@ -141,15 +134,12 @@ static partial class SelfTest
                 if (done.Task.IsCompleted && ById<ItemsRepeater>(away, "History") is { } historyRows)
                 {
                     check(await Until(() => !moving, TimeSpan.FromSeconds(2)), "finishes the first native scroll");
-                    check(scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, "keeps the view taken by the first native wheel scroll");
-                    if ((historyRows.ItemsSourceView?.Count ?? 0) < turns)
-                    {
-                        fillingStartedMs = watch.Elapsed.TotalMilliseconds;
-                        Press(window.Handle, VirtualKey.PageUp, foreground: false);
-                        await Until(() => fillingInputMs is not null, TimeSpan.FromSeconds(2));
-                        check(await Until(() => !moving, TimeSpan.FromSeconds(2)), "finishes native scrolling during older drawing");
-                    }
-                    if (list.ContainerFromIndex(0) is FrameworkElement anchor)
+                    fillingStartedMs = watch.Elapsed.TotalMilliseconds;
+                    Press(window.Handle, VirtualKey.PageUp, foreground: false);
+                    await Until(() => fillingInputMs is not null, TimeSpan.FromSeconds(2));
+                    check(await Until(() => !moving, TimeSpan.FromSeconds(2)), "finishes native scrolling during older drawing");
+                    if (Enumerable.Range(0, historyRows.ItemsSourceView?.Count ?? 0).Select(i => historyRows.TryGetElement(i)).OfType<FrameworkElement>()
+                        .FirstOrDefault(row => row.TransformToVisual(scroll).TransformPoint(default).Y + row.ActualHeight > 0 && row.TransformToVisual(scroll).TransformPoint(default).Y < scroll.ViewportHeight) is { } anchor)
                     {
                         var top = anchor.TransformToVisual(scroll).TransformPoint(default).Y;
                         var lastFrame = watch.Elapsed.TotalMilliseconds;
@@ -163,7 +153,7 @@ static partial class SelfTest
                             readerDrift = Math.Max(readerDrift.Value, Math.Abs(anchor.TransformToVisual(scroll).TransformPoint(default).Y - top));
                         }
                         CompositionTarget.Rendering += Frame;
-                        try { filled = await Until(() => historyRows.ItemsSourceView?.Count == turns, TimeSpan.FromSeconds(20)); }
+                        try { filled = await Until(() => historyRows.ItemsSourceView?.Count == turns && frames > 0, TimeSpan.FromSeconds(20)); }
                         finally { CompositionTarget.Rendering -= Frame; }
                     }
                 }
@@ -172,7 +162,6 @@ static partial class SelfTest
             {
                 timer.Stop();
                 scroll.RemoveHandler(UIElement.PreviewKeyDownEvent, heard);
-                scroll.RemoveHandler(UIElement.PointerWheelChangedEvent, wheeled);
                 scroll.ViewChanged -= Changed;
             }
             result["historyScrollBudget"] = new
@@ -197,9 +186,8 @@ static partial class SelfTest
             await Still(scroll);
             if (ById<ItemsRepeater>(away, "History") is { } historyList
                 && historyList.TryGetElement((historyList.ItemsSourceView?.Count ?? 0) - 1) is { } last
-                && Find<Button>(last).FirstOrDefault() is { } copy)
+                && ById<Button>(last, "CopyCode") is { } copy && copy.Focus(FocusState.Programmatic))
             {
-                copy.Focus(FocusState.Programmatic);
                 var tab = Press(window.Handle, VirtualKey.Tab, foreground: false, extended: false, shift: true);
                 bool tookView;
                 try
@@ -222,20 +210,27 @@ static partial class SelfTest
             else { check(false, "has the newest historical code block for the focus-away growth check"); }
             Away(window, main);
             await Choose(window, main, id, "Response");
-            await Until(() => scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
-            if (ById<Button>(away, "HeaderPin") is { } pin)
+            var followed = await Until(() => scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
+            if (ById<Button>(away, "HeaderPin") is { } pin && ById<Button>(away, "Details") is { } details
+                && pin.Focus(FocusState.Programmatic) && ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(pin.XamlRoot), pin))
             {
-                pin.Focus(FocusState.Programmatic);
                 Press(window.Handle, VirtualKey.Tab, foreground: false, extended: false);
-                await Task.Delay(150);
+                var tabbed = await Until(() => ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(pin.XamlRoot), details), TimeSpan.FromSeconds(3));
                 var response = card.Response + "\n\n" + string.Join("\n\n", Enumerable.Repeat("An arriving paragraph while header focus moves.", 20));
                 await demo.PutAsync(fixture with { Activity = fixture.Activity with { Response = response } });
                 var arrived = await Until(() => card.Response == response, TimeSpan.FromSeconds(3));
                 await Task.Delay(350);
-                check(arrived && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5,
+                check(followed && tabbed && arrived && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5,
                     "keeps following a growing reply after Tab outside the conversation has not scrolled it");
             }
-            else { check(false, "has the header focus stop for the non-scrolling Tab check"); }
+            else { check(false, "focuses the header pin before Tab to Details"); }
+            Away(window, main);
+            await Choose(window, main, id, "Response");
+            var wheelReady = await Until(() => scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
+            Wheel(window, list);
+            var wheeled = await Until(() => scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
+            await Task.Delay(350);
+            check(wheelReady && wheeled && scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, "keeps the view taken by a native wheel while older turns draw");
         }
         finally
         {
@@ -243,6 +238,16 @@ static partial class SelfTest
             await demo.RemoveSessionAsync(id);
             await Until(() => main.AllCards.All(c => c.Id != id), TimeSpan.FromSeconds(10));
         }
+    }
+
+    static void Wheel(MainWindow window, ListView list)
+    {
+        var point = list.TransformToVisual(window.RootElement).TransformPoint(new Windows.Foundation.Point(list.ActualWidth / 2, list.ActualHeight / 2));
+        var scale = list.XamlRoot.RasterizationScale;
+        var mouse = new WheelPoint { X = (int)(point.X * scale), Y = (int)(point.Y * scale) };
+        if (ClientToScreen(window.Handle, ref mouse) == 0) { throw new InvalidOperationException("The wheel target could not be located."); }
+        var target = GetFocus() is var focus && focus != 0 ? focus : window.Handle;
+        if (!PostMessageW(target, 0x020A, (nint)(120 << 16), (mouse.Y << 16) | (mouse.X & 0xffff))) { throw new InvalidOperationException("The native wheel message could not be posted."); }
     }
 
     struct WheelPoint { public int X, Y; }
