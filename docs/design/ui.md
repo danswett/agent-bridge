@@ -2441,8 +2441,9 @@ with its grey dot on the rail's Settings item, "Settings, new agent found", unti
 exists. It is offered only for Copilot CLI, Claude Code and Codex whose version was read: an
 agent whose version couldn't be read has no card, and its row keeps its Set up. Removing an
 agent's connection also holds its card at that version. The PWA's Settings also has Text size
-(§4.4), on this device only, and **Keyboard check** (#1209): while on, each key pressed anywhere
-in the app is listed (key, code, Option, Control, Command, Shift, what had focus, never its words,
+(§4.4), on this device only, and a **Keyboard shortcuts** button (#1581) for opt-in help (§9.2).
+**Keyboard check** (#1209), while on, lists each key pressed anywhere in the app
+(key, code, Option, Control, Command, Shift, what had focus, never its words,
 and whether the app used it), so a hardware keyboard can be read back on a real device; nothing is
 saved or sent. The last section, **This app** (#1246), shows the release id (the first seven
 characters of the commit the build was made from, `dev` for a local build) and the date it was
@@ -3814,11 +3815,18 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
   are read as focus lands, with no separate announcement; focus never drops to the page.
 - **Keyboard:** desktop lists move with arrows, Alt+↑/↓ reorders (#164), Shift+F10 or the
   menu key opens a row's menu, and Ctrl/⌘+K focuses search. The shortcut is named where
-  search is (the Windows search box's tooltip, on hover or when Tab reaches it) and nowhere
-  else: no shortcut hint opens because the window was activated, a click landed or Ctrl+K was
-  pressed (#256). Needs you · N is a toggle in the tab order after the machine tabs and before
-  the list. Space or Enter toggles it, and Enter on a waiting row puts focus on its question's
-  heading.
+  search is (the Windows search box's tooltip, on hover or when Tab reaches it) and in Keyboard
+  shortcuts, which opens only by choice: no shortcut hint opens because the window was
+  activated, a click landed or Ctrl+K was pressed (#256). Needs you · N is a toggle in the tab
+  order after the machine tabs and before the list. Space or Enter toggles it, and Enter on a
+  waiting row puts focus on its question's heading.
+  In the PWA, `?` outside an input, textarea, select or contenteditable field opens the modal
+  "Keyboard shortcuts" dialog, as does Settings › Keyboard shortcuts. It never opens
+  automatically (#1581). Its two-column list names Move
+  (Tab to its Move button, Space, ↑ or ↓, Space; or Alt+↑ / Alt+↓ on the row), the row menu
+  (Shift+F10 or the menu key), opening the selected session (Enter), search (Ctrl+K, ⌘K on
+  Apple platforms) and close (Esc). Focus enters the dialog; Escape or Close returns it to
+  the control that opened it.
 - **Focus stays on a pressed button (#369).** While its request is on its way, Send, End session
   and Launch (and Forget, on Machines) are never disabled, which would drop keyboard focus to
   the top of the page. Each says it can't be pressed (`aria-disabled`), looks it, and does

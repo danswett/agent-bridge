@@ -211,6 +211,10 @@
             <button type="button" class="toggle" data-text-size="larger" aria-pressed="false">Larger</button>
           </div>
         </section>
+        <section class="panel keyboard-help" aria-labelledby="keyboard-help-h">
+          <h3 id="keyboard-help-h">Keyboard shortcuts</h3>
+          <div class="row"><button type="button" id="keyboard-shortcuts-open" class="button secondary" aria-haspopup="dialog">Keyboard shortcuts</button></div>
+        </section>
         <section id="key-check" class="panel key-check" aria-labelledby="key-check-h">
           <h3 id="key-check-h">Keyboard check</h3>
           <p class="note">See what a hardware keyboard sends to this app. Start it, then press keys here or on the Sessions page, and come back to read them. Nothing is saved or sent anywhere.</p>
@@ -249,6 +253,18 @@
       </div>
     </main>
   </div>
+  <dialog id="keyboard-shortcuts-dialog" class="keyboard-shortcuts-dialog" aria-labelledby="keyboard-shortcuts-h">
+    <h2 id="keyboard-shortcuts-h">Keyboard shortcuts</h2>
+    <dl class="keyboard-shortcuts-list">
+      <dt>Move a row</dt>
+      <dd>Tab to its Move button, then Space, &uarr; or &darr;, Space. Or Alt+&uarr; / Alt+&darr; on the row.</dd>
+      <dt>Open a row's menu</dt><dd>Shift+F10 or the menu key</dd>
+      <dt>Open the selected session</dt><dd>Enter</dd>
+      <dt>Search</dt><dd id="keyboard-shortcuts-search"></dd>
+      <dt>Close</dt><dd>Esc</dd>
+    </dl>
+    <div class="row"><button type="button" id="keyboard-shortcuts-close" class="button secondary">Close</button></div>
+  </dialog>
   <dialog id="feedback-dialog" class="feedback-dialog" aria-labelledby="feedback-dialog-h">
     <h2 id="feedback-dialog-h">Review feedback</h2>
     <p class="note">Your note and selected diagnostics are encrypted on this device before they're sent to the <span data-brand>Slipgates</span> feedback service, where they're processed automatically.</p>
