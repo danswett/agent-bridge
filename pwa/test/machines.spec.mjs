@@ -86,7 +86,7 @@ test('the Machines page has no All machines row, says the fleet in one line, and
   await expect(page.locator('#machine-summary')).toHaveText('3 machines · 3 online');
   const laptop = page.locator(`#machine-list [data-device-id="${LAPTOP}"]`);
   await expect(laptop.getByRole('region', { name: 'Laptop' })).toBeVisible();
-  await expect(laptop.locator('.tile-health')).toHaveText('Health: Not measured yet');
+  await expect(laptop.locator('.tile-health-word')).toHaveText('Not measured');
   await expect(laptop.locator('.tile-running')).toHaveText('Running: 2 sessions');
   await expect(laptop.getByText('Can run')).toHaveCount(0);
   await expect(laptop.getByRole('button', { name: 'Launch here' })).toBeVisible();
@@ -109,7 +109,7 @@ const launchHere = async (page) => {
 
 test.describe('load bars', () => {
   const full = { state: 'fresh', ageMs: 2000, staleAfterMs: 15000, cpu: { percent: 37.543 }, memory: { totalBytes: 16000, availableBytes: 10000, committedPercent: 91 } };
-  const draw = (page, load, online = true) => page.evaluate(async ({ load, online }) => {
+  const draw = (page, load, online = true, available = null) => page.evaluate(async ({ load, online, available }) => {
     const { renderMachines } = await import('/js/ui/views.js');
     let list = document.getElementById('load-fixture-list');
     if (!list) {
@@ -122,8 +122,59 @@ test.describe('load bars', () => {
       known: online ? [] : [{ id: 'fixture', name: 'Measured machine', kind: 'host' }],
       me: 'phone', current: 'fixture', onSelect() {},
       facts: () => ({ sessions: '2 sessions' }), load: () => load,
+      updates: available ? {
+        state: () => ({ installer: true, phase: 'idle', current: '0.1.1', available }),
+        stateOf: () => ({}),
+      } : null,
     });
-  }, { load, online });
+  }, { load, online, available });
+
+  for (const [word, load, online, glyph] of [
+    ['Fresh', full, true, '\u25cf'],
+    ['Partial', { ...full, state: 'partial', cpu: undefined }, true, '\u25d0'],
+    ['Stale', { ...full, state: 'stale' }, true, '\u25cc'],
+    ['Unavailable', { ...full, state: 'unavailable' }, true, '\u25cb'],
+    ['Offline', full, false, '\u2298'],
+    ['Not measured', null, true, '\u25cb'],
+  ]) {
+    test(`the health line says ${word} with a neutral icon and no invented figures`, async ({ page }) => {
+      await openDemo(page);
+      await go(page, 'machines');
+      await draw(page, load, online);
+      const health = page.locator('#load-fixture-list .tile-health');
+      await expect(health.locator('.tile-health-word')).toHaveText(word);
+      await expect(health.locator('.tile-health-icon')).toHaveText(glyph);
+      await expect(health.locator('.tile-health-icon')).toHaveAttribute('aria-hidden', 'true');
+      expect(await health.locator('.tile-health-icon').evaluate((e) => getComputedStyle(e).color))
+        .toBe(await health.evaluate((e) => getComputedStyle(e).color));
+      await expect(health).not.toHaveAttribute('role', 'alert');
+      if (!['Fresh', 'Partial'].includes(word)) {
+        await expect(page.locator('#load-fixture-list [role="meter"]')).toHaveCount(0);
+        await expect(page.locator('#load-fixture-list')).not.toContainText('0%');
+      }
+    });
+  }
+
+  test('state-only changes redraw but sample age and update availability do not change health', async ({ page }) => {
+    await openDemo(page);
+    await go(page, 'machines');
+    const word = page.locator('#load-fixture-list .tile-health-word');
+    for (const [load, expected] of [
+      [full, 'Fresh'], [{ ...full, state: 'partial' }, 'Partial'],
+      [{ ...full, ageMs: 15001 }, 'Stale'], [{ ...full, state: 'future' }, 'Unavailable'],
+      [null, 'Not measured'],
+    ]) {
+      await draw(page, load);
+      await expect(word).toHaveText(expected);
+    }
+    await draw(page, full);
+    await word.evaluate((e) => { e.dataset.kept = 'true'; });
+    await draw(page, { ...full, ageMs: 2001 });
+    await expect(word).toHaveAttribute('data-kept', 'true');
+    await draw(page, full, true, '0.1.2');
+    await expect(page.locator('#load-fixture-list .machine-update-line')).toContainText('0.1.2 is available');
+    await expect(word).toHaveText('Fresh');
+  });
 
   test('the live page has no invented load figures before a feed exists', async ({ page }) => {
     await openDemo(page);
@@ -143,6 +194,8 @@ test.describe('load bars', () => {
         await go(page, 'machines');
         await draw(page, full);
         const tile = page.locator('#load-fixture-list .machine-tile');
+        await expect(tile.locator('.tile-health-word')).toHaveText('Fresh');
+        await expect(tile.locator('.tile-health-icon')).toBeVisible();
         const cpu = tile.getByRole('meter', { name: 'CPU (whole machine)' });
         const memory = tile.getByRole('meter', { name: 'Memory used' });
         await expect(cpu).toHaveAttribute('aria-valuenow', '37.543');
