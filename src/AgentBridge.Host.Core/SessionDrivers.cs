@@ -67,10 +67,6 @@ public sealed class SessionDrivers
     // A person answered or replied from a device: the turn is theirs, as if typed at the machine.
     public void ArmPerson(string id, DateTimeOffset now) => For(id).ArmDriver(Human, now);
 
-    // The principal of a press by one of homeAssistant.agentUserIds.
-    public static string HomeAssistantPrincipal(string userId) =>
-        Limits.KeepStart("homeassistant:" + userId.Trim(), Limits.DriverPrincipal)!;
-
     internal void Raise(string id)
     {
         if (Changed is not { } handlers) { return; }

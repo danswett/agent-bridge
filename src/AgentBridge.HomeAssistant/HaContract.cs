@@ -4,6 +4,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.HomeAssistant;
 
@@ -57,6 +58,10 @@ public static partial class HaContract
     public static readonly JsonSerializerOptions Json = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     public static string Serialize(JsonNode node) => node.ToJsonString(Json);
+
+    // The principal of a press by one of homeAssistant.agentUserIds.
+    public static string HomeAssistantPrincipal(string userId) =>
+        Limits.KeepStart("homeassistant:" + userId.Trim(), Limits.DriverPrincipal)!;
 
     // PowerShell's -replace is case-insensitive; the patterns are ported with that option so a
     // character such as the Kelvin sign is treated as it is there.
