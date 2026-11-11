@@ -579,9 +579,8 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 
 /* ---- sessions ---- */
 .sessions:focus { outline: none; }
-/* The title row: Sessions, the sort menu, then Search and New at its end (a phone's 24/32 title
-   row; on a desktop the list's header, with New as an Accent button), all on one line at 390 px
-   (#213). The count sits under the title. */
+/* New stays square so Sort keeps its label even in the iPad's narrow list pane (#1815).
+   The count sits under the title. */
 .sessions-head {
   display: grid; grid-template-columns: max-content minmax(0, 1fr) auto; grid-template-areas: "title sort actions";
   align-items: center; gap: 0 var(--ab-space-2); height: var(--head-h); margin-bottom: var(--ab-space-1);
@@ -601,27 +600,20 @@ body[data-conn="busy"] .sessions, body[data-conn="warn"] .sessions, body[data-co
 .sort {
   grid-area: sort; justify-self: end; min-height: 32px; max-width: 9.5rem; min-width: 0; width: 100%;
   font: inherit; font-size: var(--type-meta); color: var(--ab-text); background: var(--ab-card);
-  border: 1px solid var(--ab-field-edge); border-radius: var(--ab-radius-control); padding: 2px 6px;
+  border: 1px solid var(--ab-field-edge); border-radius: var(--ab-radius-control); padding: 2px 6px; text-overflow: ellipsis;
 }
-@media (pointer: coarse) and (not (any-pointer: fine)) { .sort { min-height: var(--tap); } }
-.new-session { position: relative; gap: var(--ab-space-1); }
-/* On a phone, New is an icon in the title row, in Bridge, as Search beside it. */
-@media (max-width: 759px) {
-  .new-session { width: var(--tap); padding: 0; color: var(--ab-bridge); background: none; border: 0; }
-  .new-session .ab-icon { width: 24px; height: 24px; --ab-icon-stroke: 1.4; }
-  .new-label { display: none; }
-  .new-session.attention::after { top: 6px; right: 6px; box-shadow: 0 0 0 2px var(--ab-shell); }
+.new-session {
+  --new-size: 32px;
+  position: relative; flex: none; width: var(--new-size); height: var(--new-size); min-height: var(--new-size);
+  padding: 0; border-radius: var(--ab-radius-control);
+}
+.new-session .ab-icon { width: 20px; height: 20px; }
+.new-session.attention::after { top: -3px; right: -3px; box-shadow: 0 0 0 2px var(--ab-shell); }
+@media (pointer: coarse) and (not (any-pointer: fine)) {
+  .sort { min-height: var(--tap); }
+  .new-session { --new-size: var(--tap); }
 }
 @media (min-width: 760px) {
-  /* In the list pane: the title and the sort menu, then the count and New. Sort is on the first
-     line, before New, so Tab's order, which is the page's, is the order drawn (ui.md §9.1 A3,
-     #371). Design takes this as the fallback for a pane with no room for the title, Sort and New
-     on one line (about 286 px), which is every pane today: its track is at most 320 px, 279 px
-     of head. Making the pane a size container to keep one line in a wider one stopped WebKit
-     pulling the list's scroll back as rows go (needs-you.spec), so a wider pane is left to the
-     change that brings one. */
-  .new-session { min-height: 32px; padding: 0 var(--ab-space-3); border-radius: var(--ab-radius-control); font-size: var(--type-row); }
-  .new-session .ab-icon { width: 16px; height: 16px; --ab-icon-stroke: 1.7; }
   .new-session.attention::after { top: -3px; right: -3px; box-shadow: 0 0 0 2px var(--ab-layer); }
 }
 /* The machine tabs (SelectorBar-style): text, the one shown in bold with a Bridge bar under it.
@@ -657,7 +649,6 @@ body[data-conn="busy"] .sessions, body[data-conn="warn"] .sessions, body[data-co
   .search-input { min-height: var(--tap); }
   .appbar .avatar { width: var(--tap); height: var(--tap); }
   .appbar .brand, .appbar .online { min-height: var(--tap); }
-  .new-session { min-height: var(--tap); }
 }
 .session-list { display: grid; gap: 2px; grid-template-columns: minmax(0, 1fr); }
 

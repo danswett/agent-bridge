@@ -1,6 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { parseRoute, routeHash } from '../../js/ui/shell.js';
+
+test('New session has only a decorative plus, never a visible label that squeezes Sort', () => {
+  const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+  const link = html.match(/<a\b[^>]*class="button new-session"[^>]*>([\s\S]*?)<\/a>/);
+  assert.ok(link);
+  assert.match(link[0], /aria-label="New session"/);
+  assert.match(link[0], /title="New session"/);
+  assert.match(link[1], /aria-hidden="true"/);
+  assert.match(link[1], /#icon-plus/);
+  assert.equal(link[1].replace(/<[^>]*>/g, '').trim(), '');
+});
 
 test('a page is read from the address hash, and anything else is the sessions page', () => {
   assert.deepEqual(parseRoute('#/usage'), { route: 'usage', rest: [] });

@@ -14,6 +14,11 @@ carry over), what was checked on the live address and what was not, and the roll
 against the live address.
 Try it without a machine: [`?demo=1`](https://app.slipgates.com/?demo=1).
 
+The Sessions header's New session action is a filled plus-only button at every width
+(#1815): a 20 px glyph, a fixed 44 px square on touch-only devices or 32 px with a
+pointer. Its accessible name and tooltip remain "New session"; removing the visible
+label leaves room for the sort menu in the iPad's wide layout.
+
 It shows sessions, their activity and their pending questions, answers those questions
 (`session.answer`), replies to sessions (`session.reply`) with files and images
 (`attachment.*`), ends them (`session.stop`), starts and resumes them (`session.launch`),
