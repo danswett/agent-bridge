@@ -38,6 +38,7 @@ import { HistoryStore } from '../history-store.js';
 import { RowMenu } from './row-menu.js';
 import { phoneMedia } from '../phone-viewport.js';
 import { LoadFeed } from '../load-feed.js';
+import { glyph } from './glyph.js';
 
 // Needs you's answers (Approve once, Deny, Resend) wait as a question's do (ui.md §5.3): any
 // change to the lane can put Approve once under a pointer aimed at something else (an entry
@@ -250,7 +251,7 @@ export class SessionsPage {
       stale: (hostId) => hosts.staleOf(hostId),
       heading: () => $('sessions-h'),
     });
-    this.view.onRender = (n) => { this.#drawCount(n); this.#settleSelection(); this.#delegateStep(); };
+    this.view.onRender = (n) => { this.#drawCount(n); this.#drawNeeds(n); this.#settleSelection(); this.#delegateStep(); };
     this.view.onSelect = (card) => card.openFromRow(() => this.#choose(card, true));
     this.view.onBack = () => this.#back();
     this.view.onInspector = () => this.#toggleInspector();
@@ -272,6 +273,17 @@ export class SessionsPage {
       open: (hostId, id) => this.showSession(id, hostId),
       badge,
     });
+    this.needsMark = h('span', { 'aria-hidden': 'true' });
+    this.needsLabel = h('span');
+    this.needsSummary = h('span', { class: 'needs-filter-summary' });
+    this.needsToggle = h('button', {
+      type: 'button', class: 'needs-filter', hidden: true, 'aria-pressed': 'false',
+      'aria-controls': 'session-list', title: 'Pending questions on connected machines',
+      onclick: () => this.view.setNeedsOnly(!this.view.needsOnly),
+    }, this.needsMark, this.needsLabel, this.needsSummary);
+    $('needs-you').before(this.needsToggle);
+    this.needsEmpty = h('p', { class: 'note', hidden: true }, 'Nothing else needs you on connected machines.');
+    $('session-list').after(this.needsEmpty);
     // An agent that needs sign-in (#800): a banner for each machine, agent and account, above the lane.
     this.signIns = $('sign-in-banners') ? new SignInBanners($('sign-in-banners'), hosts, {
       live: $('sign-in-said'),
@@ -779,6 +791,8 @@ export class SessionsPage {
 
   // Everything tied to the signed-in account goes with it.
   clear() {
+    this.needsToggle?.remove();
+    this.needsEmpty?.remove();
     for (const m of [this.wide, this.phone]) { m.removeEventListener?.('change', this.#onResize); }
     this.phone.destroy?.();
     const loads = this.#loads;
@@ -932,6 +946,36 @@ export class SessionsPage {
       if (moveFocus) { stripEl.tabIndex = -1; stripEl.focus(); }
     }
     this.#drawCount(hosts.sessions.size);
+  }
+
+  #drawNeeds(total) {
+    if (!this.needsToggle) { return; }
+    const count = this.view.needsCount ?? 0;
+    const on = this.view.needsOnly;
+    const button = this.needsToggle;
+    const hidden = !count && !on;
+    const refocus = hidden && button.ownerDocument.activeElement === button;
+    button.hidden = hidden;
+    button.setAttribute('aria-pressed', String(on));
+    const label = `Needs you \u00b7 ${count}`;
+    button.setAttribute('aria-label', label);
+    this.needsLabel.textContent = label;
+    const mark = count ? 'needs' : 'idle';
+    if (this.needsMark.dataset.glyph !== mark) {
+      this.needsMark.dataset.glyph = mark;
+      this.needsMark.replaceChildren(glyph(mark));
+    }
+    this.needsSummary.hidden = !on;
+    this.needsSummary.textContent = this.hosts.all
+      ? `Showing ${this.view.needsShown ?? 0} of ${total}`
+      : `${this.view.needsShown ?? 0} on ${this.hosts.nameOf(this.hosts.targetId) ?? 'this machine'}`;
+    this.needsSummary.title = this.needsSummary.textContent;
+    this.needsEmpty.hidden = !on || count !== 0 || !!this.view.filter;
+    if (refocus) {
+      const heading = this.$('sessions-h');
+      heading.tabIndex = -1;
+      heading.focus({ preventScroll: true });
+    }
   }
 
   #drawCount(n) {
