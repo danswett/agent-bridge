@@ -71,6 +71,9 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         public Action? OnDownload;
         public string? InstalledVersion { get; set; } = "0.1.0";
         public DateTimeOffset? DiscoveredAt { get; set; }
+        public string? CheckSource { get; set; }
+        public int? GitHubRemaining { get; set; }
+        public DateTimeOffset? GitHubQuotaAt { get; set; }
         public string? PendingNotes => Found is null ? null : $"What {Found} changes";
         public async Task<string?> CheckAsync()
         {
@@ -1270,6 +1273,31 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         inner.Holds[1].SetResult();
         await second;
         Assert.Equal(("0.3.0", (DateTimeOffset?)time.GetUtcNow()), (observed.Found, observed.FoundAsOf));
+    }
+
+    [Fact]
+    public void Unknown_update_check_metadata_is_not_reported_as_a_known_source_or_quota()
+    {
+        var state = UpdateProtocol.Fit(new UpdateState { CheckSource = "other", GitHubRemaining = -1, GitHubQuotaAt = Make.T0 });
+        Assert.Null(state.CheckSource);
+        Assert.Null(state.GitHubRemaining);
+        Assert.Null(state.GitHubQuotaAt);
+    }
+
+    [Fact]
+    public async Task A_failed_check_does_not_replace_the_source_of_the_last_successful_check()
+    {
+        updater.CheckSource = "cdn";
+        var observed = new ObservedUpdater(updater, time);
+        await observed.CheckAsync();
+        updater.CheckSource = "github";
+        updater.GitHubRemaining = 0;
+        updater.GitHubQuotaAt = time.GetUtcNow();
+        updater.CheckFails = new InvalidOperationException("refused");
+        await Assert.ThrowsAsync<InvalidOperationException>(observed.CheckAsync);
+        Assert.Equal(("cdn", 0, time.GetUtcNow()), (observed.CheckSource, observed.GitHubRemaining, observed.GitHubQuotaAt));
+        observed.SourceChanged();
+        Assert.Null(observed.CheckSource);
     }
 
     // The machine's shared release list as the app's updater reads it: each check reads the list
@@ -3265,6 +3293,9 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         prefs = prefs with { AutoUpdate = false };
         var asked = time.GetUtcNow() - TimeSpan.FromMinutes(8);
         updater.DiscoveredAt = asked;
+        updater.CheckSource = "cdn";
+        updater.GitHubRemaining = 37;
+        updater.GitHubQuotaAt = asked - TimeSpan.FromMinutes(2);
         await StartAsync();
 
         await AskedAsync(UpdateAskKind.Check);
@@ -3272,6 +3303,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         Assert.Equal(1, updater.Checks);
         Assert.Equal(("0.2.0", asked), (auto.State.Available, auto.State.CheckedAt));
+        Assert.Equal(("cdn", 37, updater.GitHubQuotaAt), (auto.State.CheckSource, auto.State.GitHubRemaining, auto.State.GitHubQuotaAt));
     }
 
     [Fact]

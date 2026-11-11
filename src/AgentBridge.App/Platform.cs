@@ -31,6 +31,9 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
 
     // A feed.txt source is read whole at every check; only GitHub's list is shared and may be older.
     public DateTimeOffset? DiscoveredAt => source is { } key && key.StartsWith('|') ? discovery.FetchedAt : null;
+    public string? CheckSource => source is { } key && key.StartsWith('|') ? discovery.Source : null;
+    public int? GitHubRemaining => source is { } key && key.StartsWith('|') ? discovery.GitHubRemaining : null;
+    public DateTimeOffset? GitHubQuotaAt => source is { } key && key.StartsWith('|') ? discovery.GitHubQuotaAt : null;
 
     public string? InstalledVersion
     {

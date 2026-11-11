@@ -370,6 +370,9 @@ public sealed class AutoUpdater
                 Available = available,
                 Notes = available is not null ? updater.PendingNotes : null,
                 CheckedAt = updater.FoundAsOf,
+                CheckSource = updater.CheckSource,
+                GitHubRemaining = updater.GitHubRemaining,
+                GitHubQuotaAt = updater.GitHubQuotaAt,
                 Phase = waiting ? UpdatePhase.Waiting : now,
                 Progress = now == UpdatePhase.Downloading ? updater.Progress : null,
                 // "Needs you" once the update has waited past WaitAtMost (#800), here too while the

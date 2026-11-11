@@ -15,6 +15,9 @@ public interface IUpdater
     // When the feed itself was last asked, where a check may be answered from the machine's
     // shared copy of it (#530): null when every check asks the feed.
     DateTimeOffset? DiscoveredAt => null;
+    string? CheckSource => null;
+    int? GitHubRemaining => null;
+    DateTimeOffset? GitHubQuotaAt => null;
     // The release notes of the release the last check found, when it has any.
     string? PendingNotes => null;
     Task DownloadAsync(Action<int> progress);
