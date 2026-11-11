@@ -169,7 +169,7 @@ public sealed class ReleaseDiscovery : IDisposable
             var floor = channel is not null && state.Url == url && state.Floors?.TryGetValue(Floor(channel, prereleases), out var f) == true ? f : null;
             var askCdn = cdn && url == GitHubList && channel is not null;
             // Only GitHub's own answer moves this, so a relay can't renew its own list's welcome.
-            var revalidate = state.GitHubAnsweredAt is not { } answered || answered > now || now - answered >= GithubRevalidateEvery;
+            var revalidate = state.RelayExpired || state.GitHubAnsweredAt is not { } answered || answered > now || now - answered >= GithubRevalidateEvery;
             if (cached && now < state.FreshUntil && (!holding || state.Source == Sources.Cdn))
             {
                 if (state.Source != Sources.Cdn) { return releases; }
@@ -260,6 +260,7 @@ public sealed class ReleaseDiscovery : IDisposable
                     Source = Sources.GitHub,
                     GitHubAnsweredAt = url == GitHubList ? now : state.GitHubAnsweredAt,
                     RelayBootstrapAt = url == GitHubList ? null : state.RelayBootstrapAt,
+                    RelayExpired = url == GitHubList ? false : state.RelayExpired,
                     Floors = ChannelNewest(body),
                 };
                 Write(state);
@@ -273,20 +274,24 @@ public sealed class ReleaseDiscovery : IDisposable
         finally { turn.Release(); }
     }
 
-    bool RelayWindow(State state, DateTimeOffset now) =>
-        !unsaved && (state.GitHubAnsweredAt ?? state.RelayBootstrapAt) is { } start && start <= now && now - start < GithubRelayAtMost;
+    bool RelayWindow(State state, DateTimeOffset now)
+    {
+        var sane = Sane(state, now);
+        if (sane != state) { Write(sane); }
+        return !unsaved && !sane.RelayExpired && (sane.GitHubAnsweredAt ?? sane.RelayBootstrapAt) is { } start && start <= now && now - start < GithubRelayAtMost;
+    }
 
     State BackedOff(State state, Answer answer, DateTimeOffset now, string url)
     {
         var failures = state.Failures + 1;
         var backoff = TimeSpan.FromTicks(Math.Min(LongestBackoff.Ticks, FirstBackoff.Ticks << Math.Min(failures - 1, 16)));
         var after = answer.Wait is { } asked ? Clamp(asked) : backoff;
-        return state with
+        return Sane(state with
         {
             NotBefore = now + after + BackoffJitter * random(), Failures = failures, Problem = answer.Problem ?? Problems.Unexpected,
             RelayBootstrapAt = url == GitHubList && answer.Problem == Problems.Limited && state.GitHubAnsweredAt is null
                 ? state.RelayBootstrapAt ?? now : state.RelayBootstrapAt,
-        };
+        }, now);
     }
 
     static TimeSpan Clamp(TimeSpan wait) => wait < FirstBackoff ? FirstBackoff : wait > LongestWait ? LongestWait : wait;
@@ -305,6 +310,7 @@ public sealed class ReleaseDiscovery : IDisposable
         NotBefore = state.NotBefore > now + LongestWait + BackoffJitter ? now : state.NotBefore,
         RelayBootstrapAt = state.RelayBootstrapAt > now || state.GitHubAnsweredAt > now ? DateTimeOffset.MinValue : state.RelayBootstrapAt,
         GitHubAnsweredAt = state.GitHubAnsweredAt > now ? null : state.GitHubAnsweredAt,
+        RelayExpired = state.RelayExpired || (state.GitHubAnsweredAt ?? state.RelayBootstrapAt) is { } start && now - start >= GithubRelayAtMost,
     };
 
     sealed record Answer(HttpStatusCode Status, string? Body = null, string? ETag = null, TimeSpan? Wait = null, string? Problem = null);
@@ -657,6 +663,7 @@ public sealed class ReleaseDiscovery : IDisposable
         public DateTimeOffset? GitHubAnsweredAt { get; init; }
         // Only this repository's GitHub list can start or clear the missing-answer bootstrap.
         public DateTimeOffset? RelayBootstrapAt { get; init; }
+        public bool RelayExpired { get; init; }
         // What GitHub's last list offered each channel (ChannelNewest), never a relay's.
         public Dictionary<string, string>? Floors { get; init; }
     }

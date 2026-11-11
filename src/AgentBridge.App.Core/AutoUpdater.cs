@@ -972,8 +972,9 @@ public sealed class AutoUpdater
         }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
-            Finish(ref checkRequest, check, UpdateOutcome.Failed, e.Message);
-            Finish(ref installRequest, install, UpdateOutcome.Failed, e.Message);
+            var outcome = checksHeldUntil is { } until && now < until && KnownCurrent(prefs().LastUpdate) ? UpdateOutcome.Refused : UpdateOutcome.Failed;
+            Finish(ref checkRequest, check, outcome, e.Message);
+            Finish(ref installRequest, install, outcome, e.Message);
             throw;
         }
         if (found is not null) { Downloaded(found); }
@@ -1164,10 +1165,13 @@ public sealed class AutoUpdater
         // check, right after the restart, is the likeliest to be refused) or a press answered.
         var last = prefs().LastUpdate;
         var unseen = last is { } l && (l.Outcome == UpdateOutcome.Updated || l.Request is not null) && now - l.At < NeedsYouAgainAfter;
-        var current = last?.Outcome == UpdateOutcome.Current && Pending is null && updater.Found is null;
+        var current = KnownCurrent(last);
         if (!unseen && !current && Asked(UpdateAskKind.Check) is null && Asked(UpdateAskKind.Install) is null) { Remember(UpdateOutcome.Failed, checksHeld, null, null); }
         return checksHeld;
     }
+
+    bool KnownCurrent(UpdateResult? last) => Pending is null && updater.Found is null
+        && (last?.Outcome == UpdateOutcome.Current || last?.Outcome == UpdateOutcome.Refused && updater.CheckedAt is not null);
 
     // A check that succeeded since the hold began (Settings', through the shared updater): the feed
     // answers again, so the hold, its cached failure and its backoff end, and the schedule runs on
