@@ -22,17 +22,19 @@ public sealed class RetryFenceTests
         await using var h = await Harness.Create();
         using var cancel = new CancellationTokenSource();
         await h.Gate.WaitToTypeAsync();
+        h.Gate.TypingQueued = new(TaskCreationOptions.RunContinuationsAsynchronously);
         var send = h.Episode.TryAsync(1, Guid.NewGuid(), RetryReason.Owner, cancel.Token);
         try
         {
-            await h.ScreenRead.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await h.Gate.TypingQueued.Task.WaitAsync(TimeSpan.FromSeconds(10));
             Assert.False(send.IsCompleted);
             await h.Change(change, cancel);
         }
         finally { h.Gate.DoneTyping(); }
         Assert.True(await send.WaitAsync(TimeSpan.FromSeconds(10)));
         Assert.Equal(0, h.Keys);
-        Assert.NotEqual(RetryStop.None, h.Episode.Stop);
+        Assert.Equal(change is "episode" or "cancel" ? RetryStop.Cancelled : RetryStop.Changed, h.Episode.Stop);
+        Assert.Equal(AnswerOutcome.Stale, Assert.Single(h.Episode.Attempts).Outcome);
     }
 
     [Theory]
@@ -51,6 +53,13 @@ public sealed class RetryFenceTests
         h.BeforeKeys = () => h.Change(change, cancel);
         Assert.True(await h.Episode.TryAsync(1, Guid.NewGuid(), RetryReason.Owner, cancel.Token));
         Assert.Equal(0, h.Keys);
+        Assert.Equal(change switch
+        {
+            "episode" or "cancel" => RetryStop.Cancelled,
+            "expired" => RetryStop.Expired,
+            _ => RetryStop.Changed,
+        }, h.Episode.Stop);
+        Assert.Equal(AnswerOutcome.Stale, Assert.Single(h.Episode.Attempts).Outcome);
     }
 
     [Fact]
@@ -77,7 +86,6 @@ public sealed class RetryFenceTests
         readonly SessionSource source;
         readonly ReplyService replier;
         public readonly DeliveryGate Gate = new();
-        public readonly TaskCompletionSource ScreenRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public readonly TaskCompletionSource KeysStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource? KeysDone;
         public Func<Task>? BeforeKeys;
@@ -140,7 +148,6 @@ public sealed class RetryFenceTests
         }
         public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken ct = default)
         {
-            ScreenRead.TrySetResult();
             return Task.FromResult(new ConsoleScreen(
                 ["\u25CF Done.", "", "\u257B\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584",
                  "\u2503", "\u2579\u2580\u2580\u2580\u2580\u2580\u2580\u2580\u2580",

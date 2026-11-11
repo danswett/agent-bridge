@@ -416,8 +416,11 @@ public sealed class ReplyService : ISessionReplier
         long from;
         InjectionResult result;
         bool working;
+        const string retryChangedReason = "the retry is no longer current, so nothing was typed";
+        var retryChanged = false;
         try
         {
+            if (stillCurrent is not null && !stillCurrent()) { return Done(Stale(retryChangedReason)); }
             if (probe.Active() is { } active) { return Done(Refused(active)); }
             var now = source.Get(session.Id);
             if (now is null) { return Done(Stale("the session has ended")); }
@@ -494,19 +497,19 @@ public sealed class ReplyService : ISessionReplier
             {
                 string? FinalEffect()
                 {
-                    const string changed = "the retry is no longer current, so nothing was typed";
                     if (probe.Active() is not null || LaunchHeld?.Invoke(session.Id) is not null || guard.Refuse(pid) is not null)
-                        return changed;
+                        return Changed();
                     if (source.Get(session.Id) is not { Agent: AgentKind.Copilot, Status: SessionStatus.Idle, Question: null } live
                         || live.ProcessId != pid || process is not { StartedAt: not null } || source.ProcessOf(session.Id) != process
                         || !processes.GetAgentProcesses(AgentKind.Copilot).Any(p => p.Id == pid && p.StartedAt == process.StartedAt))
-                        return changed;
+                        return Changed();
                     var latest = input.Read();
-                    if (!latest.Readable || latest.Asking || latest.Resumed) return changed;
-                    return stillCurrent() ? null : changed;
+                    if (!latest.Readable || latest.Asking || latest.Resumed) return Changed();
+                    return stillCurrent() ? null : Changed();
+                    string Changed() { retryChanged = true; return retryChangedReason; }
                 }
                 keys = keys with { Proceed = FinalEffect };
-                if (FinalEffect() is { } changed) { return Done(Refused(changed)); }
+                if (FinalEffect() is { } changed) { return Done(Stale(changed)); }
             }
 
             timeline.InjectStart();
@@ -524,6 +527,7 @@ public sealed class ReplyService : ISessionReplier
         log($"typed a reply into {Short(session.Id)} (pid {pid}){(staged.Count > 0 ? $" with {staged.Count} attachment(s)" : "")}: {keys.Describe()} -> {result.Status} {result.Detail}");
         return result.Status switch
         {
+            InjectionStatus.NothingTyped when retryChanged => Done(Stale(retryChangedReason)),
             InjectionStatus.NothingTyped => Done(Refused(result.Detail == WorkerInjector.ScreenChanged
                 ? "Copilot's input box changed just as the reply was to be typed, so nothing was typed; try again, or reply at the machine"
                 : DeliveryReasons.Of(result.Detail))),

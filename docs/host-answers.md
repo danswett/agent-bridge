@@ -51,6 +51,8 @@ eligibility again. The replier also rechecks its source, process inspector, G5,
 launch hold, target guard and transcript. A retry must not answer a question,
 trust prompt or permission confirmation; existing screen checks remain in force.
 Ordinary replies carry no fence and keep their existing behavior.
+An invalidated fence reports `stale`, retained as `RetryStop.Changed`, not a generic
+delivery failure. An already cancelled or expired episode keeps that terminal reason.
 
 Observation and availability callbacks run outside the episode lock. They must
 be cheap, fresh and non-reentrant, and tolerate the constructor's two observations.

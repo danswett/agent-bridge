@@ -263,6 +263,61 @@ public sealed class RetryEpisodeTests
     }
 
     [Fact]
+    public async Task A_stale_delivery_records_changed_instead_of_generic_failure()
+    {
+        var h = new Harness { Outcome = new(AnswerOutcome.Stale) };
+        Assert.True(await h.Send(RetryReason.Owner));
+        Assert.Equal(AnswerOutcome.Stale, Assert.Single(h.Episode.Attempts).Outcome);
+        Assert.Equal(RetryStop.Changed, h.Episode.Stop);
+        Assert.False(await h.Send(RetryReason.Owner));
+    }
+
+    [Theory]
+    [InlineData(false, 1)]
+    [InlineData(false, 2)]
+    [InlineData(true, 1)]
+    [InlineData(true, 2)]
+    public async Task Concurrent_eligibility_readers_recheck_the_slot_and_in_flight_exclusion(bool availability, int next)
+    {
+        var h = new Harness { Pending = new() };
+        h.Time.Advance(TimeSpan.FromSeconds(30));
+        using var releaseFirst = new ManualResetEventSlim();
+        using var releaseSecond = new ManualResetEventSlim();
+        TaskCompletionSource[] entered = [new(TaskCreationOptions.RunContinuationsAsynchronously), new(TaskCreationOptions.RunContinuationsAsynchronously)];
+        var reads = 0;
+        Action park = () =>
+        {
+            var index = Interlocked.Increment(ref reads) - 1;
+            entered[index].SetResult();
+            Assert.True((index == 0 ? releaseFirst : releaseSecond).Wait(TimeSpan.FromSeconds(10)));
+        };
+        h.OnObservation = availability ? null : park;
+        h.OnAvailability = availability ? park : null;
+        var first = Task.Run(() => h.Episode.TryAsync(1, Guid.NewGuid(), RetryReason.Auto));
+        Task<bool>? second = null;
+        try
+        {
+            await entered[0].Task.WaitAsync(TimeSpan.FromSeconds(10));
+            second = Task.Run(() => h.Episode.TryAsync(next, Guid.NewGuid(), RetryReason.Owner));
+            await entered[1].Task.WaitAsync(TimeSpan.FromSeconds(10));
+            releaseFirst.Set();
+            await h.Sent.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            releaseSecond.Set();
+            Assert.False(await second.WaitAsync(TimeSpan.FromSeconds(10)));
+            Assert.Single(h.Episode.Attempts);
+            Assert.Single(h.Requests);
+            Assert.False(first.IsCompleted);
+        }
+        finally
+        {
+            releaseFirst.Set(); releaseSecond.Set();
+            h.Pending.TrySetResult(new(AnswerOutcome.Delivered));
+            await first;
+            if (second is not null) { await second; }
+        }
+    }
+
+    [Fact]
     public async Task Outcomes_are_visible_but_replier_reasons_and_exception_text_never_enter_retry_records_or_logs()
     {
         var h = new Harness { Outcome = new(AnswerOutcome.Unconfirmed, "private-canary") };
@@ -288,6 +343,7 @@ public sealed class RetryEpisodeTests
         public RetryObservation? Current;
         public readonly RetryEpisode Episode;
         public readonly List<ReplyRequest> Requests = [];
+        public readonly TaskCompletionSource Sent = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public readonly List<string> Log = [];
         bool available = true;
         public TimeSpan ObservationDelay, AvailabilityDelay;
@@ -306,6 +362,7 @@ public sealed class RetryEpisodeTests
         public Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken cancellationToken = default, DeliveryWatch? watch = null)
         {
             Requests.Add(request);
+            Sent.TrySetResult();
             return Failure is { } failure ? Task.FromException<ReplyResult>(failure) : Pending?.Task ?? Task.FromResult(Outcome);
         }
     }

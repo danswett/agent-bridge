@@ -85,7 +85,7 @@ internal sealed class RetryEpisode
                 attempts[index] = attempts[index] with { Outcome = result.Outcome };
                 if (cancellation.IsCancellationRequested) End(RetryStop.Cancelled);
                 // Unconfirmed might already have typed: never retry an uncertain delivery.
-                if (result.Outcome != AnswerOutcome.Delivered) End(RetryStop.Failed);
+                if (result.Outcome != AnswerOutcome.Delivered) End(result.Outcome == AnswerOutcome.Stale ? RetryStop.Changed : RetryStop.Failed);
                 else if (attempts.Count == DueSeconds.Length) End(RetryStop.Exhausted);
             }
             log($"retry attempt {index + 1} {reason}: {result.Outcome}");
