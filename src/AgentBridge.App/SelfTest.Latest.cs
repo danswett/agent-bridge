@@ -128,14 +128,18 @@ static partial class SelfTest
                 }
                 await Grow(pinned: true, $"{input}+{up}");
                 await Jump();
-                await LatestInput(window, scroll, "wheel", up: true);
+                var end = scroll.VerticalOffset;
+                check(await LatestInput(window, scroll, "wheel", up: true), "latest: native wheel reaches modifier release setup");
                 await Still(scroll);
                 var before = scroll.VerticalOffset;
+                check(before < end - 1.5, "latest: modifier setup really scrolls away from the end");
                 check(await LatestModifiedKey(window, scroll, down, modifier), $"latest: receives {input}+{down}");
                 check(Math.Abs(scroll.VerticalOffset - before) <= 0.5, $"latest: {input}+{down} does not scroll");
                 card.Update(card.Session with { Activity = (card.Session.Activity ?? new Activity()) with { Response = "A shorter reply." } });
+                check(await Until(() => scroll.ScrollableHeight < before - 1.5, TimeSpan.FromSeconds(3)), "latest: shorter reply shrinks below the released offset");
+                scroll.ChangeView(null, before, null, disableAnimation: true);
                 await Still(scroll);
-                check(Bottom() && scroll.ScrollableHeight < before - 1.5, $"latest: shorter re-render clamps the released view after {input}+{down}");
+                check(Bottom() && scroll.ScrollableHeight < before - 1.5, $"latest: shorter re-render clamps the released view after {input}+{down} ({before:0} to {scroll.VerticalOffset:0}/{scroll.ScrollableHeight:0})");
                 await Grow(pinned: false, $"{input}+{down}, then shorter re-render");
             }
         }
@@ -209,13 +213,15 @@ static partial class SelfTest
         var seen = false;
         var finished = false;
         var taken = false;
-        // A parent setting Handled is not a receipt that the text itself consumed the key.
+        var observer = text is null ? null : VisualTreeHelper.GetParent(text) as UIElement;
+        if (text is not null && (observer is null || observer == scroll)) { throw new InvalidOperationException("latest: no child-level key observation point"); }
+        // After the text's class handler, but before the conversation handler can set Handled.
         var consumed = new KeyEventHandler((_, e) => { if (e.Key == key) { taken = e.Handled; } });
         var heard = new KeyEventHandler((_, e) => { if (e.Key == key) { seen = text is not null ? ReferenceEquals(e.OriginalSource, text) : InputKeyboardSource.GetKeyStateForCurrentThread(modifier).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down); } });
         var released = new KeyEventHandler((_, e) => { if (e.Key == key) { finished = true; } });
         scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
         scroll.AddHandler(UIElement.KeyUpEvent, released, true);
-        text?.AddHandler(UIElement.KeyDownEvent, consumed, true);
+        observer?.AddHandler(UIElement.KeyDownEvent, consumed, true);
         try
         {
             if (!SetKeyboardState(held)) { throw new InvalidOperationException("latest: cannot hold the keyboard modifier"); }
@@ -224,10 +230,12 @@ static partial class SelfTest
         }
         finally
         {
+            AppLog.Write($"latest {modifier}+{key}: source={seen}, keyUp={finished}, handled={taken}, caret={position}->{text?.SelectionStart.Offset}");
             scroll.RemoveHandler(UIElement.PreviewKeyDownEvent, heard);
             scroll.RemoveHandler(UIElement.KeyUpEvent, released);
-            text?.RemoveHandler(UIElement.KeyDownEvent, consumed);
+            observer?.RemoveHandler(UIElement.KeyDownEvent, consumed);
             if (!SetKeyboardState(saved)) { throw new InvalidOperationException("latest: cannot release the keyboard modifier"); }
+            if (text is not null) { LatestFocus(scroll); }
         }
     }
 
@@ -252,7 +260,9 @@ static partial class SelfTest
             try { Press(window.Handle, key, foreground: false); return await Until(() => seen && finished, TimeSpan.FromSeconds(2)); }
             finally { scroll.RemoveHandler(UIElement.PreviewKeyDownEvent, heard); scroll.RemoveHandler(UIElement.KeyUpEvent, released); }
         }
+        window.Activate();
         TrayIcon.SetForegroundWindow(window.Handle);
+        if (!await Until(() => GetForegroundWindow() == window.Handle, TimeSpan.FromSeconds(3))) { throw new InvalidOperationException("latest: native mouse target is not foreground"); }
         var bar = Find<ScrollBar>(scroll).FirstOrDefault(b => b.Orientation == Orientation.Vertical && b.ActualHeight > 0);
         LatestPoint PointAt(FrameworkElement element)
         {
@@ -270,7 +280,7 @@ static partial class SelfTest
                 : Find<RepeatButton>(bar).FirstOrDefault(b => b.Name == (up ? "VerticalSmallDecrease" : "VerticalSmallIncrease") && b.ActualHeight > 0)
                     ?? throw new InvalidOperationException("latest: no actual scrollbar arrow");
         }
-        if (input == "thumb") { target = bar is null ? throw new InvalidOperationException("latest: no vertical scrollbar") : Find<Thumb>(bar).FirstOrDefault(t => t.ActualHeight > 0) ?? throw new InvalidOperationException("latest: no actual scroll thumb"); }
+        if (input == "thumb") { target = bar is null ? throw new InvalidOperationException("latest: no vertical scrollbar") : Find<Thumb>(bar).FirstOrDefault(t => t.Name == "VerticalThumb" && t.ActualWidth > 0 && t.ActualHeight > 0) ?? throw new InvalidOperationException("latest: no actual vertical scroll thumb"); }
         var at = PointAt(target);
         await Task.Delay(100);
         void Mouse(uint flags, int data = 0)
@@ -297,6 +307,7 @@ static partial class SelfTest
                 Mouse(0x0002);
                 try
                 {
+                    if (!await Until(() => received, TimeSpan.FromSeconds(2))) { throw new InvalidOperationException($"latest: native {input} pointer press was not routed"); }
                     if (input == "thumb")
                     {
                         for (var i = 1; i <= 8; i++)
@@ -309,7 +320,8 @@ static partial class SelfTest
                 }
                 finally { Mouse(0x0004); }
             }
-            await Task.Delay(400);
+            await Until(() => received && operated, TimeSpan.FromSeconds(3));
+            AppLog.Write($"latest {input}: foreground={GetForegroundWindow() == window.Handle}, target={target.Name}, pointer={received}, operated={operated}");
             return received && operated;
         }
         finally { scroll.RemoveHandler(routed, pointer); if (bar is not null) { bar.Scroll -= operatedBar; } }
