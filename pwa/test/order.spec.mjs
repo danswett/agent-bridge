@@ -90,7 +90,7 @@ test('right-click, or Shift+F10, opens the row menu: pin and unpin, with pinned 
   await openDemo(page);
   await card(page, CODEX).locator('.row-main').click({ button: 'right' });
   const menu = card(page, CODEX).getByRole('menu');
-  await expect(menu.getByRole('menuitem')).toHaveText(['Move up', 'Move down', 'Pin']);
+  await expect(menu.getByRole('menuitem')).toHaveText(['Move up', 'Move down', 'Pin', 'Move to group']);
   await expect(menu.getByRole('menuitem', { name: 'Move up' })).toBeFocused();
   // With a pointer its rows are a desktop menu's 32px, not a finger's 44 (A11), and a click
   // draws no focus ring (A12).
@@ -514,7 +514,7 @@ test.describe('on a phone', () => {
     await openDemo(page);
     await longPress(page, CODEX);
     const menu = card(page, CODEX).getByRole('menu');
-    await expect(menu.locator('.row-menu-label')).toHaveText(['Move up', 'Move down', 'Pin']);
+    await expect(menu.locator('.row-menu-label')).toHaveText(['Move up', 'Move down', 'Pin', 'Move to group']);
     // The press doesn't open the session, and the menu fits on the screen with a finger-sized row.
     await expect(view(page, CODEX)).toBeHidden();
     const box = await menu.boundingBox();
