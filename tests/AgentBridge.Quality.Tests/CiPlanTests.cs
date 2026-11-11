@@ -405,4 +405,33 @@ public class CiPlanTests
 
         Assert.Empty(problems.Select(p => p.Message));
     }
+
+    [Fact]
+    public void Installer_reuse_keeps_every_check_and_consumes_the_app_artifact_on_both_architectures()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var stream = new YamlDotNet.RepresentationModel.YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(root, ".github", "workflows", "ci.yml"))));
+        var workflow = (YamlDotNet.RepresentationModel.YamlMappingNode)stream.Documents[0].RootNode;
+        var jobs = (YamlDotNet.RepresentationModel.YamlMappingNode)workflow["jobs"];
+        var gate = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["quality-gate"];
+        var needs = (YamlDotNet.RepresentationModel.YamlSequenceNode)gate["needs"];
+        Assert.Equal(new[] { "plan", "product", "ha-integration", "spikes", "spikes-linux", "app",
+            "app-installer", "light", "pwa-ui", "pwa-e2e" }.Order(), needs.Children.Select(n => n.ToString()).Order());
+        var installer = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["app-installer"];
+        var installerNeeds = Assert.IsType<YamlDotNet.RepresentationModel.YamlSequenceNode>(installer["needs"]);
+        Assert.Equal(new[] { "plan", "app" },
+            installerNeeds.Children.Select(n => n.ToString()));
+        var strategy = (YamlDotNet.RepresentationModel.YamlMappingNode)installer["strategy"];
+        var matrix = (YamlDotNet.RepresentationModel.YamlMappingNode)strategy["matrix"];
+        var legs = (YamlDotNet.RepresentationModel.YamlSequenceNode)matrix["include"];
+        Assert.Equal(new[] { "win-x64", "win-arm64" },
+            legs.Children.Cast<YamlDotNet.RepresentationModel.YamlMappingNode>().Select(n => n["runtime"].ToString()));
+        var steps = installer["steps"].ToString();
+        Assert.DoesNotContain("pack-app.ps1", steps, StringComparison.Ordinal);
+        Assert.Contains("Assert-AppInstallerInput", steps, StringComparison.Ordinal);
+        Assert.Contains("Write-AppDistributionEvidence", steps, StringComparison.Ordinal);
+        Assert.Contains("-TimeoutSeconds 480", steps, StringComparison.Ordinal);
+        Assert.Contains("${{ matrix.artifact }}-${{ env.APP_VERSION }}", steps, StringComparison.Ordinal);
+    }
 }
