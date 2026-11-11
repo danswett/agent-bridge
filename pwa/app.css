@@ -836,6 +836,7 @@ body[data-conn="busy"] .sessions, body[data-conn="warn"] .sessions, body[data-co
 }
 .row-menu {
   position: absolute; right: var(--ab-space-2); top: calc(100% - var(--ab-space-1)); z-index: 5; min-width: 168px;
+  max-width: calc(100vw - 24px);
   display: grid; padding: 4px; background: var(--ab-card); border: 1px solid var(--ab-stroke2);
   border-radius: 8px; box-shadow: 0 8px 24px var(--ab-shadow);
   scroll-margin-bottom: calc(var(--tabbar) + var(--safe-bottom) + var(--ab-space-2));
@@ -843,14 +844,21 @@ body[data-conn="busy"] .sessions, body[data-conn="warn"] .sessions, body[data-co
 @media (min-width: 760px) { .row-menu { scroll-margin-bottom: var(--ab-space-2); } }
 /* Above its row, where below would be under the bottom navigation. */
 .row-menu.up { top: auto; bottom: calc(100% - var(--ab-space-1)); }
+.row-menu-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.row-menu-entry:has(.row-menu-key) { min-width: 192px; }
 /* 32px with a pointer, as a desktop menu's rows; 44px only on touch alone. */
 .row-menu-item {
   min-height: 32px; padding: 0 12px; text-align: left; font: inherit; color: var(--ab-text);
+  grid-column: 1 / -1; grid-row: 1;
   background: none; border: 0; border-radius: 4px; cursor: pointer;
 }
+.row-menu-key, .row-menu-reason { color: var(--ab-text2); pointer-events: none; }
+.row-menu-key { grid-column: 2; grid-row: 1; margin: 0 12px 0 16px; white-space: nowrap; }
+.row-menu-reason { grid-column: 1 / -1; grid-row: 2; padding: 0 12px 6px; }
+html[data-touch-only-keys]:not([data-keyboard-seen]) .row-menu-key { display: none; }
 @media (pointer: coarse) and (not (any-pointer: fine)) { .row-menu-item { min-height: var(--tap); } }
-.row-menu-item:hover:not(:disabled), .row-menu-item:focus-visible:not([data-focus-quiet]) { background: var(--ab-subtle); }
-.row-menu-item:disabled { color: var(--ab-text2); cursor: default; }
+.row-menu-item:hover:not(:disabled):not([aria-disabled="true"]), .row-menu-item:focus-visible:not([data-focus-quiet]) { background: var(--ab-subtle); }
+.row-menu-item:disabled, .row-menu-item[aria-disabled="true"] { color: var(--ab-text2); cursor: default; }
 
 /* ---- a session's row (ui.md §6.1) ----
    Two lines: the glyph on line 1, the title, at most two facts under it, and the age or the new

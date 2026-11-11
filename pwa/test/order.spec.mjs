@@ -128,6 +128,119 @@ test('right-click, or Shift+F10, opens the row menu: pin and unpin, with pinned 
   await expect(card(page, CODEX).locator('.row-main')).toBeFocused();
 });
 
+test('row menu keys describe the moves without changing their accessible names', async ({ page }) => {
+  await openDemo(page);
+  await card(page, CODEX).locator('.row-main').press('Shift+F10');
+  const menu = card(page, CODEX).getByRole('menu');
+  for (const [name, keys] of [['Move up', 'Alt+\u2191'], ['Move down', 'Alt+\u2193']]) {
+    const item = menu.getByRole('menuitem', { name, exact: true });
+    await expect(item).toHaveAccessibleDescription(keys);
+    await expect(item.locator('..').locator('.row-menu-key')).toHaveText(keys);
+    const label = await item.locator('.row-menu-label').boundingBox();
+    const key = await item.locator('..').locator('.row-menu-key').boundingBox();
+    expect(key.x).toBeGreaterThan(label.x + label.width);
+  }
+  await expect(menu.getByRole('menuitem', { name: 'Pin', exact: true })).toHaveAccessibleDescription('');
+});
+
+for (const { state, id = CODEX, sort, filter, needsOnly, direction = 'up', reason } of [
+  { state: 'Most recent', sort: 'recent', reason: 'Switch to Your order to move sessions' },
+  { state: 'Machine', sort: 'machine', reason: 'Switch to Your order to move sessions' },
+  { state: 'search', filter: 'codex', reason: 'Clear the search or machine filter to move sessions' },
+  { state: 'machine search', filter: 'Demo machine', reason: 'Clear the search or machine filter to move sessions' },
+  { state: 'Needs you filter', id: COPILOT, needsOnly: true, reason: 'Clear the search or machine filter to move sessions' },
+  { state: 'first in Sessions', id: COPILOT, reason: 'Already at the top' },
+  { state: 'last in Sessions', id: DELEGATING, direction: 'down', reason: 'Already at the bottom' },
+  { state: 'alone in Pinned', reason: 'Already at the top' },
+]) {
+  test(`row menu explains ${state}; disabled moves leave it open and do nothing`, async ({ page }) => {
+    await openDemo(page);
+    if (sort) { await page.locator('#session-sort').selectOption(sort); }
+    if (filter) { await page.locator('#search').fill(filter); }
+    if (needsOnly) { await page.evaluate(() => window.agentBridgeDemo.page.view.setNeedsOnly(true)); }
+    if (state === 'alone in Pinned') {
+      await card(page, id).locator('.row-main').press('Shift+F10');
+      await card(page, id).getByRole('menuitem', { name: 'Pin', exact: true }).click();
+    }
+    await card(page, id).locator('.row-main').press('Shift+F10');
+    const menu = card(page, id).getByRole('menu');
+    const item = menu.getByRole('menuitem', { name: `Move ${direction}`, exact: true });
+    await expect(item).toHaveAttribute('aria-disabled', 'true');
+    await expect(item.locator('..').locator('.row-menu-reason')).toHaveText(reason);
+    await expect(item.locator('..').locator('.row-menu-reason')).toBeVisible();
+    await expect(item).toHaveAccessibleDescription(`Alt+${direction === 'up' ? '\u2191' : '\u2193'} ${reason}`);
+    const before = await order(page);
+    await item.dispatchEvent('click');
+    await expect(menu).toBeVisible();
+    expect(await order(page)).toEqual(before);
+    // Arrow navigation includes disabled items so their descriptions are discoverable.
+    for (let n = 0; n < 3 && !await item.evaluate((el) => el === document.activeElement); n++) {
+      await page.keyboard.press('ArrowDown');
+    }
+    await expect(item).toBeFocused();
+    for (const key of ['Enter', 'Space']) {
+      await page.keyboard.press(key);
+      await expect(menu).toBeVisible();
+      expect(await order(page)).toEqual(before);
+    }
+    await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+    await expect(card(page, id).locator('.row-main')).toBeFocused();
+  });
+}
+
+for (const { state, sort, filter, needsOnly, only } of [
+  { state: 'Your order' },
+  { state: 'Most recent', sort: 'recent' },
+  { state: 'Machine', sort: 'machine' },
+  { state: 'search', filter: 'Loading session' },
+  { state: 'machine filter', filter: 'Demo machine' },
+  { state: 'Needs you filter', needsOnly: true },
+  { state: 'a sole pending row', only: true },
+]) {
+  test(`row menu loading reason wins with ${state}, including both directions at an edge`, async ({ page }) => {
+    await openDemo(page);
+    await page.evaluate((ids) => {
+      window.agentBridgeDemo.page.view.settled = () => false;
+      for (const id of ids) { window.agentBridgeDemo.remove(id); }
+    }, only ? FIRST : []);
+    const pending = 'demo-pending-snapshot';
+    await upsert(page, pending, { agent: 'copilot', title: 'Loading session', status: needsOnly ? 'waiting' : 'idle', startedAt: later(), updatedAt: later() });
+    await expect.poll(() => order(page)).toEqual([pending, ...(only ? [] : FIRST)]);
+    if (sort) { await page.locator('#session-sort').selectOption(sort); }
+    if (filter) { await page.locator('#search').fill(filter); }
+    if (needsOnly) { await page.evaluate(() => window.agentBridgeDemo.page.view.setNeedsOnly(true)); }
+    const moves = [[pending, 'up'], [pending, 'down'], ...(!sort && !filter && !needsOnly && !only ? [[COPILOT, 'up']] : [])];
+    for (const [id, direction] of moves) {
+      await card(page, id).locator('.row-main').press('Shift+F10');
+      const item = card(page, id).getByRole('menuitem', { name: `Move ${direction}`, exact: true });
+      await expect(item.locator('..').locator('.row-menu-reason')).toHaveText('Wait for the session list to finish loading');
+      await expect(item).toHaveAttribute('aria-disabled', 'true');
+      await expect(item).toHaveAccessibleDescription(`Alt+${direction === 'up' ? '\u2191' : '\u2193'} Wait for the session list to finish loading`);
+      await page.keyboard.press('Escape');
+    }
+  });
+}
+
+for (const touch of [false, true]) {
+  test.describe(`row menu key hints with ${touch ? 'touch only' : 'a pointer'} at phone width`, () => {
+    test.use({ viewport: { width: 390, height: 664 }, hasTouch: touch });
+    test('keys hide only on touch until a keydown, then stay visible after a pointer press', async ({ page }) => {
+      await openDemo(page);
+      const row = card(page, CODEX).locator('.row-main');
+      await row.dispatchEvent('contextmenu');
+      const key = card(page, CODEX).locator('.row-menu-key').first();
+      const touchOnly = await page.evaluate(() => matchMedia('(hover: none) and (pointer: coarse)').matches);
+      if (touchOnly) { await expect(key).toBeHidden(); } else { await expect(key).toBeVisible(); }
+      await page.keyboard.press('Shift');
+      await expect(key).toBeVisible();
+      await page.locator('#session-sort').dispatchEvent('pointerdown');
+      await row.dispatchEvent('contextmenu');
+      await expect(key).toBeVisible();
+    });
+  });
+}
+
 test('Copilot, Claude and Codex rows get new message dots only for new response turns', async ({ page }) => {
   await openDemo(page);
   for (const id of [COPILOT, CLAUDE, CODEX]) {
@@ -379,7 +492,7 @@ test.describe('on a phone', () => {
     await openDemo(page);
     await longPress(page, CODEX);
     const menu = card(page, CODEX).getByRole('menu');
-    await expect(menu.getByRole('menuitem')).toHaveText(['Move up', 'Move down', 'Pin']);
+    await expect(menu.locator('.row-menu-label')).toHaveText(['Move up', 'Move down', 'Pin']);
     // The press doesn't open the session, and the menu fits on the screen with a finger-sized row.
     await expect(view(page, CODEX)).toBeHidden();
     const box = await menu.boundingBox();

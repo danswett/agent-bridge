@@ -267,13 +267,15 @@ export class SessionOrder {
     return this.#shown.pinned.includes(key) ? 'pinned' : this.#shown.sessions.includes(key) ? 'sessions' : null;
   }
 
+  isPending(key) { return this.#shown.pending.has(key); }
+
   // Whether a row on screen can move by one (delta -1 up, 1 down) within its group. Not past a row,
   // nor a row itself, its machine hasn't finished sending: it has no place yet to move relative to.
   canMove(key, delta) {
     const g = this.#group(key);
-    if (this.sort !== 'yours' || !g || this.#shown.pending.has(key)) { return false; }
+    if (this.sort !== 'yours' || !g || this.isPending(key)) { return false; }
     const i = this.#shown[g].indexOf(key) + delta;
-    return i >= 0 && i < this.#shown[g].length && !this.#shown.pending.has(this.#shown[g][i]);
+    return i >= 0 && i < this.#shown[g].length && !this.isPending(this.#shown[g][i]);
   }
 
   // Where a row on screen stands in its group (1-based), for what a grab says; null if not shown.

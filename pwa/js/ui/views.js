@@ -471,9 +471,21 @@ export class SessionListView {
   openMenu(card) {
     const key = this.#keyOf(card);
     const pinned = this.order.isPinned(key);
+    const moveItem = (delta) => {
+      const disabled = !this.moving || !this.order.canMove(key, delta);
+      const neighbour = this.order.neighbours(key)?.[delta < 0 ? 'prev' : 'next'];
+      const loading = this.order.isPending(key) || this.order.isPending(neighbour);
+      const reason = !disabled ? null : loading ? 'Wait for the session list to finish loading'
+        : this.order.sort !== 'yours' ? 'Switch to Your order to move sessions'
+        : this.filter || this.needsOnly ? 'Clear the search or machine filter to move sessions'
+        : delta < 0 ? 'Already at the top' : 'Already at the bottom';
+      return {
+        label: delta < 0 ? 'Move up' : 'Move down', shortcut: delta < 0 ? 'Alt+\u2191' : 'Alt+\u2193',
+        disabled, reason, run: () => this.#move(card, delta),
+      };
+    };
     this.#menu.show(card.element, [
-      { label: 'Move up', disabled: !this.moving || !this.order.canMove(key, -1), run: () => this.#move(card, -1) },
-      { label: 'Move down', disabled: !this.moving || !this.order.canMove(key, 1), run: () => this.#move(card, 1) },
+      moveItem(-1), moveItem(1),
       { label: pinned ? 'Unpin' : 'Pin', run: () => this.#pin(card, !pinned) },
     ], { back: card.els.open, label: `${card.session.title || 'Session'}: actions` });
   }

@@ -51,7 +51,12 @@ export function cameBack() {
 
 export function watchFocusRing(doc = globalThis.document, win = globalThis) {
   page = doc;
+  const touchOnly = win.matchMedia('(hover: none) and (pointer: coarse)');
+  const markTouchOnly = () => doc.documentElement.toggleAttribute('data-touch-only-keys', touchOnly.matches);
+  touchOnly.addEventListener('change', markTouchOnly);
+  markTouchOnly();
   doc.addEventListener('keydown', () => {
+    doc.documentElement.dataset.keyboardSeen = '';
     moved = 'key';
     // A key pressed where a press left focus shows it there, as browsers do.
     mark(doc.activeElement);
