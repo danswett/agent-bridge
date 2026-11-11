@@ -328,13 +328,13 @@ test('a frozen local question does not return after a fresh page confirms its ab
     const d = window.agentBridgeDemo, s = d.host.get(id);
     d.upsert({ ...s, activity: { turn: 'after-asking', userMessage: 'Later prompt', responseTurn: 'after-asking', response: 'Later reply' } });
     d.host.historyTurns.set(id, [
-      { id: `${id}-turn-2`, at: new Date().toISOString(), prompt: { text: 'Asking prompt' }, parts: [{ kind: 'response', text: 'Stored replacement must remain deferred' }] },
-      { id: 'after-asking', at: new Date().toISOString(), prompt: { text: 'Later prompt' }, parts: [{ kind: 'response', text: 'Later reply' }] },
+      { id: `${id}-turn-2`, at: new Date().toISOString(), prompt: { text: 'Asking prompt' }, parts: [{ id: 'replacement-reply', kind: 'response', text: 'Stored replacement must remain deferred' }] },
+      { id: 'after-asking', at: new Date().toISOString(), prompt: { text: 'Later prompt' }, parts: [{ id: 'later-reply', kind: 'response', text: 'Later reply' }] },
     ]);
     d.host.releaseResponses();
     await d.view.history.open('demo', id, { session: d.host.get(id) });
   }, CODEX);
-  await expect(card.locator(`.history-turn[data-turn="${CODEX}-turn-2"] .history-reply`)).toHaveText(long.trim());
+  await expect(card.locator('.response').filter({ visible: true })).toHaveText(long.trim());
   await expect(card.locator('.question.resolved')).toHaveCount(0);
   await page.evaluate((id) => {
     const d = window.agentBridgeDemo, s = d.host.get(id);
