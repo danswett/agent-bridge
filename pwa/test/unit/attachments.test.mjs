@@ -6,6 +6,7 @@ import { CANCELLED, ReplyService } from '../../js/reply-service.js';
 import { DemoBlobStore } from '../../js/demo.js';
 import { blobIdOf, fromBase64url, openBlob, storedSize } from '../../js/blobs.js';
 import { HostClient, HostError } from '../../js/host-client.js';
+import { SentImages } from '../../js/sent-images.js';
 
 const flush = () => new Promise((r) => setImmediate(r));
 const sha = (bytes) => createHash('sha256').update(bytes).digest('base64url');
@@ -127,6 +128,26 @@ test('only delivered attachment bindings retain the bytes this device sent', asy
     assert.deepEqual(kept, outcome === 'delivered' ? [[bindings, files, 'account-a', 'stamp']] : []);
     service.clear();
   }
+});
+
+for (const cleared of [false, true]) test(`a same-UUID automatic retry ${cleared ? 'cannot restore bytes after a sibling-tab clear' : 'retains delivered bytes without a clear'}`, { timeout: 5000 }, async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const saved = new Map(), channel = Object.assign(new EventTarget(), { postMessage() { this.dispatchEvent(new Event('message')); } });
+  let queue = Promise.resolve();
+  const options = { account: () => 'one', get: async (key) => saved.get(key), put: async (key, value) => saved.set(key, value), remove: async (key) => saved.delete(key), channel, serial: (task) => { queue = queue.then(task); return queue; } };
+  const images = new SentImages(options), sibling = new SentImages(options), { client } = fakeHost();
+  const service = new ReplyService({ current: () => ({ client, hostId: 'h1' }), images, retryMs: 5 });
+  t.after(() => service.clear());
+  const f = await prepareAttachment(file(filled(3), 'same.png', 'image/png'), { uuid: ids() }), ref = '@/attachments/original-same.png';
+  service.submit({ hostId: 'h1', sessionId: 's1', text: '', attachments: [f] });
+  while (!client.replies.length) { await flush(); }
+  client.replies[0].reject(new Error('response lost')); await flush();
+  if (cleared) { await sibling.clear(); } t.mock.timers.tick(5);
+  while (client.replies.length < 2) { await flush(); }
+  assert.equal(client.replies[1].data.request, client.replies[0].data.request);
+  client.replies[1].resolve({ outcome: 'delivered', attachments: [{ id: f.id, ref }] });
+  while (service.get('h1', 's1').state !== 'done') { await flush(); }
+  assert.equal(Boolean(await images.get(ref)), !cleared); assert.equal(saved.get('sent-images')?.entries?.length ?? 0, cleared ? 0 : 1);
 });
 
 test('a reply sends its files first, reporting how much has gone, then names them', async () => {
