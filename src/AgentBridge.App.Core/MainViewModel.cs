@@ -617,6 +617,7 @@ public sealed partial class MainViewModel : Observable
         foreach (var m in machines) { m.Toasts?.Tick(); }
         foreach (var o in OfflineMachines) { o.Tick(); }
         SyncBanner();
+        if (restarting.Count > 0) { SyncMachineRows(); }
         if (++ticks % 5 == 0)
         {
             foreach (var c in byId.Values) { c.RefreshTimes(); }

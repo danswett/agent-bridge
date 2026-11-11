@@ -576,6 +576,14 @@ already expect a drop from a remote restart, so no false offline alert. **Switch
 and the `Legacy` path for Update now is deleted in that same PR. Meanwhile the clients bridge
 the gap themselves: a machine whose last `update.state` was `installing` with `requestNow` is
 shown "Restarting to update…" for 90 s after its channel closes, then Offline as usual.
+The Windows Machines row also uses these words while that Installing state is connected,
+then returns to Offline or Connecting after the 90 s grace. A reconnect clears it; forgetting
+the machine or signing out drops its tracker. Plain Install does not start this grace.
+The Windows client keeps the last 32 Update now requests it signed per machine before
+sending, not only after an accepted reply, so a lost reply and a recreated update row still
+leave the later `last.request` outcome worded from its code, never the machine's reason text.
+These records last only while that account's machine is retained, not across the client's
+own restart. The Windows button, dialog and send loop remain a separate slice.
 
 ### Questions and answers across the restart
 

@@ -58,7 +58,12 @@ public sealed class MachineUpdateViewModel : Observable
     }
 
     // How the last update asked for, or installed by itself, ended.
-    public string? LastText => State?.Last is not { } l ? null : l.Outcome switch
+    public string? LastText => State?.Last is not { } l ? null : machine.NowPresses.Contains(l.Request) ? l.Outcome switch
+    {
+        UpdateOutcome.Updated => l.To is { } to ? $"Updated to {to}." : "Updated.",
+        UpdateOutcome.Current => "Already up to date.",
+        _ => UpdateNowWords.NotUpdated(l.Code, State?.UpdateNowAt, failed: l.Outcome == UpdateOutcome.Failed),
+    } : l.Outcome switch
     {
         UpdateOutcome.Updated => $"Updated from {l.From} to {l.To} {Words.Ago(l.At, time.GetUtcNow())}.",
         UpdateOutcome.Current => $"Already up to date when asked {Words.Ago(l.At, time.GetUtcNow())}.",
