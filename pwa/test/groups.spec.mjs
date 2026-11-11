@@ -207,7 +207,7 @@ for (const width of [1440, 390]) {
       await name.fill(' Personal ');
       await name.press('Enter');
       await expect(page.locator('.group-name')).toHaveText(['Team', 'Personal']);
-      await expect(page.getByRole('button', { name: /^Personal, 1 session/ })).toHaveAttribute('aria-expanded', 'true');
+      await expect(page.getByRole('button', { name: /^Personal group,.*1 session$/ })).toHaveAttribute('aria-expanded', 'true');
       await expect(row(page, CLAUDE).locator('.row-main')).toBeFocused();
       await reload(page);
       await expect.poll(() => groupRows(page, 'Personal')).toEqual([CLAUDE]);

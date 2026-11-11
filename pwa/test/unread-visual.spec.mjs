@@ -38,8 +38,7 @@ async function setup(page) {
 
 const geometry = (page) => page.locator('.session > .row-main').evaluateAll((els) => els.map((el) => {
   const age = el.querySelector('.row-age');
-  const signal = el.querySelector('.unread-dot') ?? age;
-  const r = el.getBoundingClientRect(), a = signal.getBoundingClientRect(), cs = getComputedStyle(el);
+  const r = el.getBoundingClientRect(), a = age.getBoundingClientRect(), cs = getComputedStyle(el);
   const ink = document.createRange();
   ink.selectNodeContents(age);
   const text = ink.getBoundingClientRect(), slot = age.getBoundingClientRect();
@@ -61,7 +60,7 @@ for (const width of [390, 820]) {
         expect(r.height).toBeGreaterThanOrEqual(44);
         expect(r.overflow).toBeLessThan(0.5);
       }
-      await expect(page.locator('.unread-dot')).toHaveCount(0);
+      await expect(row(page, NEW).locator('.row-age')).toBeVisible();
       const style = (id, selector) => row(page, id).locator(selector).evaluate((el) => {
         const s = getComputedStyle(el); return { color: s.color, weight: s.fontWeight, opacity: s.opacity };
       });
