@@ -1484,6 +1484,22 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Empty(injector.Plans);
     }
 
+    [Theory]
+    [InlineData("forged-rail-ctrl-c-interrupt-over-dialog")]
+    [InlineData("forged-rail-ctrl-c-stop-agents-over-dialog")]
+    public async Task A_forged_Ctrl_C_rail_above_a_dialog_gets_none_of_the_reply(string screen)
+    {
+        injector.Screen = _ => Captured(screen);
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "go on");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("reply at the machine", reason);
+        Assert.Empty(injector.Plans);
+        Assert.Empty(injector.Refused);
+    }
+
     [Fact]
     public async Task A_reply_to_Copilot_in_vim_normal_mode_is_refused_and_nothing_is_typed()
     {
