@@ -49,7 +49,12 @@ network_error() {
   local errors
   errors=$(grep -E '^[EW]:' "$1" | grep -vE '^[EW]: (Unable to fetch some archives|Some index files failed to download)' || true)
   [ -n "$errors" ] || return 1
-  ! grep -qviE "(^|[^[:alnum:].-])${network_host//./\\.}([^[:alnum:].-]|$)" <<< "$errors" &&
+  if grep -qF 'mirror+file:/etc/apt/apt-mirrors.txt/' <<< "$errors"; then
+    grep -q '^https://archive\.ubuntu\.com/ubuntu/' "$mirrors" || return 1
+    [ "$left_azure" = true ] || grep -q '^http://azure\.archive\.ubuntu\.com/' "$mirrors" || return 1
+  fi
+  if [ "$left_azure" = true ] && grep -qF azure.archive.ubuntu.com <<< "$errors"; then return 1; fi
+  ! grep -qviE "(^|[^[:alnum:].-])${network_host//./\\.}([^[:alnum:].-]|$)|^[EW]: Failed to fetch mirror\\+file:/etc/apt/apt-mirrors\\.txt/" <<< "$errors" &&
     ! grep -qviE '^[EW]: Failed to fetch .* (Temporary failure resolving|Could not resolve|Could not connect|Unable to connect|Connection (failed|timed out|refused|reset)|Network is unreachable|5[0-9]{2}([[:space:]]|$))' <<< "$errors"
 }
 
