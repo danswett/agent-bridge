@@ -604,7 +604,8 @@ hints, described separately from each item's name. Hints hide only with no hover
 a coarse pointer and no keydown since page load. Disabled moves stay visible and
 keyboard-reachable with a second-line reason: switch to Your order, clear the
 search or machine filter, already at the top, or already at the bottom. An unfinished
-snapshot asks to wait for the session list instead of claiming a group edge. They do
+snapshot asks to wait for the session list instead of claiming a group edge; the
+Needs you filter asks to clear that filter. Disabled moves do
 nothing and keep the menu open. `test/order.spec.mjs` covers these states in
 Chromium and WebKit; this is not evidence that the held real-iPad check passed.
 

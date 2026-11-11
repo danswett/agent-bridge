@@ -477,6 +477,7 @@ export class SessionListView {
       const reason = !disabled ? null : this.order.sort !== 'yours'
         ? 'Switch to Your order to move sessions'
         : this.filter ? 'Clear the search or machine filter to move sessions'
+        : this.needsOnly ? 'Clear the Needs you filter to move sessions'
         : !edge ? 'Wait for the session list to finish loading'
         : delta < 0 ? 'Already at the top' : 'Already at the bottom';
       return {

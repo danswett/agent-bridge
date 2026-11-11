@@ -143,11 +143,12 @@ test('row menu keys describe the moves without changing their accessible names',
   await expect(menu.getByRole('menuitem', { name: 'Pin', exact: true })).toHaveAccessibleDescription('');
 });
 
-for (const { state, id = CODEX, sort, filter, direction = 'up', reason } of [
+for (const { state, id = CODEX, sort, filter, needsOnly, direction = 'up', reason } of [
   { state: 'Most recent', sort: 'recent', reason: 'Switch to Your order to move sessions' },
   { state: 'Machine', sort: 'machine', reason: 'Switch to Your order to move sessions' },
   { state: 'search', filter: 'codex', reason: 'Clear the search or machine filter to move sessions' },
   { state: 'machine search', filter: 'Demo machine', reason: 'Clear the search or machine filter to move sessions' },
+  { state: 'Needs you filter', id: COPILOT, needsOnly: true, reason: 'Clear the Needs you filter to move sessions' },
   { state: 'first in Sessions', id: COPILOT, reason: 'Already at the top' },
   { state: 'last in Sessions', id: DELEGATING, direction: 'down', reason: 'Already at the bottom' },
   { state: 'alone in Pinned', reason: 'Already at the top' },
@@ -156,6 +157,7 @@ for (const { state, id = CODEX, sort, filter, direction = 'up', reason } of [
     await openDemo(page);
     if (sort) { await page.locator('#session-sort').selectOption(sort); }
     if (filter) { await page.locator('#search').fill(filter); }
+    if (needsOnly) { await page.evaluate(() => window.agentBridgeDemo.page.view.setNeedsOnly(true)); }
     if (state === 'alone in Pinned') {
       await card(page, id).locator('.row-main').press('Shift+F10');
       await card(page, id).getByRole('menuitem', { name: 'Pin', exact: true }).click();
