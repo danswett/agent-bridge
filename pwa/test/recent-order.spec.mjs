@@ -32,11 +32,26 @@ async function setup(page, width) {
   await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);
 }
 
+async function firstBatch(page, id) {
+  await update(page, id);
+  // A native layout scroll can acquire a timed hold after setup pauses the clock.
+  // Pump animation frames until the batch is drawn, not for a guessed total delay.
+  await expect.poll(async () => {
+    await page.clock.runFor(16);
+    return (await order(page))[0];
+  }, { intervals: [0] }).toBe(id);
+}
+
 for (const width of [390, 1440]) {
+  test(`initial scrolling settles before the first Most recent batch at ${width}`, async ({ page }) => {
+    await setup(page, width);
+    await page.locator('#list-pane').dispatchEvent('scroll');
+    await firstBatch(page, C);
+  });
+
   test(`Most recent batches busy rows and releases overlapping holds at ${width}`, async ({ page }) => {
     await setup(page, width);
-    await update(page, C);
-    await expect.poll(async () => (await order(page))[0]).toBe(C);
+    await firstBatch(page, C);
     const shown = await order(page);
     await page.clock.runFor(1000);
     await update(page, B);
