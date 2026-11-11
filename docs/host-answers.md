@@ -16,11 +16,37 @@ or reshaped fields, the session-host delivery wedge, and unknown messages are
 ineligible. Network wording is not guessed; adding a network signature needs a
 captured record and refusal tests first.
 
-This predicate does not send anything, schedule retries, change attention, or
-grant permission to act. The bounded loop, shared owner/auto attempt counter,
-attempt visibility and staged healing remain follow-up work on #1846. Any later
-sender must use the existing guarded `session.reply` path, preserving G5 and #67,
-and must not answer a question, trust prompt or permission confirmation.
+This predicate does not send anything or grant permission to act.
+
+### Inert retry episode contract (#1846)
+
+`RetryEpisode` is an internal, unwired Host.Delivery component, not an enabled
+retry loop. One instance owns one session/error episode. Inputs are its session
+UUID, guarded `ISessionReplier`, clock, safe log callback, and a fresh observation
+callback. Observations carry the original error time, captured error data, process
+identity, non-error activity version, and eligibility (live Copilot, idle, writable,
+no question/trust/permission prompt). Healing, any new activity/person reply,
+process restart, or lost eligibility permanently stops that instance. A new error
+alone must not change the activity version or create another episode.
+
+Automatic slots are 30, 90 and 180 seconds from the original error. Owner sends
+use the same counter but may run sooner. Admission consumes one of three attempts,
+even on failure, and five minutes expires the original episode using monotonic
+elapsed time. Each send types exactly `continue` through existing guarded
+`ReplyAsync`, with host-only `RequireIdle`; it never answers a prompt.
+The caller supplies a request UUID and the previously captured `NextAttempt`.
+In-flight exclusion, spent UUIDs and the expected attempt prevent an owner press,
+duplicate call or stale automatic slot from sending that attempt twice; the replier
+also deduplicates the UUID. Cancellation prevents further admissions, not undoing
+an already admitted delivery. Unconfirmed/refused/failed delivery ends the episode.
+Safe snapshots/logs expose attempt number, time, owner/auto reason and outcome;
+neither raw error text nor the replier's reason is copied.
+
+**Required before runtime enablement:** the #1846 final-effect freshness fence
+must recheck this episode/activity/process after the typing queue and before keys.
+Admission alone is not that fence. Production ownership, timers, owner Retry wiring,
+protocol visibility and staged healing remain follow-up work; #1846 stays open.
+Existing G5, #67 and replier guards are unchanged.
 
 ## What can be answered
 
