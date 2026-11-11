@@ -450,7 +450,7 @@ static class MergeRuleCommand
                 var run = runs[i];
                 var sha = MergeRule.Short(run.GetProperty("head_sha").GetString() ?? "");
                 var id = run.GetProperty("id").GetInt64();
-                var attempt = run.TryGetProperty("run_attempt", out var a) && a.ValueKind == JsonValueKind.Number ? a.GetInt32() : 1;
+                var attempt = RunAttempt(run);
                 if (run.GetProperty("status").GetString() == "completed")
                 {
                     var conclusion = run.GetProperty("conclusion").GetString() ?? "without a result";
@@ -502,14 +502,36 @@ static class MergeRuleCommand
         }
     }
 
+    static int RunAttempt(JsonElement run) =>
+        run.TryGetProperty("run_attempt", out var value) && value.ValueKind == JsonValueKind.Number
+        && value.TryGetInt32(out var attempt) && attempt > 0
+            ? attempt
+            : throw new InvalidOperationException("CI run has missing or invalid run_attempt");
+
     static MainFact? GreenFallback(Session session, string path, IReadOnlyList<JsonElement> runs, int except, out string log)
     {
         // Run ids aren't commit order: a green ancestor within the cap may have an older run id.
+        // But an older success must never leap over a finished failure or an active rerun.
         var candidates = new List<(string Sha, List<string> After)>();
-        foreach (var candidate in Enumerable.Range(0, runs.Count).Where(n => n != except
-            && runs[n].GetProperty("status").GetString() == "completed" && runs[n].GetProperty("conclusion").GetString() == "success"))
+        foreach (var candidate in Enumerable.Range(0, runs.Count).Where(n => n != except))
         {
-            var sha = runs[candidate].GetProperty("head_sha").GetString()!;
+            var run = runs[candidate];
+            var attempt = RunAttempt(run);
+            if (run.GetProperty("status").GetString() != "completed")
+            {
+                if (attempt > 1)
+                    break;
+                continue;
+            }
+            if (run.GetProperty("conclusion").GetString() != "success")
+            {
+                if (run.GetProperty("conclusion").GetString() == "cancelled" && attempt == 1
+                    && NeverStarted(session, run.GetProperty("id").GetInt64())
+                    && BuildsOn(session, runs[0].GetProperty("head_sha").GetString() ?? "", run.GetProperty("head_sha").GetString() ?? ""))
+                    continue;
+                break;
+            }
+            var sha = run.GetProperty("head_sha").GetString()!;
             if (CommitsAfter(session, sha) is { Count: > 0 } after && after.Count <= session.Config.MainGreen.FallbackCommits)
                 candidates.Add((sha, after));
         }
@@ -591,7 +613,7 @@ static class MergeRuleCommand
         // pull request failed for the length of a CI run after each merge to main.
         static bool Pending(JsonElement run) =>
             run.GetProperty("status").GetString() is "queued" or "in_progress" or "waiting" or "requested" or "pending"
-            && !(run.TryGetProperty("run_attempt", out var a) && a.ValueKind == JsonValueKind.Number && a.GetInt32() > 1);
+            && RunAttempt(run) == 1;
         string? Red(JsonElement run) =>
             after.Contains(run.GetProperty("head_sha").GetString() ?? "", StringComparer.Ordinal)
             && !Pending(run)
@@ -643,7 +665,7 @@ static class MergeRuleCommand
             {
                 if (run.GetProperty("head_sha").GetString() != sha)
                     return false;
-                var attempt = run.TryGetProperty("run_attempt", out var a) ? a.GetInt32() : 1;
+                var attempt = RunAttempt(run);
                 var status = run.GetProperty("status").GetString();
                 if (status == "completed" && run.GetProperty("conclusion").GetString() == "success")
                     continue;

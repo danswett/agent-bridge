@@ -508,6 +508,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      The evaluator also reads each later commit's CI runs: a finished failure, an active rerun,
      a started cancellation, an incomplete list or any read error still blocks. Seven commits
      back, or a later commit without its own passing merge rule, cannot use the fallback.
+     Coverage is by each commit's merge-rule pass, not tree identity: an untested combination within the six-commit window is caught by the next main run.
      Queued/running first attempts keep their existing behavior. While main
      isn't green, every pull request fails, its description starting `Main is red (CI <sha>)`;
      main unread, or with no finished run, fails closed. The fix itself gets the `fixes-main`
