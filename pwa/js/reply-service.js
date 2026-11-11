@@ -28,13 +28,19 @@ export class ReplyService extends AnswerService {
 
   // blobs(): the blob store through the current relay connection (blobs.js RelayBlobs), or null.
   constructor(options) {
+    const images = options.images ?? sentImages, retention = new WeakMap();
     super({
       ...options,
+      onTap: (entry) => {
+        const account = images.account;
+        // A retry must not acquire permission to restore bytes cleared after the original tap.
+        retention.set(entry.answer, { account, generation: images.generation, stamp: entry.answer.attachments.length && account ? images.stamp?.() : null });
+        options.onTap?.(entry);
+      },
       send: async (client, data, entry, progress, stage) => {
         const files = entry?.answer?.attachments ?? [];
-        const images = options.images ?? sentImages, account = images.account;
-        const generation = images.generation;
-        const stamp = files.length && account ? await images.stamp?.() : null;
+        const { account, generation, stamp } = retention.get(entry.answer);
+        const retainedStamp = await stamp;
         const abort = new AbortController();
         this.#sending.set(entry.key, abort);
         try {
@@ -52,7 +58,7 @@ export class ReplyService extends AnswerService {
           if (files.length) { progress({ sent: total, total, phase: 'reply' }); }
           // Its files' time is the tap's to sent, not the machine's.
           const result = await client.reply(data, { onProgress: stage, onSent: sent(entry) });
-          if (result.outcome === 'delivered' && result.attachments?.length && images.account === account && images.generation === generation) { await images.remember(result.attachments, files, account, stamp); }
+          if (result.outcome === 'delivered' && result.attachments?.length && images.account === account && images.generation === generation) { await images.remember(result.attachments, files, account, retainedStamp); }
           return result;
         } catch (e) {
           if (abort.signal.aborted) { throw Object.assign(new Error(CANCELLED), { fromHost: true, reason: CANCELLED }); }
