@@ -3,11 +3,15 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { SessionOrder, orderKey } from '../../js/session-order.js';
+import { RecentOrder } from '../../js/recent-order.js';
 import { ReadDwell, DWELL_MS } from '../../js/read-dwell.js';
+
+const document = { activeElement: null, addEventListener() {} };
 
 class Element {
   children = [];
   dataset = {};
+  get ownerDocument() { return document; }
   get firstChild() { return this.children[0] ?? null; }
   get nextSibling() { return this.parent?.children[this.parent.children.indexOf(this) + 1] ?? null; }
   append(child) { this.insertBefore(child, null); }
@@ -20,6 +24,7 @@ class Element {
     if (this.parent) { this.parent.children.splice(this.parent.children.indexOf(this), 1); this.parent = null; }
   }
   contains() { return false; }
+  closest() { return null; }
   querySelectorAll() { return this.children; }
   after() {}
   addEventListener() {}
@@ -42,8 +47,10 @@ class Card {
 const source = readFileSync(new URL('../../js/ui/views.js', import.meta.url), 'utf8')
   .replace(/^import .*;\r?$/gm, '').replace(/^export /gm, '');
 const SessionListView = vm.runInNewContext(`${source}\nSessionListView`, {
-  h: () => new Element(), SessionCard: Card, RowMenu: class {}, SessionOrder, ReadDwell,
-  whileVisible() {}, document: { activeElement: null }, queueMicrotask,
+  h: () => new Element(), SessionCard: Card, RowMenu: class {}, SessionOrder, RecentOrder, ReadDwell,
+  whileVisible() {}, document, queueMicrotask, AbortController,
+  setTimeout: (...args) => globalThis.setTimeout(...args),
+  clearTimeout: (handle) => globalThis.clearTimeout(handle),
 }, { filename: 'views.js' });
 
 for (const pinned of [false, true]) {

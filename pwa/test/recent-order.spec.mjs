@@ -23,12 +23,12 @@ async function update(page, id, question = null) {
 }
 async function setup(page, width) {
   await page.setViewportSize({ width, height: 900 });
+  await page.clock.install();
   await page.goto('?demo=1&static=1');
   await page.waitForSelector('html[data-demo-ready]');
   await page.locator('#session-sort').selectOption('recent');
   await page.mouse.move(width - 1, 0);
   await page.evaluate(() => document.activeElement?.blur());
-  await page.clock.install();
   await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);
 }
 
