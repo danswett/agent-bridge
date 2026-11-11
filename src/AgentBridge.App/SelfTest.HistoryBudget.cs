@@ -229,6 +229,7 @@ static partial class SelfTest
             var wheelReady = await Until(() => scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
             Wheel(window, list);
             var wheeled = await Until(() => scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
+            check(wheelReady && wheeled, "a native wheel takes the view away from the latest before older drawing finishes");
             await Task.Delay(350);
             check(wheelReady && wheeled && scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, "keeps the view taken by a native wheel while older turns draw");
         }

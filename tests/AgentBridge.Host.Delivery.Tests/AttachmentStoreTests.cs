@@ -469,10 +469,10 @@ public sealed class AttachmentStoreTests : IDisposable
             blobs.Release.SetResult();
         }
         Assert.Equal(start.Blob!.Id, await finished);
+        Assert.Empty(Directory.GetFiles(Incoming));
         var e = Assert.Throws<InvalidOperationException>(() => s.Start(Phone, start));
 
         Assert.Equal("the attachment's bytes do not match its sha256, so it was dropped; send it again", e.Message);
-        Assert.Empty(Directory.GetFiles(Incoming));
         Assert.Equal([start.Blob!.Id], blobs.Forgotten);
         Assert.Contains("is not on the host", s.Claim(Phone, Refs(start)).Problem);
     }

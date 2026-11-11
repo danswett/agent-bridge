@@ -3652,6 +3652,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
         var answering = AnswerResultAsync(ch, TwoPicked, Guid.NewGuid().ToString());
         await Wait.UntilAsync(() => Escaped(), "the Esc that resets the form", Patience);
+        Assert.Empty(AfterEscape());
         Fixture.Append(events, Copilot.ToolDone("q2", second++));
         if (other is not null)
         {
