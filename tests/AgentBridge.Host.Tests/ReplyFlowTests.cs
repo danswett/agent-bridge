@@ -59,12 +59,13 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         f.Dispose();
     }
 
-    ReplyService Replier(bool platform = true, IAgentHaBridgeProbe? g5 = null) => new(source, f.Processes, g5 ?? probe, new NoGuard(), injector, new ReplyOptions
+    ReplyService Replier(bool platform = true, IAgentHaBridgeProbe? g5 = null, TimeProvider? time = null) => new(source, f.Processes, g5 ?? probe, new NoGuard(), injector, new ReplyOptions
     {
         CopilotHome = f.CopilotHome,
         PlatformSupported = platform,
         ConfirmTimeout = TimeSpan.FromSeconds(2),
         PollInterval = TimeSpan.FromMilliseconds(25),
+        Time = time ?? TimeProvider.System,
     }, gate: gate);
 
     AnswerService Answerer(IAgentHaBridgeProbe? g5 = null) => new(source, f.Processes, g5 ?? probe, new NoGuard(), injector, new AnswerOptions
@@ -768,23 +769,35 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     public Task Two_replies_of_the_same_words_need_two_prompts_one_each() => TwoRepliesAsync();
 
     [Fact]
-    public Task Two_replies_of_the_same_words_need_two_prompts_even_when_the_test_continuation_is_delayed() =>
-        TwoRepliesAsync(() => Task.Delay(TimeSpan.FromSeconds(3)));
-
-    async Task TwoRepliesAsync(Func<Task>? beforeRecording = null)
+    public async Task Fifty_pairs_of_identical_replies_each_need_their_own_prompt()
     {
+        var ch = await OpenAsync();
+        for (var pair = 0; pair < 50; pair++) { await TwoRepliesAsync(ch); }
+    }
+
+    async Task TwoRepliesAsync(SecureChannel? channel = null)
+    {
+        // A slow test continuation must not spend either reply's confirmation window (#1995).
+        await using var clock = new PollClock(frozen: true);
+        Serve(Answerer(), Replier(time: clock));
+        var confirming = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        clock.OnNextWait(() => confirming.TrySetResult());
+
         // Both are typed into a working session before it takes either, and it records one.
         injector.OnInject = null;
-        var ch = await OpenAsync();
+        var ch = channel ?? await OpenAsync();
         var first = ReplyAsync(ch, "yes");
-        await HostWait.UntilAsync(() => injector.Plans.Count == 1, "the first reply to be typed", Patience);
-        await Task.Delay(300);
+        // Confirmation starts only after the first reply releases its session's typing claim.
+        await confirming.Task.WaitAsync(Patience);
+        var typed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        injector.OnInject = _ => typed.TrySetResult();
         var second = ReplyAsync(ch, "yes");
-        await HostWait.UntilAsync(() => injector.Plans.Count == 2, "the second reply to be typed", Patience);
-        await Task.Delay(300);
-        // A busy runner can leave this continuation unscheduled beyond both confirmation windows.
-        if (beforeRecording is not null) { await beforeRecording(); }
+        await typed.Task.WaitAsync(Patience);
         Fixture.Append(events, Prompt("yes", "steering"));
+
+        var recorded = await Task.WhenAny(first, second).WaitAsync(Patience);
+        Assert.Equal("delivered", (await recorded).Outcome);
+        clock.Run();
 
         // That prompt is the record of one of them, never of both.
         Assert.Equal(["delivered", "unconfirmed"], new[] { (await first).Outcome, (await second).Outcome }.Order());
