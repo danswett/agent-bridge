@@ -43,6 +43,9 @@ internal static class Cli
 
     public static readonly CommandSpec[] Commands =
     [
+        new("conformance", Options: ["--client", "--runs", "--capabilities", "--results"],
+            Required: ["--client", "--runs", "--capabilities", "--results"],
+            Usage: "conformance --client <name> --runs <json> --capabilities <json> --results <jsonl>: print the named client's recorded conformance matrix; non-passing required rows exit 1"),
         new("baseline save", Options: ["--out"], Required: ["--out"],
             Usage: "baseline save --out <file>: hash every file agent-ha-bridge installed or registered, and its scheduled tasks"),
         new("baseline compare", Options: ["--baseline"], Repeatable: ["--allow", "--ignore"], Required: ["--baseline"],
