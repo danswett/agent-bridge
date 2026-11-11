@@ -63,7 +63,7 @@ in daily use on DSWETT-HOME, DSWETT-DEV-VM1, the ARM laptop, the Dev Box and the
 **Development must not degrade it.** The guardrails below remain requirements
 while compatibility is supported; recording the retirement decision does not
 disable them. Only the evidence-backed retirement process in §0.2 may remove the
-HA path. A PR that bypasses a current guard is not merged.
+HA path. A PR that violates one is not merged.
 
 | # | Guardrail | Why it matters (what would break) |
 |---|---|---|
@@ -95,8 +95,9 @@ is later work, not a retirement prerequisite or an implemented client.
 owns required parity-row evidence, the load parity proof
 [#1949](https://github.com/danswett/agent-bridge/issues/1949) through both pipelines
 (zero loss, zero duplicates, per-sender order and bounded latency), the approved
-HA-off rehearsal on one machine then the other three with zero HA fallbacks, and
-owner sign-off. Rollback is turning HA back on. There is no 24-hour dual run,
+HA-off rehearsal on one machine then the other three with zero HA fallbacks and
+every row exercised at least 3 times, and owner sign-off. Rollback is turning HA
+back on. There is no 24-hour dual run,
 calendar wait or replacement-integration requirement. #319's HA-side migration
 gate is [closed as superseded](https://github.com/danswett/agent-bridge/issues/319#issuecomment-6791721262);
 historical migration/soak results below do not replace this gate.
@@ -223,7 +224,7 @@ in current builds until #1396's retirement gate passes (§0.2).
 | **PWA** | Phone/browser, served from GitHub Pages, never from the relay (§8) | Session list/cards, answer, reply, launch, Web Push |
 | **MCP server** (Node, existing) | Launched by MCP clients | Re-targeted from HA REST to the **local host pipe** with a scoped agent token. Tool names stay, with an alias for `ask_via_home_assistant` |
 | **HA compatibility connector** (current, optional) | Host plug-in | **During the transition: wire-compatible** with today's per-machine and per-session MQTT entities and inputs (G9), so the existing dashboard keeps working for migrated machines. Also sends actionable phone notifications and receives taps. **Never** publishes the dashboard, Lovelace resources or the publication policy (G7). Removal is gated by #1396, then reviewed #389 slices (§0.2) |
-| **HA integration and companion card** (target, optional) | Separate `danswett/agent-bridge-home-assistant` project, inside HA/browser | A paired encrypted Bridge client. HA owns the integration's own lifecycle (setting up and unloading its entry), entities, actions and presentation; Bridge owns generic protocol, session logic, host lifecycle (#805/#874) and host-enforced authorization. #388/#519 own identity/protocol prerequisites; this is not a claim that enrollment or an installable integration is implemented |
+| **HA integration and companion card** (target, optional) | Separate `danswett/agent-bridge-home-assistant` project, inside HA/browser | A paired encrypted Bridge client. HA owns the integration's own lifecycle (setting up and unloading its entry), entities, actions and presentation; Bridge owns generic protocol, session logic, host lifecycle (#805/#874) and host-enforced authorization. #1406/#1418/#1419 govern protocol, pairing and optional-client work; #519 owns agent principals. #388 is superseded, not implemented enrollment or an installable integration |
 
 ### 3.2 Why a separate host process and not "the app is the daemon"
 
@@ -1318,7 +1319,7 @@ The first goal was parity with agent-ha-bridge, then migrating machines. New fea
 |---|---|---|
 | **0 Parity audit** | `docs/parity.md`: every agent-ha-bridge feature, test suite and §6.3 invariant mapped to the new product with evidence (a test or a recorded live test), plus a migration readiness checklist. Each gap becomes a `parity` issue | Every row has evidence or an issue |
 | **1 Close host gaps** | Worktree reclaimer; blob store (large attachments are parity, because phone photos exceed the 256 KiB in-channel limit), then session transfer; Claude and Codex live tests; the gaps found in Stage 0 | One PR each, CI and Codex review, a live test on the VM and the iPhone |
-| **1b Full HA compatibility connector** | A migrated machine stays visible and drivable on the existing HA dashboard. Stages 1-7 preserve the per-machine entity contract. The target is the separate integration/card (#387), not further permanent native shared publication | Retain legacy contract fixtures and disposable HA tests; replacement, writer handover and rollback separately verified under #319 |
+| **1b Full HA compatibility connector** (historical) | A migrated machine stays visible and drivable on the existing HA dashboard. Stages 1-7 preserve the per-machine entity contract while supported. The separate integration/card is optional later work (#1419), not required HA retention | Retain needed legacy contract fixtures and disposable HA tests; the former #319 migration gate is superseded. Current retirement follows #1396 (§0.2), not replacement integration delivery |
 | **2 WinUI slice 2** | Remote machines through the relay, Launch page, hook registration, migration from agent-ha-bridge and rollback, then signing | Hyperloop on the VM |
 | **3 VM rehearsal** | Install agent-ha-bridge on the VM, migrate to the app, run the scripted parity checklist, roll back and confirm the HA bridge is unchanged, restore a snapshot and repeat | A clean pass of the whole checklist in both directions |
 | **4 Real machines** | DEV-VM1 first: read-only shadow comparison with the PS daemon until a **coverage gate** passes (decided 2026-10-29, replacing a fixed week), then a cutover and a soak. Then the laptop, the Dev Box and the Mac. DSWETT-HOME (the writer) last | Coverage gate: at least 100 questions with the 95% upper bound on the mismatch rate ≤ 3% (rule of three), 30 sessions, 500 status transitions, 50 background starts and finishes, 5 compactions, 100 resume snapshots, 50 usage readings, one restart seen, at least 24 h of wall clock, no unexplained mismatch in the last 24 h. No missed answers, rollback available throughout |

@@ -58,7 +58,8 @@ client design is not an installed replacement or a retirement prerequisite.
 
 Removal waits on #1396's required row evidence, #1949's load parity proof,
 the approved HA-off rehearsal (one machine, then the other three, zero HA
-fallbacks) and owner sign-off. No 24-hour dual run or calendar wait; rollback is
+fallbacks, every row exercised at least 3 times) and owner sign-off. No 24-hour dual
+run or calendar wait; rollback is
 turning HA back on. #317 is closed as superseded by #1419; #319 is closed as
 superseded by the rehearsal, not completed migration. #388 is superseded by
 #1406/#1418/#1419. #389 tracks separately reviewed removal, not immediate cleanup.
@@ -90,7 +91,8 @@ principals, and binds standing push access to the current grant. See
 [host config](host-config.md#trusted-peers-disposable-host-foundation). Evaluation is
 disposable-host only: no relay enrollment, production enablement or live migration
 is authorized by this slice. Independent implementation review and final-head CI
-remain gates; the wider HA architecture redirect is tracked separately in #388.
+remain gates. The former headless-client issue #388 is closed as superseded by
+#1406/#1418/#1419; the HA retirement decision and gate belong to #1396.
 
 ### Test timeout diagnostics (#660)
 
@@ -234,16 +236,17 @@ legacy daemon or HA changes. Scope is coordinated on #170.
 - **Next on track A:** S2 (#174), using the sub-agent transcripts the soak recorded (in `~/repos/wt/agent-bridge-soak-transcripts`, not committed). #175 still needs its live check.
 - **Queued backend:** #231 (agents installed later), #257 (provider-neutral account ID), #239, #206, #207, #241.
 
-Historical native publication work under #317, superseded by #387's redirect:
+Historical native publication work under closed #317; #387 records the Nov 11
+partial reversal and #1419 is optional later work:
 - #322's merged protocol-1 policy/fence contract and recordings are retained
   compatibility evidence, not publication enablement. #331/#337 closed unmerged on
   2026-11-05 at 12:45 PT, with branches and heads kept; #345 closed unmerged on
   2026-11-05 at 00:59:49 PT, with sources retained. The
   [retain/extract/supersede boundaries](ha-connector.md#publisher-work-disposition-387)
   replace the former instruction to continue that stack.
-- #319 still gates writer cutover on the replacement integration/card and
-  disposable-HA handover/rollback verification. No live HA or legacy-install
-  changes during development; no cleanup under #389 before that gate.
+- #319's former HA-side writer-cutover gate is closed as superseded by #1396's
+  HA-off rehearsal. No replacement integration is required. No live HA or
+  legacy-install changes during development; #389 removal follows #1396's gate.
 
 </details>
 
@@ -261,11 +264,12 @@ app, PWA, relay and native MCP work ships on its own gates:
 - a qualified main under the serial merge rule;
 - explicit production approval where that is required.
 
-Nothing native waits for Home Assistant, for a shadow PASS, for the dashboard writer cutover
-(#317/#319/#389) or for retiring the legacy bridge. Those are an optional compatibility and
-retirement lane with their own acceptance criteria. #238 needs its own security review and
-product live checks, not a shadow PASS. #45 uses the product's native agent identity, not HA
-credentials. The VM safety and finish rules below apply to this lane only.
+Nothing native waits for Home Assistant, a shadow PASS or retiring the legacy
+bridge. HA retirement follows #1396's current gate, then reviewed #389 removal;
+optional-client delivery (#1419) is a separate later lane, not its prerequisite.
+#238 needs its own security review and product live checks, not a shadow PASS.
+#45 uses the product's native agent identity, not HA credentials. The VM safety
+and finish rules below apply to this historical compatibility lane only.
 
 This scoping does **not** authorize stopping another session's VM, interfering with the soak,
 starting paid resources without authority, skipping a required product test, removing installed

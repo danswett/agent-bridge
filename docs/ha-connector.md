@@ -48,8 +48,9 @@ HA remains available for rollback until #1396's required parity-row evidence,
 load parity proof (#1949), HA-off rehearsal and owner sign-off pass. The Nov 11
 decision supersedes older dual-run durations and count-run gates, including the
 older registry design's slice 11. The rehearsal is one machine, then the other
-three with zero HA fallbacks; rollback is turning HA back on. #319 is closed as
-superseded, not a requirement to ship an HA integration. Keep current credentials,
+three with zero HA fallbacks and every row exercised at least 3 times; rollback
+is turning HA back on. #319 is closed as superseded, not a requirement to ship an
+HA integration. Keep current credentials,
 contract fixtures, reversible migration and G5/G6/G7 until reviewed retirement
 slices disposition them; this design neither passes the gate nor changes them.
 
