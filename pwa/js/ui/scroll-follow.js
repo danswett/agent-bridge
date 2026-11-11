@@ -164,4 +164,3 @@ export class ScrollFollow {
     this.#tail?.view.dispose();
   }
 }
-
