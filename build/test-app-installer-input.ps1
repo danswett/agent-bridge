@@ -50,7 +50,14 @@ try {
         }
         $manifestPath = Join-Path $inputPath 'installer-input.json'
         $manifest = Get-Content $manifestPath -Raw
-        foreach ($case in 'missing identity', 'missing release', 'altered release', 'missing notices', 'foreign notice commit') {
+        $refusals = [ordered]@{
+            'missing identity' = '*missing notice file*installer-input.json'
+            'missing release' = '*missing notice file*Setup.exe'
+            'altered release' = '*release hash mismatch*Setup.exe'
+            'missing notices' = '*missing notice file*manifest.json'
+            'foreign notice commit' = '*notice commit mismatch'
+        }
+        foreach ($case in $refusals.Keys) {
             $setup = Join-Path $releases (Get-AppAssetName $channel 'Installer' '0.1.600')
             $setupBytes = [IO.File]::ReadAllBytes($setup)
             $notices = Join-Path $inputPath 'publish/ThirdPartyNotices/manifest.json'
@@ -67,7 +74,7 @@ try {
             $reason = $null
             try { Assert-AppInstallerInput -InputPath $inputPath -Releases $releases @identity }
             catch { $reason = $_.Exception.Message }
-            if (-not $reason) { throw "$runtime accepted $case" }
+            if ($reason -notlike $refusals[$case]) { throw "$runtime/${case}: unexpected refusal '$reason'" }
             Set-Content -LiteralPath $manifestPath -Value $manifest
             [IO.File]::WriteAllBytes($setup, $setupBytes)
             [IO.File]::WriteAllBytes($notices, $noticeBytes)

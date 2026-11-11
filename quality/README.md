@@ -360,6 +360,15 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      on only for a draft pull request, whatever the plan says).
 
    The jobs, and what each one's for (#459):
+   - `app-installer` keeps its x64 and Arm64 check names and the full install, architecture,
+     distribution-notice and installed-app self-test checks. It waits for `app`, downloads that
+     run's existing architecture/version release artifact and a small notice/identity artifact,
+     and refuses missing input or a different commit, runtime, version, run or release hash
+     before starting Setup. It never repacks or fetches a release from another run. The job
+     uses `!cancelled()` so unavailable upstream input fails the download rather than silently
+     inheriting a skipped check; the plan validator pins this condition too. The job
+     summary and self-test artifact retain the input identity; job duration excludes the wait
+     for `app`. App parallelism and product sharding remain separate #1755 slices.
    - `light` holds the small Linux checks on one runner: `design-gen`, `a11y-contrast`,
      `pwa-unit` with its coverage pass, `pwa-site-csp`, `playwright-apt` and `docs-links`. Each step runs when its
      suite is selected, and every selected one runs even after another fails. It isn't folded

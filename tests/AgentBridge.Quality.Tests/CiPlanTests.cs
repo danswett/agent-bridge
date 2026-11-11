@@ -422,6 +422,7 @@ public class CiPlanTests
         var installerNeeds = Assert.IsType<YamlDotNet.RepresentationModel.YamlSequenceNode>(installer["needs"]);
         Assert.Equal(new[] { "plan", "app" },
             installerNeeds.Children.Select(n => n.ToString()));
+        Assert.StartsWith("!cancelled() && (", installer["if"].ToString(), StringComparison.Ordinal);
         var strategy = (YamlDotNet.RepresentationModel.YamlMappingNode)installer["strategy"];
         var matrix = (YamlDotNet.RepresentationModel.YamlMappingNode)strategy["matrix"];
         var legs = (YamlDotNet.RepresentationModel.YamlSequenceNode)matrix["include"];
