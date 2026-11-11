@@ -2203,6 +2203,82 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal(7, updater.Checks);
     }
 
+    [Theory]
+    [InlineData(UpdateOutcome.Current)]
+    [InlineData(UpdateOutcome.Failed)]
+    [Trait("Category", "Network")]
+    public async Task A_background_rate_limit_preserves_current_but_still_reports_a_real_failed_update(UpdateOutcome outcome)
+    {
+        updater.Found = null;
+        await StartAsync();
+        await AskedAsync(UpdateAskKind.Check, "current-check");
+        prefs = prefs with { LastUpdate = prefs.LastUpdate! with { Outcome = outcome, Request = null } };
+        time.Advance(AutoUpdater.CheckEvery);
+        updater.CheckFails = Limited(time.GetUtcNow().AddMinutes(30));
+        await auto.TickAsync();
+        Assert.Equal(outcome, auto.State.Last!.Outcome);
+        if (outcome == UpdateOutcome.Failed) { Assert.Contains("rate limit", auto.State.Last.Reason); }
+        time.Advance(TimeSpan.FromMinutes(29));
+        await auto.TickAsync();
+        Assert.Equal(2, updater.Checks);
+    }
+
+    [Theory]
+    [InlineData(UpdateOutcome.Current, false)]
+    [InlineData(UpdateOutcome.Current, true)]
+    [InlineData(UpdateOutcome.Failed, false)]
+    [Trait("Category", "Network")]
+    public async Task A_pressed_rate_limited_check_reports_refusal_only_while_no_newer_release_is_known(UpdateOutcome outcome, bool newer)
+    {
+        updater.Found = null;
+        await StartAsync();
+        await AskedAsync(UpdateAskKind.Check, "current");
+        prefs = prefs with { LastUpdate = prefs.LastUpdate! with { Outcome = outcome } };
+        if (newer)
+        {
+            updater.Found = "0.2.0";
+            time.Advance(AutoUpdater.CheckAgainAfter);
+            await AskedAsync(UpdateAskKind.Check, "newer");
+        }
+        time.Advance(AutoUpdater.CheckEvery);
+        var retry = time.GetUtcNow().AddMinutes(30);
+        updater.CheckFails = Limited(retry);
+        foreach (var kind in new[] { UpdateAskKind.Check, UpdateAskKind.Install, UpdateAskKind.Check })
+        {
+            var request = Guid.NewGuid().ToString();
+            await AskedAsync(kind, request);
+            Assert.Equal((!newer && outcome == UpdateOutcome.Current ? UpdateOutcome.Refused : UpdateOutcome.Failed, request), (auto.State.Last!.Outcome, auto.State.Last.Request));
+            Assert.Contains($"checking again after {retry.ToLocalTime():t}", auto.State.Last.Reason);
+            Assert.Equal(newer ? "0.2.0" : null, auto.State.Available);
+        }
+        Assert.Equal(newer ? 3 : 2, updater.Checks);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_restarted_current_machine_answers_consecutive_held_checks_as_refused()
+    {
+        updater.Found = null;
+        var retry = time.GetUtcNow().AddMinutes(30);
+        updater.CheckFails = Limited(retry);
+        prefs = prefs with { LastUpdate = new UpdateResult { Outcome = UpdateOutcome.Current, From = updater.InstalledVersion, At = time.GetUtcNow().AddHours(-1) } };
+        var observed = new ObservedUpdater(updater, time);
+        shared = observed;
+        await StartAsync();
+        await auto.TickAsync();
+        Assert.Equal(UpdateOutcome.Current, prefs.LastUpdate!.Outcome);
+        foreach (var request in new[] { Press, "7bdc8aaa-294b-4b23-bda8-bbb8c03a0906" })
+        {
+            await AskedAsync(UpdateAskKind.Check, request);
+            Assert.Equal((UpdateOutcome.Refused, request), (auto.State.Last!.Outcome, auto.State.Last.Request));
+            Assert.Equal((UpdateOutcome.Refused, request), (prefs.LastUpdate!.Outcome, prefs.LastUpdate.Request));
+            Assert.Contains($"checking again after {retry.ToLocalTime():t}", auto.State.Last.Reason);
+            Assert.Null(observed.CheckedAt);
+            Assert.Null(auto.State.Available);
+        }
+        Assert.Equal(1, updater.Checks);
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task A_rate_limited_check_right_after_an_update_leaves_the_update_for_the_devices_to_see()

@@ -38,13 +38,9 @@ namespace AgentBridge.Host.Core.Updates;
 // relay is as old as the relay's copy (its Age header, which it must send), never "GitHub answered
 // now": FetchedAt says so, and GitHub's own backoff stays in force until GitHub itself answers.
 //
-// The relay also says how old its copy is, so a compromised one could serve an old but valid list
-// with Age 0 for ever, and the floor above only moves when GitHub answers. So GitHub must answer
-// at least every GithubRevalidateEvery: when it last did is kept in the state file
-// (GitHubAnsweredAt), only GitHub's own answer moves it, and once it is that old (or missing,
-// unreadable or in the future) neither the relay nor a list kept from it is used: GitHub is asked,
-// and if it fails the check fails as any GitHub failure does (its hold and backoff), never
-// answered from the relay.
+// The relay controls Age, so GitHub revalidation is due every GithubRevalidateEvery regardless.
+// On rate-limit refusals, validated relay lists are allowed for GithubRelayAtMost from GitHubAnsweredAt,
+// or one persisted bootstrap if missing. Relay replies never renew it; invalid anchors require GitHub success.
 public sealed class ReleaseDiscovery : IDisposable
 {
     // The switch, on now the relay is live (SRE's Worker, #927): flipped by a release, never by a setting.
@@ -57,8 +53,9 @@ public sealed class ReleaseDiscovery : IDisposable
     const string AssetApiPrefix = "https://api.github.com/repos/danswett/agent-bridge/releases/assets/";
     // A relay copy older than this is not used: GitHub is asked, or its backoff says when it will be.
     public static readonly TimeSpan CdnOldest = TimeSpan.FromHours(1);
-    // GitHub itself must answer a check at least this often, whatever the relay says.
+    // GitHub is asked at least this often, whatever the relay says.
     public static readonly TimeSpan GithubRevalidateEvery = TimeSpan.FromHours(6);
+    public static readonly TimeSpan GithubRelayAtMost = TimeSpan.FromHours(24);
     static readonly TimeSpan CdnWait = TimeSpan.FromSeconds(10);
     // GitHub's page of ten releases is tens of KiB.
     const int CdnLargest = 4 * 1024 * 1024;
@@ -156,7 +153,9 @@ public sealed class ReleaseDiscovery : IDisposable
         {
             using var held = await LockAsync(cancellationToken);
             // Read under the lock: another process may have just asked.
-            var state = Sane(Read(), time.GetUtcNow());
+            var readState = Read();
+            var state = Sane(readState, time.GetUtcNow());
+            if (state != readState) { Write(state); }
             var now = time.GetUtcNow();
             T releases = default!;
             var cached = state.Url == url && state.Body is not null && Readable(state.Body, read, out releases);
@@ -170,7 +169,7 @@ public sealed class ReleaseDiscovery : IDisposable
             var floor = channel is not null && state.Url == url && state.Floors?.TryGetValue(Floor(channel, prereleases), out var f) == true ? f : null;
             var askCdn = cdn && url == GitHubList && channel is not null;
             // Only GitHub's own answer moves this, so a relay can't renew its own list's welcome.
-            var revalidate = state.GitHubAnsweredAt is not { } answered || answered > now || now - answered >= GithubRevalidateEvery;
+            var revalidate = state.RelayExpired || state.GitHubAnsweredAt is not { } answered || answered > now || now - answered >= GithubRevalidateEvery;
             if (cached && now < state.FreshUntil && (!holding || state.Source == Sources.Cdn))
             {
                 if (state.Source != Sources.Cdn) { return releases; }
@@ -179,7 +178,7 @@ public sealed class ReleaseDiscovery : IDisposable
                 // not be this one's (a list with a pre-release above GitHub's floor and an older
                 // stable release would take a stable caller back; review 6712185589).
                 var problem = channel is null ? "this check's channel isn't known"
-                    : revalidate ? $"GitHub has not answered here in the last {Span(GithubRevalidateEvery)}"
+                    : revalidate && (!holding || state.Problem != Problems.Limited || !RelayWindow(state, now)) ? $"GitHub has not answered here in the last {Span(GithubRevalidateEvery)}"
                     // Its age now, not when it was fetched: a copy taken at 59 minutes may not be
                     // served for another interval past the hour (review 6712407884).
                     : state.FetchedAt is not { } copied || now - copied > CdnOldest ? $"its copy is more than {Span(CdnOldest)} old now"
@@ -188,17 +187,35 @@ public sealed class ReleaseDiscovery : IDisposable
                 log?.Invoke($"update check: the CDN's release list kept here was not used for this check, as {problem}; {(holding ? "GitHub is not asked again yet" : "asking GitHub")}");
                 askCdn = false;
             }
-            if (askCdn && revalidate)
+            Answer? rechecked = null;
+            if (cdn && url == GitHubList && channel is not null && revalidate)
             {
                 log?.Invoke($"update check: the CDN was not asked, as GitHub has not answered here in the last {Span(GithubRevalidateEvery)}; {(holding ? "GitHub is not asked again yet" : "asking GitHub")}");
-                askCdn = false;
+                if (!holding)
+                {
+                    rechecked = await AskAsync(url, cached && state.Source != Sources.Cdn ? state.ETag : null, cancellationToken);
+                    now = time.GetUtcNow();
+                    if (rechecked.Status is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
+                    {
+                        state = BackedOff(state, rechecked, now, url);
+                        Write(state);
+                        holding = true;
+                    }
+                }
+                if (holding && state.Problem == Problems.Limited && state.GitHubAnsweredAt is null && state.RelayBootstrapAt is null && (state.Url is null || state.Url == url))
+                {
+                    state = state with { RelayBootstrapAt = now };
+                    Write(state);
+                }
+                askCdn = holding && state.Problem == Problems.Limited && RelayWindow(state, now);
             }
             if (askCdn)
             {
                 var (body, age, refused) = await AskCdnAsync(floor, installed, channel!, prereleases, cancellationToken);
                 now = time.GetUtcNow();
                 // The deadline may have passed while the relay was answering.
-                if (state.GitHubAnsweredAt is not { } before || before > now || now - before >= GithubRevalidateEvery)
+                if ((state.GitHubAnsweredAt is not { } before || before > now || now - before >= GithubRevalidateEvery)
+                    && (!holding || state.Problem != Problems.Limited || !RelayWindow(state, now)))
                 {
                     body = null;
                     refused = $"GitHub has not answered here in the last {Span(GithubRevalidateEvery)}";
@@ -218,12 +235,13 @@ public sealed class ReleaseDiscovery : IDisposable
                     };
                     Write(state);
                     log?.Invoke($"update check: the release list came from the CDN, from its copy of {Span(a)} ago");
+                    if (revalidate && (state.GitHubAnsweredAt ?? state.RelayBootstrapAt) is { } start) { log?.Invoke($"update check: using the relay under a grace window ending {(start + GithubRelayAtMost):O}"); }
                     return relayed;
                 }
                 log?.Invoke($"update check: the CDN's release list was not used, as {refused ?? "it could not be read"}; {(holding ? "GitHub is not asked again yet" : "asking GitHub")}");
             }
             if (holding) { throw Held(state); }
-            var answer = await AskAsync(url, cached && state.Source != Sources.Cdn ? state.ETag : null, cancellationToken);
+            var answer = rechecked ?? await AskAsync(url, cached && state.Source != Sources.Cdn ? state.ETag : null, cancellationToken);
             now = time.GetUtcNow();
             var unchanged = answer.Status == HttpStatusCode.NotModified && cached;
             if (unchanged || answer.Status == HttpStatusCode.OK && answer.Body is not null && Readable(answer.Body, read, out releases))
@@ -241,25 +259,39 @@ public sealed class ReleaseDiscovery : IDisposable
                     Problem = null,
                     Source = Sources.GitHub,
                     GitHubAnsweredAt = url == GitHubList ? now : state.GitHubAnsweredAt,
+                    RelayBootstrapAt = url == GitHubList ? null : state.RelayBootstrapAt,
+                    RelayExpired = url == GitHubList ? false : state.RelayExpired,
                     Floors = ChannelNewest(body),
                 };
                 Write(state);
                 if (cdn) { log?.Invoke("update check: the release list came from GitHub"); }
                 return releases;
             }
-            var failures = state.Failures + 1;
-            var backoff = TimeSpan.FromTicks(Math.Min(LongestBackoff.Ticks, FirstBackoff.Ticks << Math.Min(failures - 1, 16)));
-            var after = answer.Wait is { } asked ? Clamp(asked) : backoff;
-            state = state with
-            {
-                NotBefore = now + after + BackoffJitter * random(),
-                Failures = failures,
-                Problem = answer.Problem ?? Problems.Unexpected,
-            };
+            state = BackedOff(state, answer, now, url);
             Write(state);
             throw Held(state);
         }
         finally { turn.Release(); }
+    }
+
+    bool RelayWindow(State state, DateTimeOffset now)
+    {
+        var sane = Sane(state, now);
+        if (sane != state) { Write(sane); }
+        return !unsaved && !sane.RelayExpired && (sane.GitHubAnsweredAt ?? sane.RelayBootstrapAt) is { } start && start <= now && now - start < GithubRelayAtMost;
+    }
+
+    State BackedOff(State state, Answer answer, DateTimeOffset now, string url)
+    {
+        var failures = state.Failures + 1;
+        var backoff = TimeSpan.FromTicks(Math.Min(LongestBackoff.Ticks, FirstBackoff.Ticks << Math.Min(failures - 1, 16)));
+        var after = answer.Wait is { } asked ? Clamp(asked) : backoff;
+        return Sane(state with
+        {
+            NotBefore = now + after + BackoffJitter * random(), Failures = failures, Problem = answer.Problem ?? Problems.Unexpected,
+            RelayBootstrapAt = url == GitHubList && answer.Problem == Problems.Limited && state.GitHubAnsweredAt is null
+                ? state.RelayBootstrapAt ?? now : state.RelayBootstrapAt,
+        }, now);
     }
 
     static TimeSpan Clamp(TimeSpan wait) => wait < FirstBackoff ? FirstBackoff : wait > LongestWait ? LongestWait : wait;
@@ -276,6 +308,9 @@ public sealed class ReleaseDiscovery : IDisposable
     {
         FreshUntil = state.FreshUntil > now + Interval + IntervalJitter ? now : state.FreshUntil,
         NotBefore = state.NotBefore > now + LongestWait + BackoffJitter ? now : state.NotBefore,
+        RelayBootstrapAt = state.RelayBootstrapAt > now || state.GitHubAnsweredAt > now ? DateTimeOffset.MinValue : state.RelayBootstrapAt,
+        GitHubAnsweredAt = state.GitHubAnsweredAt > now ? null : state.GitHubAnsweredAt,
+        RelayExpired = state.RelayExpired || (state.GitHubAnsweredAt ?? state.RelayBootstrapAt) is { } start && now - start >= GithubRelayAtMost,
     };
 
     sealed record Answer(HttpStatusCode Status, string? Body = null, string? ETag = null, TimeSpan? Wait = null, string? Problem = null);
@@ -574,10 +609,12 @@ public sealed class ReleaseDiscovery : IDisposable
             (unsaved, underneath) = (false, disk.Saved);
             return memory = disk;
         }
-        catch (JsonException) { return memory = memory with { GitHubAnsweredAt = null }; }
+        catch (JsonException) { return memory = memory with { GitHubAnsweredAt = null, RelayBootstrapAt = DateTimeOffset.MinValue }; }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return memory; }
     }
 
+    // Unsaved expiry fails closed here, but cannot revoke an older file across a
+    // restart and clock rollback; durable expiry requires a successful replacement.
     void Write(State state)
     {
         memory = state = state with { Saved = time.GetUtcNow() };
@@ -626,6 +663,9 @@ public sealed class ReleaseDiscovery : IDisposable
         public string? Source { get; init; }
         // When GitHub itself last answered a check (a 200, or a 304 for a list it gave): never a relay's.
         public DateTimeOffset? GitHubAnsweredAt { get; init; }
+        // Only this repository's GitHub list can start or clear the missing-answer bootstrap.
+        public DateTimeOffset? RelayBootstrapAt { get; init; }
+        public bool RelayExpired { get; init; }
         // What GitHub's last list offered each channel (ChannelNewest), never a relay's.
         public Dictionary<string, string>? Floors { get; init; }
     }

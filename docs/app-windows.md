@@ -482,25 +482,37 @@ into one folder with one version. An app update is a host update, so they never 
   `github`) and said in the app's and the host's logs at each ask, with the relay copy's age or
   the plain reason it wasn't used, never an exception's text.
 
-  **GitHub must answer at least every 6 hours** (`ReleaseDiscovery.GithubRevalidateEvery`). The
+  **GitHub is revalidated every 6 hours** (`ReleaseDiscovery.GithubRevalidateEvery`). The
   relay says how old its copy is, so a compromised relay could serve an old but valid list with
   `Age: 0` for ever, and the floor above only moves when GitHub answers: machines would be frozen
   on that list and never offered anything newer. So when GitHub last answered a check (a 200, or a
   304 for its list) is kept in the same state file, `release-discovery.json` (`gitHubAnsweredAt`,
   written atomically; one file shared by the app and every profile's host, so a GitHub answer to
-  any of them counts for all), and only GitHub's own answer moves it, never the relay's. Once it
-  is 6 hours old, or missing, unreadable or in the future, neither the relay nor a relay's list
-  kept in the file is used for the check: GitHub is asked. If GitHub then fails (limited,
-  offline) the check fails as any GitHub failure does (the hold and backoff of #934), and is never
-  answered from the relay. A machine that has never had an answer from GitHub asks GitHub first.
-  Inside the 6 hours the relay is used as above.
+  any of them counts for all), and only GitHub's own answer moves it, never the relay's.
+  Once it is 6 hours old or missing, GitHub is asked first, obeying the existing backoff and
+  Retry-After. Only a 403, 429 or persisted rate-limit hold permits the validated relay during
+  a 24-hour window from GitHub's last answer (`GithubRelayAtMost`): bounded extra availability,
+  not indefinitely renewable relay trust. With no GitHub answer, one persisted bootstrap starts
+  at the first refusal. Relay reads, further refusals and restarts never renew either anchor,
+  GitHub's backoff or its version floor. A 500 or network failure still fails as before.
+  Future or corrupt anchors fail closed. Only a 200/304 for the pinned GitHub list renews its
+  answer time and clears the bootstrap and terminal expiry; another list does not. Logs name
+  relay grace and its ending instant. Inside the 6 hours the relay is used as above.
+
+  Observed expiry is saved as `RelayExpired`, so a successfully saved expiry cannot reopen
+  after restart or clock rollback, even back inside the ordinary six-hour interval. This
+  durability depends on a successful state-file replacement. If saving expiry fails, the
+  current process refuses relay grace, but restart plus clock rollback can expose the older
+  unexpired file and permit grace again until its original anchor expires. No restart-safe
+  expiry guarantee is made when those writes fail.
 
   **What a compromised relay can still do** (a risk both reviewers of #1175 accepted): choose
   among this repository's genuine releases, whose feeds and packages still come from GitHub and
   are checked against their checksums, and flip a release's pre-release flag, so a machine with
   Include pre-releases off could be offered a genuine pre-release. It cannot offer anything older
   than GitHub's last list here or than the installed version, and it cannot hold a machine on an
-  older genuine list for more than 6 hours.
+  older genuine list beyond normal six-hour revalidation, or the limited 24-hour grace window,
+  subject to the clock and persistence qualification above.
 * **One channel per architecture** (#222, `build/app-channels.ps1`). x64 is in Velopack's default
   channel, `win`, as every copy installed before Arm64 builds was packed; Arm64 is in
   `win-arm64`. The channel is recorded in the installed package (`current\sq.version`), and
@@ -734,10 +746,13 @@ into one folder with one version. An app update is a host update, so they never 
     however recently a press was answered. A check from Settings that succeeds meanwhile ends the
     hold (#934), unless its answer is a copy older than the refusal (the machine's shared one, or
     the CDN's, #927), and a change of source (Include pre-releases, `feed.txt`) drops it. A press from a
-    device in the meantime is answered with
-    the reason without asking the feed. The reason goes to the devices as the last update's
-    outcome (`failed`), once each time, though never over an update made, or a press answered,
-    in the last day, which the devices may not have seen yet. Velopack's `GithubSource` is given
+    device in the meantime is answered with the refusal and retry time without asking the feed.
+    A known-current machine with nothing newer pending or found keeps that knowledge across
+    consecutive refused presses, including a fresh process loaded from persisted `Current`
+    before any check succeeds: those presses report `refused`, not `failed`. A real failed
+    update or a known newer release still reports failure. Other background refusals report
+    `failed` once each time, never over an update made or a press answered in the last day,
+    which the devices may not have seen yet. Velopack's `GithubSource` is given
     no token, so the checks are unauthenticated.
   * Settings and the background updates share one updater, and only the release actually
     downloaded is applied (`IUpdater.Ready`), checked again immediately before the host stops: a
