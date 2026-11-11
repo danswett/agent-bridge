@@ -107,6 +107,76 @@ const launchHere = async (page) => {
   expect(await machine(page, 'demo', 'launchLog')).toEqual([]);
 };
 
+test.describe('load bars', () => {
+  const full = { state: 'fresh', ageMs: 2000, staleAfterMs: 15000, cpu: { percent: 37.543 }, memory: { totalBytes: 16000, availableBytes: 10000, committedPercent: 91 } };
+  const draw = (page, load, online = true) => page.evaluate(async ({ load, online }) => {
+    const { renderMachines } = await import('/js/ui/views.js');
+    let list = document.getElementById('load-fixture-list');
+    if (!list) {
+      list = document.createElement('ul');
+      list.id = 'load-fixture-list'; list.className = 'machines';
+      document.getElementById('machines').replaceChildren(list);
+    }
+    renderMachines(list, {
+      presence: online ? [{ id: 'fixture', name: 'Measured machine', kind: 'host' }] : [],
+      known: online ? [] : [{ id: 'fixture', name: 'Measured machine', kind: 'host' }],
+      me: 'phone', current: 'fixture', onSelect() {},
+      facts: () => ({ sessions: '2 sessions' }), load: () => load,
+    });
+  }, { load, online });
+
+  test('the live page has no invented load figures before a feed exists', async ({ page }) => {
+    await openDemo(page);
+    await go(page, 'machines');
+    const tile = page.locator(`#machine-list [data-device-id="${LAPTOP}"] .machine-tile`);
+    await expect(tile.getByRole('meter')).toHaveCount(0);
+    await expect(tile.locator('.machine-load-value')).toHaveText(['No figure', 'No figure']);
+  });
+
+  for (const width of [390, 1024, 1440]) {
+    for (const mode of ['dark', 'light', 'contrast']) {
+      test(`exact readings, missing figures and load-only redraw at ${width}px in ${mode}`, async ({ page, browserName }) => {
+        test.skip(mode === 'contrast' && browserName === 'webkit', 'WebKit has no forced-colors emulation');
+        await page.setViewportSize({ width, height: 900 });
+        await page.emulateMedia({ colorScheme: mode === 'dark' ? 'dark' : 'light', forcedColors: mode === 'contrast' ? 'active' : 'none' });
+        await openDemo(page);
+        await go(page, 'machines');
+        await draw(page, full);
+        const tile = page.locator('#load-fixture-list .machine-tile');
+        const cpu = tile.getByRole('meter', { name: 'CPU (whole machine)' });
+        const memory = tile.getByRole('meter', { name: 'Memory used' });
+        await expect(cpu).toHaveAttribute('aria-valuenow', '37.543');
+        await expect(memory).toHaveAttribute('aria-valuenow', '37.5');
+        await expect(tile.locator('.machine-load-value')).toHaveText(['37.543%', '37.5%']);
+        for (const meter of [cpu, memory]) {
+          const ratio = await meter.evaluate((e) => e.firstElementChild.getBoundingClientRect().width / e.getBoundingClientRect().width);
+          expect(ratio).toBeCloseTo(0.375, 2);
+          expect(await meter.evaluate((e) => getComputedStyle(e.firstElementChild).backgroundColor))
+            .not.toBe(await meter.evaluate((e) => getComputedStyle(e).backgroundColor));
+        }
+        await draw(page, { ...full, cpu: { percent: 0 }, memory: { totalBytes: 16000, availableBytes: 16000 } });
+        await expect(cpu).toHaveAttribute('aria-valuenow', '0');
+        await expect(memory).toHaveAttribute('aria-valuenow', '0');
+        await expect(tile.locator('.machine-load-value')).toHaveText(['0%', '0%']);
+        await draw(page, { ...full, state: 'partial', cpu: undefined });
+        await expect(cpu).toHaveCount(0);
+        await expect(memory).toHaveAttribute('aria-valuenow', '37.5');
+        await expect(tile.locator('.machine-load-value')).toHaveText(['No figure', '37.5%']);
+        await expect(tile.locator('.machine-load-track').first()).toHaveCSS('border-top-style', 'dashed');
+        for (const load of [null, { ...full, state: 'stale' }, { ...full, ageMs: 15001 }, { ...full, state: 'unavailable' }]) {
+          await draw(page, load);
+          await expect(tile.getByRole('meter')).toHaveCount(0);
+          await expect(tile.locator('.machine-load-value')).toHaveText(['No figure', 'No figure']);
+        }
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        await draw(page, full, false);
+        await expect(page.locator('#load-fixture-list')).toContainText('Offline');
+        await expect(page.locator('#load-fixture-list [role="meter"]')).toHaveCount(0);
+      });
+    }
+  }
+});
+
 test('Launch here, with every machine shown, opens the panel on that machine and launches there, not on the one last used', async ({ page }) => {
   await openDemo(page);
   // The panel starts on the demo machine, so a press that did not move it would launch there.
