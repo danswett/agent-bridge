@@ -73,7 +73,7 @@ test('initial question positioning is allowed but a completed deliberate reveal 
 
 test('redisplay does not mistake hidden response measurements for arriving content', (t) => {
   const pane = new Pane();
-  const response = {};
+  const response = { getBoundingClientRect: () => ({ height: 20 }) };
   pane.children = [response];
   pane.ownerDocument.defaultView.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
   let visible = true;
@@ -120,3 +120,35 @@ test('opening applies deferred turns received while the cached session was not f
   assert.equal(follow.deferred, false);
   assert.equal(pane.scrollTop, 900);
 });
+
+for (const growth of ['later response', 'same-frame response', 'padding', 'newly drawn history', 'initially hidden content', 'replacement reply']) {
+  test(`a disclosure holds its initial measurement, but ${growth} growth is followed`, (t) => {
+    const pane = new Pane();
+    let height = 30;
+    let padding = 10;
+    let visible = growth !== 'initially hidden content';
+    let response = { getBoundingClientRect: () => ({ height: visible ? height : 0 }) };
+    pane.children = growth === 'newly drawn history' ? [] : [response];
+    pane.ownerDocument.defaultView.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+    const follow = new ScrollFollow(pane, { visible: () => visible });
+    t.after(() => follow.dispose());
+    pane.scrollHeight += 300;
+    visible = true;
+    pane.children = [response];
+    follow.after(false);
+    const grow = () => {
+      height += 40;
+      pane.scrollHeight += 40;
+      if (growth === 'padding') { padding += 40; }
+      if (growth === 'replacement reply') { response = { getBoundingClientRect: () => ({ height }) }; pane.children = [response]; }
+      follow.after(false);
+    };
+    const resize = () => follow.changed([{ target: response, contentRect: { height: height - padding }, borderBoxSize: [{ blockSize: height }] }]);
+    if (growth === 'same-frame response') { grow(); }
+    resize();
+    assert.equal(pane.scrollTop, growth === 'same-frame response' ? 1240 : 900);
+    assert.equal(follow.following, true);
+    if (growth !== 'same-frame response') { grow(); resize(); }
+    assert.equal(pane.scrollTop, 1240);
+  });
+}
