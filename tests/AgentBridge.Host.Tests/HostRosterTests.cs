@@ -9,6 +9,16 @@ public sealed class HostRosterTests
         new("observe", RosterFixture.Generation, [.. labels.Select(l => w.Entry(l).Canonical())]);
 
     [Fact]
+    public void A_verified_roster_without_a_local_pin_is_reported_as_unpinned()
+    {
+        var w = new World();
+        w.Genesis();
+        var check = HostRoster.Verify(Held(w, "G"), RosterFixture.Account, () => w.Now);
+        Assert.Equal("verified", check.Outcome);
+        Assert.Contains("unpinned", check.Reasons);
+    }
+
+    [Fact]
     public void A_genesis_and_a_signed_add_verify_and_the_report_names_the_heads()
     {
         var w = new World();
