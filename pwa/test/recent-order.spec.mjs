@@ -6,6 +6,12 @@ const B = '6f1c2b7e-claude-example';
 const C = '019a1b2c-codex-example';
 const D = '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35';
 const order = (page) => page.locator('.session').evaluateAll((els) => els.map((e) => e.dataset.id));
+const approval = () => ({
+  id: 'recent-approval', kind: 'approval', askedAt: new Date().toISOString(),
+  message: 'Allow **shell**?\n\n```\npwd\n```',
+  fields: [{ name: 'decision', type: 'choice', required: true,
+    options: [{ value: 'approve', label: 'Approve once' }, { value: 'deny', label: 'Deny' }] }],
+});
 async function update(page, id, question = null) {
   await page.evaluate(({ id, question }) => {
     const d = window.agentBridgeDemo;
@@ -52,6 +58,20 @@ for (const width of [390, 1440]) {
     await expect.poll(async () => (await order(page))[0]).toBe(C);
   });
 
+  test(`real Tab between rows never releases a pending batch at ${width}`, async ({ page }) => {
+    await setup(page, width);
+    await row(page, A).locator('.row-main').focus();
+    const shown = await order(page);
+    await update(page, B);
+    await page.clock.runFor(6000);
+    await page.keyboard.press('Tab');
+    expect(await order(page)).toEqual(shown);
+    await expect(page.locator('#session-list .row-main:focus')).toHaveCount(1);
+    await page.keyboard.press('Shift+Tab');
+    expect(await order(page)).toEqual(shown);
+    await expect(row(page, A).locator('.row-main')).toBeFocused();
+  });
+
   test(`typing holds activity but a question and new session bypass alone at ${width}`, async ({ page }) => {
     await setup(page, width);
     await page.evaluate((id) => window.agentBridgeDemo.page.showSession(id), D);
@@ -62,6 +82,9 @@ for (const width of [390, 1440]) {
     await update(page, B);
     await page.clock.runFor(6000);
     expect(await order(page)).toEqual(shown);
+    await page.keyboard.press('Tab');
+    expect(await order(page)).toEqual(shown);
+    await page.keyboard.press('Shift+Tab');
     await update(page, C, { id: 'recent-question', kind: 'form', askedAt: new Date().toISOString(), fields: [], prompt: 'Continue?' });
     await expect.poll(() => order(page)).toEqual([C, ...shown.filter((id) => id !== C)]);
     await page.evaluate(() => {
@@ -93,17 +116,29 @@ for (const width of [390, 1440]) {
     expect(await row(page, C).evaluate((el) => el.getAnimations().filter((a) => /ab-motion-(reorder|shift)/.test(a.id)).length)).toBe(0);
   });
 
+  test(`ending a touch on a removed row releases the batch at ${width}`, async ({ page }) => {
+    await setup(page, width);
+    const shown = await order(page);
+    const promoted = shown.filter((id) => id !== A).at(-1);
+    const touched = await row(page, A).elementHandle();
+    await touched.evaluate((el) => el.dispatchEvent(new Event('touchstart', { bubbles: true })));
+    await update(page, promoted);
+    await page.evaluate((id) => window.agentBridgeDemo.remove(id), A);
+    await page.clock.runFor(6000);
+    await expect(row(page, A)).toHaveCount(0);
+    expect(await touched.evaluate((el) => el.isConnected)).toBe(false);
+    expect(await order(page)).toEqual(shown.filter((id) => id !== A));
+    await touched.evaluate((el) => el.dispatchEvent(new Event('touchend', { bubbles: true })));
+    await expect.poll(async () => (await order(page))[0]).toBe(promoted);
+    await touched.dispose();
+  });
+
   test(`attention bypass preserves row focus and the approval stability wait at ${width}`, async ({ page }) => {
     await setup(page, width);
     await row(page, A).locator('.row-main').focus();
     const shown = await order(page);
     await update(page, B);
-    await update(page, D, {
-      id: 'recent-approval', kind: 'approval', askedAt: new Date().toISOString(),
-      message: 'Allow **shell**?\n\n```\npwd\n```',
-      fields: [{ name: 'decision', type: 'choice', required: true,
-        options: [{ value: 'approve', label: 'Approve once' }, { value: 'deny', label: 'Deny' }] }],
-    });
+    await update(page, D, approval());
     await expect.poll(() => order(page)).toEqual([D, ...shown.filter((id) => id !== D)]);
     await expect(row(page, A).locator('.row-main')).toBeFocused();
     await page.clock.runFor(400);
@@ -123,6 +158,52 @@ for (const width of [390, 1440]) {
     await expect(lane).not.toHaveAttribute('data-arriving', '');
   });
 }
+
+test('a timed anchoring scroll protects unchanged visible approval controls for 500 ms', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await setup(page, 1440);
+  await page.evaluate((id) => {
+    const d = window.agentBridgeDemo;
+    for (let i = 0; i < 12; i++) { d.upsert({ ...d.host.get(id), id: `guard-${i}` }); }
+  }, D);
+  await page.clock.runFor(6000);
+  await update(page, D, approval());
+  await page.clock.runFor(6000);
+  await update(page, C);
+  await page.clock.runFor(1000);
+  const pane = page.locator('#list-pane');
+  await pane.evaluate((el) => {
+    el.style.overflowAnchor = 'none';
+    const top = el.querySelector('.session').getBoundingClientRect().top - el.getBoundingClientRect().top;
+    el.scrollTop = Math.max(40, top - el.clientHeight * 0.6);
+  });
+  await pane.dispatchEvent('scroll');
+  await page.clock.runFor(200);
+  const button = page.locator(`#needs-you .needs-entry[data-id="${D}"] .needs-approve`);
+  const before = await button.evaluate((el) => {
+    const pane = document.querySelector('#list-pane'), rect = el.getBoundingClientRect(), bounds = pane.getBoundingClientRect();
+    return { top: rect.top, scroll: pane.scrollTop, visible: rect.top >= bounds.top && rect.bottom <= bounds.bottom };
+  });
+  expect(before.scroll).toBeGreaterThan(0);
+  expect(before.visible).toBe(true);
+  await expect(page.locator('#needs-you .needs-you-list')).not.toHaveAttribute('data-arriving', '');
+  const count = await page.evaluate(() => window.agentBridgeDemo.host.answerLog.length);
+  await update(page, B);
+  expect((await order(page))[0]).toBe(C);
+  await page.clock.runFor(3800);
+  expect((await order(page))[0]).toBe(B);
+  const after = await button.evaluate((el) => {
+    const top = el.getBoundingClientRect().top;
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    return { top, guarded: el.closest('.needs-you-list').hasAttribute('data-arriving') };
+  });
+  expect(Math.abs(after.top - before.top)).toBeGreaterThan(1);
+  expect(after.guarded).toBe(true);
+  await page.clock.runFor(1);
+  expect(await page.evaluate(() => window.agentBridgeDemo.host.answerLog.length)).toBe(count);
+  await page.clock.runFor(501);
+  await expect(page.locator('#needs-you .needs-you-list')).not.toHaveAttribute('data-arriving', '');
+});
 
 test('a normal-motion batch glides and anchors the row being read', async ({ page }) => {
   await setup(page, 1440);
