@@ -56,6 +56,22 @@ on:
 
 permissions: {}
 
+# Coalesce sweeps separately from each head. Skipped events must never displace either;
+# the event-table test keeps this eligibility condition identical to evaluate's if below.
+concurrency:
+  group: >-
+    merge-rule-admit-${{
+      ((github.event_name != 'workflow_run' || github.event.workflow_run.head_branch != 'main' || github.event.workflow_run.head_repository.full_name != github.repository
+      || (github.event.workflow_run.name == 'CI' && github.event.workflow_run.event == 'push'))
+      && (github.event_name != 'check_suite' || github.event.check_suite.head_branch != 'main')
+      && (github.event_name != 'status' || github.event.context != 'merge-rule'))
+      && (vars.FLEET_MERGERULE == 'off' && 'sweep'
+      || github.event.pull_request.head.sha || github.event.sha
+      || github.event.check_suite.head_branch != 'main' && github.event.check_suite.head_sha
+      || github.event.workflow_run.head_branch != 'main' && github.event.workflow_run.head_sha
+      || 'sweep') || github.run_id }}
+  cancel-in-progress: false
+
 jobs:
   # Named evaluate, not merge-rule: GitHub requires every check and status of a required name to
   # pass, so a job of that name would be one more thing for each pull request to wait on.
@@ -89,15 +105,13 @@ jobs:
     continue-on-error: ${{ github.actor == 'dependabot[bot]' }}
     # One group for every writer, fast path or kill switch alike: no two evaluations read main's CI
     # and post on the same head at once, so an older read of main can never land after a newer
-    # verdict (a red main can't be overwritten by a run that saw it green). Nothing cancels, so a
-    # sweep is never cut short by a scoped run. GitHub keeps one waiting run per group and a newer
-    # one displaces it, so a scoped run that finds main not green judges every open pull request (the
-    # evaluator widens it), and a displaced scoped run's own head waits at most until the
-    # next run or the 10 minute sweep, never wrong. On the job, not the workflow: a run whose `if`
-    # skips the job (main's own runs) never enters the group, so it can't displace a waiting one.
+    # verdict (a red main can't be overwritten by a run that saw it green). Admission above
+    # coalesces duplicates; queue: max keeps admitted heads from displacing the waiting sweep.
+    # Main is read inside this lock, by the evaluator, not before waiting for admission.
     concurrency:
       group: merge-rule
       cancel-in-progress: false
+      queue: max
     steps:
       # Kill switch: FLEET_MERGERULE=off (repository variable, read on every run) restores the
       # earlier path in full: wait, build main's evaluator, judge every pull request.
