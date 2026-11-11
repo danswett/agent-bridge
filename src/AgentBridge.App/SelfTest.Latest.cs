@@ -36,24 +36,7 @@ static partial class SelfTest
             restoreFocus = () => scroll.IsTabStop = tabStop;
             var next = 1400;
             bool Bottom() => scroll.ScrollableHeight - scroll.VerticalOffset <= 1.5;
-            async Task Jump()
-            {
-                var button = ById<Button>(view, "JumpToLatest");
-                check(button is { IsTabStop: true, Visibility: Visibility.Visible } && AutomationProperties.GetName(button) == "Jump to latest",
-                    "latest: offers a keyboard-reachable, screen-reader-named Jump to latest");
-                if (button is null) { return; }
-                var activated = false;
-                RoutedEventHandler clicked = (_, _) => activated = true;
-                button.Click += clicked;
-                try
-                {
-                    check(button.Focus(FocusState.Keyboard), "latest: keyboard can focus Jump to latest");
-                    Press(window.Handle, VirtualKey.Enter, foreground: false);
-                    check(await Until(() => activated, TimeSpan.FromSeconds(3)), "latest: Enter activates Jump to latest");
-                    check(await Until(Bottom, TimeSpan.FromSeconds(3)), $"latest: Enter reaches the bottom ({scroll.VerticalOffset:0}/{scroll.ScrollableHeight:0})");
-                }
-                finally { button.Click -= clicked; }
-            }
+            Task Jump() => LatestJump(window, view, scroll, check);
             async Task Grow(bool pinned, string input)
             {
                 var before = scroll.VerticalOffset;
@@ -143,6 +126,26 @@ static partial class SelfTest
             }
         }
         finally { restoreFocus?.Invoke(); view.Card = original; }
+    }
+
+    static async Task LatestJump(MainWindow window, SessionView view, ScrollViewer scroll, Action<bool, string> check)
+    {
+        var button = ById<Button>(view, "JumpToLatest");
+        check(button is { IsTabStop: true, Visibility: Visibility.Visible } && AutomationProperties.GetName(button) == "Jump to latest",
+            "latest: offers a keyboard-reachable, screen-reader-named Jump to latest");
+        if (button is null) { return; }
+        var activated = false;
+        RoutedEventHandler clicked = (_, _) => activated = true;
+        button.Click += clicked;
+        try
+        {
+            check(button.Focus(FocusState.Keyboard), "latest: keyboard can focus Jump to latest");
+            Press(window.Handle, VirtualKey.Enter, foreground: false);
+            check(await Until(() => activated, TimeSpan.FromSeconds(3)), "latest: Enter activates Jump to latest");
+            check(await Until(() => scroll.ScrollableHeight - scroll.VerticalOffset <= 1.5, TimeSpan.FromSeconds(3)),
+                $"latest: Enter reaches the bottom ({scroll.VerticalOffset:0}/{scroll.ScrollableHeight:0})");
+        }
+        finally { button.Click -= clicked; }
     }
 
     static async Task<bool> LatestModifiedKey(MainWindow window, ScrollViewer scroll, VirtualKey key, VirtualKey modifier)
