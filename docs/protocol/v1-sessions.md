@@ -1249,7 +1249,7 @@ subscription, or a browser that renewed it, is brought up to date. Request `data
   "endpoint": "https://web.push.apple.com/QGuQyavXutnMhZ…",
   "keys": { "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV…", "auth": "BTBZMqHH6r4Tts7J_aSIgg" },
   "app": "https://danswett.github.io/agent-bridge/app/",
-  "device": "iPhone · Agent Bridge"
+  "device": "iPhone · Slipgates"
 }
 ```
 
@@ -1286,7 +1286,7 @@ learns it from the push service instead: it drops a subscription the service ans
 Request `data`: `{}`. Result: the devices this host notifies, oldest first:
 
 ```json
-{ "devices": [ { "device": "4f0e…", "name": "iPhone · Agent Bridge", "service": "web.push.apple.com", "since": "2026-10-28T04:22:43.182Z", "current": true } ] }
+{ "devices": [ { "device": "4f0e…", "name": "iPhone · Slipgates", "service": "web.push.apple.com", "since": "2026-10-28T04:22:43.182Z", "current": true } ] }
 ```
 
 `current` marks the calling device. Endpoints are never sent back: one is a capability to
