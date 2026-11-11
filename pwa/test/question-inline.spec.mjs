@@ -7,11 +7,11 @@ const CODEX = '019a1b2c-codex-example';
 const QID = 'q-inline';
 const long = 'Lorem ipsum dolor sit amet. '.repeat(120);
 
-async function setup(page, { holdHistory = false } = {}) {
+async function setup(page, { holdHistory = false, promptFrom = null } = {}) {
   await page.setViewportSize({ width: 900, height: 700 });
   await page.goto('?demo=1&static=1&answerDelay=300');
   await page.waitForSelector('html[data-demo-ready]');
-  await page.evaluate(({ id, qid, long, holdHistory }) => {
+  await page.evaluate(({ id, qid, long, holdHistory, promptFrom }) => {
     const d = window.agentBridgeDemo;
     if (holdHistory) { d.host.holdResponses(); }
     const t = new Date(Date.now() + 1000).toISOString();
@@ -35,9 +35,9 @@ async function setup(page, { holdHistory = false } = {}) {
     const s = d.host.get(id);
     d.upsert({
       ...s, status: 'waiting', statusSince: t, updatedAt: t, question,
-      activity: { ...(s.activity ?? {}), turnCount: holdHistory ? 2 : 6, turn: `${id}-turn-${holdHistory ? 2 : 6}` },
+      activity: { ...(s.activity ?? {}), ...(promptFrom ? { userMessageFrom: promptFrom } : {}), turnCount: holdHistory ? 2 : 6, turn: `${id}-turn-${holdHistory ? 2 : 6}` },
     });
-  }, { id: CODEX, qid: QID, long, holdHistory });
+  }, { id: CODEX, qid: QID, long, holdHistory, promptFrom });
   await open(page, CODEX);
   const card = view(page, CODEX);
   if (!holdHistory) { await expect(card.locator('.history .history-turn')).not.toHaveCount(0); }
@@ -262,11 +262,11 @@ for (const width of [390, 1024]) {
 }
 
 test('a closed local receipt stays in its provisional asking turn while history is pending', async ({ page }) => {
-  const card = await setup(page, { holdHistory: true });
+  const card = await setup(page, { holdHistory: true, promptFrom: 'schedule' });
   await page.evaluate((id) => {
     const d = window.agentBridgeDemo;
     const s = d.host.get(id);
-    d.upsert({ ...s, question: null, status: 'idle', activity: { ...s.activity, userMessageFrom: 'schedule' } });
+    d.upsert({ ...s, question: null, status: 'idle' });
     d.upsert({ ...d.host.get(id), activity: { ...s.activity, turn: 'later-live', userMessage: 'Later prompt', response: null, responseTurn: null } });
   }, CODEX);
   const closed = card.locator(`.question.resolved[data-question="${QID}"]`);
@@ -319,7 +319,11 @@ test('a frozen local question does not return after a fresh page confirms its ab
     d.upsert({ ...s, question: null, status: 'idle', activity: { ...s.activity, responseTurn: s.activity.turn, response: long } });
   }, { id: CODEX, long });
   await expect(card.locator('.resolved-summary')).toContainText('Question closed');
-  await card.locator('.stream-scroll').evaluate((el) => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
+  await card.locator('.stream-scroll').evaluate(async (el) => {
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    el.dispatchEvent(new WheelEvent('wheel'));
+    el.scrollTop = 0; el.dispatchEvent(new Event('scroll'));
+  });
   await page.evaluate(async (id) => {
     const d = window.agentBridgeDemo, s = d.host.get(id);
     d.upsert({ ...s, activity: { turn: 'after-asking', userMessage: 'Later prompt', responseTurn: 'after-asking', response: 'Later reply' } });
