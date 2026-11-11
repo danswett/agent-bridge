@@ -207,6 +207,7 @@ test.describe('live load wiring', () => {
     await go(page, 'machines');
     await attach(page);
     await expect(tile(page).getByRole('meter')).toHaveCount(2);
+    await expect.poll(() => ops(page)).toEqual(['load.get', 'load.subscribe']);
     await page.evaluate((id) => {
       window.loadRecord = { ...window.loadRecord, cpu: { percent: 81 } };
       for (const t of window.agentBridgeDemo.machines[id].transports) {
@@ -216,6 +217,32 @@ test.describe('live load wiring', () => {
     await expect.poll(() => ops(page)).toEqual(['load.get', 'load.subscribe', 'load.unsubscribe', 'load.get', 'load.subscribe']);
     await expect(tile(page).getByRole('meter', { name: 'CPU' })).toHaveAttribute('aria-valuenow', '81');
   });
+
+  for (const target of [LAPTOP, SHADOW]) {
+    test(`a press on ${target} survives another load reading before pointer release`, async ({ page }) => {
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      await openDemo(page);
+      await go(page, 'machines');
+      await attach(page);
+      await expect(tile(page).getByRole('meter', { includeHidden: true })).toHaveCount(2);
+      await row(page, target).click();
+      const action = tile(page, target).locator('.machine-view');
+      await action.scrollIntoViewIfNeeded();
+      const held = await action.elementHandle(), box = await action.boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.evaluate((id) => {
+        for (const t of window.agentBridgeDemo.machines[id].transports) {
+          if (t.loadSubscribed) { t.deliver({ ev: 'load.update', seq: ++t.seq, data: { ...window.loadRecord, cpu: { percent: 81 } } }); }
+        }
+      }, LAPTOP);
+      await expect(tile(page).getByRole('meter', { name: 'CPU', includeHidden: true })).toHaveAttribute('aria-valuenow', '81');
+      expect(await held.evaluate((el) => el.isConnected)).toBe(true);
+      await page.mouse.up();
+      await expect(page).toHaveURL(/#\/sessions$/);
+      expect(await page.evaluate(() => window.agentBridgeDemo.hosts.selection)).toBe(target);
+    });
+  }
 
   for (const refuse of ['load.get', 'load.subscribe']) {
     test(`a host answering unknown op to ${refuse} keeps No figure without retrying or breaking sessions`, async ({ page }) => {

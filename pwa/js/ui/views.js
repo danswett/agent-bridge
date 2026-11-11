@@ -1234,6 +1234,7 @@ function announceUpdates(list, updates, hosts) {
 const MASTER_DETAIL = '(min-width: 900px)';
 // The machine whose tile shows beside the list from 900 px, where a person picked one.
 const picked = new WeakMap();
+const drawnMachineLoads = new WeakMap();
 
 function machineLoadBar(bar, label) {
   const missing = bar?.percent == null;
@@ -1343,10 +1344,25 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
   // Drawn again only when something in it changes. It is asked to redraw on every session
   // update of every machine shown, and a button replaced between a tap's touch and its release
   // takes no click: a tap at startup, with every machine sending its sessions, was lost.
-  const key = JSON.stringify([current, detailId, hosts.map((d) => [d.id, d.name, lines.get(d.id).key, rows.get(d.id).key, signInRows.get(d.id).key, diagnoses.get(d.id).key, loads.get(d.id)?.state, loads.get(d.id)?.cpu, loads.get(d.id)?.memory]),
+  const key = JSON.stringify([current, hosts.map((d) => [d.id, d.name, lines.get(d.id).key, rows.get(d.id).key, signInRows.get(d.id).key, diagnoses.get(d.id).key]),
     // lastSeen itself, not only how it reads: Forget sends it, to tell a machine that came back.
     offline.map((k) => [k.id, k.name, k.lastSeen, k.start ?? null, ago(k.lastSeen, now), forget?.stateOf(k.id) ?? null]), !!forget, [...restarting]]);
-  if (drawnAs.get(list) === key) { return hosts.length; }
+  const loadKey = JSON.stringify([...loads].map(([id, bars]) => [id, bars?.state, bars?.cpu, bars?.memory]));
+  if (drawnAs.get(list) === key) {
+    if (drawnMachineLoads.get(list) !== loadKey) {
+      // Load-only changes must not remove a button between pointer down and release.
+      for (const row of list.children) {
+        const bars = loads.get(row.dataset.deviceId);
+        row.querySelector('.tile-health')?.replaceWith(machineHealth(bars));
+        const tracks = row.querySelectorAll('.machine-load');
+        tracks[0]?.replaceWith(machineLoadBar(bars?.cpu, 'CPU (whole machine)'));
+        tracks[1]?.replaceWith(machineLoadBar(bars?.memory, 'Memory used'));
+      }
+      drawnMachineLoads.set(list, loadKey);
+    }
+    return hosts.length;
+  }
+  drawnMachineLoads.set(list, loadKey);
   drawnAs.set(list, key);
   // Every change redraws the list, so the button that had focus is replaced: Forget's first
   // press redraws it armed, and a keyboard's second press must land on the new one.
