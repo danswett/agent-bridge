@@ -1,9 +1,10 @@
 import { test, expect } from '@playwright/test';
 
 for (const width of [390, 820]) {
-  test.describe(`${width}px sender images`, () => {
-    test.use({ viewport: { width, height: 900 }, hasTouch: true });
-    test('same-name sender images survive reload; missing bytes stay chips; viewer closes and URLs are revoked', async ({ page, context, browser }) => {
+  for (const mode of ['light', 'dark', 'contrast']) {
+  test.describe(`${width}px ${mode} sender images`, () => {
+    test.use({ viewport: { width, height: 900 }, hasTouch: true, colorScheme: mode === 'dark' ? 'dark' : 'light', forcedColors: mode === 'contrast' ? 'active' : 'none' });
+    test('same-name sender images survive reload; missing bytes stay chips; viewer closes and URLs are revoked', async ({ page, browser }) => {
       await page.goto('?demo=1&static=1');
       await page.evaluate(async () => {
         const { ReplyService } = await import('/js/reply-service.js');
@@ -26,6 +27,7 @@ for (const width of [390, 820]) {
       });
       await page.reload();
       const render = async (target) => target.evaluate(async () => {
+        const { accountStore } = await import('/js/signin.js'); accountStore.save({ accountId: 'image-test', token: 'test-only' });
         const { sentMessage } = await import('/js/ui/sent-message.js');
         const refs = [1, 2, 3].map((n) => `@/demo/attachments/${String(n).repeat(32)}-same.png`).join(' ');
         const bubble = sentMessage(refs, 'test-sent'); document.body.append(bubble);
@@ -54,4 +56,5 @@ for (const width of [390, 820]) {
       await expect.poll(() => page.evaluate(() => window.revoked.length)).toBe(2);
     });
   });
+  }
 }

@@ -358,6 +358,11 @@ next outcomes), and asks a follow-up question a little after each answer.
 
 ### Replying
 
+Delivered image attachments can retain a sender-only preview on this device (#1802).
+The local account's store holds at most 32 raster images, 8 MiB total, for 24 hours;
+sign-out or forgetting a pairing clears it. Missing bytes or reply bindings (including
+Codex and older hosts) leave the named chip. Nothing fetches images from another device.
+
 Each session has a reply box, at the foot of its conversation, when the machine's `hello` lists `sessions.reply`: a prompt for
 the session, typed into its input on the machine, whether it is idle or working. Enter is
 a new line and Ctrl+Enter (Cmd+Enter) or Send sends; the host types line breaks as spaces,

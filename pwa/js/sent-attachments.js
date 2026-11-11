@@ -2,7 +2,7 @@
 // absolute path as one whitespace-free @ token. Other paths remain ordinary message text.
 const REFERENCE = /^@(?:[a-z]:[\\/]|\/|\\\\)[^\s]*[\\/]attachments[\\/][0-9a-f]{32}-([0-9a-z._-]+)$/i;
 
-export function sentAttachments(message) {
+export function sentAttachments(message, withRefs = false) {
   const parts = message.split(/(\s+)/);
   const files = [];
   let pasted = 0;
@@ -11,7 +11,7 @@ export function sentAttachments(message) {
     if (!match) { continue; }
     const name = /^pasted\.(png|jpe?g|gif|webp)$/i.test(match[1])
       ? `Pasted image${++pasted > 1 ? ` ${pasted}` : ''}` : match[1];
-    files.push(name);
+    files.push(withRefs ? { name, ref: parts[i] } : name);
     parts[i] = '';
     if (i + 1 < parts.length) { parts[i + 1] = ''; }
   }

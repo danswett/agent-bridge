@@ -29,6 +29,7 @@ import { BRAND, NOTIFICATIONS_BLOCKED } from './brand.js';
 import { fakeMove, moves } from './move.js';
 import { loadIdentity, deviceName, kvGet, kvPut, kvDelete } from './identity.js';
 import { accountStore, startDeviceFlow } from './signin.js';
+import { sentImages } from './sent-images.js';
 import { BridgeConnection } from './connection.js';
 import { ALL, HostSession } from './host-session.js';
 import { ReturnGrace } from './return-grace.js';
@@ -820,6 +821,7 @@ function begin(account) {
   // Each machine's Diagnose (#802): read here, copied only after review.
   const diagnose = new DiagnoseControl({ fleet });
   const dropMachine = (id) => {
+    void sentImages.clear();
     hosts.dropMachine(id);
     fleet.forget(id);
     updates.forget(id);
@@ -1019,6 +1021,7 @@ function begin(account) {
     }
   });
   connection.on('signed-out', () => {
+    void sentImages.clear();
     // The account's sessions and remembered machine go with it; a reconnect within the
     // same sign-in keeps them, but a new sign-in may be a different account.
     setLinked(null);
@@ -1051,6 +1054,7 @@ function begin(account) {
   });
 
   $('signout').onclick = async () => {
+    await sentImages.clear();
     setLinked(null);
     hosts.forget();
     fleet.clear();
