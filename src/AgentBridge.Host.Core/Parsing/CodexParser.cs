@@ -42,6 +42,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         Marker("\"UserMessage\""),
         Marker("\"compacted\""),
         Marker("\"session_meta\""),
+        Marker("\"turn_context\""),
         // A sub-agent started or stopped long before the window is still listed as it is now.
         Marker("\"CollabAgentToolCall\""),
         Marker("\"multi_agent.subagent_notification\""),
@@ -66,7 +67,11 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
 
     // A sub-agent the skim saw start may have stopped in bytes never read: listed with no
     // outcome until the window says more, never running for as long as the CLI lives.
-    public override void Skipped() => S.Background.ForgetRuns();
+    public override void Skipped()
+    {
+        S.Background.ForgetRuns();
+        S.Effort = null;
+    }
 
     protected override void Count(JsonElement e)
     {
@@ -75,6 +80,9 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         {
             case "session_meta":
                 Meta(payload, Json.Time(e, "timestamp"));
+                break;
+            case "turn_context":
+                S.Effort = Json.Str(payload, "effort") ?? S.Effort;
                 break;
             case "compacted":
                 S.Compactions++;
@@ -113,11 +121,12 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
             case "turn_context":
                 {
                     // Written every turn; it changes what a client shows only when the
-                    // model or folder actually changed.
-                    var (model, cwd) = (S.Model, S.Cwd);
+                    // model, folder or effort actually changed.
+                    var (model, cwd, effort) = (S.Model, S.Cwd, S.Effort);
                     S.Model = Text.NonBlank(Json.Str(payload, "model")) ?? S.Model;
                     S.Cwd = Json.Str(payload, "cwd") ?? S.Cwd;
-                    return model != S.Model || cwd != S.Cwd;
+                    S.Effort = Json.Str(payload, "effort") ?? S.Effort;
+                    return model != S.Model || cwd != S.Cwd || effort != S.Effort;
                 }
             case "compacted":
                 S.Compactions++;

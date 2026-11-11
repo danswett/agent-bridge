@@ -36,7 +36,7 @@ internal sealed class SessionState
     public string? OwnReasoning;
     public DateTimeOffset? OwnAt;
     public string? Model;
-    // The agent's own effort and context option ids. No parser sets them yet (#1142 R2): null is unknown.
+    // The agent's own reported effort and context option ids; null is unknown.
     public string? Effort;
     public string? Context;
     public string? Cwd;

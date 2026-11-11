@@ -175,16 +175,18 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                 break;
             case "session.start":
                 S.StartedAt ??= Json.Time(e, "timestamp");
-                if (!IsSubagent(e)) { S.Model ??= Json.Str(data, "selectedModel"); }
+                if (!IsSubagent(e)) { S.Model ??= Json.Str(data, "selectedModel"); Tuning(data); }
                 break;
             // The session's own model, from before the window: a session whose background
             // agents filled the window had no message of its own in it, and so showed no model
             // where agent-ha-bridge, which reads every line as it comes, showed one.
             case "session.resume" when !IsSubagent(e):
                 S.Model = Json.Str(data, "selectedModel") ?? S.Model;
+                Tuning(data);
                 break;
             case "session.model_change" when !IsSubagent(e):
                 S.Model = Json.Str(data, "newModel") ?? S.Model;
+                Tuning(data, modelChange: true);
                 break;
             // A delegate's own, likewise: never the session's (#73).
             case "session.model_change":
@@ -251,6 +253,8 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         S.Background.ForgetShells();
         S.Background.ForgetModels();
         S.Model = null;
+        S.Effort = null;
+        S.Context = null;
         S.OwnResponse = null;
         S.OwnResponseCut = false;
         S.ResponseTurn = null;
@@ -390,6 +394,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             case "session.start":
                 S.StartedAt ??= at;
                 S.Model ??= Json.Str(data, "selectedModel");
+                if (!sub) { Tuning(data); }
                 Context(Json.Obj(data, "context"));
                 break;
             case "session.resume":
@@ -397,13 +402,14 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                 Context(Json.Obj(data, "context"));
                 // A new process: whatever the last one was doing or asking died with it (killed
                 // mid-turn, nothing says so). A question it puts up again is written again.
-                if (!sub) { S.Abandon(at); }
+                if (!sub) { S.Abandon(at); Tuning(data); }
                 break;
             case "session.context_changed":
                 Context(data);
                 break;
             case "session.model_change" when !sub:
                 S.Model = Json.Str(data, "newModel") ?? S.Model;
+                Tuning(data, modelChange: true);
                 break;
             case "session.compaction_complete" when Json.Bool(data, "success") == true:
                 // Only a compaction that finished: Copilot writes a start for every
@@ -559,6 +565,12 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                 return false;
         }
         return true;
+    }
+
+    void Tuning(JsonElement data, bool modelChange = false)
+    {
+        S.Effort = Json.Str(data, "reasoningEffort") ?? S.Effort;
+        if (modelChange) { S.Context = Json.Str(data, "contextTier") ?? S.Context; }
     }
 
     // A turn starting leaves the last one's error behind it, as the CLI's own session list clears
