@@ -1,11 +1,8 @@
-using AgentBridge.App.Core;
-using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
-using Windows.System;
 
 namespace AgentBridge.App;
 
@@ -38,14 +35,6 @@ public sealed partial class SessionView
                     var delta = e.GetCurrentPoint(scroll).Properties;
                     if (delta.IsHorizontalMouseWheel) { return; }
                     LatestInput(up: delta.MouseWheelDelta > 0);
-                }), true);
-                scroll.AddHandler(PreviewKeyDownEvent, new KeyEventHandler((_, e) =>
-                {
-                    static bool Down(VirtualKey k) => InputKeyboardSource.GetKeyStateForCurrentThread(k).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
-                    var key = ConversationKeyboard.Key((int)e.Key, Down(VirtualKey.Control), Down(VirtualKey.Shift),
-                        e.KeyStatus.IsMenuKeyDown || Down(VirtualKey.Menu), KeyUserOf(e.OriginalSource as DependencyObject));
-                    if (key is ReadingKey.LineUp or ReadingKey.PageUp or ReadingKey.Top) { LatestInput(up: true); }
-                    else if (key is ReadingKey.LineDown or ReadingKey.PageDown or ReadingKey.End) { LatestInput(up: false); }
                 }), true);
                 scroll.DirectManipulationStarted += (_, _) => LatestInput(up: true);
             }
