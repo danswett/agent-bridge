@@ -1978,10 +1978,11 @@ status rather than instead of it.
 | `account` | string? | `signInNeeded`: the account, when the host knows it from metadata (the login the CLI reports), never from a token. Absent when unknown |
 | `message` | string? | One plain-text sentence the **host composes** from `kind`, `errorClass`, `statusCode` and `provider` alone, at most 300 bytes: "Copilot needs you to sign in again (401).", "Copilot hit a rate limit (429).", "Copilot stopped with an error." **No part of the agent's own error text is ever in it** (#841): redacting arbitrary text never closed, and this field reaches every client and HA. A client may show it in Details, as text and never as a link; its row words come from `kind` and `errorClass` (ui.md §6.13) |
 | `errorClass` | `"auth"` \| `"rate"` \| `"quota"` \| `"model"` \| `"network"` \| `"other"`? | `error`: what sort, from the agent's structured fields, never its wording. Unknown reads as `other` |
+| `errorType` | `"query"` \| `"execution"` \| `"authorization"` \| `"session"` \| `"other"`? | Optional (#1844): the structured Copilot turn-error type, closed to these values; unknown reads as `other`, never raw text. Older hosts omit it; older readers ignore it. Display only, not a retry instruction |
 | `retryAt` | time? | `error`: when the agent said it can be tried again (a rate limit, a quota) |
 | `signIn` | `"phone"` \| `"machine"` \| `"unknown"`? | `signInNeeded`: `phone` when this host can relay the agent's own device-code sign-in to a person's device; `machine` only when the host knows it can be signed in nowhere else. Absent while not known; a host never sends `unknown`. A value a client does not know reads as `unknown`, which claims nothing: no sign-in from the phone is offered on it, and it is not said to be the machine's only |
 | `recovery` | `"checking"` \| `"signingIn"` \| `"pending"` \| `"failed"`? | `signInNeeded`: the host is checking for a still-valid stored credential, a person has started signing in, the agent is signed in again and the host is waiting for the session to show it (`pending`), or the check found none (`failed`). Absent otherwise. Unknown reads as `failed` |
-| `lastEventAt` | time? | `notResponding`: the transcript's last event |
+| `lastEventAt` | time? | The transcript's last event, including while `error` or `signInNeeded` is present (#1844); not `updatedAt`, which can change without an agent event. Older hosts may omit it |
 
 * **`status` stays truthful.** A turn that ended on an error or a sign-in failure has ended, so
   the session is `idle` (or `waiting` if a question is pending), with `attention` beside it. A
@@ -2045,6 +2046,13 @@ code when it is an HTTP status (100 to 599):
 | `error` / `network` | "*Agent* couldn't reach its service (*status*)." |
 | `error` / `other` | "*Agent* stopped with an error (*status*)." |
 | `notResponding` | "*Agent* isn't responding." |
+
+For exactly `errorType: "query"` with no `statusCode` or `remediation`, and the complete message
+`"No response was returned. Send your message again to retry."`, the host recognises an empty
+response (`CopilotTurnErrors.CanRetry`) and sends its own fixed template:
+"Copilot returned no response. Sending your message again usually fixes it."
+Other errors keep their class template; no arbitrary agent text is copied.
+Details shows optional Error type, Message and Last activity age. The new rows appear only for errors.
 
 Copilot CLI follows the error that ends a turn with a notice of its own, an `assistant.message`
 that starts "⚠️ Turn error:" and quotes the error's words. Those words can hold a credential, a

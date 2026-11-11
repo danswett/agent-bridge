@@ -1,9 +1,9 @@
 // An agent that needs sign-in, whose turn ended on an error, or that has stopped answering (#800):
 // every protocol name for it, read in this one file, as Connection's producer contract has them
 // (issue #800, comment 6646501884, with the push amendment 6646515428). A rename is a change here
-// and nowhere else. The app's twin is src/AgentBridge.App.Core/AuthState.cs.
+// and nowhere else. Keep attention fields in sync with src/AgentBridge.App.Core/AuthState.cs.
 //
-//   Session.attention          { kind, since, agent, provider, account, message, errorClass,
+//   Session.attention          { kind, since, agent, provider, account, message, errorClass, errorType,
 //                                retryAt, signIn, recovery, lastEventAt }
 //   hello.machine.signIn       [{ agent, provider, account, since, sessions, signIn, recovery }]
 //   capability sessions.signin, ops signin.start and signin.cancel, events signin.code and
@@ -34,6 +34,7 @@ export const SIGN_IN = Object.freeze({
 
 export const ATTENTION_KINDS = Object.freeze(['signInNeeded', 'error', 'notResponding']);
 export const ERROR_CLASSES = Object.freeze(['auth', 'rate', 'quota', 'model', 'network', 'other']);
+export const ERROR_TYPES = Object.freeze(['query', 'execution', 'authorization', 'session', 'other']);
 
 // Exactly these strings, compared whole: no prefix, no case folding, no normalising. A lookalike
 // (an IDN, a userinfo, another port or path, a trailing dot or slash) is simply not on the list.
@@ -150,11 +151,12 @@ export function readAttention(raw) {
     agent: agentOf(a.agent),
     account: kind === 'signInNeeded' ? accountName(a.account) : null,
     message: plainText(a.message, 300),
+    errorType: typeof a.errorType === 'string' ? (ERROR_TYPES.includes(a.errorType) ? a.errorType : 'other') : null,
     errorClass: kind === 'error' ? (ERROR_CLASSES.includes(a.errorClass) ? a.errorClass : 'other') : null,
     retryAt: kind === 'error' ? time(a.retryAt) : null,
     signIn: kind === 'signInNeeded' ? signInOf(a.signIn) : null,
     recovery: kind === 'signInNeeded' ? recoveryOf(a.recovery) : null,
-    lastEventAt: kind === 'notResponding' ? time(a.lastEventAt) : null,
+    lastEventAt: time(a.lastEventAt),
   };
 }
 

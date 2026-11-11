@@ -3,7 +3,9 @@
   "rows": [
     { "row": "Status" },
     { "row": "In this state" },
+    { "row": "Error type" },
     { "row": "Message" },
+    { "row": "Last activity" },
     { "row": "Not responding since" },
     { "row": "Driven by" },
     { "row": "Agent" },
@@ -74,6 +76,28 @@
         { "row": "Compactions", "value": "3 compactions" },
         { "row": "Process", "value": "pid 4312" },
         { "row": "ID", "value": "5d0c7e52-4a3b-4f8e-9c11-2b6a8e41d7f3" }
+      ]
+    },
+    {
+      "name": "an agent error with its cause and last activity",
+      "machine": null,
+      "session": {
+        "id": "error-cause", "agent": "copilot",
+        "status": "idle", "statusSince": "2026-11-06T12:00:00Z",
+        "updatedAt": "2026-11-06T12:18:00Z", "activity": {},
+        "attention": { "kind": "error", "errorType": "query", "since": "2026-11-06T12:00:00Z",
+          "lastEventAt": "2026-11-06T12:17:00Z",
+          "message": "Copilot returned no response. Sending your message again usually fixes it." }
+      },
+      "rows": [
+        { "row": "Status", "value": "Agent error" },
+        { "row": "In this state", "value": "for 20m" },
+        { "row": "Error type", "value": "Request" },
+        { "row": "Message", "value": "Copilot returned no response. Sending your message again usually fixes it." },
+        { "row": "Last activity", "value": "3m ago" },
+        { "row": "Agent", "value": "Copilot" },
+        { "row": "Updated", "value": "2m ago" },
+        { "row": "ID", "value": "error-cause" }
       ]
     },
     {

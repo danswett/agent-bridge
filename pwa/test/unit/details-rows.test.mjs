@@ -14,6 +14,19 @@ const table = JSON.parse(readFileSync(here('../../../docs/design/session-details
 const now = Date.parse(table.now);
 const order = table.rows.map((r) => r.row);
 
+test('Recovery removes error details, and unknown types and malformed activity times are safe', () => {
+  const base = { id: 'error', agent: 'copilot', status: 'idle', activity: {} };
+  for (const extra of [{}, { attention: null }, { attention: { kind: 'signInNeeded', errorType: 'authorization', lastEventAt: table.now } }]) {
+    assert.ok(!detailRows(readSession({ ...base, ...extra }), { now }).some((r) => ['Error type', 'Message', 'Last activity'].includes(r.term)));
+  }
+  const unknown = readSession({ ...base, attention: { kind: 'error', errorType: 'unknown-private-value', lastEventAt: 'invalid' } });
+  assert.equal(unknown.attention.errorType, 'other');
+  assert.equal(detailRows(unknown, { now }).find((r) => r.term === 'Error type')?.text, 'Other');
+  assert.ok(!detailRows(unknown, { now }).some((r) => r.term === 'Last activity'));
+  const error = readSession(table.scenarios.find((s) => s.session.attention?.kind === 'error').session);
+  assert.ok(!detailRows(error, { now, away: true }).some((r) => r.term === 'Last activity'));
+});
+
 for (const scenario of table.scenarios) {
   test(`Details shows the table's rows for a session with ${scenario.name}, in its order and words`, () => {
     const s = readSession(scenario.session);

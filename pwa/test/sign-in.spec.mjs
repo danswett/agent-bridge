@@ -39,6 +39,25 @@ const sheet = (page) => page.locator('dialog.sign-in-sheet');
 const row = (page, id) => page.locator(`#session-list > .session[data-id="${id}"]`);
 const signIn = (page) => banner(page).getByRole('button', { name: 'Sign in to Copilot on DEV-VM1' });
 
+test('Agent error Details shows the cause, type and last activity, then removes them on recovery', async ({ page }) => {
+  await page.clock.install();
+  await openDemo(page);
+  await page.evaluate(() => {
+    const d = window.agentBridgeDemo; const s = d.host.get('error-quota');
+    d.upsert({ ...s, attention: { kind: 'error', errorType: 'query', since: new Date(Date.now() - 1500000).toISOString(),
+      lastEventAt: new Date(Date.now() - 180000).toISOString(), message: 'Copilot returned no response. Sending your message again usually fixes it.' } });
+  });
+  await row(page, 'error-quota').click();
+  const details = page.locator('#session-views .session-view[data-id="error-quota"]');
+  await expect(details.locator('.fact-attention dd')).toHaveText('Copilot returned no response. Sending your message again usually fixes it.');
+  await expect(details.locator('.fact-error-type dd')).toHaveText('Request');
+  await expect(details.locator('.fact-last-activity dd')).toHaveText('3m ago');
+  await page.clock.fastForward(60000);
+  await expect(details.locator('.fact-last-activity dd')).toHaveText('4m ago');
+  await page.evaluate(() => { const d = window.agentBridgeDemo; d.upsert({ ...d.host.get('error-quota'), attention: null }); });
+  await expect(details.locator('.fact-attention, .fact-error-type, .fact-last-activity')).toHaveCount(0);
+});
+
 test.afterEach(async ({ page }) => {
   expect(await page.evaluate(() => window.__cspViolations ?? [])).toEqual([]);
 });

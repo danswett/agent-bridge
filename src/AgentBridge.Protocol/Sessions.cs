@@ -326,6 +326,9 @@ public enum AttentionKind { Error, SignInNeeded, NotResponding }
 [UnknownAs(Other)]
 public enum ErrorClass { Other, Auth, Rate, Quota, Model, Network }
 
+[UnknownAs(Other)]
+public enum AgentErrorType { Other, Query, Execution, Authorization, Session }
+
 // Where the agent can be signed in again. Machine is sent only when the host knows nothing else
 // is possible. A value a client does not know is Unknown, which claims nothing (#800 ruling): no
 // sign-in from the phone is offered on it, and nor is it said to be the machine's only.
@@ -438,11 +441,12 @@ public sealed record Attention
     // Host-composed from the structured fields, never agent text; within Limits.AttentionMessage.
     public string? Message { get; init; }
     public ErrorClass? ErrorClass { get; init; }
+    public AgentErrorType? ErrorType { get; init; }
     // Error: when the agent said it can be tried again (a rate limit, a quota).
     public DateTimeOffset? RetryAt { get; init; }
     public SignInWhere? SignIn { get; init; }
     public RecoveryState? Recovery { get; init; }
-    // NotResponding: the transcript's last event.
+    // The transcript's last event, also while showing a turn's error.
     public DateTimeOffset? LastEventAt { get; init; }
 }
 
