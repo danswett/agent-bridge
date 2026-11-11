@@ -104,9 +104,12 @@ body {
   background: var(--ab-shell);
   color: var(--ab-text);
 }
-/* Lock an open session's page, not the phone's other routes or their pull-to-refresh. */
-:root:has(body[data-page="sessions"][data-session-open="true"]),
+/* Lock only an open session. Keep the body rule independent: unsupported :has invalidates
+   an entire selector list, including any plain fallback beside it. */
 body[data-page="sessions"][data-session-open="true"] {
+  height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: none;
+}
+:root:has(body[data-page="sessions"][data-session-open="true"]) {
   height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: none;
 }
 body[data-page="sessions"][data-session-open="true"] .shell { height: 100vh; height: 100dvh; overflow: hidden; }
