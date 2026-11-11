@@ -17,6 +17,8 @@ public sealed partial class SessionView
     string? shownHistory;
     readonly System.Collections.ObjectModel.ObservableCollection<HistoryRow> historyShown = [];
     readonly Dictionary<string, HistoryDisclosure> openPrompts = [];
+    double historyOffset;
+    bool historyUp;
 
     // The session shown is another: its turns replace the last one's, and it opens at its end.
     // The same session shown again (the view re-attached) keeps what it has and does not scroll.
@@ -55,22 +57,56 @@ public sealed partial class SessionView
         // Measured before the rows change: the pane collapsing under the view must not read as scrolled back.
         var atEnd = pinEnd || scroll is { ScrollableHeight: > 0 } && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack;
         var offset = scroll?.VerticalOffset ?? 0;
+        var reading = atEnd ? null : ReadingHistory();
         var changed = HistoryRowSync.Apply(historyShown, rows);
         // Nothing moved when no row changed, and a scroller left from another session says nothing of where this one is.
-        if (changed) { KeepPlace(atEnd, offset); }
+        if (changed) { KeepPlace(atEnd, offset, reading); }
         HistoryLine.Text = line ?? "";
         HistoryLine.Visibility = line is null ? Visibility.Collapsed : Visibility.Visible;
         HistoryRetry.Visibility = history?.State == HistoryLoad.Failed ? Visibility.Visible : Visibility.Collapsed;
+        HistoryEarlier.Visibility = Ui.Show(history?.HasOlder == true && history.State != HistoryLoad.Failed);
+        HistoryEarlier.Content = history?.State == HistoryLoad.Loading ? "Loading earlier messages…" : "Load earlier messages";
     }
+
+    (string Id, double Top)? ReadingHistory()
+    {
+        if (ConversationScroll is not { } scroll) { return null; }
+        for (var i = 0; i < historyShown.Count; i++)
+        {
+            if (HistoryRows.TryGetElement(i) is FrameworkElement row && Top(row, scroll) + row.ActualHeight > 0 && Top(row, scroll) < scroll.ViewportHeight)
+            {
+                return (historyShown[i].Id, Top(row, scroll));
+            }
+        }
+        return null;
+    }
+
+    void HistoryScrolled(bool intermediate)
+    {
+        if (ConversationScroll is not { } scroll) { return; }
+        if (scroll.VerticalOffset != historyOffset) { historyUp = scroll.VerticalOffset < historyOffset; }
+        historyOffset = scroll.VerticalOffset;
+        if (!intermediate && !pinEnd && historyUp && scroll.VerticalOffset <= scroll.ViewportHeight) { LoadEarlier(); }
+        if (!intermediate) { historyUp = false; }
+    }
+
+    void LoadEarlier()
+    {
+        if (history is not { HasOlder: true, State: HistoryLoad.Idle }) { return; }
+        ReleasePin();
+        _ = history.LoadOlderAsync();
+    }
+
+    void OnHistoryEarlier(object sender, RoutedEventArgs e) => LoadEarlier();
 
     // The person is scrolling: the view is theirs from here, and stays where they leave it.
     internal void ReleasePin() { pinEnd = false; pinReleases++; }
 
     // Content changed in the conversation can reflow it, so the place is put back once layout has settled:
-    // the end if the view is pinned or was at the end, else the offset it was at (#1635). A scrolled-back
-    // view is only put back if it was moved up; the scroller already holds still what is inserted above it.
+    // the end if pinned, else the stored turn's screen position through a prepend (#1593).
+    // Without a visible stored turn, keep the previous offset if the layout moved it up (#1635).
     // Skipped if another session was opened, or the person took the view, meanwhile.
-    void KeepPlace(bool atEnd, double offset)
+    void KeepPlace(bool atEnd, double offset, (string Id, double Top)? reading = null)
     {
         var (session, releases) = (shownHistory, pinReleases);
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
@@ -78,7 +114,16 @@ public sealed partial class SessionView
             if (session != shownHistory || releases != pinReleases || ConversationScroll is not { } scroll) { return; }
             HistoryColumn.UpdateLayout();
             var target = atEnd || pinEnd ? scroll.ScrollableHeight : Math.Min(offset, scroll.ScrollableHeight);
-            var off = atEnd || pinEnd ? Math.Abs(scroll.VerticalOffset - target) > 0.5 : scroll.VerticalOffset < target - 0.5;
+            if (!atEnd && !pinEnd && reading is { } kept)
+            {
+                var index = historyShown.ToList().FindIndex(r => r.Id == kept.Id);
+                if (index >= 0 && HistoryRows.GetOrCreateElement(index) is FrameworkElement row)
+                {
+                    HistoryColumn.UpdateLayout();
+                    target = Math.Clamp(scroll.VerticalOffset + Top(row, scroll) - kept.Top, 0, scroll.ScrollableHeight);
+                }
+            }
+            var off = reading is not null || atEnd || pinEnd ? Math.Abs(scroll.VerticalOffset - target) > 0.5 : scroll.VerticalOffset < target - 0.5;
             if (off) { scroll.ChangeView(null, target, null, disableAnimation: true); }
         });
     }

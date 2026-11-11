@@ -347,6 +347,7 @@
                         AutomationProperties.AutomationId="HistoryLine"
                         Visibility="Collapsed" />
                     <Button x:Name="HistoryRetry" Content="Try again" Click="OnHistoryRetry" Visibility="Collapsed" />
+                    <Button x:Name="HistoryEarlier" Content="Load earlier messages" Click="OnHistoryEarlier" AutomationProperties.AutomationId="LoadEarlierMessages" Visibility="Collapsed" />
                     <ItemsRepeater x:Name="HistoryRows" AutomationProperties.AutomationId="History">
                         <ItemsRepeater.Layout>
                             <StackLayout Orientation="Vertical" Spacing="16" />

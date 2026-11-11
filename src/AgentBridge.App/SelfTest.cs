@@ -59,6 +59,7 @@ static partial class SelfTest
                 $"offers the machines as tabs over the list ({string.Join(", ", tabs?.Items.Select(i => i.Text) ?? [])})");
             var remoteFacts = rows.FirstOrDefault(r => r.Card?.Id == "demo-remote-codex") is { } rc ? ById<TextBlock>(rc, "RowFacts") : null;
             Check(remoteFacts is not null && Text(remoteFacts).EndsWith(" · " + remote.MachineName, StringComparison.Ordinal), $"names the machine on another machine's row ({(remoteFacts is null ? "none" : Text(remoteFacts))})");
+            await CheckEarlierHistory(window, main, Check);
             await CheckRowAnatomy(rows, Check);
             CheckRowNames(window, rows, Check);
             await CheckSelectionBar(window, Check, outFile);

@@ -88,6 +88,7 @@ public sealed partial class SessionView
             if (anchoring is not { } asked || Math.Abs(scroll.VerticalOffset - asked) >= 0.5) { TakeAnchor(); }
             scrolling = e.IsIntermediate;
             if (!e.IsIntermediate) { anchoring = null; keyTarget = null; }
+            HistoryScrolled(e.IsIntermediate);
         };
         scroll.DirectManipulationStarted += (_, _) => { keyTarget = null; panning = true; follow.PanStarted(); ReleasePin(); };
         scroll.DirectManipulationCompleted += (_, _) => { panning = false; follow.PanEnded(); };
