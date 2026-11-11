@@ -1633,6 +1633,11 @@ public class MergeRuleTests
     [InlineData("workflow_run", "requested", "CI", "main", "pull_request", "someone/fork", null, true)]
     [InlineData("status", null, null, null, null, null, "merge-rule", false)]
     [InlineData("status", null, null, null, null, null, "independent-review", true)]
+    [InlineData("schedule", null, null, null, null, null, null, true)]
+    [InlineData("workflow_dispatch", null, null, null, null, null, null, true)]
+    [InlineData("pull_request_target", null, null, null, null, null, null, true)]
+    [InlineData("check_suite", null, null, "main", null, null, null, false)]
+    [InlineData("check_suite", null, null, "topic", null, null, null, true)]
     public void The_merge_rule_workflow_judges_again_when_CI_finishes_on_main(string eventName, string? action, string? workflow, string? branch, string? runEvent, string? headRepo, string? context, bool runs)
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
@@ -1647,6 +1652,7 @@ public class MergeRuleTests
             ["github.event_name"] = eventName,
             ["github.event.action"] = action,
             ["github.event.context"] = context,
+            ["github.event.check_suite.head_branch"] = branch,
             ["github.event.workflow_run.name"] = workflow,
             ["github.event.workflow_run.head_branch"] = branch,
             ["github.event.workflow_run.event"] = runEvent,
@@ -1654,6 +1660,31 @@ public class MergeRuleTests
         };
 
         Assert.Equal(runs, IfExpression.Evaluate(condition, github));
+        var document = (YamlMappingNode)stream.Documents[0].RootNode;
+        var admission = Assert.IsType<YamlMappingNode>(document.Children[new YamlScalarNode("concurrency")]);
+        var writer = (YamlMappingNode)job.Children[new YamlScalarNode("concurrency")];
+        string Scalar(YamlMappingNode node, string key) => node.Children[new YamlScalarNode(key)].ToString();
+        var group = Scalar(admission, "group");
+        Assert.StartsWith("merge-rule-admit-${{", group, StringComparison.Ordinal);
+        Assert.Equal("false", Scalar(admission, "cancel-in-progress"));
+        Assert.Equal("merge-rule", Scalar(writer, "group"));
+        Assert.Equal("false", Scalar(writer, "cancel-in-progress"));
+        Assert.Equal("max", Scalar(writer, "queue"));
+        foreach (var head in new[] { "head-a", "head-b" })
+        {
+            github["github.run_id"] = "run-" + head;
+            github["github.event.pull_request.head.sha"] = eventName == "pull_request_target" ? head : null;
+            github["github.event.sha"] = eventName == "status" ? head : null;
+            github["github.event.check_suite.head_sha"] = eventName == "check_suite" ? head : null;
+            github["github.event.check_suite.head_branch"] = branch;
+            github["github.event.workflow_run.head_sha"] = eventName == "workflow_run" ? head : null;
+            var sweep = eventName is "schedule" or "workflow_dispatch" || eventName == "workflow_run" && branch == "main";
+            Assert.Equal(!runs ? "run-" + head : sweep ? "sweep" : head,
+                IfExpression.Value(group[(group.IndexOf("${{", StringComparison.Ordinal) + 3)..^2], github));
+        }
+        github["vars.FLEET_MERGERULE"] = "off";
+        Assert.Equal(runs ? "sweep" : "run-head-b",
+            IfExpression.Value(group[(group.IndexOf("${{", StringComparison.Ordinal) + 3)..^2], github));
     }
 
     /// <summary>
@@ -1663,7 +1694,9 @@ public class MergeRuleTests
     /// </summary>
     static class IfExpression
     {
-        public static bool Evaluate(string condition, IReadOnlyDictionary<string, string?> context)
+        public static bool Evaluate(string condition, IReadOnlyDictionary<string, string?> context) => Truthy(Value(condition, context));
+
+        public static object? Value(string condition, IReadOnlyDictionary<string, string?> context)
         {
             var tokens = System.Text.RegularExpressions.Regex.Matches(condition, @"\s*(\(|\)|&&|\|\||==|!=|!|'(?:[^']|'')*'|[A-Za-z_][A-Za-z0-9_.\-]*)\s*")
                 .Select(m => m.Groups[1].Value).ToList();
@@ -1671,7 +1704,7 @@ public class MergeRuleTests
             var position = 0;
             var result = Or();
             Assert.Equal(tokens.Count, position);
-            return Truthy(result);
+            return result;
 
             object? Or()
             {
@@ -1680,7 +1713,7 @@ public class MergeRuleTests
                 {
                     position++;
                     var right = And();
-                    left = Truthy(left) || Truthy(right);
+                    left = Truthy(left) ? left : right;
                 }
                 return left;
             }
@@ -1692,7 +1725,7 @@ public class MergeRuleTests
                 {
                     position++;
                     var right = Compare();
-                    left = Truthy(left) && Truthy(right);
+                    left = Truthy(left) ? right : left;
                 }
                 return left;
             }
@@ -1726,8 +1759,9 @@ public class MergeRuleTests
                 return context.TryGetValue(token, out var value) ? value : null;
             }
 
-            static bool Truthy(object? value) => value switch { bool b => b, string s => s.Length > 0, _ => false };
         }
+
+        static bool Truthy(object? value) => value switch { bool b => b, string s => s.Length > 0, _ => false };
     }
 
     // The merge-rule GitHub App (docs/merge-rule-app.md).

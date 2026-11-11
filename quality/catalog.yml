@@ -1120,7 +1120,7 @@ suites:
     triggers: [.github/workflows/**, .github/actions/**, .zizmor.yml, build/actionlint-findings.ps1, build/test-actionlint-findings.ps1]
     # actionlint, shellcheck (through actionlint) and zizmor all block; zizmor's exceptions are in .zizmor.yml, each with its reason (#1306).
     # Drafts run it too: it's part of the fast ring (quality/README.md §2).
-    command: see workflow-lint.yml (actionlint, its one exception and pwsh build/test-actionlint-findings.ps1, shellcheck, zizmor)
+    command: see workflow-lint.yml (actionlint, its exact queue-key exceptions and pwsh build/test-actionlint-findings.ps1, shellcheck, zizmor)
     where: workflow-lint.yml lint
     status: exists
 

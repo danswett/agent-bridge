@@ -458,7 +458,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    already waiting), since by default the next to arrive replaces the one waiting and a re-run
    of an old run could leave a newer run's app unpublished; GitHub doesn't promise the order
    waiting publishes start in, so the checks above keep the order. actionlint doesn't know
-   `queue` yet: workflow-lint.yml lets that one finding through there alone (#951). CodeQL,
+   `queue` yet: workflow-lint.yml allows only its exact publish/evaluate locations (#951, #1922). CodeQL,
    perf and the relay
    workflow run apart and don't hold a release.
 8. **Keeping the selector honest:** a whole-ring run (ring 2, every gated job) also says in its
@@ -573,17 +573,26 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    - Fast path (#1251): an event about one pull request or head judges only that head
      (`--pr N` for `pull_request_target`, `--sha` for `status`, `check_suite` and `workflow_run`),
      with no 45 second wait and no build: the evaluator is restored from a cache keyed by a hash of
-     its source, and built (then saved) only when main changed it. Runs go one at a time in one group, a sweep
-     included, so an older read of main's CI can't land after a newer verdict; nothing cancels, and a
-     burst folds into the one run queued behind the running one (a displaced scoped run leaves its
-     head pending until the next run or the 10 minute sweep). A scoped run that finds main not
+     its source, and built (then saved) only when main changed it. Admission coalesces events per
+     head, separately from global sweeps (#1922); skipped events have unique admission keys.
+     Every admitted writer then waits in the shared `merge-rule` job group with `queue: max`,
+     reading main only after taking that lock. A scoped event cannot displace a sweep or another
+     head; a newer sweep replaces only a pending sweep, and still judges every open PR. A scoped run that finds main not
      green judges every open pull request, as `--all` does, so a sweep displaced while main turns
      red can't leave another pull request's success standing (about 15 points, only while main is
      red; unchanged verdicts aren't posted again). A scoped run costs about 3 points
      (the open list, the head's pull request, a re-read before a post); at 15 merges an hour,
      about 3 pushes each, 45 bursts of at most 6 runs is 810 points at the very worst and about
      400 at the 3 runs a burst usually folds to, plus the sweeps (6 scheduled and 15 after main's
-     CI, up to 15 points each with 25 pull requests open, 315). Kill switch: set the repository
+     CI, up to 15 points each with 25 pull requests open, 315). Those are historical estimates,
+     not a quota guarantee: the Nov 10 repair sweep cost 58 points and 17 REST calls. Retaining
+     formerly displaced sweeps adds their existing evaluation cost, with no new job, timer,
+     token permission or idle runner minutes. A burst admits at most one writer per active head
+     plus one sweep; each head also retains one pending duplicate outside the writer lock.
+     GitHub's queue cap is 100 pending jobs: additional jobs are cancelled at that cap, not
+     promised recovery. The observed 22 open PRs fit, but bursts spanning many obsolete heads
+     can exceed that bound. The cron backstop remains best effort; a reliable fleet tick is a
+     separate slice. Kill switch: set the repository
      variable `FLEET_MERGERULE` to `off` (`gh variable set FLEET_MERGERULE --body off`); the next
      run, which reads it, goes back to the earlier path: wait 45 seconds, build main's evaluator,
      judge every pull request, in one group. Delete the variable to turn the fast path back on.

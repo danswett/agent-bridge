@@ -1,7 +1,7 @@
 # Judges actionlint's findings for workflow-lint.yml's actionlint step: every finding fails it but
-# one, the exception workflow-lint.yml sets next to its actionlint pin. That is actionlint 1.7.12's
+# the exact locations set below, with the message next to workflow-lint.yml's actionlint pin. It is actionlint 1.7.12's
 # error for concurrency's queue key, which GitHub supports and actionlint doesn't yet (#951), and
-# only where ci.yml's publish job sets queue: max. The same error anywhere else, another error
+# only where ci.yml's publish or merge-rule.yml's evaluate sets queue: max. The same error elsewhere, another error
 # there, or an exit code or output this can't read fails the step; so does the exception once
 # actionlint no longer reports it, so that it is removed.
 #
@@ -20,7 +20,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$ci = '.github/workflows/ci.yml'
+$targets = @{ '.github/workflows/ci.yml' = 'publish'; '.github/workflows/merge-rule.yml' = 'evaluate' }
 
 # As workflow commands require, so a message quoting a workflow can't end the annotation.
 function Format-Property([string]$value) { $value.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A').Replace(':', '%3A').Replace(',', '%2C') }
@@ -44,14 +44,13 @@ function Get-Block([string[]]$lines, [int]$from, [int]$to, [string]$key, [int]$i
     @{ From = $at[0] + 1; To = $end }
 }
 
-# Where ci.yml's publish job sets queue: max, as actionlint places the key: its line and column.
-# $null, and so no exception, unless ci.yml has exactly that line in exactly that place.
-function Get-PublishQueue {
-    if (-not (Test-Path -LiteralPath $ci -PathType Leaf)) { return $null }
-    $lines = [IO.File]::ReadAllLines((Resolve-Path -LiteralPath $ci))
+# The exact queue: max key in the named job, as actionlint places it: line and column.
+function Get-JobQueue([string]$path, [string]$job) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+    $lines = [IO.File]::ReadAllLines((Resolve-Path -LiteralPath $path))
     $jobs = Get-Block $lines 0 $lines.Count 'jobs' 0
     if (-not $jobs) { return $null }
-    $publish = Get-Block $lines $jobs.From $jobs.To 'publish' 2
+    $publish = Get-Block $lines $jobs.From $jobs.To $job 2
     if (-not $publish) { return $null }
     $concurrency = Get-Block $lines $publish.From $publish.To 'concurrency' 4
     if (-not $concurrency) { return $null }
@@ -68,8 +67,12 @@ if ($items -isnot [array]) { Stop-Unread "actionlint's findings aren't a JSON ar
 # actionlint exits 1 exactly when it found something.
 if (($ExitCode -eq 0) -ne ($items.Count -eq 0)) { Stop-Unread "actionlint exited $ExitCode with $($items.Count) findings" }
 
-$queue = Get-PublishQueue
-$let = $false
+$queues = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+foreach ($path in $targets.Keys) {
+    $queue = Get-JobQueue $path $targets[$path]
+    if ($queue) { $queues.Add($path, $queue) }
+}
+$let = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 $failed = 0
 foreach ($item in $items) {
     if ($item -isnot [Management.Automation.PSCustomObject]) { Stop-Unread "an actionlint finding isn't a JSON object" }
@@ -82,18 +85,22 @@ foreach ($item in $items) {
         $finding[$name] = $value
     }
     $file = "file=$(Format-Property $finding.filepath),line=$($finding.line),col=$($finding.column)"
-    if (-not $let -and $queue -and $Allowed -ne '' -and $finding.message -ceq $Allowed -and $finding.kind -ceq 'syntax-check' `
-            -and $finding.filepath -ceq $ci -and $finding.line -eq $queue.Line -and $finding.column -eq $queue.Column) {
-        $let = $true
+    $queue = $null
+    if ($queues.TryGetValue($finding.filepath, [ref]$queue) -and -not $let.Contains($finding.filepath) `
+            -and $Allowed -ne '' -and $finding.message -ceq $Allowed -and $finding.kind -ceq 'syntax-check' `
+            -and $finding.line -eq $queue.Line -and $finding.column -eq $queue.Column) {
+        [void]$let.Add($finding.filepath)
         Write-Output "::notice $file,title=actionlint exception (#951)::$(Format-Message $finding.message)"
         continue
     }
     $failed++
     Write-Output "::error $file,title=actionlint $(Format-Property $finding.kind)::$(Format-Message $finding.message)"
 }
-if ($queue -and $Allowed -ne '' -and -not $let) {
-    $failed++
-    Write-Output "::error title=actionlint::$(Format-Message "ci.yml's publish sets queue: max, but actionlint didn't report the exception workflow-lint.yml lets through; if actionlint now knows queue, remove the exception (#951)")"
+foreach ($path in $queues.Keys) {
+    if ($Allowed -ne '' -and -not $let.Contains($path)) {
+        $failed++
+        Write-Output "::error title=actionlint::$(Format-Message "$path's $($targets[$path]) sets queue: max, but actionlint didn't report the exception workflow-lint.yml lets through; if actionlint now knows queue, remove the exception (#951)")"
+    }
 }
 if ($failed) { exit 1 }
 exit 0
