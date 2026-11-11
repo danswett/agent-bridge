@@ -1280,7 +1280,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
    that always exists, so a time arriving later pushes nothing.
   5. *Refresh.* The text changes once a second only while a visible message is under a minute
    old, otherwise once a minute, and is worked out again when shown. Nothing refreshes
-   while hidden. Changing text must not reflow the label line.
+   while hidden. Changing text must not reflow the label line. Windows stored-time buttons
+   retain their sent instant and update only their text, never the history rows. Their meta
+   text has a fixed, non-wrapping width and truncates last; the exact-time reveal stays whole.
+   Offscreen, collapsed, unloaded and host-hidden buttons stop their clocks and recompute
+   when visible again. Relative boundaries follow sent time; older dates refresh at midnight.
   6. *No time yet.* The live latest exchange shows none until history for that exact turn
    arrives and matches the displayed prompt or latest response. Repeated text in another turn,
    provisional activity and session update/status times cannot supply a sent time. An

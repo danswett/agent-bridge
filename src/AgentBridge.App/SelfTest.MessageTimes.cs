@@ -42,7 +42,7 @@ static partial class SelfTest
             now = sent.AddSeconds(age);
             time.Refresh();
             window.RootElement.UpdateLayout();
-            stable &= (time.Content as TextBlock)?.Text == MessageTime.Label(sent, now, TimeZoneInfo.Utc, System.Globalization.CultureInfo.InvariantCulture)
+            stable &= time.RefreshPending && (time.Content as TextBlock)?.Text == MessageTime.Label(sent, now, TimeZoneInfo.Utc, System.Globalization.CultureInfo.InvariantCulture)
                 && time.ActualHeight == height && time.ActualWidth == width && scroll?.VerticalOffset == offset
                 && ReferenceEquals(rows?.ItemsSource, source) && FocusManager.GetFocusedElement(time.XamlRoot) == time
                 && AutomationProperties.GetName(time) == exact;
@@ -52,8 +52,9 @@ static partial class SelfTest
         window.ShowPage("settings");
         now = sent.AddMinutes(10);
         window.RootElement.UpdateLayout();
+        var stopped = await Until(() => !time.RefreshPending, TimeSpan.FromSeconds(5));
         time.Refresh();
-        check(!time.RefreshPending && (time.Content as TextBlock)?.Text == before, "stops hidden message clocks without changing their text");
+        check(stopped && !time.RefreshPending && (time.Content as TextBlock)?.Text == before, "stops hidden message clocks without changing their text");
         window.ShowPage("sessions");
         check(await Until(() => (time.Content as TextBlock)?.Text == "10 min ago" && time.RefreshPending, TimeSpan.FromSeconds(5)),
             "recomputes a stored message time when its view returns, without another history event");

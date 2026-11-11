@@ -37,18 +37,18 @@
         <!-- A message's time (#1619, §6.4): the relative or clock text, with the exact time with seconds as
              the tooltip (hover, keyboard focus), the tap/click popover and the fixed accessible name. -->
         <DataTemplate x:Key="MessageTimeTemplate" x:DataType="core:MessageStamp">
-            <Button
+            <local:MessageTimeView Stamp="{x:Bind}"
                 Style="{StaticResource AbTimeButton}"
                 AutomationProperties.Name="{x:Bind Exact}"
                 AutomationProperties.AutomationId="MessageTime"
                 ToolTipService.ToolTip="{x:Bind Exact}">
-                <TextBlock Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind Text}" />
+                <TextBlock Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind Text}" Width="104" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
                 <Button.Flyout>
                     <Flyout>
                         <TextBlock Style="{StaticResource AbTypeMeta}" IsTextSelectionEnabled="True" Text="{x:Bind Exact}" />
                     </Flyout>
                 </Button.Flyout>
-            </Button>
+            </local:MessageTimeView>
         </DataTemplate>
     </UserControl.Resources>
 
