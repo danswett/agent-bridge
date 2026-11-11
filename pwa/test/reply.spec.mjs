@@ -183,10 +183,14 @@ test.describe('on a phone', () => {
     await openDemo(page);
     const input = box(page, IDLE).getByRole('textbox', { name: 'Reply' });
     await input.pressSequentially('send this once');
+    await box(page, IDLE).evaluate((form) => form.addEventListener('focusout', () => {
+      form.dataset.blurred = 'true';
+    }, { once: true }));
     await input.press('ControlOrMeta+Enter');
     await expect(box(page, IDLE)).toHaveAttribute('data-reply', 'delivered');
     await expect(input).toHaveValue('');
     await expect(input).not.toBeFocused();
+    await expect(box(page, IDLE)).toHaveAttribute('data-blurred', 'true');
     await input.focus();
     await input.press('ControlOrMeta+z');
     await expect(input).toHaveValue('');
@@ -207,6 +211,30 @@ test.describe('on a phone', () => {
     await input.press('ControlOrMeta+z');
     await expect(input).toHaveValue('');
   });
+
+  for (const draft of ['', 'first next']) {
+    test(`delivery preserves an active composition with ${draft ? 'the sent prefix' : 'an empty intermediate draft'}`, async ({ page }) => {
+      await openDemo(page);
+      const input = box(page, IDLE).getByRole('textbox', { name: 'Reply' });
+      await input.fill('first');
+      await hold(page);
+      await input.press('ControlOrMeta+Enter');
+      await expect(box(page, IDLE)).toHaveAttribute('data-reply', 'sending');
+      await input.fill(draft);
+      const composing = await input.elementHandle();
+      await input.dispatchEvent('compositionstart', { data: '' });
+      await input.evaluate((el) => el.dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: true })));
+      expect(await composing.evaluate((el) => el.isConnected)).toBe(true);
+      await release(page);
+      await expect(box(page, IDLE)).toHaveAttribute('data-reply', 'delivered');
+      expect(await composing.evaluate((el) => el.isConnected)).toBe(true);
+      await expect(input).toHaveValue(draft);
+      await expect(input).toBeFocused();
+      await input.dispatchEvent('compositionend', { data: draft });
+      await expect(input).toHaveValue(draft ? 'next' : '');
+      await expect(input).toBeFocused();
+    });
+  }
 
   test('every reply control is at least 44 px tall', async ({ page }) => {
     await openDemo(page);
