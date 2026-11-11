@@ -152,9 +152,11 @@ public sealed class HandoffAdapterTests : IDisposable
         var pending = new ReplyHandoffAgent(source, replier).AskForNoteAsync(Id, HandoffService.Prompt, stop.Token);
         Assert.False(pending.IsCompleted);
 
+        source.Read = new(TaskCreationOptions.RunContinuationsAsynchronously);
         source.Set(source.Current with { Activity = new Activity { Turn = "new", ResponseTurn = "new",
             UserMessage = replier.Request?.Text, Response = "Delegate only", Source = new ActivitySource { Response = "helper" } } });
-        await Assert.ThrowsAsync<TimeoutException>(() => pending.WaitAsync(TimeSpan.FromMilliseconds(50)));
+        Assert.Equal("Delegate only", (await source.Read.Task.WaitAsync(stop.Token)).Activity.Response);
+        Assert.False(pending.IsCompleted);
         source.Set(source.Current with { Activity = source.Current.Activity with { Own = new OwnActivity { Response = "Main note" } } });
 
         Assert.Equal("Main note", await pending.WaitAsync(stop.Token));
@@ -228,9 +230,17 @@ public sealed class HandoffAdapterTests : IDisposable
             StatusSince = Fixture.T0, UpdatedAt = Fixture.T0, Activity = new Activity() };
         public event EventHandler<SessionChange>? Changed;
         public event EventHandler<string>? UnbudgetedChanged;
+        public TaskCompletionSource<Session>? Read;
         Session? unbudgeted;
         public void SetUnbudgeted(Session session) { unbudgeted = session; UnbudgetedChanged?.Invoke(this, Id); }
-        public Session? GetUnbudgeted(string id) => id == Id ? unbudgeted ?? Current : null;
+        public Session? GetUnbudgeted(string id)
+        {
+            if (id != Id) { return null; }
+            var session = unbudgeted ?? Current;
+            // Capture before signaling so a main response cannot hide an unread delegate response.
+            Read?.TrySetResult(session);
+            return session;
+        }
         public void Set(Session session) { Current = session; Changed?.Invoke(this, new(SessionChangeKind.Upserted, Id, session, ++revision)); }
         long revision;
         public long Revision => revision;
