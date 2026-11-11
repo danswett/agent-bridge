@@ -334,10 +334,15 @@ function registerServiceWorker() {
   };
   learn();
   navigator.serviceWorker.register('sw.js').then((reg) => {
-    // The first worker is not an update to this page; checks can still ask it to update.
+    // The first worker can already control the page while it is still activating.
+    let firstWorker = hadController ? null : navigator.serviceWorker.controller ?? reg.installing ?? reg.waiting;
+    const laterWorker = (worker) => {
+      if (!hadController && !navigator.serviceWorker.controller && worker) { firstWorker = worker; }
+      return worker === firstWorker ? null : worker;
+    };
     appRelease.attach({
-      get installing() { return navigator.serviceWorker.controller ? reg.installing : null; },
-      get waiting() { return navigator.serviceWorker.controller ? reg.waiting : null; },
+      get installing() { return laterWorker(reg.installing); },
+      get waiting() { return laterWorker(reg.waiting); },
       update: () => reg.update(),
       addEventListener: (...args) => reg.addEventListener(...args),
       removeEventListener: (...args) => reg.removeEventListener(...args),

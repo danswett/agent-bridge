@@ -116,7 +116,7 @@ for (const { name, viewport } of [{ name: 'on a phone', viewport: { width: 390, 
     await page.waitForSelector('html[data-demo-ready]');
     await go(page, 'settings');
     await page.evaluate(() => {
-      window.releaseTest.worker.to('activated');
+      window.releaseTest.worker.to('activating');
       navigator.serviceWorker.controller = window.releaseTest.worker;
       navigator.serviceWorker.dispatchEvent(new Event('controllerchange'));
     });
@@ -125,6 +125,8 @@ for (const { name, viewport } of [{ name: 'on a phone', viewport: { width: 390, 
     await section.getByRole('button', { name: 'Check for updates' }).click();
     await expect(section.locator('#release-result')).toHaveText('Up to date');
     expect(await page.evaluate(() => window.releaseTest.updates)).toBe(1);
+    await page.evaluate(() => window.releaseTest.worker.to('activated'));
+    await expect(section.getByRole('button', { name: 'Reload', exact: true })).toBeHidden();
     await page.evaluate(() => { window.releaseTest.install(); window.releaseTest.worker.to('installed'); });
     await expect(section.getByRole('button', { name: 'Reload', exact: true })).toBeHidden();
     await page.evaluate(() => window.releaseTest.worker.to('activated'));
