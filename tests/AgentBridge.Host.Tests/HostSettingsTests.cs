@@ -186,6 +186,24 @@ public sealed class HostSettingsTests : IDisposable
     }
 
     [Theory]
+    [InlineData("{}", "on", false)]
+    [InlineData("""{"fleetNames":{}}""", "on", false)]
+    [InlineData("""{/* mine */"fleetNames":{"launchRule":"on",},}""", "on", false)]
+    [InlineData("""{"fleetNames":{"launchRule":"off"}}""", "off", false)]
+    [InlineData("""{"fleetNames":{"launchRule":"unknown"}}""", "off", true)]
+    [InlineData("""{"fleetNames":{"launchRule":null}}""", "off", true)]
+    [InlineData("""{"fleetNames":false}""", "off", true)]
+    [InlineData("{", "off", true)]
+    public void Fleet_launch_names_default_on_but_invalid_settings_are_reported_and_read_off(string text, string rule, bool invalid)
+    {
+        var (settings, problem) = With(text);
+        var view = System.Text.Json.JsonSerializer.SerializeToElement(HostControl.Settings(settings, null), ProtocolJson.Options);
+
+        Assert.Equal(rule, view.GetProperty("fleetLaunchRule").GetString());
+        Assert.Equal(invalid, problem is not null);
+    }
+
+    [Theory]
     [InlineData("{}", false)]
     [InlineData("{\"permissions\":{\"trustedPeers\":false}}", false)]
     [InlineData("{\"permissions\":{\"trustedPeers\":true}}", true)]

@@ -502,6 +502,64 @@ public sealed class LocalApiTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task The_apps_fleet_name_switch_round_trips_preserves_other_settings_and_needs_no_restart()
+    {
+        var path = Path.Combine(profile, "config.json");
+        File.WriteAllText(path, """{"fleetNames":{"launchRule":"on","retained":7},"permissions":{"remoteApproval":true}}""");
+        var ch = await ConnectAsync();
+        await ch.CallAsync<HostStatus>(HostOps.Subscribe);
+
+        var off = await ch.CallAsync(HostOps.Settings, new { fleetLaunchRule = "off" });
+
+        Assert.Equal("off", off.GetProperty("settings").GetProperty("fleetLaunchRule").GetString());
+        Assert.False(off.GetProperty("restartRequired").GetBoolean());
+        Assert.Equal("off", (await NextAsync(ch)).Data.GetProperty("settings").GetProperty("fleetLaunchRule").GetString());
+        await ch.CallAsync(HostOps.Settings, new { remoteApproval = true });
+        var saved = JsonNode.Parse(File.ReadAllText(path))!;
+        Assert.Equal("off", saved["fleetNames"]!["launchRule"]!.GetValue<string>());
+        Assert.Equal(7, saved["fleetNames"]!["retained"]!.GetValue<int>());
+        Assert.True(saved["permissions"]!["remoteApproval"]!.GetValue<bool>());
+        Assert.False((await ch.CallAsync<HostStatus>(HostOps.Status)).RestartRequired);
+
+        var on = await ch.CallAsync(HostOps.Settings, new { fleetLaunchRule = "on" });
+        Assert.Equal("on", on.GetProperty("settings").GetProperty("fleetLaunchRule").GetString());
+        Assert.False(on.GetProperty("restartRequired").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData("unknown", "{}")]
+    [InlineData("ON", "{}")]
+    [InlineData("on", """{"fleetNames":false}""")]
+    [InlineData("on", """{"permissions":{"remoteApproval":"yes"}}""")]
+    public async Task An_invalid_fleet_name_setting_is_refused_without_writing_any_part_of_the_request(string rule, string config)
+    {
+        var path = Path.Combine(profile, "config.json");
+        File.WriteAllText(path, config);
+        var ch = await ConnectAsync();
+
+        await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Settings, new { fleetLaunchRule = rule, name = "not saved" }));
+
+        Assert.Equal(config, File.ReadAllText(path));
+    }
+
+    [Theory]
+    [InlineData(CallerKind.Agent)]
+    [InlineData(CallerKind.Other)]
+    [InlineData(CallerKind.HostCli)]
+    public async Task An_agent_or_other_non_app_caller_cannot_change_the_fleet_name_launch_rule(CallerKind kind)
+    {
+        var path = Path.Combine(profile, "config.json");
+        const string config = """{"fleetNames":{"launchRule":"off"}}""";
+        File.WriteAllText(path, config);
+        callers.Current = new FixedCallerGuard(new Caller(kind, "test caller"));
+        var ch = await ConnectAsync();
+
+        await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Settings, new { fleetLaunchRule = "on" }));
+
+        Assert.Equal(config, File.ReadAllText(path));
+    }
+
+    [Fact]
     public async Task Keeping_a_Dev_Box_awake_is_turned_on_from_the_app_beside_its_interval_and_applies_at_once()
     {
         File.WriteAllText(Path.Combine(profile, "config.json"), """{ "devBox": { "intervalMinutes": 20 } }""");
