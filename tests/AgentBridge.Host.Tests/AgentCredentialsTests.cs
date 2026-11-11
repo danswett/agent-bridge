@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -146,6 +147,105 @@ public sealed class AgentCredentialsTests : IDisposable
         time.Now = Started.AddHours(2);
         Assert.Null(store.Check(a, Inside()).Accepted);
     }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(30)]
+    public void A_script_record_survives_reload_with_its_own_principal_but_cannot_authenticate_yet(int days)
+    {
+        var (token, credential) = ScriptRecord();
+        credential["expiresAt"] = Started.AddDays(days);
+        WriteCredential(credential);
+        var store = Store(new Clock(Started));
+        Assert.Null(store.Problem);
+        Assert.Equal(1, store.Count);
+        var record = System.Text.Json.JsonSerializer.Deserialize<AgentCredential>(credential.ToJsonString(),
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!;
+        Assert.Equal("script:machine1/pump-wake", store.PrincipalOf(record));
+        Assert.Null(store.Check(token, Inside()).Accepted);
+    }
+
+    [Theory]
+    [InlineData("scope", "none")]
+    [InlineData("scope", "read")]
+    [InlineData("scope", "read+reply+launch")]
+    [InlineData("kind", "Script")]
+    [InlineData("kind", "unknown")]
+    [InlineData("kind", null)]
+    [InlineData("principal", "agent:machine1/pump-wake")]
+    [InlineData("principal", "script:machine2/pump-wake")]
+    [InlineData("principal", "script:machine1/")]
+    [InlineData("principal", "script:machine1/../pump-wake")]
+    [InlineData("principal", "script:machine1/pump wake")]
+    [InlineData("principal", "script:machine1/pump\nwake")]
+    [InlineData("principal", null)]
+    [InlineData("expiresAt", null)]
+    [InlineData("issuedAt", null)]
+    [InlineData("session", "sess-1")]
+    [InlineData("launchId", "launch-1")]
+    [InlineData("rootPid", "100")]
+    [InlineData("depth", "1")]
+    public void An_invalid_script_record_fails_the_whole_store_closed(string field, string? value)
+    {
+        var (token, credential) = ScriptRecord();
+        if (value is null) { credential.Remove(field); }
+        else if (field is "rootPid" or "depth") { credential[field] = int.Parse(value, System.Globalization.CultureInfo.InvariantCulture); }
+        else { credential[field] = value; }
+        WriteCredential(credential);
+        var store = Store(new Clock(Started));
+        Assert.NotNull(store.Problem);
+        Assert.Equal(0, store.Count);
+        Assert.Null(store.Check(token, Inside()).Accepted);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(31)]
+    public void A_script_record_requires_a_positive_life_of_at_most_thirty_days(int days)
+    {
+        var (_, credential) = ScriptRecord();
+        credential["expiresAt"] = Started.AddDays(days);
+        WriteCredential(credential);
+        Assert.NotNull(Store().Problem);
+    }
+
+    [Fact]
+    public void A_legacy_session_record_keeps_its_binding_and_cannot_carry_a_script_principal()
+    {
+        var token = Store().Mint("sess-1", "launch-1", 100, Started, AgentProtocol.ScopeRead);
+        var saved = JsonNode.Parse(File.ReadAllText(Path.Combine(root, AgentCredentials.FileName)))!;
+        var credential = saved["records"]![0]!["credential"]!.AsObject();
+        credential.Remove("kind");
+        credential.Remove("principal");
+        File.WriteAllText(Path.Combine(root, AgentCredentials.FileName), saved.ToJsonString());
+        var store = Store();
+        Assert.Equal("agent:machine1/sess-1", store.PrincipalOf(store.Check(token, Inside()).Accepted!));
+        credential["kind"] = "session";
+        credential["principal"] = "script:machine1/pump-wake";
+        File.WriteAllText(Path.Combine(root, AgentCredentials.FileName), saved.ToJsonString());
+        Assert.NotNull(Store().Problem);
+    }
+
+    (string Token, JsonObject Credential) ScriptRecord()
+    {
+        var token = Store(new Clock(Started)).Mint("sess-1", "launch-1", 100, Started, AgentProtocol.ScopeRead);
+        var saved = JsonNode.Parse(File.ReadAllText(Path.Combine(root, AgentCredentials.FileName)))!;
+        var credential = saved["records"]![0]!["credential"]!.AsObject();
+        credential["kind"] = "script";
+        credential["principal"] = "script:machine1/pump-wake";
+        credential["session"] = "";
+        credential["launchId"] = "";
+        credential["rootPid"] = 0;
+        credential["rootStartUtc"] = default(DateTimeOffset);
+        credential["scope"] = AgentProtocol.ScopeReadReply;
+        credential["issuedAt"] = Started;
+        credential["expiresAt"] = Started.AddDays(30);
+        return (token, credential);
+    }
+
+    void WriteCredential(JsonObject credential) =>
+        File.WriteAllText(Path.Combine(root, AgentCredentials.FileName), credential.Root.ToJsonString());
 
     sealed class Clock(DateTimeOffset now) : TimeProvider
     {
