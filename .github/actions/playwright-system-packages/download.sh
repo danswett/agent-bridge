@@ -29,19 +29,28 @@
 # makes neither check (test.sh holds both modes). Unset or anything but true, every
 # line that runs is the same as without it.
 #
-# PLAYWRIGHT_APT_ETC and PLAYWRIGHT_APT_LIMIT exist for test.sh's stand-ins; the action sets neither.
+# PLAYWRIGHT_APT_* paths and limits exist for test.sh's stand-ins; the action sets neither.
 set -euo pipefail
 
 if [ "$#" -eq 0 ]; then
   echo "::error::name the browsers whose system packages to download"; exit 1
 fi
 apt_etc=${PLAYWRIGHT_APT_ETC:-/etc/apt}
+apt_lists=${PLAYWRIGHT_APT_LISTS:-/var/lib/apt/lists}
+apt_archives=${PLAYWRIGHT_APT_ARCHIVES:-/var/cache/apt/archives}
+cache_lists="$HOME/.cache/playwright-apt-lists"; cache_debs="$HOME/.cache/playwright-apt-debs"
 limit=${PLAYWRIGHT_APT_LIMIT:-60s}
 mirrors="$apt_etc/apt-mirrors.txt"
 force=false
 [ "${PLAYWRIGHT_APT_FORCE_FALLBACK:-}" != true ] || force=true
 cache_hit=false
-if [ "${DEBS_CACHE_HIT:-}" = true ] && [ "$force" = false ]; then
+cache_available=false
+if [ "${DEBS_CACHE_HIT:-}" = true ]; then
+  if compgen -G "$cache_lists/*_Packages*" > /dev/null && compgen -G "$cache_debs/*.deb" > /dev/null; then
+    cache_available=true
+  else echo "::warning::apt cache lacks matching lists or debs; treating it as a miss"; fi
+fi
+if [ "$cache_available" = true ] && [ "$force" = false ]; then
   cache_hit=true; limit=${PLAYWRIGHT_APT_LIMIT:-20s}
 fi
 update_deadline=0
@@ -150,6 +159,8 @@ if [ "$rc" -ne 0 ]; then
   if [ "$rc" -ne 0 ]; then
     if [ "$cache_hit" = true ] && [ "$network_failed" = true ]; then
       echo "::warning::apt update failed (exit $rc); using cached packages for the mandatory offline install; see the attempt log above"
+      sudo find "$apt_lists" -maxdepth 1 -type f ! -name lock -delete
+      sudo install -m 644 "$cache_lists"/* "$apt_lists/"
     else fail update "$rc"; fi
   fi
 fi
@@ -193,3 +204,12 @@ elif [ "$rc" -ne 0 ]; then
   fail download "$rc"
 fi
 install_offline
+if [ "$cache_available" = false ] && compgen -G "$apt_archives/*.deb" > /dev/null; then
+  mkdir -p "$cache_lists" "$cache_debs"
+  find "$cache_lists" -maxdepth 1 -type f -delete
+  cp "$apt_archives"/*.deb "$cache_debs/"
+  sudo find "$apt_lists" -maxdepth 1 -type f ! -name lock -exec cp -t "$cache_lists" -- {} +
+  sudo chown -R "$(id -u):$(id -g)" "$cache_lists"
+  compgen -G "$cache_lists/*_Packages*" > /dev/null || { echo "::error::successful apt update left no package lists to cache"; exit 1; }
+  [ -z "${GITHUB_OUTPUT:-}" ] || echo 'cache-ready=true' >> "$GITHUB_OUTPUT"
+fi

@@ -406,8 +406,14 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      A non-forced debs cache hit uses 20-second attempts within a two-minute whole-update
      budget. Only classified network exhaustion or a timeout without other errors warns
      and skips the network download, then requires `apt-get install --no-download`;
-     offline install failure is fatal, without a network fallback. The cache key includes
-     the runner image, Playwright lockfile and browsers. The four subsequent browser
+     offline install failure is fatal, without a network fallback. After failed updates only,
+     the hit restores its matching signed indexes with sudo before installing; successful
+     updates keep their fresh indexes. Debs without indexes count as a miss. The versioned
+     paired key includes the runner image, Playwright lockfile and browsers. Only successful
+     cold runs save indexes and debs, on any ref; PR entries are scoped to that PR, and main
+     must seed its own entry. Cold seeding needs one successful Ubuntu update. Failed-update
+     restoration is proven offline; hosted proof needs a real failed update meeting a hit.
+     The four subsequent browser
      installs omit `--with-deps`, so they cannot trigger another apt update.
      Missing, corrupt or unrecognized errors fail at once, even alongside network errors
      (#2025; outage runs 43039845647 and 43039976393). A healthy but slow cold update
@@ -437,15 +443,16 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      fetch and the Canonical count, belong to the forced proof alone: a fallback after a real
      timeout, on any run, is the one above (#817 first proposed failing
      that one on an Azure fetch too, and dropped it). A run by hand runs every
-     job (the whole ring), but is never a release and writes no cache.
+     job (the whole ring), but is never a release; only the paired apt cache above may be saved.
    - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
      It runs only when `spikes/` changes, like `spikes` on Windows.
    - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,
      runner and every `*.csproj`, `Directory.*` file, `nuget.config`, `global.json` and the
      tool manifest; Playwright's browsers for `spikes-linux`, `pwa-ui` (per browser) and
-     `pwa-e2e`, keyed by Playwright's version. Only `main` saves a cache, so a pull request can't
-     fill the repository's 10 GB or seed what main restores; a pull request restores main's, and
-     the nearest older NuGet key when its projects differ. `app` and `publish` restore nothing:
+     `pwa-e2e`, keyed by Playwright's version. Only `main` saves these caches; a pull request
+     restores main's, and the nearest older NuGet key when its projects differ. The paired
+     apt cache above is the exception, and a PR's entry cannot seed what main restores.
+     `app` and `publish` restore nothing:
      the package main publishes is built from what the feeds serve.
    - CodeQL on a pull request analyses only the languages the change reaches (`codeql.yml`
      `languages`, #464): C# for `.cs`, `.csproj`, `Directory.*` and the like; JavaScript for
