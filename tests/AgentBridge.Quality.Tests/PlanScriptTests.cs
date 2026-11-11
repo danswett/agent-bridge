@@ -8,6 +8,7 @@ public class PlanScriptTests
 {
     [Theory]
     [InlineData("pull_request", ".github/workflows/merge-rule.yml", false)]
+    [InlineData("pull_request", "quality/merge-rule.yml", false)]
     [InlineData("pull_request", ".github/workflows/ci.yml", true)]
     [InlineData("pull_request", "src/AgentBridge.App/View.cs", true)]
     [InlineData("pull_request", "build/pack-app.ps1", true)]
@@ -30,7 +31,7 @@ public class PlanScriptTests
             Write("quality/plan.ps1", File.ReadAllText(Path.Combine(root, "quality", "plan.ps1")));
             Write("src/AgentBridge.App/App.csproj", "<Project />");
             Write("quality/catalog.yml", """
-                global_triggers: [.github/workflows/**, '**/Directory.Build.*']
+                global_triggers: [.github/workflows/**, quality/**, '**/Directory.Build.*']
                 suites:
                   - id: app
                     kind: packaging
