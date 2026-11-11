@@ -1105,11 +1105,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   Stop, and a finished delegate has no action.
 - **Delegate names** are the delegate's own words, so one could pose as the main agent.
   Every surface shows the same safe label (the app's `DelegateLabel`): bidi controls,
-  zero-width, format, control and other default-ignorable characters are removed, any
-  whitespace (line and paragraph separators too) becomes one space, and the result is cut to
+  zero-width, format, control and other default-ignorable characters are removed. Whitespace
+  (line and paragraph separators too) and the braille blank U+2800 become one space; the result is cut to
   60 characters with "…". The blank-looking characters a code block escapes (§6.4, #546) need no
   escape here, since a label never runs: the spaces among them become one space, as above, and
-  the check below reads the braille blank U+2800 as a space too. A middle dot, and the dots drawn like it (U+00B7, U+0387, U+1427,
+  a name made only of U+2800 therefore has nothing left. A middle dot, and the dots drawn like it (U+00B7, U+0387, U+1427,
   U+16EB, U+2022, U+2027, U+2219, U+22C5, U+2E31, U+2E33, U+30FB, U+318D, U+A78F, U+FF65,
   U+10101), becomes "-": "·" separates
   a status's facts, and a name with one would add a fact of its own ("Delegate Idle · Read logs

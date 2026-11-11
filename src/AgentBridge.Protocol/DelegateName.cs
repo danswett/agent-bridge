@@ -22,7 +22,7 @@ public static class DelegateName
     static readonly int LabelBytes = Encoding.UTF8.GetByteCount(Opening + Closing);
 
     // 1. Bidi controls, zero-width and other format characters, controls and default-ignorables
-    //    go; any whitespace, line and paragraph separators included, becomes one space.
+    //    go; whitespace, line and paragraph separators and braille blank U+2800 become one space.
     // 2. Longer than MaxLength characters or Limits.SubagentName bytes, it is cut at a whole
     //    character with an ellipsis. Both: one character can be a base with hundreds of marks.
     // 3. Nothing left: null, so a client names the delegate by its id, as for one with no name.
@@ -102,7 +102,7 @@ public static class DelegateName
             var status = Rune.DecodeFromUtf16(rest, out var r, out var used);
             rest = rest[used..];
             if (status != System.Buffers.OperationStatus.Done) { continue; }
-            if (Rune.IsWhiteSpace(r))
+            if (Rune.IsWhiteSpace(r) || r.Value == 0x2800)
             {
                 space = b.Length > 0;
                 continue;

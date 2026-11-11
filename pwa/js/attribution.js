@@ -58,8 +58,8 @@ export function liveVoice(session) {
 // says who asks or works, after the word Delegate (delegateTitle). An agent chose it, so it can try
 // to pass for the main agent or hide words in it; what is shown is:
 //   - its text without the characters that steer or hide it (format and control characters,
-//     bidi controls, default-ignorables, line and paragraph separators), runs of white space one
-//     space;
+//     bidi controls, default-ignorables, line and paragraph separators), runs of white space and
+//     braille blank U+2800 one space;
 //   - no middle dot of its own, since a status splits its facts at one and a row shows only the
 //     first: "Idle · Read logs" would have read "Delegate Idle" there (#252);
 //   - cut past NAME_MAX characters (whole graphemes), with an ellipsis;
@@ -95,7 +95,7 @@ export const quoted = (text) => `\u201c${String(text ?? '').replace(QUOTES, "'")
 
 // Text an agent wrote, safe to put in a label: nothing hidden or steering, on one line.
 export function cleanLabel(text) {
-  return String(text ?? '').replace(BREAKS, ' ').replace(HIDDEN, '').replace(/\s+/gu, ' ').trim();
+  return String(text ?? '').replace(BREAKS, ' ').replace(HIDDEN, '').replace(/[\s\u2800]+/gu, ' ').trim();
 }
 
 // The start of a delegate's id, for a delegate with no name to show.

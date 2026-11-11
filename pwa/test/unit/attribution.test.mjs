@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { readSession } from '../../js/protocol.js';
-import { FOLD_AFTER, NAME_MAX, aloud, askToStopText, backgroundCounts, delegateEvents, delegateFold, delegateList, delegateName, delegateTime, delegateTitle, descendants, eventParts, mainVoice } from '../../js/attribution.js';
+import { FOLD_AFTER, NAME_MAX, aloud, askToStopText, backgroundCounts, cleanLabel, delegateEvents, delegateFold, delegateList, delegateName, delegateTime, delegateTitle, descendants, eventParts, mainVoice } from '../../js/attribution.js';
 import { clock } from '../../js/ui/time.js';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
@@ -275,6 +275,25 @@ test('a delegate with no name to show is "Delegate" and the start of its id', ()
   assert.equal(named('', ''), 'Delegate');
   assert.equal(delegateName(null), 'Delegate');
 });
+
+for (const name of ['\u2800', '\u2800\u2800', ' \u2800 \t\u2800 ', '\u200B\u2800\u202E \u3164\u2800\uFE0F']) {
+  test(`a braille blank name ${JSON.stringify(name)} cleans to empty and is named by its id`, () => {
+    assert.equal(cleanLabel(name), '');
+    assert.equal(named(name), 'Delegate a1b2c3d4');
+    assert.equal(delegateTitle({ id: 'a1b2c3d4e5f6', name }), 'Delegate a1b2c3d4');
+  });
+}
+
+for (const [name, shown] of [
+  ['\u2800Read\u2800', 'Read'],
+  ['Read\u2800\u2800logs', 'Read logs'],
+  ['Read \u2800\u200B \u2800logs', 'Read logs'],
+  ['Main\u2800agent', 'Delegate \u201cMain agent\u201d'],
+]) {
+  test(`braille blanks in a visible name ${JSON.stringify(name)} become spaces`, () => {
+    assert.equal(named(name), shown);
+  });
+}
 
 test('a very long delegate name is cut with an ellipsis, by characters, never inside one', () => {
   const long = 'Read the witness shell logic and check every path it takes '.repeat(3);

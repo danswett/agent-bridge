@@ -61,6 +61,22 @@ public class DelegateNameTests
     public void A_name_that_is_nothing_but_hidden_characters_is_no_name_so_clients_name_it_by_its_id(string raw) =>
         Assert.Null(DelegateName.Clean(raw));
 
+    [Theory]
+    [InlineData("\u2800")]
+    [InlineData("\u2800\u2800")]
+    [InlineData(" \u2800 \t\u2800 ")]
+    [InlineData("\u200B\u2800\u202E \u3164\u2800\uFE0F")]
+    public void A_braille_blank_name_is_no_name_so_clients_name_it_by_its_id(string raw) =>
+        Assert.Null(DelegateName.Clean(raw));
+
+    [Theory]
+    [InlineData("\u2800Read\u2800", "Read")]
+    [InlineData("Read\u2800\u2800logs", "Read logs")]
+    [InlineData("Read \u2800\u200B \u2800logs", "Read logs")]
+    [InlineData("Main\u2800agent", "Delegate “Main agent”")]
+    public void Braille_blanks_in_a_visible_name_become_spaces(string raw, string shown) =>
+        Assert.Equal(shown, DelegateName.Clean(raw));
+
     [Fact]
     public void A_name_that_is_exactly_main_agent_is_sent_as_a_delegates() =>
         Assert.Equal("Delegate “Main agent”", DelegateName.Clean("Main agent"));
