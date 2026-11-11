@@ -369,7 +369,8 @@ test('a turn the host could not read, or cut short, makes the history partial an
 test('pages walked back after a stale cursor that repeat a turn between them hold it once', async (t) => {
   const { host, client, store } = await setup(t, { count: 45 });
   await store.open('h', ID);
-  const turn = (n) => ({ id: `${ID}-turn-${n}`, at: new Date().toISOString(), prompt: { text: `p${n}` }, parts: [], partsMore: 0, truncated: false, unreadable: false });
+  const at = new Date().toISOString();
+  const turn = (n) => ({ id: `${ID}-turn-${n}`, at, prompt: { text: `p${n}` }, parts: [], partsMore: 0, truncated: false, unreadable: false });
   host.historyStale = 1;
   const ask = client.history.bind(client);
   client.history = async (id, options) => {

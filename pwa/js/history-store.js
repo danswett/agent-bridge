@@ -31,7 +31,7 @@
 //   partial   a held turn is unreadable or cut short, or the history ends where the host's reading
 //             gave out.
 import { mainVoice } from './attribution.js';
-import { HISTORY } from './history.js';
+import { HISTORY, alignHistoryTurns } from './history.js';
 
 // Pages one walk back may ask for after a stale cursor, before reporting a recoverable failure:
 // a page holds at least one turn, and a host serves 500.
@@ -97,6 +97,7 @@ export class HistoryStore {
     const e = this.#entries.get(HistoryStore.key(hostId, session?.id));
     if (!e || !session.activity) { return; }
     const before = e.turns;
+    const previousId = e.last;
     const latest = session.activity.turn ?? null;
     let changed = latest !== e.latest;
     const turns = e.turns.slice();
@@ -108,10 +109,17 @@ export class HistoryStore {
       e.last = latest;
     }
     if (!changed) { return; }
+    const previous = turns.find((t) => t.id === previousId);
+    const missedReply = latest && latest !== previousId && previous && !previous.live?.response
+      && !previous.parts.some((p) => p.kind === 'response' && p.text);
     e.latest = latest;
     e.turns = turns;
     if (turns.length > before.length) { this.#trim(e, 'old'); }
     this.#emit(e, 'live', before);
+    // A backgrounded phone can miss every snapshot carrying the previous turn's reply.
+    if (missedReply) {
+      this.open(hostId, session.id).catch((err) => this.#fail(e, 'newest', err.message, false));
+    }
   }
 
   // ---- the work ----
@@ -287,7 +295,9 @@ export class HistoryStore {
   // to follow it, and takes its place (but for turns only activity has said, which are the newest).
   // Returns whether the page's own cursor (or its start) is the held turns' now.
   #page(e, page, kind) {
-    const P = page.turns;
+    const aligned = alignHistoryTurns(e.turns, page.turns, kind === 'newest', e.latest);
+    e.turns = aligned.held;
+    const P = aligned.turns;
     if (P[0] && page.before) { e.cursors.set(P[0].id, page.before); }
     let turns;
     if (kind === 'earlier') {
@@ -330,9 +340,16 @@ export class HistoryStore {
   // are all there is. Returns whether the oldest page's cursor is the held turns' now.
   #join(e, pending, reached) {
     const pages = pending.slice().reverse();
-    const seen = new Set();
+    let all = [];
     // A turn two of the pages share (the host's cursors shifted between asks) is held once.
-    const all = pages.flatMap((p) => p.turns).filter((t) => !seen.has(t.id) && seen.add(t.id));
+    for (const p of pages) {
+      const aligned = alignHistoryTurns(all, p.turns);
+      const ids = new Set(aligned.held.map((t) => t.id));
+      all = [...aligned.held, ...aligned.turns.filter((t) => !ids.has(t.id))];
+    }
+    const aligned = alignHistoryTurns(e.turns, all, true, e.latest);
+    e.turns = aligned.held;
+    all = aligned.turns;
     for (const p of pages) { if (p.turns[0] && p.before) { e.cursors.set(p.turns[0].id, p.before); } }
     const ids = new Set(all.map((t) => t.id));
     const held = new Map(e.turns.map((t) => [t.id, t]));
@@ -428,11 +445,11 @@ export class HistoryStore {
       i = turns.length - 1;
       changed = true;
     }
-    const replied = a.responseTurn === latest;
+    const replied = a.responseTurn === latest && !!voice.response;
     const next = { ...turns[i].live, response: replied ? voice.response : (turns[i].live?.response ?? null), responseTruncated: replied ? voice.responseTruncated : (turns[i].live?.responseTruncated ?? false), reasoning: voice.reasoning, currentTool: a.currentTool ?? null };
     if (!same(next, turns[i].live)) { turns[i] = { ...turns[i], live: next }; changed = true; }
     // A reply that is an earlier turn's is drawn there, never under the new prompt.
-    const of = a.responseTurn && a.responseTurn !== latest ? at(a.responseTurn) : -1;
+    const of = voice.response && a.responseTurn && a.responseTurn !== latest ? at(a.responseTurn) : -1;
     if (of >= 0) {
       const reply = { reasoning: null, currentTool: null, ...turns[of].live, response: voice.response, responseTruncated: voice.responseTruncated };
       if (!same(reply, turns[of].live)) { turns[of] = { ...turns[of], live: reply }; changed = true; }

@@ -1,0 +1,106 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { HistoryStore } from '../../js/history-store.js';
+import { HISTORY, readHistoryResult } from '../../js/history.js';
+import { shownParts } from '../../js/ui/history-view.js';
+
+const A = { id: 'a', at: '2026-11-11T06:37:19Z', prompt: { text: 'Question A', from: 'person' },
+  parts: [0, 1, 2, 3].map((turnId) => ({ id: `a-${turnId}`, turnId, kind: 'response', text: turnId === 3 ? 'Answer A' : '' })) };
+const B = { id: 'b', at: '2026-11-11T06:37:59Z', prompt: { text: 'Scheduled B', from: 'schedule', label: 'Watch' },
+  parts: [0, 1].map((turnId) => ({ id: `b-${turnId}`, turnId, kind: 'response', text: turnId === 1 ? 'Answer B' : '' })) };
+const said = (t, response = null, responseTurn = t.id) => ({ id: 's', agent: 'copilot',
+  activity: { turn: t.id, responseTurn, userMessage: t.prompt.text, userMessageFrom: t.prompt.from, response } });
+const words = (store) => store.get('h', 's').turns.flatMap((t) => [t.prompt.text, ...shownParts(t).filter((p) => p.kind === 'response' && p.text).map((p) => p.text)]);
+async function setup() {
+  let page = [];
+  let calls = 0;
+  let pending = null;
+  const client = { capabilities: [HISTORY.capability], history: async () => { calls++; await pending; return readHistoryResult({ turns: page }); } };
+  const store = new HistoryStore({ current: () => ({ client }) });
+  await store.open('h', 's');
+  return { store, serve: (turns) => { page = turns; }, calls: () => calls,
+    hold: () => { let release; pending = new Promise((resolve) => { release = resolve; }); return () => { pending = null; release(); }; } };
+}
+const settle = () => new Promise(setImmediate);
+
+for (const mode of ['jumped', 'in-order', 'null-gap']) {
+  test(`${mode} snapshots retain the question reply before the scheduled prompt`, async () => {
+    const { store, serve, calls } = await setup();
+    store.live('h', said(A));
+    if (mode === 'in-order') { store.live('h', said(A, 'Answer A')); }
+    if (mode === 'null-gap') { store.live('h', { id: 's', activity: { turn: null } }); }
+    serve([A, B]);
+    store.live('h', said(B, 'Answer B'));
+    store.live('h', said(B, 'Answer B'));
+    await settle();
+    assert.deepEqual(words(store), ['Question A', 'Answer A', 'Scheduled B', 'Answer B']);
+    assert.equal(calls(), mode === 'in-order' ? 1 : 2, 'one catch-up request, not one per update');
+  });
+}
+
+test('a provisional turn stays visible while its catch-up page is in flight', async () => {
+  const { store, serve, hold, calls } = await setup();
+  const release = hold();
+  store.live('h', said(A));
+  serve([A, B]);
+  store.live('h', said(B, 'Answer B'));
+  await settle();
+  assert.equal(calls(), 2);
+  assert.deepEqual(words(store), ['Question A', 'Scheduled B', 'Answer B']);
+  release();
+  await settle();
+  assert.deepEqual(words(store), ['Question A', 'Answer A', 'Scheduled B', 'Answer B']);
+});
+
+test('stored-only history retains replies with restarted assistant indexes and empty earlier messages', async () => {
+  const { store, serve } = await setup();
+  serve([A, B]);
+  await store.open('h', 's');
+  assert.deepEqual(words(store), ['Question A', 'Answer A', 'Scheduled B', 'Answer B']);
+});
+
+test('empty current or earlier activity never replaces reply text', async () => {
+  const { store } = await setup();
+  store.live('h', said(A, 'Answer A'));
+  store.live('h', said(A, ''));
+  store.live('h', said(B, '', A.id));
+  assert.equal(store.get('h', 's').turns[0].live.response, 'Answer A');
+});
+
+test('colliding ids on separate pages keep both replies and retain their keys on refresh', async (t) => {
+  const warnings = [];
+  t.mock.method(console, 'warn', (...args) => warnings.push(args));
+  const a = { ...A, id: 'same' };
+  const b = { ...B, id: 'same' };
+  let earlier = false;
+  const client = { capabilities: [HISTORY.capability], history: async (_id, options) => readHistoryResult(
+    options.before ? { turns: [a] } : { turns: earlier ? [a, b] : [b], before: 'older' }) };
+  const store = new HistoryStore({ current: () => ({ client }) });
+  await store.open('h', 's');
+  await store.loadEarlier('h', 's');
+  assert.deepEqual(words(store), ['Question A', 'Answer A', 'Scheduled B', 'Answer B']);
+  const keys = store.get('h', 's').turns.map((t) => t.id);
+  assert.equal(new Set(keys).size, 2);
+  assert.deepEqual(warnings, [['Duplicate history turn ids: 1']]);
+  earlier = true;
+  await store.open('h', 's');
+  assert.deepEqual(store.get('h', 's').turns.map((t) => t.id), keys);
+});
+
+for (const [both, between] of [[false, false], [true, false], [false, true], [false, 'provisional'], [true, 'latest']]) {
+  test(`newest colliding page, overlap=${both}, intervening=${between}, retains reply order`, async (t) => {
+    const warnings = [];
+    t.mock.method(console, 'warn', (...args) => warnings.push(args));
+    const { store, serve } = await setup();
+    const middle = { id: 'm', at: '2026-11-11T06:37:39Z', prompt: { text: 'Middle' }, parts: [] };
+    serve([{ ...A, id: 'same' }, ...(between === true ? [middle] : [])]);
+    await store.open('h', 's');
+    if (typeof between === 'string') { store.live('h', said(middle)); }
+    serve([...(both ? [{ ...A, id: 'same' }] : []), { ...B, id: 'same' }]);
+    if (between === 'provisional') { store.live('h', said({ ...B, id: 'same' })); }
+    await store.open('h', 's');
+    assert.deepEqual(words(store), ['Question A', 'Answer A', ...(between && between !== 'latest' ? ['Middle'] : []),
+      'Scheduled B', 'Answer B', ...(between === 'latest' ? ['Middle'] : [])]);
+    assert.deepEqual(warnings, [['Duplicate history turn ids: 1']]);
+  });
+}
