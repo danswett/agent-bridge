@@ -3,6 +3,11 @@ function Test-MergeRuleBackstop {
     [CmdletBinding()]
     param([string]$Repo, [long]$RunId, [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow)
     $ErrorActionPreference = 'Stop'
+    function Warn([string]$message) {
+        Write-Warning $message
+        $escaped = $message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+        Write-Host "::warning::$escaped"
+    }
     function Read-Pages([string]$path, [string]$key, [switch]$FirstPage) {
         $text = if ($FirstPage) { @(gh api $path) } else { @(gh api --paginate --slurp $path) }
         if ($LASTEXITCODE) { throw "Queue API failed: $path ($LASTEXITCODE)" }
@@ -43,7 +48,7 @@ function Test-MergeRuleBackstop {
         }
         if ($null -eq $oldest) { return $true }
         if (($Now - $oldest).TotalMinutes -ge 30) {
-            Write-Warning 'Queued evaluation is at least 30 minutes old; the cron backstop will proceed.'
+            Warn 'Queued evaluation is at least 30 minutes old; the cron backstop will proceed.'
             return $true
         }
         # A missing recent writer must cause a sweep, not an unbounded history scan.
@@ -66,10 +71,10 @@ function Test-MergeRuleBackstop {
                 }
             }
         }
-        Write-Warning 'No completed cron writer within 30 minutes could be established; the cron backstop will proceed.'
+        Warn 'No completed cron writer within 30 minutes could be established; the cron backstop will proceed.'
         return $true
     } catch {
-        Write-Warning "Could not establish a fresh scoped queue: $($_.Exception.Message) Cron will proceed."
+        Warn "Could not establish a fresh scoped queue: $($_.Exception.Message) Cron will proceed."
         return $true
     }
 }

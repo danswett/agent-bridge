@@ -4,6 +4,9 @@ $workflow = Get-Content -Raw (Join-Path $PSScriptRoot '..' '.github' 'workflows'
 if ($workflow -notmatch '(?ms)^  evaluate:\r?\n\s+needs: backstop\r?\n') {
     throw 'Cron must check queued evaluations before entering the shared writer queue.'
 }
+$evaluate = [regex]::Match($workflow, '(?ms)^  evaluate:\r?\n(.*?)(?=^  \w|\z)').Groups[1].Value
+$condition = [regex]::Match($evaluate, '(?m)^    if: >-\r?\n((?:^      .*\r?\n)+)').Groups[1].Value
+if ($condition -notmatch '!cancelled\(\)') { throw 'Event evaluation must retain !cancelled() when backstop is skipped.' }
 . (Join-Path $PSScriptRoot 'merge-rule-backstop.ps1')
 
 $now = [DateTimeOffset]'2026-11-11T20:00:00Z'
@@ -44,9 +47,13 @@ function Check([string]$name, [bool]$expected, [hashtable[]]$runs, [hashtable]$j
     $script:replies['repos/example/repo/actions/runs/80/jobs?filter=latest&per_page=100'] =
         (@(@{ jobs = @($writer); total_count = 1 }) | ConvertTo-Json -Depth 10 -AsArray -Compress)
     $warnings = @()
-    $actual = Test-MergeRuleBackstop -Repo example/repo -RunId 99 -Now $At -WarningVariable warnings
+    $information = @()
+    $actual = Test-MergeRuleBackstop -Repo example/repo -RunId 99 -Now $At -WarningVariable warnings -InformationVariable information
     if ($actual -ne $expected) { throw "$name expected proceed=$expected, got $actual" }
     if ($Warn -and -not $warnings.Count) { throw "$name must warn visibly" }
+    if ($Warn -and -not @($information | Where-Object { "$($_.MessageData)" -like '::warning::*' }).Count) {
+        throw "$name must emit a GitHub warning annotation"
+    }
     Write-Host "PASS: $name"
 }
 function Run([long]$id, [string]$event = 'status', [string]$status = 'in_progress', [int]$minutes = 1) {
@@ -66,8 +73,8 @@ Check 'skipped or cancelled runs do not suppress cron' $true @((Run 1 'status' '
 Check 'an ineligible skipped job does not suppress cron' $true @((Run 1)) @{ 1 = @((Job 'merge-rule-scoped-v1' 'completed')) }
 Check 'a main sweep does not suppress cron' $true @((Run 1 'workflow_run')) @{ 1 = @((Job 'merge-rule-sweep-v1')) }
 Check 'a running writer does not suppress cron' $true @((Run 1)) @{ 1 = @((Job 'merge-rule-scoped-v1' 'in_progress')) }
-Check 'a queued job with an unknown name visibly proceeds' $true @((Run 1)) @{ 1 = @((Job 'old-evaluate-name')) } -Warn
-Check 'uncertainty takes precedence over a fresh queued evaluation' $true @((Run 1), (Run 2)) @{ 1 = @((Job)); 2 = @((Job 'old-evaluate-name')) } -Warn
+Check 'a captured legacy queued job name visibly proceeds' $true @((Run 1)) @{ 1 = @((Job 'evaluate' 'pending')) } -Warn
+Check 'uncertainty takes precedence over a fresh queued evaluation' $true @((Run 1), (Run 2)) @{ 1 = @((Job)); 2 = @((Job 'evaluate' 'pending')) } -Warn
 Check 'a run with no queued evaluation does not suppress cron' $true @((Run 1 'pull_request_target' 'queued')) @{ 1 = @() }
 foreach ($elapsed in 0, 10, 30) {
     $fresh = Run 1
