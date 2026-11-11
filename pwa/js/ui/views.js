@@ -872,8 +872,8 @@ export class SessionListView {
 // tabs): All, once more than one machine is online or kept on screen, then each online machine,
 // then each machine kept on screen since it left (away: with every machine shown, #269), and a
 // machine still chosen while it is away. Hidden when there is nothing to choose between. Arrow
-// keys, Home and End move between them, choosing as they go, as a SelectorBar does. They never
-// scroll sideways (#351): those that fit show, the rest are under an "N more" menu.
+// keys, Home and End move between them, choosing as they go, as a SelectorBar does. Below 760 px
+// overflow stays under "N more" (#351); wide layouts scroll whole tabs with edge fades (#1894).
 
 export function renderMachineTabs(bar, { presence, me, current, nameOf = () => null, onSelect, controls = null, away = [], quiet = false }) {
   const hosts = presence.filter((d) => d.id !== me && d.kind === 'host');
@@ -959,6 +959,9 @@ function machineBar(bar) {
   });
   bar.replaceChildren(list);
   machineBars.set(bar, s);
+  s.wide = matchMedia('(min-width: 760px)');
+  s.wide.addEventListener('change', () => { s.menu.close(false); layoutMachineTabs(bar, s); });
+  list.addEventListener('scroll', () => machineTabEdges(bar, list));
   bar.addEventListener('keydown', (e) => {
     const tabs = [...list.querySelectorAll('[role="tab"]')];
     const i = tabs.indexOf(e.target);
@@ -985,13 +988,31 @@ function layoutMachineTabs(bar, s) {
   const { list, els, more, tabs } = s;
   const doc = bar.ownerDocument;
   const focus = s.had ?? (bar.contains(doc.activeElement) ? doc.activeElement.dataset.deviceId ?? (doc.activeElement === more ? MORE : null) : null);
-  els.forEach((el) => { el.style.maxWidth = ''; });
+  els.forEach((el, i) => {
+    el.style.maxWidth = '';
+    const name = Array.from(tabs[i].name);
+    el.firstElementChild.textContent = s.wide.matches && name.length > 16 ? `${name.slice(0, 16).join('')}\u2026` : tabs[i].name;
+  });
   list.replaceChildren(...els);
   more.remove();
   const room = bar.clientWidth;
   s.width = room;
   s.shown = tabs; s.hidden = [];
   if (bar.hidden || !room) { return; }
+  if (s.wide.matches) {
+    if (focus) { (els.find((el) => el.dataset.deviceId === focus) ?? els[s.chosen])?.focus({ preventScroll: true }); }
+    const chosen = els[s.chosen];
+    if (chosen) {
+      const outer = list.getBoundingClientRect(), inner = chosen.getBoundingClientRect();
+      const inset = parseFloat(getComputedStyle(list).scrollPaddingLeft);
+      // Relative subpixel scrolling can advance to the next snap point after a resize.
+      list.scrollTo({ left: list.scrollLeft + inner.left - outer.left - inset, behavior: 'instant' });
+    }
+    machineTabEdges(bar, list);
+    s.had = null;
+    return;
+  }
+  machineTabEdges(bar, list);
   // Measured with the widest count, so a count that grows a digit cannot push it off the bar.
   more.textContent = `${Math.max(1, tabs.length - 1)} more`;
   bar.append(more);
@@ -1007,6 +1028,11 @@ function layoutMachineTabs(bar, s) {
   if (focus === MORE) { (split.more.length ? more : list.querySelector('[tabindex="0"]'))?.focus(); }
   else if (focus) { [...list.children].find((b) => b.dataset.deviceId === focus)?.focus(); }
   s.had = null;
+}
+
+function machineTabEdges(bar, list) {
+  bar.toggleAttribute('data-scroll-start', list.scrollLeft > 1);
+  bar.toggleAttribute('data-scroll-end', list.scrollWidth - list.clientWidth - list.scrollLeft > 1);
 }
 
 // The machines offline, from the relay's roster (docs/protocol/roster.md): not this device,

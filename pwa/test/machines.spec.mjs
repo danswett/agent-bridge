@@ -920,11 +920,16 @@ test('a machine that lets devices sign Copilot in lists who can, read-only, insi
   await expect(rowOf(LAPTOP).locator('.machine-signin button')).toHaveCount(0);
   await expect(rowOf('demo').locator('.machine-signin')).toHaveCount(0);
 });
-for (const width of [390, 900, 1440]) {
+for (const width of [320, 390, 759]) {
   test(`at ${width}px the machine tabs fit the bar, the rest wait under an "N more" menu, and choosing one there shows it`, async ({ page }) => {
     await page.setViewportSize({ width, height: 800 });
     await openDemo(page);
     const bar = page.locator('#machine-tabs');
+    await bar.evaluate((el) => new Promise((resolve) => {
+      const resized = new ResizeObserver(() => { resized.disconnect(); resolve(); });
+      resized.observe(el);
+      el.style.maxWidth = '280px';
+    }));
     const more = bar.locator('.machine-more');
     const fits = () => bar.evaluate((el) => el.scrollWidth <= el.clientWidth);
     expect(await fits()).toBe(true);
