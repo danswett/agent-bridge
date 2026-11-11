@@ -285,6 +285,23 @@ public sealed partial class SettingsViewModel : Observable
         set { if (Status is { } s && s.Settings.RemoteApproval != value) { _ = RunAsync(() => host.CallAsync(HostOps.Settings, new SettingsRequest(RemoteApproval: value))); } }
     }
 
+    public bool CanChangeFleetLaunchRule => HostRunning && host.Can(HostOps.Capability) && !Busy && Status?.Settings.FleetLaunchRule is "on" or "off";
+    public bool FleetLaunchNamesEnabled
+    {
+        get => (Status?.Settings.FleetLaunchRule ?? "on") == "on";
+        set
+        {
+            if (!CanChangeFleetLaunchRule || FleetLaunchNamesEnabled == value) { return; }
+            var rule = value ? "on" : "off";
+            _ = RunAsync(async () =>
+            {
+                var saved = await host.CallAsync<SettingsResult>(HostOps.Settings, new SettingsRequest(FleetLaunchRule: rule));
+                if (saved.Settings.FleetLaunchRule != rule) { throw new InvalidOperationException("The host did not save the fleet launch name rule."); }
+                await host.RefreshStatusAsync();
+            });
+        }
+    }
+
     // permissions.phoneSignIn (#972): a person's device may run Copilot's own device-code sign-in
     // here. Off unless turned on; applies when the host restarts.
     public bool PhoneSignIn
@@ -619,7 +636,7 @@ public sealed partial class SettingsViewModel : Observable
     public bool Busy
     {
         get => busy;
-        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(CanSignInAgents)); Raise(nameof(Agents)); RaiseOffers(); Raise(nameof(UpdateStatus)); RaiseVerification(); } }
+        private set { if (Set(ref busy, value)) { Raise(nameof(CanChangeFleetLaunchRule)); Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(CanSignInAgents)); Raise(nameof(Agents)); RaiseOffers(); Raise(nameof(UpdateStatus)); RaiseVerification(); } }
     }
     // The card's Set up follows what the row's would (CanManageAgents), so it is drawn again wherever the rows are.
     void RaiseOffers() { Raise(nameof(AgentOffers)); Raise(nameof(HasAgentOffers)); Raise(nameof(AgentsNavName)); }

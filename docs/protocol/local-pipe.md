@@ -332,6 +332,17 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 `settings.fleetShare` reports configured `fleet.share`; changing it requires restart.
 Publication status changes are also announced through `host.subscribe`.
 
+`host.settings` also accepts `fleetLaunchRule: "on" | "off"`, writing the existing
+`fleetNames.launchRule` config key (#1832). `HostSettingsView.fleetLaunchRule` reports its
+current value in settings replies, `host.status` and subscription events. Absent config means
+`"on"`; invalid or unreadable config reports a problem and reads `"off"`. Unknown write values
+are refused before any part of the request is saved. The host checks that the proposed file
+reads back as requested and preserves unrelated fields. The launch rule reads this key fresh,
+so no restart is needed or requested for this change alone. Existing names and trust stay unchanged.
+This is the same local-App-only `host.settings` path: agents, the host CLI and relay callers
+cannot change it. Older hosts omit the view field; the app disables the toggle rather than
+sending an unsupported write.
+
 Unknown fields are ignored, and unknown enum values read as the first value listed, as in
 the rest of the protocol.
 

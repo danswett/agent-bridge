@@ -1924,6 +1924,77 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task The_fleet_name_toggle_saves_through_the_host_and_refreshes_without_a_restart_or_status_event()
+    {
+        host.Status = host.Status with { Settings = new HostSettingsView(true, FleetLaunchRule: "on") };
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.OnAsync(HostOps.Settings, async data =>
+        {
+            await FakeHost.Until(release.Task);
+            host.Status = host.Status with { Settings = host.Status.Settings with { FleetLaunchRule = data.GetProperty("fleetLaunchRule").GetString() } };
+            return new SettingsResult(host.Status.Settings, RestartRequired: false);
+        });
+        await ConnectedWith(host.Status);
+        await Wait.UntilAsync(() => settings.CanChangeFleetLaunchRule, "the fleet name control");
+        Assert.True(settings.FleetLaunchNamesEnabled);
+        var disabled = false;
+        settings.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(SettingsViewModel.CanChangeFleetLaunchRule)) { disabled |= !settings.CanChangeFleetLaunchRule; } };
+
+        settings.FleetLaunchNamesEnabled = false;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1, "the fleet name save");
+        Assert.True(disabled);
+        Assert.False(settings.CanChangeFleetLaunchRule);
+        Assert.Equal("off", host.Sent(HostOps.Settings)[0].GetProperty("fleetLaunchRule").GetString());
+        release.SetResult();
+
+        await Wait.UntilAsync(() => !settings.Busy && !settings.FleetLaunchNamesEnabled, "the saved rule read back");
+        settings.FleetLaunchNamesEnabled = true;
+        await Wait.UntilAsync(() => !settings.Busy && settings.FleetLaunchNamesEnabled, "the rule turned back on");
+        Assert.Equal("on", host.Sent(HostOps.Settings)[1].GetProperty("fleetLaunchRule").GetString());
+        Assert.False(settings.RestartRequired);
+        Assert.Empty(host.Sent(HostOps.Restart));
+    }
+
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("unknown", true)]
+    [InlineData("on", false)]
+    public async Task An_older_or_non_managing_host_never_receives_a_fleet_name_toggle_write(string? rule, bool manage)
+    {
+        await using var older = new FakeHost { Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, FleetLaunchRule: rule) } };
+        if (!manage) { older.Capabilities.Remove(HostOps.Capability); }
+        older.Start();
+        await using var olderConnection = older.Connect(ui);
+        var page = new SettingsViewModel(olderConnection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        try
+        {
+            await Wait.UntilAsync(() => page.HostRunning, "the older host");
+
+            Assert.False(page.CanChangeFleetLaunchRule);
+            page.FleetLaunchNamesEnabled = !page.FleetLaunchNamesEnabled;
+            await olderConnection.CallAsync(FakeHost.Barrier);
+
+            Assert.Empty(older.Sent(HostOps.Settings));
+        }
+        finally { page.Detach(); }
+    }
+
+    [Fact]
+    public async Task A_refused_fleet_name_save_shows_the_error_and_keeps_the_hosts_rule()
+    {
+        host.Status = host.Status with { Settings = new HostSettingsView(true, FleetLaunchRule: "on") };
+        host.On(HostOps.Settings, _ => throw new InvalidOperationException("fixture refusal"));
+        await ConnectedWith(host.Status);
+        await Wait.UntilAsync(() => settings.CanChangeFleetLaunchRule, "the fleet name control");
+
+        settings.FleetLaunchNamesEnabled = false;
+        await Wait.UntilAsync(() => settings.HasError && !settings.Busy, "the refused fleet name save");
+
+        Assert.Contains("fixture refusal", settings.Error);
+        Assert.True(settings.FleetLaunchNamesEnabled);
+    }
+
+    [Fact]
     public async Task Sign_in_from_devices_is_off_until_turned_on_through_the_host_and_then_offers_a_restart()
     {
         host.On(HostOps.Settings, _ => new SettingsResult(new HostSettingsView(true, PhoneSignIn: true), RestartRequired: true));
