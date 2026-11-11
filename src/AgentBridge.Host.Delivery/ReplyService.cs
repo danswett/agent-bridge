@@ -262,7 +262,7 @@ public sealed class ReplyService : ISessionReplier
                     if (problem is not null) { return Refused(problem); }
                 }
                 var outcome = session.Agent == AgentKind.Copilot
-                    ? await CopilotAsync(session, request.Text ?? "", claim, timeline)
+                    ? await CopilotAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle)
                     : await AgentAsync(session, request.Text ?? "", claim, timeline);
                 keysWent = outcome.KeysWent;
                 if (outcome.Result is { } result) { return result; }
@@ -364,7 +364,7 @@ public sealed class ReplyService : ISessionReplier
     // KeysWent: some or all of the reply may have reached the session, whatever the result.
     sealed record Attempt(ReplyResult? Result, Typed? Typed, bool KeysWent = false);
 
-    async Task<Attempt> CopilotAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline)
+    async Task<Attempt> CopilotAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline, bool requireIdle)
     {
         // The session id names a folder; only the agent's own id shape is accepted.
         if (!Guid.TryParseExact(session.Id, "D", out _)) { return Done(Refused("the session's id is not a Copilot session id")); }
@@ -411,6 +411,10 @@ public sealed class ReplyService : ISessionReplier
             var now = source.Get(session.Id);
             if (now is null) { return Done(Stale("the session has ended")); }
             if (now.Question is { } asking) { return Done(Asking(asking)); }
+            if (requireIdle && now.Status != SessionStatus.Idle)
+            {
+                return Done(Refused("the session is no longer idle, so the agent message was not typed") with { Refusal = ReplyRefusal.Busy });
+            }
             // Again once its turn has come: a launch of it may have begun meanwhile.
             if (LaunchHeld?.Invoke(session.Id) is { } held) { return Done(Refused(held)); }
             working = now.Status == SessionStatus.Working;

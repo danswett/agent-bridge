@@ -799,6 +799,9 @@ public sealed record ReplyRequest
     public IReadOnlyList<AttachmentRef>? Attachments { get; init; }
     // As on AnswerRequest.
     public bool? Progress { get; init; }
+    // Host-only condition for Lite's Copilot delivery, never accepted from session.reply.
+    [JsonIgnore]
+    public bool RequireIdle { get; init; }
 }
 
 // The same outcomes as an answer, read the same way.
@@ -813,7 +816,7 @@ public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null)
     public override int GetHashCode() => HashCode.Combine(Outcome, Reason, Timings);
 }
 
-public enum ReplyRefusal { Other, Asking, ComposerUnverified }
+public enum ReplyRefusal { Other, Asking, ComposerUnverified, Busy }
 
 public static class Ops
 {
