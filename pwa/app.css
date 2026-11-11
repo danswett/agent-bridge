@@ -1992,6 +1992,49 @@ summary {
   .reply-bar::before { forced-color-adjust: none; background: Canvas; border-top-color: CanvasText; }
   .reply-copy { border-color: CanvasText; color: CanvasText; }
 }
+/* Installed iPhone: a single visible-viewport bound, never screen.height or a second keyboard
+   subtraction (#2037, #1682). Keep notes above the box so a multiline hint cannot lift it. */
+:root[data-platform="ios"][data-standalone="true"][data-phone-keyboard] { --safe-bottom: 0px; }
+:root[data-platform="ios"][data-standalone="true"] .reply-slot { padding-bottom: 0; }
+:root[data-platform="ios"][data-standalone="true"] body[data-page="sessions"][data-session-open="true"] .session-pane {
+  position: fixed; top: var(--phone-view-top, 0px); bottom: auto; left: 0; right: 0;
+  height: var(--phone-view-height, 100%); z-index: 15; background: var(--ab-shell);
+  padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
+}
+:root[data-platform="ios"][data-standalone="true"] body[data-page="sessions"][data-session-open="true"]:is([data-conn="busy"], [data-conn="warn"], [data-conn="bad"]) .session-pane {
+  top: calc(var(--phone-view-top, 0px) + var(--appbar) + var(--safe-top));
+  height: calc(var(--phone-view-height, 100%) - var(--appbar) - var(--safe-top)); padding-top: 0;
+}
+@media (min-width: 760px) {
+  :root[data-platform="ios"][data-standalone="true"] body[data-page="sessions"] .sessions { grid-template-columns: minmax(0, 1fr); }
+  :root[data-platform="ios"][data-standalone="true"] .pane-divider { display: none; }
+  :root[data-platform="ios"][data-standalone="true"] body:not([data-session-open="true"]) .session-pane,
+  :root[data-platform="ios"][data-standalone="true"] body[data-session-open="true"] .list-pane { display: none; }
+  :root[data-platform="ios"][data-standalone="true"] body[data-session-open="true"] .appbar { display: none; }
+  :root[data-platform="ios"][data-standalone="true"] .session-view { position: relative; grid-template-rows: minmax(0, 1fr); }
+  :root[data-platform="ios"][data-standalone="true"] .session-view > .view-body { grid-row: 1; }
+  :root[data-platform="ios"][data-standalone="true"] .session-head { display: block; position: absolute; inset: 0 0 auto; z-index: 2; pointer-events: none; }
+  :root[data-platform="ios"][data-standalone="true"] .session-top { display: block; pointer-events: auto; background: var(--ab-shell); transform: translateY(var(--ty, 0px)); max-height: var(--stage-h, none); overflow-y: auto; }
+  :root[data-platform="ios"][data-standalone="true"] .conversation { position: relative; overflow: clip; }
+  :root[data-platform="ios"][data-standalone="true"] .reply-slot { position: absolute; inset: auto 0 0; z-index: 3; transform: translateY(var(--fy, 0px)); }
+  :root[data-platform="ios"][data-standalone="true"] .stream-scroll { padding-block: 0; }
+  :root[data-platform="ios"][data-standalone="true"] .stream-scroll > .history:not([hidden]),
+  :root[data-platform="ios"][data-standalone="true"] .stream-scroll > .history[hidden] + .stream { padding-top: calc(var(--head-h, 0px) + var(--ab-space-4)); }
+  :root[data-platform="ios"][data-standalone="true"] .stream-scroll > :last-child { padding-bottom: calc(var(--foot-h, 0px) + var(--ab-space-4)); }
+  :root[data-platform="ios"][data-standalone="true"] .session-bar { display: flex; position: absolute; inset: 0 0 auto; min-height: 48px; justify-content: space-between; pointer-events: none; z-index: 1; }
+  :root[data-platform="ios"][data-standalone="true"] .session-bar > :is(.icon-button, .row-menu) { pointer-events: auto; }
+  :root[data-platform="ios"][data-standalone="true"] .inspector { padding-top: calc(var(--head-h, 0px) + var(--ab-space-4)); scroll-padding-top: calc(var(--head-h, 0px) + var(--ab-space-2)); }
+  :root[data-platform="ios"][data-standalone="true"] .session-header { padding-inline: calc(var(--tap) + var(--ab-space-2)); }
+  :root[data-platform="ios"][data-standalone="true"] .reply-box { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: end; padding: 2px var(--ab-space-1) 3px; }
+  :root[data-platform="ios"][data-standalone="true"] .reply .attachments { grid-column: 1 / -1; grid-row: 1; }
+  :root[data-platform="ios"][data-standalone="true"] .reply-box .attach { grid-column: 1; grid-row: 2; margin: 0; }
+  :root[data-platform="ios"][data-standalone="true"] .reply-tools { display: contents; }
+  :root[data-platform="ios"][data-standalone="true"] .reply .text-wrap { grid-column: 2; grid-row: 2; }
+  :root[data-platform="ios"][data-standalone="true"] .reply .send { grid-column: 3; grid-row: 2; }
+  :root[data-platform="ios"][data-standalone="true"] .reply-bar { display: flex; position: absolute; inset: auto 0 0; min-height: 48px; padding: var(--ab-space-1) var(--ab-space-4); pointer-events: none; z-index: 3; }
+  :root[data-platform="ios"][data-standalone="true"] .reply-copy { flex: 1; height: 40px; background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-bottom: 2px solid var(--ab-bridge); opacity: 0; }
+  :root[data-platform="ios"][data-standalone="true"] .session-view[data-fsolid] .reply-copy { opacity: 1; pointer-events: auto; }
+}
 /* A button's pressed fill keeps its label at 4.5:1 (ui.md §9) rather than fading the whole
    control: a filled button's Bridge moves toward the text colour, darker on light and lighter on
    dark, away from its label's; an outlined one takes the selected fill, and its Bridge label moves
