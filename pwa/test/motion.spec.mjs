@@ -100,9 +100,9 @@ async function upsert(page, id, change) {
   }, { id, change });
 }
 
-async function conversationReady(v) {
-  // The demo's two earlier turns can arrive after open(); their insertion follows the end.
-  await expect(v.locator('.history-turn')).toHaveCount(2);
+async function conversationReady(v, turns = 2) {
+  // Demo history can arrive after open(); its insertion follows the end.
+  await expect(v.locator('.history-turn')).toHaveCount(turns);
   // Drain the initial response measurements too, before growing only the reasoning.
   await v.locator('.stream-scroll .response').evaluate((response) => new Promise((resolve) => {
     const observer = new ResizeObserver(() => { observer.disconnect(); resolve(); });
@@ -662,11 +662,13 @@ test('a question that arrives after the response has grown, in an update of its 
 
 test('a question that arrives after the reader opened the reasoning leaves the conversation where they are reading', async ({ page }) => {
   await openDemo(page, { height: 900 });
+  // The session has no earlier turns, so the conversation is only what this test puts in it: the demo's made-up history would overflow it.
+  await page.evaluate((id) => window.agentBridgeDemo.host.historyTurns.set(id, []), CODEX);
   const long = Array.from({ length: 60 }, (_, i) => `Thought ${i + 1}.`).join('\n\n');
   await upsert(page, CODEX, { activity: { response: 'Short.', reasoning: long, userMessage: null, currentTool: null }, question: null, updatedAt: later() });
   const v = await open(page, CODEX);
   const scroller = v.locator('.stream-scroll');
-  await conversationReady(v);
+  await conversationReady(v, 0);
   // Read to its end, then grown by an update of its own: still at its end.
   expect(await scroller.evaluate((el) => el.scrollHeight <= el.clientHeight)).toBe(true);
   await upsert(page, CODEX, { activity: { response: 'Short, and then a little more.' }, updatedAt: later(3000) });
@@ -687,11 +689,12 @@ test('a question that arrives after the reader opened the reasoning leaves the c
 
 test('opening reasoning at the bottom stays put, but subsequent response growth is still followed', async ({ page }) => {
   await openDemo(page, { height: 900 });
+  await page.evaluate((id) => window.agentBridgeDemo.host.historyTurns.set(id, []), CODEX);
   const reasoning = Array.from({ length: 60 }, (_, i) => `Thought ${i + 1}.`).join('\n\n');
   await upsert(page, CODEX, { activity: { response: 'Short.', reasoning, userMessage: null, currentTool: null }, question: null, updatedAt: later() });
   const v = await open(page, CODEX);
   const scroller = v.locator('.stream-scroll');
-  await conversationReady(v);
+  await conversationReady(v, 0);
   expect(await scroller.evaluate((el) => el.scrollHeight <= el.clientHeight)).toBe(true);
   await v.locator('details.reasoning').evaluate((d) => { d.open = true; });
   await expect(scroller).toContainText('Hide reasoning');
@@ -710,7 +713,9 @@ test('where the reader is is read when a question comes, though the scroll that 
   const scroller = v.locator('.stream-scroll');
   const settle = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   // A scroll's event comes at the browser's next frame: held back here, as if it hadn't come yet.
-  await page.evaluate(() => document.addEventListener('scroll', (e) => e.stopPropagation(), true));
+  await page.evaluate(() => {
+    for (const type of ['scroll', 'scrollend']) { document.addEventListener(type, (e) => e.stopPropagation(), true); }
+  });
   const ask = (id, top, ms) => page.evaluate(({ id, top, ms }) => {
     const el = document.querySelector('.session-view[data-id="019a1b2c-codex-example"] .stream-scroll');
     el.scrollTop = top === 'end' ? el.scrollHeight : top;

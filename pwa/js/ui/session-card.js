@@ -677,12 +677,12 @@ export class SessionCard {
       const follow = this.#sticking() && this.#follow.canPin;
       change();
       const grew = sc.scrollHeight - before;
-      if (grew > 0) {
-        // Following the end, to the end (whatever has grown below it too); reading, by what grew above.
+      if (grew !== 0) {
+        // Following the end, to the end (whatever has grown below it too); reading, by what grew (or shrank) above.
         // A smooth scroll to a question is cut short by setting scrollTop, so it is started again.
         const keep = () => {
           // Set from where it was, not added to where it is: the browser may have kept the place already.
-          if (follow) { sc.scrollTop = sc.scrollHeight; } else { sc.scrollTop = was + grew; }
+          if (follow) { sc.scrollTop = sc.scrollHeight; } else { sc.scrollTop = Math.max(was + grew, 0); }
           const r = this.#revealing;
           if (r?.view.isConnected) { r.view.scrollIntoView({ block: 'nearest', behavior: r.behavior }); }
         };
@@ -693,6 +693,7 @@ export class SessionCard {
       }
     };
     this.turns.onSettled = () => this.#wantEarlier();
+    this.turns.onLoadEarlier = () => this.#loadEarlier();
     e.scroll = h('div', { class: 'stream-scroll' }, this.turns.element, e.stream);
     this.#watchHold(e.scroll);
     // An open question out of sight (#1657): one tap brings its card into view.
@@ -1496,6 +1497,19 @@ export class SessionCard {
     if (!this.historyStore) { return; }
     if (this.#unwatch) { this.#drawTurns(); return; }
     this.#follow.remember();
+    // Near the top is read only for a scroll the person makes (wheel, touch, scrollbar, scrolling keys),
+    // not the browser bringing a Tab stop into view, which would load pages as focus walks up.
+    let gestureAt = -Infinity;
+    const gesture = () => { gestureAt = performance.now(); };
+    const sc = this.els.scroll;
+    sc.addEventListener('wheel', gesture, { passive: true });
+    sc.addEventListener('touchmove', gesture, { passive: true });
+    sc.addEventListener('pointerdown', gesture, { passive: true });
+    sc.addEventListener('keydown', (ev) => { if (['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', ' '].includes(ev.key)) { gesture(); } });
+    this.els.scroll.addEventListener('scroll', () => {
+      this.#sticking();
+      if (performance.now() - gestureAt < 1000) { this.#nearTop(); }
+    }, { passive: true });
     this.#unwatch = this.historyStore.watch(this.hostId, this.#s.id, () => this.#drawTurns());
     this.historyStore.open(this.hostId, this.#s.id, { session: this.#s }).catch(() => {});
     this.#drawTurns();
@@ -1508,15 +1522,35 @@ export class SessionCard {
     // when it is shown again).
     const snapshot = this.historyStore.get(this.hostId, this.#s.id);
     // A page let go at the newest end to stay within the limit would take the newest turns with it.
-    if (this.#earlierAsked || snapshot.phase !== 'ready' || !snapshot.more || snapshot.loading || this.turns.pending || snapshot.turns.length >= HISTORY.fillTurns || snapshot.turns.length + HISTORY.maxTurns > HISTORY.kept) { return; }
+    if (this.#earlierAsked || snapshot.phase !== 'ready' || !snapshot.more || snapshot.loading || snapshot.error?.on === 'earlier' || this.turns.pending || snapshot.turns.length >= HISTORY.fillTurns || snapshot.turns.length + HISTORY.maxTurns > HISTORY.kept) { return; }
     this.#earlierAsked = true;
     const go = () => {
       this.#earlierAsked = false;
-      if (this.#unwatch) { this.historyStore.loadEarlier(this.hostId, this.#s.id).catch(() => {}); }
+      if (this.#unwatch) { this.historyStore.loadEarlier(this.hostId, this.#s.id, { keepLatest: true }).catch(() => {}); }
     };
     if (globalThis.requestIdleCallback) { globalThis.requestIdleCallback(go, { timeout: 500 }); } else { setTimeout(go, 50); }
   }
   #earlierAsked = false;
+
+  // Another page would be let go at the newest end to stay within the limit, taking the newest turns
+  // (and live merging) with it: no more is offered, and the top reads as the start of what is held.
+  #atCap(snapshot) { return snapshot.turns.length + HISTORY.maxTurns > HISTORY.kept; }
+
+  // The person asked for earlier turns (the button, Try again) or came within a screen of the top.
+  #loadEarlier() {
+    if (!this.#unwatch || this.#atCap(this.historyStore.get(this.hostId, this.#s.id))) { return; }
+    this.historyStore.loadEarlier(this.hostId, this.#s.id, { keepLatest: true }).catch(() => {});
+  }
+
+  // Reading near the top loads the page before it, once the turns held are drawn; a failed page
+  // waits for Try again rather than asking on every scroll.
+  #nearTop() {
+    const sc = this.els.scroll;
+    if (sc.scrollTop > sc.clientHeight || this.turns.pending) { return; }
+    const snapshot = this.historyStore.get(this.hostId, this.#s.id);
+    if (snapshot.phase !== 'ready' || !snapshot.more || snapshot.loading || snapshot.error?.on === 'earlier') { return; }
+    this.#loadEarlier();
+  }
 
   // The question the slot holds a place for: the open one, or the one whose record it still shows.
   #slotQuestion = null;
@@ -1533,7 +1567,8 @@ export class SessionCard {
     if (this.#receipt && this.#s.question && this.#receipt.questionId !== this.#s.question.id) { records.set(this.#receipt.questionId, this.#receipt.element); }
     const inline = { slot, questionId: this.#slotQuestion, activeId: this.#s.question?.id, records, kept };
     const snapshot = this.#follow.snapshot(full, inline);
-    const drawn = this.turns.render(snapshot, this.#follow.shown?.activity.turn ?? null, inline);
+    const shown = snapshot.more && this.#atCap(full) ? { ...snapshot, more: false, start: { limited: true } } : snapshot;
+    const drawn = this.turns.render(shown, this.#follow.shown?.activity.turn ?? null, inline);
     this.#syncStoredLatest();
     // Not in a turn (none holds it, or the history is not drawn): back where the live exchange ends.
     const questionHost = this.#follow.questionHost ?? this.els.stream;
