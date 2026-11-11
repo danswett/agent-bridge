@@ -922,6 +922,39 @@ static partial class SelfTest
                 try
                 {
                     if (hidden.Count > 0) { page.UpdateLayout(); }
+                    if (tag == "sessions")
+                    {
+                        var selected = window.ViewModel.Selected;
+                        window.ViewModel.Selected = null;
+                        try
+                        {
+                            page.UpdateLayout();
+                            var create = ById<Button>(page, "NewSession");
+                            var sort = ById<Button>(page, "SortPicker");
+                            check(create is not null && Shown(create, page),
+                                "shows New session at the minimum window width");
+                            if (create is not null)
+                            {
+                                check(new ButtonAutomationPeer(create).GetName() == "New session"
+                                    && ToolTipService.GetToolTip(create) as string == "New session",
+                                    "names the icon-only New session button for UIA and its tooltip");
+                                check(create.Content is ContentControl { ActualWidth: 16, ActualHeight: 16 }
+                                    && Math.Abs(create.ActualWidth - 32) < 0.5 && Math.Abs(create.ActualHeight - 32) < 0.5,
+                                    $"draws only a 16 px plus in a 32 x 32 New session target ({create.ActualWidth:0.##} x {create.ActualHeight:0.##})");
+                            }
+                            var header = create?.Parent as FrameworkElement;
+                            check(header is not null && sort is not null && Shown(sort, page)
+                                && sort.TransformToVisual(header).TransformPoint(default).X >= 0
+                                && sort.TransformToVisual(header).TransformPoint(new Windows.Foundation.Point(sort.ActualWidth, 0)).X <= header.ActualWidth + 0.5,
+                                "keeps the sort control fully inside the Sessions header at the minimum window width");
+                            await Picture(root, Path.ChangeExtension(outFile, ".sessions-header.narrow.png"));
+                        }
+                        finally
+                        {
+                            window.ViewModel.Selected = selected;
+                            page.UpdateLayout();
+                        }
+                    }
                     if (tag == "usage")
                     {
                         // #225: whose account it is, whole, however narrow: wrapped, never cut.
