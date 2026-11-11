@@ -303,7 +303,7 @@ export function readHello(raw) {
     protocol: num(h.protocol),
     // readOnly: why the machine takes nothing from the phone now (agent-ha-bridge runs there).
     // instance: this run of the host, which a reconnect resumes the list of (sessions.subscribe's since).
-    machine: { id: str(m.id), name: str(m.name), os: str(m.os), hostVersion: str(m.hostVersion), dev: m.dev === true, sessions: Number.isSafeInteger(m.sessions) && m.sessions >= 0 ? m.sessions : null, readOnly: str(m.readOnly) || null, instance: str(m.instance), signIn: readMachineSignIn(m.signIn) },
+    machine: { id: str(m.id), name: str(m.name), os: str(m.os), hostVersion: str(m.hostVersion), dev: m.dev === true, sessions: Number.isSafeInteger(m.sessions) && m.sessions >= 0 ? m.sessions : null, readOnly: str(m.readOnly) || null, diagnosticsReason: str(m.diagnosticsReason) || null, instance: str(m.instance), signIn: readMachineSignIn(m.signIn) },
     capabilities: Array.isArray(h.capabilities) ? h.capabilities.filter((c) => typeof c === 'string') : [],
   };
 }

@@ -132,6 +132,8 @@ export class FleetStatus {
   // said, null while none has been heard.
   diagnosable(id) { return this.#machines.get(id)?.diagnostics ?? null; }
 
+  diagnosticsReason(id) { return this.#machines.get(id)?.diagnosticsReason ?? null; }
+
   // What a machine's updater is doing, or null when it offers no updates (or none is known yet).
   update(id) { return this.#updates.get(id) ?? null; }
 
@@ -345,7 +347,7 @@ export class FleetStatus {
   #note(id, machine, capabilities) {
     if (!id || !machine) { return; }
     // diagnostics: whether its hello offers diagnostics.get (#802); an older host does not.
-    this.#machines.set(id, { hostVersion: machine.hostVersion ?? null, dev: machine.dev === true, sessions: machine.sessions ?? null, readOnly: machine.readOnly ?? null, diagnostics: Array.isArray(capabilities) && capabilities.includes(DIAGNOSTICS.capability), at: this.now() });
+    this.#machines.set(id, { hostVersion: machine.hostVersion ?? null, dev: machine.dev === true, sessions: machine.sessions ?? null, readOnly: machine.readOnly ?? null, diagnosticsReason: machine.diagnosticsReason ?? null, diagnostics: Array.isArray(capabilities) && capabilities.includes(DIAGNOSTICS.capability), at: this.now() });
   }
 
   // Looks at every online machine not shown that has not been looked at for a minute. One at

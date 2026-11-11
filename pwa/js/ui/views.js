@@ -1021,13 +1021,19 @@ function signInRow(info) {
 
 // "Diagnose this machine" inside a machine's row (#802, diagnostics.js, ui.md §6.6): the snapshot
 // shown as plain text to read, a box to say it was reviewed, and Copy only once it is. Nothing is
-// sent anywhere from here; the person pastes it where they choose. A machine whose host does not
-// offer it shows a line saying so in its place, never a button that cannot act.
+// sent anywhere from here; the person pastes it where they choose. A known withholding reason
+// is shown only for a machine with an existing problem, never a button that cannot act.
 function diagnoseRow(diagnose, id, name) {
   if (!diagnose) { return { key: null, el: null }; }
   const offered = diagnose.offered(id);
   if (offered === false) {
-    return { key: 'not-offered', el: h('p', { class: 'machine-diagnose-hint' }, `Can't be diagnosed from this device \u00B7 update ${BRAND.name} on ${name}`) };
+    const why = new Map([
+      ['pinning-off', ['Diagnose needs device approval turned on', 'turn it on']],
+      ['no-person-lease', ['Diagnose needs this device approved', 'approve it']],
+      ['not-offered', ['Diagnose is not offered here', 'check its settings']],
+    ]).get(diagnose.reason(id));
+    const text = why ? `${why[0]} \u00B7 the owner of ${name} can ${why[1]}` : null;
+    return { key: text, el: text ? h('p', { class: 'machine-diagnose-hint' }, text) : null };
   }
   if (offered !== true) { return { key: null, el: null }; }
   const s = diagnose.stateOf(id);

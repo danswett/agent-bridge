@@ -233,10 +233,11 @@ export class DemoHost {
   // progress: false plays a host from before sessions.progress, which says nothing of an answer
   // or a reply until its outcome.
   // confirming: false, one that does not take an escaped approval's confirmation from this device (#803).
-  // diagnosing: true, one that offers its diagnostics to this device (#802).
+  // diagnosing: true, one that offers its diagnostics to this device (#802);
+  // diagnosticsReason: why this channel does not offer it, absent when it does (#1947).
   // history: false plays a host from before session.history (#292), which does not offer it.
-  constructor(fixture, { readOnly = null, machineId = 'demo', machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, confirming = approving, stopWindowMs = 10000, usage = true, launching = answering, transferring = launching, trusting = launching, updating = false, updatingNow = false, signingIn = false, progress = true, diagnosing = false, history = true } = {}) {
-    this.machine = { id: machineId, name: machineName, os: 'windows', hostVersion: '0.1.0', dev: true, ...(readOnly ? { readOnly } : {}) };
+  constructor(fixture, { readOnly = null, machineId = 'demo', machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, confirming = approving, stopWindowMs = 10000, usage = true, launching = answering, transferring = launching, trusting = launching, updating = false, updatingNow = false, signingIn = false, progress = true, diagnosing = false, diagnosticsReason = null, history = true } = {}) {
+    this.machine = { id: machineId, name: machineName, os: 'windows', hostVersion: '0.1.0', dev: true, ...(readOnly ? { readOnly } : {}), ...(!diagnosing && diagnosticsReason ? { diagnosticsReason } : {}) };
     this.usage = demoUsage();
     this.answerDelayMs = answerDelayMs;
     this.stopWindowMs = stopWindowMs;
@@ -1449,6 +1450,7 @@ export function demoMachines(count, { answerDelayMs = 700, stopWindowMs = 10000,
       }],
     }, {
       machineId: 'demo-shadow', machineName: 'DEV-VM1 (shadow)', answerDelayMs, stopWindowMs, answering: false,
+      diagnosticsReason: 'pinning-off',
       readOnly: 'agent-ha-bridge is running for this user (AgentBridgeDaemon); answer at the machine or through it',
     }));
   }

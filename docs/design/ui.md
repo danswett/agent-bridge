@@ -1993,10 +1993,20 @@ machine, online ones first, then the account's offline machines (#213):
 - **A machine whose bridge isn't running (§6.14, proposed):** still "Offline" on line 1, and
   line 2 says "Bridge isn't running · since *time*" in place of "Last seen…".
 - **Diagnose (#802, v1-diagnostics.md):** in another connected machine's row, after its updates,
-  a quiet small secondary **Diagnose** when its host offers it. A host that does not offer it
-  shows, in that place, the passive line "Can't be diagnosed from this device · update Slipgates
-  on <machine>", never a button that cannot act. This machine's own row has neither. The
-  states, the same on both clients except where said:
+  a quiet small secondary **Diagnose** when its host offers it, never a button that cannot act.
+  In the PWA (#1947), a host that withholds diagnostics shows one quiet secondary line only
+  when its card already shows an actual problem: `readOnly` is set, or discovery has been held
+  long enough to show "Discovery held" (the existing two-minute threshold). The optional
+  `hello.machine.diagnosticsReason` chooses the words, not the machine's health:
+  - `pinning-off`: "Diagnose needs device approval turned on · the owner of <machine> can turn it on".
+  - `no-person-lease`: "Diagnose needs this device approved · the owner of <machine> can approve it".
+  - `not-offered`: "Diagnose is not offered here · the owner of <machine> can check its settings".
+
+  A healthy card shows no reason line, even with a known reason. Missing or unknown reasons
+  show no line; none imply an update, upgrade or installation. An offered machine keeps
+  **Diagnose** with no reason line. Capability and pinned-person authorization remain unchanged;
+  a reason grants nothing. This machine's own row has neither. The states, the same on both
+  clients except where said:
   - **Asking:** Diagnose does nothing more until the answer (the PWA's reads "Diagnosing…"; the
     app's is disabled).
   - **Review:** the snapshot as plain monospace text, headed with the product, the machine and the

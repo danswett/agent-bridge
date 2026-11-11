@@ -266,7 +266,7 @@ export class DiagnoseControl {
   #epochs = new Map();
   #listeners = new Set();
 
-  // fleet: a FleetStatus (diagnosable(id), call(id, op, data)).
+  // fleet: a FleetStatus (diagnosable(id), diagnosticsReason(id), facts(id), call(id, op, data)).
   constructor({ fleet, copy = (text) => copyText(text), now = () => Date.now() }) {
     Object.assign(this, { fleet, copy, now });
   }
@@ -280,9 +280,14 @@ export class DiagnoseControl {
   // { phase: idle|asking|review, text, reviewed, copied, note } for one machine's row.
   stateOf(id) { return this.#states.get(id) ?? IDLE; }
 
-  // true: Diagnose is shown. false: the machine's host does not offer it (its row says to update
-  // it instead). null: not known yet, so neither.
+  // true: Diagnose is shown. false: the host does not offer it. null: not known yet.
   offered(id) { return this.fleet.diagnosable(id); }
+
+  // A withholding reason is not health: only facts already shown may make it visible.
+  reason(id) {
+    const facts = this.fleet.facts(id);
+    return facts?.readOnly || facts?.held ? this.fleet.diagnosticsReason(id) : null;
+  }
 
   // name: the machine's name as this device lists it.
   async press(id, name = 'this machine') {
