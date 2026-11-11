@@ -1,4 +1,6 @@
-# Operating Agent Bridge: the SRE plan
+<a id="operating-agent-bridge-the-sre-plan"></a>
+
+# Operating Slipgates: the SRE plan
 
 *Written 2026-11-03, Pacific. Tracking issue: [#568](https://github.com/danswett/agent-bridge/issues/568).*
 

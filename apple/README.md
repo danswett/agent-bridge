@@ -1,4 +1,6 @@
-# Agent Bridge — native Apple clients
+<a id="agent-bridge--native-apple-clients"></a>
+
+# Slipgates — native Apple clients
 
 Swift 6 protocol and state libraries, with SwiftUI apps for macOS 15+, iOS 18+
 and iPadOS 18+.
