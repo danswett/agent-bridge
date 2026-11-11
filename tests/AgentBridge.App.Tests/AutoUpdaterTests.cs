@@ -2207,7 +2207,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     [InlineData(UpdateOutcome.Current)]
     [InlineData(UpdateOutcome.Failed)]
     [Trait("Category", "Network")]
-    public async Task A_background_rate_limit_preserves_current_but_still_reports_a_real_failed_update(string outcome)
+    public async Task A_background_rate_limit_preserves_current_but_still_reports_a_real_failed_update(UpdateOutcome outcome)
     {
         updater.Found = null;
         await StartAsync();
