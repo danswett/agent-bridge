@@ -59,18 +59,35 @@ ignore_workflows: [Merge rule]
 
 # Main must be green. GitHub's auto-merge doesn't pause while main's CI is red, and would keep
 # landing pull requests on a broken main, each making the breakage harder to untangle. So while
-# this workflow's latest finished push run on main (at its latest attempt) isn't a success, every
-# pull request fails, except the bounded, merge-rule-covered fallback below. A newer active run
-# doesn't free a red main. A pull request with one of these labels is the fix, and skips this check alone: every
+# any named job below isn't completed successfully at its latest attempt in main's latest push
+# run, every pull request fails. Main's commit, not run finish time, determines the run.
+# Plan must succeed. Only then may a skipped job (or unexpanded skipped family) count as green.
+# Exact display names pin every selected matrix instance: missing, renamed or cancelled holds.
+# The aggregate quality-gate waits on installer, so only its test inputs are listed.
+# Installer, sign and publish jobs do not hold, but their results are printed by the evaluator.
+# A pull request with one of these labels is the fix, and skips this check alone: every
 # other requirement, the independent review included, still applies. Adding a label takes triage
 # rights, so a pull request's author can't exempt their own from a fork: ask the merge coordinator.
 main_green:
   workflow: ci.yml
   exempt_labels: [fixes-main]
-  # A missing run or a newest first attempt cancelled before starting can use a green ancestor
-  # within this many commits, only with a passing merge-rule on every later commit's merged PR.
-  # Finished failures and unreadable ancestry still block. Active runs and fixes-main are unchanged.
-  fallback_commits: 6
+  jobs:
+    - product (ubuntu-latest)
+    - product (windows-latest)
+    - product (windows-11-arm)
+    - ha-integration
+    - spikes
+    - spikes-linux
+    - light
+    - pwa-ui (chromium 1/3)
+    - pwa-ui (chromium 2/3)
+    - pwa-ui (chromium 3/3)
+    - pwa-ui (webkit 1/3)
+    - pwa-ui (webkit 2/3)
+    - pwa-ui (webkit 3/3)
+    - pwa-e2e
+    - app (win-x64)
+    - app (win-arm64)
 
 # The standing rule (owner decision 2026-11-08): Copilot and Codex reviews are optional extras and
 # never block a merge; the independent-review receipts are the gate. A pull request needs a success
