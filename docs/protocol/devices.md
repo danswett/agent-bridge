@@ -440,6 +440,27 @@ A host reads the relay's copy with `roster-get` once after each connection and v
 
 Off mode enforces nothing. No connection, command or approval is refused or changed because of what the roster holds or fails to hold, and a relay that does not answer, or answers with no roster, costs one log line. The roster reply is the one text frame the host reads past the ordinary frame bound (up to six times the relay's 224 KiB stored cap, for JSON escaping); a reply past even that is discarded as no roster, and the relay connection stays up (up to 4 MiB drained; beyond that, or for any other oversized text frame, the connection is closed as for any oversized frame). The generation is not pinned, so against a hostile relay this check protects nothing yet; observe and enforce modes, pinning and the ChannelHub gate are later slices.
 
+### Retained pin-reader foundation (#1358, part 1)
+
+`HostRosterReader` reads an existing `roster-pin.json` in a private host-state folder.
+The file is at most 4,096 bytes, owner-only, not a link, and has exactly
+`account`, `generation`, `genesis` and `heads`: the account id, a lowercase-hex generation,
+the full base64url genesis hash and one to four distinct hashes in head order.
+The person/enrollment writer must write and flush this record before a reader uses it;
+this reader has no write or creation API.
+
+A matching snapshot retains one verifier, including its probation clock. A different
+account, generation or genesis is `pin-mismatch`; heads not including or descending from
+all pinned and in-process accepted heads are `head-regress`. Neither replaces retained state.
+A missing pin reports `unpinned` and gives no trusted reader; a damaged, inaccessible,
+oversize or public pin reports the fixed `pin-unreadable` code. A failed sync reports
+`no-roster` without discarding the retained reader.
+
+This foundation is not wired into the running host yet, enables no mode and refuses no
+operation. The running OFF verifier now explicitly reports `unpinned`. Observe/report
+integration and durable advancement of accepted heads remain follow-up #1358 work;
+this reader never advances a disk pin or claims rollback protection beyond it after restart.
+
 ## Vectors
 
 [vectors/roster.json](vectors/roster.json) holds fixed test keys (`d`, `public`, `device`) and:
