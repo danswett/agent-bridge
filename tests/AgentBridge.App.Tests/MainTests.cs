@@ -237,7 +237,7 @@ public sealed class MainTests : IAsyncLifetime
             // An open row's update is only marked seen: nothing is written, nothing fails yet. Open is
             // the selected row (#180).
             ui.Post(() => other.Selected = other.Sessions.Single(c => c.Id == "old"));
-            await host.SendAsync(Events.SessionUpsert, Make.Session("old", response: "Later.", updated: Make.T0.AddMinutes(9)));
+            await host.SendAsync(Events.SessionUpsert, Make.Session("old", updated: Make.T0.AddMinutes(9)) with { Activity = new() { Response = "Later.", ResponseTurn = "reply-write-failure" } });
             await Wait.UntilAsync(() => other.Sessions.Single(c => c.Id == "old").Response == "Later.", "the update");
             Assert.Equal((int)SessionSort.Yours, TestUi.Read(() => other.SortIndex));
             Assert.Equal(["asking", "old"], TestUi.Read<string[]>(() => [.. other.Sessions.Select(c => c.Id)]));

@@ -200,13 +200,13 @@ export class SessionListView {
         shown += 1;
       }
     };
-    if (!reading) { this.dwell.cancel(); }
     const pinnedShown = arranged.pinned.some(keep);
     const sessionsShown = arranged.sessions.some(keep);
     if (pinnedShown) { want.push(this.#head('pinned', 'Pinned')); }
     cards(arranged.pinned, true);
     if (pinnedShown && sessionsShown) { want.push(this.#head('sessions', 'Sessions')); }
     cards(arranged.sessions, false);
+    if (!reading) { this.dwell.cancel(); }
     if (ended.length) { want.push(this.#endedGroup(ended)); }
     // Move only what is out of place, so a card being read is not torn out and put back.
     let prev = null;
