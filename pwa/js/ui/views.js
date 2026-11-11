@@ -5,6 +5,7 @@ import { SessionCard } from './session-card.js';
 import { RowMenu } from './row-menu.js';
 import { splitTabs } from './machine-tab-fit.js';
 import { SessionOrder } from '../session-order.js';
+import { RecentOrder } from '../recent-order.js';
 import { ReadDwell } from '../read-dwell.js';
 import { ago } from './time.js';
 import { whileVisible } from './ticker.js';
@@ -22,11 +23,11 @@ const titleOf = (card) => card.session.title || 'Untitled session';
 // Keeps one row per session, from every machine shown, in the person's order (session-order.js):
 // Pinned, then the rest, then an Ended group (ui.md §6.1); and each session's view in the session
 // pane, the selected one shown (./session-card.js). Both are updated in place so an open
-// disclosure, scroll position or focus survives an upsert, and an upsert never moves a row. A
+// disclosure, scroll position or focus survives an upsert. Most recent batches activity moves; a
 // session is its machine's: two machines may each have a session of the same id, and each acts
 // only on its own machine.
 //
-// Rows move only when the person moves them: Alt+Up/Down on a row, a drag by the handle that
+// In Your order, rows move only when the person moves them: Alt+Up/Down, a drag by the handle that
 // shows on hover, or the row menu (a long press on a phone, a right-click, Shift+F10). Up and
 // Down alone go from row to row.
 export class SessionListView {
@@ -42,6 +43,12 @@ export class SessionListView {
   #held = false;
   // Drawn once: what comes after is news, and may move.
   #drawn = false;
+  #recent = new RecentOrder();
+  #recentTimer = null;
+  #scrollTimer = null;
+  #recentHolds = new Set();
+  #recentFocus = null;
+  #recentListeners = new AbortController();
 
   get drawn() { return this.#drawn; }
 
@@ -77,6 +84,7 @@ export class SessionListView {
     this.said = h('p', { class: 'sr-only', role: 'status', 'aria-live': 'polite' });
     container.after(this.said);
     this.#listen();
+    this.#listenRecent();
   }
 
   static key(hostId, id) { return `${hostId}\n${id}`; }
@@ -128,7 +136,23 @@ export class SessionListView {
   #draw() {
     const entries = this.sessions.list();
     const sort = this.order.sort;
-    const arranged = this.order.arrange(entries, { nameOf: (id) => this.machine(id).name, shows: this.shows, settled: this.settled });
+    const held = this.#recentHolds.size > 0 || !!this.#recentFocus?.isConnected;
+    const arranged = this.#recent.arrange(this.order.arrange(entries, { nameOf: (id) => this.machine(id).name, shows: this.shows, settled: this.settled }), { sort, held });
+    clearTimeout(this.#recentTimer);
+    if (this.#recent.wait !== null) { this.#recentTimer = setTimeout(() => this.schedule(), this.#recent.wait); }
+    const before = new Map();
+    if (this.#recent.moved.size) {
+      for (const el of this.container.querySelectorAll('.session')) {
+        if (!el.getClientRects().length) { continue; }
+        before.set(el, el.getBoundingClientRect());
+      }
+    }
+    const pane = this.container.closest('#list-pane');
+    const scroller = !before.size ? null : pane && /auto|scroll/.test(getComputedStyle(pane).overflowY) ? pane : this.container.ownerDocument.scrollingElement;
+    const anchor = scroller?.scrollTop > 0 ? [...before.keys()].find((el) => seen(el)) : null;
+    for (const el of before.keys()) {
+      for (const a of el.getAnimations?.() ?? []) { if (/^ab-motion-(reorder|shift)$/.test(a.id)) { a.cancel(); } }
+    }
     const keep = (e) => this.#matches(e.hostId, e.session);
     const ended = arranged.ended.filter(keep);
     this.container.dataset.sort = this.order.sort;
@@ -232,6 +256,15 @@ export class SessionListView {
       if (caret) { try { focused.setSelectionRange(...caret); } catch { /* not a text control */ } }
     }
     if (goneAt !== null) { this.#refocus(rowsWere, goneAt); }
+    if (anchor?.isConnected) {
+      const delta = anchor.getBoundingClientRect().top - before.get(anchor).top;
+      if (delta) { this.onAnchor?.(); scroller.scrollTop += delta; }
+    }
+    for (const [el, was] of before) {
+      if (!el.isConnected) { continue; }
+      const at = el.getBoundingClientRect();
+      slide(el, this.#recent.moved.has(el.dataset.key) ? 'reorder' : 'shift', was.left - at.left, was.top - at.top);
+    }
     for (const key of arrived) {
       const el = this.#cards.get(key)?.element;
       if (el?.isConnected) { enter(el, 'listItem'); }
@@ -332,6 +365,50 @@ export class SessionListView {
   }
 
   #say(text) { this.said.textContent = text; }
+
+  #listenRecent() {
+    const c = this.container, doc = c.ownerDocument;
+    const signal = this.#recentListeners.signal;
+    const hold = (key, on) => {
+      const was = this.#recentHolds.has(key);
+      if (on) { this.#recentHolds.add(key); } else { this.#recentHolds.delete(key); }
+      if (was !== on && this.order.sort === 'recent') { this.schedule(); }
+    };
+    c.addEventListener('pointerenter', (e) => { if (e.pointerType !== 'touch') { hold('pointer', true); } }, { signal });
+    c.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'touch') { hold('pointer', false); } }, { signal });
+    // Scrolling cancels a pointer before its finger lifts; touch events keep that hold.
+    const touching = new Set(), touchEnds = ['touchend', 'touchcancel'];
+    const touchEnd = (e) => {
+      if (e.target !== e.currentTarget || e.targetTouches?.length) { return; }
+      touching.delete(e.target);
+      for (const event of touchEnds) { e.target.removeEventListener(event, touchEnd); }
+      hold('touch', touching.size > 0);
+    };
+    c.addEventListener('touchstart', (e) => {
+      touching.add(e.target);
+      for (const event of touchEnds) { e.target.addEventListener(event, touchEnd, { passive: true, signal }); }
+      hold('touch', true);
+    }, { passive: true, signal });
+    const focus = (target) => {
+      this.#recentFocus = target && (c.contains(target) || target.closest?.('#needs-you, .reply, .question')) ? target : null;
+      if (this.order.sort === 'recent') { this.schedule(); }
+    };
+    focus(doc.activeElement);
+    doc.addEventListener('focusin', (e) => focus(e.target), { signal });
+    doc.addEventListener('focusout', (e) => focus(e.relatedTarget), { signal });
+    doc.addEventListener('scroll', (e) => {
+      if (!e.target.contains?.(c)) { return; }
+      hold('scroll', true);
+      clearTimeout(this.#scrollTimer);
+      this.#scrollTimer = setTimeout(() => hold('scroll', false), 150);
+    }, { capture: true, passive: true, signal });
+  }
+
+  stopRecent() {
+    this.#recentListeners.abort();
+    clearTimeout(this.#recentTimer);
+    clearTimeout(this.#scrollTimer);
+  }
 
   openMenu(card) {
     const key = this.#keyOf(card);

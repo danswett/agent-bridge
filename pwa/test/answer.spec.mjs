@@ -823,21 +823,24 @@ test.describe('when the question changes', () => {
   });
 });
 
-test('a card that moves to the top while you type keeps your place', async ({ page }) => {
+test('a card held in Most recent while you type keeps your place', async ({ page }) => {
   await openDemo(page);
-  // Cards move on a prompt, a finished turn, a question or a status change only in Most recent; in your order they never do (#164, #628).
+  // Most recent holds ordinary activity moves while a row or answer has focus (#1577).
   await page.locator('#session-sort').selectOption('recent');
   const q = await ask(page, { id: 'q-move', message: 'Notes?', fields: [{ name: 'n', title: 'Notes', type: 'text' }] });
-  // Other sessions update, so this one is no longer first.
+  const box = q.getByRole('textbox', { name: 'Notes' });
+  await box.focus();
+  await expect(box).toBeFocused();
+  const shown = await page.locator('.session').evaluateAll((els) => els.map((el) => el.dataset.id));
+  // Other sessions update, but the focused row holds their moves.
   for (const id of ['6f1c2b7e-claude-example', COPILOT]) {
     await page.evaluate(({ id, t }) => { const d = window.agentBridgeDemo; d.upsert({ ...d.host.get(id), updatedAt: t, activity: { ...d.host.get(id).activity, userMessage: 'Another prompt' } }); }, { id, t: later() });
   }
-  await expect(page.locator('.session').first()).not.toHaveAttribute('data-id', CODEX);
-  const box = q.getByRole('textbox', { name: 'Notes' });
+  expect(await page.locator('.session').evaluateAll((els) => els.map((el) => el.dataset.id))).toEqual(shown);
   await box.click();
   await page.keyboard.type('abc');
   await page.evaluate(({ id, t }) => { const d = window.agentBridgeDemo; d.upsert({ ...d.host.get(id), updatedAt: t, activity: { ...d.host.get(id).activity, response: 'Still waiting on you.', userMessage: 'Nudge' } }); }, { id: CODEX, t: new Date(Date.now() + 5000).toISOString() });
-  await expect(page.locator('.session').first()).toHaveAttribute('data-id', CODEX);
+  expect(await page.locator('.session').evaluateAll((els) => els.map((el) => el.dataset.id))).toEqual(shown);
   await expect(box).toBeFocused();
   await page.keyboard.type('def');
   await expect(box).toHaveValue('abcdef');

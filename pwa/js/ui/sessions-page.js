@@ -296,6 +296,7 @@ export class SessionsPage {
     this.#unwatchNews = () => { unwatchSessions(); unwatchHosts?.(); };
     this.#unwatchLane = watchLane(this.lane.list, { fresh: (el) => news && this.view.settled(el.dataset.hostId) && !returned.has(el.dataset.hostId) });
     this.#laneGuard = this.lane.list ? guardLane(this.lane.list, $('list-pane')) : null;
+    this.view.onAnchor = () => this.#laneGuard?.arm();
     this.#sortMenu($('session-sort'));
     // A new channel to a machine: what waits to be resent to it goes now, and only to it.
     hosts.onOpen((id) => {
@@ -767,6 +768,7 @@ export class SessionsPage {
 
   // Everything tied to the signed-in account goes with it.
   clear() {
+    this.view.stopRecent();
     clearInterval(this.#timingTimer);
     this.#timingTimer = null;
     // The account's session is no longer shown: said before the page lets go of what says it.
