@@ -3643,12 +3643,21 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     [InlineData(null, false)]
     [InlineData("Tell me", true)]
     public async Task A_reset_form_not_asked_again_the_same_retires_its_card_as_out_of_date_with_nothing_typed_after_the_Esc(string? other, bool reordered)
+        => await ResetFormAsync(other, reordered);
+
+    [Fact]
+    public async Task A_reset_form_is_retired_even_when_the_test_observes_progress_slowly()
+        => await ResetFormAsync(null, false, () => Thread.Sleep(200));
+
+    async Task ResetFormAsync(string? other, bool reordered, Action? beforeLook = null)
     {
         var clock = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(DateTimeOffset.UtcNow);
         Serve(Answerer(time: clock, resume: true));
         // A stalled test must not spend ResetWait before it records the session's response to Esc.
         Task UntilState(Func<bool> state, string what) => Wait.UntilAsync(() =>
         {
+            // Model a test continuation scheduled infrequently on the loaded Arm runner.
+            beforeLook?.Invoke();
             if (state()) { return true; }
             clock.Advance(TimeSpan.FromMilliseconds(25));
             return state();
