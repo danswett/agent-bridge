@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { LaunchService } from '../../js/launch-service.js';
 import { HostClient, HostError } from '../../js/host-client.js';
 import { checkLaunch, flattenPrompt, readLaunchOptions, readLaunchResult, readTrustResult, MAX_PROMPT } from '../../js/launch.js';
-import { describeLaunch, describeTrust, launchPending } from '../../js/ui/launch-view.js';
+import { describeLaunch, describeTrust, launchPending, RESUMABLE_INCOMPLETE_NOTE } from '../../js/ui/launch-view.js';
 
 const flush = () => new Promise((r) => setImmediate(r));
 const REQUEST = '2b6e1f0a-7c3d-4e5f-8a9b-0c1d2e3f4a5b';
@@ -123,6 +123,10 @@ test('launch options keep well-formed resumable omissions without requiring a kn
     assert.deepEqual(readLaunchOptions({ resumableIncomplete: raw }).resumableIncomplete,
       { omitted: 2, reason: reason ?? null });
   }
+});
+
+test('the incomplete resumable notice matches the shared client wording', () => {
+  assert.equal(RESUMABLE_INCOMPLETE_NOTE, "Some sessions weren't checked in time. Reload choices to try again.");
 });
 
 test('launch options drop absent or malformed resumable omissions', () => {

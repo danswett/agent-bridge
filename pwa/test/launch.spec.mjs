@@ -1104,6 +1104,7 @@ test.describe('the cached choices', () => {
       await settled(page);
       await page.evaluate((none) => {
         const h = window.agentBridgeDemo.host;
+        if (none) { h.remote.resumable = []; }
         h.launchOptions = {
           ...h.launchOptions,
           ...(none ? { resumable: [] } : {}),
@@ -1115,10 +1116,11 @@ test.describe('the cached choices', () => {
       await reload.click();
       const line = panel(page).locator('.launch-incomplete');
       await expect(line).toBeVisible();
-      await expect(line).toHaveText("Some sessions weren't checked in time. Reload choices asks again.");
+      await expect(line).toHaveText("Some sessions weren't checked in time. Reload choices to try again.");
       await expect(panel(page)).not.toContainText('927');
       await expect(panel(page)).not.toContainText('private reason');
-      await expect(field(page, 'resume')).toBeVisible();
+      if (empty) { await expect(field(page, 'resume')).toBeHidden(); }
+      else { await expect(field(page, 'resume')).toBeVisible(); }
       expect(await field(page, 'resume').evaluate((el) =>
         el.closest('.launch-field').nextElementSibling.classList.contains('launch-incomplete'))).toBe(true);
       const { violations } = await new AxeBuilder({ page }).include('#launch')
@@ -1132,6 +1134,29 @@ test.describe('the cached choices', () => {
       if (empty) { await expect(field(page, 'resume')).toBeHidden(); }
     });
   }
+
+  test('held incomplete choices keep their quiet line when a reload fails', async ({ page }) => {
+    await openDemo(page);
+    await settled(page);
+    await page.evaluate(() => {
+      const h = window.agentBridgeDemo.host;
+      h.launchOptions = { ...h.launchOptions, resumableIncomplete: { omitted: 1, reason: 'deadline' } };
+    });
+    await openPanel(page);
+    const reload = panel(page).getByRole('button', { name: 'Reload choices' });
+    await reload.click();
+    const line = panel(page).locator('.launch-incomplete');
+    await expect(line).toBeVisible();
+
+    await page.evaluate(() => {
+      delete window.agentBridgeDemo.host.launchOptions.resumableIncomplete;
+      window.agentBridgeDemo.client.launchOptions = () => Promise.reject(new Error('the channel closed'));
+    });
+    await reload.click();
+    await expect(age(page)).toContainText("Couldn't get newer ones");
+    await expect(line).toBeVisible();
+    await expect(field(page, 'agent')).toBeVisible();
+  });
 
   test('the form shows at once from the kept choices, with their age, while the machine is slow to answer again', async ({ page }) => {
     await openDemo(page);
