@@ -465,6 +465,11 @@ static class MergeRuleCommand
                 && job.GetProperty("conclusion").GetString() is "success" or "skipped";
             bool Passed(string name)
             {
+                if (!name.Contains(" (", StringComparison.Ordinal))
+                {
+                    var instances = latest.Where(j => j.Key == name || j.Key.StartsWith($"{name} (", StringComparison.Ordinal)).ToList();
+                    return instances.Count > 0 && instances.All(j => Green(j.Value));
+                }
                 if (latest.TryGetValue(name, out var job))
                     return Green(job);
                 var family = name.Split(" (", StringSplitOptions.None)[0];
@@ -477,7 +482,7 @@ static class MergeRuleCommand
             log = $"Main: {config.MainGreen.Workflow} run {id} (attempt {attempt}) on {MergeRule.Short(sha!)}; "
                 + (held.Count == 0 ? "named jobs passed." : $"named jobs not green: {string.Join(", ", held)}.")
                 + "\n" + string.Join("\n", latest.OrderBy(j => j.Key, StringComparer.Ordinal).Select(j =>
-                    $"Main job [{(j.Key == "plan" || config.MainGreen.Jobs.Contains(j.Key, StringComparer.Ordinal) ? "required" : "non-gating")}]: {j.Key}: {j.Value.GetProperty("status").GetString()}/{j.Value.GetProperty("conclusion").GetString() ?? "pending"} (attempt {RunAttempt(j.Value)})."));
+                    $"Main job [{(j.Key == "plan" || config.MainGreen.Jobs.Any(n => n == j.Key || (!n.Contains(" (", StringComparison.Ordinal) && j.Key.StartsWith($"{n} (", StringComparison.Ordinal))) ? "required" : "non-gating")}]: {j.Key}: {j.Value.GetProperty("status").GetString()}/{j.Value.GetProperty("conclusion").GetString() ?? "pending"} (attempt {RunAttempt(j.Value)})."));
             return held.Count == 0
                 ? new("success", $"{config.Base}'s CI {MergeRule.Short(sha!)} named jobs passed")
                 : new("failure", $"{config.Base} is red (CI {MergeRule.Short(sha!)}): named job {held[0]} is not green");

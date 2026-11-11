@@ -507,8 +507,10 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      landing pull requests on a broken main, which makes the breakage hard to untangle. Each run
      reads main's current ref once and selects that commit's latest `ci.yml` push run, not the
      run that finished last or an older commit whose run id is newer. The single
-     `main_green.jobs` list pins exact display names for product, ha-integration, spikes,
-     spikes-linux, light, pwa-ui, pwa-e2e and app, including every runner, shard and runtime.
+     `main_green.jobs` list pins exact display names for ha-integration, spikes, spikes-linux,
+     light, pwa-ui, pwa-e2e and app, including every static shard and runtime. Product is a
+     dynamic family: at least one entry must exist and every present instance must pass; runners
+     omitted by the plan are not required. Entirely absent families still hold.
      The aggregate quality-gate is excluded because it waits on installer. The plan job must
      succeed. Only then may completed `skipped` entries count as green, including GitHub's
      unexpanded matrix-family skipped entry: the selector chose not to run that family.

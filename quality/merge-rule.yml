@@ -63,6 +63,7 @@ ignore_workflows: [Merge rule]
 # run, every pull request fails. Main's commit, not run finish time, determines the run.
 # Plan must succeed. Only then may a skipped job (or unexpanded skipped family) count as green.
 # Exact display names pin every selected matrix instance: missing, renamed or cancelled holds.
+# A bare name covers a dynamic family: at least one entry, and every present instance green.
 # The aggregate quality-gate waits on installer, so only its test inputs are listed.
 # Installer, sign and publish jobs do not hold, but their results are printed by the evaluator.
 # A pull request with one of these labels is the fix, and skips this check alone: every
@@ -72,9 +73,7 @@ main_green:
   workflow: ci.yml
   exempt_labels: [fixes-main]
   jobs:
-    - product (ubuntu-latest)
-    - product (windows-latest)
-    - product (windows-11-arm)
+    - product
     - ha-integration
     - spikes
     - spikes-linux

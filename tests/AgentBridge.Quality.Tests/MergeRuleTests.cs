@@ -1542,25 +1542,33 @@ public class MergeRuleTests
         finally { File.Delete(config); }
     }
 
-    [Fact]
-    public void The_main_run_43044698171_shape_passes_with_plan_selected_tests_and_skipped_families()
+    [Theory]
+    [InlineData("subset", "success")]
+    [InlineData("absent", "failure")]
+    [InlineData("red", "failure")]
+    [InlineData("skipped", "success")]
+    [InlineData("family-skipped", "success")]
+    public void A_selective_main_run_requires_product_but_not_unselected_product_runners(string scenario, string state)
     {
         var config = Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml");
         var required = MergeRuleConfig.Load(config).MainGreen.Jobs;
         object Entry(string name, string conclusion) =>
             new { id = 1, name, status = "completed", conclusion, run_attempt = 1 };
-        var jobs = required.Where(n => !n.StartsWith("pwa-ui (", StringComparison.Ordinal))
+        var jobs = required.Where(n => !n.StartsWith("pwa-ui (", StringComparison.Ordinal) && n.Split(" (", StringSplitOptions.None)[0] != "product")
             .Select(n => Entry(n, n is "ha-integration" or "spikes" or "spikes-linux" or "pwa-e2e" ? "skipped" : "success"))
+            .Concat(scenario == "absent" ? [] : [Entry(scenario == "family-skipped" ? "product" : "product (ubuntu-latest)",
+                scenario is "skipped" or "family-skipped" ? "skipped" : scenario == "red" ? "failure" : "success")])
+            .Concat(scenario == "red" ? [Entry("product (windows-latest)", "success")] : [])
             .Concat([Entry("plan", "success"), Entry("pwa-ui (${{ matrix.name }})", "skipped"),
                 Entry("app-installer (win-arm64)", "failure"), Entry("quality-gate", "failure")]).ToArray();
         var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: MainRuns((5, "in_progress", null, 1)),
             mainJobs: JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }));
         MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
-        Assert.Contains(" success merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
+        Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Every_required_display_name_matches_the_workflows_expanded_matrix()
+    public void Every_required_name_matches_the_workflows_static_matrix_or_dynamic_family()
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
         var config = MergeRuleConfig.Load(Path.Combine(root, "quality", "merge-rule.yml"));
@@ -1590,12 +1598,10 @@ public class MergeRuleTests
                 }
                 else
                 {
-                    // product's matrix is selected dynamically; the plan declares main's full OS list.
-                    var plan = (YamlMappingNode)jobs.Children[new YamlScalarNode("plan")];
-                    var outputs = (YamlMappingNode)plan.Children[new YamlScalarNode("outputs")];
-                    var expression = ((YamlScalarNode)outputs.Children[new YamlScalarNode("product-os")]).Value!;
-                    expanded.AddRange(Regex.Matches(expression, @"\[[^\]]+\]").SelectMany(m =>
-                        JsonSerializer.Deserialize<string[]>(m.Value)!).Distinct().Select(os => $"{group.Key} ({os})"));
+                    // A plan-selected matrix must be configured by family, never fixed instances.
+                    Assert.All(matrix.Children.Values, value =>
+                        Assert.Contains("needs.plan.outputs.", ((YamlScalarNode)value).Value!, StringComparison.Ordinal));
+                    expanded.Add(group.Key);
                 }
             }
             Assert.Equal(expanded.Order(StringComparer.Ordinal), group.Order(StringComparer.Ordinal));
