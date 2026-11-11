@@ -87,3 +87,60 @@ test('Needs you opens the group temporarily and unread is marked only while coll
   await toggle.click();
   await expect(toggle.locator('.unread-dot')).toBeHidden();
 });
+
+test('focus returns to the group when its visible needs-you row becomes hidden', async ({ page }) => {
+  await setup(page);
+  const toggle = header(page);
+  await toggle.click();
+  const waiting = row(page, COPILOT).locator('.row-main');
+  await waiting.focus();
+  await expect(waiting).toBeFocused();
+  await page.evaluate((id) => {
+    const d = window.agentBridgeDemo;
+    d.upsert({ ...d.host.get(id), status: 'idle', question: null });
+  }, COPILOT);
+  await expect(row(page, COPILOT)).toHaveCount(0);
+  await expect(toggle).toBeFocused();
+});
+
+test('arrows traverse group headers and visible rows in displayed order', async ({ page }) => {
+  await setup(page);
+  const toggle = header(page);
+  const [firstId, secondId] = await toggle.evaluate((el) => [
+    el.nextElementSibling.dataset.id, el.nextElementSibling.nextElementSibling.dataset.id,
+  ]);
+  const first = row(page, firstId).locator('.row-main');
+  const second = row(page, secondId).locator('.row-main');
+  const pinned = row(page, CODEX).locator('.row-main');
+  await toggle.focus();
+  await toggle.press('ArrowRight');
+  await expect(first).toBeFocused();
+  await first.press('ArrowLeft');
+  await expect(toggle).toBeFocused();
+  await toggle.press('ArrowDown');
+  await expect(first).toBeFocused();
+  await first.press('ArrowDown');
+  await expect(second).toBeFocused();
+  await second.press('ArrowUp');
+  await expect(first).toBeFocused();
+  await first.press('ArrowUp');
+  await expect(toggle).toBeFocused();
+  await toggle.press('ArrowUp');
+  await expect(pinned).toBeFocused();
+  await pinned.press('ArrowLeft');
+  await expect(pinned).toBeFocused();
+  await pinned.press('ArrowDown');
+  await expect(toggle).toBeFocused();
+  await toggle.press('ArrowLeft');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await toggle.press('ArrowDown');
+  const waiting = row(page, COPILOT).locator('.row-main');
+  await expect(waiting).toBeFocused();
+  await waiting.press('ArrowLeft');
+  await expect(toggle).toBeFocused();
+  await toggle.press('ArrowRight');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(toggle).toBeFocused();
+  await toggle.press('ArrowRight');
+  await expect(first).toBeFocused();
+});
