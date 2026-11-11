@@ -532,6 +532,15 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .tile-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ab-space-2); }
 .tile-actions .button { min-height: var(--tap); }
 .machine-tile .machine-more { padding: 0; }
+.machine-load { display: grid; grid-template-columns: minmax(5rem, 1fr) minmax(0, 2fr) auto; align-items: center; gap: var(--ab-space-2); font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
+.machine-load-track { height: 10px; border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-control); overflow: hidden; background: var(--ab-subtle); }
+.machine-load-fill { display: block; height: 100%; background: var(--ab-text2); }
+.machine-load-value { font-variant-numeric: tabular-nums; color: var(--ab-text); }
+.machine-load.missing .machine-load-track { border-style: dashed; background: none; }
+@media (forced-colors: active) {
+  .machine-load-track { forced-color-adjust: none; border-color: CanvasText; background: Canvas; }
+  .machine-load-fill { background: CanvasText; }
+}
 .machine-view { display: none; }
 @media (max-width: 899px) { .machines-page { max-width: 640px; margin-inline: auto; } }
 /* From 900 px: the machines on the left, the picked machine's tile on the right. Each row sits in

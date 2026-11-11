@@ -16,6 +16,7 @@ import { signInDevicesLines } from '../signin-devices.js';
 import { BRAND } from '../brand.js';
 import { sessionStatus } from '../status.js';
 import { glyph } from './glyph.js';
+import { loadBars } from '../load-bars.js';
 
 const LONG_PRESS_MS = 500;
 // A finger that moves further than this is scrolling, not pressing.
@@ -1069,15 +1070,30 @@ const MASTER_DETAIL = '(min-width: 900px)';
 // The machine whose tile shows beside the list from 900 px, where a person picked one.
 const picked = new WeakMap();
 
+function machineLoadBar(bar) {
+  const missing = bar.percent === null;
+  const fill = missing ? null : h('span', { class: 'machine-load-fill' });
+  if (fill) { fill.style.width = `${bar.percent}%`; }
+  return h('div', { class: `machine-load${missing ? ' missing' : ''}` },
+    h('span', null, bar.label),
+    h('div', {
+      class: 'machine-load-track', role: missing ? null : 'meter', 'aria-hidden': missing ? 'true' : null,
+      'aria-label': missing ? null : bar.label, 'aria-valuemin': missing ? null : 0,
+      'aria-valuemax': missing ? null : 100, 'aria-valuenow': bar.percent, 'aria-valuetext': missing ? null : bar.text,
+    }, fill),
+    h('span', { class: 'machine-load-value' }, missing ? 'No figure' : bar.text));
+}
+
 // A machine's tile (#1147 S1), its sections in one order: Health, Can run, Running, Actions. Only
 // what a host reports today is shown: Health reads "Not measured yet", Can run waits until it is
 // reported, and Running is the session count. Updates, sign-in and Diagnose follow in `more`.
-function machineTile({ name, raw, onSelect, onLaunch, more }) {
+function machineTile({ name, raw, bars, onSelect, onLaunch, more }) {
   const why = raw?.held ? `Discovery is held: ${raw.held}` : raw?.readOnly ? `This machine is view only: ${raw.readOnly}` : null;
   const running = !raw?.sessions ? 'Not reported yet' : raw.sessions.startsWith('0 ') ? 'No sessions running' : raw.sessions;
   const line = (cls, label, text) => h('p', { class: cls }, h('span', { class: 'tile-label' }, `${label}: `), text);
   return h('section', { class: 'machine-tile', 'aria-label': name },
     line('tile-health', 'Health', 'Not measured yet'),
+    machineLoadBar(bars.cpu), machineLoadBar(bars.memory),
     line('tile-running', 'Running', running),
     h('div', { class: 'tile-actions' },
       why ? h('p', { class: 'tile-actions-note' }, why)
@@ -1112,10 +1128,12 @@ function machineRow({ id, name, select = null, selected = false, detail = false,
   return h('li', { class: `machine${offline ? ' offline' : ''}${selected ? ' selected' : ''}${detail ? ' detail' : ''}`, dataset: { deviceId: id, deviceName: name } }, block, tile, errors);
 }
 
-export function renderMachines(list, { presence, me, current, onSelect, onLaunch = () => {}, status = () => '', facts = null, known = null, forget = null, updates = null, signInDevices = null, diagnose = null, now = Date.now() }) {
+export function renderMachines(list, { presence, me, current, onSelect, onLaunch = () => {}, status = () => '', facts = null, load = () => null, known = null, forget = null, updates = null, signInDevices = null, diagnose = null, now = Date.now() }) {
   const hosts = presence.filter((d) => d.id !== me && d.kind === 'host');
   const all = current === ALL;
   const offline = offlineMachines({ presence, known, me });
+  // The accessor may retain a record after its machine leaves; presence, not the record, is online truth.
+  const loads = new Map([...hosts, ...offline].map((d) => [d.id, loadBars(load(d.id), { online: hosts.some((host) => host.id === d.id) })]));
   const rows = new Map(hosts.map((d) => [d.id, updateRow(updates, d.id, d.name, now)]));
   // A machine that left for an Update now reads "Restarting to update…" for a while (#1159, until
   // #815's planned restart is negotiated), in its offline row, or in a row of its own while the
@@ -1150,7 +1168,7 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
   // Drawn again only when something in it changes. It is asked to redraw on every session
   // update of every machine shown, and a button replaced between a tap's touch and its release
   // takes no click: a tap at startup, with every machine sending its sessions, was lost.
-  const key = JSON.stringify([current, detailId, hosts.map((d) => [d.id, d.name, lines.get(d.id).key, rows.get(d.id).key, signInRows.get(d.id).key, diagnoses.get(d.id).key]),
+  const key = JSON.stringify([current, detailId, hosts.map((d) => [d.id, d.name, lines.get(d.id).key, rows.get(d.id).key, signInRows.get(d.id).key, diagnoses.get(d.id).key, loads.get(d.id)]),
     // lastSeen itself, not only how it reads: Forget sends it, to tell a machine that came back.
     offline.map((k) => [k.id, k.name, k.lastSeen, k.start ?? null, ago(k.lastSeen, now), forget?.stateOf(k.id) ?? null]), !!forget, [...restarting]]);
   if (drawnAs.get(list) === key) { return hosts.length; }
@@ -1165,7 +1183,7 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
       id: d.id, name: d.name, select: () => pick(d.id), selected, detail: d.id === detailId,
       facts: lines.get(d.id).el, state: selected ? 'Viewing' : 'Online',
       tile: machineTile({
-        name: d.name, raw: facts?.(d.id) ?? null, onSelect: () => onSelect(d.id), onLaunch: () => onLaunch(d.id),
+        name: d.name, raw: facts?.(d.id) ?? null, bars: loads.get(d.id), onSelect: () => onSelect(d.id), onLaunch: () => onLaunch(d.id),
         more: [rows.get(d.id).el, signInRows.get(d.id).el, diagnoses.get(d.id).el],
       }),
     });
