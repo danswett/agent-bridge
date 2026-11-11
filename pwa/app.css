@@ -936,9 +936,13 @@ html[data-touch-only-keys]:not([data-keyboard-seen]) .row-menu-key { display: no
 .row-status[data-tone="agent"] { color: var(--ab-agent-text); }
 .row-age, .row-new {
   grid-column: 3; grid-row: 1; color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-row-line);
-  width: 5em; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 400;
+  width: 7em; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 400;
 }
 .session.unread .row-age { color: var(--ab-bridge); font-weight: 600; }
+@media (prefers-color-scheme: light) and (forced-colors: none) {
+  .session.unread.selected .row-age,
+  .session.unread > .row-main:is(:hover, :active) .row-age { color: var(--ab-text); }
+}
 .row-new { display: none; }
 @media (forced-colors: active) {
   .row-title, .session.unread .row-title { color: WindowText; }

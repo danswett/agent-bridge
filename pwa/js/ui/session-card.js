@@ -5,7 +5,7 @@
 //
 // The row: the status glyph (aligned to line 1), the title, and at most two facts: the status
 // words (or "Driven by an agent"), then the machine with several shown, or else the repository.
-// The age trails it, or the new-activity dot does. The model, SHA, counts and pid are never on
+// The age trails it, accent and semibold while unread. The model, SHA, counts and pid are never on
 // the row: they are in Details.
 //
 // The view: a header (title; one meta line of glyph · status · machine · repository; Pin,

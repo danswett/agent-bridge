@@ -904,6 +904,7 @@ owner changes them too.
   semibold; read ages are `text2` regular. The 6 px dot is retired. In forced colours,
   unread shows "New" in Highlight in the age slot; all titles stay WindowText.
   The accessible name keeps "New message" and the age, including in high contrast.
+  On light selected, hovered or pressed tints, the age takes `text` instead of Bridge (A8).
 - **Never on a row:** the model, the repo SHA, turn and compaction counts, or the pid.
   Those live in session details. Nor a question's words: a waiting row says only its status
   ("Waiting on you", "Delegate *name* asks"), and the question is in the conversation (#253).
