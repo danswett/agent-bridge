@@ -35,8 +35,8 @@ internal sealed class RetryEpisode
         this.replier = replier;
         this.time = time;
         this.log = log;
-        started = time.GetTimestamp();
         initial = observe();
+        started = time.GetTimestamp();
         age = initial is null ? TimeSpan.Zero : time.GetUtcNow() - initial.ErrorAt;
         if (initial is not null && (!initial.CanReply || initial.Process.Id <= 0 || initial.Process.StartedAt is null || !CopilotTurnErrors.CanRetry(initial.Error)))
             End(RetryStop.Ineligible);
@@ -106,6 +106,7 @@ internal sealed class RetryEpisode
             return End(RetryStop.Changed);
         if (!current.CanReply || !replier.Available || !CopilotTurnErrors.CanRetry(current.Error))
             return End(RetryStop.Ineligible);
+        if (Elapsed >= TimeSpan.FromMinutes(5)) return End(RetryStop.Expired);
         return true;
     }
 
