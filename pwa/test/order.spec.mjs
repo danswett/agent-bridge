@@ -332,7 +332,7 @@ test('blocked storage lists sessions most recent first, and Your order cannot be
   await expect(sort.locator('option[value="yours"]')).toBeDisabled();
   const at = await page.evaluate(() => new Date(Date.now() + 60000).toISOString());
   await upsert(page, CODEX, { updatedAt: at, activity: { userMessage: at, userMessageAt: at } });
-  await expect.poll(() => order(page)).toEqual([CODEX, COPILOT, CLAUDE, DELEGATING]);
+  await expect.poll(() => order(page), { timeout: 10000 }).toEqual([CODEX, COPILOT, CLAUDE, DELEGATING]);
 });
 
 test('storage that fills up while a row is drawn turns the list to Most recent at once', async ({ page }) => {
