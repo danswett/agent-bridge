@@ -3721,8 +3721,9 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
 - **Session groups (#767):** a group's name is the person's own words, never changed or
   translated. The words around it: "Move to group", "New group…", "Remove from group", "Group
   name", "Rename group", "Delete group", "*name* · N" on the header, "N needs you" on a
-    collapsed one (and "unread", said only), and "*name* deleted. N sessions moved to Sessions". Never "folder", "tag" or
-  "category".
+  collapsed one, or "N new" beside the PWA group's name when no session needs you
+  ("N sessions with new messages" in its accessible name; Windows keeps "unread", said only),
+  and "*name* deleted. N sessions moved to Sessions". Never "folder", "tag" or "category".
 - **Approval notifications** say "waiting for your approval" and offer only Open (§7): an
   approval is approved in the app, never from a notification.
 - **No sentences explaining the UI,** no exclamation marks, and no emoji. The exceptions are
@@ -3895,12 +3896,16 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
   its place, or the row before it if it was last, or else the Sessions heading. On a phone the
   list comes back with focus on the Sessions heading, as Back gives it when its row has gone.
 - **Session groups (#767):**
-  - A group's header is a button that reports expanded or collapsed by its role (PWA
-    `aria-expanded`; Windows the ExpandCollapse pattern), never in its name. Its name is what
-    it shows: "*name*, 12 sessions"; collapsed, with "1 needs you" or "unread" after it when
-    its trailing edge shows the mark or the dot. Its AutomationId is built from the group's
-    id, never its name or
-    position (§9.1 A2).
+  - A group's header is a button. The PWA sets `aria-expanded` and names it
+    "*name* group, expanded, 12 sessions" or "*name* group, collapsed, 12 sessions".
+    A collapsed header inserts "1 needs you" before the total when it shows the needs-you
+    mark; otherwise it inserts "2 sessions with new messages" when it shows "2 new" beside
+    the name. Expanded headers omit both signals. Counts use "1 session" in the singular;
+    the PWA has no unread dot.
+    Windows keeps the ExpandCollapse pattern, with expanded/collapsed never in its name.
+    Its name is "*name*, 12 sessions", followed while collapsed by "1 needs you" or "unread"
+    when its existing mark or dot is visible, pending the Windows unread slice (#2092).
+    Its AutomationId is built from the group's id, never its name or position (§9.1 A2).
   - In the list's arrow order, headers sit among the rows: ↑/↓ move through headers and the
     rows of expanded groups. → on a collapsed header expands it, and on an expanded one moves
     to its first row. ← on an expanded header collapses it, and on a row in a group moves to
@@ -3909,7 +3914,7 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
     Shift+F10 or the menu key opens a header's menu as a row's.
   - A move into or out of a group is announced once, politely: "Moved to *name*", "Removed
     from *name*", unless focus moves to the group's header, whose name says it instead.
-    Toggling is said by the role alone (§9.1 A6).
+    Toggling makes no separate live announcement (§9.1 A6).
 - **Collaborators (#519):**
   - A collaborator's row reads "External session, @*login*, *machine*, their name, *title*,
     working, read-only". A person header is a group named "@*login*, external collaborator, 2

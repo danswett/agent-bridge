@@ -487,7 +487,7 @@ test('a session not chosen keeps its row through ordinary updates, and one tap o
   await row(page, CODEX).locator('.row-main').click();
   await expect(codex).toBeVisible();
   await expect(codex.locator('.response')).toBeVisible();
-  // Seen now: its row loses the dot.
+  // Seen now: its row returns to the read treatment.
   await expect(row(page, CODEX)).not.toHaveClass(/\bunread\b/);
 });
 

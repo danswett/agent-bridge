@@ -514,7 +514,7 @@ test('an address naming a session that has not arrived yet shows no other sessio
   await expect(view(page, 'demo-arriving')).toBeVisible();
 });
 
-test('news a session\'s view showed while search hid its row gets no dot once search lets the row back', async ({ page }) => {
+test('news a session\'s view showed while search hid its row is still read once search lets the row back', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.clock.install();
   await openDemo(page);
