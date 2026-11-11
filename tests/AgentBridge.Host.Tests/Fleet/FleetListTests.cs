@@ -97,6 +97,34 @@ public sealed class FleetListTests : IDisposable
     }
 
     [Theory]
+    [InlineData("build\\u202Ebox", null)]
+    [InlineData("build\\u200Bbox", null)]
+    [InlineData("build\\uD800box", null)]
+    [InlineData("build\\uDC00box", null)]
+    [InlineData("\\u2028build-box", null)]
+    [InlineData("build-box\\u2029", null)]
+    [InlineData("build\\uD83D\\uDE80box", "build\U0001F680box")]
+    public async Task Parsing_rejects_hidden_or_invalid_Unicode_but_keeps_valid_emoji_pairs(string escaped, string? expected)
+    {
+        var frame = Body($$"""
+            {"machine":"m2","name":"{{escaped}}","online":true,
+             "record":{"sessions":[{"id":"s1","node":"n1","name":"my project","state":"working","since":"2026-11-07T12:00:00Z"}]}}
+            """);
+        roster.Machines = RelayFleetRoster.Parse([frame]);
+        var machine = JsonSerializer.SerializeToElement(Assert.Single(roster.Machines), Web);
+        Assert.Equal(expected, machine.GetProperty("name").GetString());
+        if (!OperatingSystem.IsWindows()) { return; }
+        var chan = Hello(AgentProtocol.ScopeRead);
+        var listed = JsonSerializer.SerializeToElement(await Op().HandleAsync(chan, Body("{}")), Web).GetProperty("sessions")[0];
+        var found = JsonSerializer.SerializeToElement(await Op().FindAsync(chan, Body("""{"name":"my project","machine":"m2"}""")), Web).GetProperty("machines")[0];
+        foreach (var projection in new[] { listed, found })
+        {
+            if (expected is null) { Assert.False(projection.TryGetProperty("machineName", out _)); }
+            else { Assert.Equal(expected, projection.GetProperty("machineName").GetString()); }
+        }
+    }
+
+    [Theory]
     [InlineData(64, true)]
     [InlineData(65, false)]
     public void Parsing_accepts_the_machine_name_cap_but_never_truncates_an_overlong_name(int length, bool valid)
@@ -155,6 +183,27 @@ public sealed class FleetListTests : IDisposable
         Assert.Equal("build-box", offline.GetProperty("machines")[0].GetProperty("machineName").GetString());
         roster.Machines = Frames(null);
         Assert.False((await Find("m2")).GetProperty("machines")[0].TryGetProperty("machineName", out _));
+    }
+
+    [Fact]
+    public async Task Duplicate_machine_display_names_do_not_merge_machines_or_change_find_pins_or_match_session_names()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var first = Frames("build-box")[0] with { Verified = true };
+        roster.Machines = [first, first with { Id = "m3", Sessions = [new FleetSession("n2", "my project", "working", Started)] }];
+        var chan = Hello(AgentProtocol.ScopeRead);
+        var listed = JsonSerializer.SerializeToElement(await Op().HandleAsync(chan, Body("{}")), Web).GetProperty("sessions").EnumerateArray().ToList();
+        Assert.Equal(["m2", "m3"], listed.Select(s => s.GetProperty("machine").GetString()));
+        Assert.All(listed, s => Assert.Equal("build-box", s.GetProperty("machineName").GetString()));
+        foreach (var (pin, node) in new[] { ("m2", "n1"), ("m3", "n2") })
+        {
+            var found = JsonSerializer.SerializeToElement(await Op().FindAsync(chan, Body(JsonSerializer.Serialize(new { name = "my project", machine = pin }))), Web);
+            Assert.Equal("found", found.GetProperty("result").GetString());
+            Assert.Equal(pin, found.GetProperty("session").GetProperty("machine").GetString());
+            Assert.Equal(node, found.GetProperty("session").GetProperty("node").GetString());
+        }
+        var noMatch = JsonSerializer.SerializeToElement(await Op().FindAsync(chan, Body("""{"name":"build-box","machine":"m2"}""")), Web);
+        Assert.Equal("notFound", noMatch.GetProperty("result").GetString());
     }
 
     [Fact]

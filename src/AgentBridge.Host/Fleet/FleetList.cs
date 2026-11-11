@@ -1,3 +1,6 @@
+using System.Buffers;
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AgentBridge.Protocol;
@@ -37,9 +40,7 @@ public sealed class RelayFleetRoster : IFleetRoster
         foreach (var f in frames)
         {
             if (!f.TryGetProperty("machine", out var m) || m.GetString() is not { } id) { continue; }
-            var name = f.TryGetProperty("name", out var mn) && mn.ValueKind == JsonValueKind.String ? mn.GetString() : null;
-            if (name is not { Length: > 0 and <= 64 } || name.Any(char.IsControl)) { name = null; }
-            else { name = name.Trim(); if (name.Length == 0) { name = null; } }
+            var name = MachineName(f);
             var sessions = new List<FleetSession>();
             var truncated = false;
             if (f.TryGetProperty("record", out var rec) && rec.ValueKind == JsonValueKind.Object && rec.TryGetProperty("sessions", out var list) && list.ValueKind == JsonValueKind.Array)
@@ -54,6 +55,26 @@ public sealed class RelayFleetRoster : IFleetRoster
             machines.Add(new FleetMachine(id, f.TryGetProperty("online", out var on) && on.ValueKind == JsonValueKind.True, sessions, truncated, Name: name));
         }
         return machines;
+    }
+
+    static string? MachineName(JsonElement frame)
+    {
+        if (!frame.TryGetProperty("name", out var value) || value.ValueKind != JsonValueKind.String) { return null; }
+        string? name;
+        // GetString rejects unpaired JSON surrogate escapes before rune validation can inspect them.
+        try { name = value.GetString(); }
+        catch (InvalidOperationException) { return null; }
+        if (name is not { Length: > 0 and <= 64 }) { return null; }
+        var rest = name.AsSpan();
+        while (!rest.IsEmpty)
+        {
+            if (Rune.DecodeFromUtf16(rest, out var rune, out var used) != OperationStatus.Done
+                || Rune.GetUnicodeCategory(rune) is UnicodeCategory.Control or UnicodeCategory.Format or UnicodeCategory.Surrogate
+                    or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator) { return null; }
+            rest = rest[used..];
+        }
+        var trimmed = name.Trim();
+        return trimmed.Length > 0 ? trimmed : null;
     }
 }
 

@@ -18,7 +18,7 @@ Operations an agent calls on the local pipe after `agent.hello`, on its own cred
 
 - Only the caller's own account is listed; the relay sends no other account's machines, and the request carries no account or principal.
 - Only those fields come back: no prompt or question text, paths or tokens. `name` is a person's text, so it is returned only with `include: "content"`.
-- `machineName` is the relay's existing machine display name, independent of `include`: trimmed, at most 64 characters, no control characters. Missing, non-string, empty, overlong or invalid values are omitted, never guessed. It is display text, not an identity; `machine` remains the ID.
+- `machineName` is the relay's existing machine display name, independent of `include`: at most 64 raw UTF-16 code units, then trimmed. Control, format, unpaired surrogate and line/paragraph separator characters (Cc, Cf, Cs, Zl, Zp) are rejected before trimming; ordinary Unicode and valid emoji pairs stay. Missing, non-string, empty, overlong or invalid values are omitted, never guessed. It is display text, not an identity; `machine` remains the ID.
 - A machine that is offline or has not reported lately has no fresh record, so its sessions are not listed (`machineOnline` is true for every row returned).
 - Each accepted call invokes the `AuditFleetList` hook with the agent's principal. It records nothing until the audit log (#1401) is assigned to it.
 - Reads the relay registry (see [roster.md](roster.md)); needs a relay connection.

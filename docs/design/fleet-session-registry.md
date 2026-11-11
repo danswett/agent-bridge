@@ -176,8 +176,10 @@ The host publishes one snapshot of its own sessions. All members are required un
 * **machine display name.** The relay already sends the machine's `name` beside `record`.
   `fleet.list` rows and `fleet.find` machine/session/candidate objects expose it as optional
   `machineName`, independently of session-name content requests. It is trimmed display text,
-  at most 64 characters, with no control characters (the relay's machine-name filter).
-  Missing, non-string, empty, overlong or control-containing values are omitted, never guessed.
+  capped at 64 raw UTF-16 code units before trimming. Control, format, unpaired surrogate and
+  line/paragraph separator characters (Cc, Cf, Cs, Zl, Zp) are rejected before trimming;
+  ordinary Unicode and valid emoji pairs stay. Missing, non-string, empty, overlong or
+  excluded-character values are omitted, never guessed.
   This adds no relay disclosure; `machine` remains the ID and lookup pin, not the display name.
 
 ## Size and paging
