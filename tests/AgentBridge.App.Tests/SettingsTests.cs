@@ -1934,7 +1934,8 @@ public sealed class SettingsTests : IAsyncLifetime
             host.Status = host.Status with { Settings = host.Status.Settings with { FleetLaunchRule = data.GetProperty("fleetLaunchRule").GetString() } };
             return new SettingsResult(host.Status.Settings, RestartRequired: false);
         });
-        await Connected();
+        await ConnectedWith(host.Status);
+        await Wait.UntilAsync(() => settings.CanChangeFleetLaunchRule, "the fleet name control");
         Assert.True(settings.FleetLaunchNamesEnabled);
         var disabled = false;
         settings.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(SettingsViewModel.CanChangeFleetLaunchRule)) { disabled |= !settings.CanChangeFleetLaunchRule; } };
@@ -1960,15 +1961,22 @@ public sealed class SettingsTests : IAsyncLifetime
     [InlineData("on", false)]
     public async Task An_older_or_non_managing_host_never_receives_a_fleet_name_toggle_write(string? rule, bool manage)
     {
-        host.Status = host.Status with { Settings = new HostSettingsView(true, FleetLaunchRule: rule) };
-        if (!manage) { host.Capabilities.Remove(HostOps.Capability); }
-        await Connected();
+        await using var older = new FakeHost { Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, FleetLaunchRule: rule) } };
+        if (!manage) { older.Capabilities.Remove(HostOps.Capability); }
+        older.Start();
+        await using var olderConnection = older.Connect(ui);
+        var page = new SettingsViewModel(olderConnection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        try
+        {
+            await Wait.UntilAsync(() => page.HostRunning, "the older host");
 
-        Assert.False(settings.CanChangeFleetLaunchRule);
-        settings.FleetLaunchNamesEnabled = !settings.FleetLaunchNamesEnabled;
-        await connection.CallAsync(FakeHost.Barrier);
+            Assert.False(page.CanChangeFleetLaunchRule);
+            page.FleetLaunchNamesEnabled = !page.FleetLaunchNamesEnabled;
+            await olderConnection.CallAsync(FakeHost.Barrier);
 
-        Assert.Empty(host.Sent(HostOps.Settings));
+            Assert.Empty(older.Sent(HostOps.Settings));
+        }
+        finally { page.Detach(); }
     }
 
     [Fact]
@@ -1976,7 +1984,8 @@ public sealed class SettingsTests : IAsyncLifetime
     {
         host.Status = host.Status with { Settings = new HostSettingsView(true, FleetLaunchRule: "on") };
         host.On(HostOps.Settings, _ => throw new InvalidOperationException("fixture refusal"));
-        await Connected();
+        await ConnectedWith(host.Status);
+        await Wait.UntilAsync(() => settings.CanChangeFleetLaunchRule, "the fleet name control");
 
         settings.FleetLaunchNamesEnabled = false;
         await Wait.UntilAsync(() => settings.HasError && !settings.Busy, "the refused fleet name save");
