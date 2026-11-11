@@ -21,6 +21,7 @@ public sealed class MessageTimeView : Button
     DispatcherQueueTimer? timer;
     XamlRoot? root;
     Rect viewport;
+    readonly List<(UIElement Element, long Token)> visibility = [];
 
     public MessageTimeView()
     {
@@ -29,12 +30,14 @@ public sealed class MessageTimeView : Button
             if (root is not null) { root.Changed -= OnRootChanged; }
             root = XamlRoot;
             if (root is not null) { root.Changed += OnRootChanged; }
+            WatchVisibility();
             Refresh();
         };
         Unloaded += (_, _) =>
         {
             if (IsLoaded) { return; }
             timer?.Stop();
+            StopWatchingVisibility();
             if (root is not null) { root.Changed -= OnRootChanged; root = null; }
         };
         EffectiveViewportChanged += (_, e) =>
@@ -48,6 +51,26 @@ public sealed class MessageTimeView : Button
     public MessageStamp? Stamp { get => (MessageStamp?)GetValue(StampProperty); set => SetValue(StampProperty, value); }
     internal Func<MessageClock> ReadClock { get; set; } = () => MessageClock.Local;
     internal bool RefreshPending => timer?.IsRunning == true;
+
+    void WatchVisibility()
+    {
+        StopWatchingVisibility();
+        for (DependencyObject? up = this; up is not null; up = VisualTreeHelper.GetParent(up))
+        {
+            if (up is UIElement element)
+            {
+                visibility.Add((element, element.RegisterPropertyChangedCallback(VisibilityProperty, OnVisibilityChanged)));
+            }
+        }
+    }
+
+    void StopWatchingVisibility()
+    {
+        foreach (var (element, token) in visibility) { element.UnregisterPropertyChangedCallback(VisibilityProperty, token); }
+        visibility.Clear();
+    }
+
+    void OnVisibilityChanged(DependencyObject sender, DependencyProperty property) => Refresh();
 
     bool Visible()
     {

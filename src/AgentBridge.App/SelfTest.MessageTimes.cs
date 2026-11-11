@@ -49,16 +49,21 @@ static partial class SelfTest
                 && AutomationProperties.GetName(time) == exact;
         }
         check(stable, "refreshes an existing stored label across second, minute and clock boundaries without changing its size, history source, focus or scroll offset");
-        var before = (time.Content as TextBlock)?.Text;
-        window.ShowPage("settings");
-        now = sent.AddMinutes(10);
-        window.RootElement.UpdateLayout();
-        var stopped = await Until(() => !time.RefreshPending, TimeSpan.FromSeconds(5));
-        time.Refresh();
-        check(stopped && !time.RefreshPending && (time.Content as TextBlock)?.Text == before, "stops hidden message clocks without changing their text");
-        window.ShowPage("sessions");
-        check(await Until(() => (time.Content as TextBlock)?.Text == "10 min ago" && time.RefreshPending, TimeSpan.FromSeconds(5)),
-            "recomputes a stored message time when its view returns, without another history event");
+        foreach (var minutes in new[] { 10, 20 })
+        {
+            var before = (time.Content as TextBlock)?.Text;
+            window.ShowPage("settings");
+            now = sent.AddMinutes(minutes);
+            window.RootElement.UpdateLayout();
+            var stopped = await Until(() => !time.RefreshPending, TimeSpan.FromSeconds(5));
+            time.Refresh();
+            check(stopped && !time.RefreshPending && (time.Content as TextBlock)?.Text == before,
+                $"stops hidden message clocks without changing their text ({minutes} min; stopped {stopped}, pending {time.RefreshPending}, text {(time.Content as TextBlock)?.Text})");
+            window.ShowPage("sessions");
+            var resumed = await Until(() => (time.Content as TextBlock)?.Text == $"{minutes} min ago" && time.RefreshPending, TimeSpan.FromSeconds(5));
+            check(resumed,
+                $"recomputes a stored message time when its view returns, without another history event ({minutes} min; pending {time.RefreshPending}, text {(time.Content as TextBlock)?.Text})");
+        }
         time.ReadClock = () => MessageClock.Local;
         time.Refresh();
     }
