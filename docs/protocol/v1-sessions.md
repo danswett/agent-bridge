@@ -115,6 +115,7 @@ with the wrong type):
 | `HistoryPrompt` | | `from` |
 | `HistoryPart` | `id` | `outcome` |
 | `DelegateEvent` | `agent` | |
+| `ReplyAttachmentBinding` | `id`, `ref` | |
 
 So, for example, a session with no `status` reads as `idle`, one whose `title` is a number has
 no title, and a `ToolCall` with no `id` is left out of `history`. A question whose `message` is a
@@ -988,7 +989,22 @@ sends ([#448](https://github.com/danswett/agent-bridge/issues/448)). A reply of 
 those characters, with no attachments, is `refused` as empty.
 
 Result: `{ "outcome", "reason" }`, the outcomes of `session.answer`, with `timings` for a
-request that asked for progress:
+request that asked for progress, and optional `attachments`:
+
+`attachments: [{ "id": "<client attachment UUID>", "ref": "@<staged absolute path>" }]`
+binds each attachment to exactly the reference token in the recorded prompt, in the
+request's attachment order. It is returned only for **delivered Copilot and Claude**
+replies with attachments, never for refused, unconfirmed, busy or stale replies.
+Same-named files have distinct randomly staged references. A repeated request returns
+the same bindings without typing again.
+
+**Codex omits `attachments`:** its image placeholders are not stable references.
+Clients must not infer a binding from a filename or placeholder; without a binding,
+the later sender-thumbnail view keeps the chip. Absent, `null` or empty means no
+binding, also when the host predates this field. This is additive within protocol v1:
+under [Rules for every message](#rules-for-every-message), older clients ignore the
+field. No new operation, permission or capability is introduced. References already
+appear in the transcript; this field carries no file bytes or fetch authority.
 
 | `outcome` | Meaning | Typed? |
 |---|---|---|
