@@ -71,3 +71,9 @@ test('a clear in another tab prevents an earlier send from restoring bytes', asy
   await b.remember([{ id: 'old', ref: 'old' }], [{ id: 'old', type: 'image/png', bytes: new Uint8Array(1) }], 'one', stamp);
   assert.equal(await b.get('old'), null);
 });
+
+test('clearing still deletes bytes when saving the clear generation hits quota', async () => {
+  const s = setup();
+  await s.keep('old'); s.refuse(); await s.store.clear();
+  assert.equal(await s.store.get('old'), null);
+});

@@ -31,20 +31,28 @@ export class SentImages extends EventTarget {
     return this.#tail;
   }
   #changed() { this.dispatchEvent(new Event('change')); }
-  stamp() { return this.#run(async () => await this.read(GENERATION) ?? ''); }
-  async #entries(account) {
+  async #stamp() {
+    const saved = await this.read(GENERATION);
+    if (saved) { return saved; }
+    const stamp = crypto.randomUUID();
+    await this.write(GENERATION, stamp);
+    return stamp;
+  }
+  stamp() { return this.#run(() => this.#stamp()); }
+  async #entries(account, generation) {
     const saved = await this.read(KEY);
-    const entries = saved?.account === account && Array.isArray(saved.entries) ? saved.entries : [];
+    const entries = saved?.account === account && saved.generation === generation && Array.isArray(saved.entries) ? saved.entries : [];
     const fresh = entries.filter((e) => RASTER.test(e.type) && e.bytes instanceof Uint8Array && e.at > this.now() - AGE);
-    if (fresh.length !== entries.length) { await this.write(KEY, { account, entries: fresh }); }
+    if (fresh.length !== entries.length) { await this.write(KEY, { account, generation, entries: fresh }); }
     return fresh;
   }
   remember(bindings, files, account = this.account, stamp = undefined) {
     const epoch = this.#epoch;
     return this.#run(async () => {
       if (!account || account !== this.account || epoch !== this.#epoch) { return; }
-      if (stamp !== undefined && stamp !== (await this.read(GENERATION) ?? '')) { return; }
-      const entries = await this.#entries(account);
+      const generation = stamp === undefined ? await this.#stamp() : await this.read(GENERATION);
+      if (!generation || (stamp !== undefined && stamp !== generation)) { return; }
+      const entries = await this.#entries(account, generation);
       for (const binding of bindings) {
         const file = files.find((f) => f.id === binding.id);
         if (!file || !RASTER.test(file.type) || !(file.bytes instanceof Uint8Array) || file.bytes.length > MAX) { continue; }
@@ -59,7 +67,7 @@ export class SentImages extends EventTarget {
       let total = entries.reduce((n, e) => n + e.bytes.length, 0);
       while (entries.length > 32 || total > MAX) { total -= entries.shift().bytes.length; }
       if (account !== this.account || epoch !== this.#epoch) { return; }
-      await this.write(KEY, { account, entries });
+      await this.write(KEY, { account, generation, entries });
       this.#changed();
     });
   }
@@ -67,7 +75,9 @@ export class SentImages extends EventTarget {
     const account = this.account, epoch = this.#epoch;
     return this.#run(async () => {
       if (!account) { return null; }
-      const entries = await this.#entries(account);
+      const generation = await this.read(GENERATION);
+      if (!generation) { return null; }
+      const entries = await this.#entries(account, generation);
       const key = await digest(ref);
       return account === this.account && epoch === this.#epoch ? entries.find((e) => e.key === key) ?? null : null;
     });
@@ -75,9 +85,11 @@ export class SentImages extends EventTarget {
   clear() {
     this.#epoch++;
     return this.#run(async () => {
-      await this.write(GENERATION, crypto.randomUUID());
-      await this.remove(KEY);
-      this.#changed(); this.channel?.postMessage(null);
+      try { await this.remove(GENERATION); }
+      finally {
+        try { await this.remove(KEY); }
+        finally { this.#changed(); this.channel?.postMessage(null); }
+      }
     }, true);
   }
 }
