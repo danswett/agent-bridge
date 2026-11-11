@@ -35,7 +35,7 @@ async function setup(page, { holdHistory = false, promptFrom = null } = {}) {
     const s = d.host.get(id);
     d.upsert({
       ...s, status: 'waiting', statusSince: t, updatedAt: t, question,
-      activity: { ...(s.activity ?? {}), ...(promptFrom ? { userMessageFrom: promptFrom } : {}), turnCount: holdHistory ? 2 : 6, turn: `${id}-turn-${holdHistory ? 2 : 6}` },
+      activity: { ...(s.activity ?? {}), ...(promptFrom ? { userMessageFrom: promptFrom, userMessage: 'Asking prompt' } : {}), turnCount: holdHistory ? 2 : 6, turn: `${id}-turn-${holdHistory ? 2 : 6}` },
     });
   }, { id: CODEX, qid: QID, long, holdHistory, promptFrom });
   await open(page, CODEX);
@@ -316,7 +316,7 @@ test('a frozen local question does not return after a fresh page confirms its ab
   const card = await setup(page, { holdHistory: true });
   await page.evaluate(({ id, long }) => {
     const d = window.agentBridgeDemo, s = d.host.get(id);
-    d.upsert({ ...s, question: null, status: 'idle', activity: { ...s.activity, responseTurn: s.activity.turn, response: long } });
+    d.upsert({ ...s, question: null, status: 'idle', activity: { ...s.activity, responseTurn: s.activity.turn, response: long, reasoning: 'Thinking before the next turn' } });
   }, { id: CODEX, long });
   await expect(card.locator('.resolved-summary')).toContainText('Question closed');
   await card.locator('.stream-scroll').evaluate(async (el) => {
@@ -328,12 +328,13 @@ test('a frozen local question does not return after a fresh page confirms its ab
     const d = window.agentBridgeDemo, s = d.host.get(id);
     d.upsert({ ...s, activity: { turn: 'after-asking', userMessage: 'Later prompt', responseTurn: 'after-asking', response: 'Later reply' } });
     d.host.historyTurns.set(id, [
-      { id: `${id}-turn-2`, at: new Date().toISOString(), prompt: { text: 'Asking prompt' }, parts: [] },
+      { id: `${id}-turn-2`, at: new Date().toISOString(), prompt: { text: 'Asking prompt' }, parts: [{ kind: 'response', text: 'Stored replacement must remain deferred' }] },
       { id: 'after-asking', at: new Date().toISOString(), prompt: { text: 'Later prompt' }, parts: [{ kind: 'response', text: 'Later reply' }] },
     ]);
     d.host.releaseResponses();
     await d.view.history.open('demo', id, { session: d.host.get(id) });
   }, CODEX);
+  await expect(card.locator(`.history-turn[data-turn="${CODEX}-turn-2"] .history-reply`)).toHaveText(long.trim());
   await expect(card.locator('.question.resolved')).toHaveCount(0);
   await page.evaluate((id) => {
     const d = window.agentBridgeDemo, s = d.host.get(id);
