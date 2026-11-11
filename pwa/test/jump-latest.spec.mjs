@@ -84,21 +84,26 @@ test('a conversation shorter than a screen never shows the pill', async ({ page 
   await expect(pill).toBeHidden();
 });
 
-test('the plain pill moves above a stored question instead of covering its answer buttons', async ({ page }) => {
-  const { view, pane, pill } = await start(page);
-  await page.evaluate(async (id) => {
+async function storedQuestion(page, fields = 1) {
+  const result = await start(page);
+  await page.evaluate(async ({ id, fields }) => {
     const d = window.agentBridgeDemo;
     const s = d.host.get(id);
     const at = new Date().toISOString();
     const question = { id: 'jump-question', kind: 'form', askedAt: at, message: 'Choose a database',
-      fields: [{ name: 'db', title: 'Database', type: 'text' }] };
+      fields: Array.from({ length: fields }, (_, i) => ({ name: `db${i}`, title: `Database ${i + 1}`, type: 'text' })) };
     d.host.historyTurns.set(id, [
       { id: `${id}-turn-1`, at, prompt: { text: 'Earlier turn' }, parts: [{ kind: 'response', id: 'part-r', at, text: 'Earlier response.\n\n'.repeat(60) }] },
       { id: `${id}-turn-2`, at, prompt: { text: 'Question turn' }, parts: [{ kind: 'question', id: 'part-q', at, question }] },
     ]);
     d.upsert({ ...s, question, status: 'waiting', updatedAt: at });
     await d.view.history.open('demo', id, { session: d.host.get(id) });
-  }, ID);
+  }, { id: ID, fields });
+  return result;
+}
+
+test('the plain pill moves above a stored question instead of covering its answer buttons', async ({ page }) => {
+  const { view, pane, pill } = await storedQuestion(page);
   for (const selector of ['.answer-controls', '.answer-actions']) {
     const controls = view.locator(`.question:not(.resolved) ${selector}`);
     await expect(controls).toBeVisible();
@@ -114,6 +119,33 @@ test('the plain pill moves above a stored question instead of covering its answe
       return c.y - p.y - p.height;
     }).toBeGreaterThanOrEqual(8);
   }
+});
+
+test('a tall answer form keeps the pill in view, tappable and clear of actual controls', async ({ page }) => {
+  const { view, pane, pill } = await storedQuestion(page, 8);
+  const held = await pane.evaluate((el) => {
+    el.scrollTop += el.querySelector('.answer-controls').getBoundingClientRect().top + 100;
+    return el.scrollTop;
+  });
+  await expect.poll(() => gap(pane)).toBeGreaterThan(await pane.evaluate((el) => el.clientHeight));
+  await expect(pill).toBeInViewport({ ratio: 1 });
+  expect(await pane.evaluate((el) => el.scrollTop)).toBe(held);
+  expect(await pill.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
+  })).toBe(true);
+  expect(await view.evaluate((el) => {
+    const pill = el.querySelector('.jump-latest').getBoundingClientRect();
+    const pane = el.querySelector('.stream-scroll').getBoundingClientRect();
+    return [...el.querySelectorAll('.question:not(.resolved) input, .question:not(.resolved) textarea, .question:not(.resolved) button, .question:not(.resolved) select')].some((control) => {
+      const r = control.getBoundingClientRect();
+      return r.width && r.height && r.top < pane.bottom && r.bottom > pane.top
+        && r.left < pill.right && r.right > pill.left && Math.min(r.bottom, pane.bottom) > pill.top && Math.max(r.top, pane.top) < pill.bottom;
+    });
+  })).toBe(false);
+  await pill.click();
+  await expect.poll(() => gap(pane)).toBeLessThan(4);
+  await expect(pill).toBeHidden();
 });
 
 for (const width of [390, 820, 1440]) {
