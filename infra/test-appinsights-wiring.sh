@@ -55,7 +55,7 @@ for app in ("stagingApp", "productionApp"):
         fail.append(app + " must declare one vault diagnostic setting")
         continue
     diagnostic = diagnostics[0]
-    if diagnostic.get("scope") != "[format(\x27Microsoft.KeyVault/vaults/{0}\x27, parameters(\x27app\x27).keyVaultName)]" or "condition" in diagnostic:
+    if diagnostic.get("scope") != "[resourceId(\x27Microsoft.KeyVault/vaults\x27, parameters(\x27app\x27).keyVaultName)]" or "condition" in diagnostic:
         fail.append(app + " diagnostics must cover its vault even before app deployment")
     props = diagnostic["properties"]
     if props.get("workspaceId") != "[parameters(\x27workspaceId\x27)]":

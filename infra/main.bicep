@@ -193,6 +193,7 @@ module stagingApp 'modules/relay-app.bicep' = {
   params: {
     location: location
     environmentId: environmentId
+    workspaceId: logs.id
     workloadProfileName: workloadProfileName
     registryName: registry.name
     app: staging
@@ -216,6 +217,7 @@ module productionApp 'modules/relay-app.bicep' = {
   params: {
     location: location
     environmentId: environmentId
+    workspaceId: logs.id
     workloadProfileName: workloadProfileName
     registryName: registry.name
     app: production

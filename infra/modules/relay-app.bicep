@@ -8,6 +8,9 @@ param location string
 @description('Container Apps environment the app runs in.')
 param environmentId string
 
+@description('Log Analytics workspace for this vault\'s audit logs, including before the app deploys.')
+param workspaceId string
+
 @description('The stamp\'s registry; the app pulls with its own identity.')
 param registryName string
 
@@ -135,6 +138,20 @@ resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
     // turn it on (infra/README) once the subscription is permanent.
     enablePurgeProtection: app.?purgeProtection == true ? true : null
     publicNetworkAccess: 'Enabled'
+  }
+}
+
+resource vaultAudit 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  name: 'audit-to-workspace'
+  scope: vault
+  properties: {
+    workspaceId: workspaceId
+    logs: [
+      {
+        categoryGroup: 'audit'
+        enabled: true
+      }
+    ]
   }
 }
 
