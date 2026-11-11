@@ -56,7 +56,7 @@ internal sealed class RetryEpisode
         int index;
         lock (sync)
         {
-            if (sending || !Check()) return false;
+            if (sending || !Check() || stop != RetryStop.None) return false;
             if (cancellation.IsCancellationRequested)
             {
                 End(RetryStop.Cancelled);
