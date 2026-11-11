@@ -767,6 +767,7 @@ export class SessionsPage {
 
   // Everything tied to the signed-in account goes with it.
   clear() {
+    this.view.stopRecent();
     clearInterval(this.#timingTimer);
     this.#timingTimer = null;
     // The account's session is no longer shown: said before the page lets go of what says it.

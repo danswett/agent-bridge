@@ -53,6 +53,21 @@ test('pins stay separate, and explicit sorts reset the shown order without activ
   }
 });
 
+test('ending a hold before the five-second mark waits only the remaining time', () => {
+  let now = 0;
+  const recent = new RecentOrder({ now: () => now });
+  const draw = (target, held = false) => ids(recent.arrange(target, { sort: 'recent', held }));
+  draw(list('a', 'b'));
+  draw(list('b', 'a'));
+  now = 1000;
+  assert.deepEqual(draw(list('a', 'b'), true), ['b', 'a']);
+  now = 2000;
+  assert.deepEqual(draw(list('a', 'b')), ['b', 'a']);
+  assert.equal(recent.wait, 3000);
+  now = 5000;
+  assert.deepEqual(draw(list('a', 'b')), ['a', 'b']);
+});
+
 test('blocked storage uses the same held Most recent order', () => {
   const order = new SessionOrder({ storage: null });
   const recent = new RecentOrder();
@@ -62,4 +77,15 @@ test('blocked storage uses the same held Most recent order', () => {
   assert.deepEqual(draw(), ['a', 'b']);
   b.session.activityAt = '2026-11-01T00:00:03Z';
   assert.deepEqual(draw(), ['a', 'b']);
+});
+
+test('a bypass at hold release schedules eligible ordinary moves without another host event', () => {
+  const recent = new RecentOrder();
+  const draw = (target, held) => ids(recent.arrange(target, { sort: 'recent', held }));
+  draw(list('a', 'b'), true);
+  draw(list('b', 'a'), true);
+  const target = list('new', 'b', 'a');
+  assert.deepEqual(draw(target, false), ['new', 'a', 'b']);
+  assert.equal(recent.wait, 0);
+  assert.deepEqual(draw(target, false), ['new', 'b', 'a']);
 });

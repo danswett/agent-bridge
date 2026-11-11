@@ -572,6 +572,11 @@ easing in, its duration out, and how far it travels.
 | Reorder | The session list (#164) | Alt+↑/↓; Move up or Move down; a drag by the handle; an order change arriving during a return's grace (§6.1, #950) | By key or menu, the moved row slides to its new place, and the row it passed takes its own new place at once. In a drag, the row follows the pointer, a line shows where it will land, and on drop it settles into place. No other row moves | `reorder`: standard, standard | Windows: no `ReorderThemeTransition`, which slides the neighbours. Apple and Android, later: the system list's drag, whose gap follows the finger | Instant |
 | Collapse | A phone's session header (§6.2, #620) | Scrolling the conversation up 64 or down 32 in one direction, mid-conversation; a tap on the bar's title; focus moving into the header | The header slides down over the conversation, or back up under the bar. The conversation never moves. Near the top there is no motion of its own: the header rides with the scroll | `collapse`: standard, standard | PWA: the tokens on transform. Apple: the large title's own collapse. Android: the top app bar's scroll behaviours | Cross-fade |
 
+Most recent's automatic batches (§6.1, #628) use `reorder` for the moved rows and `shift`
+for neighbours. The PWA retargets from the current on-screen positions with FLIP, anchors
+the scrolled list and keeps the focused element. Reduced motion is instant; re-sorting
+makes no screen-reader announcement. The 500 ms approval wait still counts from rest.
+
 **Not in the design:**
 - **Loops** other than the two glyphs and an in-flight progress ring: no pulsing dot, badge
   or Needs you toggle, no shimmer, no animated placeholder.
@@ -692,7 +697,16 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
   Pinned only, and comes back to its group when unpinned.
 - **Sort menu:** "Your order" (the default; its accessible name is "Your order, on this device", since nothing syncs it yet), "Most recent" and "Machine" (by machine name,
   then your order). It sorts within Pinned, within each group and within Sessions; the groups
-  themselves stay in your order. Rows move only in Your order.
+  themselves stay in your order. Manual moves are available only in Your order.
+  **Most recent** orders sessions by when they last did something that matters to you: a
+  prompt, a finished turn, a question or an answer, or a change of status. Rows rearrange at
+  most every 5 seconds, and not while you are pointing at the list, a row or Needs you has
+  focus, a finger is down or scrolling, or you are typing in a reply or answer. The last
+  hold ending applies the pending batch once 5 seconds have passed. A new session or new
+  question goes to the top of its group at once; no other held move is released. In the PWA
+  these moves glide with `reorder`, neighbours with `shift`; reduced motion is instant,
+  focus stays on the same element and scroll stays anchored. Approval targets still wait
+  500 ms from rest and pass the synchronous target check (§5.3, #491/#559).
   Where the order can't be kept (storage blocked or full), the list is Most recent and Your
   order can't be picked.
 - **Ended** holds the sessions a host removed while the client was running: the most

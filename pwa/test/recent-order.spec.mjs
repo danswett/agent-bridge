@@ -44,16 +44,22 @@ for (const width of [390, 1440]) {
     await expect(row(page, A).locator('.row-main')).toBeFocused();
     await page.evaluate(() => document.activeElement.blur());
     await expect.poll(async () => (await order(page))[0]).toBe(B);
+    await page.locator('#needs-you button').first().focus();
+    await update(page, C);
+    await page.clock.runFor(5000);
+    expect((await order(page))[0]).toBe(B);
+    await page.evaluate(() => document.activeElement.blur());
+    await expect.poll(async () => (await order(page))[0]).toBe(C);
   });
 
   test(`typing holds activity but a question and new session bypass alone at ${width}`, async ({ page }) => {
     await setup(page, width);
-    await page.evaluate((id) => window.agentBridgeDemo.page.showSession(id), B);
-    const input = view(page, B).locator('.reply-input');
+    await page.evaluate((id) => window.agentBridgeDemo.page.showSession(id), D);
+    const input = view(page, D).locator('.reply-input');
     await input.fill('Keep this draft');
     await page.mouse.move(width - 1, 0);
     const shown = await order(page);
-    await update(page, D);
+    await update(page, B);
     await page.clock.runFor(6000);
     expect(await order(page)).toEqual(shown);
     await update(page, C, { id: 'recent-question', kind: 'form', askedAt: new Date().toISOString(), fields: [], prompt: 'Continue?' });
@@ -72,6 +78,7 @@ for (const width of [390, 1440]) {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await setup(page, width);
     const shown = await order(page);
+    await row(page, A).evaluate((el) => el.dispatchEvent(new Event('touchstart', { bubbles: true })));
     await row(page, A).dispatchEvent('pointerdown', { pointerType: 'touch', pointerId: 7 });
     await update(page, C);
     await page.clock.runFor(6000);
@@ -80,7 +87,64 @@ for (const width of [390, 1440]) {
     await row(page, A).dispatchEvent('pointercancel', { pointerType: 'touch', pointerId: 7 });
     expect(await order(page)).toEqual(shown);
     await page.clock.runFor(200);
+    expect(await order(page)).toEqual(shown);
+    await row(page, A).evaluate((el) => el.dispatchEvent(new Event('touchend', { bubbles: true })));
     await expect.poll(async () => (await order(page))[0]).toBe(C);
     expect(await row(page, C).evaluate((el) => el.getAnimations().filter((a) => /ab-motion-(reorder|shift)/.test(a.id)).length)).toBe(0);
   });
+
+  test(`attention bypass preserves row focus and the approval stability wait at ${width}`, async ({ page }) => {
+    await setup(page, width);
+    await row(page, A).locator('.row-main').focus();
+    const shown = await order(page);
+    await update(page, B);
+    await update(page, D, {
+      id: 'recent-approval', kind: 'approval', askedAt: new Date().toISOString(),
+      message: 'Allow **shell**?\n\n```\npwd\n```',
+      fields: [{ name: 'decision', type: 'choice', required: true,
+        options: [{ value: 'approve', label: 'Approve once' }, { value: 'deny', label: 'Deny' }] }],
+    });
+    await expect.poll(() => order(page)).toEqual([D, ...shown.filter((id) => id !== D)]);
+    await expect(row(page, A).locator('.row-main')).toBeFocused();
+    await page.clock.runFor(400);
+    const answers = () => page.evaluate(() => window.agentBridgeDemo.host.answerLog.length);
+    const count = await answers();
+    const lane = page.locator('#needs-you .needs-you-list');
+    await expect(lane).toHaveAttribute('data-arriving', '');
+    await page.locator(`#needs-you .needs-entry[data-id="${D}"]`).evaluate((el) => {
+      for (const button of el.querySelectorAll('.needs-approve, .needs-deny')) {
+        button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+      }
+
+    });
+    await page.clock.runFor(1);
+    expect(await answers()).toBe(count);
+    await page.clock.runFor(600);
+    await expect(lane).not.toHaveAttribute('data-arriving', '');
+  });
 }
+
+test('a normal-motion batch glides and anchors the row being read', async ({ page }) => {
+  await setup(page, 1440);
+  await page.evaluate((id) => {
+    const d = window.agentBridgeDemo;
+    for (let i = 0; i < 12; i++) { d.upsert({ ...d.host.get(id), id: `batch-${String(i).padStart(2, '0')}` }); }
+  }, D);
+  await page.clock.runFor(6000);
+  const pane = page.locator('#list-pane');
+  await pane.evaluate((el) => { el.scrollTop = 300; });
+  await pane.dispatchEvent('scroll');
+  await page.clock.runFor(200);
+  const anchor = await pane.evaluate((el) => {
+    const row = [...el.querySelectorAll('.session')].find((r) => r.getBoundingClientRect().bottom > el.getBoundingClientRect().top);
+    window.__recentMoves = [];
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (...args) { const a = animate.apply(this, args); window.__recentMoves.push(a); return a; };
+    return { id: row.dataset.id, top: row.getBoundingClientRect().top, scroll: el.scrollTop };
+  });
+  expect(anchor.scroll).toBeGreaterThan(0);
+  await update(page, 'batch-11');
+  await page.clock.runFor(5000);
+  expect(Math.abs(await row(page, anchor.id).evaluate((el) => el.getBoundingClientRect().top) - anchor.top)).toBeLessThan(2);
+  expect(await page.evaluate(() => window.__recentMoves.some((a) => a.id === 'ab-motion-reorder'))).toBe(true);
+});
