@@ -2,6 +2,7 @@
 // menu, Search and New in one 48 px row, on a phone (the page scrolls) and beside a session (the
 // list pane scrolls). The count line and machine tabs scroll away; no row hides under the row.
 import { test, expect } from '@playwright/test';
+import { selectSort } from './nav.mjs';
 
 async function openLong(page) {
   await page.goto('?demo=1&static=1');
@@ -47,7 +48,7 @@ async function pinned(page) {
   // A row cut by the row's edge is just scrolling past; what matters is the controls work.
   expect(covered).toBeLessThanOrEqual(1);
   await expect(page.locator('#session-sort')).toBeInViewport();
-  await page.locator('#session-sort').selectOption({ index: 1 });
+  await selectSort(page, 'recent');
   if (vp.width < 760) await page.locator('.search-open').click(); else await page.locator('#search').focus();
   await expect(page.locator('#search')).toBeFocused();
   expect((await head.boundingBox()).height).toBe(48);

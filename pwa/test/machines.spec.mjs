@@ -5,7 +5,7 @@
 // to its own machine; a read-only shadow machine beside the others; a machine that can't be
 // reached saying so on its own; and the launch panel asking which machine to launch on.
 import { test, expect } from '@playwright/test';
-import { go, open, view } from './nav.mjs';
+import { go, open, view, selectSort } from './nav.mjs';
 
 const LAPTOP = 'demo-laptop';
 const SHADOW = 'demo-shadow';
@@ -52,7 +52,7 @@ test('with more than one machine, every machine is shown at first: one list, new
   const drawn = () => page.locator('.session').evaluateAll((cards) => cards.map((c) => ({ host: c.dataset.hostId, id: c.dataset.id })));
   // In your order (#164), first seen: each machine's sessions newest first, placed as each
   // machine finished sending them.
-  await expect(page.locator('#session-sort')).toHaveValue('yours');
+  await expect(page.locator('#session-sort')).toHaveAttribute('title', 'Sort sessions: Your order');
   const yours = await drawn();
   expect(new Set(yours.map((e) => `${e.host}/${e.id}`))).toEqual(new Set(all.map((e) => `${e.host}/${e.id}`)));
   for (const host of ['demo', LAPTOP, SHADOW]) {
@@ -60,7 +60,7 @@ test('with more than one machine, every machine is shown at first: one list, new
   }
   // Most recent: as the app sorted them before, most recently updated first, whichever machine
   // they are on.
-  await page.locator('#session-sort').selectOption('recent');
+  await selectSort(page, 'recent');
   await expect.poll(drawn).toEqual(all);
   const updated = await page.evaluate(() => window.agentBridgeDemo.store.list().map((e) => e.session.updatedAt));
   expect(updated).toEqual([...updated].sort().reverse());

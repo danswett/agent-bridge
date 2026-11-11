@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { row, view } from './nav.mjs';
+import { row, view, selectSort } from './nav.mjs';
 
 const A = '02d9e5d5-6b35-49bd-b083-39572fbff648';
 const B = '6f1c2b7e-claude-example';
@@ -26,7 +26,7 @@ async function setup(page, width) {
   await page.clock.install();
   await page.goto('?demo=1&static=1');
   await page.waitForSelector('html[data-demo-ready]');
-  await page.locator('#session-sort').selectOption('recent');
+  await selectSort(page, 'recent');
   await page.mouse.move(width - 1, 0);
   await page.evaluate(() => document.activeElement?.blur());
   await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);

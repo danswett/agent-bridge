@@ -2,7 +2,7 @@
 // client, so these tests cover event handling through to what is on screen.
 import { test, expect } from '@playwright/test';
 import { BRAND } from '../js/brand.js';
-import { open, row, view } from './nav.mjs';
+import { open, row, view, selectSort } from './nav.mjs';
 import { readFileSync } from 'node:fs';
 
 const fixture = JSON.parse(readFileSync(new URL('../fixtures/sessions-list.json', import.meta.url), 'utf8'));
@@ -450,7 +450,7 @@ test('an upsert leaves every row where it is, and a remove takes the session to 
 
 test('in Most recent, an upsert moves a session to the top', async ({ page }) => {
   await openDemo(page);
-  await page.locator('#session-sort').selectOption('recent');
+  await selectSort(page, 'recent');
   await upsert(page, CODEX, { status: 'working', statusSince: later(), updatedAt: later() });
   await expect.poll(() => order(page)).toEqual([CODEX, COPILOT, CLAUDE, DELEGATING]);
 });

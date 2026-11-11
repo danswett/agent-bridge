@@ -3,6 +3,16 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { parseRoute, routeHash } from '../../js/ui/shell.js';
 
+test('Sort sessions is an icon button rather than a label competing with New', () => {
+  const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+  const button = html.match(/<button\b[^>]*id="session-sort"[^>]*>([\s\S]*?)<\/button>/);
+  assert.ok(button, 'Sort sessions must be a button');
+  assert.match(button[0], /aria-label="Sort sessions"/);
+  assert.match(button[0], /aria-haspopup="menu"/);
+  assert.match(button[1], /aria-hidden="true"/);
+  assert.equal(button[1].replace(/<[^>]*>/g, '').trim(), '');
+});
+
 test('New session has only a decorative plus, never a visible label that squeezes Sort', () => {
   const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
   const link = html.match(/<a\b[^>]*class="button new-session"[^>]*>([\s\S]*?)<\/a>/);
