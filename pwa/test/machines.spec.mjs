@@ -225,7 +225,6 @@ test.describe('live load wiring', () => {
       await go(page, 'machines');
       await attach(page);
       await expect(tile(page).getByRole('meter', { includeHidden: true })).toHaveCount(2);
-      await row(page, target).click();
       const action = tile(page, target).locator('.machine-view');
       await action.scrollIntoViewIfNeeded();
       const held = await action.elementHandle(), box = await action.boundingBox();
