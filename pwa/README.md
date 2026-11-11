@@ -635,6 +635,11 @@ running another checkout's tests at the same time. CI splits the run over severa
 (quality/README.md §4.7): Chromium, three WebKit shards (`--shard`), and `test/e2e` alone in
 the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `test/e2e` out.
 
+On a ready PR, `pwa-ui` then repeats only added or modified specs since the PR's
+merge base five times, with zero retries, in the same Chromium and WebKit shards.
+Deleted and renamed-away paths and `test/e2e` are excluded; no changed spec skips
+the repeat step. `tools/repeat-changed-specs.mjs` fails if the base cannot be found.
+
 **Renders for design review** (`test/renders/*.render.mjs`, `playwright.renders.config.mjs`):
 captures, not checks, of the demo in the states a change wants Design to sign off, each in dark,
 light and forced colours at 390 and 1440 px, saved as `renders/<state>-<theme>-<width>.png`
