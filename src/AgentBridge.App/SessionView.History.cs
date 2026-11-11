@@ -115,7 +115,7 @@ public sealed partial class SessionView
             if (session != shownHistory || releases != pinReleases || ConversationScroll is not { } scroll) { return; }
             HistoryColumn.UpdateLayout();
             var target = atEnd || pinEnd ? scroll.ScrollableHeight : Math.Min(offset, scroll.ScrollableHeight);
-            if (!latestUsed && !atEnd && !pinEnd && reading is { } kept)
+            if (!atEnd && !pinEnd && reading is { } kept)
             {
                 var index = historyShown.ToList().FindIndex(r => r.Id == kept.Id);
                 if (index >= 0 && HistoryRows.GetOrCreateElement(index) is FrameworkElement row)
