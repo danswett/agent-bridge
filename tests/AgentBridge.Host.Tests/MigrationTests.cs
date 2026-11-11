@@ -1954,35 +1954,55 @@ public sealed class MigrationTasksHooksAndSettingsTests : MigrationFixture
         var install = AgentHaBridgeInstall.Read(_f.BridgeHome).Install!;
         foreach (var script in new[] { "agent-bridge-daemon.ps1", "agent-bridge-supervisor.ps1" })
         {
-            File.WriteAllText(Path.Combine(_f.HooksDir, script), "Start-Sleep -Seconds 120\r\n");
+            File.WriteAllText(Path.Combine(_f.HooksDir, script), "Write-Output ready\r\nStart-Sleep -Seconds 120\r\n");
         }
         // Another installation's daemon, under another home: never this migration's to stop.
         var other = Path.Combine(_f.Home, "other", "hooks", "agent-bridge-daemon.ps1");
         Directory.CreateDirectory(Path.GetDirectoryName(other)!);
-        File.WriteAllText(other, "Start-Sleep -Seconds 120\r\n");
+        File.WriteAllText(other, "Write-Output ready\r\nStart-Sleep -Seconds 120\r\n");
         System.Diagnostics.Process Start(string script)
         {
-            var start = new System.Diagnostics.ProcessStartInfo(pwsh) { UseShellExecute = false, CreateNoWindow = true };
+            var start = new System.Diagnostics.ProcessStartInfo(pwsh) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
             foreach (var a in new[] { "-NoProfile", "-NonInteractive", "-File", script }) { start.ArgumentList.Add(a); }
             return System.Diagnostics.Process.Start(start)!;
         }
         using var supervisor = Start(Path.Combine(_f.HooksDir, "agent-bridge-supervisor.ps1"));
         using var daemon = Start(Path.Combine(_f.HooksDir, "agent-bridge-daemon.ps1"));
         using var stranger = Start(other);
+        async Task Stop()
+        {
+            try { new WindowsAgentHaBridgeRuntime().Stop(install); }
+            catch (IOException error) when (error.Message.Contains($"daemon (process {daemon.Id}) did not stop", StringComparison.Ordinal))
+            {
+                var failedAt = DateTimeOffset.UtcNow;
+                var observation = System.Diagnostics.Stopwatch.StartNew();
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                try { await daemon.WaitForExitAsync(timeout.Token); }
+                catch (OperationCanceledException) when (timeout.IsCancellationRequested) { }
+                var state = daemon.HasExited
+                    ? $"exited at {daemon.ExitTime.ToUniversalTime():O}, exit code {daemon.ExitCode}"
+                    : $"still running at {DateTimeOffset.UtcNow:O}";
+                Assert.Fail($"{error}{Environment.NewLine}Stop failed at {failedAt:O}; daemon {daemon.Id} {state}; observed for {observation.Elapsed.TotalSeconds:F3} seconds after failure.");
+            }
+        }
         try
         {
-            await Task.Delay(500);
+            // Readiness, not elapsed startup time: a loaded runner may still be starting pwsh.
+            using var readyTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var ready = await Task.WhenAll(new[] { supervisor, daemon, stranger }
+                .Select(p => p.StandardOutput.ReadLineAsync(readyTimeout.Token).AsTask()));
+            Assert.All(ready, signal => Assert.Equal("ready", signal));
             // A receipt naming the daemon's process id with another start time: a reused id.
             File.WriteAllText(Path.Combine(_f.Runtime, "daemon.process.json"), $"{{\"pid\":{daemon.Id},\"installationId\":\"{FakeAgentHaBridge.Id}\",\"executable\":\"{pwsh.Replace("\\", "\\\\")}\",\"startedUtcTicks\":1}}");
 
-            new WindowsAgentHaBridgeRuntime().Stop(install);
+            await Stop();
 
             Assert.True(supervisor.HasExited);
             Assert.False(daemon.HasExited);
             Assert.False(stranger.HasExited);
 
             File.WriteAllText(Path.Combine(_f.Runtime, "daemon.process.json"), $"{{\"pid\":{daemon.Id},\"installationId\":\"{FakeAgentHaBridge.Id}\",\"executable\":\"{pwsh.Replace("\\", "\\\\")}\",\"startedUtcTicks\":{daemon.StartTime.ToUniversalTime().Ticks}}}");
-            new WindowsAgentHaBridgeRuntime().Stop(install);
+            await Stop();
 
             Assert.True(daemon.HasExited);
             Assert.False(stranger.HasExited);
