@@ -68,8 +68,19 @@ export class ScrollFollow {
   #observe() {
     if (!this.#observer) { return; }
     const next = new Set(this.content());
-    for (const el of this.#observed) { if (!next.has(el)) { this.#observer.unobserve(el); } }
-    for (const el of next) { if (!this.#observed.has(el)) { this.#observer.observe(el); } }
+    const removed = [...this.#observed].filter((el) => !next.has(el));
+    let replaced = removed.reduce((sum, el) => sum + (this.#sizes.get(el) ?? 0), 0);
+    for (const el of removed) { this.#observer.unobserve(el); }
+    const visible = this.visible();
+    for (const el of next) {
+      // Initial layout is not growth; replacements retain the removed content's measurement.
+      if (visible && !this.#sizes.has(el)) {
+        const height = el.getBoundingClientRect().height;
+        this.#sizes.set(el, removed.length ? Math.min(height, replaced) : height);
+        replaced = Math.max(0, replaced - height);
+      }
+      if (!this.#observed.has(el)) { this.#observer.observe(el, { box: 'border-box' }); }
+    }
     this.#observed = next;
   }
 
@@ -85,18 +96,29 @@ export class ScrollFollow {
     }
     this.remember();
     if (!wasFollowing && this.following && this.#latest) {
-      this.#pending.clear();
-      this.shown = this.#latest;
-      this.onFollow();
-      if (this.#tail) {
-        this.#observer?.unobserve(this.#tail.root);
-        this.#tail.view.dispose();
-        this.#tail.root.remove();
-      }
-      this.#tail = null;
-      this.after();
+      this.#rejoin();
     }
     return el.scrollTop;
+  }
+
+  // Choosing a cached session starts at its latest, not at the previous reading position.
+  open() {
+    this.following = true;
+    this.resume();
+    if (this.#pending.size) { this.#rejoin(); } else { this.after(); }
+  }
+
+  #rejoin() {
+    this.#pending.clear();
+    this.shown = this.#latest;
+    this.onFollow();
+    if (this.#tail) {
+      this.#observer?.unobserve(this.#tail.root);
+      this.#tail.view.dispose();
+      this.#tail.root.remove();
+    }
+    this.#tail = null;
+    this.after();
   }
 
   display(session) {
@@ -162,10 +184,11 @@ export class ScrollFollow {
   changed(entries) {
     if (!this.visible()) { return; }
     let grew = false;
-    for (const { target, contentRect } of entries) {
+    for (const { target, contentRect, borderBoxSize } of entries) {
       if (!this.#observed.has(target)) { continue; }
-      grew ||= contentRect.height > (this.#sizes.get(target) ?? 0);
-      this.#sizes.set(target, contentRect.height);
+      const height = borderBoxSize?.[0]?.blockSize ?? contentRect.height;
+      grew ||= height > (this.#sizes.get(target) ?? 0);
+      this.#sizes.set(target, height);
     }
     this.read();
     if (this.following && grew) { this.after(); }

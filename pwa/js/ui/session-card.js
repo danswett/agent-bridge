@@ -434,6 +434,8 @@ let seq = 0;
 export class SessionCard {
   #s = null;
   #last = {};
+  // Arrival identity survives machine-metadata redraws.
+  #arrival = null;
   #history = { loaded: false, loading: false };
   #panel = null;
   #receipt = null;
@@ -629,7 +631,11 @@ export class SessionCard {
     e.speaker = h('p', { class: 'speaker' }, e.voice, e.agentLabel, e.agentAge);
     e.reasoningText = h('p', { class: 'plain' });
     e.reasoning = h('details', { class: 'reasoning', hidden: true }, h('summary', null, 'Show reasoning'), e.reasoningText);
-    e.reasoning.addEventListener('toggle', () => { e.reasoning.querySelector('summary').textContent = e.reasoning.open ? 'Hide reasoning' : 'Show reasoning'; });
+    e.reasoning.addEventListener('toggle', () => {
+      // Reading a disclosure spends any pending initial-history placement.
+      this.#placed = true;
+      e.reasoning.querySelector('summary').textContent = e.reasoning.open ? 'Hide reasoning' : 'Show reasoning';
+    });
     e.truncated = h('p', { class: 'note truncated', hidden: true }, 'Earlier text not shown: the response was longer than the machine sends.');
     e.dropped = h('p', { class: 'note dropped', hidden: true }, 'The main agent\'s latest response was left out: too long to send with its delegates.');
     e.response = h('div', { class: 'md response' });
@@ -911,7 +917,10 @@ export class SessionCard {
       this.#renderFacts(rows);
     }
     this.#tickFacts(s, Date.now());
-    this.#follow.after(false);
+    const arrival = JSON.stringify([displayed.activity.turn, voice.response ?? '']);
+    const arrived = this.#arrival !== arrival;
+    this.#arrival = arrival;
+    this.#follow.after(arrived && !first);
     this.#bringQuestion(atEnd);
 
     // The tools shown follow the session: refetched (at most every 2 s) as it changes.
@@ -1294,6 +1303,20 @@ export class SessionCard {
     e.pin.title = pinned ? 'Unpin' : 'Pin';
   }
 
+  // Only an explicit row choice starts over; browser-history restoration keeps its position.
+  #fromRow = false;
+
+  openFromRow(choose) {
+    const opening = !this.#selected;
+    this.#fromRow = true;
+    try { choose(); } finally { this.#fromRow = false; }
+    // Routing has now made the phone pane visible. No later pin can outlive a disclosure.
+    if (opening && this.#selected && this.viewing()) {
+      this.#follow.read();
+      this.#follow.after();
+    }
+  }
+
   // The row chosen, and its view the one shown.
   setSelected(selected) {
     if (selected === this.#selected) { return; }
@@ -1301,8 +1324,14 @@ export class SessionCard {
     this.element.classList.toggle('selected', selected);
     if (selected) { this.els.open.setAttribute('aria-current', 'true'); } else { this.els.open.removeAttribute('aria-current'); }
     this.view.hidden = !selected;
-    if (selected) { this.#openTurns(); }
-    // Shown again (a row chosen, the browser's Back or Forward): its header whole, the scroll kept.
+    if (selected) {
+      if (this.#fromRow) {
+        this.#placed = false;
+        this.#follow.open();
+      }
+      this.#openTurns();
+    }
+    // Shown again (a row chosen, the browser's Back or Forward): its header whole.
     if (selected) { this.collapse?.shown(); }
     // Shown now, in the page it was put into: what holds it there can move its question too.
     // Hidden, nothing of it is read or watched.

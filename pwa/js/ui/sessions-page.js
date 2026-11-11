@@ -242,7 +242,7 @@ export class SessionsPage {
       heading: () => $('sessions-h'),
     });
     this.view.onRender = (n) => { this.#drawCount(n); this.#settleSelection(); this.#delegateStep(); };
-    this.view.onSelect = (card) => this.#choose(card);
+    this.view.onSelect = (card) => card.openFromRow(() => this.#choose(card, true));
     this.view.onBack = () => this.#back();
     this.view.onInspector = () => this.#toggleInspector();
     for (const m of [this.wide, this.phone]) { m.addEventListener('change', () => this.#resized()); }
@@ -533,7 +533,7 @@ export class SessionsPage {
 
   // A row chosen: the address names it, so a reload, a resize or the browser's back keeps it.
   // On a phone that is a new entry (Back returns to the list); on a desktop it replaces the last.
-  #choose(card) {
+  #choose(card, fromRow = false) {
     const rest = [card.hostId ?? '', card.id];
     // What had focus in the list (a row, a Needs you entry) gets it back when a phone returns there.
     const had = globalThis.document?.activeElement;
@@ -554,7 +554,8 @@ export class SessionsPage {
     const onSession = onSessions && this.shell.rest.length >= 2;
     if (onSession && this.#delegateLevel()) {
       // Over a delegate's entry: back to its session's first, so the one chosen replaces that.
-      globalThis.addEventListener('popstate', () => this.#choose(card), { once: true });
+      const choose = () => this.#choose(card, fromRow);
+      globalThis.addEventListener('popstate', () => fromRow ? card.openFromRow(choose) : choose(), { once: true });
       this.#stepBack();
       return;
     }
