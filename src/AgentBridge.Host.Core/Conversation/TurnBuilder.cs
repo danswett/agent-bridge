@@ -251,6 +251,7 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
         var truncated = Truncated || more > 0 || parts.Any(p => p.Truncated == true || p.Question?.Truncated == true) || Prompt?.Truncated == true;
         var turn = new HistoryTurn
         {
+            Kind = Prompt?.From switch { UserMessageFrom.Notification => TurnKind.Notification, UserMessageFrom.Schedule => TurnKind.Scheduled, _ => TurnKind.User },
             Id = Id,
             At = At,
             Prompt = Prompt,

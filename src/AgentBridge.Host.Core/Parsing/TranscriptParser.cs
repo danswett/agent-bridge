@@ -40,7 +40,8 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
     ReadOnlyMemory<byte> _line;
 
     // The id of the turn the record being read starts, for activity.turn.
-    protected void TurnStarts() => S.TurnId = _line.IsEmpty ? null : Conversation.TurnIds.Of(_line.Span);
+    protected string? RecordId => _line.IsEmpty ? null : Conversation.TurnIds.Of(_line.Span);
+    protected void TurnStarts() => S.TurnId = RecordId;
 
     // What a record that may start a turn carries (Conversation.TurnMarks); null for an agent
     // without history.

@@ -2,12 +2,46 @@ using System.Text;
 using System.Text.Json;
 using AgentBridge.Host.Core.Conversation;
 using AgentBridge.Host.Core.Parsing;
+using AgentBridge.Host.Core.Transcripts;
 using AgentBridge.Protocol;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 public class CopilotNoticeTests
 {
+    [Fact]
+    public void Skipped_bytes_never_promote_a_reply_with_unknown_ownership_to_the_owner()
+    {
+        var state = new SessionState();
+        var parser = new CopilotParser(state, TimeProvider.System);
+        foreach (var line in new[] { Copilot.User("Owner question.", 1), Notice(2), Copilot.TurnStart(3) })
+        {
+            parser.Skim(Encoding.UTF8.GetBytes(line));
+        }
+        ((ILineSink)parser).Skipped();
+        parser.Parse(Encoding.UTF8.GetBytes(Copilot.Assistant("Unattributed reply.", 4)));
+        Assert.Null(state.OwnResponse);
+        Assert.Null(state.Response);
+        Assert.Equal("Unattributed reply.", state.Notice!.Parts.Single().Text);
+        Assert.Equal(TurnKind.Unknown, state.Notice.Kind);
+    }
+
+    [Fact]
+    public void Live_notice_response_identity_matches_its_stored_part_after_reasoning()
+    {
+        var state = new SessionState();
+        var parser = new CopilotParser(state, TimeProvider.System);
+        var notice = Notice(1);
+        var reply = Copilot.Assistant("Notice answer.", 3, reasoning: "Synthetic reasoning.");
+        foreach (var line in new[] { notice, Copilot.TurnStart(2), reply }) { parser.Parse(Encoding.UTF8.GetBytes(line)); }
+        var turn = new TurnBuilder(state.Notice!.Id, Fixture.T0, state.Notice.Prompt);
+        turn.Record(TurnIds.Of(Encoding.UTF8.GetBytes(reply)));
+        using var doc = JsonDocument.Parse(reply);
+        new CopilotHistory().Apply(doc.RootElement, Fixture.T0.AddSeconds(3), turn,
+            new HistoryContext(new Dictionary<string, string?>(), new Dictionary<string, string>(), true));
+        Assert.Equal(turn.Build(true).Parts.Single(p => p.Kind == HistoryPartKind.Response).Id, state.Notice.Parts.Single().Id);
+    }
+
     static string Notice(int second, string delivery = "idle") => Copilot.Event("user.message",
         new { content = "Synthetic completion notice.", source = "system", delivery }, second);
 
@@ -36,6 +70,9 @@ public class CopilotNoticeTests
 
         Assert.Equal("Owner answer.", state.OwnResponse);
         Assert.Equal(owner, state.ResponseTurn);
+        Assert.Equal(TurnKind.Notification, state.Notice!.Kind);
+        Assert.NotEqual(owner, state.Notice.Id);
+        Assert.Equal("Notice reply.", state.Notice.Parts.Single().Text);
         Read(Copilot.User("Next owner question.", 10));
         Read(Copilot.TurnStart(11));
         Read(Copilot.Assistant("Next owner answer.", 12));
@@ -66,6 +103,36 @@ public class CopilotNoticeTests
         Assert.Equal(["Owner answer.", "Notice reply.", "Scheduled answer."],
             page.Turns.Select(t => t.Parts.Single(p => p.Kind == HistoryPartKind.Response).Text));
         Assert.Equal(UserMessageFrom.Schedule, page.Turns[2].Prompt!.From);
+        Assert.Equal([TurnKind.User, TurnKind.Notification, TurnKind.Scheduled], page.Turns.Select(t => t.Kind));
+        var newest = reader.Read("fixture", AgentKind.Copilot, path, null, 1,
+            new HistorySeed(new Dictionary<string, string?>(), new Dictionary<string, string>()), true);
+        var alone = reader.Read("fixture", AgentKind.Copilot, path, newest.Before, 1,
+            new HistorySeed(new Dictionary<string, string?>(), new Dictionary<string, string>()), true);
+        Assert.Equal(JsonSerializer.Serialize(page.Turns[1], ProtocolJson.Options),
+            JsonSerializer.Serialize(alone.Turns!.Single(), ProtocolJson.Options));
+    }
+
+    [Fact]
+    public void A_second_notice_queued_inside_the_first_does_not_redirect_either_reply_to_the_owner()
+    {
+        var state = new SessionState();
+        var parser = new CopilotParser(state, TimeProvider.System);
+        void Read(string line) => parser.Parse(Encoding.UTF8.GetBytes(line));
+        Read(Copilot.User("Owner question.", 1));
+        Read(Copilot.Assistant("Owner answer.", 2));
+        Read(Notice(3));
+        Read(Copilot.TurnStart(4));
+        var first = state.Notice!.Id;
+        Read(Notice(5, "steering"));
+        var second = state.Notice!.Id;
+        Read(Copilot.Assistant("First notice reply.", 6));
+        Assert.Equal(first, state.Notice!.Id);
+        Read(Copilot.TurnEnd(7));
+        Read(Copilot.TurnStart(8));
+        Read(Copilot.Assistant("Second notice reply.", 9));
+        Assert.Equal(second, state.Notice!.Id);
+        Assert.Equal("Second notice reply.", state.Notice.Parts.Single().Text);
+        Assert.Equal("Owner answer.", state.OwnResponse);
     }
 
     [Fact]
