@@ -70,6 +70,17 @@ public class TurnCompletionTests
     }
 
     [Fact]
+    public void A_question_that_clears_between_idle_samples_still_restarts_settling()
+    {
+        var progress = Progress();
+        progress.Observe("working", "before");
+        Assert.False(Complete(progress, 0));
+        progress.Question();
+        Assert.False(Complete(progress, 15, answered: true));
+        Assert.True(Complete(progress, 30, answered: true));
+    }
+
+    [Fact]
     public void A_quiet_compaction_waits_a_minute_before_it_starts_settling()
     {
         var progress = Progress(compact: true);
