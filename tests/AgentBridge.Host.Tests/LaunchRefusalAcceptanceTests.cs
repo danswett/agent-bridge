@@ -11,6 +11,7 @@ public sealed class LaunchRefusalAcceptanceTests(ITestOutputHelper output) : Lau
     [InlineData("agent", "synthetic-machine")]
     [InlineData("model", "synthetic-machine")]
     [InlineData("workspace", "synthetic-machine")]
+    [InlineData("workspace-path", "synthetic-machine")]
     [InlineData("other-agent-model", "synthetic-machine")]
     [InlineData("offered", "synthetic-machine")]
     [InlineData("model", "another-synthetic-machine")]
@@ -65,9 +66,10 @@ public sealed class LaunchRefusalAcceptanceTests(ITestOutputHelper output) : Lau
                 reason = $"model not offered by {machine}: '{model}' for {chosen.Label}; it offers {string.Join(", ", chosen.Models)}";
                 break;
             case "workspace":
-                workspace = "unlisted-workspace";
+            case "workspace-path":
+                workspace = scenario == "workspace" ? "unlisted-workspace" : @"C:\synthetic-private-workspace";
                 Assert.DoesNotContain(offered.Workspaces, w => w.Label == workspace);
-                reason = $"workspace not offered by {machine}: '{workspace}'; it offers {string.Join(", ", offered.Workspaces.Select(w => w.Label))}";
+                reason = $"workspace not offered by {machine}; it offers {string.Join(", ", offered.Workspaces.Select(w => w.Label))}";
                 break;
             case "other-agent-model":
                 model = offered.Agents.Where(a => a.Id != chosen.Id).SelectMany(a => a.Models)
@@ -83,6 +85,7 @@ public sealed class LaunchRefusalAcceptanceTests(ITestOutputHelper output) : Lau
         if (reason is not null)
         {
             Assert.Equal(("refused", reason), (result.Outcome_, result.Reason));
+            if (scenario == "workspace-path") { Assert.DoesNotContain(workspace, result.Reason); }
             Assert.Null(result.Session);
             Assert.Equal(JsonValueKind.Undefined, result.Launched.ValueKind);
             Assert.Empty(starter.Specs);

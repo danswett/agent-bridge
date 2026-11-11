@@ -836,7 +836,7 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
     public async Task Settings_this_machine_does_not_offer_are_refused_before_anything_starts()
     {
         var ch = await OpenAsync();
-        Assert.Equal(("refused", "workspace not offered by Test host: 'Secret'; it offers App, API"), Pair(await LaunchAsync(ch, new { workspace = "Secret" })));
+        Assert.Equal(("refused", "workspace not offered by Test host; it offers App, API"), Pair(await LaunchAsync(ch, new { workspace = "Secret" })));
         Assert.Equal(("refused", "agent not offered by Test host: 'codex'; it offers copilot"), Pair(await LaunchAsync(ch, new { agent = "codex", prompt = "x" })));
         Assert.StartsWith("model not offered by Test host: 'gpt-9' for Copilot; it offers auto", (await LaunchAsync(ch, new { model = "gpt-9" })).Reason);
         Assert.StartsWith("Unknown effort 'ultra' for Copilot", (await LaunchAsync(ch, new { effort = "ultra" })).Reason);

@@ -857,7 +857,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         var shown = Limits.KeepStart(choices, 512)!;
         if (shown != choices) { shown += $"... (see launch.options for all {offered.Count} choices)"; }
         var machine = Limits.KeepStart(LaunchProtocol.Flatten(options.MachineName), 64);
-        return $"{cause} not offered by {machine}: '{Limits.KeepStart(value, 64)}'{(agent is null ? "" : $" for {agent}")}; it offers {shown}";
+        var requested = cause == "workspace" ? "" : $": '{Limits.KeepStart(value, 64)}'";
+        return $"{cause} not offered by {machine}{requested}{(agent is null ? "" : $" for {agent}")}; it offers {shown}";
     }
 
     // agent-ha-bridge's Resolve-DaemonRequestedLaunch: what the request names, against what this

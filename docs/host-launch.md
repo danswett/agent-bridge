@@ -112,10 +112,11 @@ differences, each deliberate:
    among those offered, the machine's default for each left out; permissions (`refused`,
    naming what is offered).
    An unoffered agent, model or workspace names this host's display name, the one refused
-   choice and the offered list used here: `model not offered by <machine>: '<model>' for
+   cause and the offered list used here: `model not offered by <machine>: '<model>' for
    <agent>; it offers <choices>`. The displayed list is capped at 512 UTF-8 bytes, with a
    notice pointing to `launch.options` for the full list when shortened; the options themselves
-   are unchanged. No process starts and no other machine is tried.
+   are unchanged. Rejected workspace values are not echoed because they can be paths.
+   No process starts and no other machine is tried.
 5. Attachments, claimed for this launch (`refused` if the agent cannot take them or they are
    not held for this device).
 6. The start turn, one launch at a time. agent-ha-bridge and trust again; a resume, or a new
