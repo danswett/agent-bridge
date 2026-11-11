@@ -41,6 +41,11 @@ function Invoke-Gh {
 # (Class.Method, without the arguments) and Playwright's `  1) [webkit] › file.spec.mjs:43:1 › title`
 # (file:line). A log line may start with the runner's timestamp.
 function Get-FailedTests([string]$Log) {
+    $Log = $Log -replace '\x1b\[[0-9;]*[A-Za-z]', ''
+    if ($Log.Contains([char]27)) {
+        Write-Warning 'Unrecognized terminal escape in job log; refusing a partial failure list.'
+        return , [string[]]@()
+    }
     $names = [System.Collections.Generic.SortedSet[string]]::new([StringComparer]::Ordinal)
     foreach ($m in [regex]::Matches($Log, '(?m)^(?:\S+Z)?[ \t]*Failed[ \t]+(?<n>[A-Za-z_][\w+]*(?:\.[\w+]+)+)')) { [void]$names.Add($m.Groups['n'].Value) }
     foreach ($m in [regex]::Matches($Log, '(?m)^(?:\S+Z)?[ \t]*\d+\) \[[^\]\r\n]+\] › (?<f>[^\s:]+):(?<l>\d+)')) { [void]$names.Add("$($m.Groups['f'].Value):$($m.Groups['l'].Value)") }
@@ -100,7 +105,7 @@ function Invoke-RerunKnownFlakes([long]$RunId, [string]$Repository, [switch]$Dry
     }
     $failedByJob = [ordered]@{}
     foreach ($job in @($jobs | Where-Object { $_.conclusion -eq 'failure' -and $_.name -ne $script:GateJob })) {
-        $log = (Invoke-Gh api "repos/$Repository/actions/jobs/$($job.id)/logs") -join "`n"
+        $log = (Invoke-Gh api "repos/$Repository/actions/jobs/$($job.id)/logs" --allow-escape-sequences) -join "`n"
         $failedByJob[$job.name] = Get-FailedTests $log
     }
     $issues = Invoke-Gh issue list --repo $Repository --label flaky --state open --limit 200 --json 'number,title,body,author' | ConvertFrom-Json

@@ -61,7 +61,11 @@ function Fake-Gh {
             if ($s.gate) { $js += @{ id = 8; name = 'quality-gate'; conclusion = 'failure' } }
             @{ jobs = $js } | ConvertTo-Json -Depth 4; return }
         '^api repos/r/actions/jobs/8/logs' { 'Error: Process completed with exit code 1.'; return }
-        '^api repos/r/actions/jobs/7/logs' { $s.log; return }
+        '^api repos/r/actions/jobs/7/logs' {
+            if ($s.log.Contains([string][char]27) -and '--allow-escape-sequences' -notin $args) {
+                $global:LASTEXITCODE = 1; return
+            }
+            $s.log; return }
         '^issue list' { ($issues | ConvertTo-Json -Depth 4 -AsArray); return }
         '^run rerun' { return }
         '^issue comment' { return }
@@ -78,6 +82,14 @@ function Run-Scenario([hashtable]$Over, [switch]$DryRun) {
 
 $x = Run-Scenario @{}
 Assert ($x.Result.Rerun -and $x.Reran -eq 1 -and $x.Comments -eq 1) 'a known flake is re-run once and logged on its issue'
+$x = Run-Scenario @{ log = "2026-11-09T05:00:00Z   `e[31mFailed `e[1mA.B.C.Method`e[0m [1 s]" }
+Assert ($x.Result.Rerun -and $x.Reran -eq 1 -and $x.Comments -eq 1) 'a known flake with ANSI escapes is read, re-run once and logged'
+$x = Run-Scenario @{ log = "  Failed A.B.C.Method [1 s]`n  `e[31mFailed New.Real.Failure`e[0m [1 s]" }
+Assert (-not $x.Result.Rerun -and $x.Reran -eq 0 -and $x.Comments -eq 0) 'an ANSI-escaped real failure beside a known flake stays red'
+foreach ($escape in @('[38:5:196m', '[?25l')) {
+    $x = Run-Scenario @{ log = "  Failed A.B.C.Method [1 s]`n  `e${escape}Failed New.Real.Failure`e[0m [1 s]" }
+    Assert (-not $x.Result.Rerun -and $x.Reran -eq 0 -and $x.Comments -eq 0) "a remaining ESC$escape cannot hide an unfiled failure beside a known flake"
+}
 $x = Run-Scenario @{} -DryRun
 Assert ($x.Result.Rerun -and $x.Reran -eq 0 -and $x.Comments -eq 0) 'a dry run re-runs and comments on nothing'
 $x = Run-Scenario @{ gate = $true }
