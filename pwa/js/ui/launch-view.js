@@ -27,6 +27,7 @@ import { LaunchFollow, sameQuestion, samePrompt } from '../launch-follow.js';
 import { LINGER_READ_MS } from './receipt.js';
 
 export const APPROVE_HINT = 'agent-bridge-host workspace add <folder>';
+export const RESUMABLE_INCOMPLETE_NOTE = "Some sessions weren't checked in time. Reload choices to try again.";
 const AGENT_DEFAULT = '';
 
 // After busy, a launch's line stays this long: the "Try again in a moment" it says is over then (ui.md §7).
@@ -240,8 +241,9 @@ export class LaunchPanel {
     // How old the choices shown are, and why they could not be renewed. Not a live region: it is rewritten only when a draw finds its words changed.
     e.age = h('p', { class: 'note launch-age', hidden: true });
     e.trust = h('div', { class: 'launch-trust', hidden: true });
+    e.incomplete = h('p', { class: 'note launch-incomplete', hidden: true }, RESUMABLE_INCOMPLETE_NOTE);
     e.form = h('form', { class: 'launch-form', novalidate: true, onsubmit: (ev) => { ev.preventDefault(); this.#press(); } },
-      Object.values(e.fields),
+      Object.entries(e.fields).flatMap(([name, control]) => name === 'resume' ? [control, e.incomplete] : [control]),
       h('div', { class: 'row' },
         e.launch = h('button', { type: 'submit', class: 'button launch-button' }, 'Launch'),
         e.resend = h('button', { type: 'button', class: 'button secondary resend', hidden: true, onclick: () => this.#resend() }, 'Try again'),
@@ -513,6 +515,7 @@ export class LaunchPanel {
   #draw() {
     const e = this.els;
     const o = this.#options;
+    e.incomplete.hidden = !o?.resumableIncomplete;
     const name = this.#target?.machineName || 'this machine';
     if (this.#target?.inspectOnly) {
       const questions = this.#trustQuestions();

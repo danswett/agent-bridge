@@ -2,6 +2,7 @@
 // a real one does (session.launch): it refuses what it does not offer, in its words, and a
 // started session arrives as any other, with the panel jumping to its card.
 import { test, expect } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 import { go, row, view } from './nav.mjs';
 
 const RESUMABLE = '7d3c1a2e-5b6f-4c8d-9e0a-1b2c3d4e5f60';
@@ -1095,6 +1096,70 @@ test.describe('a launch followed after it was not confirmed', () => {
 // The choices are fetched in the background and kept, so the page never waits on the machine (#1527).
 test.describe('the cached choices', () => {
   const age = (page) => panel(page).locator('.launch-age');
+
+  for (const empty of [false, true]) {
+    test(`unchecked resumable sessions show a quiet line that Reload choices clears${empty ? ' with no checked sessions' : ''}`, async ({ page }) => {
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await openDemo(page);
+      await settled(page);
+      await page.evaluate((none) => {
+        const h = window.agentBridgeDemo.host;
+        if (none) { h.remote.resumable = []; }
+        h.launchOptions = {
+          ...h.launchOptions,
+          ...(none ? { resumable: [] } : {}),
+          resumableIncomplete: { omitted: 927, reason: 'private reason C:\\private\\session-title' },
+        };
+      }, empty);
+      await openPanel(page);
+      const reload = panel(page).getByRole('button', { name: 'Reload choices' });
+      await reload.click();
+      await expect(reload).toBeEnabled();
+      const line = panel(page).locator('.launch-incomplete');
+      await expect(line).toBeVisible();
+      await expect(line).toHaveText("Some sessions weren't checked in time. Reload choices to try again.");
+      await expect(panel(page)).not.toContainText('927');
+      await expect(panel(page)).not.toContainText('private reason');
+      if (empty) { await expect(field(page, 'resume')).toBeHidden(); }
+      else { await expect(field(page, 'resume')).toBeVisible(); }
+      expect(await field(page, 'resume').evaluate((el) =>
+        el.closest('.launch-field').nextElementSibling.classList.contains('launch-incomplete'))).toBe(true);
+      const { violations } = await new AxeBuilder({ page }).include('#launch')
+        .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22a', 'wcag22aa', 'best-practice']).analyze();
+      expect(violations).toEqual([]);
+
+      await page.evaluate(() => { delete window.agentBridgeDemo.host.launchOptions.resumableIncomplete; });
+      await reload.click();
+      await expect(reload).toBeEnabled();
+      await expect(line).toBeHidden();
+      if (empty) { await expect(field(page, 'resume')).toBeHidden(); }
+    });
+  }
+
+  test('held incomplete choices keep their quiet line when a reload fails', async ({ page }) => {
+    await openDemo(page);
+    await settled(page);
+    await page.evaluate(() => {
+      const h = window.agentBridgeDemo.host;
+      h.launchOptions = { ...h.launchOptions, resumableIncomplete: { omitted: 1, reason: 'deadline' } };
+    });
+    await openPanel(page);
+    const reload = panel(page).getByRole('button', { name: 'Reload choices' });
+    await reload.click();
+    // The opening refresh can already show the notice; finish this reload before changing the host.
+    await expect(reload).toBeEnabled();
+    const line = panel(page).locator('.launch-incomplete');
+    await expect(line).toBeVisible();
+
+    await page.evaluate(() => {
+      delete window.agentBridgeDemo.host.launchOptions.resumableIncomplete;
+      window.agentBridgeDemo.client.launchOptions = () => Promise.reject(new Error('the channel closed'));
+    });
+    await reload.click();
+    await expect(age(page)).toContainText("Couldn't get newer ones");
+    await expect(line).toBeVisible();
+    await expect(field(page, 'agent')).toBeVisible();
+  });
 
   test('the form shows at once from the kept choices, with their age, while the machine is slow to answer again', async ({ page }) => {
     await openDemo(page);

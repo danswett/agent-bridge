@@ -101,11 +101,14 @@ export function readLaunchOptions(raw) {
     if (!x || !str(x.id) || !LAUNCHERS.includes(x.launcher)) { return null; }
     return { id: x.id, agent: readAgent(x.agent), launcher: x.launcher, title: str(x.title) ?? x.id, cwd: str(x.cwd), workspace: str(x.workspace), updatedAt: str(x.updatedAt) };
   }).filter(Boolean);
+  const incomplete = obj(o.resumableIncomplete);
   const d = obj(o.defaults) ?? {};
   return {
     agents,
     workspaces,
     resumable,
+    ...(incomplete && Number.isSafeInteger(incomplete.omitted) && incomplete.omitted > 0
+      ? { resumableIncomplete: { omitted: incomplete.omitted, reason: str(incomplete.reason) } } : {}),
     defaults: {
       agent: agents.some((a) => a.id === d.agent) ? d.agent : agents[0]?.id ?? null,
       workspace: workspaces.some((w) => w.label === d.workspace) ? d.workspace : workspaces[0]?.label ?? null,

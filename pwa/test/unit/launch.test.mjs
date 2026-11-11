@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { LaunchService } from '../../js/launch-service.js';
 import { HostClient, HostError } from '../../js/host-client.js';
 import { checkLaunch, flattenPrompt, readLaunchOptions, readLaunchResult, readTrustResult, MAX_PROMPT } from '../../js/launch.js';
-import { describeLaunch, describeTrust, launchPending } from '../../js/ui/launch-view.js';
+import { describeLaunch, describeTrust, launchPending, RESUMABLE_INCOMPLETE_NOTE } from '../../js/ui/launch-view.js';
 
 const flush = () => new Promise((r) => setImmediate(r));
 const REQUEST = '2b6e1f0a-7c3d-4e5f-8a9b-0c1d2e3f4a5b';
@@ -115,6 +115,31 @@ test('launch options leave out launchers this app does not know and anything unr
   assert.deepEqual(o.resumable.map((r) => r.id), ['x']);
   assert.deepEqual(o.defaults, { agent: 'codex', workspace: 'B', permissions: 'ask' });
   assert.equal(readLaunchOptions(undefined).defaults.agent, null);
+});
+
+test('launch options keep well-formed resumable omissions without requiring a known reason', () => {
+  for (const reason of ['deadline', 'a future reason', undefined]) {
+    const raw = { omitted: 2, reason, title: 'private title', path: 'private path' };
+    assert.deepEqual(readLaunchOptions({ resumableIncomplete: raw }).resumableIncomplete,
+      { omitted: 2, reason: reason ?? null });
+  }
+});
+
+test('the incomplete resumable notice matches the shared client wording', () => {
+  assert.equal(RESUMABLE_INCOMPLETE_NOTE, "Some sessions weren't checked in time. Reload choices to try again.");
+});
+
+test('launch options drop absent or malformed resumable omissions', () => {
+  const olderHost = readLaunchOptions({});
+  assert.equal(Object.hasOwn(olderHost, 'resumableIncomplete'), false);
+  for (const raw of [
+    undefined, null, false, 1, 'deadline', [], {}, { reason: 'deadline' },
+    { omitted: 0 }, { omitted: -1 }, { omitted: 1.5 }, { omitted: '2' },
+    { omitted: true }, { omitted: NaN }, { omitted: Infinity },
+    { omitted: Number.MAX_SAFE_INTEGER + 1 },
+  ]) {
+    assert.deepEqual(readLaunchOptions({ resumableIncomplete: raw }), olderHost);
+  }
 });
 
 test('a launch the machine would refuse is caught before it is sent, in the machine\'s words', () => {
