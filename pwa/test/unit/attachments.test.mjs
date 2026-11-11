@@ -150,6 +150,24 @@ for (const cleared of [false, true]) test(`a same-UUID automatic retry ${cleared
   assert.equal(Boolean(await images.get(ref)), !cleared); assert.equal(saved.get('sent-images')?.entries?.length ?? 0, cleared ? 0 : 1);
 });
 
+test('without browser storage, the original tap sends files first and then replies', { timeout: 5000 }, async (t) => {
+  const storage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  delete globalThis.localStorage;
+  t.after(() => { if (storage) { Object.defineProperty(globalThis, 'localStorage', storage); } });
+  const { client, files, log } = fakeHost(), reply = client.reply;
+  client.reply = (...args) => { log.push(['reply']); return reply(...args); };
+  const service = new ReplyService({ current: () => ({ client, hostId: 'h1' }), onTap: () => log.push(['tap']) });
+  t.after(() => service.clear());
+  const f = await prepareAttachment(file(filled(12000), 'shot.png', 'image/png'), { uuid: ids() });
+  assert.doesNotThrow(() => service.submit({ hostId: 'h1', sessionId: 's1', text: 'look', attachments: [f] }));
+  while (!client.replies.length) { await flush(); }
+  assert.deepEqual(log.map(([op]) => op), ['tap', 'start', 'chunk', 'chunk', 'reply']);
+  assert.deepEqual(Buffer.concat(files.get(f.id).chunks), Buffer.from(f.bytes));
+  client.replies[0].resolve({ outcome: 'delivered' });
+  while (service.get('h1', 's1').state !== 'done') { await flush(); }
+  assert.equal(service.get('h1', 's1').outcome, 'delivered');
+});
+
 test('a reply sends its files first, reporting how much has gone, then names them', async () => {
   const { client, service, seen, log } = setup();
   const make = ids();
