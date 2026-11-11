@@ -446,7 +446,7 @@ public class CiPlanTests
     }
 
     [Fact, Trait("Category", "Process")]
-    public void Popup_preparation_parses_and_obeys_the_popup_and_probe_failure_rule_offline()
+    public async Task Popup_preparation_parses_and_obeys_the_popup_and_probe_failure_rule_offline()
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
         var start = new System.Diagnostics.ProcessStartInfo("pwsh") { RedirectStandardOutput = true, RedirectStandardError = true };
@@ -456,7 +456,7 @@ public class CiPlanTests
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();
         Assert.True(process.WaitForExit(30000), "Offline popup checks timed out.");
-        Assert.True(process.ExitCode == 0, output.Result + error.Result);
+        Assert.True(process.ExitCode == 0, (await output) + (await error));
     }
 
     [Fact]
