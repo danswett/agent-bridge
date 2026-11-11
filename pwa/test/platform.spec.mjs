@@ -51,11 +51,11 @@ test.afterEach(async ({ page }) => {
 test.describe('shortcut hints', () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
-  test('on a Mac, Send\'s hint says ⌘↩ and search\'s ⌘K, and ⌘K focuses search', async ({ page }) => {
+  test('on a Mac, Send\'s hint says Cmd+Return and search\'s ⌘K, and ⌘K focuses search', async ({ page }) => {
     await on(page, AS.macos);
     await expect(page.locator('html')).toHaveAttribute('data-platform', 'macos');
     const v = await open(page, IDLE);
-    await expect(v.getByRole('button', { name: 'Send' })).toHaveAttribute('title', 'Send (⌘↩)');
+    await expect(v.getByRole('button', { name: 'Send' })).toHaveAttribute('title', 'Send (Cmd+Return)');
     const search = page.locator('#search');
     await expect(search).toHaveAttribute('title', 'Search sessions (⌘K)');
     await expect(search).toHaveAttribute('aria-keyshortcuts', 'Meta+K');
