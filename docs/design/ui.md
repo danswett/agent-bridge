@@ -931,6 +931,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     opens its menu. Touch and the mouse reach More as any button.
   - It holds at the narrowest list (264, §5.2) and in one column. The PWA does the same
     (`js/ui/machine-tab-fit.js`, #351).
+  - **PWA wide-layout exception (#1890, #1894):** from 760 px, keep every machine as a
+    horizontally scrolling tab, with a decorative fade only at edges with more content.
+    The chosen tab scrolls fully into view, including keyboard selection and resizing.
+    Names over 16 characters show the first 16 and an ellipsis; tooltip and accessible name
+    retain the whole name. Below 760 px, More and its keyboard behavior are unchanged.
 - macOS: a "Fleet" sidebar section.
 - iOS: a toolbar button.
 - Android: filter chips.

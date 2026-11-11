@@ -685,6 +685,18 @@ body[data-conn="busy"] .sessions, body[data-conn="warn"] .sessions, body[data-co
 .machine-tab.away { font-style: italic; }
 @media (forced-colors: active) { .machine-tab[aria-selected="true"]::after { forced-color-adjust: none; background: Highlight; } }
 @media (min-width: 760px) { .machine-tab { min-height: 36px; min-width: 32px; } }
+/* #1894: wide machine tabs scroll whole; the edge fades are decorative. */
+@media (min-width: 760px) {
+  .machine-tablist { flex: 1; overflow-x: auto; scrollbar-width: none; scroll-snap-type: x mandatory; scroll-padding-inline: 16px; }
+  .machine-tablist::-webkit-scrollbar { display: none; }
+  .machine-tablist .machine-tab { max-width: none; scroll-snap-align: start; }
+  .machine-tabs::before, .machine-tabs::after {
+    content: ""; position: absolute; top: 0; bottom: 0; width: 16px; z-index: 1; pointer-events: none; opacity: 0;
+  }
+  .machine-tabs::before { left: 0; background: linear-gradient(to right, var(--ab-layer), transparent); }
+  .machine-tabs::after { right: 0; background: linear-gradient(to left, var(--ab-layer), transparent); }
+  .machine-tabs[data-scroll-start]::before, .machine-tabs[data-scroll-end]::after { opacity: 1; }
+}
 /* A desktop's width on a touch screen (a tablet): the compact controls grow back to 44 (§9). */
 @media (min-width: 760px) and (pointer: coarse) and (not (any-pointer: fine)) {
   .nav-item { width: var(--tap); height: var(--tap); min-height: var(--tap); }
