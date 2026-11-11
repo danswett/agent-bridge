@@ -737,7 +737,7 @@ export class SessionCard {
       content: () => e.scroll.querySelectorAll('.response, .history-reply, .history-prompt, .history-tool, .user-message .bubble, .prompt-preview, .tool-line'),
       scroll: (fn) => this.collapse ? this.collapse.appScroll(fn) : fn(),
       visible: () => this.viewing() && e.scroll.getClientRects().length > 0,
-      canFollow: (revealed) => !this.#s?.question || (!revealed && !this.#touches && !this.#pressing && !this.#hovering),
+      canFollow: (revealed) => !this.#s?.question || (!revealed && (!this.#placed || (!this.#touches && !this.#pressing && !this.#hovering))),
       canDefer: () => !!this.historyStore && (!e.user.hidden || !e.prompt.hidden || !e.agentBlock.hidden),
       onFollow: () => this.update(this.#s),
     });
@@ -1525,7 +1525,7 @@ export class SessionCard {
     const held = this.#placed && (this.#touches || this.#pressing || this.#hovering);
     if (this.#sticking() && drawn && sc.getClientRects().length && !held) {
       this.#follow.after(!this.#placed);
-      this.#placed = true;
+      if (full.phase !== 'loading' || full.turns.length) { this.#placed = true; }
     }
   }
 
