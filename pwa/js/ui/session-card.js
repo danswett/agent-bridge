@@ -1496,6 +1496,7 @@ export class SessionCard {
     const slot = this.els.question;
     if (this.#s.question) { this.#slotQuestion = this.#s.question.id; } else if (!slot.hasChildNodes()) { this.#slotQuestion = null; }
     const sc = this.els.scroll;
+    const readAt = !this.turns.latest && !this.#sticking() ? sc.scrollTop : null;
     // Not at the end before this draw (the person read on, or something grew with no scroll):
     // nothing here takes them from where they are.
     // A newer turn than the last drawn is the reply the person is waiting for: it is followed.
@@ -1508,6 +1509,11 @@ export class SessionCard {
     // Not in a turn (none holds it, or the history is not drawn): back where the live exchange ends.
     if (!this.turns.hosted && slot.parentNode !== this.els.stream) { this.els.stream.append(slot); }
     this.#syncWaiting();
+    // Chromium anchors to the old live stream while its stored replacement is inserted above it.
+    if (readAt !== null && this.turns.latest) {
+      const keep = () => { sc.scrollTop = readAt; };
+      if (this.collapse) { this.collapse.appScroll(keep); } else { keep(); }
+    }
     if (away && drawn && tail === this.turns.element.lastElementChild) { this.#stick = false; }
     this.#wantEarlier();
     // Latest at the bottom, kept there until the person scrolls (#1646). A draw that showed
