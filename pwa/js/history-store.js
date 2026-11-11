@@ -84,9 +84,9 @@ export class HistoryStore {
   }
 
   // The page before the oldest turn held. Nothing is asked when there is none to ask for.
-  loadEarlier(hostId, sessionId) {
+  loadEarlier(hostId, sessionId, { keepLatest = false } = {}) {
     const e = this.#entry(hostId, sessionId);
-    return this.#run(e, 'earlier', (gen) => this.#earlier(e, gen));
+    return this.#run(e, 'earlier', (gen) => this.#earlier(e, gen, keepLatest));
   }
 
   // The session's activity, merged: by the id of its latest turn, never between turns held (the
@@ -209,7 +209,7 @@ export class HistoryStore {
     this.#land(e, result, 'newest');
   }
 
-  async #earlier(e, gen) {
+  async #earlier(e, gen, keepLatest) {
     if (e.before === null) { return; }
     const client = this.#client(e, 'earlier');
     if (!client) { return; }
@@ -256,7 +256,7 @@ export class HistoryStore {
         // Nothing held is within reach: what the host serves now takes its place.
         if (!reached) { e.recovering = null; break; }
       } else {
-        oldest = this.#page(e, result, 'earlier');
+        oldest = this.#page(e, result, 'earlier', keepLatest);
       }
       cursor = result.before;
       if (!e.recovering) { break; }
@@ -294,7 +294,7 @@ export class HistoryStore {
   // where it belongs by the turns it shares with what is held; one that shares none is not known
   // to follow it, and takes its place (but for turns only activity has said, which are the newest).
   // Returns whether the page's own cursor (or its start) is the held turns' now.
-  #page(e, page, kind) {
+  #page(e, page, kind, keepLatest = false) {
     const aligned = alignHistoryTurns(e.turns, page.turns, kind === 'newest', e.latest);
     e.turns = aligned.held;
     const P = aligned.turns;
@@ -307,6 +307,9 @@ export class HistoryStore {
         const at = turns.findIndex((h) => h.id === t.id);
         if (at < 0) { fresh.push(t); } else { turns[at] = adopt(t, turns[at]); }
       }
+      // If the oldest page turn cannot fit, keep the prior cursor: a later replay deduplicates
+      // the admitted suffix, then advances the cursor only once the whole page fits.
+      if (keepLatest) { fresh.splice(0, Math.max(0, turns.length + fresh.length - this.keep)); }
       turns = [...fresh, ...turns];
     } else {
       turns = this.#newestMerge(e, P);

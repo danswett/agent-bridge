@@ -1497,7 +1497,7 @@ export class SessionCard {
     this.#earlierAsked = true;
     const go = () => {
       this.#earlierAsked = false;
-      if (this.#unwatch) { this.historyStore.loadEarlier(this.hostId, this.#s.id).catch(() => {}); }
+      if (this.#unwatch) { this.historyStore.loadEarlier(this.hostId, this.#s.id, { keepLatest: true }).catch(() => {}); }
     };
     if (globalThis.requestIdleCallback) { globalThis.requestIdleCallback(go, { timeout: 500 }); } else { setTimeout(go, 50); }
   }
@@ -1510,7 +1510,7 @@ export class SessionCard {
   // The person asked for earlier turns (the button, Try again) or came within a screen of the top.
   #loadEarlier() {
     if (!this.#unwatch || this.#atCap(this.historyStore.get(this.hostId, this.#s.id))) { return; }
-    this.historyStore.loadEarlier(this.hostId, this.#s.id).catch(() => {});
+    this.historyStore.loadEarlier(this.hostId, this.#s.id, { keepLatest: true }).catch(() => {});
   }
 
   // Reading near the top loads the page before it, once the turns held are drawn; a failed page
