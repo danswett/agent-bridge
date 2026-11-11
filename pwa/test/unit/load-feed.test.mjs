@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { HostClient } from '../../js/host-client.js';
 import { LoadFeed } from '../../js/load-feed.js';
 import { loadBars } from '../../js/load-bars.js';
-
 const sample = (extra = {}) => ({ state: 'fresh', ageMs: 2000, staleAfterMs: 15000,
   cpu: { percent: 37.5 }, memory: { totalBytes: 100, availableBytes: 25 }, ...extra });
 async function fake(t, { capabilities = ['load'], hold = [], result = sample() } = {}) {
@@ -25,7 +24,6 @@ async function fake(t, { capabilities = ['load'], hold = [], result = sample() }
     update: (data) => transport.onmessage({ ev: 'load.update', seq: ++seq, data }) };
 }
 const flush = () => new Promise((resolve) => setImmediate(resolve));
-
 test('get then subscribe feeds exact machine figures and ignores all other fields', async (t) => {
   const a = await fake(t), b = await fake(t, { result: sample({ cpu: undefined }) });
   const changes = [];
@@ -38,7 +36,6 @@ test('get then subscribe feeds exact machine figures and ignores all other field
   assert.equal(loadBars(feed.load('b')).cpu.percent, null);
   assert.ok(changes.includes('a') && changes.includes('b'));
 });
-
 test('only the host state and age determine freshness, never elapsed client time', async (t) => {
   let now = 100;
   const a = await fake(t), feed = new LoadFeed({ now: () => now });
@@ -62,7 +59,6 @@ test('no load capability makes no load request and exposes no record or demo fig
   assert.equal(feed.load('a'), null);
   assert.equal(loadBars(feed.load('a')).word, 'Unavailable');
 });
-
 test('duplicate attachment subscribes once and disconnect clears before reconnect subscribes again', async (t) => {
   const a = await fake(t), feed = new LoadFeed();
   await Promise.all([feed.attach('a', a.client), feed.attach('a', a.client)]);
@@ -93,7 +89,6 @@ test('late responses cannot restore a disconnected record or overwrite a newer u
   await attached;
   assert.equal(feed.load('a').cpu.percent, 90);
 });
-
 test('malformed and oversized updates are ignored and valid updates are limited to one per second', async (t) => {
   t.mock.method(console, 'error', () => {});
   let now = 0;
@@ -112,7 +107,6 @@ test('malformed and oversized updates are ignored and valid updates are limited 
   a.update(sample({ cpu: { percent: 20 } }));
   assert.equal(feed.load('a').cpu.percent, 20);
 });
-
 test('a refused subscription surfaces its error instead of leaving apparently live figures', async (t) => {
   const a = await fake(t, { hold: ['load.subscribe'] }), feed = new LoadFeed();
   const pending = feed.attach('a', a.client), rejected = assert.rejects(pending, /load.subscribe/);
@@ -120,4 +114,13 @@ test('a refused subscription surfaces its error instead of leaving apparently li
   a.refuse(a.sent.find((m) => m.op === 'load.subscribe'));
   await rejected;
   assert.equal(feed.load('a'), null);
+});
+
+test('a failed old unsubscribe cannot block a healthy replacement client', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  const a = await fake(t, { hold: ['load.unsubscribe'] }), b = await fake(t), feed = new LoadFeed();
+  await feed.attach('a', a.client);
+  const pending = feed.attach('a', b.client); await flush(); a.client.close();
+  await pending;
+  assert.deepEqual(b.ops(), ['load.get', 'load.subscribe']);
 });

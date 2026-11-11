@@ -27,6 +27,7 @@ export class LoadFeed {
     if (previous?.client === client && client.capabilities.includes('load')) { return previous.pending; }
     const detached = this.detach(machineId);
     if (client.closed || !client.capabilities.includes('load')) { return detached; }
+    void detached.catch((error) => console.error(error));
     const entry = { client, record: null, revision: 0, lastUpdate: -Infinity, off: [], subscribing: false };
     this.#machines.set(machineId, entry);
     const current = () => this.#machines.get(machineId) === entry;
@@ -46,7 +47,7 @@ export class LoadFeed {
       const raw = await client.request(op);
       if (revision === entry.revision) { accept(raw); }
     };
-    entry.pending = detached.then(async () => {
+    entry.pending = Promise.resolve().then(async () => {
       if (!current()) { return; }
       await ask('load.get');
       if (!current()) { return; }
