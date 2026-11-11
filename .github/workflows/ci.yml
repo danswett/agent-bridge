@@ -222,7 +222,7 @@ jobs:
             # A pull request: the windows-11-arm product leg and the app's packaging legs run
             # when the change calls for them (the app only for a reason of its own), and on main.
             $ring = if ($env:WHOLE_RING -eq 'true') { 2 } else { 1 }
-            ./quality/plan.ps1 -Ring $ring -Base $env:BASE -Head HEAD -CompareRing1:($ring -gt 1) -Narrow app -ExcludePlatform win-arm64 -Jobs $jobs
+            ./quality/plan.ps1 -Ring $ring -Base $env:BASE -Head HEAD -CompareRing1:($ring -gt 1) -Narrow app,app-installer -ExcludePlatform win-arm64 -Jobs $jobs
           } else {
             $ring = if ($env:WHOLE_RING -eq 'true') { 2 } else { 1 }
             ./quality/plan.ps1 -Ring $ring -Base $env:BASE -Head HEAD -CompareRing1:($ring -gt 1) -Jobs $jobs
