@@ -17,6 +17,14 @@ namespace AgentBridge.Host.Core.Parsing;
 public static class CopilotTurnErrors
 {
     public static bool EndsTurn(JsonElement data) => Json.Str(data, "errorType") is not ("model_call" or "hook");
+
+    // #1846: eligibility only, not permission to type. Only the recorded empty-response
+    // signature (#1843) is known transient; a new cause needs a captured sample first.
+    // Structured failures/remediation win even if their message matches that signature.
+    public static bool CanRetry(JsonElement data) =>
+        Json.Get(data, "statusCode") is null && Json.Get(data, "remediation") is null
+        && Json.Str(data, "errorType") == "query"
+        && Json.Str(data, "message") == "No response was returned. Send your message again to retry.";
 }
 
 internal static class AgentErrors

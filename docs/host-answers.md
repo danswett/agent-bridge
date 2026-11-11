@@ -5,6 +5,23 @@ into the agent's own prompt, as if it had been typed at the machine. The prompt 
 answerable at the terminal the whole time; whichever answer lands first wins. This page is
 how the host does it and what it refuses.
 
+## Transient error eligibility (#1846, classification slice)
+
+`CopilotTurnErrors.CanRetry` accepts only the captured `session.error` data from
+#1843: `errorType: query` with the exact message "No response was returned. Send
+your message again to retry.", and no non-null `statusCode` or `remediation`.
+Any status or remediation, even an unknown or malformed one, refuses eligibility.
+Other types (including auth, quota, policy, hook and model-call errors), missing
+or reshaped fields, the session-host delivery wedge, and unknown messages are
+ineligible. Network wording is not guessed; adding a network signature needs a
+captured record and refusal tests first.
+
+This predicate does not send anything, schedule retries, change attention, or
+grant permission to act. The bounded loop, shared owner/auto attempt counter,
+attempt visibility and staged healing remain follow-up work on #1846. Any later
+sender must use the existing guarded `session.reply` path, preserving G5 and #67,
+and must not answer a question, trust prompt or permission confirmation.
+
 ## What can be answered
 
 | Agent | Question | Answered |
