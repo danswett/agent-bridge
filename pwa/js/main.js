@@ -79,7 +79,11 @@ const $ = (id) => document.getElementById(id);
 }
 // Settings > Keyboard check (#1209): what a hardware keyboard's keys reach the app as.
 mountKeyCheck();
-const appRelease = new AppRelease({ version: APP_VERSION, onChange: (state) => releaseView?.render(state) });
+const appRelease = new AppRelease({
+  version: APP_VERSION,
+  fetchVersion: (...args) => fetch(...args),
+  onChange: (state) => releaseView?.render(state),
+});
 const releaseView = mountRelease({ version: APP_VERSION, builtAt: BUILT_AT, check: () => appRelease.check() });
 const params = new URLSearchParams(location.search);
 const BASE = RELAY || location.origin;
