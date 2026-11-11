@@ -28,6 +28,8 @@ param(
     # A draft pull request's run (quality/README.md §2): ring 0's suites, on Linux only, with ring
     # 0's test filter. The summary says plainly that it's partial; ready for review runs ring 1.
     [switch] $FastRing,
+    # Main can reuse completed product evidence for proven docs/ordinary-test-only changes.
+    [switch] $MainPush,
     [Parameter(Mandatory)]
     [string] $Base,
     [Parameter(Mandatory)]
@@ -117,6 +119,7 @@ function Test-OwnReason([string] $job) {
 $outputs = [ordered]@{}
 foreach ($job in $Jobs) {
     $runs = if ($job -in $Narrow -and $ring1) { Test-OwnReason $job } else { $ci.ContainsKey($job) }
+    if ($MainPush -and $job -eq 'product' -and -not $whole -and $selection.nonProductOnly -eq $true) { $runs = $false }
     $outputs[$job] = if ($runs) { 'true' } else { 'false' }
 }
 $outputs['suites'] = ConvertTo-JsonArray $ids
@@ -164,7 +167,7 @@ foreach ($job in $Jobs) {
     $md.Add("| $job | $runs | $((@($ci[$job] ?? @()) | ForEach-Object { Code $_ }) -join ', ') |")
 }
 $md.Add("")
-if ($productIds.Count -gt 0) {
+if ($outputs['product'] -eq 'true') {
     $projects = if ($whole) { 'all of AgentBridge.slnx' } else { (@($testProjects | ForEach-Object { Code $_ }) -join ', ') }
     $md.Add("product tests $(if ($projects) { $projects } else { 'no .NET test project' }), on $((@($productOs) -join ', ')).")
     $md.Add("")

@@ -286,9 +286,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    re-run (attempt 2 on) never joins `ci-main` but gets its own run-id group, like a run by hand,
    so it runs beside them and can't take a waiting push run's place and leave that push's commit
    untested (#938's review). GitHub promises no
-   order between push runs: the merge rule reads the current main commit's push run and its
-   named test jobs, not an older finished run. Missing or cancelled jobs and read errors hold;
-   there is no green-ancestor fallback for merging (item 9).
+   order between push runs: the merge rule ignores cancelled runs and unfinished product
+   evidence, judging the newest usable named-job result (item 9).
    So a main run's change is everything since the last commit main's CI
    passed on: the plan reads `ci.yml`'s passed push runs on `main` (the newest 100, through the
    `actions: read` token), takes the newest whose commit is an ancestor of this one, fetches
@@ -297,6 +296,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    or the runs unreadable, runs the whole ring, never "no change". A docs-only push to `main`
    runs what docs select (`light`'s link check, say), not the app or the product's builds.
    Pull requests keep cancelling a superseded run, and a run by hand its own group.
+   Known docs/ordinary-test-only main changes also skip `product` through its plan output.
+   The selector proves test-source ownership through the project graph: files linked into or
+   referenced by shipped projects, embedded protocol examples, whole-ring inputs (including the
+   selector's tests), and unclassifiable paths still run product. PRs still test changed tests;
+   unknown-base main runs keep the whole ring. There are no push-trigger path filters.
 
    **Packaging needs an app reason over a known range (#1910).** Pull requests and main pushes
    with a proven base pass
@@ -513,8 +517,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    green.
    - `merge-rule` is a commit status that main's copy of `.github/workflows/merge-rule.yml` posts
      on each open pull request's head, from `agent-bridge-quality merge-rule` (`MergeRule.cs`) and
-     the rules in [`merge-rule.yml`](merge-rule.yml): main green, that is every named test job
-     in main's latest push run of `ci.yml` passed at its own latest attempt, unless the pull request has the
+     the rules in [`merge-rule.yml`](merge-rule.yml): main green, that is its newest completed
+     product evidence in `ci.yml` passed the named jobs at their own latest attempts, unless the pull request has the
      `fixes-main` label; not a draft; no `hold` or `do-not-merge`
      label; an independent-review receipt on the head (see the standing rule below; a Copilot review is optional and an errored one is ignored, #706); CodeQL's latest run on the head green and
      code scanning's `CodeQL` check not failed; every other check run and status on the head
@@ -530,22 +534,26 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      share a head get the worst of their verdicts, since a status belongs to the commit.
    - Main must be green, since auto-merge doesn't pause while main's CI is red and would keep
      landing pull requests on a broken main, which makes the breakage hard to untangle. Each run
-     reads main's current ref once and selects that commit's latest `ci.yml` push run, not the
-     run that finished last or an older commit whose run id is newer. The single
+     walks main's `ci.yml` push runs newest first, across up to 100 runs. A cancelled run never
+     counts. A candidate needs a successful completed plan and completed product instances;
+     queued, in-progress or cancelled named jobs pass the run over. A failed plan or a
+     classification-skipped product family also passes it over. A newer main head still running
+     does not block; the pull request's own running checks still do. The single
      `main_green.jobs` list pins exact display names for ha-integration, spikes, spikes-linux,
      light, pwa-ui, pwa-e2e and app, including every static shard and runtime. Product is a
      dynamic family: at least one entry must exist and every present instance must pass; runners
      omitted by the plan are not required. Entirely absent families still hold.
      The aggregate quality-gate is excluded because it waits on installer. The plan job must
-     succeed. Only then may completed `skipped` entries count as green, including GitHub's
-     unexpanded matrix-family skipped entry: the selector chose not to run that family.
-     Otherwise every named instance must succeed: missing, renamed, running, red or cancelled holds.
+     succeed. Completed `skipped` siblings count as green, including GitHub's unexpanded
+     matrix-family entry; a skipped product family is not product evidence. Every named job
+     that ran must succeed: a failed product or sibling holds main red, even beside skipped
+     siblings. Missing, renamed or neutral named jobs never grant green.
      Jobs are paged across all attempts, then judged by their own latest attempt (and job id
      within an attempt), so rerunning only failed jobs can free main without discarding earlier
      successful jobs. Installer, signing and publishing results do not hold, even if red or
      pending; the evaluator prints them as non-gating jobs for Quality's main-red log.
-     There is no green-ancestor fallback for missing or cancelled named jobs. Main unread, or
-     with no push run for its current commit, fails closed. The fix itself gets the `fixes-main`
+     Unreadable history, plan or product data fails closed without fallback. No usable run in
+     the bounded history also holds with an explicit reason. The fix itself gets the `fixes-main`
      label (`main_green.exempt_labels`) from the merge coordinator, since labels take triage
      rights: it skips this check and nothing else, the independent review included. CI finishing
      on main starts a run, so verdicts follow main to red and back.

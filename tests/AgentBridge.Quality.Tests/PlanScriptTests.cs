@@ -27,6 +27,7 @@ public class PlanScriptTests
     [InlineData("push", "Directory.Build.props", true, true)]
     [InlineData("push", ".github/actions/install-trivy/action.yml", true, true)]
     [InlineData("push", "tests/Example.Tests/Test.cs", false, false)]
+    [InlineData("push", "tests/Example.Tests/Shared.cs", true, false)]
     [InlineData("pull_request", "tests/Example.Tests/Test.cs", false, false)]
     [InlineData("push", "tests/AgentBridge.Quality.Tests/Test.cs", false, true)]
     [InlineData("push", "docs/protocol/examples/demo.json", true, false)]
@@ -64,7 +65,7 @@ public class PlanScriptTests
             var whole = steps.Children.Cast<YamlMappingNode>().Single(step =>
                 step.Children.TryGetValue(new YamlScalarNode("id"), out var id) && id.ToString() == "whole-ring");
             Write("quality/plan.ps1", File.ReadAllText(Path.Combine(root, "quality", "plan.ps1")));
-            Write("src/AgentBridge.App/App.csproj", """<Project><ItemGroup><EmbeddedResource Include="../../docs/protocol/examples/*.json" /></ItemGroup></Project>""");
+            Write("src/AgentBridge.App/App.csproj", """<Project><ItemGroup><EmbeddedResource Include="../../docs/protocol/examples/*.json" /><Compile Include="../../tests/Example.Tests/Shared.cs" /></ItemGroup></Project>""");
             Write("tests/Example.Tests/Tests.csproj", """<Project><ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" /></ItemGroup></Project>""");
             Write("quality/catalog.yml", """
                 global_triggers: [.github/workflows/**, .github/actions/**, quality/**, tests/AgentBridge.Quality.Tests/**, '**/Directory.Build.*']
@@ -193,7 +194,7 @@ public class PlanScriptTests
                 $"app={outputs["app"]}\napp-installer={outputs["app-installer"]}");
             foreach (var job in new[] { "product", "ha-integration", "spikes", "spikes-linux", "pwa-ui", "pwa-e2e" })
                 Assert.Equal(job == "product" && eventName == "push" && changed.StartsWith("tests/", StringComparison.Ordinal)
-                    && !wholeRing && anotherFile is null ? "false"
+                    && !wholeRing && anotherFile is null && changed != "tests/Example.Tests/Shared.cs" ? "false"
                     : wholeRing || changed != "docs/guide.md" ? "true" : "false", outputs[job]);
             Assert.Equal("true", outputs["light"]);
             if (wholeRing)

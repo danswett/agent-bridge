@@ -93,7 +93,7 @@ static class MergeRuleCommand
                      [--post] [--target-url URL] [--summary FILE] [--allow-non-main]
               Judges open pull requests into main against quality/merge-rule.yml: those on the
               numbered one's head, those whose head is SHA, or all of them. Main's CI comes
-              first: while any named job on its latest push isn't green, every pull request fails
+              first: while the latest completed product evidence isn't green, every pull request fails
               but one with an exempt label (main_green). Prints each verdict;
               with --post, also sets each head's merge-rule status to the worst verdict on it
               (unless the workflow already posted the same), and with --summary, appends a
@@ -417,48 +417,26 @@ static class MergeRuleCommand
     }
 
     /// <summary>
-    /// Main's current commit and its latest push run, judged only by the configured exact job
-    /// names at each job's latest attempt. Missing or unreadable facts never grant green.
+    /// Main's newest completed product evidence, with each named job's latest attempt.
+    /// Missing or unreadable facts never grant green.
     /// </summary>
     static MainFact ReadMain(Session session, out string log)
     {
         var config = session.Config;
         try
         {
-            // Pin to main's current commit. An old push finishing (or being rerun) later must
-            // never replace the result for a newer commit; run ids aren't commit order either.
-            using var head = session.Rest($"repos/{session.Slug}/git/ref/heads/{Uri.EscapeDataString(config.Base)}");
-            var sha = head.RootElement.GetProperty("object").GetProperty("sha").GetString();
-            if (!IsCommitSha(sha))
-                throw new InvalidOperationException("main has no valid commit SHA");
-            var path = $"repos/{session.Slug}/actions/workflows/{Uri.EscapeDataString(config.MainGreen.Workflow)}/runs?branch={Uri.EscapeDataString(config.Base)}&event=push&per_page=20&head_sha={sha}";
-            using var doc = session.Rest(path);
-            var runs = doc.RootElement.GetProperty("workflow_runs").EnumerateArray()
-                .Where(r => r.GetProperty("head_sha").GetString() == sha)
-                .OrderByDescending(r => r.GetProperty("id").GetInt64()).ToList();
-            if (runs.Count == 0)
+            var evidence = CompletedMain(session);
+            if (evidence is null)
             {
-                log = $"Main: no {config.MainGreen.Workflow} push run on {config.Base} commit {sha}.";
-                return new("failure", $"no CI run on {config.Base} commit {MergeRule.Short(sha!)}: waiting for one");
+                log = $"Main: no completed non-cancelled product evidence in {config.MainGreen.Workflow}'s push history.";
+                return new("failure", $"no completed non-cancelled CI run on {config.Base}: waiting for one");
             }
-            var run = runs[0];
+            var (run, latest) = evidence.Value;
+            var sha = run.GetProperty("head_sha").GetString();
+            if (!IsCommitSha(sha))
+                throw new InvalidOperationException("CI run has no valid commit SHA");
             var id = run.GetProperty("id").GetInt64();
             var attempt = RunAttempt(run);
-            var jobs = new List<JsonElement>();
-            for (var page = 1; ; page++)
-            {
-                using var listed = session.Rest($"repos/{session.Slug}/actions/runs/{id}/jobs?filter=all&per_page=100&page={page}");
-                var batch = listed.RootElement.GetProperty("jobs");
-                jobs.AddRange(batch.EnumerateArray().Select(j => j.Clone()));
-                if (jobs.Count >= listed.RootElement.GetProperty("total_count").GetInt32())
-                    break;
-                if (batch.GetArrayLength() == 0 || page >= 20)
-                    throw new InvalidOperationException("CI job list is incomplete");
-            }
-            // Failed-jobs-only reruns omit successes from the new attempt. Keep the latest
-            // attempt of each exact display name, not just jobs from the run's latest attempt.
-            var latest = jobs.GroupBy(j => j.GetProperty("name").GetString() ?? "", StringComparer.Ordinal)
-                .ToDictionary(g => g.Key, g => g.OrderByDescending(RunAttempt).ThenByDescending(j => j.GetProperty("id").GetInt64()).First(), StringComparer.Ordinal);
             var planGreen = latest.TryGetValue("plan", out var plan)
                 && plan.GetProperty("status").GetString() == "completed" && plan.GetProperty("conclusion").GetString() == "success";
             bool Green(JsonElement job) => job.GetProperty("status").GetString() == "completed"
@@ -493,6 +471,73 @@ static class MergeRuleCommand
             return new MainFact("error", MergeRule.Printable($"couldn't read {config.Base}'s CI: {e.Message}"));
         }
     }
+
+    static (JsonElement Run, Dictionary<string, JsonElement> Jobs)? CompletedMain(Session session)
+    {
+        var config = session.Config;
+        var seen = 0;
+        for (var page = 1; ; page++)
+        {
+            using var doc = session.Rest($"repos/{session.Slug}/actions/workflows/{Uri.EscapeDataString(config.MainGreen.Workflow)}/runs?branch={Uri.EscapeDataString(config.Base)}&event=push&per_page=20&page={page}");
+            var runs = doc.RootElement.GetProperty("workflow_runs");
+            foreach (var run in runs.EnumerateArray().OrderByDescending(r => r.GetProperty("id").GetInt64()))
+            {
+                if (run.GetProperty("conclusion").GetString() == "cancelled")
+                    continue;
+                var id = run.GetProperty("id").GetInt64();
+                var jobs = new List<JsonElement>();
+                for (var jobPage = 1; ; jobPage++)
+                {
+                    using var listed = session.Rest($"repos/{session.Slug}/actions/runs/{id}/jobs?filter=all&per_page=100&page={jobPage}");
+                    var batch = listed.RootElement.GetProperty("jobs");
+                    jobs.AddRange(batch.EnumerateArray().Select(j => j.Clone()));
+                    if (jobs.Count >= listed.RootElement.GetProperty("total_count").GetInt32())
+                        break;
+                    if (batch.GetArrayLength() == 0 || jobPage >= 20)
+                        throw new InvalidOperationException("CI job list is incomplete");
+                }
+                // Failed-jobs-only reruns retain earlier successful instances.
+                var latest = jobs.GroupBy(j => j.GetProperty("name").GetString() ?? "", StringComparer.Ordinal)
+                    .ToDictionary(g => g.Key, g => g.OrderByDescending(RunAttempt).ThenByDescending(j => j.GetProperty("id").GetInt64()).First(), StringComparer.Ordinal);
+                // A failed plan's unexpanded skipped family is replaced when a retry expands it.
+                foreach (var placeholder in latest.Where(j => j.Value.GetProperty("conclusion").GetString() == "skipped"
+                    && (!j.Key.Contains(" (", StringComparison.Ordinal) || j.Key.Contains(" (${{ matrix.", StringComparison.Ordinal))).ToList())
+                    if (latest.Any(j => j.Key.StartsWith(placeholder.Key.Split(" (", StringSplitOptions.None)[0] + " (", StringComparison.Ordinal)
+                        && j.Key != placeholder.Key && RunAttempt(j.Value) > RunAttempt(placeholder.Value)))
+                        latest.Remove(placeholder.Key);
+                if (!latest.TryGetValue("plan", out var plan))
+                    throw new InvalidOperationException("CI job list has no plan");
+                var planPending = Incomplete(plan);
+                var planConclusion = plan.GetProperty("conclusion").GetString();
+                if (!planPending && planConclusion is null)
+                    throw new InvalidOperationException("completed plan has no conclusion");
+                if (planPending || planConclusion != "success")
+                    continue;
+                var product = latest.Where(j => j.Key == "product" || j.Key.StartsWith("product (", StringComparison.Ordinal)).ToList();
+                if (product.Count == 0)
+                    throw new InvalidOperationException("CI job list has no product family");
+                if (product.Any(j => Incomplete(j.Value)
+                    || j.Value.GetProperty("conclusion").GetString() is "cancelled" or "skipped"))
+                    continue;
+                if (latest.Any(j => config.MainGreen.Jobs.Any(n => n.Split(" (", StringSplitOptions.None)[0] == j.Key.Split(" (", StringSplitOptions.None)[0])
+                    && (Incomplete(j.Value) || j.Value.GetProperty("conclusion").GetString() == "cancelled")))
+                    continue;
+                return (run.Clone(), latest);
+            }
+            seen += runs.GetArrayLength();
+            if (seen >= doc.RootElement.GetProperty("total_count").GetInt32())
+                return null;
+            if (runs.GetArrayLength() == 0 || page >= 5)
+                throw new InvalidOperationException("CI run history is incomplete (100-run window)");
+        }
+    }
+
+    static bool Incomplete(JsonElement job) => job.GetProperty("status").GetString() switch
+    {
+        "completed" => false,
+        "queued" or "in_progress" or "waiting" or "pending" or "requested" => true,
+        _ => throw new InvalidOperationException("CI job has missing or invalid status"),
+    };
 
     static int RunAttempt(JsonElement run) =>
         run.TryGetProperty("run_attempt", out var value) && value.ValueKind == JsonValueKind.Number

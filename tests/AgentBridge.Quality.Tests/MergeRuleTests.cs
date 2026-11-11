@@ -1479,6 +1479,7 @@ public class MergeRuleTests
         }
         else if (scenario == "plan-failed")
             jobs[2] = Job(3, "app (win-arm64)", conclusion: "skipped");
+        jobs.Add(Job(39, "product (ubuntu-latest)"));
         jobs.Add(Job(40, "plan", conclusion: scenario == "plan-failed" ? "failure" : "success"));
         foreach (var name in new[] { "app-installer (win-arm64)", "sign", "publish", "quality-gate" })
             jobs.Add(Job(50 + jobs.Count, name, scenario == "installer-pending" ? "in_progress" : "completed",
@@ -1493,7 +1494,9 @@ public class MergeRuleTests
             var output = new StringWriter();
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain);
             Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
-            if (scenario is not ("missing-run" or "invalid-attempt"))
+            if (scenario is "running" or "plan-failed" or "cancelled" or "rerun-running")
+                Assert.Contains("no completed non-cancelled product evidence", output.ToString(), StringComparison.Ordinal);
+            else if (scenario is not ("missing-run" or "invalid-attempt"))
                 Assert.Contains("app-installer (win-arm64)", output.ToString(), StringComparison.Ordinal);
         }
         finally { File.Delete(config); }
@@ -1504,14 +1507,15 @@ public class MergeRuleTests
     {
         var github = new FakeGitHub(GraphQLPullRequest(Head), mainJobPages: [
             """
-                {"total_count":5,"jobs":[
+                {"total_count":6,"jobs":[
                 {"id":0,"name":"plan","status":"completed","conclusion":"success","run_attempt":1},
+                {"id":5,"name":"product (ubuntu-latest)","status":"completed","conclusion":"success","run_attempt":1},
                 {"id":1,"name":"light","status":"completed","conclusion":"success","run_attempt":1},
                 {"id":2,"name":"app (win-x64)","status":"completed","conclusion":"success","run_attempt":1},
                 {"id":3,"name":"app (win-arm64)","status":"completed","conclusion":"failure","run_attempt":1}]}
             """,
             """
-                {"total_count":5,"jobs":[
+                {"total_count":6,"jobs":[
                 {"id":4,"name":"app (win-arm64)","status":"completed","conclusion":"success","run_attempt":2}]}
             """,
         ]);
@@ -1557,12 +1561,14 @@ public class MergeRuleTests
         finally { File.Delete(config); }
     }
 
-    [Fact]
-    public void A_skipped_classification_run_does_not_replace_the_last_tested_main()
+    [Theory]
+    [InlineData("success")]
+    [InlineData("failure")]
+    public void A_skipped_classification_or_failed_plan_does_not_replace_the_last_tested_main(string planConclusion)
     {
-        var skipped = JsonSerializer.Serialize(new { total_count = 4, jobs =
-            new[] { "light", "app (win-x64)", "app (win-arm64)", "plan" }.Select((name, id) =>
-                new { id, name, status = "completed", conclusion = name == "plan" ? "success" : "skipped", run_attempt = 1 }),
+        var skipped = JsonSerializer.Serialize(new { total_count = 5, jobs =
+            new[] { "light", "app (win-x64)", "app (win-arm64)", "product", "plan" }.Select((name, id) =>
+                new { id, name, status = "completed", conclusion = name == "plan" ? planConclusion : "skipped", run_attempt = 1 }),
         });
         var github = new FakeGitHub(GraphQLPullRequest(Head),
             mainRuns: MainRuns((6, "completed", "success", 1), (5, "completed", "failure", 1)),
@@ -1577,11 +1583,74 @@ public class MergeRuleTests
     }
 
     [Theory]
+    [InlineData(false, "failure")]
+    [InlineData(true, "error")]
+    public void History_is_paged_and_an_unreadable_later_page_never_grants_green(bool unreadable, string state)
+    {
+        var first = JsonSerializer.Serialize(new { total_count = 21, workflow_runs = Enumerable.Range(6, 20)
+            .Select(id => new { id, head_sha = $"c{id}".PadRight(40, '0'), status = "completed", conclusion = "cancelled", run_attempt = 1 }) });
+        var older = MainRuns((5, "completed", "failure", 1));
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: older,
+            mainRunPages: unreadable ? [first] : [first, older]);
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+            Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
+            Assert.Contains(github.RestPaths, p => p.Contains("per_page=20&page=2", StringComparison.Ordinal));
+        }
+        finally { File.Delete(config); }
+    }
+
+    [Theory]
+    [InlineData("product", "success", "success")]
+    [InlineData("product (${{ matrix.os }})", "failure", "failure")]
+    public void A_successful_plan_retry_supersedes_its_old_skipped_product_placeholder(string placeholder, string conclusion, string state)
+    {
+        object Entry(int id, string name, string result, int attempt) =>
+            new { id, name, status = "completed", conclusion = result, run_attempt = attempt };
+        var jobs = new[] { Entry(0, placeholder, "skipped", 1), Entry(1, "plan", "success", 2),
+            Entry(2, "product (ubuntu-latest)", conclusion, 2), Entry(3, "light", "skipped", 2),
+            Entry(4, "app (win-x64)", "skipped", 2), Entry(5, "app (win-arm64)", "skipped", 2) };
+        var github = new FakeGitHub(GraphQLPullRequest(Head),
+            mainRuns: MainRuns((6, "completed", conclusion, 2), (5, "completed", "success", 1)),
+            jobsByRun: new Dictionary<long, string> { [6] = JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }) });
+        var config = WriteConfig();
+        try
+        {
+            var output = new StringWriter();
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain);
+            Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
+            Assert.Contains("Main: ci.yml run 6", output.ToString(), StringComparison.Ordinal);
+        }
+        finally { File.Delete(config); }
+    }
+
+    [Theory]
+    [InlineData("plan")]
+    [InlineData("product (ubuntu-latest)")]
+    public void Unreadable_plan_or_product_status_cannot_fall_back_to_older_green(string unreadable)
+    {
+        var jobs = new[] { "plan", "product (ubuntu-latest)" }.Select((name, id) =>
+            new { id, name, status = name == unreadable ? null : "completed", conclusion = "success", run_attempt = 1 }).ToArray();
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: MainRuns((6, "completed", "success", 1), (5, "completed", "success", 1)),
+            jobsByRun: new Dictionary<long, string> { [6] = JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }) });
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+            Assert.Contains(" error merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
+            Assert.DoesNotContain(github.RestPaths, p => p.Contains("/actions/runs/5/jobs?", StringComparison.Ordinal));
+        }
+        finally { File.Delete(config); }
+    }
+
+    [Theory]
     [InlineData("subset", "success")]
-    [InlineData("absent", "failure")]
+    [InlineData("absent", "error")]
     [InlineData("red", "failure")]
-    [InlineData("skipped", "success")]
-    [InlineData("family-skipped", "success")]
+    [InlineData("skipped", "failure")]
+    [InlineData("family-skipped", "failure")]
     public void A_selective_main_run_requires_product_but_not_unselected_product_runners(string scenario, string state)
     {
         var config = Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml");
@@ -1652,7 +1721,7 @@ public class MergeRuleTests
             hold_labels: [hold]
             independent_review: { context: independent-review, posters: [danswett] }
             codeql: { workflow: CodeQL, check: CodeQL }
-            main_green: { workflow: ci.yml, exempt_labels: [fixes-main], jobs: [light, app (win-x64), app (win-arm64)] }
+            main_green: { workflow: ci.yml, exempt_labels: [fixes-main], jobs: [light, app (win-x64), app (win-arm64), product] }
             copilot_waiver: { second_review: independent-review-2 }
             sensitive_paths: [docs/old.md]
             """);
@@ -1740,7 +1809,7 @@ public class MergeRuleTests
     /// <paramref name="statuses"/> REST's status history, and <paramref name="mainRuns"/> (or one
     /// green run) main's CI.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null) : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null) : IGitHub
     {
         public List<string> Posted { get; } = [];
 
@@ -1783,7 +1852,14 @@ public class MergeRuleTests
                 return JsonDocument.Parse(JsonSerializer.Serialize(new { total_count = matching.Length, workflow_runs = matching }));
             }
             if (path.Contains("/actions/workflows/", StringComparison.Ordinal))
+            {
+                if (mainRunPages is not null)
+                {
+                    var page = int.Parse(path[(path.LastIndexOf('=') + 1)..], System.Globalization.CultureInfo.InvariantCulture);
+                    return page > mainRunPages.Length ? throw new InvalidOperationException("gh: HTTP 502") : JsonDocument.Parse(mainRunPages[page - 1]);
+                }
                 return failMain ? throw new InvalidOperationException("gh: HTTP 502") : JsonDocument.Parse(mainRuns ?? MainRuns((1, "completed", "success", 1)));
+            }
             if (path.Contains("/actions/runs/", StringComparison.Ordinal))
             {
                 if (jobsByRun is not null)
@@ -1799,8 +1875,8 @@ public class MergeRuleTests
                 using var all = JsonDocument.Parse(mainRuns ?? MainRuns((1, "completed", "success", 1)));
                 var run = all.RootElement.GetProperty("workflow_runs").EnumerateArray().Single(r =>
                     path.Contains($"/actions/runs/{r.GetProperty("id").GetInt64()}/jobs?", StringComparison.Ordinal));
-                return JsonDocument.Parse(JsonSerializer.Serialize(new { total_count = 4, jobs =
-                    new[] { "light", "app (win-x64)", "app (win-arm64)", "plan" }.Select((name, id) => new
+                return JsonDocument.Parse(JsonSerializer.Serialize(new { total_count = 5, jobs =
+                    new[] { "light", "app (win-x64)", "app (win-arm64)", "product (ubuntu-latest)", "plan" }.Select((name, id) => new
                     {
                         id, name, status = name == "plan" ? "completed" : run.GetProperty("status").GetString(),
                         conclusion = name == "plan" ? "success" : run.GetProperty("conclusion").GetString(), run_attempt = run.GetProperty("run_attempt").GetInt32(),
