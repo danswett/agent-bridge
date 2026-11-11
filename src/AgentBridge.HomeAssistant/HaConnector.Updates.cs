@@ -1,42 +1,9 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using AgentBridge.Host.Core.Updates;
 
 namespace AgentBridge.HomeAssistant;
-
-// A release newer than the one installed: its version, notes and page, and whatever the updater
-// that found it needs to download and apply exactly that release (opaque to the connector).
-public sealed record UpdateRelease(string Version, string? Notes, string? Url)
-{
-    public object? Handle { get; init; }
-}
-
-// The host's own updater, as the connector drives it. The host is updated with the app that
-// carries it (Velopack, docs/app-windows.md); a copy its updater did not install (a build folder,
-// a platform it does not package) has no Installed, and the machine's update controls are not
-// served.
-public interface IHostUpdates
-{
-    // The version installed, or null when this copy is not one its updater can update.
-    string? Installed { get; }
-    // The releases page, for release_url when no particular release is known.
-    string? ReleasesUrl { get; }
-    // The newest release when it is newer than the one installed; null when current.
-    Task<UpdateRelease?> CheckAsync(CancellationToken cancellationToken);
-    Task DownloadAsync(UpdateRelease release, Action<int> progress, CancellationToken cancellationToken);
-    // Hands the downloaded release to the updater, which applies it once this process has exited,
-    // and has the host exit. Throws when it cannot be handed over.
-    void ApplyAndRestart(UpdateRelease release);
-    Task ApplyAndRestartAsync(UpdateRelease release)
-    {
-        ApplyAndRestart(release);
-        return Task.CompletedTask;
-    }
-    // Before ApplyAndRestart: everything the update would end is safe to end (#238), or this
-    // throws why not, and nothing is handed over. Velopack ends every process in the package, and a
-    // usage probe's process whose input goes with a host must not be cut mid-refresh.
-    Task ReadyAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-}
 
 // Stage 6: the machine's update entity and its Install and Check buttons (docs/ha-connector.md,
 // "Stage 6"), as agent-ha-bridge's Sync-DaemonUpdateStatus serves them for its own install

@@ -1,5 +1,6 @@
 using AgentBridge.HomeAssistant;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Updates;
 using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Protocol;

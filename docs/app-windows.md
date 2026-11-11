@@ -376,6 +376,10 @@ The Velopack package holds the app, the host, its launcher, the injector and the
 hook (`agent-bridge-host-hook`, docs/host-hooks.md), published
 into one folder with one version. An app update is a host update, so they never skew.
 
+The host updater contract (`IHostUpdates` and `UpdateRelease`) lives in
+`AgentBridge.Host.Core.Updates`, independent of the HA adapter. The existing HA update
+controls consume that same contract; this extraction does not disable or remove them.
+
 * Pack id `AgentBridgeApp`, installed in `%LOCALAPPDATA%\AgentBridgeApp`. Not
   `%LOCALAPPDATA%\AgentBridge`: that is the host's data root (device keys, accounts,
   config, logs), and Velopack deletes its install folder on uninstall.
