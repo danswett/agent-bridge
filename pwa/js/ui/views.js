@@ -47,6 +47,7 @@ export class SessionListView {
   #recentTimer = null;
   #scrollTimer = null;
   #recentHolds = new Set();
+  #recentFocus = null;
   #recentListeners = new AbortController();
 
   get drawn() { return this.#drawn; }
@@ -135,9 +136,7 @@ export class SessionListView {
   #draw() {
     const entries = this.sessions.list();
     const sort = this.order.sort;
-    const activeElement = this.container.ownerDocument.activeElement;
-    const held = this.#recentHolds.size > 0 || this.container.contains(activeElement)
-      || !!activeElement?.closest?.('#needs-you, .reply-input, .question');
+    const held = this.#recentHolds.size > 0 || !!this.#recentFocus?.isConnected;
     const arranged = this.#recent.arrange(this.order.arrange(entries, { nameOf: (id) => this.machine(id).name, shows: this.shows, settled: this.settled }), { sort, held });
     clearTimeout(this.#recentTimer);
     if (this.#recent.wait !== null) { this.#recentTimer = setTimeout(() => this.schedule(), this.#recent.wait); }
@@ -257,7 +256,10 @@ export class SessionListView {
       if (caret) { try { focused.setSelectionRange(...caret); } catch { /* not a text control */ } }
     }
     if (goneAt !== null) { this.#refocus(rowsWere, goneAt); }
-    if (anchor?.isConnected) { scroller.scrollTop += anchor.getBoundingClientRect().top - before.get(anchor).top; }
+    if (anchor?.isConnected) {
+      const delta = anchor.getBoundingClientRect().top - before.get(anchor).top;
+      if (delta) { this.onAnchor?.(); scroller.scrollTop += delta; }
+    }
     for (const [el, was] of before) {
       if (!el.isConnected) { continue; }
       const at = el.getBoundingClientRect();
@@ -375,15 +377,25 @@ export class SessionListView {
     c.addEventListener('pointerenter', (e) => { if (e.pointerType !== 'touch') { hold('pointer', true); } }, { signal });
     c.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'touch') { hold('pointer', false); } }, { signal });
     // Scrolling cancels a pointer before its finger lifts; touch events keep that hold.
-    c.addEventListener('touchstart', () => hold('touch', true), { passive: true, signal });
-    for (const event of ['touchend', 'touchcancel']) {
-      doc.addEventListener(event, (e) => hold('touch', (e.touches?.length ?? 0) > 0), { passive: true, signal });
-    }
-    for (const event of ['focusin', 'focusout']) {
-      doc.addEventListener(event, (e) => {
-        if (this.order.sort === 'recent' && (c.contains(e.target) || e.target.closest?.('#needs-you, .reply-input, .question'))) { this.schedule(); }
-      }, { signal });
-    }
+    const touching = new Set(), touchEnds = ['touchend', 'touchcancel'];
+    const touchEnd = (e) => {
+      if (e.target !== e.currentTarget || e.targetTouches?.length) { return; }
+      touching.delete(e.target);
+      for (const event of touchEnds) { e.target.removeEventListener(event, touchEnd); }
+      hold('touch', touching.size > 0);
+    };
+    c.addEventListener('touchstart', (e) => {
+      touching.add(e.target);
+      for (const event of touchEnds) { e.target.addEventListener(event, touchEnd, { passive: true, signal }); }
+      hold('touch', true);
+    }, { passive: true, signal });
+    const focus = (target) => {
+      this.#recentFocus = target && (c.contains(target) || target.closest?.('#needs-you, .reply, .question')) ? target : null;
+      if (this.order.sort === 'recent') { this.schedule(); }
+    };
+    focus(doc.activeElement);
+    doc.addEventListener('focusin', (e) => focus(e.target), { signal });
+    doc.addEventListener('focusout', (e) => focus(e.relatedTarget), { signal });
     doc.addEventListener('scroll', (e) => {
       if (!e.target.contains?.(c)) { return; }
       hold('scroll', true);

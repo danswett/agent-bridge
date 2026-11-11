@@ -330,7 +330,8 @@ test('blocked storage lists sessions most recent first, and Your order cannot be
   const sort = page.locator('#session-sort');
   await expect(sort).toHaveValue('recent');
   await expect(sort.locator('option[value="yours"]')).toBeDisabled();
-  await upsert(page, CODEX, { updatedAt: later(), activity: { userMessage: 'A new prompt' } });
+  const at = await page.evaluate(() => new Date(Date.now() + 60000).toISOString());
+  await upsert(page, CODEX, { updatedAt: at, activity: { userMessage: at, userMessageAt: at } });
   await expect.poll(() => order(page)).toEqual([CODEX, COPILOT, CLAUDE, DELEGATING]);
 });
 
