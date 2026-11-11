@@ -391,7 +391,7 @@ test('about 500 turns are kept: the host\'s whole window loads, and its start is
   assert.deepEqual(snap.start, { at: null, limited: true });
 });
 
-for (const arrivals of [36, 55]) test(`an earlier page preserves the newest end when ${arrivals} live turns arrive during its request`, async (t) => {
+for (const arrivals of [36, 55, 56]) test(`an earlier page preserves the newest end when ${arrivals} live turns arrive during its request`, async (t) => {
   const { host, client, store } = await setup(t, { count: 700, first: 5 });
   await store.open('h', ID);
   for (let page = 0; page < 22; page++) { await store.loadEarlier('h', ID); }
@@ -418,6 +418,7 @@ for (const arrivals of [36, 55]) test(`an earlier page preserves the newest end 
   assert.deepEqual(nums(landed).slice(-arrivals - 1), range(700, 700 + arrivals));
   assert.equal(landed.atLatest, true);
   if (arrivals === 55) { assert.deepEqual(nums(landed), range(256, 755)); }
+  if (arrivals === 56) { assert.deepEqual(nums(landed), range(276, 756)); }
   if (arrivals === 36) {
     // Free capacity without letting go of a held turn.
     store.keep += HISTORY.maxTurns;
