@@ -148,6 +148,9 @@ test.describe('load bars', () => {
         await expect(cpu).toHaveAttribute('aria-valuenow', '37.543');
         await expect(memory).toHaveAttribute('aria-valuenow', '37.5');
         await expect(tile.locator('.machine-load-value')).toHaveText(['37.543%', '37.5%']);
+        await cpu.evaluate((e) => { e.dataset.kept = 'true'; });
+        await draw(page, { ...full, ageMs: 2001 });
+        await expect(cpu).toHaveAttribute('data-kept', 'true');
         for (const meter of [cpu, memory]) {
           const ratio = await meter.evaluate((e) => e.firstElementChild.getBoundingClientRect().width / e.getBoundingClientRect().width);
           expect(ratio).toBeCloseTo(0.375, 2);
