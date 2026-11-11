@@ -20,7 +20,8 @@ Outside contributors (pull requests only, no fleet access) start with
 | Repository docs and approved designs | Durable architecture, roadmap and decisions; not a minute-by-minute activity log |
 
 [Product, #696](https://github.com/danswett/agent-bridge/issues/696), owns the order
-of work; triage records its priority decisions on canonical issues.
+of work; SG Chief of Staff records its priority decisions on canonical issues and
+owns issue triage, deduplication, routing and escalation.
 Keep cross-track dependencies on their canonical issues. Put readiness and
 merge/rebase requests on the PR for Quality. Public issue and PR updates work
 without private Project access.
@@ -178,7 +179,7 @@ not consent, idle work, an empty queue or a passed gate.
 
 For a material conflict, stop the affected action and link both records on the
 canonical issue or PR. Ask the named authority: implementation owner for scope,
-TPM/triage for routing, Product for ordering, Quality for landing, or the owner for
+SG Chief of Staff for routing, Product for ordering, Quality for landing, or the owner for
 permissions and material design decisions. Preserve the blocker and needed
 responder. Unrelated accepted work need not stop. Do not select whichever account
 of the rules makes the action easier or treat a newer informal comment as a
@@ -186,12 +187,17 @@ waiver of enforced requirements.
 
 ## Running Shiproom
 
+**Historical procedure:** this section preserves the earlier Shiproom protocol for
+existing links, not current fleet timers or reporting obligations. Use the live roles
+in [agent onboarding](agents/onboarding.md#1-who-does-what) and resolve sessions with
+`fleet.find`; SG Chief of Staff owns current coordination.
+
 The [public Shiproom hub](https://github.com/danswett/agent-bridge/issues/689)
 links coordinator check-ins and blocker acknowledgments to the existing
 [private Project](https://github.com/users/danswett/projects/1).
 Shiproom owns coordination, Project health, deadlines and escalation only.
-TPM retains issue triage, deduplication and the single collector; implementation,
-design and Quality retain their existing authorities. Authors may still arm
+The then-current triage role retained issue triage, deduplication and the single
+collector; implementation, design and Quality retain their existing authorities. Authors may still arm
 their own exact-head auto-merge under AGENTS.md. Shiproom is not a merge grant,
 a second implementation coordinator or completion of the #170 index cutover.
 
@@ -211,7 +217,7 @@ An acknowledgment required for ownership or a blocker must explicitly address it
 | 5 minutes after a delivered blocker/ACK request | Obtain an explicit acknowledgment; escalate a missed deadline once |
 | 15 minutes after the last explicit check-in | Coordinator check-in due |
 | 20 minutes after the last explicit check-in | Mark the heartbeat stale |
-| 30 minutes after the last explicit check-in | Escalate to the named responsible coordinator/TPM |
+| 30 minutes after the last explicit check-in | Escalate to the named responsible coordinator or triage owner |
 | Immediately | Escalate P0 or unsafe routing to the actual responsible authority |
 
 Preserve the actual blocked reason and needed responder. A sent message, generic

@@ -53,21 +53,21 @@ $Prerequisites = @(
         Need = 'Owner approval of the #357 lab contract. The merged nonexecuting drafts (#849, #1115) are not execution approval.' }
     [pscustomobject]@{ Id = 'owner-authorization'; Met = $false; Owner = 'owner'
         Need = 'The owner authorizes this nightly''s execution and spend. Approving the contract, this workflow or a separate manual proof authorizes neither.' }
-    [pscustomobject]@{ Id = 'bootstrap'; Met = $false; Owner = 'owner, Platform'
+    [pscustomobject]@{ Id = 'bootstrap'; Met = $false; Owner = 'owner, SRE'
         Need = 'The bootstrap receipt (#357 B2): rg-agent-bridge-lab and its network, an OIDC principal scoped to that group only and trusting only environment lab, and the lab environment limited to main, holding LAB_AZURE_CLIENT_ID, LAB_AZURE_TENANT_ID and LAB_SUBSCRIPTION_ID (the owner-approved subscription, never a default).' }
     [pscustomobject]@{ Id = 's0-snapshot'; Met = $false; Owner = 'owner'
         Need = 'Each role''s S0 snapshot, with the proof that a run restored from it has no previous identity, hooks, settings or processes.' }
-    [pscustomobject]@{ Id = 'arm64-feasibility'; Met = $false; Owner = 'Platform, owner'
+    [pscustomobject]@{ Id = 'arm64-feasibility'; Met = $false; Owner = 'SRE, owner'
         Need = 'A receipt that native Windows 11 Arm64 runs in this subscription and region: image, size, Trusted Launch and licence billing (#357 B1). The nightly runs both roles or neither: x64 emulation and Linux are no substitute.' }
-    [pscustomobject]@{ Id = 'run-registration'; Met = $false; Owner = 'Platform, SRE'
+    [pscustomobject]@{ Id = 'run-registration'; Met = $false; Owner = 'Engineering, SRE'
         Need = 'provision.ps1 registers each run''s exact resource names and expiry in the sweeper''s trusted inventory, and checks the receipt, before its first create.' }
     [pscustomobject]@{ Id = 'expiry-sweeper'; Met = $false; Owner = 'SRE'
         Need = 'A durable sweeper, independent of this workflow, that deletes expired run-owned resources by exact name from that inventory. A cancelled run never reaches its own cleanup.' }
     [pscustomobject]@{ Id = 'cost-alerts'; Met = $false; Owner = 'SRE'
         Need = 'Lab cost and resource-age alerts against the owner''s $75/month for both roles nightly (#357 B1), with the cost measured.' }
-    [pscustomobject]@{ Id = 'owner-device-flow'; Met = $false; Owner = 'owner, Platform'
+    [pscustomobject]@{ Id = 'owner-device-flow'; Met = $false; Owner = 'owner, SRE'
         Need = 'Owner-only Slipgates-lab-bot device flow on each role''s fresh VM in every run within its original expiry, with credential, relay and device fences proved (#357 B3). No lab token, CI/vault secret or signed-in image.' }
-    [pscustomobject]@{ Id = 'v1-scenario'; Met = $false; Owner = 'Platform'
+    [pscustomobject]@{ Id = 'v1-scenario'; Met = $false; Owner = 'Engineering'
         Need = 'The shared runner''s v1 scenario, nightly-v1 (#736): launch, reply, answer, stop and an explicit update pair, writing result.json schema version 1.' }
 )
 # Only when the run asks for PPE (#590, owner decision B4).

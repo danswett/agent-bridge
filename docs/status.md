@@ -158,16 +158,15 @@ remain routing references until every active destination is verified.
   [the stand-down receipt](https://github.com/danswett/agent-bridge/issues/170#issuecomment-6617290473).
 - **B, UI implementation coordinator** retains track B
   and client integration, yielding merge order to Quality.
-- **Triage/readiness** maintains canonical routing,
-  verifies owner acceptance and consumes the existing single collector. It has no
-  merge authority and must not create another periodic GitHub poller.
+- **SG Chief of Staff** maintains canonical routing, verifies owner acceptance and
+  owns issue triage, deduplication and escalation. It has no merge authority.
 - **Creative director** (formerly titled VP of Design) is additive: audits, proposals and design review
   under [#477](https://github.com/danswett/agent-bridge/issues/477). Material design
   changes still require owner approval; design leadership is not merge authority.
 - **Product** owns the order of work: the epics and each
-  item's Epic and Horizon, including those TPM/triage sets on new issues under
+  item's Epic and Horizon, including those SG Chief of Staff sets on new issues under
   [#696](https://github.com/danswett/agent-bridge/issues/696)'s intake rule. Issue
-  triage itself stays with TPM. Changes to the order are decided on #696 with the owner.
+  triage itself stays with SG Chief of Staff. Changes to the order are decided on #696 with the owner.
   The role has no merge or implementation authority.
 
 #### Operational sources of truth

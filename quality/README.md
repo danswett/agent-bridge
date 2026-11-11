@@ -907,8 +907,9 @@ Each phase is a few PRs, and each PR leaves CI green and useful on its own.
 **Phase 3: the lab and nightly (weeks 5–8)**
 
 State (2026-11-04): the lab's contract is agreed and written down
-([lab/README.md](lab/README.md)); Platform owns items 1, 2 and 4, SRE the PPE, cut and
-promotion they feed (#590, #451). Built: the nightly flake hunt (item 6, #509). Partial: a
+([lab/README.md](lab/README.md)); Engineering owns the runner and scenarios in items 1,
+2 and 4. SRE owns the fleet, images, lab environment, PPE, cut and promotion they feed
+(#590, #451). Built: the nightly flake hunt (item 6, #509). Partial: a
 draft of item 1's provisioning step that refuses to apply, checked against a stand-in `az`
 (`lab-scripts`); `lab-e2e-agents` only as the shadow soak. Unbuilt: the rest of items 1–5.
 What blocks the first run is listed in [lab/README.md §10](lab/README.md#10-before-anything-runs).
