@@ -16,7 +16,7 @@ public static class DelegateLabel
     public const int MaxLength = 60;
 
     // 1. Bidi controls, zero-width and other format characters, controls and default-ignorables
-    //    go; any whitespace, line and paragraph separators included, becomes one space.
+    //    go; whitespace, line and paragraph separators and braille blank U+2800 become one space.
     // 2. Longer than MaxLength, it is cut at a whole character with an ellipsis.
     // 3. A middle dot, and the dots drawn like it, becomes "-": it is the separator between a
     //    status's facts, and a name with one ("Idle · Read logs") read as a fact of its own (#286).
@@ -128,7 +128,7 @@ public static class DelegateLabel
         var space = false;
         foreach (var r in text.EnumerateRunes())
         {
-            if (Rune.IsWhiteSpace(r))
+            if (Rune.IsWhiteSpace(r) || r.Value == 0x2800)
             {
                 space = b.Length > 0;
                 continue;
