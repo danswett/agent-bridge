@@ -263,6 +263,50 @@ public sealed class MachineUpdateTests : IAsyncLifetime
             && remote.Update?.Busy?.Working == state.Busy?.Working, "the Update now state");
     }
 
+    void TickRows() => TestUi.Read(() => { for (var i = 0; i < 5; i++) { main.Tick(); } return true; });
+    string RemoteStatus() => TestUi.Read(() => main.MachineRows.Single(r => r.Key == "remote-id").Status);
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Only_Update_now_reads_restarting_until_90_seconds_after_its_channel_closes(bool now)
+    {
+        await ListedAsync();
+        await remoteHost.SendAsync(UpdateProtocol.Event, Found with { Phase = UpdatePhase.Installing, RequestNow = now });
+        await Wait.UntilAsync(() => remote.Update?.Phase == UpdatePhase.Installing, "the installing state");
+        Assert.Equal(now ? UpdateNowWords.Restarting : "Online", RemoteStatus());
+        clock.Advance(TimeSpan.FromMinutes(2)); // The grace starts at departure, not at Installing.
+        TickRows();
+
+        await remoteHost.StopAsync();
+        await Wait.UntilAsync(() => remote.State != LinkState.Connected, "the channel closed");
+        TickRows();
+        clock.Advance(TimeSpan.FromSeconds(89));
+        TickRows();
+        Assert.Equal(now ? UpdateNowWords.Restarting : "Connecting", RemoteStatus());
+        clock.Advance(TimeSpan.FromSeconds(1));
+        TickRows();
+        Assert.Equal("Connecting", RemoteStatus());
+    }
+
+    [Fact]
+    public async Task A_machine_returning_inside_the_restart_window_clears_it_before_an_unrelated_drop()
+    {
+        await ListedAsync();
+        await remoteHost.SendAsync(UpdateProtocol.Event, Found with { Phase = UpdatePhase.Installing, RequestNow = true });
+        await Wait.UntilAsync(() => remote.Update?.Phase == UpdatePhase.Installing, "installing");
+        Assert.Equal(UpdateNowWords.Restarting, RemoteStatus());
+        await remoteHost.StopAsync();
+        await Wait.UntilAsync(() => remote.State != LinkState.Connected, "the channel closed");
+        clock.Advance(TimeSpan.FromSeconds(30));
+        remoteHost.Start();
+        await Wait.UntilAsync(() => remote.State == LinkState.Connected && RemoteStatus() == "Online", "the machine returned");
+
+        await remoteHost.StopAsync();
+        await Wait.UntilAsync(() => remote.State != LinkState.Connected, "an unrelated drop");
+        Assert.Equal("Connecting", RemoteStatus());
+    }
+
     [Fact]
     public async Task A_machine_that_stops_offering_updates_leaves_the_list()
     {

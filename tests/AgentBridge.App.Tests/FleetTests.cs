@@ -116,6 +116,74 @@ public sealed class FleetTests : IAsyncLifetime
         await Wait.UntilAsync(() => Card("there")?.Away == true, "the other machine's rows marked offline");
     }
 
+    async Task<MachineUpdateViewModel> UpdatingMachineAsync()
+    {
+        remoteHost.On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("remote-id", "Build server", "windows", "0.1.0"),
+            [.. remoteHost.Capabilities, UpdateProtocol.Capability]));
+        remoteHost.On(UpdateProtocol.Subscribe, _ => new UpdateState { Installer = true });
+        await BothMachinesAsync();
+        await Wait.UntilAsync(() => TestUi.Read(() => main.MachineUpdates.Count) == 1, "updates listed");
+        return TestUi.Read(() => main.MachineUpdates.Single());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_forgotten_or_signed_out_machine_leaves_no_restart_window_for_its_next_listing(bool signOut)
+    {
+        link.Known = [];
+        await UpdatingMachineAsync();
+        await remoteHost.SendAsync(UpdateProtocol.Event, new UpdateState { Installer = true, Phase = UpdatePhase.Installing, RequestNow = true });
+        await Wait.UntilAsync(() => Remote().Host.Update?.Phase == UpdatePhase.Installing, "installing");
+        Assert.Contains(Rows(), r => r.Status == UpdateNowWords.Restarting);
+        link.Known = [new KnownMachine("remote-id", "Build server", "host", Make.T0)];
+        await GoneAsync();
+        Assert.Equal(UpdateNowWords.Restarting, Rows().Single(r => r.Offline is not null).Status);
+        clock.Advance(TimeSpan.FromSeconds(90));
+        TestUi.Read(() => { for (var i = 0; i < 5; i++) { main.Tick(); } return true; });
+        Assert.Equal("Offline", Rows().Single(r => r.Offline is not null).Status);
+        // A second departure, removed before its grace ends.
+        Return();
+        await Wait.UntilAsync(() => Remote().Current && Remote().Host.Update?.Phase == UpdatePhase.Idle, "the machine returned");
+        await remoteHost.SendAsync(UpdateProtocol.Event, new UpdateState { Installer = true, Phase = UpdatePhase.Installing, RequestNow = true });
+        await Wait.UntilAsync(() => Rows().Any(r => r.Status == UpdateNowWords.Restarting), "restarting again");
+        await GoneAsync();
+        if (signOut) { link.Set(FleetState.SignedOut); }
+        else { Assert.Null(await link.ForgetAsync("remote-id", default)); }
+        await Wait.UntilAsync(() => main.MachineOf("remote-id") is null, "removed");
+
+        link.Known = [new KnownMachine("remote-id", "Build server", "host", Make.T0)];
+        link.Set(FleetState.Connected, ("host-id", "Test PC"));
+        await Wait.UntilAsync(() => Rows().Any(r => r.Offline is not null), "listed offline without reconnecting");
+        Assert.Equal("Offline", Rows().Single(r => r.Offline is not null).Status);
+        Assert.DoesNotContain(Rows(), r => r.Status == UpdateNowWords.Restarting);
+    }
+
+    [Fact]
+    public async Task An_Update_now_signed_here_keeps_fixed_outcome_words_after_its_reply_is_lost_and_the_row_is_recreated()
+    {
+        var old = await UpdatingMachineAsync();
+        using var app = P256KeyPair.Generate();
+        using var hostKey = P256KeyPair.Generate();
+        link.UpdateNowSigner = request => Transfers.SignUpdateNow(app, hostKey.Public, "0.5.0", null, clock.GetUtcNow(), request);
+        var request = Guid.NewGuid().ToString();
+        var signed = fleet.SignUpdateNow(hostKey.Public, "remote-id", "0.5.0", null, request);
+        Assert.NotNull(signed);
+        remoteHost.OnAsync(UpdateProtocol.Install, async _ => { await remoteHost.StopAsync(); return new UpdateCommandResult(UpdateAck.Accepted); });
+        await Assert.ThrowsAnyAsync<IOException>(() => Remote().Host.ReadAsync<UpdateCommandResult>(UpdateProtocol.Install, new { now = signed }));
+        await Wait.UntilAsync(() => TestUi.Read(() => main.MachineUpdates.Count) == 0, "the old row removed");
+        remoteHost.Start();
+        await Wait.UntilAsync(() => TestUi.Read(() => main.MachineUpdates.Count) == 1, "the new row");
+        var row = TestUi.Read(() => main.MachineUpdates.Single());
+        Assert.NotSame(old, row);
+        var last = new UpdateResult { Outcome = UpdateOutcome.Refused, Code = ManageReason.Expired, Reason = "untrusted host words", Request = request, At = Make.T0 };
+        await remoteHost.SendAsync(UpdateProtocol.Event, new UpdateState { Installer = true, Last = last });
+        await Wait.UntilAsync(() => row.HasLast, "the outcome after restarting");
+        Assert.Equal(UpdateNowWords.NotUpdated(ManageReason.Expired), row.LastText);
+        await remoteHost.SendAsync(UpdateProtocol.Event, new UpdateState { Installer = true, Last = last with { Request = "another-press" } });
+        await Wait.UntilAsync(() => row.LastText == "Not updated: untrusted host words.", "an unrelated Install keeps its wording");
+    }
+
     [Fact]
     public async Task Each_other_machine_the_relay_lists_gets_its_cards_and_this_machines_own_host_is_not_listed_twice()
     {
@@ -1568,6 +1636,8 @@ public sealed class FleetTests : IAsyncLifetime
     // The relay's presence as the test says, and channels to the fake hosts on their pipes.
     internal sealed class FakeFleetLink : IFleetLink
     {
+        public Func<string, SignedCommand?>? UpdateNowSigner { get; set; }
+        public SignedCommand? SignUpdateNow(byte[]? machinePublic, string machine, string release, UpdateBusy? accept, string request) => UpdateNowSigner?.Invoke(request);
         // The relay's roster: offline machines, null for a relay without one.
         public IReadOnlyList<KnownMachine>? Known { get; set; }
         // Runs once, as the next read of the offline machines starts: a drop just before it.
