@@ -45,7 +45,7 @@ public sealed class FleetFindTests : IDisposable
         return chan;
     }
 
-    FleetList Op(params FleetMachine[] machines) => new(store, new Roster(machines)) { AuditFleetList = audited.Add };
+    FleetList Op(params FleetMachine[] machines) => new(store, new Roster(machines), audit: new AgentAuditLog(root)) { AuditFleetList = audited.Add };
 
     static FleetMachine M(string id, bool online, string? name, bool truncated = false, bool verified = false) =>
         new(id, online, name is null ? [] : [new FleetSession("n-" + id, name, "working", Started, "s-" + id)], truncated, verified);

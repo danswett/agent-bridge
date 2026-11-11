@@ -461,6 +461,13 @@ not the request. The outcome is `attempted`, never proof of delivery, and `reque
 attempt id, not the relay request id returned by the sender. Sender refusals or failures leave
 that one attempt record. An absent log, a false append or a thrown append refuses the send with
 `auditUnwritable`; nothing is sent or queued. Early caller/input refusals write no record in A1.
+Authenticated agent `session.answer` calls write one local `refused` record and still cannot
+answer (#2011, #1401 A5). The target is a normalized session UUID, or `unknown` for malformed
+input. `fleet.find` and `fleet.list` write one local `attempted` record before reading the
+roster, with target `fleet`; lookup names and answer fields are never logged or hashed.
+These records use the credential's principal and chain and a fresh local attempt UUID.
+An absent log, false append or thrown append returns `auditUnwritable`, with no answer
+dispatch or roster read. Unauthenticated refusals write no record; person paths are unchanged.
 Other action wiring remains in later #1401 slices.
 
 ## Approving a workspace at the machine

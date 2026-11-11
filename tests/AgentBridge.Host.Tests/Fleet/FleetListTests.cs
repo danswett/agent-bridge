@@ -30,7 +30,7 @@ public sealed class FleetListTests : IDisposable
         return chan;
     }
 
-    FleetList Op() => new(store, roster, new FixedTime(Started.AddSeconds(90))) { AuditFleetList = audited.Add };
+    FleetList Op() => new(store, roster, new FixedTime(Started.AddSeconds(90)), new AgentAuditLog(root)) { AuditFleetList = audited.Add };
 
     static readonly JsonSerializerOptions Web = new(JsonSerializerDefaults.Web);
 
