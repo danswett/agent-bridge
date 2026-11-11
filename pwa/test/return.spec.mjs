@@ -10,6 +10,7 @@ import { open } from './nav.mjs';
 const LAPTOP = 'demo-laptop';
 const IDLE = 'laptop-copilot-1';
 const ASK = 'laptop-ask-1';
+const AWAY_RETURN = 'a machine that goes away just after a return reads as last seen for 3 s, then shows offline in place';
 
 const card = (page, id) => page.locator(`.session[data-host-id="${LAPTOP}"][data-id="${id}"]`);
 const sv = (page, id) => page.locator(`.session-view[data-host-id="${LAPTOP}"][data-id="${id}"]`);
@@ -35,11 +36,79 @@ async function comeBack(page) {
   }));
 }
 
+async function observeAwayReturn(page) {
+  await page.clock.install();
+  await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
+  await page.evaluate(() => {
+    const { grace, hosts } = window.agentBridgeDemo;
+    const trace = window.awayReturnTrace = { acceptedSince: null, events: [] };
+    const record = (event, details = {}) => {
+      const tab = document.querySelector('#machine-tabs .machine-tab[data-device-id="demo-laptop"]');
+      const row = document.querySelector('.session[data-host-id="demo-laptop"][data-id="laptop-copilot-1"]');
+      const strip = document.querySelector('#connection-strip');
+      const link = hosts.link('demo-laptop');
+      const state = {
+        event, ...details, now: Date.now(), visibility: document.visibilityState, focused: document.hasFocus(),
+        grace: { active: grace.active, since: grace.since, age: grace.age, drawn: grace.drawn },
+        machine: { online: hosts.isOnline('demo-laptop'), phase: link?.phase, synced: link?.client?.synced, stale: hosts.staleOf('demo-laptop') },
+        render: {
+          tab: { class: tab?.className, label: tab?.getAttribute('aria-label') },
+          row: { stale: row?.getAttribute('data-stale'), status: row?.querySelector('.row-status')?.textContent, glyph: row?.querySelector('.row-glyph .glyph')?.getAttribute('data-glyph') },
+          strip: { hidden: strip?.hidden, text: strip?.textContent },
+          slot: document.querySelector('#return-slot')?.textContent,
+          hostStateHidden: document.querySelector('#host-state')?.hidden,
+        },
+      };
+      trace.events.push(state);
+      return state;
+    };
+    trace.record = record;
+    let accepting = true;
+    grace.onChange(() => {
+      if (accepting && grace.active && document.visibilityState === 'visible') { trace.acceptedSince = grace.since; }
+      record('grace.change');
+    });
+    document.addEventListener('visibilitychange', (event) => record(event.type, { trusted: event.isTrusted }), true);
+    for (const name of ['pageshow', 'pagehide', 'focus', 'blur', 'online', 'offline']) {
+      window.addEventListener(name, (event) => record(event.type, { persisted: event.persisted, trusted: event.isTrusted }), true);
+    }
+    record('setup.before');
+    document.dispatchEvent(new Event('visibilitychange'));
+    accepting = false;
+    record('setup.after');
+    if (trace.acceptedSince === null || trace.acceptedSince !== grace.since || document.visibilityState !== 'visible') {
+      throw new Error('Return setup: visibilitychange did not produce an observed visible grace start');
+    }
+  });
+}
+
 async function advanceAwayClock(page, ms) {
+  const ready = await page.evaluate((ms) => {
+    const trace = window.awayReturnTrace;
+    const grace = window.agentBridgeDemo.grace;
+    trace?.record('clock.before', { ms });
+    return trace?.acceptedSince != null && grace.active && grace.since === trace.acceptedSince
+      && document.visibilityState === 'visible';
+  }, ms);
+  if (!ready) {
+    throw new Error('Return setup: refusing to advance fake time before a visible grace start is observed');
+  }
   await page.clock.runFor(ms);
+  await page.evaluate((ms) => window.awayReturnTrace.record('clock.after', { ms }), ms);
 }
 
 test.use({ viewport: { width: 1440, height: 900 }, hasTouch: false });
+
+test.afterEach(async ({ page }, info) => {
+  if (info.title !== AWAY_RETURN || info.status === info.expectedStatus) { return; }
+  const report = await page.evaluate(() => {
+    const trace = window.awayReturnTrace;
+    if (!trace) { return { setup: 'not installed', visibility: document.visibilityState, demoReady: !!window.agentBridgeDemo }; }
+    const final = trace.record('failure');
+    return { acceptedSince: trace.acceptedSince, events: trace.events, final };
+  });
+  await info.attach('away-return-state.json', { body: JSON.stringify(report, null, 2), contentType: 'application/json' });
+});
 
 test('return_setup_refuses_to_advance_before_grace_starts', async ({ page }) => {
   await openDemo(page);
@@ -53,9 +122,9 @@ test('return_setup_refuses_to_advance_before_grace_starts', async ({ page }) => 
 });
 
 // Quarantined (#1493, #1474): the historical WebKit grace failure remains unreproduced.
-test.skip('a machine that goes away just after a return reads as last seen for 3 s, then shows offline in place', async ({ page }) => {
+test.skip(AWAY_RETURN, async ({ page }) => {
   await openDemo(page);
-  await comeBack(page);
+  await observeAwayReturn(page);
   await setOnline(page, false);
   await advanceAwayClock(page, 1500);
   await expect(card(page, IDLE).locator('.row-glyph .glyph')).not.toHaveAttribute('data-glyph', 'failed');
