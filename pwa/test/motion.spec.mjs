@@ -705,6 +705,50 @@ test('opening reasoning at the bottom stays put, but subsequent response growth 
   await expect.poll(() => scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThanOrEqual(4);
 });
 
+test('a question stays in sight when late history lands during its reveal with native scroll events', async ({ page }) => {
+  await openDemo(page, { height: 600 });
+  await page.evaluate((id) => {
+    const client = window.agentBridgeDemo.client;
+    const history = client.history.bind(client);
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    client.history = async (sessionId, options) => {
+      const result = await history(sessionId, options);
+      if (sessionId === id) { window.__historyPrepared = true; await gate; }
+      return result;
+    };
+    const scrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (options) {
+      scrollIntoView.call(this, options);
+      if (window.__historyReveal || !this.matches('.question-slot .question') || !this.closest(`[data-id="${id}"]`)) { return; }
+      const sc = this.closest('.stream-scroll');
+      window.__historyReveal = {
+        behavior: options.behavior,
+        turns: sc.querySelectorAll('.history-turn').length,
+        outside: this.getBoundingClientRect().top >= sc.getBoundingClientRect().bottom,
+      };
+      // Let the app finish installing its reveal listeners before the prepared history lands.
+      queueMicrotask(release);
+    };
+  }, CODEX);
+  const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
+  await upsert(page, CODEX, { activity: { response: long, reasoning: null, userMessage: null, currentTool: null }, question: null, updatedAt: later() });
+  const v = await open(page, CODEX);
+  const scroller = v.locator('.stream-scroll');
+  await expect.poll(() => page.evaluate(() => window.__historyPrepared)).toBe(true);
+  await scroller.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  await atRest(page, scroller);
+  await page.evaluate((id) => {
+    const d = window.agentBridgeDemo;
+    const question = { id: 'q-late-history', kind: 'form', message: 'Carry on?', askedAt: new Date().toISOString(), fields: [] };
+    d.upsert({ ...d.host.get(id), question, status: 'waiting', updatedAt: new Date(Date.now() + 3000).toISOString() });
+  }, CODEX);
+  await expect.poll(() => page.evaluate(() => window.__historyReveal)).toEqual({ behavior: 'smooth', turns: 0, outside: true });
+  await expect(v.locator('.history-turn')).toHaveCount(2);
+  await atRest(page, scroller);
+  await expect(v.locator('.question-slot .question:not(.resolved)')).toBeInViewport();
+});
+
 test('where the reader is is read when a question comes, though the scroll that took them there has yet to send its event', async ({ page }) => {
   await openDemo(page, { height: 600 });
   const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
