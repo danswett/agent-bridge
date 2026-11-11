@@ -286,10 +286,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    re-run (attempt 2 on) never joins `ci-main` but gets its own run-id group, like a run by hand,
    so it runs beside them and can't take a waiting push run's place and leave that push's commit
    untested (#938's review). GitHub promises no
-   order between push runs, and nothing relies on one: the merge rule passes over a replaced
-   run when the newest run's commit builds on it. A newest run cancelled before starting, or
-   a missing run, can instead use a green ancestor within six commits, only when every later
-   commit passed its own merge rule; finished failures and read errors still block (item 9).
+   order between push runs: the merge rule reads the current main commit's push run and its
+   named test jobs, not an older finished run. Missing or cancelled jobs and read errors hold;
+   there is no green-ancestor fallback for merging (item 9).
    So a main run's change is everything since the last commit main's CI
    passed on: the plan reads `ci.yml`'s passed push runs on `main` (the newest 100, through the
    `actions: read` token), takes the newest whose commit is an ancestor of this one, fetches
@@ -444,9 +443,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      of the same pull request, as ci.yml does. Only pull requests: these workflows group each
      push run on `main` by its own run id, so none is cancelled. ci.yml's push runs on `main`
      never cancel a run in progress either, but a first attempt still waiting can be replaced in
-     `ci-main` (item 7). That matters beyond publishing: a cancelled push run would be the latest
-     finished one merge-rule's main_green reads, and holds every pull request as if main were red
-     unless it's provably such a replaced waiting run (item 9).
+     `ci-main` (item 7). A cancelled named test job on main's current push holds
+     merge-rule's main_green check until it succeeds (item 9).
 
    A final `quality-gate` job (`if: always()`) needs all of them. It fails if any failed or was
    cancelled, and if any job the plan selected didn't succeed: when the whole ring runs, that's
@@ -493,8 +491,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    green.
    - `merge-rule` is a commit status that main's copy of `.github/workflows/merge-rule.yml` posts
      on each open pull request's head, from `agent-bridge-quality merge-rule` (`MergeRule.cs`) and
-     the rules in [`merge-rule.yml`](merge-rule.yml): main green, that is the latest finished
-     push run of `ci.yml` on main (at its latest attempt) passed, unless the pull request has the
+     the rules in [`merge-rule.yml`](merge-rule.yml): main green, that is every named test job
+     in main's latest push run of `ci.yml` passed at its own latest attempt, unless the pull request has the
      `fixes-main` label; not a draft; no `hold` or `do-not-merge`
      label; an independent-review receipt on the head (see the standing rule below; a Copilot review is optional and an errored one is ignored, #706); CodeQL's latest run on the head green and
      code scanning's `CodeQL` check not failed; every other check run and status on the head
@@ -510,36 +508,22 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      share a head get the worst of their verdicts, since a status belongs to the commit.
    - Main must be green, since auto-merge doesn't pause while main's CI is red and would keep
      landing pull requests on a broken main, which makes the breakage hard to untangle. Each run
-     reads main once: `ci.yml`'s push runs on main, newest first, judged by the latest that
-     finished, so a newer one still going doesn't free a red main until it passes; a finished run
-     being re-run counts as not green (its last finished attempt was almost always red). A run
-     cancelled while still pending, replaced in `ci-main` by a newer push before any job of it
-     started (a first attempt with a newer run listed, whose jobs, every one read, have no
-     runner and no steps, and whose commit the newest run's commit builds on, by GitHub's
-     compare), tested nothing, and the newest run tests its change, so it is passed over for the
-     finished run before it, red or green. A newest first attempt cancelled before starting can
-     instead use the bounded fallback below; other cancelled runs, or one whose jobs or compare
-     can't be read, still count as not green. A run that passed
-     doesn't vouch for a later commit (by main's compare from it) whose run, older by id since
-     runs aren't promised to be created in push order, hasn't passed, nor for one whose run isn't
-     found. A later commit's first-attempt run still queued or running counts as found and as not
-     red: the pass stands, so a pull request can be judged green while main's CI on its newest
-     commit is still running, and the verdict follows that run (merge-rule judges again when
-     main's `CI` push run is requested, starts and finishes), so a red result fails every pull
-     request at once. A later commit with no run on the first page of 20 is looked for on up to
-     four more. One still not found, or a newest first attempt cancelled before any job started,
-     can use a finished green ancestor **at most six commits back** (`main_green.fallback_commits`).
-     GitHub's compare must list every later commit and prove ancestry; each must map to its
-     matching merged PR in this repository and base branch, with a successful `merge-rule`
-     status from `status_poster` on that PR's exact head, posted no later than its merge. That
-     status proves its own ring and required receipts passed; association alone is not proof.
-     The evaluator also reads each later commit's CI runs: a finished failure, an active rerun,
-     a started cancellation, an incomplete list or any read error still blocks. Seven commits
-     back, or a later commit without its own passing merge rule, cannot use the fallback.
-     Coverage is by each commit's merge-rule pass, not tree identity: an untested combination within the six-commit window is caught by the next main run.
-     Queued/running first attempts keep their existing behavior. While main
-     isn't green, every pull request fails, its description starting `Main is red (CI <sha>)`;
-     main unread, or with no finished run, fails closed. The fix itself gets the `fixes-main`
+     reads main's current ref once and selects that commit's latest `ci.yml` push run, not the
+     run that finished last or an older commit whose run id is newer. The single
+     `main_green.jobs` list pins exact display names for ha-integration, spikes, spikes-linux,
+     light, pwa-ui, pwa-e2e and app, including every static shard and runtime. Product is a
+     dynamic family: at least one entry must exist and every present instance must pass; runners
+     omitted by the plan are not required. Entirely absent families still hold.
+     The aggregate quality-gate is excluded because it waits on installer. The plan job must
+     succeed. Only then may completed `skipped` entries count as green, including GitHub's
+     unexpanded matrix-family skipped entry: the selector chose not to run that family.
+     Otherwise every named instance must succeed: missing, renamed, running, red or cancelled holds.
+     Jobs are paged across all attempts, then judged by their own latest attempt (and job id
+     within an attempt), so rerunning only failed jobs can free main without discarding earlier
+     successful jobs. Installer, signing and publishing results do not hold, even if red or
+     pending; the evaluator prints them as non-gating jobs for Quality's main-red log.
+     There is no green-ancestor fallback for missing or cancelled named jobs. Main unread, or
+     with no push run for its current commit, fails closed. The fix itself gets the `fixes-main`
      label (`main_green.exempt_labels`) from the merge coordinator, since labels take triage
      rights: it skips this check and nothing else, the independent review included. CI finishing
      on main starts a run, so verdicts follow main to red and back.

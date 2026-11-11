@@ -41,6 +41,7 @@ sealed class MergeRuleConfig
         config.Codeql ??= new();
         config.MainGreen ??= new();
         config.MainGreen.ExemptLabels ??= [];
+        config.MainGreen.Jobs ??= [];
         config.CopilotWaiver ??= new();
         config.CopilotWaiver.Labels ??= [];
         config.CopilotWaiver.OneReviewPaths ??= [];
@@ -53,8 +54,8 @@ sealed class MergeRuleConfig
         if (string.IsNullOrWhiteSpace(config.Codeql.Workflow)) missing.Add("codeql.workflow");
         if (string.IsNullOrWhiteSpace(config.Codeql.Check)) missing.Add("codeql.check");
         if (string.IsNullOrWhiteSpace(config.MainGreen.Workflow)) missing.Add("main_green.workflow");
-        if (config.MainGreen.FallbackCommits is < 1 or > 6)
-            throw new FormatException("main_green.fallback_commits must be between 1 and 6.");
+        if (config.MainGreen.Jobs.Count == 0 || config.MainGreen.Jobs.Any(string.IsNullOrWhiteSpace))
+            missing.Add("main_green.jobs");
         if (config.SensitivePaths.Count == 0) missing.Add("sensitive_paths");
         // With nowhere to read the second review from, one review would stand in for two on a
         // sensitive change, so the config refuses to load rather than guess.
@@ -88,10 +89,10 @@ sealed class CodeQlConfig
 
 sealed class MainGreenConfig
 {
-    /// <summary>The workflow file whose latest finished push run on the base branch says whether it's green.</summary>
+    /// <summary>The workflow whose latest push run on the base commit supplies the named jobs.</summary>
     public string Workflow { get; set; } = "";
     public List<string> ExemptLabels { get; set; } = [];
-    public int FallbackCommits { get; set; } = 6;
+    public List<string> Jobs { get; set; } = [];
 }
 
 /// <summary>
@@ -114,7 +115,7 @@ sealed class CopilotWaiverConfig
 }
 
 /// <summary>
-/// The base branch's CI, read once per run: success, failure (red, being re-run, or no finished
+/// The base branch's CI, read once per run: success, failure (a named job not green or a missing
 /// run) or error (couldn't be read), and the reason, which a blocked pull request's description
 /// starts with.
 /// </summary>

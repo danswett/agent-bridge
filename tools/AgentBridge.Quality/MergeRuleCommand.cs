@@ -93,7 +93,7 @@ static class MergeRuleCommand
                      [--post] [--target-url URL] [--summary FILE] [--allow-non-main]
               Judges open pull requests into main against quality/merge-rule.yml: those on the
               numbered one's head, those whose head is SHA, or all of them. Main's CI comes
-              first: while its latest finished push run isn't green, every pull request fails
+              first: while any named job on its latest push isn't green, every pull request fails
               but one with an exempt label (main_green). Prints each verdict;
               with --post, also sets each head's merge-rule status to the worst verdict on it
               (unless the workflow already posted the same), and with --summary, appends a
@@ -417,83 +417,75 @@ static class MergeRuleCommand
     }
 
     /// <summary>
-    /// The base branch's CI: its workflow's newest finished push run there, at its latest attempt
-    /// (one REST call, and a compare when it passed, and up to four more pages of runs when a
-    /// commit after its run's has none on the first). A newer run still going doesn't count, so
-    /// main stays red until the fix's run passes; but a finished run being re-run (attempt 2 on)
-    /// does, as not green, since its
-    /// attempt before was newer than any older run's, and is almost always red: no one re-runs a
-    /// green main. One exception: a run cancelled before any job started, whose commit the newest
-    /// run's commit builds on, was a pending run that main's CI concurrency group replaced with a
-    /// newer one; it tested nothing, and the newest run, planned from the last commit main's CI
-    /// passed on, tests its change, so it's passed over. A newest run on an older commit proves no
-    /// such thing, since GitHub doesn't promise runs enter the group in push order; nor does a
-    /// passed run vouch for a later commit whose older run by id hasn't passed, or whose run can't
-    /// be found in a few more pages. No finished
-    /// run, or one that can't be read, fails closed. A newest never-started cancellation or a
-    /// missing later run can use a green ancestor within the configured cap only when each
-    /// later commit passed merge-rule on its own merged PR head.
+    /// Main's current commit and its latest push run, judged only by the configured exact job
+    /// names at each job's latest attempt. Missing or unreadable facts never grant green.
     /// </summary>
     static MainFact ReadMain(Session session, out string log)
     {
         var config = session.Config;
-        const int Runs = 20;
-        var path = $"repos/{session.Slug}/actions/workflows/{Uri.EscapeDataString(config.MainGreen.Workflow)}/runs?branch={Uri.EscapeDataString(config.Base)}&event=push&per_page={Runs}";
         try
         {
+            // Pin to main's current commit. An old push finishing (or being rerun) later must
+            // never replace the result for a newer commit; run ids aren't commit order either.
+            using var head = session.Rest($"repos/{session.Slug}/git/ref/heads/{Uri.EscapeDataString(config.Base)}");
+            var sha = head.RootElement.GetProperty("object").GetProperty("sha").GetString();
+            if (!IsCommitSha(sha))
+                throw new InvalidOperationException("main has no valid commit SHA");
+            var path = $"repos/{session.Slug}/actions/workflows/{Uri.EscapeDataString(config.MainGreen.Workflow)}/runs?branch={Uri.EscapeDataString(config.Base)}&event=push&per_page=20&head_sha={sha}";
             using var doc = session.Rest(path);
             var runs = doc.RootElement.GetProperty("workflow_runs").EnumerateArray()
+                .Where(r => r.GetProperty("head_sha").GetString() == sha)
                 .OrderByDescending(r => r.GetProperty("id").GetInt64()).ToList();
-            var replaced = new List<string>();
-            for (var i = 0; i < runs.Count; i++)
+            if (runs.Count == 0)
             {
-                var run = runs[i];
-                var sha = MergeRule.Short(run.GetProperty("head_sha").GetString() ?? "");
-                var id = run.GetProperty("id").GetInt64();
-                var attempt = RunAttempt(run);
-                if (run.GetProperty("status").GetString() == "completed")
-                {
-                    var conclusion = run.GetProperty("conclusion").GetString() ?? "without a result";
-                    // i > 0: only a run with a newer one after it can have been replaced; the newest
-                    // cancelled, or a re-run attempt cancelled, could hide a real result.
-                    if (conclusion == "cancelled" && i > 0 && attempt == 1 && NeverStarted(session, id)
-                        && BuildsOn(session, runs[0].GetProperty("head_sha").GetString() ?? "", run.GetProperty("head_sha").GetString() ?? ""))
-                    {
-                        replaced.Add($"{id} on {sha}");
-                        continue;
-                    }
-                    if (conclusion == "cancelled" && i == 0 && attempt == 1 && NeverStarted(session, id))
-                    {
-                        if (GreenFallback(session, path, runs, i, out var fallbackLog) is { } covered)
-                        {
-                            log = fallbackLog;
-                            return covered;
-                        }
-                    }
-                    if (conclusion == "success" && Unvouched(session, path, Runs, runs, i, out var missingRun) is { } unvouched)
-                    {
-                        if (missingRun && GreenFallback(session, path, runs, i, out var fallbackLog) is { } covered)
-                        {
-                            log = fallbackLog;
-                            return covered;
-                        }
-                        log = $"Main: {config.MainGreen.Workflow} run {id} (attempt {attempt}) on {sha} ended success, but {unvouched}.";
-                        return new MainFact("failure", unvouched);
-                    }
-                    log = $"Main: {config.MainGreen.Workflow} run {id} (attempt {attempt}) on {sha} ended {conclusion}."
-                        + (replaced.Count > 0 ? $" Passed over run(s) {string.Join(", ", replaced)}: cancelled before starting, replaced by a newer run." : "");
-                    return conclusion == "success"
-                        ? new MainFact("success", $"{config.Base}'s CI {sha} passed")
-                        : new MainFact("failure", $"{config.Base} is red (CI {sha}): waiting for {config.Base} to be fixed");
-                }
-                if (attempt > 1)
-                {
-                    log = $"Main: {config.MainGreen.Workflow} run {id} on {sha} is re-running (attempt {attempt}).";
-                    return new MainFact("failure", $"{config.Base}'s CI {sha} is being re-run: waiting for {config.Base} to be green");
-                }
+                log = $"Main: no {config.MainGreen.Workflow} push run on {config.Base} commit {sha}.";
+                return new("failure", $"no CI run on {config.Base} commit {MergeRule.Short(sha!)}: waiting for one");
             }
-            log = $"Main: no finished {config.MainGreen.Workflow} push run on {config.Base} among the latest {Runs}.";
-            return new MainFact("failure", $"no finished CI run on {config.Base}: waiting for one");
+            var run = runs[0];
+            var id = run.GetProperty("id").GetInt64();
+            var attempt = RunAttempt(run);
+            var jobs = new List<JsonElement>();
+            for (var page = 1; ; page++)
+            {
+                using var listed = session.Rest($"repos/{session.Slug}/actions/runs/{id}/jobs?filter=all&per_page=100&page={page}");
+                var batch = listed.RootElement.GetProperty("jobs");
+                jobs.AddRange(batch.EnumerateArray().Select(j => j.Clone()));
+                if (jobs.Count >= listed.RootElement.GetProperty("total_count").GetInt32())
+                    break;
+                if (batch.GetArrayLength() == 0 || page >= 20)
+                    throw new InvalidOperationException("CI job list is incomplete");
+            }
+            // Failed-jobs-only reruns omit successes from the new attempt. Keep the latest
+            // attempt of each exact display name, not just jobs from the run's latest attempt.
+            var latest = jobs.GroupBy(j => j.GetProperty("name").GetString() ?? "", StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.OrderByDescending(RunAttempt).ThenByDescending(j => j.GetProperty("id").GetInt64()).First(), StringComparer.Ordinal);
+            var planGreen = latest.TryGetValue("plan", out var plan)
+                && plan.GetProperty("status").GetString() == "completed" && plan.GetProperty("conclusion").GetString() == "success";
+            bool Green(JsonElement job) => job.GetProperty("status").GetString() == "completed"
+                && job.GetProperty("conclusion").GetString() is "success" or "skipped";
+            bool Passed(string name)
+            {
+                if (!name.Contains(" (", StringComparison.Ordinal))
+                {
+                    var instances = latest.Where(j => j.Key == name || j.Key.StartsWith($"{name} (", StringComparison.Ordinal)).ToList();
+                    return instances.Count > 0 && instances.All(j => Green(j.Value));
+                }
+                if (latest.TryGetValue(name, out var job))
+                    return Green(job);
+                var family = name.Split(" (", StringSplitOptions.None)[0];
+                // GitHub doesn't expand a matrix when the selector skips the whole family.
+                return latest.Any(j => (j.Key == family || (j.Key.StartsWith($"{family} (${{{{ matrix.", StringComparison.Ordinal)
+                    && j.Key.EndsWith(" }})", StringComparison.Ordinal)))
+                    && j.Value.GetProperty("status").GetString() == "completed" && j.Value.GetProperty("conclusion").GetString() == "skipped");
+            }
+            var held = planGreen ? config.MainGreen.Jobs.Where(name => !Passed(name)).ToList() : ["plan"];
+            log = $"Main: {config.MainGreen.Workflow} run {id} (attempt {attempt}) on {MergeRule.Short(sha!)}; "
+                + (held.Count == 0 ? "named jobs passed." : $"named jobs not green: {string.Join(", ", held)}.")
+                + "\n" + string.Join("\n", latest.OrderBy(j => j.Key, StringComparer.Ordinal).Select(j =>
+                    $"Main job [{(j.Key == "plan" || config.MainGreen.Jobs.Any(n => n == j.Key || (!n.Contains(" (", StringComparison.Ordinal) && j.Key.StartsWith($"{n} (", StringComparison.Ordinal))) ? "required" : "non-gating")}]: {j.Key}: {j.Value.GetProperty("status").GetString()}/{j.Value.GetProperty("conclusion").GetString() ?? "pending"} (attempt {RunAttempt(j.Value)})."));
+            return held.Count == 0
+                ? new("success", $"{config.Base}'s CI {MergeRule.Short(sha!)} named jobs passed")
+                : new("failure", $"{config.Base} is red (CI {MergeRule.Short(sha!)}): named job {held[0]} is not green");
         }
         catch (Exception e) when (IsReadFailure(e))
         {
@@ -507,231 +499,6 @@ static class MergeRuleCommand
         && value.TryGetInt32(out var attempt) && attempt > 0
             ? attempt
             : throw new InvalidOperationException("CI run has missing or invalid run_attempt");
-
-    static MainFact? GreenFallback(Session session, string path, IReadOnlyList<JsonElement> runs, int except, out string log)
-    {
-        // Run ids aren't commit order: a green ancestor within the cap may have an older run id.
-        // But an older success must never leap over a finished failure or an active rerun.
-        var candidates = new List<(string Sha, List<string> After)>();
-        foreach (var candidate in Enumerable.Range(0, runs.Count).Where(n => n != except))
-        {
-            var run = runs[candidate];
-            var attempt = RunAttempt(run);
-            if (run.GetProperty("status").GetString() != "completed")
-            {
-                if (attempt > 1)
-                    break;
-                continue;
-            }
-            if (run.GetProperty("conclusion").GetString() != "success")
-            {
-                if (run.GetProperty("conclusion").GetString() == "cancelled" && attempt == 1
-                    && NeverStarted(session, run.GetProperty("id").GetInt64())
-                    && BuildsOn(session, runs[0].GetProperty("head_sha").GetString() ?? "", run.GetProperty("head_sha").GetString() ?? ""))
-                    continue;
-                break;
-            }
-            var sha = run.GetProperty("head_sha").GetString()!;
-            if (CommitsAfter(session, sha) is { Count: > 0 } after && after.Count <= session.Config.MainGreen.FallbackCommits)
-                candidates.Add((sha, after));
-        }
-        foreach (var (sha, after) in candidates.OrderBy(c => c.After.Count))
-        {
-            if (!CoveredByMergeRule(session, path, after))
-                continue;
-            var green = MergeRule.Short(sha);
-            log = $"Main: green ancestor {green} covers later merge-rule passes.";
-            return new MainFact("success", $"{session.Config.Base}'s CI {green} passed; later commits passed merge-rule");
-        }
-        log = "";
-        return null;
-    }
-
-    /// <summary>
-    /// Whether no job of the run's latest attempt ever ran: none got a runner or a step. A pending
-    /// run replaced in a concurrency group has no jobs at all, or only ones never picked up. A
-    /// list cut short, or a job without those facts, isn't proof, so the run counts.
-    /// </summary>
-    static bool NeverStarted(Session session, long run)
-    {
-        using var doc = session.Rest($"repos/{session.Slug}/actions/runs/{run}/jobs?per_page=100");
-        var jobs = doc.RootElement.GetProperty("jobs");
-        return doc.RootElement.GetProperty("total_count").GetInt32() == jobs.GetArrayLength()
-            && jobs.EnumerateArray().All(job =>
-                job.TryGetProperty("runner_id", out var runner)
-                && (runner.ValueKind == JsonValueKind.Null || (runner.ValueKind == JsonValueKind.Number && runner.GetInt64() == 0))
-                && job.TryGetProperty("steps", out var steps) && steps.ValueKind == JsonValueKind.Array && steps.GetArrayLength() == 0);
-    }
-
-    /// <summary>
-    /// Whether commit <paramref name="newer"/> has <paramref name="older"/> in its history (or is
-    /// it), from GitHub's compare. Anything but two full commit ids isn't proof.
-    /// </summary>
-    static bool BuildsOn(Session session, string newer, string older)
-    {
-        if (!IsCommitSha(newer) || !IsCommitSha(older))
-            return false;
-        if (newer == older)
-            return true;
-        using var doc = session.Rest($"repos/{session.Slug}/compare/{older}...{newer}?per_page=1");
-        return doc.RootElement.GetProperty("status").GetString() is "ahead" or "identical";
-    }
-
-    static List<string>? CommitsAfter(Session session, string sha)
-    {
-        using var doc = session.Rest($"repos/{session.Slug}/compare/{Uri.EscapeDataString(sha)}...{Uri.EscapeDataString(session.Config.Base)}?per_page=100");
-        var root = doc.RootElement;
-        var commits = root.GetProperty("commits");
-        if (root.GetProperty("status").GetString() is not ("ahead" or "identical")
-            || root.GetProperty("total_commits").GetInt32() != commits.GetArrayLength())
-            return null;
-        return commits.EnumerateArray().Select(c => c.GetProperty("sha").GetString() ?? "").ToList();
-    }
-
-    /// <summary>
-    /// Why a passed run doesn't vouch for main, or null if it does: a run older by id, on a commit
-    /// after the passed run's, that hasn't passed. GitHub doesn't promise runs are created in push
-    /// order, so the newest run can be on an older commit than one whose run was replaced, failed
-    /// or is being re-run, which the passed run never tested. Main's commits after the passed
-    /// run's come from one compare; one that can't list them all isn't proof. Each of them needs
-    /// its run found: one missing from the first page (<paramref name="listed"/>, of
-    /// <paramref name="perPage"/>) is looked for in the next few, any run there on such a commit
-    /// that hasn't passed blocks, and one still missing (beyond them, or never run, as in a push
-    /// of several commits) isn't proof either. A page that can't be read fails closed.
-    /// </summary>
-    static string? Unvouched(Session session, string path, int perPage, IReadOnlyList<JsonElement> listed, int passedAt, out bool missingRun)
-    {
-        const int Pages = 5;
-        missingRun = false;
-        var config = session.Config;
-        var sha = listed[passedAt].GetProperty("head_sha").GetString() ?? "";
-        var after = CommitsAfter(session, sha);
-        if (after is null)
-            return $"{config.Base}'s commits after CI {MergeRule.Short(sha)} can't all be listed: waiting for {config.Base}'s CI";
-        // A first attempt still queued or running is found, not red: the verdict follows its
-        // finishing (merge-rule runs on that event). Judging only on completion left every armed
-        // pull request failed for the length of a CI run after each merge to main.
-        static bool Pending(JsonElement run) =>
-            run.GetProperty("status").GetString() is "queued" or "in_progress" or "waiting" or "requested" or "pending"
-            && RunAttempt(run) == 1;
-        string? Red(JsonElement run) =>
-            after.Contains(run.GetProperty("head_sha").GetString() ?? "", StringComparer.Ordinal)
-            && !Pending(run)
-            && !(run.GetProperty("status").GetString() == "completed" && run.GetProperty("conclusion").GetString() == "success")
-                ? $"{config.Base}'s CI hasn't passed on {MergeRule.Short(run.GetProperty("head_sha").GetString() ?? "")}, a commit after CI {MergeRule.Short(sha)}: waiting for {config.Base} to be green"
-                : null;
-        foreach (var run in listed.Skip(passedAt + 1))
-            if (Red(run) is { } red)
-                return red;
-        var missing = after.Except(listed.Select(r => r.GetProperty("head_sha").GetString() ?? ""), StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
-        var seen = listed.Select(r => r.GetProperty("id").GetInt64()).ToHashSet();
-        var full = listed.Count >= perPage;
-        // Runs created since the first page shift the rest down: one listed again is skipped.
-        for (var page = 2; missing.Count > 0 && full && page <= Pages; page++)
-        {
-            using var next = session.Rest($"{path}&page={page}");
-            var runs = next.RootElement.GetProperty("workflow_runs").EnumerateArray().ToList();
-            full = runs.Count >= perPage;
-            foreach (var run in runs)
-            {
-                if (!seen.Add(run.GetProperty("id").GetInt64()))
-                    continue;
-                if (Red(run) is { } red)
-                    return red;
-                missing.Remove(run.GetProperty("head_sha").GetString() ?? "");
-            }
-        }
-        var unfound = after.FirstOrDefault(missing.Contains);
-        missingRun = unfound is not null;
-        return unfound is not null && !CoveredByMergeRule(session, path, after)
-            ? $"{config.Base}'s CI on {MergeRule.Short(unfound)}, a commit after CI {MergeRule.Short(sha)}, can't be found: waiting for {config.Base}'s CI"
-            : null;
-    }
-
-    static bool CoveredByMergeRule(Session session, string path, IReadOnlyList<string> after)
-    {
-        if (after.Count == 0 || after.Count > session.Config.MainGreen.FallbackCommits || after.Any(sha => !IsCommitSha(sha)))
-            return false;
-        foreach (var sha in after)
-        {
-            // Read each commit's runs, not just the first pages of main: a missing run mustn't
-            // hide a finished failure or a cancelled run that actually started.
-            using var doc = session.Rest($"{path}&head_sha={sha}");
-            var root = doc.RootElement;
-            var runs = root.GetProperty("workflow_runs");
-            if (root.GetProperty("total_count").GetInt32() != runs.GetArrayLength())
-                return false;
-            foreach (var run in runs.EnumerateArray())
-            {
-                if (run.GetProperty("head_sha").GetString() != sha)
-                    return false;
-                var attempt = RunAttempt(run);
-                var status = run.GetProperty("status").GetString();
-                if (status == "completed" && run.GetProperty("conclusion").GetString() == "success")
-                    continue;
-                if (attempt != 1)
-                    return false;
-                if (status == "completed" && run.GetProperty("conclusion").GetString() == "cancelled"
-                    && NeverStarted(session, run.GetProperty("id").GetInt64()))
-                    continue;
-                if (status is not ("queued" or "in_progress" or "waiting" or "requested" or "pending"))
-                    return false;
-            }
-            if (!PassedMergeRule(session, sha))
-                return false;
-        }
-        return true;
-    }
-
-    static bool PassedMergeRule(Session session, string sha)
-    {
-        const string query = """
-            query($owner: String!, $name: String!, $covered: String!) {
-              rateLimit { cost remaining }
-              repository(owner: $owner, name: $name) {
-                object(expression: $covered) { ... on Commit {
-                  oid associatedPullRequests(first: 5) { totalCount nodes {
-                    state baseRefName baseRepository { nameWithOwner } mergedAt mergeCommit { oid } headRefOid
-                    commits(last: 1) { nodes { commit {
-                      oid status { context(name: "merge-rule") { state createdAt creator { login } } }
-                    } } }
-                  } }
-                } }
-              }
-            }
-            """;
-        var (owner, name) = Split(session.Slug);
-        using var doc = session.GraphQL(query, new Dictionary<string, object> { ["owner"] = owner, ["name"] = name, ["covered"] = sha });
-        var commit = doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("object");
-        if (commit.ValueKind != JsonValueKind.Object || commit.GetProperty("oid").GetString() != sha)
-            return false;
-        var prs = commit.GetProperty("associatedPullRequests");
-        var nodes = prs.GetProperty("nodes");
-        if (prs.GetProperty("totalCount").GetInt32() != nodes.GetArrayLength())
-            return false;
-        foreach (var pr in nodes.EnumerateArray())
-        {
-            if (pr.GetProperty("state").GetString() != "MERGED" || pr.GetProperty("baseRefName").GetString() != session.Config.Base
-                || pr.GetProperty("baseRepository").GetProperty("nameWithOwner").GetString() != session.Slug
-                || pr.GetProperty("mergeCommit") is not { ValueKind: JsonValueKind.Object } merged || merged.GetProperty("oid").GetString() != sha)
-                continue;
-            var heads = pr.GetProperty("commits").GetProperty("nodes");
-            if (heads.GetArrayLength() != 1)
-                continue;
-            var head = heads[0].GetProperty("commit");
-            var headSha = pr.GetProperty("headRefOid").GetString();
-            if (!IsCommitSha(headSha) || head.GetProperty("oid").GetString() != headSha
-                || head.GetProperty("status") is not { ValueKind: JsonValueKind.Object } status
-                || status.GetProperty("context") is not { ValueKind: JsonValueKind.Object } pass)
-                continue;
-            if (pass.GetProperty("state").GetString() == "SUCCESS"
-                && Login(pass.GetProperty("creator")) == session.Config.StatusPoster
-                && DateTimeOffset.Parse(pass.GetProperty("createdAt").GetString() ?? throw new FormatException("merge-rule has no timestamp."), CultureInfo.InvariantCulture)
-                    <= DateTimeOffset.Parse(pr.GetProperty("mergedAt").GetString() ?? throw new FormatException("Merged PR has no timestamp."), CultureInfo.InvariantCulture))
-                return true;
-        }
-        return false;
-    }
 
     // REST names a bot "app[bot]" and GraphQL "app"; read both the GraphQL way.
     static string? Login(JsonElement actor) =>
