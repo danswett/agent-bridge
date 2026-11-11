@@ -1164,7 +1164,8 @@ public sealed class AutoUpdater
         // check, right after the restart, is the likeliest to be refused) or a press answered.
         var last = prefs().LastUpdate;
         var unseen = last is { } l && (l.Outcome == UpdateOutcome.Updated || l.Request is not null) && now - l.At < NeedsYouAgainAfter;
-        if (!unseen && Asked(UpdateAskKind.Check) is null && Asked(UpdateAskKind.Install) is null) { Remember(UpdateOutcome.Failed, checksHeld, null, null); }
+        var current = last?.Outcome == UpdateOutcome.Current && Pending is null && updater.Found is null;
+        if (!unseen && !current && Asked(UpdateAskKind.Check) is null && Asked(UpdateAskKind.Install) is null) { Remember(UpdateOutcome.Failed, checksHeld, null, null); }
         return checksHeld;
     }
 

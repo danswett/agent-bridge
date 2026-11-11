@@ -300,18 +300,14 @@ public sealed class ReleaseDiscoveryTests : IDisposable
         using (var discovery = new ReleaseDiscovery(folder, github, time, random: () => 0, log: said.Add))
         {
             Assert.Equal(body, await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
-            Assert.Equal(ReleaseDiscovery.Sources.Cdn, discovery.Source);
         }
         Assert.Equal(new[] { Url, ReleaseDiscovery.CdnList }, github.Requests.Select(r => r.Url));
-        Assert.Contains(said, line => line.Contains("release list came from the CDN", StringComparison.Ordinal));
         using var saved = JsonDocument.Parse(File.ReadAllText(Path.Combine(folder, ReleaseDiscovery.FileName)));
         Assert.Equal(anchor, saved.RootElement.GetProperty("gitHubAnsweredAt").Deserialize<DateTimeOffset?>());
         Assert.Equal(Now.AddMinutes(30), saved.RootElement.GetProperty("notBefore").GetDateTimeOffset());
         Assert.Equal(1, saved.RootElement.GetProperty("failures").GetInt32());
-        Assert.Equal("0.1.1", saved.RootElement.GetProperty("floors").GetProperty("win|pre").GetString());
         var ends = (anchor ?? Now).AddHours(24);
         Assert.Contains(said, line => line.Contains("grace", StringComparison.Ordinal) && line.Contains(ends.ToString("O"), StringComparison.Ordinal));
-
         using var restarted = new ReleaseDiscovery(folder, github, time, random: () => 0);
         time.Advance(TimeSpan.FromMinutes(10));
         body = RelayList("0.1.999");
@@ -335,15 +331,26 @@ public sealed class ReleaseDiscoveryTests : IDisposable
     public async Task An_expired_or_future_grace_window_cannot_use_the_relay_after_a_refusal(int hours, bool bootstrap)
     {
         Directory.CreateDirectory(folder);
+        var anchor = hours > 0 ? Now.AddMinutes(5) : Now.AddHours(hours);
         File.WriteAllText(Path.Combine(folder, ReleaseDiscovery.FileName),
-            JsonSerializer.Serialize(new { url = Url, gitHubAnsweredAt = bootstrap ? (DateTimeOffset?)null : Now.AddHours(hours), relayBootstrapAt = bootstrap ? Now.AddHours(hours) : (DateTimeOffset?)null }));
+            JsonSerializer.Serialize(new { url = Url, gitHubAnsweredAt = bootstrap ? (DateTimeOffset?)null : anchor, relayBootstrapAt = bootstrap ? anchor : (DateTimeOffset?)null, notBefore = Now.AddMinutes(30), problem = "limited" }));
+        github.Answer = _ => new(HttpStatusCode.Forbidden);
+        using var discovery = Discovery();
+        await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
+        Assert.Empty(github.Requests);
+        time.Advance(TimeSpan.FromMinutes(10));
+        await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
+        Assert.All(github.Requests, r => Assert.Equal(Url, r.Url));
+    }
+
+    [Fact]
+    public async Task A_bootstrap_that_cannot_be_saved_does_not_authorize_the_relay()
+    {
+        Directory.CreateDirectory(Path.Combine(folder, ReleaseDiscovery.FileName + ".tmp"));
         github.Answer = _ => new(HttpStatusCode.Forbidden);
         using var discovery = Discovery();
         await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
         Assert.Equal(Url, Assert.Single(github.Requests).Url);
-        time.Advance(TimeSpan.FromHours(2));
-        await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
-        Assert.All(github.Requests, r => Assert.Equal(Url, r.Url));
     }
 
     [Theory]

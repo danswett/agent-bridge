@@ -2212,13 +2212,10 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         updater.Found = null;
         await StartAsync();
         await AskedAsync(UpdateAskKind.Check, "current-check");
-        Assert.Equal(UpdateOutcome.Current, prefs.LastUpdate!.Outcome);
-        prefs = prefs with { LastUpdate = prefs.LastUpdate with { Outcome = outcome, Request = null } };
+        prefs = prefs with { LastUpdate = prefs.LastUpdate! with { Outcome = outcome, Request = null } };
         time.Advance(AutoUpdater.CheckEvery);
         updater.CheckFails = Limited(time.GetUtcNow().AddMinutes(30));
-
         await auto.TickAsync();
-
         Assert.Equal(outcome, auto.State.Last!.Outcome);
         if (outcome == UpdateOutcome.Failed) { Assert.Contains("rate limit", auto.State.Last.Reason); }
         time.Advance(TimeSpan.FromMinutes(29));
