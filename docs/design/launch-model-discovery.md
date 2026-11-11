@@ -16,32 +16,44 @@ combines built-in models with models observed in live sessions. The configured
 default is offered too. `Launchers.cs` maps Agency to Copilot tuning. None of that
 proves account entitlement, and session observations must not be called discovery.
 
-The routes below are supported by
+The routes below are historical proposals from
 [Engineering's source report](https://github.com/danswett/agent-bridge/issues/1453#issuecomment-6734312045)
 and readback of `hooks/session-launch.ps1` in `danswett/agent-ha-bridge`.
-They are not fresh captures or proof about every installed CLI version.
+They are not verified protocol responses or account-entitlement evidence.
+[SRE's capture](https://github.com/danswett/agent-bridge/pull/1784#issuecomment-6804440873)
+contains help/version output for Agency, Copilot and Claude; Codex was absent.
+It neither validates nor disproves the proposed protocols.
 An unsupported version must report a fault and use labeled fallback, never weaken
 isolation flags or substitute a generic catalogue as an account answer.
 
 ## Per-agent ask
 
+Per [Engineering's ruling](https://github.com/danswett/agent-bridge/issues/1453#issuecomment-6804452821),
+discovery cannot use a CLI flag: it requires a protocol request inside a started
+session (`model/list` in Codex app-server, Claude's initialize `control_request`,
+or Copilot's `session.model.list`). **All three protocol calls, their response
+fields and account claims, including Codex's sign-in/cache semantics, remain
+unverified until captured.** The CLI flags below only start the proposed process.
+
 | Agent | Route and answer | Account scope and fallback |
 |---|---|---|
-| Copilot | `copilot --headless --no-auto-update --stdio`; JSON-RPC `connect`, inert `session.create`, `session.model.list`, then `session.delete` | Account-scoped through the launch executable, home and sign-in. A real hidden session is necessary. Last good matching answer, then pinned list, then built-in |
-| Claude | `claude -p --input-format stream-json --output-format stream-json --verbose --safe-mode --no-session-persistence --strict-mcp-config`; SDK `control_request` with `request.subtype: initialize` | Account models and per-model `supportedEffortLevels`. Unsupported safe mode fails to the same fallback, not a weaker invocation |
-| Codex | `codex -c features.plugins=false app-server`; JSON-RPC `initialize`, `initialized`, `account/read`, then paginated `model/list` | Per-account only if sign-in and cache provenance are established; otherwise generic/unverified and the same fallback. Entries include `supportedReasoningEfforts` |
+| Copilot | **Unverified proposed route:** `copilot --headless --no-auto-update --stdio`; JSON-RPC `connect`, inert `session.create`, `session.model.list`, then `session.delete` | **Unverified account claim:** account-scoped through the launch executable, home and sign-in, using a hidden session. If verified, last good matching answer, then pinned list, then built-in |
+| Claude | **Unverified proposed route:** `claude -p --input-format stream-json --output-format stream-json --verbose --safe-mode --no-session-persistence --strict-mcp-config`; SDK `control_request` with `request.subtype: initialize` | **Unverified response/account claims:** account models and per-model `supportedEffortLevels`. Unsupported safe mode must fail to the same fallback, not a weaker invocation |
+| Codex | **Unverified proposed route:** `codex -c features.plugins=false app-server`; JSON-RPC `initialize`, `initialized`, `account/read`, then paginated `model/list` | **Unverified response/account claims:** per-account list and entries with `supportedReasoningEfforts`. Sign-in/cache provenance must be established before discovery; otherwise use the same labeled fallback |
 | Agency | No separate model-list API verified; candidate is its actual Copilot child in the selected profile | **Same as Copilot, unverified.** Until executable, home, account and profile mapping are captured, pinned then built-in; never borrow another scope's discovery |
 
-These are protocol descriptions, not complete scripts to run on the fleet.
+These are unverified protocol proposals, not complete scripts to run on the fleet.
 Copilot's session-less `models.list` omitted picker models in the source report;
 `copilot help config` prints a generic catalogue, not an entitlement list.
 Claude must retain subscription sign-in: do not use `--bare`. Safe mode and an
 explicitly empty MCP configuration must exclude hooks, plugins, skills and project
 instructions without changing the owner's stored settings.
-Codex asks `account/read` without asking it to refresh credentials and starts no
-thread. API-key or signed-out responses are not verified ChatGPT-plan discovery.
+The source-reported, unverified Codex route asks `account/read` without requesting
+credential refresh and starts no thread. API-key or signed-out responses must not
+be treated as verified ChatGPT-plan discovery.
 
-Codex may answer `model/list` from its built-in list when offline. Preserve the
+The unverified legacy behavior says Codex may answer `model/list` from its built-in
+list when offline. The proposed acceptance check must preserve the
 old `models_cache.json` evidence: fetched before the answer, less than 300 seconds
 old, and containing every returned model. **That is necessary, not sufficient.**
 The old check accepts a nonempty cache identity without comparing it to the active
@@ -133,9 +145,10 @@ premium request is used (Copilot checked then on 1.0.95). Reported elapsed times
 were Copilot 3-4 seconds, up to 12 cold; Claude/Codex about 1 second; Agency unknown.
 These are not current measurements or a billing guarantee; captures must establish
 current behavior. Every ask starts a process under the owner's sign-in and may
-contact the vendor. Copilot alone requires the hidden throwaway session.
-Obtain approval for credential-context/hidden-session use before live execution;
-merging this note is not that approval.
+contact the vendor. The unverified Copilot proposal includes a hidden throwaway
+session. Engineering's ruling requires Chief of Staff and Quality approval for a
+signed-in probe, one CLI at a time; Codex must be installed before its capture.
+This slice installs nothing. Merging this note is not execution approval.
 
 Use the same approved executable, agent home and account as launch, including
 Copilot's launch-account checks in host-launch. Never search for alternate tokens,
@@ -178,8 +191,10 @@ attribute a restriction to an owner pin or to the account's returned catalogue.
 
 All rows are **sensitive: yes**, include tests/docs, and have a hard 400-line cap;
 budgets are estimates, not exceptions. Paths below are proposed files. Engineering
-splits a row again if needed. No code slice starts until the four captures and this
-event-driven design are accepted; all adapters stay unwired until integration.
+splits a row again if needed. **Implementation slices M1 to M4 are blocked; nothing
+is built on an unverified protocol.** No code slice starts until the four captures
+and this event-driven design are accepted; all adapters stay unwired until
+integration. Until then the host keeps its current list, labeled not discovered.
 
 | Order | Slice and budget | Files and failing-first evidence |
 |---|---|---|
