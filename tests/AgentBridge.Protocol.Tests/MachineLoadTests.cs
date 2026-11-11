@@ -65,6 +65,23 @@ public class MachineLoadTests
         Assert.DoesNotContain(read.Sessions, s => s.Session == "s-0");
     }
 
+    [Theory]
+    [InlineData("fresh", MachineLoadState.Partial)]
+    [InlineData("partial", MachineLoadState.Partial)]
+    [InlineData("unavailable", MachineLoadState.Unavailable)]
+    [InlineData("stale", MachineLoadState.Stale)]
+    [InlineData("future", MachineLoadState.Unavailable)]
+    [InlineData(null, MachineLoadState.Unavailable)]
+    public void Capping_sessions_never_improves_the_reported_state(string? state, MachineLoadState expected)
+    {
+        var sessions = Enumerable.Range(0, 201).Select(i => new { session = $"s-{i}" }).ToArray();
+        var json = JsonSerializer.SerializeToElement(new { state, ageMs = 0, staleAfterMs = 15000, cpu = new { percent = 25 }, sessions }, ProtocolJson.Options);
+        var read = Received.Read<MachineLoad>(json);
+        Assert.Equal(expected, read.State);
+        Assert.Equal(200, read.Sessions.Count);
+        Assert.Equal(25, read.Cpu!.Percent);
+    }
+
     [Fact]
     public void Serialized_load_vectors_have_only_approved_strings_and_utc_timestamps()
     {

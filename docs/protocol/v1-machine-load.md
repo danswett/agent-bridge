@@ -34,7 +34,7 @@ connection may hold one subscription, and `load.unsubscribe` `{}` ends it. `seq`
 | `staleAfterMs` | number | How old `sampledAt` may be before the host calls it `stale` |
 | `cpu` | `{ percent, cores }`? | `percent` 0 to 100, **of the whole machine**: the counter delta over the interval divided by (cores x interval). `cores` are logical cores. Absent on the first sample or after a counter reset |
 | `memory` | `{ totalBytes, availableBytes, committedPercent }`? | `availableBytes` is what the OS says can be given out now. This, not the session sum, is headroom. `committedPercent` is committed memory, 0 to 100 |
-| `sessions` | SessionLoad[] | One per discovered session, at most 200. Over 200 the host sends the 200 with the most working set and sets `state` to `partial`. Anything published beyond the channel is machine totals only: the Compliance clearance (#1150) covers totals, so `sessions` stays on the channel |
+| `sessions` | SessionLoad[] | One per discovered session, at most 200. Over 200, keep the 200 with the most working set. The cap changes only `fresh` to `partial`; it preserves `partial`, `stale` and `unavailable`, including an unknown or missing state's `unavailable` fallback. Anything published beyond the channel is machine totals only: the Compliance clearance (#1150) covers totals, so `sessions` stays on the channel |
 | `unattributed` | `{ processes, workingSetBytes }`? | Processes the host started under a session root that no session now owns (for example children of an exited root) |
 
 Disk is not in this record: SRE ruled it out of this slice. A later contract adds it.
@@ -57,6 +57,19 @@ Adding names later requires a separate owner decision. The only string fields ar
 `agent`, `state`, `handleKind`, and `sampledAt` (an ISO 8601 UTC timestamp).
 Missing numerical fields, including fields within `cpu` or `memory`, remain absent, never zero.
 An unknown state reads as `unavailable`; an unknown agent or handle kind reads as `other`.
+
+### Numerical wire policy
+
+Writers send finite percentages from 0 to 100 inclusive: `cpu.percent`, `cpuPercent` and
+`committedPercent`. Session CPU is a share of the whole machine, not a per-core percentage.
+Percentages retain binary64 measurement precision, with no extra wire rounding; clients may
+format them for display without changing the reading.
+`processes` and `handles` are integers from 0 to 2147483647; `cores` is 1 to 2147483647.
+`ageMs`, `staleAfterMs` and every byte count are integers from 0 to 9007199254740991 inclusive
+(the largest exactly interoperable JavaScript integer). Fractional ages, counts and bytes are
+not sent. Unknown, nonfinite or out-of-domain figures are omitted, never clamped or zeroed.
+Record decoding checks representation and finiteness only, not these domain limits; the later
+host mapper enforces this writer policy. This record-only slice adds no host behavior.
 
 Also not in v1 of this record: disk growth per session. Process I/O write bytes are not retained disk
 size and a recursive workspace scan per tick is not allowed, so the field is absent until a

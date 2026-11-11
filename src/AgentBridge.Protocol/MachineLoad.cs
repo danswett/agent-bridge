@@ -21,7 +21,7 @@ public sealed record MachineLoad
 
     public DateTimeOffset? SampledAt { get; init; }
     public long? AgeMs { get; init; }
-    public MachineLoadState State { get => truncated ? MachineLoadState.Partial : state; init => state = value; }
+    public MachineLoadState State { get => truncated && state == MachineLoadState.Fresh ? MachineLoadState.Partial : state; init => state = value; }
     public long? StaleAfterMs { get; init; }
     public MachineLoadCpu? Cpu { get; init; }
     public MachineLoadMemory? Memory { get; init; }
