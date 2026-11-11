@@ -503,6 +503,9 @@ show the same edge (`Session.driver`, with `driverPrincipal` `homeassistant:<use
 account that pressed), and a person's answer or reply from either takes it back as one on the
 card does.
 
+`HaContract.HomeAssistantPrincipal` in the HA assembly formats that principal from the
+trimmed user id, capped at `Limits.DriverPrincipal` UTF-8 bytes; the stored and wire value is unchanged.
+
 Where stage 2 knowingly differs from the daemon:
 
 | Difference | Why |

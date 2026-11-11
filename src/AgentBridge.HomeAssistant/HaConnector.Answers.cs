@@ -912,7 +912,7 @@ public sealed partial class HaConnector
         public string? Stamp { get; init; }
         public string? Press { get; init; }
         public string Driver { get; init; } = "human";
-        // Which agent, for an agent's press (SessionDrivers.HomeAssistantPrincipal).
+        // Which agent, for an agent's press (HaContract.HomeAssistantPrincipal).
         public string? Principal { get; init; }
         // Words from the reply box, and an approval tap: how a failed one may be given again.
         public bool Box { get; init; }
@@ -1274,7 +1274,7 @@ public sealed partial class HaConnector
         !string.IsNullOrWhiteSpace(userId) && options.AgentUserIds.Contains(userId.Trim(), StringComparer.Ordinal) ? "agent" : "human";
 
     // Which agent pressed, for the host's own clients (Session.DriverPrincipal); null for a person.
-    string? PrincipalOf(string? userId) => DriverOf(userId) == SessionDrivers.Agent ? SessionDrivers.HomeAssistantPrincipal(userId!) : null;
+    string? PrincipalOf(string? userId) => DriverOf(userId) == SessionDrivers.Agent ? HaContract.HomeAssistantPrincipal(userId!) : null;
 
     static string RequestId(string sessionId, string questionId, string what)
     {
