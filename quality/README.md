@@ -295,6 +295,14 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    runs what docs select (`light`'s link check, say), not the app or the product's builds.
    Pull requests keep cancelling a superseded run, and a run by hand its own group.
 
+   **Packaging needs an app reason, on main too (#1910).** Pull requests and main pushes pass
+   `-Narrow app,app-installer`: a whole-ring-only workflow or quality change does not build
+   packages or installers. App source and dependencies, packaging inputs, shared build roots,
+   ci.yml's packaging/SBOM steps and `install-trivy` still select both jobs. Selection covers
+   the entire range since the last green main commit, so an earlier untested app change still
+   builds. Main keeps the `windows-11-arm` product leg; a manual whole-ring run remains
+   un-narrowed. A docs-only range skips packaging even when main needs the whole ring.
+
    **What decides selection doesn't select for itself (#487).** Before the selector is built,
    the plan job compares the change (`HEAD^1..HEAD` on a pull request; on `main`, since its last
    passed commit) with a fixed list in ci.yml: `.github/`, `quality/`,
@@ -302,7 +310,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    `Directory.*.props` or `.targets`, `*.sln`/`*.slnx`, `global.json` or `nuget.config`. A ready
    pull request or a push to `main` that touches one runs the whole ring: its `whole-ring` output, written by a step
    of its own that nothing from the change runs in, makes every gated job and every
-   suite-gated step run, `product` test the whole solution on all three runners, and the plan
+   suite-gated step run (except unselected app and installer), `product` test the whole solution
+   on all main runners (pull requests leave Arm64 to main), and the plan
    select ring 2 (with ring 1's choice beside it). Otherwise a selector or catalog under change
    would choose its own tests: a bug in `ChangedFiles`, or one line moving `quality/**` into
    `no_test_paths`, could pass a gate that ran nothing. A draft keeps its fast ring, whose gate
@@ -325,9 +334,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    for reruns with `gh workflow run --ref`, fires only once the file has run or is on `main`), or
    listed in the catalog with `status: planned`. It also checks ci.yml's wiring to the plan, which
    only names hold together: every job whose `if:` reads the plan has exactly the one gate shape
-   (its own output, and it runs in the whole ring whatever the plan says, except `app` on a pull
-   request, which runs only when its own output is true: the whole ring alone no longer brings
-   the packaging legs to a pull request, and a pull request's whole ring leaves the
+   (its own output, and it runs in the whole ring whatever the plan says, except `app` and
+   `app-installer`, which always require their own output to be true: the whole ring alone
+   brings neither job to a pull request or main push, and a pull request's whole ring leaves the
    `windows-11-arm` product leg to `main`, #1249); the plan
    step's `JOBS`, the jobs gated on the plan and the plan's outputs, bound to the steps that
    compute them, agree; every check job in ci.yml is in `quality-gate`'s needs (all but the
@@ -347,7 +356,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    The plan writes the "what runs and why" table to the run's summary, and outputs:
    - a true or false per job, from the selected suites' `where:`. So the catalog, not ci.yml,
      says which suites a job runs, and moving a suite moves its trigger. On a pull request and
-     on `main` a job runs only when it's true or the whole ring runs;
+     on `main` a job runs only when it's true or the whole ring runs; app and installer
+     always require their own output to be true;
    - the selected suites, which gate the steps inside `product` (the AOT injector and hook,
      the build scripts, the relay container) and inside `light`: when the whole ring runs,
      every one of those steps runs;
@@ -432,7 +442,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
 
    A final `quality-gate` job (`if: always()`) needs all of them. It fails if any failed or was
    cancelled, and if any job the plan selected didn't succeed: when the whole ring runs, that's
-   every job; otherwise, on `main` as on a pull request, every job the plan gave true (and a
+   every job except unselected app and installer; otherwise, on `main` as on a pull request,
+   every job the plan gave true (and a
    plan that passed must have given each job, and `whole-ring`, exactly true or false). A job the plan
    skipped is fine. It's the required check (on `main` since 2026-11-03, with `merge-rule` beside
    it in main's ruleset, item 9), so skipped jobs never leave a pull request waiting.

@@ -80,13 +80,12 @@ static partial class CiPlan
     // Main is planned like a pull request (quality/README.md §4.7): only the whole ring, which the
     // plan decides apart from the selector, runs a gated job or step whatever the selector says.
     const string WholeRingBypass = "env.WHOLE_RING == 'true'";
-    // The app's packaging legs are the one job the whole ring does not bring to a pull request
-    // (#1249): there its plan output alone says whether the change needs them. Main runs them
-    // whenever it runs the whole ring.
+    // App and installer use their own plan outputs, on main too (#1910); manual whole-ring
+    // plans still select both. Other jobs keep the selector-independent whole-ring bypass.
     static string GatedJobIf(string id)
     {
         var selected = id is "app" or "app-installer"
-            ? $"(needs.plan.outputs.whole-ring == 'true' && github.event_name != 'pull_request') || needs.plan.outputs.{id} == 'true'"
+            ? $"needs.plan.outputs.{id} == 'true'"
             : $"needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.{id} == 'true'";
         // A selected installer must fail on unavailable input, not inherit app's implicit skip.
         return id == "app-installer" ? $"!cancelled() && ({selected})" : selected;

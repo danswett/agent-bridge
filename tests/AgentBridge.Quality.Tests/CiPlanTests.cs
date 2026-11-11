@@ -39,7 +39,7 @@ public class CiPlanTests
             if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration == 'true'
           app:
             needs: plan
-            if: (needs.plan.outputs.whole-ring == 'true' && github.event_name != 'pull_request') || needs.plan.outputs.app == 'true'
+            if: needs.plan.outputs.app == 'true'
           relay-image-sarif:
             needs: product
           quality-gate:
@@ -367,14 +367,37 @@ public class CiPlanTests
     }
 
     [Fact]
-    public void The_app_is_the_one_job_the_whole_ring_does_not_bring_to_a_pull_request()
+    public void Packaging_jobs_require_their_own_plan_output_even_on_whole_ring_pushes()
     {
-        const string AppIf = "if: (needs.plan.outputs.whole-ring == 'true' && github.event_name != 'pull_request') || needs.plan.outputs.app == 'true'";
-        const string Message = "ci.yml job app is gated on the plan, but its if: isn't exactly: (needs.plan.outputs.whole-ring == 'true' && github.event_name != 'pull_request') || needs.plan.outputs.app == 'true'";
-        // The usual shape would run the app on every whole-ring pull request again.
-        Assert.Equal([Message], Check(Wired.Replace(AppIf, "if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.app == 'true'")));
-        // And without the whole ring, main would skip it when the plan didn't pick it.
-        Assert.Equal([Message], Check(Wired.Replace(AppIf, "if: needs.plan.outputs.app == 'true'")));
+        var wired = Wired
+            .Replace("JOBS: product ha-integration app", "JOBS: product ha-integration app app-installer", StringComparison.Ordinal)
+            .Replace("app: ${{ steps.select.outputs.app }}", "app: ${{ steps.select.outputs.app }}\n      app-installer: ${{ steps.select.outputs.app-installer }}", StringComparison.Ordinal)
+            .Replace("  relay-image-sarif:", "  app-installer:\n    needs: [plan, app]\n    if: \"!cancelled() && (needs.plan.outputs.app-installer == 'true')\"\n  relay-image-sarif:", StringComparison.Ordinal)
+            .Replace("needs: [plan, product, ha-integration, app]", "needs: [plan, product, ha-integration, app, app-installer]", StringComparison.Ordinal);
+        Assert.Empty(Check(wired));
+        foreach (var id in new[] { "app", "app-installer" })
+        {
+            var selected = $"needs.plan.outputs.{id} == 'true'";
+            var condition = id == "app-installer" ? $"!cancelled() && ({selected})" : selected;
+            foreach (var bypass in new[] { "needs.plan.outputs.whole-ring == 'true'",
+                         "(needs.plan.outputs.whole-ring == 'true' && github.event_name != 'pull_request')" })
+                Assert.Equal([$"ci.yml job {id} is gated on the plan, but its if: isn't exactly: {condition}"],
+                    Check(wired.Replace(selected, $"{bypass} || {selected}", StringComparison.Ordinal)));
+        }
+    }
+
+    [Fact]
+    public void The_quality_gate_allows_unselected_packages_but_keeps_other_whole_ring_jobs_required()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var stream = new YamlDotNet.RepresentationModel.YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(root, ".github", "workflows", "ci.yml"))));
+        var jobs = (YamlDotNet.RepresentationModel.YamlMappingNode)((YamlDotNet.RepresentationModel.YamlMappingNode)stream.Documents[0].RootNode)["jobs"];
+        var gate = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["quality-gate"];
+        var steps = (YamlDotNet.RepresentationModel.YamlSequenceNode)gate["steps"];
+        var check = (YamlDotNet.RepresentationModel.YamlMappingNode)steps.Children[0];
+        Assert.Contains(".key == \"plan\" or ($all and .key != \"app\" and .key != \"app-installer\") or $plan[.key] == \"true\"",
+            check["run"].ToString(), StringComparison.Ordinal);
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using YamlDotNet.RepresentationModel;
 
 namespace AgentBridge.Quality.Tests;
@@ -7,16 +8,27 @@ namespace AgentBridge.Quality.Tests;
 public class PlanScriptTests
 {
     [Theory]
-    [InlineData("pull_request", ".github/workflows/merge-rule.yml", false)]
-    [InlineData("pull_request", "quality/merge-rule.yml", false)]
-    [InlineData("pull_request", ".github/workflows/ci.yml", true)]
-    [InlineData("pull_request", "src/AgentBridge.App/View.cs", true)]
-    [InlineData("pull_request", "build/pack-app.ps1", true)]
-    [InlineData("pull_request", "Directory.Build.props", true)]
-    [InlineData("pull_request", ".github/actions/install-trivy/action.yml", true)]
-    [InlineData("push", ".github/workflows/merge-rule.yml", true)]
-    [InlineData("workflow_dispatch", ".github/workflows/merge-rule.yml", true)]
-    public async Task The_workflows_plan_selects_the_installer_only_with_its_app_input(string eventName, string changed, bool packages)
+    [InlineData("pull_request", ".github/workflows/merge-rule.yml", false, true)]
+    [InlineData("pull_request", "quality/merge-rule.yml", false, true)]
+    [InlineData("pull_request", ".github/workflows/ci.yml", true, true)]
+    [InlineData("pull_request", "src/AgentBridge.App/View.cs", true, true)]
+    [InlineData("pull_request", "build/pack-app.ps1", true, true)]
+    [InlineData("pull_request", "Directory.Build.props", true, true)]
+    [InlineData("pull_request", ".github/actions/install-trivy/action.yml", true, true)]
+    [InlineData("push", "docs/guide.md", false, false)]
+    [InlineData("push", "docs/guide.md", false, true)]
+    [InlineData("push", ".github/workflows/merge-rule.yml", false, true)]
+    [InlineData("push", ".github/CODEOWNERS", false, true)]
+    [InlineData("push", "quality/merge-rule.yml", false, true)]
+    [InlineData("push", ".github/workflows/ci.yml", true, true)]
+    [InlineData("push", "src/AgentBridge.App/View.cs", true, false)]
+    [InlineData("push", "src/AgentBridge.App/View.cs", true, true)]
+    [InlineData("push", "build/pack-app.ps1", true, true)]
+    [InlineData("push", "Directory.Build.props", true, true)]
+    [InlineData("push", ".github/actions/install-trivy/action.yml", true, true)]
+    [InlineData("workflow_dispatch", ".github/workflows/merge-rule.yml", true, true)]
+    public async Task The_workflows_plan_selects_the_installer_only_with_its_app_input(
+        string eventName, string changed, bool packages, bool wholeRing)
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
         var folder = Fixture.ScratchFolder();
@@ -31,8 +43,28 @@ public class PlanScriptTests
             Write("quality/plan.ps1", File.ReadAllText(Path.Combine(root, "quality", "plan.ps1")));
             Write("src/AgentBridge.App/App.csproj", "<Project />");
             Write("quality/catalog.yml", """
-                global_triggers: [.github/workflows/**, quality/**, '**/Directory.Build.*']
+                global_triggers: [.github/workflows/**, .github/actions/**, quality/**, '**/Directory.Build.*']
+                no_test_paths: [docs/**, .github/CODEOWNERS]
                 suites:
+                  - id: checks
+                    kind: unit
+                    ring: 1
+                    select: always
+                    platforms: [linux-x64, win-x64, win-arm64]
+                    runner: hosted
+                    command: see ci.yml
+                    where: ci.yml product, ha-integration, spikes, spikes-linux, light, pwa-ui, pwa-e2e
+                    status: exists
+                  - id: docs
+                    kind: static
+                    ring: 1
+                    select: affected
+                    platforms: [linux-x64]
+                    runner: hosted
+                    triggers: [docs/**]
+                    command: see ci.yml light
+                    where: ci.yml light
+                    status: exists
                   - id: app
                     kind: packaging
                     ring: 1
@@ -78,7 +110,7 @@ public class PlanScriptTests
             start.Environment["JOBS"] = ((YamlMappingNode)select["env"])["JOBS"].ToString();
             start.Environment["EVENT"] = eventName;
             start.Environment["DRAFT"] = "false";
-            start.Environment["WHOLE_RING"] = "true";
+            start.Environment["WHOLE_RING"] = wholeRing ? "true" : "false";
             start.Environment["BASE"] = "HEAD^1";
             start.Environment["GITHUB_OUTPUT"] = output;
             start.Environment["GITHUB_STEP_SUMMARY"] = Path.Combine(folder, "summary");
@@ -93,10 +125,21 @@ public class PlanScriptTests
 
             var outputs = File.ReadAllLines(output).Select(line => line.Split('=', 2))
                 .ToDictionary(parts => parts[0], parts => parts[1], StringComparer.Ordinal);
-            Assert.Equal("true", outputs["whole-solution"]);
+            Assert.Equal(wholeRing ? "true" : "false", outputs["whole-solution"]);
             var expected = packages ? "true" : "false";
             Assert.Equal($"app={expected}\napp-installer={expected}",
                 $"app={outputs["app"]}\napp-installer={outputs["app-installer"]}");
+            foreach (var job in new[] { "product", "ha-integration", "spikes", "spikes-linux", "pwa-ui", "pwa-e2e" })
+                Assert.Equal(wholeRing || !changed.StartsWith("docs/", StringComparison.Ordinal) ? "true" : "false", outputs[job]);
+            Assert.Equal("true", outputs["light"]);
+            if (outputs["product"] == "true")
+                Assert.Equal(eventName == "pull_request"
+                        ? new[] { "ubuntu-latest", "windows-latest" }
+                        : new[] { "ubuntu-latest", "windows-latest", "windows-11-arm" },
+                    JsonSerializer.Deserialize<string[]>(outputs["product-os"]));
+            Assert.Equal("needs.plan.outputs.app == 'true'", ((YamlMappingNode)jobs["app"])["if"].ToString());
+            Assert.Equal("!cancelled() && (needs.plan.outputs.app-installer == 'true')",
+                ((YamlMappingNode)jobs["app-installer"])["if"].ToString());
         }
         finally
         {
