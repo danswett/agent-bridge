@@ -180,10 +180,13 @@ export function alignHistoryTurns(held, page, retain = false) {
   });
   // Keep the rekeyed collision's neighbours in order when anchoring a newest-page merge.
   if (retain && out.some((t, i) => t.id !== held[i].id)) {
+    let previous = -1;
     for (const h of out) {
-      if (turns.some((t) => t.id === h.id)) { continue; }
-      const at = turns.findIndex((t) => Date.parse(t.at) > Date.parse(h.at));
-      turns.splice(at < 0 ? turns.length : at, 0, h);
+      const known = turns.findIndex((t) => t.id === h.id);
+      if (known >= 0) { previous = known; continue; }
+      const at = h.provisional ? previous + 1 : turns.findIndex((t) => Date.parse(t.at) > Date.parse(h.at));
+      previous = at < 0 ? turns.length : at;
+      turns.splice(previous, 0, h);
     }
   }
   if (duplicates) { console.warn(`Duplicate history turn ids: ${duplicates}`); }
