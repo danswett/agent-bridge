@@ -453,9 +453,17 @@ public sealed class SessionService
     {
         using (G5?.Hold())
         {
-            return new(1, machine with { Sessions = source.Snapshot().Count, ReadOnly = ReadOnly?.Invoke(), Restore = Restore?.Invoke() }, Offered(channel));
+            var offered = Offered(channel);
+            return new(1, machine with
+            {
+                Sessions = source.Snapshot().Count, ReadOnly = ReadOnly?.Invoke(), Restore = Restore?.Invoke(),
+                DiagnosticsReason = DiagnosticsReason(offered),
+            }, offered);
         }
     }
+
+    string? DiagnosticsReason(IReadOnlyCollection<string> offered) =>
+        Diagnostics is not null && !offered.Contains(DiagnosticsProtocol.Capability) ? DiagnosticsProtocol.NotOffered : null;
 
     // ---- hello.changed: what hello would say, told to the channels that asked, when it changes ----
     //
@@ -481,8 +489,8 @@ public sealed class SessionService
 
     // Only what a client acts on; machine.sessions changes all the time and is not a change here.
     // machine.restore is: a session judged after its agent's discovery was held is offered later.
-    static string Said(string? readOnly, RestoreNotice? restore, IEnumerable<string> offered) =>
-        (readOnly ?? "") + "\n" + Said(restore) + "\n" + string.Join("\n", offered);
+    static string Said(string? readOnly, RestoreNotice? restore, string? diagnosticsReason, IEnumerable<string> offered) =>
+        (readOnly ?? "") + "\n" + Said(restore) + "\n" + (diagnosticsReason ?? "") + "\n" + string.Join("\n", offered);
 
     // The whole notice as shaped for the channel: its cause, its time and what each offer says change
     // too, with the counts the same (an uncertain session found live, the rest rebuilt; Copilot on
@@ -498,7 +506,7 @@ public sealed class SessionService
         });
         lock (watch)
         {
-            watch.Said = Said(hello.Machine.ReadOnly, hello.Machine.Restore, hello.Capabilities);
+            watch.Said = Said(hello.Machine.ReadOnly, hello.Machine.Restore, hello.Machine.DiagnosticsReason, hello.Capabilities);
             watch.Shape = shape;
         }
         lock (helloGate) { helloTimer ??= Time.CreateTimer(_ => CheckHellos(), null, HelloCheck, HelloCheck); }
@@ -530,12 +538,16 @@ public sealed class SessionService
                 var readOnly = ReadOnly?.Invoke();
                 var restore = Restore?.Invoke();
                 var offered = Offered(channel);
+                var diagnosticsReason = DiagnosticsReason(offered);
                 string said;
-                if (shape is null) { said = Said(readOnly, restore, offered); }
+                if (shape is null) { said = Said(readOnly, restore, diagnosticsReason, offered); }
                 else
                 {
-                    var shaped = shape(new HelloResult(1, machine with { ReadOnly = readOnly, Restore = restore }, offered));
-                    said = Said(shaped.Machine.ReadOnly, shaped.Machine.Restore, shaped.Capabilities);
+                    var shaped = shape(new HelloResult(1, machine with
+                    {
+                        ReadOnly = readOnly, Restore = restore, DiagnosticsReason = diagnosticsReason,
+                    }, offered));
+                    said = Said(shaped.Machine.ReadOnly, shaped.Machine.Restore, shaped.Machine.DiagnosticsReason, shaped.Capabilities);
                 }
                 lock (watch)
                 {

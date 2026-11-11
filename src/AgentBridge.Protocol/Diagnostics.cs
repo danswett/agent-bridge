@@ -14,6 +14,9 @@ public static class DiagnosticsProtocol
     public const string Capability = "diagnostics";
     public const string Get = "diagnostics.get";
     public const int Schema = 1;
+    public const string PinningOff = "pinning-off";
+    public const string NoPersonLease = "no-person-lease";
+    public const string NotOffered = "not-offered";
 
     // Journal entries a request gets when it names none, and at most.
     public const int DefaultEntries = 100;

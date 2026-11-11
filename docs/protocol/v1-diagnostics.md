@@ -26,8 +26,20 @@ repairs anything.
 
 hello's `capabilities` include `diagnostics` only on a channel this host would serve it to.
 
-A client with no `diagnostics` from a host does not ask. Its Diagnose button then says the machine
-cannot be diagnosed from there and should be updated. It sends no request and does not retry.
+A client with no `diagnostics` from a host does not ask or retry. A host with a diagnostics
+service adds optional `hello.machine.diagnosticsReason` when it does not offer that capability:
+
+| Code | Meaning |
+|---|---|
+| `pinning-off` | Trusted-peer enforcement is off at this host; no device is a pinned person |
+| `no-person-lease` | This channel has no current locally pinned person grant |
+| `not-offered` | Diagnostics are otherwise not offered on this channel (including the local pipe) |
+
+The reason is per channel, not the machine's health. It is absent when diagnostics are offered,
+when no diagnostics service exists, and on older hosts. Older PWAs ignore this optional field.
+It conveys no authority: the capability
+and every read still require `RemoteAuthorization.IsPinnedPerson`, unchanged. A change to this
+reason participates in `hello.changed`, as `machine.restore` does.
 
 ## `diagnostics.get`
 
@@ -149,9 +161,11 @@ Refusals:
 
 The PWA and the Windows app show it the same way (ui.md §6.6).
 
-- A machine whose hello offers `diagnostics` has a quiet, secondary **Diagnose** in its row. One
-  whose hello does not shows no button, but the line "Can't be diagnosed from this device · update
-  Slipgates on <machine>", and is never asked.
+- A machine whose hello offers `diagnostics` has a quiet, secondary **Diagnose** in its row.
+  Without it, there is no button or request. The #1921 client slice replaces the old "Can't be
+  diagnosed" line: a healthy machine, or a host sending no reason, shows no diagnosis line.
+  Only a machine needing diagnosis with a known reason gets one quiet line naming what prevents
+  the read and who clears it. Missing or unknown reasons never imply an update is needed.
 - The snapshot is shown as plain text (the PWA wraps it on a narrow screen; the app's box
   scrolls). It starts with
   "Slipgates diagnostics · <machine> · <time>". Times are shown in Pacific time, with PST or
