@@ -32,13 +32,18 @@ public sealed partial class SentMessageView : StackPanel
     public SentMessageView()
     {
         Spacing = 8;
-        Loaded += (_, _) => Draw();
-        Unloaded += (_, _) => { generation++; shown = null; Children.Clear(); };
+        Loaded += (_, _) => { shown = null; Draw(); };
+        Unloaded += (_, _) =>
+        {
+            generation++; shown = null;
+            foreach (var child in Children.Where(c => c is not TextBlock).ToArray()) { Children.Remove(child); }
+        };
     }
 
     void Draw()
     {
-        if (!IsLoaded || shown == Message) { return; }
+        // Text must take part in the header's first measure, before the conversation is pinned.
+        if (shown == Message) { return; }
         shown = Message;
         var version = ++generation;
         Children.Clear();
@@ -67,7 +72,7 @@ public sealed partial class SentMessageView : StackPanel
                 TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, Margin = new Thickness(8, 2, 8, 2),
             });
         }
-        if (files.Count > 0) { _ = DrawAttachments(files, attachments, version); }
+        if (files.Count > 0 && IsLoaded) { _ = DrawAttachments(files, attachments, version); }
     }
 
     static bool Local(string path) => path.Length > 3 && char.IsAsciiLetter(path[0]) && path[1] == ':'
