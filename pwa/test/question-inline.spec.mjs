@@ -173,8 +173,8 @@ test('a delayed answer receipt stays once in its own turn when another question 
 });
 
 for (const width of [390, 1024]) {
-  for (const omitted of [false, true]) {
-    test(`an answered question never stays below three later turns after a snapshot jump (${width}px, asking turn ${omitted ? 'omitted' : 'stored'})`, async ({ page }) => {
+  for (const recorded of ['stored', 'omitted', 'empty']) {
+    test(`answered questions never stay below three later turns after a snapshot jump (${width}px, asking turn ${recorded})`, async ({ page }) => {
       await page.setViewportSize({ width, height: 800 });
       await page.goto('?demo=1&static=1&answerDelay=50');
       await page.waitForSelector('html[data-demo-ready]');
@@ -197,7 +197,7 @@ for (const width of [390, 1024]) {
       await expect(card.locator('.stream > .question-slot .question:not(.resolved)')).toBeVisible();
       await card.locator(`[data-question="${QID}"] .choice[data-value="pg"]`).click();
       await page.waitForFunction((qid) => window.agentBridgeDemo.host.typed.some((t) => t.question === qid), QID);
-      await page.evaluate(async ({ id, omitted }) => {
+      await page.evaluate(async ({ id, recorded }) => {
         const d = window.agentBridgeDemo;
         const s = d.host.get(id);
         const { question } = window.pinnedCase;
@@ -211,12 +211,12 @@ for (const width of [390, 1024]) {
           parts: [{ id: `later-reply-${n}`, kind: 'response', at: at(n), text: `Later reply ${n}` }],
         }));
         window.pinnedCase = { asking, later };
-        d.host.historyTurns.set(id, omitted ? later : [asking, ...later]);
+        d.host.historyTurns.set(id, recorded === 'omitted' ? later : [{ ...asking, parts: recorded === 'empty' ? [] : asking.parts }, ...later]);
         d.upsert({ ...s, question: null, status: 'idle', activity: {
           turn: 'later-3', turnCount: 4, userMessage: 'Later prompt 3', responseTurn: 'later-3', response: 'Later reply 3',
         } });
         await d.view.history.open('demo', id, { session: d.host.get(id) });
-      }, { id: CODEX, omitted });
+      }, { id: CODEX, recorded });
       await expect(card.locator('.question:not(.resolved)')).toHaveCount(0);
       const unplaced = card.locator('.question.resolved');
       await expect.poll(() => unplaced.evaluateAll((nodes) => nodes.filter((n) => !n.closest('.history-turn')).length)).toBe(0);
@@ -236,8 +236,26 @@ for (const width of [390, 1024]) {
       await expect(closed).toHaveCount(1);
       expect(await card.locator('.history-turn').evaluateAll((nodes) => nodes.map((n) => n.dataset.turn))).toEqual(['asking-turn', 'later-1', 'later-2']);
       await expect(card.locator('.question:not(.resolved)')).toHaveAttribute('data-question', 'next-unrecorded');
-      await expect(closed).toHaveCount(1);
-      await expect.poll(() => card.locator('.question.resolved').evaluateAll((nodes) => nodes.filter((n) => !n.closest('.history-turn')).length)).toBe(0);
+      await expect(card.locator('.question[data-arriving]')).toHaveCount(0);
+      await card.locator('[data-question="next-unrecorded"] .choice[data-value="pg"]').click();
+      await page.waitForFunction(() => window.agentBridgeDemo.host.typed.some((t) => t.question === 'next-unrecorded'));
+      await page.evaluate(async (id) => {
+        const d = window.agentBridgeDemo;
+        const { asking, later } = window.pinnedCase;
+        later[2].parts.push({ ...asking.parts[0], id: 'next-part', question: { ...asking.parts[0].question, id: 'next-unrecorded' } });
+        d.host.historyTurns.set(id, [asking, ...later]);
+        await d.view.history.open('demo', id, { session: d.host.get(id) });
+      }, CODEX);
+      await expect(card.locator('.history-turn[data-turn="later-3"] .resolved-summary')).toContainText('You answered');
+      await page.evaluate((id) => {
+        const d = window.agentBridgeDemo;
+        d.upsert({ ...d.host.get(id), status: 'waiting', question: { ...window.pinnedCase.asking.parts[0].question, id: 'still-waiting' }, activity: {
+          turn: 'waiting-turn', turnCount: 5, userMessage: 'Another question', response: null, responseTurn: null,
+        } });
+      }, CODEX);
+      await expect(card.locator('.stream > .question-slot .question:not(.resolved)')).toBeVisible();
+      await expect(card.locator('.question.resolved')).toHaveCount(2);
+      expect(await card.locator('.question.resolved').evaluateAll((nodes) => nodes.map((n) => n.closest('.history-turn')?.dataset.turn))).toEqual(['asking-turn', 'later-3']);
     });
   }
 }
