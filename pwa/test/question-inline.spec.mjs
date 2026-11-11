@@ -237,7 +237,8 @@ for (const width of [390, 1024]) {
       expect(await card.locator('.history-turn').evaluateAll((nodes) => nodes.map((n) => n.dataset.turn))).toEqual(['asking-turn', 'later-1', 'later-2']);
       await expect(card.locator('.question:not(.resolved)')).toHaveAttribute('data-question', 'next-unrecorded');
       await expect(card.locator('.question[data-arriving]')).toHaveCount(0);
-      await card.locator('[data-question="next-unrecorded"] .choice[data-value="pg"]').click();
+      await card.locator('[data-question="next-unrecorded"] .choice[data-value="pg"]').focus();
+      await page.keyboard.press('Enter');
       await page.waitForFunction(() => window.agentBridgeDemo.host.typed.some((t) => t.question === 'next-unrecorded'));
       await page.evaluate(async (id) => {
         const d = window.agentBridgeDemo;
