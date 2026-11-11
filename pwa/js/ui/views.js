@@ -950,10 +950,11 @@ function updateRow(updates, id, name, now) {
   const updateNow = updates.isUpdateNow?.(s.last?.request) ?? false;
   const idle = s.installer && s.phase === 'idle' && !s.waiting;
   // Legacy hosts send the held check's retry clock only in this reason, in host-local time.
-  const checkFailed = idle && !updateNow && !s.last?.code && ['failed', 'refused'].includes(s.last?.outcome)
+  const heldCheck = idle && !updateNow && !s.last?.code && ['failed', 'refused'].includes(s.last?.outcome)
     && s.last.reason?.startsWith("the release feed's rate limit refused the check");
+  const checkFailed = heldCheck && !(Date.parse(s.checkedAt) > Date.parse(s.last.at));
   const compact = idle && (s.available ? checkFailed : s.current && s.checkedAt
-    && (!s.last || s.last.outcome === 'current' || checkFailed));
+    && (!s.last || s.last.outcome === 'current' || heldCheck));
   const retry = checkFailed ? s.last.reason.match(/checking again after (\d{1,2}:\d{2}(?:\s*[AP]M)?)\.?$/i)?.[1] : null;
   let said = updateLine(s, now);
   if (compact) {
@@ -964,7 +965,7 @@ function updateRow(updates, id, name, now) {
       said += `. Last checked ${checked}.`;
     }
   }
-  const last = compact ? null : lastLine(s, now, { updateNow });
+  const last = compact || (heldCheck && !checkFailed) ? null : lastLine(s, now, { updateNow });
   const check = canCheck(s) && !busy && !asking;
   const install = canInstall(s) && !busy && !asking;
   const offerNow = !compact && updates.signs === true && canUpdateNow(s);
