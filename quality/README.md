@@ -606,8 +606,15 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      with a warning. Versioned job display names classify scoped evaluations versus sweeps;
      this is a weak API classifier, so unknown names never suppress evaluation. Main sweeps,
      dispatch and event runs bypass this check. Cron admission cannot displace a main sweep.
-     This adds one short read-only job per cron, four paginated run lists plus job lists for
-     active event runs, not a resolver job per event. Event cancellation and all triggers stay
+     Fresh replacements cannot keep deferring cron: yielding also requires a completed cron
+     writer within the last 30 minutes, established from completed schedule runs and their
+     actual writer jobs. Writer success or failure counts; skipped/cancelled jobs do not.
+     No such writer, or unreadable history, warns and proceeds. The age is measured at writer
+     completion, not the creation time of whichever scoped job is queued now.
+     This adds one short read-only job per cron, four paginated active-run lists plus job lists;
+     a proposed deferral also reads one page of ten completed cron runs and at most ten job lists,
+     stopping when recent writer evidence is found, otherwise warning and proceeding.
+     It is not a resolver job per event. Event cancellation and all triggers stay
      unchanged; event-admission coalescing remains a follow-up.
      Every admitted writer then waits in the shared `merge-rule` job group with `queue: max`,
      reading main only after taking that lock. A scoped event cannot displace a sweep or another

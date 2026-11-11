@@ -3,8 +3,8 @@ function Test-MergeRuleBackstop {
     [CmdletBinding()]
     param([string]$Repo, [long]$RunId, [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow)
     $ErrorActionPreference = 'Stop'
-    function Read-Pages([string]$path, [string]$key) {
-        $text = @(gh api --paginate --slurp $path)
+    function Read-Pages([string]$path, [string]$key, [switch]$FirstPage) {
+        $text = if ($FirstPage) { @(gh api $path) } else { @(gh api --paginate --slurp $path) }
         if ($LASTEXITCODE) { throw "Queue API failed: $path ($LASTEXITCODE)" }
         $pages = @(($text -join "`n") | ConvertFrom-Json)
         if (-not $pages.Count) { throw "Empty queue API response: $path" }
@@ -12,7 +12,8 @@ function Test-MergeRuleBackstop {
             if ($null -eq $page.$key -or $null -eq $page.total_count) { throw "Incomplete queue API response: $path" }
             $page.$key
         })
-        if ($items.Count -ne $pages[0].total_count) { throw "Truncated queue API response: $path" }
+        $expected = if ($FirstPage) { [Math]::Min(10, $pages[0].total_count) } else { $pages[0].total_count }
+        if ($items.Count -ne $expected) { throw "Truncated queue API response: $path" }
         $items
     }
     try {
@@ -45,8 +46,28 @@ function Test-MergeRuleBackstop {
             Write-Warning 'Queued evaluation is at least 30 minutes old; the cron backstop will proceed.'
             return $true
         }
-        Write-Host 'Fresh scoped evaluations are queued; this cron sweep yields before the writer queue.'
-        return $false
+        # A missing recent writer must cause a sweep, not an unbounded history scan.
+        $history = @(Read-Pages "repos/$Repo/actions/workflows/merge-rule.yml/runs?event=schedule&status=completed&per_page=10" 'workflow_runs' -FirstPage)
+        foreach ($run in $history) {
+            if (-not $run.id -or $run.event -ne 'schedule' -or $run.status -ne 'completed') {
+                throw 'Incomplete cron history.'
+            }
+            if ($run.id -eq $RunId) { continue }
+            foreach ($job in @(Read-Pages "repos/$Repo/actions/runs/$($run.id)/jobs?filter=latest&per_page=100" 'jobs')) {
+                if ($job.name -ne 'merge-rule-sweep-v1' -or $job.status -ne 'completed' -or
+                    $job.conclusion -notin 'success', 'failure') { continue }
+                if (-not $job.completed_at) { throw 'Completed cron writer has no completion time.' }
+                $finished = [DateTimeOffset]::Parse($job.completed_at, [Globalization.CultureInfo]::InvariantCulture)
+                if ($finished -gt $Now) { throw 'Completed cron writer has a future completion time.' }
+                # Any proven writer within the bound proves the latest writer is also recent.
+                if (($Now - $finished).TotalMinutes -lt 30) {
+                    Write-Host 'Fresh scoped evaluations are queued and a cron writer completed within 30 minutes; this cron sweep yields.'
+                    return $false
+                }
+            }
+        }
+        Write-Warning 'No completed cron writer within 30 minutes could be established; the cron backstop will proceed.'
+        return $true
     } catch {
         Write-Warning "Could not establish a fresh scoped queue: $($_.Exception.Message) Cron will proceed."
         return $true

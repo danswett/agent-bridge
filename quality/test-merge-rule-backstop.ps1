@@ -11,17 +11,20 @@ $script:calls = [System.Collections.Generic.List[string]]::new()
 $script:replies = @{}
 $script:failure = $null
 function gh {
-    if ($args[0] -ne 'api' -or $args[1] -ne '--paginate' -or $args[2] -ne '--slurp') {
+    $path = $args[-1]
+    $history = $path -eq 'repos/example/repo/actions/workflows/merge-rule.yml/runs?event=schedule&status=completed&per_page=10'
+    if ($args[0] -ne 'api' -or ($history -and $args.Count -ne 2) -or
+        (-not $history -and ($args[1] -ne '--paginate' -or $args[2] -ne '--slurp'))) {
         throw 'Queue reads must retain every page.'
     }
-    $path = $args[-1]
     $script:calls.Add($path)
     if ($script:failure -eq $path) { $global:LASTEXITCODE = 1; return }
     $global:LASTEXITCODE = 0
     if (-not $script:replies.ContainsKey($path)) { throw "Unexpected API read: $path" }
     $script:replies[$path]
 }
-function Check([string]$name, [bool]$expected, [hashtable[]]$runs, [hashtable]$jobs = @{}, [string]$bad = '', [switch]$Warn) {
+function Check([string]$name, [bool]$expected, [hashtable[]]$runs, [hashtable]$jobs = @{}, [string]$bad = '',
+    [switch]$Warn, [DateTimeOffset]$At = $now, [string]$WriterConclusion = 'success', [switch]$NoWriter) {
     $script:calls.Clear()
     $script:failure = $bad
     $script:replies = @{}
@@ -34,8 +37,14 @@ function Check([string]$name, [bool]$expected, [hashtable[]]$runs, [hashtable]$j
         $script:replies["repos/example/repo/actions/runs/$id/jobs?filter=latest&per_page=100"] =
             (@(@{ jobs = @($jobs[$id]); total_count = @($jobs[$id]).Count }) | ConvertTo-Json -Depth 10 -AsArray -Compress)
     }
+    $history = @(if (-not $NoWriter) { Run 80 'schedule' 'completed' })
+    $script:replies['repos/example/repo/actions/workflows/merge-rule.yml/runs?event=schedule&status=completed&per_page=10'] =
+        (@{ workflow_runs = $history; total_count = $history.Count } | ConvertTo-Json -Depth 10 -Compress)
+    $writer = @{ name = 'merge-rule-sweep-v1'; status = 'completed'; conclusion = $WriterConclusion; completed_at = $now.AddMinutes(-1).ToString('o') }
+    $script:replies['repos/example/repo/actions/runs/80/jobs?filter=latest&per_page=100'] =
+        (@(@{ jobs = @($writer); total_count = 1 }) | ConvertTo-Json -Depth 10 -AsArray -Compress)
     $warnings = @()
-    $actual = Test-MergeRuleBackstop -Repo example/repo -RunId 99 -Now $now -WarningVariable warnings
+    $actual = Test-MergeRuleBackstop -Repo example/repo -RunId 99 -Now $At -WarningVariable warnings
     if ($actual -ne $expected) { throw "$name expected proceed=$expected, got $actual" }
     if ($Warn -and -not $warnings.Count) { throw "$name must warn visibly" }
     Write-Host "PASS: $name"
@@ -60,6 +69,16 @@ Check 'a running writer does not suppress cron' $true @((Run 1)) @{ 1 = @((Job '
 Check 'a queued job with an unknown name visibly proceeds' $true @((Run 1)) @{ 1 = @((Job 'old-evaluate-name')) } -Warn
 Check 'uncertainty takes precedence over a fresh queued evaluation' $true @((Run 1), (Run 2)) @{ 1 = @((Job)); 2 = @((Job 'old-evaluate-name')) } -Warn
 Check 'a run with no queued evaluation does not suppress cron' $true @((Run 1 'pull_request_target' 'queued')) @{ 1 = @() }
+foreach ($elapsed in 0, 10, 30) {
+    $fresh = Run 1
+    $fresh.created_at = $now.AddMinutes($elapsed - 1).ToString('o')
+    Check "fresh replacements cannot defer cron forever at tick $elapsed" ($elapsed -eq 30) @($fresh) @{ 1 = @((Job)) } -At $now.AddMinutes($elapsed) -Warn:($elapsed -eq 30)
+}
+Check 'a recent failed cron writer still allows deferral' $false @((Run 1)) @{ 1 = @((Job)) } -WriterConclusion failure
+Check 'a skipped cron writer does not renew the bound' $true @((Run 1)) @{ 1 = @((Job)) } -WriterConclusion skipped -Warn
+Check 'a cancelled cron writer does not renew the bound' $true @((Run 1)) @{ 1 = @((Job)) } -WriterConclusion cancelled -Warn
+Check 'no completed cron writer visibly proceeds' $true @((Run 1)) @{ 1 = @((Job)) } -NoWriter -Warn
+Check 'unreadable cron history visibly proceeds' $true @((Run 1)) @{ 1 = @((Job)) } 'repos/example/repo/actions/workflows/merge-rule.yml/runs?event=schedule&status=completed&per_page=10' -Warn
 Check 'an old queued evaluation cannot starve the backstop' $true @((Run 1 'status' 'in_progress' 31), (Run 2)) @{ 1 = @((Job)); 2 = @((Job)) } -Warn
 Check 'the thirty minute boundary proceeds' $true @((Run 1 'status' 'queued' 30)) @{ 1 = @((Job)) } -Warn
 Check 'an unreadable queue visibly proceeds' $true @() @{} 'repos/example/repo/actions/workflows/merge-rule.yml/runs?status=queued&per_page=100' -Warn
@@ -87,3 +106,18 @@ if (-not (Test-MergeRuleBackstop -Repo example/repo -RunId 99 -Now $now -Warning
     throw 'Incomplete pagination must warn and proceed, not suppress cron.'
 }
 Write-Host 'PASS: incomplete pagination visibly proceeds'
+
+Check 'history budget fixture starts with a recent writer' $false @((Run 1)) @{ 1 = @((Job)) }
+$history = @(80..89 | ForEach-Object { Run $_ 'schedule' 'completed' })
+$script:replies['repos/example/repo/actions/workflows/merge-rule.yml/runs?event=schedule&status=completed&per_page=10'] =
+    (@{ workflow_runs = $history; total_count = 800 } | ConvertTo-Json -Depth 10 -Compress)
+foreach ($run in $history) {
+    $writer = @{ name = 'merge-rule-sweep-v1'; status = 'completed'; conclusion = 'success'; completed_at = $now.AddMinutes(-31).ToString('o') }
+    $script:replies["repos/example/repo/actions/runs/$($run.id)/jobs?filter=latest&per_page=100"] =
+        (@(@{ jobs = @($writer); total_count = 1 }) | ConvertTo-Json -Depth 10 -AsArray -Compress)
+}
+$script:calls.Clear()
+if (-not (Test-MergeRuleBackstop -Repo example/repo -RunId 99 -Now $now) -or $script:calls.Count -ne 16) {
+    throw 'Old history must proceed after at most ten historical job reads, not scan all 800 runs.'
+}
+Write-Host 'PASS: old cron history has a bounded lookup budget'
