@@ -205,6 +205,11 @@ done
 reset "$azure" "$canonical"; export APT_UPDATE_ERROR="W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/noble/InRelease Temporary failure resolving 'azure.archive.ubuntu.com'" APT_UPDATE_EXIT=0
 check "an update reporting Azure DNS warnings despite exit zero still switches immediately" \
   100 "$(printf 'update\nupdate')" "$canonical"
+reset "$azure" "$canonical"; export APT_UPDATE_ERROR='W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/noble/InRelease 503 Service Unavailable'
+check "mirror-file server errors retry on Azure and Canonical even without a hostname" \
+  100 "$(printf 'update\nupdate\nupdate\nupdate\nupdate\nupdate')" "$canonical"
+[ "$(cat "$SLEEP_LOG")" = $'5\n20\n5\n20' ] \
+  || { echo "FAIL: both update phases did not use 5/20 second backoff"; failures=$((failures + 1)); }
 
 for error in '404 Not Found' 'Hash Sum mismatch' 'Unable to locate package missing'; do
   reset "$azure" "$canonical"; export APT_ERROR="E: $error"
