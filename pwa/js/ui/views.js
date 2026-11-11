@@ -278,6 +278,12 @@ export class SessionListView {
       if (caret) { try { focused.setSelectionRange(...caret); } catch { /* not a text control */ } }
     }
     if (goneAt !== null) { this.#refocus(rowsWere, goneAt); }
+    if (focused && !focused.isConnected) {
+      const row = rowsWere.find((r) => r.contains(focused));
+      if (row && live.has(row.dataset.key)) {
+        this.#refocus(rowsWere, rowsWere.indexOf(row), this.#groups.get(this.order.groupFor(row.dataset.key)));
+      }
+    }
     if (anchor?.isConnected) {
       const delta = anchor.getBoundingClientRect().top - before.get(anchor).top;
       if (delta) { this.onAnchor?.(); scroller.scrollTop += delta; }
@@ -299,12 +305,12 @@ export class SessionListView {
     if (this.order.sort !== sort) { this.schedule(); }
   }
 
-  // A session that had focus (its row, or its view: End session pressed twice) has ended, and its
-  // focus went with it to the page, so the next Tab began at the top (§9.1 A4, #369). It goes to
+  // A focused session ended, or its group now hides its row, leaving focus on the page
+  // (§9.1 A4, #369). It goes to the retained group header, otherwise to
   // the row that takes its place, or the one before it if it was last, or else the list's
   // heading. Only to one in sight: on a phone the list is under the session's view, and going
   // back to it (sessions-page.js) gives focus back there.
-  #refocus(rowsWere, at) {
+  #refocus(rowsWere, at, preferred = null) {
     const doc = this.container.ownerDocument;
     // Unless focus went somewhere real meanwhile. The list's own ancestors don't count: WebKit
     // can give lost focus to the Sessions section.
@@ -312,7 +318,7 @@ export class SessionListView {
     if (now && now !== doc.body && now.isConnected && !now.contains(this.container)) { return; }
     const shown = (r) => this.container.contains(r) && r.getClientRects().length > 0;
     const next = rowsWere.slice(at + 1).find(shown) ?? rowsWere.slice(0, Math.max(at, 0)).reverse().find(shown);
-    let to = next?.querySelector('.row-main');
+    let to = preferred && shown(preferred) ? preferred : next?.querySelector('.row-main');
     if (!to) {
       const heading = this.heading();
       if (!heading?.getClientRects().length) { return; }
@@ -343,11 +349,6 @@ export class SessionListView {
         head.focus({ preventScroll: true });
       };
       head.addEventListener('click', () => toggle(!this.order.isGroupCollapsed(group.id)));
-      head.addEventListener('keydown', (e) => {
-        if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || !['ArrowLeft', 'ArrowRight'].includes(e.key)) { return; }
-        e.preventDefault();
-        toggle(e.key === 'ArrowLeft');
-      });
       this.#groups.set(group.id, head);
     }
     const needs = !group.expanded && group.needs ? `${group.needs} needs you` : '';
@@ -490,20 +491,38 @@ export class SessionListView {
         }
         return;
       }
+      const head = e.target.closest?.('.session-group-toggle');
       const card = e.target.closest?.('.row-main') ? this.#cardOf(e.target) : null;
-      if (!card) { return; }
+      if (!card && !head) { return; }
       // The context-menu key, or Shift+F10: Safari has neither as a contextmenu event.
-      if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey)) {
+      if (card && (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey))) {
         e.preventDefault();
         this.openMenu(card);
         return;
       }
-      if (e.ctrlKey || e.metaKey || e.shiftKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) { return; }
+      if (e.ctrlKey || e.metaKey || e.shiftKey) { return; }
+      if (!e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        if (head) {
+          e.preventDefault();
+          const expanded = head.getAttribute('aria-expanded') === 'true';
+          if (e.key === 'ArrowRight' && expanded) {
+            const first = head.nextElementSibling;
+            if (first?.matches('.session')) { first.querySelector('.row-main')?.focus(); }
+          } else if (expanded === (e.key === 'ArrowLeft')) { head.click(); }
+        } else if (e.key === 'ArrowLeft' && !this.order.isPinned(this.#keyOf(card))) {
+          const group = this.#groups.get(this.order.groupFor(this.#keyOf(card)));
+          if (group?.isConnected) { e.preventDefault(); group.focus(); }
+        }
+        return;
+      }
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') { return; }
+      if (e.altKey) {
+        if (card) { e.preventDefault(); if (!this.#grab) { this.#move(card, e.key === 'ArrowUp' ? -1 : 1); } }
+        return;
+      }
       e.preventDefault();
-      if (e.altKey) { if (!this.#grab) { this.#move(card, e.key === 'ArrowUp' ? -1 : 1); } return; }
-      // Up and Down alone go between rows, as a list does (ui.md §9).
-      const rows = [...this.container.querySelectorAll('.session > .row-main')];
-      rows[rows.indexOf(card.els.open) + (e.key === 'ArrowUp' ? -1 : 1)]?.focus();
+      const items = [...this.container.querySelectorAll('.session-group-toggle, .session > .row-main')];
+      items[items.indexOf(head ?? card.els.open) + (e.key === 'ArrowUp' ? -1 : 1)]?.focus();
     });
     // Enter, and Space on its key-up, arrive as a click with no pointer (detail 0). A mouse click is
     // not a grab: the handle is also where a drag starts.
