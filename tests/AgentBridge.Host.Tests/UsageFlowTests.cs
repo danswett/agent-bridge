@@ -151,6 +151,8 @@ public sealed class UsageFlowTests : IAsyncLifetime
     [Fact]
     public async Task A_usage_subscription_ends_with_its_channel()
     {
+        // Channel-close cleanup is under test, not the grace for out-of-order presence.
+        host.Hub.PresenceGrace = TimeSpan.Zero;
         var ch = await OpenAsync();
         Result(await ch.RequestAsync(UsageProtocol.Subscribe, new { }));
         Assert.Equal(1, usage.Subscribers);
