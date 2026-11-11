@@ -1114,6 +1114,7 @@ test.describe('the cached choices', () => {
       await openPanel(page);
       const reload = panel(page).getByRole('button', { name: 'Reload choices' });
       await reload.click();
+      await expect(reload).toBeEnabled();
       const line = panel(page).locator('.launch-incomplete');
       await expect(line).toBeVisible();
       await expect(line).toHaveText("Some sessions weren't checked in time. Reload choices to try again.");
@@ -1145,6 +1146,8 @@ test.describe('the cached choices', () => {
     await openPanel(page);
     const reload = panel(page).getByRole('button', { name: 'Reload choices' });
     await reload.click();
+    // The opening refresh can already show the notice; finish this reload before changing the host.
+    await expect(reload).toBeEnabled();
     const line = panel(page).locator('.launch-incomplete');
     await expect(line).toBeVisible();
 
