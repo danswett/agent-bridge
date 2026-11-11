@@ -1205,30 +1205,37 @@ const MASTER_DETAIL = '(min-width: 900px)';
 // The machine whose tile shows beside the list from 900 px, where a person picked one.
 const picked = new WeakMap();
 
-function machineLoadBar(bar) {
-  const missing = bar.percent === null;
+function machineLoadBar(bar, label) {
+  const missing = bar?.percent == null;
   const fill = missing ? null : h('span', { class: 'machine-load-fill' });
   if (fill) { fill.style.width = `${bar.percent}%`; }
   return h('div', { class: `machine-load${missing ? ' missing' : ''}` },
-    h('span', null, bar.label),
+    h('span', null, label),
     h('div', {
       class: 'machine-load-track', role: missing ? null : 'meter', 'aria-hidden': missing ? 'true' : null,
-      'aria-label': missing ? null : bar.label, 'aria-valuemin': missing ? null : 0,
-      'aria-valuemax': missing ? null : 100, 'aria-valuenow': bar.percent, 'aria-valuetext': missing ? null : bar.text,
+      'aria-label': missing ? null : label, 'aria-valuemin': missing ? null : 0,
+      'aria-valuemax': missing ? null : 100, 'aria-valuenow': bar?.percent, 'aria-valuetext': missing ? null : bar.text,
     }, fill),
     h('span', { class: 'machine-load-value' }, missing ? 'No figure' : bar.text));
 }
 
+function machineHealth(bars) {
+  return h('p', { class: 'tile-health' },
+    h('span', { class: 'tile-label' }, 'Health: '),
+    h('span', { class: 'tile-health-icon', 'aria-hidden': 'true' }, bars?.icon ?? '\u25cb'),
+    h('span', { class: 'tile-health-word' }, bars?.word ?? 'Not measured'));
+}
+
 // A machine's tile (#1147 S1), its sections in one order: Health, Can run, Running, Actions. Only
-// what a host reports today is shown: Health reads "Not measured yet", Can run waits until it is
-// reported, and Running is the session count. Updates, sign-in and Diagnose follow in `more`.
+// what a host reports is shown; no load record means Not measured, not a diagnosis.
+// Running is the session count. Updates, sign-in and Diagnose follow in `more`.
 function machineTile({ name, raw, bars, onSelect, onLaunch, more }) {
   const why = raw?.held ? `Discovery is held: ${raw.held}` : raw?.readOnly ? `This machine is view only: ${raw.readOnly}` : null;
   const running = !raw?.sessions ? 'Not reported yet' : raw.sessions.startsWith('0 ') ? 'No sessions running' : raw.sessions;
   const line = (cls, label, text) => h('p', { class: cls }, h('span', { class: 'tile-label' }, `${label}: `), text);
   return h('section', { class: 'machine-tile', 'aria-label': name },
-    line('tile-health', 'Health', 'Not measured yet'),
-    machineLoadBar(bars.cpu), machineLoadBar(bars.memory),
+    machineHealth(bars),
+    machineLoadBar(bars?.cpu, 'CPU (whole machine)'), machineLoadBar(bars?.memory, 'Memory used'),
     line('tile-running', 'Running', running),
     h('div', { class: 'tile-actions' },
       why ? h('p', { class: 'tile-actions-note' }, why)
@@ -1268,7 +1275,10 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
   const all = current === ALL;
   const offline = offlineMachines({ presence, known, me });
   // The accessor may retain a record after its machine leaves; presence, not the record, is online truth.
-  const loads = new Map([...hosts, ...offline].map((d) => [d.id, loadBars(load(d.id), { online: hosts.some((host) => host.id === d.id) })]));
+  const loads = new Map([...hosts, ...offline].map((d) => {
+    const online = hosts.some((host) => host.id === d.id), record = load(d.id);
+    return [d.id, online && record == null ? null : loadBars(record, { online })];
+  }));
   const rows = new Map(hosts.map((d) => [d.id, updateRow(updates, d.id, d.name, now)]));
   // A machine that left for an Update now reads "Restarting to update…" for a while (#1159, until
   // #815's planned restart is negotiated), in its offline row, or in a row of its own while the
@@ -1303,7 +1313,7 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
   // Drawn again only when something in it changes. It is asked to redraw on every session
   // update of every machine shown, and a button replaced between a tap's touch and its release
   // takes no click: a tap at startup, with every machine sending its sessions, was lost.
-  const key = JSON.stringify([current, detailId, hosts.map((d) => [d.id, d.name, lines.get(d.id).key, rows.get(d.id).key, signInRows.get(d.id).key, diagnoses.get(d.id).key, loads.get(d.id).cpu, loads.get(d.id).memory]),
+  const key = JSON.stringify([current, detailId, hosts.map((d) => [d.id, d.name, lines.get(d.id).key, rows.get(d.id).key, signInRows.get(d.id).key, diagnoses.get(d.id).key, loads.get(d.id)?.state, loads.get(d.id)?.cpu, loads.get(d.id)?.memory]),
     // lastSeen itself, not only how it reads: Forget sends it, to tell a machine that came back.
     offline.map((k) => [k.id, k.name, k.lastSeen, k.start ?? null, ago(k.lastSeen, now), forget?.stateOf(k.id) ?? null]), !!forget, [...restarting]]);
   if (drawnAs.get(list) === key) { return hosts.length; }
@@ -1334,6 +1344,7 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
       facts: h('span', { class: 'machine-seen' }, `Last seen ${seen || 'a while ago'}`),
       state: restarting.has(k.id) ? RESTARTING : startWords(k.start),
       more: [
+        machineHealth(loads.get(k.id)),
         forget ? h('div', { class: 'machine-actions' }, h('button', {
           type: 'button', class: `button secondary small machine-forget${s.armed ? ' armed' : ''}`,
           // The name starts with the words shown, so a person who says what they see presses it

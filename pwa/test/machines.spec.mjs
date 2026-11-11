@@ -152,6 +152,9 @@ test.describe('load bars', () => {
         await expect(page.locator('#load-fixture-list [role="meter"]')).toHaveCount(0);
         await expect(page.locator('#load-fixture-list')).not.toContainText('0%');
       }
+      if (!online) {
+        await expect(page.locator('#load-fixture-list .machine-tile, #load-fixture-list .machine-launch')).toHaveCount(0);
+      }
     });
   }
 
@@ -215,17 +218,20 @@ test.describe('load bars', () => {
         await expect(memory).toHaveAttribute('aria-valuenow', '0');
         await expect(tile.locator('.machine-load-value')).toHaveText(['0%', '0%']);
         await draw(page, { ...full, state: 'partial', cpu: undefined });
+        await expect(tile.locator('.tile-health-word')).toHaveText('Partial');
         await expect(cpu).toHaveCount(0);
         await expect(memory).toHaveAttribute('aria-valuenow', '37.5');
         await expect(tile.locator('.machine-load-value')).toHaveText(['No figure', '37.5%']);
         await expect(tile.locator('.machine-load-track').first()).toHaveCSS('border-top-style', 'dashed');
-        for (const load of [null, { ...full, state: 'stale' }, { ...full, ageMs: 15001 }, { ...full, state: 'unavailable' }]) {
+        for (const [load, word] of [[null, 'Not measured'], [{ ...full, state: 'stale' }, 'Stale'], [{ ...full, ageMs: 15001 }, 'Stale'], [{ ...full, state: 'unavailable' }, 'Unavailable']]) {
           await draw(page, load);
+          await expect(tile.locator('.tile-health-word')).toHaveText(word);
           await expect(tile.getByRole('meter')).toHaveCount(0);
           await expect(tile.locator('.machine-load-value')).toHaveText(['No figure', 'No figure']);
         }
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         await draw(page, full, false);
+        await expect(page.locator('#load-fixture-list .tile-health-word')).toHaveText('Offline');
         await expect(page.locator('#load-fixture-list')).toContainText('Offline');
         await expect(page.locator('#load-fixture-list [role="meter"]')).toHaveCount(0);
       });
