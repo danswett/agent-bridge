@@ -42,6 +42,9 @@ for (const [platform, userAgent, modifier, key] of [
     }, userAgent);
     await start(page);
     await expect(send(page)).toHaveAttribute('title', `Send (${modifier}+${key})`);
+    await input(page).fill('default modifier sends');
+    await input(page).press(platform === 'macos' ? 'Meta+Enter' : 'Control+Enter');
+    await expect.poll(() => log(page)).toHaveLength(1);
     await choose(page, 'Send');
     await expect(send(page)).toHaveAttribute('title', `Send (${key})`);
     await expect(send(page)).toHaveAttribute('aria-description', `Send (${key})`);
@@ -72,6 +75,11 @@ for (const width of [320, 1024]) {
   test.describe(`touch at ${width}px`, () => {
     test.use({ viewport: { width, height: 820 }, hasTouch: true });
     test('choices fit; phone Return stays a new line while tablet hardware Return sends', async ({ page }) => {
+      await page.addInitScript(() => {
+        Object.defineProperty(navigator, 'userAgentData', { value: undefined });
+        Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' });
+        Object.defineProperty(navigator, 'maxTouchPoints', { value: 5 });
+      });
       await start(page);
       await choose(page, 'Send');
       await go(page, 'settings');
