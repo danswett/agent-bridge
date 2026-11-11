@@ -947,18 +947,35 @@ function updateRow(updates, id, name, now) {
   const { busy, asking, note } = updates.stateOf(id);
   // Seen leaving for an Update now while online: its row reads so once it has gone (renderMachines).
   updates.restarting?.(id, true);
-  const said = updateLine(s, now);
-  const last = lastLine(s, now, { updateNow: updates.isUpdateNow?.(s.last?.request) ?? false });
+  const updateNow = updates.isUpdateNow?.(s.last?.request) ?? false;
+  const idle = s.installer && s.phase === 'idle' && !s.waiting;
+  // Legacy hosts send the held check's retry clock only in this reason, in host-local time.
+  const heldCheck = idle && !updateNow && !s.last?.code && ['failed', 'refused'].includes(s.last?.outcome)
+    && s.last.reason?.startsWith("the release feed's rate limit refused the check");
+  const checkFailed = heldCheck && !(Date.parse(s.checkedAt) > Date.parse(s.last.at));
+  const compact = idle && (s.available ? checkFailed : s.current && s.checkedAt
+    && (!s.last || s.last.outcome === 'current' || heldCheck));
+  const retry = checkFailed ? s.last.reason.match(/checking again after (\d{1,2}:\d{2}(?:\s*[AP]M)?)\.?$/i)?.[1] : null;
+  let said = updateLine(s, now);
+  if (compact) {
+    said = s.available ? 'Update available, but the check failed.' : `Up to date (${s.current})`;
+    if (retry) { said += `${s.available ? '' : '.'} Next ${s.available ? 'try' : 'check'} ${retry}.`; }
+    else if (!s.available && !checkFailed && now - Date.parse(s.checkedAt) > 3600000) {
+      const checked = new Date(s.checkedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' });
+      said += `. Last checked ${checked}.`;
+    }
+  }
+  const last = compact || (heldCheck && !checkFailed) ? null : lastLine(s, now, { updateNow });
   const check = canCheck(s) && !busy && !asking;
   const install = canInstall(s) && !busy && !asking;
-  const offerNow = updates.signs === true && canUpdateNow(s);
+  const offerNow = !compact && updates.signs === true && canUpdateNow(s);
   const pressNow = offerNow && !busy && !asking;
-  const why = updates.signs === true ? updateNowReason(s) : null;
+  const why = !compact && updates.signs === true ? updateNowReason(s) : null;
   const key = [said, last, note, busy, asking, check, install, offerNow, pressNow, why];
   // Not disabled when it cannot be pressed: a disabled button loses focus, and the next draw
   // could not give it back. A press then does nothing (UpdateControl, and the host's own rules).
   const button = (cls, label, aria, can, onPress) => h('button', {
-    type: 'button', class: `button secondary small ${cls}`, 'aria-label': aria,
+    type: 'button', class: `button ${checkFailed ? 'primary' : 'secondary'} small ${cls}`, 'aria-label': aria,
     'aria-disabled': can ? null : 'true',
     onclick: (e) => { if (can) { onPress(e); } },
   }, label);
@@ -976,8 +993,11 @@ function updateRow(updates, id, name, now) {
       why ? h('p', { class: 'machine-update-why' }, why) : null,
       note ? h('p', { class: 'machine-error', role: 'alert' }, note) : null,
       s.installer ? h('div', { class: 'machine-actions machine-update-actions' },
-        button('machine-update-check', busy ? 'Asking…' : 'Check', `Check ${name} for updates`, check, () => updates.press(id, 'check')),
-        s.available ? button('machine-update-install', 'Install', `Install ${s.available} on ${name} when no session there is busy`, install, () => updates.press(id, 'install')) : null,
+        compact && !s.available ? h('a', {
+          href: '#/machines', class: 'machine-update-check', 'aria-disabled': check ? null : 'true',
+          onclick: (e) => { e.preventDefault(); if (check) { updates.press(id, 'check'); } },
+        }, 'Check now') : button('machine-update-check', busy ? 'Asking…' : compact ? 'Check now' : 'Check', compact ? 'Check now' : `Check ${name} for updates`, check, () => updates.press(id, 'check')),
+        s.available && !compact ? button('machine-update-install', 'Install', `Install ${s.available} on ${name} when no session there is busy`, install, () => updates.press(id, 'install')) : null,
         offerNow ? button('machine-update-now', 'Update now', `Update now: ${s.available} on ${name}, without waiting`, pressNow, (e) => {
           const doc = e.currentTarget.ownerDocument;
           updates.pressNow(id, { machine: name, confirm: (sheet, { signal } = {}) => openUpdateNowSheet(sheet, { doc, returnFocus: refocus(doc), signal }) });
