@@ -3651,32 +3651,35 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
     async Task ResetFormAsync(string? other, bool reordered, Action? beforeLook = null)
     {
-        var clock = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(DateTimeOffset.UtcNow);
+        await using var clock = new PollClock();
         Serve(Answerer(time: clock, resume: true));
-        // A stalled test must not spend ResetWait before it records the session's response to Esc.
         Task UntilState(Func<bool> state, string what) => Wait.UntilAsync(() =>
         {
             // Model a test continuation scheduled infrequently on the loaded Arm runner.
             beforeLook?.Invoke();
-            if (state()) { return true; }
-            clock.Advance(TimeSpan.FromMilliseconds(25));
             return state();
         }, what, Patience);
         await AskFieldsAsync(TwoLists, 2, TwoPicked);
         var asked = false;
         injector.Screen = () => StuckScreen(() => asked);
+        // The CLI records Esc before its injection completes, so no reset budget races the test.
+        injector.OnInjectAsync = async () =>
+        {
+            if (!IsEscape(injector.Plans[^1].Plan)) { return; }
+            Assert.Empty(AfterEscape());
+            Fixture.Append(events, Copilot.ToolDone("q2", second++));
+            if (other is not null)
+            {
+                Fixture.Append(events, Copilot.ToolStart("q3", "ask_user", new { message = other, requestedSchema = new { properties = reordered ? TwoListsReordered : TwoLists } }, second++));
+                asked = true;
+            }
+            await source.RefreshAsync();
+        };
         var ch = await OpenAsync();
 
         var answering = AnswerResultAsync(ch, TwoPicked, Guid.NewGuid().ToString());
         await UntilState(() => Escaped(), "the Esc that resets the form");
         Assert.Empty(AfterEscape());
-        Fixture.Append(events, Copilot.ToolDone("q2", second++));
-        if (other is not null)
-        {
-            Fixture.Append(events, Copilot.ToolStart("q3", "ask_user", new { message = other, requestedSchema = new { properties = reordered ? TwoListsReordered : TwoLists } }, second++));
-            asked = true;
-        }
-        await source.RefreshAsync();
         await UntilState(() => answering.IsCompleted, "the reset form's out-of-date result");
         var result = await answering;
 
@@ -3848,6 +3851,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     {
         public readonly List<(int Pid, KeyPlan Plan)> Plans = [];
         public Action? OnInject;
+        public Func<Task>? OnInjectAsync;
         public Task Gate = Task.CompletedTask;
         public InjectionResult Result = new(InjectionStatus.Typed, "ok");
         // The session's screen as the CLI draws it, or null for a host that cannot read it.
@@ -3900,7 +3904,11 @@ public sealed class AnswerFlowTests : IAsyncLifetime
                 return new InjectionResult(InjectionStatus.NothingTyped, refusal);
             }
             lock (Plans) { Plans.Add((processId, plan)); At.Add(DateTime.UtcNow); }
-            if (Result.Status == InjectionStatus.Typed) { OnInject?.Invoke(); }
+            if (Result.Status == InjectionStatus.Typed)
+            {
+                OnInject?.Invoke();
+                if (OnInjectAsync is { } injected) { await injected(); }
+            }
             return Result;
         }
 
