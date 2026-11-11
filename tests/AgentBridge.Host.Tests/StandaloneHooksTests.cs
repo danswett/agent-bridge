@@ -1095,8 +1095,12 @@ public sealed class StandaloneHooksTests : IDisposable
         }
     }
 
+    // Redirected stdout is a synchronous pipe; its blocking read must not queue behind
+    // other process tests' occupied thread-pool workers.
     internal static Task<int> ReadHookReadinessAsync(Process running) =>
-        running.StandardOutput.ReadAsync(new char[1], 0, 1).WaitAsync(TimeSpan.FromSeconds(5));
+        Task.Factory.StartNew(() => running.StandardOutput.Read(new char[1], 0, 1),
+            CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)
+            .WaitAsync(TimeSpan.FromSeconds(5));
 
     [Fact]
     [Trait("Category", "Process")]
