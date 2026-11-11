@@ -146,6 +146,50 @@ export function readStart(raw) {
   return { at: str(s.at), limited: s.limited === true };
 }
 
+function collisionId(turn, used) {
+  const base = `${turn.wireId ?? turn.id}~duplicate-${encodeURIComponent(turn.at)}`;
+  let id = base;
+  for (let n = 1; used.has(id); n++) { id = `${base}~${n}`; }
+  used.add(id);
+  return id;
+}
+
+// A repeated page is an update; different dated turns sharing a wire id are not.
+export function alignHistoryTurns(held, page, retain = false) {
+  const out = held.slice();
+  const used = new Set([...held, ...page].map((t) => t.id));
+  let duplicates = 0;
+  const turns = page.map((t) => {
+    const wire = t.wireId ?? t.id;
+    const match = out.find((h) => h.id === t.id && (h.provisional || h.at === t.at
+      || h.parts.some((p) => t.parts.some((q) => p.id === q.id))))
+      ?? out.find((h) => !h.provisional && (h.wireId ?? h.id) === wire && h.at === t.at);
+    if (match) {
+      if (t.wireId && match.id === wire) { out[out.indexOf(match)] = { ...match, id: t.id, wireId: wire }; return t; }
+      return match.id === t.id ? t : { ...t, id: match.id, wireId: wire };
+    }
+    const at = out.findIndex((h) => h.id === t.id);
+    if (at < 0) { return t; }
+    duplicates++;
+    if (Date.parse(t.at) < Date.parse(out[at].at)) {
+      return { ...t, wireId: wire, id: collisionId(t, used) };
+    }
+    const h = out[at];
+    out[at] = { ...h, wireId: h.wireId ?? h.id, id: collisionId(h, used) };
+    return t;
+  });
+  // Keep the rekeyed collision's neighbours in order when anchoring a newest-page merge.
+  if (retain && out.some((t, i) => t.id !== held[i].id)) {
+    for (const h of out) {
+      if (turns.some((t) => t.id === h.id)) { continue; }
+      const at = turns.findIndex((t) => Date.parse(t.at) > Date.parse(h.at));
+      turns.splice(at < 0 ? turns.length : at, 0, h);
+    }
+  }
+  if (duplicates) { console.warn(`Duplicate history turn ids: ${duplicates}`); }
+  return { held: out, turns };
+}
+
 // session.history's result, one of:
 //   { turns, before, start, partial }  a page, oldest turn first; before is the cursor for the page
 //                                      before it (null when nothing older is served, and start says
@@ -177,11 +221,7 @@ export function readHistoryResult(raw) {
   for (let i = turns.length - 1; i >= 0; i--) {
     const t = turns[i];
     if (!seen.has(t.id)) { seen.add(t.id); continue; }
-    let n = 1;
-    let id;
-    do { id = `${t.id}~duplicate-${n++}`; } while (used.has(id));
-    used.add(id);
-    turns[i] = { ...t, id };
+    turns[i] = { ...t, wireId: t.id, id: collisionId(t, used) };
     duplicates++;
   }
   if (duplicates) { console.warn(`Duplicate history turn ids: ${duplicates}`); }
