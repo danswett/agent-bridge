@@ -1502,13 +1502,17 @@ public class MergeRuleTests
     public void A_later_jobs_page_can_supply_the_successful_retry_without_losing_earlier_successes()
     {
         var github = new FakeGitHub(GraphQLPullRequest(Head), mainJobPages: [
-            """{"total_count":5,"jobs":[
+            """
+                {"total_count":5,"jobs":[
                 {"id":0,"name":"plan","status":"completed","conclusion":"success","run_attempt":1},
                 {"id":1,"name":"light","status":"completed","conclusion":"success","run_attempt":1},
                 {"id":2,"name":"app (win-x64)","status":"completed","conclusion":"success","run_attempt":1},
-                {"id":3,"name":"app (win-arm64)","status":"completed","conclusion":"failure","run_attempt":1}]}""",
-            """{"total_count":5,"jobs":[
-                {"id":4,"name":"app (win-arm64)","status":"completed","conclusion":"success","run_attempt":2}]}""",
+                {"id":3,"name":"app (win-arm64)","status":"completed","conclusion":"failure","run_attempt":1}]}
+            """,
+            """
+                {"total_count":5,"jobs":[
+                {"id":4,"name":"app (win-arm64)","status":"completed","conclusion":"success","run_attempt":2}]}
+            """,
         ]);
         var config = WriteConfig();
         try
@@ -1525,11 +1529,13 @@ public class MergeRuleTests
     {
         var github = new FakeGitHub(GraphQLPullRequest(Head),
             mainRuns: MainRuns((9, "completed", "failure", 1), (5, "in_progress", null, 1)),
-            mainJobs: """{"total_count":4,"jobs":[
+            mainJobs: """
+                {"total_count":4,"jobs":[
                 {"id":0,"name":"plan","status":"completed","conclusion":"success","run_attempt":1},
                 {"id":1,"name":"light","status":"completed","conclusion":"success","run_attempt":1},
                 {"id":2,"name":"app (win-x64)","status":"completed","conclusion":"success","run_attempt":1},
-                {"id":3,"name":"app (win-arm64)","status":"completed","conclusion":"success","run_attempt":1}]}""",
+                {"id":3,"name":"app (win-arm64)","status":"completed","conclusion":"success","run_attempt":1}]}
+            """,
             mainHead: "c5".PadRight(40, '0'));
         var config = WriteConfig();
         try

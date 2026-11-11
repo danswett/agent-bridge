@@ -282,10 +282,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    re-run (attempt 2 on) never joins `ci-main` but gets its own run-id group, like a run by hand,
    so it runs beside them and can't take a waiting push run's place and leave that push's commit
    untested (#938's review). GitHub promises no
-   order between push runs, and nothing relies on one: the merge rule passes over a replaced
-   run when the newest run's commit builds on it. A newest run cancelled before starting, or
-   a missing run, can instead use a green ancestor within six commits, only when every later
-   commit passed its own merge rule; finished failures and read errors still block (item 9).
+   order between push runs: the merge rule reads the current main commit's push run and its
+   named test jobs, not an older finished run. Missing or cancelled jobs and read errors hold;
+   there is no green-ancestor fallback for merging (item 9).
    So a main run's change is everything since the last commit main's CI
    passed on: the plan reads `ci.yml`'s passed push runs on `main` (the newest 100, through the
    `actions: read` token), takes the newest whose commit is an ancestor of this one, fetches
