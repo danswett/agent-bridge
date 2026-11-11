@@ -40,9 +40,10 @@ export class ScrollFollow {
   #pending = new Set();
   #tail = null;
   #rendered = null;
+  #jumpEnd = null;
 
-  constructor(element, { input = element, content = () => element.children, scroll = (fn) => fn(), visible = () => element.getClientRects().length > 0, canFollow = () => true, canDefer = () => true, onFollow = () => {} } = {}) {
-    Object.assign(this, { element, content, scroll, visible, canFollow, canDefer, onFollow });
+  constructor(element, { input = element, content = () => element.children, scroll = (fn) => fn(), visible = () => element.getClientRects().length > 0, canFollow = () => true, canDefer = () => true, onFollow = () => {}, onPosition = () => {} } = {}) {
+    Object.assign(this, { element, input, content, scroll, visible, canFollow, canDefer, onFollow, onPosition });
     const { signal } = this.#listeners;
     element.addEventListener('scroll', () => this.read(), { signal, passive: true });
     for (const type of ['wheel', 'touchstart', 'touchmove', 'pointerdown', 'keydown']) {
@@ -98,7 +99,32 @@ export class ScrollFollow {
     if (!wasFollowing && this.following && this.#latest) {
       this.#rejoin();
     }
+    this.onPosition();
     return el.scrollTop;
+  }
+
+  jump(behavior = 'auto') {
+    this.#jumpEnd?.();
+    this.resume();
+    if (this.#pending.size) { this.#rejoin(); }
+    this.following = true;
+    const to = Math.max(0, this.element.scrollHeight - this.element.clientHeight);
+    const ended = new AbortController();
+    const done = () => { ended.abort(); release(); this.#jumpEnd = null; };
+    const finish = () => { done(); this.after(); };
+    const { signal } = ended;
+    let release;
+    this.#jumpEnd = done;
+    const landed = () => { if (this.element.scrollTop >= Math.min(to, this.element.scrollHeight - this.element.clientHeight) - BOTTOM_TOLERANCE_PX) { finish(); } };
+    this.element.addEventListener('scroll', landed, { signal });
+    this.element.addEventListener('scrollend', finish, { signal });
+    this.element.ownerDocument.defaultView?.addEventListener('resize', landed, { signal });
+    this.element.ownerDocument.defaultView?.visualViewport?.addEventListener('resize', landed, { signal });
+    for (const type of ['wheel', 'touchstart', 'touchmove', 'pointerdown', 'keydown']) {
+      (this.input ?? this.element).addEventListener(type, done, { signal, capture: true, passive: true });
+    }
+    this.scroll(() => { release = this.appScroll(() => this.element.scrollTo({ top: to, behavior }), false); });
+    if (behavior !== 'smooth' || this.element.scrollTop >= to - BOTTOM_TOLERANCE_PX) { finish(); }
   }
 
   // Choosing a cached session starts at its latest, not at the previous reading position.
@@ -179,6 +205,7 @@ export class ScrollFollow {
       }
     }
     this.remember();
+    this.onPosition();
   }
 
   changed(entries) {
@@ -210,6 +237,7 @@ export class ScrollFollow {
   resume() { this.#app = null; this.remember(); }
 
   dispose() {
+    this.#jumpEnd?.();
     this.#listeners.abort();
     this.#observer?.disconnect();
     this.#tail?.view.dispose();

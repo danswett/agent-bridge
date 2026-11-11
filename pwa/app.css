@@ -1195,6 +1195,19 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 }
 
 /* ---- the conversation (ui.md §6.4) ---- */
+/* Jump to latest (#1720): an overlay anchored to the scroll pane, never a layout spacer. */
+.conversation:has(> .jump-latest) { position: relative; }
+.jump-latest {
+  position: absolute; left: 50%; transform: translate(-50%, -100%); z-index: 3;
+  display: flex; align-items: center; justify-content: center; gap: var(--ab-space-2);
+  height: 44px; max-width: calc(100% - 24px); padding: 0 var(--ab-space-4);
+  border: 1px solid var(--ab-stroke2); border-radius: 999px;
+  background: var(--ab-card); color: var(--ab-text); font: inherit; cursor: pointer;
+}
+.jump-latest[hidden] { display: none; }
+.jump-latest .ab-icon { transform: rotate(-90deg); }
+@media (forced-colors: active) { .jump-latest { background: ButtonFace; color: ButtonText; border-color: ButtonText; } }
+
 .conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .stream-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--ab-space-6); }
 /* The reading measure: about 68 characters, a step larger than the UI around it. */

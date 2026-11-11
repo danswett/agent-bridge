@@ -447,6 +447,9 @@ export class SessionCard {
   #leaving = null;
   #orphan = null;
   #reply = null;
+  #unreply = null;
+  #jumpResize;
+  #jumpStyle;
   // The host the reply box is for, and what it held when it last went away (the machine
   // stopped taking replies for a moment, say), so it comes back with the words in it.
   #replyHost = null;
@@ -700,12 +703,14 @@ export class SessionCard {
     this.#watchHold(e.scroll);
     // An open question out of sight (#1657): one tap brings its card into view.
     e.waiting = h('button', { type: 'button', class: 'question-waiting', hidden: true, onclick: () => this.#showWaiting() }, 'Question waiting');
+    e.jump = h('button', { type: 'button', class: 'jump-latest', hidden: true, onclick: () => this.#follow.jump(scrollBehavior()) },
+      designIcon('back', { size: 20 }), 'Jump to latest');
     // Watched, not measured: a read of the layout here would spend the one the move watch owes.
     if (typeof IntersectionObserver === 'function') {
       new IntersectionObserver((entries) => { this.#questionSeen = entries.at(-1).isIntersecting; this.#syncWaiting(); }, { root: e.scroll }).observe(e.question);
     }
     e.conversation = h('div', { class: 'conversation', id: this.ids.conversation, role: 'tabpanel', 'aria-labelledby': this.ids.tabC },
-      e.scroll, e.waiting, e.reply, e.replyBar);
+      e.scroll, e.waiting, e.jump, e.reply, e.replyBar);
 
     // The inspector: Details, then Tools.
     e.facts = h('dl', { class: 'facts' });
@@ -749,10 +754,15 @@ export class SessionCard {
       canFollow: (revealed) => !this.#s?.question || (!revealed && (!this.#placed || (!this.#touches && !this.#pressing && !this.#hovering))),
       canDefer: () => !!this.historyStore && (!e.user.hidden || !e.prompt.hidden || !e.agentBlock.hidden),
       onFollow: () => this.update(this.#s),
+      onPosition: () => this.#syncLatest(),
     });
     const foot = new CollapsingFoot({ view: this.view, slot: e.reply, bar: e.replyBar, copy: e.replyCopy, scroller: e.scroll });
     this.collapse = new CollapsingHeader({ view: this.view, head: e.head, top: e.top, bar: e.bar, scroller: e.scroll, foot });
     this.foot = foot;
+    this.#jumpResize = new ResizeObserver(() => this.#syncLatest());
+    for (const el of [e.scroll, e.reply]) { this.#jumpResize.observe(el); }
+    this.#jumpStyle = new MutationObserver(() => this.#syncLatest());
+    this.#jumpStyle.observe(e.scroll, { attributes: true, attributeFilter: ['style'] });
     this.#phone?.addEventListener('change', this.#onPhone);
     this.#applyTab();
     // A question that stays where it is can still move (#491): a title wrapping, a tool line
@@ -1470,6 +1480,9 @@ export class SessionCard {
     this.#panel = null;
     this.#reply?.destroy();
     this.#reply = null;
+    this.#unreply?.();
+    this.#jumpResize.disconnect();
+    this.#jumpStyle.disconnect();
     this.#stop?.destroy();
     this.#stop = null;
     this.#menu.close(false);
@@ -1704,6 +1717,8 @@ export class SessionCard {
     const ctx = this.answering();
     const hostId = ctx?.replies && ctx.capabilities?.includes('sessions.reply') ? ctx.hostId : null;
     if (this.#replyHost !== hostId || (hostId && !this.#reply)) {
+      this.#unreply?.();
+      this.#unreply = null;
       if (this.#reply) {
         this.#replyDraft = { hostId: this.#replyHost, text: this.#reply.text };
         this.#reply.destroy();
@@ -1712,6 +1727,12 @@ export class SessionCard {
       if (hostId) {
         this.#reply = new ReplyBox({ machineName: this.machineName, replying: { service: ctx.replies, hostId, sessionId: s.id }, attach: ctx.capabilities.includes('sessions.attach'), largeMax: ctx.largeAttachments?.() ?? 0, onGoToQuestion: () => this.#goToQuestion(), onChange: () => this.foot?.changed() });
         if (this.#replyDraft.hostId === hostId) { this.#reply.els.input.value = this.#replyDraft.text; }
+        let request = ctx.replies.get(hostId, s.id)?.request;
+        this.#unreply = ctx.replies.watch(hostId, s.id, (entry) => {
+          if (entry?.state !== 'sending' || entry.request === request) { return; }
+          request = entry.request;
+          this.#follow.jump();
+        });
       }
       this.#replyHost = hostId;
       this.els.reply.replaceChildren(...(this.#reply ? [this.#reply.element] : []));
@@ -1888,8 +1909,29 @@ export class SessionCard {
 
   #questionSeen = true;
 
+  #syncLatest() {
+    const e = this.els;
+    if (!e.scroll.getClientRects().length) { return; }
+    const show = e.scroll.scrollHeight - e.scroll.clientHeight - e.scroll.scrollTop > e.scroll.clientHeight;
+    if (show) {
+      // Anchor to the visible scroll pane; the phone's existing foot coverage follows its box.
+      let bottom = e.scroll.offsetTop + e.scroll.clientHeight - (this.collapse?.footCovered() ?? 0) - 8;
+      const box = e.conversation.getBoundingClientRect();
+      const controls = [...this.#guarded?.querySelectorAll('.answer-controls, .answer-actions') ?? []].map((el) => el.getBoundingClientRect()).filter((r) => r.height);
+      const top = Math.min(...controls.map((r) => r.top));
+      const end = Math.max(...controls.map((r) => r.bottom));
+      if (end > box.top + bottom - 44 && top < box.top + bottom) { bottom = top - box.top - 8; }
+      if (e.jump.style.top !== `${bottom}px`) { e.jump.style.top = `${bottom}px`; }
+    }
+    if (e.jump.hidden === show) {
+      if (show) { e.jump.hidden = false; enter(e.jump, 'listItem'); }
+      else { leave(e.jump, 'listItem'); e.jump.hidden = true; }
+    }
+    this.#syncWaiting();
+  }
+
   #syncWaiting() {
-    this.els.waiting.hidden = !this.#s?.question || this.#questionSeen;
+    this.els.waiting.hidden = !this.#s?.question || this.#questionSeen || !this.els.jump.hidden;
   }
 
   #showWaiting() {
