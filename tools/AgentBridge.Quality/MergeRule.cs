@@ -53,6 +53,8 @@ sealed class MergeRuleConfig
         if (string.IsNullOrWhiteSpace(config.Codeql.Workflow)) missing.Add("codeql.workflow");
         if (string.IsNullOrWhiteSpace(config.Codeql.Check)) missing.Add("codeql.check");
         if (string.IsNullOrWhiteSpace(config.MainGreen.Workflow)) missing.Add("main_green.workflow");
+        if (config.MainGreen.FallbackCommits is < 1 or > 6)
+            throw new FormatException("main_green.fallback_commits must be between 1 and 6.");
         if (config.SensitivePaths.Count == 0) missing.Add("sensitive_paths");
         // With nowhere to read the second review from, one review would stand in for two on a
         // sensitive change, so the config refuses to load rather than guess.
@@ -89,6 +91,7 @@ sealed class MainGreenConfig
     /// <summary>The workflow file whose latest finished push run on the base branch says whether it's green.</summary>
     public string Workflow { get; set; } = "";
     public List<string> ExemptLabels { get; set; } = [];
+    public int FallbackCommits { get; set; } = 6;
 }
 
 /// <summary>

@@ -1,5 +1,6 @@
 using YamlDotNet.RepresentationModel;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace AgentBridge.Quality.Tests;
 
@@ -1061,6 +1062,204 @@ public class MergeRuleTests
             File.Delete(config);
         }
     }
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_newest_cancelled_run_uses_green_ancestry_only_when_every_later_commit_passed_merge_rule(bool allPassed)
+    {
+        var after = new[] { "c6".PadRight(40, '0'), "c7".PadRight(40, '0') };
+        FakeGitHub Fixture(bool passed) => new(GraphQLPullRequest(Head),
+            mainRuns: MainRuns((7, "completed", "cancelled", 1), (5, "completed", "success", 1)),
+            mainJobs: MainJobs(),
+            mainAfter: JsonSerializer.Serialize(new { status = "ahead", total_commits = after.Length, commits = after.Select(sha => new { sha }) }),
+            mainMerged: after.ToDictionary(sha => sha, sha => MergedMainCommit(sha, passed || sha == after[1])));
+        var config = WriteConfig();
+        try
+        {
+            // Prove the eligible case first: an evaluator that blocks everything doesn't prove the guard.
+            var eligible = Fixture(true);
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), eligible, OnMain);
+            Assert.Contains(" success merge-rule ", Assert.Single(eligible.Posted), StringComparison.Ordinal);
+            if (!allPassed)
+            {
+                var missing = Fixture(false);
+                MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), missing, OnMain);
+                Assert.Contains(" failure merge-rule ", Assert.Single(missing.Posted), StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void The_main_green_fallback_uses_ancestry_not_run_id_order(bool cancelled)
+    {
+        var old = "c8".PadRight(40, '0');
+        var newer = "c7".PadRight(40, '0');
+        var head = "c9".PadRight(40, '0');
+        string Compare(params string[] commits) => JsonSerializer.Serialize(new
+        {
+            status = "ahead", total_commits = commits.Length, commits = commits.Select(sha => new { sha }),
+        });
+        var runs = new List<(long, string, string?, int)> { (8, "completed", "success", 1), (7, "completed", "success", 1) };
+        if (cancelled)
+            runs.Insert(0, (9, "completed", "cancelled", 1));
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: MainRuns([.. runs]), mainJobs: MainJobs(),
+            mainAfters: new Dictionary<string, string>
+            {
+                [old] = Compare([.. Enumerable.Range(1, 5).Select(n => $"c{n}".PadRight(40, '0')), newer, head]),
+                [newer] = Compare(head),
+            }, mainMerged: new Dictionary<string, string> { [head] = MergedMainCommit(head, true) });
+        var config = WriteConfig();
+        try
+        {
+            var output = new StringWriter();
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain);
+            Assert.Contains(" success merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
+            Assert.Contains("green ancestor c700000", output.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    [Fact]
+    public void A_finished_failure_stops_the_main_green_fallback_even_when_runs_are_out_of_push_order()
+    {
+        var after = "c30".PadRight(40, '0');
+        var github = new FakeGitHub(GraphQLPullRequest(Head),
+            mainRuns: MainRuns((30, "completed", "cancelled", 1), (20, "completed", "failure", 1), (10, "completed", "success", 1)),
+            mainJobs: MainJobs(), mainAfter: JsonSerializer.Serialize(new
+            {
+                status = "ahead", total_commits = 1, commits = new[] { new { sha = after } },
+            }), mainMerged: new Dictionary<string, string> { [after] = MergedMainCommit(after, true) });
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+            Assert.Contains(" failure merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
+            Assert.DoesNotContain(github.RestPaths, p => p.Contains($"/compare/{"c10".PadRight(40, '0')}...main?", StringComparison.Ordinal));
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    [Theory]
+    [InlineData("newest", null)]
+    [InlineData("coverage", null)]
+    [InlineData("pending", null)]
+    [InlineData("pending", "0")]
+    [InlineData("pending", "-1")]
+    [InlineData("pending", "null")]
+    [InlineData("pending", "\"1\"")]
+    [InlineData("pending", "true")]
+    [InlineData("pending", "[]")]
+    public void Missing_or_invalid_main_run_attempts_never_grant_a_first_attempt_exception(string where, string? attempt)
+    {
+        var after = "c6".PadRight(40, '0');
+        var runs = JsonNode.Parse(where == "pending"
+            ? MainRuns((7, "completed", "success", 1), (6, "queued", null, 1))
+            : MainRuns((6, "completed", "cancelled", 1), (5, "completed", "success", 1)))!;
+        var run = runs["workflow_runs"]![where == "pending" ? 1 : 0]!.AsObject();
+        if (attempt is null)
+            run.Remove("run_attempt");
+        else
+            run["run_attempt"] = JsonNode.Parse(attempt);
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: runs.ToJsonString(), mainJobs: MainJobs(),
+            mainPages: where == "coverage" ? [MainRuns((5, "completed", "success", 1))] : null,
+            mainAfter: JsonSerializer.Serialize(new { status = "ahead", total_commits = 1, commits = new[] { new { sha = after } } }),
+            mainMerged: new Dictionary<string, string> { [after] = MergedMainCommit(after, true) });
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+            Assert.Contains(" error merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    static string MergedMainCommit(string sha, bool passed) => JsonSerializer.Serialize(new
+    {
+        data = new { repository = new { @object = new
+        {
+            oid = sha,
+            associatedPullRequests = new { totalCount = 1, nodes = new[] { new
+            {
+                state = "MERGED", baseRefName = "main", baseRepository = new { nameWithOwner = "danswett/agent-bridge" }, mergeCommit = new { oid = sha },
+                headRefOid = Head, mergedAt = "2026-11-03T20:02:00Z",
+                commits = new { nodes = new[] { new { commit = new
+                {
+                    oid = Head, status = new { context = passed ? new
+                    {
+                        state = "SUCCESS", creator = new { login = "github-actions" }, createdAt = "2026-11-03T20:01:00Z",
+                    } : null },
+                } } } },
+            } } },
+        } } },
+    });
+
+    [Theory]
+    [InlineData("six", "success")]
+    [InlineData("seven", "failure")]
+    [InlineData("missing", "success")]
+    [InlineData("failed", "failure")]
+    [InlineData("rerunning", "failure")]
+    [InlineData("started", "failure")]
+    [InlineData("compare-error", "error")]
+    [InlineData("incomplete", "failure")]
+    [InlineData("wrong-poster", "failure")]
+    [InlineData("wrong-head", "failure")]
+    [InlineData("wrong-merge", "failure")]
+    [InlineData("wrong-repo", "failure")]
+    [InlineData("after-merge", "failure")]
+    [InlineData("cut-pr-list", "failure")]
+    public void The_main_green_fallback_is_bounded_and_requires_complete_pre_merge_proof(string scenario, string state)
+    {
+        var after = Enumerable.Range(6, scenario == "seven" ? 7 : 6).Select(n => $"c{n}".PadRight(40, '0')).ToArray();
+        var runs = new List<(long, string, string?, int)> { (5, "completed", "success", 1) };
+        if (scenario != "missing")
+            runs.Insert(0, (scenario == "seven" ? 12 : 11, "completed", "cancelled", 1));
+        if (scenario is "failed" or "rerunning")
+            runs.Add((8, scenario == "failed" ? "completed" : "in_progress", scenario == "failed" ? "failure" : null, scenario == "failed" ? 1 : 2));
+        var proof = after.ToDictionary(sha => sha, sha => MergedMainCommit(sha, true));
+        proof[after[0]] = scenario switch
+        {
+            "wrong-poster" => proof[after[0]].Replace("github-actions", "someone-else", StringComparison.Ordinal),
+            "wrong-head" => proof[after[0]].Replace($"\"headRefOid\":\"{Head}\"", $"\"headRefOid\":\"{Older}\"", StringComparison.Ordinal),
+            "wrong-merge" => proof[after[0]].Replace($"\"mergeCommit\":{{\"oid\":\"{after[0]}\"}}", $"\"mergeCommit\":{{\"oid\":\"{Older}\"}}", StringComparison.Ordinal),
+            "wrong-repo" => proof[after[0]].Replace("danswett/agent-bridge", "someone/agent-bridge", StringComparison.Ordinal),
+            "after-merge" => proof[after[0]].Replace("20:01:00Z", "20:03:00Z", StringComparison.Ordinal),
+            "cut-pr-list" => proof[after[0]].Replace("\"totalCount\":1", "\"totalCount\":6", StringComparison.Ordinal),
+            _ => proof[after[0]],
+        };
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: MainRuns([.. runs]),
+            mainJobs: scenario == "started" ? MainJobs((12, 1)) : MainJobs(),
+            mainAfter: scenario == "compare-error" ? null : JsonSerializer.Serialize(new
+            {
+                status = "ahead", total_commits = scenario == "incomplete" ? 100 : after.Length, commits = after.Select(sha => new { sha }),
+            }), mainMerged: proof);
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+            Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
     // Auto-merge doesn't pause while main is red, so the merge rule must: judged by main's CI
     // push run that finished last, at its latest attempt.
     [Fact]
@@ -1529,6 +1728,7 @@ public class MergeRuleTests
     static string MainRuns(params (long Id, string Status, string? Conclusion, int Attempt)[] runs) =>
         JsonSerializer.Serialize(new
         {
+            total_count = runs.Length,
             workflow_runs = runs.Select(r => new { id = r.Id, head_sha = $"c{r.Id}".PadRight(40, '0'), status = r.Status, conclusion = r.Conclusion, run_attempt = r.Attempt }),
         });
 
@@ -1613,7 +1813,7 @@ public class MergeRuleTests
     /// <paramref name="statuses"/> REST's status history, and <paramref name="mainRuns"/> (or one
     /// green run) main's CI.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainCompare = """{"status": "ahead"}""", string? mainAfter = """{"status": "identical", "total_commits": 0, "commits": []}""", string?[]? mainPages = null) : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainCompare = """{"status": "ahead"}""", string? mainAfter = """{"status": "identical", "total_commits": 0, "commits": []}""", string?[]? mainPages = null, IReadOnlyDictionary<string, string>? mainMerged = null, IReadOnlyDictionary<string, string>? mainAfters = null) : IGitHub
     {
         public List<string> Posted { get; } = [];
 
@@ -1621,6 +1821,9 @@ public class MergeRuleTests
 
         public JsonDocument GraphQL(string query, IReadOnlyDictionary<string, object> variables)
         {
+            if (variables.TryGetValue("covered", out var covered))
+                return JsonDocument.Parse(mainMerged?.GetValueOrDefault((string)covered)
+                    ?? """{"data":{"repository":{"object":null}}}""");
             if (failChecks && query.Contains("checkSuites", StringComparison.Ordinal))
                 throw new InvalidOperationException("gh: HTTP 502");
             if (variables.TryGetValue("number", out var number))
@@ -1639,6 +1842,13 @@ public class MergeRuleTests
         public JsonDocument Rest(string path)
         {
             RestPaths.Add(path);
+            if (path.Contains("&head_sha=", StringComparison.Ordinal))
+            {
+                using var all = JsonDocument.Parse(mainRuns ?? MainRuns((1, "completed", "success", 1)));
+                var matching = all.RootElement.GetProperty("workflow_runs").EnumerateArray()
+                    .Where(run => run.GetProperty("head_sha").GetString() == path[(path.LastIndexOf('=') + 1)..]).ToArray();
+                return JsonDocument.Parse(JsonSerializer.Serialize(new { total_count = matching.Length, workflow_runs = matching }));
+            }
             // Main's runs a page at a time when given pages (null: one that can't be read), past
             // the last none.
             if (mainPages is not null && path.Contains("/actions/workflows/", StringComparison.Ordinal))
@@ -1653,7 +1863,10 @@ public class MergeRuleTests
             // Main's commits after a passed run's, then two of main's commits compared, not a pull
             // request's head against main.
             if (path.Contains("...main?", StringComparison.Ordinal))
-                return JsonDocument.Parse(mainAfter ?? throw new InvalidOperationException("gh: HTTP 502"));
+            {
+                var sha = path[(path.IndexOf("/compare/", StringComparison.Ordinal) + 9)..path.IndexOf("...main?", StringComparison.Ordinal)];
+                return JsonDocument.Parse(mainAfters?.GetValueOrDefault(sha) ?? mainAfter ?? throw new InvalidOperationException("gh: HTTP 502"));
+            }
             if (path.Contains("/compare/", StringComparison.Ordinal) && !path.Contains("/compare/main...", StringComparison.Ordinal))
                 return JsonDocument.Parse(mainCompare ?? throw new InvalidOperationException("gh: HTTP 502"));
             if (failStatuses && path.Contains("/statuses", StringComparison.Ordinal))

@@ -283,8 +283,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    so it runs beside them and can't take a waiting push run's place and leave that push's commit
    untested (#938's review). GitHub promises no
    order between push runs, and nothing relies on one: the merge rule passes over a replaced
-   run only when the newest run's commit builds on its commit, and otherwise, or when the newest
-   run itself was replaced, holds main not green until that run is re-run (item 9).
+   run when the newest run's commit builds on it. A newest run cancelled before starting, or
+   a missing run, can instead use a green ancestor within six commits, only when every later
+   commit passed its own merge rule; finished failures and read errors still block (item 9).
    So a main run's change is everything since the last commit main's CI
    passed on: the plan reads `ci.yml`'s passed push runs on `main` (the newest 100, through the
    `actions: read` token), takes the newest whose commit is an ancestor of this one, fetches
@@ -497,18 +498,27 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      started (a first attempt with a newer run listed, whose jobs, every one read, have no
      runner and no steps, and whose commit the newest run's commit builds on, by GitHub's
      compare), tested nothing, and the newest run tests its change, so it is passed over for the
-     finished run before it, red or green; any other cancelled run (the newest included), or one
-     whose jobs or compare can't be read, still counts as not green: re-run it. A run that passed
+     finished run before it, red or green. A newest first attempt cancelled before starting can
+     instead use the bounded fallback below; other cancelled runs, or one whose jobs or compare
+     can't be read, still count as not green. A run that passed
      doesn't vouch for a later commit (by main's compare from it) whose run, older by id since
      runs aren't promised to be created in push order, hasn't passed, nor for one whose run isn't
      found. A later commit's first-attempt run still queued or running counts as found and as not
      red: the pass stands, so a pull request can be judged green while main's CI on its newest
      commit is still running, and the verdict follows that run (merge-rule judges again when
      main's `CI` push run is requested, starts and finishes), so a red result fails every pull
-     request at once. Only a commit with no run at all is "can't be found", which the run's own
-     `requested` event settles within seconds, without a timer. A later commit with no run on the first page of 20 is looked for on up to four more,
-     and one still not found (further back, or never run, as a commit inside a push of several)
-     holds main not green until a run on main's head passes. While it
+     request at once. A later commit with no run on the first page of 20 is looked for on up to
+     four more. One still not found, or a newest first attempt cancelled before any job started,
+     can use a finished green ancestor **at most six commits back** (`main_green.fallback_commits`).
+     GitHub's compare must list every later commit and prove ancestry; each must map to its
+     matching merged PR in this repository and base branch, with a successful `merge-rule`
+     status from `status_poster` on that PR's exact head, posted no later than its merge. That
+     status proves its own ring and required receipts passed; association alone is not proof.
+     The evaluator also reads each later commit's CI runs: a finished failure, an active rerun,
+     a started cancellation, an incomplete list or any read error still blocks. Seven commits
+     back, or a later commit without its own passing merge rule, cannot use the fallback.
+     Coverage is by each commit's merge-rule pass, not tree identity: an untested combination within the six-commit window is caught by the next main run.
+     Queued/running first attempts keep their existing behavior. While main
      isn't green, every pull request fails, its description starting `Main is red (CI <sha>)`;
      main unread, or with no finished run, fails closed. The fix itself gets the `fixes-main`
      label (`main_green.exempt_labels`) from the merge coordinator, since labels take triage
