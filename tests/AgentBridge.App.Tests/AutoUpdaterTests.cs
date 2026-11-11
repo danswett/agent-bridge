@@ -2224,14 +2224,16 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
+    [InlineData(UpdateOutcome.Current, false)]
+    [InlineData(UpdateOutcome.Current, true)]
+    [InlineData(UpdateOutcome.Failed, false)]
     [Trait("Category", "Network")]
-    public async Task A_pressed_rate_limited_check_reports_refusal_only_while_no_newer_release_is_known(bool newer)
+    public async Task A_pressed_rate_limited_check_reports_refusal_only_while_no_newer_release_is_known(UpdateOutcome outcome, bool newer)
     {
         updater.Found = null;
         await StartAsync();
         await AskedAsync(UpdateAskKind.Check, "current");
+        prefs = prefs with { LastUpdate = prefs.LastUpdate! with { Outcome = outcome } };
         if (newer)
         {
             updater.Found = "0.2.0";
@@ -2245,7 +2247,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         {
             var request = Guid.NewGuid().ToString();
             await AskedAsync(kind, request);
-            Assert.Equal((newer ? UpdateOutcome.Failed : UpdateOutcome.Refused, request), (auto.State.Last!.Outcome, auto.State.Last.Request));
+            Assert.Equal((!newer && outcome == UpdateOutcome.Current ? UpdateOutcome.Refused : UpdateOutcome.Failed, request), (auto.State.Last!.Outcome, auto.State.Last.Request));
             Assert.Contains($"checking again after {retry.ToLocalTime():t}", auto.State.Last.Reason);
             Assert.Equal(newer ? "0.2.0" : null, auto.State.Available);
         }

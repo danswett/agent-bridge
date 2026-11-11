@@ -340,8 +340,11 @@ public sealed class ReleaseDiscoveryTests : IDisposable
         Assert.Empty(github.Requests);
         time.Advance(TimeSpan.FromMinutes(10));
         await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
-        using var rolledBack = new ReleaseDiscovery(folder, github, new FakeTimeProvider(Now.AddHours(-2)), random: () => 0);
-        await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => rolledBack.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
+        foreach (var rollback in new[] { 2, 24 })
+        {
+            using var rolledBack = new ReleaseDiscovery(folder, github, new FakeTimeProvider(Now.AddHours(-rollback)), random: () => 0);
+            await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => rolledBack.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
+        }
         Assert.All(github.Requests, r => Assert.Equal(Url, r.Url));
     }
 
