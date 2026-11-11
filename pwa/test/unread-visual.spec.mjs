@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 import { motionsDone, row } from './nav.mjs';
 
 const READ = '6f1c2b7e-claude-example';
@@ -22,6 +23,7 @@ async function setup(page) {
     for (const id of [NEW, DONE]) {
       const s = d.host.get(id);
       d.upsert({ ...s, status: 'idle', question: null,
+        updatedAt: new Date(Date.now() - (47 * 60 + 45) * 60000).toISOString(),
         activity: { ...s.activity, turn: 'visual-reply', responseTurn: 'visual-reply', response: 'A new reply' } });
     }
     const h = document.documentElement;
@@ -38,8 +40,12 @@ const geometry = (page) => page.locator('.session > .row-main').evaluateAll((els
   const age = el.querySelector('.row-age');
   const signal = el.querySelector('.unread-dot') ?? age;
   const r = el.getBoundingClientRect(), a = signal.getBoundingClientRect(), cs = getComputedStyle(el);
+  const ink = document.createRange();
+  ink.selectNodeContents(age);
+  const text = ink.getBoundingClientRect(), slot = age.getBoundingClientRect();
   return { edge: r.right - parseFloat(cs.paddingRight), age: a.right, width: a.width,
-    text: el.querySelector('.row-text').getBoundingClientRect().right, height: r.height };
+    text: el.querySelector('.row-text').getBoundingClientRect().right, height: r.height,
+    overflow: Math.max(0, slot.left - text.left, text.right - slot.right) };
 }));
 
 for (const width of [390, 820]) {
@@ -53,6 +59,7 @@ for (const width of [390, 820]) {
         expect(Math.abs(r.age - r.edge)).toBeLessThan(0.5);
         expect(Math.abs(r.age - before[0].age)).toBeLessThan(0.5);
         expect(r.height).toBeGreaterThanOrEqual(44);
+        expect(r.overflow).toBeLessThan(0.5);
       }
       await expect(page.locator('.unread-dot')).toHaveCount(0);
       const style = (id, selector) => row(page, id).locator(selector).evaluate((el) => {
@@ -81,6 +88,15 @@ for (const width of [390, 820]) {
     });
   }
 }
+
+test('selected unread ages keep AA contrast on the light selected tint', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'reduce' });
+  await setup(page);
+  await row(page, NEW).evaluate((el) => el.classList.add('selected'));
+  const result = await new AxeBuilder({ page })
+    .include('.session.unread.selected > .row-main').withRules(['color-contrast']).analyze();
+  expect(result.violations).toEqual([]);
+});
 
 test('high contrast shows New in the age slot and speaks both new message and age', async ({ page, browserName }) => {
   test.skip(browserName === 'webkit', 'WebKit does not emulate forced colours');
