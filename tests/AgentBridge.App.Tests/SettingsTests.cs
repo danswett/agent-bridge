@@ -16,7 +16,7 @@ public sealed class SettingsTests : IAsyncLifetime
     readonly FakeProcesses processes = new();
     readonly Updater updater = new();
     readonly AtSignIn atSignIn = new();
-    readonly LockedDispatcher ui = new();
+    readonly HoldingDispatcher ui = new();
     readonly string app = Path.Combine(Path.GetTempPath(), "abs-" + Guid.NewGuid().ToString("N")[..8]);
     AppPreferences prefs = new();
     HostConnection connection = null!;
@@ -1597,10 +1597,13 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.True(settings.Agents.Single(a => a.Id == "copilot").ShowSetUp);
     }
 
-    [Fact]
-    public async Task An_agent_whose_connection_the_person_removed_is_not_offered_back_at_that_version()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_agent_whose_connection_the_person_removed_is_not_offered_back_at_that_version(bool holdStatus)
     {
         await WithAgents([Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: RecordIntakeOn)]);
+        Assert.False(settings.Agents.Single().ShowSetUp);
         host.On(HostOps.AgentsSetup, _ =>
         {
             host.Status = host.Status with { Agents = new(DateTimeOffset.UtcNow, [NeverSetUp("claude", "Claude Code")]) };
@@ -1608,10 +1611,16 @@ public sealed class SettingsTests : IAsyncLifetime
         });
         host.On(HostOps.AgentsRefresh, _ => host.Status.Agents);
 
-        await settings.SetUpAgentAsync("claude", remove: true);
+        // The setup reply can finish while its refreshed status is still waiting for the UI.
+        if (holdStatus) { ui.Hold(); }
+        try
+        {
+            await settings.SetUpAgentAsync("claude", remove: true);
 
-        Assert.Empty(settings.AgentOffers);
-        Assert.True(settings.Agents.Single().ShowSetUp);
+            Assert.Empty(settings.AgentOffers);
+            Assert.True(settings.Agents.Single().ShowSetUp);
+        }
+        finally { ui.Release(); }
     }
 
     [Fact]
