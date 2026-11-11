@@ -210,6 +210,16 @@ check "mirror-file server errors retry on Azure and Canonical even without a hos
   100 "$(printf 'update\nupdate\nupdate\nupdate\nupdate\nupdate')" "$canonical"
 [ "$(cat "$SLEEP_LOG")" = $'5\n20\n5\n20' ] \
   || { echo "FAIL: both update phases did not use 5/20 second backoff"; failures=$((failures + 1)); }
+reset "$canonical"; export APT_UPDATE_ERROR='W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/noble/InRelease 503 Service Unavailable'
+check "a new invocation on a Canonical-only list retries update failures three times" \
+  100 "$(printf 'update\nupdate\nupdate')" "$canonical"
+[ "$(cat "$SLEEP_LOG")" = $'5\n20' ] \
+  || { echo "FAIL: Canonical-only update did not use 5/20 second backoff"; failures=$((failures + 1)); }
+reset "$canonical"; export APT_ERROR='E: Failed to fetch https://archive.ubuntu.com/ubuntu/pool/pkg.deb Connection failed' APT_FAIL_COUNT=2
+check "a new invocation on a Canonical-only list recovers on its third download attempt" \
+  0 "$(printf 'update\n%s\n%s\n%s' "$download" "$download" "$download")" "$canonical"
+[ "$(cat "$SLEEP_LOG")" = $'5\n20' ] \
+  || { echo "FAIL: Canonical-only download did not use 5/20 second backoff"; failures=$((failures + 1)); }
 
 for error in '404 Not Found' 'Hash Sum mismatch' 'Unable to locate package missing'; do
   reset "$azure" "$canonical"; export APT_ERROR="E: $error"
