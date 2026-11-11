@@ -1004,8 +1004,9 @@ function layoutMachineTabs(bar, s) {
     const chosen = els[s.chosen];
     if (chosen) {
       const outer = list.getBoundingClientRect(), inner = chosen.getBoundingClientRect();
+      const inset = parseFloat(getComputedStyle(list).scrollPaddingLeft);
       // Relative subpixel scrolling can advance to the next snap point after a resize.
-      list.scrollTo({ left: list.scrollLeft + inner.left - outer.left - 16, behavior: 'instant' });
+      list.scrollTo({ left: list.scrollLeft + inner.left - outer.left - inset, behavior: 'instant' });
     }
     machineTabEdges(bar, list);
     s.had = null;

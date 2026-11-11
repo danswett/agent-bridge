@@ -110,7 +110,8 @@ test.describe('wide machine tabs scroll whole (#1894)', () => {
               return { style: style.outlineStyle, reach: parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset),
                 room: [tab.left - clip.left, clip.right - tab.right, tab.top - clip.top, clip.bottom - tab.bottom] };
             });
-            await info.attach(`machine-tab-focus-${key}.png`, { body: await list.screenshot(), contentType: 'image/png' });
+            const name = `machine-tab-focus-${key}.png`;
+            await info.attach(name, { body: await list.screenshot({ path: info.outputPath(name) }), contentType: 'image/png' });
             expect(ring.style).toBe('solid');
             expect(ring.reach).toBeGreaterThan(0);
             for (const room of ring.room) { expect(room).toBeGreaterThanOrEqual(ring.reach); }

@@ -687,9 +687,11 @@ body[data-conn="busy"] .sessions, body[data-conn="warn"] .sessions, body[data-co
 @media (min-width: 760px) { .machine-tab { min-height: 36px; min-width: 32px; } }
 /* #1894: wide machine tabs scroll whole; the edge fades are decorative. */
 @media (min-width: 760px) {
-  .machine-tablist { flex: 1; overflow-x: auto; scrollbar-width: none; scroll-snap-type: x mandatory; scroll-padding-inline: 16px; }
+  /* Keep the 5px focus ring inside the clip, plus 1px for scroll rounding, without moving text. */
+  .machine-tablist { flex: 1; padding: 6px; margin: -6px; overflow-x: auto; scrollbar-width: none; scroll-snap-type: x mandatory; scroll-padding-inline: 22px; }
   .machine-tablist::-webkit-scrollbar { display: none; }
-  .machine-tablist .machine-tab { max-width: none; scroll-snap-align: start; }
+  .machine-tablist .machine-tab { max-width: calc(100% - 32px); scroll-snap-align: start; }
+  .machine-tablist .machine-tab:focus-visible { z-index: 2; }
   .machine-tabs::before, .machine-tabs::after {
     content: ""; position: absolute; top: 0; bottom: 0; width: 16px; z-index: 1; pointer-events: none; opacity: 0;
   }
