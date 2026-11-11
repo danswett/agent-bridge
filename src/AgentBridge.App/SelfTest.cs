@@ -314,6 +314,7 @@ static partial class SelfTest
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".launched.png"));
             await CheckYourMessages(window, main, Check, outFile, launchedPrompt);
             await CheckPrompts(window, main, demo, Check, outFile);
+            await CheckSentAttachments(window, main, demo, Check);
             Resize(window, 1000, 900);
 
             // Codex on the other machine starts only on a first message: nothing is sent without one.
