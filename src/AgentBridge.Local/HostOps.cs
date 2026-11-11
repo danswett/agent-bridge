@@ -110,6 +110,8 @@ public sealed record HostAccount(string Login, string AccountId);
 // this profile. Refused: the relay turned the account down; sign in again.
 public sealed record RelayStatus(RelayState State, string? Url = null, string? Detail = null, DateTimeOffset? Since = null);
 
+public sealed record FleetPublicationStatus(string Result, int SkippedInvalidIds = 0, int Failures = 0, DateTimeOffset? NextRetry = null, string? Failure = null);
+
 // A device-flow sign-in the host is running: the code to enter, and where.
 public sealed record SignInStatus(SignInState State, string? UserCode = null, string? VerificationUri = null, DateTimeOffset? ExpiresAt = null, string? Error = null);
 
@@ -124,7 +126,7 @@ public sealed record SignInStatus(SignInState State, string? UserCode = null, st
 // while absent, when the folder-trust devices may, and only while folder trust is on.
 // PhoneSignIn: permissions.phoneSignIn, signing an agent in from a person's device (#972).
 public sealed record HostSettingsView(bool RemoteApproval, string? Name = null, bool RemoteFolderTrust = false, IReadOnlyList<string>? RemoteFolderTrustDevices = null,
-    bool DevBoxKeepAwake = false, string? EscapedApproval = null, IReadOnlyList<string>? EscapedApprovalDevices = null, bool PhoneSignIn = false)
+    bool DevBoxKeepAwake = false, string? EscapedApproval = null, IReadOnlyList<string>? EscapedApprovalDevices = null, bool PhoneSignIn = false, bool FleetShare = true)
 {
     // By the devices in it, not the list object, so a restart is not asked for because two reads
     // of the same file made two lists.
@@ -134,7 +136,7 @@ public sealed record HostSettingsView(bool RemoteApproval, string? Name = null, 
         && DevBoxKeepAwake == other.DevBoxKeepAwake && EscapedApproval == other.EscapedApproval
         && (EscapedApprovalDevices is null) == (other.EscapedApprovalDevices is null)
         && (EscapedApprovalDevices ?? []).SequenceEqual(other.EscapedApprovalDevices ?? [], StringComparer.Ordinal)
-        && PhoneSignIn == other.PhoneSignIn;
+        && PhoneSignIn == other.PhoneSignIn && FleetShare == other.FleetShare;
 
     public override int GetHashCode() => HashCode.Combine(RemoteApproval, Name, RemoteFolderTrust, RemoteFolderTrustDevices?.Count ?? 0, DevBoxKeepAwake);
 }
@@ -163,6 +165,7 @@ public sealed record HostStatus
     public required MachineInfo Machine { get; init; }
     public HostAccount? Account { get; init; }
     public required RelayStatus Relay { get; init; }
+    public FleetPublicationStatus? FleetPublication { get; init; }
     public required SignInStatus SignIn { get; init; }
     // Why delivery is off: agent-ha-bridge is running for this user (design G5). Null when it
     // is not, so answers, replies and stops are this host's to deliver.

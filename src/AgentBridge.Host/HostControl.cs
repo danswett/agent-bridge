@@ -31,6 +31,7 @@ public sealed class HostControlOptions
     public Func<string?> AgentHaBridge { get; init; } = () => null;
     // What Home Assistant's refusals of this machine say now (HaAuthGuard.Problem), or null.
     public Func<string?> HomeAssistant { get; init; } = () => null;
+    public Func<FleetPublicationStatus?> FleetPublication { get; init; } = () => null;
     // GitHub's device flow through a relay: (relay, show(code, uri), ct) -> the account.
     public required Func<Uri, Action<string, string>, CancellationToken, Task<SignInResult>> SignIn { get; init; }
     // Keeps a finished sign-in (the profile's account and relay) and starts using it.
@@ -164,6 +165,7 @@ public sealed class HostControl
             Machine = options.Machine,
             Account = options.Account(),
             Relay = relay,
+            FleetPublication = options.FleetPublication(),
             SignIn = signIn,
             AgentHaBridge = options.AgentHaBridge(),
             HomeAssistant = options.HomeAssistant(),
@@ -188,7 +190,7 @@ public sealed class HostControl
 
     public static HostSettingsView Settings(HostSettings settings, string? name) =>
         new(settings.RemoteApproval, name, settings.Launch.RemoteFolderTrust, settings.Launch.RemoteFolderTrustDevices is { Count: > 0 } d ? d : null, settings.DevBox.KeepAwake,
-            settings.EscapedApproval, settings.EscapedApprovalDevices, settings.PhoneSignIn);
+            settings.EscapedApproval, settings.EscapedApprovalDevices, settings.PhoneSignIn, settings.FleetShare);
 
     // The relay loop reports each change of its connection here.
     public void SetRelay(RelayState state, string? detail = null)

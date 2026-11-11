@@ -669,10 +669,12 @@ async Task<int> ServeAsync(HostHandover handover)
         () => settings.ReadOnly ? (settingsProblem is null ? DiagnosticsReadOnly.ConfigReadOnly : DiagnosticsReadOnly.ConfigProblem, null)
             : RemoteDiagnostics.AgentHaBridge(g5),
         log: Log);
+    var fleetNames = new AgentBridge.Host.Fleet.FleetNames(identity.Folder);
+    var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare, name: fleetNames.Get, log: Log);
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log, peerUsage), launcher, transfers)
     {
         Drivers = drivers,
-        FleetNames = new AgentBridge.Host.Fleet.FleetNames(identity.Folder),
+        FleetNames = fleetNames,
         // Said in hello so a phone shows the machine read-only and why.
         ReadOnly = OfferedReadOnly,
         G5 = g5,
@@ -798,6 +800,7 @@ async Task<int> ServeAsync(HostHandover handover)
         Relay = ServeRelay,
         AgentHaBridge = agentHaCached,
         HomeAssistant = () => haAuth.Problem,
+        FleetPublication = () => fleetPublication.Status,
         ReadOnly = () => ReadOnlyReason() ?? agentHaCached(),
         ReadOnlyNow = ServeReadOnly,
         Agents = agentReadiness,
@@ -838,6 +841,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // A pass, or keep-awake turned on or off, changes what the app's Settings shows.
     if (keepAwake is not null) { keepAwake.Changed += control.Refresh; }
     haAuth.Changed += control.Refresh;
+    fleetPublication.Changed += control.Refresh;
     // The roster changing changes who the app's Settings lists (#972).
     personRoster.Changed += control.Refresh;
     LocalServer? local = null;
@@ -936,7 +940,7 @@ async Task<int> ServeAsync(HostHandover handover)
                 Log($"device roster (security.roster {settings.Security.Roster}): {check.Summary}");
             });
             since.Restart();
-            await relay.Completion.WaitAsync(current.Token);
+            await fleetPublication.RunAsync(relay.RegistryPutAsync, relay.Completion, current.Token);
             (endedWith, endedWhy) = ((int?)relay.CloseStatus, relay.CloseReason);
             diagnosticsJournal.Record(JournalEvents.RelayClosed(endedWith, since.Elapsed, HostVersion()));
             Log($"connection ended after {since.Elapsed.TotalMinutes:F1} min: {(int?)relay.CloseStatus} {relay.CloseReason}");
