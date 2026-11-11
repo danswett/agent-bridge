@@ -37,11 +37,19 @@ internal static class Program
             Console.Error.WriteLine(e.Message);
             return 2;
         }
+        catch (ArgumentException e) when (p.Name == "conformance")
+        {
+            outcome = Outcome.Error(e.Message);
+        }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or HttpRequestException or HostErrorException or System.Net.WebSockets.WebSocketException or TaskCanceledException)
         {
             outcome = Outcome.Error(e.Message);
         }
-        if (outcome.Verdict == Verdict.Pass && (p.Name == "newest" || (p.Name == "sessions" && p.Flag("--id-only"))))
+        if (p.Name == "conformance")
+        {
+            if (outcome.Verdict == Verdict.Error) { Console.Error.WriteLine(outcome.Detail); }
+        }
+        else if (outcome.Verdict == Verdict.Pass && (p.Name == "newest" || (p.Name == "sessions" && p.Flag("--id-only"))))
         {
             // Only the id, so `$cp = agent-bridge-rehearsal …` sets a variable.
             Console.WriteLine(outcome.Detail);
@@ -67,6 +75,10 @@ internal static class Program
 
         switch (p.Name)
         {
+            case "conformance":
+                return ClientConformanceCommand.Run(p, Console.Out) == 0
+                    ? Outcome.Pass("Every required row passed for the named client.")
+                    : Outcome.Fail("The named client has non-passing required rows.");
             case "baseline save":
                 {
                     var baseline = BaselineCapture.Capture(homes, new ScheduledTasks(), DateTimeOffset.UtcNow);
