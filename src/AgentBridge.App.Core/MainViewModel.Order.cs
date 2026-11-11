@@ -96,8 +96,8 @@ public sealed partial class MainViewModel
             c.Pinned = pins.Contains(c);
             var key = KeyOf(c);
             // The row open in the session pane sees its news as it comes (ui.md §6.1, Unread).
-            if (c == open) { Order.MarkSeen(key, c.Session.UpdatedAt); }
-            c.Unread = Order.Unread(key, c.Session.UpdatedAt);
+            if (c == open) { Order.MarkSeen(key, c.Session.Activity?.ResponseTurn); }
+            c.Unread = Order.Unread(key, c.Session.Activity?.ResponseTurn);
         }
         // Headings by the order on screen, which a held update leaves as it was.
         bool pinnedSeen = false, restSeen = false;

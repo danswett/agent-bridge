@@ -168,16 +168,48 @@ test('storage that cannot be read or written falls back to most recent', () => {
   assert.equal(o2.sort, 'recent');
 });
 
-test('a row has news once its session updates after it was last open, and not on first sight', () => {
+test('Copilot, Claude and Codex rows have news only for a different main-agent response turn', () => {
+  for (const agent of ['copilot', 'claude', 'codex']) {
+    const storage = new MemoryStorage();
+    const o = new SessionOrder({ storage });
+    const e = entry(agent, 1);
+    e.session.agent = agent;
+    e.session.activity = { responseTurn: 'turn-z' };
+    shown(o, [e]);
+    assert.equal(o.unread(key(agent), 'turn-z'), false);
+    e.session.updatedAt = at(2);
+    e.session.status = 'working';
+    e.session.activity = { responseTurn: 'turn-z', turn: 'next-prompt', currentTool: { name: 'test' } };
+    shown(o, [e]);
+    assert.equal(o.unread(key(agent), 'turn-z'), false);
+    assert.equal(o.unread(key(agent), 'turn-a'), true);
+    assert.equal(o.unread(key(agent), null), false);
+    o.markSeen(key(agent), null);
+    assert.equal(o.unread(key(agent), 'turn-a'), true);
+    o.markSeen(key(agent), 'turn-a');
+    assert.equal(new SessionOrder({ storage }).unread(key(agent), 'turn-a'), false);
+  }
+});
+
+test('missing replies baseline as read, but their first reply is news', () => {
   const o = new SessionOrder({ storage: new MemoryStorage() });
   shown(o, [entry('a', 1)]);
-  assert.equal(o.unread(key('a'), at(1)), false);
-  assert.equal(o.unread(key('a'), at(2)), true);
-  o.markSeen(key('a'), at(2));
-  assert.equal(o.unread(key('a'), at(2)), false);
-  // Never back in time.
-  o.markSeen(key('a'), at(1));
-  assert.equal(o.unread(key('a'), at(2)), false);
+  assert.equal(o.unread(key('a'), undefined), false);
+  assert.equal(o.unread(key('a'), ''), false);
+  assert.equal(o.unread(key('a'), 'first-reply'), true);
+});
+
+test('legacy timestamp marks baseline replies without losing pins or order on reload', () => {
+  const storage = new MemoryStorage();
+  storage.setItem('agent-bridge.app.order', JSON.stringify({ pinned: [key('b')], order: [key('a')], seen: { [key('a')]: at(1) } }));
+  const o = new SessionOrder({ storage });
+  const list = [entry('a', 2), entry('b', 1)];
+  list[0].session.activity = { responseTurn: 'turn-z' };
+  assert.deepEqual(shown(o, list).pinned, ['b']);
+  const again = new SessionOrder({ storage });
+  assert.equal(again.unread(key('a'), 'turn-z'), false);
+  assert.equal(again.unread(key('a'), 'turn-a'), true);
+  assert.deepEqual(shown(again, list).sessions, ['a']);
 });
 
 test('a session the host removes ends up in the ended group, and one only gone from view does not', () => {
@@ -212,5 +244,5 @@ test('a machine\'s complete list forgets rows of its sessions that ended while n
   o.synced('h1', new Set(['b']));
   const kept = JSON.parse(storage.getItem('agent-bridge.app.order'));
   assert.deepEqual(kept.order, [key('b'), key('x', 'h2')]);
-  assert.deepEqual(Object.keys(kept.seen).sort(), [key('b'), key('x', 'h2')].sort());
+  assert.deepEqual(Object.keys(kept.seenTurns).sort(), [key('b'), key('x', 'h2')].sort());
 });

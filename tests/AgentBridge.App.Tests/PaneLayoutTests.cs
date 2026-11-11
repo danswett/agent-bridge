@@ -336,7 +336,7 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         var quiet = Card("quiet");
         var age = TestUi.Read(() => quiet.AgeText);
         ui.Post(() => quiet.Unread = true);
-        Assert.Equal("A session, Idle, danswett/agent-bridge, New activity", TestUi.Read(() => quiet.RowLabel));
+        Assert.Equal("A session, Idle, danswett/agent-bridge, New message", TestUi.Read(() => quiet.RowLabel));
         Assert.False(TestUi.Read(() => quiet.ShowAge));
         Select("quiet");
         Assert.Equal($"A session, Idle, danswett/agent-bridge, {age}", TestUi.Read(() => quiet.RowLabel));

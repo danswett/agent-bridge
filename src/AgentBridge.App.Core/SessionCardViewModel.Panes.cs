@@ -40,7 +40,7 @@ public sealed partial class SessionCardViewModel
 
     // A row read aloud (ui.md §9.1 A1, #796). It starts with the words the row draws, in the order
     // drawn and from the properties the row binds, so the two can't drift: the title, line 2's
-    // status and place, then the age, or "New activity" where the dot takes the age's place. Then
+    // status and place, then the age, or "New message" where the dot takes the age's place. Then
     // what else the glyph's name (§9.2) says that the row doesn't draw, so nothing it said before
     // goes unsaid: the status's later facts, or all of it under "Driven by an agent"; the driver
     // while a question's words take its place; and the machine while the row shows where instead.
@@ -58,7 +58,7 @@ public sealed partial class SessionCardViewModel
                 Title,
                 DelegateLabel.Aloud(RowStatus),
                 RowPlace,
-                Unread ? "New activity" : AgeText,
+                Unread ? "New message" : AgeText,
                 unsaid,
                 Driven && !DriverDrawn ? "driven by an agent" : null,
                 Machine is null ? ctx.MachineName() : null,

@@ -171,17 +171,48 @@ public sealed class OrderTests : IDisposable
         Assert.Equal(["a", "b"], Ids(o.Arrange([E("a", 5), E("b", 2)]).Sessions));
     }
 
+    [Theory]
+    [InlineData(AgentKind.Copilot)]
+    [InlineData(AgentKind.Claude)]
+    [InlineData(AgentKind.Codex)]
+    public void A_row_has_news_only_for_a_different_main_agent_response_turn(AgentKind agent)
+    {
+        var o = new SessionOrder(null);
+        var e = new OrderEntry("local", Make.Session("a") with { Agent = agent, Activity = new() { ResponseTurn = "turn-z" } });
+        o.Arrange([e]);
+        Assert.False(o.Unread(K("a"), "turn-z"));
+        o.Arrange([e with { Session = e.Session with { UpdatedAt = Make.T0.AddMinutes(5), Status = SessionStatus.Working } }]);
+        Assert.False(o.Unread(K("a"), "turn-z"));
+        Assert.True(o.Unread(K("a"), "turn-a"));
+        Assert.False(o.Unread(K("a"), null));
+        o.MarkSeen(K("a"), null);
+        Assert.True(o.Unread(K("a"), "turn-a"));
+        o.MarkSeen(K("a"), "turn-a");
+        Assert.False(o.Unread(K("a"), "turn-a"));
+    }
+
     [Fact]
-    public void A_row_has_news_once_its_session_updates_after_it_was_last_open_but_not_on_first_sight()
+    public void A_missing_reply_starts_read_but_its_first_reply_is_news()
     {
         var o = new SessionOrder(null);
         o.Arrange([E("a", 1)]);
-        Assert.False(o.Unread(K("a"), Make.T0.AddMinutes(1)));
-        Assert.True(o.Unread(K("a"), Make.T0.AddMinutes(2)));
-        o.MarkSeen(K("a"), Make.T0.AddMinutes(2));
-        Assert.False(o.Unread(K("a"), Make.T0.AddMinutes(2)));
-        o.MarkSeen(K("a"), Make.T0.AddMinutes(1));
-        Assert.False(o.Unread(K("a"), Make.T0.AddMinutes(2)));
+        Assert.False(o.Unread(K("a"), null));
+        Assert.False(o.Unread(K("a"), ""));
+        Assert.True(o.Unread(K("a"), "first-reply"));
+    }
+
+    [Fact]
+    public void Legacy_timestamp_marks_baseline_replies_without_losing_pins_or_order()
+    {
+        Directory.CreateDirectory(folder);
+        System.IO.File.WriteAllText(File, "{\"pinned\":[\"local\\nb\"],\"order\":[\"local\\na\"],\"seen\":{\"local\\na\":\"2026-10-28T04:00:00Z\"}}");
+        var o = new SessionOrder(File);
+        var e = new OrderEntry("local", Make.Session("a") with { Activity = new() { ResponseTurn = "turn-z" } });
+        Assert.Equal(["b"], Ids(o.Arrange([e, E("b", 1)]).Pinned));
+        var again = new SessionOrder(File);
+        Assert.False(again.Unread(K("a"), "turn-z"));
+        Assert.True(again.Unread(K("a"), "turn-a"));
+        Assert.Equal(["a"], Ids(again.Arrange([e, E("b", 1)]).Sessions));
     }
 
     [Fact]
@@ -189,10 +220,10 @@ public sealed class OrderTests : IDisposable
     {
         var o = new SessionOrder(File);
         o.Arrange([E("a", 1)]);
-        o.MarkSeen(K("a"), Make.T0.AddMinutes(5));
-        Assert.True(new SessionOrder(File).Unread(K("a"), Make.T0.AddMinutes(5)));
+        o.MarkSeen(K("a"), "reply");
+        Assert.True(new SessionOrder(File).Unread(K("a"), "reply"));
         o.Flush();
-        Assert.False(new SessionOrder(File).Unread(K("a"), Make.T0.AddMinutes(5)));
+        Assert.False(new SessionOrder(File).Unread(K("a"), "reply"));
     }
 
     [Fact]

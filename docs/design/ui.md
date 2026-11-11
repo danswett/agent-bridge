@@ -236,7 +236,7 @@ every colour from the generated roles (#177).
 
 - **Weights:** regular and semibold, with bold for Apple titles and medium for Android's
   section headers (Material 3's Title Small), and italic for emphasis in agent text. A semibold
-  row title means *unread activity*, and nothing else uses weight.
+  row title means *unread messages*, and nothing else uses weight.
 - **No synthesized styles.** Every weight and style the ramps use (`type.weights` ×
   `type.styles` in `tokens.json`: 400, 500, 600 and 700, upright and italic) is a real face
   in both Slipgates Sans and Slipgates Mono, and no client lets the platform fake a bold, an
@@ -695,7 +695,11 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
   recently ended first, at most 20, until the client restarts. A machine that goes offline
   or out of view ends nothing. An ended session leaves its group for Ended, which is never
   grouped, and keeps its membership for a resume ("Groups", below).
-- **Unread:** a row whose session updated since the row was last open: the selected row (an
+- **Unread messages:** a new main-agent reply since the row was last open. The read marker
+  stores `activity.responseTurn`, not a time: a different id means unread; an absent id is
+  not unread. Tools, status, delegates, prompts, questions and usage never change the bit.
+  First sight (including upgrading from timestamp markers) baselines existing replies as read.
+  A reply is read on the selected row (an
   unfolded card in the PWA until #179 lands), once it has been open, visible and the window focused with its newest
   main-agent message on screen for about a second (#1584). News arriving during that second restarts it;
   reading never answers a Needs you question, and never re-sorts Most recent. A session seen for the first
@@ -866,7 +870,7 @@ owner changes them too.
 
 **Row anatomy (two lines):**
 - **Leading:** the status glyph, aligned to line 1.
-- **Line 1:** the title. Semibold means unread activity, and the 6 px Bridge dot appears at
+- **Line 1:** the title. Semibold means unread messages, and the 6 px Bridge dot appears at
   the trailing edge.
 - **Line 2:** at most two facts, for example "3 delegates · DEV-VM1", "Editing
   LaunchView.xaml.cs · ULTRA" or "Driven by an agent · ULTRA" (in agent colour).

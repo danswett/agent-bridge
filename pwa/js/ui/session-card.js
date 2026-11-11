@@ -1255,7 +1255,7 @@ export class SessionCard {
   setUnread(unread) {
     const e = this.els;
     if (unread && !e.unread) {
-      e.unread = h('span', { class: 'unread-dot' }, h('span', { class: 'sr-only', id: this.ids.unread }, 'New activity'));
+      e.unread = h('span', { class: 'unread-dot' }, h('span', { class: 'sr-only', id: this.ids.unread }, 'New message'));
       e.rowLine1.append(e.unread);
       this.element.classList.add('unread');
       // Activity dot (ui.md §5.3): fades in, and later out; it never pulses or repeats.
@@ -1273,7 +1273,7 @@ export class SessionCard {
   #nameRow() {
     const e = this.els;
     const { drawn, unsaid } = this.#rowName;
-    e.open.setAttribute('aria-label', [...drawn, e.unread ? 'New activity' : e.rowAge.textContent, ...unsaid].filter(Boolean).join(', '));
+    e.open.setAttribute('aria-label', [...drawn, e.unread ? 'New message' : e.rowAge.textContent, ...unsaid].filter(Boolean).join(', '));
   }
 
   setPinned(pinned) {
