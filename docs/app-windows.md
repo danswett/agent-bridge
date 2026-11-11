@@ -1304,6 +1304,12 @@ tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to 
   200 ms, reader content within 1.5 DIP, and blocks unselected. Client drawing only, not host reads
   or physical input. Run published `AgentBridge.exe --self-test-history-scroll <result.json>`;
   normal `--self-test` includes it on both Windows CI architectures.
+  The sign-in row captures run `CheckSignInRowTypography` in Light, Dark and CI high contrast:
+  the status run alone uses proportional figures for words-only text, fixing the bundled face's
+  wide tabular hyphen (#903); any digit keeps the whole run tabular. The check measures the drawn
+  hyphen against proportional text in the same face, size and tracking, checks a mixed words/count
+  status and equal count-column widths for 1 and 8, and reuses a counted row for sign-in. Other
+  metadata and the changing age remain tabular; the bundled font and shared type ramp are unchanged.
   Its progress gallery (#600, ui.md §6.5) puts a reply and an answer through each receipt state against the demo host, which holds a request or picks its outcome for the gallery's sessions (`DemoHost.Script`): Send's ring in the quiet window, Still sending…, Send's check, a failed reply with Send again, a tapped option's ring, unconfirmed and stale (the tapped option pressed, and heard as pressed through its Toggle pattern, the rest disabled), busy and refused (every option again), and You answered for a tap, free text and a form. It checks each and saves `result.progress.<state>.<pass>.png` in light, dark, at the narrowest window and in high contrast. A reply's receipt line on screen as high contrast turns on must turn to the window's text without being bound again: receipt lines and Send's held ring repaint on a theme or system colour change.
   Last, it measures a live resize (#765): it resizes the window a step a frame, 8 px at a time, from 1560 px to
   400 and back, and keeps every interval between the UI thread's frames (`CompositionTarget.Rendering`) by the window's width
