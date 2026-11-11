@@ -2223,6 +2223,35 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal(2, updater.Checks);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Network")]
+    public async Task A_pressed_rate_limited_check_reports_refusal_only_while_no_newer_release_is_known(bool newer)
+    {
+        updater.Found = null;
+        await StartAsync();
+        await AskedAsync(UpdateAskKind.Check, "current");
+        if (newer)
+        {
+            updater.Found = "0.2.0";
+            time.Advance(AutoUpdater.CheckAgainAfter);
+            await AskedAsync(UpdateAskKind.Check, "newer");
+        }
+        time.Advance(AutoUpdater.CheckEvery);
+        var retry = time.GetUtcNow().AddMinutes(30);
+        updater.CheckFails = Limited(retry);
+        foreach (var kind in new[] { UpdateAskKind.Check, UpdateAskKind.Install, UpdateAskKind.Check })
+        {
+            var request = Guid.NewGuid().ToString();
+            await AskedAsync(kind, request);
+            Assert.Equal((newer ? UpdateOutcome.Failed : UpdateOutcome.Refused, request), (auto.State.Last!.Outcome, auto.State.Last.Request));
+            Assert.Contains($"checking again after {retry.ToLocalTime():t}", auto.State.Last.Reason);
+            Assert.Equal(newer ? "0.2.0" : null, auto.State.Available);
+        }
+        Assert.Equal(newer ? 3 : 2, updater.Checks);
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task A_rate_limited_check_right_after_an_update_leaves_the_update_for_the_devices_to_see()

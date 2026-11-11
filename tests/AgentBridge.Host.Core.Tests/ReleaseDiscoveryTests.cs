@@ -328,7 +328,7 @@ public sealed class ReleaseDiscoveryTests : IDisposable
     [InlineData(1, false)]
     [InlineData(-25, true)]
     [InlineData(1, true)]
-    public async Task An_expired_or_future_grace_window_cannot_use_the_relay_after_a_refusal(int hours, bool bootstrap)
+    public async Task An_expired_or_future_grace_stays_closed_after_clock_changes(int hours, bool bootstrap)
     {
         Directory.CreateDirectory(folder);
         var anchor = hours > 0 ? Now.AddMinutes(5) : Now.AddHours(hours);
@@ -340,6 +340,8 @@ public sealed class ReleaseDiscoveryTests : IDisposable
         Assert.Empty(github.Requests);
         time.Advance(TimeSpan.FromMinutes(10));
         await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
+        using var rolledBack = new ReleaseDiscovery(folder, github, new FakeTimeProvider(Now.AddHours(-2)), random: () => 0);
+        await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => rolledBack.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
         Assert.All(github.Requests, r => Assert.Equal(Url, r.Url));
     }
 
@@ -361,13 +363,14 @@ public sealed class ReleaseDiscoveryTests : IDisposable
     {
         Directory.CreateDirectory(folder);
         File.WriteAllText(Path.Combine(folder, ReleaseDiscovery.FileName),
-            JsonSerializer.Serialize(new { url = Url, body = RelayList("0.1.2"), source = "github", gitHubAnsweredAt = Now.AddHours(-7), relayBootstrapAt = Now.AddHours(-25) }));
+            JsonSerializer.Serialize(new { url = Url, body = RelayList("0.1.2"), source = "github", gitHubAnsweredAt = Now.AddHours(-7), relayBootstrapAt = Now.AddHours(-25), relayExpired = true }));
         github.Answer = _ => status == HttpStatusCode.OK ? Ok(RelayList("0.1.3"), "\"v3\"") : new(status);
         using var discovery = Discovery();
         await discovery.ReleasesAsync(otherList ? Url + "&other=1" : Url, b => b, CancellationToken.None, "0.1.0", "win");
         using var saved = JsonDocument.Parse(File.ReadAllText(Path.Combine(folder, ReleaseDiscovery.FileName)));
         Assert.Equal(otherList ? Now.AddHours(-7) : Now, saved.RootElement.GetProperty("gitHubAnsweredAt").GetDateTimeOffset());
         Assert.Equal(otherList ? Now.AddHours(-25) : (DateTimeOffset?)null, saved.RootElement.GetProperty("relayBootstrapAt").Deserialize<DateTimeOffset?>());
+        Assert.Equal(otherList, saved.RootElement.GetProperty("relayExpired").GetBoolean());
     }
 
     sealed class FakeGitHub : HttpMessageHandler
