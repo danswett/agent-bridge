@@ -1137,7 +1137,7 @@ public class MergeRuleTests
 
             Assert.Equal(0, exit);
             Assert.Equal([$"{Head} failure merge-rule Main is red (CI c500000): named job light is not green "], github.Posted);
-            Assert.Contains(github.RestPaths, p => p.Contains("branch=main&event=push&per_page=20&head_sha=", StringComparison.Ordinal));
+            Assert.Contains(github.RestPaths, p => p.Contains("branch=main&event=push&per_page=20&page=1", StringComparison.Ordinal));
         }
         finally
         {
@@ -1165,8 +1165,8 @@ public class MergeRuleTests
     }
 
     [Theory]
-    [InlineData(6, "in_progress", 1, "Main is red (CI c600000): named job light is not green")]
-    [InlineData(5, "queued", 2, "Main is red (CI c500000): named job light is not green")]
+    [InlineData(6, "in_progress", 1, "Main is red (CI c500000): named job light is not green")]
+    [InlineData(5, "queued", 2, "")]
     public void A_main_run_still_going_after_a_red_one_still_blocks(long id, string status, int attempt, string description)
     {
         var runs = new List<(long, string, string?, int)> { (id, status, null, attempt) };
@@ -1179,7 +1179,8 @@ public class MergeRuleTests
         {
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
 
-            Assert.Equal([$"{Head} failure merge-rule {description} "], github.Posted);
+            Assert.Contains(description.Length == 0 ? " success merge-rule " : description,
+                Assert.Single(github.Posted), StringComparison.Ordinal);
         }
         finally
         {
@@ -1222,7 +1223,7 @@ public class MergeRuleTests
                 [$"{Head} error merge-rule Couldn't read main's CI: gh: HTTP 502 ",
                  $"{Older} success merge-rule Copilot reviewed 0000000; every check passed; independent review on file; main isn't green, but it's labelled fixes-main "],
                 unreadable.Posted);
-            Assert.Equal([$"{Head} failure merge-rule Main is red (CI c500000): named job light is not green "], unfinished.Posted);
+            Assert.Equal([$"{Head} failure merge-rule No completed non-cancelled CI run on main: waiting for one "], unfinished.Posted);
         }
         finally
         {
@@ -1525,25 +1526,52 @@ public class MergeRuleTests
     }
 
     [Fact]
-    public void Main_uses_commit_order_even_when_an_older_push_finishes_later_and_has_a_newer_run_id()
+    public void Main_uses_the_latest_completed_non_cancelled_run_instead_of_a_newer_unfinished_head()
     {
         var github = new FakeGitHub(GraphQLPullRequest(Head),
-            mainRuns: MainRuns((9, "completed", "failure", 1), (5, "in_progress", null, 1)),
-            mainJobs: """
-                {"total_count":4,"jobs":[
-                {"id":0,"name":"plan","status":"completed","conclusion":"success","run_attempt":1},
-                {"id":1,"name":"light","status":"completed","conclusion":"success","run_attempt":1},
-                {"id":2,"name":"app (win-x64)","status":"completed","conclusion":"success","run_attempt":1},
-                {"id":3,"name":"app (win-arm64)","status":"completed","conclusion":"success","run_attempt":1}]}
-            """,
-            mainHead: "c5".PadRight(40, '0'));
+            mainRuns: MainRuns((9, "in_progress", null, 1), (8, "completed", "cancelled", 1), (5, "completed", "success", 1)));
         var config = WriteConfig();
         try
         {
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
             Assert.Contains(" success merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
             Assert.Contains(github.RestPaths, p => p.Contains("/actions/runs/5/jobs?", StringComparison.Ordinal));
-            Assert.DoesNotContain(github.RestPaths, p => p.Contains("/actions/runs/9/jobs?", StringComparison.Ordinal));
+        }
+        finally { File.Delete(config); }
+    }
+
+    [Theory]
+    [InlineData("success", "success")]
+    [InlineData("failure", "failure")]
+    public void A_cancelled_latest_run_never_replaces_completed_green_or_red_evidence(string conclusion, string state)
+    {
+        var github = new FakeGitHub(GraphQLPullRequest(Head),
+            mainRuns: MainRuns((6, "completed", "cancelled", 1), (5, "completed", conclusion, 1)));
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+            Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
+            Assert.DoesNotContain(github.RestPaths, p => p.Contains("/actions/runs/6/jobs?", StringComparison.Ordinal));
+        }
+        finally { File.Delete(config); }
+    }
+
+    [Fact]
+    public void A_skipped_classification_run_does_not_replace_the_last_tested_main()
+    {
+        var skipped = JsonSerializer.Serialize(new { total_count = 4, jobs =
+            new[] { "light", "app (win-x64)", "app (win-arm64)", "plan" }.Select((name, id) =>
+                new { id, name, status = "completed", conclusion = name == "plan" ? "success" : "skipped", run_attempt = 1 }),
+        });
+        var github = new FakeGitHub(GraphQLPullRequest(Head),
+            mainRuns: MainRuns((6, "completed", "success", 1), (5, "completed", "failure", 1)),
+            jobsByRun: new Dictionary<long, string> { [6] = skipped });
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+            Assert.Contains("Main is red (CI c500000)", Assert.Single(github.Posted), StringComparison.Ordinal);
         }
         finally { File.Delete(config); }
     }
@@ -1712,7 +1740,7 @@ public class MergeRuleTests
     /// <paramref name="statuses"/> REST's status history, and <paramref name="mainRuns"/> (or one
     /// green run) main's CI.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null) : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null) : IGitHub
     {
         public List<string> Posted { get; } = [];
 
@@ -1758,6 +1786,10 @@ public class MergeRuleTests
                 return failMain ? throw new InvalidOperationException("gh: HTTP 502") : JsonDocument.Parse(mainRuns ?? MainRuns((1, "completed", "success", 1)));
             if (path.Contains("/actions/runs/", StringComparison.Ordinal))
             {
+                if (jobsByRun is not null)
+                    foreach (var (id, json) in jobsByRun)
+                        if (path.Contains($"/actions/runs/{id}/jobs?", StringComparison.Ordinal))
+                            return JsonDocument.Parse(json);
                 if (mainJobPages is not null)
                 {
                     var page = int.Parse(path[(path.LastIndexOf('=') + 1)..], System.Globalization.CultureInfo.InvariantCulture);
@@ -1765,7 +1797,8 @@ public class MergeRuleTests
                 }
                 if (mainJobs is not null) return JsonDocument.Parse(mainJobs);
                 using var all = JsonDocument.Parse(mainRuns ?? MainRuns((1, "completed", "success", 1)));
-                var run = all.RootElement.GetProperty("workflow_runs")[0];
+                var run = all.RootElement.GetProperty("workflow_runs").EnumerateArray().Single(r =>
+                    path.Contains($"/actions/runs/{r.GetProperty("id").GetInt64()}/jobs?", StringComparison.Ordinal));
                 return JsonDocument.Parse(JsonSerializer.Serialize(new { total_count = 4, jobs =
                     new[] { "light", "app (win-x64)", "app (win-arm64)", "plan" }.Select((name, id) => new
                     {
