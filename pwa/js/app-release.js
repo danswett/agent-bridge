@@ -63,9 +63,11 @@ export class AppRelease {
         return metadata(await response.json());
       };
       // Metadata failure must not stop the browser's independent installation retry.
-      [latest] = await Promise.all([read(), Promise.resolve().then(() => {
+      const [release, update] = await Promise.allSettled([read(), Promise.resolve().then(() => {
         if (!this.disposed) { return this.registration?.update(); }
       })]);
+      if (release.status === 'rejected' || update.status === 'rejected') { throw new Error('Release check failed'); }
+      latest = release.value;
       if (this.disposed) { return; }
       this.#watch(this.registration?.installing ?? this.registration?.waiting);
     } catch {

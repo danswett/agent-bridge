@@ -363,3 +363,35 @@ test('disposing immediately cancels a worker update that has not started yet', a
   await pending;
   assert.equal(registration.updates, 0);
 });
+
+for (const rejected of ['metadata', 'worker update']) {
+  test(`a rejected ${rejected} keeps concurrent checks out until the other operation settles`, async (t) => {
+    t.mock.timers.enable({ apis: ['Date'] });
+    let finish;
+    let requests = 0;
+    const held = new Promise((resolve) => { finish = resolve; });
+    t.after(() => finish(response()));
+    const { app, registration } = setup(async () => {
+      requests++;
+      if (rejected === 'metadata') { throw new Error('metadata unavailable'); }
+      return held;
+    });
+    registration.update = async () => {
+      registration.updates++;
+      if (rejected === 'worker update') { throw new Error('update unavailable'); }
+      await held;
+    };
+    const pending = app.check();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(app.checking, true, 'the unfinished operation still owns the single-flight guard');
+    await app.check();
+    t.mock.timers.tick(5000);
+    await app.auto();
+    assert.equal(requests, 1);
+    assert.equal(registration.updates, 1);
+    finish(response());
+    await pending;
+    assert.equal(app.checking, false);
+    assert.equal(app.state.error, "Couldn't check for updates.");
+  });
+}
