@@ -30,6 +30,7 @@ public sealed record Choice(string Value, string Label)
 public sealed partial class LaunchViewModel : Observable
 {
     public const string ApproveHint = "agent-bridge-host workspace add <folder>";
+    public const string ResumeIncompleteNotice = "Some sessions weren't checked in time. Reload choices to try again.";
     const string Key = "launch";
     const string AgentDefault = "";
     // A launch waits for its session to register (60 s on the host) and, for Copilot, for its
@@ -243,6 +244,8 @@ public sealed partial class LaunchViewModel : Observable
 
     public bool ShowForm => options is not null && !InspectOnly;
     public bool ShowResume { get; private set; }
+    public bool ShowResumeIncomplete => ShowForm && options?.ResumableIncomplete is not null;
+    public string ResumeIncompleteText => ResumeIncompleteNotice;
     public bool ShowWorkspace { get; private set; }
     public bool ShowProfile { get; private set; }
     public bool ShowModel { get; private set; }
@@ -600,7 +603,7 @@ public sealed partial class LaunchViewModel : Observable
         finally { filling = false; }
         foreach (var p in new[] { nameof(Resumes), nameof(Resume), nameof(Agents), nameof(Agent), nameof(Workspaces), nameof(Workspace), nameof(Profiles), nameof(Profile),
             nameof(Models), nameof(Model), nameof(Efforts), nameof(Effort), nameof(Contexts), nameof(Context), nameof(Permissions),
-            nameof(ShowForm), nameof(ShowResume), nameof(ShowWorkspace), nameof(ShowProfile), nameof(ShowModel), nameof(ShowEffort), nameof(ShowContext),
+            nameof(ShowForm), nameof(ShowResume), nameof(ShowResumeIncomplete), nameof(ShowWorkspace), nameof(ShowProfile), nameof(ShowModel), nameof(ShowEffort), nameof(ShowContext),
             nameof(ShowReload), nameof(ReloadText), nameof(CanReload), nameof(Note), nameof(NoteWarns), nameof(Busy), nameof(PromptPlaceholder), nameof(Title) })
         {
             Raise(p);
