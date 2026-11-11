@@ -13,13 +13,13 @@ Require ($on -match '(?m)^\s+workflows: \[CI\]') 'workflow_run must watch the CI
 Require ($on -match '(?m)^\s+types: \[completed\]') 'workflow_run must fire on completed'
 Require ($on -match '(?m)^\s+branches: \[main\]') 'workflow_run must be limited to main'
 Require ($on -match '(?ms)^  workflow_dispatch:.*?^\s+ref:') 'workflow_dispatch needs a ref input, for rollback'
+Require ($on -match "cron: '\*/5 \* \* \* \*'") 'Pages needs a five-minute named-job check'
 
 $build = [regex]::Match($text, '(?ms)^  build:\r?\n(.*?)^  deploy:').Groups[1].Value
 $deploy = [regex]::Match($text, '(?ms)^  deploy:\r?\n(.*)').Groups[1].Value
 Require ($text -match 'quality/pages-gate\.ps1' -and $text -notmatch 'commits/main') 'the gate must skip only a commit already live or older, not one that is not main''s tip'
-Require ($build -match "(?m)^    if: .*workflow_run\.conclusion == 'success'") 'the build job does not require conclusion == success'
-Require ($build -match "(?m)^    if: .*workflow_run\.event == 'push'") 'the build job does not require the CI run to be a push'
-Require ($build -match 'TARGET_SHA: \$\{\{ github\.event\.workflow_run\.head_sha') 'the build job must build workflow_run.head_sha, not the default branch'
+Require ($text -match 'quality/pages-candidate\.ps1' -and $text -match 'per_page=20' -and $text -notmatch 'workflow_run\.conclusion') 'Pages must select bounded same-SHA named-job evidence, not the whole CI conclusion'
+Require ($build -match 'TARGET_SHA: \$\{\{ needs\.gate\.outputs\.sha') 'the build job must build the selected tested SHA'
 Require ($build -match 'merge-base --is-ancestor \"\$TARGET_SHA\" origin/main') 'the build job must prove the commit is on main before building it'
 Require ($build -notmatch '(?m)^\s+ref: ') 'the build job must not check out an event-supplied ref (CodeQL cache-poisoning)'
 Require ($build -notmatch '(?m)^\s+(pages|id-token): write') 'the build job must hold no publishing token'
