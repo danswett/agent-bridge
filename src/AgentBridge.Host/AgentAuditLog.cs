@@ -18,20 +18,22 @@ namespace AgentBridge.Host;
 public sealed record AgentAuditEntry(string Direction, string Request, string Principal, string[] Chain, string Action,
     string Target, string Outcome, string Reason = "");
 
-// The trail of what agents did, one JSON line per event in <profile>\audit\agents-YYYY-MM-DD.jsonl,
+// The trail of what agents did, one JSON line per event in <profile>\audit\agents-YYYY-MM-DD.jsonl
+// or launches-YYYY-MM-DD.jsonl for session.launch, with a separate 16 MiB launch-history quota,
 // in a folder only this user can open. It keeps the SHA-256 and length of any text an event
-// carried and never the text, so reading the log leaks nothing a prompt held. At most 30 days and
-// 64 MiB are kept, the oldest files going first, and never the day's file being written.
+// carried and never the text, so reading the log leaks nothing a prompt held. Agent files keep at
+// most 30 days and 64 MiB, oldest files going first, and never the day's file being written.
 //
 // An unwritable log refuses the action (the #1401 row in design/agent-launch-scope.md): Append
 // returns false and never throws, and the caller must then refuse the action it was auditing
 // and release any slot. A failure (read-only folder, disk full) is said once in the host log and
-// the next success says it recovered. Standalone: nothing calls it yet (slice 4 and #1170 do).
+// the next success says it recovered. agent.send appends before dispatch (#1985).
 public sealed class AgentAuditLog
 {
     public const string FolderName = "audit";
     public const int KeepDays = 30;
     public const long MaxBytes = 64L * 1024 * 1024;
+    public const long MaxLaunchBytes = 16L * 1024 * 1024;
     public const int MaxReason = 200;
     public const int MaxField = 256;
     public const int MaxChain = 16;
@@ -72,16 +74,19 @@ public sealed class AgentAuditLog
             lock (gate)
             {
                 var folder = PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded");
-                var file = Path.Combine(folder, FileFor(now));
+                var launch = entry.Action == "session.launch";
+                var file = Path.Combine(folder, FileFor(now, launch));
+                var length = File.Exists(file) ? new FileInfo(file).Length : 0;
+                // Include a separator after a torn line, and refuse before creating or changing any file.
+                var torn = length > 0 && EndsWithoutNewline(file);
+                var used = launch ? new DirectoryInfo(folder).EnumerateFiles("launches-*.jsonl").Sum(f => f.Length) : length;
+                var limit = launch ? MaxLaunchBytes : maxBytes;
+                if (used > limit - data.Length - (torn ? 1 : 0)) { throw new IOException("the agent audit quota is full"); }
                 var options = new FileStreamOptions { Mode = FileMode.Append, Access = FileAccess.Write, Share = FileShare.Read };
                 if (!OperatingSystem.IsWindows()) { options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite; }
                 using (var stream = new FileStream(file, options))
                 {
                     // A crash mid-write can leave a partial line: start on a fresh one so it can't swallow this event.
-                    var torn = stream.Length > 0 && EndsWithoutNewline(file);
-                    // Retention never deletes the day being written, so its file needs its own bound, or a
-                    // looping agent could pass the budget and prune every earlier day.
-                    if (stream.Length + data.Length + (torn ? 1 : 0) > maxBytes) { throw new IOException("the day's agent audit file is full"); }
                     if (torn) { stream.Write("\n"u8); }
                     stream.Write(data);
                 }
@@ -89,7 +94,7 @@ public sealed class AgentAuditLog
                 else { File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite); }
                 if (failing) { failing = false; log("agent audit log is writing again"); }
                 // The line is already written: a retention fault is its own problem, not a lost event.
-                try { Retain(folder, now); retentionFailing = false; }
+                try { if (!launch) { Retain(folder, now); retentionFailing = false; } }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException)
                 {
                     if (!retentionFailing) { retentionFailing = true; log($"agent audit log could not trim old files: {e.GetType().Name}"); }
@@ -134,7 +139,7 @@ public sealed class AgentAuditLog
         return peek.ReadByte() != '\n';
     }
 
-    static string FileFor(DateTimeOffset day) => $"agents-{day.UtcDateTime:yyyy-MM-dd}.jsonl";
+    static string FileFor(DateTimeOffset day, bool launch) => $"{(launch ? "launches" : "agents")}-{day.UtcDateTime:yyyy-MM-dd}.jsonl";
 
     static bool TryDay(string name, out DateTime day)
     {

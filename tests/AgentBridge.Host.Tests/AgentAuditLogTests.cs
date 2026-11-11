@@ -36,6 +36,98 @@ public sealed class AgentAuditLogTests : IDisposable
     }
 
     [Fact]
+    public void Launch_events_have_their_own_owner_only_daily_UTC_file()
+    {
+        var midnight = new MidnightClock();
+        var log = new AgentAuditLog(profile, midnight, said.Add);
+        Assert.True(log.Append(Entry("session.launch")));
+        var file = Path.Combine(Audit, "launches-2026-11-08.jsonl");
+        using var doc = JsonDocument.Parse(File.ReadAllText(file));
+        Assert.Equal("session.launch", doc.RootElement.GetProperty("action").GetString());
+        Assert.Equal("agent:m1/s1", doc.RootElement.GetProperty("principal").GetString());
+        Assert.Equal(8, doc.RootElement.GetProperty("at").GetDateTimeOffset().Day);
+        Assert.Equal(1, midnight.Reads);
+        AssertOwnerOnly(file);
+        Assert.False(File.Exists(Path.Combine(Audit, "agents-2026-11-08.jsonl")));
+
+        Assert.True(log.Append(Entry("session.launch")));
+        Assert.Equal(2, midnight.Reads);
+        Assert.True(File.Exists(Path.Combine(Audit, "launches-2026-11-09.jsonl")));
+        Assert.True(log.Append(Entry()));
+        Assert.True(File.Exists(Path.Combine(Audit, "agents-2026-11-09.jsonl")));
+    }
+
+    sealed class MidnightClock : TimeProvider
+    {
+        public int Reads { get; private set; }
+        public override DateTimeOffset GetUtcNow() =>
+            new DateTimeOffset(2026, 11, 8, 23, 59, 59, TimeSpan.Zero).AddSeconds(2 * Reads++);
+    }
+
+    [Theory]
+    [InlineData(false, 0)]
+    [InlineData(false, 1)]
+    [InlineData(true, 0)]
+    [InlineData(true, 1)]
+    public void The_launch_append_that_would_pass_16_MiB_is_refused_without_changing_the_file(bool torn, int over)
+    {
+        const long quota = 16L * 1024 * 1024;
+        var log = Log();
+        var entry = Entry("session.launch");
+        const string prompt = "private launch text \u00e9";
+        Assert.True(log.Append(entry, prompt));
+        var file = Path.Combine(Audit, "launches-2026-11-08.jsonl");
+        var line = File.ReadAllBytes(Assert.Single(Directory.GetFiles(Audit)));
+        using (var seed = new FileStream(file, FileMode.Create, FileAccess.Write))
+        {
+            seed.SetLength(quota - line.Length - (torn ? 1 : 0) + over);
+            seed.Position = seed.Length - 1;
+            seed.WriteByte(torn ? (byte)'x' : (byte)'\n');
+        }
+        var before = new FileInfo(file).Length;
+        Assert.Equal(over == 0, log.Append(entry, prompt));
+        Assert.Equal(over == 0 ? quota : before, new FileInfo(file).Length);
+        using (var read = File.OpenRead(file))
+        {
+            read.Position = before - 1;
+            Assert.Equal(torn ? 'x' : '\n', read.ReadByte());
+            if (over == 0)
+            {
+                if (torn) { Assert.Equal('\n', read.ReadByte()); }
+                var appended = new byte[line.Length];
+                read.ReadExactly(appended);
+                Assert.Equal(line, appended);
+            }
+        }
+        Assert.False(log.Append(entry, prompt));
+        Assert.Equal(over == 0 ? quota : before, new FileInfo(file).Length);
+        var refusal = Assert.Single(said);
+        Assert.DoesNotContain(prompt, refusal);
+        Assert.DoesNotContain(profile, refusal);
+    }
+
+    [Fact]
+    public void Earlier_launch_days_count_toward_the_quota_and_send_pruning_cannot_remove_them()
+    {
+        var log = Log(max: 700);
+        Assert.True(log.Append(Entry("session.launch")));
+        var earlier = Path.Combine(Audit, "launches-2026-11-08.jsonl");
+        using (var seed = new FileStream(earlier, FileMode.Create, FileAccess.Write))
+        {
+            seed.SetLength(16L * 1024 * 1024);
+            seed.Position = seed.Length - 1;
+            seed.WriteByte((byte)'\n');
+        }
+        clock.Advance(TimeSpan.FromDays(1));
+        Assert.False(new AgentAuditLog(profile, clock, said.Add).Append(Entry("session.launch")));
+        Assert.True(log.Append(Entry()));
+        clock.Advance(TimeSpan.FromDays(31));
+        Assert.True(log.Append(Entry()));
+        Assert.True(File.Exists(earlier));
+        Assert.Equal(16L * 1024 * 1024, new FileInfo(earlier).Length);
+    }
+
+    [Fact]
     public void Message_text_is_never_written_only_its_hash_and_length()
     {
         const string secret = "tangerine-ostrich-4471-do-not-log";
@@ -161,9 +253,11 @@ public sealed class AgentAuditLogTests : IDisposable
         if (!OperatingSystem.IsWindows()) { return; }
         using (new FileStream(oldest, FileMode.Open, FileAccess.Read, FileShare.None))
         {
-            Log(max: 400).Append(Entry(outcome: new string('o', 250)));
+            Assert.True(Log(max: 400).Append(Entry()));
+            Assert.Contains("could not trim old files", Assert.Single(said));
+            Assert.Equal(3, Directory.GetFiles(Audit).Length);
+            Assert.All(Directory.GetFiles(Audit), file => Assert.True(new FileInfo(file).Length > 0));
         }
-        Assert.Equal(3, Directory.GetFiles(Audit).Length);
     }
 
     [Fact]
