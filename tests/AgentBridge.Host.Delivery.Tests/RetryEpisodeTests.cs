@@ -125,6 +125,34 @@ public sealed class RetryEpisodeTests
     }
 
     [Fact]
+    public async Task Cancellation_keeps_the_in_flight_slot_until_delivery_finishes_and_forbids_another_attempt()
+    {
+        var h = new Harness { Pending = new() };
+        using var cancel = new CancellationTokenSource();
+        var first = h.Episode.TryAsync(1, Guid.NewGuid(), RetryReason.Owner, cancel.Token);
+        cancel.Cancel();
+        Assert.False(await h.Send(RetryReason.Owner));
+        Assert.False(first.IsCompleted);
+        h.Pending.SetResult(new(AnswerOutcome.Delivered));
+        Assert.True(await first);
+        Assert.Equal(RetryStop.Cancelled, h.Episode.Stop);
+        Assert.False(await h.Send(RetryReason.Owner));
+        Assert.Single(h.Requests);
+    }
+
+    [Fact]
+    public async Task Late_episode_construction_does_not_extend_the_original_error_deadline()
+    {
+        var h = new Harness();
+        h.Time.Advance(TimeSpan.FromMinutes(4));
+        var late = new RetryEpisode(Guid.NewGuid(), () => h.Current, h, h.Time, h.Log.Add);
+        h.Time.Advance(TimeSpan.FromMinutes(1));
+        Assert.False(await late.TryAsync(1, Guid.NewGuid(), RetryReason.Owner));
+        Assert.Equal(RetryStop.Expired, late.Stop);
+        Assert.Empty(h.Requests);
+    }
+
+    [Fact]
     public async Task Read_only_delivery_and_a_new_non_transient_error_stop_before_sending()
     {
         var h = new Harness { Available = false };
@@ -145,13 +173,16 @@ public sealed class RetryEpisodeTests
         var h = new Harness { Outcome = new(AnswerOutcome.Unconfirmed, "private-canary") };
         Assert.True(await h.Send(RetryReason.Owner));
         Assert.Equal(AnswerOutcome.Unconfirmed, Assert.Single(h.Episode.Attempts).Outcome);
-        h.Failure = new IOException("private-canary");
-        await Assert.ThrowsAsync<IOException>(() => h.Send(RetryReason.Owner));
         Assert.Equal(RetryStop.Failed, h.Episode.Stop);
-        Assert.Equal(2, h.Episode.Attempts.Count);
+        Assert.False(await h.Send(RetryReason.Owner));
+        var failed = new Harness { Failure = new IOException("private-canary") };
+        await Assert.ThrowsAsync<IOException>(() => failed.Send(RetryReason.Owner));
+        Assert.Equal(RetryStop.Failed, failed.Episode.Stop);
+        Assert.Single(failed.Episode.Attempts);
+        Assert.DoesNotContain("private-canary", string.Join("\n", failed.Log));
         Assert.DoesNotContain("private-canary", string.Join("\n", h.Log));
         Assert.DoesNotContain("private-canary", JsonSerializer.Serialize(h.Episode.Attempts));
-        Assert.False(await h.Send(RetryReason.Owner));
+        Assert.False(await failed.Send(RetryReason.Owner));
     }
 
     sealed class Harness : ISessionReplier
