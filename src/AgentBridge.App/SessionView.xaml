@@ -441,12 +441,12 @@
                                             x:Name="HistoryYourMessage"
                                             Grid.Column="1"
                                             HorizontalAlignment="Right"
-                                            Padding="16,10"
+                                            Padding="8"
                                             Background="{ThemeResource AbCard}"
                                             BorderBrush="{ThemeResource AbStroke}"
                                             BorderThickness="1"
                                             CornerRadius="{StaticResource AbRadiusCard}">
-                                            <TextBlock Style="{StaticResource AbTypeRow}" TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind Prompt}" />
+                                            <local:SentMessageView Reading="False" Message="{x:Bind Prompt}" />
                                         </Border>
                                     </Grid>
                                     <ContentControl IsTabStop="False" HorizontalAlignment="Right" MinHeight="20" Content="{x:Bind PromptUnder}" ContentTemplate="{StaticResource MessageTimeTemplate}" Visibility="{x:Bind local:Ui.Some(Prompt)}" />
@@ -638,13 +638,13 @@
                             x:Name="YourMessage"
                             Grid.Column="1"
                             HorizontalAlignment="Right"
-                            Padding="16,10"
+                            Padding="8"
                             Background="{ThemeResource AbCard}"
                             BorderBrush="{ThemeResource AbStroke}"
                             BorderThickness="1"
                             CornerRadius="{StaticResource AbRadiusCard}"
                             AutomationProperties.AutomationId="YourMessage">
-                            <TextBlock Style="{StaticResource AbTypeReading}" TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind Card.UserMessage, Mode=OneWay}" />
+                            <local:SentMessageView Message="{x:Bind Card.UserMessage, Mode=OneWay}" />
                         </Border>
                     </Grid>
 
@@ -840,13 +840,13 @@
                             x:Name="YourMessageBelow"
                             Grid.Column="1"
                             HorizontalAlignment="Right"
-                            Padding="16,10"
+                            Padding="8"
                             Background="{ThemeResource AbCard}"
                             BorderBrush="{ThemeResource AbStroke}"
                             BorderThickness="1"
                             CornerRadius="{StaticResource AbRadiusCard}"
                             AutomationProperties.AutomationId="YourMessageBelow">
-                            <TextBlock Style="{StaticResource AbTypeReading}" TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind Card.UserMessage, Mode=OneWay}" />
+                            <local:SentMessageView Message="{x:Bind Card.UserMessage, Mode=OneWay}" />
                         </Border>
                     </Grid>
                 </local:ReadingColumn>

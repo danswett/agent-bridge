@@ -38,7 +38,7 @@ static partial class SelfTest
             var thumbnail = bubble is null ? null : ById<Button>(bubble, "SentAttachment");
             var picture = bubble is null ? null : ById<Image>(bubble, "SentImage");
             var text = bubble is null ? "" : string.Join("\n", Find<TextBlock>(bubble).Select(t => t.Text));
-            check(picture?.Source is BitmapImage { PixelWidth: > 0 } && thumbnail is { ActualWidth: >= 44 and <= 240, ActualHeight: >= 44 and <= 240, CornerRadius.TopLeft: 8 }
+            check(picture is { Width: 1, Height: 1, Source: BitmapImage { PixelWidth: > 0 } } && thumbnail is { ActualWidth: >= 44 and <= 240, ActualHeight: >= 44 and <= 240, CornerRadius.TopLeft: 8 }
                 && AutomationProperties.GetName(thumbnail).StartsWith("Image, Pasted image,", StringComparison.Ordinal),
                 "renders a disk-backed pasted image as a bounded, rounded, accessible thumbnail");
             check(text.Contains("What is this?", StringComparison.Ordinal) && text.Contains("missing.png", StringComparison.Ordinal) && text.Contains("report.pdf", StringComparison.Ordinal)

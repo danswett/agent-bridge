@@ -30,6 +30,12 @@ shows the window: a start at sign-in or a toast launch leaves it pending for the
 
 ## Decisions
 
+Sent person-message bubbles recognise host-staged attachment references, including earlier
+turns. Images available on a local disk show thumbnails that open a named image viewer;
+missing, oversized and non-image attachments keep filename chips without exposing paths.
+No remote paths are probed, no bytes are fetched, and decoded images are held only while
+their bubble or viewer is loaded. Preview reads are limited to 32 MiB and 16 million pixels.
+
 ### Local API: a named pipe owned by the host
 
 Settings' **Agents on this machine** section uses the host's shared readiness report
