@@ -391,6 +391,48 @@ test('about 500 turns are kept: the host\'s whole window loads, and its start is
   assert.deepEqual(snap.start, { at: null, limited: true });
 });
 
+for (const arrivals of [36, 55]) test(`an earlier page preserves the newest end when ${arrivals} live turns arrive during its request`, async (t) => {
+  const { host, client, store } = await setup(t, { count: 700, first: 5 });
+  await store.open('h', ID);
+  for (let page = 0; page < 22; page++) { await store.loadEarlier('h', ID); }
+  assert.equal(store.get('h', ID).turns.length, 445);
+  const requests = host.historyLog.length;
+  let release, begin;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const started = new Promise((resolve) => { begin = resolve; });
+  const ask = client.history.bind(client);
+  client.history = async (...args) => { const page = await ask(...args); begin(); await gate; return page; };
+  t.after(() => release());
+  const pending = store.loadEarlier('h', ID, { keepLatest: true });
+  await Promise.race([started, pending]);
+  assert.equal(store.get('h', ID).loading, 'earlier');
+  for (const n of range(701, 700 + arrivals)) {
+    store.live('h', session({ turn: `${ID}-turn-${n}`, responseTurn: `${ID}-turn-${n}`, response: `Live ${n}` }));
+  }
+  release();
+  const landed = await pending;
+  assert.equal(host.historyLog.length, requests + 1);
+  assert.equal(landed.loading, null);
+  assert.equal(landed.more, true);
+  assert.ok(landed.turns.length <= HISTORY.kept);
+  assert.deepEqual(nums(landed).slice(-arrivals - 1), range(700, 700 + arrivals));
+  assert.equal(landed.atLatest, true);
+  if (arrivals === 55) { assert.deepEqual(nums(landed), range(256, 755)); }
+  if (arrivals === 36) {
+    // Free capacity without letting go of a held turn.
+    store.keep += HISTORY.maxTurns;
+    const resumed = await store.loadEarlier('h', ID, { keepLatest: true });
+    assert.equal(host.historyLog.at(-1).before, host.historyLog.at(-2).before);
+    assert.deepEqual(nums(resumed), range(236, 736));
+    const continued = await store.loadEarlier('h', ID, { keepLatest: true });
+    assert.deepEqual(nums(continued), range(216, 736));
+  }
+  const next = `${ID}-turn-${701 + arrivals}`;
+  store.live('h', session({ turn: next, responseTurn: next, response: 'Still merging.' }));
+  assert.equal(store.get('h', ID).turns.at(-1).id, next);
+  assert.equal(store.get('h', ID).turns.at(-1).live.response, 'Still merging.');
+});
+
 test('past the limit the end farthest from where turns came in is let go, and loaded again by scrolling back', async (t) => {
   const { host, store } = await setup(t, { count: 12, keep: 6, limit: 3 });
   await store.open('h', ID);
