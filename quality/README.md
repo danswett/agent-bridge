@@ -373,11 +373,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      `pwa-unit` with its coverage pass, `pwa-site-csp`, `playwright-apt` and `docs-links`. Each step runs when its
      suite is selected, and every selected one runs even after another fails. It isn't folded
      into `plan`, since a failure there would skip every job that needs the plan.
-   - `pwa-ui` runs Playwright on four runners: Chromium in one, WebKit (about twice as slow) in
-     three `--shard`s, with `--fully-parallel` so a shard splits by test rather than by file.
+   - `pwa-ui` runs Playwright on six runners: three Chromium and three WebKit
+     `--shard`s, with `--fully-parallel` so a shard splits by test rather than by file.
      `pwa-e2e` runs `test/e2e`, in both browsers, in the one job that builds the dev stack. The
      shards set `PWA_SKIP_E2E`, so `test/e2e` is left out of them rather than skipping itself;
-     together the five run every spec. The one PWA job these replace took a median of 15
+     together the seven run every spec. The one PWA job these replace took a median of 15
      minutes. Every job that runs `playwright install --with-deps` (each `pwa-ui` leg, `pwa-e2e`
      and `spikes-linux`) first downloads Playwright's system packages through
      `.github/actions/playwright-system-packages`, and if apt's first mirror hasn't finished in

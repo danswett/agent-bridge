@@ -1388,10 +1388,10 @@ jobs:
   pwa-ui:
     # The product PWA in Chromium and WebKit against the published build (with its CSP), in demo
     # mode. Split over runners (#457): one run of every spec took 11 to 16 minutes on one, and set
-    # the wall time of every PWA change. WebKit takes about twice Chromium's time, so it has three
-    # shards. Playwright's --shard splits what --project selects, so together the four run every
-    # spec in both browsers. --fully-parallel lets a shard split by test rather than by file: by
-    # file, the first WebKit shard got axe, delegates and answer, and ran 5 minutes to the others'
+    # the wall time of every PWA change. Both browsers now have three
+    # shards. Playwright's --shard splits what --project selects, so together the six run every
+    # spec in both browsers. Chromium is split by test with --fully-parallel like WebKit.
+    # By file, the first WebKit shard got axe, delegates and answer, and ran 5 minutes to the others'
     # 2 (no spec shares state between its tests; each has its own page). Two workers, as before: a
     # third made WebKit slower on these 4-CPU runners, not faster. test/e2e is pwa-e2e's
     # (PWA_SKIP_E2E): left out here, not left to skip itself for want of the dev stack.
@@ -1402,9 +1402,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: chromium
+          - name: chromium 1/3
             project: chromium
-            shard: 1/1
+            shard: 1/3
+            renders: true
+          - name: chromium 2/3
+            project: chromium
+            shard: 2/3
+          - name: chromium 3/3
+            project: chromium
+            shard: 3/3
           - name: webkit 1/3
             project: webkit
             shard: 1/3
@@ -1479,11 +1486,11 @@ jobs:
       # against what the product draws, and nothing runs on an owner's machine, so CI draws them.
       # Chromium alone: the engine that emulates forced colours.
       - name: Renders of the demo
-        if: ${{ !cancelled() && matrix.project == 'chromium' && hashFiles('pwa/test/renders/*.render.mjs') != '' }}
+        if: ${{ !cancelled() && matrix.renders && hashFiles('pwa/test/renders/*.render.mjs') != '' }}
         continue-on-error: true
         run: npx playwright test --config playwright.renders.config.mjs
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: ${{ !cancelled() && matrix.project == 'chromium' }}
+        if: ${{ !cancelled() && matrix.renders }}
         with:
           name: pwa-renders
           path: pwa/renders/
@@ -1500,7 +1507,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() && matrix.project == 'chromium' }}
         with:
-          name: pwa-captures
+          name: pwa-captures-${{ matrix.project }}-${{ strategy.job-index }}
           path: |
             pwa/test-results/**/signin-*.png
             !pwa/test-results/**/attachments/**
