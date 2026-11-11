@@ -40,8 +40,8 @@ public static class LocalApi
             return sessions.RenameFleetSession(data);
         }
             if (op == AgentBridge.Host.Lite.LiteAgentSend.Op) { return await AgentBridge.Host.Lite.LiteAgentSend.HandleAsync(credentials, lite, channel, data, appendAttempt: audit is null ? null : audit.Append); }
-            if (op == AgentBridge.Host.Fleet.FleetList.Op) { return await (fleet ?? new AgentBridge.Host.Fleet.FleetList(credentials, null)).HandleAsync(channel, data); }
-            if (op == AgentBridge.Host.Fleet.FleetList.FindOp) { return await (fleet ?? new AgentBridge.Host.Fleet.FleetList(credentials, null)).FindAsync(channel, data); }
+            if (op == AgentBridge.Host.Fleet.FleetList.Op) { return await (fleet ?? new AgentBridge.Host.Fleet.FleetList(credentials, null)).HandleAsync(channel, data, auditLog: audit); }
+            if (op == AgentBridge.Host.Fleet.FleetList.FindOp) { return await (fleet ?? new AgentBridge.Host.Fleet.FleetList(credentials, null)).FindAsync(channel, data, auditLog: audit); }
             // Pipe only, and Windows only for now (§3.4): a relay channel never reaches this handler.
             if (op == AgentProtocol.Hello)
             {
@@ -78,6 +78,13 @@ public static class LocalApi
             }
             if (authorization is not null && op.StartsWith("host.peers.", StringComparison.Ordinal)) { return authorization.Manage(op, data); }
             return await control.HandleAsync(channel, op, data);
+        }
+        if (op == Ops.SessionAnswer && credentials?.Of(channel) is { } answering)
+        {
+            // Refusals must not copy arbitrary answer fields into the audit trail.
+            AuditAgentAction(credentials, answering, op, AnswerAuditTarget(data), "refused", audit);
+            throw Refuse(op, new Caller(CallerKind.Agent, credentials.PrincipalOf(answering)),
+                "answering, replying, ending and launching sessions are for the person, from the app or a phone", log);
         }
         if (Acts.Contains(op) && callers.Classify(channel) is { Kind: CallerKind.Agent } agent)
         {
@@ -159,6 +166,28 @@ public static class LocalApi
 
     static InvalidOperationException AuditUnavailable() =>
         new("refused: auditUnwritable: the agent audit log could not be written; nothing was launched or stopped");
+
+    static string AnswerAuditTarget(JsonElement data)
+    {
+        try
+        {
+            return data.ValueKind == JsonValueKind.Object && data.TryGetProperty("id", out var id)
+                && id.ValueKind == JsonValueKind.String && id.TryGetGuid(out var session) ? session.ToString("D") : "unknown";
+        }
+        catch (InvalidOperationException) { return "unknown"; }
+    }
+
+    internal static void AuditAgentAction(AgentCredentials credentials, AgentCredential caller, string op, string target, string outcome, AgentAuditLog? audit)
+    {
+        var entry = new AgentAuditEntry("local", Guid.NewGuid().ToString("D"), credentials.PrincipalOf(caller), caller.Chain, op, target, outcome);
+        bool written;
+        try { written = audit?.Append(entry) == true; }
+        catch (Exception) { throw AgentActionAuditUnavailable(); }
+        if (!written) { throw AgentActionAuditUnavailable(); }
+    }
+
+    static InvalidOperationException AgentActionAuditUnavailable() =>
+        new("refused: auditUnwritable: the agent audit log could not be written; nothing was done");
 
     static InvalidOperationException Refuse(string op, Caller caller, string why, Action<string>? log)
     {

@@ -85,21 +85,21 @@ public sealed record FleetListSession(string Machine, string Node, string State,
 // The fleet.list pipe op (#1412, design/fleet-session-registry.md slice 4): an agent that passed
 // agent.hello lists its own account's sessions. The reply is built field by field from
 // FleetListSession, so nothing else the registry or a session holds can reach the agent.
-public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roster, TimeProvider? time = null)
+public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roster, TimeProvider? time = null, AgentAuditLog? audit = null)
 {
     public const string Op = "fleet.list";
     public const string FindOp = "fleet.find";
 
-    // The audit hook (#1401): called once per accepted call with the agent's principal. Nothing
-    // is recorded until the audit log exists and is assigned here.
+    // Notification only: the required audit append succeeds before this hook or any roster read.
     public Action<string>? AuditFleetList { get; set; }
 
-    public async Task<object?> HandleAsync(IProtocolChannel channel, JsonElement data, CancellationToken ct = default)
+    public async Task<object?> HandleAsync(IProtocolChannel channel, JsonElement data, CancellationToken ct = default, AgentAuditLog? auditLog = null)
     {
         var caller = Authorize(channel, Op);
         // The only member read; a principal or account in the body is ignored. Names are what a
         // person typed, so they come only when asked for (design §5.8).
         var withNames = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("include", out var inc) && inc.ValueKind == JsonValueKind.String && inc.GetString() == "content";
+        LocalApi.AuditAgentAction(credentials!, caller, Op, "fleet", "attempted", auditLog ?? audit);
         AuditFleetList?.Invoke(credentials!.PrincipalOf(caller));
         return new { sessions = await ListAsync(withNames, ct) };
     }
@@ -108,7 +108,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
     // trimmed, exact and case-sensitive, and never echoed back. Records are unsigned until
     // hostSign exists, so no machine is ever verified: a live match answers `unverified`, never
     // `found`, and only verified live matches would ever carry a node.
-    public async Task<object?> FindAsync(IProtocolChannel channel, JsonElement data, CancellationToken ct = default)
+    public async Task<object?> FindAsync(IProtocolChannel channel, JsonElement data, CancellationToken ct = default, AgentAuditLog? auditLog = null)
     {
         var caller = Authorize(channel, FindOp);
         var name = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString()!.Trim() : "";
@@ -122,6 +122,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
                 throw new InvalidOperationException("refused: fleet.find \"machine\" must be 1 to 64 of letters, digits, '.', '_', '-'");
             }
         }
+        LocalApi.AuditAgentAction(credentials!, caller, FindOp, "fleet", "attempted", auditLog ?? audit);
         AuditFleetList?.Invoke(credentials!.PrincipalOf(caller));
         var scope = (await roster!.ReadAsync(ct)).Where(x => machine is null || x.Id == machine).ToList();
         var incomplete = scope.Where(x => x.Online && x.Truncated).Select(x => x.Id).ToList();
