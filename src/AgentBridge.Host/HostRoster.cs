@@ -21,7 +21,7 @@ public sealed record RosterCheck(
 {
     public string Summary => Outcome switch
     {
-        "verified" => $"verified {Entries} entries from the relay ({Accepted} accepted, {Quarantined} quarantined, {Refused} refused, {Unreadable} unreadable); heads {string.Join(",", Heads)}; enforcing nothing",
+        "verified" => $"verified {Entries} entries from the relay ({Accepted} accepted, {Quarantined} quarantined, {Refused} refused, {Unreadable} unreadable); heads {string.Join(",", Heads)}; reasons {string.Join(",", Reasons)}; enforcing nothing",
         _ => $"not verified: {Outcome}; enforcing nothing",
     };
 }
@@ -34,6 +34,13 @@ public static class HostRoster
     // nothing against a hostile relay; pinning and enforcing are later slices.
     public static RosterCheck Verify(RelayRoster relay, string account, Func<TimeSpan> clock)
     {
+        var check = Read(relay, account, clock).Check;
+        return check with { Reasons = [.. check.Reasons, "unpinned"] };
+    }
+
+    internal static (RosterCheck Check, RosterVerifier? Verifier) Read(
+        RelayRoster relay, string account, Func<TimeSpan> clock, RosterVerifier? verifier = null)
+    {
         var entries = new List<Entry>();
         var unreadable = 0;
         foreach (var text in relay.Entries)
@@ -41,18 +48,18 @@ public static class HostRoster
             try { entries.Add(Entry.Parse(Encoding.UTF8.GetBytes(text))); }
             catch (RosterFormatException) { unreadable++; }
         }
-        if (entries.Count == 0) { return Empty(relay, unreadable, relay.Entries.Count == 0 ? "the relay holds no roster yet" : "no entry could be read"); }
+        if (entries.Count == 0) { return (Empty(relay, unreadable, relay.Entries.Count == 0 ? "the relay holds no roster yet" : "no entry could be read"), null); }
         var genesis = entries.FirstOrDefault(e => e.Body.Op == EntryOp.Genesis && e.Body.Account == account);
-        if (genesis is null) { return Empty(relay, unreadable, "the relay holds no genesis for this account"); }
+        if (genesis is null) { return (Empty(relay, unreadable, "the relay holds no genesis for this account"), null); }
 
-        var verifier = new RosterVerifier(account, genesis.Body.Generation, clock);
+        verifier ??= new RosterVerifier(account, genesis.Body.Generation, clock);
         var offered = verifier.Offer(entries);
         int Count(Verdict v) => offered.Count(o => o.Verdict == v);
-        return new RosterCheck(
+        return (new RosterCheck(
             "verified", relay.Mode, relay.Entries.Count,
             Count(Verdict.Accepted), Count(Verdict.Quarantined), Count(Verdict.Duplicate), Count(Verdict.Refused), unreadable,
             [.. verifier.Heads.Select(h => Convert.ToHexString(h)[..12].ToLowerInvariant())],
-            [.. offered.Where(o => o.Reason is not null).Select(o => o.Reason!).Distinct().Order()]);
+            [.. offered.Where(o => o.Reason is not null).Select(o => o.Reason!).Distinct().Order()]), verifier);
     }
 
     static RosterCheck Empty(RelayRoster relay, int unreadable, string why) =>
