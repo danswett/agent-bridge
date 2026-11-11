@@ -31,29 +31,46 @@ function Get-Timestamp($value) {
   ([DateTimeOffset]$value).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
 }
 $handled = @{}
-if (-not $PSBoundParameters.ContainsKey('Since') -and (Test-Path -LiteralPath $StatePath)) {
-  $saved = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json -AsHashtable
-  if ($saved.version -ne 1 -or $saved.repo -ne $repo -or $saved.team -ne $teamKey -or
-      -not $saved.since -or $saved.handled -isnot [hashtable]) { throw "Invalid wake watcher state: $StatePath" }
-  $Since = Get-Timestamp $saved.since
-  $handled = $saved.handled
+$stateWritable = $true
+$initialSince = $Since
+if (-not $PSBoundParameters.ContainsKey('Since')) {
+  try {
+    if (Test-Path -LiteralPath $StatePath) {
+      $saved = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json -AsHashtable
+      if ($saved.version -ne 1 -or $saved.repo -ne $repo -or $saved.team -ne $teamKey -or
+          -not $saved.since -or $saved.handled -isnot [hashtable]) { throw 'Invalid state schema' }
+      $Since = Get-Timestamp $saved.since
+      $handled = $saved.handled
+      foreach ($id in @($handled.Keys)) {
+        if ($id -notmatch '^\d+$') { throw 'Invalid handled comment id' }
+        $handled[$id] = Get-Timestamp $handled[$id]
+      }
+    }
+  } catch {
+    $Since = $initialSince
+    $handled = @{}
+    $stateWritable = $false
+    Write-Host "STATE WARNING: cannot read or validate '$StatePath'; leaving it untouched and continuing in memory only from $Since, without retrying state access this run. Restore that file, or replay history with an earlier -Since and a writable -StatePath."
+  }
 }
 $Since = [DateTimeOffset]::Parse($Since).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-foreach ($id in @($handled.Keys)) {
-  if ($id -notmatch '^\d+$') { throw "Invalid handled comment id in $StatePath" }
-  $handled[$id] = Get-Timestamp $handled[$id]
-}
 
 function Save-Progress([string]$since, [hashtable]$seen) {
-  [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($StatePath))
-  $temporary = "$StatePath.$([Guid]::NewGuid().ToString('N')).tmp"
+  if (-not $script:stateWritable) { return }
   try {
-    $json = @{ version = 1; repo = $repo; team = $teamKey; since = $since; handled = $seen } |
-      ConvertTo-Json -Depth 4
-    [IO.File]::WriteAllText($temporary, $json)
-    [IO.File]::Move($temporary, $StatePath, $true)
-  } finally {
-    if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary }
+    [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($StatePath))
+    $temporary = "$StatePath.$([Guid]::NewGuid().ToString('N')).tmp"
+    try {
+      $json = @{ version = 1; repo = $repo; team = $teamKey; since = $since; handled = $seen } |
+        ConvertTo-Json -Depth 4
+      [IO.File]::WriteAllText($temporary, $json)
+      [IO.File]::Move($temporary, $StatePath, $true)
+    } finally {
+      if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary }
+    }
+  } catch {
+    $script:stateWritable = $false
+    Write-Host "STATE WARNING: cannot save '$StatePath'; continuing in memory only, without retrying saves this run. Repair write access or choose a writable -StatePath; next restart replay with -Since $since."
   }
 }
 # Keep the initial lower bound even if every request fails before the watcher stops.
@@ -140,10 +157,11 @@ while ((Get-Date) -lt $deadline) {
         $nextHandled[[string]$comment.id] = Get-Timestamp $comment.updated_at
       }
     }
+    if ($hits.Count) { $hits | % { "WAKE comment $($_.html_url) by $($_.user.login) at $(Get-Timestamp $_.updated_at)" } }
     Save-Progress $watermark $nextHandled
     # The query still includes older revisions until this run exits; remember those in memory too.
     foreach ($comment in $comments) { $handled[[string]$comment.id] = Get-Timestamp $comment.updated_at }
-    if ($hits.Count) { $hits | % { "WAKE comment $($_.html_url) by $($_.user.login) at $(Get-Timestamp $_.updated_at)" }; exit 0 }
+    if ($hits.Count) { exit 0 }
     if ($Prs.Count -and (Get-Date) -ge $nextCi) {
       $nextCi = (Get-Date).AddSeconds($CiSeconds)
       foreach ($p in $Prs) {

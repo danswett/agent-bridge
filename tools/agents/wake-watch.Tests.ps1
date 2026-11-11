@@ -21,11 +21,19 @@ Describe 'Wake watcher restart progress' {
             } | Select-Object -Skip (($page - 1) * 100) -First 100)
             $json = ConvertTo-Json -InputObject $items -Depth 5 -Compress
             $etag = '"' + $json.GetHashCode() + '"'
+            if ($global:WakeWatchFixture.blockSave) {
+                $state = Get-ChildItem (Join-Path $HOME '.copilot/wake-watch') -Filter '*.json'
+                [IO.File]::Delete($state.FullName)
+                [void][IO.Directory]::CreateDirectory($state.FullName)
+                $global:WakeWatchFixture.blockSave = $false
+            }
             if ($call -contains "If-None-Match: $etag") { return "HTTP/2.0 304`n`n" }
             "HTTP/2.0 200`nETag: $etag`n`n$json"
         }
         function Watch([hashtable]$Options = @{}) {
-            (& $watcher -Team watch-test -MaxMinutes 1 -CommentSeconds 0 @Options 6>&1) -join "`n"
+            $out = (& $watcher -Team watch-test -MaxMinutes 1 -CommentSeconds 0 @Options 6>&1) -join "`n"
+            $global:WakeWatchFixture.exitCode = $LASTEXITCODE
+            $out
         }
     }
     BeforeEach {
@@ -33,7 +41,7 @@ Describe 'Wake watcher restart progress' {
         Set-Variable HOME -Value (Join-Path $TestDrive ([Guid]::NewGuid().ToString('N'))) -Force
         $global:WakeWatchFixture = @{
             clock = [datetime]::new(2026, 11, 6, 0, 0, 0, [DateTimeKind]::Utc)
-            comments = @(); calls = [Collections.Generic.List[string]]::new(); failPage = 0
+            comments = @(); calls = [Collections.Generic.List[string]]::new(); failPage = 0; blockSave = $false
         }
         Mock Get-Date {
             $global:WakeWatchFixture.clock = $global:WakeWatchFixture.clock.AddSeconds(10)
@@ -117,11 +125,80 @@ Describe 'Wake watcher restart progress' {
         Watch @{ Since = '2026-11-06T00:00:00Z' } | Should -Match 'WAKE comment .*issuecomment-1 '
     }
 
-    It 'reports corrupt state instead of silently resetting the cursor' {
+    It 'recovers from corrupt startup state in memory without throwing or retrying' {
         Watch | Should -Match 'WAKE timeout'
         $state = Get-ChildItem (Join-Path $HOME '.copilot/wake-watch') -Filter '*.json'
         Set-Content -LiteralPath $state.FullName -Value 'not json'
+        $global:WakeWatchFixture.comments = @(
+            New-Comment 1 $global:WakeWatchFixture.clock.AddSeconds(20).ToString('yyyy-MM-ddTHH:mm:ssZ'))
 
-        { Watch } | Should -Throw
+        $out = Watch
+        $out | Should -Match ([regex]::Escape($state.FullName))
+        $out | Should -Match 'STATE WARNING.*-Since'
+        $out | Should -Match 'WAKE comment .*issuecomment-1 '
+        ([regex]::Matches($out, 'STATE WARNING')).Count | Should -Be 1
+        $global:WakeWatchFixture.exitCode | Should -Be 0
+        Get-Content -LiteralPath $state.FullName | Should -Be 'not json'
+        Watch @{ Since = '2026-11-06T00:00:00Z' } | Should -Match 'WAKE comment .*issuecomment-1 '
+    }
+
+    It 'recovers from unreadable startup state in memory without retrying reads (<ReadOperation>)' -TestCases @(
+        @{ ReadOperation = 'Get-Content' }, @{ ReadOperation = 'Test-Path' }
+    ) {
+        param($ReadOperation)
+        Watch | Should -Match 'WAKE timeout'
+        $state = Get-ChildItem (Join-Path $HOME '.copilot/wake-watch') -Filter '*.json'
+        $global:WakeWatchFixture.unreadablePath = $state.FullName
+        Mock $ReadOperation { throw [UnauthorizedAccessException]::new('denied') } -ParameterFilter {
+            $LiteralPath -eq $global:WakeWatchFixture.unreadablePath
+        }
+        $global:WakeWatchFixture.comments = @(
+            New-Comment 1 $global:WakeWatchFixture.clock.AddSeconds(20).ToString('yyyy-MM-ddTHH:mm:ssZ'))
+
+        $out = Watch
+        $out | Should -Match ([regex]::Escape($state.FullName))
+        $out | Should -Match 'STATE WARNING.*-Since'
+        $out | Should -Match 'WAKE comment .*issuecomment-1 '
+        ([regex]::Matches($out, 'STATE WARNING')).Count | Should -Be 1
+        $global:WakeWatchFixture.exitCode | Should -Be 0
+    }
+
+    It 'warns once and still wakes when state is unwritable at startup' {
+        $blocked = Join-Path $HOME 'blocked-state'
+        [void][IO.Directory]::CreateDirectory($blocked)
+        $global:WakeWatchFixture.comments = @(New-Comment 1 '2026-11-06T00:00:50Z')
+
+        $out = Watch @{ StatePath = $blocked; Since = '2026-11-06T00:00:00Z' }
+        $out | Should -Match ([regex]::Escape($blocked))
+        $out | Should -Match 'STATE WARNING.*-Since'
+        $out | Should -Match 'WAKE comment .*issuecomment-1 '
+        ([regex]::Matches($out, 'STATE WARNING')).Count | Should -Be 1
+        $global:WakeWatchFixture.exitCode | Should -Be 0
+    }
+
+    It 'does not hide a real wake when saving progress fails after a read' {
+        $global:WakeWatchFixture.comments = @(New-Comment 1 '2026-11-06T00:00:50Z')
+        $global:WakeWatchFixture.blockSave = $true
+
+        $out = Watch
+        $out | Should -Match 'WAKE comment .*issuecomment-1 '
+        $out | Should -Match 'STATE WARNING.*-Since'
+        $global:WakeWatchFixture.exitCode | Should -Be 0
+    }
+
+    It 'does not acknowledge a comment before its wake is announced' {
+        $global:WakeWatchFixture.comments = @(New-Comment 1 '2026-11-06T00:00:50Z')
+        $out = & $watcher -Team watch-test -MaxMinutes 1 -CommentSeconds 0 | ForEach-Object {
+            if ($_ -match '^WAKE comment') {
+                $state = Get-ChildItem (Join-Path $HOME '.copilot/wake-watch') -Filter '*.json'
+                $saved = Get-Content -LiteralPath $state.FullName -Raw | ConvertFrom-Json -AsHashtable
+                $global:WakeWatchFixture.ackBeforeWake = $saved.handled.ContainsKey('1') -or
+                    [DateTimeOffset]$saved.since -gt [DateTimeOffset]'2026-11-06T00:00:50Z'
+            }
+            $_
+        }
+
+        ($out -join "`n") | Should -Match 'WAKE comment .*issuecomment-1 '
+        $global:WakeWatchFixture.ackBeforeWake | Should -BeFalse
     }
 }

@@ -77,11 +77,21 @@ Never hard-code a session or node id in a doc, script or message you keep. Sessi
 - **Restart without cursor flags.** The watcher saves an inclusive watermark and handled comment
   revisions under `~/.copilot/wake-watch/` (one hashed file per repository and team). A restart
   resumes there, including comments posted while you handled the previous wake, without repeating
-  unchanged comments. An edit with a newer `updated_at` can wake you again. Only the first run
-  defaults to now. Progress is written atomically after every page succeeds, including empty polls;
+  unchanged comments. An edit with a newer `updated_at` can wake you again. With no usable state,
+  the initial cursor is the supplied `-Since` or now. Progress is written atomically after every
+  page succeeds and any comment wake has been printed, including on empty polls;
   failed reads never advance it. The file contains timestamps and comment ids, not comment bodies
-  or credentials. Unreadable state is an error, not a reset to now.
+  or credentials. Unreadable or corrupt state prints `STATE WARNING` with its exact path, leaves
+  that file untouched, and continues in memory from the initial cursor, without retrying state
+  reads or writes this run. Restore the named file, or replay with an earlier `-Since` and a
+  writable `-StatePath` to recover history. A write failure also warns once with the path and
+  recovery cursor, then continues in memory without retrying saves; real wakes still return.
+  Memory-only progress is not durable: repair access or choose a writable path and use the printed
+  `-Since` on restart.
   Run one watcher per team state file; use `-StatePath` for an independent consumer.
+  State is local to the user profile on that machine. Across nodes, recovery needs the same
+  accessible state file (via `-StatePath`) or an explicit replay with an earlier `-Since`;
+  automatic transfer between machines is not part of this helper.
   An explicit `-Since` resets saved progress for an intentional replay; `-IgnoreIds` still excludes
   whole comments, including edits. Do not add a second to the cursor: another comment may have the
   same timestamp. The watcher prints the effective UTC cursor on start:
