@@ -787,12 +787,19 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   each failed job's log (not `quality-gate`, the summary job, which fails whenever another does and has no test of its own) and re-runs the failed jobs once only if there is at least one failed
   job, every failed job shows a failed test, and every failed test is named in an open `flaky`
   issue by `danswett` or the hunt's bot. It leaves the run red when any failed test has no issue,
-  a job failed without a test failure in its log (a build error, a hang), a job timed out, the run
+  a job failed without a test failure in its log (a build error, a hang), a non-Windows job timed out, the run
   is already a re-run (attempt 2 or later), or a newer push run exists on `main`. Each re-run is
   a comment on every flake issue it concerned, one line per test
   (`rerun-known-flakes: test=<name> run=<id> attempt=1 job=<job>`), so the flips of a test can be
   counted against the quarantine thresholds. The workflow runs main's copy of the script with a
   token that can re-run workflows and comment on issues, and never runs the failed run's code.
+  #2018 adds a Windows timeout path beside the existing recognized-flake rule on any OS.
+  A timed-out job labelled `windows-latest` or `windows-11-arm` may be re-run once without
+  inventing a flake issue. Every other failed job must still satisfy the original rule;
+  unknown failures, build errors, unrecognized WinUI failures and cancellations refuse.
+  Each retry records the source run, original job ids, names, attempt and per-job reasons
+  in the retry run's summary, before posting issue comments. GitHub retains the next attempt
+  on the source run. Attempt 2 is never re-run, so repeated timeouts or failures remain red.
   Offline test: `quality/test-rerun-known-flakes.ps1` (catalog suite `rerun-known-flakes`).
 - **Red minutes on main** (owner target, 2026-11-09): `pwsh quality/red-minutes.ps1` prints how long
   main's CI was red over the last 24 h, the same way the main guardian counts it (a spell runs from a

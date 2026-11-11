@@ -1,8 +1,9 @@
 # Re-runs the failed jobs of a red push run of ci.yml on main, once, when every test that failed
 # is already filed as a flake (owner decision, 2026-11-08; quality/README.md §5). A real failure
 # stays red: one failed test with no open `flaky` issue, a failed job with no test failure in
-# its log (a build error, a hang, a timeout), a re-run already made (attempt 2 or later) or a
-# newer push run on main all leave the run as it is.
+# its log (a build error, a hang), a re-run already made (attempt 2 or later) or a
+# newer push run on main all leave the run as it is. #2018 also permits a first Windows
+# timeout alongside recognized flakes on any OS; a Linux timeout is still refused.
 #
 # Each re-run is logged as a comment on every flake issue it concerned, one line per test in a
 # fixed shape, so the flips of a test are countable from its issue:
@@ -92,7 +93,7 @@ function Invoke-RerunKnownFlakes([long]$RunId, [string]$Repository, [switch]$Dry
     if ($run.path -ne '.github/workflows/ci.yml' -or $run.event -ne 'push' -or $run.head_branch -ne 'main' -or $run.head_repository.full_name -ne $Repository) {
         return [pscustomobject]@{ Rerun = $false; Reason = 'not a push run of ci.yml on main'; Matched = @() }
     }
-    if ($run.conclusion -ne 'failure') { return [pscustomobject]@{ Rerun = $false; Reason = "the run ended $($run.conclusion), not failure"; Matched = @() } }
+    if ($run.conclusion -notin @('failure', 'timed_out')) { return [pscustomobject]@{ Rerun = $false; Reason = "the run ended $($run.conclusion), not failure or timed_out"; Matched = @() } }
     if ($run.run_attempt -ne 1) { return [pscustomobject]@{ Rerun = $false; Reason = "attempt $($run.run_attempt): a run is re-run once"; Matched = @() } }
 
     $newer = (Invoke-Gh api "repos/$Repository/actions/runs?branch=main&event=push&per_page=10" | ConvertFrom-Json).workflow_runs |
@@ -100,8 +101,12 @@ function Invoke-RerunKnownFlakes([long]$RunId, [string]$Repository, [switch]$Dry
     if (@($newer).Count -gt 0) { return [pscustomobject]@{ Rerun = $false; Reason = 'a newer push run of ci.yml exists on main'; Matched = @() } }
 
     $jobs = (Invoke-Gh api "repos/$Repository/actions/runs/$RunId/jobs?per_page=100" | ConvertFrom-Json).jobs
-    if (@($jobs | Where-Object { $_.conclusion -eq 'timed_out' }).Count -gt 0) {
-        return [pscustomobject]@{ Rerun = $false; Reason = 'a job timed out'; Matched = @() }
+    if (@($jobs | Where-Object { $_.conclusion -eq 'cancelled' }).Count -gt 0) {
+        return [pscustomobject]@{ Rerun = $false; Reason = 'a job was cancelled'; Matched = @() }
+    }
+    $timeouts = @($jobs | Where-Object { $_.conclusion -eq 'timed_out' })
+    if (@($timeouts | Where-Object { 'windows-latest' -notin $_.labels -and 'windows-11-arm' -notin $_.labels }).Count -gt 0) {
+        return [pscustomobject]@{ Rerun = $false; Reason = 'a non-Windows job timed out'; Matched = @() }
     }
     $failedByJob = [ordered]@{}
     foreach ($job in @($jobs | Where-Object { $_.conclusion -eq 'failure' -and $_.name -ne $script:GateJob })) {
@@ -109,10 +114,21 @@ function Invoke-RerunKnownFlakes([long]$RunId, [string]$Repository, [switch]$Dry
         $failedByJob[$job.name] = Get-FailedTests $log
     }
     $issues = Invoke-Gh issue list --repo $Repository --label flaky --state open --limit 200 --json 'number,title,body,author' | ConvertFrom-Json
-    $decision = Get-RerunDecision $failedByJob $issues
+    $decision = if ($timeouts.Count -gt 0 -and $failedByJob.Count -eq 0) {
+        [pscustomobject]@{ Rerun = $true; Reason = $null; Matched = @() }
+    } else { Get-RerunDecision $failedByJob $issues }
     if (-not $decision.Rerun -or $DryRun) { return $decision }
 
     Invoke-Gh run rerun $RunId --repo $Repository --failed | Out-Null
+    $evidence = @("Re-ran failed jobs of run $RunId once from attempt=1; GitHub records the next attempt. A repeated failure stays red.")
+    foreach ($job in @($jobs | Where-Object { $_.conclusion -in @('failure', 'timed_out') -and $_.name -ne $script:GateJob })) {
+        $reason = if ($job.conclusion -eq 'timed_out') { 'Windows timeout' }
+            else { 'known flake: ' + (($decision.Matched | Where-Object Job -eq $job.name | ForEach-Object { "$($_.Test) (issue #$($_.Issue))" }) -join '; ') }
+        $evidence += "job=$($job.id) name=$($job.name) attempt=1 reason=$reason"
+    }
+    $record = $evidence -join "`n"
+    Write-Host $record
+    if ($env:GITHUB_STEP_SUMMARY) { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $record }
     $when = Get-Pacific ([datetime]::UtcNow)
     foreach ($group in $decision.Matched | Group-Object Issue) {
         $lines = $group.Group | ForEach-Object { "rerun-known-flakes: test=$($_.Test) run=$RunId attempt=1 job=$($_.Job)" }
@@ -128,7 +144,7 @@ if ($MyInvocation.InvocationName -eq '.') { return }
 if (-not $RunId -or -not $Repository) { throw 'Give -RunId and -Repository (or run in Actions, where GITHUB_REPOSITORY is set).' }
 $result = Invoke-RerunKnownFlakes -RunId $RunId -Repository $Repository -DryRun:$DryRun
 $summary = if ($result.Rerun) {
-    "Known flake: re-run the failed jobs of run $RunId once. " + (($result.Matched | ForEach-Object { "$($_.Test) (issue #$($_.Issue))" }) -join '; ') + $(if ($DryRun) { ' (dry run: nothing re-run)' } else { '' })
+    "Covered failures: re-run the failed jobs of run $RunId once. " + (($result.Matched | ForEach-Object { "$($_.Test) (issue #$($_.Issue))" }) -join '; ') + $(if ($DryRun) { ' (dry run: nothing re-run)' } else { '' })
 } else { "Left as it is: $($result.Reason)." }
 Write-Host $summary
 if ($env:GITHUB_STEP_SUMMARY) { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summary }
