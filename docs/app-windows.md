@@ -30,6 +30,12 @@ shows the window: a start at sign-in or a toast launch leaves it pending for the
 
 ## Decisions
 
+Settings' **Reply box** group offers **Return key in replies**: **New line** (the
+unchanged default, Ctrl+Enter sends) or **Send** (Enter sends, Shift+Enter makes a
+new line, Ctrl+Enter still sends). The choice is local to this device/profile and
+applies immediately, including the Send tooltip and accessible description.
+Enter during IME composition is left to the text control and never sends a reply.
+
 Sent person-message bubbles recognise host-staged attachment references, including earlier
 turns. Images available on a local disk show thumbnails that open a named image viewer;
 missing, oversized and non-image attachments keep filename chips without exposing paths.

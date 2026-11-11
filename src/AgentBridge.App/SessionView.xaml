@@ -1029,7 +1029,8 @@
                                 Style="{StaticResource AccentButtonStyle}"
                                 AutomationProperties.AutomationId="SendReply"
                                 AutomationProperties.Name="Send"
-                                ToolTipService.ToolTip="Send (Ctrl+Enter)"
+                                ToolTipService.ToolTip="{x:Bind Card.ReplySendTooltip, Mode=OneWay}"
+                                AutomationProperties.HelpText="{x:Bind Card.ReplySendTooltip, Mode=OneWay}"
                                 IsEnabled="{x:Bind Card.Reply.SendEnabled, Mode=OneWay, FallbackValue=False}"
                                 Click="OnSendReply">
                                 <!-- Send says how its reply goes (ui.md §5.3, §6.5): the platform's ring in place of

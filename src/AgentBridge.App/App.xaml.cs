@@ -120,6 +120,7 @@ public partial class App : Application
                 ShowMachine = () => self?.ShowMachines == true,
                 ReadOnlyWhy = readOnlyWhy,
                 ShowDetail = () => prefs.ShowDetail,
+                ReturnSends = () => prefs.ReturnSends,
                 Host = conn,
                 Shrinker = shrinker,
                 Blobs = blobs,

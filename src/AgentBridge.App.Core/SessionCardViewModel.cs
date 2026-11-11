@@ -81,8 +81,8 @@ public sealed partial class SessionCardViewModel : Observable
     }
 
     public Session Session => session;
-    public bool ReplyReturnSends(bool ctrl, bool shift, bool composing) => ctrl;
-    public string ReplySendTooltip => "Send (Ctrl+Enter)";
+    public bool ReplyReturnSends(bool ctrl, bool shift, bool composing) => !composing && (ctrl || (ctx.ReturnSends() && !shift));
+    public string ReplySendTooltip => ctx.ReturnSends() ? "Send (Enter)" : "Send (Ctrl+Enter)";
     SessionHistory? stored;
     // The turns the host stores for this session (#292), read as the pane draws them; null with no host to ask.
     public SessionHistory? Stored => stored ??= ctx.Host is { } host ? new SessionHistory(host, session.Id) : null;
