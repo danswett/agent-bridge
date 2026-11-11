@@ -50,7 +50,7 @@ test('Agent error Details shows the cause, type and last activity, then removes 
   await row(page, 'error-quota').click();
   const details = page.locator('#session-views .session-view[data-id="error-quota"]');
   await expect(details.locator('.fact-attention dd')).toHaveText('Copilot returned no response. Sending your message again usually fixes it.');
-  await expect(details.locator('.fact-error-type dd')).toHaveText('query');
+  await expect(details.locator('.fact-error-type dd')).toHaveText('Request');
   await expect(details.locator('.fact-last-activity dd')).toHaveText('3m ago');
   await page.clock.fastForward(60000);
   await expect(details.locator('.fact-last-activity dd')).toHaveText('4m ago');

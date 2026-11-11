@@ -11,7 +11,7 @@ namespace AgentBridge.App.Core;
 // (issue #800, comment 6646501884, with the push amendment 6646515428). A rename is a change here
 // and nowhere else. pwa/js/auth-state.js is its twin, with the same rules.
 //
-//   Session.attention          { kind, since, agent, provider, account, message, errorClass,
+//   Session.attention          { kind, since, agent, provider, account, message, errorClass, errorType,
 //                                retryAt, signIn, recovery, lastEventAt }
 //   capability sessions.signin, ops signin.start and signin.cancel, events signin.code and
 //   signin.done, which come only to the channels in the flow: a device code is never in a
@@ -44,6 +44,7 @@ public static partial class AuthState
 
     static readonly string[] Kinds = [SignInNeeded, Error, NotResponding];
     static readonly string[] ErrorClasses = ["auth", "rate", "quota", "model", "network", "other"];
+    static readonly string[] ErrorTypes = ["query", "execution", "authorization", "session", "other"];
     // pending: signed in, the host not yet sure the session answers (its clear gate). There is no
     // "resumed": the host clears the attention.
     static readonly string[] Recoveries = ["checking", "signingIn", "failed", "pending"];
@@ -171,7 +172,8 @@ public static partial class AuthState
             error ? Time(a, "retryAt") : null,
             signIn && Str(a, "signIn") is "phone" or "machine" ? Str(a, "signIn") : null,
             signIn ? Str(a, "recovery") switch { { } r when Recoveries.Contains(r) => r, { } => "failed", null => null } : null,
-            kind == NotResponding ? Time(a, "lastEventAt") : null);
+            Time(a, "lastEventAt"),
+            Str(a, "errorType") is { } t ? (ErrorTypes.Contains(t) ? t : "other") : null);
     }
 
     // signin.start's result. An outcome this client doesn't know reads as refused: never as started,
@@ -269,7 +271,7 @@ public static partial class AuthState
 // Session.attention as the app uses it (AuthState.ReadAttention). Kind is signInNeeded, error or
 // notResponding; Message the host's sentence for it (AuthState.PlainText), shown in Details only.
 public sealed record Attention(string Kind, DateTimeOffset? Since, AgentKind Agent, string? Account, string? Message,
-    string? ErrorClass, DateTimeOffset? RetryAt, string? SignIn, string? Recovery, DateTimeOffset? LastEventAt);
+    string? ErrorClass, DateTimeOffset? RetryAt, string? SignIn, string? Recovery, DateTimeOffset? LastEventAt, string? ErrorType = null);
 
 // signin.start's result: Outcome is started, busy or refused.
 public sealed record StartResult(string Outcome, string? Flow, string? Reason);

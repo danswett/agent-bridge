@@ -60,9 +60,9 @@ export function detailRows(s, { status = null, machine = null, away = false, now
   // where it would count up for a session nobody can see (§6.2). The offline words' "last seen" is
   // the only time in the state group then.
   add('In this state', away || state.view === 'idle' ? null : `for ${duration(s.statusSince, now)}`, 'since');
-  add('Error type', s.attention?.errorType, 'error-type');
+  add('Error type', s.attention?.kind === 'error' && s.attention.errorType ? { query: 'Request', execution: 'Execution', authorization: 'Authorization', session: 'Session', other: 'Other' }[s.attention.errorType] ?? 'Other' : null, 'error-type');
   add('Message', s.attention?.message, 'attention');
-  add('Last activity', s.attention?.kind === 'error' || s.attention?.kind === 'signInNeeded' ? ago(s.attention.lastEventAt, now) : null, 'last-activity');
+  add('Last activity', !away && s.attention?.kind === 'error' ? ago(s.attention.lastEventAt, now) : null, 'last-activity');
   add('Not responding since', away ? null : clockTime(silentSince(s)), 'silent');
   add('Driven by', state.driven && !away ? (s.driverPrincipal || 'an agent') : null, 'driver');
   add('Agent', { copilot: 'Copilot', claude: 'Claude', codex: 'Codex' }[s.agent] ?? 'Agent', 'agent');

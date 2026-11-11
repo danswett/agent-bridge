@@ -1,7 +1,7 @@
 // An agent that needs sign-in, whose turn ended on an error, or that has stopped answering (#800):
 // every protocol name for it, read in this one file, as Connection's producer contract has them
 // (issue #800, comment 6646501884, with the push amendment 6646515428). A rename is a change here
-// and nowhere else. The app's twin is src/AgentBridge.App.Core/AuthState.cs.
+// and nowhere else. Keep attention fields in sync with src/AgentBridge.App.Core/AuthState.cs.
 //
 //   Session.attention          { kind, since, agent, provider, account, message, errorClass, errorType,
 //                                retryAt, signIn, recovery, lastEventAt }

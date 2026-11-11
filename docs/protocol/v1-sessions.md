@@ -2020,13 +2020,6 @@ is why a `finished` push waits 3 s and is withdrawn once the `attention` comes.
 `message` comes from one table (`AgentErrors.Template`), with the agent's name and the status
 code when it is an HTTP status (100 to 599):
 
-For exactly `errorType: "query"` and the complete message
-`"No response was returned. Send your message again to retry."`, the host recognises an empty
-response (`AgentErrors.IsEmptyResponse`) and sends its own fixed template:
-"Copilot returned no response. Sending your message again usually fixes it."
-Near-matches and other types keep the generic template; no arbitrary agent text is copied.
-PWA Details shows the optional Error type, Message and Last activity age. No error adds no rows.
-
 | `kind` / `errorClass` | `message` |
 |---|---|
 | `signInNeeded` | "*Agent* needs you to sign in again (*status*)." |
@@ -2037,6 +2030,13 @@ PWA Details shows the optional Error type, Message and Last activity age. No err
 | `error` / `network` | "*Agent* couldn't reach its service (*status*)." |
 | `error` / `other` | "*Agent* stopped with an error (*status*)." |
 | `notResponding` | "*Agent* isn't responding." |
+
+For exactly `errorType: "query"` with no `statusCode` or `remediation`, and the complete message
+`"No response was returned. Send your message again to retry."`, the host recognises an empty
+response (`CopilotTurnErrors.CanRetry`) and sends its own fixed template:
+"Copilot returned no response. Sending your message again usually fixes it."
+Other errors keep their class template; no arbitrary agent text is copied.
+Details shows optional Error type, Message and Last activity age. The new rows appear only for errors.
 
 Copilot CLI follows the error that ends a turn with a notice of its own, an `assistant.message`
 that starts "⚠️ Turn error:" and quotes the error's words. Those words can hold a credential, a

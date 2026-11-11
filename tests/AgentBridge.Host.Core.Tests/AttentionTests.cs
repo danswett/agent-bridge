@@ -59,16 +59,17 @@ public class AttentionTests
     }
 
     [Theory]
-    [InlineData("query", "No response was returned. Send your message again to retry. fake-private-value")]
-    [InlineData("query", "fake-private-value")]
-    [InlineData("fake-private-value", "No response was returned. Send your message again to retry.")]
-    public async Task An_unknown_cause_never_copies_arbitrary_error_text_or_type(string type, string message)
+    [InlineData("query", "No response was returned. Send your message again to retry. fake-private-value", null, "Copilot stopped with an error.")]
+    [InlineData("query", "fake-private-value", null, "Copilot stopped with an error.")]
+    [InlineData("fake-private-value", "No response was returned. Send your message again to retry.", null, "Copilot stopped with an error.")]
+    [InlineData("query", "No response was returned. Send your message again to retry.", 429, "Copilot hit a rate limit (429).")]
+    public async Task A_nonretryable_cause_never_copies_arbitrary_error_text_or_type(string type, string message, int? status, string expected)
     {
         await using var s = new Session_();
-        var session = await s.After(Error(new { errorType = type, message }, 3));
+        var session = await s.After(Error(new { errorType = type, message, statusCode = status }, 3));
         var json = System.Text.Json.JsonSerializer.Serialize(session.Attention, ProtocolJson.Options);
         Assert.DoesNotContain("fake-private-value", json);
-        Assert.Equal("Copilot stopped with an error.", session.Attention?.Message);
+        Assert.Equal(expected, session.Attention?.Message);
     }
 
     [Fact]

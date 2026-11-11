@@ -117,7 +117,9 @@ public sealed partial class SessionCardViewModel
         // What the agent said went wrong (#800): plain text, revealed and cut short by AuthState,
         // never a link, and only here, never on its row.
         // The host's sentence for what is wrong (6649775484), as it is: never the agent's own text.
+        if (AuthState.Of(session) is { Kind: AuthState.Error, ErrorType: { } type }) { rows.Add(new("Error type", type switch { "query" => "Request", "execution" => "Execution", "authorization" => "Authorization", "session" => "Session", _ => "Other" })); }
         if (AuthState.Of(session)?.Message is { Length: > 0 } said) { rows.Add(new("Message", said)); }
+        if (Line.Rule != StatusRules.Away && AuthState.Of(session) is { Kind: AuthState.Error, LastEventAt: { } last }) { rows.Add(new("Last activity", Words.Ago(last, now))); }
         // Not responding: the time it went silent, which the row's age counts from (ui.md §6.13).
         if (AuthState.Clock(SilentSince) is { } silent) { rows.Add(new("Not responding since", silent)); }
         if (Driven) { rows.Add(new("Driven by", DriverPrincipal ?? "an agent")); }
