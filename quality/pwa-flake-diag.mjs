@@ -1,5 +1,5 @@
 // Throwaway diagnostic branch only: preserve assertions and collect internal ordering.
-import { readFileSync, writeFileSync, mkdirSync, copyFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
 import { availableParallelism } from 'node:os';
@@ -18,7 +18,7 @@ patch('js/ui/sessions-page.js', '    const grace = hosts.grace;', `    const gra
 patch('js/ui/session-card.js', '  #wantEarlier() {', `  #wantEarlier() { ${log('history.want', 'id: this.#s.id, held: this.historyStore.get(this.hostId, this.#s.id).turns.length, pending: this.turns.pending, asked: this.#earlierAsked')}`);
 patch('js/ui/session-card.js', '  #nearTop() {', `  #nearTop() { ${log('history.nearTop', 'id: this.#s.id, top: this.els.scroll.scrollTop, pending: this.turns.pending')}`);
 patch('js/ui/session-card.js', '  #bringQuestion(atEnd) {', `  #bringQuestion(atEnd) { ${log('question.bring', 'id: this.#s.id, atEnd, touches: this.#touches, pressing: this.#pressing, hovering: this.#hovering, selected: this.#selected, top: this.els.scroll.scrollTop')}`);
-patch('js/ui/session-card.js', '  #reading() {', `  #reading() { ${log('question.reading', 'id: this.#s.id, reading: this.#follow.reading, top: this.els.scroll.scrollTop')}`);
+patch('js/ui/session-card.js', '  #reading() {', `  #reading() { ${log('question.reading', 'id: this.#s?.id, reading: this.#follow.reading, top: this.els.scroll.scrollTop')}`);
 patch('js/ui/history-view.js', '  #drawSlice() {', `  #drawSlice() { ${log('history.slice', 'backlog: this.#backlog.length, drawn: this.#drawn.size')}`);
 patch('js/history-store.js', '  #emit(e, kind, before = e.turns) {',
   `  #emit(e, kind, before = e.turns) { ${log('store.emit', 'id: e.sessionId, kind, held: e.turns.length, loading: e.loading, before: e.before, phase: e.phase, error: e.error')}`);
@@ -43,15 +43,16 @@ if (process.env.DIAG_LOAD === 'loaded') {
   }
 }
 const cases = [
-  ['1493', 'return.spec.mjs', 'a machine that goes away|focus on the sort control|a lane entry held', 20],
-  ['1936', 'history-perf.spec.mjs', 'a person who scrolled up', 10],
-  ['1938', 'motion.spec.mjs', 'where the reader is is read', 20],
+  ['smoke', ['return.spec.mjs', 'history-perf.spec.mjs', 'motion.spec.mjs'], 'a lane entry held|a person who scrolled up|where the reader is is read', 1],
+  ['1493', ['return.spec.mjs'], 'a machine that goes away|focus on the sort control|a lane entry held', 20],
+  ['1936', ['history-perf.spec.mjs'], 'a person who scrolled up', 10],
+  ['1938', ['motion.spec.mjs'], 'where the reader is is read', 20],
 ];
 let broken = false;
 try {
-  for (const [issue, file, grep, repeats] of cases) {
+  for (const [issue, files, grep, repeats] of cases) {
     const report = `diag-output/${issue}-report.json`;
-    const args = ['node_modules/@playwright/test/cli.js', 'test', file, '--project', process.env.DIAG_BROWSER,
+    const args = ['node_modules/@playwright/test/cli.js', 'test', ...files, '--project', process.env.DIAG_BROWSER,
       '--grep', grep, '--repeat-each', String(repeats), '--workers=2', '--fully-parallel', '--retries=0', '--reporter=list,json'];
     const result = spawnSync(process.execPath, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
       env: { ...process.env, PLAYWRIGHT_JSON_OUTPUT_NAME: report } });
@@ -59,6 +60,7 @@ try {
     writeFileSync(`diag-output/${issue}-stderr.log`, result.stderr ?? '');
     console.log(JSON.stringify({ issue, args, exit: result.status, error: result.error?.message }));
     if (result.error || result.status === null) { throw result.error ?? new Error('Runner terminated'); }
+    if (existsSync('diag-output/page-errors.log')) { throw new Error('Page error invalidates diagnostics: see page-errors.log'); }
     if (result.status > 1) { broken = true; }
     if (!readFileSync(report, 'utf8').includes('"suites"')) { throw new Error('Missing test report'); }
   }

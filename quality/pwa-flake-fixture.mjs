@@ -1,5 +1,5 @@
 import { test as base, expect } from '@playwright/test';
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, appendFileSync } from 'node:fs';
 
 export { expect };
 export const test = base.extend({
@@ -36,7 +36,10 @@ export const test = base.extend({
         return result;
       };
     }
-    page.on('pageerror', (err) => console.error(`PAGEERROR ${err.stack}`));
+    page.on('pageerror', (err) => {
+      console.error(`PAGEERROR ${err.stack}`);
+      appendFileSync('diag-output/page-errors.log', `${info.title}: ${err.stack}\n`);
+    });
     await use();
     await snapshot('final');
     const events = await page.evaluate(() => window.__diagEvents ?? []);
