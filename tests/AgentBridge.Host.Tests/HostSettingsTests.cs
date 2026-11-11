@@ -221,6 +221,25 @@ public sealed class HostSettingsTests : IDisposable
 
     string Said = "";
 
+    [Theory]
+    [InlineData("""{"load":false}""", "load is not an object")]
+    [InlineData("""{"load":{"enabled":"true"}}""", "load.enabled is not true or false")]
+    public void An_unreadable_load_setting_is_reported_instead_of_sending_load(string text, string why)
+    {
+        Assert.Contains(why, With(text).Problem);
+    }
+
+    [Fact]
+    public void A_person_can_turn_relay_load_off_and_unset_it_without_changing_other_settings()
+    {
+        With("""{"push":{"enabled":false}}""");
+        Assert.Equal(0, Run("config", "set", "load.enabled", "false"));
+        Assert.Equal(1, Run("config", "set", "load.enabled", "yes"));
+        Assert.Contains("Not written", Said);
+        Assert.False(HostSettings.Load(folder).Settings.Push);
+        Assert.Equal(0, Run("config", "unset", "load.enabled"));
+    }
+
     [Fact]
     [Trait("Category", "Process")]
     public void A_workspace_is_approved_at_the_machine_with_the_cli_and_removed_the_same_way()
