@@ -40,7 +40,7 @@ internal sealed class RetryEpisode
         age = initial is null ? TimeSpan.Zero : time.GetUtcNow() - initial.ErrorAt;
         if (initial is not null && (!initial.CanReply || initial.Process.Id <= 0 || initial.Process.StartedAt is null || !CopilotTurnErrors.CanRetry(initial.Error)))
             End(RetryStop.Ineligible);
-        else Check();
+        else Check(observe(), replier.Available);
     }
 
     public int NextAttempt { get { lock (sync) return attempts.Count + 1; } }
@@ -53,10 +53,13 @@ internal sealed class RetryEpisode
         if (request == Guid.Empty) throw new ArgumentException("Request must be nonempty.", nameof(request));
         if (!Enum.IsDefined(reason)) throw new ArgumentOutOfRangeException(nameof(reason));
         if (cancellation.IsCancellationRequested) { Cancel(); cancellation.ThrowIfCancellationRequested(); }
+        lock (sync) { if (sending || stop != RetryStop.None) return false; }
+        var current = observe();
+        var available = replier.Available;
         int index;
         lock (sync)
         {
-            if (sending || !Check() || stop != RetryStop.None) return false;
+            if (sending || !Check(current, available) || stop != RetryStop.None) return false;
             if (cancellation.IsCancellationRequested)
             {
                 End(RetryStop.Cancelled);
@@ -75,6 +78,7 @@ internal sealed class RetryEpisode
             var result = await replier.ReplyAsync(new ReplyRequest
             {
                 Id = session.ToString("D"), Request = request.ToString("D"), Text = "continue", RequireIdle = true,
+                StillCurrent = () => Current(index + 1, cancellation),
             }, cancellationToken: cancellation).ConfigureAwait(false);
             lock (sync)
             {
@@ -102,15 +106,27 @@ internal sealed class RetryEpisode
 
     TimeSpan Elapsed => age + time.GetElapsedTime(started);
 
-    bool Check()
+    bool Current(int attempt, CancellationToken cancellation)
+    {
+        lock (sync) { if (!sending || stop != RetryStop.None || attempts.Count != attempt) return false; }
+        var current = observe();
+        var available = replier.Available;
+        lock (sync)
+        {
+            if (!sending || attempts.Count != attempt) return false;
+            if (cancellation.IsCancellationRequested) return End(RetryStop.Cancelled);
+            return Check(current, available);
+        }
+    }
+
+    bool Check(RetryObservation? current, bool available)
     {
         if (stop != RetryStop.None) return false;
         if (age < TimeSpan.Zero) return End(RetryStop.Ineligible);
         if (Elapsed >= TimeSpan.FromMinutes(5)) return End(RetryStop.Expired);
-        var current = observe();
         if (initial is null || current is null || current.Process != initial.Process || current.ActivityVersion != initial.ActivityVersion)
             return End(RetryStop.Changed);
-        if (!current.CanReply || !replier.Available || !CopilotTurnErrors.CanRetry(current.Error))
+        if (!current.CanReply || !available || !CopilotTurnErrors.CanRetry(current.Error))
             return End(RetryStop.Ineligible);
         if (Elapsed >= TimeSpan.FromMinutes(5)) return End(RetryStop.Expired);
         return true;

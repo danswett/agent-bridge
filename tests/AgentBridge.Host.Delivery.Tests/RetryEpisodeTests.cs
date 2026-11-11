@@ -231,6 +231,38 @@ public sealed class RetryEpisodeTests
     }
 
     [Fact]
+    public async Task A_replier_throwing_cancellation_ends_the_episode_and_releases_no_new_attempt()
+    {
+        var h = new Harness { Failure = new OperationCanceledException() };
+        await Assert.ThrowsAsync<OperationCanceledException>(() => h.Send(RetryReason.Owner));
+        Assert.Equal(RetryStop.Cancelled, h.Episode.Stop);
+        Assert.False(await h.Send(RetryReason.Owner));
+        Assert.Single(h.Requests);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Observe_and_available_allow_another_thread_to_cancel_without_holding_the_episode_lock(bool availability, bool fence)
+    {
+        var h = new Harness { Pending = new() };
+        var send = fence ? h.Send(RetryReason.Owner) : null;
+        Action cancel = () => Assert.True(Task.Run(h.Episode.Cancel).Wait(TimeSpan.FromSeconds(10)));
+        h.OnObservation = availability ? null : cancel;
+        h.OnAvailability = availability ? cancel : null;
+        if (fence)
+        {
+            Assert.False(Assert.Single(h.Requests).StillCurrent!());
+            h.Pending.SetResult(new(AnswerOutcome.Delivered));
+            Assert.True(await send!);
+        }
+        else { Assert.False(await h.Send(RetryReason.Owner)); }
+        Assert.Equal(RetryStop.Cancelled, h.Episode.Stop);
+    }
+
+    [Fact]
     public async Task Outcomes_are_visible_but_replier_reasons_and_exception_text_never_enter_retry_records_or_logs()
     {
         var h = new Harness { Outcome = new(AnswerOutcome.Unconfirmed, "private-canary") };
