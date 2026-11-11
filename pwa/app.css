@@ -104,6 +104,12 @@ body {
   background: var(--ab-shell);
   color: var(--ab-text);
 }
+/* Lock an open session's page, not the phone's other routes or their pull-to-refresh. */
+:root:has(body[data-page="sessions"][data-session-open="true"]),
+body[data-page="sessions"][data-session-open="true"] {
+  height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: none;
+}
+body[data-page="sessions"][data-session-open="true"] .shell { height: 100vh; height: 100dvh; overflow: hidden; }
 
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
@@ -1122,7 +1128,7 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 
 /* ---- the conversation (ui.md §6.4) ---- */
 .conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.stream-scroll { flex: 1; min-height: 0; overflow: auto; padding: var(--ab-space-6); }
+.stream-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--ab-space-6); }
 /* The reading measure: about 68 characters, a step larger than the UI around it. */
 .stream {
   max-width: 770px; margin: 0 auto; display: grid; gap: var(--ab-space-6);
