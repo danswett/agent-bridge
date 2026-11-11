@@ -751,7 +751,7 @@ suites:
     runner: hosted
     # The download every job that runs `playwright install --with-deps` makes first (#799, #689):
     # against stand-ins for npx, sudo and apt-get, it leaves the Azure mirror for Canonical's
-    # archive at the time limit or after DNS/connection retries; other apt failures still fail.
+    # archive on Azure DNS/update timeout or exhausted network retries; package errors fail at once.
     triggers: [.github/actions/playwright-system-packages/**]
     command: bash .github/actions/playwright-system-packages/test.sh
     where: ci.yml light

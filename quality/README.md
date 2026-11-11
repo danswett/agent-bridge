@@ -398,12 +398,15 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      `.github/actions/playwright-system-packages`, and if apt's first mirror hasn't finished in
      five minutes it fetches the rest from the runner's Canonical fallback,
      `https://archive.ubuntu.com` (main run 41927187905 lost a WebKit shard to that mirror at
-     100 kB/s, and main run 41952998347 `pwa-e2e`). A download's DNS or connection failure
-     gets three attempts, waiting 5 then 20 seconds; if all fail, the same mirror switch
-     gives Canonical one download attempt, whose failure fails the step with the attempt log.
-     Missing, corrupt or unrecognized package errors are not retried or sent to another mirror,
-     even alongside a network error (#2025; outage runs 43039845647 and 43039976393).
-     The five-minute timeout path and forced-proof checks below are unchanged.
+     100 kB/s, and main run 41952998347 `pwa-e2e`). Before updating apt, a five-second Azure
+     DNS probe switches immediately if lookup fails; an Azure DNS error during update or
+     download also switches without backoff. An update timeout now switches rather than
+     repeating the same mirror. Classified connection/5xx failures get three attempts,
+     waiting 5 then 20 seconds, before switching. Canonical gets the same bounded network
+     retries, then fails loudly with the attempt log; it never switches back to Azure.
+     Missing, corrupt or unrecognized errors fail at once, even alongside network errors
+     (#2025; outage runs 43039845647 and 43039976393). The install timeout path and
+     forced-proof checks below are unchanged.
      Each of those jobs gets 35 minutes, so a
      fallback download still leaves time for the tests; the browsers' own download, on a cache
      miss, is unchanged. To prove that fallback once without waiting for a slow mirror, once this
