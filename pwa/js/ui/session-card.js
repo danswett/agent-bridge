@@ -438,6 +438,7 @@ export class SessionCard {
   #arrival = null;
   #history = { loaded: false, loading: false };
   #panel = null;
+  #askingTurns = new WeakMap();
   #receipt = null;
   // Closed records keep their question's place, including when another question arrives.
   #closed = [];
@@ -787,6 +788,13 @@ export class SessionCard {
     const first = this.#s === null;
     // Whether the conversation is read to its end, before this update draws anything into it.
     const atEnd = this.#reading();
+    if (this.#panel && this.#panel.questionId !== s.question?.id) {
+      const asking = this.#askingTurns.get(this.#panel.q);
+      if (asking) { asking.closedPage ??= this.#historyPage; }
+    }
+    if (this.#receipt && this.#s?.question?.id === this.#receipt.questionId && s.question?.id !== this.#receipt.questionId) {
+      this.#receipt.page = this.#historyPage;
+    }
     this.#s = s;
     this.historyStore?.live(this.hostId, s);
     if (this.#unwatch) { this.#drawTurns(); }
@@ -1484,6 +1492,7 @@ export class SessionCard {
   // session is shown. It opens at the latest message:   kept at the end while it fills, until the
     // person scrolls.
   #unwatch = null;
+  #historyPage = 0;
   #follow;
   #placed = false;
 
@@ -1510,7 +1519,10 @@ export class SessionCard {
       this.#sticking();
       if (performance.now() - gestureAt < 1000) { this.#nearTop(); }
     }, { passive: true });
-    this.#unwatch = this.historyStore.watch(this.hostId, this.#s.id, () => this.#drawTurns());
+    this.#unwatch = this.historyStore.watch(this.hostId, this.#s.id, (_snapshot, change) => {
+      if (change.kind === 'newest') { this.#historyPage++; }
+      this.#drawTurns();
+    });
     this.historyStore.open(this.hostId, this.#s.id, { session: this.#s }).catch(() => {});
     this.#drawTurns();
   }
@@ -1558,6 +1570,16 @@ export class SessionCard {
   #drawTurns() {
     const full = this.historyStore.get(this.hostId, this.#s.id);
     const kept = this.#trimClosed(full.turns);
+    const local = [...this.#closed, this.#receipt].filter((r) => r?.closed);
+    const questionIds = (turns) => new Set(turns.flatMap((t) => t.parts.filter((p) => p.kind === 'question' && p.question).map((p) => p.question.id)));
+    const recorded = questionIds(full.turns);
+    // A held asking turn can host its local receipt until a newer page confirms its parts.
+    const turns = full.turns.map((t) => {
+      const parts = local.filter((r) => r.turn === t.id && !recorded.has(r.questionId)
+        && (t.provisional || (this.#historyPage <= r.page && (r !== this.#receipt || !this.#s.question))))
+        .map((r) => ({ kind: 'question', question: r.question, at: r.at }));
+      return parts.length ? { ...t, parts: [...t.parts, ...parts] } : t;
+    });
     this.#renderMessageTimes(full);
     const slot = this.els.question;
     if (this.#s.question) { this.#slotQuestion = this.#s.question.id; } else if (!slot.hasChildNodes()) { this.#slotQuestion = null; }
@@ -1566,13 +1588,24 @@ export class SessionCard {
     const records = new Map(this.#closed.map((r) => [r.questionId, r.element]));
     if (this.#receipt && this.#s.question && this.#receipt.questionId !== this.#s.question.id) { records.set(this.#receipt.questionId, this.#receipt.element); }
     const inline = { slot, questionId: this.#slotQuestion, activeId: this.#s.question?.id, records, kept };
-    const snapshot = this.#follow.snapshot(full, inline);
-    const shown = snapshot.more && this.#atCap(full) ? { ...snapshot, more: false, start: { limited: true } } : snapshot;
-    const drawn = this.turns.render(shown, this.#follow.shown?.activity.turn ?? null, inline);
+    const current = this.#follow.snapshot({ ...full, turns }, inline);
+    const snapshot = current.more && this.#atCap(full) ? { ...current, more: false, start: { limited: true } } : current;
+    // A scrolled reader keeps frozen message content, but not a stale question placement.
+    const shown = snapshot.turns.map((t) => {
+      const source = turns.find((x) => x.id === t.id);
+      const parts = source?.parts.filter((p) => p.kind === 'question' && local.some((r) => r.questionId === p.question?.id)
+        && !t.parts.some((q) => q.kind === 'question' && q.question?.id === p.question.id)) ?? [];
+      return parts.length ? { ...t, parts: [...t.parts, ...parts] } : t;
+    });
+    const drawn = this.turns.render({ ...snapshot, turns: shown }, this.#follow.shown?.activity.turn ?? null, inline);
     this.#syncStoredLatest();
     // Not in a turn (none holds it, or the history is not drawn): back where the live exchange ends.
     const questionHost = this.#follow.questionHost ?? this.els.stream;
     if (!this.turns.hosted && !this.#follow.hosted) { this.#follow.place(slot, questionHost); }
+    if (full.phase === 'ready' && !full.loading && !full.error) {
+      const placed = questionIds(turns);
+      for (const r of local) { if (this.#historyPage > r.page && !placed.has(r.questionId)) { r.element.remove(); } }
+    }
     this.#syncWaiting();
     // Chromium anchors to the old live stream while its stored replacement is inserted above it.
     if (readAt !== null && this.turns.latest) {
@@ -1739,6 +1772,7 @@ export class SessionCard {
         listed: () => this.#s?.question?.id === q.id,
         escaped: escapedMode ? { mode: escapedMode === 'confirm' && !ctx.confirm ? 'device' : escapedMode, sign: ctx.confirm ?? null, title: s.title ?? null } : null,
       });
+      this.#askingTurns.set(q, (sameQuestion ? this.#askingTurns.get(old.q) : null) ?? { turn: s.activity.turn ?? null, closedPage: null });
       this.#panel.setHeld(held);
       view = this.#panel.element;
     } else if (q) {
@@ -2040,7 +2074,8 @@ export class SessionCard {
       heard: () => drawn(live),
       follow: (fn) => service.watch(hostId, sessionId, questionId, fn),
     });
-    const receipt = { questionId, question, at: new Date().toISOString(), element, line, final: false, closed: false, collapsed: false, unwatch: null, fresh: true, clock, redraw: null };
+    const asking = this.#askingTurns.get(question);
+    const receipt = { questionId, question, turn: asking?.turn ?? null, page: asking?.closedPage ?? this.#historyPage, at: new Date().toISOString(), element, line, final: false, closed: false, collapsed: false, unwatch: null, fresh: true, clock, redraw: null };
     const show = (entry) => {
       if (!entry && this.#s?.question?.id !== questionId) { entry = { state: 'done', outcome: 'stale' }; }
       if (!entry) { return; }
