@@ -188,6 +188,37 @@ test('installed iPhone notices precede the composer in DOM and accessibility ord
   }))).toEqual({ same: true, moved: false, announcements: ['Sending reply'] });
 });
 
+test('installed iPhone landscape connection news stays visible above the pane', async ({ page }, info) => {
+  const v = await installed(page);
+  await page.setViewportSize({ width: 844, height: 390 });
+  await v.getByRole('textbox', { name: 'Reply', exact: true }).fill('Reply');
+  for (const conn of ['busy', 'warn', 'bad']) {
+    await page.evaluate((conn) => { document.body.dataset.conn = conn; }, conn);
+    for (const [height, top] of [[390, 0], [260, 80]]) {
+      await viewport(page, { height, top, safe: 21 });
+      await expect(page.locator('.appbar')).toBeVisible();
+      const bar = await page.locator('.appbar').boundingBox(), pane = await page.locator('.session-pane').boundingBox();
+      expect(pane.y).toBeCloseTo(bar.y + bar.height, 1);
+      await check(page, v, { keyboard: height < 390, safe: 21 }, info);
+    }
+  }
+});
+
+test('tapping the installed iPhone landscape bar title restores the header without moving the conversation', async ({ page }) => {
+  const v = await installed(page), scroller = v.locator('.stream-scroll');
+  await page.setViewportSize({ width: 844, height: 390 });
+  await viewport(page, { height: 390, safe: 21 });
+  await scroller.evaluate((sc) => { sc.scrollTop = 0; }); await motionsDone(page);
+  await scroller.evaluate((sc) => { sc.dispatchEvent(new WheelEvent('wheel', { deltaY: 300, bubbles: true })); sc.scrollTo({ top: 300, behavior: 'instant' }); });
+  await expect(v).toHaveAttribute('data-titled', '');
+  const title = v.locator('.bar-title-text');
+  expect(await title.evaluate((el) => getComputedStyle(el).pointerEvents)).toBe('auto');
+  await title.tap();
+  await expect.poll(() => v.locator('.session-top').evaluate((el) => el.style.getPropertyValue('--ty'))).toBe('0px');
+  expect(await scroller.evaluate((sc) => sc.scrollTop)).toBe(300);
+  await expect(v.locator('.bar-title')).toBeHidden();
+});
+
 test('the installed iPhone landscape More menu keeps its actions tappable', async ({ page }) => {
   const v = await installed(page);
   await page.setViewportSize({ width: 844, height: 390 });

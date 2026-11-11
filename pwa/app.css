@@ -2011,6 +2011,8 @@ summary {
   :root[data-platform="ios"][data-standalone="true"] body:not([data-session-open="true"]) .session-pane,
   :root[data-platform="ios"][data-standalone="true"] body[data-session-open="true"] .list-pane { display: none; }
   :root[data-platform="ios"][data-standalone="true"] body[data-session-open="true"] .appbar { display: none; }
+  :root[data-platform="ios"][data-standalone="true"] body[data-session-open="true"]:is([data-conn="busy"], [data-conn="warn"], [data-conn="bad"]) .appbar { display: flex; position: fixed; top: var(--phone-view-top, 0px);
+    left: 0; right: 0; height: calc(var(--appbar) + var(--safe-top)); }
   :root[data-platform="ios"][data-standalone="true"] .session-view { position: relative; grid-template-rows: minmax(0, 1fr); }
   :root[data-platform="ios"][data-standalone="true"] .session-view > .view-body { grid-row: 1; }
   :root[data-platform="ios"][data-standalone="true"] .session-head { display: block; position: absolute; inset: 0 0 auto; z-index: 2; pointer-events: none; }
@@ -2023,6 +2025,8 @@ summary {
   :root[data-platform="ios"][data-standalone="true"] .stream-scroll > :last-child { padding-bottom: calc(var(--foot-h, 0px) + var(--ab-space-4)); }
   :root[data-platform="ios"][data-standalone="true"] .session-bar { display: flex; position: absolute; inset: 0 0 auto; min-height: 48px; justify-content: space-between; pointer-events: none; z-index: 1; }
   :root[data-platform="ios"][data-standalone="true"] .session-bar > :is(.icon-button, .row-menu) { pointer-events: auto; }
+  :root[data-platform="ios"][data-standalone="true"] .bar-title { opacity: 0; visibility: hidden; pointer-events: none; }
+  :root[data-platform="ios"][data-standalone="true"] .session-view[data-titled] .bar-title { opacity: 1; visibility: visible; pointer-events: auto; }
   :root[data-platform="ios"][data-standalone="true"] .inspector { padding-top: calc(var(--head-h, 0px) + var(--ab-space-4)); scroll-padding-top: calc(var(--head-h, 0px) + var(--ab-space-2)); }
   :root[data-platform="ios"][data-standalone="true"] .session-header { padding-inline: calc(var(--tap) + var(--ab-space-2)); }
   :root[data-platform="ios"][data-standalone="true"] .reply-box { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: end; padding: 2px var(--ab-space-1) 3px; }
