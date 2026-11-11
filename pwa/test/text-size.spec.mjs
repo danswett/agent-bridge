@@ -118,10 +118,13 @@ test.describe('a narrow phone', () => {
       const title = await box('.page-title');
       const lineHeight = await page.locator('#sessions-h').evaluate((e) => parseFloat(getComputedStyle(e).lineHeight));
       expect(title.height).toBeLessThanOrEqual(lineHeight + 1);
-      const sort = await box('.sort');
+      const sortButton = page.getByRole('button', { name: 'Sort sessions', exact: true });
+      const sort = await sortButton.boundingBox();
       const search = await box('.search-open');
-      expect(await page.locator('.sessions-head .sort').evaluate((e) => e.scrollWidth <= e.clientWidth + 1)).toBe(true);
-      expect(sort.width).toBeGreaterThanOrEqual(48);
+      expect(await sortButton.evaluate((e) => e.scrollWidth <= e.clientWidth + 1)).toBe(true);
+      expect(sort.width).toBe(44);
+      expect(sort.height).toBe(44);
+      await expect(sortButton).toBeInViewport({ ratio: 1 });
       expect(search.x).toBeGreaterThanOrEqual(sort.x + sort.width - 1);
       expect(title.x + title.width).toBeLessThanOrEqual(sort.x + 1);
     });
