@@ -211,6 +211,17 @@
             <button type="button" class="toggle" data-text-size="larger" aria-pressed="false">Larger</button>
           </div>
         </section>
+        <section class="panel" aria-labelledby="reply-box-h">
+          <h3 id="reply-box-h">Reply box</h3>
+          <div id="reply-return" role="group" aria-labelledby="reply-return-h">
+            <h4 id="reply-return-h">Return key in replies</h4>
+            <p class="note">On this device only.</p>
+            <div class="row"><button type="button" class="toggle" data-reply-return="newline" aria-pressed="true" aria-describedby="reply-return-newline-help">New line</button><p class="note" id="reply-return-newline-help"></p></div>
+            <div class="row"><button type="button" class="toggle" data-reply-return="send" aria-pressed="false" aria-describedby="reply-return-send-help">Send</button><p class="note" id="reply-return-send-help"></p></div>
+            <p class="note" id="reply-return-phone" hidden>On a phone the Return key always makes a new line. Use the Send button.</p>
+            <p class="note warn" role="status" hidden></p>
+          </div>
+        </section>
         <section class="panel keyboard-help" aria-labelledby="keyboard-help-h">
           <h3 id="keyboard-help-h">Keyboard shortcuts</h3>
           <div class="row"><button type="button" id="keyboard-shortcuts-open" class="button secondary" aria-haspopup="dialog">Keyboard shortcuts</button></div>

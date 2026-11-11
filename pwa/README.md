@@ -599,6 +599,11 @@ span in a sentence this way, and NEL and the separators in prose.
 
 ## Tests
 
+Settings > Reply box keeps Return key in replies on this device only (#1877): New line
+is the default; Send uses Return, with Shift+Return for a new line. Ctrl/Cmd+Return
+still sends, IME never sends, and phone-size touch Return always makes a new line.
+`test/reply-return.spec.mjs` covers both choices, persistence, shortcuts and touch.
+
 The session row menu (#1580, #1209 rule 3) shows Alt+Up/Down as trailing arrow-key
 hints, described separately from each item's name. Hints hide only with no hover,
 a coarse pointer and no keydown since page load. Disabled moves stay visible and

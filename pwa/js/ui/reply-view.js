@@ -20,7 +20,7 @@ import { utf8Bytes } from '../answers.js';
 import { ReplyLimits, checkReply, replyRequest } from '../replies.js';
 import { AttachmentLimits, describeSize, prepareAttachment } from '../attachments.js';
 import { CANCELLED } from '../reply-service.js';
-import { isSendKey, shortcutHints } from '../platform.js';
+import { replyReturnSends, replyReturnHint } from './reply-return.js';
 import { ReceiptClock, describeInFlight, drawReceipt, drawn, dropCheck, holdCheck, receiptLive } from './receipt.js';
 import { PHONE } from './collapse-header.js';
 import { UPDATING, holdOf } from './hold.js';
@@ -143,6 +143,10 @@ export class ReplyBox {
   #onGoToQuestion = null;
   // Told whenever the box's words or state are drawn again (a phone's compact copy of them).
   #onChange = null;
+  #onReturn = () => {
+    this.els.send.title = replyReturnHint();
+    this.els.send.setAttribute('aria-description', replyReturnHint());
+  };
 
   // replying: { service, hostId, sessionId }. attach: whether the machine takes files.
   // largeMax: the largest it takes through the blob store, 0 for none. onGoToQuestion: the
@@ -164,6 +168,8 @@ export class ReplyBox {
       if (doc.visibilityState === 'hidden') { this.els.input.blur(); }
     }, { signal });
     doc.defaultView.addEventListener('pagehide', () => this.els.input.blur(), { signal });
+    this.#onReturn();
+    doc.defaultView.addEventListener('reply-return-change', this.#onReturn, { signal });
     this.#place();
     this.#phone?.addEventListener('change', this.#onPhone);
     // The box's width decides where its words wrap, and it has none until it is drawn.
@@ -285,9 +291,9 @@ export class ReplyBox {
       if (!e.status.textContent) { e.status.classList.remove('room'); }
       this.#sync();
     };
-    // Ctrl+Enter or Cmd+Enter sends, as in most chat boxes; Enter alone is a new line.
     e.input.onkeydown = (ev) => {
-      if (isSendKey(ev)) { ev.preventDefault(); this.#send(); }
+      if (this.#composing || ev.isComposing || ev.keyCode === 229) { return; }
+      if (replyReturnSends(ev)) { ev.preventDefault(); this.#send(); }
     };
     // A pasted screenshot or copied file is attached; pasted text is left to the box.
     e.input.onpaste = (ev) => {
@@ -308,10 +314,9 @@ export class ReplyBox {
       e.picker.value = '';
       this.#add(files);
     });
-    // Attach, then Send (ui.md §6.5): icons, named, with the shortcut in Send's tooltip: ⌘↩ on
-    // Apple's platforms, Ctrl+Enter elsewhere (the platform layer, #168).
+    // Attach, then Send (ui.md §6.5), with the active shortcut separate from Send's name.
     e.attach = h('button', { type: 'button', class: 'icon-button attach', 'aria-label': 'Attach a file or image', title: 'Attach a file or image', hidden: !this.#attach, onclick: () => e.picker.click() }, icon('paperclip'), h('span', { class: 'attach-label' }, 'Attach'));
-    e.send = h('button', { type: 'submit', class: 'button send', 'aria-label': 'Send', title: `Send (${shortcutHints().send})` }, designIcon('send', { cls: 'ab-icon-20' }));
+    e.send = h('button', { type: 'submit', class: 'button send', 'aria-label': 'Send', title: replyReturnHint() }, designIcon('send', { cls: 'ab-icon-20' }));
     e.resend = h('button', { type: 'button', class: 'button secondary resend', hidden: true, onclick: () => this.#resend() }, 'Try again');
     e.cancel = h('button', { type: 'button', class: 'button secondary cancel', hidden: true, onclick: () => this.#cancel() }, 'Cancel');
     // The receipt's words, and apart from them the line a screen reader hears it on (receipt.js).
