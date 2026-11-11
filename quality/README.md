@@ -227,6 +227,10 @@ manual rehearsal to the automated tests.
 
 ## 4. Choosing tests from what changed
 
+Every suite requires `validation_plan: native` or `ha-compatibility`; missing or unknown values fail the catalog check.
+This reports scope only (`validationPlan` in selected/skipped suite JSON): no selection, ring, command, job or gate changes.
+The six HA-only suites are `homeassistant`, `ha-integration`, `ha-contract-drift`, `ha-contract-fixtures`, `migrate-rollback` and `shadow-soak`; shared rehearsal and native checks remain `native`.
+
 One selector, `tools/AgentBridge.Quality` (`agent-bridge-quality select`), serves both ring 0 on a
 laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a change needs. Its
 `check` command is the completeness check in step 5.

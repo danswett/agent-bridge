@@ -95,11 +95,12 @@ public class CompletenessTests
         var problems = catalog.Validate(Fixture.Graph().CsprojCount).Select(p => p.Message);
 
         Assert.Equal([
-            "suite bare has no kind", "suite bare has no ring", "suite bare has no select", "suite bare has no platforms",
+            "suite bare has no kind", "suite bare has no ring", "suite bare has no select", "suite bare has no validation_plan", "suite bare has no platforms",
             "suite bare has no runner", "suite bare has no status",
             "suite odd has kind 'vibes', not one of unit, component, process, integration, e2e, live, ui, perf, security, a11y, static, packaging",
             "suite odd has ring 7, not 0 to 4",
             "suite odd has select 'sometimes', not one of affected, always",
+            "suite odd has no validation_plan",
             "suite odd has platform 'amiga', not one of win-x64, win-arm64, linux-x64, linux-arm64, macos-arm64, ios-sim, ios-device, browser",
             "suite odd has runner 'cloud', not one of local, hosted, lab, staging, device",
             "suite odd has status 'done', not one of exists, partial, planned",
@@ -117,6 +118,7 @@ public class CompletenessTests
         var catalog = Catalog.Parse($"""
             suites:
               - id: s
+                validation_plan: native
                 kind: e2e
                 ring: 3
                 select: always
@@ -137,6 +139,7 @@ public class CompletenessTests
         var catalog = Catalog.Parse("""
             suites:
               - id: orphan
+                validation_plan: native
                 kind: unit
                 ring: 1
                 select: affected

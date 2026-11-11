@@ -61,6 +61,7 @@ public class PlanScriptTests
                 no_test_paths: [docs/**, .github/CODEOWNERS]
                 suites:
                   - id: checks
+                    validation_plan: ha-compatibility
                     kind: unit
                     ring: 1
                     select: always
@@ -70,6 +71,7 @@ public class PlanScriptTests
                     where: ci.yml product, ha-integration, spikes, spikes-linux, light, pwa-ui, pwa-e2e
                     status: exists
                   - id: docs
+                    validation_plan: native
                     kind: static
                     ring: 1
                     select: affected
@@ -80,6 +82,7 @@ public class PlanScriptTests
                     where: ci.yml light
                     status: exists
                   - id: app
+                    validation_plan: native
                     kind: packaging
                     ring: 1
                     select: affected
@@ -91,6 +94,7 @@ public class PlanScriptTests
                     where: ci.yml app
                     status: exists
                   - id: app-installer
+                    validation_plan: native
                     kind: packaging
                     ring: 1
                     select: affected
@@ -167,6 +171,9 @@ public class PlanScriptTests
             foreach (var job in new[] { "product", "ha-integration", "spikes", "spikes-linux", "pwa-ui", "pwa-e2e" })
                 Assert.Equal(wholeRing || !changed.StartsWith("docs/", StringComparison.Ordinal) ? "true" : "false", outputs[job]);
             Assert.Equal("true", outputs["light"]);
+            if (wholeRing)
+                Assert.Contains("Validation plans (reporting only): native=3, ha-compatibility=1.",
+                    File.ReadAllText(Path.Combine(folder, "summary")), StringComparison.Ordinal);
             if (outputs["product"] == "true")
                 Assert.Equal(eventName == "pull_request"
                         ? new[] { "ubuntu-latest", "windows-latest" }
