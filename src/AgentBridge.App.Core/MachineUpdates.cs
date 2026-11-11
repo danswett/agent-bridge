@@ -77,6 +77,55 @@ public sealed class MachineUpdateViewModel : Observable
     public string InstallName => $"Install {State?.Available ?? "the update"} on {Name} when no session there is busy";
     public string CheckName => $"Check {Name} for updates";
 
+    MachineUpdateNowPrompt? nowPrompt;
+    UpdateState? nowState;
+    long nowConnection;
+    long nowSnapshot;
+    bool nowWasCurrent;
+    bool retired;
+    public bool CanUpdateNow => !retired && !busy && !machine.IsLocal && !machine.Offline
+        && machine.Host.State == LinkState.Connected && machine.Host.Can(UpdateProtocol.Capability)
+        && State is { CanUpdateNow: true, Available: not null };
+    bool NowCurrent => CanUpdateNow && ReferenceEquals(State, nowState) && machine.Host.ConnectionNumber == nowConnection
+        && machine.Host.Sessions.Snapshots == nowSnapshot && machine.Current == nowWasCurrent;
+
+    // Preparation only: the UI/send slice consumes a choice, never sends from this model.
+    public MachineUpdateNowPrompt? PrepareNow(UpdateCommandResult? again = null)
+    {
+        CancelNow();
+        if (!CanUpdateNow) { return null; }
+        var state = again is { Outcome: UpdateAck.Confirm } ? again.State : State;
+        if (state is not { CanUpdateNow: true, Available: { } release } || release != State?.Available) { return null; }
+        var b = UpdateNowWords.Read(state.Busy);
+        if (!machine.Current) { b = b with { Unknown = true }; }
+        var sheet = again is { Outcome: UpdateAck.Confirm } || !UpdateNowWords.Quiet(b)
+            ? UpdateNowWords.Sheet(Name, b, id => machine.Host.Sessions.Get(id) is { } s
+                ? string.IsNullOrEmpty(s.Title) ? "Untitled session" : s.Title : null)
+            : null;
+        nowState = State;
+        nowConnection = machine.Host.ConnectionNumber;
+        nowSnapshot = machine.Host.Sessions.Snapshots;
+        nowWasCurrent = machine.Current;
+        return nowPrompt = new(release, sheet);
+    }
+
+    public MachineUpdateNowChoice? TakeNow(MachineUpdateNowPrompt prompt, bool confirmed = false)
+    {
+        if (!ReferenceEquals(prompt, nowPrompt)) { return null; }
+        if (!NowCurrent || prompt.Cancelled || (prompt.Sheet is not null && !confirmed)) { CancelNow(); return null; }
+        nowPrompt = null;
+        return new(prompt.Release, prompt.Sheet is { } sheet ? UpdateNowWords.AcceptOf(sheet.Busy) : null);
+    }
+
+    public void CancelNow()
+    {
+        var prompt = nowPrompt;
+        nowPrompt = null;
+        if (prompt is not null) { prompt.Cancel(); }
+    }
+
+    internal void Retire() { retired = true; CancelNow(); }
+
     public void Check() => _ = AskAsync(UpdateProtocol.Check);
     public void Install() => _ = AskAsync(UpdateProtocol.Install);
 
@@ -111,6 +160,8 @@ public sealed class MachineUpdateViewModel : Observable
     // The machine's state changed, or a second passed (the "checked 3 minutes ago").
     internal void Changed()
     {
+        if (!NowCurrent) { CancelNow(); }
+        Raise(nameof(CanUpdateNow));
         Raise(nameof(Name));
         Raise(nameof(StatusText));
         Raise(nameof(LastText));
@@ -123,3 +174,13 @@ public sealed class MachineUpdateViewModel : Observable
         Raise(nameof(CheckName));
     }
 }
+
+public sealed class MachineUpdateNowPrompt(string release, UpdateNowSheet? sheet) : Observable
+{
+    public string Release { get; } = release;
+    public UpdateNowSheet? Sheet { get; } = sheet;
+    public bool Cancelled { get; private set; }
+    internal void Cancel() { Cancelled = true; Raise(nameof(Cancelled)); }
+}
+
+public sealed record MachineUpdateNowChoice(string Release, UpdateBusy? Accept);

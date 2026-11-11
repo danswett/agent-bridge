@@ -204,6 +204,7 @@ public sealed partial class MainViewModel : Observable
         if (!shown)
         {
             if (row is null) { return; }
+            row.Retire();
             MachineUpdates.Remove(row);
         }
         else if (row is null)
