@@ -382,6 +382,28 @@
                         Text="{x:Bind ViewModel.DevBoxAlarm, Mode=OneWay}"
                         Visibility="{x:Bind local:Ui.Some(ViewModel.DevBoxAlarm), Mode=OneWay}" />
                 </StackPanel>    
+                <TextBlock Style="{StaticResource AbSectionTitle}" Text="Reply box" AutomationProperties.HeadingLevel="Level2" />
+                <RadioButtons
+                    MaxColumns="1"
+                    AutomationProperties.AutomationId="ReplyReturn"
+                    AutomationProperties.Name="Return key in replies"
+                    SelectedIndex="{x:Bind ViewModel.ReplyReturnIndex, Mode=TwoWay}">
+                    <RadioButtons.Header>
+                        <TextBlock Text="Return key in replies" FontFamily="{StaticResource ContentControlThemeFontFamily}" FontSize="{ThemeResource ControlContentThemeFontSize}" Foreground="{ThemeResource ToggleSwitchHeaderForeground}" />
+                    </RadioButtons.Header>
+                    <RadioButton AutomationProperties.Name="New line" AutomationProperties.HelpText="Send with Ctrl+Enter.">
+                        <StackPanel>
+                            <TextBlock Text="New line" />
+                            <TextBlock Style="{StaticResource AbSecondaryText}" Text="Send with Ctrl+Enter." TextWrapping="Wrap" />
+                        </StackPanel>
+                    </RadioButton>
+                    <RadioButton AutomationProperties.Name="Send" AutomationProperties.HelpText="Shift+Enter makes a new line.">
+                        <StackPanel>
+                            <TextBlock Text="Send" />
+                            <TextBlock Style="{StaticResource AbSecondaryText}" Text="Shift+Enter makes a new line." TextWrapping="Wrap" />
+                        </StackPanel>
+                    </RadioButton>
+                </RadioButtons>
                 <!-- The app itself. -->
                 <TextBlock Style="{StaticResource AbSectionTitle}" Text="This app" />
                 <ToggleSwitch Header="Show reasoning and tool history on cards" AutomationProperties.AutomationId="ShowDetail" IsOn="{x:Bind ViewModel.ShowDetail, Mode=TwoWay}" />

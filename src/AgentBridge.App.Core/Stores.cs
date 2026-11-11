@@ -90,6 +90,7 @@ public sealed record AppPreferences
 {
     // The old per-machine Detail toggle: reasoning and the tool history on cards.
     public bool ShowDetail { get; init; } = true;
+    public bool ReturnSends { get; init; }
     public bool Toasts { get; init; } = true;
     public bool FinishedToasts { get; init; } = true;
     // Include pre-releases when checking for updates.

@@ -566,6 +566,14 @@ public sealed partial class SettingsViewModel : Observable
     }
 
     public bool ShowDetail { get => prefs().ShowDetail; set { if (value != ShowDetail) { Save(prefs() with { ShowDetail = value }); } } }
+    public int ReplyReturnIndex
+    {
+        get => prefs().ReturnSends ? 1 : 0;
+        set
+        {
+            if (value is 0 or 1 && (value == 1) != prefs().ReturnSends) { Save(prefs() with { ReturnSends = value == 1 }); }
+        }
+    }
     public bool Toasts { get => prefs().Toasts; set { if (value != Toasts) { Save(prefs() with { Toasts = value }); } } }
     public bool FinishedToasts { get => prefs().FinishedToasts; set { if (value != FinishedToasts) { Save(prefs() with { FinishedToasts = value }); } } }
     public bool Prereleases

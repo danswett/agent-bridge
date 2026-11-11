@@ -33,10 +33,13 @@ public sealed partial class SessionView : UserControl
     bool attached;
     PaneLayoutViewModel? layout;
     bool showingTab;
+    bool replyComposing;
 
     public SessionView()
     {
         InitializeComponent();
+        ReplyBox.TextCompositionStarted += (_, _) => replyComposing = true;
+        ReplyBox.TextCompositionEnded += (_, _) => replyComposing = false;
         HistoryRows.ItemsSource = historyShown;
         Loaded += (_, _) =>
         {
@@ -633,7 +636,8 @@ public sealed partial class SessionView : UserControl
     {
         if (e.Key != VirtualKey.Enter) { return; }
         var ctrl = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
-        if (!ctrl) { return; }
+        var shift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+        if (Card?.ReplyReturnSends(ctrl, shift, replyComposing) != true) { return; }
         e.Handled = true;
         Card?.Reply?.Send();
     }

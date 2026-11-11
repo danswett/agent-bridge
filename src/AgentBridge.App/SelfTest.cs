@@ -338,6 +338,7 @@ static partial class SelfTest
             window.ShowPage("settings");
             await Task.Delay(500);
             Check(Fits(window, "SettingsPane"), "fits the Settings page's column in a wide window");
+            await CheckReplyReturn(window, main, Check);
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".settings.png"));
             await CheckAgentRows(window, main, demo, Check, outFile, result);
 
