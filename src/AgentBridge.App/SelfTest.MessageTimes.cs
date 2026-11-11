@@ -27,7 +27,7 @@ static partial class SelfTest
         time.ReadClock = () => new MessageClock(now, TimeZoneInfo.Utc, System.Globalization.CultureInfo.InvariantCulture);
         time.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false });
         time.Focus(FocusState.Keyboard);
-        await Until(() => Shown(time, view) && FocusManager.GetFocusedElement(time.XamlRoot) == time, TimeSpan.FromSeconds(5));
+        await Until(() => Shown(time, view) && ReferenceEquals(FocusManager.GetFocusedElement(time.XamlRoot), time), TimeSpan.FromSeconds(5));
         time.Refresh();
         window.RootElement.UpdateLayout();
         var scroll = ConversationScroller(view);
@@ -45,7 +45,7 @@ static partial class SelfTest
             window.RootElement.UpdateLayout();
             stable &= time.RefreshPending && (time.Content as TextBlock)?.Text == MessageTime.Label(sent, now, TimeZoneInfo.Utc, System.Globalization.CultureInfo.InvariantCulture)
                 && time.ActualHeight == height && time.ActualWidth == width && scroll?.VerticalOffset == offset
-                && ReferenceEquals(rows?.ItemsSource, source) && FocusManager.GetFocusedElement(time.XamlRoot) == time
+                && ReferenceEquals(rows?.ItemsSource, source) && ReferenceEquals(FocusManager.GetFocusedElement(time.XamlRoot), time)
                 && AutomationProperties.GetName(time) == exact;
         }
         check(stable, "refreshes an existing stored label across second, minute and clock boundaries without changing its size, history source, focus or scroll offset");
