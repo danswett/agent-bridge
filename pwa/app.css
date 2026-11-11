@@ -449,7 +449,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 }
 .feedback-dialog details[open] > summary::after { transform: rotate(45deg); }
 @media (prefers-reduced-motion: no-preference) {
-  .feedback-dialog details > summary::after { transition: transform 120ms ease; }
+  .feedback-dialog details > summary::after { transition: transform var(--ab-motion-feedback-disclosure-duration) var(--ab-motion-ease-feedback-disclosure); }
 }
 .feedback-exact-data { margin-top: 8px; }
 .feedback-preview {
@@ -975,8 +975,8 @@ html[data-touch-only-keys]:not([data-keyboard-seen]) .row-menu-key { display: no
    satellites once per 8 s. Nothing else on a card moves on its own. An HTML box turning, so the
    compositor turns it and the page's style and layout are left alone each frame (#610). */
 .glyph .glyph-spin, .glyph .glyph-orbit { transform-origin: 50% 50%; }
-.glyph .glyph-spin { animation: glyph-turn 1.2s linear infinite; }
-.glyph .glyph-orbit { animation: glyph-turn 8s linear infinite; }
+.glyph .glyph-spin { animation: glyph-turn var(--ab-motion-glyph-working-period) var(--ab-motion-ease-linear) infinite; }
+.glyph .glyph-orbit { animation: glyph-turn var(--ab-motion-glyph-delegating-period) var(--ab-motion-ease-linear) infinite; }
 @keyframes glyph-turn { to { transform: rotate(360deg); } }
 /* An icon's stroke looks the same weight at every size: 1.5 on its 20 grid, 1.7 at 16 px
    or below, 1.4 at 24 or above. */
@@ -1270,7 +1270,7 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 .sent-image-viewer header, .sent-image-viewer footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; z-index: 1; }
 .sent-image-viewer img { max-width: 100%; max-height: 100%; object-fit: contain; justify-self: center; align-self: center; touch-action: none; }
 .sent-image-viewer button { min-width: 44px; min-height: 44px; }
-@media (prefers-reduced-motion: no-preference) { .sent-image-viewer[open] { animation: sent-image-open 200ms ease-out; } }
+@media (prefers-reduced-motion: no-preference) { .sent-image-viewer[open] { animation: sent-image-open var(--ab-motion-image-viewer-duration) var(--ab-motion-ease-image-viewer); } }
 @keyframes sent-image-open { from { opacity: 0; scale: .98; } to { opacity: 1; scale: 1; } }
 @media (min-width: 640px) {
   .sent-image img { max-width: 280px; max-height: 280px; }
@@ -1715,7 +1715,7 @@ summary {
 .answer[aria-busy="true"] .choice[aria-pressed="true"]::after,
 .needs-entry:is([data-answer="sending"], [data-answer="waiting"]) .button[aria-pressed="true"]::after {
   content: ""; position: absolute; inset-block: 0; inset-inline-end: 10px; margin-block: auto; width: 12px; height: 12px;
-  border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin 1s linear infinite;
+  border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin var(--ab-motion-progress-period) var(--ab-motion-ease-linear) infinite;
 }
 .reply .button.send[aria-busy="true"]::after { inset: 0; margin: auto; }
 /* Send, disabled while its request is in flight and, its box emptied, while its check shows, keeps
@@ -1884,23 +1884,23 @@ summary {
   .session-bar > .icon-button, .session-bar > .row-menu { pointer-events: auto; }
   .session-bar::before {
     content: ""; position: absolute; inset: 0; z-index: -1; background: var(--ab-shell); border-bottom: 1px solid var(--ab-stroke2);
-    opacity: 0; transition: opacity var(--ab-motion-cross-fade) linear;
+    opacity: 0; transition: opacity var(--ab-motion-cross-fade) var(--ab-motion-ease-linear);
   }
   .session-view[data-solid] .session-bar::before { opacity: 1; }
   .bar-title {
     flex: 1; min-width: 0; min-height: var(--tap); display: flex; align-items: center; gap: var(--ab-space-2);
     font-size: 1.0625rem; line-height: 1.375rem; font-weight: 600; pointer-events: none;
-    opacity: 0; visibility: hidden; transition: opacity var(--ab-motion-cross-fade) linear, visibility 0s linear var(--ab-motion-cross-fade);
+    opacity: 0; visibility: hidden; transition: opacity var(--ab-motion-cross-fade) var(--ab-motion-ease-linear), visibility var(--ab-motion-instant) var(--ab-motion-ease-linear) var(--ab-motion-cross-fade);
   }
-  .session-view[data-titled] .bar-title { opacity: 1; visibility: visible; pointer-events: auto; transition-delay: 0s; }
+  .session-view[data-titled] .bar-title { opacity: 1; visibility: visible; pointer-events: auto; transition-delay: var(--ab-motion-instant); }
   .bar-title .glyph { flex: none; scale: 1.125; margin: 0 1px; }
   .bar-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .animating .session-top { transition: transform var(--ab-motion-collapse-duration) var(--ab-motion-collapse-ease); }
 }
 @keyframes head-cross-fade { from { opacity: 0; } }
 @media (max-width: 759px) and (prefers-reduced-motion: reduce) {
-  .animating .session-top { transition: none; animation: head-cross-fade var(--ab-motion-collapse-duration) linear; }
-  .fading .session-top { transition: opacity var(--ab-motion-cross-fade) linear; opacity: 0; }
+  .animating .session-top { transition: none; animation: head-cross-fade var(--ab-motion-collapse-duration) var(--ab-motion-ease-linear); }
+  .fading .session-top { transition: opacity var(--ab-motion-cross-fade) var(--ab-motion-ease-linear); opacity: 0; }
 }
 @media (max-width: 759px) and (forced-colors: active) {
   .session-top { background: Canvas; color: CanvasText; }
@@ -1984,22 +1984,22 @@ summary {
   .reply-slot:empty + .reply-bar { display: none; }
   .reply-bar::before {
     content: ""; position: absolute; inset: 0; z-index: -1; background: var(--ab-shell); border-top: 1px solid var(--ab-stroke2);
-    opacity: 0; transition: opacity var(--ab-motion-cross-fade) linear;
+    opacity: 0; transition: opacity var(--ab-motion-cross-fade) var(--ab-motion-ease-linear);
   }
   .session-view[data-fsolid] .reply-bar::before { opacity: 1; }
   .reply-copy {
     flex: 1; min-width: 0; height: 40px; display: flex; align-items: center; padding: 0 var(--ab-space-3);
     background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-bottom: 2px solid var(--ab-bridge);
     border-radius: var(--ab-radius-control); color: var(--ab-text3); font-size: 16px; line-height: 24px; cursor: text;
-    opacity: 0; visibility: hidden; transition: opacity var(--ab-motion-cross-fade) linear, visibility 0s linear var(--ab-motion-cross-fade);
+    opacity: 0; visibility: hidden; transition: opacity var(--ab-motion-cross-fade) var(--ab-motion-ease-linear), visibility var(--ab-motion-instant) var(--ab-motion-ease-linear) var(--ab-motion-cross-fade);
   }
   .reply-copy > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .reply-copy.draft { color: var(--ab-text); }
-  .session-view[data-fsolid] .reply-copy { opacity: 1; visibility: visible; pointer-events: auto; transition-delay: 0s; }
+  .session-view[data-fsolid] .reply-copy { opacity: 1; visibility: visible; pointer-events: auto; transition-delay: var(--ab-motion-instant); }
 }
 @media (max-width: 759px) and (prefers-reduced-motion: reduce) {
-  .fanimating .reply-slot { transition: none; animation: head-cross-fade var(--ab-motion-collapse-duration) linear; }
-  .ffading .reply-slot { transition: opacity var(--ab-motion-cross-fade) linear; opacity: 0; }
+  .fanimating .reply-slot { transition: none; animation: head-cross-fade var(--ab-motion-collapse-duration) var(--ab-motion-ease-linear); }
+  .ffading .reply-slot { transition: opacity var(--ab-motion-cross-fade) var(--ab-motion-ease-linear); opacity: 0; }
 }
 @media (max-width: 759px) and (forced-colors: active) {
   .reply-slot { background: Canvas; }
@@ -2041,12 +2041,12 @@ summary {
   :root[data-platform="ios"][data-standalone="true"] .session-bar { display: flex; position: absolute; inset: 0 0 auto; min-height: max(3rem, 48px); align-items: center; gap: var(--ab-space-1); padding: 0 var(--ab-space-1); justify-content: space-between; pointer-events: none; z-index: 1; isolation: isolate; }
   :root[data-platform="ios"][data-standalone="true"] .session-bar > :is(.icon-button, .row-menu) { pointer-events: auto; }
   :root[data-platform="ios"][data-standalone="true"] .session-bar::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--ab-shell); border-bottom: 1px solid var(--ab-stroke2);
-    opacity: 0; transition: opacity var(--ab-motion-cross-fade) linear; }
+    opacity: 0; transition: opacity var(--ab-motion-cross-fade) var(--ab-motion-ease-linear); }
   :root[data-platform="ios"][data-standalone="true"] .session-view[data-solid] .session-bar::before { opacity: 1; }
   :root[data-platform="ios"][data-standalone="true"] .bar-title { flex: 1; min-width: 0; min-height: var(--tap); display: flex; align-items: center; gap: var(--ab-space-2);
     font-size: 1.0625rem; line-height: 1.375rem; font-weight: 600; opacity: 0; visibility: hidden; pointer-events: none;
-    transition: opacity var(--ab-motion-cross-fade) linear, visibility 0s linear var(--ab-motion-cross-fade); }
-  :root[data-platform="ios"][data-standalone="true"] .session-view[data-titled] .bar-title { opacity: 1; visibility: visible; pointer-events: auto; transition-delay: 0s; }
+    transition: opacity var(--ab-motion-cross-fade) var(--ab-motion-ease-linear), visibility var(--ab-motion-instant) var(--ab-motion-ease-linear) var(--ab-motion-cross-fade); }
+  :root[data-platform="ios"][data-standalone="true"] .session-view[data-titled] .bar-title { opacity: 1; visibility: visible; pointer-events: auto; transition-delay: var(--ab-motion-instant); }
   :root[data-platform="ios"][data-standalone="true"] .bar-title .glyph { flex: none; scale: 1.125; margin: 0 1px; }
   :root[data-platform="ios"][data-standalone="true"] .bar-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   :root[data-platform="ios"][data-standalone="true"] .inspector { padding-top: calc(var(--head-h, 0px) + var(--ab-space-4)); scroll-padding-top: calc(var(--head-h, 0px) + var(--ab-space-2)); }
@@ -2060,14 +2060,14 @@ summary {
   :root[data-platform="ios"][data-standalone="true"] .reply-bar { display: flex; position: absolute; inset: auto 0 0; min-height: max(3rem, 48px); align-items: center; padding: var(--ab-space-1) var(--ab-space-4); pointer-events: none; z-index: 3; isolation: isolate; }
   :root[data-platform="ios"][data-standalone="true"] .reply-slot:empty + .reply-bar { display: none; }
   :root[data-platform="ios"][data-standalone="true"] .reply-bar::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--ab-shell); border-top: 1px solid var(--ab-stroke2);
-    opacity: 0; transition: opacity var(--ab-motion-cross-fade) linear; }
+    opacity: 0; transition: opacity var(--ab-motion-cross-fade) var(--ab-motion-ease-linear); }
   :root[data-platform="ios"][data-standalone="true"] .session-view[data-fsolid] .reply-bar::before { opacity: 1; }
   :root[data-platform="ios"][data-standalone="true"] .reply-copy { flex: 1; min-width: 0; height: 40px; display: flex; align-items: center; padding: 0 var(--ab-space-3);
     background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-bottom: 2px solid var(--ab-bridge); border-radius: var(--ab-radius-control); color: var(--ab-text3); font-size: 16px; line-height: 24px; cursor: text;
-    opacity: 0; visibility: hidden; transition: opacity var(--ab-motion-cross-fade) linear, visibility 0s linear var(--ab-motion-cross-fade); }
+    opacity: 0; visibility: hidden; transition: opacity var(--ab-motion-cross-fade) var(--ab-motion-ease-linear), visibility var(--ab-motion-instant) var(--ab-motion-ease-linear) var(--ab-motion-cross-fade); }
   :root[data-platform="ios"][data-standalone="true"] .reply-copy > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   :root[data-platform="ios"][data-standalone="true"] .reply-copy.draft { color: var(--ab-text); }
-  :root[data-platform="ios"][data-standalone="true"] .session-view[data-fsolid] .reply-copy { opacity: 1; visibility: visible; pointer-events: auto; transition-delay: 0s; }
+  :root[data-platform="ios"][data-standalone="true"] .session-view[data-fsolid] .reply-copy { opacity: 1; visibility: visible; pointer-events: auto; transition-delay: var(--ab-motion-instant); }
 }
 /* A button's pressed fill keeps its label at 4.5:1 (ui.md §9) rather than fading the whole
    control: a filled button's Bridge moves toward the text colour, darker on light and lighter on

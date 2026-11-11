@@ -129,6 +129,25 @@ function motionDecls(tokens, reduced) {
       if (!reduced) { out.push([`${p}-exit-ease`, bezier(c.exit.easing)]); }
     }
   }
+  const css = tokens.motion.platform.pwa.css;
+  for (const [name, duration] of Object.entries(css.durationMs)) {
+    if (!Number.isInteger(duration) || duration < 0 || duration > m.limitMs) {
+      throw new Error(`motion.platform.pwa.css.durationMs.${name} must be whole ms within motion.limitMs`);
+    }
+    out.push([`--ab-motion-${cssCase(name)}-duration`, reduced ? '0ms' : `${duration}ms`]);
+  }
+  for (const [name, easing] of Object.entries(css.easing)) {
+    if (!['linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out'].includes(easing)) {
+      throw new Error(`motion.platform.pwa.css.easing.${name} must be a non-overshooting CSS easing keyword`);
+    }
+    if (!reduced) { out.push([`--ab-motion-ease-${cssCase(name)}`, easing]); }
+  }
+  for (const [name, period] of Object.entries(css.periodMs)) {
+    if (!Number.isInteger(period) || period <= 0) {
+      throw new Error(`motion.platform.pwa.css.periodMs.${name} must be positive whole ms`);
+    }
+    if (!reduced) { out.push([`--ab-motion-${cssCase(name)}-period`, `${period}ms`]); }
+  }
   return out;
 }
 
