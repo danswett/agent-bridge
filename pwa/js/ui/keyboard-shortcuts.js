@@ -21,7 +21,7 @@ export function mountKeyboardShortcuts({ doc = globalThis.document, enabled = ()
   });
   doc.addEventListener('keydown', (e) => {
     if (e.key !== '?' || e.defaultPrevented || e.repeat || e.isComposing || e.ctrlKey || e.metaKey || e.altKey) { return; }
-    if (isEditable(doc.activeElement) || doc.activeElement?.tagName === 'SELECT') { return; }
+    if (isEditable(doc.activeElement) || ['INPUT', 'SELECT'].includes(doc.activeElement?.tagName)) { return; }
     if (!enabled() || doc.querySelector('dialog[open]')) { return; }
     e.preventDefault();
     open(doc.activeElement);

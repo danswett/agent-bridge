@@ -66,6 +66,18 @@ test('question mark leaves typing, composition and modified keys alone', () => {
   }
 });
 
+for (const type of ['checkbox', 'radio', 'button']) {
+  test(`question mark leaves a focused ${type} input and its focus alone`, () => {
+    const { doc, dialog, key } = fixture();
+    const field = { tagName: 'INPUT', type };
+    doc.activeElement = field;
+    const event = key();
+    assert.deepEqual({
+      prevented: event.defaultPrevented, open: dialog.open, focusedField: doc.activeElement === field,
+    }, { prevented: false, open: false, focusedField: true });
+  });
+}
+
 test('help leaves a handled key and an open dialog alone, and is unavailable while signed out', () => {
   const { doc, close, dialog, key } = fixture();
   key({ handled: true });

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { go, open } from './nav.mjs';
+import { go, open, view } from './nav.mjs';
 
 test('help opens only by choice, traps focus and Escape returns to either opener', async ({ page }) => {
   await page.goto('?demo=1&static=1');
@@ -58,4 +58,32 @@ test('question mark types normally in search, a reply and editable content', asy
   });
   await page.keyboard.press('?');
   await expect(dialog).toBeHidden();
+});
+
+test('question mark leaves a question form radio and checkbox focused without opening help', async ({ page }) => {
+  await page.goto('?demo=1&static=1');
+  await page.waitForSelector('html[data-demo-ready]');
+  const id = '6f1c2b7e-claude-example';
+  await page.evaluate((id) => {
+    const host = window.agentBridgeDemo.host;
+    const at = new Date(Date.now() + 1000).toISOString();
+    host.upsert({ ...host.get(id), status: 'waiting', statusSince: at, updatedAt: at, question: {
+      kind: 'form', id: 'q-help-inputs', askedAt: at, message: 'Configure the run',
+      fields: [
+        { name: 'mode', title: 'Mode', type: 'choice', options: [{ value: 'fast', label: 'Fast' }, { value: 'full', label: 'Full' }] },
+        { name: 'extras', title: 'Extras', type: 'multi', options: [{ value: 'trace', label: 'Trace' }] },
+      ],
+    } });
+  }, id);
+  await open(page, id);
+  const question = view(page, id).locator('.question');
+  const dialog = page.getByRole('dialog', { name: 'Keyboard shortcuts', exact: true });
+  for (const control of [question.getByRole('radio', { name: 'Fast', exact: true }), question.getByRole('checkbox', { name: 'Trace', exact: true })]) {
+    await control.focus();
+    await control.press('?');
+    await expect(control).toBeFocused();
+    await expect(control).not.toBeChecked();
+    await expect(dialog).toBeHidden();
+  }
+  expect(await page.evaluate(() => window.agentBridgeDemo.host.answerLog)).toHaveLength(0);
 });
