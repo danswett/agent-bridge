@@ -37,7 +37,7 @@ export async function startDeviceFlow(base) {
 const ACCOUNT = 'agent-bridge.app.account';
 
 export const accountStore = {
-  load(storage = localStorage) {
+  load(storage = globalThis.localStorage) {
     try {
       const a = JSON.parse(storage.getItem(ACCOUNT) ?? 'null');
       return a && typeof a.token === 'string' ? a : null;
