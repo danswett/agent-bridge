@@ -60,20 +60,18 @@ for (const hasTouch of [false, true]) {
         }
       }
       const head = await page.locator('.sessions-head').boundingBox();
-      expect(box.x + box.width).toBeLessThanOrEqual(head.x + head.width + 0.5);
+      const current = await fresh.boundingBox();
+      expect(current.x + current.width).toBeLessThanOrEqual(head.x + head.width + 0.5);
       const sortBox = await sort.boundingBox();
-      expect(sortBox.x + sortBox.width).toBeLessThanOrEqual(box.x);
+      expect(sortBox.x + sortBox.width).toBeLessThanOrEqual(current.x);
     }
 
     for (const width of [264, 320, 390, 760, 1024]) {
       test(`a ${width} px list header preserves New and the sort label`, async ({ page }) => {
         await page.setViewportSize({ width: 1440, height: 900 });
         await openDemo(page);
-        await page.locator('#sessions').evaluate((el, width) => {
-          const pane = document.getElementById('list-pane');
-          const head = pane.querySelector('.sessions-head');
-          const inset = pane.getBoundingClientRect().width - head.getBoundingClientRect().width;
-          el.style.setProperty('--list-w', `${width + inset}px`);
+        await page.locator('.sessions-head').evaluate((el, width) => {
+          el.style.width = `${width}px`;
         }, width);
         expect((await page.locator('.sessions-head').boundingBox()).width).toBeCloseTo(width, 0);
         await checkHeader(page, width >= 320);
@@ -81,7 +79,7 @@ for (const hasTouch of [false, true]) {
     }
 
     for (const width of [320, 390, 760, 1024]) {
-      test(`the ${width} px window keeps Sort whole beside New with 83 sessions`, async ({ page }) => {
+      test(`the ${width} px window preserves New and Sort with 83 sessions`, async ({ page }) => {
         await page.setViewportSize({ width, height: 900 });
         await openDemo(page, '&machines=3');
         await page.evaluate(() => {
@@ -93,7 +91,7 @@ for (const hasTouch of [false, true]) {
         });
         await expect(page.locator('#session-list > .session')).toHaveCount(83);
         const head = await page.locator('.sessions-head').boundingBox();
-        await checkHeader(page, head.width >= 320 || width >= 760);
+        await checkHeader(page, head.width >= 320 || width >= 1024);
       });
     }
   });

@@ -11,7 +11,7 @@ test('New session has only a decorative plus, never a visible label that squeeze
   assert.match(link[0], /title="New session"/);
   assert.match(link[1], /aria-hidden="true"/);
   assert.match(link[1], /#icon-plus/);
-  assert.equal(link[1].replace(/<[^>]*>/g, '').trim(), '');
+  assert.equal(link[1].trim(), '<svg class="ab-icon ab-icon-20" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><use href="design/sprite.svg#icon-plus"/></svg>');
 });
 
 test('a page is read from the address hash, and anything else is the sessions page', () => {
