@@ -10,7 +10,7 @@ test('Sort sessions is an icon button rather than a label competing with New', (
   assert.match(button[0], /aria-label="Sort sessions"/);
   assert.match(button[0], /aria-haspopup="menu"/);
   assert.match(button[1], /aria-hidden="true"/);
-  assert.equal(button[1].replace(/<[^>]*>/g, '').trim(), '');
+  assert.match(button[1], /^\s*<svg\b[\s\S]*<\/svg>\s*$/);
 });
 
 test('New session has only a decorative plus, never a visible label that squeezes Sort', () => {
