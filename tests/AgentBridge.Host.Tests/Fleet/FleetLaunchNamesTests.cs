@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Delivery.Launch;
@@ -111,6 +112,42 @@ public sealed class FleetLaunchNamesTests : IDisposable
         Assert.Equal(count, logs.Count);
         Assert.Equal(invalid ? 2 : 1, logs.Count);
         Assert.Single(source.Sessions);
+    }
+
+    [Theory]
+    [InlineData("utf8", null)]
+    [InlineData("utf8", "on")]
+    [InlineData("utf8", "off")]
+    [InlineData("utf16", null)]
+    [InlineData("utf16", "on")]
+    [InlineData("utf16", "off")]
+    [InlineData("utf16be", null)]
+    [InlineData("utf16be", "on")]
+    [InlineData("utf16be", "off")]
+    [InlineData("utf32", null)]
+    [InlineData("utf32", "on")]
+    [InlineData("utf32", "off")]
+    [InlineData("utf32be", null)]
+    [InlineData("utf32be", "on")]
+    [InlineData("utf32be", "off")]
+    public async Task Bom_configurations_accepted_by_the_host_preserve_the_launch_rule(string encoding, string? rule)
+    {
+        var textEncoding = encoding switch
+        {
+            "utf8" => new UTF8Encoding(true),
+            "utf16" => Encoding.Unicode,
+            "utf16be" => Encoding.BigEndianUnicode,
+            "utf32" => Encoding.UTF32,
+            "utf32be" => new UTF32Encoding(true, true),
+            _ => throw new ArgumentOutOfRangeException(nameof(encoding)),
+        };
+        var json = rule is null ? "{}" : JsonSerializer.Serialize(new { fleetNames = new { launchRule = rule } });
+        File.WriteAllText(Config, json, textEncoding);
+        Assert.Null(HostSettings.Load(fixture.Root).Problem);
+        var result = await policy.RunAsync(Ask(), "fixture", Start);
+        Assert.Equal(rule == "off" ? LaunchOutcome.Refused : LaunchOutcome.Started, result.Outcome);
+        Assert.Equal(rule == "off" ? 0 : 1, source.Sessions.Count);
+        Assert.Equal(rule == "off" ? 0 : 1, logs.Count);
     }
 
     [Fact]

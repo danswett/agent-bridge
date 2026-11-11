@@ -100,7 +100,7 @@ public sealed partial class FleetLaunchNames
     {
         try
         {
-            using var json = JsonDocument.Parse(File.ReadAllBytes(config), HostSettings.Options);
+            using var json = JsonDocument.Parse(File.ReadAllText(config), HostSettings.Options);
             if (!json.RootElement.TryGetProperty("fleetNames", out var section)) { return true; }
             if (!section.TryGetProperty("launchRule", out var value)) { return true; }
             if (value.ValueKind == JsonValueKind.String && value.GetString() is "on" or "off") { return value.GetString() == "on"; }
