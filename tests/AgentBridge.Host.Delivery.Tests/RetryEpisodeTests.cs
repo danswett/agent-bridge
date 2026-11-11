@@ -141,14 +141,39 @@ public sealed class RetryEpisodeTests
     }
 
     [Fact]
-    public async Task Late_episode_construction_does_not_extend_the_original_error_deadline()
+    public async Task Initial_observation_time_counts_once_without_resetting_offsets_or_deadline()
     {
         var h = new Harness();
-        h.Time.Advance(TimeSpan.FromMinutes(4));
-        var late = new RetryEpisode(Guid.NewGuid(), () => h.Current, h, h.Time, h.Log.Add);
-        h.Time.Advance(TimeSpan.FromMinutes(1));
-        Assert.False(await late.TryAsync(1, Guid.NewGuid(), RetryReason.Owner));
+        var reads = 0;
+        var late = new RetryEpisode(Guid.NewGuid(), () =>
+        {
+            if (reads++ == 0) h.Time.Advance(TimeSpan.FromSeconds(20));
+            return h.Current;
+        }, h, h.Time, h.Log.Add);
+        Assert.False(await late.TryAsync(1, Guid.NewGuid(), RetryReason.Auto));
+        h.Time.Advance(TimeSpan.FromSeconds(10));
+        Assert.True(await late.TryAsync(1, Guid.NewGuid(), RetryReason.Auto));
+        h.Time.Advance(TimeSpan.FromSeconds(269));
+        Assert.True(await late.TryAsync(2, Guid.NewGuid(), RetryReason.Owner));
+        h.Time.Advance(TimeSpan.FromSeconds(1));
+        Assert.False(await late.TryAsync(3, Guid.NewGuid(), RetryReason.Owner));
         Assert.Equal(RetryStop.Expired, late.Stop);
+        Assert.Equal(2, h.Requests.Count);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Slow_observation_or_availability_cannot_admit_an_owner_or_auto_after_expiry(bool availability, bool owner)
+    {
+        var h = new Harness();
+        h.Time.Advance(TimeSpan.FromSeconds(299));
+        h.ObservationDelay = availability ? TimeSpan.Zero : TimeSpan.FromSeconds(2);
+        h.AvailabilityDelay = availability ? TimeSpan.FromSeconds(2) : TimeSpan.Zero;
+        Assert.False(await h.Send(owner ? RetryReason.Owner : RetryReason.Auto));
+        Assert.Equal(RetryStop.Expired, h.Episode.Stop);
         Assert.Empty(h.Requests);
     }
 
@@ -194,14 +219,16 @@ public sealed class RetryEpisodeTests
         public readonly RetryEpisode Episode;
         public readonly List<ReplyRequest> Requests = [];
         public readonly List<string> Log = [];
-        public bool Available { get; set; } = true;
+        bool available = true;
+        public TimeSpan ObservationDelay, AvailabilityDelay;
+        public bool Available { get { Time.Advance(AvailabilityDelay); return available; } set => available = value; }
         public TaskCompletionSource<ReplyResult>? Pending;
         public ReplyResult Outcome = new(AnswerOutcome.Delivered);
         public Exception? Failure;
         public Harness(string error = Empty)
         {
             Initial = Current = new(JsonSerializer.Deserialize<JsonElement>(error), Time.GetUtcNow(), new(7, Time.GetUtcNow()), 0, true);
-            Episode = new(Guid.NewGuid(), () => Current, this, Time, Log.Add);
+            Episode = new(Guid.NewGuid(), () => { Time.Advance(ObservationDelay); return Current; }, this, Time, Log.Add);
         }
         public Task<bool> Send(RetryReason reason = RetryReason.Auto) =>
             Episode.TryAsync(Episode.NextAttempt, Guid.NewGuid(), reason);
