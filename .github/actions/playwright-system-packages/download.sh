@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Downloads the system packages `npx playwright install --with-deps <browsers>` is about to
-# install, so that install finds them already fetched (#799, #689). Run it from the folder whose
+# Downloads and offline-installs the system packages `npx playwright install --with-deps <browsers>`
+# would install, so the subsequent browser install needs no apt update (#799, #689). Run it where
 # node_modules holds that Playwright; its arguments are the browsers.
 #
 # Why: on main run 41927187905, pwa-ui's webkit 3/3 fetched its 181 packages (114 MB) from
@@ -8,17 +8,19 @@
 # the install, before any test ran; on main run 41952998347 pwa-e2e did the same with Chromium's
 # and WebKit's packages. The runner's mirror list (/etc/apt/apt-mirrors.txt, from
 # actions/runner-images) puts that mirror first and Canonical's HTTPS archive after it, but apt
-# moves down the list only when a fetch fails, never when it is slow. So the download gets five
-# minutes on the list as it stands; if it isn't done by then (timeout's 124), the
+# moves down the list only when a fetch fails, never when it is slow. Network attempts get
+# 60 seconds; an Azure timeout (124) or DNS failure immediately leaves Azure. The
 # Azure mirror is taken off the list and apt fetches the rest from https://archive.ubuntu.com,
 # keeping what it has. Nothing else changes: no source, key or trust setting is added, apt checks
 # every package against the signed index either way. Azure DNS failures leave immediately;
-# connection/5xx errors get three attempts (5 s, then 20 s apart), including on Canonical. If
+# connection/5xx errors get three attempts (5 s, then 20 s apart), including on Canonical.
+# A non-forced cache hit uses 20-second attempts within a two-minute update budget; only
+# classified network exhaustion may warn and continue to the mandatory offline install. If
 # the mirror list isn't the Azure-then-Canonical one this expects, or Azure is still named after the
 # edit, it fails rather than go on waiting on the same mirror.
 #
 # PLAYWRIGHT_APT_FORCE_FALLBACK=true (the action's force-apt-fallback, which ci.yml sets only in
-# pwa-ui on a run by hand that asks for it; quality/README.md §4.7) skips the five minutes and takes
+# pwa-ui on a run by hand that asks for it; quality/README.md §4.7) skips the first download and takes
 # this fallback before any package is downloaded, to prove it once. Its log says it was forced, not
 # timed out, and how many packages came from https://archive.ubuntu.com. The WebKit legs are the
 # proof, so a webkit download with none fails; any other, whose packages the runner may already
@@ -34,10 +36,15 @@ if [ "$#" -eq 0 ]; then
   echo "::error::name the browsers whose system packages to download"; exit 1
 fi
 apt_etc=${PLAYWRIGHT_APT_ETC:-/etc/apt}
-limit=${PLAYWRIGHT_APT_LIMIT:-5m}
+limit=${PLAYWRIGHT_APT_LIMIT:-60s}
 mirrors="$apt_etc/apt-mirrors.txt"
 force=false
 [ "${PLAYWRIGHT_APT_FORCE_FALLBACK:-}" != true ] || force=true
+cache_hit=false
+if [ "${DEBS_CACHE_HIT:-}" = true ] && [ "$force" = false ]; then
+  cache_hit=true; limit=${PLAYWRIGHT_APT_LIMIT:-20s}
+fi
+update_deadline=0
 attempts=${PLAYWRIGHT_APT_ATTEMPTS:-3}
 delay=${PLAYWRIGHT_APT_RETRY_DELAY:-5}
 network_host=azure.archive.ubuntu.com
@@ -62,21 +69,29 @@ network_error() {
 }
 
 retry() {
-  local n=1 rc=0 log
+  local n=1 rc=0 log wait
   network_failed=false
   log=$(mktemp)
   while true; do
+    if [ "$update_deadline" -gt 0 ] && [ "$SECONDS" -ge "$update_deadline" ]; then
+      echo "::warning::apt update budget exhausted"
+      rc=124; network_failed=true; break
+    fi
     echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::apt attempt $n of $attempts: $*"
     rc=0; LC_ALL=C "$@" 2>&1 | tee "$log" || rc=$?
-    if [ "$rc" -eq 0 ] && ! grep -qE '^[EW]: Failed to fetch' "$log"; then break; fi
+    if [ "$rc" -eq 0 ] && ! grep -qE '^[EW]:' "$log"; then break; fi
     [ "$rc" -ne 0 ] || rc=100
-    [ "$rc" -ne 124 ] || break
-    network_error "$log" || break
-    if { [ "$left_azure" = false ] && grep -qiE 'Temporary failure resolving|Could not resolve' "$log"; } || [ "$n" -ge "$attempts" ]; then
+    if [ "$rc" -ne 124 ] || grep -qE '^[EW]:' "$log"; then network_error "$log" || break; fi
+    if { [ "$left_azure" = false ] && { [ "$rc" -eq 124 ] || grep -qiE 'Temporary failure resolving|Could not resolve' "$log"; }; } || [ "$n" -ge "$attempts" ]; then
       network_failed=true; break
     fi
+    wait=$((delay * 4 ** (n - 1)))
+    if [ "$update_deadline" -gt 0 ] && [ "$((SECONDS + wait))" -ge "$update_deadline" ]; then
+      echo "::warning::apt update budget has no time for another backoff"
+      rc=124; network_failed=true; break
+    fi
     echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::apt network failure (exit $rc, attempt $n of $attempts); retrying"
-    sleep $((delay * 4 ** (n - 1))); n=$((n + 1))
+    sleep "$wait"; n=$((n + 1))
   done
   rm -f "$log"
   return "$rc"
@@ -104,27 +119,53 @@ if [ "${#pkgs[@]}" -eq 0 ]; then
 fi
 
 # timeout returns 137 if --kill-after had to KILL it; that still takes the timeout fallback.
-bounded() { local rc=0; sudo timeout --kill-after=30s "$limit" "$@" || rc=$?; [ "$rc" -eq 137 ] && rc=124; return "$rc"; }
-if grep -q '^http://azure\.archive\.ubuntu\.com/' "$mirrors" && ! timeout --kill-after=2s 5s getent hosts azure.archive.ubuntu.com >/dev/null 2>&1; then
-  echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::Azure DNS probe failed; fetching the rest from https://archive.ubuntu.com"
-  leave_azure
+bounded() {
+  local rc=0 remaining
+  if [ "$update_deadline" -gt 0 ]; then
+    remaining=$((update_deadline - SECONDS)); [ "$remaining" -gt 0 ] || return 124
+    sudo timeout --kill-after=2s "${remaining}s" timeout --kill-after=2s "$limit" "$@" || rc=$?
+  else
+    sudo timeout --kill-after=30s "$limit" "$@" || rc=$?
+  fi
+  [ "$rc" -eq 137 ] && rc=124; return "$rc"
+}
+if [ "$cache_hit" = true ]; then update_deadline=$((SECONDS + ${PLAYWRIGHT_APT_UPDATE_BUDGET:-120})); fi
+if grep -q '^http://azure\.archive\.ubuntu\.com/' "$mirrors"; then
+  probe_rc=0
+  probe_output=$(timeout --kill-after=2s 5s getent hosts azure.archive.ubuntu.com 2>&1) || probe_rc=$?
+  echo "::notice::Azure DNS probe exit $probe_rc: ${probe_output:-no output}"
+  if [ "$probe_rc" -ne 0 ]; then
+    echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::Azure DNS probe failed (exit $probe_rc); fetching the rest from https://archive.ubuntu.com"
+    leave_azure
+  fi
 fi
 rc=0
 retry bounded apt-get update || rc=$?
 if [ "$rc" -ne 0 ]; then
-  if [ "$left_azure" = false ] && { [ "$rc" -eq 124 ] || [ "$network_failed" = true ]; }; then
+  if [ "$left_azure" = false ] && [ "$network_failed" = true ]; then
     echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::Azure apt-get update failed or exceeded $limit; switching to https://archive.ubuntu.com"
     leave_azure
-    retry bounded apt-get update || fail update "$?"
-  else fail update "$rc"; fi
+    rc=0; retry bounded apt-get update || rc=$?
+  fi
+  if [ "$rc" -ne 0 ]; then
+    if [ "$cache_hit" = true ] && [ "$network_failed" = true ]; then
+      echo "::warning::apt update failed (exit $rc); using cached packages for the mandatory offline install; see the attempt log above"
+    else fail update "$rc"; fi
+  fi
 fi
+update_deadline=0
+# Never interrupt dpkg with the network timeout while it is modifying installed packages.
+install_offline() {
+  sudo apt-get install -y --no-install-recommends --no-download "${pkgs[@]}" || fail install "$?"
+}
+if [ "$cache_hit" = true ]; then install_offline; exit 0; fi
 rc=0
 if [ "$force" = true ]; then
   echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::force-apt-fallback: taking the Azure mirror off apt's list before downloading anything; nothing timed out"
 else
   retry bounded apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" || rc=$?
 fi
-if [ "$force" = true ] || { [ "$left_azure" = false ] && { [ "$rc" -eq 124 ] || [ "$network_failed" = true ]; }; }; then
+if [ "$force" = true ] || { [ "$left_azure" = false ] && [ "$network_failed" = true ]; }; then
   if [ "$rc" -eq 124 ]; then
     echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::apt took over $limit to download Playwright's system packages; fetching the rest from https://archive.ubuntu.com"
   elif [ "$network_failed" = true ]; then
@@ -151,3 +192,4 @@ if [ "$force" = true ] || { [ "$left_azure" = false ] && { [ "$rc" -eq 124 ] || 
 elif [ "$rc" -ne 0 ]; then
   fail download "$rc"
 fi
+install_offline

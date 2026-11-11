@@ -1,9 +1,9 @@
 name: Playwright's system packages
 description: >
-  Downloads the system packages `npx playwright install --with-deps` will install for the given
-  browsers, leaving a slow apt mirror for Canonical's HTTPS archive after five minutes (download.sh
-  says why). Every job that runs `playwright install --with-deps` uses it just before that install,
-  which still runs as before and finds the packages downloaded. Linux runners only.
+  Downloads and offline-installs the system packages for the given browsers, with bounded
+  network retries and Canonical mirror fallback (download.sh says why). With a non-forced
+  debs cache hit, exhausted update network failures warn before the mandatory offline install.
+  Jobs then run browser-only `playwright install`, without another apt update. Linux runners only.
 
 inputs:
   browsers:

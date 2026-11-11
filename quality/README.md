@@ -393,20 +393,26 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      `pwa-e2e` runs `test/e2e`, in both browsers, in the one job that builds the dev stack. The
      shards set `PWA_SKIP_E2E`, so `test/e2e` is left out of them rather than skipping itself;
      together the seven run every spec. The one PWA job these replace took a median of 15
-     minutes. Every job that runs `playwright install --with-deps` (each `pwa-ui` leg, `pwa-e2e`
-     and `spikes-linux`) first downloads Playwright's system packages through
-     `.github/actions/playwright-system-packages`, and if apt's first mirror hasn't finished in
-     five minutes it fetches the rest from the runner's Canonical fallback,
+     minutes. Each `pwa-ui` leg, `pwa-e2e` and `spikes-linux` downloads and offline-installs
+     Playwright's system packages through `.github/actions/playwright-system-packages`.
+     Network attempts have a 60-second bound; an Azure timeout switches to the runner's Canonical fallback,
      `https://archive.ubuntu.com` (main run 41927187905 lost a WebKit shard to that mirror at
      100 kB/s, and main run 41952998347 `pwa-e2e`). Before updating apt, a five-second Azure
      DNS probe switches immediately if lookup fails; an Azure DNS error during update or
      download also switches without backoff. An update timeout now switches rather than
-     repeating the same mirror. Classified connection/5xx failures get three attempts,
+     repeating the same mirror. Classified connection/5xx failures and Canonical timeouts get three attempts,
      waiting 5 then 20 seconds, before switching. Canonical gets the same bounded network
      retries, then fails loudly with the attempt log; it never switches back to Azure.
+     A non-forced debs cache hit uses 20-second attempts within a two-minute whole-update
+     budget. Only classified network exhaustion or a timeout without other errors warns
+     and skips the network download, then requires `apt-get install --no-download`;
+     offline install failure is fatal, without a network fallback. The cache key includes
+     the runner image, Playwright lockfile and browsers. The four subsequent browser
+     installs omit `--with-deps`, so they cannot trigger another apt update.
      Missing, corrupt or unrecognized errors fail at once, even alongside network errors
-     (#2025; outage runs 43039845647 and 43039976393). The install timeout path and
-     forced-proof checks below are unchanged.
+     (#2025; outage runs 43039845647 and 43039976393). A healthy but slow cold update
+     now has less time per attempt than the old five-minute limit. Forced-proof checks
+     below are unchanged.
      Each of those jobs gets 35 minutes, so a
      fallback download still leaves time for the tests; the browsers' own download, on a cache
      miss, is unchanged. To prove that fallback once without waiting for a slow mirror, once this
@@ -429,7 +435,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      Chromium's, whose packages the runner may already have, only warns. Read each WebKit leg's
      count and its `Get:` lines before calling the fallback proven. Those two checks, the Azure
      fetch and the Canonical count, belong to the forced proof alone: a fallback after a real
-     five-minute timeout, on any run, is the one above, unchanged (#817 first proposed failing
+     timeout, on any run, is the one above (#817 first proposed failing
      that one on an Azure fetch too, and dropped it). A run by hand runs every
      job (the whole ring), but is never a release and writes no cache.
    - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
