@@ -946,6 +946,57 @@ public class MergeRuleTests
         Assert.Equal(names, listed);
     }
 
+    [Theory]
+    [InlineData("requested", false)]
+    [InlineData("in_progress", false)]
+    [InlineData("completed", true)]
+    public void Only_completed_workflow_runs_dispatch_the_merge_rule(string action, bool dispatches)
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var stream = new YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(root, ".github", "workflows", "merge-rule.yml"))));
+        var on = (YamlMappingNode)((YamlMappingNode)stream.Documents[0].RootNode).Children[new YamlScalarNode("on")];
+        var trigger = (YamlMappingNode)on.Children[new YamlScalarNode("workflow_run")];
+        var types = ((YamlSequenceNode)trigger.Children[new YamlScalarNode("types")]).Children.Select(n => n.ToString());
+
+        Assert.Equal(dispatches, types.Contains(action, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void A_completed_workflow_still_rejects_a_failing_non_receipt_status()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var stream = new YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(root, ".github", "workflows", "merge-rule.yml"))));
+        var workflow = (YamlMappingNode)stream.Documents[0].RootNode;
+        var on = (YamlMappingNode)workflow.Children[new YamlScalarNode("on")];
+        var trigger = (YamlMappingNode)on.Children[new YamlScalarNode("workflow_run")];
+        Assert.Contains(new YamlScalarNode("completed"), ((YamlSequenceNode)trigger.Children[new YamlScalarNode("types")]).Children);
+        var job = (YamlMappingNode)((YamlMappingNode)workflow.Children[new YamlScalarNode("jobs")]).Children[new YamlScalarNode("evaluate")];
+        var condition = ((YamlScalarNode)job.Children[new YamlScalarNode("if")]).Value!;
+        Assert.True(IfExpression.Evaluate(condition, new Dictionary<string, string?>
+        {
+            ["github.event_name"] = "workflow_run",
+            ["github.event.action"] = "completed",
+            ["github.event.workflow_run.head_branch"] = "quality/change",
+        }));
+        var github = new FakeGitHub(GraphQLPullRequest(Head, extraStatuses:
+        [
+            new { context = "external-policy", state = "FAILURE", description = "Policy failed", createdAt = "2026-11-03T20:01:00Z", creator = new { login = "external-app" } },
+        ]));
+        var config = WriteConfig();
+        try
+        {
+            Assert.Equal(0, MergeRuleCommand.Run(["--sha", Head, "--config", config, "--post"], new StringWriter(), github, OnMain));
+
+            Assert.Equal($"{Head} failure merge-rule Check external-policy ended failure on abcdef0 ", Assert.Single(github.Posted));
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
     // The native Apple client (#260, #548) holds a transport, keys, signed commands and trust.
     [Theory]
     [InlineData("apple/Sources/AgentBridgeCore/NoiseChannel.swift")]
