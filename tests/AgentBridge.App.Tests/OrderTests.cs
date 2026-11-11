@@ -19,6 +19,64 @@ public sealed class OrderTests : IDisposable
     static string[] Ids(IEnumerable<OrderEntry> list) => [.. list.Select(e => e.Session.Id)];
     static string K(string id, string machine = "local") => SessionOrder.KeyOf(machine, id);
 
+    [Theory]
+    [InlineData("status", true)]
+    [InlineData("prompt", true)]
+    [InlineData("turn", true)]
+    [InlineData("finished", true)]
+    [InlineData("asked", true)]
+    [InlineData("answered", true)]
+    [InlineData("tool", false)]
+    [InlineData("output", false)]
+    [InlineData("reasoning", false)]
+    [InlineData("background", false)]
+    [InlineData("title", false)]
+    [InlineData("model", false)]
+    [InlineData("delegate", false)]
+    public void Most_recent_uses_the_same_meaningful_events_as_the_PWA(string change, bool moves)
+    {
+        var o = new SessionOrder(null) { Sort = SessionSort.Recent };
+        var s = Make.Session("a", SessionStatus.Working, updated: Make.T0) with
+        {
+            Activity = new() { Turn = "t1", TurnCount = 1 },
+            Question = change == "answered" ? Make.Choice() : null,
+        };
+        var other = E("b", 5);
+        o.Arrange([new("local", s), other]);
+        var next = s with { UpdatedAt = Make.T0.AddMinutes(10) };
+        next = change switch
+        {
+            "status" => next with { Status = SessionStatus.Idle },
+            "prompt" => next with { Activity = s.Activity with { UserMessage = "go", UserMessageFrom = UserMessageFrom.Agent } },
+            "turn" => next with { Activity = s.Activity with { Turn = "t2" } },
+            "finished" => next with { Activity = s.Activity with { TurnCount = 2 } },
+            "asked" => next with { Question = Make.Choice() },
+            "answered" => next with { Question = null },
+            "tool" => next with { Activity = s.Activity with { CurrentTool = new() { Id = "tool", Name = "Bash", Status = ToolStatus.Running, StartedAt = Make.T0 } } },
+            "output" => next with { Activity = s.Activity with { Response = "tick" } },
+            "reasoning" => next with { Activity = s.Activity with { Reasoning = "tick" } },
+            "background" => next with { Activity = s.Activity with { Background = Background.Of(1, 0) } },
+            "title" => next with { Title = "New title" },
+            "model" => next with { Model = "m2" },
+            _ => next with { SubagentsMore = 1 },
+        };
+        Assert.Equal(moves ? ["a", "b"] : ["b", "a"], Ids(o.Arrange([new("local", next), other]).Sessions));
+    }
+
+    [Fact]
+    public void Activity_survives_reconnects_never_moves_back_and_ties_ignore_later_ticks()
+    {
+        var o = new SessionOrder(null) { Sort = SessionSort.Recent };
+        OrderEntry[] list = [E("a", 1, "m2"), E("a", 1, "m1"), E("b", 2)];
+        o.Arrange(list);
+        list[0] = list[0] with { Session = list[0].Session with { UpdatedAt = Make.T0.AddMinutes(10), Status = SessionStatus.Working } };
+        o.Arrange(list, settled: _ => false);
+        Assert.Equal(["local\nb", "m1\na", "m2\na"], o.Arrange(list.Reverse().ToArray()).Sessions.Select(e => e.Key));
+        list[0] = list[0] with { Session = list[0].Session with { UpdatedAt = Make.T0, Status = SessionStatus.Idle } };
+        list[2] = list[2] with { Session = list[2].Session with { UpdatedAt = Make.T0, Status = SessionStatus.Working } };
+        Assert.Equal(["local\nb", "m1\na", "m2\na"], o.Arrange(list).Sessions.Select(e => e.Key));
+    }
+
     [Fact]
     public void Upserts_never_reorder_rows_in_your_order_as_three_sessions_update_in_turn()
     {
@@ -143,7 +201,7 @@ public sealed class OrderTests : IDisposable
         var o = new SessionOrder(null);
         OrderEntry[] list = [E("a", 3, "m2"), E("b", 2, "m1"), E("c", 1, "m2")];
         o.Arrange(list);
-        list[2] = E("c", 9, "m2");
+        list[2] = E("c", 9, "m2") with { Session = E("c", 9).Session with { Status = SessionStatus.Working } };
         o.Sort = SessionSort.Recent;
         Assert.Equal(["c", "a", "b"], Ids(o.Arrange(list).Sessions));
         var names = new Dictionary<string, string> { ["m1"] = "Alpha", ["m2"] = "Beta" };
@@ -168,7 +226,7 @@ public sealed class OrderTests : IDisposable
         Assert.Equal(["b", "a"], Ids(o.Arrange(list).Sessions));
         Assert.False(o.Usable);
         Assert.Equal(SessionSort.Recent, o.Sort);
-        Assert.Equal(["a", "b"], Ids(o.Arrange([E("a", 5), E("b", 2)]).Sessions));
+        Assert.Equal(["a", "b"], Ids(o.Arrange([E("a", 5) with { Session = E("a", 5).Session with { Status = SessionStatus.Working } }, E("b", 2)]).Sessions));
     }
 
     [Theory]

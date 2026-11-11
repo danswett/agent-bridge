@@ -520,6 +520,7 @@ public sealed partial class MainViewModel : Observable
 
     void OnUpsert(Machine m, Session s)
     {
+        Order.Observe(m.Key, s, snapshot: !m.Host.Sessions.Complete);
         var key = CardKey(m.Key, s.Id);
         // A session a host adds once its machine's list has been read is news, and fades in where
         // it lands; those of a list being read (after connecting, or again after a gap in the

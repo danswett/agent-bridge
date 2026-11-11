@@ -88,6 +88,24 @@ public sealed class MainTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task In_most_recent_output_ticks_and_reconnect_snapshots_do_not_move_a_card()
+    {
+        await SnapshotAsync();
+        ui.Post(() => main.SortIndex = (int)SessionSort.Recent);
+        await host.SendAsync(Events.SessionUpsert, Make.Session("old", response: "Tick.", updated: Make.T0.AddMinutes(2)));
+        await Wait.UntilAsync(() => Card("old").Response == "Tick.", "the output tick");
+        Assert.Equal(["asking", "old"], Order());
+        ui.Post(() =>
+        {
+            connection.Sessions.BeginSnapshot();
+            connection.Sessions.Upsert(Make.Session("old", status: SessionStatus.Working, updated: Make.T0.AddMinutes(9)));
+            connection.Sessions.Upsert(Card("asking").Session);
+            connection.Sessions.EndSnapshot();
+        });
+        Assert.Equal(["asking", "old"], Order());
+    }
+
+    [Fact]
     public async Task The_menu_and_keyboard_move_and_pin_cards_and_pinned_cards_sit_under_their_own_heading()
     {
         await SnapshotAsync();
@@ -206,7 +224,7 @@ public sealed class MainTests : IAsyncLifetime
         TestUi.Read(() => Card("third").Editing = true);
 
         // Most recent would put "old" first among the pinned, but someone is typing.
-        await host.SendAsync(Events.SessionUpsert, Make.Session("old", response: "Later.", updated: Make.T0.AddMinutes(9)));
+        await host.SendAsync(Events.SessionUpsert, Make.Session("old", response: "Later.", updated: Make.T0.AddMinutes(9), turns: 2));
         await Wait.UntilAsync(() => Card("old").Response == "Later.", "the update");
 
         Assert.Equal(["asking", "old", "third"], Order());
@@ -237,7 +255,7 @@ public sealed class MainTests : IAsyncLifetime
             // An open row's update is only marked seen: nothing is written, nothing fails yet. Open is
             // the selected row (#180).
             ui.Post(() => other.Selected = other.Sessions.Single(c => c.Id == "old"));
-            await host.SendAsync(Events.SessionUpsert, Make.Session("old", updated: Make.T0.AddMinutes(9)) with { Activity = new() { Response = "Later.", ResponseTurn = "reply-write-failure" } });
+            await host.SendAsync(Events.SessionUpsert, Make.Session("old", updated: Make.T0.AddMinutes(9)) with { Activity = new() { Response = "Later.", ResponseTurn = "reply-write-failure", TurnCount = 2 } });
             await Wait.UntilAsync(() => other.Sessions.Single(c => c.Id == "old").Response == "Later.", "the update");
             Assert.Equal((int)SessionSort.Yours, TestUi.Read(() => other.SortIndex));
             Assert.Equal(["asking", "old"], TestUi.Read<string[]>(() => [.. other.Sessions.Select(c => c.Id)]));
