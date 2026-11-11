@@ -184,7 +184,7 @@ export class HistoryView {
   #framing = false;
   #noteNode = null;
   #label = h('span', { class: 'history-meta history-state', tabindex: '-1', role: 'status', hidden: true });
-  #button = h('button', { type: 'button', class: 'history-load', hidden: true, onclick: () => { if (this.#button.getAttribute('aria-disabled') !== 'true') { this.onLoadEarlier(); } } });
+  #button = h('button', { type: 'button', class: 'history-load', hidden: true, onclick: () => { if (this.#button.getAttribute('aria-disabled') !== 'true') { this.onLoadEarlier?.(); } } });
   #top = h('div', { class: 'history-top', hidden: true }, this.#label, this.#button);
   #topKind = null;
   #topText = null;
@@ -193,7 +193,7 @@ export class HistoryView {
   #records = new Map();
 
   // onLoadEarlier(): the person asked for the page before the oldest turn (the button, or Try again).
-  onLoadEarlier = () => {};
+  onLoadEarlier = null;
 
   // Draws the line above the oldest turn; the turns below stay where they are on screen.
   #drawTop(plan) {
@@ -306,7 +306,7 @@ export class HistoryView {
     // ones put in their place.
     syncChildren(this.element, nodes);
     const shown = nodes.length > 1;
-    this.#drawTop(topPlan(snapshot));
+    this.#drawTop(this.onLoadEarlier ? topPlan(snapshot) : null);
     this.element.hidden = !shown && this.#top.hidden;
     this.#ticker.refresh();
     if (this.#backlog.length) { this.#schedule(); }

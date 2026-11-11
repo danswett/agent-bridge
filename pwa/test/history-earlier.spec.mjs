@@ -48,6 +48,15 @@ for (const width of [390, 1440]) test(`Load earlier messages brings the page bef
   await button.evaluate((b) => b.click());
   await expect.poll(() => held(v)).toBeGreaterThan(before);
   await expect.poll(async () => Math.abs((await top()) - was)).toBeLessThan(3);
+  // Prepending must not re-engage following: later live growth also leaves this turn in place.
+  await page.evaluate((id) => {
+    const d = window.agentBridgeDemo;
+    const s = d.host.get(id);
+    d.upsert({ ...s, activity: { ...s.activity, response: Array.from({ length: 60 }, (_, i) => `Still streaming ${i + 1}.`).join('\n\n') } });
+  }, ID);
+  await expect(scroll).toContainText('Still streaming 60.');
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await expect.poll(async () => Math.abs((await top()) - was)).toBeLessThan(3);
 });
 
 for (const width of [390, 1440]) test(`scrolling to the top loads earlier turns without the button at ${width}`, async ({ page }) => {
@@ -78,6 +87,23 @@ test('pressing Load earlier messages from the keyboard keeps focus on it through
   await page.keyboard.press('Enter');
   await expect.poll(() => held(v)).toBeGreaterThan(second);
   await expect(button).toBeFocused();
+});
+
+test('new live turns held below the reader do not offer a second earlier-page control', async ({ page }) => {
+  await start(page, 160, 1440);
+  const v = view(page, ID);
+  const scroll = v.locator('.stream-scroll');
+  await expect(v.getByRole('button', { name: 'Load earlier messages' })).toBeVisible();
+  await scroll.evaluate((el) => { el.scrollTop = el.clientHeight * 2; });
+  for (const n of [1, 2]) {
+    await page.evaluate(({ id, n }) => {
+      const d = window.agentBridgeDemo;
+      const s = d.host.get(id);
+      d.upsert({ ...s, activity: { ...s.activity, turn: `live-${n}`, responseTurn: `live-${n}`, response: `New live reply ${n}` } });
+    }, { id: ID, n });
+    await expect(scroll).toContainText(`New live reply ${n}`);
+  }
+  await expect(v.getByRole('button', { name: 'Load earlier messages' })).toHaveCount(1);
 });
 
 test('past the 500-turn limit a person asking for more is told history stops there and keeps the newest turns', async ({ page }) => {

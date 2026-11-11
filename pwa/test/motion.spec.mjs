@@ -689,6 +689,7 @@ test('a question that arrives after the reader opened the reasoning leaves the c
 
 test('opening reasoning at the bottom stays put, but subsequent response growth is still followed', async ({ page }) => {
   await openDemo(page, { height: 900 });
+  await page.evaluate((id) => window.agentBridgeDemo.host.historyTurns.set(id, []), CODEX);
   const reasoning = Array.from({ length: 60 }, (_, i) => `Thought ${i + 1}.`).join('\n\n');
   await upsert(page, CODEX, { activity: { response: 'Short.', reasoning, userMessage: null, currentTool: null }, question: null, updatedAt: later() });
   const v = await open(page, CODEX);
@@ -712,7 +713,9 @@ test('where the reader is is read when a question comes, though the scroll that 
   const scroller = v.locator('.stream-scroll');
   const settle = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   // A scroll's event comes at the browser's next frame: held back here, as if it hadn't come yet.
-  await page.evaluate(() => document.addEventListener('scroll', (e) => e.stopPropagation(), true));
+  await page.evaluate(() => {
+    for (const type of ['scroll', 'scrollend']) { document.addEventListener(type, (e) => e.stopPropagation(), true); }
+  });
   const ask = (id, top, ms) => page.evaluate(({ id, top, ms }) => {
     const el = document.querySelector('.session-view[data-id="019a1b2c-codex-example"] .stream-scroll');
     el.scrollTop = top === 'end' ? el.scrollHeight : top;
