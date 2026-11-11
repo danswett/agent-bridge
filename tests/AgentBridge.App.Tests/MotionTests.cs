@@ -87,8 +87,8 @@ public sealed class MotionTests
             Assert.Equal($"{{StaticResource {key}}}", (string?)item.Attribute("Duration"));
             Assert.Equal(Catalogue[entry].Duration,
                 TimeSpan.Parse(Generated()(key)!, System.Globalization.CultureInfo.InvariantCulture));
-            Assert.Empty(item.Attributes().Where(a => a.Name.LocalName is
-                "Width" or "Height" or "Offset" or "EnableDependentAnimation"));
+            Assert.DoesNotContain(item.Attributes(), a => a.Name.LocalName is
+                "Width" or "Height" or "Offset" or "EnableDependentAnimation");
         }
         Assert.All(doc.Descendants().Attributes("Duration"),
             duration => Assert.StartsWith("{StaticResource AbMotion", duration.Value, StringComparison.Ordinal));
