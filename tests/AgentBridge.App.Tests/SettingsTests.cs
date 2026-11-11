@@ -100,6 +100,38 @@ public sealed class SettingsTests : IAsyncLifetime
 
     Task Connected() => Wait.UntilAsync(() => settings.HostRunning && connection.Status is not null, "the connection");
 
+    [Fact]
+    public async Task The_reply_Return_choice_is_local_persisted_and_updates_existing_cards_at_once()
+    {
+        await Connected();
+        var card = new SessionCardViewModel(Make.Session(), new CardContext
+        {
+            Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null),
+            Capabilities = () => connection.Capabilities, ReturnSends = () => prefs.ReturnSends,
+        });
+        var changed = new List<string?>();
+        card.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+        settings.PreferencesChanged += card.CapabilitiesChanged;
+        try
+        {
+            Assert.Equal(0, settings.ReplyReturnIndex);
+            Assert.Equal("Send (Ctrl+Enter)", card.ReplySendTooltip);
+            settings.ReplyReturnIndex = 1;
+            Assert.True(card.ReplyReturnSends(false, false, false));
+            Assert.Equal("Send (Enter)", card.ReplySendTooltip);
+            Assert.Contains("", changed);
+            var file = Path.Combine(app, "reply-preferences.json");
+            prefs.Save(file);
+            prefs = AppPreferences.Load(file);
+            Assert.Equal(1, settings.ReplyReturnIndex);
+            settings.ReplyReturnIndex = 0;
+            Assert.False(prefs.ReturnSends);
+            Assert.Equal("Send (Ctrl+Enter)", card.ReplySendTooltip);
+            Assert.DoesNotContain(host.Received, r => r.Op == HostOps.Settings);
+        }
+        finally { settings.PreferencesChanged -= card.CapabilitiesChanged; card.Detach(); }
+    }
+
     static LaunchOptions VerificationOptions() => new()
     {
         Agents = [new LaunchAgent { Id = "agency", Label = "Agency", Kind = AgentKind.Copilot, Profiles = ["work"] }],

@@ -563,6 +563,7 @@ public sealed partial class SettingsViewModel : Observable
     }
 
     public bool ShowDetail { get => prefs().ShowDetail; set { if (value != ShowDetail) { Save(prefs() with { ShowDetail = value }); } } }
+    public int ReplyReturnIndex { get => 0; set => throw new NotImplementedException(); }
     public bool Toasts { get => prefs().Toasts; set { if (value != Toasts) { Save(prefs() with { Toasts = value }); } } }
     public bool FinishedToasts { get => prefs().FinishedToasts; set { if (value != FinishedToasts) { Save(prefs() with { FinishedToasts = value }); } } }
     public bool Prereleases

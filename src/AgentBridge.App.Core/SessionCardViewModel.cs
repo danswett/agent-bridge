@@ -15,6 +15,7 @@ public sealed class CardContext
     public Func<bool> ShowMachine { get; init; } = () => false;
     public Func<string?> ReadOnlyWhy { get; init; } = () => null;
     public Func<bool> ShowDetail { get; init; } = () => true;
+    public Func<bool> ReturnSends { get; init; } = () => false;
     public HostConnection? Host { get; init; }
     public IImageShrinker? Shrinker { get; init; }
     // Another machine's: the relay's blob store, and that machine's relay device id, for files over
@@ -80,6 +81,8 @@ public sealed partial class SessionCardViewModel : Observable
     }
 
     public Session Session => session;
+    public bool ReplyReturnSends(bool ctrl, bool shift, bool composing) => ctrl;
+    public string ReplySendTooltip => "Send (Ctrl+Enter)";
     SessionHistory? stored;
     // The turns the host stores for this session (#292), read as the pane draws them; null with no host to ask.
     public SessionHistory? Stored => stored ??= ctx.Host is { } host ? new SessionHistory(host, session.Id) : null;

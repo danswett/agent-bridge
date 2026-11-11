@@ -43,6 +43,27 @@ public sealed class CardTests : IAsyncLifetime
 
     QuestionViewModel Question(Question q, IReadOnlyList<string>? caps = null) => new(q, "s1", AgentKind.Copilot, caps ?? connection.Capabilities, deliveries, "Test PC");
 
+    [Theory]
+    [InlineData(false, false, false, false, false)]
+    [InlineData(false, true, false, false, true)]
+    [InlineData(true, false, false, false, true)]
+    [InlineData(true, false, true, false, false)]
+    [InlineData(true, true, false, false, true)]
+    [InlineData(true, true, true, false, true)]
+    [InlineData(false, true, false, true, false)]
+    [InlineData(true, false, false, true, false)]
+    [InlineData(true, true, false, true, false)]
+    public void Return_in_a_reply_respects_the_device_choice_modifiers_and_composition(bool sends, bool ctrl, bool shift, bool composing, bool expected)
+    {
+        var card = new SessionCardViewModel(Make.Session(), new CardContext
+        {
+            Deliveries = deliveries, Folds = new FoldStore(null), Capabilities = () => connection.Capabilities,
+            ReturnSends = () => sends,
+        });
+        try { Assert.Equal(expected, card.ReplyReturnSends(ctrl, shift, composing)); }
+        finally { card.Detach(); }
+    }
+
     [Fact]
     public async Task A_single_choice_question_answers_on_a_click_with_the_options_value()
     {
