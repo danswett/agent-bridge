@@ -1,4 +1,4 @@
-// Release-state model for #1277. The caller owns registration and explicit reloads.
+// Release-state model for #1246. The caller owns registration and explicit reloads.
 const SHA = /^(?:[0-9a-f]{40}|dev)$/;
 const INSTALLING = new Set(['installing', 'installed', 'activating']);
 
@@ -23,6 +23,10 @@ export class AppRelease {
     this.registration = null;
     this.worker = null;
     this.activated = false;
+    this.lastCheck = -Infinity;
+    this.takeoverTimer = null;
+    this.stalled = false;
+    this.installError = '';
     this.found = () => this.#watch(this.registration.installing);
     this.changed = () => {
       if (this.worker.state === 'activated') { this.tookOver(); }
@@ -39,19 +43,29 @@ export class AppRelease {
     this.#watch(registration?.installing ?? registration?.waiting);
   }
 
-  async check() {
+  auto() {
+    if (Date.now() - this.lastCheck < 5000) { return; }
+    return this.check({ automatic: true });
+  }
+
+  async check({ automatic = false } = {}) {
     if (this.checking || this.disposed) { return; }
     const before = this.state;
     let latest;
     let failed = false;
     this.checking = true;
-    this.#set({ ...before, phase: 'checking', error: '' });
+    this.lastCheck = Date.now();
+    if (!automatic) { this.#set({ ...before, phase: 'checking', error: '' }); }
     try {
-      const response = await this.fetchVersion('version.json', { cache: 'no-store' });
-      if (!response.ok) { throw new Error('Release request failed'); }
-      latest = metadata(await response.json());
-      if (this.disposed) { return; }
-      await this.registration?.update();
+      const read = async () => {
+        const response = await this.fetchVersion('version.json', { cache: 'no-store' });
+        if (!response.ok) { throw new Error('Release request failed'); }
+        return metadata(await response.json());
+      };
+      // Metadata failure must not stop the browser's independent installation retry.
+      [latest] = await Promise.all([read(), Promise.resolve().then(() => {
+        if (!this.disposed) { return this.registration?.update(); }
+      })]);
       if (this.disposed) { return; }
       this.#watch(this.registration?.installing ?? this.registration?.waiting);
     } catch {
@@ -61,15 +75,27 @@ export class AppRelease {
     }
     if (this.disposed) { return; }
     if (failed) {
-      this.#set({ ...before, error: "Couldn't check for updates." });
+      if (automatic) { this.#refresh(); return; }
+      this.#set({ ...before, phase: this.#phase(before.latest), error: this.installError || "Couldn't check for updates." });
+    } else if (automatic && latest.version === this.version && !this.worker && !this.activated && !this.installError) {
+      if (before.latest?.version === this.version && !before.error) { return; }
+      // A routine current result is silent; clear an older "newer version" line if rolled back.
+      this.#set({ phase: 'idle', latest: null, error: '' });
     } else {
-      this.#set({ phase: this.#phase(latest), latest, error: '' });
+      this.#set({ phase: this.#phase(latest), latest, error: this.installError });
     }
+  }
+
+  installFailed(sentence) {
+    if (this.disposed) { return; }
+    this.installError = sentence;
+    this.#refresh();
   }
 
   tookOver() {
     if (this.disposed) { return; }
     this.activated = true;
+    this.#clearTakeover();
     this.#refresh();
   }
 
@@ -82,6 +108,7 @@ export class AppRelease {
   #watch(worker) {
     // An already-active worker can be the old release; only its observed takeover proves readiness.
     if (worker === this.worker) { return; }
+    this.#clearTakeover();
     this.worker?.removeEventListener('statechange', this.changed);
     this.worker = worker && INSTALLING.has(worker.state) ? worker : null;
     this.worker?.addEventListener('statechange', this.changed);
@@ -91,15 +118,33 @@ export class AppRelease {
   #phase(latest) {
     // Takeover proves an update is ready, not that it is the latest published id.
     if (this.activated) { return 'ready'; }
+    if (this.installError) { return 'failed'; }
+    if (this.stalled) { return 'stalled'; }
     if (!latest) { return 'idle'; }
     if (latest.version === this.version) { return 'current'; }
     return this.worker && INSTALLING.has(this.worker.state) ? 'installing' : 'behind';
   }
 
   #refresh() {
-    if (!this.checking && !this.disposed) {
-      this.#set({ ...this.state, phase: this.#phase(this.state.latest) });
+    if (!this.worker || !['installed', 'activating'].includes(this.worker.state) || this.activated) {
+      this.#clearTakeover();
+    } else if (!this.disposed && this.takeoverTimer === null && !this.stalled) {
+      this.takeoverTimer = setTimeout(() => {
+        this.takeoverTimer = null;
+        this.stalled = true;
+        this.#refresh();
+      }, 10000);
     }
+    const phase = this.#phase(this.state.latest);
+    if (!this.disposed && (!this.checking || ['ready', 'stalled', 'failed'].includes(phase))) {
+      this.#set({ ...this.state, phase, error: this.installError });
+    }
+  }
+
+  #clearTakeover() {
+    clearTimeout(this.takeoverTimer);
+    this.takeoverTimer = null;
+    this.stalled = false;
   }
 
   #set(state) {
