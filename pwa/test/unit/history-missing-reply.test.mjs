@@ -87,7 +87,7 @@ test('colliding ids on separate pages keep both replies and retain their keys on
   assert.deepEqual(store.get('h', 's').turns.map((t) => t.id), keys);
 });
 
-for (const [both, between] of [[false, false], [true, false], [false, true], [false, 'provisional']]) {
+for (const [both, between] of [[false, false], [true, false], [false, true], [false, 'provisional'], [true, 'latest']]) {
   test(`newest colliding page, overlap=${both}, intervening=${between}, retains reply order`, async (t) => {
     const warnings = [];
     t.mock.method(console, 'warn', (...args) => warnings.push(args));
@@ -95,11 +95,12 @@ for (const [both, between] of [[false, false], [true, false], [false, true], [fa
     const middle = { id: 'm', at: '2026-11-11T06:37:39Z', prompt: { text: 'Middle' }, parts: [] };
     serve([{ ...A, id: 'same' }, ...(between === true ? [middle] : [])]);
     await store.open('h', 's');
-    if (between === 'provisional') { store.live('h', said(middle)); }
+    if (typeof between === 'string') { store.live('h', said(middle)); }
     serve([...(both ? [{ ...A, id: 'same' }] : []), { ...B, id: 'same' }]);
     if (between === 'provisional') { store.live('h', said({ ...B, id: 'same' })); }
     await store.open('h', 's');
-    assert.deepEqual(words(store), ['Question A', 'Answer A', ...(between ? ['Middle'] : []), 'Scheduled B', 'Answer B']);
+    assert.deepEqual(words(store), ['Question A', 'Answer A', ...(between && between !== 'latest' ? ['Middle'] : []),
+      'Scheduled B', 'Answer B', ...(between === 'latest' ? ['Middle'] : [])]);
     assert.deepEqual(warnings, [['Duplicate history turn ids: 1']]);
   });
 }

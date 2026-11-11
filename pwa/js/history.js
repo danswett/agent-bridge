@@ -155,7 +155,7 @@ function collisionId(turn, used) {
 }
 
 // A repeated page is an update; different dated turns sharing a wire id are not.
-export function alignHistoryTurns(held, page, retain = false) {
+export function alignHistoryTurns(held, page, retain = false, latest = null) {
   const out = held.slice();
   const used = new Set([...held, ...page].map((t) => t.id));
   let duplicates = 0;
@@ -184,7 +184,8 @@ export function alignHistoryTurns(held, page, retain = false) {
     for (const h of out) {
       const known = turns.findIndex((t) => t.id === h.id);
       if (known >= 0) { previous = known; continue; }
-      const at = h.provisional ? previous + 1 : turns.findIndex((t) => Date.parse(t.at) > Date.parse(h.at));
+      const at = h.provisional ? (h.id === latest ? turns.length : previous + 1)
+        : turns.findIndex((t) => Date.parse(t.at) > Date.parse(h.at));
       previous = at < 0 ? turns.length : at;
       turns.splice(previous, 0, h);
     }

@@ -295,7 +295,7 @@ export class HistoryStore {
   // to follow it, and takes its place (but for turns only activity has said, which are the newest).
   // Returns whether the page's own cursor (or its start) is the held turns' now.
   #page(e, page, kind) {
-    const aligned = alignHistoryTurns(e.turns, page.turns, kind === 'newest');
+    const aligned = alignHistoryTurns(e.turns, page.turns, kind === 'newest', e.latest);
     e.turns = aligned.held;
     const P = aligned.turns;
     if (P[0] && page.before) { e.cursors.set(P[0].id, page.before); }
@@ -347,7 +347,7 @@ export class HistoryStore {
       const ids = new Set(aligned.held.map((t) => t.id));
       all = [...aligned.held, ...aligned.turns.filter((t) => !ids.has(t.id))];
     }
-    const aligned = alignHistoryTurns(e.turns, all, true);
+    const aligned = alignHistoryTurns(e.turns, all, true, e.latest);
     e.turns = aligned.held;
     all = aligned.turns;
     for (const p of pages) { if (p.turns[0] && p.before) { e.cursors.set(p.turns[0].id, p.before); } }
