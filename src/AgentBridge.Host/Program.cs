@@ -55,6 +55,8 @@ using AgentBridge.Transport;
 //                                               profile has taken over agent-ha-bridge's hook
 //                                               spool, its heartbeat, and the hooks' timings
 //                                               (docs/host-hooks.md)
+//   agent-bridge-host audit [--action <action>] [--outcome <outcome>] [--since <time>]
+//                                               read known audit metadata, without changing the profile
 //   agent-bridge-host migrate [--dry-run] | rollback [--dry-run] | migration status
 //                                               move this machine's hooks and settings from
 //                                               agent-ha-bridge to this host, and back
@@ -80,6 +82,11 @@ string? Option(string name)
     return i >= 0 && i + 1 < arguments.Count ? arguments[i + 1] : null;
 }
 bool Flag(string name) => arguments.Contains(name);
+
+if (command == "audit")
+{
+    return AuditCommands.Run(arguments, Identity.DefaultRoot, Console.Out, Console.Error);
+}
 
 // Inventory must return before even intake or device/account identity files are opened.
 if (command == "ha" && HaCommands.TryInventoryCommand(arguments, Identity.DefaultRoot, Console.Out, Console.Error) is { } inventoryExit)

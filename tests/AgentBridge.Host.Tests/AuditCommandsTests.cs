@@ -60,7 +60,7 @@ public sealed class AuditCommandsTests : IDisposable
         row["prompt"] = JsonSerializer.SerializeToElement("private unknown prompt");
         row["token"] = JsonSerializer.SerializeToElement("private unknown credential");
         row["previousSha256"] = JsonSerializer.SerializeToElement(new string('0', 64));
-        File.WriteAllText(file, "{\"v\":1,\"previousSha256\":\"\"}\n" + JsonSerializer.Serialize(row) + "\n");
+        File.WriteAllText(file, "{\"v\":1,\"previousSha256\":\"\",\"futureField\":\"private header prompt\"}\n" + JsonSerializer.Serialize(row) + "\n");
         File.WriteAllText(Path.Combine(Audit, "not-an-audit.jsonl"), "private unrelated file");
         File.WriteAllText(Path.Combine(Profile, "config.json"), "private broken configuration");
 
@@ -104,6 +104,10 @@ public sealed class AuditCommandsTests : IDisposable
 
     [Theory]
     [InlineData("{\"v\":2,\"prompt\":\"private corrupt content\"}\n")]
+    [InlineData("{\"v\":\"private corrupt content\"}\n")]
+    [InlineData("{\"v\":null}\n")]
+    [InlineData("{\"v\":1,\"previousSha256\":\"\\uD800\"}\n")]
+    [InlineData("{\"v\":1,\"\\uD800\":1}\n")]
     [InlineData("{\"v\":1,\"action\":\"session.launch\"}\n")]
     [InlineData("private corrupt content\n")]
     [InlineData("{\"v\":1,\"previousSha256\":42}\n")]
@@ -129,5 +133,31 @@ public sealed class AuditCommandsTests : IDisposable
         Assert.Contains("incomplete", result.Error);
         using var row = JsonDocument.Parse(result.Output);
         Assert.Equal("complete", row.RootElement.GetProperty("request").GetString());
+    }
+
+    [Fact]
+    public void A_file_in_place_of_the_audit_folder_is_a_read_failure_not_an_empty_report()
+    {
+        Directory.CreateDirectory(Profile);
+        File.WriteAllText(Audit, "private corrupt content");
+        var result = Run();
+        Assert.Equal(1, result.Code);
+        Assert.Empty(result.Output);
+        Assert.NotEmpty(result.Error);
+        Assert.DoesNotContain("private", result.Error);
+    }
+
+    [Fact]
+    public void A_selected_profile_does_not_read_another_profiles_records()
+    {
+        Append(DateTimeOffset.Parse("2026-11-11T00:01:00Z"), "agent.send", "attempted", "default-request");
+        var other = Path.Combine(root, "other");
+        Assert.True(new AgentAuditLog(other).Append(new AgentAuditEntry("local", "other-request",
+            "agent:other/session", [], "agent.send", "target", "attempted")));
+        var result = Run("--profile", "other");
+        Assert.Equal(0, result.Code);
+        Assert.Contains("other-request", result.Output);
+        Assert.DoesNotContain("default-request", result.Output);
+        Assert.Empty(result.Error);
     }
 }
