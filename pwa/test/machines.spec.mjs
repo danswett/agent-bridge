@@ -239,6 +239,40 @@ test.describe('one truthful update line', () => {
     await show(page, { last: { outcome: 'failed', reason: refused, at: '2026-11-10T17:00:00Z' } });
     await expect(update(page).locator('p')).toHaveText(['Up to date (0.1.4415)']);
   });
+
+  test('discovery details preserve the status and actions while source, quota and their ages change independently', async ({ page }) => {
+    await show(page, {
+      checkSource: 'cdn', checkedAt: '2026-11-10T17:28:00Z',
+      gitHubRemaining: 43, gitHubQuotaAt: '2026-11-10T17:35:00Z',
+      last: { outcome: 'failed', reason: refused, at: now.toISOString() },
+    });
+    const block = update(page);
+    const details = block.locator('.machine-update-detail');
+    const set = (change) => page.evaluate((c) => window.agentBridgeDemo.setUpdate({ ...window.agentBridgeDemo.host.update, ...c }), change);
+    await expect(details).toHaveText([
+      'Update list from the release feed, 12 min old',
+      'When last asked, GitHub allowed 43 more checks (5 min ago)',
+    ]);
+    await expect(block.locator('.machine-update-line')).toHaveText('Up to date (0.1.4415). Next check 9:46 AM.');
+    await expect(block.getByRole('link', { name: 'Check now' })).toBeVisible();
+    await expect(block.locator('button')).toHaveCount(0);
+    await set({ gitHubRemaining: 0 });
+    await expect(details.nth(1)).toHaveText('When last asked, GitHub allowed no more checks (5 min ago)');
+    await set({ checkSource: 'github', checkedAt: '2026-11-10T17:41:00Z' });
+    await expect(details.first()).toHaveText('Update list from GitHub, under a minute old');
+    await expect(details.nth(1)).toHaveText('When last asked, GitHub allowed no more checks (5 min ago)');
+    await set({ checkSource: 'unknown', gitHubQuotaAt: now.toISOString() });
+    await expect(details).toHaveText(['When last asked, GitHub allowed no more checks (under a minute ago)']);
+    await set({ checkSource: 'cdn', checkedAt: 'not a time' });
+    await expect(details).toHaveCount(1);
+    await set({ checkedAt: '2026-11-10T17:28:00Z', gitHubQuotaAt: 'not a time' });
+    await expect(details).toHaveText(['Update list from the release feed, 12 min old']);
+    await set({ checkSource: null, gitHubRemaining: null, gitHubQuotaAt: null });
+    await expect(details).toHaveCount(0);
+    await show(page, {});
+    await expect(update(page).locator('.machine-update-detail')).toHaveCount(0);
+    await expect(update(page).locator('p')).toHaveText(['Up to date (0.1.4415)']);
+  });
 });
 
 test('Launch here, with every machine shown, opens the panel on that machine and launches there, not on the one last used', async ({ page }) => {
