@@ -110,6 +110,11 @@
                         ItemTemplate="{StaticResource ChoiceTemplate}"
                         ItemsSource="{x:Bind ViewModel.Resumes, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.Resume, Mode=OneWay}"
                         SelectionChanged="OnPicked" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowResume), Mode=OneWay}" />
+                    <TextBlock
+                        AutomationProperties.AutomationId="LaunchResumeIncomplete"
+                        Style="{StaticResource AbSecondaryText}" TextWrapping="Wrap"
+                        Text="{x:Bind ViewModel.ResumeIncompleteText, Mode=OneWay}"
+                        Visibility="{x:Bind local:Ui.Show(ViewModel.ShowResumeIncomplete), Mode=OneWay}" />
                     <ComboBox
                         Tag="agent" Header="Agent" HorizontalAlignment="Stretch" AutomationProperties.AutomationId="LaunchAgent"
                         ItemTemplate="{StaticResource ChoiceTemplate}"

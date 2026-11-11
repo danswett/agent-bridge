@@ -262,6 +262,47 @@ public sealed class LaunchTests : IAsyncLifetime
         Assert.True(launch.ShowReload);
     }
 
+    [Theory]
+    [InlineData(false, "deadline")]
+    [InlineData(true, @"C:\private\unknown-reason")]
+    public async Task Incomplete_resume_choices_show_a_quiet_notice_even_when_no_sessions_were_checked(bool empty, string reason)
+    {
+        options = options with { Resumable = empty ? [] : options.Resumable, ResumableIncomplete = new(7, reason) };
+        await launch.RefreshAsync();
+
+        Assert.True(launch.ShowResumeIncomplete);
+        Assert.Equal("Some sessions weren't checked in time. Reload choices to try again.", launch.ResumeIncompleteText);
+        Assert.True(launch.ShowReload && launch.CanReload);
+        Assert.Equal("Reload choices", launch.ReloadText);
+    }
+
+    [Fact]
+    public async Task A_clean_reload_clears_the_incomplete_resume_notice_and_notifies_the_view()
+    {
+        options = options with { ResumableIncomplete = new(1, "deadline") };
+        await launch.RefreshAsync();
+        Assert.True(launch.ShowResumeIncomplete);
+        var cleared = false;
+        launch.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(LaunchViewModel.ShowResumeIncomplete) && !launch.ShowResumeIncomplete) { cleared = true; }
+        };
+        options = options with { ResumableIncomplete = null };
+
+        await launch.RefreshAsync();
+
+        Assert.False(launch.ShowResumeIncomplete);
+        Assert.True(cleared);
+        Assert.True(launch.ShowForm);
+    }
+
+    [Fact]
+    public void A_host_that_does_not_send_resume_omissions_shows_no_incomplete_notice()
+    {
+        Assert.False(launch.ShowResumeIncomplete);
+        Assert.True(launch.ShowForm);
+    }
+
     [Fact]
     public async Task Try_again_after_a_failed_send_shows_what_became_of_it_not_an_older_error()
     {
@@ -690,6 +731,32 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
         await Wait.UntilAsync(() => launch.State == "started", "started");
         Assert.Equal("there", Assert.Single(remoteHost.Sent(LaunchProtocol.Launch)).GetProperty("workspace").GetString());
         Assert.Empty(localHost.Sent(LaunchProtocol.Launch));
+    }
+
+    [Fact]
+    public async Task Switching_machines_clears_the_incomplete_resume_notice_before_the_new_choices_arrive()
+    {
+        localHost.On(LaunchProtocol.Options, _ => new LaunchOptions { Defaults = new() { Permissions = LaunchProtocol.Ask }, ResumableIncomplete = new(1, "deadline") });
+        var waiting = new TaskCompletionSource();
+        var release = new TaskCompletionSource();
+        remoteHost.OnAsync(LaunchProtocol.Options, async _ =>
+        {
+            waiting.TrySetResult();
+            await FakeHost.Until(release.Task);
+            return new LaunchOptions { Defaults = new() { Permissions = LaunchProtocol.Ask } };
+        });
+        var launch = LaunchPage.Open(main, ui);
+        await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
+        Assert.True(launch.ShowResumeIncomplete);
+
+        ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
+        await waiting.Task.WaitAsync(FakeHost.Patience);
+        Assert.False(launch.ShowResumeIncomplete);
+        Assert.False(launch.ShowForm);
+        release.SetResult();
+
+        await Wait.UntilAsync(() => launch.ShowForm, "the other machine's choices");
+        Assert.False(launch.ShowResumeIncomplete);
     }
 
     [Fact]
