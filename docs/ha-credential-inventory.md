@@ -8,15 +8,14 @@ clients or changes anything. Files: `ha-token.dpapi` (Windows), `ha-token`
 Directories, links or metadata failures are `unknown` (stderr, exit 1); other entries
 still run. Exit 0 proves checks completed, not decommissioning or rollback safety.
 
-Later per-profile owner decisions require protected rollback snapshots/windows and
+Later per-profile owner retain/remove decisions require protected rollback snapshots/windows and
 byte-faithful unknown settings/config retention. No token export or legacy import.
 Settings (including renamed `agentTokenEnvVar`), legacy stores, backups, receipts
 and environments are not read: inventory/approval remains separate, not presumed absent.
 
-Disabling future use, draining/stopping clients, deleting a local copy, remotely
-revoking a token and expiring inherited environments differ. Clients may hold a
-token after deletion. Revocation can break other consumers and rollback: retain
-auth/backoff while any reader remains. Future retries recheck clients and preserve evidence.
+Disabling use, draining/stopping clients, deleting a copy, revoking remotely and expiring environments differ.
+A client may retain a deleted token; revocation can break other consumers and rollback.
+Keep auth/backoff while readers remain; retries recheck clients and retain rollback evidence.
 
 Removal requires [#1949's load proof](https://github.com/danswett/agent-bridge/issues/1949)
 and [#1396's gate](https://github.com/danswett/agent-bridge/issues/1396), HA-off rehearsal
