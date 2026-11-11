@@ -9,10 +9,11 @@
 # and WebKit's packages. The runner's mirror list (/etc/apt/apt-mirrors.txt, from
 # actions/runner-images) puts that mirror first and Canonical's HTTPS archive after it, but apt
 # moves down the list only when a fetch fails, never when it is slow. So the download gets five
-# minutes on the list as it stands; if it isn't done by then (timeout's 124, and only that), the
+# minutes on the list as it stands; if it isn't done by then (timeout's 124), the
 # Azure mirror is taken off the list and apt fetches the rest from https://archive.ubuntu.com,
 # keeping what it has. Nothing else changes: no source, key or trust setting is added, apt checks
-# every package against the signed index either way, and any other apt failure fails the step. If
+# every package against the signed index either way. DNS/connection errors get three download
+# attempts (5 s, then 20 s apart), then one attempt from Canonical; other apt errors fail at once. If
 # the mirror list isn't the Azure-then-Canonical one this expects, or Azure is still named after the
 # edit, it fails rather than go on waiting on the same mirror.
 #
@@ -53,6 +54,35 @@ retry() {
   done
 }
 
+# Apt exits 100 for network errors AND bad packages. Every substantive error must be a
+# recognized fetch/connectivity failure; a mixed failure must not retry a corrupt/missing package.
+network_error() {
+  local errors
+  errors=$(grep '^E:' "$1" | grep -v '^E: Unable to fetch some archives' || true)
+  [ -n "$errors" ] || return 1
+  ! grep -viE '^E: Failed to fetch .* (Temporary failure resolving|Could not resolve|Could not connect|Unable to connect|Connection (failed|timed out|refused|reset)|Network is unreachable)' <<< "$errors"
+}
+
+download() {
+  local n=1 rc=0 log
+  log=$(mktemp)
+  while true; do
+    echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::apt download attempt $n of $attempts"
+    if LC_ALL=C bounded apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" 2>&1 | tee "$log"; then
+      rc=0; break
+    else
+      rc=$?
+    fi
+    [ "$rc" -ne 124 ] || break
+    network_error "$log" || break
+    if [ "$n" -ge "$attempts" ]; then network_failed=true; break; fi
+    echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::apt download failed (exit $rc, attempt $n of $attempts); retrying DNS/connection failure"
+    sleep $(( ${PLAYWRIGHT_APT_RETRY_DELAY:-5} * 4 ** (n - 1) )); n=$((n + 1))
+  done
+  rm -f "$log"
+  return "$rc"
+}
+
 # install-deps --dry-run prints the apt-get command it would run; the packages follow
 # --no-install-recommends. Every such line counts, should Playwright ever print one per browser.
 list=$(npx playwright install-deps --dry-run "$@" | sed -n 's/.*--no-install-recommends \([^"]*\)".*/\1/p' | tr '\n' ' ')
@@ -68,17 +98,20 @@ update() { retry bounded apt-get update; }
 # A hung mirror ends the update at the limit (124); one more go, then the step fails, not the job's 35 minutes.
 update || { rc=$?; [ "$rc" -eq 124 ] || exit "$rc"; echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::apt-get update took over $limit; trying once more"; update; }
 rc=0
+network_failed=false
 if [ "$force" = true ]; then
   echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::force-apt-fallback: taking the Azure mirror off apt's list before downloading anything; nothing timed out"
 else
-  retry bounded apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" || rc=$?
+  download || rc=$?
 fi
-if [ "$force" = true ] || [ "$rc" -eq 124 ]; then
+if [ "$force" = true ] || [ "$rc" -eq 124 ] || [ "$network_failed" = true ]; then
   if ! grep -q '^http://azure\.archive\.ubuntu\.com/' "$mirrors" || ! grep -q '^https://archive\.ubuntu\.com/ubuntu/' "$mirrors"; then
     echo "::error::$mirrors doesn't list the Azure mirror and https://archive.ubuntu.com this step expects, so it can't leave the slow mirror"; exit 1
   fi
   if [ "$rc" -eq 124 ]; then
     echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::apt took over $limit to download Playwright's system packages; fetching the rest from https://archive.ubuntu.com"
+  elif [ "$network_failed" = true ]; then
+    echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::apt download exhausted $attempts DNS/connection attempts; fetching the rest from https://archive.ubuntu.com once"
   fi
   sudo sed -i '/^http:\/\/azure\.archive\.ubuntu\.com\//d' "$mirrors"
   if grep -rqs '^[^#]*azure\.archive\.ubuntu\.com' "$mirrors" "$apt_etc/sources.list" "$apt_etc/sources.list.d/"; then
@@ -98,6 +131,10 @@ if [ "$force" = true ] || [ "$rc" -eq 124 ]; then
     else
       echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::force-apt-fallback: nothing was downloaded from https://archive.ubuntu.com, so this leg proves nothing about the fallback"
     fi
+  elif [ "$network_failed" = true ]; then
+    bounded apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" || {
+      rc=$?; echo "::error::Canonical apt download failed (exit $rc) after $attempts DNS/connection attempts; see the attempt log above"; exit "$rc"
+    }
   else
     retry bounded apt-get install -y --download-only --no-install-recommends "${pkgs[@]}"
   fi
