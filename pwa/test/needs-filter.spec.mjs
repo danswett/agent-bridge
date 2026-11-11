@@ -107,5 +107,32 @@ for (const width of [390, 1440]) {
       await expect(control(page)).toHaveAttribute('aria-pressed', 'false');
       await expect(page.locator('#session-list > .session')).toHaveCount(4);
     });
+
+    test('an offline question leaves the connected count and active rows, even at zero', async ({ page }) => {
+      await page.goto('?demo=1&static=1&machines=3');
+      await page.waitForSelector('html[data-demo-ready]');
+      await expect(control(page)).toHaveAccessibleName('Needs you \u00b7 3');
+      await control(page).click();
+      await page.evaluate(() => {
+        const d = window.agentBridgeDemo;
+        d.setOnline(d.host.machine.id, false);
+      });
+      await expect(control(page)).toHaveAccessibleName('Needs you \u00b7 2');
+      await expect(row(page, COPILOT)).toHaveCount(0);
+      expect(await page.evaluate((id) => !!window.agentBridgeDemo.host.get(id).question, COPILOT)).toBe(true);
+      await expect(page.getByText('Nothing else needs you on connected machines.', { exact: true })).toBeHidden();
+      await page.evaluate(() => {
+        const d = window.agentBridgeDemo;
+        for (const { hostId, session } of d.page.hosts.sessions.list()) {
+          if (hostId !== d.host.machine.id && session.question) {
+            d.machines[hostId].upsert({ ...session, status: 'idle', question: null });
+          }
+        }
+      });
+      await expect(control(page)).toHaveAccessibleName('Needs you \u00b7 0');
+      await expect(control(page)).toHaveAttribute('title', 'Pending questions on connected machines');
+      await expect(row(page, COPILOT)).toHaveCount(0);
+      await expect(page.getByText('Nothing else needs you on connected machines.', { exact: true })).toBeVisible();
+    });
   });
 }
