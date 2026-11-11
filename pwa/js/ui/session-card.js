@@ -439,6 +439,7 @@ export class SessionCard {
   #history = { loaded: false, loading: false };
   #panel = null;
   #askingTurns = new WeakMap();
+  #questionTurns = new WeakMap();
   #receipt = null;
   // Closed records keep their question's place, including when another question arrives.
   #closed = [];
@@ -1567,6 +1568,15 @@ export class SessionCard {
   // The question the slot holds a place for: the open one, or the one whose record it still shows.
   #slotQuestion = null;
 
+  #withQuestionParts(turn, parts) {
+    if (parts.length === turn.parts.length && parts.every((p, i) => p === turn.parts[i])) { return turn; }
+    const old = this.#questionTurns.get(turn);
+    if (old && parts.length === old.parts.length && parts.every((p, i) => p === old.parts[i])) { return old; }
+    const shown = { ...turn, parts };
+    this.#questionTurns.set(turn, shown);
+    return shown;
+  }
+
   #drawTurns() {
     const full = this.historyStore.get(this.hostId, this.#s.id);
     const kept = this.#trimClosed(full.turns);
@@ -1577,8 +1587,8 @@ export class SessionCard {
     const turns = full.turns.map((t) => {
       const parts = local.filter((r) => r.turn === t.id && !recorded.has(r.questionId)
         && (t.provisional || (this.#historyPage <= r.page && (r !== this.#receipt || !this.#s.question))))
-        .map((r) => ({ kind: 'question', question: r.question, at: r.at }));
-      return parts.length ? { ...t, parts: [...t.parts, ...parts] } : t;
+        .map((r) => r.part ??= { kind: 'question', question: r.question, at: r.at });
+      return this.#withQuestionParts(t, [...t.parts, ...parts]);
     });
     this.#renderMessageTimes(full);
     const slot = this.els.question;
@@ -1593,9 +1603,11 @@ export class SessionCard {
     // A scrolled reader keeps frozen message content, but not a stale question placement.
     const shown = snapshot.turns.map((t) => {
       const source = turns.find((x) => x.id === t.id);
-      const parts = source?.parts.filter((p) => p.kind === 'question' && local.some((r) => r.questionId === p.question?.id)
-        && !t.parts.some((q) => q.kind === 'question' && q.question?.id === p.question.id)) ?? [];
-      return parts.length ? { ...t, parts: [...t.parts, ...parts] } : t;
+      const wanted = source?.parts.filter((p) => p.kind === 'question' && local.some((r) => r.questionId === p.question?.id)) ?? [];
+      const parts = t.parts.filter((p) => p.kind !== 'question' || !local.some((r) => r.questionId === p.question?.id)
+        || wanted.some((q) => q.question.id === p.question.id));
+      parts.push(...wanted.filter((p) => !parts.some((q) => q.kind === 'question' && q.question?.id === p.question.id)));
+      return this.#withQuestionParts(t, parts);
     });
     const drawn = this.turns.render({ ...snapshot, turns: shown }, this.#follow.shown?.activity.turn ?? null, inline);
     this.#syncStoredLatest();
