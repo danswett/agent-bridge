@@ -14,6 +14,22 @@ const table = JSON.parse(readFileSync(here('../../../docs/design/session-details
 const now = Date.parse(table.now);
 const order = table.rows.map((r) => r.row);
 
+test('An errored session shows its safe cause, type and last event age, and recovery removes them', () => {
+  const base = { id: 'error', agent: 'copilot', status: 'idle', activity: {} };
+  const attention = { kind: 'error', errorType: 'query', since: '2026-11-06T12:00:00Z',
+    lastEventAt: '2026-11-06T12:17:00Z', message: 'Copilot returned no response. Sending your message again usually fixes it.' };
+  const rows = detailRows(readSession({ ...base, attention }), { now });
+  assert.equal(rows.find((r) => r.term === 'Error type')?.text, 'query');
+  assert.equal(rows.find((r) => r.term === 'Message')?.text, attention.message);
+  assert.equal(rows.find((r) => r.term === 'Last activity')?.text, '3m ago');
+  for (const extra of [{}, { attention: null }]) {
+    assert.ok(!detailRows(readSession({ ...base, ...extra }), { now }).some((r) => ['Error type', 'Message', 'Last activity'].includes(r.term)));
+  }
+  const unknown = readSession({ ...base, attention: { ...attention, errorType: 'unknown-private-value', lastEventAt: 'invalid' } });
+  assert.equal(unknown.attention.errorType, 'other');
+  assert.ok(!detailRows(unknown, { now }).some((r) => r.term === 'Last activity'));
+});
+
 for (const scenario of table.scenarios) {
   test(`Details shows the table's rows for a session with ${scenario.name}, in its order and words`, () => {
     const s = readSession(scenario.session);

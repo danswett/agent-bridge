@@ -42,6 +42,36 @@ public class AttentionTests
     static string Error(object data, int s, string? agentId = null) => Copilot.Event("session.error", data, s, agentId);
 
     [Fact]
+    public async Task An_empty_response_shows_its_cause_and_last_event_until_the_next_turn()
+    {
+        await using var s = new Session_();
+        const string message = "No response was returned. Send your message again to retry.";
+        var session = await s.After(Copilot.User("Go", 1), Copilot.TurnStart(2),
+            Error(new { errorType = "query", message }, 3), Copilot.Event("hook.end", new { }, 5));
+
+        Assert.Equal(SessionStatus.Idle, session.Status);
+        Assert.Equal("Copilot returned no response. Sending your message again usually fixes it.", session.Attention?.Message);
+        var attention = JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(session.Attention, ProtocolJson.Options))!;
+        Assert.Equal("query", attention["errorType"]?.GetValue<string>());
+        Assert.Equal(Fixture.T0.AddSeconds(3), session.Attention?.Since);
+        Assert.Equal(Fixture.T0.AddSeconds(5), session.Attention?.LastEventAt);
+        Assert.Null((await s.After(Copilot.User("Continue", 6))).Attention);
+    }
+
+    [Theory]
+    [InlineData("query", "No response was returned. Send your message again to retry. fake-private-value")]
+    [InlineData("query", "fake-private-value")]
+    [InlineData("fake-private-value", "No response was returned. Send your message again to retry.")]
+    public async Task An_unknown_cause_never_copies_arbitrary_error_text_or_type(string type, string message)
+    {
+        await using var s = new Session_();
+        var session = await s.After(Error(new { errorType = type, message }, 3));
+        var json = System.Text.Json.JsonSerializer.Serialize(session.Attention, ProtocolJson.Options);
+        Assert.DoesNotContain("fake-private-value", json);
+        Assert.Equal("Copilot stopped with an error.", session.Attention?.Message);
+    }
+
+    [Fact]
     public async Task Recovery_overlay_stays_pending_until_model_proof_and_rejects_stale_flow_or_error_callbacks()
     {
         await using var s = new Session_();
@@ -95,7 +125,7 @@ public class AttentionTests
         var session = await s.After(Copilot.User("Carry on with the release", 1), Copilot.TurnStart(2), Error(SignedOut, 3));
 
         Assert.Equal(SessionStatus.Idle, session.Status);
-        Assert.Equal(new Attention { Kind = AttentionKind.SignInNeeded, Since = Fixture.T0.AddSeconds(3), Agent = AgentKind.Copilot, Provider = "github", Message = "Copilot needs you to sign in again (401)." }, session.Attention);
+        Assert.Equal(new Attention { Kind = AttentionKind.SignInNeeded, Since = Fixture.T0.AddSeconds(3), Agent = AgentKind.Copilot, Provider = "github", Message = "Copilot needs you to sign in again (401).", ErrorType = AgentErrorType.Authorization, LastEventAt = Fixture.T0.AddSeconds(3) }, session.Attention);
     }
 
     [Fact]
@@ -399,7 +429,7 @@ public class AttentionTests
             Error(new { errorType = "session", message = "Turn error: too many requests", statusCode = 429 }, 3));
 
         Assert.Equal(SessionStatus.Idle, session.Status);
-        Assert.Equal(new Attention { Kind = AttentionKind.Error, Since = Fixture.T0.AddSeconds(3), Agent = AgentKind.Copilot, Message = "Copilot hit a rate limit (429).", ErrorClass = ErrorClass.Rate }, session.Attention);
+        Assert.Equal(new Attention { Kind = AttentionKind.Error, Since = Fixture.T0.AddSeconds(3), Agent = AgentKind.Copilot, Message = "Copilot hit a rate limit (429).", ErrorClass = ErrorClass.Rate, ErrorType = AgentErrorType.Session, LastEventAt = Fixture.T0.AddSeconds(3) }, session.Attention);
     }
 
     // The CLI retries a failed model call within the turn, and a hook's failure ends nothing.

@@ -58,7 +58,7 @@ import { moveView, moves } from '../move.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 // The Details rows whose values move with the clock: drawn again where they are, not as new nodes.
-const CLOCK_ROWS = new Set(['status', 'since', 'started', 'updated']);
+const CLOCK_ROWS = new Set(['status', 'since', 'started', 'updated', 'last-activity']);
 // Each session's delegate events as the person left them (ui.md §6.4): its fold (D3) open or
 // closed, and the shared lines opened to name everyone. By machine and session, so a card drawn
 // again (a machine back online, a list sent again) keeps them, for as long as the page is open.

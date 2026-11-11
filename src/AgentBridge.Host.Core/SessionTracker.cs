@@ -346,7 +346,8 @@ internal sealed class SessionTracker
             WaitingOn = question?.Agent,
             Subagents = subagents,
             SubagentsMore = more,
-            Attention = _state.Attention ?? Stalled(effective, lastEvent, background, subagents, more, now),
+            Attention = _state.Attention is { } attention ? attention with { LastEventAt = lastEvent }
+                : Stalled(effective, lastEvent, background, subagents, more, now),
             Activity = new Activity
             {
                 Response = response,

@@ -3,7 +3,9 @@
   "rows": [
     { "row": "Status" },
     { "row": "In this state" },
+    { "row": "Error type" },
     { "row": "Message" },
+    { "row": "Last activity" },
     { "row": "Not responding since" },
     { "row": "Driven by" },
     { "row": "Agent" },

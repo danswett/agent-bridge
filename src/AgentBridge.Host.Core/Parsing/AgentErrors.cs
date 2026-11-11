@@ -39,9 +39,19 @@ internal static class AgentErrors
         if (!CopilotTurnErrors.EndsTurn(data)) { return null; }
         var type = Json.Str(data, "errorType");
         var status = Json.Int(data, "statusCode");
+        var attention = new Attention
+        {
+            Kind = AttentionKind.Error, Since = at, Agent = AgentKind.Copilot,
+            ErrorType = type switch
+            {
+                "query" => AgentErrorType.Query, "execution" => AgentErrorType.Execution,
+                "authorization" => AgentErrorType.Authorization, "session" => AgentErrorType.Session,
+                _ => AgentErrorType.Other,
+            },
+        };
         if (Json.Str(data, "remediation") == "sign_in" || type == "authorization" || status == 401)
         {
-            return new Attention { Kind = AttentionKind.SignInNeeded, Since = at, Agent = AgentKind.Copilot, Provider = "github", Message = Template(AttentionKind.SignInNeeded, null, status, AgentKind.Copilot) };
+            return attention with { Kind = AttentionKind.SignInNeeded, Provider = "github", Message = Template(AttentionKind.SignInNeeded, null, status, AgentKind.Copilot) };
         }
         var errorClass = status switch { 403 => ErrorClass.Auth, 429 => ErrorClass.Rate, _ => ErrorClass.Other };
         // #687: the CLI's own session host stopped acknowledging events (errorType "query", then
@@ -53,14 +63,11 @@ internal static class AgentErrors
         // as a generic "stopped with an error".
         if (IsHostWedge(data))
         {
-            return new Attention { Kind = AttentionKind.Error, Since = at, Agent = AgentKind.Copilot, Message = HostWedgeMessage, ErrorClass = ErrorClass.Other };
+            return attention with { Message = HostWedgeMessage, ErrorClass = ErrorClass.Other };
         }
-        return new Attention
+        return attention with
         {
-            Kind = AttentionKind.Error,
-            Since = at,
-            Agent = AgentKind.Copilot,
-            Message = Template(AttentionKind.Error, errorClass, status, AgentKind.Copilot),
+            Message = IsEmptyResponse(data) ? EmptyResponseMessage : Template(AttentionKind.Error, errorClass, status, AgentKind.Copilot),
             ErrorClass = errorClass,
         };
     }
@@ -71,12 +78,17 @@ internal static class AgentErrors
         Json.Str(data, "message") is { } m && m.Contains("session event delivery failed", StringComparison.Ordinal)
         && (m.Contains("did not acknowledge", StringComparison.Ordinal) || m.Contains("did not complete", StringComparison.Ordinal));
 
+    internal static bool IsEmptyResponse(JsonElement data) => Json.Str(data, "errorType") == "query"
+        && Json.Str(data, "message") == "No response was returned. Send your message again to retry.";
+
     // attention.message (#841, Engineering): composed by the host from the structured fields
     // alone, never from the agent's words. Redacting arbitrary error text is a blocklist that
     // never closed (Basic, _-joined keys, a repeated Bearer, camelCase keys in three rounds), and
     // this field reaches every client, HA and the phone. The CLI's turn-error notice is shown as
     // the same sentence (CopilotParser.MainText, #846). The words follow ui.md §6.13 (#814):
     // "Needs sign-in", "Not authorised", "Rate limited", "Agent error".
+    internal const string EmptyResponseMessage = "Copilot returned no response. Sending your message again usually fixes it.";
+
     static readonly Dictionary<(AttentionKind, ErrorClass?), string> Templates = new()
     {
         [(AttentionKind.SignInNeeded, null)] = "{0} needs you to sign in again",
