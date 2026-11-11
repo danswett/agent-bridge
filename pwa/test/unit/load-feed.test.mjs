@@ -20,7 +20,7 @@ async function fake(t, { capabilities = ['load'], hold = [], result = sample() }
   const client = new HostClient(transport);
   t.after(() => client.close());
   await client.hello();
-  return { client, sent, answer,
+  return { client, sent, answer, refuse: (m) => transport.onmessage({ re: m.id, ok: false, error: 'refused' }),
     ops: () => sent.filter((m) => m.op !== 'hello').map((m) => m.op),
     update: (data) => transport.onmessage({ ev: 'load.update', seq: ++seq, data }) };
 }
@@ -111,4 +111,13 @@ test('malformed and oversized updates are ignored and valid updates are limited 
   now = 1000;
   a.update(sample({ cpu: { percent: 20 } }));
   assert.equal(feed.load('a').cpu.percent, 20);
+});
+
+test('a refused subscription surfaces its error instead of leaving apparently live figures', async (t) => {
+  const a = await fake(t, { hold: ['load.subscribe'] }), feed = new LoadFeed();
+  const pending = feed.attach('a', a.client), rejected = assert.rejects(pending, /load.subscribe/);
+  await flush();
+  a.refuse(a.sent.find((m) => m.op === 'load.subscribe'));
+  await rejected;
+  assert.equal(feed.load('a'), null);
 });
