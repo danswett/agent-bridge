@@ -1195,7 +1195,7 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 }
 
 /* ---- the conversation (ui.md §6.4) ---- */
-/* Jump to latest (#1720): an overlay anchored to the scroll pane, never a layout spacer. */
+/* Jump to latest (#1720): an overlay normally; a tall question leaves a separate row for it. */
 .conversation:has(> .jump-latest) { position: relative; }
 .jump-latest {
   position: absolute; left: 50%; transform: translate(-50%, -100%); z-index: 3;
@@ -1205,6 +1205,16 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
   background: var(--ab-card); color: var(--ab-text); font: inherit; cursor: pointer;
 }
 .jump-latest[hidden] { display: none; }
+.jump-latest[data-rail] {
+  position: relative; left: auto; transform: none; flex: none; align-self: center; margin: 8px 12px;
+}
+/* Keep the phone's content spacing without a padding floor that could push the row out of view. */
+@media (max-width: 759px) {
+  .stream-scroll:has(~ .jump-latest[data-rail]) { padding-block: 0; }
+  .stream-scroll:has(~ .jump-latest[data-rail]) > .history:not([hidden]),
+  .stream-scroll:has(~ .jump-latest[data-rail]) > .history[hidden] + .stream { padding-top: calc(var(--head-h, 0px) + var(--ab-space-4)); }
+  .stream-scroll:has(~ .jump-latest[data-rail]) > :last-child { padding-bottom: calc(var(--foot-h, 0px) + var(--ab-space-4)); }
+}
 .jump-latest .ab-icon { transform: rotate(-90deg); }
 @media (forced-colors: active) { .jump-latest { background: ButtonFace; color: ButtonText; border-color: ButtonText; } }
 

@@ -1913,16 +1913,28 @@ export class SessionCard {
     const e = this.els;
     if (!e.scroll.getClientRects().length) { return; }
     const show = e.scroll.scrollHeight - e.scroll.clientHeight - e.scroll.scrollTop > e.scroll.clientHeight;
+    let rail = false;
+    let covered = 0;
     if (show) {
       // Anchor to the visible scroll pane; the phone's existing foot coverage follows its box.
-      let bottom = e.scroll.offsetTop + e.scroll.clientHeight - (this.collapse?.footCovered() ?? 0) - 8;
+      covered = this.collapse?.footCovered() ?? 0;
+      const reserved = e.jump.hasAttribute('data-rail') ? 44 + 8 + parseFloat(e.jump.style.marginBottom) : 0;
+      let bottom = e.scroll.offsetTop + e.scroll.clientHeight + reserved - covered - 8;
       const box = e.conversation.getBoundingClientRect();
       const controls = [...this.#guarded?.querySelectorAll('.answer-controls, .answer-actions') ?? []].map((el) => el.getBoundingClientRect()).filter((r) => r.height);
       const top = Math.min(...controls.map((r) => r.top));
       const end = Math.max(...controls.map((r) => r.bottom));
-      if (end > box.top + bottom - 44 && top < box.top + bottom) { bottom = top - box.top - 8; }
-      if (e.jump.style.top !== `${bottom}px`) { e.jump.style.top = `${bottom}px`; }
+      if (end > box.top + bottom - 44 && top < box.top + bottom) {
+        bottom = top - box.top - 8;
+        // A form taller than the pane has no room above it: reserve a row, not an overlay on its inputs.
+        rail = bottom < e.scroll.offsetTop + (this.collapse?.covered() ?? 0) + 44 + 8;
+      }
+      const at = rail ? '' : `${bottom}px`;
+      if (e.jump.style.top !== at) { e.jump.style.top = at; }
     }
+    e.jump.toggleAttribute('data-rail', rail);
+    const margin = rail ? `${covered + 8}px` : '';
+    if (e.jump.style.marginBottom !== margin) { e.jump.style.marginBottom = margin; }
     if (e.jump.hidden === show) {
       if (show) { e.jump.hidden = false; enter(e.jump, 'listItem'); }
       else { leave(e.jump, 'listItem'); e.jump.hidden = true; }
