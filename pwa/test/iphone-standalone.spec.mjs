@@ -1,5 +1,5 @@
 // An installed iPhone's phone layout (#1682): the session pane ends at the screen's bottom edge
-// (never past it), the reply box sits the home indicator's band plus its own padding above that
+// (never past it), the reply box sits only the home indicator's band above that
 // edge, and the header sits under the status bar with no blur or filter over it.
 // #1627 extended the pane past the viewport to chase a gap measured from a faked screen; the
 // owner's phone then showed the box too low and the header blurred. This pins the layout that works.
@@ -76,15 +76,15 @@ test.afterEach(async ({ page }) => {
 });
 
 for (const long of [true, false]) {
-  test(`installed on an iPhone, a ${long ? 'long' : 'short'} conversation ends at the screen's edge, the reply box sits 46 above it and the header is clear and unblurred`, async ({ page }, info) => {
+  test(`installed on an iPhone, a ${long ? 'long' : 'short'} conversation ends at the screen's edge, the reply box clears only the safe area and the header is clear and unblurred`, async ({ page }, info) => {
     await installed(page, { long });
     const at = await geometry(page);
     // The pane is the screen: not a pixel past its bottom edge, and the page does not scroll.
     expect(at.paneBottomGap).toBe(0);
     expect(at.paneTop).toBe(0);
     expect(at.docOverflow).toBeLessThanOrEqual(0);
-    // The box: the home indicator's band (34) and the slot's own padding (12).
-    expect(at.boxGap).toBe(SAFE_BOTTOM + 12);
+    // #2037: only the home indicator's band; no additional slot gap.
+    expect(at.boxGap).toBe(SAFE_BOTTOM);
     // The header starts under the status bar and nothing blurs it.
     expect(at.barTop).toBeGreaterThanOrEqual(SAFE_TOP);
     expect(at.blurred).toBe(0);
@@ -96,7 +96,7 @@ for (const long of [true, false]) {
     await frame(page);
     const up = await geometry(page);
     expect(up.paneBottomGap).toBe(0);
-    expect(up.boxGap).toBe(12);
+    expect(up.boxGap).toBe(0);
     expect(up.blurred).toBe(0);
 
     // Closed again: back to where it was.

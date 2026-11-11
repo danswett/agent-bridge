@@ -36,6 +36,7 @@ import { PaneDividers } from './pane-dividers.js';
 import { UPDATING } from './hold.js';
 import { HistoryStore } from '../history-store.js';
 import { RowMenu } from './row-menu.js';
+import { phoneMedia } from '../phone-viewport.js';
 
 // Needs you's answers (Approve once, Deny, Resend) wait as a question's do (ui.md §5.3): any
 // change to the lane can put Approve once under a pointer aimed at something else (an entry
@@ -139,6 +140,7 @@ const TEXT_FIELD = 'textarea, select, input:not([type="button"], [type="checkbox
 const POPUP = '[role="menu"], [role="dialog"], [role="alertdialog"], dialog[open], [aria-modal="true"], [aria-haspopup][aria-expanded="true"]';
 
 export class SessionsPage {
+  #onResize = () => this.#resized();
   #shownCaps = new Map();
   #notWholeSince = null;
   #slotTimer = null;
@@ -216,7 +218,7 @@ export class SessionsPage {
     this.order = new SessionOrder({ storage });
     const media = (q) => globalThis.matchMedia?.(q) ?? { matches: false, addEventListener() {} };
     this.wide = media(WIDE);
-    this.phone = media(PHONE);
+    this.phone = globalThis.matchMedia ? phoneMedia(globalThis, PHONE) : media(PHONE);
     this.#inspectorHidden = this.#read(INSPECTOR) === 'hidden';
     this.view = new SessionListView($('session-list'), hosts.sessions, {
       views: $('session-views'),
@@ -248,7 +250,7 @@ export class SessionsPage {
     this.view.onSelect = (card) => card.openFromRow(() => this.#choose(card, true));
     this.view.onBack = () => this.#back();
     this.view.onInspector = () => this.#toggleInspector();
-    for (const m of [this.wide, this.phone]) { m.addEventListener('change', () => this.#resized()); }
+    for (const m of [this.wide, this.phone]) { m.addEventListener('change', this.#onResize); }
     this.#drawPanes();
     // The widths of the panes from 760 up (#1030): the dividers only draw on those widths.
     this.dividers = $('list-divider') && $('sessions')
@@ -773,6 +775,8 @@ export class SessionsPage {
 
   // Everything tied to the signed-in account goes with it.
   clear() {
+    for (const m of [this.wide, this.phone]) { m.removeEventListener?.('change', this.#onResize); }
+    this.phone.destroy?.();
     this.#sortPopup.close(false);
     this.#sortEvents?.abort();
     this.view.stopRecent();
