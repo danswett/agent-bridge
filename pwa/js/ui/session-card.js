@@ -1645,6 +1645,9 @@ export class SessionCard {
       this.#follow.after(!this.#placed);
       if (full.phase !== 'loading' || full.turns.length) { this.#placed = true; }
     }
+    // Replacement can move the question after the history anchor aimed its smooth scroll.
+    const reveal = this.#revealing;
+    if (reveal?.view.isConnected) { reveal.view.scrollIntoView({ block: 'nearest', behavior: reveal.behavior }); }
   }
 
   // A stored latest turn with questions supplies their order, including after reload. Only words
