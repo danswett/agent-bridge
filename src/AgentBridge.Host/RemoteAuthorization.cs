@@ -86,7 +86,7 @@ public sealed class RemoteAuthorization : IDisposable
 
     public Func<SecureChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions) => async (channel, op, data) =>
     {
-        if (!Enabled) { return await sessions.HandleAsync(channel, op, data); }
+        if (!Enabled) { return await sessions.HandleAsync(channel, op, data, hello => DiagnosticsFor(channel, hello)); }
         if (!Allows(channel) || !leases.TryGetValue(channel, out var lease)) { throw new InvalidOperationException("the peer is not authorized"); }
         var operations = lease.Role switch
         {
@@ -104,6 +104,7 @@ public sealed class RemoteAuthorization : IDisposable
     HelloResult Shape(SecureChannel channel, HelloResult hello)
     {
         var role = Allows(channel) && leases.TryGetValue(channel, out var lease) ? lease.Role : null;
+        hello = DiagnosticsFor(channel, hello);
         return hello with
         {
             // machine.restore names sessions (#780): only for a role that may read them.
@@ -117,6 +118,17 @@ public sealed class RemoteAuthorization : IDisposable
             })],
         };
     }
+
+    HelloResult DiagnosticsFor(SecureChannel channel, HelloResult hello) => hello with
+    {
+        Machine = hello.Machine with
+        {
+            DiagnosticsReason = hello.Machine.DiagnosticsReason is null ? null
+                : !Enabled ? DiagnosticsProtocol.PinningOff
+                : !IsPinnedPerson(channel) ? DiagnosticsProtocol.NoPersonLease
+                : DiagnosticsProtocol.NotOffered,
+        },
+    };
 
     public void Revalidate()
     {

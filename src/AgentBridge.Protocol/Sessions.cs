@@ -357,8 +357,10 @@ public enum NotificationClass { NeedsYou, Done, Fyi }
 // from a restart.
 // Restore: what went when the host last stopped (#780, RestoreProtocol), for RestoreProtocol.ShownFor
 // after it started; absent when nothing did, or from a host that does not say.
+// DiagnosticsReason: why this channel is not offered diagnostics (#1921); absent when offered
+// or from a host without a diagnostics service. Never an authorization grant.
 public sealed record MachineInfo([property: Strict(Strictness.Identity)] string Id, string Name, string Os, string HostVersion, bool? Dev = null, int? Sessions = null, string? ReadOnly = null, string? Instance = null,
-    RestoreNotice? Restore = null);
+    RestoreNotice? Restore = null, string? DiagnosticsReason = null);
 
 public sealed record HelloResult([property: Strict(Strictness.Identity)] int Protocol, MachineInfo Machine, IReadOnlyList<string> Capabilities);
 

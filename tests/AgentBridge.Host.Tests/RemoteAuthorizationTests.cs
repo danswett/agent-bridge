@@ -527,6 +527,91 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         await channel.Closed.WaitAsync(Patience);
     }
 
+    [Theory]
+    [InlineData(false, TrustedPeerStore.Person, true, "pinning-off")]
+    [InlineData(true, TrustedPeerStore.Service, true, "no-person-lease")]
+    [InlineData(true, TrustedPeerStore.Host, true, "no-person-lease")]
+    [InlineData(true, TrustedPeerStore.Person, true, null)]
+    [InlineData(true, TrustedPeerStore.Person, false, "not-offered")]
+    public async Task Hello_says_why_diagnostics_are_withheld_without_offering_or_serving_them(
+        bool pinning, string role, bool offered, string? reason)
+    {
+        if (!pinning)
+        {
+            authorization.Dispose();
+            authorization = new RemoteAuthorization(false, store, time);
+            authorization.Attach(host.Hub);
+        }
+        var sessions = new SessionService(source, new MachineInfo(host.Id, "Host", "windows", "0.1.0"))
+        {
+            Diagnostics = new RemoteDiagnostics(ch => offered && authorization.IsPinnedPerson(ch), null,
+                "0.1.0", false, () => null, () => (DiagnosticsReadOnly.None, null), time),
+        };
+        host.Hub.Handler = authorization.Handler(sessions);
+        var peer = await PeerAsync("pwa");
+        Pin(peer, role);
+        var channel = await peer.Hub.OpenAsync(host.Id, Patience);
+        var hello = Result(await channel.RequestAsync(Ops.Hello, new { }, Patience));
+
+        Assert.Equal(reason is null, hello.GetProperty("capabilities").EnumerateArray()
+            .Any(c => c.GetString() == DiagnosticsProtocol.Capability));
+        var machine = hello.GetProperty("machine");
+        Assert.Equal(reason is not null, machine.TryGetProperty("diagnosticsReason", out var value));
+        if (reason is not null)
+        {
+            Assert.Equal(reason, value.GetString());
+            Assert.False((await channel.RequestAsync(DiagnosticsProtocol.Get, new { }, Patience)).GetProperty("ok").GetBoolean());
+        }
+    }
+
+    [Fact]
+    public async Task A_hello_without_a_diagnostics_service_makes_no_claim_about_why_it_is_missing()
+    {
+        var (peer, _) = await OpenAsync();
+        var channel = await peer.Hub.OpenAsync(host.Id, Patience);
+        var hello = Result(await channel.RequestAsync(Ops.Hello, new { }, Patience));
+
+        Assert.False(hello.GetProperty("machine").TryGetProperty("diagnosticsReason", out _));
+    }
+
+    [Fact]
+    public async Task A_person_pin_is_never_inferred_from_disabled_pinning_or_an_unpinned_channel()
+    {
+        var (peer, channel) = await OpenAsync();
+        Assert.True(authorization.IsPinnedPerson(channel));
+        using var disabled = new RemoteAuthorization(false, store, time);
+        Assert.False(disabled.IsPinnedPerson(channel));
+
+        store.Revoke(peer.Key.Public);
+        Assert.False(authorization.IsPinnedPerson(channel));
+    }
+
+    [Fact]
+    public async Task A_watched_hello_keeps_its_reason_until_diagnostics_are_offered()
+    {
+        var offered = false;
+        var sessions = new SessionService(source, new MachineInfo(host.Id, "Host", "windows", "0.1.0"))
+        {
+            Time = time,
+            Diagnostics = new RemoteDiagnostics(ch => offered && authorization.IsPinnedPerson(ch), null,
+                "0.1.0", false, () => null, () => (DiagnosticsReadOnly.None, null), time),
+        };
+        host.Hub.Handler = authorization.Handler(sessions);
+        var (peer, _) = await OpenAsync();
+        var channel = await peer.Hub.OpenAsync(host.Id, Patience);
+        var first = Result(await channel.RequestAsync(Ops.Hello, new { changes = true }, Patience));
+        Assert.Equal("not-offered", first.GetProperty("machine").GetProperty("diagnosticsReason").GetString());
+        time.Advance(sessions.HelloCheck);
+        Assert.False(channel.Events.TryRead(out _));
+
+        offered = true;
+        time.Advance(sessions.HelloCheck);
+        Assert.Equal(Events.HelloChanged, (await channel.Events.ReadAsync().AsTask().WaitAsync(Patience)).Name);
+        var next = Result(await channel.RequestAsync(Ops.Hello, new { }, Patience));
+        Assert.False(next.GetProperty("machine").TryGetProperty("diagnosticsReason", out _));
+        Assert.Contains(next.GetProperty("capabilities").EnumerateArray(), c => c.GetString() == DiagnosticsProtocol.Capability);
+    }
+
     [Fact]
     public async Task Diagnostics_are_neither_offered_nor_served_while_pins_are_off()
     {
