@@ -177,6 +177,93 @@ public sealed class MachineUpdateTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Update_now_preparation_distinguishes_quiet_busy_and_unreadable_machines()
+    {
+        var row = await ListedAsync();
+        Assert.False(row.CanUpdateNow);
+        Assert.Null(row.PrepareNow());
+        await NowState(Found with { CanUpdateNow = true, Busy = new() });
+        var quiet = Assert.IsType<MachineUpdateNowPrompt>(row.PrepareNow());
+        Assert.Null(quiet.Sheet);
+        var choice = Assert.IsType<MachineUpdateNowChoice>(row.TakeNow(quiet));
+        Assert.Equal("0.5.0", choice.Release);
+        Assert.Null(choice.Accept);
+        Assert.Null(row.TakeNow(quiet));
+
+        await remoteHost.SendAsync(Events.SessionUpsert, Make.Session("approval", title: "Review update"));
+        await Wait.UntilAsync(() => remote.Sessions.Get("approval") is not null, "the named session");
+        await NowState(Found with
+        {
+            CanUpdateNow = true,
+            Busy = new() { Working = 1, Waiting = 1, Sessions = [new("missing", UpdateBusyState.Working), new("approval", UpdateBusyState.Approval)] },
+        });
+        var busy = Assert.IsType<MachineUpdateNowPrompt>(row.PrepareNow());
+        Assert.Equal("Update Desk PC now?", busy.Sheet!.Title);
+        Assert.Equal(["Approval waiting", "Mid-turn"], busy.Sheet.Sessions.Select(s => s.State));
+        Assert.Equal(["Review update", UpdateNowWords.Unnamed], busy.Sheet.Sessions.Select(s => s.Name));
+        Assert.Equal(UpdateNowWords.WarnLine, busy.Sheet.Warn);
+        Assert.Equal(2, row.TakeNow(busy, confirmed: true)!.Accept!.Sessions!.Count);
+
+        await NowState(Found with { CanUpdateNow = true });
+        var unknown = Assert.IsType<MachineUpdateNowPrompt>(row.PrepareNow());
+        Assert.Equal(UpdateNowWords.UnknownLine, unknown.Sheet!.Unknown);
+        Assert.True(row.TakeNow(unknown, confirmed: true)!.Accept!.Unknown);
+        Assert.Empty(remoteHost.Sent(UpdateProtocol.Install));
+    }
+
+    [Fact]
+    public async Task A_confirm_answer_reprepares_the_dialog_and_invalidates_the_old_snapshot()
+    {
+        var row = await ListedAsync();
+        await NowState(Found with { CanUpdateNow = true, Busy = new() });
+        var first = row.PrepareNow()!;
+        var changed = Found with { CanUpdateNow = true, Busy = new() { Waiting = 1, Sessions = [new("question", UpdateBusyState.Question)] } };
+        var again = Assert.IsType<MachineUpdateNowPrompt>(row.PrepareNow(new UpdateCommandResult(UpdateAck.Confirm, "untrusted machine text") { State = changed }));
+        Assert.True(first.Cancelled);
+        Assert.Null(row.TakeNow(first, confirmed: true));
+        Assert.Equal("Question waiting", Assert.Single(again.Sheet!.Sessions).State);
+        Assert.Equal(UpdateNowWords.PauseLine, again.Sheet.Pause);
+        Assert.Equal("question", Assert.Single(row.TakeNow(again, confirmed: true)!.Accept!.Sessions!).Id);
+        Assert.Empty(remoteHost.Sent(UpdateProtocol.Install));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Cancel_and_stale_or_removed_targets_never_produce_an_update_choice(bool signOut)
+    {
+        var row = await ListedAsync();
+        await NowState(Found with { CanUpdateNow = true });
+        var cancel = row.PrepareNow()!;
+        Assert.Null(row.TakeNow(cancel)); // No explicit primary-button choice, including Enter or Escape.
+        Assert.True(cancel.Cancelled);
+        var stale = row.PrepareNow()!;
+        await NowState(Found with { CanUpdateNow = true, Available = "0.6.0" });
+        Assert.True(stale.Cancelled);
+        Assert.Null(row.TakeNow(stale, confirmed: true));
+        var removed = row.PrepareNow()!;
+        if (signOut) { main.Remove(row.Key); }
+        else
+        {
+            await remoteHost.StopAsync();
+            await Wait.UntilAsync(() => removed.Cancelled, "the disconnected machine's dialog cancelled");
+        }
+        Assert.True(removed.Cancelled);
+        Assert.Null(row.TakeNow(removed, confirmed: true));
+        Assert.Null(row.PrepareNow());
+        Assert.Empty(remoteHost.Sent(UpdateProtocol.Install));
+    }
+
+    async Task NowState(UpdateState state)
+    {
+        await remoteHost.SendAsync(UpdateProtocol.Event, state);
+        await remote.ReadAsync<object>(FakeHost.Barrier);
+        await Wait.UntilAsync(() => remote.Update?.Available == state.Available && remote.Update?.CanUpdateNow == state.CanUpdateNow
+            && (remote.Update?.Busy is null) == (state.Busy is null)
+            && remote.Update?.Busy?.Working == state.Busy?.Working, "the Update now state");
+    }
+
+    [Fact]
     public async Task A_machine_that_stops_offering_updates_leaves_the_list()
     {
         await ListedAsync();
