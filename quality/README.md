@@ -396,12 +396,33 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      `pwa-e2e` runs `test/e2e`, in both browsers, in the one job that builds the dev stack. The
      shards set `PWA_SKIP_E2E`, so `test/e2e` is left out of them rather than skipping itself;
      together the seven run every spec. The one PWA job these replace took a median of 15
-     minutes. Every job that runs `playwright install --with-deps` (each `pwa-ui` leg, `pwa-e2e`
-     and `spikes-linux`) first downloads Playwright's system packages through
-     `.github/actions/playwright-system-packages`, and if apt's first mirror hasn't finished in
-     five minutes it fetches the rest from the runner's Canonical fallback,
+     minutes. Each `pwa-ui` leg, `pwa-e2e` and `spikes-linux` downloads and offline-installs
+     Playwright's system packages through `.github/actions/playwright-system-packages`.
+     Network attempts have a 60-second bound; an Azure timeout switches to the runner's Canonical fallback,
      `https://archive.ubuntu.com` (main run 41927187905 lost a WebKit shard to that mirror at
-     100 kB/s, and main run 41952998347 `pwa-e2e`). Each of those jobs gets 35 minutes, so a
+     100 kB/s, and main run 41952998347 `pwa-e2e`). Before updating apt, a five-second Azure
+     DNS probe switches immediately if lookup fails; an Azure DNS error during update or
+     download also switches without backoff. An update timeout now switches rather than
+     repeating the same mirror. Classified connection/5xx failures and Canonical timeouts get three attempts,
+     waiting 5 then 20 seconds, before switching. Canonical gets the same bounded network
+     retries, then fails loudly with the attempt log; it never switches back to Azure.
+     A non-forced debs cache hit uses 20-second attempts within a two-minute whole-update
+     budget. Only classified network exhaustion or a timeout without other errors warns
+     and skips the network download, then requires `apt-get install --no-download`;
+     offline install failure is fatal, without a network fallback. After failed updates only,
+     the hit restores its matching signed indexes with sudo before installing; successful
+     updates keep their fresh indexes. Debs without indexes count as a miss. The versioned
+     paired key includes the runner image, Playwright lockfile and browsers. Only successful
+     cold runs save indexes and debs, on any ref; PR entries are scoped to that PR, and main
+     must seed its own entry. Cold seeding needs one successful Ubuntu update. Failed-update
+     restoration is proven offline; hosted proof needs a real failed update meeting a hit.
+     The four subsequent browser
+     installs omit `--with-deps`, so they cannot trigger another apt update.
+     Missing, corrupt or unrecognized errors fail at once, even alongside network errors
+     (#2025; outage runs 43039845647 and 43039976393). A healthy but slow cold update
+     now has less time per attempt than the old five-minute limit. Forced-proof checks
+     below are unchanged.
+     Each of those jobs gets 35 minutes, so a
      fallback download still leaves time for the tests; the browsers' own download, on a cache
      miss, is unchanged. To prove that fallback once without waiting for a slow mirror, once this
      `workflow_dispatch` trigger is on `main` (until then a branch's run by hand may not
@@ -423,17 +444,18 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      Chromium's, whose packages the runner may already have, only warns. Read each WebKit leg's
      count and its `Get:` lines before calling the fallback proven. Those two checks, the Azure
      fetch and the Canonical count, belong to the forced proof alone: a fallback after a real
-     five-minute timeout, on any run, is the one above, unchanged (#817 first proposed failing
+     timeout, on any run, is the one above (#817 first proposed failing
      that one on an Azure fetch too, and dropped it). A run by hand runs every
-     job (the whole ring), but is never a release and writes no cache.
+     job (the whole ring), but is never a release; only the paired apt cache above may be saved.
    - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
      It runs only when `spikes/` changes, like `spikes` on Windows.
    - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,
      runner and every `*.csproj`, `Directory.*` file, `nuget.config`, `global.json` and the
      tool manifest; Playwright's browsers for `spikes-linux`, `pwa-ui` (per browser) and
-     `pwa-e2e`, keyed by Playwright's version. Only `main` saves a cache, so a pull request can't
-     fill the repository's 10 GB or seed what main restores; a pull request restores main's, and
-     the nearest older NuGet key when its projects differ. `app` and `publish` restore nothing:
+     `pwa-e2e`, keyed by Playwright's version. Only `main` saves these caches; a pull request
+     restores main's, and the nearest older NuGet key when its projects differ. The paired
+     apt cache above is the exception, and a PR's entry cannot seed what main restores.
+     `app` and `publish` restore nothing:
      the package main publishes is built from what the feeds serve.
    - CodeQL on a pull request analyses only the languages the change reaches (`codeql.yml`
      `languages`, #464): C# for `.cs`, `.csproj`, `Directory.*` and the like; JavaScript for
