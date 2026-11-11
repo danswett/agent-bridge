@@ -1545,6 +1545,27 @@ public class MergeRuleTests
     }
 
     [Theory]
+    [InlineData("queued", "success", "success")]
+    [InlineData("queued", "failure", "failure")]
+    [InlineData("pending", "failure", "failure")]
+    [InlineData("in_progress", "success", "success")]
+    [InlineData("completed", "success", "error")]
+    public void An_unfinished_run_without_jobs_does_not_replace_completed_evidence(string status, string older, string state)
+    {
+        var github = new FakeGitHub(GraphQLPullRequest(Head),
+            mainRuns: MainRuns((6, status, status == "completed" ? "success" : null, 1), (5, "completed", older, 1)),
+            jobsByRun: new Dictionary<long, string> { [6] = """{"total_count":0,"jobs":[]}""" });
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+            Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
+            Assert.Equal(status != "completed", github.RestPaths.Any(p => p.Contains("/actions/runs/5/jobs?", StringComparison.Ordinal)));
+        }
+        finally { File.Delete(config); }
+    }
+
+    [Theory]
     [InlineData("success", "success")]
     [InlineData("failure", "failure")]
     public void A_cancelled_latest_run_never_replaces_completed_green_or_red_evidence(string conclusion, string state)

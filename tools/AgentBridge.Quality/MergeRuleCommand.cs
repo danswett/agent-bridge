@@ -496,6 +496,8 @@ static class MergeRuleCommand
                     if (batch.GetArrayLength() == 0 || jobPage >= 20)
                         throw new InvalidOperationException("CI job list is incomplete");
                 }
+                if (jobs.Count == 0 && Incomplete(run))
+                    continue;
                 // Failed-jobs-only reruns retain earlier successful instances.
                 var latest = jobs.GroupBy(j => j.GetProperty("name").GetString() ?? "", StringComparer.Ordinal)
                     .ToDictionary(g => g.Key, g => g.OrderByDescending(RunAttempt).ThenByDescending(j => j.GetProperty("id").GetInt64()).First(), StringComparer.Ordinal);
