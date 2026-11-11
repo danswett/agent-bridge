@@ -169,9 +169,22 @@ export function readHistoryResult(raw) {
   if (present(r.start) && start === null) { return null; }
   // A host sends at most the 50 turns a page may ask for: more is not a page of this protocol.
   if (!Array.isArray(r.turns) || r.turns.length > HISTORY.maxTurns) { return null; }
-  // A turn id is unique within a session: one a page repeats is held once, at its first place.
+  const turns = r.turns.map(readTurn).filter(Boolean);
+  const used = new Set(turns.map((t) => t.id));
   const seen = new Set();
-  const turns = r.turns.map(readTurn).filter((t) => t && !seen.has(t.id) && seen.add(t.id));
+  let duplicates = 0;
+  // Keep the newest occurrence's wire id for live attribution; earlier collisions need DOM keys.
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const t = turns[i];
+    if (!seen.has(t.id)) { seen.add(t.id); continue; }
+    let n = 1;
+    let id;
+    do { id = `${t.id}~duplicate-${n++}`; } while (used.has(id));
+    used.add(id);
+    turns[i] = { ...t, id };
+    duplicates++;
+  }
+  if (duplicates) { console.warn(`Duplicate history turn ids: ${duplicates}`); }
   return {
     turns,
     before: r.before ? r.before : null,

@@ -14,10 +14,12 @@ const words = (store) => store.get('h', 's').turns.flatMap((t) => [t.prompt.text
 async function setup() {
   let page = [];
   let calls = 0;
-  const client = { capabilities: [HISTORY.capability], history: async () => { calls++; return readHistoryResult({ turns: page }); } };
+  let pending = null;
+  const client = { capabilities: [HISTORY.capability], history: async () => { calls++; await pending; return readHistoryResult({ turns: page }); } };
   const store = new HistoryStore({ current: () => ({ client }) });
   await store.open('h', 's');
-  return { store, serve: (turns) => { page = turns; }, calls: () => calls };
+  return { store, serve: (turns) => { page = turns; }, calls: () => calls,
+    hold: () => { let release; pending = new Promise((resolve) => { release = resolve; }); return () => { pending = null; release(); }; } };
 }
 const settle = () => new Promise(setImmediate);
 
@@ -35,18 +37,17 @@ for (const ordered of [false, true]) {
   });
 }
 
-test('a lagging newest page and an empty page never discard an unanswered provisional turn', async () => {
-  const { store, serve } = await setup();
+test('a provisional turn stays visible while its catch-up page is in flight', async () => {
+  const { store, serve, hold, calls } = await setup();
+  const release = hold();
   store.live('h', said(A));
-  serve([B]);
+  serve([A, B]);
   store.live('h', said(B, 'Answer B'));
   await settle();
+  assert.equal(calls(), 2);
   assert.deepEqual(words(store), ['Question A', 'Scheduled B', 'Answer B']);
-  serve([]);
-  await store.open('h', 's');
-  assert.ok(store.get('h', 's').turns.some((t) => t.id === 'a'));
-  serve([A, B]);
-  await store.open('h', 's');
+  release();
+  await settle();
   assert.deepEqual(words(store), ['Question A', 'Answer A', 'Scheduled B', 'Answer B']);
 });
 

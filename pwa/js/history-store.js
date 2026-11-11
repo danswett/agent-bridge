@@ -108,10 +108,17 @@ export class HistoryStore {
       e.last = latest;
     }
     if (!changed) { return; }
+    const previous = turns.find((t) => t.id === e.latest);
+    const missedReply = latest && latest !== e.latest && previous && !previous.live?.response
+      && !previous.parts.some((p) => p.kind === 'response' && p.text);
     e.latest = latest;
     e.turns = turns;
     if (turns.length > before.length) { this.#trim(e, 'old'); }
     this.#emit(e, 'live', before);
+    // A backgrounded phone can miss every snapshot carrying the previous turn's reply.
+    if (missedReply) {
+      this.open(hostId, session.id).catch((err) => this.#fail(e, 'newest', err.message, false));
+    }
   }
 
   // ---- the work ----
@@ -428,11 +435,11 @@ export class HistoryStore {
       i = turns.length - 1;
       changed = true;
     }
-    const replied = a.responseTurn === latest;
+    const replied = a.responseTurn === latest && !!voice.response;
     const next = { ...turns[i].live, response: replied ? voice.response : (turns[i].live?.response ?? null), responseTruncated: replied ? voice.responseTruncated : (turns[i].live?.responseTruncated ?? false), reasoning: voice.reasoning, currentTool: a.currentTool ?? null };
     if (!same(next, turns[i].live)) { turns[i] = { ...turns[i], live: next }; changed = true; }
     // A reply that is an earlier turn's is drawn there, never under the new prompt.
-    const of = a.responseTurn && a.responseTurn !== latest ? at(a.responseTurn) : -1;
+    const of = voice.response && a.responseTurn && a.responseTurn !== latest ? at(a.responseTurn) : -1;
     if (of >= 0) {
       const reply = { reasoning: null, currentTool: null, ...turns[of].live, response: voice.response, responseTruncated: voice.responseTruncated };
       if (!same(reply, turns[of].live)) { turns[of] = { ...turns[of], live: reply }; changed = true; }
