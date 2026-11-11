@@ -280,6 +280,29 @@ test('a closed local receipt stays in its provisional asking turn while history 
   await expect(closed).toHaveCount(1);
 });
 
+test('a reader scrolled back keeps the closed receipt in its frozen asking turn', async ({ page }) => {
+  const card = await setup(page, { holdHistory: true });
+  await page.evaluate(({ id, long }) => {
+    const d = window.agentBridgeDemo;
+    const s = d.host.get(id);
+    d.upsert({ ...s, activity: { ...s.activity, userMessage: 'Asking prompt', responseTurn: s.activity.turn, response: long } });
+  }, { id: CODEX, long });
+  const scroller = card.locator('.stream-scroll');
+  await scroller.evaluate((el) => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
+  await page.evaluate((id) => {
+    const d = window.agentBridgeDemo;
+    const s = d.host.get(id);
+    d.upsert({ ...s, question: null, status: 'idle', activity: {
+      ...s.activity, turn: 'after-asking', userMessage: 'Later prompt', responseTurn: 'after-asking', response: 'Later reply',
+    } });
+  }, CODEX);
+  const asking = card.locator(`.history-turn[data-turn="${CODEX}-turn-2"]`);
+  await expect(asking.locator('.resolved-summary')).toContainText('Question closed');
+  await expect(card.locator('.question.resolved')).toHaveCount(1);
+  await expect(card.getByText('Later reply', { exact: true })).toBeVisible();
+  await expect.poll(() => scroller.evaluate((el) => el.scrollTop)).toBe(0);
+});
+
 test('delayed history and disjoint local closures share one newest-20 window', async ({ page }) => {
   const id = 'retention-disjoint';
   await page.goto('?demo=1&static=1');
