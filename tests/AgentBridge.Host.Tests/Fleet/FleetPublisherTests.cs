@@ -85,16 +85,17 @@ public sealed class FleetPublisherTests
     public async Task Sustained_failures_back_off_monotonically_cap_at_thirty_seconds_and_reset_on_success()
     {
         var logs = new List<string>();
-        var publication = new FleetPublication(source, "machine", share: true, time: time, log: logs.Add);
+        var clock = new SteppedClock(time);
+        var publication = new FleetPublication(source, "machine", share: true, time: clock, log: logs.Add);
         var calls = 0;
         Task Fail(JsonElement _, CancellationToken ct) { calls++; throw new IOException("private prompt path token"); }
         foreach (var seconds in new[] { 2, 4, 8, 16, 30, 30 })
         {
             Assert.False(await publication.PollAsync(Fail, force: true));
             Assert.Equal("failed", publication.Status.Result);
-            Assert.Equal(time.GetUtcNow().AddSeconds(seconds), publication.Status.NextRetry);
+            Assert.Equal(clock.GetUtcNow().AddSeconds(seconds), publication.Status.NextRetry);
             var before = calls;
-            time.AdjustTime(time.GetUtcNow().AddDays(1));
+            clock.Step += TimeSpan.FromDays(1);
             Assert.False(await publication.PollAsync(Fail, force: true));
             time.Advance(TimeSpan.FromSeconds(seconds - 1));
             Assert.False(await publication.PollAsync(Fail));
@@ -297,6 +298,15 @@ public sealed class FleetPublisherTests
         var result = JsonSerializer.SerializeToElement(await list.HandleAsync(channel, JsonSerializer.SerializeToElement(new { include = "content" })), ProtocolJson.Options);
         Assert.Equal(source.Sessions.Count, result.GetProperty("sessions").GetArrayLength());
         Assert.All(result.GetProperty("sessions").EnumerateArray(), s => Assert.False(s.TryGetProperty("name", out _)));
+    }
+
+    sealed class SteppedClock(FakeTimeProvider inner) : TimeProvider
+    {
+        public TimeSpan Step { get; set; }
+        public override DateTimeOffset GetUtcNow() => inner.GetUtcNow() + Step;
+        public override long GetTimestamp() => inner.GetTimestamp();
+        public override long TimestampFrequency => inner.TimestampFrequency;
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) => inner.CreateTimer(callback, state, dueTime, period);
     }
 
     static string[] Fields(JsonElement e) => e.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal).ToArray();
