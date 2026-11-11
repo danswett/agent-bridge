@@ -49,18 +49,16 @@ public class ConformanceInventoryTests
     [InlineData((int)InventoryDisposition.OutOfScope)]
     public void An_exclusion_without_a_recorded_decision_is_refused(int disposition)
     {
-        var required = new ConformanceInventoryRow(17, new("multi-field-questions", true));
         foreach (var decision in new string?[] { null, "", " ", "not an approved decision" })
-            Assert.Throws<ArgumentException>(() => ConformanceInventory.ForClient("PWA",
-                [required with { Disposition = (InventoryDisposition)disposition, Decision = decision }]));
+            Assert.Throws<ArgumentException>(() =>
+                new ConformanceInventoryRow(17, new("multi-field-questions", true), (InventoryDisposition)disposition, decision));
     }
 
     [Fact]
     public void An_unknown_client_or_disposition_cannot_produce_a_successful_empty_selection()
     {
         Assert.Throws<ArgumentException>(() => ConformanceInventory.ForClient("unknown"));
-        Assert.Throws<ArgumentException>(() => ConformanceInventory.ForClient("PWA",
-            [new(1, new("reply"), (InventoryDisposition)99)]));
+        Assert.Throws<ArgumentException>(() => new ConformanceInventoryRow(1, new("reply"), (InventoryDisposition)99));
     }
 
     [Fact]
