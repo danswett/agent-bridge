@@ -1616,7 +1616,16 @@ export class SessionCard {
     if (!this.turns.hosted && !this.#follow.hosted) { this.#follow.place(slot, questionHost); }
     if (full.phase === 'ready' && !full.loading && !full.error) {
       const placed = questionIds(turns);
-      for (const r of local) { if (this.#historyPage > r.page && !placed.has(r.questionId)) { r.element.remove(); } }
+      for (const r of local) {
+        if (this.#historyPage > r.page && !placed.has(r.questionId)) {
+          r.element.remove();
+          // Confirmed absence ends the live lifecycle; later stored placement may reuse the record.
+          if (r === this.#receipt) {
+            this.#receipt = null;
+            this.#closed.push(r);
+          }
+        }
+      }
     }
     this.#syncWaiting();
     // Chromium anchors to the old live stream while its stored replacement is inserted above it.
