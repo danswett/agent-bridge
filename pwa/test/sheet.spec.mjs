@@ -86,6 +86,23 @@ for (const [layout, viewport] of [
       expect(await page.evaluate(() => document.activeElement === window.sheetAnchor)).toBe(true);
     });
 
+    test('text-only overflow is reachable and scrollable with the keyboard', async ({ page }) => {
+      await page.evaluate(async () => {
+        const { openSheet } = await import('./js/ui/sheet.js');
+        const { h } = await import('./js/ui/dom.js');
+        window.sheet = openSheet({
+          title: 'Group details',
+          content: Array.from({ length: 80 }, (_, i) => h('p', {}, `Session details ${i + 1}`)),
+        });
+      });
+      const body = page.getByRole('dialog').locator('.sg-sheet-body');
+      expect(await body.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+      await page.keyboard.press('Tab');
+      await expect(body).toBeFocused();
+      await page.keyboard.press('PageDown');
+      await expect.poll(() => body.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+    });
+
     test('form, menu and alert choose their layout and an alert can focus its safe action', async ({ page }) => {
       for (const [kind, width] of [['form', 440], ['menu', 240], ['alert', 300]]) {
         const dialog = await open(page, { kind });
@@ -145,8 +162,9 @@ for (const [layout, viewport] of [
 
     for (const colorScheme of ['light', 'dark']) {
       for (const contrast of ['no-preference', 'more']) {
-        test(`scrim and accessibility in ${colorScheme}, contrast ${contrast}`, async ({ page }) => {
-          await page.emulateMedia({ colorScheme, contrast, reducedMotion: 'reduce' });
+        test(`scrim and accessibility in ${colorScheme}, contrast ${contrast}`, async ({ page, browserName }) => {
+          await page.emulateMedia({ colorScheme, contrast, reducedMotion: 'reduce',
+            forcedColors: browserName === 'chromium' && contrast === 'more' ? 'active' : 'none' });
           const dialog = await open(page);
           const opacity = await dialog.evaluate((el) => Number(getComputedStyle(el, '::backdrop').opacity));
           expect(opacity).toBe(contrast === 'more' ? .6 : colorScheme === 'dark' ? .32 : .22);

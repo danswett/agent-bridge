@@ -15,7 +15,7 @@ export function openSheet({ title, content = null, footer = null, kind = 'sheet'
     'aria-modal': 'true', 'aria-labelledby': id, dataset: { kind, anchored: String(!!anchor) },
   },
   h('header', { class: 'sg-sheet-head' }, h('h2', { id }, title), cancel),
-  h('div', { class: 'sg-sheet-body' }, content),
+  h('div', { class: 'sg-sheet-body', tabindex: '0', role: 'region', 'aria-labelledby': id }, content),
   footer ? h('footer', { class: 'sg-sheet-foot' }, footer) : null);
   const listeners = new AbortController();
   const { signal } = listeners;
