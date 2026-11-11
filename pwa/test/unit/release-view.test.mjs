@@ -30,6 +30,7 @@ test('Settings calls the release controller, renders its busy state and keeps ne
     return elements[id] ??= Object.assign(new EventTarget(), {
       textContent: '', hidden: false, attributes: {},
       setAttribute(name, value) { this.attributes[name] = value; },
+      getAttribute(name) { return this.attributes[name] ?? null; },
     });
   } };
   let finish;
@@ -47,14 +48,19 @@ test('Settings calls the release controller, renders its busy state and keeps ne
   const button = doc.getElementById('release-check');
   button.dispatchEvent(new Event('click'));
   assert.equal(requests, 1);
-  assert.equal(button.disabled, true);
+  assert.notEqual(button.disabled, true);
+  assert.equal(button.attributes['aria-disabled'], 'true');
   assert.equal(button.attributes['aria-busy'], 'true');
+  const first = pending;
+  button.dispatchEvent(new Event('click'));
+  assert.equal(pending, first);
+  assert.equal(requests, 1);
   finish({ ok: true, json: async () => ({ version: 'b'.repeat(40), builtAt: '' }) });
   await pending;
   assert.equal(elements['release-id'].textContent, '64a4019');
   assert.equal(elements['release-newer-id'].textContent, 'bbbbbbb');
   assert.equal(elements['release-newer'].hidden, false);
-  assert.equal(button.disabled, false);
+  assert.equal(button.attributes['aria-disabled'], 'false');
   button.dispatchEvent(new Event('click'));
   finish({ ok: false });
   await pending;
@@ -62,6 +68,6 @@ test('Settings calls the release controller, renders its busy state and keeps ne
   assert.equal(elements['release-newer'].hidden, false);
   assert.equal(elements['release-newer-id'].textContent, 'bbbbbbb');
   assert.equal(button.hidden, false);
-  assert.equal(button.disabled, false);
+  assert.equal(button.attributes['aria-disabled'], 'false');
   assert.equal(button.attributes['aria-busy'], 'false');
 });

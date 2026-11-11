@@ -57,7 +57,7 @@ for (const { name, viewport } of [{ name: 'on a phone', viewport: { width: 390, 
       await check.click();
       await expect.poll(() => !!reply).toBe(true);
       const checking = section.getByRole('button', { name: 'Checking…', exact: true });
-      await expect(checking).toBeDisabled();
+      await expect(checking).toHaveAttribute('aria-disabled', 'true');
       await expect(checking).toHaveAttribute('aria-busy', 'true');
       await checking.evaluate((button) => button.click());
       reply();
@@ -75,6 +75,51 @@ for (const { name, viewport } of [{ name: 'on a phone', viewport: { width: 390, 
     const { violations } = await new AxeBuilder({ page }).include('#release').analyze();
     expect(violations).toEqual([]);
   });
+
+  for (const phase of ['installing', 'ready']) {
+    for (const moved of [false, true]) {
+      test(`Check keeps keyboard focus and ${moved ? 'leaves moved focus alone' : 'hands it off'} on ${phase} ${name}`, async ({ page }) => {
+        await page.setViewportSize(viewport);
+        await fakeRegistration(page);
+        let finish;
+        let requests = 0;
+        await page.route('**/version.json', async (route) => {
+          requests++;
+          await new Promise((resolve) => { finish = resolve; });
+          await route.fulfill({ json: { version: 'b'.repeat(40), builtAt: '' } });
+        });
+        await page.goto('?demo=1&static=1');
+        await page.waitForSelector('html[data-demo-ready]');
+        await go(page, 'settings');
+        const section = page.getByRole('region', { name: 'This app' });
+        const check = section.locator('#release-check');
+        const copy = section.getByRole('button', { name: 'Copy app version' });
+        const result = section.locator('#release-result');
+        await check.focus();
+        await page.keyboard.press('Enter');
+        await expect.poll(() => !!finish).toBe(true);
+        await expect(check).toBeFocused();
+        expect(await check.evaluate((button) => button.disabled)).toBe(false);
+        await expect(check).toHaveAttribute('aria-disabled', 'true');
+        await expect(check).toHaveAttribute('aria-busy', 'true');
+        await page.keyboard.press('Enter');
+        await page.keyboard.press('Space');
+        expect(requests).toBe(1);
+        if (moved) { await page.keyboard.press('Shift+Tab'); await expect(copy).toBeFocused(); }
+        await page.evaluate((phase) => {
+          window.releaseTest.install();
+          if (phase === 'ready') { window.releaseTest.worker.to('activated'); }
+        }, phase);
+        finish();
+        await expect(check).toBeHidden();
+        const target = moved ? copy : phase === 'ready' ? section.getByRole('button', { name: 'Reload', exact: true }) : result;
+        await expect(target).toBeFocused();
+        await page.evaluate(() => window.releaseTest.worker.to('activated'));
+        await expect(result).toHaveText('A new version of the app is ready.');
+        await expect(target).toBeFocused();
+      });
+    }
+  }
 
   test(`Settings follows installation and reloads only when asked ${name}`, async ({ page }) => {
     await page.setViewportSize(viewport);
