@@ -45,6 +45,7 @@ public sealed class Machine : IAsyncDisposable
     public string Key { get; }
     public bool IsLocal => Key == LocalKey;
     public HostConnection Host { get; }
+    internal UpdateNowPresses NowPresses { get; } = new();
     public CardContext Cards { get; }
     public Deliveries Deliveries => Cards.Deliveries;
     public ToastPlanner? Toasts { get; }
@@ -259,7 +260,14 @@ public sealed class Fleet : IAsyncDisposable
     public Task<string?> ForgetAsync(string machineId, CancellationToken ct) => link.ForgetAsync(machineId, ct);
     public SignedCommand? SignTransfer(TransferSource from, string session, string to) => link.SignTransfer(from, session, to);
     public SignedCommand? SignTrust(byte[]? machinePublic, string machine, string question, string choice, string request) => link.SignTrust(machinePublic, machine, question, choice, request);
-    public SignedCommand? SignUpdateNow(byte[]? machinePublic, string machine, string release, UpdateBusy? accept, string request) => link.SignUpdateNow(machinePublic, machine, release, accept, request);
+    public SignedCommand? SignUpdateNow(byte[]? machinePublic, string machine, string release, UpdateBusy? accept, string request)
+    {
+        var signed = link.SignUpdateNow(machinePublic, machine, release, accept, request);
+        // Remember before sending: the press's reply may be lost, and its update row is replaced
+        // on reconnect. The machine survives that reconnect, but not sign-out or forgetting.
+        if (signed is not null) { main.MachineOf(machine)?.NowPresses.Add(request); }
+        return signed;
+    }
     public string? DeviceId => link.DeviceId;
     public IReadOnlyList<FleetHost> People => link.People;
 

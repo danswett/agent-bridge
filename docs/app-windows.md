@@ -580,6 +580,13 @@ controls consume that same contract; this extraction does not disable or remove 
     question waiting, the sessions unknown, or a Codex usage check, held at most 11 minutes), and
     how it ended as one too (`last.code`), which they word themselves; the app's log names the
     device that pressed it and what it went over.
+    On this app's Machines page, another machine reporting `installing` with `requestNow`
+    reads "Restarting to update…" while connected and for 90 seconds after it leaves, then
+    Offline or Connecting as usual. A return clears the grace; forgetting the machine or
+    signing out discards it. A plain Install keeps its existing status. The app remembers the
+    last 32 Update now requests it signed per machine before sending, so their later outcomes
+    use the fixed code wording even if the press's reply was lost and its update row was
+    recreated on reconnect. This does not add the Windows Update now button or send loop.
   * **Ready:** a banner over every page, "Version *v* is ready. Restart to update." with
     **Restart to update** (an `InfoBar` with no close button, like the other app banners, so it
     stays while the release waits), and the same line and button in Settings. No toast: toasts

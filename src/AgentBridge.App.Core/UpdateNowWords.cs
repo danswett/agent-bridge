@@ -177,8 +177,8 @@ public sealed record UpdateNowSheet(string Title, IReadOnlyList<UpdateNowSheetRo
 
 public sealed record UpdateNowSheetRow(string Name, string State);
 
-// The Update now presses this app sent that a machine took (their requests), the last few only:
-// their outcome, which the machine reports after its restart, is worded as an Update now's.
+// The last few Update now presses this app signed: their outcome after the machine restarts
+// is worded as an Update now's even when the reply to the press was lost.
 public sealed class UpdateNowPresses
 {
     const int Kept = 32;

@@ -128,8 +128,12 @@ public sealed partial class MainViewModel
     {
         var want = new List<MachineRowViewModel>();
         var listedOffline = OfflineMachines.Select(o => o.Id).ToHashSet(StringComparer.Ordinal);
+        foreach (var gone in restarting.Keys.Where(k => machines.All(m => m.Key != k)).ToList()) { restarting.Remove(gone); }
+        var restartingRows = new HashSet<string>(StringComparer.Ordinal);
         foreach (var m in machines.OrderByDescending(m => m.IsLocal))
         {
+            var leaving = Restarting(m);
+            if (leaving) { restartingRows.Add(m.Key); }
             // One kept offline with its rows (#269) that the roster lists is shown by its offline
             // row, which has its Forget; one the roster does not know says so itself.
             if (m.Offline && listedOffline.Contains(m.Key)) { continue; }
@@ -142,7 +146,7 @@ public sealed partial class MainViewModel
             row.HeldWhy = HeldLong(m, connected);
             row.Facts = m.OfflineSince is { } since ? $"Last seen {Words.Ago(since, Time.GetUtcNow())}"
                 : string.Join(" · ", new[] { connected ? Words.Plural(count, "session", "sessions") : null, row.Held ? "Discovery held" : row.ViewOnly ? "View only" : null }.Where(s => s is not null));
-            row.Status = m.Offline ? "Offline" : !connected ? "Connecting" : m.IsLocal ? "This machine" : "Online";
+            row.Status = leaving ? UpdateNowWords.Restarting : m.Offline ? "Offline" : !connected ? "Connecting" : m.IsLocal ? "This machine" : "Online";
             row.Tile(count, m.OfflineSince is { } off ? Words.Ago(off, Time.GetUtcNow()) : null, m.Host.Can(LaunchProtocol.Capability));
             row.CanShowSessions = connected && !m.Offline && machines.Count > 1;
             row.CanCheckHere = m.IsLocal && CheckLocal is not null;
@@ -158,7 +162,7 @@ public sealed partial class MainViewModel
             var key = $"offline:{o.Id}";
             var row = MachineRows.FirstOrDefault(r => r.Key == key && r.Offline == o) ?? new MachineRowViewModel(key, o);
             row.Name = o.Name;
-            row.Status = o.Status;
+            row.Status = restartingRows.Contains(o.Id) ? UpdateNowWords.Restarting : o.Status;
             want.Add(row);
         }
         foreach (var gone in MachineRows.Except(want).ToList()) { MachineRows.Remove(gone); }
@@ -169,6 +173,30 @@ public sealed partial class MainViewModel
             else if (at != i) { MachineRows.Move(at, i); }
         }
         Raise(nameof(FleetSummary));
+    }
+
+    // Null while Installing is connected; the grace starts only when that channel goes away.
+    readonly Dictionary<string, DateTimeOffset?> restarting = new(StringComparer.Ordinal);
+
+    bool Restarting(Machine m)
+    {
+        if (m.IsLocal) { return false; }
+        if (!m.Offline && m.Host.State == LinkState.Connected)
+        {
+            if (m.Host.Update is { Phase: UpdatePhase.Installing, RequestNow: true })
+            {
+                restarting[m.Key] = null;
+                return true;
+            }
+            restarting.Remove(m.Key);
+            return false;
+        }
+        if (!restarting.TryGetValue(m.Key, out var left)) { return false; }
+        var now = Time.GetUtcNow();
+        if (left is null) { restarting[m.Key] = left = now; }
+        if (now - left.Value < UpdateNowWords.RestartShown) { return true; }
+        restarting.Remove(m.Key);
+        return false;
     }
 
     // How long a discovery hold must last before its machine's row says so: a hold that starts and
