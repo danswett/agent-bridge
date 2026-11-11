@@ -131,7 +131,7 @@ export function updateDetails(s, now = Date.now()) {
     const at = timestamp(value);
     return at ? Math.max(0, Math.floor((now - Date.parse(at)) / 60000)) : null;
   };
-  const words = (minutes) => minutes < 1 ? 'under a minute' : `${minutes} min`;
+  const words = (minutes) => minutes < 1 ? 'under a minute' : minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h`;
   const source = s?.checkSource === 'cdn' ? 'the release feed' : s?.checkSource === 'github' ? 'GitHub' : null;
   const checked = age(s?.checkedAt);
   const remaining = quota(s?.gitHubRemaining);
@@ -139,7 +139,7 @@ export function updateDetails(s, now = Date.now()) {
   const lines = [];
   if (source && checked !== null) { lines.push(`Update list from ${source}, ${words(checked)} old`); }
   if (remaining !== null && observed !== null) {
-    lines.push(`When last asked, GitHub allowed ${remaining === 0 ? 'no more checks' : `${remaining} more checks`} (${words(observed)} ago)`);
+    lines.push(`When last asked, GitHub allowed ${remaining === 0 ? 'no more checks' : `${remaining} more check${remaining === 1 ? '' : 's'}`} (${words(observed)} ago)`);
   }
   return lines;
 }
