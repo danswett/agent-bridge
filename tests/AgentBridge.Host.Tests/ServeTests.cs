@@ -641,6 +641,8 @@ public sealed partial class ServeTests : IAsyncLifetime
     [Fact]
     public async Task What_a_device_said_it_shows_stops_counting_when_its_channel_closes()
     {
+        // Channel-close cleanup is under test, not the grace for out-of-order presence.
+        host.Hub.PresenceGrace = TimeSpan.Zero;
         var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
         service = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0")) { Time = time };
         host.Hub.Handler = service.HandleAsync;
