@@ -148,7 +148,7 @@ for (const { state, id = CODEX, sort, filter, needsOnly, direction = 'up', reaso
   { state: 'Machine', sort: 'machine', reason: 'Switch to Your order to move sessions' },
   { state: 'search', filter: 'codex', reason: 'Clear the search or machine filter to move sessions' },
   { state: 'machine search', filter: 'Demo machine', reason: 'Clear the search or machine filter to move sessions' },
-  { state: 'Needs you filter', id: COPILOT, needsOnly: true, reason: 'Clear the Needs you filter to move sessions' },
+  { state: 'Needs you filter', id: COPILOT, needsOnly: true, reason: 'Clear the search or machine filter to move sessions' },
   { state: 'first in Sessions', id: COPILOT, reason: 'Already at the top' },
   { state: 'last in Sessions', id: DELEGATING, direction: 'down', reason: 'Already at the bottom' },
   { state: 'alone in Pinned', reason: 'Already at the top' },
@@ -189,21 +189,38 @@ for (const { state, id = CODEX, sort, filter, needsOnly, direction = 'up', reaso
   });
 }
 
-test('row menu distinguishes an unfinished snapshot from a group edge', async ({ page }) => {
-  await openDemo(page);
-  await page.evaluate(() => { window.agentBridgeDemo.page.view.settled = () => false; });
-  const pending = 'demo-pending-snapshot';
-  await upsert(page, pending, { agent: 'copilot', title: 'Loading session', status: 'idle', startedAt: later(), updatedAt: later() });
-  await expect.poll(() => order(page)).toEqual([pending, ...FIRST]);
-  for (const [id, direction] of [[pending, 'down'], [COPILOT, 'up']]) {
-    await card(page, id).locator('.row-main').press('Shift+F10');
-    const item = card(page, id).getByRole('menuitem', { name: `Move ${direction}`, exact: true });
-    await expect(item.locator('..').locator('.row-menu-reason')).toHaveText('Wait for the session list to finish loading');
-    await expect(item).toHaveAttribute('aria-disabled', 'true');
-    await expect(item).toHaveAccessibleDescription(`Alt+${direction === 'up' ? '\u2191' : '\u2193'} Wait for the session list to finish loading`);
-    await page.keyboard.press('Escape');
-  }
-});
+for (const { state, sort, filter, needsOnly, only } of [
+  { state: 'Your order' },
+  { state: 'Most recent', sort: 'recent' },
+  { state: 'Machine', sort: 'machine' },
+  { state: 'search', filter: 'Loading session' },
+  { state: 'machine filter', filter: 'Demo machine' },
+  { state: 'Needs you filter', needsOnly: true },
+  { state: 'a sole pending row', only: true },
+]) {
+  test(`row menu loading reason wins with ${state}, including both directions at an edge`, async ({ page }) => {
+    await openDemo(page);
+    await page.evaluate((ids) => {
+      window.agentBridgeDemo.page.view.settled = () => false;
+      for (const id of ids) { window.agentBridgeDemo.remove(id); }
+    }, only ? FIRST : []);
+    const pending = 'demo-pending-snapshot';
+    await upsert(page, pending, { agent: 'copilot', title: 'Loading session', status: needsOnly ? 'waiting' : 'idle', startedAt: later(), updatedAt: later() });
+    await expect.poll(() => order(page)).toEqual([pending, ...(only ? [] : FIRST)]);
+    if (sort) { await page.locator('#session-sort').selectOption(sort); }
+    if (filter) { await page.locator('#search').fill(filter); }
+    if (needsOnly) { await page.evaluate(() => window.agentBridgeDemo.page.view.setNeedsOnly(true)); }
+    const moves = [[pending, 'up'], [pending, 'down'], ...(!sort && !filter && !needsOnly && !only ? [[COPILOT, 'up']] : [])];
+    for (const [id, direction] of moves) {
+      await card(page, id).locator('.row-main').press('Shift+F10');
+      const item = card(page, id).getByRole('menuitem', { name: `Move ${direction}`, exact: true });
+      await expect(item.locator('..').locator('.row-menu-reason')).toHaveText('Wait for the session list to finish loading');
+      await expect(item).toHaveAttribute('aria-disabled', 'true');
+      await expect(item).toHaveAccessibleDescription(`Alt+${direction === 'up' ? '\u2191' : '\u2193'} Wait for the session list to finish loading`);
+      await page.keyboard.press('Escape');
+    }
+  });
+}
 
 for (const touch of [false, true]) {
   test.describe(`row menu key hints with ${touch ? 'touch only' : 'a pointer'} at phone width`, () => {

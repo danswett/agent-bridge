@@ -472,13 +472,11 @@ export class SessionListView {
     const pinned = this.order.isPinned(key);
     const moveItem = (delta) => {
       const disabled = !this.moving || !this.order.canMove(key, delta);
-      const position = this.order.position(key);
-      const edge = position && (delta < 0 ? position.at === 1 : position.at === position.of);
-      const reason = !disabled ? null : this.order.sort !== 'yours'
-        ? 'Switch to Your order to move sessions'
-        : this.filter ? 'Clear the search or machine filter to move sessions'
-        : this.needsOnly ? 'Clear the Needs you filter to move sessions'
-        : !edge ? 'Wait for the session list to finish loading'
+      const neighbour = this.order.neighbours(key)?.[delta < 0 ? 'prev' : 'next'];
+      const loading = this.order.isPending(key) || this.order.isPending(neighbour);
+      const reason = !disabled ? null : loading ? 'Wait for the session list to finish loading'
+        : this.order.sort !== 'yours' ? 'Switch to Your order to move sessions'
+        : this.filter || this.needsOnly ? 'Clear the search or machine filter to move sessions'
         : delta < 0 ? 'Already at the top' : 'Already at the bottom';
       return {
         label: delta < 0 ? 'Move up' : 'Move down', shortcut: delta < 0 ? 'Alt+\u2191' : 'Alt+\u2193',
