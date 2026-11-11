@@ -56,7 +56,13 @@ internal sealed class RetryEpisode
         int index;
         lock (sync)
         {
-            if (sending || !Check() || expectedAttempt != attempts.Count + 1 || requests.Contains(request)) return false;
+            if (sending || !Check()) return false;
+            if (cancellation.IsCancellationRequested)
+            {
+                End(RetryStop.Cancelled);
+                cancellation.ThrowIfCancellationRequested();
+            }
+            if (expectedAttempt != attempts.Count + 1 || requests.Contains(request)) return false;
             if (reason == RetryReason.Auto && Elapsed.TotalSeconds < DueSeconds[attempts.Count]) return false;
             index = attempts.Count;
             requests.Add(request);
