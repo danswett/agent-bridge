@@ -39,9 +39,8 @@ public sealed class MessageTimeView : Button
         };
         EffectiveViewportChanged += (_, e) =>
         {
-            var was = Visible();
             viewport = e.EffectiveViewport;
-            if (was != Visible()) { Refresh(); }
+            if (RefreshPending != Visible()) { Refresh(); }
         };
         SizeChanged += (_, _) => { if (!RefreshPending) { Refresh(); } };
     }
