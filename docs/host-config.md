@@ -27,6 +27,7 @@ follow.
   "delivery": { "readOnly": false },
   "sessions": { "restoreOnStart": true },
   "fleet": { "share": true },
+  "load": { "enabled": true },
   "launch": {
     "enabled": true,
     "workspaces": [
@@ -108,6 +109,7 @@ except an explicit `null` for `fleet` or `fleet.share` disables sharing with a p
 | `launch.agents.<id>.models`, `efforts`, `contexts` | built in | The values to offer, replacing the built-in lists (and, for models, those the machine's sessions are using). At most 64 each |
 | `launch.agents.<id>.extraArgs` | `[]` | Arguments added to every launch of that agent, as written |
 | `launch.transfer.serve` | `true` | Hand this machine's ended sessions to the account's other machines, each on a command a person's device signed for it ([host-transfer.md](host-transfer.md)). `false` leaves `sessions.transfer.serve` out |
+| `load.enabled` | `true` | Share machine totals and per-session load numbers through the relay to the owner's devices ([owner clearance, #1150](https://github.com/danswett/agent-bridge/issues/1150#issuecomment-6787433188); [default-on amendment, #1871](https://github.com/danswett/agent-bridge/issues/1871#issuecomment-6790914065)). No names, paths, command lines, PIDs, titles or prompts. `false` leaves `load` out of `hello`; `load.get` and `load.subscribe` are unsupported. Never offered on the local pipe. Config-only, no environment fallback; read at startup. `config show` and the startup log say whether relay load sharing is on or off. A person can opt out with `agent-bridge-host config set load.enabled false`; agents cannot change it. The data handlers are delivered separately in #1870 |
 | `launch.transfer.receive` | `true` | Bring sessions here from the account's other machines (`sessions.transfer`) |
 | `launch.transfer.maxBytes` | `26214400` (25 MiB) | The largest session bundle, compressed, this machine sends or takes: 1 MiB to 200 MiB. A transfer needs it on both machines |
 | `launch.transfer.maxSourceBytes` | 10 × `maxBytes` | The most read from disk to pack one, and unpacked to install one: from `maxBytes` to 20 GiB |
@@ -178,6 +180,10 @@ is not an object, leaves keep-awake off; an interval that is not a whole number 
 that is not an object, is off, and an `allowAllTargets` that is not `true` or `false` is `false`;
 each is said, and `config set` refuses to write it. A setting
 someone may have meant as off is never read as on.
+
+An unreadable, invalid or newer-schema file also turns relay load sharing off. A `load` that
+is not an object, or `load.enabled` that is neither boolean nor null, reports a configuration
+problem and turns sharing off, never defaulting it on.
 
 ## Trusted peers: disposable-host foundation
 

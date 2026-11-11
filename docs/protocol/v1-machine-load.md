@@ -100,8 +100,10 @@ minute, with `measuredAt`). A client never infers it.
 
 A record is at most 64 KiB as sent. A client that sees `state: "stale"` or `unavailable` shows
 "no figure", not zero. The relay channel is cleared by the owner as linked above. The host offers
-`load` only when `load.enabled` is true (boolean, default `false`, beside `launch.transfer.serve`;
-the host-setting slice adds it to host-config.md). This record-only slice enables nothing.
+`load` only on the relay when `load.enabled` is true (boolean, default `true`, beside
+`launch.transfer.serve` in [host-config.md](../host-config.md), per the
+[owner-approved default-on amendment](https://github.com/danswett/agent-bridge/issues/1871#issuecomment-6790914065)).
+A person can turn it off; handlers remain the separate #1870 slice.
 
 ## 2. Session move (#1146, fleet #22)
 

@@ -50,6 +50,8 @@ public sealed class SessionService
     public SessionDrivers? Drivers { get; init; }
     public TimeProvider Time { get; init; } = TimeProvider.System;
     public Fleet.FleetNames? FleetNames { get; init; }
+    // Shared by hello and the relay load handlers; only the composition reads host settings.
+    public Func<bool> LoadEnabled { get; init; } = () => true;
 
     internal object RenameFleetSession(JsonElement data) =>
         (FleetNames ?? throw new InvalidOperationException("refused: fleet-name storage is not available on this host")).Rename(source, data);
@@ -615,6 +617,7 @@ public sealed class SessionService
             if (launcher?.Available == true && transfers.Receives) { offered.Add(TransferProtocol.Capability); }
             if (transfers.Serves) { offered.Add(TransferProtocol.ServeCapability); }
         }
+        if (LoadEnabled() && channel is SecureChannel) { offered.Add(Capabilities.Load); }
         return offered;
     }
 

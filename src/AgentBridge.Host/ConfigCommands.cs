@@ -28,7 +28,7 @@ public static class ConfigCommands
     static readonly string[] Keys =
     [
         "permissions.remoteApproval", "permissions.trustedPeers", "permissions.remoteManage", "permissions.escapedApproval", "permissions.escapedApprovalDevices", "permissions.phoneSignIn", "push.enabled", "delivery.readOnly",
-        "sessions.restoreOnStart", "fleet.share",
+        "sessions.restoreOnStart", "fleet.share", "load.enabled",
         "launch.enabled", "launch.defaultWorkspace", "launch.defaultAgent", "launch.permissions",
         "launch.worktrees.root", "launch.worktrees.limit", "launch.worktrees.idleHours",
         "launch.profiles", "launch.defaultProfile", "launch.resumeCount", "launch.remoteFolderTrust", "launch.remoteFolderTrustDevices",
@@ -107,6 +107,7 @@ public static class ConfigCommands
         var (settings, problem) = HostSettings.Load(Path.GetDirectoryName(path)!);
         if (problem is not null) { output.WriteLine(problem); }
         foreach (var p in settings.SectionProblems) { output.WriteLine(p); }
+        output.WriteLine(settings.LoadStatus);
         return 0;
     }
 

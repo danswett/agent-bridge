@@ -125,6 +125,8 @@ public sealed record HostSettings(bool RemoteApproval)
 
     public bool Push { get; init; } = true;
     public bool FleetShare { get; init; } = true;
+    public bool LoadEnabled { get; init; } = true;
+    public string LoadStatus => $"relay load sharing is {(LoadEnabled ? "on" : "off")} (load.enabled); machine totals and per-session numbers only";
 
     public bool ReadOnly { get; init; }
     public bool TrustedPeers { get; init; }
@@ -156,7 +158,7 @@ public sealed record HostSettings(bool RemoteApproval)
     // anyway would read a setting meant as off as on.
     static HostSettings Off => Default with
     {
-        RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false }, Push = false, FleetShare = false, ReadOnly = true,
+        RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false }, Push = false, FleetShare = false, LoadEnabled = false, ReadOnly = true,
         Usage = UsageSettings.Default with { Publish = false }, TrustedPeers = true, RemoteManage = false, RestoreOnStart = false, RestoreKept = true,
         EscapedApproval = AgentBridge.Protocol.EscapedApproval.Machine, EscapedApprovalDevices = [],
     };
@@ -218,6 +220,22 @@ public sealed record HostSettings(bool RemoteApproval)
                 Security = security,
                 SecurityProblems = securityProblems.Count == 0 ? [] : securityProblems,
             };
+            if (root.TryGetProperty("load", out var load) && load.ValueKind != JsonValueKind.Null)
+            {
+                if (load.ValueKind != JsonValueKind.Object) { throw new JsonException("load is not an object"); }
+                if (load.TryGetProperty("enabled", out var loadEnabled) && loadEnabled.ValueKind != JsonValueKind.Null)
+                {
+                    settings = settings with
+                    {
+                        LoadEnabled = loadEnabled.ValueKind switch
+                        {
+                            JsonValueKind.True => true,
+                            JsonValueKind.False => false,
+                            _ => throw new JsonException("load.enabled is not true or false"),
+                        },
+                    };
+                }
+            }
             if (root.TryGetProperty("delivery", out var delivery) && delivery.ValueKind != JsonValueKind.Null)
             {
                 if (delivery.ValueKind != JsonValueKind.Object) { throw new JsonException("delivery is not an object"); }
