@@ -19,6 +19,7 @@ async function start(page, count, width) {
     window.agentBridgeDemo.host.historyTurns.set(ID, turns);
   }, { ID, count });
   await open(page, ID);
+  await expect.poll(() => held(view(page, ID))).toBe(Math.min(count, 105));
 }
 
 const held = (v) => v.locator('.history-turn').count();
@@ -112,7 +113,6 @@ test('live turns held below the reader count toward the earlier-history limit', 
   const v = view(page, ID);
   const scroll = v.locator('.stream-scroll');
   const button = v.getByRole('button', { name: 'Load earlier messages' });
-  await expect.poll(() => held(v)).toBe(105);
   while (await held(v) < 445) {
     const before = await held(v);
     await button.evaluate((b) => b.click());
