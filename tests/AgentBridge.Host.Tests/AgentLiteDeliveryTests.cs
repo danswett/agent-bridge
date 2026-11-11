@@ -23,6 +23,10 @@ public sealed class AgentLiteDeliveryTests
         public int Gets;
         public AnswerOutcome Outcome = AnswerOutcome.Delivered;
         public ReplyRefusal Refusal;
+        public readonly TaskCompletionSource ReplyScreenRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Action<KeyPlan>? OnInject;
+        public readonly List<KeyPlan> Plans = [];
+        int reads;
         public readonly List<ReplyRequest> Typed = []; public readonly List<string> Log = [];
         public readonly FakeTimeProvider Clock = new(); public readonly LiteLaunchLog Launches = new();
         public LiteDeliver Build() => new([new ForcedAskGate(Launches, () => AllowAllTargets)], this, this, this, Log.Add, Clock);
@@ -39,8 +43,17 @@ public sealed class AgentLiteDeliveryTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask; public bool Available => true;
         public Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken ct = default, DeliveryWatch? watch = null)
         { Typed.Add(request); return Task.FromResult(new ReplyResult(Outcome, "reason") { Refusal = Refusal }); }
-        public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken ct = default) => Task.FromResult(new ConsoleScreen(Rows, null));
+        public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken ct = default)
+        {
+            Plans.Add(plan);
+            OnInject?.Invoke(plan);
+            return Task.FromResult(new InjectionResult(InjectionStatus.Typed, ""));
+        }
+        public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken ct = default)
+        {
+            if (Interlocked.Increment(ref reads) == 2) { ReplyScreenRead.TrySetResult(); }
+            return Task.FromResult(new ConsoleScreen(Rows, null));
+        }
     }
     static VerifiedEnvelope Envelope(string text, string request = Req)
     {
@@ -106,6 +119,55 @@ public sealed class AgentLiteDeliveryTests
         Assert.Equal(new LiteDelivery(false, "busy"), await Send(f));
         Assert.Empty(f.Typed);
     }
+    [Theory]
+    [InlineData(true, SessionStatus.Working, false)]
+    [InlineData(true, SessionStatus.Waiting, false)]
+    [InlineData(true, SessionStatus.Idle, true)]
+    [InlineData(false, SessionStatus.Working, true)]
+    public async Task Lite_rechecks_idle_after_waiting_for_the_typing_slot_but_a_person_can_still_reply_while_working(
+        bool lite, SessionStatus afterWait, bool typed)
+    {
+        using var home = new global::Fixture();
+        var events = home.CopilotSession(Target, 42);
+        global::Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3));
+        home.Processes.Run(AgentKind.Copilot, 42);
+        var f = new Fixture();
+        f.Launch(LaunchProtocol.Ask);
+        f.OnInject = plan => global::Fixture.Append(events, Copilot.User(plan.Sends[0].Text, 4));
+        var gate = new DeliveryGate();
+        var replier = new ReplyService(gate, f, home.Processes, new NoBridge(), new NoGuard(), f,
+            new ReplyOptions { CopilotHome = home.CopilotHome, PlatformSupported = true, PreRead = false,
+                ConfirmTimeout = TimeSpan.FromSeconds(1), PollInterval = TimeSpan.FromMilliseconds(10) });
+        var deliver = new LiteDeliver([new ForcedAskGate(f.Launches, () => false)], f, replier, f, f.Log.Add);
+        await gate.WaitToTypeAsync();
+        Task<LiteDelivery>? delivery = null;
+        Task<ReplyResult>? reply = null;
+        try
+        {
+            if (lite) { delivery = deliver.DeliverAsync(Envelope("hi"), "hi", default); }
+            else
+            {
+                // Match Lite's preflight screen read before entering the real replier.
+                await f.ReadScreenAsync(42);
+                reply = replier.ReplyAsync(new ReplyRequest { Id = Target, Request = Req, Text = "hi" });
+            }
+            await f.ReplyScreenRead.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.False(delivery is { IsCompleted: true } || reply is { IsCompleted: true });
+            f.Status = afterWait;
+        }
+        finally { gate.DoneTyping(); }
+        if (delivery is not null)
+        {
+            Assert.Equal(typed ? new LiteDelivery(true, null) : new LiteDelivery(false, LiteCodes.Busy),
+                await delivery.WaitAsync(TimeSpan.FromSeconds(10)));
+        }
+        else { Assert.Equal(AnswerOutcome.Delivered, (await reply!.WaitAsync(TimeSpan.FromSeconds(10))).Outcome); }
+        Assert.Equal(typed ? 1 : 0, f.Plans.Count);
+    }
+
+    sealed class NoBridge : IAgentHaBridgeProbe { public string? Active() => null; }
+    sealed class NoGuard : ITargetGuard { public string? Refuse(int processId) => null; }
+
     [Fact]
     public async Task Text_the_envelope_does_not_bind_and_text_over_the_cap_are_refused()
     {
@@ -120,6 +182,7 @@ public sealed class AgentLiteDeliveryTests
     [InlineData(AnswerOutcome.Busy, ReplyRefusal.Other, "busy")]
     [InlineData(AnswerOutcome.Stale, ReplyRefusal.Other, "noSuchSession")]
     [InlineData(AnswerOutcome.Refused, ReplyRefusal.Asking, "busy")]
+    [InlineData(AnswerOutcome.Refused, ReplyRefusal.Busy, "busy")]
     [InlineData(AnswerOutcome.Refused, ReplyRefusal.ComposerUnverified, "composerNotEmpty")]
     [InlineData(AnswerOutcome.Refused, ReplyRefusal.Other, "notReplyTarget")]
     public async Task A_replier_that_does_not_deliver_is_reported_with_its_own_refusal_code(AnswerOutcome outcome, ReplyRefusal refusal, string code)

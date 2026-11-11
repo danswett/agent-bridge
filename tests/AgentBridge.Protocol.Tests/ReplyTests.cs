@@ -79,4 +79,15 @@ public class ReplyTests
         Assert.Equal("""{"outcome":"busy","reason":"x"}""", JsonSerializer.Serialize(new ReplyResult(AnswerOutcome.Busy, "x"), ProtocolJson.Options));
         Assert.Equal(AnswerOutcome.Unconfirmed, JsonSerializer.Deserialize<ReplyResult>("""{"outcome":"queued"}""", ProtocolJson.Options)!.Outcome);
     }
+
+    [Fact]
+    public void The_host_only_idle_condition_does_not_change_the_reply_wire_contract()
+    {
+        var request = Reply("go on");
+        Assert.Equal(JsonSerializer.Serialize(request, ProtocolJson.Options),
+            JsonSerializer.Serialize(request with { RequireIdle = true }, ProtocolJson.Options));
+        var read = JsonSerializer.Deserialize<ReplyRequest>(
+            """{"id":"s1","request":"r","text":"go on","requireIdle":true}""", ProtocolJson.Options)!;
+        Assert.False(read.RequireIdle);
+    }
 }

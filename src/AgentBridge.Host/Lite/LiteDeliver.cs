@@ -49,18 +49,18 @@ public sealed class LiteDeliver(
         if (session.Agent != AgentKind.Copilot || session.ProcessId is not { } pid) { return Refused(LiteCodes.NotReplyTarget); }
         if (!Idle(session)) { return Refused(LiteCodes.Busy); }
         if (!await ComposerEmptyAsync(pid, ct)) { return Refused(LiteCodes.ComposerNotEmpty); }
-        // Idle again right before the typing; the replier then holds the keys to the box it read.
+        // Check before handing off; RequireIdle also rechecks once the replier holds the typing slot.
         if (source.Get(target) is not { } now || now.ProcessId != pid) { return Refused(LiteCodes.NoSuchSession); }
         if (!Idle(now)) { return Refused(LiteCodes.Busy); }
         if (!WithinRate(target)) { return Refused(LiteCodes.Busy); }
-        var reply = new ReplyRequest { Id = target, Request = body.Request, Text = Frame(body.Principal, body.Request, safe) };
+        var reply = new ReplyRequest { Id = target, Request = body.Request, Text = Frame(body.Principal, body.Request, safe), RequireIdle = true };
         var result = await replier.ReplyAsync(reply, null, ct);
         return result.Outcome switch
         {
             AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed => new LiteDelivery(true, null),
             AnswerOutcome.Busy => Refused(LiteCodes.Busy),
             AnswerOutcome.Stale => Refused(LiteCodes.NoSuchSession),
-            _ => Refused(result.Refusal switch { ReplyRefusal.Asking => LiteCodes.Busy, ReplyRefusal.ComposerUnverified => LiteCodes.ComposerNotEmpty, _ => LiteCodes.NotReplyTarget }),
+            _ => Refused(result.Refusal switch { ReplyRefusal.Asking or ReplyRefusal.Busy => LiteCodes.Busy, ReplyRefusal.ComposerUnverified => LiteCodes.ComposerNotEmpty, _ => LiteCodes.NotReplyTarget }),
         };
     }
 
