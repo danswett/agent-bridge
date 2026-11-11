@@ -2256,6 +2256,31 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task A_restarted_current_machine_answers_consecutive_held_checks_as_refused()
+    {
+        updater.Found = null;
+        var retry = time.GetUtcNow().AddMinutes(30);
+        updater.CheckFails = Limited(retry);
+        prefs = prefs with { LastUpdate = new UpdateResult { Outcome = UpdateOutcome.Current, From = updater.InstalledVersion, At = time.GetUtcNow().AddHours(-1) } };
+        var observed = new ObservedUpdater(updater, time);
+        shared = observed;
+        await StartAsync();
+        await auto.TickAsync();
+        Assert.Equal(UpdateOutcome.Current, prefs.LastUpdate!.Outcome);
+        foreach (var request in new[] { "restarted-first", "restarted-second" })
+        {
+            await AskedAsync(UpdateAskKind.Check, request);
+            Assert.Equal((UpdateOutcome.Refused, request), (auto.State.Last!.Outcome, auto.State.Last.Request));
+            Assert.Equal((UpdateOutcome.Refused, request), (prefs.LastUpdate!.Outcome, prefs.LastUpdate.Request));
+            Assert.Contains($"checking again after {retry.ToLocalTime():t}", auto.State.Last.Reason);
+            Assert.Null(observed.CheckedAt);
+            Assert.Null(auto.State.Available);
+        }
+        Assert.Equal(1, updater.Checks);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task A_rate_limited_check_right_after_an_update_leaves_the_update_for_the_devices_to_see()
     {
         updater.CheckFails = new HttpRequestException("Response status code does not indicate success: 403 (rate limit exceeded).", null, System.Net.HttpStatusCode.Forbidden);
