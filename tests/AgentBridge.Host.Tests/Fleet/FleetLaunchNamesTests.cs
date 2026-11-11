@@ -42,8 +42,13 @@ public sealed class FleetLaunchNamesTests : IDisposable
     [InlineData("SG Reviewer Z")]
     [InlineData("SG Builder 1")]
     [InlineData("SG Worker 9999", true)]
-    public async Task A_new_launch_publishes_only_its_explicit_name_and_logs_the_caller_without_prompt_text(string name, bool unreadable = false)
+    [InlineData("SG Worker 1", false, "/* config */{}")]
+    [InlineData("SG Worker 1", false, """{/* config */"fleetNames":{"launchRule":"on"}}""")]
+    [InlineData("SG Worker 1", false, """{"other":true,}""")]
+    [InlineData("SG Worker 1", false, """{"fleetNames":{"launchRule":"on",},}""")]
+    public async Task A_new_launch_publishes_only_its_explicit_name_and_logs_the_caller_without_prompt_text(string name, bool unreadable = false, string? json = null)
     {
+        if (json is not null) { File.WriteAllText(Config, json); }
         roster.Unreadable = unreadable;
         var result = await policy.RunAsync(Ask(name), "fixture-principal", Start);
         Assert.Equal(LaunchOutcome.Started, result.Outcome);
@@ -88,12 +93,14 @@ public sealed class FleetLaunchNamesTests : IDisposable
     }
 
     [Theory]
-    [InlineData("""{"fleetNames":{"launchRule":"off"}}""")]
+    [InlineData("""{"fleetNames":{"launchRule":"off"}}""", false)]
+    [InlineData("""{/* config */"fleetNames":{"launchRule":"off"}}""", false)]
+    [InlineData("""{"fleetNames":{"launchRule":"off",},}""", false)]
     [InlineData("""{"fleetNames":{"launchRule":"unknown"}}""")]
     [InlineData("""{"fleetNames":{"launchRule":null}}""")]
     [InlineData("""{"fleetNames":false}""")]
     [InlineData("broken")]
-    public async Task Off_or_unreadable_policy_refuses_named_launches_on_every_fresh_read(string json)
+    public async Task Off_or_unreadable_policy_refuses_named_launches_on_every_fresh_read(string json, bool invalid = true)
     {
         File.WriteAllText(Config, "{}");
         Assert.Equal(LaunchOutcome.Started, (await policy.RunAsync(Ask(), "fixture", Start)).Outcome);
@@ -102,6 +109,7 @@ public sealed class FleetLaunchNamesTests : IDisposable
         var count = logs.Count;
         Assert.Equal(LaunchOutcome.Refused, (await policy.RunAsync(Ask("SG Worker 2"), "fixture", Start)).Outcome);
         Assert.Equal(count, logs.Count);
+        Assert.Equal(invalid ? 2 : 1, logs.Count);
         Assert.Single(source.Sessions);
     }
 
@@ -131,15 +139,19 @@ public sealed class FleetLaunchNamesTests : IDisposable
         Assert.Contains(logs, line => line.Contains("not saved", StringComparison.Ordinal));
     }
 
-    [Fact]
-    public async Task An_unconfirmed_launch_reserves_its_name_until_the_new_session_registers()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_unconfirmed_launch_reserves_its_name_until_registration_or_proven_failure(bool failed)
     {
         var request = Ask();
         await policy.RunAsync(request, "fixture", () => Task.FromResult(new LaunchResult(LaunchOutcome.Unconfirmed)));
+        launcher.Fail(Guid.NewGuid());
         Assert.Contains("already", (await policy.RunAsync(Ask(), "fixture", Start)).Reason);
+        if (failed) { launcher.Fail(Guid.Parse(request.Request)); launcher.Fail(Guid.Parse(request.Request)); }
         var late = await Start();
         launcher.Register(Guid.Parse(request.Request), late.Session!);
-        Assert.Equal("SG Builder 1829", names.Get(late.Session!));
+        Assert.Equal(failed ? null : "SG Builder 1829", names.Get(late.Session!));
     }
 
     sealed class Roster : IFleetRoster
@@ -152,6 +164,8 @@ public sealed class FleetLaunchNamesTests : IDisposable
     {
         public bool Available => true;
         public event Action<Guid, string>? RequestRegistered;
+        public event Action<Guid>? RequestFailed;
+        public void Fail(Guid request) => RequestFailed?.Invoke(request);
         public void Register(Guid request, string id) => RequestRegistered?.Invoke(request, id);
         public Task<LaunchOptions> OptionsAsync(CancellationToken ct) => throw new NotSupportedException();
         public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken ct) => throw new NotSupportedException();

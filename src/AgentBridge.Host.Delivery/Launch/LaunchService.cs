@@ -24,6 +24,8 @@ public interface ISessionLauncher
 
     // Also raised when registration succeeds after the initial answer was unconfirmed.
     event Action<Guid, string>? RequestRegistered { add { } remove { } }
+    // Only a proven failure, including after an initial unconfirmed answer.
+    event Action<Guid>? RequestFailed { add { } remove { } }
 
     // The agents launches started that still run, registered or not: whatever runs inside one
     // is an agent's, and may not manage the host (§6.3 invariant 13).
@@ -149,6 +151,7 @@ public sealed class LaunchServiceOptions
 public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 {
     public event Action<Guid, string>? RequestRegistered;
+    public event Action<Guid>? RequestFailed;
 
     readonly ISessionSource source;
     readonly IAgentHaBridgeProbe probe;
@@ -1504,6 +1507,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     {
         // Before the outcome is told, so the record has it by the time anyone hears of the session.
         if (result is { Outcome: LaunchOutcome.Started, Session: { } id }) { Noted(p, id); RequestRegistered?.Invoke(p.Key, id); }
+        if (result.Outcome == LaunchOutcome.Failed) { RequestFailed?.Invoke(p.Key); }
         if (!p.Decided.TrySetResult(result) && result.Outcome == LaunchOutcome.Started)
         {
             p.RegisteredLate = true;

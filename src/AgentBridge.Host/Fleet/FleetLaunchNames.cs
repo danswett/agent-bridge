@@ -30,6 +30,7 @@ public sealed partial class FleetLaunchNames
         this.log = log;
         config = Path.Combine(folder, HostSettings.FileName);
         launcher.RequestRegistered += Bind;
+        launcher.RequestFailed += key => { lock (gate) { pending.Remove(key); } };
     }
 
     public async Task<LaunchResult> RunAsync(LaunchRequest request, string peer, Func<Task<LaunchResult>> start)
@@ -99,7 +100,7 @@ public sealed partial class FleetLaunchNames
     {
         try
         {
-            using var json = JsonDocument.Parse(File.ReadAllBytes(config));
+            using var json = JsonDocument.Parse(File.ReadAllBytes(config), HostSettings.Options);
             if (!json.RootElement.TryGetProperty("fleetNames", out var section)) { return true; }
             if (!section.TryGetProperty("launchRule", out var value)) { return true; }
             if (value.ValueKind == JsonValueKind.String && value.GetString() is "on" or "off") { return value.GetString() == "on"; }
