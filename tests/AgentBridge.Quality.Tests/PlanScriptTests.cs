@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using YamlDotNet.RepresentationModel;
 
 namespace AgentBridge.Quality.Tests;
@@ -7,16 +8,39 @@ namespace AgentBridge.Quality.Tests;
 public class PlanScriptTests
 {
     [Theory]
-    [InlineData("pull_request", ".github/workflows/merge-rule.yml", false)]
-    [InlineData("pull_request", "quality/merge-rule.yml", false)]
-    [InlineData("pull_request", ".github/workflows/ci.yml", true)]
-    [InlineData("pull_request", "src/AgentBridge.App/View.cs", true)]
-    [InlineData("pull_request", "build/pack-app.ps1", true)]
-    [InlineData("pull_request", "Directory.Build.props", true)]
-    [InlineData("pull_request", ".github/actions/install-trivy/action.yml", true)]
-    [InlineData("push", ".github/workflows/merge-rule.yml", true)]
-    [InlineData("workflow_dispatch", ".github/workflows/merge-rule.yml", true)]
-    public async Task The_workflows_plan_selects_the_installer_only_with_its_app_input(string eventName, string changed, bool packages)
+    [InlineData("pull_request", ".github/workflows/merge-rule.yml", false, true)]
+    [InlineData("pull_request", "quality/merge-rule.yml", false, true)]
+    [InlineData("pull_request", ".github/workflows/ci.yml", true, true)]
+    [InlineData("pull_request", "src/AgentBridge.App/View.cs", true, true)]
+    [InlineData("pull_request", "build/pack-app.ps1", true, true)]
+    [InlineData("pull_request", "Directory.Build.props", true, true)]
+    [InlineData("pull_request", ".github/actions/install-trivy/action.yml", true, true)]
+    [InlineData("push", "docs/guide.md", false, false)]
+    [InlineData("push", "docs/guide.md", false, true)]
+    [InlineData("push", ".github/workflows/merge-rule.yml", false, true)]
+    [InlineData("push", ".github/CODEOWNERS", false, true)]
+    [InlineData("push", "quality/merge-rule.yml", false, true)]
+    [InlineData("push", ".github/workflows/ci.yml", true, true)]
+    [InlineData("push", "src/AgentBridge.App/View.cs", true, false)]
+    [InlineData("push", "src/AgentBridge.App/View.cs", true, true)]
+    [InlineData("push", "build/pack-app.ps1", true, true)]
+    [InlineData("push", "Directory.Build.props", true, true)]
+    [InlineData("push", ".github/actions/install-trivy/action.yml", true, true)]
+    [InlineData("workflow_dispatch", ".github/workflows/merge-rule.yml", true, true)]
+    public Task The_workflows_plan_selects_the_installer_only_with_its_app_input(
+        string eventName, string changed, bool packages, bool wholeRing) =>
+        CheckPlan(eventName, changed, packages, wholeRing);
+
+    [Theory]
+    [InlineData("docs/guide.md", false)]
+    [InlineData("docs/guide.md", true)]
+    [InlineData(".github/workflows/merge-rule.yml", false)]
+    [InlineData(".github/workflows/merge-rule.yml", true)]
+    public Task A_push_without_a_proven_base_packages_an_earlier_untested_app_change(
+        string changed, bool runsUnreadable) => CheckPlan("push", changed, true, true, runsUnreadable);
+
+    static async Task CheckPlan(
+        string eventName, string changed, bool packages, bool wholeRing, bool? runsUnreadable = null)
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
         var folder = Fixture.ScratchFolder();
@@ -28,11 +52,33 @@ public class PlanScriptTests
             var steps = (YamlSequenceNode)((YamlMappingNode)jobs["plan"])["steps"];
             var select = steps.Children.Cast<YamlMappingNode>().Single(step =>
                 step.Children.TryGetValue(new YamlScalarNode("id"), out var id) && id.ToString() == "select");
+            var whole = steps.Children.Cast<YamlMappingNode>().Single(step =>
+                step.Children.TryGetValue(new YamlScalarNode("id"), out var id) && id.ToString() == "whole-ring");
             Write("quality/plan.ps1", File.ReadAllText(Path.Combine(root, "quality", "plan.ps1")));
             Write("src/AgentBridge.App/App.csproj", "<Project />");
             Write("quality/catalog.yml", """
-                global_triggers: [.github/workflows/**, quality/**, '**/Directory.Build.*']
+                global_triggers: [.github/workflows/**, .github/actions/**, quality/**, '**/Directory.Build.*']
+                no_test_paths: [docs/**, .github/CODEOWNERS]
                 suites:
+                  - id: checks
+                    kind: unit
+                    ring: 1
+                    select: always
+                    platforms: [linux-x64, win-x64, win-arm64]
+                    runner: hosted
+                    command: see ci.yml
+                    where: ci.yml product, ha-integration, spikes, spikes-linux, light, pwa-ui, pwa-e2e
+                    status: exists
+                  - id: docs
+                    kind: static
+                    ring: 1
+                    select: affected
+                    platforms: [linux-x64]
+                    runner: hosted
+                    triggers: [docs/**]
+                    command: see ci.yml light
+                    where: ci.yml light
+                    status: exists
                   - id: app
                     kind: packaging
                     ring: 1
@@ -64,6 +110,11 @@ public class PlanScriptTests
 
             ChangedFiles.Git(folder, "init", "-q", "-b", "main");
             Commit("base", "quality/plan.ps1", "quality/catalog.yml", "src/AgentBridge.App/App.csproj");
+            if (runsUnreadable.HasValue)
+            {
+                Write("src/AgentBridge.App/Earlier.cs", "earlier untested app change");
+                Commit("untested app", "src/AgentBridge.App/Earlier.cs");
+            }
             Write(changed, changed.EndsWith(".props", StringComparison.Ordinal) ? "<Project />" : "changed");
             Commit("change", changed);
 
@@ -75,15 +126,31 @@ public class PlanScriptTests
                 RedirectStandardError = true,
             };
             start.Environment["CI_PLAN_TEST_RUN"] = select["run"].ToString();
+            start.Environment["CI_PLAN_TEST_WHOLE"] = whole["run"].ToString();
+            start.Environment["CI_PLAN_TEST_RUNS"] = runsUnreadable.HasValue ? (runsUnreadable.Value ? "unreadable" : "none") : "";
             start.Environment["JOBS"] = ((YamlMappingNode)select["env"])["JOBS"].ToString();
             start.Environment["EVENT"] = eventName;
             start.Environment["DRAFT"] = "false";
-            start.Environment["WHOLE_RING"] = "true";
+            start.Environment["WHOLE_RING"] = wholeRing ? "true" : "false";
             start.Environment["BASE"] = "HEAD^1";
+            start.Environment["BASE_KNOWN"] = "true";
             start.Environment["GITHUB_OUTPUT"] = output;
             start.Environment["GITHUB_STEP_SUMMARY"] = Path.Combine(folder, "summary");
             foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-Command",
-                         "$ErrorActionPreference = 'Stop'; & ([scriptblock]::Create($env:CI_PLAN_TEST_RUN))" })
+                         """
+                         $ErrorActionPreference = 'Stop'
+                         if ($env:CI_PLAN_TEST_RUNS) {
+                             function global:gh { $global:LASTEXITCODE = if ($env:CI_PLAN_TEST_RUNS -eq 'unreadable') { 1 } else { 0 } }
+                             & ([scriptblock]::Create($env:CI_PLAN_TEST_WHOLE))
+                             $whole = Get-Content $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
+                             $env:BASE = $whole['base']
+                             $env:WHOLE_RING = $whole['whole-ring']
+                             $env:BASE_KNOWN = $whole['base-known']
+                             if ($env:BASE -ne 'HEAD^1' -or $env:WHOLE_RING -ne 'true') { throw 'Unknown base must run the whole ring over the tip fallback.' }
+                             Clear-Content $env:GITHUB_OUTPUT
+                         }
+                         & ([scriptblock]::Create($env:CI_PLAN_TEST_RUN))
+                         """ })
                 start.ArgumentList.Add(arg);
             using var process = Process.Start(start) ?? throw new InvalidOperationException("pwsh did not start.");
             var error = process.StandardError.ReadToEndAsync();
@@ -93,10 +160,23 @@ public class PlanScriptTests
 
             var outputs = File.ReadAllLines(output).Select(line => line.Split('=', 2))
                 .ToDictionary(parts => parts[0], parts => parts[1], StringComparer.Ordinal);
-            Assert.Equal("true", outputs["whole-solution"]);
+            Assert.Equal(wholeRing ? "true" : "false", outputs["whole-solution"]);
             var expected = packages ? "true" : "false";
             Assert.Equal($"app={expected}\napp-installer={expected}",
                 $"app={outputs["app"]}\napp-installer={outputs["app-installer"]}");
+            foreach (var job in new[] { "product", "ha-integration", "spikes", "spikes-linux", "pwa-ui", "pwa-e2e" })
+                Assert.Equal(wholeRing || !changed.StartsWith("docs/", StringComparison.Ordinal) ? "true" : "false", outputs[job]);
+            Assert.Equal("true", outputs["light"]);
+            if (outputs["product"] == "true")
+                Assert.Equal(eventName == "pull_request"
+                        ? new[] { "ubuntu-latest", "windows-latest" }
+                        : new[] { "ubuntu-latest", "windows-latest", "windows-11-arm" },
+                    JsonSerializer.Deserialize<string[]>(outputs["product-os"]));
+            Assert.Equal("needs.plan.outputs.app == 'true'", ((YamlMappingNode)jobs["app"])["if"].ToString());
+            Assert.Equal("!cancelled() && (needs.plan.outputs.app-installer == 'true')",
+                ((YamlMappingNode)jobs["app-installer"])["if"].ToString());
+            Assert.Equal("${{ steps.whole-ring.outputs.base-known }}",
+                ((YamlMappingNode)select["env"])["BASE_KNOWN"].ToString());
         }
         finally
         {

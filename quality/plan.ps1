@@ -39,8 +39,9 @@ param(
     # whole-ring main run fails, it says at once whether ring 1 would have run the failing job (§4.8).
     [switch] $CompareRing1,
     # Jobs a ring-2 run gives true only when ring 1 selected them for a reason of their own, not
-    # because the whole ring runs (#1249: the app's packaging legs on a pull request that only
-    # touches workflows or the quality tool). Main never passes it: there they all run.
+    # because the whole ring runs (#1249, #1910: app and installer on pull requests and main
+    # pushes with a proven base). Unknown-base pushes and manual whole-ring runs leave this
+    # empty and still run every job.
     [string[]] $Narrow = @(),
     # Platforms product doesn't run on this event (#1249: win-arm64 runs on main, not on a pull
     # request head). The app job still packages both architectures whenever it runs.
@@ -88,7 +89,7 @@ if ($productOs.Count -eq 0 -and $productIds.Count -gt 0) { $productOs = @($runne
 
 function Test-WholeRing([string] $rule) { $rule.StartsWith('global_triggers ') -or $rule.StartsWith('unclaimed path') }
 
-# Build inputs every project compiles from: a pull request changing one still packages the app.
+# Build inputs every project compiles from: changing one still packages the app.
 $appInputs = @('AgentBridge.slnx', 'nuget.config', 'global.json', '**/Directory.Build.*', '**/Directory.Packages.props')
 function Test-NotOwn([string] $rule) {
     if ($rule.StartsWith('global_triggers ')) { return $rule.Substring('global_triggers '.Length) -notin $appInputs }
@@ -100,8 +101,8 @@ $Narrow = @($Narrow -split '[,\s]+' | Where-Object { $_ })
 $ring1 = $null
 if ($Ring -gt 1 -and ($Narrow.Count -gt 0 -or $CompareRing1)) { $ring1 = Select-Suites 1 }
 $ring1Ci = if ($ring1) { $ring1.jobs['ci.yml'] ?? @{} } else { @{} }
-# ci.yml holds the app job's packaging and SBOM steps, and install-trivy feeds them: a pull request
-# editing either must still package the app, which the workflows-wide global trigger can't say.
+# ci.yml holds the app job's packaging and SBOM steps, and install-trivy feeds them: a change
+# to either must still package the app, which the workflows-wide global trigger can't say.
 $packagingEdited = $false
 if ($ring1) {
     $edited = @(git -C $root diff --name-only "$Base...$Head")
