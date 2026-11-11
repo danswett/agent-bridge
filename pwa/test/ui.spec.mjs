@@ -318,8 +318,8 @@ test('a session row is named for the words it draws, in the order drawn, then fo
   await expect(named(COPILOT)).toHaveAccessibleName(/^Plan Migration to Windows App, Waiting on you, danswett\/agent-ha-bridge, \d+d ago, Demo machine$/);
   await expect(named(DELEGATING)).toHaveAccessibleName(/^Land the P1 slices, Delegating to 2 agents, danswett\/agent-bridge, \d+d ago, details not reported, Demo machine$/);
   // Driven: "Driven by an agent" in the status's place; and, updated while not open, the dot in the age's.
-  await upsert(page, CODEX, { driver: 'agent', updatedAt: later() });
-  await expect(named(CODEX)).toHaveAccessibleName('Fix flaky test, Driven by an agent, New activity, idle, Demo machine');
+  await upsert(page, CODEX, { driver: 'agent', updatedAt: later(), activity: { turn: 'new-reply', responseTurn: 'new-reply' } });
+  await expect(named(CODEX)).toHaveAccessibleName('Fix flaky test, Driven by an agent, New message, idle, Demo machine');
   // With every machine shown, the row draws its machine where the workspace was.
   await openDemo(page, '&machines=3');
   await expect(named(COPILOT)).toHaveAccessibleName(/^Plan Migration to Windows App, Waiting on you, Demo machine, \d+d ago$/);
@@ -479,7 +479,7 @@ test('the session chosen is remembered across a reload, and a new question shows
 test('a session not chosen keeps its row through ordinary updates, and one tap on the row opens it', async ({ page }) => {
   await openDemo(page);
   const codex = card(page, CODEX);
-  await upsert(page, CODEX, { updatedAt: later(), activity: { response: 'A plain update.' } });
+  await upsert(page, CODEX, { updatedAt: later(), activity: { turn: 'plain-reply', response: 'A plain update.', responseTurn: 'plain-reply' } });
   await expect(codex.locator('.response')).toHaveText('A plain update.');
   await expect(codex).toBeHidden();
   await expect(row(page, CODEX).locator('.row-main .glyph')).toHaveAttribute('data-glyph', 'idle');

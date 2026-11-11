@@ -1527,7 +1527,7 @@ public sealed class CardTests : IAsyncLifetime
         card.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
 
         card.Unread = true;
-        Assert.Equal("A session, Idle, danswett/agent-bridge, New activity, Test PC", card.RowLabel);
+        Assert.Equal("A session, Idle, danswett/agent-bridge, New message, Test PC", card.RowLabel);
         card.Unread = false;
 
         clock.Advance(TimeSpan.FromMinutes(3));

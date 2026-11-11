@@ -10,7 +10,7 @@
 //   * Most recent: latest activity first (a prompt, a finished turn, a question or an answer, a status change; #628). Machine: by machine name, then your order.
 //   * A session the host removed is kept in memory as ended, for the Ended group, until the page
 //     goes; nothing else about it is kept.
-//   * Activity: a row whose session updated since it was last open on screen is unread. A
+//   * Unread: a new main-agent response turn since the row was last open on screen. A
 //     session seen for the first time is not news: what it did before then was never shown.
 //
 // It knows nothing of the DOM: the list's markup is rewritten by #179, and this stays.
@@ -40,9 +40,9 @@ const strings = (v) => (Array.isArray(v) ? v.filter((k) => typeof k === 'string'
 function read(raw) {
   let v = null;
   try { v = JSON.parse(raw ?? 'null'); } catch { v = null; }
-  const seen = {};
-  if (v?.seen && typeof v.seen === 'object') {
-    for (const [k, t] of Object.entries(v.seen)) { if (typeof t === 'string') { seen[k] = t; } }
+  const seenTurns = {};
+  if (v?.seenTurns && typeof v.seenTurns === 'object') {
+    for (const [k, t] of Object.entries(v.seenTurns)) { if (t === null || typeof t === 'string') { seenTurns[k] = t; } }
   }
   const pinned = [...new Set(strings(v?.pinned))];
   const pins = new Set(pinned);
@@ -56,7 +56,7 @@ function read(raw) {
     sort: SORTS.includes(v?.sort) ? v.sort : 'yours',
     pinned,
     order: [...new Set(strings(v?.order))].filter((k) => !pins.has(k)),
-    seen,
+    seenTurns,
     groupRecords,
     groupListed: Object.assign(Object.create(null), v?.groupListed),
     groupDeviceTag: typeof v?.groupDeviceTag === 'string' && /^[0-9a-f]{32}$/.test(v.groupDeviceTag) ? v.groupDeviceTag : null,
@@ -223,12 +223,12 @@ export class SessionOrder {
     if (fresh.length) { s.order.unshift(...fresh); }
     for (const e of all) {
       const k = keyOf(e);
-      if (s.seen[k] === undefined) { s.seen[k] = e.session.updatedAt; changed = true; }
+      if (s.seenTurns[k] === undefined) { s.seenTurns[k] = e.session.activity?.responseTurn ?? null; changed = true; }
     }
     if (s.order.length + s.pinned.length > MAX_KEYS) {
       const live = new Set(all.map(keyOf));
       for (let i = s.order.length - 1; i >= 0 && s.order.length + s.pinned.length > MAX_KEYS; i--) {
-        if (!live.has(s.order[i])) { delete s.seen[s.order[i]]; s.order.splice(i, 1); }
+        if (!live.has(s.order[i])) { delete s.seenTurns[s.order[i]]; s.order.splice(i, 1); }
       }
     }
     if (changed) { this.#save(); }
@@ -305,16 +305,16 @@ export class SessionOrder {
     this.#save();
   }
 
-  unread(key, updatedAt) {
-    const seen = this.#state.seen[key];
-    return seen !== undefined && typeof updatedAt === 'string' && updatedAt > seen;
+  unread(key, responseTurn) {
+    const seen = this.#state.seenTurns[key];
+    return seen !== undefined && typeof responseTurn === 'string' && responseTurn.length > 0 && responseTurn !== seen;
   }
 
   // The row is open on screen: what it shows now has been seen.
-  markSeen(key, updatedAt) {
-    const seen = this.#state.seen[key];
-    if (typeof updatedAt !== 'string' || (seen !== undefined && seen >= updatedAt)) { return; }
-    this.#state.seen[key] = updatedAt;
+  markSeen(key, responseTurn) {
+    const seen = this.#state.seenTurns[key];
+    if (typeof responseTurn !== 'string' || !responseTurn || seen === responseTurn) { return; }
+    this.#state.seenTurns[key] = responseTurn;
     this.#save();
   }
 
@@ -336,14 +336,14 @@ export class SessionOrder {
     s.order = s.order.filter((k) => !gone(k));
     s.pinned = s.pinned.filter((k) => !gone(k));
     let changed = s.order.length + s.pinned.length !== before;
-    for (const k of Object.keys(s.seen)) { if (gone(k)) { delete s.seen[k]; changed = true; } }
+    for (const k of Object.keys(s.seenTurns)) { if (gone(k)) { delete s.seenTurns[k]; changed = true; } }
     if (changed) { this.#save(); }
   }
 
   #ended1(hostId, session) {
     const key = orderKey(hostId, session.id);
     this.#drop(key);
-    delete this.#state.seen[key];
+    delete this.#state.seenTurns[key];
     this.#save();
     this.#ended = [{ hostId, session, endedAt: new Date(this.now()).toISOString() }, ...this.#ended.filter((e) => keyOf(e) !== key)].slice(0, MAX_ENDED);
   }

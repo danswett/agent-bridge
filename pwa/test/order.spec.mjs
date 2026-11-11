@@ -128,41 +128,41 @@ test('right-click, or Shift+F10, opens the row menu: pin and unpin, with pinned 
   await expect(card(page, CODEX).locator('.row-main')).toBeFocused();
 });
 
-test('a row not open gets the new activity dot when its session updates, and opening it clears the dot', async ({ page }) => {
+test('Copilot, Claude and Codex rows get new message dots only for new response turns', async ({ page }) => {
   await openDemo(page);
-  const codex = card(page, CODEX);
-  await expect(view(page, CODEX)).toBeHidden();
-  await expect(codex.locator('.unread-dot')).toHaveCount(0);
-  await upsert(page, CODEX, { updatedAt: later(), status: 'working' });
-  await expect(codex.locator('.unread-dot')).toBeVisible();
-  await expect(codex.locator('.row-main')).toHaveAccessibleName(/New activity/);
-  // In place of its age, and its title in semibold.
-  await expect(codex.locator('.row-age')).toBeHidden();
-  expect(await codex.locator('.row-title').evaluate((e) => getComputedStyle(e).fontWeight)).toBe('600');
-  // An open session's news is seen as it comes.
-  await open(page, CLAUDE);
-  await upsert(page, CLAUDE, { updatedAt: later() });
-  await expect(card(page, CLAUDE).locator('.unread-dot')).toHaveCount(0);
-  // It goes once the session is opened, from its row or from outside (a notification's link).
-  await codex.locator('.row-main').click();
-  await expect(codex.locator('.unread-dot')).toHaveCount(0);
-  await open(page, CLAUDE);
-  await upsert(page, CODEX, { updatedAt: later() });
-  await expect(codex.locator('.unread-dot')).toBeVisible();
-  await page.evaluate((id) => window.agentBridgeDemo.page.showSession(id), CODEX);
-  await expect(view(page, CODEX)).toBeVisible();
-  await expect(codex.locator('.unread-dot')).toHaveCount(0);
+  for (const id of [COPILOT, CLAUDE, CODEX]) {
+    await open(page, DELEGATING);
+    const row = card(page, id);
+    await expect(row.locator('.unread-dot')).toHaveCount(0);
+    await upsert(page, id, { updatedAt: later(), status: 'working', activity: { userMessage: 'Next prompt', currentTool: { name: 'test' } } });
+    await expect(row).toHaveAttribute('data-status', 'working');
+    await expect(row.locator('.unread-dot')).toHaveCount(0);
+    await upsert(page, id, { activity: { turn: 'reply-z', response: 'A new reply', responseTurn: 'reply-z' } });
+    await expect(row.locator('.unread-dot')).toBeVisible();
+    await expect(row.locator('.row-main')).toHaveAccessibleName(/New message/);
+    await expect(row.locator('.row-age')).toBeHidden();
+    expect(await row.locator('.row-title').evaluate((e) => getComputedStyle(e).fontWeight)).toBe('600');
+    await open(page, id);
+    await expect(row.locator('.unread-dot')).toHaveCount(0);
+    await open(page, DELEGATING);
+    await upsert(page, id, { updatedAt: later() });
+    await expect(row.locator('.unread-dot')).toHaveCount(0);
+    await upsert(page, id, { activity: { turn: 'reply-a', responseTurn: 'reply-a' } });
+    await expect(row.locator('.unread-dot')).toBeVisible();
+    await page.evaluate((id) => window.agentBridgeDemo.page.showSession(id), id);
+    await expect(row.locator('.unread-dot')).toHaveCount(0);
+  }
   expect(await order(page)).toEqual(FIRST);
 });
 
 test('news that comes while another page shows is not marked seen until Sessions shows again', async ({ page }) => {
   await openDemo(page);
   await open(page, CLAUDE);
-  const seen = () => page.evaluate((k) => JSON.parse(localStorage.getItem('demo:agent-bridge.app.order') ?? '{}').seen?.[k], `demo\n${CLAUDE}`);
+  const seen = () => page.evaluate((k) => JSON.parse(localStorage.getItem('demo:agent-bridge.app.order') ?? '{}').seenTurns?.[k], `demo\n${CLAUDE}`);
   await page.locator('#nav [data-nav="machines"]').click();
   await expect(page.locator('#sessions')).toBeHidden();
-  const t = later();
-  await upsert(page, CLAUDE, { updatedAt: t });
+  const t = 'reply-offscreen';
+  await upsert(page, CLAUDE, { updatedAt: later(), activity: { turn: t, responseTurn: t } });
   await page.waitForTimeout(100);
   expect(await seen()).not.toBe(t);
   await page.locator('#nav [data-nav="sessions"]').click();
@@ -346,8 +346,8 @@ test('storage that fills up while a row is drawn turns the list to Most recent a
   await openDemo(page);
   await open(page, CODEX);
   await page.evaluate(() => { window.__full = true; });
-  // An open session's update marks it seen, and that write is the one that fails.
-  await upsert(page, CODEX, { updatedAt: later(), activity: { userMessage: 'A new prompt' } });
+  // An open session's reply marks it seen, and that write is the one that fails.
+  await upsert(page, CODEX, { updatedAt: later(), activity: { turn: 'reply-full-storage', userMessage: 'A new prompt', responseTurn: 'reply-full-storage' } });
   await expect(page.locator('#session-sort')).toHaveValue('recent');
   await expect.poll(() => order(page)).toEqual([CODEX, COPILOT, CLAUDE, DELEGATING]);
 });
@@ -515,7 +515,7 @@ test('news on the open session is read after it has been on screen for a second,
   await page.getByRole('combobox', { name: /sort/i }).selectOption('recent');
   await open(page, CLAUDE);
   await page.clock.runFor(1500);
-  await upsert(page, CLAUDE, { updatedAt: later() });
+  await upsert(page, CLAUDE, { updatedAt: later(), activity: { turn: 'reply-on-screen', responseTurn: 'reply-on-screen' } });
   await page.clock.runFor(50);
   await expect(card(page, CLAUDE).locator('.unread-dot')).toHaveCount(1);
   const before = await order(page);
@@ -535,7 +535,7 @@ test('news that comes while the window is not focused is not read until it is fo
   await open(page, CLAUDE);
   await page.clock.runFor(1500);
   await page.evaluate(() => { document.hasFocus = () => false; window.dispatchEvent(new Event('blur')); });
-  await upsert(page, CLAUDE, { updatedAt: later() });
+  await upsert(page, CLAUDE, { updatedAt: later(), activity: { turn: 'reply-unfocused', responseTurn: 'reply-unfocused' } });
   await page.clock.runFor(3000);
   await expect(card(page, CLAUDE).locator('.unread-dot')).toHaveCount(1);
   await page.evaluate(() => { document.hasFocus = () => true; window.dispatchEvent(new Event('focus')); });

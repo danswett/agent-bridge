@@ -19,7 +19,7 @@ public sealed partial class MainViewModel
             if (before is not null) { before.Selected = false; }
             if (value is null) { return; }
             value.Selected = true;
-            Order.MarkSeen(KeyOf(value), value.Session.UpdatedAt);
+            Order.MarkSeen(KeyOf(value), value.Session.Activity?.ResponseTurn);
             value.Unread = false;
         }
     }

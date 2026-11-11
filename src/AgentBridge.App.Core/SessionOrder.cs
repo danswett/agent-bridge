@@ -33,7 +33,7 @@ public sealed record Arrangement(IReadOnlyList<OrderEntry> Pinned, IReadOnlyList
 //     your order. Each sorts within Pinned and within the rest; rows move only in Your order.
 //   * A session a host removed is kept in memory as ended, for the Ended group, until the app
 //     restarts. A machine that goes offline or out of view ends nothing.
-//   * Unread: a row whose session updated since the row was last open. A session seen for the
+//   * Unread: a new main-agent response turn since the row was last open. A session seen for the
 //     first time is not news.
 //
 // It knows nothing of XAML: the list's markup is rewritten by #180, and this stays. A file that
@@ -63,7 +63,7 @@ public sealed class SessionOrder
         public SessionSort Sort { get; set; }
         public List<string> Pinned { get; set; } = [];
         public List<string> Order { get; set; } = [];
-        public Dictionary<string, DateTimeOffset> Seen { get; set; } = [];
+        public Dictionary<string, string?> SeenTurns { get; set; } = [];
     }
 
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
@@ -110,7 +110,7 @@ public sealed class SessionOrder
         s.Pinned = (s.Pinned ?? []).Where(k => k is not null).Distinct(StringComparer.Ordinal).ToList();
         var pins = s.Pinned.ToHashSet(StringComparer.Ordinal);
         s.Order = (s.Order ?? []).Where(k => k is not null && !pins.Contains(k)).Distinct(StringComparer.Ordinal).ToList();
-        s.Seen = new Dictionary<string, DateTimeOffset>(s.Seen ?? [], StringComparer.Ordinal);
+        s.SeenTurns = new Dictionary<string, string?>(s.SeenTurns ?? [], StringComparer.Ordinal);
         if (!Enum.IsDefined(s.Sort)) { s.Sort = SessionSort.Yours; }
         return s;
     }
@@ -176,7 +176,7 @@ public sealed class SessionOrder
         state.Order.InsertRange(0, fresh.Select(e => e.Key).Distinct(StringComparer.Ordinal));
         foreach (var e in all)
         {
-            if (state.Seen.TryAdd(e.Key, e.Session.UpdatedAt)) { changed = true; }
+            if (state.SeenTurns.TryAdd(e.Key, e.Session.Activity?.ResponseTurn)) { changed = true; }
         }
         if (state.Order.Count + state.Pinned.Count > MaxKeys)
         {
@@ -184,7 +184,7 @@ public sealed class SessionOrder
             for (var i = state.Order.Count - 1; i >= 0 && state.Order.Count + state.Pinned.Count > MaxKeys; i--)
             {
                 if (live.Contains(state.Order[i])) { continue; }
-                state.Seen.Remove(state.Order[i]);
+                state.SeenTurns.Remove(state.Order[i]);
                 state.Order.RemoveAt(i);
             }
         }
@@ -246,14 +246,15 @@ public sealed class SessionOrder
         Save();
     }
 
-    public bool Unread(string key, DateTimeOffset updatedAt) => state.Seen.TryGetValue(key, out var seen) && updatedAt > seen;
+    public bool Unread(string key, string? responseTurn) =>
+        !string.IsNullOrEmpty(responseTurn) && state.SeenTurns.TryGetValue(key, out var seen) && responseTurn != seen;
 
     // The row is open on screen: what it shows now has been seen. Kept with the next save, or by
     // Flush: an open card's every update would otherwise rewrite the file on the UI thread.
-    public void MarkSeen(string key, DateTimeOffset updatedAt)
+    public void MarkSeen(string key, string? responseTurn)
     {
-        if (state.Seen.TryGetValue(key, out var seen) && seen >= updatedAt) { return; }
-        state.Seen[key] = updatedAt;
+        if (string.IsNullOrEmpty(responseTurn) || (state.SeenTurns.TryGetValue(key, out var seen) && seen == responseTurn)) { return; }
+        state.SeenTurns[key] = responseTurn;
         seenDirty = true;
     }
 
@@ -268,7 +269,7 @@ public sealed class SessionOrder
     {
         var key = KeyOf(machine, session.Id);
         Drop(key);
-        state.Seen.Remove(key);
+        state.SeenTurns.Remove(key);
         Save();
         ended = [new EndedSession(machine, session, time.GetUtcNow()), .. ended.Where(e => e.Key != key)];
         if (ended.Count > MaxEnded) { ended.RemoveRange(MaxEnded, ended.Count - MaxEnded); }
@@ -281,7 +282,7 @@ public sealed class SessionOrder
         var prefix = KeyOf(machine, "");
         bool Gone(string k) => k.StartsWith(prefix, StringComparison.Ordinal) && !liveIds.Contains(k[prefix.Length..]);
         var changed = state.Order.RemoveAll(Gone) + state.Pinned.RemoveAll(Gone) > 0;
-        foreach (var k in state.Seen.Keys.Where(Gone).ToList()) { state.Seen.Remove(k); changed = true; }
+        foreach (var k in state.SeenTurns.Keys.Where(Gone).ToList()) { state.SeenTurns.Remove(k); changed = true; }
         if (changed) { Save(); }
     }
 
