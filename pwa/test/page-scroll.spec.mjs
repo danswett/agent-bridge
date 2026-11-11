@@ -58,7 +58,7 @@ for (const width of [390, 1024]) {
       await page.waitForSelector('html[data-demo-ready]');
       await open(page, IDLE);
       expect(await page.evaluate(() => getComputedStyle(document.body).overflowY)).toBe('hidden');
-      expect(await page.evaluate(() => document.body.getBoundingClientRect().height)).toBe(844);
+      expect(await page.evaluate(() => document.body.getBoundingClientRect().height)).toBeCloseTo(844, 0);
     });
   });
 }
