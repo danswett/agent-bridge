@@ -535,7 +535,7 @@ test('news a session\'s view showed while search hid its row gets no dot once se
   await expect(view(page, CODEX)).toBeHidden();
   await page.locator('#search').fill('');
   await expect(row(page, CODEX)).toBeVisible();
-  await expect(row(page, CODEX).locator('.unread-dot')).toHaveCount(0);
+  await expect(row(page, CODEX)).not.toHaveClass(/unread/);
 });
 
 test('a session chosen stays chosen across 1440, 900 and 390 px, pushed on the phone', async ({ page }) => {
