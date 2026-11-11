@@ -915,7 +915,7 @@ export class SessionCard {
       this.#renderFacts(rows);
     }
     this.#tickFacts(s, Date.now());
-    this.#follow.after(false);
+    this.#follow.after(this.#changed('arrival', [displayed.activity.turn, voice.response ?? '']) && !first);
     this.#bringQuestion(atEnd);
 
     // The tools shown follow the session: refetched (at most every 2 s) as it changes.
