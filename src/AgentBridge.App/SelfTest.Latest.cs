@@ -119,6 +119,13 @@ static partial class SelfTest
                 if (modifier == VirtualKey.None) { await LatestCaretMode(window, enabled: true); caret = true; }
                 await Jump();
                 check(await LatestModifiedKey(window, scroll, up, modifier), $"latest: receives {input}+{up}");
+                if (modifier == VirtualKey.None)
+                {
+                    var extent = scroll.ScrollableHeight;
+                    card.Update(card.Session with { Activity = (card.Session.Activity ?? new Activity()) with { Response = string.Join("\n\n", Enumerable.Repeat(paragraph, 31)) } });
+                    check(await Until(() => scroll.ScrollableHeight > extent + 1.5, TimeSpan.FromSeconds(3)), "latest: response extent grows after consumed caret Up");
+                    check(await Until(Bottom, TimeSpan.FromSeconds(3)), "latest: consumed caret Up keeps pin through response growth before history appends");
+                }
                 await Grow(pinned: true, $"{input}+{up}");
                 await Jump();
                 await LatestInput(window, scroll, "wheel", up: true);
