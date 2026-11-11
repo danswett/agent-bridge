@@ -281,8 +281,8 @@ public sealed partial class MainWindow : Window
 
     void OnLaunchHere(object sender, RoutedEventArgs e)
     {
-        if (RowOf(sender) is not { } row) { return; }
-        Launch.Select(row.Key);
+        if (RowOf(sender) is not { } row || Launch.Machines.FirstOrDefault(c => c.Value == row.Key) is not { } choice) { return; }
+        Launch.SelectedMachine = choice;
         ShowPage("launch");
     }
 
