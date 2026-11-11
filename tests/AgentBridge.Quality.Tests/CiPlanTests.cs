@@ -455,7 +455,7 @@ public class CiPlanTests
         Assert.DoesNotContain("pack-app.ps1", steps, StringComparison.Ordinal);
         Assert.Contains("Assert-AppInstallerInput", steps, StringComparison.Ordinal);
         Assert.Contains("Write-AppDistributionEvidence", steps, StringComparison.Ordinal);
-        Assert.Contains("-TimeoutSeconds 480", steps, StringComparison.Ordinal);
+        Assert.Contains("-TimeoutSeconds 720", steps, StringComparison.Ordinal);
         Assert.Contains("${{ matrix.artifact }}-${{ env.APP_VERSION }}", steps, StringComparison.Ordinal);
     }
 }
