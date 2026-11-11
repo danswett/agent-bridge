@@ -39,6 +39,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
     private protected Device host = null!;
     private protected Device client = null!;
     private protected string app = "", api = "", elsewhere = "";
+    private protected string machineName = "Test host";
 
     private protected LaunchFlowFixture() => starter = new FakeStarter(f);
 
@@ -94,6 +95,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
         if (wait is not null || readyWait is not null || trustConfirm is not null || follow is not null) { clock.Run(); }
         return new(source, gate ?? probe, screens, starter,         locator, new AgencyCatalog(agency, log: logged.Enqueue), new LaunchServiceOptions
         {
+            MachineName = machineName,
             Time = clock,
             CopilotHome = homes?.Copilot ?? f.CopilotHome,
             ClaudeHome = homes?.Claude ?? f.ClaudeHome,
@@ -121,7 +123,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
     }
 
     private protected void Serve(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, TimeSpan? readyWait = null) =>
-        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), launcher: Launcher(config, wait, usage, now, readyWait: readyWait)).HandleAsync;
+        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", machineName, "windows", "0.1.0"), launcher: Launcher(config, wait, usage, now, readyWait: readyWait)).HandleAsync;
 
     private protected async Task<SecureChannel> OpenAsync()
     {
@@ -834,9 +836,9 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
     public async Task Settings_this_machine_does_not_offer_are_refused_before_anything_starts()
     {
         var ch = await OpenAsync();
-        Assert.Equal(("refused", "Unknown workspace 'Secret'; this machine has App, API"), Pair(await LaunchAsync(ch, new { workspace = "Secret" })));
-        Assert.Equal(("refused", "Unknown agent 'codex'; this machine has copilot"), Pair(await LaunchAsync(ch, new { agent = "codex", prompt = "x" })));
-        Assert.StartsWith("Unknown model 'gpt-9' for Copilot; it offers auto", (await LaunchAsync(ch, new { model = "gpt-9" })).Reason);
+        Assert.Equal(("refused", "workspace not offered by Test host; it offers App, API"), Pair(await LaunchAsync(ch, new { workspace = "Secret" })));
+        Assert.Equal(("refused", "agent not offered by Test host: 'codex'; it offers copilot"), Pair(await LaunchAsync(ch, new { agent = "codex", prompt = "x" })));
+        Assert.StartsWith("model not offered by Test host: 'gpt-9' for Copilot; it offers auto", (await LaunchAsync(ch, new { model = "gpt-9" })).Reason);
         Assert.StartsWith("Unknown effort 'ultra' for Copilot", (await LaunchAsync(ch, new { effort = "ultra" })).Reason);
         Assert.StartsWith("a prompt cannot start with /", (await LaunchAsync(ch, new { prompt = "/allow-all" })).Reason);
         Assert.StartsWith("No resumable session", (await LaunchAsync(ch, new { resume = "44444444-4444-4444-8444-444444444444" })).Reason);

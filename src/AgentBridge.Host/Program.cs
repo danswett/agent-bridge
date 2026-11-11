@@ -546,7 +546,7 @@ async Task<int> ServeAsync(HostHandover handover)
     var agentCredentials = OperatingSystem.IsWindows() ? new AgentCredentials(identity.Folder, machine.Id, log: Log, rootAlive: AgentCredentials.SameProcessAlive) : null;
     // Made here, not beside RemoteDiagnostics, because launches record into it too (#737).
     var diagnosticsJournal = new DiagnosticsJournal(TimeProvider.System, Path.Combine(identity.Folder, "diagnostics-journal.jsonl"));
-    var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore, agentCredentials, diagnosticsJournal);
+    var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore, agentCredentials, diagnosticsJournal, machine.Name);
     launcher.SessionStarted += restore.Launched;
     launcher.StartScanning();
     var liteDeliver = AgentBridge.Host.Lite.LiteComposition.Create(source, replies, OperatingSystem.IsWindows() ? new WorkerInjector(log: Log) : new NoScreens(), () => settings.AgentMessaging.AllowAllTargets, launcher, Log);
@@ -1027,7 +1027,7 @@ async Task<int> ServeAsync(HostHandover handover)
 // Launching and resuming sessions from other devices (docs/host-launch.md): only in the folders
 // the profile's config.json approves, and on Windows only for now. The agent starts in a console
 // of its own on this desktop, so the host must run here, as the user, unelevated.
-LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, AttachmentStore? attachments, SessionTransfers transfers, DeliveryGate deliveryGate, IRestorePending restore, ILaunchCredentials? credentials, IDiagnosticsJournal journal)
+LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, AttachmentStore? attachments, SessionTransfers transfers, DeliveryGate deliveryGate, IRestorePending restore, ILaunchCredentials? credentials, IDiagnosticsJournal journal, string machineName)
 {
     foreach (var problem in settings.LaunchProblems) { Log($"config.json: {problem}"); }
     IAgentStarter starter = OperatingSystem.IsWindows() ? new WindowsAgentStarter() : new UnsupportedPlatformStarter();
@@ -1037,6 +1037,7 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
     var launchHttp = new UsageHttp(TimeSpan.FromSeconds(15));
     var launcher = new LaunchService(deliveryGate, source, probe, injector, starter, agentLocator, new AgencyCatalog(new BatchFileRunner(new CommandRunner()), log: Log), new LaunchServiceOptions
     {
+        MachineName = machineName,
         CopilotHome = options.CopilotHome,
         ClaudeHome = options.ClaudeHome,
         ClaudeConfigDirExplicit = options.ClaudeConfigDirExplicit,
