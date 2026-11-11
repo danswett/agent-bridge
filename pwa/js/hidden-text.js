@@ -22,10 +22,19 @@ const HIDDEN = new RegExp(HIDDEN_CLASS, 'u');
 // supplementary planes' right-to-left ranges.
 const RTL_CLASS = '[\\u0590-\\u08FF\\uFB1D-\\uFDFF\\uFE70-\\uFEFF\\u{10800}-\\u{10FFF}\\u{1E800}-\\u{1EFFF}]';
 const RTL = new RegExp(RTL_CLASS, 'u');
-const HIDDEN_ALL = new RegExp(HIDDEN_CLASS, 'gu');
-const HIDDEN_OR_RTL_ALL = new RegExp(`${HIDDEN_CLASS}|${RTL_CLASS}`, 'gu');
+const MARK = /\p{M}/u;
+const WHITESPACE = /\p{White_Space}/u;
+// Marks keep their base, so every mark in a run on whitespace or a line start is hidden (#555).
+const nextBase = (c, blankBase) => MARK.test(c) ? blankBase : WHITESPACE.test(c);
 
-export const hasHidden = (text) => HIDDEN.test(String(text ?? ''));
+export function hasHidden(text) {
+  let blankBase = true;
+  for (const c of String(text ?? '')) {
+    if (HIDDEN.test(c) || (blankBase && MARK.test(c))) { return true; }
+    blankBase = nextBase(c, blankBase);
+  }
+  return false;
+}
 export const hasRightToLeft = (text) => RTL.test(String(text ?? ''));
 
 const escape = (c) => {
@@ -41,7 +50,13 @@ const escape = (c) => {
 // decision 3) is to escape them and still offer Approve once; Hebrew or Arabic in code or in an
 // approval is the harder to read for it.
 export function reveal(text, { rightToLeft = false } = {}) {
-  return String(text ?? '').replace(rightToLeft ? HIDDEN_OR_RTL_ALL : HIDDEN_ALL, escape);
+  let shown = '';
+  let blankBase = true;
+  for (const c of String(text ?? '')) {
+    shown += HIDDEN.test(c) || (blankBase && MARK.test(c)) || (rightToLeft && RTL.test(c)) ? escape(c) : c;
+    blankBase = nextBase(c, blankBase);
+  }
+  return shown;
 }
 
 // The line endings a shell does not end a line at, as the escapes reveal gives them: a bare
@@ -59,11 +74,19 @@ export const revealLineSeparators = (text) => String(text ?? '').replace(/\r(?!\
 // writes one past the first plane (`\uD83D\uDE00` in a tool's arguments): read as that character,
 // not as two unpaired halves, which would refuse an emoji; a half on its own still stands for itself.
 export function unescapeShown(text) {
-  return String(text ?? '').replace(/\\u([dD][89abAB][0-9A-Fa-f]{2})\\u([dD][c-fC-F][0-9A-Fa-f]{2})|\\u(?:([0-9A-Fa-f]{4})|\{([0-9A-Fa-f]{1,6})\})/g, (written, high, low, four, any) => {
+  const source = String(text ?? '');
+  let blankBase = true;
+  let prevEnd = 0;
+  return source.replace(/\\u([dD][89abAB][0-9A-Fa-f]{2})\\u([dD][c-fC-F][0-9A-Fa-f]{2})|\\u(?:([0-9A-Fa-f]{4})|\{([0-9A-Fa-f]{1,6})\})/g, (written, high, low, four, any, offset) => {
+    // Judge a mark on the text read back so far, not on the last hex digit of an adjacent escape.
+    for (const c of source.slice(prevEnd, offset)) { blankBase = nextBase(c, blankBase); }
+    prevEnd = offset + written.length;
     const value = high ? 0x10000 + ((parseInt(high, 16) - 0xD800) << 10) + (parseInt(low, 16) - 0xDC00) : parseInt(four ?? any, 16);
-    if (value > 0x10FFFF) { return written; }
+    if (value > 0x10FFFF) { blankBase = false; return written; }
     const c = String.fromCodePoint(value);
-    return hasHidden(c) || hasRightToLeft(c) ? c : written;
+    const hidden = HIDDEN.test(c) || (blankBase && MARK.test(c)) || RTL.test(c);
+    blankBase = hidden ? nextBase(c, blankBase) : false;
+    return hidden ? c : written;
   });
 }
 

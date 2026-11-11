@@ -131,6 +131,20 @@ test('an approval too long to show whole, an edit\'s diff say, opens its session
 
 const shell = (command) => `Allow **shell**?\n\n\`\`\`\n${command}\n\`\`\``;
 
+test('a combining mark on a space or line start, raw or host-escaped, keeps Approve once out of the lane', () => {
+  for (const command of ['true \u0307#; echo RAN', 'echo safe\n\u0307#; echo RAN', '\u0307\u20DD#', 'true \\u0307#; echo RAN', 'echo safe\n\\u0307#; echo RAN']) {
+    for (const message of [command, shell(command)]) {
+      const [e] = lane([entry('h1', session('a', approval('q', { message })))]);
+      assert.equal(e.mode, 'open', JSON.stringify(message));
+      assert.equal(e.prompt, null);
+      assert.equal(e.decisions, null);
+    }
+  }
+  for (const command of ['echo e\u0307', 'echo e\\u0307']) {
+    assert.equal(lane([entry('h1', session('a', approval('q', { message: shell(command) })))])[0].mode, 'approve');
+  }
+});
+
 test('a command with a character not drawn where it runs makes the lane refuse Approve once: RLO, LRI to PDI, ZWSP, U+2028, private use, a CR, a variation selector, a blank-looking space', () => {
   const hidden = {
     // Drawn reversed: the end of the command reads as its start.
