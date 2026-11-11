@@ -1242,6 +1242,27 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 .bubble .plain { margin: 0; }
 .sent-attachments { list-style: none; display: grid; gap: var(--ab-space-1); margin: 0; padding: 0; }
 .sent-attachments[hidden] { display: none; }
+.sent-image { border: 1px solid var(--ab-stroke2); border-radius: 8px; padding: 0; min-width: 44px; min-height: 44px; overflow: hidden; background: var(--ab-card); cursor: pointer; }
+.sent-image img { display: block; width: auto; height: auto; max-width: 200px; max-height: 200px; }
+.sent-image:hover { outline: 1px solid var(--ab-bridge); }
+.sent-image:active { filter: brightness(.96); }
+.sent-attachment.sent-image-tile { padding: 0; border: 0; background: none; max-width: none; }
+.sent-image-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.sent-image-grid .sent-attachment:not(.sent-image-tile) { grid-column: 1 / -1; }
+.sent-image-grid .sent-image img { width: 96px; height: 96px; object-fit: cover; }
+.sent-image-viewer { box-sizing: border-box; width: 100%; max-width: 100vw; height: 100dvh; max-height: 100dvh; padding: 8px; border: 0; background: var(--ab-viewer); color: var(--ab-viewer-text); overflow: auto; }
+.sent-image-viewer::backdrop { background: var(--ab-viewer); opacity: .8; }
+.sent-image-viewer[open] { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 8px; }
+.sent-image-viewer header, .sent-image-viewer footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; z-index: 1; }
+.sent-image-viewer img { max-width: 100%; max-height: 100%; object-fit: contain; justify-self: center; align-self: center; touch-action: none; }
+.sent-image-viewer button { min-width: 44px; min-height: 44px; }
+@media (prefers-reduced-motion: no-preference) { .sent-image-viewer[open] { animation: sent-image-open 200ms ease-out; } }
+@keyframes sent-image-open { from { opacity: 0; scale: .98; } to { opacity: 1; scale: 1; } }
+@media (min-width: 640px) {
+  .sent-image img { max-width: 280px; max-height: 280px; }
+  .sent-image-grid .sent-image img { width: 136px; height: 136px; }
+  .sent-image-viewer { width: 80vw; height: 80dvh; border-radius: 8px; }
+}
 .sent-attachments + .plain:not([hidden]) { margin-top: var(--ab-space-2); }
 .sent-attachment {
   display: flex; align-items: center; box-sizing: border-box; min-height: 48px; min-width: 0;

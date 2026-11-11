@@ -5,7 +5,7 @@
 // `onmessage(message)` / `onclose(error)` callbacks, carrying already-parsed JSON. In the
 // app that is an end-to-end Noise channel (channels.js); in demo mode and the unit tests
 // it is an in-process fake. Nothing here knows which.
-import { Capabilities, Events, Ops, readAnswerResult, readAttachmentState, readDiscoveryHeld, readHello, readProgress, readSession, readStopResult, readSubagent } from './protocol.js';
+import { Capabilities, Events, Ops, readAnswerResult, readReplyResult, readAttachmentState, readDiscoveryHeld, readHello, readProgress, readSession, readStopResult, readSubagent } from './protocol.js';
 import { PatchError, applyPatch, readPatch } from './session-patch.js';
 import { USAGE, readUsage } from './usage.js';
 import { UPDATE, readUpdateState } from './update.js';
@@ -229,7 +229,7 @@ export class HostClient {
   // Resolves to { outcome, reason, timings? }; rejects only when no outcome arrived (HostError).
   // onProgress and onSent as for answer().
   async reply(data, { timeoutMs = this.#replyTimeoutMs, onProgress = null, onSent = null } = {}) {
-    return readAnswerResult(await this.request(Ops.sessionReply, this.#withProgress(data, onProgress, (d) => checkReply(d) === null), { timeoutMs, onProgress, onSent }));
+    return readReplyResult(await this.request(Ops.sessionReply, this.#withProgress(data, onProgress, (d) => checkReply(d) === null), { timeoutMs, onProgress, onSent }));
   }
 
   // Sends a file ahead of a reply (attachments.js does the chunking). Each resolves to

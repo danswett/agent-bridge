@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import {
-  readActivity, readAnswerResult, readAttachmentState, readBackground, readDiscoveryHeld, readHello, readOwn, readProgress,
+  readActivity, readAnswerResult, readReplyResult, readReplyAttachmentBinding, readAttachmentState, readBackground, readDiscoveryHeld, readHello, readOwn, readProgress,
   readQuestion, readSession, readSource, readStopResult, readSubagent, readTool,
 } from '../../js/protocol.js';
 import { checkAnswer } from '../../js/answers.js';
@@ -228,7 +228,8 @@ const READS = {
   // for progress sends (#600): read as the service gets them.
   DeliveryProgress: { read: readProgress },
   DeliveryTimings: { read: (j) => readAnswerResult({ outcome: 'delivered', timings: j }).timings ?? {} },
-  ReplyResult: { read: readAnswerResult, unread: ['attachments'] },
+  ReplyResult: { read: readReplyResult },
+  ReplyAttachmentBinding: { read: readReplyAttachmentBinding },
   StopResult: { read: readStopResult },
   // session.history's page and the records in it, as the history store gets them (#292).
   HistoryResult: { read: readHistoryResult },
@@ -456,7 +457,6 @@ const NOT_REPLAYED = {
   PushListResult: 'the PWA does not call push.list',
   PushDevice: 'the PWA does not call push.list',
   AttachmentRef: 'written as ReplyRequest\'s attachments, replayed there',
-  ReplyAttachmentBinding: 'sender-thumbnail bindings are not read until #1802 S3',
   BlobRef: 'written by the blob-store path of uploadAttachment, which needs a relay',
   ResumableIncomplete: 'read only within LaunchOptions, and not yet by the PWA (#95 S3)',
   LaunchDefaults: 'read only within LaunchOptions, where it must name an agent and a workspace offered',
