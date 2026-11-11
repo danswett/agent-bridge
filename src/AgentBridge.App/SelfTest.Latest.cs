@@ -38,7 +38,9 @@ static partial class SelfTest
             scroll.IsTabStop = true;
             EventHandler<ScrollViewerViewChangedEventArgs> trace = (_, e) => AppLog.Write($"latest view: intermediate={e.IsIntermediate}, offset={scroll.VerticalOffset:0.##}, extent={scroll.ScrollableHeight:0.##}, state={view.LatestState}");
             scroll.ViewChanged += trace;
-            restoreFocus = () => { scroll.ViewChanged -= trace; scroll.IsTabStop = tabStop; };
+            RoutedEventHandler focused = (_, e) => { if (e.OriginalSource is RichTextBlock text) { AppLog.Write($"latest GotFocus: RichTextBlock id={text.GetHashCode()}, children={VisualTreeHelper.GetChildrenCount(text)}, focus={text.FocusState}"); } };
+            scroll.GotFocus += focused;
+            restoreFocus = () => { scroll.ViewChanged -= trace; scroll.GotFocus -= focused; scroll.IsTabStop = tabStop; };
             var next = 1400;
             bool Bottom() => scroll.ScrollableHeight - scroll.VerticalOffset <= 1.5;
             Task Jump() => LatestJump(window, view, scroll, check);
@@ -235,8 +237,11 @@ static partial class SelfTest
         try
         {
             if (!SetKeyboardState(held)) { throw new InvalidOperationException("latest: cannot hold the keyboard modifier"); }
+            if (text is not null) { AppLog.Write($"latest before {key}: textId={text.GetHashCode()}, focus={text.FocusState}, children={VisualTreeHelper.GetChildrenCount(text)}"); }
             method = Press(window.Handle, key, foreground: text is not null, nativeOnly: text is not null);
-            return await Until(() => seen && finished && (text is null || taken && text.SelectionStart.Offset != position), TimeSpan.FromSeconds(2));
+            var received = await Until(() => seen && finished && (text is null || taken && text.SelectionStart.Offset != position), TimeSpan.FromSeconds(2));
+            if (!received) { LatestFailure(window, text); }
+            return received;
         }
         finally
         {
@@ -265,7 +270,7 @@ static partial class SelfTest
             var actual = GetForegroundWindow();
             AppLog.Write($"latest focus {++attempts}: request={requested}, target={window.Handle:X}, actual={actual:X}");
             return actual == window.Handle;
-        }, TimeSpan.FromSeconds(3))) { throw new InvalidOperationException("latest: native input target did not become foreground"); }
+        }, TimeSpan.FromSeconds(3))) { LatestFailure(window); throw new InvalidOperationException("latest: native input target did not become foreground"); }
     }
 
     static async Task<bool> LatestInput(MainWindow window, ScrollViewer scroll, string input, bool up)

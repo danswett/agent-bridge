@@ -1,3 +1,4 @@
+using AgentBridge.App.Core;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
@@ -24,10 +25,11 @@ public sealed partial class SessionView
                 latestScroll = scroll;
                 scroll.ViewChanged += (_, e) =>
                 {
-                    if (latestUsed && latestReturning && !e.IsIntermediate)
+                    if (latestUsed && latestReturning)
                     {
-                        latestReturning = false;
-                        if (scroll.ScrollableHeight - scroll.VerticalOffset <= 0.5) { latestPinned = true; pinEnd = true; }
+                        var next = new LatestReturn(latestPinned, latestReturning).Scrolled(e.IsIntermediate, scroll.VerticalOffset, scroll.ScrollableHeight);
+                        latestReturning = next.Returning;
+                        if (next.Pinned) { latestPinned = true; pinEnd = true; }
                     }
                     if (latestPinned) { anchor = null; }
                 };
