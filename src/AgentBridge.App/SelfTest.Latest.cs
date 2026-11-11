@@ -6,7 +6,9 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using Windows.Foundation;
 using Windows.System;
 
@@ -23,6 +25,7 @@ static partial class SelfTest
         var card = new SessionCardViewModel(original.Session, main.Local.Cards);
         view.Card = card;
         Action? restoreFocus = null;
+        var caret = false;
         try
         {
             if (card.Stored is not { } stored) { check(false, "latest: has stored history"); return; }
@@ -100,32 +103,61 @@ static partial class SelfTest
             check(Bottom() && departures == 0, $"latest: stays at the bottom for three seconds ({departures} layout departures)");
             foreach (var (modifier, down, up) in new[] {
                 (VirtualKey.Control, VirtualKey.PageDown, VirtualKey.Up),
-                (VirtualKey.Shift, VirtualKey.Down, VirtualKey.PageUp) })
+                (VirtualKey.Shift, VirtualKey.Down, VirtualKey.PageUp),
+                (VirtualKey.None, VirtualKey.Down, VirtualKey.Up) })
             {
+                var input = modifier == VirtualKey.None ? "consumed caret" : $"inert {modifier}";
                 card = new SessionCardViewModel(original.Session, main.Local.Cards);
                 view.Card = card;
                 stored = card.Stored ?? throw new InvalidOperationException("latest: modifier case has no fresh history");
                 check(await Until(() => stored.State != HistoryLoad.Loading, TimeSpan.FromSeconds(5)), "latest: fresh modifier history finishes loading");
                 for (var n = 0; n < 40; n++) { stored.AddLive(StoredTurn(next++)); }
-                card.Update(card.Session with { Activity = (card.Session.Activity ?? new Activity()) with { Response = string.Join("\n\n", Enumerable.Repeat("A long reply paragraph.", 30)) } });
+                var paragraph = modifier == VirtualKey.None ? string.Join(" ", Enumerable.Repeat("Selectable caret text.", 30)) : "A long reply paragraph.";
+                card.Update(card.Session with { Activity = (card.Session.Activity ?? new Activity()) with { Response = string.Join("\n\n", Enumerable.Repeat(paragraph, 30)) } });
                 await Still(scroll);
                 check(stored.Turns.Count + 40 < HistoryLimits.Kept, "latest: modifier appends remain below the history retention cap");
+                if (modifier == VirtualKey.None) { await LatestCaretMode(window, enabled: true); caret = true; }
                 await Jump();
-                check(await LatestModifiedKey(window, scroll, up, modifier), $"latest: receives inert {modifier}+{up}");
-                await Grow(pinned: true, $"inert {modifier}+{up}");
+                check(await LatestModifiedKey(window, scroll, up, modifier), $"latest: receives {input}+{up}");
+                await Grow(pinned: true, $"{input}+{up}");
                 await Jump();
                 await LatestInput(window, scroll, "wheel", up: true);
                 await Still(scroll);
                 var before = scroll.VerticalOffset;
-                check(await LatestModifiedKey(window, scroll, down, modifier), $"latest: receives inert {modifier}+{down}");
-                check(Math.Abs(scroll.VerticalOffset - before) <= 0.5, $"latest: inert {modifier}+{down} does not scroll");
+                check(await LatestModifiedKey(window, scroll, down, modifier), $"latest: receives {input}+{down}");
+                check(Math.Abs(scroll.VerticalOffset - before) <= 0.5, $"latest: {input}+{down} does not scroll");
                 card.Update(card.Session with { Activity = (card.Session.Activity ?? new Activity()) with { Response = "A shorter reply." } });
                 await Still(scroll);
-                check(Bottom() && scroll.ScrollableHeight < before - 1.5, $"latest: shorter re-render clamps the released view after inert {modifier}+{down}");
-                await Grow(pinned: false, $"inert {modifier}+{down}, then shorter re-render");
+                check(Bottom() && scroll.ScrollableHeight < before - 1.5, $"latest: shorter re-render clamps the released view after {input}+{down}");
+                await Grow(pinned: false, $"{input}+{down}, then shorter re-render");
             }
         }
-        finally { restoreFocus?.Invoke(); view.Card = original; }
+        finally
+        {
+            try { if (caret) { await LatestCaretMode(window, enabled: false); } }
+            finally { restoreFocus?.Invoke(); view.Card = original; }
+        }
+    }
+
+    static async Task LatestCaretMode(MainWindow window, bool enabled)
+    {
+        ContentDialog? Open() => VisualTreeHelper.GetOpenPopupsForXamlRoot(window.RootElement.XamlRoot)
+            .SelectMany(p => p.Child is ContentDialog d ? new[] { d } : p.Child is { } child ? Find<ContentDialog>(child).ToArray() : []).FirstOrDefault();
+        if (Open() is not null) { throw new InvalidOperationException("latest: a dialog already blocks caret-mode setup"); }
+        Press(window.Handle, VirtualKey.F7, foreground: false, extended: false);
+        ContentDialog? dialog = null;
+        if (!await Until(() => (dialog = Open()) is not null, TimeSpan.FromSeconds(3)))
+        { throw new InvalidOperationException("latest: F7 did not open the native caret-browsing dialog"); }
+        if (dialog!.Title is not TextBlock || dialog.Content is not StackPanel content
+            || (enabled ? content.FindName("notPopAgainCheckBox") is not CheckBox || content.FindName("content") is not TextBlock : content.Children.Count != 0))
+        { throw new InvalidOperationException("latest: unexpected dialog, not the requested native caret-mode toggle"); }
+        var primary = Find<Button>(dialog).FirstOrDefault(b => b.Name == "PrimaryButton");
+        if (primary is null || !primary.Focus(FocusState.Keyboard)) { throw new InvalidOperationException("latest: cannot focus the native caret-mode choice"); }
+        var accepted = false;
+        dialog.PrimaryButtonClick += (_, _) => accepted = true;
+        Press(window.Handle, VirtualKey.Enter, foreground: false);
+        if (!await Until(() => accepted && Open() is null, TimeSpan.FromSeconds(3)))
+        { throw new InvalidOperationException("latest: native caret-mode choice did not complete"); }
     }
 
     static async Task LatestJump(MainWindow window, SessionView view, ScrollViewer scroll, Action<bool, string> check)
@@ -150,27 +182,44 @@ static partial class SelfTest
 
     static async Task<bool> LatestModifiedKey(MainWindow window, ScrollViewer scroll, VirtualKey key, VirtualKey modifier)
     {
-        LatestFocus(scroll);
+        RichTextBlock? text = null;
+        if (modifier == VirtualKey.None)
+        {
+            text = Find<RichTextBlock>(scroll).FirstOrDefault(t => t.IsTextSelectionEnabled && t.ActualHeight > 60
+                && t.TransformToVisual(scroll).TransformPoint(new Point()).Y >= 1
+                && t.TransformToVisual(scroll).TransformPoint(new Point()).Y + t.ActualHeight < scroll.ViewportHeight - 1);
+            if (text is null || !text.Focus(FocusState.Programmatic) || !ReferenceEquals(FocusManager.GetFocusedElement(scroll.XamlRoot), text))
+            { throw new InvalidOperationException("latest: cannot focus fully visible selectable conversation text"); }
+            var middle = text.ContentStart.GetPositionAtOffset(300, LogicalDirection.Forward) ?? throw new InvalidOperationException("latest: selectable text has no interior caret position");
+            text.Select(middle, middle);
+        }
+        else { LatestFocus(scroll); }
+        var position = text?.SelectionStart.Offset;
         var saved = new byte[256];
         if (!GetKeyboardState(saved)) { throw new InvalidOperationException("latest: cannot read keyboard modifiers"); }
         var held = saved.ToArray();
-        held[(int)modifier] = held[modifier == VirtualKey.Control ? 0xA2 : 0xA0] = 0x80;
+        if (modifier != VirtualKey.None) { held[(int)modifier] = held[modifier == VirtualKey.Control ? 0xA2 : 0xA0] = 0x80; }
         var seen = false;
         var finished = false;
-        var heard = new KeyEventHandler((_, e) => { if (e.Key == key) { seen = InputKeyboardSource.GetKeyStateForCurrentThread(modifier).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down); } });
+        var taken = false;
+        // A parent setting Handled is not a receipt that the text itself consumed the key.
+        var consumed = new KeyEventHandler((_, e) => { if (e.Key == key) { taken = e.Handled; } });
+        var heard = new KeyEventHandler((_, e) => { if (e.Key == key) { seen = text is not null ? ReferenceEquals(e.OriginalSource, text) : InputKeyboardSource.GetKeyStateForCurrentThread(modifier).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down); } });
         var released = new KeyEventHandler((_, e) => { if (e.Key == key) { finished = true; } });
         scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
         scroll.AddHandler(UIElement.KeyUpEvent, released, true);
+        text?.AddHandler(UIElement.KeyDownEvent, consumed, true);
         try
         {
             if (!SetKeyboardState(held)) { throw new InvalidOperationException("latest: cannot hold the keyboard modifier"); }
             Press(window.Handle, key, foreground: false);
-            return await Until(() => seen && finished, TimeSpan.FromSeconds(2));
+            return await Until(() => seen && finished && (text is null || taken && text.SelectionStart.Offset != position), TimeSpan.FromSeconds(2));
         }
         finally
         {
             scroll.RemoveHandler(UIElement.PreviewKeyDownEvent, heard);
             scroll.RemoveHandler(UIElement.KeyUpEvent, released);
+            text?.RemoveHandler(UIElement.KeyDownEvent, consumed);
             if (!SetKeyboardState(saved)) { throw new InvalidOperationException("latest: cannot release the keyboard modifier"); }
         }
     }
