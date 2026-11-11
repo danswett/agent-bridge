@@ -135,6 +135,10 @@ static partial class SelfTest
                 check(before < end - 1.5, "latest: modifier setup really scrolls away from the end");
                 check(await LatestModifiedKey(window, scroll, down, modifier), $"latest: receives {input}+{down}");
                 check(Math.Abs(scroll.VerticalOffset - before) <= 0.5, $"latest: {input}+{down} does not scroll");
+                // Clamp first: replacement can produce a non-bottom ViewChanged that hides a false return.
+                scroll.ChangeView(null, scroll.ScrollableHeight + scroll.ViewportHeight, null, disableAnimation: true);
+                await Still(scroll);
+                check(Bottom(), $"latest: oversized offset clamps before replacement after {input}+{down}");
                 card.Update(card.Session with { Activity = (card.Session.Activity ?? new Activity()) with { Response = "A shorter reply." } });
                 check(await Until(() => scroll.ScrollableHeight < before - 1.5, TimeSpan.FromSeconds(3)), "latest: shorter reply shrinks below the released offset");
                 scroll.ChangeView(null, before, null, disableAnimation: true);
