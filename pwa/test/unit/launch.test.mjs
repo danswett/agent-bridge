@@ -117,6 +117,27 @@ test('launch options leave out launchers this app does not know and anything unr
   assert.equal(readLaunchOptions(undefined).defaults.agent, null);
 });
 
+test('launch options keep well-formed resumable omissions without requiring a known reason', () => {
+  for (const reason of ['deadline', 'a future reason', undefined]) {
+    const raw = { omitted: 2, reason, title: 'private title', path: 'private path' };
+    assert.deepEqual(readLaunchOptions({ resumableIncomplete: raw }).resumableIncomplete,
+      { omitted: 2, reason: reason ?? null });
+  }
+});
+
+test('launch options drop absent or malformed resumable omissions', () => {
+  const olderHost = readLaunchOptions({});
+  assert.equal(Object.hasOwn(olderHost, 'resumableIncomplete'), false);
+  for (const raw of [
+    undefined, null, false, 1, 'deadline', [], {}, { reason: 'deadline' },
+    { omitted: 0 }, { omitted: -1 }, { omitted: 1.5 }, { omitted: '2' },
+    { omitted: true }, { omitted: NaN }, { omitted: Infinity },
+    { omitted: Number.MAX_SAFE_INTEGER + 1 },
+  ]) {
+    assert.deepEqual(readLaunchOptions({ resumableIncomplete: raw }), olderHost);
+  }
+});
+
 test('a launch the machine would refuse is caught before it is sent, in the machine\'s words', () => {
   assert.equal(checkLaunch({ agent: 'copilot', workspace: 'B', prompt: 'hello' }), null);
   assert.equal(checkLaunch({ agent: 'copilot', resume: 'x', prompt: '' }), null);
