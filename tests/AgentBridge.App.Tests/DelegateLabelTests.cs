@@ -142,6 +142,29 @@ public class DelegateLabelTests
         Assert.Equal("Delegate abc", DelegateLabel.For(name, "a\u202Eb\" c"));
     }
 
+    [Theory]
+    [InlineData("\u2800")]
+    [InlineData("\u2800\u2800")]
+    [InlineData(" \u2800 \t\u2800 ")]
+    [InlineData("\u200B\u2800\u202E \u3164\u2800\uFE0F")]
+    public void A_braille_blank_name_cleans_to_empty_and_is_named_by_its_id(string name)
+    {
+        Assert.Equal("", DelegateLabel.Clean(name, DelegateLabel.MaxLength));
+        Assert.Equal("Delegate 3a91c0de", DelegateLabel.For(name, Id));
+        Assert.Equal(DelegateLabel.For(name, Id), DelegateLabel.For(AgentBridge.Protocol.DelegateName.Clean(name), Id));
+    }
+
+    [Theory]
+    [InlineData("\u2800Read\u2800", "Read")]
+    [InlineData("Read\u2800\u2800logs", "Read logs")]
+    [InlineData("Read \u2800\u200B \u2800logs", "Read logs")]
+    [InlineData("Main\u2800agent", "Delegate “Main agent”")]
+    public void Braille_blanks_in_a_visible_name_are_spaces_as_the_host_also_shows_it(string name, string shown)
+    {
+        Assert.Equal(shown, DelegateLabel.For(name, Id));
+        Assert.Equal(shown, DelegateLabel.For(AgentBridge.Protocol.DelegateName.Clean(name), Id));
+    }
+
     [Fact]
     public void A_300_character_name_is_cut_to_60_characters_with_an_ellipsis_and_never_mid_character()
     {
