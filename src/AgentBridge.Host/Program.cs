@@ -673,6 +673,7 @@ async Task<int> ServeAsync(HostHandover handover)
     var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare, name: fleetNames.Get, log: Log);
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log, peerUsage), launcher, transfers)
     {
+        LoadEnabled = () => settings.LoadEnabled,
         Drivers = drivers,
         FleetNames = fleetNames,
         // Said in hello so a phone shows the machine read-only and why.
@@ -689,6 +690,7 @@ async Task<int> ServeAsync(HostHandover handover)
         Diagnostics = diagnostics,
         LiteReceiver = new AgentBridge.Host.Lite.LiteReceiver(new AgentBridge.Host.Lite.SettingsLiteMode(() => HostSettings.CurrentAgentMessaging(identity.Folder)),         new AgentBridge.Host.Lite.OwnLitePeers(new OwnPeers(identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, () => identity.Account?.AccountId)), liteDeliver),
     };
+    Log(settings.LoadStatus);
     // Who is on the other end of the pipe: the app beside this host, or something inside an
     // agent session, which may not manage it (§6.3 invariant 13).
     var inspector = new SystemProcessInspector();

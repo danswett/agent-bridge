@@ -94,7 +94,25 @@ public sealed class ServeTests : IAsyncLifetime
         Assert.Equal(1, hello.GetProperty("protocol").GetInt32());
         Assert.Equal("Test host", hello.GetProperty("machine").GetProperty("name").GetString());
         Assert.Equal("windows", hello.GetProperty("machine").GetProperty("os").GetString());
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability], hello.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], hello.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
+    }
+
+    [Fact]
+    public async Task Load_hello_uses_the_injected_gate_and_disabled_requests_are_unsupported()
+    {
+        var enabled = false;
+        var gated = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0")) { LoadEnabled = () => enabled };
+        host.Hub.Handler = gated.HandleAsync;
+        var ch = await OpenAsync();
+        Assert.DoesNotContain(Capabilities.Load, Result(await ch.RequestAsync(Ops.Hello, new { })).GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
+        foreach (var op in new[] { "load.get", "load.subscribe" })
+        {
+            var refused = await ch.RequestAsync(op, new { });
+            Assert.False(refused.GetProperty("ok").GetBoolean());
+            Assert.Equal($"unknown op {op}", refused.GetProperty("error").GetString());
+        }
+        enabled = true;
+        Assert.Contains(Capabilities.Load, Result(await ch.RequestAsync(Ops.Hello, new { })).GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
     }
 
     [Fact]

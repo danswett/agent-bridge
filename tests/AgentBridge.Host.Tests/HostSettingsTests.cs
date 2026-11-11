@@ -221,6 +221,48 @@ public sealed class HostSettingsTests : IDisposable
 
     string Said = "";
 
+    [Theory]
+    [InlineData("""{"load":false}""", "load is not an object")]
+    [InlineData("""{"load":{"enabled":"true"}}""", "load.enabled is not true or false")]
+    public void An_unreadable_load_setting_is_reported_instead_of_sending_load(string text, string why)
+    {
+        var (settings, problem) = With(text);
+        Assert.Contains(why, problem);
+        Assert.False(settings.LoadEnabled);
+    }
+
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("{}", true)]
+    [InlineData("""{"load":null}""", true)]
+    [InlineData("""{"load":{}}""", true)]
+    [InlineData("""{"load":{"enabled":null}}""", true)]
+    [InlineData("""{"load":{"enabled":false}}""", false)]
+    [InlineData("""{"load":{"enabled":true}}""", true)]
+    [InlineData("""{"version":2,"load":{"enabled":true}}""", false)]
+    [InlineData("""{"push":{"enabled":"no"},"load":{"enabled":true}}""", false)]
+    public void Relay_load_defaults_on_but_an_opt_out_or_unreadable_file_turns_it_off(string? text, bool on)
+    {
+        Assert.Equal(on, With(text).Settings.LoadEnabled);
+    }
+
+    [Fact]
+    public void A_person_can_turn_relay_load_off_and_unset_it_without_changing_other_settings()
+    {
+        With("""{"push":{"enabled":false}}""");
+        Assert.Equal(0, Run("config", "set", "load.enabled", "false"));
+        Assert.False(HostSettings.Load(folder).Settings.LoadEnabled);
+        Assert.Equal(1, Run("config", "set", "load.enabled", "yes"));
+        Assert.Contains("Not written", Said);
+        Assert.Equal(0, Run("config", "show"));
+        Assert.Contains("relay load sharing is off", Said);
+        Assert.False(HostSettings.Load(folder).Settings.Push);
+        Assert.Equal(0, Run("config", "unset", "load.enabled"));
+        Assert.True(HostSettings.Load(folder).Settings.LoadEnabled);
+        Assert.Equal(0, Run("config", "show"));
+        Assert.Contains("relay load sharing is on", Said);
+    }
+
     [Fact]
     [Trait("Category", "Process")]
     public void A_workspace_is_approved_at_the_machine_with_the_cli_and_removed_the_same_way()

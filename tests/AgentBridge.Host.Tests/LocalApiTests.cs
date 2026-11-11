@@ -152,6 +152,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Contains(Capabilities.SessionsRead, hello.Capabilities);
         Assert.Contains(HostOps.Capability, hello.Capabilities);
         Assert.DoesNotContain(Capabilities.Push, hello.Capabilities);
+        Assert.DoesNotContain(Capabilities.Load, hello.Capabilities);
     }
 
     [Fact]
