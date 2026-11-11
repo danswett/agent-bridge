@@ -7,7 +7,8 @@ const paragraphs = (turn, lines) => Array.from({ length: lines }, (_, i) => `Tur
 test.use({
   viewport: { width: 390, height: 844 },
   deviceScaleFactor: 1,
-  isMobile: true,
+  // Mobile WebKit rejects wheel input; keep the phone viewport and standalone page.
+  isMobile: false,
   hasTouch: true,
   reducedMotion: 'reduce',
   userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',

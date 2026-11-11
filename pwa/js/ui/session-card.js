@@ -55,6 +55,7 @@ import { sentMessage, setSentMessage } from './sent-message.js';
 import { HISTORY, closedQuestionIds } from '../history.js';
 import { MoveStrip } from './move-view.js';
 import { moveView, moves } from '../move.js';
+import { ScrollFollow } from './scroll-follow.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 // The Details rows whose values move with the clock: drawn again where they are, not as new nodes.
@@ -469,13 +470,6 @@ export class SessionCard {
   #pressing = false;
   // A mouse or pen over the conversation: someone reading it, perhaps about to click.
   #hovering = false;
-  // Whether the conversation is read to its end (ui.md §5.3, Scroll to a question), and where it
-  // was scrolled to when that was measured: kept while only its content changes, since a response
-  // growing below isn't followed and so doesn't take the reader from its end; measured again once
-  // it has scrolled since (read from scrollTop, before its scroll event has come). Forgotten (null)
-  // while it isn't on screen, and when it may come back, where the browser can have moved it.
-  #readToEnd = null;
-  #readAt = 0;
   // Until when the question's controls ignore a pointer's click (QUESTION_ARRIVAL_GUARD_MS).
   #guardUntil = 0;
   // The question's view the guard covers, and the question it was armed for.
@@ -687,13 +681,20 @@ export class SessionCard {
           if (r?.view.isConnected) { r.view.scrollIntoView({ block: 'nearest', behavior: r.behavior }); }
         };
         if (this.collapse) { this.collapse.appScroll(keep); } else { keep(); }
-        if (follow) { this.#stuckAt = sc.scrollTop; }
+        this.#follow.remember();
         // Our own scroll, keeping what is read where it was: not a move under a pointer.
         this.#moves?.settle();
       }
     };
     this.turns.onSettled = () => this.#wantEarlier();
     e.scroll = h('div', { class: 'stream-scroll' }, this.turns.element, e.stream);
+    this.#follow = new ScrollFollow(e.scroll, {
+      scroll: (fn) => this.collapse ? this.collapse.appScroll(fn) : fn(),
+      visible: () => this.viewing() && e.scroll.getClientRects().length > 0,
+      canFollow: () => !this.#s?.question,
+      canDefer: () => !!this.historyStore && (!e.user.hidden || !e.prompt.hidden || !e.agentBlock.hidden),
+      onFollow: () => this.update(this.#s),
+    });
     this.#watchHold(e.scroll);
     // An open question out of sight (#1657): one tap brings its card into view.
     e.waiting = h('button', { type: 'button', class: 'question-waiting', hidden: true, onclick: () => this.#showWaiting() }, 'Question waiting');
@@ -771,6 +772,9 @@ export class SessionCard {
   }
 
   update(s) {
+    if (this.#s?.question && !s.question) { this.#follow.resume(); }
+    const heldTop = this.#follow.read();
+    const displayed = this.#follow.display(s);
     const first = this.#s === null;
     // Whether the conversation is read to its end, before this update draws anything into it.
     const atEnd = this.#reading();
@@ -857,7 +861,7 @@ export class SessionCard {
     e.rowAge.title = localTime(rowAt(s));
     this.refreshTimes();
 
-    const t = s.activity.currentTool;
+    const t = displayed.activity.currentTool;
     e.tool.hidden = !t;
     if (t) {
       e.tool.dataset.status = t.status;
@@ -873,7 +877,7 @@ export class SessionCard {
     this.#renderReply(s);
     this.#renderStop(s);
     // The main agent's own words only (ui.md §1 principle 3); a delegate's are on its own row.
-    const voice = liveVoice(s);
+    const voice = liveVoice(displayed);
     if (this.#changed('response', voice.response ?? '')) {
       e.response.replaceChildren(renderMarkdown(voice.response ?? ''));
     }
@@ -884,13 +888,13 @@ export class SessionCard {
     e.reasoningText.textContent = voice.reasoning ?? '';
     e.voice.hidden = !voice.attributed;
     e.agentLabel.hidden = voice.attributed;
-    e.agentLabel.textContent = AGENT_NAME[s.agent] ?? AGENT_NAME.unknown;
+    e.agentLabel.textContent = AGENT_NAME[displayed.agent] ?? AGENT_NAME.unknown;
     this.#renderDelegates(s);
     e.agentBlock.hidden = !voice.response && !voice.responseDropped && !voice.reasoning && !t && e.events.hidden;
-    const echoed = this.#changed('userMessage', s.activity.userMessage ?? '');
-    e.user.hidden = !s.activity.userMessage;
-    setSentMessage(e.userBubble, s.activity.userMessage ?? '');
-    this.#renderPrompt(s);
+    const echoed = this.#changed('userMessage', displayed.activity.userMessage ?? '');
+    e.user.hidden = !displayed.activity.userMessage;
+    setSentMessage(e.userBubble, displayed.activity.userMessage ?? '');
+    this.#renderPrompt(displayed);
     this.#syncStoredLatest();
     this.#renderMessageTimes();
     // Send acknowledged (ui.md §5.3): your message, back from the machine, rises into place; a
@@ -905,6 +909,7 @@ export class SessionCard {
       this.#renderFacts(rows);
     }
     this.#tickFacts(s, Date.now());
+    this.#follow.after(heldTop);
     this.#bringQuestion(atEnd);
 
     // The tools shown follow the session: refetched (at most every 2 s) as it changes.
@@ -981,6 +986,7 @@ export class SessionCard {
   // only a line arriving fades in, so nothing beside it slides. A control with keyboard focus
   // keeps it, or gives it to where its line went.
   #renderEvents(s, now = Date.now()) {
+    s = this.#follow.shown ?? s;
     const e = this.els;
     const lines = delegateEvents(s, now);
     const fold = delegateFold(lines);
@@ -1146,7 +1152,8 @@ export class SessionCard {
   }
 
   #renderMessageTimes(snapshot = this.historyStore?.get(this.hostId, this.#s.id)) {
-    const times = liveMessageTimes(snapshot, this.#s);
+    if (!this.#follow.following) { return; }
+    const times = liveMessageTimes(snapshot, this.#follow.shown ?? this.#s);
     setTime(this.els.userTime, times.prompt);
     setTime(this.els.promptAge, times.prompt);
     setTime(this.els.agentAge, times.response);
@@ -1158,7 +1165,7 @@ export class SessionCard {
   #setPromptOpen(open) {
     const e = this.els;
     this.#promptOpen = open;
-    const origin = promptOrigin(this.#s);
+    const origin = promptOrigin(this.#follow.shown ?? this.#s);
     e.promptFull.hidden = !open;
     e.prompt.toggleAttribute('data-open', open);
     e.promptToggle.setAttribute('aria-expanded', String(open));
@@ -1289,7 +1296,6 @@ export class SessionCard {
   setSelected(selected) {
     if (selected === this.#selected) { return; }
     this.#selected = selected;
-    this.#readToEnd = null;
     this.element.classList.toggle('selected', selected);
     if (selected) { this.els.open.setAttribute('aria-current', 'true'); } else { this.els.open.removeAttribute('aria-current'); }
     this.view.hidden = !selected;
@@ -1321,7 +1327,6 @@ export class SessionCard {
 
   // The inspector became a pane of its own, or stopped being one.
   layoutChanged() {
-    this.#readToEnd = null;
     const { inspector } = this.layout();
     // A delegate shown in the inspector stays shown as the window narrows: pushed in the Delegates
     // tab. Only then: a tab chosen at a narrower width is left as it was.
@@ -1344,7 +1349,6 @@ export class SessionCard {
     this.#revealTools();
     this.detail.shown();
     if (this.#tab === was) { return; }
-    this.#readToEnd = null;
     // Back on the conversation, its question shows again where a click may be headed: the same
     // wait as a question arriving, one that came while another tab was shown included.
     if (this.#tab === 'conversation' && this.#guarded?.isConnected && this.#selected) { this.#guard(); }
@@ -1433,6 +1437,7 @@ export class SessionCard {
     for (const r of this.#closed.splice(0)) { this.#destroyReceipt(r); }
     this.delegates.dispose();
     this.turns.dispose();
+    this.#follow.dispose();
     this.#messageTimes.stop();
     this.detail.dispose();
     this.#moves?.stop();
@@ -1447,23 +1452,19 @@ export class SessionCard {
   // session is shown. It opens at the latest message:   kept at the end while it fills, until the
     // person scrolls.
   #unwatch = null;
-  #stick = true;
-  #stuckAt = -1;
+  #follow;
   #placed = false;
 
-  // Still following the end: until the scroll is somewhere we did not put it and not at the end,
-  // which is checked here as well as on the scroll event, since a draw can come before the event.
+  // Read input that reached the scroller before its scroll event was dispatched.
   #sticking() {
-    if (this.#stick && this.els.scroll.scrollTop !== this.#stuckAt && !this.#atEnd()) { this.#stick = false; }
-    return this.#stick;
+    this.#follow.read();
+    return this.#follow.following;
   }
 
   #openTurns() {
     if (!this.historyStore) { return; }
     if (this.#unwatch) { this.#drawTurns(); return; }
-    this.#stuckAt = this.els.scroll.scrollTop;
-    // A scroll that is not ours and leaves the end: the person has taken over.
-    this.els.scroll.addEventListener('scroll', () => { this.#sticking(); }, { passive: true });
+    this.#follow.remember();
     this.#unwatch = this.historyStore.watch(this.hostId, this.#s.id, () => this.#drawTurns());
     this.historyStore.open(this.hostId, this.#s.id, { session: this.#s }).catch(() => {});
     this.#drawTurns();
@@ -1490,31 +1491,28 @@ export class SessionCard {
   #slotQuestion = null;
 
   #drawTurns() {
-    const snapshot = this.historyStore.get(this.hostId, this.#s.id);
-    const kept = this.#trimClosed(snapshot.turns);
-    this.#renderMessageTimes(snapshot);
+    const full = this.historyStore.get(this.hostId, this.#s.id);
+    const kept = this.#trimClosed(full.turns);
+    this.#renderMessageTimes(full);
     const slot = this.els.question;
     if (this.#s.question) { this.#slotQuestion = this.#s.question.id; } else if (!slot.hasChildNodes()) { this.#slotQuestion = null; }
     const sc = this.els.scroll;
     const readAt = !this.turns.latest && !this.#sticking() ? sc.scrollTop : null;
-    // Not at the end before this draw (the person read on, or something grew with no scroll):
-    // nothing here takes them from where they are.
-    // A newer turn than the last drawn is the reply the person is waiting for: it is followed.
-    const away = this.#sticking() && sc.getClientRects().length > 0 && !this.#atEnd();
-    const tail = this.turns.element.lastElementChild;
     const records = new Map(this.#closed.map((r) => [r.questionId, r.element]));
     if (this.#receipt && this.#s.question && this.#receipt.questionId !== this.#s.question.id) { records.set(this.#receipt.questionId, this.#receipt.element); }
-    const drawn = this.turns.render(snapshot, this.#s.activity?.turn ?? null, { slot, questionId: this.#slotQuestion, activeId: this.#s.question?.id, records, kept });
+    const inline = { slot, questionId: this.#slotQuestion, activeId: this.#s.question?.id, records, kept };
+    const snapshot = this.#follow.snapshot(full, inline);
+    const drawn = this.turns.render(snapshot, this.#follow.shown?.activity.turn ?? null, inline);
     this.#syncStoredLatest();
     // Not in a turn (none holds it, or the history is not drawn): back where the live exchange ends.
-    if (!this.turns.hosted && slot.parentNode !== this.els.stream) { this.els.stream.append(slot); }
+    const questionHost = this.#follow.questionHost ?? this.els.stream;
+    if (!this.turns.hosted && !this.#follow.hosted) { this.#follow.place(slot, questionHost); }
     this.#syncWaiting();
     // Chromium anchors to the old live stream while its stored replacement is inserted above it.
     if (readAt !== null && this.turns.latest) {
       const keep = () => { sc.scrollTop = readAt; };
       if (this.collapse) { this.collapse.appScroll(keep); } else { keep(); }
     }
-    if (away && drawn && tail === this.turns.element.lastElementChild) { this.#stick = false; }
     this.#wantEarlier();
     // Latest at the bottom, kept there until the person scrolls (#1646). A draw that showed
     // nothing does not count, so turns arriving later still scroll.
@@ -1524,8 +1522,7 @@ export class SessionCard {
     const held = this.#placed && (this.#touches || this.#pressing || this.#hovering);
     if (this.#sticking() && drawn && sc.getClientRects().length && !held) {
       this.#placed = true;
-      const toEnd = () => { sc.scrollTop = sc.scrollHeight; this.#stuckAt = sc.scrollTop; };
-      if (this.collapse) { this.collapse.appScroll(toEnd); } else { toEnd(); }
+      this.#follow.after(sc.scrollTop);
     }
   }
 
@@ -1533,7 +1530,7 @@ export class SessionCard {
   // not in that record still need the live exchange below it.
   #syncStoredLatest() {
     const e = this.els;
-    const s = this.#s;
+    const s = this.#follow.shown ?? this.#s;
     const t = this.turns.latest;
     const focus = [e.userTime, e.promptAge, e.agentAge].map(holdTimeFocus);
     const voice = liveVoice(s);
@@ -1778,22 +1775,9 @@ export class SessionCard {
     this.#syncWaiting();
   }
 
-  #atEnd() {
-    const sc = this.els.scroll;
-    return sc.scrollHeight - sc.scrollTop - sc.clientHeight < 24;
-  }
-
   #reading() {
-    const sc = this.els.scroll;
-    if (!sc.getClientRects().length) {
-      this.#readToEnd = null;
-      return this.#atEnd();
-    }
-    if (this.#readToEnd === null || sc.scrollTop !== this.#readAt) {
-      this.#readToEnd = this.#atEnd();
-      this.#readAt = sc.scrollTop;
-    }
-    return this.#readToEnd;
+    this.#follow.read();
+    return this.#follow.following;
   }
 
   // Smoothly, and never into a conversation scrolled back through or held: atEnd is where the
@@ -1859,11 +1843,11 @@ export class SessionCard {
     // And what the reply area covers at the foot (scroll-padding-bottom).
     const bottom = box.bottom - (this.collapse?.footCovered() ?? 0);
     const moves = sc.getClientRects().length > 0 && (v.top < top - 1 || v.bottom > bottom + 1);
-    const scroll = () => view.scrollIntoView({ block: 'nearest', behavior });
+    const scroll = () => this.#follow.appScroll(() => view.scrollIntoView({ block: 'nearest', behavior }));
     // A scroll the app makes leaves the header as it was.
     if (this.collapse) { this.collapse.appScroll(scroll); } else { scroll(); }
     this.#guard();
-    if (!moves || behavior !== 'smooth') { return; }
+    if (!moves || behavior !== 'smooth') { this.#follow.resume(); return; }
     // Every step of the scroll re-arms it, so it runs out only after the question has stopped
     // moving: `scroll` fires in every engine, where `scrollend` isn't in Safari yet. Listening
     // stops at `scrollend`, once the steps stop, or as soon as the person takes the scroller
@@ -1893,12 +1877,6 @@ export class SessionCard {
   // is still down. A mouse button holds it until released, wherever that is, and a mouse or pen
   // holds it while it is over it.
   #watchHold(scroller) {
-    // Any scroll: measured afresh at the next update (a scroll away and back to the same place
-    // included). Not measured here: an update can come before this event does.
-    scroller.addEventListener('scroll', () => { this.#readToEnd = null; }, { passive: true });
-    // What the person opens or presses in it (Show reasoning, a disclosure in a response) can
-    // grow it with no scroll: where they are is measured afresh at the next update.
-    for (const type of ['toggle', 'click']) { scroller.addEventListener(type, () => { this.#readToEnd = null; }, true); }
     const fingers = (e) => { this.#touches = (e.touches?.length ?? 0) > 0; };
     scroller.addEventListener('touchstart', () => { this.#touches = true; }, { passive: true });
     for (const end of ['touchend', 'touchcancel']) { scroller.addEventListener(end, fingers, { passive: true }); }
