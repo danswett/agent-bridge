@@ -2087,14 +2087,15 @@ machine, online ones first, then the account's offline machines (#213):
     9. **The page.** One line heads the list: "5 machines · 4 online · 1 tight", text only. The
        "All machines" row does not exist: it is a filter on the Sessions page, not a machine. The
        machine rows stay online first, then offline (§6.6).
-    10. **Phone, and any width under 900 px.** One column. Header, Health and Actions always show. Can
+    10. **Phone, and any width under 760 px.** One column. Header, Health and Actions always show. Can
         run and Running are disclosure rows: real buttons, `aria-expanded`, closed by default; a
-        machine's open state is kept while the page is shown, and is not saved. A tablet in portrait
-        uses this layout, centred, at most 640 px wide.
-    11. **900 px and wider (iPad landscape, the Windows app, a browser):** the machine list on the left,
-        its rows as above plus the Health word on line 2; the selected machine's tile on the right with
-        Can run and Running open, in two columns. With none selected, the first machine is. The right
-        pane takes the width the rows do not use.
+        machine's open state is kept while the page is shown, and is not saved. At most 640 px wide.
+    11. **Wide Fleet page (#2068, owner decision 2026-11-11):** every machine is an expanded card
+        in an equal-width, wrapping grid, with no machine selector or detail pane. The PWA uses two
+        columns from 760 px (including iPad portrait), three from 1100 px and four from 1500 px,
+        filling the page's available width. The Windows Fleet page follows the same grid rule
+        (#1868); this PWA slice does not implement Windows. Launch here and Show sessions are
+        available without selecting a card; offline cards remain quieter, after online cards.
     12. **Offline.** Header and Forget only; Health reads "Offline · last seen *time*". No earlier
         figures are shown as current. A machine whose bridge isn't running keeps §6.14's words, with
         Health hidden.
@@ -2112,7 +2113,8 @@ machine, online ones first, then the account's offline machines (#213):
     all three colour modes; a missing figure is omitted, not "0"; Tight with 0, 1 and 3 or more
     sessions; Relieve hidden when Healthy, Not measured, View only and Offline; Relieve confirmation
     names only the title and focuses Cancel; Cancel and Escape change nothing; "All machines" absent;
-    900 px layout switch at 899 and 900; disclosure state per machine; no height change on refresh;
+    eight expanded cards at phone and iPad portrait/landscape widths, no selector or unused gutter,
+    touch and keyboard access through the last offline card; disclosure state per machine; no height change on refresh;
     UIA names and tab order in the Windows app; the same host record gives the same words on the PWA
     and the Windows app.
 

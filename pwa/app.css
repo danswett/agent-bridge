@@ -517,6 +517,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .machine-flag.held { color: var(--ab-needs-text); }
 .machine-more {
   display: grid; gap: var(--ab-space-2);
+  min-width: 0; overflow-wrap: anywhere;
   padding: 0 var(--ab-space-3) var(--ab-space-3) calc(var(--ab-space-3) + 20px + var(--ab-space-3));
 }
 .machine-more:empty { display: none; }
@@ -552,22 +553,17 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   .machine-load-track { forced-color-adjust: none; border-color: CanvasText; background: Canvas; }
   .machine-load-fill { background: CanvasText; }
 }
-.machine-view { display: none; }
-@media (max-width: 899px) { .machines-page { max-width: 640px; margin-inline: auto; } }
-/* From 900 px: the machines on the left, the picked machine's tile on the right. Each row sits in
-   the list column; the tile spans every row of the second, and the last row, 1fr, takes its height. */
-@media (min-width: 900px) {
-  .machines { grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); grid-template-rows: auto 1fr; column-gap: var(--ab-space-4); row-gap: 0; align-items: start; }
-  .machine:not(.offline) { display: contents; }
-  .machine-block { grid-column: 1; background: var(--ab-card); border: 1px solid var(--ab-stroke2); }
-  .machine-block:not(:has(~ .machine-error)), .machine:not(.offline) > .machine-error { margin-bottom: var(--ab-space-2); }
-  .machine.detail > .machine-block { background: var(--ab-selected); }
-  .machine.offline, .machine-updates, .machine:not(.offline) > .machine-error { grid-column: 1; }
-  .machine.offline { margin-bottom: var(--ab-space-2); }
-  .machine-tile { display: none; padding-left: var(--ab-space-4); }
-  .machine.detail .machine-tile { display: grid; grid-column: 2; grid-row: 1 / -1; padding-top: var(--ab-space-4); background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card); }
-  .machine-view { display: inline-flex; }
-}
+/* Fleet uses the page's full width, not the general-purpose 760 px reading column. */
+.page[data-route="machines"] { max-width: none; }
+.machines { grid-template-columns: minmax(0, 1fr); align-items: start; gap: var(--ab-space-3); }
+.machine-updates { grid-column: 1 / -1; }
+.machine-view { display: inline-flex; }
+.machine-state { white-space: normal; max-width: 14ch; }
+.machine-sub { white-space: normal; }
+@media (max-width: 759px) { .machines-page { max-width: 640px; margin-inline: auto; } }
+@media (min-width: 760px) { .machines { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1100px) { .machines { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 1500px) { .machines { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 
 /* ---- agent usage: agent-ha-bridge's usage card ---- */
 /* Under the sessions: each agent's fullest window, in its own colour, and the way to Usage. */
