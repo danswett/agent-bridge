@@ -85,18 +85,29 @@ export class ScrollFollow {
     }
     this.remember();
     if (!wasFollowing && this.following && this.#latest) {
-      this.#pending.clear();
-      this.shown = this.#latest;
-      this.onFollow();
-      if (this.#tail) {
-        this.#observer?.unobserve(this.#tail.root);
-        this.#tail.view.dispose();
-        this.#tail.root.remove();
-      }
-      this.#tail = null;
-      this.after();
+      this.#rejoin();
     }
     return el.scrollTop;
+  }
+
+  // Choosing a cached session starts at its latest, not at the previous reading position.
+  open() {
+    this.following = true;
+    this.resume();
+    if (this.#pending.size) { this.#rejoin(); } else { this.after(); }
+  }
+
+  #rejoin() {
+    this.#pending.clear();
+    this.shown = this.#latest;
+    this.onFollow();
+    if (this.#tail) {
+      this.#observer?.unobserve(this.#tail.root);
+      this.#tail.view.dispose();
+      this.#tail.root.remove();
+    }
+    this.#tail = null;
+    this.after();
   }
 
   display(session) {

@@ -89,3 +89,34 @@ test('redisplay does not mistake hidden response measurements for arriving conte
   resize(20);
   assert.equal(pane.scrollTop, 900);
 });
+
+test('opening resets a cached reader hold but a later scroll up holds new content again', (t) => {
+  const pane = new Pane();
+  const follow = new ScrollFollow(pane);
+  t.after(() => follow.dispose());
+  pane.scrollTop = 500;
+  pane.dispatchEvent(new Event('scroll'));
+  follow.appScroll(() => {})();
+  follow.open();
+  assert.equal(pane.scrollTop, 900);
+  pane.scrollTop = 820;
+  pane.dispatchEvent(new Event('scroll'));
+  pane.scrollHeight += 300;
+  follow.after();
+  assert.equal(pane.scrollTop, 820);
+});
+
+test('opening applies deferred turns received while the cached session was not following', (t) => {
+  const pane = new Pane();
+  let shown;
+  const follow = new ScrollFollow(pane, { onFollow: () => { shown = follow.shown.activity.turn; } });
+  t.after(() => follow.dispose());
+  follow.display({ activity: { turn: 'first' } });
+  pane.scrollTop = 500;
+  pane.dispatchEvent(new Event('scroll'));
+  follow.display({ activity: { turn: 'second' } });
+  follow.open();
+  assert.equal(shown, 'second');
+  assert.equal(follow.deferred, false);
+  assert.equal(pane.scrollTop, 900);
+});
