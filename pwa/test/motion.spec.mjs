@@ -1784,6 +1784,53 @@ test('where the browser sends no scrollend, as Safari doesn\'t, a question scrol
   await page.clock.runFor(50);
   expect({ held, after, mine: await question() }).toEqual({ held: true, after: false, mine: false });
 });
+for (const takeover of ['wheel', 'touchstart', 'keydown']) {
+  test(`without scrollend, ${takeover} after the quiet fallback cancels a retained question reveal before a no-extent update`, async ({ page }) => {
+    await page.addInitScript(() => {
+      const add = EventTarget.prototype.addEventListener;
+      EventTarget.prototype.addEventListener = function (type, ...rest) { return type === 'scrollend' ? undefined : add.call(this, type, ...rest); };
+    });
+    await openDemo(page, { height: 600 });
+    const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
+    await upsert(page, CODEX, { activity: { response: long, reasoning: null, userMessage: null, currentTool: null }, question: null, updatedAt: later() });
+    const v = await open(page, CODEX);
+    await conversationReady(v);
+    await askCodex(page, choices('q-retained-reveal'));
+    const scroller = v.locator('.stream-scroll');
+    await atRest(page, scroller);
+    await scroller.evaluate((el) => { el.scrollTop = 0; });
+    await atRest(page, scroller);
+    await expect(v.locator('.question-slot .question')).not.toBeInViewport();
+    const snapshot = await page.evaluate(async ({ id, takeover }) => {
+      const sc = document.querySelector(`.session-view[data-id="${id}"] .stream-scroll`);
+      const started = performance.now();
+      await new Promise((resolve) => {
+        let quiet;
+        const step = () => {
+          clearTimeout(quiet);
+          quiet = setTimeout(() => { sc.removeEventListener('scroll', step); resolve(); }, 150);
+        };
+        sc.addEventListener('scroll', step);
+        document.querySelector(`#needs-you .needs-entry[data-id="${id}"] .needs-title`).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+      });
+      // Past the 100 ms fallback, but still inside the retained reveal's 1.5 s lifetime.
+      const elapsed = performance.now() - started;
+      sc.dispatchEvent(takeover === 'keydown'
+        ? new KeyboardEvent(takeover, { key: 'PageUp', bubbles: true })
+        : new Event(takeover, { bubbles: true }));
+      sc.scrollTop = 0;
+      const extent = sc.scrollHeight;
+      const d = window.agentBridgeDemo;
+      d.upsert({ ...d.host.get(id), updatedAt: new Date(Date.now() + 61_000).toISOString() });
+      return { elapsed, extent, after: sc.scrollHeight };
+    }, { id: CODEX, takeover });
+    expect(snapshot.elapsed).toBeLessThan(1500);
+    expect(snapshot.after).toBe(snapshot.extent);
+    await atRest(page, scroller);
+    expect(await scroller.evaluate((el) => el.scrollTop)).toBe(0);
+  });
+}
+
 test('a question that arrives while another page is shown takes no click for a moment when Sessions is shown again', async ({ page }) => {
   await openDemo(page);
   await open(page, CODEX);
