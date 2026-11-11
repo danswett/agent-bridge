@@ -42,6 +42,10 @@ function Invoke-Gh {
 # (file:line). A log line may start with the runner's timestamp.
 function Get-FailedTests([string]$Log) {
     $Log = $Log -replace '\x1b\[[0-9;]*[A-Za-z]', ''
+    if ($Log.Contains([char]27)) {
+        Write-Warning 'Unrecognized terminal escape in job log; refusing a partial failure list.'
+        return , [string[]]@()
+    }
     $names = [System.Collections.Generic.SortedSet[string]]::new([StringComparer]::Ordinal)
     foreach ($m in [regex]::Matches($Log, '(?m)^(?:\S+Z)?[ \t]*Failed[ \t]+(?<n>[A-Za-z_][\w+]*(?:\.[\w+]+)+)')) { [void]$names.Add($m.Groups['n'].Value) }
     foreach ($m in [regex]::Matches($Log, '(?m)^(?:\S+Z)?[ \t]*\d+\) \[[^\]\r\n]+\] › (?<f>[^\s:]+):(?<l>\d+)')) { [void]$names.Add("$($m.Groups['f'].Value):$($m.Groups['l'].Value)") }
