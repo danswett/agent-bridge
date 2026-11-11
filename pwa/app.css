@@ -908,6 +908,51 @@ html[data-touch-only-keys]:not([data-keyboard-seen]) .row-menu-key { display: no
 .group-editor .text-input { width: 100%; }
 @media (forced-colors: active) { .row-menu-sheet { border-color: CanvasText; } }
 
+/* Groups overlays (#2074): native modal focus/inertness, with only the body scrolling. */
+.sg-sheet {
+  position: fixed; inset: auto 0 var(--sheet-bottom, 0px); margin: 0; width: 100%; max-width: none;
+  max-height: min(70dvh, calc(var(--sheet-view-height, 100dvh) - var(--safe-top) - 96px));
+  padding: 0 var(--ab-space-4) calc(var(--safe-bottom) + var(--ab-space-4));
+  color: var(--ab-text); background: var(--ab-layer); border: 1px solid var(--ab-stroke2);
+  border-radius: var(--ab-radius-card) var(--ab-radius-card) 0 0;
+  box-shadow: 0 -8px 28px var(--ab-shadow); overflow: hidden;
+}
+.sg-sheet[open] { display: flex; flex-direction: column; }
+.sg-sheet::backdrop { background: var(--ab-viewer); opacity: .22; }
+@media (prefers-color-scheme: dark) { .sg-sheet::backdrop { opacity: .32; } }
+@media (prefers-contrast: more), (forced-colors: active) { .sg-sheet::backdrop { opacity: .6; } }
+.sg-sheet-head { display: flex; align-items: center; gap: var(--ab-space-2); min-height: 52px; flex: none; }
+.sg-sheet-head h2 { margin: 0; flex: 1; min-width: 0; font-size: 1.125rem; font-weight: 600; overflow-wrap: anywhere; }
+.sg-sheet-cancel {
+  min-width: 64px; min-height: 44px; padding: 0 var(--ab-space-3); font: inherit; font-weight: 600;
+  color: var(--ab-bridge); background: transparent; border: 0; border-radius: var(--ab-radius-control); cursor: pointer;
+}
+.sg-sheet-cancel:active { background: var(--ab-selected); }
+.sg-sheet-body { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.sg-sheet-foot { flex: none; padding-top: var(--ab-space-3); }
+.sg-sheet :is(button, input, select, textarea) { min-width: 44px; min-height: 44px; }
+.sg-sheet :focus-visible { outline-offset: -3px; }
+.sg-sheet[data-kind="alert"] {
+  inset: calc(var(--sheet-view-top, 0px) + var(--sheet-view-height, 100dvh) / 2) auto auto 50%;
+  transform: translate(-50%, -50%); width: min(300px, calc(100vw - 32px)); border-radius: var(--ab-radius-card);
+}
+@media (min-width: 760px) {
+  .sg-sheet {
+    inset: calc(var(--sheet-view-top, 0px) + var(--sheet-view-height, 100dvh) / 2) auto auto 50%;
+    transform: translate(-50%, -50%); width: 340px; border-radius: var(--ab-radius-card);
+    box-shadow: 0 12px 40px var(--ab-shadow);
+  }
+  .sg-sheet[data-kind="menu"] { width: 240px; }
+  .sg-sheet[data-kind="form"] { width: 440px; }
+  .sg-sheet[data-anchored="true"]:is([data-kind="sheet"], [data-kind="menu"]) {
+    left: var(--sheet-x, 16px); top: var(--sheet-y, 16px); transform: none;
+  }
+}
+@media (forced-colors: active) {
+  .sg-sheet { border-color: CanvasText; }
+  .sg-sheet::backdrop { forced-color-adjust: none; }
+}
+
 /* ---- a session's row (ui.md §6.1) ----
    Two lines: the glyph on line 1, the title, at most two facts under it, and the age or the new
    activity dot at the trailing edge. A grid item is min-width:auto, so a long unbroken title or

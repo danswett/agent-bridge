@@ -605,6 +605,15 @@ span in a sentence this way, and NEL and the separators in prose.
 
 ## Tests
 
+Groups overlays (#2074) use `openSheet` in `js/ui/sheet.js`: `title`, DOM `content`
+and optional pinned `footer`, `kind` (`sheet`, `menu`, `form`, `alert`) and `anchor`.
+It returns `{ dialog, close }`; Cancel and Escape also close it and restore focus.
+For an alert, pass `cancelLabel: null` and `initialFocus` as its safe footer action.
+`onClose` runs once. Native modality keeps the background inert; the body alone scrolls.
+Phone sheets respect safe areas and the visual viewport; iPad sheets/menus anchor beside
+the list, forms centre at 440px, and alerts centre at 300px. `test/sheet.spec.mjs`
+covers the primitive in both engines; existing group and approval UI is not migrated.
+
 Update discovery details (#927) are read and worded in `js/update.js`, separately from the
 Machines card's status and actions. Valid metadata adds the original update-list age and the
 historical direct GitHub quota with its own age; missing data adds nothing. Reader cases are
