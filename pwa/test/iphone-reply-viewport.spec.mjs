@@ -219,6 +219,43 @@ test('tapping the installed iPhone landscape bar title restores the header witho
   await expect(v.locator('.bar-title')).toBeHidden();
 });
 
+test('installed iPhone landscape floating chrome is opaque and focus stays clear of both bars', async ({ page }) => {
+  const v = await installed(page), scroller = v.locator('.stream-scroll'), input = v.getByRole('textbox', { name: 'Reply', exact: true });
+  await page.setViewportSize({ width: 844, height: 390 });
+  await viewport(page, { height: 390, safe: 21 });
+  await input.fill('One\nTwo'); await input.blur();
+  await scroller.evaluate((sc) => { sc.scrollTop = 0; }); await motionsDone(page);
+  await scroller.evaluate((sc) => { sc.dispatchEvent(new WheelEvent('wheel', { deltaY: 300, bubbles: true })); sc.scrollTo({ top: 300, behavior: 'instant' }); });
+  await expect(v).toHaveAttribute('data-titled', '');
+  await scroller.evaluate((sc) => { sc.dispatchEvent(new WheelEvent('wheel', { deltaY: -40, bubbles: true })); sc.scrollTo({ top: 260, behavior: 'instant' }); });
+  await expect(v).toHaveAttribute('data-fsolid', '');
+  await motionsDone(page);
+  const paint = await v.evaluate((el) => {
+    const ctx = document.createElement('canvas').getContext('2d');
+    return [['.session-bar', '::before'], ['.reply-slot', null], ['.reply-bar', '::before']].map(([selector, pseudo]) => {
+      const style = getComputedStyle(el.querySelector(selector), pseudo);
+      ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = style.backgroundColor; ctx.fillRect(0, 0, 1, 1);
+      return ctx.getImageData(0, 0, 1, 1).data[3] * Number(style.opacity) * (!pseudo || style.content !== 'none');
+    });
+  });
+  expect.soft(paint).toEqual([255, 255, 255]);
+  for (const edge of ['top', 'bottom']) {
+    await scroller.evaluate((sc, edge) => {
+      const stream = sc.querySelector('.stream'), probe = document.createElement('button');
+      stream.style.position = 'relative'; probe.id = `focus-${edge}`; probe.textContent = 'Focus probe';
+      probe.style.cssText = 'position:absolute;left:16px;height:44px;top:0'; stream.append(probe);
+      probe.style.top = `${sc.getBoundingClientRect().top + (edge === 'top' ? 4 : sc.clientHeight - 20) - probe.getBoundingClientRect().top}px`;
+      probe.focus({ preventScroll: true });
+    }, edge);
+    await motionsDone(page);
+    const clearance = await v.evaluate((el) => {
+      const sc = el.querySelector('.stream-scroll'), s = sc.getBoundingClientRect(), r = el.querySelector(':focus').getBoundingClientRect();
+      return { top: r.top - s.top - parseFloat(sc.style.getPropertyValue('--covered')), bottom: s.bottom - parseFloat(sc.style.getPropertyValue('--fcovered')) - r.bottom };
+    });
+    expect.soft(clearance.top, edge).toBeGreaterThanOrEqual(0); expect.soft(clearance.bottom, edge).toBeGreaterThanOrEqual(0);
+  }
+});
+
 test('the installed iPhone landscape More menu keeps its actions tappable', async ({ page }) => {
   const v = await installed(page);
   await page.setViewportSize({ width: 844, height: 390 });
