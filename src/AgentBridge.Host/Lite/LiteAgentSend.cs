@@ -14,7 +14,7 @@ public static partial class LiteAgentSend
     public const string Op = "agent.send";
     public const int MaxText = 4096;
 
-    public static async Task<object?> HandleAsync(AgentCredentials? credentials, ILiteSender? sender, IProtocolChannel channel, JsonElement data, CancellationToken ct = default, bool? windows = null)
+    public static async Task<object?> HandleAsync(AgentCredentials? credentials, ILiteSender? sender, IProtocolChannel channel, JsonElement data, CancellationToken ct = default, bool? windows = null, Func<AgentAuditEntry, string?, bool>? appendAttempt = null)
     {
         if (credentials is null || !(windows ?? OperatingSystem.IsWindows()))
         {
@@ -37,9 +37,19 @@ public static partial class LiteAgentSend
         {
             throw new ArgumentException("refused: badText: text must not be blank or hold control characters other than tab, CR and LF");
         }
+        // This local attempt id is not the relay request id, which the sender creates later.
+        var attempt = new AgentAuditEntry("out", Guid.NewGuid().ToString("D"), credentials.PrincipalOf(caller),
+            caller.Chain, Op, $"{machine}/{session}", "attempted");
+        bool written;
+        try { written = appendAttempt?.Invoke(attempt, text) == true; }
+        catch (Exception) { throw AuditUnavailable(); }
+        if (!written) { throw AuditUnavailable(); }
         var outcome = await (sender ?? new LiteOffSender()).SendAsync(caller, new LiteSendInput(machine, session, text), ct);
         return new LiteSendReply(outcome.Kind.ToString().ToLowerInvariant(), outcome.Code, outcome.Request);
     }
+
+    static InvalidOperationException AuditUnavailable() =>
+        new("refused: auditUnwritable: the agent audit log could not be written; nothing was sent");
 
     [GeneratedRegex(@"^[A-Za-z0-9._-]{1,64}\z")]
     private static partial Regex MachinePattern();
