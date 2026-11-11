@@ -16,14 +16,15 @@ name: Merge rule
 #  - status: a receipt or any other status posted on a head. The App's own merge-rule posts do
 #    start a run (only GITHUB_TOKEN's events don't), so the job skips status events for the
 #    merge-rule context: they'd only re-judge what was just judged.
-#  - workflow_run: any other workflow started or finished on a pull request. Started, so a new run
-#    or a rerun on an already-green head turns the verdict pending at once (Perf, dispatched by
-#    hand, is required by nothing else); finished, so a late red flips it. A test keeps the list
+#  - workflow_run: any other workflow started (in_progress) or finished on a pull request.
+#    New runs and re-runs trigger re-judgement at start; completion picks up a late red.
+#    GitHub documents: "The requested activity type does not occur when a workflow is re-run."
+#    https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run
+#    Only requested is dropped (#1821): a queued run not yet started on a runner can retain an
+#    earlier verdict until start or another judgement (the accepted P3 residual). A test keeps the list
 #    complete. That includes the review relay in merge-rule-review.yml: pull_request_review runs
 #    the pull request's copy of a workflow, which mustn't post statuses. And CI's push run on main
-#    being requested, started and finished, so every verdict follows main going red or green
-#    again (main_green); a queued or running run counts as found, which ends the window where a
-#    judgement made seconds after a merge saw no run yet and held every pull request until it ended.
+#    starting and finishing, so every verdict follows main going red or green again (main_green).
 #  - check_suite: a check from an app other than GitHub Actions finished (code
 #    scanning's CodeQL). Actions' own suites start no check_suite workflow, hence workflow_run.
 #  - schedule and workflow_dispatch: a backstop for anything the events missed. That includes
@@ -45,7 +46,7 @@ on:
   status:
   workflow_run: # zizmor: ignore[dangerous-triggers]
     workflows: [Apple clients, Beta acceptance, CI, CodeQL, Dependencies, Epic dashboard, Flake hunt, HA contract drift, IaC scan, Lab nightly (held), Lab release verification (held), Merge rule review relay, Ops probe, Pages, Perf, Re-run known flakes, Relay deploy, Update gap, Upload release halt policy, Weekly quality report, Workflow lint]
-    types: [requested, in_progress, completed]
+    types: [in_progress, completed]
   check_suite:
     types: [completed] # the only type Actions accepts here
   schedule:
@@ -62,8 +63,8 @@ jobs:
     # Main's own runs and check suites (pushes, the weekly CodeQL, a dispatch on main) start no
     # evaluation: no pull request's head is on main. But a push run of CI finishing on main does:
     # main going red fails every pull request (but a fixes-main one), and going green again frees
-    # them (quality/merge-rule.yml, main_green). So does one being requested or started: the
-    # evaluator counts a queued or running run as found. Every other completion does too, whatever its
+    # them (quality/merge-rule.yml, main_green). A start also re-judges a new run or re-run.
+    # Every other start or completion does too, whatever its
     # event: Perf dispatched on a pull request's branch counts toward the verdict too.
     if: >-
       (github.event_name != 'workflow_run' || github.event.workflow_run.head_branch != 'main' || github.event.workflow_run.head_repository.full_name != github.repository
@@ -100,7 +101,7 @@ jobs:
     steps:
       # Kill switch: FLEET_MERGERULE=off (repository variable, read on every run) restores the
       # earlier path in full: wait, build main's evaluator, judge every pull request.
-      # A push sets off a burst of events (each workflow requested, then finished). On that path,
+      # A push sets off a burst of events (workflow starts, completions and statuses). On that path,
       # waiting a little lets the rest of the burst fold into the one run that waits behind this
       # one, which keeps the GraphQL budget (GITHUB_TOKEN: 1,000 points an hour for the
       # repository) well clear: quality/README.md §4.9 has the numbers.
