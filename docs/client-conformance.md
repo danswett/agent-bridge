@@ -14,4 +14,10 @@ Standard output contains only one JSON line per declared version/capability for 
 named client. Unreported results become `missing`. Exit 0 means every selected row
 passed; 1 means any other verdict; 2 means invalid/unreadable input (error on stderr).
 All input rows are validated before output, including other clients' rows.
-Inventory wiring, approved exclusions and client drivers remain later slices.
+`ConformanceInventory` (#1407 slice 3a) records the pinned 34-row fleet inventory and
+decision-linked dispositions. Host/fleet obligations remain obligations, not client passes;
+intentional drops, the excluded Apple host cohort and resolved owner inventory stay distinct.
+Client scheduling (required, parked, unshipped or optional) never excuses a missing behavior
+when that client is explicitly selected. Multi-field forms remain required despite retiring
+HA's dropdown workaround. Catalog-to-CLI wiring, exclusion reporting and drivers are later slices;
+the command above still requires an explicit capabilities file and does not apply the catalog.
