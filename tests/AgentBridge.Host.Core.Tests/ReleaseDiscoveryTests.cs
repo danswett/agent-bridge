@@ -56,6 +56,13 @@ public sealed class ReleaseDiscoveryTests : IDisposable
         Assert.Equal(("cdn", 37, Now), (cached.Source, cached.GitHubRemaining, cached.GitHubQuotaAt));
         Assert.Equal(time.GetUtcNow() - TimeSpan.FromMinutes(4), cached.FetchedAt);
         Assert.Equal(new[] { Url, ReleaseDiscovery.CdnList }, github.Requests.Select(r => r.Url));
+        time.Advance(TimeSpan.FromHours(7));
+        github.Answer = r => r.RequestUri!.AbsoluteUri == ReleaseDiscovery.CdnList
+            ? new(HttpStatusCode.OK) { Content = new StringContent(list), Headers = { Age = TimeSpan.Zero } }
+            : new(HttpStatusCode.Forbidden) { Headers = { { "X-RateLimit-Remaining", "0" } } };
+        using var grace = Discovery();
+        await grace.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win");
+        Assert.Equal(("cdn", 0, time.GetUtcNow()), (grace.Source, grace.GitHubRemaining, grace.GitHubQuotaAt));
     }
 
     [Theory]
