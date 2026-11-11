@@ -33,3 +33,44 @@ public sealed record AgentHelloRequest
 }
 
 public sealed record AgentHelloResult(string Principal, string Scope);
+
+// The temporary AP5-lite send (#1351). The same op name is spoken twice: an agent asks its own host
+// over the pipe (AgentLiteSendRequest), and the sending host asks the target host over a secure
+// channel (AgentLiteDelivery). The agent's answer is AgentLiteSendResult.
+public static class AgentLite
+{
+    public const string Send = "agent.lite.send";
+
+    // What a send came to. Only Delivered means the target host accepted the message.
+    public const string Delivered = "delivered";
+    public const string Refused = "refused";
+    public const string Undeliverable = "undeliverable";
+    public const string Unconfirmed = "unconfirmed";
+    public const string Off = "off";
+
+    // The longest reply, in characters: the same limit as a reply sent through Home Assistant.
+    public const int MaxTextChars = 255;
+
+    // The bytes an envelope's dataSha256 binds: both hosts build them from the text alone.
+    public static byte[] DataOf(string text) => System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new { text }, ProtocolJson.Options);
+}
+
+public sealed record AgentLiteSendRequest
+{
+    public required string Machine { get; init; }
+    public required string Session { get; init; }
+    public required string Instance { get; init; }
+    public required string Text { get; init; }
+}
+
+public sealed record AgentLiteDelivery
+{
+    public required string Envelope { get; init; }
+    public required string Text { get; init; }
+}
+
+// The target host's acknowledgement: the request id it saw, its outcome (delivered or refused,
+// with a code) and its kill epoch.
+public sealed record AgentLiteAck(string Request, string Outcome, string? Code = null, long KillEpoch = 0);
+
+public sealed record AgentLiteSendResult(string Outcome, string? Code = null, string? Detail = null);

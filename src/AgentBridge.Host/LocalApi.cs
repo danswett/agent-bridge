@@ -25,7 +25,7 @@ public static class LocalApi
     // What an agent's hello offers: reading only.
     static readonly HashSet<string> AgentCapabilities = [Capabilities.SessionsRead, UsageProtocol.Capability];
 
-    public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,     RemoteAuthorization? authorization = null, AgentCredentials? credentials = null) => async (channel, op, data) =>
+    public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,     RemoteAuthorization? authorization = null, AgentCredentials? credentials = null, AgentLiteSender? lite = null) => async (channel, op, data) =>
     {
             // Pipe only, and Windows only for now (§3.4): a relay channel never reaches this handler.
             if (op == AgentProtocol.Hello)
@@ -42,6 +42,16 @@ public static class LocalApi
                     throw new InvalidOperationException($"refused: {decision.Refusal}");
                 }
                 return credentials.Accept(channel, credential);
+            }
+            // The agent's own host speaks for it: the principal comes from the connection's
+            // credential, never from the request.
+            if (op == AgentLite.Send && lite is not null)
+            {
+                if (credentials is null || !OperatingSystem.IsWindows()) { throw new InvalidOperationException("refused: agent.lite.send isn't available on this host"); }
+                AgentLiteSendRequest sendRequest;
+                try { sendRequest = data.Deserialize<AgentLiteSendRequest>(ProtocolJson.Options) ?? throw new ArgumentException("agent.lite.send needs a target and text"); }
+                catch (JsonException) { throw new ArgumentException("agent.lite.send needs a target and text"); }
+                return await lite.SendAsync(credentials.Of(channel), sendRequest);
             }
         // Managing a machine from another device (#801) is for the relay alone. Refused here for
         // every caller, the app included, so nothing on this machine, an agent least of all, can

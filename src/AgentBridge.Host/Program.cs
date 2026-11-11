@@ -473,6 +473,9 @@ async Task<int> ServeAsync(HostHandover handover)
     // private folder, never a shared temporary one.
     using var transfers = new SessionTransfers(identity.Key, Path.Combine(identity.Folder, "transfers"), Log) { Trust = trustedPeers };
     var agentCredentials = OperatingSystem.IsWindows() ? new AgentCredentials(identity.Folder, machine.Id, log: Log, rootAlive: AgentCredentials.SameProcessAlive) : null;
+    // The settings are read again on every send, so switching the mode off needs no restart.
+    ILiteLink? liteLink = null;
+    var liteSender = new AgentLiteSender(identity.Folder, machine.Id, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, () => Volatile.Read(ref liteLink));
     var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore, agentCredentials);
     launcher.SessionStarted += restore.Launched;
     launcher.SeenReadyLate += restore.SeenReadyLate;
@@ -757,7 +760,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // The roster changing changes who the app's Settings lists (#972).
     personRoster.Changed += control.Refresh;
     LocalServer? local = null;
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials), Log); }
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, liteSender), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);
@@ -823,6 +826,7 @@ async Task<int> ServeAsync(HostHandover handover)
             push?.Attach(new RelayPushSender(relay));
             relayBlobs.Attach(relay);
             transfers.Attach(relay, hub);
+            Volatile.Write(ref liteLink, new RelayLiteLink(relay, hub));
             usagePeers?.Attach(relay, hub);
             trustAnswers.Attach(relay);
             escapedApprovals.Attach(relay);
@@ -873,6 +877,7 @@ async Task<int> ServeAsync(HostHandover handover)
             trustedPeers.Attach(null);
             relayBlobs.Attach(null);
             transfers.Attach(null, null);
+            Volatile.Write(ref liteLink, null);
             usagePeers?.Attach(null, null);
             trustAnswers.Attach(null);
             escapedApprovals.Attach(null);
