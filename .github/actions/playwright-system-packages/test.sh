@@ -32,13 +32,23 @@ case "$*" in
     if [ -n "${APT_SLOW:-}" ] && grep -q 'azure\.archive\.ubuntu\.com' "$PLAYWRIGHT_APT_ETC/apt-mirrors.txt"; then
       exec sleep 30
     fi
+    if [ -n "${APT_ERROR:-}" ] && [ "$(grep -c -- '--download-only' "$APT_LOG")" -le "${APT_FAIL_COUNT:-99}" ]; then
+      if [ "${APT_AZURE_ONLY:-}" != true ] || grep -q 'azure\.archive\.ubuntu\.com' "$PLAYWRIGHT_APT_ETC/apt-mirrors.txt"; then
+        printf '%s\n' "$APT_ERROR" >&2; exit 100
+      fi
+    fi
     [ -z "${APT_GETS:-}" ] || printf '%s\n' "$APT_GETS"
     exit "${APT_DOWNLOAD_EXIT:-0}" ;;
 esac
 exit 99
 EOF
-chmod +x "$work/bin/npx" "$work/bin/sudo" "$work/bin/apt-get"
-export PATH="$work/bin:$PATH" NPX_LOG="$work/npx.log" APT_LOG="$work/apt.log"
+cat > "$work/bin/sleep" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = 30 ]; then exec /usr/bin/sleep "$@"; fi
+echo "$*" >> "$SLEEP_LOG"
+EOF
+chmod +x "$work/bin/npx" "$work/bin/sudo" "$work/bin/apt-get" "$work/bin/sleep"
+export PATH="$work/bin:$PATH" NPX_LOG="$work/npx.log" APT_LOG="$work/apt.log" SLEEP_LOG="$work/sleep.log"
 export PLAYWRIGHT_APT_ETC="$work/apt" PLAYWRIGHT_APT_LIMIT=1s
 unset GITHUB_JOB
 export PLAYWRIGHT_APT_ATTEMPTS=1 PLAYWRIGHT_APT_RETRY_DELAY=0
@@ -53,9 +63,10 @@ reset() {
   rm -rf "$PLAYWRIGHT_APT_ETC"; mkdir -p "$PLAYWRIGHT_APT_ETC/sources.list.d"
   printf '%s\n' "$@" > "$PLAYWRIGHT_APT_ETC/apt-mirrors.txt"
   printf 'Types: deb\nURIs: mirror+file:/etc/apt/apt-mirrors.txt\n' > "$PLAYWRIGHT_APT_ETC/sources.list.d/ubuntu.sources"
-  : > "$NPX_LOG"; : > "$APT_LOG"
+  : > "$NPX_LOG"; : > "$APT_LOG"; : > "$SLEEP_LOG"
   export NPX_OUT='sudo -- sh -c "apt-get update&& apt-get install -y --no-install-recommends libasound2t64 libgtk-4-1 xvfb"'
   unset APT_SLOW APT_UPDATE_SLOW APT_UPDATE_EXIT APT_DOWNLOAD_EXIT APT_GETS PLAYWRIGHT_APT_FORCE_FALLBACK CHECK_BROWSERS
+  unset APT_ERROR APT_FAIL_COUNT APT_AZURE_ONLY
 }
 # check <name> <expected exit> <expected apt-get calls, one per line> [expected mirror list lines...]
 # download.sh is given CHECK_BROWSERS, chromium and webkit unless set.
@@ -124,13 +135,52 @@ check "a persistently failing apt-get update is tried three times, then fails th
   100 "$(printf 'update\nupdate\nupdate')" "$azure" "$canonical"
 
 reset "$azure" "$canonical"; export PLAYWRIGHT_APT_ATTEMPTS=3 APT_DOWNLOAD_EXIT=100
-check "a persistently failing download is tried three times, then fails the step" \
-  100 "$(printf 'update\n%s\n%s\n%s' "$download" "$download" "$download")" "$azure" "$canonical"
+check "a download failure without a network diagnostic fails without retrying or changing mirrors" \
+  100 "$(printf 'update\n%s' "$download")" "$azure" "$canonical"
 
 reset "$azure" "$canonical"; export PLAYWRIGHT_APT_ATTEMPTS=3 APT_SLOW=1
 check "a slow download is not retried: it leaves the Azure mirror after one try" \
   0 "$(printf 'update\n%s\n%s' "$download" "$download")" "$canonical"
 export PLAYWRIGHT_APT_ATTEMPTS=1
+
+# Network downloads use the default three attempts and 5/20 second backoff; sleep is recorded,
+# not waited out. Errors must come from this download, not a previous attempt.
+reset "$azure" "$canonical"; unset PLAYWRIGHT_APT_ATTEMPTS PLAYWRIGHT_APT_RETRY_DELAY
+export APT_ERROR="E: Failed to fetch http://azure.archive.ubuntu.com/ubuntu/pool/pkg.deb Temporary failure resolving 'azure.archive.ubuntu.com'" APT_FAIL_COUNT=1
+check "a DNS failure then success retries without switching mirrors" \
+  0 "$(printf 'update\n%s\n%s' "$download" "$download")" "$azure" "$canonical"
+[ "$(cat "$SLEEP_LOG")" = 5 ] || { echo "FAIL: first download backoff was not 5 seconds"; failures=$((failures + 1)); }
+
+reset "$azure" "$canonical"
+export APT_ERROR="E: Failed to fetch http://azure.archive.ubuntu.com/ubuntu/pool/pkg.deb Temporary failure resolving 'azure.archive.ubuntu.com'" APT_AZURE_ONLY=true
+check "three DNS failures leave Azure and download once from Canonical" \
+  0 "$(printf 'update\n%s\n%s\n%s\n%s' "$download" "$download" "$download" "$download")" "$canonical"
+[ "$(cat "$SLEEP_LOG")" = $'5\n20' ] || { echo "FAIL: download backoff was not 5 then 20 seconds"; failures=$((failures + 1)); }
+grep -q '^::warning.*fetching the rest from https://archive\.ubuntu\.com' "$work/out" \
+  || { echo "FAIL: DNS fallback was not announced"; failures=$((failures + 1)); }
+! grep -q 'force-apt-fallback' "$work/out" \
+  || { echo "FAIL: DNS fallback ran the forced proof"; failures=$((failures + 1)); }
+
+reset "$azure" "$canonical"; export APT_ERROR='E: Failed to fetch http://azure.archive.ubuntu.com/ubuntu/pool/pkg.deb Could not connect to azure.archive.ubuntu.com:80 (1.2.3.4), connection timed out'
+check "connection failures exhaust three attempts and one Canonical attempt then fail loudly" \
+  100 "$(printf 'update\n%s\n%s\n%s\n%s' "$download" "$download" "$download" "$download")" "$canonical"
+grep -q '^::error::' "$work/out" \
+  || { echo "FAIL: exhausted downloads did not emit an error"; failures=$((failures + 1)); }
+for attempt in 1 2 3; do
+  grep -q "attempt $attempt of 3" "$work/out" \
+    || { echo "FAIL: missing download attempt $attempt log"; failures=$((failures + 1)); }
+done
+
+for error in '404 Not Found' 'Hash Sum mismatch' 'Unable to locate package missing'; do
+  reset "$azure" "$canonical"; export APT_ERROR="E: $error"
+  check "a missing or corrupt package ($error) fails without retry or fallback" \
+    100 "$(printf 'update\n%s' "$download")" "$azure" "$canonical"
+done
+reset "$azure" "$canonical"
+export APT_ERROR=$'E: Temporary failure resolving azure.archive.ubuntu.com\nE: Hash Sum mismatch'
+check "a corrupt package alongside a DNS failure still refuses retry and fallback" \
+  100 "$(printf 'update\n%s' "$download")" "$azure" "$canonical"
+export PLAYWRIGHT_APT_ATTEMPTS=1 PLAYWRIGHT_APT_RETRY_DELAY=0
 
 # force-apt-fallback (ci.yml's pwa-ui on a run by hand): APT_SLOW stays set, so a download tried
 # before leaving the Azure mirror would time out and show up as a second call.
