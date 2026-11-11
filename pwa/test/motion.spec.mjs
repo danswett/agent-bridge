@@ -719,16 +719,18 @@ test('a question stays in sight when late history lands during its reveal with n
     };
     const scrollIntoView = Element.prototype.scrollIntoView;
     Element.prototype.scrollIntoView = function (options) {
+      const first = !window.__historyReveal && this.matches('.question-slot .question') && this.closest(`[data-id="${id}"]`);
+      if (first) {
+        const sc = this.closest('.stream-scroll');
+        window.__historyReveal = {
+          behavior: options.behavior,
+          turns: sc.querySelectorAll('.history-turn').length,
+          outside: this.getBoundingClientRect().top >= sc.getBoundingClientRect().bottom,
+        };
+      }
       scrollIntoView.call(this, options);
-      if (window.__historyReveal || !this.matches('.question-slot .question') || !this.closest(`[data-id="${id}"]`)) { return; }
-      const sc = this.closest('.stream-scroll');
-      window.__historyReveal = {
-        behavior: options.behavior,
-        turns: sc.querySelectorAll('.history-turn').length,
-        outside: this.getBoundingClientRect().top >= sc.getBoundingClientRect().bottom,
-      };
       // Let the app finish installing its reveal listeners before the prepared history lands.
-      queueMicrotask(release);
+      if (first) { queueMicrotask(release); }
     };
   }, CODEX);
   const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
