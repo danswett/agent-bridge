@@ -118,7 +118,7 @@ static partial class SelfTest
                 check(stored.Turns.Count + 40 < HistoryLimits.Kept, "latest: modifier appends remain below the history retention cap");
                 if (modifier == VirtualKey.None) { await LatestCaretMode(window, enabled: true); caret = true; }
                 await Jump();
-                check(await LatestModifiedKey(window, scroll, up, modifier), $"latest: receives {input}+{up}");
+                check(await LatestKey(window, scroll, up, modifier), $"latest: receives {input}+{up}");
                 if (modifier == VirtualKey.None)
                 {
                     var extent = scroll.ScrollableHeight;
@@ -133,7 +133,7 @@ static partial class SelfTest
                 await Still(scroll);
                 var before = scroll.VerticalOffset;
                 check(before < end - 1.5, "latest: modifier setup really scrolls away from the end");
-                check(await LatestModifiedKey(window, scroll, down, modifier), $"latest: receives {input}+{down}");
+                check(await LatestKey(window, scroll, down, modifier), $"latest: receives {input}+{down}");
                 check(Math.Abs(scroll.VerticalOffset - before) <= 0.5, $"latest: {input}+{down} does not scroll");
                 // Clamp first: replacement can produce a non-bottom ViewChanged that hides a false return.
                 scroll.ChangeView(null, scroll.ScrollableHeight + scroll.ViewportHeight, null, disableAnimation: true);
@@ -195,10 +195,10 @@ static partial class SelfTest
         finally { button.Click -= clicked; }
     }
 
-    static async Task<bool> LatestModifiedKey(MainWindow window, ScrollViewer scroll, VirtualKey key, VirtualKey modifier)
+    static async Task<bool> LatestKey(MainWindow window, ScrollViewer scroll, VirtualKey key, VirtualKey modifier, bool selectable = true)
     {
         RichTextBlock? text = null;
-        if (modifier == VirtualKey.None)
+        if (modifier == VirtualKey.None && selectable)
         {
             text = Find<RichTextBlock>(scroll).FirstOrDefault(t => t.IsTextSelectionEnabled && t.ActualHeight > 60
                 && t.TransformToVisual(scroll).TransformPoint(new Point()).Y >= 1
@@ -221,7 +221,8 @@ static partial class SelfTest
         if (text is not null && (observer is null || observer == scroll)) { throw new InvalidOperationException("latest: no child-level key observation point"); }
         // After the text's class handler, but before the conversation handler can set Handled.
         var consumed = new KeyEventHandler((_, e) => { if (e.Key == key) { taken = e.Handled; } });
-        var heard = new KeyEventHandler((_, e) => { if (e.Key == key) { seen = text is not null ? ReferenceEquals(e.OriginalSource, text) : InputKeyboardSource.GetKeyStateForCurrentThread(modifier).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down); } });
+        var heard = new KeyEventHandler((_, e) => { if (e.Key == key) { seen = text is not null ? ReferenceEquals(e.OriginalSource, text)
+            : modifier == VirtualKey.None ? ReferenceEquals(e.OriginalSource, scroll) : InputKeyboardSource.GetKeyStateForCurrentThread(modifier).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down); } });
         var released = new KeyEventHandler((_, e) => { if (e.Key == key) { finished = true; } });
         scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
         scroll.AddHandler(UIElement.KeyUpEvent, released, true);
@@ -251,19 +252,8 @@ static partial class SelfTest
 
     static async Task<bool> LatestInput(MainWindow window, ScrollViewer scroll, string input, bool up)
     {
+        if (input == "key") { return await LatestKey(window, scroll, up ? VirtualKey.PageUp : VirtualKey.PageDown, VirtualKey.None, selectable: false); }
         LatestFocus(scroll);
-        if (input == "key")
-        {
-            var seen = false;
-            var finished = false;
-            var key = up ? VirtualKey.PageUp : VirtualKey.PageDown;
-            var heard = new KeyEventHandler((_, e) => { if (e.Key == key) { seen = true; } });
-            var released = new KeyEventHandler((_, e) => { if (e.Key == key) { finished = true; } });
-            scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
-            scroll.AddHandler(UIElement.KeyUpEvent, released, true);
-            try { Press(window.Handle, key, foreground: false); return await Until(() => seen && finished, TimeSpan.FromSeconds(2)); }
-            finally { scroll.RemoveHandler(UIElement.PreviewKeyDownEvent, heard); scroll.RemoveHandler(UIElement.KeyUpEvent, released); }
-        }
         window.Activate();
         TrayIcon.SetForegroundWindow(window.Handle);
         if (!await Until(() => GetForegroundWindow() == window.Handle, TimeSpan.FromSeconds(3))) { throw new InvalidOperationException("latest: native mouse target is not foreground"); }
