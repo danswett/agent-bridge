@@ -1061,6 +1061,57 @@ public class MergeRuleTests
             File.Delete(config);
         }
     }
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_newest_cancelled_run_uses_green_ancestry_only_when_every_later_commit_passed_merge_rule(bool allPassed)
+    {
+        var after = new[] { "c6".PadRight(40, '0'), "c7".PadRight(40, '0') };
+        FakeGitHub Fixture(bool passed) => new(GraphQLPullRequest(Head),
+            mainRuns: MainRuns((7, "completed", "cancelled", 1), (5, "completed", "success", 1)),
+            mainJobs: MainJobs(),
+            mainAfter: JsonSerializer.Serialize(new { status = "ahead", total_commits = after.Length, commits = after.Select(sha => new { sha }) }),
+            mainMerged: after.ToDictionary(sha => sha, sha => MergedMainCommit(sha, passed || sha == after[1])));
+        var config = WriteConfig();
+        try
+        {
+            // Prove the eligible case first: an evaluator that blocks everything doesn't prove the guard.
+            var eligible = Fixture(true);
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), eligible, OnMain);
+            Assert.Contains(" success merge-rule ", Assert.Single(eligible.Posted), StringComparison.Ordinal);
+            if (!allPassed)
+            {
+                var missing = Fixture(false);
+                MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), missing, OnMain);
+                Assert.Contains(" failure merge-rule ", Assert.Single(missing.Posted), StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    static string MergedMainCommit(string sha, bool passed) => JsonSerializer.Serialize(new
+    {
+        data = new { repository = new { @object = new
+        {
+            oid = sha,
+            associatedPullRequests = new { totalCount = 1, nodes = new[] { new
+            {
+                state = "MERGED", baseRefName = "main", mergeCommit = new { oid = sha },
+                headRefOid = Head, mergedAt = "2026-11-03T20:02:00Z",
+                commits = new { nodes = new[] { new { commit = new
+                {
+                    oid = Head, status = new { context = passed ? new
+                    {
+                        state = "SUCCESS", creator = new { login = "github-actions" }, createdAt = "2026-11-03T20:01:00Z",
+                    } : null },
+                } } } },
+            } } },
+        } } },
+    });
+
     // Auto-merge doesn't pause while main is red, so the merge rule must: judged by main's CI
     // push run that finished last, at its latest attempt.
     [Fact]
@@ -1613,7 +1664,7 @@ public class MergeRuleTests
     /// <paramref name="statuses"/> REST's status history, and <paramref name="mainRuns"/> (or one
     /// green run) main's CI.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainCompare = """{"status": "ahead"}""", string? mainAfter = """{"status": "identical", "total_commits": 0, "commits": []}""", string?[]? mainPages = null) : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainCompare = """{"status": "ahead"}""", string? mainAfter = """{"status": "identical", "total_commits": 0, "commits": []}""", string?[]? mainPages = null, IReadOnlyDictionary<string, string>? mainMerged = null) : IGitHub
     {
         public List<string> Posted { get; } = [];
 
@@ -1621,6 +1672,9 @@ public class MergeRuleTests
 
         public JsonDocument GraphQL(string query, IReadOnlyDictionary<string, object> variables)
         {
+            if (variables.TryGetValue("covered", out var covered))
+                return JsonDocument.Parse(mainMerged?.GetValueOrDefault((string)covered)
+                    ?? """{"data":{"repository":{"object":null}}}""");
             if (failChecks && query.Contains("checkSuites", StringComparison.Ordinal))
                 throw new InvalidOperationException("gh: HTTP 502");
             if (variables.TryGetValue("number", out var number))
