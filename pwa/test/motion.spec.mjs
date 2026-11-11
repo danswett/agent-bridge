@@ -597,6 +597,20 @@ test('a finger held on the conversation keeps it where it is when a question arr
   await expect(v.locator('.question-slot .question')).not.toBeInViewport();
 });
 
+test('a response growing with a new question does not bypass a finger holding the conversation', async ({ page }) => {
+  await openDemo(page, { height: 900 });
+  await upsert(page, CODEX, { activity: { response: 'Short.', reasoning: null, userMessage: null, currentTool: null }, question: null, updatedAt: later() });
+  const v = await open(page, CODEX);
+  const scroller = v.locator('.stream-scroll');
+  expect(await scroller.evaluate((el) => el.scrollHeight <= el.clientHeight)).toBe(true);
+  await scroller.evaluate((el) => el.dispatchEvent(new Event('touchstart', { bubbles: true })));
+  const response = Array.from({ length: 60 }, (_, i) => `Held line ${i + 1}.`).join('\n\n');
+  await upsert(page, CODEX, { activity: { response }, question: { id: 'q-held-growth', kind: 'form', message: 'Carry on?', askedAt: later(), fields: [] }, updatedAt: later(3000) });
+  await expect(scroller).toContainText('Held line 60.');
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  expect(await scroller.evaluate((el) => el.scrollTop)).toBe(0);
+});
+
 test('a question that arrives with a longer response is brought into sight below all of it', async ({ page }) => {
   await openDemo(page, { height: 900 });
   await upsert(page, CODEX, { activity: { response: 'Short.', userMessage: null, reasoning: null, currentTool: null }, question: null, updatedAt: later() });
@@ -621,11 +635,12 @@ test('a question that arrives after the response has grown, in an update of its 
   const v = await open(page, CODEX);
   const scroller = v.locator('.stream-scroll');
   expect(await scroller.evaluate((el) => el.scrollHeight <= el.clientHeight)).toBe(true);
-  // The response grows below, on its own: the conversation isn't followed, and stays where it is.
+  // Streamed growth stays at the bottom until the person scrolls away (#1827).
   const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
   await upsert(page, CODEX, { activity: { response: long }, updatedAt: later(3000) });
   await expect(scroller).toContainText('Line 60 of a long answer.');
-  expect(await scroller.evaluate((el) => ({ top: el.scrollTop, longer: el.scrollHeight > el.clientHeight + 100 }))).toEqual({ top: 0, longer: true });
+  expect(await scroller.evaluate((el) => el.scrollHeight > el.clientHeight + 100)).toBe(true);
+  await expect.poll(() => scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThanOrEqual(4);
   // Then a question, in an update of its own: followed as if both had come together.
   await page.evaluate(() => {
     const d = window.agentBridgeDemo;
@@ -657,6 +672,22 @@ test('a question that arrives after the reader opened the reasoning leaves the c
   await expect(v.locator('.question-slot .question')).toHaveCount(1);
   await page.waitForTimeout(400);
   expect(await scroller.evaluate((el) => el.scrollTop)).toBe(0);
+});
+
+test('opening reasoning at the bottom stays put, but subsequent response growth is still followed', async ({ page }) => {
+  await openDemo(page, { height: 900 });
+  const reasoning = Array.from({ length: 60 }, (_, i) => `Thought ${i + 1}.`).join('\n\n');
+  await upsert(page, CODEX, { activity: { response: 'Short.', reasoning, userMessage: null, currentTool: null }, question: null, updatedAt: later() });
+  const v = await open(page, CODEX);
+  const scroller = v.locator('.stream-scroll');
+  expect(await scroller.evaluate((el) => el.scrollHeight <= el.clientHeight)).toBe(true);
+  await v.locator('details.reasoning').evaluate((d) => { d.open = true; });
+  await expect(scroller).toContainText('Hide reasoning');
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  expect(await scroller.evaluate((el) => el.scrollTop)).toBe(0);
+  await upsert(page, CODEX, { activity: { response: 'A new streamed response.\n\nAnother streamed paragraph.' }, updatedAt: later(3000) });
+  await expect(scroller).toContainText('A new streamed response.');
+  await expect.poll(() => scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThanOrEqual(4);
 });
 
 test('where the reader is is read when a question comes, though the scroll that took them there has yet to send its event', async ({ page }) => {
@@ -702,16 +733,18 @@ test('a reader who scrolls back and returns to the same place, with the response
   const v = await open(page, CODEX);
   const scroller = v.locator('.stream-scroll');
   const settle = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-  // At the end, as an update reads it; then the response grows below, with no scroll.
+  // Scroll away before growth; returning to this old position must not re-engage following.
   await scroller.evaluate((el) => { el.scrollTop = el.scrollHeight; });
   await settle();
   await upsert(page, CODEX, { activity: { response: `${long}\n\nOne more.` }, updatedAt: later(2000) });
   await expect(scroller).toContainText('One more.');
+  const at = await scroller.evaluate((el) => el.scrollTop - 40);
+  await scroller.evaluate((el, at) => { el.scrollTop = at; }, at);
+  await settle();
   const more = Array.from({ length: 20 }, (_, i) => `Later line ${i + 1}.`).join('\n\n');
   await upsert(page, CODEX, { activity: { response: `${long}\n\nOne more.\n\n${more}` }, updatedAt: later(3000) });
   await expect(scroller).toContainText('Later line 20.');
   // A page back and a page forward, as keys do: the same place, now well above the end.
-  const at = await scroller.evaluate((el) => el.scrollTop);
   await scroller.evaluate((el) => { el.scrollTop -= 300; });
   await settle();
   await scroller.evaluate((el, at) => { el.scrollTop = at; }, at);
