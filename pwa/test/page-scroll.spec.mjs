@@ -47,5 +47,18 @@ for (const width of [390, 1024]) {
       expect(await page.evaluate(() => document.documentElement.scrollHeight - innerHeight)).toBeLessThanOrEqual(0);
       await expect(header).toBeInViewport();
     });
+    test('the body stays locked without the root :has enhancement', async ({ page }) => {
+      await page.addInitScript(() => Object.defineProperty(navigator, 'standalone', { value: true }));
+      await page.route(/app\.css$/, async (route) => {
+        const response = await route.fetch();
+        // An unknown pseudo-class makes the parser reject the entire enhancement rule.
+        await route.fulfill({ response, body: (await response.text()).replace(':root:has(', ':root:unsupported-has(') });
+      });
+      await page.goto('?demo=1&static=1');
+      await page.waitForSelector('html[data-demo-ready]');
+      await open(page, IDLE);
+      expect(await page.evaluate(() => getComputedStyle(document.body).overflowY)).toBe('hidden');
+      expect(await page.evaluate(() => document.body.getBoundingClientRect().height)).toBe(844);
+    });
   });
 }
