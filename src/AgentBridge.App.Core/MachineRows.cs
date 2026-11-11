@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using AgentBridge.Local;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.App.Core;
 
@@ -42,10 +43,11 @@ public sealed class MachineRowViewModel : Observable
     public string Status { get => status; internal set { if (Set(ref status, value)) { RaiseTile(); } } }
     int sessions;
     string? seenAgo;
+    bool offersLaunch;
     // What the tile reads from the fields above (#1147): see MachineTile.
-    internal void Tile(int count, string? seen)
+    internal void Tile(int count, string? seen, bool launch)
     {
-        (sessions, seenAgo) = (count, seen);
+        (sessions, seenAgo, offersLaunch) = (count, seen, launch);
         RaiseTile();
     }
     void RaiseTile()
@@ -61,11 +63,11 @@ public sealed class MachineRowViewModel : Observable
     public string HealthText => MachineTile.Health(status == "Offline", seenAgo).Text;
     public string HealthIcon => MachineTile.Health(status == "Offline", seenAgo).Icon;
     public string RunningText => MachineTile.Running(sessions);
-    public bool CanLaunchHere => !IsOffline && MachineTile.CanLaunchHere(status, ViewOnly, Held);
+    public bool CanLaunchHere => !IsOffline && offersLaunch && MachineTile.CanLaunchHere(status, ViewOnly, Held);
     public string? LaunchWhy => MachineTile.LaunchWhy(status, ViewOnly, Held);
     public bool HasLaunchWhy => LaunchWhy is not null;
     // An offline machine shows its header and Forget only.
-    public bool ShowTile => status != "Offline";
+    public bool ShowTile => !IsOffline && status != "Offline";
     public bool ShowHealth => !IsOffline;
     public string LaunchHereName => $"Launch a session on {name}";
     public bool ViewOnly => viewOnlyWhy is not null;
@@ -141,7 +143,7 @@ public sealed partial class MainViewModel
             row.Facts = m.OfflineSince is { } since ? $"Last seen {Words.Ago(since, Time.GetUtcNow())}"
                 : string.Join(" · ", new[] { connected ? Words.Plural(count, "session", "sessions") : null, row.Held ? "Discovery held" : row.ViewOnly ? "View only" : null }.Where(s => s is not null));
             row.Status = m.Offline ? "Offline" : !connected ? "Connecting" : m.IsLocal ? "This machine" : "Online";
-            row.Tile(count, m.OfflineSince is { } off ? Words.Ago(off, Time.GetUtcNow()) : null);
+            row.Tile(count, m.OfflineSince is { } off ? Words.Ago(off, Time.GetUtcNow()) : null, m.Host.Can(LaunchProtocol.Capability));
             row.CanShowSessions = connected && !m.Offline && machines.Count > 1;
             row.CanCheckHere = m.IsLocal && CheckLocal is not null;
             row.Update = MachineUpdates.FirstOrDefault(u => u.Key == m.Key);
