@@ -41,6 +41,9 @@ cat > "$work/bin/apt-get" <<'EOF'
 echo "$*" >> "$APT_LOG"
 case "$*" in
   *--no-download*)
+    if [ -n "${APT_EXPECT_INDEX:-}" ] && [ "$(cat "$PLAYWRIGHT_APT_LISTS"/*_Packages)" != "$APT_EXPECT_INDEX" ]; then
+      echo 'E: package candidates do not match the cached archives' >&2; exit 100
+    fi
     [ -z "${APT_CACHE_ERROR:-}" ] || printf '%s\n' "$APT_CACHE_ERROR" >&2
     exit "${APT_CACHE_EXIT:-0}" ;;
   update)
@@ -74,6 +77,8 @@ chmod +x "$work/bin/npx" "$work/bin/sudo" "$work/bin/apt-get" "$work/bin/sleep" 
 export PATH="$work/bin:$PATH" NPX_LOG="$work/npx.log" APT_LOG="$work/apt.log" SLEEP_LOG="$work/sleep.log"
 export TIMEOUT_LOG="$work/timeout.log"
 export PLAYWRIGHT_APT_ETC="$work/apt" PLAYWRIGHT_APT_LIMIT=1s
+export HOME="$work/cache-fixture/home" GITHUB_OUTPUT="$work/cache-fixture/output"
+export PLAYWRIGHT_APT_LISTS="$work/cache-fixture/lists" PLAYWRIGHT_APT_ARCHIVES="$work/cache-fixture/archives"
 unset GITHUB_JOB
 export PLAYWRIGHT_APT_ATTEMPTS=1 PLAYWRIGHT_APT_RETRY_DELAY=0
 
@@ -85,6 +90,11 @@ failures=0
 
 # reset <mirror list lines...>: a fresh apt directory and logs, and the stand-ins' defaults.
 reset() {
+  rm -rf "$work/cache-fixture"
+  mkdir -p "$PLAYWRIGHT_APT_LISTS" "$PLAYWRIGHT_APT_ARCHIVES" "$HOME/.cache/playwright-apt-lists" "$HOME/.cache/playwright-apt-debs"
+  echo image > "$PLAYWRIGHT_APT_LISTS/image_Packages"; echo image-signature > "$PLAYWRIGHT_APT_LISTS/image_InRelease"
+  echo cached > "$HOME/.cache/playwright-apt-lists/cache_Packages"; echo cached-signature > "$HOME/.cache/playwright-apt-lists/cache_InRelease"
+  : > "$HOME/.cache/playwright-apt-debs/cached.deb"; : > "$PLAYWRIGHT_APT_ARCHIVES/downloaded.deb"; : > "$GITHUB_OUTPUT"
   rm -rf "$PLAYWRIGHT_APT_ETC"; mkdir -p "$PLAYWRIGHT_APT_ETC/sources.list.d"
   printf '%s\n' "$@" > "$PLAYWRIGHT_APT_ETC/apt-mirrors.txt"
   printf 'Types: deb\nURIs: mirror+file:/etc/apt/apt-mirrors.txt\n' > "$PLAYWRIGHT_APT_ETC/sources.list.d/ubuntu.sources"
@@ -93,7 +103,7 @@ reset() {
   unset APT_SLOW APT_UPDATE_SLOW APT_UPDATE_EXIT APT_DOWNLOAD_EXIT APT_GETS PLAYWRIGHT_APT_FORCE_FALLBACK CHECK_BROWSERS
   unset APT_ERROR APT_FAIL_COUNT APT_AZURE_ONLY
   unset APT_DNS_EXIT APT_DNS_OUTPUT APT_UPDATE_ERROR
-  unset DEBS_CACHE_HIT APT_CACHE_ERROR APT_CACHE_EXIT APT_TIMEOUT_EXIT PLAYWRIGHT_APT_UPDATE_BUDGET
+  unset DEBS_CACHE_HIT APT_CACHE_ERROR APT_CACHE_EXIT APT_TIMEOUT_EXIT PLAYWRIGHT_APT_UPDATE_BUDGET APT_EXPECT_INDEX
 }
 # check <name> <expected exit> <expected apt-get calls, one per line> [expected mirror list lines...]
 # download.sh is given CHECK_BROWSERS, chromium and webkit unless set.
@@ -121,6 +131,11 @@ check "a download that finishes in time fetches the packages Playwright names, f
   0 "$(printf 'update\n%s' "$download")" "$azure" "$canonical"
 grep -qxF 'playwright install-deps --dry-run chromium webkit' "$NPX_LOG" \
   || { echo "FAIL: Playwright was asked about $(cat "$NPX_LOG"), not the browsers given"; failures=$((failures + 1)); }
+[ "$(cat "$HOME/.cache/playwright-apt-lists/image_Packages" 2>/dev/null)" = image ] &&
+  [ "$(cat "$HOME/.cache/playwright-apt-lists/image_InRelease" 2>/dev/null)" = image-signature ] &&
+  [ ! -e "$HOME/.cache/playwright-apt-lists/cache_Packages" ] &&
+  [ -f "$HOME/.cache/playwright-apt-debs/downloaded.deb" ] && grep -qx 'cache-ready=true' "$GITHUB_OUTPUT" \
+  || { echo "FAIL: a successful cold update did not stage matching lists and debs for saving"; failures=$((failures + 1)); }
 
 reset "$azure" "$canonical"; export APT_SLOW=1
 check "a download still running at the limit leaves the Azure mirror and finishes from Canonical's HTTPS archive" \
@@ -137,6 +152,8 @@ check "an apt failure that isn't the limit fails the step, and the mirror list i
 
 reset "$azure" "$canonical"; export APT_UPDATE_EXIT=100
 check "a failed apt-get update fails the step before anything is downloaded" 100 "update" "$azure" "$canonical"
+[ ! -s "$GITHUB_OUTPUT" ] && [ ! -e "$HOME/.cache/playwright-apt-lists/image_Packages" ] \
+  || { echo "FAIL: a failed cold update staged or authorized a cache save"; failures=$((failures + 1)); }
 
 reset "$azure" "$canonical"; export APT_UPDATE_SLOW=1
 check "an update that times out switches to Canonical before its next update and download" \
@@ -241,9 +258,11 @@ check "a new invocation on a Canonical-only list recovers on its third download 
   0 "$(printf 'update\n%s\n%s\n%s' "$download" "$download" "$download")" "$canonical"
 [ "$(cat "$SLEEP_LOG")" = $'5\n20' ] \
   || { echo "FAIL: Canonical-only download did not use 5/20 second backoff"; failures=$((failures + 1)); }
-reset "$azure" "$canonical"; export DEBS_CACHE_HIT=true
+reset "$azure" "$canonical"; export DEBS_CACHE_HIT=true APT_EXPECT_INDEX=image
 check "a cache hit installs offline without downloading packages again" \
   0 "$(printf 'update\n%s' "$cached")" "$azure" "$canonical"
+[ "$(cat "$HOME/.cache/playwright-apt-lists/cache_Packages")" = cached ] && [ ! -s "$GITHUB_OUTPUT" ] \
+  || { echo "FAIL: a successful warm update replaced the cached snapshot or authorized saving"; failures=$((failures + 1)); }
 reset "$azure" "$canonical"; export DEBS_CACHE_HIT=true APT_CACHE_EXIT=100 APT_CACHE_ERROR='E: Hash Sum mismatch'
 check "a corrupt cached package fails without another update or download" \
   100 "$(printf 'update\n%s' "$cached")" "$azure" "$canonical"
@@ -258,17 +277,23 @@ check "Canonical timeouts use three sixty-second attempts then fail loudly" \
 [ "$(cat "$SLEEP_LOG")" = $'5\n20' ] \
   || { echo "FAIL: timeout retries did not use 5/20 second backoff"; failures=$((failures + 1)); }
 export PLAYWRIGHT_APT_LIMIT=1s
-reset "$azure" "$canonical"; export DEBS_CACHE_HIT=true APT_DNS_EXIT=1
+reset "$azure" "$canonical"; export DEBS_CACHE_HIT=true APT_DNS_EXIT=1 APT_EXPECT_INDEX=cached
 export APT_UPDATE_ERROR="E: Failed to fetch https://archive.ubuntu.com/ubuntu/dists/noble/InRelease Temporary failure resolving 'archive.ubuntu.com'"
 check "a cache hit survives exhausted update DNS failures only by completing the offline install" \
   0 "$(printf 'update\nupdate\nupdate\n%s' "$cached")" "$canonical"
 grep -q '^::warning.*apt update.*cached' "$work/out" \
   || { echo "FAIL: using cached packages after failed update was not a loud warning"; failures=$((failures + 1)); }
+[ "$(cat "$PLAYWRIGHT_APT_LISTS/cache_InRelease" 2>/dev/null)" = cached-signature ] && [ ! -s "$GITHUB_OUTPUT" ] \
+  || { echo "FAIL: failed-update recovery did not restore the signed snapshot without saving"; failures=$((failures + 1)); }
+reset "$canonical"; export DEBS_CACHE_HIT=true APT_UPDATE_ERROR='E: Failed to fetch https://archive.ubuntu.com/ubuntu/dists/noble/InRelease Connection failed'
+rm "$HOME/.cache/playwright-apt-lists/cache_Packages" "$HOME/.cache/playwright-apt-lists/cache_InRelease"
+check "a debs hit without cached lists is a miss and cannot mask a failed update" 100 "$(printf 'update\nupdate\nupdate')" "$canonical"
+[ ! -s "$GITHUB_OUTPUT" ] || { echo "FAIL: an incomplete hit authorized saving after a failed update"; failures=$((failures + 1)); }
 reset "$azure" "$canonical"; export APT_DNS_EXIT=1
 export APT_UPDATE_ERROR="E: Failed to fetch https://archive.ubuntu.com/ubuntu/dists/noble/InRelease Temporary failure resolving 'archive.ubuntu.com'"
 check "without a cache hit exhausted update DNS failures remain fatal" \
   100 "$(printf 'update\nupdate\nupdate')" "$canonical"
-reset "$canonical"; export DEBS_CACHE_HIT=true APT_TIMEOUT_EXIT=124
+reset "$canonical"; export DEBS_CACHE_HIT=true APT_TIMEOUT_EXIT=124 APT_EXPECT_INDEX=cached
 check "a cache hit survives three update timeouts only by completing the offline install" \
   0 "$(printf 'update\nupdate\nupdate\n%s' "$cached")" "$canonical"
 reset "$canonical"; export DEBS_CACHE_HIT=true APT_UPDATE_SLOW=all PLAYWRIGHT_APT_UPDATE_BUDGET=3 PLAYWRIGHT_APT_LIMIT=30s
@@ -297,6 +322,7 @@ check "offline install failure after a cache-hit update warning is fatal without
 reset "$azure" "$canonical"; export APT_CACHE_EXIT=100 APT_CACHE_ERROR='E: Sub-process /usr/bin/dpkg returned an error code (1)'
 check "an offline install failure after downloading packages fails the step" \
   100 "$(printf 'update\n%s\n%s' "$download" "$cached")" "$azure" "$canonical"
+[ ! -s "$GITHUB_OUTPUT" ] || { echo "FAIL: a failed offline install authorized a cache save"; failures=$((failures + 1)); }
 reset "$azure" "$canonical"; export APT_TIMEOUT_EXIT=124
 export APT_UPDATE_ERROR=$'E: Failed to fetch http://azure.archive.ubuntu.com/ubuntu/dists/noble/InRelease Connection failed\nE: Hash Sum mismatch'
 check "a timeout with mixed integrity errors never retries or switches mirrors" 124 "update" "$azure" "$canonical"
@@ -306,6 +332,10 @@ check "a forced proof cannot use a cache hit to ignore update DNS failures" \
   100 "$(printf 'update\nupdate\nupdate')" "$canonical"
 ! grep -q 'npx playwright install --with-deps' "$here/../../workflows/ci.yml" \
   || { echo "FAIL: a downstream browser install would run apt update again"; failures=$((failures + 1)); }
+[ "$(grep -c 'playwright-apt-lists$' "$here/action.yml")" = 2 ] &&
+  grep -q 'key:.*-lists-v1$' "$here/action.yml" &&
+  grep -qF "    - if: steps.packages.outputs.cache-ready == 'true'" "$here/action.yml" \
+  || { echo "FAIL: paired versioned caches must restore and save on successful cold runs on any ref"; failures=$((failures + 1)); }
 awk '
   /^  [[:alnum:]_-]+:/ { actions=0 }
   /uses: \.\/\.github\/actions\/playwright-system-packages/ { actions++ }
