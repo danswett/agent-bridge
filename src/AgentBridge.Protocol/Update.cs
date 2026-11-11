@@ -56,6 +56,9 @@ public static class UpdateProtocol
         Unavailable = Limits.KeepStart(s.Unavailable, Reason),
         Request = IsRequest(s.Request) ? s.Request : null,
         Progress = s.Progress is { } p ? Math.Clamp(p, 0, 100) : null,
+        CheckSource = s.CheckSource is "cdn" or "github" ? s.CheckSource : null,
+        GitHubRemaining = s.GitHubRemaining is >= 0 && s.GitHubQuotaAt is not null ? s.GitHubRemaining : null,
+        GitHubQuotaAt = s.GitHubRemaining is >= 0 ? s.GitHubQuotaAt : null,
         WaitingCode = IsCode(s.WaitingCode) ? s.WaitingCode : null,
         CanUpdateNow = false,
         UpdateNowWhy = null,
@@ -181,6 +184,9 @@ public sealed record UpdateState
     public string? Available { get; init; }
     public string? Notes { get; init; }
     public DateTimeOffset? CheckedAt { get; init; }
+    public string? CheckSource { get; init; }
+    public int? GitHubRemaining { get; init; }
+    public DateTimeOffset? GitHubQuotaAt { get; init; }
     public UpdatePhase Phase { get; init; }
     // 0-100 while downloading.
     public int? Progress { get; init; }

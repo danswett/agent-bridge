@@ -51,6 +51,9 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     // As of when Found is known: the feed's own answer may be older than the check that read it,
     // from the machine's shared copy (#530), and the devices are told how old it really is.
     public DateTimeOffset? FoundAsOf { get; private set; }
+    public string? CheckSource { get; private set; }
+    public int? GitHubRemaining => inner.GitHubRemaining;
+    public DateTimeOffset? GitHubQuotaAt => inner.GitHubQuotaAt;
     public DateTimeOffset? DiscoveredAt => inner.DiscoveredAt;
     public UpdatePhase Phase => Volatile.Read(ref downloads) > 0 ? UpdatePhase.Downloading : Volatile.Read(ref checks) > 0 ? UpdatePhase.Checking : UpdatePhase.Idle;
     public int? Progress { get; private set; }
@@ -73,6 +76,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
             Found = found;
             CheckedAt = time.GetUtcNow();
             FoundAsOf = inner.DiscoveredAt is { } at && at < CheckedAt ? at : CheckedAt;
+            CheckSource = inner.CheckSource;
             return found;
         }
         finally
@@ -144,6 +148,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         Found = null;
         CheckedAt = null;
         FoundAsOf = null;
+        CheckSource = null;
         failed = null;
         Raise();
     }
@@ -158,7 +163,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     string Bound()
     {
         var now = inner.Source;
-        if (bound is not null && bound != now) { (Found, CheckedAt, FoundAsOf, failed) = (null, null, null, null); }
+        if (bound is not null && bound != now) { (Found, CheckedAt, FoundAsOf, CheckSource, failed) = (null, null, null, null, null); }
         bound = now;
         return now;
     }

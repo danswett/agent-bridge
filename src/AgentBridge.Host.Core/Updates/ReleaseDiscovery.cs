@@ -133,6 +133,8 @@ public sealed class ReleaseDiscovery : IDisposable
     public DateTimeOffset? FetchedAt => memory.FetchedAt;
     // Which answered the list given last: Sources.Cdn or Sources.GitHub (null before any).
     public string? Source => memory.Source;
+    public int? GitHubRemaining => memory.GitHubQuota?.Remaining;
+    public DateTimeOffset? GitHubQuotaAt => memory.GitHubQuota?.At;
 
     // The release list's JSON: GitHub's, or the last one it gave while that is fresh. When there
     // is neither, throws a ReleaseDiscoveryException (or, cancelled, OperationCanceledException),
@@ -195,6 +197,7 @@ public sealed class ReleaseDiscovery : IDisposable
                 {
                     rechecked = await AskAsync(url, cached && state.Source != Sources.Cdn ? state.ETag : null, cancellationToken);
                     now = time.GetUtcNow();
+                    state = ObservedQuota(state, rechecked);
                     if (rechecked.Status is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
                     {
                         state = BackedOff(state, rechecked, now, url);
@@ -243,6 +246,7 @@ public sealed class ReleaseDiscovery : IDisposable
             if (holding) { throw Held(state); }
             var answer = rechecked ?? await AskAsync(url, cached && state.Source != Sources.Cdn ? state.ETag : null, cancellationToken);
             now = time.GetUtcNow();
+            state = ObservedQuota(state, answer);
             var unchanged = answer.Status == HttpStatusCode.NotModified && cached;
             if (unchanged || answer.Status == HttpStatusCode.OK && answer.Body is not null && Readable(answer.Body, read, out releases))
             {
@@ -313,7 +317,9 @@ public sealed class ReleaseDiscovery : IDisposable
         RelayExpired = state.RelayExpired || (state.GitHubAnsweredAt ?? state.RelayBootstrapAt) is { } start && now - start >= GithubRelayAtMost,
     };
 
-    sealed record Answer(HttpStatusCode Status, string? Body = null, string? ETag = null, TimeSpan? Wait = null, string? Problem = null);
+    internal sealed record Quota(int Remaining, DateTimeOffset At);
+    sealed record Answer(HttpStatusCode Status, string? Body = null, string? ETag = null, TimeSpan? Wait = null, string? Problem = null, Quota? Quota = null);
+    static State ObservedQuota(State state, Answer answer) => answer.Quota is { } quota ? state with { GitHubQuota = quota } : state;
 
     // The relay's list and how old its copy is, or why it is not used: words for the log, never
     // an exception's text or the relay's body. A copy of unknown age is not used: it could be any
@@ -476,27 +482,32 @@ public sealed class ReleaseDiscovery : IDisposable
         request.Headers.Accept.ParseAdd("application/vnd.github+json");
         request.Headers.TryAddWithoutValidation("X-GitHub-Api-Version", "2022-11-28");
         if (etag is not null) { request.Headers.TryAddWithoutValidation("If-None-Match", etag); }
+        Quota? quota = null;
         try
         {
             using var response = await http.SendAsync(request, cancellationToken);
+            if (url == GitHubList && int.TryParse(Header(response, "X-RateLimit-Remaining"), NumberStyles.None, CultureInfo.InvariantCulture, out var remaining))
+            {
+                quota = new(remaining, time.GetUtcNow());
+            }
             var status = response.StatusCode;
             var tag = response.Headers.ETag?.ToString();
-            if (status == HttpStatusCode.NotModified) { return new Answer(status, ETag: tag); }
+            if (status == HttpStatusCode.NotModified) { return new Answer(status, ETag: tag, Quota: quota); }
             if (status == HttpStatusCode.OK)
             {
                 var body = await response.Content.ReadAsStringAsync(cancellationToken);
                 // Only a list is kept: anything else would be served as the answer for an interval.
-                return IsList(body) ? new Answer(status, body, tag) : new Answer(status, Problem: Problems.Unexpected);
+                return IsList(body) ? new Answer(status, body, tag, Quota: quota) : new Answer(status, Problem: Problems.Unexpected, Quota: quota);
             }
             // The body is never kept or shown: GitHub's names the address it limited. For a
             // public repository's releases, unauthenticated, a 403 is a limit, primary or secondary.
             var problem = status is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests ? Problems.Limited
                 : (int)status >= 500 ? Problems.Unreachable : Problems.Refused;
-            return new Answer(status, Wait: Wait(response), Problem: problem);
+            return new Answer(status, Wait: Wait(response), Problem: problem, Quota: quota);
         }
         catch (Exception e) when (e is HttpRequestException or IOException || e is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
-            return new Answer(0, Problem: Problems.Unreachable);
+            return new Answer(0, Problem: Problems.Unreachable, Quota: quota);
         }
     }
 
@@ -661,6 +672,8 @@ public sealed class ReleaseDiscovery : IDisposable
         public string? Problem { get; init; }
         public DateTimeOffset? Saved { get; init; }
         public string? Source { get; init; }
+        // The last quota header GitHub itself supplied; cached/relay reads never renew it.
+        public Quota? GitHubQuota { get; init; }
         // When GitHub itself last answered a check (a 200, or a 304 for a list it gave): never a relay's.
         public DateTimeOffset? GitHubAnsweredAt { get; init; }
         // Only this repository's GitHub list can start or clear the missing-answer bootstrap.
