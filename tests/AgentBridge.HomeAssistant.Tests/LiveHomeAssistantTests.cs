@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentBridge.HomeAssistant;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Updates;
 using AgentBridge.Protocol;
 using Xunit;
 

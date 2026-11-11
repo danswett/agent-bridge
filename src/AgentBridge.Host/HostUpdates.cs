@@ -1,5 +1,4 @@
 using System.Text.Json;
-using AgentBridge.HomeAssistant;
 using AgentBridge.Host.Core.Updates;
 using AgentBridge.Protocol;
 using Velopack;

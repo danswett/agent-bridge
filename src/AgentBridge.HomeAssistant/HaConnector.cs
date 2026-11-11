@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Updates;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.HomeAssistant;
