@@ -765,7 +765,13 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Two_replies_of_the_same_words_need_two_prompts_one_each()
+    public Task Two_replies_of_the_same_words_need_two_prompts_one_each() => TwoRepliesAsync();
+
+    [Fact]
+    public Task Two_replies_of_the_same_words_need_two_prompts_even_when_the_test_continuation_is_delayed() =>
+        TwoRepliesAsync(() => Task.Delay(TimeSpan.FromSeconds(3)));
+
+    async Task TwoRepliesAsync(Func<Task>? beforeRecording = null)
     {
         // Both are typed into a working session before it takes either, and it records one.
         injector.OnInject = null;
@@ -776,6 +782,8 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         var second = ReplyAsync(ch, "yes");
         await HostWait.UntilAsync(() => injector.Plans.Count == 2, "the second reply to be typed", Patience);
         await Task.Delay(300);
+        // A busy runner can leave this continuation unscheduled beyond both confirmation windows.
+        if (beforeRecording is not null) { await beforeRecording(); }
         Fixture.Append(events, Prompt("yes", "steering"));
 
         // That prompt is the record of one of them, never of both.
