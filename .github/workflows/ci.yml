@@ -249,9 +249,9 @@ jobs:
       matrix:
         os: ${{ fromJSON(needs.plan.outputs.product-os) }}
     runs-on: ${{ matrix.os }}
-    # A clean run takes about five minutes. The Linux test step has hung in dotnet test for hours
-    # (#129); this caps what a hang can cost.
-    timeout-minutes: 30
+    # #2018: twice the slowest healthy Windows jobs in the last 20 main runs
+    # (11m47s x64, 11m31s Arm64), rounded up. Linux keeps its #129 hang cap.
+    timeout-minutes: ${{ startsWith(matrix.os, 'windows-') && 24 || 30 }}
     env:
       SUITES: ${{ needs.plan.outputs.suites }}
       WHOLE_RING: ${{ needs.plan.outputs.whole-ring }}
@@ -709,6 +709,9 @@ jobs:
             out: out/app-arm64
             artifact: agent-bridge-windows-arm64
     runs-on: ${{ matrix.runner }}
+    # #2018: twice the last 20 main runs' healthy maxima (8m18s Arm64, 7m55s x64),
+    # rounded up. Job execution only; waiting for app or a runner is outside this cap.
+    timeout-minutes: ${{ matrix.runtime == 'win-arm64' && 17 || 16 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

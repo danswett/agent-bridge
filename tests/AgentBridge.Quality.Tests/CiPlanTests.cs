@@ -429,6 +429,26 @@ public class CiPlanTests
         Assert.Empty(problems.Select(p => p.Message));
     }
 
+    [Theory]
+    [InlineData("product", "${{ startsWith(matrix.os, 'windows-') && 24 || 30 }}")]
+    [InlineData("app-installer", "${{ matrix.runtime == 'win-arm64' && 17 || 16 }}")]
+    public void Windows_job_hangs_have_measured_caps_without_ignoring_failure(
+        string id, string timeout)
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var stream = new YamlDotNet.RepresentationModel.YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(root, ".github", "workflows", "ci.yml"))));
+        var jobs = (YamlDotNet.RepresentationModel.YamlMappingNode)
+            ((YamlDotNet.RepresentationModel.YamlMappingNode)stream.Documents[0].RootNode)["jobs"];
+        var job = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs[id];
+
+        Assert.True(job.Children.TryGetValue(new YamlDotNet.RepresentationModel.YamlScalarNode("timeout-minutes"), out var cap),
+            $"{id} must cap a hung job.");
+        Assert.Equal(timeout, cap.ToString());
+        Assert.False(job.Children.ContainsKey(new YamlDotNet.RepresentationModel.YamlScalarNode("continue-on-error")),
+            $"{id} must still fail when its timeout expires.");
+    }
+
     [Fact]
     public void Installer_reuse_keeps_every_check_and_consumes_the_app_artifact_on_both_architectures()
     {
