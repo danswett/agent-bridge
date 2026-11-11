@@ -676,6 +676,7 @@ test('a question that arrives after the reader opened the reasoning leaves the c
 
 test('opening reasoning at the bottom stays put, but subsequent response growth is still followed', async ({ page }) => {
   await openDemo(page, { height: 900 });
+  await page.evaluate((id) => window.agentBridgeDemo.host.historyTurns.set(id, []), CODEX);
   const reasoning = Array.from({ length: 60 }, (_, i) => `Thought ${i + 1}.`).join('\n\n');
   await upsert(page, CODEX, { activity: { response: 'Short.', reasoning, userMessage: null, currentTool: null }, question: null, updatedAt: later() });
   const v = await open(page, CODEX);
