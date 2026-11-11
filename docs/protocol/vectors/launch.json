@@ -45,6 +45,18 @@
           }
         },
         {
+          "name": "disabled-mcp-servers",
+          "json": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "agent": "copilot",
+            "workspace": "agent-bridge",
+            "disabledMcpServers": [
+              "remote.tools",
+              "local_1-test"
+            ]
+          }
+        },
+        {
           "name": "a-resume",
           "json": {
             "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
@@ -89,6 +101,46 @@
         }
       ],
       "refused": [
+        {
+          "name": "disabled-mcp-injection",
+          "json": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "agent": "copilot",
+            "workspace": "agent-bridge",
+            "disabledMcpServers": [
+              "x --allow-all-tools"
+            ]
+          },
+          "refusedBy": "LaunchProtocol.Check",
+          "reason": "disabledMcpServers takes plain server names of 1 to 64 characters: letters, digits, dot, underscore and hyphen, not starting with a hyphen"
+        },
+        {
+          "name": "disabled-mcp-duplicate",
+          "json": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "agent": "copilot",
+            "workspace": "agent-bridge",
+            "disabledMcpServers": [
+              "tools",
+              "tools"
+            ]
+          },
+          "refusedBy": "LaunchProtocol.Check",
+          "reason": "disabledMcpServers contains a duplicate name"
+        },
+        {
+          "name": "disabled-mcp-newline",
+          "json": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "agent": "copilot",
+            "workspace": "agent-bridge",
+            "disabledMcpServers": [
+              "tools\n"
+            ]
+          },
+          "refusedBy": "LaunchProtocol.Check",
+          "reason": "disabledMcpServers takes plain server names of 1 to 64 characters: letters, digits, dot, underscore and hyphen, not starting with a hyphen"
+        },
         {
           "name": "a-prompt-led-by-a-byte-order-mark",
           "json": {
@@ -821,7 +873,8 @@
               "context": "1m",
               "profile": "work"
             },
-            "attachments": true
+            "attachments": true,
+            "disabledMcpServers": true
           }
         },
         {
@@ -861,7 +914,8 @@
               "context": "1m",
               "profile": "work"
             },
-            "attachments": true
+            "attachments": true,
+            "disabledMcpServers": true
           },
           "reads": {
             "id": "copilot",
@@ -887,7 +941,8 @@
               "context": "1m",
               "profile": "work"
             },
-            "attachments": true
+            "attachments": true,
+            "disabledMcpServers": true
           }
         },
         {
@@ -915,7 +970,8 @@
               "context": "1m",
               "profile": "work"
             },
-            "attachments": true
+            "attachments": true,
+            "disabledMcpServers": true
           },
           "reads": {
             "id": "copilot",
@@ -941,7 +997,8 @@
               "context": "1m",
               "profile": "work"
             },
-            "attachments": true
+            "attachments": true,
+            "disabledMcpServers": true
           }
         }
       ],
@@ -971,7 +1028,8 @@
               "context": "1m",
               "profile": "work"
             },
-            "attachments": true
+            "attachments": true,
+            "disabledMcpServers": true
           },
           "refusedBy": "parse"
         },
@@ -1001,7 +1059,8 @@
               "context": "1m",
               "profile": "work"
             },
-            "attachments": true
+            "attachments": true,
+            "disabledMcpServers": true
           },
           "refusedBy": "parse"
         }
@@ -1235,7 +1294,8 @@
                   "context": "1m",
                   "profile": "work"
                 },
-                "attachments": true
+                "attachments": true,
+                "disabledMcpServers": true
               },
               {
                 "id": "codex",
@@ -1327,7 +1387,8 @@
                   "context": "1m",
                   "profile": "work"
                 },
-                "attachments": true
+                "attachments": true,
+                "disabledMcpServers": true
               }
             ],
             "workspaces": [
@@ -1407,7 +1468,8 @@
                   "context": "1m",
                   "profile": "work"
                 },
-                "attachments": true
+                "attachments": true,
+                "disabledMcpServers": true
               },
               {
                 "id": "codex",
@@ -1485,7 +1547,8 @@
                   "context": "1m",
                   "profile": "work"
                 },
-                "attachments": true
+                "attachments": true,
+                "disabledMcpServers": true
               },
               {
                 "id": "codex",
@@ -1567,7 +1630,8 @@
                   "context": "1m",
                   "profile": "work"
                 },
-                "attachments": true
+                "attachments": true,
+                "disabledMcpServers": true
               },
               {
                 "id": "codex",

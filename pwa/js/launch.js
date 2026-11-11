@@ -30,6 +30,13 @@ const isControl = (c) => /[\u0000-\u001f\u007f-\u009f]/.test(c);
 
 // Null when the launch can be sent; otherwise why not, in the host's words.
 export function checkLaunch(l) {
+  const disabled = l.disabledMcpServers;
+  if (disabled != null) {
+    if (!Array.isArray(disabled)) { return 'disabledMcpServers has to be a list of server names'; }
+    if (disabled.length > 16) { return 'disabledMcpServers takes at most 16 names'; }
+    if (disabled.some((n) => typeof n !== 'string' || n.length > 64 || !/^[A-Za-z0-9._][A-Za-z0-9._-]{0,63}$/.test(n))) { return 'disabledMcpServers takes plain server names of 1 to 64 characters: letters, digits, dot, underscore and hyphen, not starting with a hyphen'; }
+    if (new Set(disabled).size !== disabled.length) { return 'disabledMcpServers contains a duplicate name'; }
+  }
   if (l.agent != null && !LAUNCHERS.includes(l.agent)) { return `unknown agent '${cut(l.agent)}'; this protocol launches ${LAUNCHERS.join(', ')}`; }
   for (const name of ['workspace', 'resume', 'profile', 'model', 'effort', 'context']) {
     const v = l[name];
@@ -90,6 +97,7 @@ export function readLaunchOptions(raw) {
       defaults: { model: str(d.model), effort: str(d.effort), context: str(d.context), profile: str(d.profile) },
       attachments: x.attachments === true,
       needsPrompt: x.needsPrompt === true,
+      disabledMcpServers: x.disabledMcpServers === true,
     };
   }).filter(Boolean);
   const workspaces = (Array.isArray(o.workspaces) ? o.workspaces : []).map((w) => {

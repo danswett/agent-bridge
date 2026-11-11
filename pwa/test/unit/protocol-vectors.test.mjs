@@ -348,7 +348,7 @@ const BUILDS = {
     // never the vector's own keys: a field C# renames is then one the PWA would not send.
     build: (j) => {
       const launch = {};
-      for (const k of ['agent', 'permissions', 'workspace', 'resume', 'profile', 'model', 'effort', 'context', 'prompt']) {
+      for (const k of ['agent', 'permissions', 'workspace', 'resume', 'profile', 'model', 'effort', 'context', 'prompt', 'disabledMcpServers']) {
         if (j[k] !== undefined) { launch[k] = j[k]; }
       }
       if (j.transfer) {

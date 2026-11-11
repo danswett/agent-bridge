@@ -62,7 +62,8 @@ public sealed partial class HaConnector
     sealed record Consumed(string? Box, string? PayloadAt);
 
     // A launch request read from the prompt payload (Get-DaemonLaunchRequest).
-    sealed record PayloadRequest(string Kind, string? Id = null, string Text = "", IReadOnlyDictionary<string, string>? Settings = null, string Problem = "");
+    sealed record PayloadRequest(string Kind, string? Id = null, string Text = "", IReadOnlyDictionary<string, string>? Settings = null, string Problem = "",
+        IReadOnlyList<string>? DisabledMcpServers = null);
 
     static readonly string[] LaunchSettings = ["agent", "workspace", "profile", "resume", "model", "effort", "context", "permissions"];
 
@@ -465,6 +466,7 @@ public sealed partial class HaConnector
         if (launchRequestsHandled.Contains(id, StringComparer.Ordinal)) { return new("handled"); }
 
         var parsed = new Dictionary<string, string>(StringComparer.Ordinal);
+        IReadOnlyList<string>? disabledMcpServers = null;
         var problem = "";
         if (hasSettings)
         {
@@ -473,6 +475,22 @@ public sealed partial class HaConnector
             {
                 foreach (var pair in settings.EnumerateObject())
                 {
+                    if (pair.Name == "disabledMcpServers")
+                    {
+                        if (pair.Value.ValueKind == JsonValueKind.Null) { continue; }
+                        if (pair.Value.ValueKind != JsonValueKind.Array || pair.Value.EnumerateArray().Any(n => n.ValueKind != JsonValueKind.String))
+                        {
+                            problem = "Launch refused: disabledMcpServers has to be a list of server names.";
+                            break;
+                        }
+                        disabledMcpServers = [.. pair.Value.EnumerateArray().Select(n => n.GetString()!)];
+                        if (LaunchProtocol.CheckDisabledMcpServers(disabledMcpServers) is { } badMcp)
+                        {
+                            problem = $"Launch refused: {badMcp}.";
+                            break;
+                        }
+                        continue;
+                    }
                     if (!LaunchSettings.Contains(pair.Name, StringComparer.Ordinal))
                     {
                         problem = $"Launch refused: unknown setting '{pair.Name}' - a launch takes {string.Join(", ", LaunchSettings)}.";
@@ -491,7 +509,7 @@ public sealed partial class HaConnector
         }
         if (problem.Length > 0) { parsed.Clear(); }
         var text = problem.Length == 0 && a.TryGetProperty("text", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString()!.Trim() : "";
-        return new("fresh", id, text, parsed, problem);
+        return new("fresh", id, text, parsed, problem, disabledMcpServers);
     }
 
     [GeneratedRegex("^[A-Za-z0-9-]{8,64}$")]
@@ -593,9 +611,14 @@ public sealed partial class HaConnector
             permissions = wantedPermissions == HaContract.PermissionAllowAll ? LaunchProtocol.AllowAll : LaunchProtocol.Ask;
         }
 
+        if (read.DisabledMcpServers is { Count: > 0 } && agent?.DisabledMcpServers != true)
+        {
+            return (null, null, $"{agent?.Label ?? "This launcher"} does not support disabledMcpServers");
+        }
         var request = new LaunchRequest
         {
             Request = RequestId(Slug, "launch", $"{read.Id}#{pressed}"),
+            DisabledMcpServers = read.DisabledMcpServers,
             Agent = agent?.Id,
             Workspace = workspace,
             Resume = resume,

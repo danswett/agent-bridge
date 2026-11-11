@@ -326,6 +326,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 Defaults = defaults with { Profile = profile },
                 Attachments = l.TakesAttachments && attachments is not null ? true : null,
                 NeedsPrompt = l.NeedsPrompt ? true : null,
+                DisabledMcpServers = l.Kind == AgentKind.Copilot ? true : null,
             });
         }
 
@@ -767,7 +768,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     // Everything a launch was settled on before it starts.
     sealed record Plan(Launcher Launcher, string Executable, string Directory, string? Workspace, WorkspaceConfig? Isolated, ResumeEntry? Resume,
-        string Where, string Profile, string Model, string Effort, string Context, bool AllowAll, string Prompt, LaunchTransfer? Transfer = null, string? Role = null);
+        string Where, string Profile, string Model, string Effort, string Context, bool AllowAll, string Prompt, LaunchTransfer? Transfer = null, string? Role = null,
+        IReadOnlyList<string>? DisabledMcpServers = null);
 
     // ct: a restore's, cancelled as the host stops or its caller withdraws it. Honoured until the
     // agent is started, never after: a started session is followed whatever happens.
@@ -950,6 +952,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         }
 
         var agent = o.Agents.First(a => a.Id == launcher.Id);
+        if (r.DisabledMcpServers is { Count: > 0 } && agent.DisabledMcpServers != true) { return (null, $"{launcher.Label} does not support disabledMcpServers"); }
         var profile = "";
         if (launcher.TakesProfile && agent.Profiles is { } profiles)
         {
@@ -980,7 +983,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         var allowAll = (r.Permissions ?? Config.Permissions) == LaunchProtocol.AllowAll;
 
         return (new Plan(launcher, resolved.Executables[launcher.Id], directory, workspace?.Label, workspace?.Isolate == true ? workspace : null, resume, where,
-            profile, model, effort, context, allowAll, LaunchProtocol.Flatten(r.Prompt), r.Transfer, r.Role), null);
+            profile, model, effort, context, allowAll, LaunchProtocol.Flatten(r.Prompt), r.Transfer, r.Role, r.DisabledMcpServers), null);
     }
 
     // No account checker is a refusal, not a pass: production always wires one, and a launch must
@@ -1096,7 +1099,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             var newId = fetched is not null ? Guid.NewGuid().ToString() : null;
             var sessionId = newId ?? plan.Resume?.Id ?? (plan.Launcher.ChoosesOwnSessionId ? "" : Guid.NewGuid().ToString());
             var args = Launchers.Arguments(plan.Launcher, sessionId, plan.Resume is not null || newId is not null, plan.Model, plan.Effort, plan.Context, plan.AllowAll,
-                extras, plan.Profile, prompt);
+                extras, plan.Profile, prompt, plan.DisabledMcpServers);
             var environment = AgentEnvironment.For(options.CopilotHome, options.ClaudeHome,
                 options.CodexHome, options.ClaudeConfigDirExplicit, locator.ChildPath());
             environment[Launchers.SessionVariable] = sessionId.Length > 0 ? sessionId : "launched";

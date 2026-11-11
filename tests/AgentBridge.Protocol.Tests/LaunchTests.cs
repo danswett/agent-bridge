@@ -11,6 +11,47 @@ public class LaunchTests
         new() { Request = Uuid, Agent = agent, Workspace = workspace, Resume = resume, Model = model, Permissions = permissions, Prompt = prompt, Attachments = attachments };
 
     [Fact]
+    public void Disabled_MCP_servers_round_trip_as_names_and_default_to_no_change()
+    {
+        var json = $$"""{"request":"{{Uuid}}","disabledMcpServers":["tools.remote","local_1-test","{{new string('a', 64)}}"]}""";
+        var request = JsonSerializer.Deserialize<LaunchRequest>(json, ProtocolJson.Options)!;
+        Assert.Null(LaunchProtocol.Check(request));
+        Assert.Equal(json, JsonSerializer.Serialize(request, ProtocolJson.Options));
+        Assert.DoesNotContain("disabledMcpServers", JsonSerializer.Serialize(Launch(), ProtocolJson.Options));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("-flag")]
+    [InlineData("--allow-all-tools")]
+    [InlineData("x --allow-all-tools")]
+    [InlineData("a b")]
+    [InlineData("a\"b")]
+    [InlineData("a'b")]
+    [InlineData("a/b")]
+    [InlineData("a\\b")]
+    [InlineData("a;b")]
+    [InlineData("a&b")]
+    [InlineData("a\nb")]
+    [InlineData("a\n")]
+    [InlineData("a\tb")]
+    public void Disabled_MCP_servers_refuse_non_names(string name)
+    {
+        var json = JsonSerializer.Serialize(new { request = Uuid, disabledMcpServers = new[] { name } });
+        Assert.Contains("disabledMcpServers", LaunchProtocol.Check(JsonSerializer.Deserialize<LaunchRequest>(json, ProtocolJson.Options)!));
+    }
+
+    [Fact]
+    public void Disabled_MCP_servers_refuse_duplicates_nulls_long_names_and_more_than_sixteen()
+    {
+        foreach (var names in new[] { new[] { "same", "same" }, new[] { (string)null! }, new[] { new string('a', 65) }, Enumerable.Range(0, 17).Select(i => $"server{i}").ToArray() })
+        {
+            var json = JsonSerializer.Serialize(new { request = Uuid, disabledMcpServers = names });
+            Assert.Contains("disabledMcpServers", LaunchProtocol.Check(JsonSerializer.Deserialize<LaunchRequest>(json, ProtocolJson.Options)!));
+        }
+    }
+
+    [Fact]
     public void A_launch_may_leave_every_setting_to_the_machine()
     {
         Assert.Null(LaunchProtocol.Check(Launch()));

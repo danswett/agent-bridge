@@ -155,6 +155,7 @@ public static partial class HaContract
                     ["context"] = a.Defaults?.Context,
                 },
             };
+            if (a.DisabledMcpServers == true) { agents[a.Id]!["disabled_mcp_servers"] = true; }
         }
         var version = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(offered.Defaults.Agent + "\n" + Serialize(agents))))[..12].ToLowerInvariant();
         return new JsonObject { ["version"] = version, ["default_agent"] = offered.Defaults.Agent, ["agents"] = agents };

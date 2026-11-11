@@ -23,6 +23,20 @@ public static partial class LaunchProtocol
     // profile, and model, effort and context values. Each is matched against what
     // launch.options offered, so these bound only what a host has to read.
     public const int MaxName = 256;
+    public const int MaxDisabledMcpServers = 16;
+    public const int MaxMcpServerName = 64;
+
+    public static string? CheckDisabledMcpServers(IReadOnlyList<string>? names)
+    {
+        if (names is null) { return null; }
+        if (names.Count > MaxDisabledMcpServers) { return $"disabledMcpServers takes at most {MaxDisabledMcpServers} names"; }
+        if (names.Any(n => n is null || !McpServerName().IsMatch(n))) { return $"disabledMcpServers takes plain server names of 1 to {MaxMcpServerName} characters: letters, digits, dot, underscore and hyphen, not starting with a hyphen"; }
+        if (names.Distinct(StringComparer.Ordinal).Count() != names.Count) { return "disabledMcpServers contains a duplicate name"; }
+        return null;
+    }
+
+    [GeneratedRegex(@"\A[A-Za-z0-9._][A-Za-z0-9._-]{0,63}\z")]
+    private static partial Regex McpServerName();
 
     // What launch.options lists, and how long each entry may be.
     public const int MaxWorkspaces = 64;
@@ -41,6 +55,7 @@ public static partial class LaunchProtocol
     // the values name something this machine offers is the host's (launch.options).
     public static string? Check(LaunchRequest launch)
     {
+        if (CheckDisabledMcpServers(launch.DisabledMcpServers) is { } badMcp) { return badMcp; }
         if (launch.FleetName is not null && (launch.Resume is not null || launch.Transfer is not null)) { return "fleetName is only for a new session"; }
         if (launch.Agent is { } agent && !Agents.Contains(agent, StringComparer.Ordinal)) { return $"unknown agent '{Cut(agent)}'; this protocol launches {string.Join(", ", Agents)}"; }
         foreach (var (name, value) in new[] { ("workspace", launch.Workspace), ("resume", launch.Resume), ("profile", launch.Profile), ("model", launch.Model), ("effort", launch.Effort), ("context", launch.Context) })
@@ -131,6 +146,7 @@ public sealed record LaunchRequest
     public string? Effort { get; init; }
     public string? Context { get; init; }
     public string? Permissions { get; init; }
+    public IReadOnlyList<string>? DisabledMcpServers { get; init; }
     // The job a coordinator starts this worker for (letters, digits and hyphens). Only a launch
     // with a role has its MCP servers narrowed, to those launch.workerMcp lists for that role
     // (none when it lists none); a launch without one is a person's and keeps their own.
@@ -259,6 +275,7 @@ public sealed record LaunchAgent
     public bool? Attachments { get; init; }
     // It starts its session only on a first message, so a launch must carry a prompt.
     public bool? NeedsPrompt { get; init; }
+    public bool? DisabledMcpServers { get; init; }
 }
 
 public sealed record LaunchTuning
