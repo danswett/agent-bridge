@@ -1,6 +1,4 @@
-// Settings > This app (#1246): the release id and build date the app was stamped with
-// (tools/build-site.mjs), so the owner and Quality can say which build was tested. Nothing is
-// fetched here; it only reads what the build wrote into config.js.
+// Settings > This app (#1246): the running release and the release controller's manual check.
 import { copyText } from '../markdown.js';
 
 const SHA = /^[0-9a-f]{40}$/;
@@ -16,7 +14,7 @@ export function releaseLine(version, builtAt, locale) {
   return { id, date, copy: date ? `${id} ${date}` : id };
 }
 
-export function mountRelease({ version, builtAt, doc = document, win = window } = {}) {
+export function mountRelease({ version, builtAt, check, doc = document, win = window } = {}) {
   const $ = (id) => doc.getElementById(id);
   const copy = $('release-copy');
   if (!copy || !$('release-id')) { return null; }
@@ -26,5 +24,30 @@ export function mountRelease({ version, builtAt, doc = document, win = window } 
   copy.addEventListener('click', async () => {
     $('release-status').textContent = await copyText(line.copy, doc) ? 'Copied' : "Couldn't copy. Select the version and copy it instead.";
   });
-  return line;
+  const button = $('release-check');
+  button.addEventListener('click', () => { if (button.getAttribute('aria-disabled') !== 'true') { check(); } });
+  $('release-reload').addEventListener('click', () => win.location.reload());
+  const render = ({ phase, latest, error }) => {
+    const newer = latest && latest.version !== version;
+    $('release-newer').hidden = !newer;
+    if (newer) {
+      const next = releaseLine(latest.version, latest.builtAt, win.navigator?.language);
+      $('release-newer-id').textContent = next.id;
+      $('release-newer-date').textContent = next.date;
+    }
+    // Capture before hiding: browsers may clear activeElement as soon as Check disappears.
+    const hadFocus = doc.activeElement === button;
+    button.hidden = phase === 'installing' || phase === 'ready';
+    button.setAttribute('aria-disabled', String(phase === 'checking'));
+    button.setAttribute('aria-busy', String(phase === 'checking'));
+    button.textContent = phase === 'checking' ? 'Checking…' : 'Check for updates';
+    $('release-reload').hidden = phase !== 'ready';
+    $('release-result').textContent = error || ({
+      current: 'Up to date',
+      installing: 'Installing the new version…',
+      ready: 'A new version of the app is ready.',
+    }[phase] ?? '');
+    if (hadFocus && button.hidden) { $(phase === 'ready' ? 'release-reload' : 'release-result').focus(); }
+  };
+  return { ...line, render };
 }

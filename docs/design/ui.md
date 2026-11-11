@@ -2478,6 +2478,16 @@ characters of the commit the build was made from, `dev` for a local build) and t
 built, in the person's locale, with a Copy button; the build writes both to `config.js` and to a
 `version.json` the worker always fetches from the network, so Quality and the owner can say which
 build was tested.
+**Check for updates** (#1965) asks the existing release controller on a press only.
+It reads **Checking…**, aria-disabled and busy but still focusable (repeat presses do
+nothing), then says **Up to date**, **Installing the
+new version…**, **A new version of the app is ready.** with **Reload**, or **Couldn't
+check for updates.** in a polite live region. A differing published id appears as
+**Newer version** with its build date. Installation hides Check; only an observed
+activation/takeover offers Reload, which never runs on its own. If Check owns focus
+when hidden, focus goes to the installation result or, when ready, Reload; focus
+moved elsewhere stays there. Copy feedback is
+separate from the update result. Automatic checks and stalled installs stay on #1278.
 
 **An agent's row today** (the creative director's #784 words; #705's per-row names and
 verbs). Every state is words on the row, with at most one verb:

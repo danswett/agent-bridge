@@ -47,6 +47,7 @@ import { ForgetControl, CONFIRM_MS, vanished } from './forget.js';
 import { UpdateControl } from './update.js';
 import { DiagnoseControl } from './diagnostics.js';
 import { ReleaseWatch } from './release-watch.js';
+import { AppRelease } from './app-release.js';
 import { LastingBanner } from './banner-rule.js';
 import { UsageView } from './ui/usage-view.js';
 import { conceal, reveal, watchDisclosures, watchPresses } from './ui/motion.js';
@@ -78,7 +79,12 @@ const $ = (id) => document.getElementById(id);
 }
 // Settings > Keyboard check (#1209): what a hardware keyboard's keys reach the app as.
 mountKeyCheck();
-mountRelease({ version: APP_VERSION, builtAt: BUILT_AT });
+const appRelease = new AppRelease({
+  version: APP_VERSION,
+  fetchVersion: (...args) => fetch(...args),
+  onChange: (state) => releaseView?.render(state),
+});
+const releaseView = mountRelease({ version: APP_VERSION, builtAt: BUILT_AT, check: () => appRelease.check() });
 const params = new URLSearchParams(location.search);
 const BASE = RELAY || location.origin;
 
@@ -328,6 +334,19 @@ function registerServiceWorker() {
   };
   learn();
   navigator.serviceWorker.register('sw.js').then((reg) => {
+    // The first worker can already control the page while it is still activating.
+    let firstWorker = hadController ? null : navigator.serviceWorker.controller ?? reg.installing ?? reg.waiting;
+    const laterWorker = (worker) => {
+      if (!hadController && !navigator.serviceWorker.controller && worker) { firstWorker = worker; }
+      return worker === firstWorker ? null : worker;
+    };
+    appRelease.attach({
+      get installing() { return laterWorker(reg.installing); },
+      get waiting() { return laterWorker(reg.waiting); },
+      update: () => reg.update(),
+      addEventListener: (...args) => reg.addEventListener(...args),
+      removeEventListener: (...args) => reg.removeEventListener(...args),
+    });
     // Watched from the start, while the release in control is still being read: an install
     // that fails meanwhile is counted, and kept once the release is known.
     reg.addEventListener('updatefound', () => releases.watch(reg.installing));
@@ -340,7 +359,7 @@ function registerServiceWorker() {
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     releases.tookOver();
     learn();
-    if (hadController) { showStatus($('update-banner')); }
+    if (hadController) { appRelease.tookOver(); showStatus($('update-banner')); }
   });
   $('reload').onclick = () => location.reload();
   // A load is the browser's next try.
