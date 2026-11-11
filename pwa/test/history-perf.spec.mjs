@@ -125,8 +125,35 @@ test('a person who scrolled up is not taken back to the bottom as older turns ar
   await page.locator('.session[data-id="long-1"] .row-main').click();
   const pane = page.locator('.session-view[data-id="long-1"] .stream-scroll');
   await expect.poll(() => pane.locator('.history-turn').count()).toBeGreaterThan(12);
+  // Finish background fill before the gesture: a gesture during a pending draw is a separate case.
+  await expect(pane.locator('.history-turn')).toHaveCount(104);
+  await page.evaluate(() => {
+    const client = window.agentBridgeDemo.client;
+    const history = client.history.bind(client);
+    const gate = new Promise((resolve) => { window.releaseEarlierPage = resolve; });
+    client.history = async (id, options) => {
+      const result = await history(id, options);
+      // The page before the 105 held turns (the latest is not a history row).
+      if (id === 'long-1' && options?.before === 'h1.395') {
+        window.earlierPageIds = result.turns.map((t) => t.id);
+        await gate;
+      }
+      return result;
+    };
+  });
+  const rows = () => pane.locator('.history-turn').evaluateAll((els) => els.map((el) => el.dataset.turn));
+  const before = await rows();
   await pane.evaluate((el) => { el.dispatchEvent(new Event('wheel')); el.scrollTop = 0; });
-  const before = await pane.locator('.history-turn').count();
-  await expect.poll(() => pane.locator('.history-turn').count()).toBeGreaterThan(before + 20);
+  await expect.poll(() => page.evaluate(() => window.earlierPageIds?.length)).toBe(20);
+  expect(await rows()).toEqual(before);
+  const marker = pane.locator(`.history-turn[data-turn="${before[0]}"]`);
+  const top = () => marker.evaluate((el) => el.getBoundingClientRect().top);
+  const was = await top();
+  const added = await page.evaluate(() => {
+    window.releaseEarlierPage();
+    return window.earlierPageIds;
+  });
+  await expect.poll(rows).toEqual([...added, ...before]);
+  await expect.poll(async () => Math.abs((await top()) - was)).toBeLessThan(3);
   expect(await gap(page)).toBeGreaterThan(200);
 });
