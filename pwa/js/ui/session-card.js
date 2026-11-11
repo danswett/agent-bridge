@@ -629,7 +629,11 @@ export class SessionCard {
     e.speaker = h('p', { class: 'speaker' }, e.voice, e.agentLabel, e.agentAge);
     e.reasoningText = h('p', { class: 'plain' });
     e.reasoning = h('details', { class: 'reasoning', hidden: true }, h('summary', null, 'Show reasoning'), e.reasoningText);
-    e.reasoning.addEventListener('toggle', () => { e.reasoning.querySelector('summary').textContent = e.reasoning.open ? 'Hide reasoning' : 'Show reasoning'; });
+    e.reasoning.addEventListener('toggle', () => {
+      // Reading a disclosure spends any pending initial-history placement.
+      this.#placed = true;
+      e.reasoning.querySelector('summary').textContent = e.reasoning.open ? 'Hide reasoning' : 'Show reasoning';
+    });
     e.truncated = h('p', { class: 'note truncated', hidden: true }, 'Earlier text not shown: the response was longer than the machine sends.');
     e.dropped = h('p', { class: 'note dropped', hidden: true }, 'The main agent\'s latest response was left out: too long to send with its delegates.');
     e.response = h('div', { class: 'md response' });
@@ -1294,6 +1298,20 @@ export class SessionCard {
     e.pin.title = pinned ? 'Unpin' : 'Pin';
   }
 
+  // Only an explicit row choice starts over; browser-history restoration keeps its position.
+  #fromRow = false;
+
+  openFromRow(choose) {
+    const opening = !this.#selected;
+    this.#fromRow = true;
+    try { choose(); } finally { this.#fromRow = false; }
+    // Routing has now made the phone pane visible. No later pin can outlive a disclosure.
+    if (opening && this.#selected && this.viewing()) {
+      this.#follow.read();
+      this.#follow.after();
+    }
+  }
+
   // The row chosen, and its view the one shown.
   setSelected(selected) {
     if (selected === this.#selected) { return; }
@@ -1302,15 +1320,11 @@ export class SessionCard {
     if (selected) { this.els.open.setAttribute('aria-current', 'true'); } else { this.els.open.removeAttribute('aria-current'); }
     this.view.hidden = !selected;
     if (selected) {
-      this.#placed = false;
-      this.#follow.open();
+      if (this.#fromRow) {
+        this.#placed = false;
+        this.#follow.open();
+      }
       this.#openTurns();
-      // On phones the pushed pane becomes visible after selection returns.
-      requestAnimationFrame(() => {
-        if (!this.#selected) { return; }
-        this.#follow.read();
-        this.#follow.after();
-      });
     }
     // Shown again (a row chosen, the browser's Back or Forward): its header whole.
     if (selected) { this.collapse?.shown(); }

@@ -34,20 +34,20 @@ async function arrive(page, turn) {
 for (const arriving of [false, true]) {
   test(`opening and reopening a long session shows the latest reply${arriving ? ', including a row arriving after open' : ''} (#1646)`, async ({ page }) => {
     await page.addInitScript(() => { Object.defineProperty(navigator, 'standalone', { value: true }); });
-    await page.goto('?demo=1&static=1#/sessions');
+    await page.goto('?demo=1&static=1&delegates=1#/sessions');
     await page.waitForSelector('html[data-demo-ready]');
-    await page.evaluate(({ id, turns, response }) => {
+    await page.evaluate(({ id, turns, response, arriving }) => {
       const at = new Date().toISOString();
       window.agentBridgeDemo.host.historyDelayMs = 100;
       window.agentBridgeDemo.upsert({
-        id, agent: 'copilot', title: 'Long conversation', cwd: 'C:\\demo', status: 'idle',
+        id, agent: 'copilot', title: 'Long conversation', cwd: 'C:\\demo', status: arriving ? 'working' : 'idle',
         statusSince: at, startedAt: at, updatedAt: at, processId: 4300, question: null,
         activity: {
           turnCount: turns, longReplies: true, turn: `${id}-turn-${turns}`, responseTurn: `${id}-turn-${turns}`,
           userMessage: `Message ${turns}`, response,
         },
       });
-    }, { id: ID, turns: TURNS, response: reply(TURNS) });
+    }, { id: ID, turns: TURNS, response: reply(TURNS), arriving });
     const v = await open(page, ID);
     const pane = v.locator('.stream-scroll');
     await expect.poll(() => pane.locator('.history-turn').count()).toBeGreaterThan(20);
@@ -58,8 +58,28 @@ for (const arriving of [false, true]) {
 
     await pane.evaluate((el) => { el.dispatchEvent(new Event('touchmove')); el.scrollTop = 0; });
     await expect.poll(() => gap(pane)).toBeGreaterThan(400);
+    const restored = await pane.evaluate((el) => el.scrollTop);
+    await page.goBack();
+    await expect(v).toBeHidden();
+    await page.goForward();
+    await expect(v).toBeVisible();
+    await motionsDone(page);
+    expect(await pane.evaluate((el) => el.scrollTop)).toBe(restored);
     await go(page, 'sessions');
-    await open(page, ID);
+    if (arriving) {
+      const other = await open(page, 'demo-delegates');
+      await other.getByRole('tab', { name: 'Delegates' }).click();
+      await other.locator('.delegates-panel .delegate[data-id="demo-agent-suite"] .delegate-summary').click();
+      await expect.poll(() => page.evaluate(() => history.state?.delegate)).toBe('demo-agent-suite');
+      // Row navigation must wait for the delegate's history entry to be popped first.
+      const row = page.locator(`.session[data-id="${ID}"] .row-main`);
+      expect(await row.evaluate((el) => { el.click(); return el.getAttribute('aria-current'); })).toBe(null);
+      await expect(v).toBeVisible();
+      await expect(other).toBeHidden();
+      await expect(page.locator('.session[data-id="demo-delegates"] .row-main')).not.toHaveAttribute('aria-current', 'true');
+    } else {
+      await open(page, ID);
+    }
     if (arriving) { await arrive(page, TURNS + 1); }
     await expect.poll(() => gap(pane)).toBeLessThan(4);
     await expect(v.locator('.response p').last()).toBeInViewport();
@@ -71,5 +91,51 @@ for (const arriving of [false, true]) {
     const held = await pane.evaluate((el) => el.scrollTop);
     await arrive(page, TURNS + (arriving ? 2 : 1));
     expect(await pane.evaluate((el) => el.scrollTop)).toBe(held);
+  });
+}
+
+for (const disclosure of [false, true]) {
+  test(disclosure ? 'reasoning opened before the opening frame stays put, then response growth follows' : 'choosing an already selected row leaves its reading position alone', async ({ page }) => {
+    await page.setViewportSize({ width: 1100, height: 900 });
+    await page.goto('?demo=1&static=1#/sessions');
+    await page.waitForSelector('html[data-demo-ready]');
+    const id = '019a1b2c-codex-example';
+    await page.evaluate(({ id, disclosure }) => {
+      const d = window.agentBridgeDemo;
+      const s = d.host.get(id);
+      const long = Array.from({ length: 60 }, (_, i) => `Paragraph ${i + 1}.`).join('\n\n');
+      d.upsert({
+        ...s, status: 'working', question: null, updatedAt: new Date(Date.now() + 1000).toISOString(),
+        activity: { ...s.activity, response: disclosure ? 'Short.' : long, reasoning: disclosure ? long : null, userMessage: null, currentTool: null },
+      });
+    }, { id, disclosure });
+    const row = page.locator(`.session[data-id="${id}"] .row-main`);
+    const pane = page.locator(`.session-view[data-id="${id}"] .stream-scroll`);
+    if (disclosure) {
+      // The disclosure grows in the same task as opening, before any opening frame can run.
+      await row.evaluate((el) => {
+        el.click();
+        document.querySelector('.session-view[data-id="019a1b2c-codex-example"] details.reasoning').open = true;
+      });
+      await expect(pane).toContainText('Hide reasoning');
+      await motionsDone(page);
+      expect(await pane.evaluate((el) => el.scrollTop)).toBe(0);
+      await page.evaluate((id) => {
+        const d = window.agentBridgeDemo;
+        const s = d.host.get(id);
+        d.upsert({ ...s, activity: { ...s.activity, response: 'A new streamed response.\n\nAnother streamed paragraph.' }, updatedAt: new Date(Date.now() + 3000).toISOString() });
+      }, id);
+      await expect(pane).toContainText('A new streamed response.');
+      await expect.poll(() => gap(pane)).toBeLessThan(4);
+    } else {
+      await row.click();
+      await expect.poll(() => gap(pane)).toBeLessThan(4);
+      await pane.evaluate((el) => { el.scrollTop -= 80; });
+      await motionsDone(page);
+      const held = await pane.evaluate((el) => el.scrollTop);
+      await row.click();
+      await motionsDone(page);
+      expect(await pane.evaluate((el) => el.scrollTop)).toBe(held);
+    }
   });
 }
