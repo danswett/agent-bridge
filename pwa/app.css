@@ -401,6 +401,19 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 }
 .button.secondary { background: transparent; color: var(--ab-bridge); }
 .button:disabled, .button[aria-disabled="true"] { opacity: .55; cursor: default; }
+.keyboard-shortcuts-dialog {
+  width: min(640px, calc(100vw - 24px)); max-height: 90vh; overflow: auto; margin: auto;
+  color: var(--ab-text); background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card); padding: 16px;
+}
+.keyboard-shortcuts-dialog::backdrop { background: var(--ab-shell); opacity: .85; }
+.keyboard-shortcuts-dialog h2 { margin: 0 0 8px; }
+.keyboard-shortcuts-list { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 12px; }
+.keyboard-shortcuts-list dt { font-weight: 600; }
+.keyboard-shortcuts-list dd { margin: 0; overflow-wrap: anywhere; }
+.keyboard-help h3 { margin: 0 0 var(--ab-space-2); font-size: var(--type-section); line-height: var(--type-section-line); font-weight: 600; color: var(--ab-text2); }
+@media (forced-colors: active) {
+  .keyboard-shortcuts-dialog { color: CanvasText; background: Canvas; border-color: CanvasText; }
+}
 .feedback-dialog {
   width: min(720px, calc(100vw - 24px)); max-height: 90vh; overflow: auto; margin: auto;
   color: var(--ab-text); background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card);

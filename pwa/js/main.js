@@ -58,6 +58,7 @@ import { edgeSwipeBack, installedOnApple, markPlatform } from './platform.js';
 import { applyTextSize, readTextSize, saveTextSize } from './text-size.js';
 import { mountKeyCheck } from './ui/key-check-view.js';
 import { mountRelease } from './ui/release-view.js';
+import { mountKeyboardShortcuts } from './ui/keyboard-shortcuts.js';
 import { FeedbackDiagnostics, feedbackFailureMessage, isSensitiveFeedbackText, sendFeedbackBundle, serializeFeedbackBundle } from './feedback.js';
 
 // Installed on iOS or iPadOS, the edge swipe walks the same back stack as Android's Back.
@@ -83,6 +84,7 @@ const BASE = RELAY || location.origin;
 
 // The pages, the app bar and the navigation between them.
 const shell = new Shell();
+mountKeyboardShortcuts({ enabled: () => shell.signedIn });
 
 // Every machine's latest usage report, drawn as one row per allowance on the usage page, and as
 // one line under the sessions.
