@@ -12,9 +12,11 @@ test('help opens only by choice, traps focus and Escape returns to either opener
   await expect(dialog).toBeVisible();
   const close = dialog.getByRole('button', { name: 'Close', exact: true });
   await expect(close).toBeFocused();
-  await page.keyboard.press('Tab');
-  await page.keyboard.press('Tab');
-  await expect(close).toBeFocused();
+  for (const key of ['Tab', 'Tab', 'Shift+Tab', 'Shift+Tab']) {
+    await page.keyboard.press(key);
+    await expect.poll(() => dialog.evaluate((el) => el.contains(document.activeElement)),
+      { message: `Focus stays inside Keyboard shortcuts after ${key}` }).toBe(true);
+  }
   await expect(dialog.locator('dt')).toHaveText(['Move a row', "Open a row's menu", 'Open the selected session', 'Search', 'Close']);
   await expect(dialog.locator('dd').first()).toHaveText('Tab to its Move button, then Space, ↑ or ↓, Space. Or Alt+↑ / Alt+↓ on the row.');
   await expect(dialog.locator('dd').nth(1)).toHaveText('Shift+F10 or the menu key');
