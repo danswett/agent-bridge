@@ -946,20 +946,28 @@ public class MergeRuleTests
         Assert.Equal(names, listed);
     }
 
-    [Theory]
-    [InlineData("requested", false)]
-    [InlineData("in_progress", false)]
-    [InlineData("completed", true)]
-    public void Only_completed_workflow_runs_dispatch_the_merge_rule(string action, bool dispatches)
+    [Fact]
+    public void Started_and_completed_workflow_runs_dispatch_but_the_completed_only_trigger_fails_the_regression()
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
-        var stream = new YamlStream();
-        stream.Load(new StringReader(File.ReadAllText(Path.Combine(root, ".github", "workflows", "merge-rule.yml"))));
-        var on = (YamlMappingNode)((YamlMappingNode)stream.Documents[0].RootNode).Children[new YamlScalarNode("on")];
-        var trigger = (YamlMappingNode)on.Children[new YamlScalarNode("workflow_run")];
-        var types = ((YamlSequenceNode)trigger.Children[new YamlScalarNode("types")]).Children.Select(n => n.ToString());
+        const string CompletedOnlyAtF7c29898 = """
+            on:
+              workflow_run:
+                types: [completed]
+            """;
+        Assert.Throws<Xunit.Sdk.EqualException>(() => RequireStartAndCompletion(CompletedOnlyAtF7c29898));
+        RequireStartAndCompletion(File.ReadAllText(Path.Combine(root, ".github", "workflows", "merge-rule.yml")));
 
-        Assert.Equal(dispatches, types.Contains(action, StringComparer.Ordinal));
+        static void RequireStartAndCompletion(string yaml)
+        {
+            var stream = new YamlStream();
+            stream.Load(new StringReader(yaml));
+            var on = (YamlMappingNode)((YamlMappingNode)stream.Documents[0].RootNode).Children[new YamlScalarNode("on")];
+            var trigger = (YamlMappingNode)on.Children[new YamlScalarNode("workflow_run")];
+            var types = ((YamlSequenceNode)trigger.Children[new YamlScalarNode("types")]).Children.Select(n => n.ToString());
+
+            Assert.Equal(["in_progress", "completed"], types);
+        }
     }
 
     [Fact]
