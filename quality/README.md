@@ -599,7 +599,16 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      (`--pr N` for `pull_request_target`, `--sha` for `status`, `check_suite` and `workflow_run`),
      with no 45 second wait and no build: the evaluator is restored from a cache keyed by a hash of
      its source, and built (then saved) only when main changed it. Admission coalesces events per
-     head, separately from global sweeps (#1922); skipped events have unique admission keys.
+     head, separately from main sweeps, cron and dispatch (#1922, #2130); skipped events have unique admission keys.
+     Before joining the writer queue, cron checks for other queued, pending or waiting scoped
+     evaluations. It yields only to a positively identified fresh scoped job; a queue at least
+     30 minutes old, unreadable/incomplete API data, or an unknown queued job name lets it run
+     with a warning. Versioned job display names classify scoped evaluations versus sweeps;
+     this is a weak API classifier, so unknown names never suppress evaluation. Main sweeps,
+     dispatch and event runs bypass this check. Cron admission cannot displace a main sweep.
+     This adds one short read-only job per cron, four paginated run lists plus job lists for
+     active event runs, not a resolver job per event. Event cancellation and all triggers stay
+     unchanged; event-admission coalescing remains a follow-up.
      Every admitted writer then waits in the shared `merge-rule` job group with `queue: max`,
      reading main only after taking that lock. A scoped event cannot displace a sweep or another
      head; a newer sweep replaces only a pending sweep, and still judges every open PR. A scoped run that finds main not

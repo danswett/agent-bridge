@@ -1290,6 +1290,10 @@ public class MergeRuleTests
         };
 
         Assert.Equal(runs, IfExpression.Evaluate(condition, github));
+        github["needs.backstop.outputs.proceed"] = "false";
+        Assert.Equal(runs && eventName != "schedule", IfExpression.Evaluate(condition, github));
+        github["needs.backstop.outputs.proceed"] = null;
+        Assert.Equal(runs, IfExpression.Evaluate(condition, github));
         var document = (YamlMappingNode)stream.Documents[0].RootNode;
         var admission = Assert.IsType<YamlMappingNode>(document.Children[new YamlScalarNode("concurrency")]);
         var writer = (YamlMappingNode)job.Children[new YamlScalarNode("concurrency")];
@@ -1308,12 +1312,17 @@ public class MergeRuleTests
             github["github.event.check_suite.head_sha"] = eventName == "check_suite" ? head : null;
             github["github.event.check_suite.head_branch"] = branch;
             github["github.event.workflow_run.head_sha"] = eventName == "workflow_run" ? head : null;
-            var sweep = eventName is "schedule" or "workflow_dispatch" || eventName == "workflow_run" && branch == "main";
-            Assert.Equal(!runs ? "run-" + head : sweep ? "sweep" : head,
+            var sweep = eventName == "schedule" ? "backstop" : eventName == "workflow_dispatch" ? "dispatch"
+                : eventName == "workflow_run" && branch == "main" ? "sweep" : null;
+            Assert.Equal(!runs ? "run-" + head : sweep ?? head,
                 IfExpression.Value(group[(group.IndexOf("${{", StringComparison.Ordinal) + 3)..^2], github));
+            var name = Scalar(job, "name");
+            if (runs)
+                Assert.Equal(sweep is null ? "merge-rule-scoped-v1" : "merge-rule-sweep-v1",
+                    IfExpression.Value(name[3..^2], github));
         }
         github["vars.FLEET_MERGERULE"] = "off";
-        Assert.Equal(runs ? "sweep" : "run-head-b",
+        Assert.Equal(!runs ? "run-head-b" : eventName == "schedule" ? "backstop" : eventName == "workflow_dispatch" ? "dispatch" : "sweep",
             IfExpression.Value(group[(group.IndexOf("${{", StringComparison.Ordinal) + 3)..^2], github));
     }
 
@@ -1384,6 +1393,12 @@ public class MergeRuleTests
                 }
                 if (token == "!")
                     return !Truthy(Primary());
+                if (token == "cancelled")
+                {
+                    Assert.Equal("(", tokens[position++]);
+                    Assert.Equal(")", tokens[position++]);
+                    return false;
+                }
                 if (token.StartsWith('\''))
                     return token[1..^1].Replace("''", "'", StringComparison.Ordinal);
                 return context.TryGetValue(token, out var value) ? value : null;
