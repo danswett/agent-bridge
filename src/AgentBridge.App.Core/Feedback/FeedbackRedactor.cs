@@ -264,7 +264,7 @@ public static partial class FeedbackRedactor
     private static partial Regex EscapeSequence();
 
     [GeneratedRegex(@"(?<![\w-])(--?(?:[a-z0-9]{1,20}[-_]){0,3}(?:password|passwd|pwd|token|secret|api-?key)\s+)(?!\s*\[redacted\])(?!-)\S+", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeoutMs)]
-    private static partial Regex CliFlag();
+    internal static partial Regex CliFlag();
 
     [GeneratedRegex(@"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", RegexOptions.None, TimeoutMs)]
     private static partial Regex Email();
