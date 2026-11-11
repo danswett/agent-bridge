@@ -66,6 +66,27 @@ test(`a ${TURNS}-turn session scrolls within ${BUDGET_MS} ms of opening, and old
   expect(m.scrollGap).toBeLessThan(4);
 });
 
+test('host delivery latency is not charged to the client opening budget', async ({ page, browserName }) => {
+  await longSession(page, browserName);
+  await page.evaluate(() => { window.agentBridgeDemo.host.historyDelayMs = 400; });
+  const m = await openAndTime(page);
+  expect(m.firstScrollMs).toBeLessThan(BUDGET_MS);
+  expect(m.firstTurns).toBeLessThanOrEqual(5);
+  expect(m.scrollGap).toBeLessThan(4);
+});
+
+test('synchronous work during opening is still charged to the client budget', async ({ page, browserName }) => {
+  await longSession(page, browserName);
+  await page.evaluate((budget) => {
+    document.querySelector('.session[data-id="long-1"] .row-main').addEventListener('click', () => {
+      const until = performance.now() + budget;
+      while (performance.now() < until) { /* Deliberately block the opening task. */ }
+    }, { once: true });
+  }, BUDGET_MS + 50);
+  const m = await openAndTime(page);
+  expect(m.firstScrollMs).toBeGreaterThanOrEqual(BUDGET_MS);
+});
+
 // Opening shows the latest at the bottom and stays there until the person scrolls (#1646).
 const gap = (page) => page.evaluate(() => { const p = document.querySelector('.session-view[data-id="long-1"] .stream-scroll'); return p.scrollHeight - p.scrollTop - p.clientHeight; });
 
