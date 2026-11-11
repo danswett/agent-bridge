@@ -54,7 +54,7 @@ static partial class SelfTest
                 }
                 finally { button.Click -= clicked; }
             }
-            async Task Grow(bool pinned, string input, bool requireGrowth = false)
+            async Task Grow(bool pinned, string input)
             {
                 var before = scroll.VerticalOffset;
                 var extent = scroll.ScrollableHeight;
@@ -66,16 +66,20 @@ static partial class SelfTest
                     AppLog.Write($"latest {input} {i}: {scroll.VerticalOffset:0.##}/{scroll.ScrollableHeight:0.##}");
                     if (pinned ? !Bottom() : Math.Abs(scroll.VerticalOffset - before) > 1.5) { bad.Add($"{i}: {scroll.VerticalOffset:0}/{scroll.ScrollableHeight:0}"); }
                 }
-                if (requireGrowth)
-                {
-                    var grew = scroll.ScrollableHeight > extent + 1.5;
-                    check(grew, $"latest: twenty modifier-case appends grow the extent after {input} ({extent:0}/{scroll.ScrollableHeight:0})");
-                    if (!grew) { return; }
-                }
+                check(scroll.ScrollableHeight > extent + 1.5, $"latest: twenty appends grow the extent after {input} ({extent:0}/{scroll.ScrollableHeight:0})");
                 check(bad.Count == 0, $"latest: {(pinned ? "stays pinned" : "stays scrolled back")} through twenty appends after {input} ({string.Join("; ", bad)})");
             }
             foreach (var input in new[] { "wheel", "arrow", "thumb", "key" })
             {
+                if (input != "wheel")
+                {
+                    card = new SessionCardViewModel(original.Session, main.Local.Cards);
+                    view.Card = card;
+                    stored = card.Stored ?? throw new InvalidOperationException("latest: input case has no fresh history");
+                    check(await Until(() => stored.State != HistoryLoad.Loading, TimeSpan.FromSeconds(5)), "latest: fresh input history finishes loading");
+                    for (var n = 0; n < 300; n++) { stored.AddLive(StoredTurn(next++)); }
+                    await Still(scroll);
+                }
                 // Setup only. The action being tested below always travels through the real input path.
                 await LatestInput(window, scroll, input, up: true);
                 view.ReleasePin();
@@ -125,7 +129,7 @@ static partial class SelfTest
                 check(stored.Turns.Count + 40 < HistoryLimits.Kept, "latest: modifier appends remain below the history retention cap");
                 await Jump();
                 check(await LatestModifiedKey(window, scroll, up, modifier), $"latest: receives inert {modifier}+{up}");
-                await Grow(pinned: true, $"inert {modifier}+{up}", requireGrowth: true);
+                await Grow(pinned: true, $"inert {modifier}+{up}");
                 await Jump();
                 await LatestInput(window, scroll, "wheel", up: true);
                 await Still(scroll);
@@ -135,7 +139,7 @@ static partial class SelfTest
                 card.Update(card.Session with { Activity = (card.Session.Activity ?? new Activity()) with { Response = "A shorter reply." } });
                 await Still(scroll);
                 check(Bottom() && scroll.ScrollableHeight < before - 1.5, $"latest: shorter re-render clamps the released view after inert {modifier}+{down}");
-                await Grow(pinned: false, $"inert {modifier}+{down}, then shorter re-render", requireGrowth: true);
+                await Grow(pinned: false, $"inert {modifier}+{down}, then shorter re-render");
             }
         }
         finally { restoreFocus?.Invoke(); view.Card = original; }
@@ -180,11 +184,14 @@ static partial class SelfTest
         if (input == "key")
         {
             var seen = false;
+            var finished = false;
             var key = up ? VirtualKey.PageUp : VirtualKey.PageDown;
             var heard = new KeyEventHandler((_, e) => { if (e.Key == key) { seen = true; } });
+            var released = new KeyEventHandler((_, e) => { if (e.Key == key) { finished = true; } });
             scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
-            try { Press(window.Handle, key, foreground: false); return await Until(() => seen, TimeSpan.FromSeconds(2)); }
-            finally { scroll.RemoveHandler(UIElement.PreviewKeyDownEvent, heard); }
+            scroll.AddHandler(UIElement.KeyUpEvent, released, true);
+            try { Press(window.Handle, key, foreground: false); return await Until(() => seen && finished, TimeSpan.FromSeconds(2)); }
+            finally { scroll.RemoveHandler(UIElement.PreviewKeyDownEvent, heard); scroll.RemoveHandler(UIElement.KeyUpEvent, released); }
         }
         TrayIcon.SetForegroundWindow(window.Handle);
         var bar = Find<ScrollBar>(scroll).FirstOrDefault(b => b.Orientation == Orientation.Vertical && b.ActualHeight > 0);
@@ -213,6 +220,13 @@ static partial class SelfTest
             if (SendLatestMouse(1, packet, Marshal.SizeOf<LatestMouse>()) != 1) { throw new InvalidOperationException("latest: SendInput refused mouse input"); }
         }
         var received = false;
+        var operated = input == "wheel";
+        ScrollEventHandler operatedBar = (_, e) =>
+        {
+            if (input == "thumb" ? e.ScrollEventType == ScrollEventType.ThumbTrack
+                : e.ScrollEventType == (up ? ScrollEventType.SmallDecrement : ScrollEventType.SmallIncrement)) { operated = true; }
+        };
+        if (bar is not null) { bar.Scroll += operatedBar; }
         var routed = input == "wheel" ? UIElement.PointerWheelChangedEvent : UIElement.PointerPressedEvent;
         var pointer = new PointerEventHandler((_, _) => received = true);
         scroll.AddHandler(routed, pointer, true);
@@ -237,9 +251,9 @@ static partial class SelfTest
                 finally { Mouse(0x0004); }
             }
             await Task.Delay(400);
-            return received;
+            return received && operated;
         }
-        finally { scroll.RemoveHandler(routed, pointer); }
+        finally { scroll.RemoveHandler(routed, pointer); if (bar is not null) { bar.Scroll -= operatedBar; } }
     }
 
     [StructLayout(LayoutKind.Sequential)]
