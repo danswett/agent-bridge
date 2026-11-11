@@ -65,8 +65,11 @@ public sealed class HostRosterReader
             if (OperatingSystem.IsWindows())
             {
                 var acl = new FileInfo(full).GetAccessControl(AccessControlSections.Access | AccessControlSections.Owner);
-                var me = WindowsIdentity.GetCurrent().User!;
-                if (!me.Equals(acl.GetOwner(typeof(SecurityIdentifier))))
+                using var identity = WindowsIdentity.GetCurrent();
+                var me = identity.User!;
+                var owner = acl.GetOwner(typeof(SecurityIdentifier));
+                // Elevated tokens can give new files their default owner group rather than User.
+                if (!me.Equals(owner) && identity.Owner?.Equals(owner) != true)
                 {
                     throw new InvalidDataException();
                 }
@@ -106,6 +109,7 @@ public sealed class HostRosterReader
         }
         catch (FileNotFoundException) { return (null, null); }
         catch (DirectoryNotFoundException) { return (null, null); }
+        catch (InvalidDataException) { return (null, "pin-unreadable"); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException
             or ArgumentException or RosterFormatException or System.Security.SecurityException)
         {
