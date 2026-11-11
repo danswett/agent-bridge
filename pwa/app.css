@@ -1050,6 +1050,15 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
   .session-header .icon-button { width: var(--tap); height: var(--tap); }
   .view-tab { min-height: var(--tap); min-width: var(--tap); }
 }
+/* Shared text edges (#1893): retain the list's 20px inset and the session pane's 24px inset. */
+@media (min-width: 760px) {
+  .machine-tablist > .machine-tab:first-child { justify-content: flex-start; padding-left: 0; }
+  .session-header { grid-template-columns: minmax(0, 1fr) auto; }
+  .session-header .header-main { grid-column: 1; }
+  .session-header .header-actions { grid-column: 2; }
+  .view-tabs > .view-tab:first-child { padding-left: 0; }
+  .session-view .reply { margin-left: 0; }
+}
 .view-body { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; }
 .session-view[data-tab="conversation"] .inspector { display: none; }
 .session-view[data-tab="tools"] .conversation, .session-view[data-tab="details"] .conversation, .session-view[data-tab="delegates"] .conversation { display: none; }

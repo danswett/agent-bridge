@@ -10,7 +10,7 @@ for (const hasTouch of [false, true]) {
   test.describe(`shared pane text edges (#1893), ${hasTouch ? 'touch' : 'pointer'}`, () => {
     test.use({ hasTouch });
 
-    for (const width of [760, 820, 1180]) {
+    for (const width of [760, 820, 1180, 1920]) {
       test.describe(`${width} px`, () => {
         test.use({ viewport: { width, height: 900 } });
         test.beforeEach(async ({ page }) => {
@@ -36,6 +36,7 @@ for (const hasTouch of [false, true]) {
         test('the session title, first view tab text and reply box share the 24 px edge', async ({ page }) => {
           await page.locator('#session-list .row-main').first().click();
           const view = page.locator('.session-view:not([hidden])');
+          if (width >= 1280) { await view.locator('.inspector-button').click(); }
           const pane = await page.locator('#session-pane').boundingBox();
           expect.soft(await textLeft(view.locator('.session-title'))).toBeCloseTo(pane.x + 24, 1);
           expect.soft(await textLeft(view.locator('.view-tab').first())).toBeCloseTo(pane.x + 24, 1);
