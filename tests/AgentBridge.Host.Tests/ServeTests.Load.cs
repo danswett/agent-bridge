@@ -41,6 +41,10 @@ public sealed partial class ServeTests
         record = Result(await ch.RequestAsync("load.get", new { }));
         Assert.True(System.Text.Encoding.UTF8.GetByteCount(record.GetRawText()) <= 64 * 1024);
         Assert.Equal("partial", record.GetProperty("state").GetString());
+        var single = Reading() with { Sessions = new Dictionary<string, AgentBridge.Host.Core.Load.SessionLoad> { [""] = new(LoadState.Ok, 1, 1, 1) } };
+        var padding = SecureChannel.MaxMessageBytes - ProtocolJson.ByteCount(MachineLoadMapper.Map(single, loadTime.GetUtcNow(), TimeSpan.FromSeconds(15)));
+        loadReport = single with { Sessions = new Dictionary<string, AgentBridge.Host.Core.Load.SessionLoad> { [new string('a', padding)] = new(LoadState.Ok, 1, 1, 1) } };
+        Assert.Equal("partial", Result(await ch.RequestAsync("load.get", new { })).GetProperty("state").GetString());
         loadReport = null;
         Assert.Equal("unavailable", Result(await ch.RequestAsync("load.get", new { })).GetProperty("state").GetString());
     }
@@ -53,7 +57,7 @@ public sealed partial class ServeTests
         loadReport = Reading();
         Assert.Equal(25, Result(await ch.RequestAsync("load.subscribe", new { })).GetProperty("cpu").GetProperty("percent").GetDouble());
         Result(await ch.RequestAsync("load.subscribe", new { }));
-        Assert.Equal(1, loads.Subscribers);
+        await HostWait.UntilAsync(() => loads.Subscribers == 1, "one active load subscription", Patience);
         loads.Publish(loadReport);
         loadTime.Advance(TimeSpan.FromMilliseconds(999));
         loads.Publish(loadReport);
@@ -76,8 +80,8 @@ public sealed partial class ServeTests
         loadTime.Advance(TimeSpan.FromSeconds(2));
         loads.Publish(loadReport);
         await LoadQuietAsync(ch);
-        await ch.DisposeAsync();
-        await Fixture.EventuallyAsync(() => loads.Subscribers == 0);
+        await client.DisposeAsync();
+        await HostWait.UntilAsync(() => loads.Subscribers == 0, "load subscription cleanup", Patience);
     }
 
     static async Task LoadQuietAsync(SecureChannel ch)
@@ -110,7 +114,8 @@ public sealed partial class ServeTests
             Assert.Null(await service.HandleAsync(new LoadPipe(), op, JsonSerializer.SerializeToElement(new { })));
         }
         loadEnabled = true;
-        Assert.Null(await service.HandleAsync(new LoadPipe(), "load.get", JsonSerializer.SerializeToElement(new { })));
+        foreach (var op in new[] { "load.get", "load.subscribe", "load.unsubscribe", "load.update" })
+        { Assert.Null(await service.HandleAsync(new LoadPipe(), op, JsonSerializer.SerializeToElement(new { }))); }
         Assert.Equal("unknown op load.update", (await ch.RequestAsync("load.update", new { })).GetProperty("error").GetString());
     }
 

@@ -444,8 +444,8 @@ async Task<int> ServeAsync(HostHandover handover)
     var attempts = new AttemptLedger(Path.Combine(identity.Folder, "answer-attempts.json"), log: Log);
     await using var source = new SessionSource(options, processes, drivers: drivers, answerAttempted: attempts.IsClaimed);
     attempts.Changed += source.AnswerAttemptsChanged;
-    // Per-session process CPU and working set, one shared snapshot every 5 s (#1150). Local only:
-    // host.log gets a line at most once a minute; nothing is sent anywhere.
+    // Per-session process CPU and working set, one shared snapshot every 5 s (#1150).
+    // Relay load reads reuse it; host.log gets a line at most once a minute.
     await using var load = new AgentBridge.Host.Core.Load.ProcessLoadSampler(source, new AgentBridge.Host.Core.Load.SystemProcessTable());
     var lastLoadLog = DateTimeOffset.MinValue;
     load.Sampled += report =>
@@ -677,9 +677,12 @@ async Task<int> ServeAsync(HostHandover handover)
         log: Log);
     var fleetNames = new AgentBridge.Host.Fleet.FleetNames(identity.Folder);
     var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare, name: fleetNames.Get, log: Log);
+    var loadService = new LoadService(() => load.Current, () => settings.LoadEnabled, Log);
+    load.Sampled += loadService.Publish;
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log, peerUsage), launcher, transfers)
     {
         LoadEnabled = () => settings.LoadEnabled,
+        Load = loadService,
         Drivers = drivers,
         FleetNames = fleetNames,
         // Said in hello so a phone shows the machine read-only and why.
