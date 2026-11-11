@@ -115,10 +115,17 @@ public sealed record HostSettings(bool RemoteApproval)
 
     // What agents may do on this machine (#1295, design/agent-principals.md 5.1): off unless
     // turned on here, and off for everything whenever the section or the file cannot be read.
-    // Changed only at the machine; nothing consumes it yet.
+    // Changed only at the machine; agent launch policy reads it afresh before each check.
     public AgentPolicy Agents { get; init; } = AgentPolicy.Off;
 
     public IReadOnlyList<string> AgentsProblems { get; init; } = [];
+
+    // Keep settings and their diagnostics from one read, so no policy error can become a grant.
+    public static (AgentPolicy Policy, string? Problem) CurrentAgents(string folder)
+    {
+        var (settings, problem) = Load(folder);
+        return (settings.Agents, problem ?? (settings.AgentsProblems.Count == 0 ? null : string.Join("; ", settings.AgentsProblems)));
+    }
 
     // Every problem a section reported, for the log, config show, and config set's check.
     public IEnumerable<string> SectionProblems => LaunchProblems.Concat(HomeAssistantProblems).Concat(UsageProblems).Concat(DevBoxProblems).Concat(AgentMessagingProblems).Concat(AgentsProblems).Concat(PermissionProblems).Concat(SecurityProblems);

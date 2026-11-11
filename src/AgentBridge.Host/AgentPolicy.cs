@@ -10,8 +10,8 @@ namespace AgentBridge.Host;
 // limits). A section, or a nested object, that is not what it should be is Off too, and said.
 // A single bad key falls back to that key's own safe default, which is always the narrowest
 // value, so an error never widens a grant. Limits can only be lowered: the design's number is
-// both the default and the ceiling, and zero, a negative or anything above it is the default.
-// Unknown keys are said and ignored.
+// both the default and the ceiling. Invalid launch limits refuse launch rather than silently
+// using defaults; all four are required when launch is enabled. Unknown keys are said and ignored.
 public sealed record AgentPolicy
 {
     public const int DefaultCredentialDays = 7;
@@ -20,6 +20,7 @@ public sealed record AgentPolicy
     public static readonly AgentPolicy Off = new();
 
     public bool Enabled { get; init; }
+    public bool LaunchEnabled { get; init; }
     public int CredentialDays { get; init; } = DefaultCredentialDays;
     public string IssueLaunched { get; init; } = ScopeNone;
     public string IssueAdopted { get; init; } = ScopeNone;
@@ -40,6 +41,7 @@ public sealed record AgentPolicy
         if (section is not { } s || s.ValueKind == JsonValueKind.Null) { return (Off, problems); }
         if (s.ValueKind != JsonValueKind.Object) { return Denied(problems, "agents is not an object"); }
         var policy = Off;
+        JsonElement? launchLimits = null;
         var inboundLocal = AgentInboundPolicy.Off;
         var inboundRemote = AgentInboundPolicy.Off;
         foreach (var p in s.EnumerateObject())
@@ -47,6 +49,14 @@ public sealed record AgentPolicy
             switch (p.Name)
             {
                 case "enabled": policy = policy with { Enabled = Bool(p.Value, "agents.enabled", problems) }; break;
+                case "launch":
+                    if (!Object(p.Value, "agents.launch", problems, out var launch)) { return Denied(problems); }
+                    foreach (var l in launch.EnumerateObject())
+                    {
+                        if (l.Name == "enabled") { policy = policy with { LaunchEnabled = Bool(l.Value, "agents.launch.enabled", problems) }; }
+                        else { Unknown($"agents.launch.{l.Name}", problems); }
+                    }
+                    break;
                 case "credentialDays": policy = policy with { CredentialDays = Int(p.Value, "agents.credentialDays", 1, DefaultCredentialDays, DefaultCredentialDays, problems) }; break;
                 case "label":
                     policy = policy with { Label = Choice(p.Value, "agents.label", ["prefix", "none"], "prefix", problems) };
@@ -98,12 +108,14 @@ public sealed record AgentPolicy
                     break;
                 case "limits":
                     if (!Object(p.Value, "agents.limits", problems, out var limits)) { return Denied(problems); }
+                    launchLimits = limits;
                     policy = policy with { Limits = AgentPolicyLimits.Read(limits, problems) };
                     break;
                 default: Unknown($"agents.{p.Name}", problems); break;
             }
         }
-        return (policy with { InboundLocal = inboundLocal, InboundRemote = inboundRemote }, problems);
+        var parsedLimits = AgentLaunchLimits.Read(launchLimits, policy.LaunchEnabled, problems);
+        return (policy with { InboundLocal = inboundLocal, InboundRemote = inboundRemote, Limits = policy.Limits with { Launch = parsedLimits } }, problems);
     }
 
     static AgentInboundPolicy ReadInbound(JsonElement side, string path, bool remote, List<string> problems)
@@ -264,8 +276,9 @@ public sealed record AgentPolicyLimits
     public int ConversationMinutes { get; init; } = 60;
     public int PerPairPerMinute { get; init; } = 6;
     public int PerTargetPerMinute { get; init; } = 12;
-    public int LaunchesPerOriginPerHour { get; init; } = 3;
-    public int LaunchesPerMachinePerHour { get; init; } = 10;
+    public AgentLaunchLimits Launch { get; init; } = AgentLaunchLimits.Default;
+    public int LaunchesPerOriginPerHour => Launch.LaunchesPerOriginPerHour;
+    public int LaunchesPerMachinePerHour => Launch.LaunchesPerMachinePerHour;
 
     internal static AgentPolicyLimits Read(JsonElement limits, List<string> problems)
     {
@@ -281,8 +294,7 @@ public sealed record AgentPolicyLimits
                 case "conversationMinutes": result = result with { ConversationMinutes = AgentPolicy.Int(p.Value, path, 1, d.ConversationMinutes, d.ConversationMinutes, problems) }; break;
                 case "perPairPerMinute": result = result with { PerPairPerMinute = AgentPolicy.Int(p.Value, path, 1, d.PerPairPerMinute, d.PerPairPerMinute, problems) }; break;
                 case "perTargetPerMinute": result = result with { PerTargetPerMinute = AgentPolicy.Int(p.Value, path, 1, d.PerTargetPerMinute, d.PerTargetPerMinute, problems) }; break;
-                case "launchesPerOriginPerHour": result = result with { LaunchesPerOriginPerHour = AgentPolicy.Int(p.Value, path, 1, d.LaunchesPerOriginPerHour, d.LaunchesPerOriginPerHour, problems) }; break;
-                case "launchesPerMachinePerHour": result = result with { LaunchesPerMachinePerHour = AgentPolicy.Int(p.Value, path, 1, d.LaunchesPerMachinePerHour, d.LaunchesPerMachinePerHour, problems) }; break;
+                case "launchesPerOriginPerHour" or "launchesPerMachinePerHour" or "liveAgentLaunched" or "agentLaunchedIdleHours": break;
                 default: problems.Add($"{path} is not a setting; ignored"); break;
             }
         }
