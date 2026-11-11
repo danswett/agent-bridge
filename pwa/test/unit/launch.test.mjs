@@ -179,11 +179,25 @@ test('what a launch says matches its outcome, and a started session says where i
   assert.match(describeLaunch({ state: 'sending' }, { machineName: 'Desk' }).text, /on Desk/);
 });
 
+test('a busy reason keeps host advice once and adds advice only when absent', () => {
+  for (const [reason, text] of [
+    ['Busy: Codex in X is waiting for a person to answer whether to trust that folder, so nothing was launched. Try again in a couple of minutes.', 'Busy: Codex in X is waiting for a person to answer whether to trust that folder, so nothing was launched. Try again in a couple of minutes.'],
+    ['Held: discovery is waiting. Try again in a minute or two.', 'Held: discovery is waiting. Try again in a minute or two.'],
+    ['the host is preparing a departure', 'Not launched: the host is preparing a departure. Try again in a moment.'],
+    ['Busy: another launch is running', 'Busy: another launch is running. Try again in a moment.'],
+    ['the host is busy. TRY AGAIN later!', 'Not launched: the host is busy. TRY AGAIN later!'],
+    [null, 'Not launched: the machine is busy with another launch. Try again in a moment.'],
+    ['', 'Not launched: the machine is busy with another launch. Try again in a moment.'],
+  ]) {
+    assert.deepEqual(describeLaunch({ state: 'done', outcome: 'busy', reason }), { text, tone: 'warn' });
+  }
+});
+
 test('a resume the machine holds back while its discovery is held shows the waiting form, and another busy launch does not', () => {
   const held = 'Held: session discovery is waiting on an unrecognised copilot process (pid 4120), so whether that session is still running cannot be told yet. Try again in a minute or two.';
   const done = (answer, reason) => ({ state: 'done', outcome: 'busy', answer, reason });
   assert.deepEqual(describeLaunch(done({ resume: 's1' }, held), { machineName: 'Desk' }), { text: 'Desk is still finding its sessions. Try Launch again in a moment.', tone: 'progress' });
-  assert.match(describeLaunch(done({ workspace: 'B' }, held), { machineName: 'Desk' }).text, /^Not launched: Held:/);
+  assert.deepEqual(describeLaunch(done({ workspace: 'B' }, held), { machineName: 'Desk' }), { text: held, tone: 'warn' });
   assert.match(describeLaunch(done({ resume: 's1' }, 'another launch is running'), { machineName: 'Desk' }).text, /^Not launched: another launch/);
 });
 

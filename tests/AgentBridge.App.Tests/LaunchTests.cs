@@ -161,6 +161,24 @@ public sealed class LaunchTests : IAsyncLifetime
         Assert.Equal(2, requests.Distinct().Count());
     }
 
+    [Theory]
+    [InlineData("Busy: Codex in X is waiting for a person to answer whether to trust that folder, so nothing was launched. Try again in a couple of minutes.", "Busy: Codex in X is waiting for a person to answer whether to trust that folder, so nothing was launched. Try again in a couple of minutes.")]
+    [InlineData("Held: discovery is waiting. Try again in a minute or two.", "Held: discovery is waiting. Try again in a minute or two.")]
+    [InlineData("the host is preparing a departure", "Not launched: the host is preparing a departure. Try again in a moment.")]
+    [InlineData("Busy: another launch is running", "Busy: another launch is running. Try again in a moment.")]
+    [InlineData("the host is busy. TRY AGAIN later!", "Not launched: the host is busy. TRY AGAIN later!")]
+    [InlineData(null, "Not launched: the machine is busy with another launch. Try again in a moment.")]
+    [InlineData("", "Not launched: the machine is busy with another launch. Try again in a moment.")]
+    public async Task Busy_with_host_advice_is_not_repeated(string? reason, string expected)
+    {
+        outcome = _ => new LaunchResult(LaunchOutcome.Busy, reason);
+        ui.Post(launch.Launch);
+
+        await Wait.UntilAsync(() => launch.State == "busy", "busy");
+        Assert.Equal(expected, launch.StatusText);
+        Assert.Equal(Tone.Warn, launch.StatusTone);
+    }
+
     [Fact]
     public async Task A_launch_whose_response_is_lost_is_sent_again_with_the_same_request_and_starts_once()
     {
