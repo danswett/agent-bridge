@@ -10,7 +10,7 @@ import { ReadDwell } from '../read-dwell.js';
 import { ago } from './time.js';
 import { whileVisible } from './ticker.js';
 import { enter, leave, seen, select as showSelection, slide } from './motion.js';
-import { updateLine, lastLine, canCheck, canInstall, canUpdateNow, updateNowReason, RESTARTING } from '../update.js';
+import { updateLine, updateDetails, lastLine, canCheck, canInstall, canUpdateNow, updateNowReason, RESTARTING } from '../update.js';
 import { openUpdateNowSheet } from './update-now-sheet.js';
 import { signInDevicesLines } from '../signin-devices.js';
 import { BRAND } from '../brand.js';
@@ -971,7 +971,8 @@ function updateRow(updates, id, name, now) {
   const offerNow = !compact && updates.signs === true && canUpdateNow(s);
   const pressNow = offerNow && !busy && !asking;
   const why = !compact && updates.signs === true ? updateNowReason(s) : null;
-  const key = [said, last, note, busy, asking, check, install, offerNow, pressNow, why];
+  const details = updateDetails(s, now);
+  const key = [said, last, note, busy, asking, check, install, offerNow, pressNow, why, ...details];
   // Not disabled when it cannot be pressed: a disabled button loses focus, and the next draw
   // could not give it back. A press then does nothing (UpdateControl, and the host's own rules).
   const button = (cls, label, aria, can, onPress) => h('button', {
@@ -991,6 +992,7 @@ function updateRow(updates, id, name, now) {
       h('p', { class: 'machine-update-line' }, said),
       last ? h('p', { class: 'machine-update-last' }, last) : null,
       why ? h('p', { class: 'machine-update-why' }, why) : null,
+      ...details.map((text) => h('p', { class: 'machine-update-detail' }, text)),
       note ? h('p', { class: 'machine-error', role: 'alert' }, note) : null,
       s.installer ? h('div', { class: 'machine-actions machine-update-actions' },
         compact && !s.available ? h('a', {

@@ -34,6 +34,8 @@ const obj = (v) => (v !== null && typeof v === 'object' && !Array.isArray(v) ? v
 // A code (UpdateProtocol.IsCode): a short lowercase word or words joined by '-'.
 const code = (v) => (typeof v === 'string' && /^[a-z-]{1,32}$/.test(v) ? v : null);
 const count = (v) => (Number.isSafeInteger(v) && v >= 0 ? Math.min(v, BUSY_MOST) : 0);
+const timestamp = (v) => (typeof v === 'string' && Number.isFinite(Date.parse(v)) ? v : null);
+const quota = (v) => (Number.isInteger(v) && v >= 0 && v <= 2147483647 ? v : null);
 
 function readResult(raw) {
   const r = obj(raw);
@@ -94,6 +96,8 @@ export function nowArgs({ release, accept = null }) {
 export function readUpdateState(raw) {
   const s = obj(raw) ?? {};
   const progress = typeof s.progress === 'number' && Number.isFinite(s.progress) ? Math.max(0, Math.min(100, Math.round(s.progress))) : null;
+  const quotaAt = timestamp(s.gitHubQuotaAt);
+  const remaining = quotaAt ? quota(s.gitHubRemaining) : null;
   return {
     current: str(s.current),
     installer: s.installer === true,
@@ -101,6 +105,9 @@ export function readUpdateState(raw) {
     available: str(s.available),
     notes: str(s.notes),
     checkedAt: str(s.checkedAt),
+    checkSource: ['cdn', 'github'].includes(s.checkSource) ? s.checkSource : null,
+    gitHubRemaining: remaining,
+    gitHubQuotaAt: remaining === null ? null : quotaAt,
     // An unknown phase reads as idle: nothing to wait on.
     phase: PHASES.includes(s.phase) ? s.phase : 'idle',
     progress,
@@ -116,6 +123,25 @@ export function readUpdateState(raw) {
     requestNow: s.requestNow === true,
     waitingCode: code(s.waitingCode),
   };
+}
+
+// Product's secondary discovery detail (#927); quota is a past observation, not an allowance now.
+export function updateDetails(s, now = Date.now()) {
+  const age = (value) => {
+    const at = timestamp(value);
+    return at ? Math.max(0, Math.floor((now - Date.parse(at)) / 60000)) : null;
+  };
+  const words = (minutes) => minutes < 1 ? 'under a minute' : `${minutes} min`;
+  const source = s?.checkSource === 'cdn' ? 'the release feed' : s?.checkSource === 'github' ? 'GitHub' : null;
+  const checked = age(s?.checkedAt);
+  const remaining = quota(s?.gitHubRemaining);
+  const observed = age(s?.gitHubQuotaAt);
+  const lines = [];
+  if (source && checked !== null) { lines.push(`Update list from ${source}, ${words(checked)} old`); }
+  if (remaining !== null && observed !== null) {
+    lines.push(`When last asked, GitHub allowed ${remaining === 0 ? 'no more checks' : `${remaining} more checks`} (${words(observed)} ago)`);
+  }
+  return lines;
 }
 
 // update.check's and update.install's result. An unknown outcome reads as refused.

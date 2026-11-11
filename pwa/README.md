@@ -599,6 +599,11 @@ span in a sentence this way, and NEL and the separators in prose.
 
 ## Tests
 
+Update discovery details (#927) are read and worded in `js/update.js`, separately from the
+Machines card's status and actions. Valid metadata adds the original update-list age and the
+historical direct GitHub quota with its own age; missing data adds nothing. Reader cases are
+in `test/unit/update.test.mjs`, and independent detail redraws in `test/machines.spec.mjs`.
+
 Settings > Reply box keeps Return key in replies on this device only (#1877): New line
 is the default; Send uses Return, with Shift+Return for a new line. Ctrl/Cmd+Return
 still sends, IME never sends, and phone-size touch Return always makes a new line.

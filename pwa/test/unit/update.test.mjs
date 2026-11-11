@@ -14,6 +14,34 @@ import { fromBase64url } from '../../js/blobs.js';
 const NOW = Date.parse('2026-11-02T18:00:00.000Z');
 const found = readUpdateState({ current: '0.4.0', installer: true, available: '0.5.0', checkedAt: '2026-11-02T17:55:00.000Z', phase: 'idle' });
 
+test('update discovery keeps the successful source and historical direct quota, including zero', () => {
+  for (const remaining of [43, 0]) {
+    const s = readUpdateState({ checkSource: 'cdn', gitHubRemaining: remaining, gitHubQuotaAt: '2026-11-02T17:55:00Z' });
+    assert.equal(s.checkSource, 'cdn');
+    assert.equal(s.gitHubRemaining, remaining);
+    assert.equal(s.gitHubQuotaAt, '2026-11-02T17:55:00Z');
+  }
+  assert.equal(readUpdateState({ checkSource: 'github' }).checkSource, 'github');
+});
+
+test('unknown discovery data stays unknown instead of becoming a fresh or zero quota', () => {
+  const missing = readUpdateState({});
+  assert.equal(missing.checkSource, null);
+  assert.equal(missing.gitHubRemaining, null);
+  assert.equal(missing.gitHubQuotaAt, null);
+  assert.equal(readUpdateState({ checkSource: '__proto__' }).checkSource, null);
+  for (const gitHubRemaining of [-1, 1.5, '43', Infinity, 2147483648, null]) {
+    const s = readUpdateState({ gitHubRemaining, gitHubQuotaAt: '2026-11-02T17:55:00Z' });
+    assert.equal(s.gitHubRemaining, null);
+    assert.equal(s.gitHubQuotaAt, null);
+  }
+  for (const gitHubQuotaAt of [null, 0, 'not a time']) {
+    const s = readUpdateState({ gitHubRemaining: 43, gitHubQuotaAt });
+    assert.equal(s.gitHubRemaining, null);
+    assert.equal(s.gitHubQuotaAt, null);
+  }
+});
+
 test('a state from a newer host reads safely: an unknown phase as idle and an unknown outcome as failed', () => {
   const s = readUpdateState({ installer: true, phase: 'rebooting', progress: 140, last: { outcome: 'rolled-back', at: '2026-11-02T18:00:00.000Z' } });
   assert.equal(s.phase, 'idle');
