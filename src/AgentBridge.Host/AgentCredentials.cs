@@ -214,6 +214,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         lock (gate)
         {
             if (problem is not null) { throw new InvalidOperationException("agent credentials are unavailable"); }
+            log($"agent credentials: issuing script credential {credential.Id} for {credential.Principal}");
             Prune(now);
             if (problem is not null) { throw new InvalidOperationException("agent credentials are unavailable"); }
             if (records.Count >= MaxCredentials) { throw new InvalidOperationException("too many live agent credentials"); }
@@ -221,7 +222,6 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             {
                 throw new InvalidOperationException("two script credentials are already live for this name; revoke before minting another");
             }
-            log($"agent credentials: issuing script credential {credential.Id} for {credential.Principal}");
             var folder = PrivateFolder.Ensure(Path.Combine(Path.GetDirectoryName(path)!, "script-credentials"),
                 "the script credential folder", "no script credential is issued");
             // Hashing the validated principal also keeps case-distinct names distinct on Windows.

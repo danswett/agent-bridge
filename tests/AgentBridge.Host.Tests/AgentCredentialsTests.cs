@@ -247,19 +247,29 @@ public sealed class AgentCredentialsTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void A_logging_failure_issues_nothing_and_leaves_the_rotation_slot_available(bool rotating)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void A_logging_failure_issues_nothing_and_leaves_the_rotation_slot_available(bool rotating, bool expired)
     {
         var clock = new Clock(Started);
         var existing = rotating ? Store(clock).MintScript("pump").Path : null;
+        if (expired)
+        {
+            Store(clock).Mint("expired", "launch", 100, Started, AgentProtocol.ScopeRead, lifetime: TimeSpan.FromHours(1));
+            clock.Now = Started.AddHours(2);
+        }
+        var count = Store(clock).Count;
         var before = existing is null ? null : File.ReadAllBytes(existing);
         var verifier = Path.Combine(root, AgentCredentials.FileName);
         var hashes = File.Exists(verifier) ? File.ReadAllBytes(verifier) : null;
-        var store = new AgentCredentials(root, "machine1", clock, _ => throw new IOException("synthetic log failure"));
+        var store = new AgentCredentials(root, "machine1", clock, line =>
+        {
+            if (line.Contains("issuing script credential", StringComparison.Ordinal)) { throw new IOException("synthetic log failure"); }
+        });
         Assert.Throws<IOException>(() => store.MintScript("pump"));
-        Assert.Equal(rotating ? 1 : 0, store.Count);
-        Assert.Equal(rotating ? 1 : 0, Store(clock).Count);
+        Assert.Equal(count, store.Count);
+        Assert.Equal(count, Store(clock).Count);
         if (existing is not null)
         {
             Assert.True(before!.SequenceEqual(File.ReadAllBytes(existing)));
