@@ -1,4 +1,3 @@
-using AgentBridge.Host;
 using Xunit;
 
 namespace AgentBridge.Host.Tests;
@@ -11,15 +10,13 @@ public sealed class HaInventoryTests
     {
         var output = new StringWriter();
         var error = new StringWriter();
-        var code = HaCommands.Run(["ha", "inventory"], folder,
-            () => throw new InvalidOperationException("Inventory must not ask for a secret"),
-            output, error, devBuild: true,
-            agentHaBridge: () => throw new InvalidOperationException("Inventory must not inspect running clients"));
-        return (code, output.ToString(), error.ToString());
+        var code = HaCommands.TryInventoryCommand(["ha", "--profile", Path.GetFileName(folder), "inventory"],
+            Path.GetDirectoryName(folder)!, output, error);
+        return (code ?? throw new InvalidOperationException("Inventory was not dispatched"), output.ToString(), error.ToString());
     }
 
     [Fact]
-    public void An_absent_profile_is_reported_without_creating_it()
+    public void Inventory_dispatch_reports_an_absent_profile_without_creating_an_identity()
     {
         using var fixture = new Fixture();
         var folder = Path.Combine(fixture.Root, "absent");
@@ -37,7 +34,7 @@ public sealed class HaInventoryTests
     public void Present_artifacts_are_not_opened_decrypted_printed_or_changed_even_when_corrupt()
     {
         using var fixture = new Fixture();
-        var files = Artifacts.Concat(["config.json", "key.json", "account.json"])
+        var files = Artifacts.Concat(["config.json", "intake.json", "key.json", "account.json"])
             .ToDictionary(name => name, name => System.Text.Encoding.UTF8.GetBytes("private-fixture-content-" + name));
         var locks = new List<FileStream>();
         try
@@ -54,6 +51,7 @@ public sealed class HaInventoryTests
             Assert.Empty(error);
             foreach (var name in Artifacts) { Assert.Contains($"{name}: present", text); }
             Assert.DoesNotContain("private-fixture-content", text + error);
+            Assert.DoesNotContain("intake.json", text + error);
             Assert.DoesNotContain("key.json", text + error);
             Assert.DoesNotContain("account.json", text + error);
             Assert.Contains("not checked", text);
@@ -94,5 +92,28 @@ public sealed class HaInventoryTests
         Assert.Equal(before, Inventory(second));
         Assert.Empty(Directory.GetFiles(first));
         Assert.Equal("private-fixture-content", File.ReadAllText(Path.Combine(second, "ha-token")));
+    }
+
+    [Theory]
+    [InlineData("..")]
+    [InlineData(@"..\outside")]
+    public void Inventory_dispatch_refuses_a_profile_path_without_reading_or_creating_it(string profile)
+    {
+        using var fixture = new Fixture();
+        var error = new StringWriter();
+        Assert.Equal(2, HaCommands.TryInventoryCommand(["ha", "inventory", "--profile", profile],
+            fixture.Root, new StringWriter(), error));
+        Assert.Contains("profile name", error.ToString());
+        Assert.Empty(Directory.GetFileSystemEntries(fixture.Root));
+    }
+
+    [Fact]
+    public void Inventory_dispatch_never_dispatches_credential_writes()
+    {
+        using var fixture = new Fixture();
+        var error = new StringWriter();
+        Assert.Null(HaCommands.TryInventoryCommand(["ha", "token", "clear"], fixture.Root, new StringWriter(), error));
+        Assert.Empty(error.ToString());
+        Assert.Empty(Directory.GetFileSystemEntries(fixture.Root));
     }
 }
