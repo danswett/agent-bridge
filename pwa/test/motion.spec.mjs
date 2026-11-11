@@ -117,8 +117,9 @@ async function desktopTour(page) {
   await expect(copilot.locator('.inspector')).toBeHidden();
   await copilot.locator('.inspector-button').click();
   await expect(copilot.locator('.inspector')).toBeVisible();
-  await upsert(page, CODEX, { status: 'working', statusSince: later(), updatedAt: later() });
+  await upsert(page, CODEX, { status: 'working', statusSince: later(), updatedAt: later(), activity: { turn: 'motion-reply', responseTurn: 'motion-reply', response: 'A new reply.' } });
   await expect(row(page, CODEX).locator('.glyph')).toHaveAttribute('data-glyph', 'working');
+  await expect(row(page, CODEX).locator('.unread-dot')).toBeVisible();
   await upsert(page, 'demo-motion', { agent: 'copilot', title: 'Arrives and goes', status: 'idle', startedAt: later(), updatedAt: later() });
   await expect(row(page, 'demo-motion')).toHaveCount(1);
   await page.evaluate(() => window.agentBridgeDemo.remove('demo-motion'));
