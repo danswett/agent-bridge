@@ -52,6 +52,7 @@ export function cameBack() {
 export function watchFocusRing(doc = globalThis.document, win = globalThis) {
   page = doc;
   doc.addEventListener('keydown', () => {
+    doc.documentElement.dataset.keyboardSeen = '';
     moved = 'key';
     // A key pressed where a press left focus shows it there, as browsers do.
     mark(doc.activeElement);

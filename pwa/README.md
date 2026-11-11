@@ -599,6 +599,15 @@ span in a sentence this way, and NEL and the separators in prose.
 
 ## Tests
 
+The session row menu (#1580, #1209 rule 3) shows Alt+Up/Down as trailing arrow-key
+hints, described separately from each item's name. Hints hide only with no hover,
+a coarse pointer and no keydown since page load. Disabled moves stay visible and
+keyboard-reachable with a second-line reason: switch to Your order, clear the
+search or machine filter, already at the top, or already at the bottom. An unfinished
+snapshot asks to wait for the session list instead of claiming a group edge. They do
+nothing and keep the menu open. `test/order.spec.mjs` covers these states in
+Chromium and WebKit; this is not evidence that the held real-iPad check passed.
+
 Closed questions keep one read-only disclosure at the question's place in the conversation,
 including answers at the terminal or another device, cancellation and session end (#1601).
 The latest 20 stay without a timer; reloading uses the host's history, never a cached refusal.

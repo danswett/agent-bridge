@@ -4,6 +4,8 @@
 import { h } from './dom.js';
 import { enter, leave } from './motion.js';
 
+let nextDescription = 0;
+
 export class RowMenu {
   #el = null;
   #back = null;
@@ -12,7 +14,8 @@ export class RowMenu {
 
   get open() { return !!this.#el; }
 
-  // anchor: the element the menu is drawn in (positioned). items: [{ label, disabled, run }].
+  // anchor: the element the menu is drawn in (positioned).
+  // items: [{ label, disabled, shortcut, reason, run }]; a reason keeps a disabled item focusable.
   // back: what gets focus when the menu closes.
   // trigger: the button that opened it, if it is one (aria-expanded follows the menu, and a press
   // on it is its own to handle, not an outside press that closes the menu just before it reopens).
@@ -21,11 +24,23 @@ export class RowMenu {
     this.#back = back;
     this.#trigger = trigger;
     trigger?.setAttribute('aria-expanded', 'true');
-    const buttons = items.map((it) => h('button', {
-      type: 'button', role: 'menuitem', class: 'row-menu-item', disabled: it.disabled ? true : null,
-      onclick: () => { this.close(); it.run(); },
-    }, it.label));
-    const el = h('div', { class: 'row-menu', role: 'menu', 'aria-label': label }, ...buttons);
+    const buttons = [];
+    const entries = items.map((it) => {
+      const keyId = it.shortcut ? `row-menu-description-${++nextDescription}` : null;
+      const reasonId = it.reason ? `row-menu-description-${++nextDescription}` : null;
+      const button = h('button', {
+        type: 'button', role: 'menuitem', class: 'row-menu-item',
+        disabled: it.disabled && !it.reason ? true : null,
+        'aria-disabled': it.disabled ? 'true' : null,
+        'aria-describedby': [keyId, reasonId].filter(Boolean).join(' ') || null,
+        onclick: () => { if (it.disabled) { return; } this.close(); it.run(); },
+      }, h('span', { class: 'row-menu-label' }, it.label));
+      buttons.push(button);
+      return h('div', { class: 'row-menu-entry', role: 'none' }, button,
+      keyId ? h('span', { class: 'row-menu-key', id: keyId, 'aria-hidden': 'true' }, it.shortcut) : null,
+      reasonId ? h('span', { class: 'row-menu-reason', id: reasonId, 'aria-hidden': 'true' }, it.reason) : null);
+    });
+    const el = h('div', { class: 'row-menu', role: 'menu', 'aria-label': label }, ...entries);
     el.addEventListener('keydown', (e) => {
       const live = buttons.filter((b) => !b.disabled);
       const i = live.indexOf(document.activeElement);
@@ -54,7 +69,7 @@ export class RowMenu {
     // Menu (ui.md §5.3): it settles in from its anchor, and is usable as it does.
     enter(el, 'menu', { dy: up ? 1 : -1 });
     el.scrollIntoView?.({ block: 'nearest' });
-    (buttons.find((b) => !b.disabled) ?? el).focus?.();
+    (buttons.find((b) => !b.disabled && b.getAttribute('aria-disabled') !== 'true') ?? buttons.find((b) => !b.disabled) ?? el).focus?.();
   }
 
   close(refocus = true) {
