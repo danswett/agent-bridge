@@ -1291,6 +1291,10 @@ public class MergeRuleTests
         };
 
         Assert.Equal(runs, IfExpression.Evaluate(condition, github));
+        github["needs.backstop.outputs.proceed"] = "false";
+        Assert.Equal(runs && eventName != "schedule", IfExpression.Evaluate(condition, github));
+        github["needs.backstop.outputs.proceed"] = null;
+        Assert.Equal(runs, IfExpression.Evaluate(condition, github));
         var document = (YamlMappingNode)stream.Documents[0].RootNode;
         var admission = Assert.IsType<YamlMappingNode>(document.Children[new YamlScalarNode("concurrency")]);
         var writer = (YamlMappingNode)job.Children[new YamlScalarNode("concurrency")];
@@ -1309,13 +1313,40 @@ public class MergeRuleTests
             github["github.event.check_suite.head_sha"] = eventName == "check_suite" ? head : null;
             github["github.event.check_suite.head_branch"] = branch;
             github["github.event.workflow_run.head_sha"] = eventName == "workflow_run" ? head : null;
-            var sweep = eventName is "schedule" or "workflow_dispatch" || eventName == "workflow_run" && branch == "main";
-            Assert.Equal(!runs ? "run-" + head : sweep ? "sweep" : head,
+            var sweep = eventName == "schedule" ? "backstop" : eventName == "workflow_dispatch" ? "dispatch"
+                : eventName == "workflow_run" && branch == "main" ? "sweep" : null;
+            Assert.Equal(!runs ? "run-" + head : sweep ?? head,
                 IfExpression.Value(group[(group.IndexOf("${{", StringComparison.Ordinal) + 3)..^2], github));
+            var name = Scalar(job, "name");
+            if (runs)
+                Assert.Equal(sweep is null ? "merge-rule-scoped-v1" : "merge-rule-sweep-v1",
+                    IfExpression.Value(name[3..^2], github));
         }
         github["vars.FLEET_MERGERULE"] = "off";
-        Assert.Equal(runs ? "sweep" : "run-head-b",
+        Assert.Equal(!runs ? "run-head-b" : eventName == "schedule" ? "backstop" : eventName == "workflow_dispatch" ? "dispatch" : "sweep",
             IfExpression.Value(group[(group.IndexOf("${{", StringComparison.Ordinal) + 3)..^2], github));
+    }
+
+    [Theory]
+    [InlineData("skipped", false, true)]
+    [InlineData("skipped", true, false)]
+    [InlineData("failure", false, true)]
+    public void An_event_evaluates_when_the_cron_only_backstop_is_skipped(string result, bool cancelled, bool runs)
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var yaml = new YamlStream();
+        yaml.Load(new StringReader(File.ReadAllText(Path.Combine(root, ".github", "workflows", "merge-rule.yml"))));
+        var jobs = (YamlMappingNode)((YamlMappingNode)yaml.Documents[0].RootNode)["jobs"];
+        var condition = ((YamlMappingNode)jobs["evaluate"])["if"].ToString();
+        Assert.Contains("!cancelled()", condition);
+        var context = new Dictionary<string, string?>
+        {
+            ["github.event_name"] = "pull_request_target",
+            ["needs.backstop.result"] = result,
+            ["cancelled"] = cancelled ? "true" : "false",
+        };
+        Assert.Equal(runs, IfExpression.EvaluateJob(condition, context));
+        Assert.False(IfExpression.EvaluateJob(condition.Replace("!cancelled() && ", "", StringComparison.Ordinal), context));
     }
 
     /// <summary>
@@ -1326,6 +1357,12 @@ public class MergeRuleTests
     static class IfExpression
     {
         public static bool Evaluate(string condition, IReadOnlyDictionary<string, string?> context) => Truthy(Value(condition, context));
+
+        public static bool EvaluateJob(string condition, IReadOnlyDictionary<string, string?> context) =>
+            (Regex.IsMatch(condition, @"\b(always|cancelled|failure|success)\s*\(")
+             || context.TryGetValue("needs.backstop.result", out var result) && result == "success"
+             && !(context.TryGetValue("cancelled", out var cancelled) && cancelled == "true"))
+            && Evaluate(condition, context);
 
         public static object? Value(string condition, IReadOnlyDictionary<string, string?> context)
         {
@@ -1385,6 +1422,12 @@ public class MergeRuleTests
                 }
                 if (token == "!")
                     return !Truthy(Primary());
+                if (token == "cancelled")
+                {
+                    Assert.Equal("(", tokens[position++]);
+                    Assert.Equal(")", tokens[position++]);
+                    return context.TryGetValue("cancelled", out var cancelled) && cancelled == "true";
+                }
                 if (token.StartsWith('\''))
                     return token[1..^1].Replace("''", "'", StringComparison.Ordinal);
                 return context.TryGetValue(token, out var value) ? value : null;
