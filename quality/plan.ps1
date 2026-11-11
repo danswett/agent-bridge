@@ -40,7 +40,8 @@ param(
     [switch] $CompareRing1,
     # Jobs a ring-2 run gives true only when ring 1 selected them for a reason of their own, not
     # because the whole ring runs (#1249, #1910: app and installer on pull requests and main
-    # pushes). Manual whole-ring runs leave this empty and still run every job.
+    # pushes with a proven base). Unknown-base pushes and manual whole-ring runs leave this
+    # empty and still run every job.
     [string[]] $Narrow = @(),
     # Platforms product doesn't run on this event (#1249: win-arm64 runs on main, not on a pull
     # request head). The app job still packages both architectures whenever it runs.

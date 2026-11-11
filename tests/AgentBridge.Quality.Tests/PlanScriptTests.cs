@@ -27,8 +27,20 @@ public class PlanScriptTests
     [InlineData("push", "Directory.Build.props", true, true)]
     [InlineData("push", ".github/actions/install-trivy/action.yml", true, true)]
     [InlineData("workflow_dispatch", ".github/workflows/merge-rule.yml", true, true)]
-    public async Task The_workflows_plan_selects_the_installer_only_with_its_app_input(
-        string eventName, string changed, bool packages, bool wholeRing)
+    public Task The_workflows_plan_selects_the_installer_only_with_its_app_input(
+        string eventName, string changed, bool packages, bool wholeRing) =>
+        CheckPlan(eventName, changed, packages, wholeRing);
+
+    [Theory]
+    [InlineData("docs/guide.md", false)]
+    [InlineData("docs/guide.md", true)]
+    [InlineData(".github/workflows/merge-rule.yml", false)]
+    [InlineData(".github/workflows/merge-rule.yml", true)]
+    public Task A_push_without_a_proven_base_packages_an_earlier_untested_app_change(
+        string changed, bool runsUnreadable) => CheckPlan("push", changed, true, true, runsUnreadable);
+
+    static async Task CheckPlan(
+        string eventName, string changed, bool packages, bool wholeRing, bool? runsUnreadable = null)
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
         var folder = Fixture.ScratchFolder();
@@ -40,6 +52,8 @@ public class PlanScriptTests
             var steps = (YamlSequenceNode)((YamlMappingNode)jobs["plan"])["steps"];
             var select = steps.Children.Cast<YamlMappingNode>().Single(step =>
                 step.Children.TryGetValue(new YamlScalarNode("id"), out var id) && id.ToString() == "select");
+            var whole = steps.Children.Cast<YamlMappingNode>().Single(step =>
+                step.Children.TryGetValue(new YamlScalarNode("id"), out var id) && id.ToString() == "whole-ring");
             Write("quality/plan.ps1", File.ReadAllText(Path.Combine(root, "quality", "plan.ps1")));
             Write("src/AgentBridge.App/App.csproj", "<Project />");
             Write("quality/catalog.yml", """
@@ -96,6 +110,11 @@ public class PlanScriptTests
 
             ChangedFiles.Git(folder, "init", "-q", "-b", "main");
             Commit("base", "quality/plan.ps1", "quality/catalog.yml", "src/AgentBridge.App/App.csproj");
+            if (runsUnreadable.HasValue)
+            {
+                Write("src/AgentBridge.App/Earlier.cs", "earlier untested app change");
+                Commit("untested app", "src/AgentBridge.App/Earlier.cs");
+            }
             Write(changed, changed.EndsWith(".props", StringComparison.Ordinal) ? "<Project />" : "changed");
             Commit("change", changed);
 
@@ -107,15 +126,31 @@ public class PlanScriptTests
                 RedirectStandardError = true,
             };
             start.Environment["CI_PLAN_TEST_RUN"] = select["run"].ToString();
+            start.Environment["CI_PLAN_TEST_WHOLE"] = whole["run"].ToString();
+            start.Environment["CI_PLAN_TEST_RUNS"] = runsUnreadable.HasValue ? (runsUnreadable.Value ? "unreadable" : "none") : "";
             start.Environment["JOBS"] = ((YamlMappingNode)select["env"])["JOBS"].ToString();
             start.Environment["EVENT"] = eventName;
             start.Environment["DRAFT"] = "false";
             start.Environment["WHOLE_RING"] = wholeRing ? "true" : "false";
             start.Environment["BASE"] = "HEAD^1";
+            start.Environment["BASE_KNOWN"] = "true";
             start.Environment["GITHUB_OUTPUT"] = output;
             start.Environment["GITHUB_STEP_SUMMARY"] = Path.Combine(folder, "summary");
             foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-Command",
-                         "$ErrorActionPreference = 'Stop'; & ([scriptblock]::Create($env:CI_PLAN_TEST_RUN))" })
+                         """
+                         $ErrorActionPreference = 'Stop'
+                         if ($env:CI_PLAN_TEST_RUNS) {
+                             function global:gh { $global:LASTEXITCODE = if ($env:CI_PLAN_TEST_RUNS -eq 'unreadable') { 1 } else { 0 } }
+                             & ([scriptblock]::Create($env:CI_PLAN_TEST_WHOLE))
+                             $whole = Get-Content $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
+                             $env:BASE = $whole['base']
+                             $env:WHOLE_RING = $whole['whole-ring']
+                             $env:BASE_KNOWN = $whole['base-known']
+                             if ($env:BASE -ne 'HEAD^1' -or $env:WHOLE_RING -ne 'true') { throw 'Unknown base must run the whole ring over the tip fallback.' }
+                             Clear-Content $env:GITHUB_OUTPUT
+                         }
+                         & ([scriptblock]::Create($env:CI_PLAN_TEST_RUN))
+                         """ })
                 start.ArgumentList.Add(arg);
             using var process = Process.Start(start) ?? throw new InvalidOperationException("pwsh did not start.");
             var error = process.StandardError.ReadToEndAsync();
@@ -140,6 +175,8 @@ public class PlanScriptTests
             Assert.Equal("needs.plan.outputs.app == 'true'", ((YamlMappingNode)jobs["app"])["if"].ToString());
             Assert.Equal("!cancelled() && (needs.plan.outputs.app-installer == 'true')",
                 ((YamlMappingNode)jobs["app-installer"])["if"].ToString());
+            Assert.Equal("${{ steps.whole-ring.outputs.base-known }}",
+                ((YamlMappingNode)select["env"])["BASE_KNOWN"].ToString());
         }
         finally
         {

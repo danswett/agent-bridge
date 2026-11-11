@@ -295,13 +295,17 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    runs what docs select (`light`'s link check, say), not the app or the product's builds.
    Pull requests keep cancelling a superseded run, and a run by hand its own group.
 
-   **Packaging needs an app reason, on main too (#1910).** Pull requests and main pushes pass
+   **Packaging needs an app reason over a known range (#1910).** Pull requests and main pushes
+   with a proven base pass
    `-Narrow app,app-installer`: a whole-ring-only workflow or quality change does not build
    packages or installers. App source and dependencies, packaging inputs, shared build roots,
    ci.yml's packaging/SBOM steps and `install-trivy` still select both jobs. Selection covers
-   the entire range since the last green main commit, so an earlier untested app change still
-   builds. Main keeps the `windows-11-arm` product leg; a manual whole-ring run remains
-   un-narrowed. A docs-only range skips packaging even when main needs the whole ring.
+   the entire range since the last green main commit when that base is known, so an earlier
+   untested app change still builds. If no passed ancestor is found or the run list is
+   unreadable, main runs the whole ring without narrowing: the HEAD^1 fallback cannot prove
+   that earlier app changes were packaged. Main keeps the `windows-11-arm` product leg;
+   manual whole-ring runs remain un-narrowed. A proven docs-only range skips packaging
+   even when main needs the whole ring.
 
    **What decides selection doesn't select for itself (#487).** Before the selector is built,
    the plan job compares the change (`HEAD^1..HEAD` on a pull request; on `main`, since its last
