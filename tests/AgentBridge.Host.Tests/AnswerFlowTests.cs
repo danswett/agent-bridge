@@ -3644,14 +3644,23 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     [InlineData("Tell me", true)]
     public async Task A_reset_form_not_asked_again_the_same_retires_its_card_as_out_of_date_with_nothing_typed_after_the_Esc(string? other, bool reordered)
     {
-        Serve(Answerer(resume: true));
+        var clock = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(DateTimeOffset.UtcNow);
+        Serve(Answerer(time: clock, resume: true));
+        // A stalled test must not spend ResetWait before it records the session's response to Esc.
+        Task UntilState(Func<bool> state, string what) => Wait.UntilAsync(() =>
+        {
+            if (state()) { return true; }
+            clock.Advance(TimeSpan.FromMilliseconds(25));
+            return state();
+        }, what, Patience);
         await AskFieldsAsync(TwoLists, 2, TwoPicked);
         var asked = false;
         injector.Screen = () => StuckScreen(() => asked);
         var ch = await OpenAsync();
 
         var answering = AnswerResultAsync(ch, TwoPicked, Guid.NewGuid().ToString());
-        await Wait.UntilAsync(() => Escaped(), "the Esc that resets the form", Patience);
+        await UntilState(() => Escaped(), "the Esc that resets the form");
+        Assert.Empty(AfterEscape());
         Fixture.Append(events, Copilot.ToolDone("q2", second++));
         if (other is not null)
         {
@@ -3659,6 +3668,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
             asked = true;
         }
         await source.RefreshAsync();
+        await UntilState(() => answering.IsCompleted, "the reset form's out-of-date result");
         var result = await answering;
 
         Assert.Equal("stale", result.GetProperty("outcome").GetString());

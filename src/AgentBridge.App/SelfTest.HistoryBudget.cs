@@ -227,10 +227,22 @@ static partial class SelfTest
             Away(window, main);
             await Choose(window, main, id, "Response");
             var wheelReady = await Until(() => scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
-            Wheel(window, list);
-            var wheeled = await Until(() => scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
-            await Task.Delay(350);
-            check(wheelReady && wheeled && scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, "keeps the view taken by a native wheel while older turns draw");
+            var wheelMoving = false;
+            void WheelChanged(object? sender, ScrollViewerViewChangedEventArgs e) => wheelMoving = e.IsIntermediate;
+            scroll.ViewChanged += WheelChanged;
+            try
+            {
+                Wheel(window, list);
+                var wheeled = await Until(() => scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
+                check(wheelReady && wheeled, "a native wheel takes the view away from the latest");
+                var drawn = await Until(() => ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count == turns, TimeSpan.FromSeconds(30));
+                await Still(scroll);
+                var kept = await Until(() => !wheelMoving && scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
+                result["historyWheelFill"] = new { wheelReady, wheeled, drawn, kept, offset = scroll.VerticalOffset, extent = scroll.ScrollableHeight };
+                check(wheelReady && wheeled && drawn && kept && scroll.VerticalOffset < scroll.ScrollableHeight - 1.5,
+                    "keeps the view taken by a native wheel while older turns draw");
+            }
+            finally { scroll.ViewChanged -= WheelChanged; }
         }
         finally
         {
