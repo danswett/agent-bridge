@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentBridge.HomeAssistant;
 using AgentBridge.Host.Core;
@@ -332,6 +333,37 @@ public sealed class LaunchTests : IDisposable
     }
 
     public static TheoryData<string> Refusals => [.. Loaded.Value["refusals"]!.AsObject().Select(r => r.Key)];
+
+    [Fact]
+    public async Task Disabled_MCP_servers_are_discovered_and_carried_as_an_agents_list_not_card_settings()
+    {
+        var options = System.Text.Json.JsonSerializer.SerializeToNode(offered, ProtocolJson.Options)!;
+        options["agents"]![1]!["disabledMcpServers"] = true;
+        offered = options.Deserialize<LaunchOptions>(ProtocolJson.Options)!;
+        await using var c = await Ready();
+        var sensor = JsonNode.Parse(ha.Retained[HaContract.LaunchOptionsTopic(Slug)])!;
+        Assert.True(sensor["agents"]!["copilot"]!["disabled_mcp_servers"]!.GetValue<bool>());
+        ha.Choose(Entity("select", "new_permissions"), HaContract.PermissionAllowAll);
+        Payload(new JsonObject { ["request"] = "req-02124-abcd", ["settings"] = new JsonObject { ["disabledMcpServers"] = new JsonArray("tools", "remote.test") } });
+        await Launch(c, AgentUser);
+        var request = System.Text.Json.JsonSerializer.SerializeToNode(Assert.Single(launched), ProtocolJson.Options)!;
+        Assert.Equal(["tools", "remote.test"], request["disabledMcpServers"]!.AsArray().Select(n => n!.GetValue<string>()));
+        Assert.Null(request["permissions"]);
+    }
+
+    [Theory]
+    [InlineData("\"tools\"")]
+    [InlineData("[\"tools\",1]")]
+    [InlineData("[null]")]
+    [InlineData("[\"tools --allow-all-tools\"]")]
+    public async Task Disabled_MCP_servers_with_bad_shapes_or_names_are_refused_before_launch(string json)
+    {
+        await using var c = await Ready();
+        Payload(new JsonObject { ["request"] = "req-02124-abcd", ["settings"] = new JsonObject { ["disabledMcpServers"] = JsonNode.Parse(json) } });
+        await Launch(c, AgentUser);
+        Assert.Empty(launched);
+        Assert.Contains("disabledMcpServers", Note);
+    }
 
     [Theory]
     [MemberData(nameof(Refusals))]

@@ -777,6 +777,10 @@ public static class ProtocolVectors
             .Valid("the-machines-defaults", new LaunchRequest { Request = Request })
             .Valid("every-setting", New() with { Profile = "work", Model = "claude-opus-5.5", Effort = "high", Context = "1m", Permissions = LaunchProtocol.AllowAll, Prompt = "Fix the flaky test", Attachments = [new AttachmentRef { Id = FileA }] })
             .Valid("the-agents-own-defaults", New() with { Model = "", Effort = "", Context = "" })
+            .Valid("disabled-mcp-servers", New() with { DisabledMcpServers = ["remote.tools", "local_1-test"] })
+            .Refused("disabled-mcp-injection", New() with { DisabledMcpServers = ["x --allow-all-tools"] })
+            .Refused("disabled-mcp-duplicate", New() with { DisabledMcpServers = ["tools", "tools"] })
+            .Refused("disabled-mcp-newline", New() with { DisabledMcpServers = ["tools\n"] })
             .Valid("a-resume", new LaunchRequest { Request = Request, Agent = "claude", Resume = SessionId })
             .Valid("a-transfer", New() with { Transfer = Bring })
             .Valid("a-prompt-at-its-16-KiB-limit", New() with { Prompt = Repeat('a', LaunchProtocol.MaxPrompt) })
@@ -831,7 +835,7 @@ public static class ProtocolVectors
         var copilot = new LaunchAgent
         {
             Id = "copilot", Label = "Copilot CLI", Kind = AgentKind.Copilot, Models = ["claude-opus-5.5", "gpt-5.6-sol"], Efforts = ["low", "high"], Contexts = ["1m"],
-            Profiles = ["work"], Defaults = tuning, Attachments = true,
+            Profiles = ["work"], Defaults = tuning, Attachments = true, DisabledMcpServers = true,
         };
         var codex = new LaunchAgent { Id = "codex", Label = "Codex", Kind = AgentKind.Codex, NeedsPrompt = true };
         f.Record<LaunchAgent>(Host).Valid("full", copilot).Valid("minimal", codex);

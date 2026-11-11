@@ -751,6 +751,10 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   config and state cleared) rather than left with lists nothing refreshes. It is not in
   agent-ha-bridge's per-machine topic list, so that daemon's Forget does not clear it. `launch-remote.ps1 -Options` prints it and a launch is checked
   against it before the button is pressed.
+  An agent entry with `disabled_mcp_servers: true` accepts the optional
+  `settings.disabledMcpServers` array in a launch payload. It defaults to empty and
+  uses the protocol's strict names and limits ([v1-launch.md](protocol/v1-launch.md)).
+  It never reads card selectors or changes permissions, and persists no MCP settings.
 * **The purple edge**: a session an agent's press launched is `agent`-driven from the moment it
   appears, for the turn it was launched with (already under way or still to come); the turn
   after that is whoever's it is.

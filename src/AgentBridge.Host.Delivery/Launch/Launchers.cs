@@ -129,7 +129,7 @@ public static class Launchers
     // Model, effort and context are already validated against what the agent offers; empty
     // means pass nothing. The prompt is already flattened to one line (LaunchProtocol.Flatten).
     public static IReadOnlyList<string> Arguments(Launcher launcher, string sessionId, bool resume, string model, string effort, string context,
-        bool allowAll, IReadOnlyList<string> extras, string profile, string prompt)
+        bool allowAll, IReadOnlyList<string> extras, string profile, string prompt, IReadOnlyList<string>? disabledMcpServers = null)
     {
         var args = new List<string>();
         var extra = extras.Where(e => !string.IsNullOrWhiteSpace(e)).ToList();
@@ -168,6 +168,14 @@ public static class Launchers
                 // nobody watching. --allow-all is tools, paths and URLs, as Claude's and Codex's
                 // flags already cover everything.
                 if (allowAll) { copilot.Add("--allow-all"); }
+                foreach (var name in disabledMcpServers ?? [])
+                {
+                    // A role may already deny it; never remove a role restriction or repeat a flag.
+                    if (!extra.Where((a, i) => i > 0 && extra[i - 1] == "--disable-mcp-server").Contains(name, StringComparer.Ordinal))
+                    {
+                        extra.AddRange(["--disable-mcp-server", name]);
+                    }
+                }
                 copilot.AddRange(extra);
                 if (prompt.Length > 0) { copilot.AddRange(["-i", prompt]); }
                 if (launcher.Id == "agency")

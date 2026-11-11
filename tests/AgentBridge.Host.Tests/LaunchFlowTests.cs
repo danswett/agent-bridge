@@ -277,6 +277,54 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
 
     static string[] Denied(IReadOnlyList<string> args) => [.. args.Select((a, i) => (a, i)).Where(x => x.a == "--disable-mcp-server").Select(x => args[x.i + 1])];
 
+    [Theory]
+    [InlineData("copilot", false)]
+    [InlineData("copilot", true)]
+    [InlineData("agency", false)]
+    public async Task Disabled_MCP_servers_are_separate_arguments_once_without_widening_a_role_or_permissions(string agent, bool role)
+    {
+        OwnerMcp("alpha", "beta");
+        var path = Path.Combine(f.CopilotHome, "mcp-config.json");
+        var before = File.ReadAllText(path);
+        locator.Installed[agent] = $@"C:\fake\{agent}.exe";
+        var request = JsonSerializer.Deserialize<LaunchRequest>(JsonSerializer.Serialize(new
+        {
+            request = Guid.NewGuid().ToString(), agent, workspace = "App", permissions = "ask", prompt = "go",
+            role = role ? "review" : null, disabledMcpServers = new[] { "alpha", "remote.tools" },
+        }), ProtocolJson.Options)!;
+        var launcher = Launcher(Config());
+        var options = JsonSerializer.SerializeToElement(await launcher.OptionsAsync(), ProtocolJson.Options);
+        Assert.True(options.GetProperty("agents").EnumerateArray().Single(a => a.GetProperty("id").GetString() == agent).GetProperty("disabledMcpServers").GetBoolean());
+        await launcher.LaunchAsync(request, "phone");
+        var args = Assert.Single(starter.Specs).Arguments;
+        Assert.Equal(role ? ["alpha", "beta", "remote.tools"] : new[] { "alpha", "remote.tools" }, Denied(args));
+        Assert.Equal(role, args.Contains("--disable-builtin-mcps"));
+        Assert.DoesNotContain("--allow-all", args);
+        Assert.Equal("go", args[^1]);
+        Assert.Equal(before, File.ReadAllText(path));
+    }
+
+    [Fact]
+    public async Task Empty_disabled_MCP_servers_leave_the_owner_command_line_unchanged()
+    {
+        var request = JsonSerializer.Deserialize<LaunchRequest>($$"""{"request":"{{Guid.NewGuid()}}","agent":"copilot","workspace":"App","disabledMcpServers":[]}""", ProtocolJson.Options)!;
+        var result = await Launcher(Config()).LaunchAsync(request, "phone");
+        Assert.Equal(["--session-id", result.Session!, "--banner"], Assert.Single(starter.Specs).Arguments);
+    }
+
+    [Theory]
+    [InlineData("claude")]
+    [InlineData("codex")]
+    public async Task Disabled_MCP_servers_are_refused_for_launchers_without_the_flag(string agent)
+    {
+        locator.Installed[agent] = $@"C:\fake\{agent}.exe";
+        var request = JsonSerializer.Deserialize<LaunchRequest>($$"""{"request":"{{Guid.NewGuid()}}","agent":"{{agent}}","workspace":"App","prompt":"go","disabledMcpServers":["tools"]}""", ProtocolJson.Options)!;
+        var result = await Launcher(Config()).LaunchAsync(request, "phone");
+        Assert.Equal(LaunchOutcome.Refused, result.Outcome);
+        Assert.Contains("disabledMcpServers", result.Reason);
+        Assert.Empty(starter.Specs);
+    }
+
     [Fact]
     public async Task A_launch_with_a_role_disables_every_owner_server_the_role_does_not_list_and_the_built_ins()
     {
