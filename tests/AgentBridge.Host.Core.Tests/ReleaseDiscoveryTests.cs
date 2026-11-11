@@ -32,6 +32,52 @@ public sealed class ReleaseDiscoveryTests : IDisposable
     ReleaseDiscovery Discovery() => new(folder, github, time, random: () => 0);
 
     [Fact]
+    public async Task Relay_and_shared_cache_reads_preserve_the_last_direct_GitHub_quota_observation()
+    {
+        var list = $$"""[{"tag_name":"v0.1.2","assets":[{"name":"releases.win.json","browser_download_url":"{{ReleaseDiscovery.DownloadPrefix}}v0.1.2/releases.win.json"}]}]""";
+        github.Answer = _ => new(HttpStatusCode.OK) { Content = new StringContent(list), Headers = { { "X-RateLimit-Remaining", "37" } } };
+        using (var direct = new ReleaseDiscovery(folder, github, time, random: () => 0, cdn: false))
+        {
+            await direct.ReleasesAsync(Url, CancellationToken.None);
+            Assert.Equal((37, Now), (direct.GitHubRemaining, direct.GitHubQuotaAt));
+        }
+        time.Advance(ReleaseDiscovery.Interval);
+        github.Answer = _ => new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(list),
+            Headers = { { "Age", "180" }, { "X-RateLimit-Remaining", "999" } },
+        };
+        using var relay = Discovery();
+        await relay.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win");
+        Assert.Equal(("cdn", 37, Now), (relay.Source, relay.GitHubRemaining, relay.GitHubQuotaAt));
+        time.Advance(TimeSpan.FromMinutes(1));
+        using var cached = Discovery();
+        await cached.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win");
+        Assert.Equal(("cdn", 37, Now), (cached.Source, cached.GitHubRemaining, cached.GitHubQuotaAt));
+        Assert.Equal(time.GetUtcNow() - TimeSpan.FromMinutes(4), cached.FetchedAt);
+        Assert.Equal(new[] { Url, ReleaseDiscovery.CdnList }, github.Requests.Select(r => r.Url));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("-1")]
+    [InlineData("unknown")]
+    [InlineData("99999999999999999999")]
+    public async Task A_missing_or_invalid_quota_is_unknown_not_zero(string? remaining)
+    {
+        using var discovery = Discovery();
+        github.Answer = _ =>
+        {
+            var answer = Ok(Releases, "\"v1\"");
+            if (remaining is not null) { answer.Headers.TryAddWithoutValidation("X-RateLimit-Remaining", remaining); }
+            return answer;
+        };
+        await discovery.ReleasesAsync(Url, CancellationToken.None);
+        Assert.Null(discovery.GitHubRemaining);
+        Assert.Null(discovery.GitHubQuotaAt);
+    }
+
+    [Fact]
     public async Task A_200_is_kept_so_checks_within_the_interval_ask_GitHub_nothing()
     {
         using var discovery = Discovery();
@@ -76,12 +122,14 @@ public sealed class ReleaseDiscoveryTests : IDisposable
         var limited = await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, CancellationToken.None));
         Assert.True(limited.Limited);
         Assert.Equal(reset, limited.RetryAt);
+        Assert.Equal((0, Now), (discovery.GitHubRemaining, discovery.GitHubQuotaAt));
         Assert.Equal($"GitHub is limiting how often this network can check for updates. {Product.Name} will check again after 01:50.", Said(limited));
 
         // Clicks before the reset are answered at once, with the same words, and ask nothing.
         time.Advance(TimeSpan.FromMinutes(19));
         var again = await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, CancellationToken.None));
         Assert.Equal(limited.Message, again.Message);
+        Assert.Equal((0, Now), (discovery.GitHubRemaining, discovery.GitHubQuotaAt));
         Assert.Single(github.Requests);
 
         time.Advance(TimeSpan.FromMinutes(1));
