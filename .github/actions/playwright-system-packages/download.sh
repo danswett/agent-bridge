@@ -169,7 +169,7 @@ update_deadline=0
 install_offline() {
   sudo apt-get install -y --no-install-recommends --no-download "${pkgs[@]}" || fail install "$?"
 }
-if [ "$cache_hit" = true ]; then install_offline; exit 0; fi
+if [ "$cache_hit" = true ] && [ "$rc" -ne 0 ]; then install_offline; exit 0; fi
 rc=0
 if [ "$force" = true ]; then
   echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::force-apt-fallback: taking the Azure mirror off apt's list before downloading anything; nothing timed out"
