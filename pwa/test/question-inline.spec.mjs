@@ -260,6 +260,25 @@ for (const width of [390, 1024]) {
   }
 }
 
+test('a closed local receipt stays in its provisional asking turn while history is pending', async ({ page }) => {
+  const card = await setup(page, { holdHistory: true });
+  await page.evaluate((id) => {
+    const d = window.agentBridgeDemo;
+    const s = d.host.get(id);
+    d.upsert({ ...s, question: null, status: 'idle' });
+    d.upsert({ ...d.host.get(id), activity: { ...s.activity, turn: 'later-live', userMessage: 'Later prompt', response: null, responseTurn: null } });
+  }, CODEX);
+  const closed = card.locator(`.question.resolved[data-question="${QID}"]`);
+  const asking = card.locator(`.history-turn[data-turn="${CODEX}-turn-2"]`);
+  await expect(asking.locator('.resolved-summary')).toContainText('Question closed');
+  await expect(closed).toHaveCount(1);
+  await closed.getByRole('button', { name: 'Show question' }).click();
+  await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
+  await expect.poll(() => page.evaluate((id) => window.agentBridgeDemo.view.history.get('demo', id).loading, CODEX)).toBeNull();
+  await expect(asking.locator('.resolved-record')).toBeVisible();
+  await expect(closed).toHaveCount(1);
+});
+
 test('delayed history and disjoint local closures share one newest-20 window', async ({ page }) => {
   const id = 'retention-disjoint';
   await page.goto('?demo=1&static=1');
