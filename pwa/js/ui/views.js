@@ -14,6 +14,8 @@ import { updateLine, lastLine, canCheck, canInstall, canUpdateNow, updateNowReas
 import { openUpdateNowSheet } from './update-now-sheet.js';
 import { signInDevicesLines } from '../signin-devices.js';
 import { BRAND } from '../brand.js';
+import { sessionStatus } from '../status.js';
+import { glyph } from './glyph.js';
 
 const LONG_PRESS_MS = 500;
 // A finger that moves further than this is scrolling, not pressing.
@@ -35,6 +37,7 @@ export class SessionListView {
   #scheduled = false;
   #menu = new RowMenu();
   #heads = {};
+  #groups = new Map();
   #ended = null;
   #press = null;
   #swallowClick = false;
@@ -65,8 +68,8 @@ export class SessionListView {
   // heading() -> the list's heading, where focus goes when a session that had it ends with no
   // row left to take it.
   // history: the HistoryStore the cards draw their earlier conversation from, or null.
-  constructor(container, sessions, { history = null, fetchDetail, fetchDelegate = null, machine = () => ({ name: '', show: false }), answering = () => null, order = new SessionOrder(), shows = () => true, settled = () => true, views = null, layout = () => ({ inspector: false }), viewing = () => true, stale = () => null, heading = () => null, awake = () => globalThis.document?.hasFocus?.() !== false, timers = null } = {}) {
-    Object.assign(this, { container, sessions, history, fetchDetail, fetchDelegate, machine, answering, order, shows, settled, layout, viewing, stale, heading, awake });
+  constructor(container, sessions, { history = null, fetchDetail, fetchDelegate = null, machine = () => ({ name: '', show: false }), answering = () => null, order = new SessionOrder(), shows = () => true, settled = () => true, views = null, layout = () => ({ inspector: false }), viewing = () => true, stale = () => null, heading = () => null, awake = () => globalThis.document?.hasFocus?.() !== false, showEmptyGroups = () => true, timers = null } = {}) {
+    Object.assign(this, { container, sessions, history, fetchDetail, fetchDelegate, machine, answering, order, shows, settled, layout, viewing, stale, heading, awake, showEmptyGroups });
     // A session is read once open, visible and focused for about a second (session-order-roaming.md section 8).
     this.dwell = new ReadDwell({ mark: (key, at) => { this.order.markSeen(key, at); this.render(); }, timers });
     for (const [target, event] of [[globalThis.window, 'focus'], [globalThis.window, 'blur'], [globalThis.document, 'visibilitychange']]) { target?.addEventListener?.(event, () => this.schedule()); }
@@ -112,6 +115,9 @@ export class SessionListView {
   }
 
   filter = '';
+  needsOnly = false;
+
+  setNeedsOnly(on) { this.needsOnly = !!on; this.render(); }
 
   #matches(hostId, s) {
     if (!this.filter) { return true; }
@@ -119,7 +125,7 @@ export class SessionListView {
     return [s.title, s.repository, s.branch, s.cwd, s.agent, m.name].some((v) => typeof v === 'string' && v.toLowerCase().includes(this.filter));
   }
 
-  get moving() { return !this.filter && this.order.sort === 'yours'; }
+  get moving() { return !this.filter && !this.needsOnly && this.order.sort === 'yours'; }
 
   // While a row is grabbed nothing else rearranges: a redraw waits for the drop. The one thing
   // that doesn't wait is the grabbed session ending, or the list no longer being movable.
@@ -153,10 +159,12 @@ export class SessionListView {
     for (const el of before.keys()) {
       for (const a of el.getAnimations?.() ?? []) { if (/^ab-motion-(reorder|shift)$/.test(a.id)) { a.cancel(); } }
     }
-    const keep = (e) => this.#matches(e.hostId, e.session);
-    const ended = arranged.ended.filter(keep);
+    const matches = (e) => this.#matches(e.hostId, e.session);
+    const keep = (e) => matches(e) && (!this.needsOnly || sessionStatus(e.session).glyph === 'needs');
+    const grouped = this.order.groupRows(arranged.sessions, { matches, filtered: !!this.filter, needsOnly: this.needsOnly, showEmpty: this.showEmptyGroups() });
+    const ended = this.needsOnly ? [] : arranged.ended.filter(keep);
     this.container.dataset.sort = this.order.sort;
-    this.container.dataset.filtered = this.filter ? 'true' : 'false';
+    this.container.dataset.filtered = this.filter || this.needsOnly ? 'true' : 'false';
     this.onSorted?.();
     const live = new Set([...arranged.pinned, ...arranged.sessions].map((e) => SessionListView.key(e.hostId, e.session.id)));
     // Moving a card takes focus out of it, and a card being answered moves when its
@@ -180,7 +188,7 @@ export class SessionListView {
       if (!live.has(key) && this.#drawn && this.shows(card.hostId) && this.settled(card.hostId)) { leave(card.element, 'listItem'); }
     }
     let reading = false;
-    const cards = (list, isPinned) => {
+    const cards = (list, isPinned, emit = true) => {
       for (const entry of list) {
         const { hostId, session: s } = entry;
         const key = SessionListView.key(hostId, s.id);
@@ -218,19 +226,33 @@ export class SessionListView {
         // view stays on screen while search hides its row, so this comes before search's say.
         const responseTurn = s.activity?.responseTurn;
         if (card.selected) { reading = true; this.dwell.watch(key, responseTurn, this.order.unread(key, responseTurn) && this.viewing() && this.awake()); }
-        if (!keep(entry)) { continue; }
         card.setUnread(this.order.unread(key, responseTurn));
+        if (!emit || !keep(entry)) { continue; }
         want.push(card.element);
         shown += 1;
       }
     };
     const pinnedShown = arranged.pinned.some(keep);
-    const sessionsShown = arranged.sessions.some(keep);
+    const sessionsShown = grouped.sessions.some(keep);
     if (pinnedShown) { want.push(this.#head('pinned', 'Pinned')); }
     cards(arranged.pinned, true);
-    if (pinnedShown && sessionsShown) { want.push(this.#head('sessions', 'Sessions')); }
-    cards(arranged.sessions, false);
+    cards(arranged.sessions, false, false);
+    for (const group of grouped.groups) {
+      want.push(this.#groupHead(group));
+      for (const entry of group.visible) {
+        want.push(this.#cards.get(SessionListView.key(entry.hostId, entry.session.id)).element);
+        shown++;
+      }
+    }
+    if ((pinnedShown || grouped.groups.length) && sessionsShown) { want.push(this.#head('sessions', 'Sessions')); }
+    for (const entry of grouped.sessions.filter(keep)) {
+      want.push(this.#cards.get(SessionListView.key(entry.hostId, entry.session.id)).element);
+      shown++;
+    }
     if (!reading) { this.dwell.cancel(); }
+    for (const id of this.#groups.keys()) {
+      if (!this.order.groups.some((g) => g.id === id)) { this.#groups.delete(id); }
+    }
     if (ended.length) { want.push(this.#endedGroup(ended)); }
     // Move only what is out of place, so a card being read is not torn out and put back.
     let prev = null;
@@ -306,6 +328,40 @@ export class SessionListView {
     return this.#heads[id];
   }
 
+  #groupHead(group) {
+    let head = this.#groups.get(group.id);
+    if (!head) {
+      head = h('button', { type: 'button', class: 'session-group-toggle', dataset: { group: group.id } },
+        icon('chevron', 'group-chevron'), h('span', { class: 'group-name' }),
+        h('span', { class: 'group-count' }),
+        h('span', { class: 'group-needs', hidden: true }, glyph('needs'), h('span')),
+        h('span', { class: 'unread-dot', 'aria-hidden': 'true', hidden: true }));
+      const toggle = (collapsed) => {
+        if (this.filter || this.needsOnly) { return; }
+        this.order.setGroupCollapsed(group.id, collapsed);
+        this.render();
+        head.focus({ preventScroll: true });
+      };
+      head.addEventListener('click', () => toggle(!this.order.isGroupCollapsed(group.id)));
+      head.addEventListener('keydown', (e) => {
+        if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || !['ArrowLeft', 'ArrowRight'].includes(e.key)) { return; }
+        e.preventDefault();
+        toggle(e.key === 'ArrowLeft');
+      });
+      this.#groups.set(group.id, head);
+    }
+    const needs = !group.expanded && group.needs ? `${group.needs} needs you` : '';
+    head.setAttribute('aria-expanded', String(group.expanded));
+    head.setAttribute('aria-disabled', String(!!(this.filter || this.needsOnly)));
+    head.setAttribute('aria-label', `${group.name}, ${group.count} ${group.count === 1 ? 'session' : 'sessions'}${needs ? `, ${needs}` : !group.expanded && group.unread ? ', New activity' : ''}`);
+    head.querySelector('.group-name').textContent = group.name;
+    head.querySelector('.group-count').textContent = `\u00b7 ${group.count}`;
+    head.querySelector('.group-needs').hidden = !needs;
+    head.querySelector('.group-needs > span:last-child').textContent = needs;
+    head.querySelector('.unread-dot').hidden = group.expanded || !!needs || !group.unread;
+    return head;
+  }
+
   // Ended · N, folded unless opened: the sessions the host removed while this page was open.
   #endedGroup(ended) {
     if (!this.#ended) {
@@ -334,7 +390,7 @@ export class SessionListView {
 
   // Moves a row and keeps the move in view and in focus.
   #move(card, delta) {
-    if (this.filter || !this.order.move(this.#keyOf(card), delta)) { return false; }
+    if (!this.moving || !this.order.move(this.#keyOf(card), delta)) { return false; }
     // Into view before the slide is measured: the slide's first frame puts the row back where it
     // was, and a scroll then would find it already in sight and leave its new place clipped.
     this.#moved(card.element, () => { this.render(); card.element.scrollIntoView({ block: 'nearest' }); });
@@ -414,8 +470,8 @@ export class SessionListView {
     const key = this.#keyOf(card);
     const pinned = this.order.isPinned(key);
     this.#menu.show(card.element, [
-      { label: 'Move up', disabled: !!this.filter || !this.order.canMove(key, -1), run: () => this.#move(card, -1) },
-      { label: 'Move down', disabled: !!this.filter || !this.order.canMove(key, 1), run: () => this.#move(card, 1) },
+      { label: 'Move up', disabled: !this.moving || !this.order.canMove(key, -1), run: () => this.#move(card, -1) },
+      { label: 'Move down', disabled: !this.moving || !this.order.canMove(key, 1), run: () => this.#move(card, 1) },
       { label: pinned ? 'Unpin' : 'Pin', run: () => this.#pin(card, !pinned) },
     ], { back: card.els.open, label: `${card.session.title || 'Session'}: actions` });
   }

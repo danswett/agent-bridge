@@ -94,6 +94,10 @@ operations; group headers and move menus follow in G2/G3. Pinning keeps membersh
 separate, and membership expires after 30 days without listing the session. This runs only in the
 client: a host leaving does not delete the record. Nothing syncs yet, and no host holds group state.
 
+G2 (#1615) draws those groups between Pinned and Sessions. Collapse is kept only in the device's
+local order, outside the group registers. Collapsed groups retain visible needs-you rows; search
+and Needs you temporarily expand matching groups without changing the saved collapse.
+
 Required vectors: concurrent move of the same row on two devices; insert at the same position;
 delete against move; rename against delete of a group; a stale write arriving after a newer one;
 equal counters; read marker from two devices; merge is the same in either order and repeating it
