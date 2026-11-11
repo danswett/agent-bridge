@@ -5,8 +5,6 @@ name: Re-run known flakes
 # A real failure stays red: an unfiled failing test, a failed job with no test failure in its
 # log, a run that was already re-run, or a newer push run on main all leave the run alone.
 # Each re-run is logged on the issue of every test it concerned.
-# #2018 adds Windows timeouts beside that existing any-OS rule, never unknown failures.
-# Job ids and reasons are recorded in this run's summary; GitHub records the source attempt.
 #
 # This runs main's copy of quality/rerun-known-flakes.ps1 (workflow_run always uses the default
 # branch's workflow and checkout) and never checks out or runs the code of the run it reads.
