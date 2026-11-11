@@ -100,9 +100,9 @@ async function upsert(page, id, change) {
   }, { id, change });
 }
 
-async function conversationReady(v) {
-  // The demo's two earlier turns can arrive after open(); their insertion follows the end.
-  await expect(v.locator('.history-turn')).toHaveCount(2);
+async function conversationReady(v, turns = 2) {
+  // Demo history can arrive after open(); its insertion follows the end.
+  await expect(v.locator('.history-turn')).toHaveCount(turns);
   // Drain the initial response measurements too, before growing only the reasoning.
   await v.locator('.stream-scroll .response').evaluate((response) => new Promise((resolve) => {
     const observer = new ResizeObserver(() => { observer.disconnect(); resolve(); });
@@ -668,7 +668,7 @@ test('a question that arrives after the reader opened the reasoning leaves the c
   await upsert(page, CODEX, { activity: { response: 'Short.', reasoning: long, userMessage: null, currentTool: null }, question: null, updatedAt: later() });
   const v = await open(page, CODEX);
   const scroller = v.locator('.stream-scroll');
-  await conversationReady(v);
+  await conversationReady(v, 0);
   // Read to its end, then grown by an update of its own: still at its end.
   expect(await scroller.evaluate((el) => el.scrollHeight <= el.clientHeight)).toBe(true);
   await upsert(page, CODEX, { activity: { response: 'Short, and then a little more.' }, updatedAt: later(3000) });
@@ -694,7 +694,7 @@ test('opening reasoning at the bottom stays put, but subsequent response growth 
   await upsert(page, CODEX, { activity: { response: 'Short.', reasoning, userMessage: null, currentTool: null }, question: null, updatedAt: later() });
   const v = await open(page, CODEX);
   const scroller = v.locator('.stream-scroll');
-  await conversationReady(v);
+  await conversationReady(v, 0);
   expect(await scroller.evaluate((el) => el.scrollHeight <= el.clientHeight)).toBe(true);
   await v.locator('details.reasoning').evaluate((d) => { d.open = true; });
   await expect(scroller).toContainText('Hide reasoning');
