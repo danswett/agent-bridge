@@ -334,7 +334,14 @@ function registerServiceWorker() {
   };
   learn();
   navigator.serviceWorker.register('sw.js').then((reg) => {
-    appRelease.attach(reg);
+    // The first worker is not an update to this page; checks can still ask it to update.
+    appRelease.attach({
+      get installing() { return navigator.serviceWorker.controller ? reg.installing : null; },
+      get waiting() { return navigator.serviceWorker.controller ? reg.waiting : null; },
+      update: () => reg.update(),
+      addEventListener: (...args) => reg.addEventListener(...args),
+      removeEventListener: (...args) => reg.removeEventListener(...args),
+    });
     // Watched from the start, while the release in control is still being read: an install
     // that fails meanwhile is counted, and kept once the release is known.
     reg.addEventListener('updatefound', () => releases.watch(reg.installing));

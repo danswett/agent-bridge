@@ -105,25 +105,56 @@ for (const { name, viewport } of [{ name: 'on a phone', viewport: { width: 390, 
       section.getByRole('button', { name: 'Reload', exact: true }).click(),
     ]);
   });
+
+  test(`a first installation is not offered as an update ${name}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await fakeRegistration(page, false);
+    await page.route('**/version.json', (route) => route.fulfill({ json: {
+      version: '64a4019c0ffee0123456789abcdef0123456789a', builtAt: '',
+    } }));
+    await page.goto('?demo=1&static=1');
+    await page.waitForSelector('html[data-demo-ready]');
+    await go(page, 'settings');
+    await page.evaluate(() => {
+      window.releaseTest.worker.to('activated');
+      navigator.serviceWorker.controller = window.releaseTest.worker;
+      navigator.serviceWorker.dispatchEvent(new Event('controllerchange'));
+    });
+    const section = page.getByRole('region', { name: 'This app' });
+    await expect(section.getByRole('button', { name: 'Reload', exact: true })).toBeHidden();
+    await section.getByRole('button', { name: 'Check for updates' }).click();
+    await expect(section.locator('#release-result')).toHaveText('Up to date');
+    expect(await page.evaluate(() => window.releaseTest.updates)).toBe(1);
+    await page.evaluate(() => { window.releaseTest.install(); window.releaseTest.worker.to('installed'); });
+    await expect(section.getByRole('button', { name: 'Reload', exact: true })).toBeHidden();
+    await page.evaluate(() => window.releaseTest.worker.to('activated'));
+    await expect(section.locator('#release-result')).toHaveText('A new version of the app is ready.');
+  });
 }
 
-async function fakeRegistration(page) {
-  await page.addInitScript(() => {
+async function fakeRegistration(page, controlled = true) {
+  await page.addInitScript((controlled) => {
     const registration = new EventTarget();
     registration.update = async () => { window.releaseTest.updates++; };
     const serviceWorker = new EventTarget();
-    serviceWorker.controller = { state: 'activated', scriptURL: new URL('sw.js', location.href).href };
+    serviceWorker.controller = controlled ? { state: 'activated', scriptURL: new URL('sw.js', location.href).href } : null;
     serviceWorker.register = async () => registration;
     Object.defineProperty(navigator, 'serviceWorker', { value: serviceWorker });
     window.releaseTest = {
       updates: 0,
       install() {
         const worker = new EventTarget();
+        worker.scriptURL = new URL('sw.js', location.href).href;
         worker.state = 'installing';
-        worker.to = (state) => { worker.state = state; worker.dispatchEvent(new Event('statechange')); };
+        worker.to = (state) => {
+          worker.state = state;
+          if (state === 'installed') { registration.waiting = worker; registration.installing = null; }
+          worker.dispatchEvent(new Event('statechange'));
+        };
         this.worker = registration.installing = worker;
         registration.dispatchEvent(new Event('updatefound'));
       },
     };
-  });
+    if (!controlled) { window.releaseTest.install(); }
+  }, controlled);
 }
