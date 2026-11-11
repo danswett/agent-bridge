@@ -126,6 +126,142 @@ const launchHere = async (page) => {
   expect(await machine(page, 'demo', 'launchLog')).toEqual([]);
 };
 
+test.describe('live load wiring', () => {
+  const sample = { state: 'fresh', ageMs: 2000, staleAfterMs: 15000,
+    cpu: { percent: 37.5 }, memory: { totalBytes: 16000, availableBytes: 10000 } };
+  const tile = (page, id = LAPTOP) => page.locator(`#machine-list [data-device-id="${id}"]`);
+  const ops = (page) => page.evaluate(() => window.loadOps);
+  const attach = (page, refuse = null) => page.evaluate(async ({ sample, refuse, id }) => {
+    const { hosts, machines } = window.agentBridgeDemo, host = machines[id];
+    const receive = host.receive.bind(host);
+    window.loadOps = [];
+    window.loadRecord = sample;
+    host.receive = (t, m) => {
+      if (!m.op.startsWith('load.')) { return receive(t, m); }
+      window.loadOps.push(m.op);
+      if (m.op === refuse) { return t.deliver({ re: m.id, ok: false, error: 'unknown op' }); }
+      if (m.op === 'load.subscribe') { t.loadSubscribed = true; }
+      if (m.op === 'load.unsubscribe') { t.loadSubscribed = false; }
+      t.deliver({ re: m.id, ok: true, result: window.loadRecord });
+    };
+    host.capabilities.push('load');
+    await hosts.refresh(id);
+  }, { sample, refuse, id: LAPTOP });
+
+  test('hello attaches one feed and host-declared stale updates remove exact figures', async ({ page }) => {
+    await openDemo(page);
+    await go(page, 'machines');
+    await attach(page);
+    await expect.poll(() => ops(page)).toEqual(['load.get', 'load.subscribe']);
+    await expect(tile(page).getByRole('meter', { name: 'CPU' })).toHaveAttribute('aria-valuenow', '37.5');
+    await expect(tile(page).getByRole('meter', { name: 'Memory' })).toHaveAttribute('aria-valuenow', '37.5');
+    await expect(tile(page, SHADOW).locator('.machine-load-value')).toHaveText(['No figure', 'No figure']);
+    await page.evaluate(({ sample, id }) => {
+      for (const t of window.agentBridgeDemo.machines[id].transports) {
+        if (t.loadSubscribed) { t.deliver({ ev: 'load.update', seq: ++t.seq, data: { ...sample, ageMs: 15001 } }); }
+      }
+    }, { sample, id: LAPTOP });
+    await expect(tile(page).getByRole('meter')).toHaveCount(0);
+    await expect(tile(page).locator('.machine-load-value')).toHaveText(['No figure', 'No figure']);
+    await page.evaluate(() => window.agentBridgeDemo.page.refresh());
+    expect(await ops(page)).toEqual(['load.get', 'load.subscribe']);
+  });
+
+  test('disconnect clears figures, reconnect resubscribes and page cleanup unsubscribes', async ({ page }) => {
+    await openDemo(page);
+    await go(page, 'machines');
+    await attach(page);
+    await expect(tile(page).getByRole('meter')).toHaveCount(2);
+    await page.evaluate((id) => {
+      const { hosts, machines } = window.agentBridgeDemo;
+      hosts.reopenMs = 100;
+      hosts.retryMs = 100;
+      machines[id].failOpen = true;
+      machines[id].disconnect();
+    }, LAPTOP);
+    await expect(tile(page).getByRole('meter')).toHaveCount(0);
+    await page.evaluate((id) => { window.agentBridgeDemo.machines[id].failOpen = false; }, LAPTOP);
+    await expect.poll(() => ops(page)).toEqual(['load.get', 'load.subscribe', 'load.get', 'load.subscribe']);
+    await expect(tile(page).getByRole('meter')).toHaveCount(2);
+    await page.evaluate(async (id) => {
+      const { hosts, machines } = window.agentBridgeDemo;
+      machines[id].capabilities = machines[id].capabilities.filter((c) => c !== 'load');
+      await hosts.refresh(id);
+    }, LAPTOP);
+    await expect.poll(() => ops(page)).toEqual(['load.get', 'load.subscribe', 'load.get', 'load.subscribe', 'load.unsubscribe']);
+    await expect(tile(page).getByRole('meter')).toHaveCount(0);
+    await page.evaluate(async (id) => {
+      const { hosts, machines } = window.agentBridgeDemo;
+      machines[id].capabilities.push('load');
+      await hosts.refresh(id);
+    }, LAPTOP);
+    await expect(tile(page).getByRole('meter')).toHaveCount(2);
+    await page.evaluate(() => window.agentBridgeDemo.page.clear());
+    await expect.poll(async () => (await ops(page)).filter((op) => op === 'load.unsubscribe').length).toBe(2);
+    await page.evaluate(() => window.agentBridgeDemo.page.refresh());
+    expect((await ops(page)).filter((op) => op === 'load.subscribe')).toHaveLength(3);
+  });
+
+  test('a channel event gap recovers load figures with the confirmed session snapshot', async ({ page }) => {
+    await openDemo(page);
+    await go(page, 'machines');
+    await attach(page);
+    await expect(tile(page).getByRole('meter')).toHaveCount(2);
+    await expect.poll(() => ops(page)).toEqual(['load.get', 'load.subscribe']);
+    await page.evaluate((id) => {
+      window.loadRecord = { ...window.loadRecord, cpu: { percent: 81 } };
+      for (const t of window.agentBridgeDemo.machines[id].transports) {
+        if (t.loadSubscribed) { t.deliver({ ev: 'load.update', seq: t.seq += 2, data: window.loadRecord }); }
+      }
+    }, LAPTOP);
+    await expect.poll(() => ops(page)).toEqual(['load.get', 'load.subscribe', 'load.unsubscribe', 'load.get', 'load.subscribe']);
+    await expect(tile(page).getByRole('meter', { name: 'CPU' })).toHaveAttribute('aria-valuenow', '81');
+  });
+
+  for (const target of [LAPTOP, SHADOW]) {
+    test(`a press on ${target} survives another load reading before pointer release`, async ({ page }) => {
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      await openDemo(page);
+      await go(page, 'machines');
+      await attach(page);
+      await expect(tile(page).getByRole('meter', { includeHidden: true })).toHaveCount(2);
+      await row(page, target).click();
+      const action = tile(page, target).locator('.machine-view');
+      await action.scrollIntoViewIfNeeded();
+      const held = await action.elementHandle(), box = await action.boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.evaluate((id) => {
+        for (const t of window.agentBridgeDemo.machines[id].transports) {
+          if (t.loadSubscribed) { t.deliver({ ev: 'load.update', seq: ++t.seq, data: { ...window.loadRecord, cpu: { percent: 81 } } }); }
+        }
+      }, LAPTOP);
+      await expect(tile(page).getByRole('meter', { name: 'CPU', includeHidden: true })).toHaveAttribute('aria-valuenow', '81');
+      expect(await held.evaluate((el) => el.isConnected)).toBe(true);
+      await page.mouse.up();
+      await expect(page).toHaveURL(/#\/sessions$/);
+      expect(await page.evaluate(() => window.agentBridgeDemo.hosts.selection)).toBe(target);
+    });
+  }
+
+  for (const refuse of ['load.get', 'load.subscribe']) {
+    test(`a host answering unknown op to ${refuse} keeps No figure without retrying or breaking sessions`, async ({ page }) => {
+      const errors = [];
+      page.on('console', (m) => { if (m.type() === 'error') { errors.push(m.text()); } });
+      await openDemo(page);
+      await go(page, 'machines');
+      await attach(page, refuse);
+      await expect.poll(() => errors.some((e) => e.includes('unknown op'))).toBe(true);
+      await expect(tile(page).getByRole('meter')).toHaveCount(0);
+      await expect(tile(page).locator('.machine-load-value')).toHaveText(['No figure', 'No figure']);
+      await page.evaluate(() => window.agentBridgeDemo.page.refresh());
+      expect(await ops(page)).toEqual(refuse === 'load.get' ? ['load.get'] : ['load.get', 'load.subscribe']);
+      await go(page, 'sessions');
+      await expect(card(page, LAPTOP, 'laptop-ask-1')).toBeVisible();
+    });
+  }
+});
+
 test.describe('load bars', () => {
   const full = { state: 'fresh', ageMs: 2000, staleAfterMs: 15000, cpu: { percent: 37.543 }, memory: { totalBytes: 16000, availableBytes: 10000, committedPercent: 91 } };
   const draw = (page, load, online = true, available = null) => page.evaluate(async ({ load, online, available }) => {
