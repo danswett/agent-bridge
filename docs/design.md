@@ -9,13 +9,15 @@
 > historical snapshot; status.md supersedes it. Decisions made after 2026-10-29 are
 > recorded in status.md's decision log until they are folded into the sections here.
 >
-> **HA architecture redirect (owner, 2026-11-02; #387).** The target is a separate
-> [HA integration and companion card](https://github.com/danswett/agent-bridge-home-assistant/issues/1),
-> using Bridge as a paired client. The host's existing HA connector is **current
-> compatibility**, not the permanent architecture. The original HA mechanisms and
-> dated spike/rehearsal results below are **historical evidence**, not proof of an
-> installable successor. [ha-connector.md](ha-connector.md#retaining-ha-without-a-legacy-daemon-317)
-> records the retained/held publisher work and the replacement gates.
+> **HA retirement decision (owner, 2026-11-11; #387/#1396).** This partially
+> reverses the 2026-11-02 redirect: HA is an optional client someone may add later,
+> not a required replacement. HA functionality no longer has to be retained.
+> [The decision record](#02-ha-retirement-decision-3871396) governs retirement;
+> the host connector is **current compatibility**, not the permanent architecture.
+> Original HA mechanisms and dated spike/rehearsal results below are **historical
+> evidence**, not current retirement gates or proof of an installable successor.
+> [ha-connector.md](ha-connector.md#publisher-work-disposition-387) preserves the
+> native publisher disposition without requiring an HA-side implementation.
 >
 > **The name.** The product was renamed from Agent Bridge to Slipgates on 2026-11-03
 > ([brand.md](design/brand.md)). This page uses the new name for the product and its parts.
@@ -45,7 +47,7 @@ home lab.
 | Machine-to-machine and phone connectivity | **The Slipgates relay**: an **untrusted**, end-to-end-encrypted (E2E) rendezvous and relay, **Azure-native and built for massive scale and low latency** (§5.8: account-homed routing across AKS nodes, anycast global load balancer, regions added as stamps, direct WebRTC/LAN paths that upgrade in place). It is also self-hostable as one container, and there is a relay-free LAN-only mode |
 | Identity | **Sign in with GitHub** (an OAuth app owned by `danswett`) scopes the account. **Per-device keys**, approved on an existing device with a matching code, carry the actual trust |
 | Phone | **PWA** first, served from GitHub Pages (not the relay; see §8), with Web Push. Native iOS/Android later on the same protocol and push gateway |
-| Home Assistant | Optional **paired client**: a separate HA integration owns HA entities/actions and a companion card owns presentation. The existing host connector preserves compatibility until a verified replacement; HA functionality is retained, not retired (#387) |
+| Home Assistant | Optional **paired client, later** (#1419), not a retirement prerequisite. Slipgates must work without HA; no owner-built HA functionality must survive (S0 complete). Current compatibility remains until #1396's retirement gate, not until an HA-side replacement ships (#387) |
 | Macs | **First-class**: the same host, plus a native SwiftUI app with the same pages, menu-bar item, notifications with typed answers, installer and manager as the Windows app. Its code is the base of the later native iPhone app (SwiftUI on both) |
 | Accounts and billing | GitHub `danswett`: repository, Actions (free, the repository is public), Releases, artifact attestations, the OAuth app, and Copilot credits for the implementation work. The relay's hosting is the only recurring cost (see §11) |
 
@@ -54,12 +56,14 @@ is **P2**: local app, local host, phone continuity through the HA connector.
 
 ---
 
-## 0.1 Hard rule: the existing HA bridge keeps working throughout
+## 0.1 Hard rule: protect the live bridge until authorized retirement
 
 The current bridge (PowerShell daemon 1.33.x, HA dashboard, phone notifications) is
 in daily use on DSWETT-HOME, DSWETT-DEV-VM1, the ARM laptop, the Dev Box and the Mac.
-**Nothing in this program may degrade it.** The guardrails below are requirements,
-not advice. A PR that violates one is not merged.
+**Development must not degrade it.** The guardrails below remain requirements
+while compatibility is supported; recording the retirement decision does not
+disable them. Only the evidence-backed retirement process in §0.2 may remove the
+HA path. A PR that bypasses a current guard is not merged.
 
 | # | Guardrail | Why it matters (what would break) |
 |---|---|---|
@@ -69,11 +73,44 @@ not advice. A PR that violates one is not merged.
 | G4 | **Hands off agent hook registrations** (`~/.copilot/hooks/*`, Claude settings, Codex config, instruction files and owned blocks) unless the owner explicitly runs *Migrate*, or `hooks install` on a fresh machine with no legacy installation/registrations. Fresh setup owns only its entries and uses a private runtime ([host-hooks.md](host-hooks.md)). Development and test installs use `--no-hooks` or isolated agent homes | The Go hook and the PS fallback are how every session reaches the bridge today. A rewritten registration silently detaches all sessions on that machine |
 | G5 | **The new host never injects, launches, stops or writes HA while a PS daemon is active for that user.** It checks the `CopilotBridgeSupervisor_<id>` / daemon mutexes and the `AgentBridgeDaemon_<id>` task at start and on every action, and refuses with a diagnostic. Shadow mode is strictly read-only: it reads transcripts and copies of spool events, never consumes the spool | Two writers typing into one console or both answering one question corrupts sessions. Consuming spool files would starve the PS daemon |
 | G6 | **No writes to the production HA** from development builds. The HA connector is developed against a disposable HA (container in CI, as the existing `Integration` group requires) with a distinct topic root and entity prefix. Pointing the connector at the real HA is part of an explicit per-machine *Migrate* | Writes into `agent_bridge_*`, the `/agent-decisions` dashboard, Lovelace resources or the publication-policy resource collide with the live bridge and its publication fences |
-| G7 | **No competing dashboard writer.** Until the replacement HA integration/card and reversible handover in #319 are verified, the new stack does not publish the reply card, dashboard or publication policy, and `migrate` refuses the configured PS writer. That writer moves only through an explicit, verified handover with rollback, never by bypassing this check | Publication authority is explicit and fenced. A second writer is exactly the overwrite the fences exist to prevent |
+| G7 | **No competing dashboard writer.** The new stack does not publish the reply card, dashboard or publication policy, and `migrate` refuses the configured PS writer. Keep this current guard until a reviewed retirement slice under #1396 changes it; optional HA delivery is not a prerequisite and this record grants no bypass | Publication authority is explicit and fenced. A second writer is exactly the overwrite the fences exist to prevent |
 | G8 | **Per-machine migration is explicit, reversible and verified**: *Migrate* keeps `~/.agent-ha-bridge` intact, disables (not deletes) the PS task, and *Roll back* restores the task and hook registrations byte for byte. The rollback is exercised in CI and on a VM before it is offered | A failed cutover must cost minutes, not a rebuild |
 | G9 | **Wire compatibility on the HA side for migrated machines** (§3.1, HA connector): a migrated machine's host keeps publishing the same per-machine and per-session MQTT entities (topics, ids, attributes, command inputs) that the existing dashboard renders, verified by contract tests recorded from the PS daemon | That way the existing HA dashboard and phone flow keep showing and answering sessions from migrated machines during the transition |
 | G10 | **Changes to `agent-ha-bridge` are limited** to (a) the opt-in trace recorder, default **off**, and (b) at P3, a migration hand-off hook. Each lands through the normal PR, full suite, analyzer and release process, one release at a time | Keeps the live bridge's release cadence and risk exactly as today |
 | G11 | **Testing on disposable machines first**: Hyperloop VMs or a separate Windows user profile until P2's exit criteria are met. The first real machine to migrate is DSWETT-DEV-VM1, never the publication writer | A bug in a spike should never reach a machine you depend on |
+
+---
+
+## 0.2 HA retirement decision (#387/#1396)
+
+**Decision, 2026-11-11 PT.** The
+[owner's partial reversal](https://github.com/danswett/agent-bridge/issues/1396#issuecomment-6790674187)
+supersedes the requirement in #387/#317 to retain HA functionality through a
+replacement integration. S0 is complete: the owner has nothing built in HA that
+must keep working. Slipgates supplies the required fleet and phone capabilities
+without HA. The optional [HA client design](design/ha-optional-client.md) (#1419)
+is later work, not a retirement prerequisite or an implemented client.
+
+**Gate, not a duration.** [#1396](https://github.com/danswett/agent-bridge/issues/1396)
+owns required parity-row evidence, the load parity proof
+[#1949](https://github.com/danswett/agent-bridge/issues/1949) through both pipelines
+(zero loss, zero duplicates, per-sender order and bounded latency), the approved
+HA-off rehearsal on one machine then the other three with zero HA fallbacks, and
+owner sign-off. Rollback is turning HA back on. There is no 24-hour dual run,
+calendar wait or replacement-integration requirement. #319's HA-side migration
+gate is [closed as superseded](https://github.com/danswett/agent-bridge/issues/319#issuecomment-6791721262);
+historical migration/soak results below do not replace this gate.
+
+**Disposition and boundaries.** The
+[Engineering slice decision](https://github.com/danswett/agent-bridge/issues/1396#issuecomment-6803756936)
+allows this docs-only record now, with no predecessor. It does not certify parity,
+authorize a live HA-off action, or remove runtime, credentials, settings or tests.
+Removal remains separately reviewed work under #389, split by connector/publisher
+(#525 scope), credentials/configuration (#526 scope), CI/tooling (#527) and fleet
+scripts. Keep G5/G6/G7, owner-only management, generic protocol/authorization and
+rollback evidence. Preserve #322 and the closed-unmerged #331/#337/#345 sources;
+their [disposition](ha-connector.md#publisher-work-disposition-387) is not an
+instruction to merge, delete or rebuild the permanent publisher.
 
 ---
 
@@ -104,6 +141,8 @@ and every invariant in §6.3 must hold in the new host. A behavior is changed on
 a Home Assistant limit forced it (255-character text, optimistic selects, entity-id
 pinning, `#1,3` position encoding, 10-option multi-select cap, card-version gating).
 Those limits disappear and the cleaner behavior replaces them.
+This is Slipgates capability parity, not a promise to retain HA entities, cards
+or automations after retirement; §0.2 supersedes that earlier requirement.
 
 ---
 
@@ -113,7 +152,7 @@ Those limits disappear and the cleaner behavior replaces them.
 |---|---|---|
 | **UI** | Generated Lovelace dashboard, 7 custom elements in `agent-bridge-reply-card.js` (CARD_VERSION 1.41.0), button-card, layout-card, card-mod | WinUI 3 and SwiftUI apps, PWA, later native phone apps. Each renders locally from protocol state |
 | **Bus** | `mqtt.publish` over REST for every entity, MQTT discovery, retained topics, `subscribe_trigger`/`mqtt/subscribe` over WS, `/api/states` polling | **Bridge Protocol v1** (§4): snapshot + ordered event stream + commands with acknowledgements, over a secure channel |
-| **Multi-machine hub** | Retained per-machine sensors. Every daemon reads all of them (`Get-DaemonPeerMachines`). One configured writer publishes the shared dashboard under publication fences | Standalone clients aggregate host subscriptions without HA publication. The optional HA integration owns its HA view; current legacy publication fences remain until verified replacement. Target discovery comes from the signed device roster (§5.4) |
+| **Multi-machine hub** | Retained per-machine sensors. Every daemon reads all of them (`Get-DaemonPeerMachines`). One configured writer publishes the shared dashboard under publication fences | Standalone clients aggregate host subscriptions without HA publication. An optional HA client owns its own view; current legacy publication fences remain until gated retirement (§0.2). Target discovery comes from the signed device roster (§5.4) |
 | **Identity and attribution** | User HA token vs agent HA token. `context.user_id` matched against `agentUserIds` gives the purple edge | Principals are `user@device` and `agent@session`, carried in signed command envelopes (§5.5) |
 | **Trust anchor** | `input_text.agent_bridge_pairing` (HA-native state the broker cannot forge) confirms the pairing SAS code | The matching code is compared on **an existing paired device's screen**. The relay cannot forge either side |
 | **Phone** | HA companion app, `notify.mobile_app_*` with actionable buttons, `mobile_app_notification_action` events | PWA + Web Push now, native apps + APNs/FCM later, both through the relay's **push gateway** with E2E-encrypted payloads. The HA connector remains optional |
@@ -126,9 +165,9 @@ Two side effects are worth stating plainly:
   fencing, rollback pins, render fingerprints, card-version gating,
   entity-registry pinning, `config-refresh` recovery and the 255-character workarounds.
   The standalone clients do not need it. Current HA compatibility still does.
-  The owner's redirect (#387) retains HA functionality through the separate
-  integration/card, superseding permanent native shared publication (#318).
-  Replacement and reversible cutover (#319) must be verified before cleanup (#389).
+  The Nov 11 partial reversal (#387) removes the HA-retention requirement.
+  Permanent native shared publication (#318) remains superseded, not completed.
+  Cleanup (#389) waits for #1396's retirement gate (§0.2), not an HA replacement.
 * The `control-authorization` component (`docs/control-authorization.md`) was designed
   for a "future verified adapter" that never existed. In this design it becomes the
   real authorization layer (§5.6).
@@ -171,7 +210,7 @@ Two side effects are worth stating plainly:
 
 The optional HA integration/card joins as another paired encrypted client,
 not an HA publisher inside the target host. The compatibility connector remains
-in current builds until the replacement and cutover gates pass.
+in current builds until #1396's retirement gate passes (§0.2).
 
 ### 3.1 Processes and responsibilities
 
@@ -183,7 +222,7 @@ in current builds until the replacement and cutover gates pass.
 | **Relay** (ASP.NET Core) | Cloud, run by the project; self-host container available | Account sign-in, signed device directory, opaque frame forwarding, push gateway. Serves no app code. Holds no keys capable of reading content |
 | **PWA** | Phone/browser, served from GitHub Pages, never from the relay (§8) | Session list/cards, answer, reply, launch, Web Push |
 | **MCP server** (Node, existing) | Launched by MCP clients | Re-targeted from HA REST to the **local host pipe** with a scoped agent token. Tool names stay, with an alias for `ask_via_home_assistant` |
-| **HA compatibility connector** (current, optional) | Host plug-in | **During the transition: wire-compatible** with today's per-machine and per-session MQTT entities and inputs (G9), so the existing dashboard keeps working for migrated machines. Also sends actionable phone notifications and receives taps. **Never** publishes the dashboard, Lovelace resources or the publication policy (G7). Removal is gated by verified replacement/cutover (#319/#389) |
+| **HA compatibility connector** (current, optional) | Host plug-in | **During the transition: wire-compatible** with today's per-machine and per-session MQTT entities and inputs (G9), so the existing dashboard keeps working for migrated machines. Also sends actionable phone notifications and receives taps. **Never** publishes the dashboard, Lovelace resources or the publication policy (G7). Removal is gated by #1396, then reviewed #389 slices (§0.2) |
 | **HA integration and companion card** (target, optional) | Separate `danswett/agent-bridge-home-assistant` project, inside HA/browser | A paired encrypted Bridge client. HA owns the integration's own lifecycle (setting up and unloading its entry), entities, actions and presentation; Bridge owns generic protocol, session logic, host lifecycle (#805/#874) and host-enforced authorization. #388/#519 own identity/protocol prerequisites; this is not a claim that enrollment or an installable integration is implemented |
 
 ### 3.2 Why a separate host process and not "the app is the daemon"
@@ -946,7 +985,7 @@ already gives us the per-agent table design):
 | `Host.Maintenance` | `daemon-maintenance.ps1`, `bridge-update.ps1` | Host self-update on macOS. On Windows the app owns updates (§7.3) |
 | `Host.DevBox` | `bridge-devbox.ps1`, keep-awake | Unchanged behavior, scheduled inside the host |
 | `Host.Protocol` (shared library) | new | Resources, events, commands, envelope, Noise, blobs. Shared by host, app and relay (and compiled to TS for the PWA through generated schemas) |
-| `Host.Connectors.HomeAssistant` (compatibility only) | `decision-mqtt.ps1`, `daemon-decision-notify.ps1` | Existing entity/command/notification behavior remains until verified HA-side replacement (#319/#389), not a permanent host HA dependency |
+| `Host.Connectors.HomeAssistant` (compatibility only) | `decision-mqtt.ps1`, `daemon-decision-notify.ps1` | Existing entity/command/notification behavior remains until gated retirement (#1396/#389), not a permanent host HA dependency or a requirement to build an HA replacement |
 | **Not permanent host responsibilities; preserve evidence** | `bridge-frontend-cards.ps1`, dashboard generation in `decision-ha-websocket.ps1`, publication policy/fencing, entity-registry pinning, Lovelace resource management, `config-refresh` | Target HA ownership is in the separate integration/card. Retain/extract/supersede decisions in [ha-connector.md](ha-connector.md#retaining-ha-without-a-legacy-daemon-317) precede deletion; current safeguards remain |
 
 ### 6.2 Process model on Windows (the console question)
@@ -1122,7 +1161,7 @@ deltas for code-only updates applied and restarted in under 13 s.
    `agent-bridge-host ha token set` (#67; [host-config.md](host-config.md)).
    #258 tracks Settings exposure. Target setup belongs to the separate paired
    integration, once enrollment, authorization and installation are implemented
-   and verified (#388).
+   and verified (#1419); it is not required for retirement.
 6. Start the host. Show a live health check (the `agent-ha-bridge status` content in
    the UI).
 
@@ -1133,11 +1172,12 @@ deltas for code-only updates applied and restarted in under 13 s.
   installation id, workspaces, launcher settings, usage accounts and Dev Box settings.
 * Stop and disable `AgentBridgeDaemon_<id>`, keeping it until migration is confirmed.
   Swap the hook fallback target. Leave `~/.agent-ha-bridge` intact for rollback.
-* If HA was configured: point the HA connector at it in wire-compatible mode (G9), so
+* Current compatibility, before gated retirement: if HA was configured, point the
+  HA connector at it in wire-compatible mode (G9), so
   this machine's sessions stay on the existing dashboard and phone flow. Migration
   **never** touches the dashboard, Lovelace resources or publication policy (G7).
-  Replacing the legacy publisher is a separate, explicit P7 operator action
-  under #319; HA functionality is retained through the integration/card (#387).
+  Retiring that path is separate reviewed work under #1396/#389; an integration/card
+  replacement is no longer required (#387, §0.2).
 * Verify before finishing: a test question is answered from the HA card and from the
   app, and a reply is delivered. If either fails, roll back automatically (G8).
 
@@ -1234,13 +1274,15 @@ an HA constraint, 🔁 = reimplemented differently.
 | Agent driving other sessions (MCP tools) | 🔁 | — | MCP → local pipe with agent token |
 | Pairing | 🔁 | 🔁 | Code/QR on an existing device. No HA helper |
 | Dev Box keep-awake | ✅ | — | |
-| HA automations on bridge state | — | — | Current compatibility entities remain; target HA integration owns entities and authorized actions |
+| HA automations on bridge state | — | — | Current compatibility entities remain until gated retirement; S0 has no owner-built HA function to retain. Any later HA client owns its entities and authorized actions |
 
 ---
 
 ## 10. Roadmap
 
 Each phase ends shippable, with the PowerShell bridge still able to run until P7.
+The original phases and estimates are historical planning context; §0.2 governs
+current retirement, with no time-based wait or required optional HA client.
 
 | Phase | Content | Exit criteria |
 |---|---|---|
@@ -1251,7 +1293,7 @@ Each phase ends shippable, with the PowerShell bridge still able to run until P7
 | **P4 Relay + fleet** | Relay service (accounts, roster, frames, rate limits, metrics), pairing, the transport ladder, multi-machine app view, transfers, signed commands, authorization engine, agent principals, MCP retarget, **observability (§5.10): `ops` API, Operator and Connection pages, synthetic probes** | Home PC, VM and Dev Box all visible and drivable from each other, with the relay demonstrably blind (inspected). The Operator page shows live relay health, and the label-allowlist and log-hygiene tests pass |
 | **P5 macOS** | Host on macOS (tmux delivery, LaunchAgent, Secure Enclave/Keychain) and the **SwiftUI app** at full parity with the Windows app (all §7.1 pages, menu bar, notifications with typed answers, install/manage/update, migration). Linux host (systemd, tmux) | A Mac goes from download to a working session in under 5 minutes, and runs without any Windows machine. Mac sessions at parity from either app |
 | **P6 PWA + push** | PWA, passkey pairing, Web Push gateway | Answer and reply from an iPhone and an Android phone with the desktop off |
-| **P7 Retire the legacy daemon** | Verify the separate HA integration/card replacement (#387), then the writer's explicit reversible cutover (#319, under #317). #318's permanent native publisher direction is superseded, not completed. Retire obsolete dependencies only through gated #389 cleanup | No standalone feature requires HA; users who keep HA need no legacy daemon. Replacement, writer cutover and rollback pass on disposable HA before any live migration |
+| **P7 Retire HA dependencies** | #1396's required parity evidence, #1949 load proof, HA-off rehearsal and owner sign-off, then bounded #389 removal slices. #318's permanent native publisher remains superseded; #1419 is optional and later | Slipgates works without HA. Gate evidence passes; rollback is HA back on. No HA replacement or fixed-duration dual run is required (§0.2) |
 | **P8 Native phone apps** (later) | iOS from the shared SwiftUI package; Android (Kotlin) on `Host.Protocol`; APNs/FCM | Store-published |
 
 Rough size: P0 2–3 weeks; P1 4–6; P2 6–8; P3 3–4; P4 6–8; P5 2–3; P6 3–4; P7 2. The
@@ -1261,14 +1303,15 @@ lines)**. On top of that come `install.ps1` (3,600 lines), the card (3,760 lines
 JS, mostly replaced rather than ported) and the MCP server (1,700 lines,
 re-targeted).
 
-**Machine migration order** (G7, G11): Hyperloop VM → DSWETT-DEV-VM1 → ARM laptop →
+**Historical machine migration order** (G7, G11): Hyperloop VM → DSWETT-DEV-VM1 → ARM laptop →
 Dev Box → Mac (after P5) → DSWETT-HOME (the publication writer) last, at P7. Each
 machine stays on the new host for a week, with rollback available, before the next
-one moves.
+one moves. This original schedule is not the current HA retirement gate (§0.2).
 
 ### Path to migration (decided 2026-10-29)
 
-The first goal is parity with agent-ha-bridge, then migrating machines. New features
+**Historical migration plan; not the Nov 11 retirement gate (§0.2).**
+The first goal was parity with agent-ha-bridge, then migrating machines. New features
 (observability beyond health and logs, scale work) wait until then. The stages:
 
 | Stage | Content | Validated by |
