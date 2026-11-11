@@ -22,6 +22,16 @@ public sealed class FleetNames
 
     public string? Get(string id) { lock (gate) { return names.GetValueOrDefault(id); } }
 
+    internal bool TryNameNew(ISessionSource source, string id, string name)
+    {
+        lock (gate)
+        {
+            if (names.ContainsKey(id)) { return false; }
+            Rename(source, JsonSerializer.SerializeToElement(new { id, name }));
+            return true;
+        }
+    }
+
     public object Rename(ISessionSource source, JsonElement data)
     {
         if (data.ValueKind != JsonValueKind.Object

@@ -693,10 +693,14 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         return LaunchAsync(request with { Permissions = LaunchProtocol.Ask }, peer, cancellationToken);
     }
 
+    public Func<LaunchRequest, string, Func<Task<LaunchResult>>, Task<LaunchResult>>? NamedLaunch { get; set; }
+
     public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key)) { return Task.FromResult(Refused("request must be a UUID")); }
-        return requests.Once(key, () => RunAsync(request, key, peer), result =>
+        return requests.Once(key, () => request.FleetName is null ? RunAsync(request, key, peer)
+            : NamedLaunch is { } policy ? policy(request, peer, () => RunAsync(request, key, peer))
+            : Task.FromResult(Refused("fleetName is not supported by this host")), result =>
             Settled(request, result, $"launch {Short(key)}"));
     }
 

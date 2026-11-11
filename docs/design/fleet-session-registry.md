@@ -292,7 +292,7 @@ from, who can set one, and how it is marked.
   prompt, which this note cannot rule out; the first user message is the other fallback
   (`SessionTracker.cs:304-309`, v1-sessions.md:1725), and the HA folder-leaf name is no better
   (`HaPayloads.cs:50-54`). So the host publishes only a **fleet name that a person set on
-  purpose**: a host setting in the host's own state (a rename in the app or the host CLI), keyed
+  purpose** (or the fixed launch rule below): a host setting in the host's own state, keyed
   by session id, never read from a transcript, `workspace.yaml` or a folder. A session with no
   fleet name is listed without one. Slice 3b builds the setting; until it exists no name is
   published and lookup by name returns `notFound`.
@@ -302,13 +302,13 @@ from, who can set one, and how it is marked.
   for this op (local-pipe.md:103); an agent session or any untraced process is refused like other
   acting ops (local-pipe.md:101, 104). The Windows app (slice 7) carries the rename entry point and
   the host CLI a `rename` command; the Mac and iOS apps and the PWA are not app callers
-  (local-pipe.md:102) and cannot set names. The same name can be given at launch (an optional
-  `fleetName` on `session.launch`). `session.launch` **refuses** a request carrying `fleetName`
-  (readable reason, no session started, never silently dropped) unless the caller is the app or
-  the host CLI. That covers the MCP `launch_agent_session` tool (local-pipe.md:218-219), agents
-  that hold a launch scope, and launches arriving over the phone or PWA channel; a channel launch
-  with `fleetName` is refused the same way. A person who wants names on a fleet of launched
-  sessions sets them there, not through the agents. The setting is stored in the host's state
+  (local-pipe.md:102) and cannot rename sessions. The owner-approved launch exception accepts
+  explicit `fleetName` only for a new host-created session: `SG ` plus one of `Chief of Staff`,
+  `Engineering Lead`, `Quality Lead`, `Product Lead`, `Creative Lead`, `Migration Lead`, `SRE Lead`,
+  `Reviewer [A-Z]`, or `(Builder|Worker) [0-9]{1,4}` (exact, ASCII). Live local/readable account matches
+  are refused; in-flight names stay reserved through late registration. The host logs only name,
+  new session id and caller. Agent rename/self-launch refusals remain. Fresh `fleetNames.launchRule`
+  in config defaults on when absent; off/invalid/unreadable refuses (App setter: #1832). Names are stored
   beside its other settings, keyed by session id, so it is as strong as the host's state-file
   protection: a same-user process that can write that file can change it (the pipe's agent rail
   is a safety rail, not a boundary, local-pipe.md:168). It is not an agent-writable path, but it
