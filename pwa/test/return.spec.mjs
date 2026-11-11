@@ -35,14 +35,29 @@ async function comeBack(page) {
   }));
 }
 
+async function advanceAwayClock(page, ms) {
+  await page.clock.runFor(ms);
+}
+
 test.use({ viewport: { width: 1440, height: 900 }, hasTouch: false });
+
+test('return_setup_refuses_to_advance_before_grace_starts', async ({ page }) => {
+  await openDemo(page);
+  await page.clock.install();
+  await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
+  expect(await page.evaluate(() => window.agentBridgeDemo.grace.active)).toBe(false);
+  const before = await page.evaluate(() => Date.now());
+  await expect(advanceAwayClock(page, 1)).rejects.toThrow(
+    'Return setup: refusing to advance fake time before a visible grace start is observed');
+  expect(await page.evaluate(() => Date.now())).toBe(before);
+});
 
 // Quarantined (#1493, #1474): the historical WebKit grace failure remains unreproduced.
 test.skip('a machine that goes away just after a return reads as last seen for 3 s, then shows offline in place', async ({ page }) => {
   await openDemo(page);
   await comeBack(page);
   await setOnline(page, false);
-  await page.clock.runFor(1500);
+  await advanceAwayClock(page, 1500);
   await expect(card(page, IDLE).locator('.row-glyph .glyph')).not.toHaveAttribute('data-glyph', 'failed');
   await expect(card(page, IDLE).locator('.row-status')).not.toHaveText('Offline');
   await expect(card(page, IDLE)).not.toHaveAttribute('data-stale', /./);
@@ -50,7 +65,7 @@ test.skip('a machine that goes away just after a return reads as last seen for 3
   const tab = page.locator('#machine-tabs .machine-tab[data-device-id="demo-laptop"]');
   await expect(tab).not.toHaveClass(/away/);
   await expect(tab).not.toHaveAttribute('aria-label', /offline/);
-  await page.clock.runFor(1600);
+  await advanceAwayClock(page, 1600);
   await expect(tab).toHaveClass(/away/);
   await expect(tab).toHaveAttribute('aria-label', /offline/);
   await expect(card(page, IDLE)).toHaveAttribute('data-stale', 'offline');
