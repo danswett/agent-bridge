@@ -173,6 +173,14 @@ The host publishes one snapshot of its own sessions. All members are required un
 * **sig.** Optional in `v: 1`. Absent until `hostSign` exists; see "Signing".
 * **machine online.** Not in the host's record: the relay adds it from its own socket knowledge
   (see "Freshness and replay").
+* **machine display name.** The relay already sends the machine's `name` beside `record`.
+  `fleet.list` rows and `fleet.find` machine/session/candidate objects expose it as optional
+  `machineName`, independently of session-name content requests. It is trimmed display text,
+  capped at 64 raw UTF-16 code units before trimming. Control, format, unpaired surrogate and
+  line/paragraph separator characters (Cc, Cf, Cs, Zl, Zp) are rejected before trimming;
+  ordinary Unicode and valid emoji pairs stay. Missing, non-string, empty, overlong or
+  excluded-character values are omitted, never guessed.
+  This adds no relay disclosure; `machine` remains the ID and lookup pin, not the display name.
 
 ## Size and paging
 
@@ -340,7 +348,10 @@ truth.
 -> { "result": "notFound" }
 ```
 
-Every `session` and candidate holds typed fields only; **the name is never echoed back**. Only
+Every `session` and candidate holds typed fields only; **the session name is never echoed back**.
+Where a reply includes a machine object, session or candidate, it may also carry `machineName`
+as described above. `incomplete` still lists only machine IDs. Display names do not verify a
+record or alter any lookup result. Only
 verified, live records ever contribute a `node`: `unverified`, `unpinned` and `incomplete` answers
 list machines and flags, never a node to route to. `unpinned` lists, for each machine holding a
 match, `machine`, `online`, `verified`, and the matching session's `state` and `since`, so a person

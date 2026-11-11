@@ -5,8 +5,8 @@ Operations an agent calls on the local pipe after `agent.hello`, on its own cred
 | Operation | Scope | What it does |
 | --- | --- | --- |
 | `agent.send` | read+reply | Sends text to one session; see [local-pipe.md](local-pipe.md#agentsend-ap5-lite). |
-| `fleet.list` | read | Lists the sessions of the agent's own account, across its machines. |
-| `fleet.find` | read | Finds one session of the agent's own account by exact name; answers `unverified` until records are signed. |
+| `fleet.list` | read | Lists the sessions of the agent's own account, across its machines, with optional machine display names. |
+| `fleet.find` | read | Finds one session of the agent's own account by exact name, with optional machine display names; answers `unverified` until records are signed. |
 
 ## `fleet.list`
 
@@ -14,10 +14,11 @@ Operations an agent calls on the local pipe after `agent.hello`, on its own cred
 { "id": 3, "op": "fleet.list", "data": { "include": "content" } }
 ```
 
-`include` is optional. Reply: `{ "sessions": [ { "machine", "node", "state", "since", "secondsInState", "machineOnline", "name"? } ] }`.
+`include` is optional. Reply: `{ "sessions": [ { "machine", "machineName"?, "node", "state", "since", "secondsInState", "machineOnline", "name"? } ] }`.
 
 - Only the caller's own account is listed; the relay sends no other account's machines, and the request carries no account or principal.
 - Only those fields come back: no prompt or question text, paths or tokens. `name` is a person's text, so it is returned only with `include: "content"`.
+- `machineName` is the relay's existing machine display name, independent of `include`: at most 64 raw UTF-16 code units, then trimmed. Control, format, unpaired surrogate and line/paragraph separator characters (Cc, Cf, Cs, Zl, Zp) are rejected before trimming; ordinary Unicode and valid emoji pairs stay. Missing, non-string, empty, overlong or invalid values are omitted, never guessed. It is display text, not an identity; `machine` remains the ID.
 - A machine that is offline or has not reported lately has no fresh record, so its sessions are not listed (`machineOnline` is true for every row returned).
 - Each accepted call invokes the `AuditFleetList` hook with the agent's principal. It records nothing until the audit log (#1401) is assigned to it.
 - Reads the relay registry (see [roster.md](roster.md)); needs a relay connection.
@@ -40,6 +41,7 @@ Optional `"machine"` (1 to 64 of letters, digits, `.`, `_`, `-`) limits the matc
 | `found` | One verified live match on the given `machine` | `session`: `{ id, node, machine, state, since, online }` |
 | `notFound` | Otherwise | none |
 
+- Every machine object, session and candidate above also carries optional `machineName` under the same rules as `fleet.list`; `incomplete` remains an array of IDs. A display name is never a machine pin.
 - Until `hostSign` exists no record is verified, so today a live match answers `unverified` and `found` is not returned: a name alone, or an impostor machine of the same account beside an offline original, never yields a routable node. **Deviation from issue #1399**, which asked for a plain found/ambiguous/not-found; the design governs.
 - The name is trimmed, then matched exactly and case-sensitively; it is refused if empty or over 64 characters (before any audit entry). It is never echoed back, so the call does not taint the caller with session text.
 - Same account, scope and refusal rules as `fleet.list`. Each accepted call invokes the same `AuditFleetList` hook.
