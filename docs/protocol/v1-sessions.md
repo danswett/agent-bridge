@@ -80,6 +80,7 @@ with the wrong type):
 | `HelloResult` | `protocol` | |
 | `MachineInfo` | `id` | |
 | `Session` | `id` | |
+| `SessionLoad` ([v1-machine-load.md](v1-machine-load.md)) | `session` | |
 | `Subagent` | `id` | |
 | `ToolCall` | `id` | |
 | `Activity` | | `source`, `userMessageFrom` |

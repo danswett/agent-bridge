@@ -129,11 +129,39 @@ public static class ProtocolVectors
         Update(catalog.File("update.json", "v1-update.md", "A machine's updates, seen and asked for from another device."));
         Manage(catalog.File("manage.json", "v1-sessions.md", "Restarting a machine and repairing its hooks from a person's other device (#801)."));
         Usage(catalog.File("usage.json", "v1-usage.md", "How much of each agent's allowance is gone."));
+        MachineLoadRecords(catalog.File("machine-load.json", "v1-machine-load.md#1-machineload-1150", "Numerical machine and session load on the relay channel."));
         History(catalog.File("history.json", "v1-history.md", "A session's earlier turns, a page at a time, for the conversation pane."));
         Diagnostics(catalog.File("diagnostics.json", "v1-diagnostics.md", "Diagnosing a machine from a person's device: its health and its content-free journal (#737)."));
         AgentPrincipals(catalog.File("agent-principals.json", "local-pipe.md#agent-principals-agenthello", "An agent session opening its local pipe connection as itself (Windows, local pipe only)."));
         foreach (var d in KnownDifferences.All) { catalog.Differs(d); }
         return catalog.Build();
+    }
+
+    static void MachineLoadRecords(VectorFileBuilder f)
+    {
+        var session = new SessionLoad { Session = SessionId, Agent = LoadAgentKind.Agency, Processes = 3, CpuPercent = 12.5, WorkingSetBytes = 104857600, Handles = 42, HandleKind = LoadHandleKind.Handles, State = SessionLoadState.Fresh };
+        var full = new MachineLoad
+        {
+            SampledAt = T0, AgeMs = 100, State = MachineLoadState.Fresh, StaleAfterMs = 15000,
+            Cpu = new(25, 8), Memory = new(17179869184, 8589934592, 50), Sessions = [session], Unattributed = new(1, 1048576),
+        };
+        f.Record<MachineLoadCpu>(Host).Valid("whole-machine", full.Cpu).Valid("no-figure", new());
+        f.Record<MachineLoadMemory>(Host).Valid("headroom", full.Memory).Valid("no-figure", new());
+        f.Record<UnattributedLoad>(Host).Valid("unowned", full.Unattributed).Valid("no-figure", new());
+        f.Record<SessionLoad>(Host)
+            .Valid("full", session)
+            .Valid("partial", session with { State = SessionLoadState.Partial, CpuPercent = null })
+            .Valid("no-figure", new SessionLoad { Session = SessionId })
+            .Valid("descriptors", session with { Agent = LoadAgentKind.Direct, HandleKind = LoadHandleKind.Fds })
+            .Reads("unknown-enums", """{"session":"s-1","agent":"future","state":"future","handleKind":"future"}""");
+        f.Record<MachineLoad>(Host)
+            .Valid("full", full)
+            .Valid("partial", full with { State = MachineLoadState.Partial, Memory = null })
+            .Valid("stale", full with { State = MachineLoadState.Stale, AgeMs = 16000 })
+            .Valid("first-sample-no-cpu", full with { Cpu = null, Sessions = [session with { CpuPercent = null }] })
+            .Valid("unavailable", new MachineLoad())
+            .Reads("unknown-state", """{"state":"future","sessions":[]}""")
+            .Reads("no-figure", """{"state":"partial","cpu":{},"memory":{},"sessions":[]}""");
     }
 
     // ---- sessions ----
