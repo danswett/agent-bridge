@@ -66,10 +66,13 @@ public sealed class HostRosterReader
             {
                 var acl = new FileInfo(full).GetAccessControl(AccessControlSections.Access | AccessControlSections.Owner);
                 var me = WindowsIdentity.GetCurrent().User!;
-                if (!me.Equals(acl.GetOwner(typeof(SecurityIdentifier))) ||
-                    acl.GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>().Any(r => !me.Equals(r.IdentityReference)))
+                if (!me.Equals(acl.GetOwner(typeof(SecurityIdentifier))))
                 {
                     throw new InvalidDataException();
+                }
+                foreach (FileSystemAccessRule rule in acl.GetAccessRules(true, true, typeof(SecurityIdentifier)))
+                {
+                    if (!me.Equals(rule.IdentityReference)) { throw new InvalidDataException(); }
                 }
             }
             else if (!PrivateFolder.IsPrivate(full)) { throw new InvalidDataException(); }
