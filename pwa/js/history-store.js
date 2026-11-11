@@ -230,6 +230,7 @@ export class HistoryStore {
         return;
       }
       if (gen !== e.generation) { return; }
+      if (keepLatest && !collecting && cursor !== e.before) { break; }
       if (result.stale) {
         // What is drawn stays. Ask again without the cursor and merge by id: the turn held at the
         // old end is where the walk back from the newest page is done.
