@@ -236,6 +236,7 @@ public sealed class ReplyService : ISessionReplier
     async Task<ReplyResult> DeliverAsync(ReplyRequest request, Guid key, string peer, DeliveryTimeline timeline)
     {
         Typed typed;
+        IReadOnlyList<ReplyAttachmentBinding>? bindings = null;
         try
         {
             if (!options.PlatformSupported) { return Refused("replying is not supported on this platform yet; reply at the machine"); }
@@ -267,6 +268,13 @@ public sealed class ReplyService : ISessionReplier
                 keysWent = outcome.KeysWent;
                 if (outcome.Result is { } result) { return result; }
                 typed = outcome.Typed!;
+                if (claim is not null && session.Agent is AgentKind.Copilot or AgentKind.Claude)
+                {
+                    bindings = [.. refs.Select((attachment, i) => new ReplyAttachmentBinding
+                    {
+                        Id = attachment.Id, Ref = "@" + claim.Staged[i],
+                    })];
+                }
             }
             finally
             {
@@ -294,7 +302,7 @@ public sealed class ReplyService : ISessionReplier
         try { confirmed = await typed.Confirm(); }
         catch (Exception e) { confirmed = Failed(AnswerOutcome.Unconfirmed, $"reply {key.ToString()[..8]} to {Short(request.Id)} could not be checked", e); }
         Measure(key, request.Id, typed.Seen, timeline, confirmed);
-        return confirmed;
+        return confirmed.Outcome == AnswerOutcome.Delivered ? confirmed with { Attachments = bindings } : confirmed;
     }
 
     // One line for each reply that reached its confirmation, to measure why replies go

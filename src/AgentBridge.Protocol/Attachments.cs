@@ -57,6 +57,14 @@ public sealed record AttachmentRef
     public required string Id { get; init; }
 }
 
+public sealed record ReplyAttachmentBinding
+{
+    [Strict(Strictness.Identity)]
+    public required string Id { get; init; }
+    [Strict(Strictness.Identity)]
+    public required string Ref { get; init; }
+}
+
 public static class AttachmentLimits
 {
     // One file through the channel. Larger ones go through the blob store.

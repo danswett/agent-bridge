@@ -577,9 +577,17 @@ public static class ProtocolVectors
             .Refused("an-attachment-that-is-not-a-uuid", Reply("see this", "photo.png"))
             .Refused("the-same-attachment-twice", Reply("see this", FileA, FileA.ToUpperInvariant()))
             .Refused("a-null-attachment", $$"""{"id":"{{SessionId}}","request":"{{Request}}","text":"x","attachments":[null]}""");
+        var binding = new ReplyAttachmentBinding
+        {
+            Id = FileA, Ref = @"@C:\bridge\attachments\0123456789abcdef0123456789abcdef-shot.png",
+        };
+        f.Record<ReplyAttachmentBinding>(Host).Valid("a-staged-reference", binding);
         f.Record<ReplyResult>(Host)
             .Valid("delivered", new ReplyResult(AnswerOutcome.Delivered))
+            .Valid("delivered-with-bindings", new ReplyResult(AnswerOutcome.Delivered) { Attachments = [binding] })
+            .Valid("refused-without-bindings", new ReplyResult(AnswerOutcome.Refused, "the session is asking a question"))
             .Valid("busy", new ReplyResult(AnswerOutcome.Busy, "an answer to this session is being typed"))
+            .Reads("unreadable-bindings-are-absent", """{"outcome":"delivered","attachments":"wrong"}""")
             .Reads("an-unknown-outcome-reads-as-unconfirmed", """{"outcome":"typed"}""");
         // session.reply and session.answer with progress: true (sessions.progress).
         f.Record<DeliveryProgress>(Host)

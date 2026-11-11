@@ -228,7 +228,7 @@ const READS = {
   // for progress sends (#600): read as the service gets them.
   DeliveryProgress: { read: readProgress },
   DeliveryTimings: { read: (j) => readAnswerResult({ outcome: 'delivered', timings: j }).timings ?? {} },
-  ReplyResult: { read: readAnswerResult },
+  ReplyResult: { read: readAnswerResult, unread: ['attachments'] },
   StopResult: { read: readStopResult },
   // session.history's page and the records in it, as the history store gets them (#292).
   HistoryResult: { read: readHistoryResult },
@@ -451,6 +451,7 @@ const NOT_REPLAYED = {
   PushListResult: 'the PWA does not call push.list',
   PushDevice: 'the PWA does not call push.list',
   AttachmentRef: 'written as ReplyRequest\'s attachments, replayed there',
+  ReplyAttachmentBinding: 'sender-thumbnail bindings are not read until #1802 S3',
   BlobRef: 'written by the blob-store path of uploadAttachment, which needs a relay',
   ResumableIncomplete: 'read only within LaunchOptions, and not yet by the PWA (#95 S3)',
   LaunchDefaults: 'read only within LaunchOptions, where it must name an agent and a workspace offered',

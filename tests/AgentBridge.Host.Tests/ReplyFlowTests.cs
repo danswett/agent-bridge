@@ -1163,17 +1163,52 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Delivered_same_named_files_bind_the_client_ids_to_distinct_recorded_references_in_send_order()
+    {
+        using var store = ServeAttachments();
+        var ch = await OpenAsync();
+        var first = Png(100);
+        var secondFile = Png(200);
+        var a = await UploadAsync(ch, first, "shot.png");
+        var b = await UploadAsync(ch, secondFile, "shot.png");
+        var request = new { id = Id, request = Guid.NewGuid().ToString(), text = "compare", attachments = Files(b, a) };
+
+        var result = Ok(await ch.RequestAsync(Ops.SessionReply, request));
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        var bindings = result.GetProperty("attachments").EnumerateArray().ToArray();
+        Assert.Equal([b, a], bindings.Select(x => x.GetProperty("id").GetString()));
+        var references = bindings.Select(x => x.GetProperty("ref").GetString()!).ToArray();
+        var typed = Assert.Single(injector.Plans).Plan.Sends[0].Text;
+        Assert.Equal(typed.Split(' ').Take(2), references);
+        Assert.NotEqual(references[0], references[1]);
+        Assert.Equal(secondFile, File.ReadAllBytes(references[0][1..]));
+        Assert.Equal(first, File.ReadAllBytes(references[1][1..]));
+        await source.RefreshAsync();
+        Assert.All(references, reference => Assert.Contains(reference, source.Get(Id)!.Activity.UserMessage));
+
+        var repeated = Ok(await ch.RequestAsync(Ops.SessionReply, request));
+        Assert.Equal(result.GetRawText(), repeated.GetRawText());
+        Assert.Single(injector.Plans);
+    }
+
+    [Fact]
     public async Task Files_alone_are_a_reply_and_one_copilot_did_not_attach_is_unconfirmed()
     {
         ServeAttachments();
         var ch = await OpenAsync();
         injector.OnInject = plan => Fixture.Append(events, WithFiles(plan.Sends[0].Text, attach: false));
 
-        var (outcome, reason) = await ReplyAsync(ch, "", attachments: Files(await UploadAsync(ch, Png(64))));
+        var result = Ok(await ch.RequestAsync(Ops.SessionReply, new
+        {
+            id = Id, request = Guid.NewGuid().ToString(), text = "", attachments = Files(await UploadAsync(ch, Png(64))),
+        }));
 
-        Assert.Equal("unconfirmed", outcome);
+        Assert.Equal("unconfirmed", result.GetProperty("outcome").GetString());
+        var reason = result.GetProperty("reason").GetString();
         Assert.Contains("did not attach every file", reason);
         Assert.DoesNotContain("at the machine", reason);
+        Assert.False(result.TryGetProperty("attachments", out _));
         Assert.StartsWith("@", Assert.Single(injector.Plans).Plan.Sends[0].Text);
     }
 
@@ -1185,7 +1220,12 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         var ch = await OpenAsync();
         var id = await UploadAsync(ch, Png(100));
 
-        Assert.Equal("refused", (await ReplyAsync(ch, "look", attachments: Files(id))).Outcome);
+        var refused = Ok(await ch.RequestAsync(Ops.SessionReply, new
+        {
+            id = Id, request = Guid.NewGuid().ToString(), text = "look", attachments = Files(id),
+        }));
+        Assert.Equal("refused", refused.GetProperty("outcome").GetString());
+        Assert.False(refused.TryGetProperty("attachments", out _));
         // The question was only in the transcript, so the files had been staged; now they are not.
         Assert.Empty(Directory.Exists(Staging) ? Directory.GetFiles(Staging) : []);
         Assert.Equal(1, store.Count);
