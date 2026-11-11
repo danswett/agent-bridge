@@ -1,7 +1,7 @@
 # Beta download manifest (#735)
 
 The landing site in `danswett/slipgates-site` consumes a static snapshot, not GitHub's
-visitor-facing API. Landing Site Team owns its pages and workflow; Platform owns
+visitor-facing API. Landing Site Team owns its pages and workflow; Engineering owns
 this release contract. SRE owns Pages settings, DNS and go-live proof. Engineering
 staffs review and Quality admits the PRs. This contract does not authorize deployment.
 
@@ -113,5 +113,5 @@ non-Gregorian/time-separator cultures and publication reruns against a stand-in
 `gh`. The default producer makes no network calls; only `-Publish` enables them.
 Existing Windows publisher fixtures also
 cover the new-upload versus manifest-repair outputs, without changing attest's
-meaning. CI is the validation venue for the restricted Platform VM4 session;
-neither fixture suite authorizes local target execution or a live upload.
+meaning. CI runs both fixture suites; neither authorizes local target execution
+or a live upload.

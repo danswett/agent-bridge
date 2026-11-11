@@ -2573,7 +2573,7 @@ and setup never traps the person (decision 4). The steps, in order, with their b
    changed**, with **Details**. Fresh setup never takes over another tool's state.
 2. **Agents** ([board](proposals/384-first-run/proposal-384-agents.png)), "Found agents are
    selected. Choose any others to install." A checkbox row per agent: found ones checked,
-   missing ones unchecked and Not selected. **An agent's version** (#231; Head of Product's
+   missing ones unchecked and Not selected. **An agent's version** (#231; Product's
    decision, 2026-11-04, [#696](https://github.com/danswett/agent-bridge/issues/696#issuecomment-6651872822))
    sets how it's offered:
    - **Tested:** checked.

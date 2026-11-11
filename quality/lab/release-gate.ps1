@@ -46,9 +46,9 @@ $ErrorActionPreference = 'Stop'
 $Prerequisites = @(
     [pscustomobject]@{ Id = 'contract-approval'; Met = $false; Owner = 'owner, Quality'
         Need = 'The #357 lab contract and its provisioning draft (#849) approved and merged.' }
-    [pscustomobject]@{ Id = 'nightly-landed'; Met = $false; Owner = 'Platform, Quality'
+    [pscustomobject]@{ Id = 'nightly-landed'; Met = $false; Owner = 'Engineering, Quality'
         Need = 'The lab nightly (#854) merged, and this workflow''s call re-pointed from its pinned #854 commit to main''s own ./.github/workflows/lab-nightly.yml, so the workflow and the scripts its jobs run come from one commit; with proof that a call still runs one lab run at a time.' }
-    [pscustomobject]@{ Id = 'nightly-cleared'; Met = $false; Owner = 'owner, Platform, SRE'
+    [pscustomobject]@{ Id = 'nightly-cleared'; Met = $false; Owner = 'owner, Engineering, SRE'
         Need = 'Every prerequisite of quality/lab/nightly-gate.ps1 met in reviewed source: the owner''s authorization of execution and spend, the bootstrap, S0 snapshots, native Arm64 feasibility, run registration, the expiry sweeper, cost alerts, the lab token and the v1 scenario (#357 B1-B3, #736).' }
     [pscustomobject]@{ Id = 'release-consumer'; Met = $false; Owner = 'SRE, owner'
         Need = 'A reviewed consumer of the verification (SRE''s #590 cut and promotion path, quality/README.md §7): which channel, if any, a verified release may feed. Until then a verification has nowhere to go, and it is never a promotion, a channel move or a Beta 1 count.' }

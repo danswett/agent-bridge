@@ -272,7 +272,7 @@ function Get-PwaRelay {
 
 # Where to sign in a profile that has not: as asked, else as agent-bridge-host itself would
 # (AGENT_BRIDGE_RELAY, then the profile's last), else the relay the app's own profile signed in
-# to, else the one the phone's app uses. A machine without the app (DEV-VM1) has only the last.
+# to, else the one the phone's app uses. A machine without the app can still use the Pages relay.
 function Get-ShadowRelayUrl {
     if ($RelayUrl) { return $RelayUrl }
     if ($env:AGENT_BRIDGE_RELAY) { return $env:AGENT_BRIDGE_RELAY }

@@ -9,7 +9,7 @@ stands:
 - **Planned** isn't built yet.
 
 **Deployment record.** The production monitoring module went live on 2026-11-07 (about 01:15 PT),
-deployed by Platform SRE with `az deployment group create` of `infra/modules/monitoring.bicep`
+deployed by SRE with `az deployment group create` of `infra/modules/monitoring.bicep`
 alone (deployment `relay-monitoring-sre-20261107`, owner approval in the SRE session). A full
 `infra/deploy.ps1 -Production` what-if that day also showed the unapplied feedback containers
 and app updates, so the module went in alone rather than widening the change. It created the
