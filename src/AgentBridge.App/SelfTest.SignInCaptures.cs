@@ -1,4 +1,5 @@
 using AgentBridge.App.Core;
+using AgentBridge.Protocol;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
@@ -97,7 +98,15 @@ static partial class SelfTest
             var rowShown = await Until(() => Row() is not null, TimeSpan.FromSeconds(5));
             var rowWords = Row() is { } sr && ById<TextBlock>(sr, "RowFacts") is { } facts ? Text(facts) : "";
             check(rowShown && rowWords.StartsWith("Needs sign-in", StringComparison.Ordinal), $"captures a row that needs sign-in{where} ({rowWords})");
-            if (rowShown) { await Looks(look => Row() is { } r ? Shot(r, File("row", look)) : Task.CompletedTask); }
+            if (rowShown)
+            {
+                await Looks(async look =>
+                {
+                    if (Row() is not { } r) { check(false, $"keeps the sign-in row drawn for its typography check{look}"); return; }
+                    await CheckSignInRowTypography(window, main, r, check, look);
+                    await Shot(r, File("row", look));
+                });
+            }
             if (page.Rows.Items.Count > 0) { page.Rows.ScrollIntoView(page.Rows.Items[0]); }
 
             // A way to sign in this app doesn't know: no claim, so nothing to press, and never "at the
@@ -173,5 +182,108 @@ static partial class SelfTest
             if (!contrast) { window.RootElement.RequestedTheme = ElementTheme.Default; }
             AppLog.Write($"self-test: sign-in captures{where}: gone");
         }
+    }
+
+    static async Task CheckSignInRowTypography(MainWindow window, MainViewModel main, SessionRow row, Action<bool, string> check, string look)
+    {
+        var facts = ById<TextBlock>(row, "RowFacts");
+        var words = row.FindName("StatusWords") as Run;
+        if (facts is null || words is null || words.Text != "Needs sign-in")
+        {
+            check(false, $"finds the drawn Needs sign-in status for its typography check{look}");
+            return;
+        }
+
+        // Inter's tabular figures substitute a wider hyphen too (#903). Compare the actual
+        // row's character advances with the same face's proportional text, not just its string.
+        var referenceWords = new Run { Text = words.Text };
+        var reference = new TextBlock
+        {
+            Style = (Style)Application.Current.Resources["AbTypeMeta"],
+            FontFamily = facts.FontFamily,
+            FontSize = facts.FontSize,
+            FontWeight = facts.FontWeight,
+            FontStyle = facts.FontStyle,
+            CharacterSpacing = facts.CharacterSpacing,
+            IsTextScaleFactorEnabled = facts.IsTextScaleFactorEnabled,
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        Typography.SetNumeralAlignment(referenceWords, Microsoft.UI.Xaml.FontNumeralAlignment.Proportional);
+        reference.Inlines.Add(referenceWords);
+        var tabularWords = new Run { Text = words.Text };
+        var tabular = new TextBlock
+        {
+            Style = reference.Style,
+            FontFamily = reference.FontFamily,
+            FontSize = reference.FontSize,
+            FontWeight = reference.FontWeight,
+            FontStyle = reference.FontStyle,
+            CharacterSpacing = reference.CharacterSpacing,
+            IsTextScaleFactorEnabled = reference.IsTextScaleFactorEnabled,
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        Typography.SetNumeralAlignment(tabularWords, Microsoft.UI.Xaml.FontNumeralAlignment.Tabular);
+        tabular.Inlines.Add(tabularWords);
+        var host = new StackPanel { Opacity = 0, IsHitTestVisible = false, HorizontalAlignment = HorizontalAlignment.Left };
+        host.Children.Add(reference);
+        host.Children.Add(tabular);
+        var context = main.AllMachines[0].Cards;
+        var counted = DemoHost.Delegating(context.Time.GetUtcNow()) with { Id = "demo-row-typography", Subagents = [] };
+        counted = counted with { Activity = counted.Activity with { Background = Background.Of(1, 1) } };
+        var countingCard = new SessionCardViewModel(counted, context);
+        var counting = new SessionRow { Card = countingCard };
+        host.Children.Add(counting);
+        var root = (Panel)window.RootElement;
+        root.Children.Add(host);
+        try
+        {
+            host.UpdateLayout();
+            await Task.Delay(50);
+            static double Advance(Run run, int at)
+            {
+                if (at < 0) { return double.NaN; }
+                var start = run.ContentStart.GetPositionAtOffset(at, LogicalDirection.Forward);
+                var next = run.ContentStart.GetPositionAtOffset(at + 1, LogicalDirection.Forward);
+                return start is null || next is null ? double.NaN
+                    : next.GetCharacterRect(LogicalDirection.Forward).X - start.GetCharacterRect(LogicalDirection.Forward).X;
+            }
+            var hyphen = words.Text.IndexOf('-');
+            var drawn = Advance(words, hyphen);
+            var normal = Advance(referenceWords, hyphen);
+            var wide = Advance(tabularWords, hyphen);
+            check(normal > 0 && wide > normal + 1, $"distinguishes the font's proportional and tabular hyphens{look} ({normal:F2} / {wide:F2} px)");
+            check(normal > 0 && Math.Abs(drawn - normal) <= 0.25,
+                $"draws sign-in with proportional hyphen spacing in the row status{look} ({drawn:F2} px, {normal:F2} expected)");
+
+            var age = ById<TextBlock>(row, "Age");
+            check(Typography.GetNumeralAlignment(facts) == Microsoft.UI.Xaml.FontNumeralAlignment.Tabular
+                && age is not null && Typography.GetNumeralAlignment(age) == Microsoft.UI.Xaml.FontNumeralAlignment.Tabular,
+                $"keeps the row's other metadata and changing age tabular{look}");
+            check(words.FontFamily.Source == facts.FontFamily.Source && words.FontSize == facts.FontSize
+                && words.CharacterSpacing == facts.CharacterSpacing,
+                $"keeps the row status in its meta face, size and tracking{look}");
+
+            var countWords = counting.FindName("StatusWords") as Run;
+            check(countWords is not null && countWords.Text == "Delegating to 1 agent"
+                && Typography.GetNumeralAlignment(countWords) == Microsoft.UI.Xaml.FontNumeralAlignment.Tabular,
+                $"keeps mixed words and a delegate count in the status run tabular{look} ({countWords?.Text})");
+            if (countWords is not null)
+            {
+                var one = Advance(countWords, countWords.Text.IndexOf('1'));
+                countingCard.Update(counted with { Activity = counted.Activity with { Background = Background.Of(8, 1) } });
+                host.UpdateLayout();
+                await Task.Delay(50);
+                var eight = Advance(countWords, countWords.Text.IndexOf('8'));
+                check(countWords.Text == "Delegating to 8 agents" && one > 0 && Math.Abs(one - eight) <= 0.25,
+                    $"keeps the count column width when a delegate count changes from 1 to 8{look} ({one:F2} / {eight:F2} px)");
+            }
+            counting.Card = row.Card;
+            host.UpdateLayout();
+            await Task.Delay(50);
+            check(countWords is not null && countWords.Text == words.Text
+                && Typography.GetNumeralAlignment(countWords) == Microsoft.UI.Xaml.FontNumeralAlignment.Proportional,
+                $"uses proportional status words when a counted row is reused for sign-in{look}");
+        }
+        finally { root.Children.Remove(host); countingCard.Detach(); }
     }
 }

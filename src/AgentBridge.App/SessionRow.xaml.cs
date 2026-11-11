@@ -46,6 +46,9 @@ public sealed partial class SessionRow : UserControl
 
     public static FontWeight Weight(bool unread) => unread ? FontWeights.SemiBold : FontWeights.Normal;
     public static string Separator(string? place) => string.IsNullOrEmpty(place) ? "" : " · ";
+    // This face's tabular figures widen hyphens too; only runs with counts need them (#903).
+    public static FontNumeralAlignment StatusFigures(string? status) => status?.Any(char.IsDigit) == true
+        ? FontNumeralAlignment.Tabular : FontNumeralAlignment.Proportional;
     public static string WordsState(StatusTone tone) => $"Words{tone}";
 
     void OnCard(SessionCardViewModel? old, SessionCardViewModel? card)

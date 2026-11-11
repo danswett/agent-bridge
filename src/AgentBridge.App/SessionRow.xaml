@@ -139,7 +139,10 @@
             TextTrimming="CharacterEllipsis"
             TextWrapping="NoWrap"
             AutomationProperties.AutomationId="RowFacts">
-            <Run x:Name="StatusWords" Text="{x:Bind Card.RowStatus, Mode=OneWay}" /><Run Text="{x:Bind local:SessionRow.Separator(Card.RowPlace), Mode=OneWay}" /><Run Text="{x:Bind Card.RowPlace, Mode=OneWay}" />
+            <Run
+                x:Name="StatusWords"
+                Text="{x:Bind Card.RowStatus, Mode=OneWay}"
+                Typography.NumeralAlignment="{x:Bind local:SessionRow.StatusFigures(Card.RowStatus), Mode=OneWay}" /><Run Text="{x:Bind local:SessionRow.Separator(Card.RowPlace), Mode=OneWay}" /><Run Text="{x:Bind Card.RowPlace, Mode=OneWay}" />
         </TextBlock>
 
         <!-- A grip to drag the row to another place, shown while the pointer is over it, in Your
