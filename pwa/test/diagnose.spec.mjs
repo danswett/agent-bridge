@@ -2,8 +2,8 @@
 // ?diagnose=1, where the laptop offers diagnostics.get and the other two are hosts from before
 // it: the laptop's snapshot shown as plain text with only what the app reads, Copy only once the
 // person has said they reviewed it, Escape closing it, a refusal said in the person's words and
-// never with the host's text, and an older host showing an update hint in place of Diagnose and
-// never asked.
+// never with the host's text. Withholding reasons are quiet, never update advice; healthy and
+// older machines show no hint and a host that withholds diagnostics is never asked.
 import { test, expect } from '@playwright/test';
 import { go } from './nav.mjs';
 
@@ -13,6 +13,15 @@ const CANARY = 'ghp_CANARYtoken0123456789abcdef';
 
 const item = (page, id) => page.locator(`#machine-list [data-device-id="${id}"]`);
 const demo = (page, id, field) => page.evaluate(([id, field]) => window.agentBridgeDemo.machines[id][field], [id, field]);
+
+async function setReason(page, id, reason) {
+  await page.evaluate(async ([id, reason]) => {
+    const { machines, hosts } = window.agentBridgeDemo;
+    if (reason === null) { delete machines[id].machine.diagnosticsReason; }
+    else { machines[id].machine.diagnosticsReason = reason; }
+    await hosts.refresh(id);
+  }, [id, reason]);
+}
 
 async function openDemo(page) {
   await page.addInitScript(() => {
@@ -175,11 +184,97 @@ test('a held kind this device does not know is said as unknown and never named',
   expect(await demo(page, LAPTOP, 'diagnosticsLog')).toHaveLength(3);
 });
 
-test('an older machine offers no Diagnose and is never asked, and a refusal is said in plain words', async ({ page }) => {
+const reasonLines = [
+  ['pinning-off', 'Diagnose needs device approval turned on \u00B7 the owner of DEV-VM1 (shadow) can turn it on'],
+  ['no-person-lease', 'Diagnose needs this device approved \u00B7 the owner of DEV-VM1 (shadow) can approve it'],
+  ['not-offered', 'Diagnose is not offered here \u00B7 the owner of DEV-VM1 (shadow) can check its settings'],
+];
+
+for (const [reason, line] of reasonLines) {
+  test(`readOnly set with ${reason} shows one distinct quiet line naming who clears it, never update advice`, async ({ page }) => {
+    await openDemo(page);
+    await setReason(page, SHADOW, reason);
+    const shadow = item(page, SHADOW);
+    await expect(shadow.locator('.tile-actions-note')).toContainText('view only');
+    const hint = shadow.locator('.machine-diagnose-hint');
+    await expect(hint).toHaveCount(1);
+    await expect(hint).toHaveText(line);
+    await expect(hint).not.toContainText(/update|upgrade|install|error|failed/i);
+    await expect(hint).not.toHaveAttribute('role', 'alert');
+    await expect(hint).not.toHaveClass(/machine-error|warn|error/);
+    expect(await hint.evaluate((el) => getComputedStyle(el).color))
+      .toBe(await shadow.locator('.machine-sub').evaluate((el) => getComputedStyle(el).color));
+    await expect(shadow.locator('.machine-diagnose')).toHaveCount(0);
+    expect(await demo(page, SHADOW, 'calls')).not.toContain('diagnostics.get');
+  });
+
+  test(`neither readOnly nor discovery held with ${reason} shows no diagnosis hint`, async ({ page }) => {
+    await openDemo(page);
+    await setReason(page, 'demo', reason);
+    await expect(item(page, 'demo').locator('.tile-actions-note')).toHaveCount(0);
+    await expect(item(page, 'demo').locator('.machine-diagnose-hint')).toHaveCount(0);
+    expect(await demo(page, 'demo', 'calls')).not.toContain('diagnostics.get');
+  });
+}
+
+test('discovery held without readOnly shows a reason only once that existing problem is shown', async ({ page }) => {
   await openDemo(page);
+  await setReason(page, 'demo', 'no-person-lease');
+  await page.clock.install();
+  await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);
+  await page.evaluate(() => window.agentBridgeDemo.hold({ reason: 'scan paused', agents: ['copilot'] }));
+  const machine = item(page, 'demo');
+  await expect(machine.locator('.machine-diagnose-hint')).toHaveCount(0);
+  await page.clock.runFor(2 * 60000 + 100);
+  await expect(machine.locator('.tile-actions-note')).toHaveText('Discovery is held: scan paused');
+  await expect(machine.locator('.machine-diagnose-hint')).toHaveText(
+    'Diagnose needs this device approved \u00B7 the owner of Demo machine can approve it');
+  await page.evaluate(() => window.agentBridgeDemo.hold(null));
+  await page.clock.runFor(100);
+  await expect(machine.locator('.machine-diagnose-hint')).toHaveCount(0);
+});
+
+test('readOnly set redraws the hint when only diagnosticsReason changes', async ({ page }) => {
+  await openDemo(page);
+  const hint = item(page, SHADOW).locator('.machine-diagnose-hint');
+  await setReason(page, SHADOW, 'pinning-off');
+  await expect(hint).toHaveText(reasonLines[0][1]);
+  await setReason(page, SHADOW, 'no-person-lease');
+  await expect(hint).toHaveText(reasonLines[1][1]);
+});
+
+test('readOnly set on an older host without diagnosticsReason shows no hint', async ({ page }) => {
+  await openDemo(page);
+  await setReason(page, SHADOW, null);
+  expect(await demo(page, SHADOW, 'machine')).not.toHaveProperty('diagnosticsReason');
+  await expect(item(page, SHADOW).locator('.machine-diagnose-hint')).toHaveCount(0);
+  await expect(item(page, SHADOW).locator('.machine-diagnose')).toHaveCount(0);
+  expect(await demo(page, SHADOW, 'calls')).not.toContain('diagnostics.get');
+});
+
+test('neither readOnly nor discovery held on an offered machine keeps Diagnose with no hint despite a reason', async ({ page }) => {
+  await openDemo(page);
+  await setReason(page, LAPTOP, 'pinning-off');
+  await expect(item(page, LAPTOP).locator('.machine-diagnose')).toBeVisible();
+  await expect(item(page, LAPTOP).locator('.machine-diagnose-hint')).toHaveCount(0);
+});
+
+test('readOnly set with an unknown newer-host reason shows no hint and leaves the card intact', async ({ page }) => {
+  await openDemo(page);
+  await setReason(page, SHADOW, 'future-diagnostics-reason');
+  const shadow = item(page, SHADOW);
+  await expect(shadow.locator('.machine-diagnose-hint')).toHaveCount(0);
+  await expect(shadow.locator('.machine-name')).toHaveText('DEV-VM1 (shadow)');
+  await expect(shadow.locator('.machine-view')).toBeVisible();
+  expect(await demo(page, SHADOW, 'calls')).not.toContain('diagnostics.get');
+});
+
+test('readOnly set on a shadow with a reason offers no Diagnose and is never asked, and a refusal is plain', async ({ page }) => {
+  await openDemo(page);
+  await setReason(page, SHADOW, 'pinning-off');
   const shadow = item(page, SHADOW);
   await expect(shadow.locator('.machine-diagnose')).toHaveCount(0);
-  await expect(shadow.locator('.machine-diagnose-hint')).toHaveText(/^Can't be diagnosed from this device \u00B7 update .+ on DEV-VM1 \(shadow\)$/);
+  await expect(shadow.locator('.machine-diagnose-hint')).toHaveText(reasonLines[0][1]);
   expect(await demo(page, SHADOW, 'calls')).not.toContain('diagnostics.get');
   expect(await demo(page, 'demo', 'calls')).not.toContain('diagnostics.get');
 
