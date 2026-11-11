@@ -350,8 +350,11 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
 
         var result = await ReplyAsync(ClaudeId, "What do you see?", shot, notes);
 
-        Assert.Equal(new ReplyResult(AnswerOutcome.Delivered), result);
+        Assert.Equal(AnswerOutcome.Delivered, result.Outcome);
+        var bindings = System.Text.Json.JsonSerializer.SerializeToElement(result, ProtocolJson.Options).GetProperty("attachments").EnumerateArray().ToArray();
+        Assert.Equal([shot, notes], bindings.Select(x => x.GetProperty("id").GetString()));
         var line = Typed(Assert.Single(console.Plans).Plan);
+        Assert.Equal(line.Split(' ').Take(2), bindings.Select(x => x.GetProperty("ref").GetString()));
         Assert.Matches(@"^@\S+-Screen-Shot\.png @\S+-plan\.md What do you see\?$", line);
         Assert.Equal(0, store.Count);
     }
@@ -440,6 +443,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
         Assert.Contains("has not read every file", result.Reason);
         Assert.DoesNotContain("at the machine", result.Reason);
+        Assert.False(System.Text.Json.JsonSerializer.SerializeToElement(result, ProtocolJson.Options).TryGetProperty("attachments", out _));
     }
 
     // ---- Codex ----
@@ -533,7 +537,9 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         var b = Upload(Png(200), "b.png");
         CodexTakesImages();
 
-        Assert.Equal(new ReplyResult(AnswerOutcome.Delivered), await ReplyAsync(CodexId, "What changed?", a, b));
+        var result = await ReplyAsync(CodexId, "What changed?", a, b);
+        Assert.Equal(new ReplyResult(AnswerOutcome.Delivered), result);
+        Assert.False(System.Text.Json.JsonSerializer.SerializeToElement(result, ProtocolJson.Options).TryGetProperty("attachments", out _));
         var sends = console.Plans.Select(p => p.Plan.Sends.Single()).ToList();
         Assert.Equal(3, sends.Count);
         Assert.All(sends.Take(2), s => Assert.Matches(@"^\S+-[ab]\.png$", s.Text));
