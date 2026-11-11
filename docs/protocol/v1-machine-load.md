@@ -1,14 +1,16 @@
 # Bridge Protocol v1: machine load and session move (contract)
 
-Status: **contract for a builder, not yet implemented.** It settles what #1150 (host measures
+Status: **load records and vectors implemented; host handlers and session move remain contracts.** It settles what #1150 (host measures
 session process trees and headroom) must publish, what a session move carries and records
 (#1146, fleet #22), and where #1142 (real launch options) already stands. Same channel, framing
-and rules as [v1-sessions.md](v1-sessions.md). Records will live in
-`src/AgentBridge.Protocol/MachineLoad.cs`; the builder adds `vectors/machine-load.json` through
+and rules as [v1-sessions.md](v1-sessions.md). Load records live in
+`src/AgentBridge.Protocol/MachineLoad.cs`; `vectors/machine-load.json` is generated through
 `ProtocolVectors.cs`, as for the other files ([vectors/README.md](vectors/README.md)).
 
 Counts and sizes only. Nothing here carries a path, command line, PID, prompt, transcript or
-credential, and a figure leaves the machine only after Compliance has cleared it (#1150).
+credential. Numerical machine totals and per-session figures were
+[cleared by the owner, #1150 comment 6787433188](https://github.com/danswett/agent-bridge/issues/1150#issuecomment-6787433188),
+for the relay channel. This does not clear process names or change the Home Assistant path.
 
 ## 1. `machine.load` (#1150)
 
@@ -32,7 +34,6 @@ connection may hold one subscription, and `load.unsubscribe` `{}` ends it. `seq`
 | `staleAfterMs` | number | How old `sampledAt` may be before the host calls it `stale` |
 | `cpu` | `{ percent, cores }`? | `percent` 0 to 100, **of the whole machine**: the counter delta over the interval divided by (cores x interval). `cores` are logical cores. Absent on the first sample or after a counter reset |
 | `memory` | `{ totalBytes, availableBytes, committedPercent }`? | `availableBytes` is what the OS says can be given out now. This, not the session sum, is headroom. `committedPercent` is committed memory, 0 to 100 |
-| `topProcesses` | `{ name, cores }[]`? | Present only while machine `cpu.percent` is above 85: at most five, by process name and cores used. Names and numbers only |
 | `sessions` | SessionLoad[] | One per discovered session, at most 200. Over 200 the host sends the 200 with the most working set and sets `state` to `partial`. Anything published beyond the channel is machine totals only: the Compliance clearance (#1150) covers totals, so `sessions` stays on the channel |
 | `unattributed` | `{ processes, workingSetBytes }`? | Processes the host started under a session root that no session now owns (for example children of an exited root) |
 
@@ -44,8 +45,6 @@ Disk is not in this record: SRE ruled it out of this slice. A later contract add
 |---|---|---|
 | `session` | string | The session id as in [v1-sessions.md](v1-sessions.md), the existing identity; no new key |
 | `agent` | string | The agent kind, as the launcher names it (`agency` or `direct` for Copilot) |
-| `cliVersion` | string? | The agent CLI's version |
-| `processNames` | `{ name, count }[]` | Process counts by name (for example `agency.exe` x2); never paths, arguments or prompts |
 | `processes` | number | Processes in the whole tree, helpers and descendants included |
 | `cpuPercent` | number? | Of the whole machine, same normalisation. Absent on a first sample |
 | `workingSetBytes` | number? | The **sum of working sets** of the tree. It double-counts shared pages, so it is labelled so and is never a headroom figure |
@@ -53,7 +52,13 @@ Disk is not in this record: SRE ruled it out of this slice. A later contract add
 | `handleKind` | `"handles"` \| `"fds"`? | Says which `handles` is. Present with `handles` |
 | `state` | `"fresh"` \| `"partial"` \| `"unavailable"` | `partial`: a process of the tree exited or could not be read mid-sample |
 
-Not in v1 of this record: disk growth per session. Process I/O write bytes are not retained disk
+Not in v1: `SessionLoad.processNames`, `MachineLoad.topProcesses`, and `SessionLoad.cliVersion`.
+Adding names later requires a separate owner decision. The only string fields are `session`,
+`agent`, `state`, `handleKind`, and `sampledAt` (an ISO 8601 UTC timestamp).
+Missing numerical fields, including fields within `cpu` or `memory`, remain absent, never zero.
+An unknown state reads as `unavailable`; an unknown agent or handle kind reads as `other`.
+
+Also not in v1 of this record: disk growth per session. Process I/O write bytes are not retained disk
 size and a recursive workspace scan per tick is not allowed, so the field is absent until a
 metadata-only measure is agreed (a later change adds `workspaceBytes`, sampled at most once a
 minute, with `measuredAt`). A client never infers it.
@@ -81,7 +86,9 @@ minute, with `measuredAt`). A client never infers it.
 ### Limits and refusals
 
 A record is at most 64 KiB as sent. A client that sees `state: "stale"` or `unavailable` shows
-"no figure", not zero. The host offers `load` only when Compliance has cleared it: a new host setting `load.enabled` (boolean, default `false`, beside `launch.transfer.serve`; the builder adds it to host-config.md with the first slice).
+"no figure", not zero. The relay channel is cleared by the owner as linked above. The host offers
+`load` only when `load.enabled` is true (boolean, default `false`, beside `launch.transfer.serve`;
+the host-setting slice adds it to host-config.md). This record-only slice enables nothing.
 
 ## 2. Session move (#1146, fleet #22)
 

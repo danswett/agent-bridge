@@ -876,6 +876,7 @@ public static class Paging
 
 public static class Capabilities
 {
+    public const string Load = "load";
     public const string SessionsRead = "sessions.read";
     // sessions.subscribe takes patch (live changes as session.patch) and since (resuming without
     // a whole snapshot): docs/protocol/v1-sessions.md, Patches and Resuming.

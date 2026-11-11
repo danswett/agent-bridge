@@ -1,0 +1,411 @@
+{
+  "about": "Numerical machine and session load on the relay channel.",
+  "spec": "v1-machine-load.md#1-machineload-1150",
+  "generatedBy": "tests/AgentBridge.Protocol.Tests/ProtocolVectors.cs",
+  "contexts": {},
+  "records": {
+    "MachineLoadCpu": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "whole-machine",
+          "json": {
+            "percent": 25,
+            "cores": 8
+          }
+        },
+        {
+          "name": "no-figure",
+          "json": {}
+        },
+        {
+          "name": "wrong-type-percent",
+          "json": {
+            "percent": "many",
+            "cores": 8
+          },
+          "reads": {
+            "cores": 8
+          }
+        }
+      ],
+      "refused": []
+    },
+    "MachineLoadMemory": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "headroom",
+          "json": {
+            "totalBytes": 17179869184,
+            "availableBytes": 8589934592,
+            "committedPercent": 50
+          }
+        },
+        {
+          "name": "no-figure",
+          "json": {}
+        },
+        {
+          "name": "wrong-type-totalBytes",
+          "json": {
+            "totalBytes": "many",
+            "availableBytes": 8589934592,
+            "committedPercent": 50
+          },
+          "reads": {
+            "availableBytes": 8589934592,
+            "committedPercent": 50
+          }
+        }
+      ],
+      "refused": []
+    },
+    "UnattributedLoad": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "unowned",
+          "json": {
+            "processes": 1,
+            "workingSetBytes": 1048576
+          }
+        },
+        {
+          "name": "no-figure",
+          "json": {}
+        },
+        {
+          "name": "wrong-type-processes",
+          "json": {
+            "processes": "many",
+            "workingSetBytes": 1048576
+          },
+          "reads": {
+            "workingSetBytes": 1048576
+          }
+        }
+      ],
+      "refused": []
+    },
+    "SessionLoad": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "full",
+          "json": {
+            "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "agent": "agency",
+            "processes": 3,
+            "cpuPercent": 12.5,
+            "workingSetBytes": 104857600,
+            "handles": 42,
+            "handleKind": "handles",
+            "state": "fresh"
+          }
+        },
+        {
+          "name": "partial",
+          "json": {
+            "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "agent": "agency",
+            "processes": 3,
+            "workingSetBytes": 104857600,
+            "handles": 42,
+            "handleKind": "handles",
+            "state": "partial"
+          }
+        },
+        {
+          "name": "no-figure",
+          "json": {
+            "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "agent": "other",
+            "state": "unavailable"
+          }
+        },
+        {
+          "name": "descriptors",
+          "json": {
+            "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "agent": "direct",
+            "processes": 3,
+            "cpuPercent": 12.5,
+            "workingSetBytes": 104857600,
+            "handles": 42,
+            "handleKind": "fds",
+            "state": "fresh"
+          }
+        },
+        {
+          "name": "unknown-enums",
+          "json": {
+            "session": "s-1",
+            "agent": "future",
+            "state": "future",
+            "handleKind": "future"
+          },
+          "reads": {
+            "session": "s-1",
+            "agent": "other",
+            "handleKind": "other",
+            "state": "unavailable"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "missing-session",
+          "json": {
+            "agent": "agency",
+            "processes": 3,
+            "cpuPercent": 12.5,
+            "workingSetBytes": 104857600,
+            "handles": 42,
+            "handleKind": "handles",
+            "state": "fresh"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-session",
+          "json": {
+            "session": 42,
+            "agent": "agency",
+            "processes": 3,
+            "cpuPercent": 12.5,
+            "workingSetBytes": 104857600,
+            "handles": 42,
+            "handleKind": "handles",
+            "state": "fresh"
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "MachineLoad": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "full",
+          "json": {
+            "sampledAt": "2026-10-28T04:22:43.182Z",
+            "ageMs": 100,
+            "state": "fresh",
+            "staleAfterMs": 15000,
+            "cpu": {
+              "percent": 25,
+              "cores": 8
+            },
+            "memory": {
+              "totalBytes": 17179869184,
+              "availableBytes": 8589934592,
+              "committedPercent": 50
+            },
+            "sessions": [
+              {
+                "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+                "agent": "agency",
+                "processes": 3,
+                "cpuPercent": 12.5,
+                "workingSetBytes": 104857600,
+                "handles": 42,
+                "handleKind": "handles",
+                "state": "fresh"
+              }
+            ],
+            "unattributed": {
+              "processes": 1,
+              "workingSetBytes": 1048576
+            }
+          }
+        },
+        {
+          "name": "partial",
+          "json": {
+            "sampledAt": "2026-10-28T04:22:43.182Z",
+            "ageMs": 100,
+            "state": "partial",
+            "staleAfterMs": 15000,
+            "cpu": {
+              "percent": 25,
+              "cores": 8
+            },
+            "sessions": [
+              {
+                "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+                "agent": "agency",
+                "processes": 3,
+                "cpuPercent": 12.5,
+                "workingSetBytes": 104857600,
+                "handles": 42,
+                "handleKind": "handles",
+                "state": "fresh"
+              }
+            ],
+            "unattributed": {
+              "processes": 1,
+              "workingSetBytes": 1048576
+            }
+          }
+        },
+        {
+          "name": "stale",
+          "json": {
+            "sampledAt": "2026-10-28T04:22:43.182Z",
+            "ageMs": 16000,
+            "state": "stale",
+            "staleAfterMs": 15000,
+            "cpu": {
+              "percent": 25,
+              "cores": 8
+            },
+            "memory": {
+              "totalBytes": 17179869184,
+              "availableBytes": 8589934592,
+              "committedPercent": 50
+            },
+            "sessions": [
+              {
+                "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+                "agent": "agency",
+                "processes": 3,
+                "cpuPercent": 12.5,
+                "workingSetBytes": 104857600,
+                "handles": 42,
+                "handleKind": "handles",
+                "state": "fresh"
+              }
+            ],
+            "unattributed": {
+              "processes": 1,
+              "workingSetBytes": 1048576
+            }
+          }
+        },
+        {
+          "name": "first-sample-no-cpu",
+          "json": {
+            "sampledAt": "2026-10-28T04:22:43.182Z",
+            "ageMs": 100,
+            "state": "fresh",
+            "staleAfterMs": 15000,
+            "memory": {
+              "totalBytes": 17179869184,
+              "availableBytes": 8589934592,
+              "committedPercent": 50
+            },
+            "sessions": [
+              {
+                "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+                "agent": "agency",
+                "processes": 3,
+                "workingSetBytes": 104857600,
+                "handles": 42,
+                "handleKind": "handles",
+                "state": "fresh"
+              }
+            ],
+            "unattributed": {
+              "processes": 1,
+              "workingSetBytes": 1048576
+            }
+          }
+        },
+        {
+          "name": "unavailable",
+          "json": {
+            "state": "unavailable",
+            "sessions": []
+          }
+        },
+        {
+          "name": "unknown-state",
+          "json": {
+            "state": "future",
+            "sessions": []
+          },
+          "reads": {
+            "state": "unavailable",
+            "sessions": []
+          }
+        },
+        {
+          "name": "no-figure",
+          "json": {
+            "state": "partial",
+            "cpu": {},
+            "memory": {},
+            "sessions": []
+          }
+        },
+        {
+          "name": "wrong-type-ageMs",
+          "json": {
+            "sampledAt": "2026-10-28T04:22:43.182Z",
+            "ageMs": "many",
+            "state": "fresh",
+            "staleAfterMs": 15000,
+            "cpu": {
+              "percent": 25,
+              "cores": 8
+            },
+            "memory": {
+              "totalBytes": 17179869184,
+              "availableBytes": 8589934592,
+              "committedPercent": 50
+            },
+            "sessions": [
+              {
+                "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+                "agent": "agency",
+                "processes": 3,
+                "cpuPercent": 12.5,
+                "workingSetBytes": 104857600,
+                "handles": 42,
+                "handleKind": "handles",
+                "state": "fresh"
+              }
+            ],
+            "unattributed": {
+              "processes": 1,
+              "workingSetBytes": 1048576
+            }
+          },
+          "reads": {
+            "sampledAt": "2026-10-28T04:22:43.182Z",
+            "state": "fresh",
+            "staleAfterMs": 15000,
+            "cpu": {
+              "percent": 25,
+              "cores": 8
+            },
+            "memory": {
+              "totalBytes": 17179869184,
+              "availableBytes": 8589934592,
+              "committedPercent": 50
+            },
+            "sessions": [
+              {
+                "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+                "agent": "agency",
+                "processes": 3,
+                "cpuPercent": 12.5,
+                "workingSetBytes": 104857600,
+                "handles": 42,
+                "handleKind": "handles",
+                "state": "fresh"
+              }
+            ],
+            "unattributed": {
+              "processes": 1,
+              "workingSetBytes": 1048576
+            }
+          }
+        }
+      ],
+      "refused": []
+    }
+  },
+  "knownDifferences": []
+}
