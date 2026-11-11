@@ -266,13 +266,22 @@ test('a closed local receipt stays in its provisional asking turn while history 
   await page.evaluate((id) => {
     const d = window.agentBridgeDemo;
     const s = d.host.get(id);
-    d.upsert({ ...s, question: null, status: 'idle' });
+    d.upsert({ ...s, question: null, status: 'idle', activity: { ...s.activity, userMessageFrom: 'schedule' } });
     d.upsert({ ...d.host.get(id), activity: { ...s.activity, turn: 'later-live', userMessage: 'Later prompt', response: null, responseTurn: null } });
   }, CODEX);
   const closed = card.locator(`.question.resolved[data-question="${QID}"]`);
   const asking = card.locator(`.history-turn[data-turn="${CODEX}-turn-2"]`);
   await expect(asking.locator('.resolved-summary')).toContainText('Question closed');
   await expect(closed).toHaveCount(1);
+  const prompt = asking.locator('.prompt-toggle');
+  await prompt.click();
+  await prompt.focus();
+  await page.evaluate((id) => {
+    const d = window.agentBridgeDemo, s = d.host.get(id);
+    d.upsert({ ...s, activity: { ...s.activity, responseTurn: s.activity.turn, response: 'A later reply' } });
+  }, CODEX);
+  await expect(prompt).toHaveAttribute('aria-expanded', 'true');
+  await expect(prompt).toBeFocused();
   await closed.getByRole('button', { name: 'Show question' }).click();
   await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
   await expect.poll(() => page.evaluate((id) => window.agentBridgeDemo.view.history.get('demo', id).loading, CODEX)).toBeNull();
@@ -301,6 +310,32 @@ test('a reader scrolled back keeps the closed receipt in its frozen asking turn'
   await expect(card.locator('.question.resolved')).toHaveCount(1);
   await expect(card.getByText('Later reply', { exact: true })).toBeVisible();
   await expect.poll(() => scroller.evaluate((el) => el.scrollTop)).toBe(0);
+});
+
+test('a frozen local question does not return after a fresh page confirms its absence', async ({ page }) => {
+  const card = await setup(page, { holdHistory: true });
+  await page.evaluate(({ id, long }) => {
+    const d = window.agentBridgeDemo, s = d.host.get(id);
+    d.upsert({ ...s, question: null, status: 'idle', activity: { ...s.activity, responseTurn: s.activity.turn, response: long } });
+  }, { id: CODEX, long });
+  await expect(card.locator('.resolved-summary')).toContainText('Question closed');
+  await card.locator('.stream-scroll').evaluate((el) => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
+  await page.evaluate(async (id) => {
+    const d = window.agentBridgeDemo, s = d.host.get(id);
+    d.upsert({ ...s, activity: { turn: 'after-asking', userMessage: 'Later prompt', responseTurn: 'after-asking', response: 'Later reply' } });
+    d.host.historyTurns.set(id, [
+      { id: `${id}-turn-2`, at: new Date().toISOString(), prompt: { text: 'Asking prompt' }, parts: [] },
+      { id: 'after-asking', at: new Date().toISOString(), prompt: { text: 'Later prompt' }, parts: [{ kind: 'response', text: 'Later reply' }] },
+    ]);
+    d.host.releaseResponses();
+    await d.view.history.open('demo', id, { session: d.host.get(id) });
+  }, CODEX);
+  await expect(card.locator('.question.resolved')).toHaveCount(0);
+  await page.evaluate((id) => {
+    const d = window.agentBridgeDemo, s = d.host.get(id);
+    d.upsert({ ...s, updatedAt: new Date().toISOString() });
+  }, CODEX);
+  await expect(card.locator('.question.resolved')).toHaveCount(0);
 });
 
 test('delayed history and disjoint local closures share one newest-20 window', async ({ page }) => {
