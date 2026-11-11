@@ -45,5 +45,5 @@ public sealed record MessageClock(DateTimeOffset Now, TimeZoneInfo Zone, Culture
 {
     public static MessageClock Local => new(DateTimeOffset.UtcNow, TimeZoneInfo.Local, CultureInfo.CurrentCulture);
 
-    public MessageStamp Stamp(DateTimeOffset at) => new(MessageTime.Label(at, Now, Zone, Culture), MessageTime.Exact(at, Zone, Culture));
+    public MessageStamp Stamp(DateTimeOffset at) => new(MessageTime.Label(at, Now, Zone, Culture), MessageTime.Exact(at, Zone, Culture), at);
 }
