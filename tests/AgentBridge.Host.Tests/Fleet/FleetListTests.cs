@@ -57,15 +57,16 @@ public sealed class FleetListTests : IDisposable
     public async Task The_reply_carries_only_the_allow_listed_fields_and_no_name_unless_asked()
     {
         if (!OperatingSystem.IsWindows()) { return; }
+        roster.Machines = Frames("build-box");
         var chan = Hello(AgentProtocol.ScopeRead);
         var op = Op();
         var plain = JsonSerializer.Serialize(await op.HandleAsync(chan, Body("""{"prompt":"secret prompt","account":"other"}""")), Web);
-        Assert.Equal(["machine", "machineOnline", "node", "secondsInState", "since", "state"], Names(plain));
+        Assert.Equal(["machine", "machineName", "machineOnline", "node", "secondsInState", "since", "state"], Names(plain));
         Assert.DoesNotContain("my project", plain);
         Assert.DoesNotContain("secret", plain);
         Assert.Contains("\"secondsInState\":90", plain);
         var named = JsonSerializer.Serialize(await op.HandleAsync(chan, Body("""{"include":"content"}""")), Web);
-        Assert.Equal(["machine", "machineOnline", "name", "node", "secondsInState", "since", "state"], Names(named));
+        Assert.Equal(["machine", "machineName", "machineOnline", "name", "node", "secondsInState", "since", "state"], Names(named));
         Assert.Contains("my project", named);
     }
 
@@ -83,6 +84,7 @@ public sealed class FleetListTests : IDisposable
     [Theory]
     [InlineData("build-box", "build-box")]
     [InlineData("  build box  ", "build box")]
+    [InlineData("build-\u00e9", "build-\u00e9")]
     [InlineData(null, null)]
     [InlineData("", null)]
     [InlineData("   ", null)]
@@ -105,12 +107,16 @@ public sealed class FleetListTests : IDisposable
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task Listing_adds_only_machineName_from_the_registry_and_never_guesses_it(bool hasName)
+    [InlineData("build-box", true, true)]
+    [InlineData("build-box", false, false)]
+    [InlineData(null, true, false)]
+    [InlineData("", true, false)]
+    [InlineData("line\nbreak", true, false)]
+    [InlineData(42, true, false)]
+    public async Task Listing_adds_only_machineName_from_the_registry_and_never_guesses_it(object? input, bool includeName, bool hasName)
     {
         if (!OperatingSystem.IsWindows()) { return; }
-        roster.Machines = Frames("build-box", includeName: hasName);
+        roster.Machines = Frames(input, includeName);
         var reply = JsonSerializer.Serialize(await Op().HandleAsync(Hello(AgentProtocol.ScopeRead), Body("{}")), Web);
         Assert.Equal(hasName
             ? ["machine", "machineName", "machineOnline", "node", "secondsInState", "since", "state"]
@@ -124,7 +130,7 @@ public sealed class FleetListTests : IDisposable
         if (!OperatingSystem.IsWindows()) { return; }
         roster.Machines = Frames("build-box");
         var chan = Hello(AgentProtocol.ScopeRead);
-        async Task<JsonElement> Find(string machine) => JsonSerializer.SerializeToElement(
+        async Task<JsonElement> Find(string? machine) => JsonSerializer.SerializeToElement(
             await Op().FindAsync(chan, Body(JsonSerializer.Serialize(new { name = "my project", machine }))), Web);
         var unsigned = await Find("m2");
         Assert.Equal("unverified", unsigned.GetProperty("result").GetString());
@@ -135,6 +141,20 @@ public sealed class FleetListTests : IDisposable
         Assert.Equal("found", verified.GetProperty("result").GetString());
         Assert.Equal("build-box", verified.GetProperty("session").GetProperty("machineName").GetString());
         Assert.Equal("notFound", (await Find("build-box")).GetProperty("result").GetString());
+        var unpinned = await Find(null);
+        Assert.Equal("unpinned", unpinned.GetProperty("result").GetString());
+        Assert.Equal("build-box", unpinned.GetProperty("machines")[0].GetProperty("machineName").GetString());
+        var machine = roster.Machines[0];
+        roster.Machines = [machine, machine with { Id = "m3" }];
+        var ambiguous = await Find(null);
+        Assert.Equal("ambiguous", ambiguous.GetProperty("result").GetString());
+        Assert.All(ambiguous.GetProperty("candidates").EnumerateArray(), c => Assert.Equal("build-box", c.GetProperty("machineName").GetString()));
+        roster.Machines = [machine with { Online = false }];
+        var offline = await Find("m2");
+        Assert.Equal("offline", offline.GetProperty("result").GetString());
+        Assert.Equal("build-box", offline.GetProperty("machines")[0].GetProperty("machineName").GetString());
+        roster.Machines = Frames(null);
+        Assert.False((await Find("m2")).GetProperty("machines")[0].TryGetProperty("machineName", out _));
     }
 
     [Fact]

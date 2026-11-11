@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
 
@@ -6,7 +7,7 @@ namespace AgentBridge.Host.Fleet;
 
 // One machine of the caller's own account, as the relay's session registry reports it.
 // Verified stays false until hostSign exists (design "Signing"); Truncated is the record's own cap flag.
-public sealed record FleetMachine(string Id, bool Online, IReadOnlyList<FleetSession> Sessions, bool Truncated = false, bool Verified = false);
+public sealed record FleetMachine(string Id, bool Online, IReadOnlyList<FleetSession> Sessions, bool Truncated = false, bool Verified = false, string? Name = null);
 
 public sealed record FleetSession(string Node, string? Name, string State, DateTimeOffset Since, string? Id = null);
 
@@ -36,6 +37,9 @@ public sealed class RelayFleetRoster : IFleetRoster
         foreach (var f in frames)
         {
             if (!f.TryGetProperty("machine", out var m) || m.GetString() is not { } id) { continue; }
+            var name = f.TryGetProperty("name", out var mn) && mn.ValueKind == JsonValueKind.String ? mn.GetString() : null;
+            if (name is not { Length: > 0 and <= 64 } || name.Any(char.IsControl)) { name = null; }
+            else { name = name.Trim(); if (name.Length == 0) { name = null; } }
             var sessions = new List<FleetSession>();
             var truncated = false;
             if (f.TryGetProperty("record", out var rec) && rec.ValueKind == JsonValueKind.Object && rec.TryGetProperty("sessions", out var list) && list.ValueKind == JsonValueKind.Array)
@@ -47,13 +51,15 @@ public sealed class RelayFleetRoster : IFleetRoster
                         s.GetProperty("state").GetString()!, s.GetProperty("since").GetDateTimeOffset(), s.TryGetProperty("id", out var sid) ? sid.GetString() : null));
                 }
             }
-            machines.Add(new FleetMachine(id, f.TryGetProperty("online", out var on) && on.ValueKind == JsonValueKind.True, sessions, truncated));
+            machines.Add(new FleetMachine(id, f.TryGetProperty("online", out var on) && on.ValueKind == JsonValueKind.True, sessions, truncated, Name: name));
         }
         return machines;
     }
 }
 
-public sealed record FleetListSession(string Machine, string Node, string State, DateTimeOffset Since, long SecondsInState, bool MachineOnline, [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Name);
+public sealed record FleetListSession(string Machine, string Node, string State, DateTimeOffset Since, long SecondsInState, bool MachineOnline,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Name,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MachineName = null);
 
 // The fleet.list pipe op (#1412, design/fleet-session-registry.md slice 4): an agent that passed
 // agent.hello lists its own account's sessions. The reply is built field by field from
@@ -102,19 +108,30 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         var hits = scope.Select(x => (Machine: x, Sessions: x.Sessions.Where(s => string.Equals(s.Name, name, StringComparison.Ordinal)).ToList())).Where(h => h.Sessions.Count > 0).ToList();
         var live = hits.Where(h => h.Machine.Online).ToList();
         var stale = hits.Where(h => !h.Machine.Online).ToList();
-        if (live.Any(h => !h.Machine.Verified)) { return new { result = "unverified", machines = live.Select(h => new { machine = h.Machine.Id, online = true }) }; }
-        var cands = live.SelectMany(h => h.Sessions.Select(s => new { id = s.Id ?? s.Node, node = (string?)s.Node, machine = h.Machine.Id, state = s.State, since = s.Since, online = true })).ToList();
-        var offlineCands = stale.SelectMany(h => h.Sessions.Select(s => new { id = s.Id ?? s.Node, node = (string?)null, machine = h.Machine.Id, state = s.State, since = s.Since, online = false })).ToList();
+        if (live.Any(h => !h.Machine.Verified)) { return new { result = "unverified", machines = live.Select(h => new FindMachine(h.Machine.Id, h.Machine.Name, Online: true)) }; }
+        var cands = live.SelectMany(h => h.Sessions.Select(s => new FindSession(s.Id ?? s.Node, s.Node, h.Machine.Id, s.State, s.Since, true, h.Machine.Name))).ToList();
+        var offlineCands = stale.SelectMany(h => h.Sessions.Select(s => new FindSession(s.Id ?? s.Node, null, h.Machine.Id, s.State, s.Since, false, h.Machine.Name))).ToList();
         if (cands.Count >= 2 || (cands.Count == 1 && stale.Count > 0)) { return new { result = "ambiguous", candidates = cands.Concat(offlineCands).ToList() }; }
         if (cands.Count == 0)
         {
-            if (stale.Count > 0) { return new { result = "offline", machines = stale.Select(h => new { machine = h.Machine.Id }).ToList() }; }
+            if (stale.Count > 0) { return new { result = "offline", machines = stale.Select(h => new FindMachine(h.Machine.Id, h.Machine.Name)).ToList() }; }
             return new { result = "notFound" };
         }
         // Only reachable once records can be verified (hostSign): one verified live match.
-        if (machine is null) { return new { result = "unpinned", machines = live.Select(h => new { machine = h.Machine.Id, online = true, verified = true, state = h.Sessions[0].State, since = h.Sessions[0].Since }).ToList() }; }
+        if (machine is null) { return new { result = "unpinned", machines = live.Select(h => new FindMachine(h.Machine.Id, h.Machine.Name, Online: true, Verified: true, State: h.Sessions[0].State, Since: h.Sessions[0].Since)).ToList() }; }
         return new { result = "found", session = cands[0] };
     }
+
+    sealed record FindMachine(string Machine,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MachineName,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Online = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Verified = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? State = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? Since = null);
+
+    sealed record FindSession(string Id, string? Node, string Machine, string State, DateTimeOffset Since, bool Online,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MachineName);
+
     AgentCredential Authorize(IProtocolChannel channel, string op)
     {
         if (credentials is null || !OperatingSystem.IsWindows()) { throw new InvalidOperationException($"refused: {op} isn't available on this host"); }
@@ -134,6 +151,6 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
     {
         var now = (time ?? TimeProvider.System).GetUtcNow();
         return (await roster!.ReadAsync(ct)).SelectMany(m => m.Sessions.Select(s => new FleetListSession(
-            m.Id, s.Node, s.State, s.Since, Math.Max(0, (long)(now - s.Since).TotalSeconds), m.Online, withNames ? s.Name : null))).ToList();
+            m.Id, s.Node, s.State, s.Since, Math.Max(0, (long)(now - s.Since).TotalSeconds), m.Online, withNames ? s.Name : null, m.Name))).ToList();
     }
 }
