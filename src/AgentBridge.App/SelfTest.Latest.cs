@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using AgentBridge.App.Core;
 using AgentBridge.Protocol;
@@ -11,16 +12,18 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.Foundation;
 using Windows.System;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace AgentBridge.App;
 
 static partial class SelfTest
 {
-    static async Task CheckLatest(MainWindow window, MainViewModel main, Action<bool, string> check)
+    static async Task CheckLatest(MainWindow window, MainViewModel main, Action<bool, string> check, Action<string> boundary)
     {
+        boundary("latest setup");
         Resize(window, 1200, 900);
         var view = await Choose(window, main, "demo-choice", "Response");
-        if (view?.Card is not { } original) { check(false, "latest: opens the demo transcript"); return; }
+        if (view?.Card is not { } original) { check(false, "latest: opens the demo transcript"); boundary(""); return; }
         // A separate history cache: the 300 turns must not change later demo checks.
         var card = new SessionCardViewModel(original.Session, main.Local.Cards);
         view.Card = card;
@@ -32,7 +35,7 @@ static partial class SelfTest
             await Task.Delay(500);
             for (var n = 1; n <= 300; n++) { stored.AddLive(StoredTurn(1000 + n)); }
             var scroll = ConversationScroller(view);
-            if (scroll is null || !await Until(() => scroll.ScrollableHeight > 2000, TimeSpan.FromSeconds(10)))
+            if (scroll is null || !await LatestUntil(() => scroll.ScrollableHeight > 2000, TimeSpan.FromSeconds(10)))
             { check(false, "latest: lays out 300 stored turns"); return; }
             var tabStop = scroll.IsTabStop;
             scroll.IsTabStop = true;
@@ -61,12 +64,13 @@ static partial class SelfTest
             }
             foreach (var input in new[] { "wheel", "arrow", "thumb", "key" })
             {
+                boundary($"latest {input}");
                 if (input != "wheel")
                 {
                     card = new SessionCardViewModel(original.Session, main.Local.Cards);
                     view.Card = card;
                     stored = card.Stored ?? throw new InvalidOperationException("latest: input case has no fresh history");
-                    check(await Until(() => stored.State != HistoryLoad.Loading, TimeSpan.FromSeconds(5)), "latest: fresh input history finishes loading");
+                    check(await LatestUntil(() => stored.State != HistoryLoad.Loading, TimeSpan.FromSeconds(5)), "latest: fresh input history finishes loading");
                     for (var n = 0; n < 300; n++) { stored.AddLive(StoredTurn(next++)); }
                     await Still(scroll);
                 }
@@ -85,15 +89,16 @@ static partial class SelfTest
                 check(Bottom(), $"latest: stays pinned through plain-text to formatted re-render after {input}");
                 var before = scroll.VerticalOffset;
                 await LatestInput(window, scroll, input, up: true);
-                check(await Until(() => scroll.VerticalOffset < before - 1.5, TimeSpan.FromSeconds(3)), $"latest: {input} scrolls up out of pin mode");
+                check(await LatestUntil(() => scroll.VerticalOffset < before - 1.5, TimeSpan.FromSeconds(3)), $"latest: {input} scrolls up out of pin mode");
                 await Still(scroll);
                 await Grow(pinned: false, input);
                 scroll.ChangeView(null, scroll.ScrollableHeight - 8, null, disableAnimation: true);
                 await Still(scroll);
                 await LatestInput(window, scroll, input, up: false);
-                check(await Until(Bottom, TimeSpan.FromSeconds(3)), $"latest: real {input} reaches the bottom again");
+                check(await LatestUntil(Bottom, TimeSpan.FromSeconds(3)), $"latest: real {input} reaches the bottom again");
                 await Grow(pinned: true, $"returning by {input}");
             }
+            boundary("latest quiet layout");
             await Jump();
             var departures = 0;
             void Layout(object? sender, object args)
@@ -111,10 +116,11 @@ static partial class SelfTest
                 (VirtualKey.None, VirtualKey.Down, VirtualKey.Up) })
             {
                 var input = modifier == VirtualKey.None ? "consumed caret" : $"inert {modifier}";
+                boundary($"latest {input}+{up}");
                 card = new SessionCardViewModel(original.Session, main.Local.Cards);
                 view.Card = card;
                 stored = card.Stored ?? throw new InvalidOperationException("latest: modifier case has no fresh history");
-                check(await Until(() => stored.State != HistoryLoad.Loading, TimeSpan.FromSeconds(5)), "latest: fresh modifier history finishes loading");
+                check(await LatestUntil(() => stored.State != HistoryLoad.Loading, TimeSpan.FromSeconds(5)), "latest: fresh modifier history finishes loading");
                 for (var n = 0; n < 40; n++) { stored.AddLive(StoredTurn(next++)); }
                 var paragraph = modifier == VirtualKey.None ? string.Join(" ", Enumerable.Repeat("Selectable caret text.", 30)) : "A long reply paragraph.";
                 card.Update(card.Session with { Activity = (card.Session.Activity ?? new Activity()) with { Response = string.Join("\n\n", Enumerable.Repeat(paragraph, 30)) } });
@@ -127,10 +133,11 @@ static partial class SelfTest
                 {
                     var extent = scroll.ScrollableHeight;
                     card.Update(card.Session with { Activity = (card.Session.Activity ?? new Activity()) with { Response = string.Join("\n\n", Enumerable.Repeat(paragraph, 31)) } });
-                    check(await Until(() => scroll.ScrollableHeight > extent + 1.5, TimeSpan.FromSeconds(3)), "latest: response extent grows after consumed caret Up");
-                    check(await Until(Bottom, TimeSpan.FromSeconds(3)), "latest: consumed caret Up keeps pin through response growth before history appends");
+                    check(await LatestUntil(() => scroll.ScrollableHeight > extent + 1.5, TimeSpan.FromSeconds(3)), "latest: response extent grows after consumed caret Up");
+                    check(await LatestUntil(Bottom, TimeSpan.FromSeconds(3)), "latest: consumed caret Up keeps pin through response growth before history appends");
                 }
                 await Grow(pinned: true, $"{input}+{up}");
+                boundary($"latest {input}+{down}");
                 await Jump();
                 var end = scroll.VerticalOffset;
                 check(await LatestInput(window, scroll, "wheel", up: true), "latest: native wheel reaches modifier release setup");
@@ -144,7 +151,7 @@ static partial class SelfTest
                 await Still(scroll);
                 check(Bottom(), $"latest: oversized offset clamps before replacement after {input}+{down}");
                 card.Update(card.Session with { Activity = (card.Session.Activity ?? new Activity()) with { Response = "A shorter reply." } });
-                check(await Until(() => scroll.ScrollableHeight < before - 1.5, TimeSpan.FromSeconds(3)), "latest: shorter reply shrinks below the released offset");
+                check(await LatestUntil(() => scroll.ScrollableHeight < before - 1.5, TimeSpan.FromSeconds(3)), "latest: shorter reply shrinks below the released offset");
                 scroll.ChangeView(null, before, null, disableAnimation: true);
                 await Still(scroll);
                 check(Bottom() && scroll.ScrollableHeight < before - 1.5, $"latest: shorter re-render clamps the released view after {input}+{down} ({before:0} to {scroll.VerticalOffset:0}/{scroll.ScrollableHeight:0})");
@@ -153,9 +160,19 @@ static partial class SelfTest
         }
         finally
         {
+            boundary("latest cleanup");
             try { if (caret) { await LatestCaretMode(window, enabled: false); } }
-            finally { restoreFocus?.Invoke(); view.Card = original; }
+            finally { restoreFocus?.Invoke(); view.Card = original; boundary(""); }
         }
+    }
+
+    static async Task<bool> LatestUntil(Func<bool> condition, TimeSpan timeout,
+        [CallerMemberName] string member = "", [CallerLineNumber] int line = 0)
+    {
+        var clock = Stopwatch.StartNew();
+        bool? passed = null;
+        try { var result = await Until(condition, timeout); passed = result; return result; }
+        finally { AppLog.Write($"latest wait: at={member}:{line}, seconds={clock.Elapsed.TotalSeconds:0.000}, limitSeconds={timeout.TotalSeconds:0.000}, passed={passed?.ToString() ?? "exception"}"); }
     }
 
     static async Task LatestCaretMode(MainWindow window, bool enabled)
@@ -166,7 +183,7 @@ static partial class SelfTest
         if (Open() is not null) { throw new InvalidOperationException("latest: a dialog already blocks caret-mode setup"); }
         Press(window.Handle, VirtualKey.F7, foreground: true, extended: false, nativeOnly: true);
         ContentDialog? dialog = null;
-        if (!await Until(() => (dialog = Open()) is not null, TimeSpan.FromSeconds(3)))
+        if (!await LatestUntil(() => (dialog = Open()) is not null, TimeSpan.FromSeconds(3)))
         { throw new InvalidOperationException("latest: F7 did not open the native caret-browsing dialog"); }
         if (dialog!.Title is not TextBlock || dialog.Content is not StackPanel content
             || (enabled ? content.FindName("notPopAgainCheckBox") is not CheckBox || content.FindName("content") is not TextBlock : content.Children.Count != 0))
@@ -176,7 +193,7 @@ static partial class SelfTest
         var accepted = false;
         dialog.PrimaryButtonClick += (_, _) => accepted = true;
         Press(window.Handle, VirtualKey.Enter, foreground: true, nativeOnly: true);
-        if (!await Until(() => accepted && Open() is null, TimeSpan.FromSeconds(3)))
+        if (!await LatestUntil(() => accepted && Open() is null, TimeSpan.FromSeconds(3)))
         { throw new InvalidOperationException("latest: native caret-mode choice did not complete"); }
     }
 
@@ -193,8 +210,8 @@ static partial class SelfTest
         {
             check(button.Focus(FocusState.Keyboard), "latest: keyboard can focus Jump to latest");
             Press(window.Handle, VirtualKey.Enter, foreground: false);
-            check(await Until(() => activated, TimeSpan.FromSeconds(3)), "latest: Enter activates Jump to latest");
-            check(await Until(() => scroll.ScrollableHeight - scroll.VerticalOffset <= 1.5, TimeSpan.FromSeconds(3)),
+            check(await LatestUntil(() => activated, TimeSpan.FromSeconds(3)), "latest: Enter activates Jump to latest");
+            check(await LatestUntil(() => scroll.ScrollableHeight - scroll.VerticalOffset <= 1.5, TimeSpan.FromSeconds(3)),
                 $"latest: Enter reaches the bottom ({scroll.VerticalOffset:0}/{scroll.ScrollableHeight:0})");
         }
         finally { button.Click -= clicked; }
@@ -209,8 +226,17 @@ static partial class SelfTest
             text = Find<RichTextBlock>(scroll).FirstOrDefault(t => t.IsTextSelectionEnabled && t.ActualHeight > 60
                 && t.TransformToVisual(scroll).TransformPoint(new Point()).Y >= 1
                 && t.TransformToVisual(scroll).TransformPoint(new Point()).Y + t.ActualHeight < scroll.ViewportHeight - 1);
-            if (text is null || !text.Focus(FocusState.Keyboard) || !ReferenceEquals(FocusManager.GetFocusedElement(scroll.XamlRoot), text))
-            { throw new InvalidOperationException("latest: cannot focus fully visible selectable conversation text"); }
+            if (text is null) { LatestFailure(window); throw new InvalidOperationException("latest: no fully visible selectable conversation text"); }
+            var ready = false;
+            RoutedEventHandler focused = (_, e) => { if (ReferenceEquals(e.OriginalSource, text)) { ready = true; } };
+            text.GotFocus += focused;
+            try
+            {
+                if (!text.Focus(FocusState.Keyboard) || !ReferenceEquals(FocusManager.GetFocusedElement(scroll.XamlRoot), text)
+                    || !await LatestUntil(() => ready, TimeSpan.FromSeconds(3)))
+                { LatestFailure(window, text); throw new InvalidOperationException("latest: selectable text did not receive target GotFocus"); }
+            }
+            finally { text.GotFocus -= focused; }
             var middle = text.ContentStart.GetPositionAtOffset(300, LogicalDirection.Forward) ?? throw new InvalidOperationException("latest: selectable text has no interior caret position");
             text.Select(middle, middle);
         }
@@ -238,8 +264,10 @@ static partial class SelfTest
         {
             if (!SetKeyboardState(held)) { throw new InvalidOperationException("latest: cannot hold the keyboard modifier"); }
             if (text is not null) { AppLog.Write($"latest before {key}: textId={text.GetHashCode()}, focus={text.FocusState}, children={VisualTreeHelper.GetChildrenCount(text)}"); }
+            if (text is not null && VisualTreeHelper.GetChildrenCount(text) != 1)
+            { LatestFailure(window, text); throw new InvalidOperationException("latest: focused selectable text must have exactly one visual child before input"); }
             method = Press(window.Handle, key, foreground: text is not null, nativeOnly: text is not null);
-            var received = await Until(() => seen && finished && (text is null || taken && text.SelectionStart.Offset != position), TimeSpan.FromSeconds(2));
+            var received = await LatestUntil(() => seen && finished && (text is null || taken && text.SelectionStart.Offset != position), TimeSpan.FromSeconds(2));
             if (!received) { LatestFailure(window, text); }
             return received;
         }
@@ -263,7 +291,7 @@ static partial class SelfTest
     static async Task LatestForeground(MainWindow window)
     {
         var attempts = 0;
-        if (!await Until(() =>
+        if (!await LatestUntil(() =>
         {
             window.Activate();
             var requested = TrayIcon.SetForegroundWindow(window.Handle);
@@ -331,7 +359,7 @@ static partial class SelfTest
                 Mouse(0x0002);
                 try
                 {
-                    if (!await Until(() => received, TimeSpan.FromSeconds(2))) { throw new InvalidOperationException($"latest: native {input} pointer press was not routed"); }
+                    if (!await LatestUntil(() => received, TimeSpan.FromSeconds(2))) { throw new InvalidOperationException($"latest: native {input} pointer press was not routed"); }
                     if (input == "thumb")
                     {
                         for (var i = 1; i <= 8; i++)
@@ -345,7 +373,7 @@ static partial class SelfTest
                 finally { Mouse(0x0004); }
             }
             bool Done() => received && operated && (input != "thumb" || dragged);
-            await Until(Done, TimeSpan.FromSeconds(3));
+            await LatestUntil(Done, TimeSpan.FromSeconds(3));
             AppLog.Write($"latest {input}: foreground={GetForegroundWindow() == window.Handle}, target={target.Name}, pointer={received}, operated={operated}, dragged={dragged}");
             return Done();
         }
