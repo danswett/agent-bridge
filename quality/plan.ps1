@@ -146,6 +146,9 @@ if ($FastRing) {
     $md.Add("")
 }
 $md.Add("Ring $Ring over $($selection.files.Count) changed file(s) from $(Text $selection.source). Mode: **$($selection.mode)**.")
+$nativeCount = @($suites | Where-Object validationPlan -eq 'native').Count
+$haCount = @($suites | Where-Object validationPlan -eq 'ha-compatibility').Count
+$md.Add("Validation plans (reporting only): native=$nativeCount, ha-compatibility=$haCount.")
 $wholeRing = $suites.reasons | Where-Object { Test-WholeRing $_.rule } | Group-Object rule
 foreach ($g in $wholeRing) {
     $md.Add("The whole ring runs, by $(Code $g.Name): $(Files ($g.Group.files | Sort-Object -Unique)).")

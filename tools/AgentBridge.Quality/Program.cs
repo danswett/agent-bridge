@@ -205,6 +205,7 @@ static class Program
             {
                 s.Suite.Id,
                 s.Suite.Kind,
+                s.Suite.ValidationPlan,
                 s.Suite.Ring,
                 s.Suite.Runner,
                 s.Suite.Status,
@@ -217,7 +218,7 @@ static class Program
                 s.Suite.SecuritySensitive,
                 Reasons = s.Reasons.Select(r => new { r.Rule, r.Files }),
             }),
-            Skipped = selection.Skipped.Select(s => new { s.Suite.Id, s.Why }),
+            Skipped = selection.Skipped.Select(s => new { s.Suite.Id, s.Suite.ValidationPlan, s.Why }),
         }, Json);
 
     /// <summary>

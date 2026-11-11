@@ -13,6 +13,7 @@ static class Fixture
           - docs/design/**
         suites:
           - id: protocol
+            validation_plan: native
             kind: unit
             ring: 0
             select: always
@@ -24,6 +25,7 @@ static class Fixture
             where: ci.yml product
             status: exists
           - id: transport
+            validation_plan: native
             kind: component
             ring: 0
             select: affected
@@ -34,6 +36,7 @@ static class Fixture
             where: ci.yml product
             status: exists
           - id: host
+            validation_plan: native
             kind: component
             ring: 0
             select: affected
@@ -42,6 +45,7 @@ static class Fixture
             project: tests/Host.Tests
             status: planned
           - id: homeassistant
+            validation_plan: ha-compatibility
             kind: component
             ring: 0
             select: affected
@@ -50,6 +54,7 @@ static class Fixture
             project: tests/HomeAssistant.Tests
             status: planned
           - id: ha-integration
+            validation_plan: ha-compatibility
             kind: integration
             ring: 1
             select: affected
@@ -60,6 +65,7 @@ static class Fixture
             where: ci.yml ha-integration
             status: exists
           - id: docs-links
+            validation_plan: native
             kind: static
             ring: 1
             select: affected
@@ -68,6 +74,7 @@ static class Fixture
             triggers: ['**/*.md']
             status: planned
           - id: pwa-unit
+            validation_plan: native
             kind: unit
             ring: 0
             select: affected
@@ -77,6 +84,7 @@ static class Fixture
             command: cd pwa && node --test "test/unit/*.test.mjs"
             status: planned
           - id: pwa-ui
+            validation_plan: native
             kind: ui
             ring: 1
             select: affected
@@ -86,6 +94,7 @@ static class Fixture
             command: cd pwa && npx playwright test   # Chromium and WebKit
             status: planned
           - id: apple-core
+            validation_plan: native
             kind: unit
             ring: 0
             select: affected
@@ -94,6 +103,7 @@ static class Fixture
             triggers: [apple/**]
             status: planned
           - id: infra
+            validation_plan: native
             kind: static
             ring: 1
             select: affected
@@ -102,6 +112,7 @@ static class Fixture
             triggers: [infra/**]
             status: planned
           - id: codeql
+            validation_plan: native
             kind: security
             ring: 1
             select: always
@@ -109,6 +120,7 @@ static class Fixture
             runner: hosted
             status: planned
           - id: bench
+            validation_plan: native
             kind: perf
             ring: 2
             select: always

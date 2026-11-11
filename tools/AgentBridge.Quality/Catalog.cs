@@ -41,6 +41,7 @@ sealed class Catalog
 
     static readonly string[] Kinds = ["unit", "component", "process", "integration", "e2e", "live", "ui", "perf", "security", "a11y", "static", "packaging"];
     static readonly string[] Selects = ["affected", "always"];
+    static readonly string[] ValidationPlans = ["native", "ha-compatibility"];
     internal static readonly string[] PlatformNames = ["win-x64", "win-arm64", "linux-x64", "linux-arm64", "macos-arm64", "ios-sim", "ios-device", "browser"];
     static readonly string[] Runners = ["local", "hosted", "lab", "staging", "device"];
     static readonly string[] Statuses = ["exists", "partial", "planned"];
@@ -74,6 +75,7 @@ sealed class Catalog
             else if (suite.Ring is < 0 or > 4)
                 Add(suite, $"has ring {suite.Ring}, not 0 to 4");
             OneOf(suite, "select", suite.Select, Selects);
+            OneOf(suite, "validation_plan", suite.ValidationPlan, ValidationPlans);
             if (suite.Platforms.Count == 0)
                 Add(suite, "has no platforms");
             foreach (var platform in suite.Platforms.Where(p => !PlatformNames.Contains(p, StringComparer.Ordinal)))
@@ -108,6 +110,7 @@ sealed class Suite
     public string? Kind { get; set; }
     public int? Ring { get; set; }
     public string? Select { get; set; }
+    public string? ValidationPlan { get; set; }
     public bool SecuritySensitive { get; set; }
     public List<string> Platforms { get; set; } = [];
     public string? Runner { get; set; }
