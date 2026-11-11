@@ -15,15 +15,23 @@ test('help opens only by choice, traps focus and Escape returns to either opener
   const focusProbes = [];
   for (const [index, key] of ['Tab', 'Tab', 'Shift+Tab', 'Shift+Tab'].entries()) {
     await page.keyboard.press(key);
-    focusProbes.push(await dialog.evaluate((el, { index, key }) => {
+    const focus = await dialog.evaluate((el, { index, key }) => {
       const active = document.activeElement;
       return {
         index, key, activeElement: { tag: active?.tagName ?? null, id: active?.id ?? null },
         hasFocus: document.hasFocus(), dialogOpen: el.open, contained: el.contains(active),
+        pageRoot: active === document.body || active === document.documentElement,
       };
-    }, { index: index + 1, key }));
-    await expect.poll(() => dialog.evaluate((el) => el.contains(document.activeElement)),
-      { message: `Focus stays inside Keyboard shortcuts after ${key}; probes: ${JSON.stringify(focusProbes)}` }).toBe(true);
+    }, { index: index + 1, key });
+    focusProbes.push(focus);
+    // Native Tab may visit browser chrome, but must never focus background page content.
+    expect(focus.dialogOpen && (focus.contained || (!focus.hasFocus && focus.pageRoot)),
+      `Focus stays inside Keyboard shortcuts after ${key}; probes: ${JSON.stringify(focusProbes)}`).toBe(true);
+    if (!focus.hasFocus) {
+      await page.keyboard.press('Shift+Tab');
+      await expect(close).toBeFocused();
+      await expect.poll(() => close.evaluate((el) => el === document.activeElement && document.hasFocus())).toBe(true);
+    }
   }
   await expect(dialog.locator('dt')).toHaveText(['Move a row', "Open a row's menu", 'Open the selected session', 'Search', 'Close']);
   await expect(dialog.locator('dd').first()).toHaveText('Tab to its Move button, then Space, ↑ or ↓, Space. Or Alt+↑ / Alt+↓ on the row.');
