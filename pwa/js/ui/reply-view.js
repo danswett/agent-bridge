@@ -106,6 +106,7 @@ export function describeReply(entry, { machineName, stalled = false } = {}) {
 }
 
 export class ReplyBox {
+  #lifecycle = new AbortController();
   #unwatch = null;
   #receipt = null;
   // Whether the line says files are being read, which the receipt doesn't know of.
@@ -116,6 +117,7 @@ export class ReplyBox {
   // When the session's turn that was running at the last update began, to see the next one start.
   #turn;
   #sent = null;
+  #composing = false;
   #session = null;
   // The busy outcome whose pause has been started, so a re-render does not start another.
   #busyFor = null;
@@ -156,6 +158,12 @@ export class ReplyBox {
     this.#largeMax = largeMax;
     this.#phone = globalThis.matchMedia?.(PHONE) ?? null;
     this.#build();
+    const doc = this.els.input.ownerDocument;
+    const signal = this.#lifecycle.signal;
+    doc.addEventListener('visibilitychange', () => {
+      if (doc.visibilityState === 'hidden') { this.els.input.blur(); }
+    }, { signal });
+    doc.defaultView.addEventListener('pagehide', () => this.els.input.blur(), { signal });
     this.#place();
     this.#phone?.addEventListener('change', this.#onPhone);
     // The box's width decides where its words wrap, and it has none until it is drawn.
@@ -182,6 +190,7 @@ export class ReplyBox {
   }
 
   destroy() {
+    this.#lifecycle.abort();
     this.#unwatch?.();
     this.#receipt.destroy();
     clearTimeout(this.#busyTimer);
@@ -225,6 +234,25 @@ export class ReplyBox {
 
   get text() { return this.els.input.value; }
 
+  #watchComposition(input) {
+    input.addEventListener('compositionstart', () => { this.#composing = true; });
+    input.addEventListener('compositionend', () => { this.#composing = false; this.#show(this.entry); });
+  }
+
+  // An empty value assignment leaves native undo intact in WebKit; a fresh editor does not.
+  #clearUndo(keepFocus = true) {
+    const old = this.els.input;
+    const input = old.cloneNode(true);
+    input.value = '';
+    for (const event of ['oninput', 'onkeydown', 'onpaste']) { input[event] = old[event]; }
+    this.#watchComposition(input);
+    this.els.input = input;
+    const focused = keepFocus && old === old.ownerDocument.activeElement;
+    if (!keepFocus) { old.blur(); }
+    old.replaceWith(input);
+    if (focused) { input.focus({ preventScroll: true }); }
+  }
+
   // Words put in for the person to read and send, after anything already typed ("Ask main agent
   // to stop it", ui.md §6.3): nothing is sent until Send. What is there is kept as it is, its
   // trailing space or line break too: a reply on its way comes out of the box only while the box
@@ -248,24 +276,26 @@ export class ReplyBox {
     const id = this.idBase;
     const e = this.els = {};
     e.input = h('textarea', { id: `${id}-text`, rows: 2, class: 'text-input reply-input', placeholder: 'Message the main agent', 'aria-describedby': `${id}-hint ${id}-bytes ${id}-held` });
-    e.input.addEventListener('input', () => {
+    this.#watchComposition(e.input);
+    e.input.oninput = (ev) => {
+      if (!ev.isComposing && e.input.value === '') { this.#clearUndo(); }
       this.#clearError();
       // The receipt's room is kept from Send until the box is typed in again (ui.md §6.5).
       this.#end('edit');
       if (!e.status.textContent) { e.status.classList.remove('room'); }
       this.#sync();
-    });
+    };
     // Ctrl+Enter or Cmd+Enter sends, as in most chat boxes; Enter alone is a new line.
-    e.input.addEventListener('keydown', (ev) => {
+    e.input.onkeydown = (ev) => {
       if (isSendKey(ev)) { ev.preventDefault(); this.#send(); }
-    });
+    };
     // A pasted screenshot or copied file is attached; pasted text is left to the box.
-    e.input.addEventListener('paste', (ev) => {
+    e.input.onpaste = (ev) => {
       const files = [...(ev.clipboardData?.items ?? [])].filter((i) => i.kind === 'file').map((i) => i.getAsFile()).filter(Boolean);
       if (!files.length || !this.#attach) { return; }
       ev.preventDefault();
       this.#add(files);
-    });
+    };
     e.bytes = h('span', { class: 'bytes', id: `${id}-bytes`, 'aria-live': 'polite' });
     e.hint = h('p', { class: 'note reply-hint', id: `${id}-hint`, hidden: true }, 'Line breaks are sent as spaces: the session gets your reply as one line.');
     e.held = h('p', { class: 'note warn reply-held', id: `${id}-held`, hidden: true }, 'The session is waiting for an answer to its question. Answer that first, then reply.');
@@ -385,8 +415,8 @@ export class ReplyBox {
     e.attach.hidden = !this.#attach;
     e.attach.disabled = held || pending || this.#files.length + this.#preparing >= AttachmentLimits.perReply;
     for (const b of e.files.querySelectorAll('button.remove')) { b.disabled = pending; }
-    // Nothing to send, or held: disabled, and focus, if it was here, goes back to the words (a
-    // delivered reply empties the box). On its way, or back after busy: not disabled, which
+    // Nothing to send, or held: disable Send and return its focus to the words; #show then
+    // blurs an editor emptied by delivery (#1840). On its way, or back after busy: not disabled, which
     // would drop focus to the top of the page (#369); #send does nothing meanwhile, and the
     // service sends one request per reply whatever is pressed.
     const off = held || this.#preparing > 0 || (text.trim() === '' && this.#files.length === 0);
@@ -478,6 +508,7 @@ export class ReplyBox {
   }
 
   #send() {
+    if (this.#composing) { return; }
     if (this.#hold.updating && !this.#held() && !this.#pending() && !this.#busyTimer && this.#preparing === 0 && (this.els.input.value.trim() !== '' || this.#files.length > 0)) {
       this.els.updating.textContent = UPDATING;
       this.els.updating.hidden = false;
@@ -515,12 +546,16 @@ export class ReplyBox {
 
   #show(entry) {
     const e = this.els;
+    let cleared = false;
     if (entry?.state === 'done' && this.#sent?.request === entry.request) {
       if (entry.outcome === 'delivered') {
         // Delivered: what went comes out of the box, and only that. Anything typed while it was
         // on its way stays; a box no longer beginning with it has been rewritten, and is kept.
         const value = e.input.value;
-        if (value.startsWith(this.#sent.text)) { e.input.value = value.slice(this.#sent.text.length).replace(/^\s+/, ''); }
+        if (!this.#composing && value.startsWith(this.#sent.text)) {
+          e.input.value = value.slice(this.#sent.text.length).replace(/^\s+/, '');
+          cleared = value !== e.input.value && e.input.value === '';
+        }
         for (const f of this.#sent.files) { if (f.url) { URL.revokeObjectURL(f.url); } }
         this.#files = this.#files.filter((f) => !this.#sent.files.includes(f));
         this.#renderFiles();
@@ -530,7 +565,8 @@ export class ReplyBox {
         for (const f of this.#sent.files) { f.id = this.uuid(); f.offered = false; f.blob = null; }
         this.#renderFiles();
       }
-      this.#sent = null;
+      // compositionend finishes delivered text cleanup without interrupting the live editor.
+      if (entry.outcome !== 'delivered' || !this.#composing) { this.#sent = null; }
     }
     e.form.dataset.reply = entry ? (entry.state === 'done' ? (OUTCOME_TEXT[entry.outcome] ? entry.outcome : 'unconfirmed') : entry.state) : 'none';
     // Send acknowledged (ui.md §5.3): each new state of the reply rises into place (receipt.js).
@@ -562,5 +598,6 @@ export class ReplyBox {
       this.#busyTimer = setTimeout(() => { this.#busyTimer = null; this.#end('pause'); this.#sync(); }, REPLY_BUSY_PAUSE_MS);
     }
     this.#sync();
+    if (cleared) { this.#clearUndo(false); }
   }
 }

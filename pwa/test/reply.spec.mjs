@@ -153,6 +153,94 @@ test.describe('on a phone', () => {
     expect(await log(page)).toEqual([]);
   });
 
+  for (const event of ['visibilitychange', 'pagehide']) {
+    test(`${event} blurs the composer without losing its draft or refocusing on return`, async ({ page }) => {
+      await openDemo(page);
+      const input = box(page, IDLE).getByRole('textbox', { name: 'Reply' });
+      await input.fill('unfinished draft');
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await expect(input).toBeFocused();
+      await page.evaluate((event) => {
+        if (event === 'visibilitychange') {
+          Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+          document.dispatchEvent(new Event(event));
+        } else {
+          window.dispatchEvent(new PageTransitionEvent(event, { persisted: true }));
+        }
+      }, event);
+      await expect(input).not.toBeFocused();
+      await expect(input).toHaveValue('unfinished draft');
+      await page.evaluate(() => {
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+        document.dispatchEvent(new Event('visibilitychange'));
+        window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+      });
+      await expect(input).not.toBeFocused();
+    });
+  }
+
+  test('a delivered keyboard send leaves an empty unfocused composer with no sent text to undo', async ({ page }) => {
+    await openDemo(page);
+    const input = box(page, IDLE).getByRole('textbox', { name: 'Reply' });
+    await input.pressSequentially('send this once');
+    await box(page, IDLE).evaluate((form) => form.addEventListener('focusout', () => {
+      form.dataset.blurred = 'true';
+    }, { once: true }));
+    await input.press('ControlOrMeta+Enter');
+    await expect(box(page, IDLE)).toHaveAttribute('data-reply', 'delivered');
+    await expect(input).toHaveValue('');
+    await expect(input).not.toBeFocused();
+    await expect(box(page, IDLE)).toHaveAttribute('data-blurred', 'true');
+    await input.focus();
+    await input.press('ControlOrMeta+z');
+    await expect(input).toHaveValue('');
+  });
+
+  test('deleting the draft clears its undo history without dismissing the composer', async ({ page }) => {
+    await openDemo(page);
+    const input = box(page, IDLE).getByRole('textbox', { name: 'Reply' });
+    expect(await input.evaluate((el) => {
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: true }));
+      return el.isConnected;
+    })).toBe(true);
+    await input.pressSequentially('discard this draft');
+    await input.press('ControlOrMeta+a');
+    await input.press('Backspace');
+    await expect(input).toHaveValue('');
+    await expect(input).toBeFocused();
+    await input.press('ControlOrMeta+z');
+    await expect(input).toHaveValue('');
+  });
+
+  for (const draft of ['', 'first next']) {
+    test(`delivery preserves an active composition with ${draft ? 'the sent prefix' : 'an empty intermediate draft'}`, async ({ page }) => {
+      await openDemo(page);
+      const input = box(page, IDLE).getByRole('textbox', { name: 'Reply' });
+      await input.fill('discarded draft');
+      await input.fill('');
+      await input.fill('first');
+      await hold(page);
+      await input.press('ControlOrMeta+Enter');
+      await expect(box(page, IDLE)).toHaveAttribute('data-reply', 'sending');
+      await input.fill(draft);
+      const composing = await input.elementHandle();
+      await input.dispatchEvent('compositionstart', { data: '' });
+      await input.evaluate((el) => el.dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: true })));
+      expect(await composing.evaluate((el) => el.isConnected)).toBe(true);
+      await release(page);
+      await expect(box(page, IDLE)).toHaveAttribute('data-reply', 'delivered');
+      expect(await composing.evaluate((el) => el.isConnected)).toBe(true);
+      await expect(input).toHaveValue(draft);
+      await expect(input).toBeFocused();
+      await input.press('ControlOrMeta+Enter');
+      await expect(box(page, IDLE).getByRole('alert')).toBeHidden();
+      await input.dispatchEvent('compositionend', { data: draft });
+      await expect(input).toHaveValue(draft ? 'next' : '');
+      await expect(input).toBeFocused();
+      expect(await log(page)).toHaveLength(1);
+    });
+  }
+
   test('every reply control is at least 44 px tall', async ({ page }) => {
     await openDemo(page);
     await box(page, IDLE).getByRole('textbox', { name: 'Reply' }).fill('x');
@@ -450,7 +538,7 @@ test.describe('from a keyboard', () => {
     expect((await log(page)).map((r) => r.text)).toEqual(['line one\nline two']);
   });
 
-  test('Send keeps focus while its reply goes, a second press of any kind sends nothing more, and delivered gives focus back to the box', async ({ page }) => {
+  test('Send keeps focus while its reply goes, a second press sends nothing more, and delivered leaves the empty box unfocused', async ({ page }) => {
     await openDemo(page);
     const reply = box(page, IDLE);
     const input = reply.getByRole('textbox', { name: 'Reply' });
@@ -474,9 +562,9 @@ test.describe('from a keyboard', () => {
     await expect(send).toBeFocused();
     await release(page);
     await expect(reply).toHaveAttribute('data-reply', 'delivered');
-    // The box is empty, so Send is off; focus goes back to the box rather than the page.
+    // Delivery leaves the empty composer unfocused, so iOS does not offer Shake to Undo.
     await expect(send).toBeDisabled();
-    await expect(input).toBeFocused();
+    await expect(input).not.toBeFocused();
     const sent = await log(page);
     expect(new Set(sent.map((r) => r.request)).size).toBe(1);
     expect(sent.map((r) => r.text)).toEqual(sent.map(() => 'exactly once'));
