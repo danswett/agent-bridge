@@ -46,10 +46,14 @@ test('a turn the host refused is left out of its page and the turns around it ar
   assert.deepEqual(page.turns.map((t) => t.id), ['a', 'c']);
 });
 
-test('a page that repeats a turn id holds it once, at its first place', () => {
+test('a page that repeats a turn id keeps both turns with distinct keys and logs only the count', (t) => {
+  const warnings = [];
+  t.mock.method(console, 'warn', (...args) => warnings.push(args));
   const page = readHistoryResult({ turns: [{ id: 'a', at: AT, prompt: { text: 'one' } }, { id: 'a', at: AT, prompt: { text: 'again' } }, { id: 'b', at: AT }], start: { at: AT } });
-  assert.deepEqual(page.turns.map((t) => t.id), ['a', 'b']);
-  assert.equal(page.turns[0].prompt.text, 'one');
+  assert.equal(new Set(page.turns.map((t) => t.id)).size, 3);
+  assert.deepEqual(page.turns.map((t) => t.prompt?.text), ['one', 'again', undefined]);
+  assert.equal(page.turns[1].id, 'a', 'the newest occurrence retains the live identity');
+  assert.deepEqual(warnings, [['Duplicate history turn ids: 1']]);
 });
 
 test('a page of more turns than a page may hold, with a cursor or without, and a cursor too long to send back, are not pages', () => {
