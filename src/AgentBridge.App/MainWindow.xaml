@@ -101,7 +101,7 @@
                             Foreground="{ThemeResource AbNeedsInk}" />
                     </NavigationViewItem.InfoBadge>
                 </NavigationViewItem>
-                <NavigationViewItem x:Name="MachinesItem" Tag="machines" AutomationProperties.AutomationId="NavMachines" AutomationProperties.Name="Machines" ToolTipService.ToolTip="Machines">
+                <NavigationViewItem x:Name="MachinesItem" Tag="machines" AutomationProperties.AutomationId="NavMachines" AutomationProperties.Name="Fleet" ToolTipService.ToolTip="Fleet">
                     <ContentControl Style="{StaticResource AbIconMachine}" Width="20" Height="20" Margin="-8,0,0,0" AutomationProperties.AutomationId="NavIcon" />
                 </NavigationViewItem>
                 <NavigationViewItem
@@ -215,7 +215,7 @@
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Style="{StaticResource AbTypeTitle}" AutomationProperties.HeadingLevel="Level1" Text="Machines" />
+                                <TextBlock Style="{StaticResource AbTypeTitle}" AutomationProperties.HeadingLevel="Level1" Text="Fleet" />
                                 <!-- Every machine listed, this one included (#51). -->
                                 <Button
                                     Grid.Column="1"
