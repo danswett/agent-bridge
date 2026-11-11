@@ -59,13 +59,11 @@ public sealed class SessionService
 
     internal SessionProcess? ProcessForAdoption(string session)
     {
-        var process = source.ProcessOf(session);
-        if (process?.StartedAt is { } started && launcher?.LaunchedProcesses().Any(p => p.ProcessId == process.Id
-            && (p.StartedAt - started).Duration() <= TimeSpan.FromSeconds(1)) == true)
+        if (launcher?.LaunchedSession(session) == true)
         {
             throw new InvalidOperationException("refused: a session the host launched cannot be adopted");
         }
-        return process;
+        return source.ProcessOf(session);
     }
 
     // hello's machine.restore (#780): what went with the machine or the host when it last stopped, or

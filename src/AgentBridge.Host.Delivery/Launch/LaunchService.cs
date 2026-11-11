@@ -31,6 +31,8 @@ public interface ISessionLauncher
     // is an agent's, and may not manage the host (§6.3 invariant 13).
     IReadOnlyList<Started> LaunchedProcesses() => [];
 
+    bool LaunchedSession(string session) => false;
+
     // launch.trust.answer, for a person whose signed command the caller has checked: answers a
     // folder-trust question a launched agent is waiting on (trust, or quit).
     Task<TrustAnswerResult> AnswerTrustAsync(Guid request, string question, bool trust, string device, string by, CancellationToken cancellationToken = default) =>
@@ -226,6 +228,11 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     public IReadOnlyList<Started> LaunchedProcesses()
     {
         lock (pendingGate) { return [.. launchedOn.Values.Concat(pending.Select(p => p.Started)).Distinct().Where(starter.Running)]; }
+    }
+
+    public bool LaunchedSession(string session)
+    {
+        lock (pendingGate) { return launchedOn.ContainsKey(session) || pending.Any(p => p.SessionId == session || p.LiveId == session); }
     }
 
     // agent-ha-bridge's $script:BridgeResumeCacheLimit: how many of the newest sessions in
@@ -1496,9 +1503,10 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     void Launched(string sessionId, Started started)
     {
+        var live = source.Snapshot().Select(s => s.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
         lock (pendingGate)
         {
-            foreach (var gone in launchedOn.Where(x => !starter.Running(x.Value)).Select(x => x.Key).ToList()) { launchedOn.Remove(gone); }
+            foreach (var gone in launchedOn.Where(x => !live.Contains(x.Key) && !starter.Running(x.Value)).Select(x => x.Key).ToList()) { launchedOn.Remove(gone); }
             launchedOn[sessionId] = started;
         }
     }

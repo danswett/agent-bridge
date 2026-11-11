@@ -170,13 +170,14 @@ public sealed class AgentAdoptionPipeTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task A_host_launched_process_is_not_adoptable_even_without_a_current_credential(bool revoked)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task A_host_launched_process_is_not_adoptable_even_without_a_current_credential(bool revoked, bool child)
     {
         if (!OperatingSystem.IsWindows()) { return; }
         var process = source.ProcessOf(Session)!;
-        launcher.Processes = [new Started(process.Id, process.StartedAt!.Value)];
+        launcher.Processes = [new Started(child ? process.Id + 1 : process.Id, process.StartedAt!.Value)];
         if (revoked) { store.Mint(Session, "launch1", process.Id, process.StartedAt.Value, AgentProtocol.ScopeRead); store.Revoke(Session, "fixture"); }
         callers.Kind = CallerKind.HostCli;
         await using var ch = await LocalClient.ConnectAsync(LocalEndpoint.For(root));
@@ -190,6 +191,7 @@ public sealed class AgentAdoptionPipeTests : IAsyncLifetime
         public IReadOnlyList<Started> Processes { get; set; } = [];
         public bool Available => false;
         public IReadOnlyList<Started> LaunchedProcesses() => Processes;
+        public bool LaunchedSession(string session) => session == Session && Processes.Count > 0;
         public Task<LaunchOptions> OptionsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }

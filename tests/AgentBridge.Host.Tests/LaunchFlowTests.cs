@@ -1240,13 +1240,25 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
     public async Task Codex_is_launched_only_with_a_first_message_and_its_launch_is_bound_to_the_session_it_chose()
     {
         locator.Installed["codex"] = @"C:\fake\codex.cmd";
+        starter.Registers = false;
+        var launcher = Launcher(Config());
+        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", machineName, "windows", "0.1.0"), launcher: launcher).HandleAsync;
         var ch = await OpenAsync();
         Assert.Equal(("refused", "Codex starts its session only on a first message; give it a prompt"), Pair(await LaunchAsync(ch, new { agent = "codex" })));
 
-        var o = await LaunchAsync(ch, new { agent = "codex", prompt = "add pagination" });
+        var launching = LaunchAsync(ch, new { agent = "codex", prompt = "add pagination" });
+        await WaitAsync(() => Task.FromResult(starter.Pids.Count == 1));
+        starter.RegisterCodex(starter.Specs[0], starter.Pids[0], 7001, starter.CodexId);
+        var o = await launching;
         Assert.Equal("started", o.Outcome_);
         Assert.Equal(starter.CodexId, o.Session);
         Assert.Equal(["--no-daemon", "-c", "model_reasoning_summary=detailed", "--", "add pagination"], starter.Specs[0].Arguments);
+        Assert.NotEqual(starter.Pids[0], source.ProcessOf(starter.CodexId)!.Id);
+        Assert.True(launcher.LaunchedSession(starter.CodexId));
+        starter.Exit(starter.Pids[0]);
+        starter.Registers = true;
+        Assert.Equal("started", (await LaunchAsync(ch, new { prompt = "another session" })).Outcome_);
+        Assert.True(launcher.LaunchedSession(starter.CodexId));
     }
 
     [Fact]
