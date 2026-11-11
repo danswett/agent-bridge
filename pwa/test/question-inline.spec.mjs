@@ -173,8 +173,8 @@ test('a delayed answer receipt stays once in its own turn when another question 
 });
 
 for (const width of [390, 1024]) {
-  for (const recorded of ['stored', 'omitted', 'empty']) {
-    test(`answered questions never stay below three later turns after a snapshot jump (${width}px, asking turn ${recorded})`, async ({ page }) => {
+  for (const [recorded, refetch] of ['stored', 'omitted', 'empty'].flatMap((recorded) => ['success', 'failure'].map((refetch) => [recorded, refetch]))) {
+    test(`answered questions never stay below three later turns after a snapshot jump (${width}px, asking turn ${recorded}, refetch ${refetch})`, async ({ page }) => {
       await page.setViewportSize({ width, height: 800 });
       await page.goto('?demo=1&static=1&answerDelay=50');
       await page.waitForSelector('html[data-demo-ready]');
@@ -220,11 +220,27 @@ for (const width of [390, 1024]) {
       await expect(card.locator('.question:not(.resolved)')).toHaveCount(0);
       const unplaced = card.locator('.question.resolved');
       await expect.poll(() => unplaced.evaluateAll((nodes) => nodes.filter((n) => !n.closest('.history-turn')).length)).toBe(0);
+      await page.evaluate(({ id, refetch }) => {
+        const d = window.agentBridgeDemo, client = d.view.history.current('demo').client;
+        const ask = client.history.bind(client);
+        client.history = async (...args) => {
+          client.history = ask;
+          const result = await ask(...args);
+          if (refetch === 'failure') { throw new Error('refetch failed'); }
+          return result;
+        };
+        d.host.holdResponses();
+        window.pinnedCase.refetch = d.view.history.open('demo', id);
+      }, { id: CODEX, refetch });
+      await expect.poll(() => page.evaluate((id) => window.agentBridgeDemo.view.history.get('demo', id).loading, CODEX)).toBe('newest');
       await page.evaluate((id) => {
         const d = window.agentBridgeDemo;
         d.upsert({ ...d.host.get(id), status: 'waiting', question: { ...window.pinnedCase.asking.parts[0].question, id: 'next-unrecorded' } });
       }, CODEX);
       await expect(card.locator('.stream > .question-slot .question:not(.resolved)')).toBeVisible();
+      await expect.poll(() => unplaced.evaluateAll((nodes) => nodes.filter((n) => !n.closest('.history-turn')).length)).toBe(0);
+      await page.evaluate(async () => { window.agentBridgeDemo.host.releaseResponses(); await window.pinnedCase.refetch; });
+      expect(await page.evaluate((id) => window.agentBridgeDemo.view.history.get('demo', id).error?.reason ?? null, CODEX)).toBe(refetch === 'failure' ? 'refetch failed' : null);
       await expect.poll(() => unplaced.evaluateAll((nodes) => nodes.filter((n) => !n.closest('.history-turn')).length)).toBe(0);
       await page.evaluate(async (id) => {
         const d = window.agentBridgeDemo;
