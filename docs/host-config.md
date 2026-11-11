@@ -446,6 +446,15 @@ audited, as the #1401 row in design/agent-launch-scope.md requires: the log says
 host log and again when writing resumes, and the caller must refuse and release any slot when the
 write returns false.
 
+`session.launch` records use a separate owner-only file,
+`<profile>\audit\launches-YYYY-MM-DD.jsonl` (#1998, #1401 A2), with the same record shape
+and privacy rules. All launch files together have their own 16 MiB quota: existing bytes,
+the new UTF-8 line and any separator after a torn line must fit. Exact fit is allowed;
+an over-quota append changes no file, returns false and uses the same host-log warning
+described above, without prompt text or paths. The caller must refuse the action on false.
+The date and record timestamp use one UTC clock read. Send retention cannot delete launch
+evidence; launch pruning and launch-handler wiring remain in later #1401 slices.
+
 `agent.send` now writes one outbound `agent.send` attempt after caller and input validation,
 before invoking the sender (#1985, #1401 A1). Its principal and chain come from the credential,
 not the request. The outcome is `attempted`, never proof of delivery, and `request` is a local
