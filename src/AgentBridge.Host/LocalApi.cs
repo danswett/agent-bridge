@@ -25,7 +25,7 @@ public static class LocalApi
     // What an agent's hello offers: reading only.
     static readonly HashSet<string> AgentCapabilities = [Capabilities.SessionsRead, UsageProtocol.Capability];
 
-    public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,     RemoteAuthorization? authorization = null,     AgentCredentials? credentials = null, AgentBridge.Host.Lite.ILiteSender? lite = null, AgentBridge.Host.Fleet.FleetList? fleet = null) => async (channel, op, data) =>
+    public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,     RemoteAuthorization? authorization = null,     AgentCredentials? credentials = null, AgentBridge.Host.Lite.ILiteSender? lite = null, AgentBridge.Host.Fleet.FleetList? fleet = null, AgentAuditLog? audit = null) => async (channel, op, data) =>
     {
         if (op == Fleet.FleetNames.Op)
         {
@@ -36,7 +36,7 @@ public static class LocalApi
             }
             return sessions.RenameFleetSession(data);
         }
-            if (op == AgentBridge.Host.Lite.LiteAgentSend.Op) { return await AgentBridge.Host.Lite.LiteAgentSend.HandleAsync(credentials, lite, channel, data); }
+            if (op == AgentBridge.Host.Lite.LiteAgentSend.Op) { return await AgentBridge.Host.Lite.LiteAgentSend.HandleAsync(credentials, lite, channel, data, appendAttempt: audit is null ? null : audit.Append); }
             if (op == AgentBridge.Host.Fleet.FleetList.Op) { return await (fleet ?? new AgentBridge.Host.Fleet.FleetList(credentials, null)).HandleAsync(channel, data); }
             if (op == AgentBridge.Host.Fleet.FleetList.FindOp) { return await (fleet ?? new AgentBridge.Host.Fleet.FleetList(credentials, null)).FindAsync(channel, data); }
             // Pipe only, and Windows only for now (§3.4): a relay channel never reaches this handler.

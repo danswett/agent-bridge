@@ -440,8 +440,15 @@ file, and size pruning stops at a file it cannot delete. A line torn by a crash 
 the next event. An unwritable log (a read-only folder, a full disk) refuses the action being
 audited, as the #1401 row in design/agent-launch-scope.md requires: the log says so once in the
 host log and again when writing resumes, and the caller must refuse and release any slot when the
-write returns false. Nothing calls the log yet: the agent operations that write to it arrive with
-#720 slice 4 and #1170.
+write returns false.
+
+`agent.send` now writes one outbound `agent.send` attempt after caller and input validation,
+before invoking the sender (#1985, #1401 A1). Its principal and chain come from the credential,
+not the request. The outcome is `attempted`, never proof of delivery, and `request` is a local
+attempt id, not the relay request id returned by the sender. Sender refusals or failures leave
+that one attempt record. An absent log, a false append or a thrown append refuses the send with
+`auditUnwritable`; nothing is sent or queued. Early caller/input refusals write no record in A1.
+Other action wiring remains in later #1401 slices.
 
 ## Approving a workspace at the machine
 

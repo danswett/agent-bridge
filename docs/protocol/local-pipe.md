@@ -253,6 +253,14 @@ sender, which answers
 
 `request` is the sender's request id.
 
+After caller and input validation, the host must append one audit **attempt** before calling
+the sender. An absent audit log, a false append or a thrown append raises the fixed error
+`refused: auditUnwritable: the agent audit log could not be written; nothing was sent`.
+The sender is not called, and nothing is queued or retried. Early caller/input refusals are not
+audited in this slice. The record's `attempted` outcome is not delivery confirmation; its local
+attempt id is distinct from the sender's relay request id. Only text hash and byte length are
+recorded, never the text. See [the audit log](../host-config.md#the-agent-audit-log).
+
 ### The MCP server (`mcp/`)
 
 An agent reaches this pipe through `mcp/src/server.mjs`, an MCP server it starts as a stdio child

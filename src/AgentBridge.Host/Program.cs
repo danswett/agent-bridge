@@ -856,7 +856,7 @@ async Task<int> ServeAsync(HostHandover handover)
     var liteLink = new AgentBridge.Host.Lite.RelayLiteLink();
     var fleetRoster = new AgentBridge.Host.Fleet.RelayFleetRoster();
     launcher.NamedLaunch = new AgentBridge.Host.Fleet.FleetLaunchNames(launcher, source, fleetNames, fleetRoster, identity.Folder, Log).RunAsync;
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, new AgentBridge.Host.Lite.SettingsLiteMode(() => HostSettings.CurrentAgentMessaging(identity.Folder)), new AgentBridge.Host.Lite.OwnLitePeers(new OwnPeers(identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, () => identity.Account?.AccountId)), liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster)), Log); }
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, new AgentBridge.Host.Lite.SettingsLiteMode(() => HostSettings.CurrentAgentMessaging(identity.Folder)), new AgentBridge.Host.Lite.OwnLitePeers(new OwnPeers(identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, () => identity.Account?.AccountId)), liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster), audit: new AgentAuditLog(identity.Folder, log: Log)), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);
