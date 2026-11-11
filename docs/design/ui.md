@@ -623,6 +623,10 @@ that a control can be used while it moves.
 
 ### 6.1 Session list
 
+The Windows header's New action is the 16 px plus alone in a fixed 32 x 32 Accent
+button (#1817). Its accessible name and tooltip stay "New session"; launch availability
+is unchanged, and the sort picker remains fully visible at the minimum window width.
+
 Sections, top to bottom:
 
 1. **Needs you · N** (#165, #253): a toggle, not a lane. It is the list's first item, under the

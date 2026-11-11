@@ -101,17 +101,16 @@
                 </Button>
                 <Button
                     Grid.Column="2"
-                    MinHeight="32"
+                    Width="32"
+                    Height="32"
+                    Padding="0"
                     Style="{StaticResource AccentButtonStyle}"
                     AutomationProperties.AutomationId="NewSession"
                     AutomationProperties.Name="New session"
                     ToolTipService.ToolTip="New session"
                     Visibility="{x:Bind local:Ui.Show(Launch.Available), Mode=OneWay, FallbackValue=Collapsed}"
                     Click="OnNew">
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                        <ContentControl Style="{StaticResource AbIconPlus}" Width="16" Height="16" />
-                        <TextBlock Text="New" />
-                    </StackPanel>
+                    <ContentControl Style="{StaticResource AbIconPlus}" Width="16" Height="16" />
                 </Button>
             </Grid>
 
