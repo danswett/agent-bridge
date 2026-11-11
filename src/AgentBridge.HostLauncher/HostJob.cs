@@ -114,7 +114,7 @@ public sealed class HostJob : IDisposable
                 await exited.Task.WaitAsync(ct);
                 return GetExitCodeProcess(process, out var code) ? unchecked((int)code) : throw new Win32Exception(Marshal.GetLastPInvokeError());
             }
-            finally { registered.Unregister(wait); }
+            finally { registered.Unregister(null); }
         }
 
         public void Dispose() => process.Dispose();
