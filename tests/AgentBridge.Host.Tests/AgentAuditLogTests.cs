@@ -253,9 +253,11 @@ public sealed class AgentAuditLogTests : IDisposable
         if (!OperatingSystem.IsWindows()) { return; }
         using (new FileStream(oldest, FileMode.Open, FileAccess.Read, FileShare.None))
         {
-            Log(max: 400).Append(Entry(outcome: new string('o', 250)));
+            Assert.True(Log(max: 400).Append(Entry()));
+            Assert.Contains("could not trim old files", Assert.Single(said));
+            Assert.Equal(3, Directory.GetFiles(Audit).Length);
+            Assert.All(Directory.GetFiles(Audit), file => Assert.True(new FileInfo(file).Length > 0));
         }
-        Assert.Equal(3, Directory.GetFiles(Audit).Length);
     }
 
     [Fact]
