@@ -42,6 +42,9 @@ attempts=${PLAYWRIGHT_APT_ATTEMPTS:-3}
 delay=${PLAYWRIGHT_APT_RETRY_DELAY:-5}
 network_host=azure.archive.ubuntu.com
 left_azure=false
+if ! grep -q '^http://azure\.archive\.ubuntu\.com/' "$mirrors" && grep -q '^https://archive\.ubuntu\.com/ubuntu/' "$mirrors"; then
+  network_host=archive.ubuntu.com; left_azure=true
+fi
 network_failed=false
 
 # Apt uses the same exit code for network and package errors; mixed errors must fail closed.
