@@ -1,11 +1,13 @@
 using AgentBridge.HomeAssistant;
 using AgentBridge.Host.Core;
+using AgentBridge.Transport;
 
 namespace AgentBridge.Host;
 
 // The Home Assistant connector from the command line, at the machine (docs/ha-connector.md):
 //
 //   agent-bridge-host ha status          whether the connector would run, and why not
+//   agent-bridge-host ha inventory       HA credential/state file presence only
 //   agent-bridge-host ha token set       the token, from standard input; nothing is echoed
 //   agent-bridge-host ha token clear
 //   agent-bridge-host ha shadow          what the connector would publish beside what the broker
@@ -20,6 +22,22 @@ public static class HaCommands
     public static bool Writes(IReadOnlyList<string> args) =>
         args.ElementAtOrDefault(1) == "token" && args.ElementAtOrDefault(2) is "set" or "clear";
 
+    public static int? TryInventoryCommand(IReadOnlyList<string> args, string root, TextWriter output, TextWriter error)
+    {
+        var rest = args.ToList();
+        var p = rest.IndexOf("--profile");
+        var profile = p >= 0 ? rest.ElementAtOrDefault(p + 1) : "default";
+        if (p >= 0) { rest.RemoveRange(p, Math.Min(2, rest.Count - p)); }
+        if (rest.ElementAtOrDefault(1) != "inventory") { return null; }
+        if (profile is null || !Identity.IsValidProfile(profile))
+        {
+            error.WriteLine("Not a profile name: use letters, digits, '-', '_' and '.'.");
+            return 2;
+        }
+        if (rest is not ["ha", "inventory"]) { error.WriteLine("usage: agent-bridge-host ha inventory [--profile <name>]"); return 2; }
+        return Inventory(Path.Combine(root, profile), output, error);
+    }
+
     public static int Run(IReadOnlyList<string> args, string folder, Func<string?> readSecret, TextWriter output, TextWriter error,
         bool devBuild, Func<string?>? agentHaBridge)
     {
@@ -27,6 +45,8 @@ public static class HaCommands
         {
             case ("status", _):
                 return Status(folder, output, devBuild, agentHaBridge);
+            case ("inventory", null):
+                return Inventory(folder, output, error);
             case ("token", "set"):
                 {
                     var token = readSecret();
@@ -53,9 +73,38 @@ public static class HaCommands
                 output.WriteLine("Removed the Home Assistant token. Restart agent-bridge-host serve to stop using it.");
                 return 0;
             default:
-                error.WriteLine("usage: agent-bridge-host ha status | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]   [--profile <name>]");
+                error.WriteLine("usage: agent-bridge-host ha status | ha inventory | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]   [--profile <name>]");
                 return 2;
         }
+    }
+
+    static int Inventory(string folder, TextWriter output, TextWriter error)
+    {
+        output.WriteLine("Home Assistant credential/state inventory (file presence only):");
+        var result = 0;
+        foreach (var name in new[] { "ha-token.dpapi", "ha-token", "ha-auth.json", "ha-connector.json" })
+        {
+            try
+            {
+                var attributes = File.GetAttributes(Path.Combine(folder, name));
+                if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+                {
+                    error.WriteLine($"  {name}: unknown (not a regular file)");
+                    result = 1;
+                    continue;
+                }
+                output.WriteLine($"  {name}: present (contents not read)");
+            }
+            catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { output.WriteLine($"  {name}: absent"); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                error.WriteLine($"  {name}: unknown (file metadata could not be read)");
+                result = 1;
+            }
+        }
+        output.WriteLine("Configuration, token validity, running clients and legacy/environment credentials: not checked.");
+        output.WriteLine("No credentials or state changed. Retain them for rollback; removal is a separate owner-approved operation.");
+        return result;
     }
 
     // The read-only shadow (HaShadow): what this host would publish beside what the broker holds,

@@ -81,6 +81,12 @@ string? Option(string name)
 }
 bool Flag(string name) => arguments.Contains(name);
 
+// Inventory must return before even intake or device/account identity files are opened.
+if (command == "ha" && HaCommands.TryInventoryCommand(arguments, Identity.DefaultRoot, Console.Out, Console.Error) is { } inventoryExit)
+{
+    return inventoryExit;
+}
+
 var defaults = SessionSourceOptions.ForCurrentUser();
 // serve reads what it may do on this machine from the profile's config.json (HostSettings), and
 // so do ha shadow, which must see the sessions as serve would (permissions.remoteApproval), and
