@@ -641,7 +641,21 @@ jobs:
         with:
           name: ${{ matrix.artifact }}-${{ env.APP_VERSION }}
           path: ${{ matrix.out }}/releases
+          if-no-files-found: error
           retention-days: 30
+      - name: Record the installer input from this tested pack
+        shell: pwsh
+        run: |
+          . ./build/app-installer-input.ps1
+          Write-AppInstallerInput -Publish '${{ matrix.out }}/publish' -Releases '${{ matrix.out }}/releases' -Out "$env:RUNNER_TEMP/installer-input" -Version $env:APP_VERSION -Runtime '${{ matrix.runtime }}' -Commit '${{ github.sha }}' -RunId '${{ github.run_id }}'
+      - name: The installer input's notices and identity
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.artifact }}-installer-input-${{ env.APP_VERSION }}
+          path: ${{ runner.temp }}/installer-input
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
       # The package's SBOM (quality/README.md §3.3, supply-chain): every NuGet package and project
       # in the published folder, read from its .deps.json files, as CycloneDX. On every build, so a
       # pull request shows it still works; publish attests it against the packages it uploads.
@@ -669,13 +683,11 @@ jobs:
           retention-days: 7
 
   app-installer:
-    # The installer half of the app's checks, split out of `app` so the two ~6 minute self-tests
-    # run side by side instead of one after the other (#1654). It packs the same commit with the
-    # same script, then installs the Setup.exe it made and starts the installed app. Nothing here
-    # is published or signed: `app` stays the job whose package ships.
+    # Reuse app's tested unsigned pack, never a second build or a different run (#1766).
+    # The existing install, architecture, distribution and installed-app checks remain intact.
     name: app-installer (${{ matrix.runtime }})
-    needs: plan
-    if: (needs.plan.outputs.whole-ring == 'true' && github.event_name != 'pull_request') || needs.plan.outputs.app-installer == 'true'
+    needs: [plan, app]
+    if: "!cancelled() && ((needs.plan.outputs.whole-ring == 'true' && github.event_name != 'pull_request') || needs.plan.outputs.app-installer == 'true')"
     strategy:
       fail-fast: false
       matrix:
@@ -683,25 +695,33 @@ jobs:
           - runtime: win-x64
             runner: windows-latest
             out: out/app
+            artifact: agent-bridge-windows
           - runtime: win-arm64
             runner: windows-11-arm
             out: out/app-arm64
+            artifact: agent-bridge-windows-arm64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+      - name: The matching tested release files from this run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          dotnet-version: '10.0.x'
-      - run: dotnet tool install -g vpk --version 1.2.161
-      - name: Publish and pack
+          name: ${{ matrix.artifact }}-${{ env.APP_VERSION }}
+          path: ${{ matrix.out }}/releases
+      - name: The matching installer notices and identity from this run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ matrix.artifact }}-installer-input-${{ env.APP_VERSION }}
+          path: ${{ runner.temp }}/installer-input
+      - name: Refuse missing, foreign or altered installer input before running it
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          ./build/release-notes.ps1 -Repository "${{ github.repository }}" -Commit "${{ github.sha }}" -Out out/app/notes.md
-          ./build/pack-app.ps1 -Version $env:APP_VERSION -Runtime ${{ matrix.runtime }} -Out ${{ matrix.out }} -Release:($env:APP_RELEASE -eq 'true') -DeltaFrom "https://github.com/${{ github.repository }}" -ReleaseNotes out/app/notes.md
+          . ./build/app-installer-input.ps1
+          Assert-AppInstallerInput -InputPath "$env:RUNNER_TEMP/installer-input" -Releases '${{ matrix.out }}/releases' -Version $env:APP_VERSION -Runtime '${{ matrix.runtime }}' -Commit '${{ github.sha }}' -RunId '${{ github.run_id }}' | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/selftest" | Out-Null
+          Copy-Item "$env:RUNNER_TEMP/installer-input/installer-input.json" "$env:RUNNER_TEMP/selftest/installer-input.json"
       - name: The installer installs per user, into its own channel and architecture, and the installed app starts
         # The Setup.exe a person downloads, run silently on this throwaway runner: per user, no
         # admin, into %LOCALAPPDATA%\AgentBridgeApp. A silent install starts nothing, so no host or
@@ -731,7 +751,7 @@ jobs:
           }
           if ($bad) { exit 1 }
           . ./build/app-notices.ps1
-          Write-AppDistributionEvidence -Publish '${{ matrix.out }}/publish' -Releases '${{ matrix.out }}/releases' -Version $env:APP_VERSION -Runtime '${{ matrix.runtime }}' -Installed "$root/current" -Out "$logs/distribution-evidence.json"
+          Write-AppDistributionEvidence -Publish "$env:RUNNER_TEMP/installer-input/publish" -Releases '${{ matrix.out }}/releases' -Version $env:APP_VERSION -Runtime '${{ matrix.runtime }}' -Installed "$root/current" -Out "$logs/distribution-evidence.json"
           ./build/app-self-test.ps1 -Exe "$root/current/AgentBridge.exe" -Result "$logs/result.json" -TimeoutSeconds 480
           exit $LASTEXITCODE
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -1202,6 +1222,15 @@ jobs:
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'beta-release-manifest')) }}
         shell: pwsh
         run: pwsh -NoProfile -File build/test-release-manifest.ps1
+      - name: .NET for the installer input quality harness
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'app-installer-input')) }}
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Installer input refuses missing, foreign and altered artifacts
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'app-installer-input')) }}
+        shell: pwsh
+        run: ./quality/run.ps1 -Suite app-installer-input
       - name: The MCP server's packages
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'mcp-server')) }}
         working-directory: mcp

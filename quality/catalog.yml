@@ -410,6 +410,17 @@ suites:
     where: ci.yml light
     status: exists
 
+  - id: app-installer-input
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, win-arm64, linux-x64]
+    runner: local
+    triggers: [build/app-installer-input.ps1, build/test-app-installer-input.ps1, build/app-notices.ps1, build/app-channels.ps1]
+    command: pwsh -NoProfile -File build/test-app-installer-input.ps1
+    where: ci.yml light
+    status: exists
+
   - id: build-scripts
     kind: unit
     ring: 1
@@ -531,7 +542,7 @@ suites:
     select: affected
     # Publish, pack, release-vs-dev host identity, the published app's self-test, the
     # installer's silent per-user install and the installed copy's self-test, publish dry run.
-    # The installer half runs in the parallel app-installer job, on its own pack of the same commit.
+    # The installer half reuses app's tested pack and notices from this run, without repacking.
     platforms: [win-x64, win-arm64]
     runner: hosted
     # What the app's build takes in from outside src/ (the protocol's example sessions, embedded

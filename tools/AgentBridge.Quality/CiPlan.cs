@@ -83,9 +83,14 @@ static partial class CiPlan
     // The app's packaging legs are the one job the whole ring does not bring to a pull request
     // (#1249): there its plan output alone says whether the change needs them. Main runs them
     // whenever it runs the whole ring.
-    static string GatedJobIf(string id) => id is "app" or "app-installer"
-        ? $"(needs.plan.outputs.whole-ring == 'true' && github.event_name != 'pull_request') || needs.plan.outputs.{id} == 'true'"
-        : $"needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.{id} == 'true'";
+    static string GatedJobIf(string id)
+    {
+        var selected = id is "app" or "app-installer"
+            ? $"(needs.plan.outputs.whole-ring == 'true' && github.event_name != 'pull_request') || needs.plan.outputs.{id} == 'true'"
+            : $"needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.{id} == 'true'";
+        // A selected installer must fail on unavailable input, not inherit app's implicit skip.
+        return id == "app-installer" ? $"!cancelled() && ({selected})" : selected;
+    }
 
     public static IReadOnlyList<Problem> Check(Catalog catalog, string yaml)
     {
