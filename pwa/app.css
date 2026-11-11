@@ -1994,6 +1994,7 @@ summary {
 }
 /* Installed iPhone: a single visible-viewport bound, never screen.height or a second keyboard
    subtraction (#2037, #1682). Keep notes above the box so a multiline hint cannot lift it. */
+:root[data-platform="ios"][data-standalone="true"] { --phone-view-top: 0px; --phone-view-height: 100%; }
 :root[data-platform="ios"][data-standalone="true"][data-phone-keyboard] { --safe-bottom: 0px; }
 :root[data-platform="ios"][data-standalone="true"] .reply-slot { padding-bottom: 0; }
 :root[data-platform="ios"][data-standalone="true"] body[data-page="sessions"][data-session-open="true"] .session-pane {
