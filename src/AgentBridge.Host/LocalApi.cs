@@ -25,7 +25,10 @@ public static class LocalApi
     // What an agent's hello offers: reading only.
     static readonly HashSet<string> AgentCapabilities = [Capabilities.SessionsRead, UsageProtocol.Capability];
 
-    public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,     RemoteAuthorization? authorization = null,     AgentCredentials? credentials = null, AgentBridge.Host.Lite.ILiteSender? lite = null, AgentBridge.Host.Fleet.FleetList? fleet = null, AgentAuditLog? audit = null) => async (channel, op, data) =>
+    public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,     RemoteAuthorization? authorization = null,     AgentCredentials? credentials = null, AgentBridge.Host.Lite.ILiteSender? lite = null, AgentBridge.Host.Fleet.FleetList? fleet = null, AgentAuditLog? audit = null, TimeProvider? auditTime = null) =>
+        Handler(sessions, control, callers, log, authorization, credentials, lite, fleet, audit, new RefusalAudits(auditTime ?? TimeProvider.System));
+
+    static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log, RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet, AgentAuditLog? audit, RefusalAudits refusals) => async (channel, op, data) =>
     {
         if (op == Fleet.FleetNames.Op)
         {
@@ -78,7 +81,12 @@ public static class LocalApi
         }
         if (Acts.Contains(op) && callers.Classify(channel) is { Kind: CallerKind.Agent } agent)
         {
-            throw Refuse(op, agent, "answering, replying, ending and launching sessions are for the person, from the app or a phone", log);
+            const string why = "answering, replying, ending and launching sessions are for the person, from the app or a phone";
+            if (op is LaunchProtocol.Launch or Ops.SessionStop && credentials?.Of(channel) is { } credential)
+            {
+                AuditRefusal(credentials, credential, op, data, audit, why, refusals);
+            }
+            throw Refuse(op, agent, why, log);
         }
         // What a device says it shows decides whether the person is using it, and a device in use
         // holds back the person's pushes (#1190): an agent saying it would silence them.
@@ -106,6 +114,51 @@ public static class LocalApi
             _ => hello,
         });
     };
+
+    sealed class RefusalAudits(TimeProvider time)
+    {
+        public TimeProvider Time { get; } = time;
+        public Dictionary<string, (long At, int Written, int Suppressed, long Last)> Windows { get; } = new(StringComparer.Ordinal);
+    }
+
+    static void AuditRefusal(AgentCredentials credentials, AgentCredential caller, string op, JsonElement data, AgentAuditLog? audit, string why, RefusalAudits refusals)
+    {
+        var principal = credentials.PrincipalOf(caller);
+        lock (refusals.Windows)
+        {
+            var now = refusals.Time.GetTimestamp();
+            // Fixed hours start at the first successful record; expired principals consume no memory.
+            foreach (var stale in refusals.Windows.Where(w => refusals.Time.GetElapsedTime(w.Value.At, now) >= TimeSpan.FromHours(1)).Select(w => w.Key).ToArray())
+            { refusals.Windows.Remove(stale); }
+            var state = refusals.Windows.GetValueOrDefault(principal, (At: now, Written: 0, Suppressed: 0, Last: now));
+            var summary = state.Written >= 60;
+            if (summary)
+            {
+                if (state.Suppressed < int.MaxValue) { state.Suppressed++; }
+                refusals.Windows[principal] = state;
+                if (refusals.Time.GetElapsedTime(state.Last, now) < TimeSpan.FromMinutes(1)) { return; }
+            }
+            string? Field(string name)
+            {
+                if (data.ValueKind != JsonValueKind.Object || !data.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.String) { return null; }
+                try { return v.GetString(); }
+                catch (InvalidOperationException) { return null; } // An unpaired surrogate is not a usable field.
+            }
+            // A refused request is unvalidated: never copy arbitrary text as an id into the audit.
+            var request = Guid.TryParse(Field("request"), out var r) ? r.ToString("D") : Guid.NewGuid().ToString("D");
+            var target = op == LaunchProtocol.Launch ? "local" : Guid.TryParse(Field("id"), out var id) ? id.ToString("D") : "unknown";
+            var reason = summary ? $"{state.Suppressed} additional launch or stop attempts were refused" : why;
+            var entry = new AgentAuditEntry("local", request, principal, caller.Chain, op, target, "refused", reason);
+            bool written;
+            try { written = audit?.Append(entry, !summary && op == LaunchProtocol.Launch ? Field("prompt") : null) == true; }
+            catch (Exception) { throw AuditUnavailable(); }
+            if (!written) { throw AuditUnavailable(); }
+            refusals.Windows[principal] = (state.At, Math.Min(60, state.Written + 1), 0, now);
+        }
+    }
+
+    static InvalidOperationException AuditUnavailable() =>
+        new("refused: auditUnwritable: the agent audit log could not be written; nothing was launched or stopped");
 
     static InvalidOperationException Refuse(string op, Caller caller, string why, Action<string>? log)
     {
