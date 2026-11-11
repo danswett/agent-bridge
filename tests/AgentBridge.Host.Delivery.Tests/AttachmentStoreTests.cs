@@ -460,15 +460,15 @@ public sealed class AttachmentStoreTests : IDisposable
         if (failureAlreadyReported)
         {
             blobs.Release.SetResult();
-            await forgotten.WaitAsync(TimeSpan.FromSeconds(10));
+            await UntilAsync(() => forgotten.IsCompleted, "the rejected blob to be forgotten after its failure");
         }
-        var finished = forgotten.WaitAsync(TimeSpan.FromSeconds(10));
         if (!failureAlreadyReported)
         {
             Assert.False(forgotten.IsCompleted);
             blobs.Release.SetResult();
         }
-        Assert.Equal(start.Blob!.Id, await finished);
+        await UntilAsync(() => forgotten.IsCompleted, "the rejected blob to be forgotten after its failure");
+        Assert.Equal(start.Blob!.Id, await forgotten);
         Assert.Empty(Directory.GetFiles(Incoming));
         var e = Assert.Throws<InvalidOperationException>(() => s.Start(Phone, start));
 
