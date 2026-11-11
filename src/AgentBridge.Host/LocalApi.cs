@@ -114,8 +114,12 @@ public static class LocalApi
 
     static void AuditRefusal(AgentCredentials credentials, AgentCredential caller, string op, JsonElement data, AgentAuditLog? audit, string why)
     {
-        string? Field(string name) => data.ValueKind == JsonValueKind.Object && data.TryGetProperty(name, out var v)
-            && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+        string? Field(string name)
+        {
+            if (data.ValueKind != JsonValueKind.Object || !data.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.String) { return null; }
+            try { return v.GetString(); }
+            catch (InvalidOperationException) { return null; } // An unpaired surrogate is not a usable field.
+        }
         // A refused request is unvalidated: never copy arbitrary text as an id into the audit.
         var request = Guid.TryParse(Field("request"), out var r) ? r.ToString("D") : Guid.NewGuid().ToString("D");
         var target = op == LaunchProtocol.Launch ? "local" : Guid.TryParse(Field("id"), out var id) ? id.ToString("D") : "unknown";

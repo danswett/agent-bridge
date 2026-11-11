@@ -128,6 +128,16 @@ public sealed class LocalApiLaunchStopAuditTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(root, AgentAuditLog.FolderName)));
     }
 
+    [Theory]
+    [InlineData(LaunchProtocol.Launch, """{"request":"\uD800"}""")]
+    [InlineData(Ops.SessionStop, """{"id":"\uD800"}""")]
+    public async Task Undecodable_identifiers_still_leave_one_refused_record(string op, string json)
+    {
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(new AgentAuditLog(root))(channel, op, JsonDocument.Parse(json).RootElement));
+        Assert.Equal("refused", Line(op).GetProperty("outcome").GetString());
+        Assert.Equal(0, actions.Calls);
+    }
+
     sealed class Actions : ISessionLauncher, ISessionStopper
     {
         public int Calls;
