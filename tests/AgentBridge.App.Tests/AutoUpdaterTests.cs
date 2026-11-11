@@ -2267,7 +2267,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         await StartAsync();
         await auto.TickAsync();
         Assert.Equal(UpdateOutcome.Current, prefs.LastUpdate!.Outcome);
-        foreach (var request in new[] { "restarted-first", "restarted-second" })
+        foreach (var request in new[] { Press, "7bdc8aaa-294b-4b23-bda8-bbb8c03a0906" })
         {
             await AskedAsync(UpdateAskKind.Check, request);
             Assert.Equal((UpdateOutcome.Refused, request), (auto.State.Last!.Outcome, auto.State.Last.Request));
