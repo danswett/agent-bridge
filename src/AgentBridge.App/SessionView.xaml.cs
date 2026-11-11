@@ -40,6 +40,7 @@ public sealed partial class SessionView : UserControl
         InitializeComponent();
         ReplyBox.TextCompositionStarted += (_, _) => replyComposing = true;
         ReplyBox.TextCompositionEnded += (_, _) => replyComposing = false;
+        InitializeLatest();
         HistoryRows.ItemsSource = historyShown;
         Loaded += (_, _) =>
         {

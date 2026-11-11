@@ -85,7 +85,7 @@ public sealed partial class SessionView
             SyncQuestionBar();
             // A question still moving into view is held from the pointer until it has stopped.
             guard.Scrolled(DateTimeOffset.UtcNow);
-            if (anchoring is not { } asked || Math.Abs(scroll.VerticalOffset - asked) >= 0.5) { TakeAnchor(); }
+            if (anchoring is not { } asked || Math.Abs(scroll.VerticalOffset - asked) >= 0.5 || latestUsed && !latestPinned) { TakeAnchor(); }
             scrolling = e.IsIntermediate;
             if (!e.IsIntermediate) { anchoring = null; keyTarget = null; }
             HistoryScrolled(e.IsIntermediate);
@@ -123,7 +123,7 @@ public sealed partial class SessionView
         // From where the last key is taking it, so a key pressed while that scroll still moves adds to it.
         var from = keyTarget ?? scroll.VerticalOffset;
         var to = ConversationKeyboard.Offset(key, from, scroll.ViewportHeight, scroll.ScrollableHeight);
-        if (Math.Abs(to - from) >= 0.5 && scroll.ChangeView(null, to, null, disableAnimation: !Motion.Scrolls)) { keyTarget = to; ReleasePin(); }
+        if (Math.Abs(to - from) >= 0.5 && scroll.ChangeView(null, to, null, disableAnimation: !Motion.Scrolls)) { LatestInput(up: to < from); keyTarget = to; ReleasePin(); }
     }
 
     // What had focus when a key reached the conversation, from it up to the list: a text input, a
