@@ -260,7 +260,7 @@ export class HostSession {
     const hello = await client.hello({ changes: true });
     if (link.client !== client || link.phase !== 'open') { return; }
     const machine = { ...hello.machine, name: hello.machine.name ?? link.machine?.name ?? null };
-    const key = (m, c) => JSON.stringify([m?.name, m?.hostVersion, m?.dev, m?.readOnly ?? null, m?.signIn ?? [], c]);
+    const key = (m, c) => JSON.stringify([m?.name, m?.hostVersion, m?.dev, m?.readOnly ?? null, m?.diagnosticsReason ?? null, m?.signIn ?? [], c]);
     const changed = key(machine, hello.capabilities) !== key(link.machine, link.capabilities);
     link.machine = machine;
     link.capabilities = hello.capabilities;
