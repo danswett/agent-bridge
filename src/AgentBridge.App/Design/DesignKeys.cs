@@ -150,6 +150,7 @@ static class DesignKeys
         "AbIconSessions",
         "AbIconSettings",
         "AbIconSidebar",
+        "AbIconSort",
         "AbIconStop",
         "AbIconTools",
         "AbIconUsage",

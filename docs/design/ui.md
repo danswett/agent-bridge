@@ -628,6 +628,12 @@ that a control can be used while it moves.
 
 ### 6.1 Session list
 
+The PWA's H3 header (#1892) keeps title, Sort and New on one row. Sort is a 44 px
+icon button named "Sort sessions"; its tooltip names the current order and the menu
+ticks that choice. New is a 44 px hollow Bridge plus with a 1.5 px border and transparent
+fill. The unwrapped count line sits 8 px below the row. Machine tabs and text edges
+are separate slices (#1894, #1893 respectively).
+
 The Windows header's New action is the 16 px plus alone in a fixed 32 x 32 Accent
 button (#1817). Its accessible name and tooltip stay "New session"; launch availability
 is unchanged, and the sort picker remains fully visible at the minimum window width.

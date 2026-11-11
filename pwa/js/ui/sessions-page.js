@@ -35,6 +35,7 @@ import { CUE_MS } from '../return-grace.js';
 import { PaneDividers } from './pane-dividers.js';
 import { UPDATING } from './hold.js';
 import { HistoryStore } from '../history-store.js';
+import { RowMenu } from './row-menu.js';
 
 // Needs you's answers (Approve once, Deny, Resend) wait as a question's do (ui.md §5.3): any
 // change to the lane can put Approve once under a pointer aimed at something else (an entry
@@ -170,6 +171,8 @@ export class SessionsPage {
   // From Escape's pop until its popstate lands: a second press then would pop past the list.
   #escaping = false;
   #timingTimer = null;
+  #sortEvents = null;
+  #sortPopup = new RowMenu();
 
   // $: getElementById. hosts: a HostSession. connection: presence, known and ready.
   // blobs(): the relay's blob store, or null; relayMax(): the largest blob it takes.
@@ -769,6 +772,8 @@ export class SessionsPage {
 
   // Everything tied to the signed-in account goes with it.
   clear() {
+    this.#sortPopup.close(false);
+    this.#sortEvents?.abort();
     this.view.stopRecent();
     clearInterval(this.#timingTimer);
     this.#timingTimer = null;
@@ -801,14 +806,29 @@ export class SessionsPage {
 
   // Your order, Most recent or Machine. Where the order can't be kept on this device, the list
   // is Most recent and Your order can't be picked.
-  #sortMenu(select) {
-    if (!select) { return; }
-    select.replaceChildren(...SORTS.map((s) => h('option', { value: s, disabled: s === 'yours' && !this.order.usable ? true : null, 'aria-label': s === 'yours' ? YOUR_ORDER_NAME : null }, SORT_LABELS[s])));
+  #sortMenu(button) {
+    if (!button) { return; }
+    this.#sortEvents = new AbortController();
+    const options = { signal: this.#sortEvents.signal };
+    let state = '';
     const show = () => {
-      select.value = this.order.sort;
-      select.options[0].disabled = !this.order.usable;
+      button.title = `Sort sessions: ${SORT_LABELS[this.order.sort]}`;
+      const next = `${this.order.sort}:${this.order.usable}`;
+      if (state !== next) { this.#sortPopup.close(); }
+      state = next;
     };
-    select.addEventListener('change', () => { this.view.setSort(select.value); show(); });
+    const open = () => {
+      if (this.#sortPopup.open) { this.#sortPopup.close(); return; }
+      this.#sortPopup.show(button.closest('.sessions-head'), SORTS.map((s) => ({
+        label: SORT_LABELS[s], name: s === 'yours' ? YOUR_ORDER_NAME : null,
+        checked: s === this.order.sort, disabled: s === 'yours' && !this.order.usable,
+        run: () => { this.view.setSort(s); show(); },
+      })), { back: button, trigger: button, label: 'Sort sessions' });
+    };
+    button.addEventListener('click', open, options);
+    button.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); open(); }
+    }, options);
     this.view.onSorted = show;
     show();
   }

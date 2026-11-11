@@ -315,6 +315,25 @@ test('the sort menu offers Most recent and Machine, and remembers the choice', a
   await expect(sort).toHaveAttribute('title', 'Sort sessions: Machine');
 });
 
+test('the sort icon opens by keyboard and session news leaves its menu usable', async ({ page }) => {
+  await openDemo(page);
+  const sort = page.getByRole('button', { name: 'Sort sessions', exact: true });
+  await sort.focus();
+  await sort.press('ArrowDown');
+  const yours = page.getByRole('menuitemradio', { name: 'Your order, on this device' });
+  await expect(yours).toBeFocused();
+  await upsert(page, CODEX, { title: 'News while choosing a sort' });
+  await expect(card(page, CODEX)).toContainText('News while choosing a sort');
+  await expect(yours).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(sort).toHaveAttribute('title', 'Sort sessions: Most recent');
+  await expect(sort).toBeFocused();
+  await sort.click();
+  await page.locator('#sessions-h').click();
+  await expect(page.getByRole('menu', { name: 'Sort sessions' })).toHaveCount(0);
+});
+
 // The Move button (#1579, ui.md §6.1): grab, move, drop and cancel from the keyboard.
 const mover = (page, id) => card(page, id).getByRole('button', { name: /^Move / });
 const said = (page) => page.locator('#session-list + [role="status"]');

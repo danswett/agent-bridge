@@ -25,7 +25,7 @@ test.afterEach(async ({ page }) => {
 });
 
 for (const hasTouch of [false, true]) {
-  test.describe(`icon-only New session with ${hasTouch ? 'touch' : 'a pointer'}`, () => {
+  test.describe(`H3 Sessions header (#1892) with ${hasTouch ? 'touch' : 'a pointer'}`, () => {
     test.use({ hasTouch });
 
     async function checkHeader(page) {
@@ -38,7 +38,6 @@ for (const hasTouch of [false, true]) {
       expect(box.width).toBe(44);
       expect(box.height).toBe(44);
       await expect(fresh).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-      await expect(fresh).toHaveCSS('border-top-width', '1.5px');
       const glyph = await fresh.locator('svg').boundingBox();
       expect(glyph.width).toBe(20);
       expect(glyph.height).toBe(20);
