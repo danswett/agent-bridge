@@ -613,6 +613,8 @@ public sealed class ReleaseDiscovery : IDisposable
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return memory; }
     }
 
+    // Unsaved expiry fails closed here, but cannot revoke an older file across a
+    // restart and clock rollback; durable expiry requires a successful replacement.
     void Write(State state)
     {
         memory = state = state with { Saved = time.GetUtcNow() };

@@ -198,6 +198,9 @@ public sealed class AutoUpdater
     // Release checks held off after the feed's rate limit refused them, and why.
     DateTimeOffset? checksHeldUntil;
     string? checksHeld;
+    // A refused press replaces LastUpdate, not the Current fact loaded at startup,
+    // before this process has been able to complete a successful check.
+    bool knownCurrent;
     // When the refused check came back: only a check that succeeded after that ends the hold.
     DateTimeOffset? heldAt;
     int rateLimited;
@@ -259,6 +262,7 @@ public sealed class AutoUpdater
         this.host = host;
         this.manager = manager;
         this.prefs = prefs;
+        knownCurrent = prefs().LastUpdate?.Outcome == UpdateOutcome.Current;
         this.save = save;
         this.log = log;
         this.othersInPackage = othersInPackage;
@@ -1170,8 +1174,8 @@ public sealed class AutoUpdater
         return checksHeld;
     }
 
-    bool KnownCurrent(UpdateResult? last) => Pending is null && updater.Found is null
-        && (last?.Outcome == UpdateOutcome.Current || last?.Outcome == UpdateOutcome.Refused && updater.CheckedAt is not null);
+    bool KnownCurrent(UpdateResult? last) => knownCurrent = Pending is null && updater.Found is null
+        && (last?.Outcome == UpdateOutcome.Current || last?.Outcome == UpdateOutcome.Refused && (knownCurrent || updater.CheckedAt is not null));
 
     // A check that succeeded since the hold began (Settings', through the shared updater): the feed
     // answers again, so the hold, its cached failure and its backoff end, and the schedule runs on
