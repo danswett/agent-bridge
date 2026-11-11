@@ -287,10 +287,24 @@ test.describe('bringing a session from another machine', () => {
     await openDemo(page);
     await openPanel(page);
     await field(page, 'resume').selectOption(`@demo-studio/${AWAY}`);
-    // It ended up running again on Studio PC while the panel was open.
-    await page.evaluate((id) => { const h = window.agentBridgeDemo.host; h.remote.resumable = h.remote.resumable.filter((r) => r.id !== id); }, AWAY);
+    // Remove it only when the host receives the transfer: an in-flight choices refresh must
+    // not see it disappear before the press and turn this into a new-session launch (#1909).
+    await page.evaluate((id) => {
+      const h = window.agentBridgeDemo.host;
+      const receive = h.receive.bind(h);
+      h.receive = (transport, message) => {
+        if (message.op === 'session.launch') {
+          h.remote.resumable = h.remote.resumable.filter((r) => r.id !== id);
+        }
+        return receive(transport, message);
+      };
+    }, AWAY);
+    await page.evaluate(() => window.agentBridgeDemo.launchPanel.refresh());
+    await expect(field(page, 'resume')).toHaveValue(`@demo-studio/${AWAY}`);
     await launchButton(page).tap();
+    await expect(panel(page)).toHaveAttribute('data-launch', 'refused');
     await expect(status(page)).toHaveText('Not launched: the session could not be brought from the other machine: Studio PC refused: that session is not one its machine offers (it is not on its resume list).');
+    expect(await log(page)).toEqual([expect.objectContaining({ transfer: expect.objectContaining({ from: 'demo-studio', session: AWAY }) })]);
   });
 
   test('a machine that takes no sessions from others lists only its own', async ({ page }) => {
