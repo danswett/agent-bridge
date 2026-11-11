@@ -221,6 +221,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             {
                 throw new InvalidOperationException("two script credentials are already live for this name; revoke before minting another");
             }
+            log($"agent credentials: issuing script credential {credential.Id} for {credential.Principal}");
             var folder = PrivateFolder.Ensure(Path.Combine(Path.GetDirectoryName(path)!, "script-credentials"),
                 "the script credential folder", "no script credential is issued");
             // Hashing the validated principal also keeps case-distinct names distinct on Windows.
@@ -256,7 +257,6 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
                 try { File.Delete(temp); }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Fault("could not remove the protected script credential temporary file"); }
             }
-            log($"agent credentials: issued script credential {credential.Id} for {credential.Principal}");
             return (credential, final);
         }
     }

@@ -246,22 +246,28 @@ public sealed class AgentCredentialsTests : IDisposable
         Assert.Single(Directory.GetFileSystemEntries(root));
     }
 
-    [Fact]
-    public void A_logging_failure_after_script_replacement_does_not_remove_the_committed_hash()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_logging_failure_issues_nothing_and_leaves_the_rotation_slot_available(bool rotating)
     {
-        var first = Store(new Clock(Started)).MintScript("pump");
-        var store = new AgentCredentials(root, "machine1", new Clock(Started), _ => throw new IOException("synthetic log failure"));
+        var clock = new Clock(Started);
+        var existing = rotating ? Store(clock).MintScript("pump").Path : null;
+        var before = existing is null ? null : File.ReadAllBytes(existing);
+        var verifier = Path.Combine(root, AgentCredentials.FileName);
+        var hashes = File.Exists(verifier) ? File.ReadAllBytes(verifier) : null;
+        var store = new AgentCredentials(root, "machine1", clock, _ => throw new IOException("synthetic log failure"));
         Assert.Throws<IOException>(() => store.MintScript("pump"));
-        Assert.Equal(2, Store(new Clock(Started)).Count);
-        var bytes = File.ReadAllBytes(first.Path);
-        var clear = OperatingSystem.IsWindows()
-            ? ProtectedData.Unprotect(bytes, null, DataProtectionScope.CurrentUser) : bytes;
-        try
+        Assert.Equal(rotating ? 1 : 0, store.Count);
+        Assert.Equal(rotating ? 1 : 0, Store(clock).Count);
+        if (existing is not null)
         {
-            Assert.True(File.ReadAllText(Path.Combine(root, AgentCredentials.FileName))
-                .Contains(Convert.ToHexString(SHA256.HashData(clear)), StringComparison.Ordinal));
+            Assert.True(before!.SequenceEqual(File.ReadAllBytes(existing)));
+            Assert.True(hashes!.SequenceEqual(File.ReadAllBytes(verifier)));
         }
-        finally { CryptographicOperations.ZeroMemory(clear); }
+        else { Assert.Empty(Directory.GetFiles(root, "*", SearchOption.AllDirectories)); }
+        Store(clock).MintScript("pump");
+        Assert.Equal(rotating ? 2 : 1, Store(clock).Count);
     }
 
     [Fact]
