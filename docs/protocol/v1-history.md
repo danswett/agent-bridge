@@ -398,7 +398,7 @@ from the bytes as written.
 ## Security and authorization
 
 * **Who gets it.** Exactly the principals that may read this session's content today **as a
-  person**: a person's paired devices through the relay (role `person`), and the Agent Bridge app
+  person**: a person's paired devices through the relay (role `person`), and the Slipgates app
   and the user's other non-agent processes on the local pipe, as `session.get`. **Not** an agent
   on the pipe (CallerGuard's `Agent`): it is refused (`refused: … reading a session's history is
   for the person …`), and its hello omits `sessions.history`, until agents have a principal of

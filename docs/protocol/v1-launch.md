@@ -176,7 +176,7 @@ A pending folder-trust question, in `launch.options`' `trust` and a launch resul
   "warning": "Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. …",
   "askedAt": "2026-10-31T16:31:30Z",
   "answerable": false,
-  "atMachine": "Answer at the machine. To answer from your devices, turn on \"Answer folder-trust questions from my devices\" in the Agent Bridge app's Settings on that machine, or run agent-bridge-host config set launch.remoteFolderTrust true there and restart the host."
+  "atMachine": "Answer at the machine. To answer from your devices, turn on \"Answer folder-trust questions from my devices\" in the Slipgates app's Settings on that machine, or run agent-bridge-host config set launch.remoteFolderTrust true there and restart the host."
 }
 ```
 
