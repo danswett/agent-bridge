@@ -148,6 +148,17 @@ public sealed class AgentCredentialsTests : IDisposable
         Assert.Null(store.Check(a, Inside()).Accepted);
     }
 
+    [Fact]
+    public void A_script_record_defaults_to_thirty_days_without_minting_or_storing_a_token()
+    {
+        var record = AgentCredential.Script("credential1", "machine1", "pump-wake", Started);
+        Assert.Equal(Started.AddDays(30), record.ExpiresAt);
+        Assert.Equal("script:machine1/pump-wake", Store().PrincipalOf(record));
+        Assert.False(File.Exists(Path.Combine(root, AgentCredentials.FileName)));
+        Assert.Throws<ArgumentException>(() => AgentCredential.Script("credential1", "machine1", "../bad", Started));
+        Assert.Throws<ArgumentException>(() => AgentCredential.Script("credential1", "machine1", "pump", Started, TimeSpan.FromDays(31)));
+    }
+
     [Theory]
     [InlineData(1)]
     [InlineData(30)]
@@ -176,14 +187,18 @@ public sealed class AgentCredentialsTests : IDisposable
     [InlineData("principal", "script:machine2/pump-wake")]
     [InlineData("principal", "script:machine1/")]
     [InlineData("principal", "script:machine1/../pump-wake")]
+    [InlineData("principal", "script:machine1/..")]
+    [InlineData("principal", "script:machine1/pump/wake")]
     [InlineData("principal", "script:machine1/pump wake")]
     [InlineData("principal", "script:machine1/pump\nwake")]
     [InlineData("principal", null)]
     [InlineData("expiresAt", null)]
     [InlineData("issuedAt", null)]
+    [InlineData("issuedAt", "0001-01-01T00:00:00+00:00")]
     [InlineData("session", "sess-1")]
     [InlineData("launchId", "launch-1")]
     [InlineData("rootPid", "100")]
+    [InlineData("rootStartUtc", "2026-11-07T12:00:00+00:00")]
     [InlineData("depth", "1")]
     public void An_invalid_script_record_fails_the_whole_store_closed(string field, string? value)
     {

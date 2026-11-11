@@ -10,7 +10,18 @@ namespace AgentBridge.Host;
 // What a credential is bound to (design/agent-principals.md §3.3). Id names the grant in logs and
 // audit and is never the secret.
 public sealed record AgentCredential(string Id, string Session, string LaunchId, int RootPid, DateTimeOffset RootStartUtc,
-    string Scope, int Depth, string[] Chain, DateTimeOffset IssuedAt, DateTimeOffset ExpiresAt);
+    string Scope, int Depth, string[] Chain, DateTimeOffset IssuedAt, DateTimeOffset ExpiresAt,
+    string Kind = "session", string? Principal = null)
+{
+    // Record construction only; minting and persisting a script token are separate operations.
+    public static AgentCredential Script(string id, string machine, string name, DateTimeOffset issuedAt, TimeSpan? lifetime = null)
+    {
+        var credential = new AgentCredential(id, "", "", 0, default, AgentProtocol.ScopeReadReply, 0, [], issuedAt,
+            issuedAt + (lifetime ?? TimeSpan.FromDays(AgentCredentials.DefaultScriptDays)), "script", $"script:{machine}/{name}");
+        if (string.IsNullOrEmpty(id) || !AgentCredentials.ValidScript(credential, machine)) { throw new ArgumentException("invalid script credential record"); }
+        return credential;
+    }
+}
 
 public sealed record AgentHelloDecision(AgentCredential? Accepted, string? Refusal)
 {
@@ -42,6 +53,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     public const string FileName = "agent-credentials.json";
     public const int MaxCredentials = 1024;
     public const int DefaultDays = 7;
+    public const int DefaultScriptDays = 30;
 
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
@@ -231,6 +243,8 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             }
         }
         if (match is null) { return AgentHelloDecision.Refused("no live credential matches that token"); }
+        // S1 defines records only: do not open script authentication before its caller checks exist.
+        if (match.Kind == "script") { return Outside(match, "script caller verification is not available"); }
         if (match.RootPid <= 0) { return Outside(match, "its launch has not started"); }
         if (!ancestry.Complete)
         {
@@ -273,13 +287,15 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     // principal, for as long as its credential stands.
     public AgentHelloResult Accept(IProtocolChannel channel, AgentCredential credential)
     {
-        var principal = AgentProtocol.Principal(machine, credential.Session);
+        var principal = PrincipalOf(credential);
         connections.AddOrUpdate(channel, new Connection(credential.Id, principal));
         return new AgentHelloResult(principal, credential.Scope);
     }
 
-    // The principal a credential's holder acts as (agent:<machine>/<session>).
-    public string PrincipalOf(AgentCredential credential) => AgentProtocol.Principal(machine, credential.Session);
+    public string PrincipalOf(AgentCredential credential) =>
+        credential.Kind == "script"
+            ? credential.Principal ?? throw new ArgumentException("script credential has no principal", nameof(credential))
+            : AgentProtocol.Principal(machine, credential.Session);
 
     // The credential behind this channel's agent connection, or null when it has none or it has
     // been revoked or has expired since.
@@ -348,7 +364,8 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             foreach (var r in saved.Records)
             {
                 if (r?.Credential is not { } c || r.Hash is not { Length: 64 } || !IsHex(r.Hash) || c.Id is not { Length: > 0 } || !ids.Add(c.Id)
-                    || !ValidSession(c.Session) || !AgentProtocol.Scopes.Contains(c.Scope, StringComparer.Ordinal) || c.Chain is null)
+                    || !AgentProtocol.Scopes.Contains(c.Scope, StringComparer.Ordinal) || c.Chain is null
+                    || !(c.Kind == "session" ? ValidSession(c.Session) && c.Principal is null : c.Kind == "script" && ValidScript(c, machine)))
                 {
                     throw new JsonException("invalid credential record");
                 }
@@ -378,6 +395,20 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     static string Hash(string token) => Convert.ToHexString(SHA256.HashData(System.Text.Encoding.ASCII.GetBytes(token)));
 
     static bool IsHex(string s) => s.All(Uri.IsHexDigit);
+
+    internal static bool ValidScript(AgentCredential c, string machine)
+    {
+        var prefix = $"script:{machine}/";
+        return ValidScriptPart(machine) && c.Principal is { Length: <= 128 } principal
+            && principal.StartsWith(prefix, StringComparison.Ordinal) && ValidScriptPart(principal[prefix.Length..])
+            && c.Session == "" && c.LaunchId == "" && c.RootPid == 0 && c.RootStartUtc == default
+            && c.Scope == AgentProtocol.ScopeReadReply && c.Depth == 0 && c.Chain is { Length: 0 }
+            && c.IssuedAt != default && c.ExpiresAt > c.IssuedAt
+            && c.ExpiresAt - c.IssuedAt <= TimeSpan.FromDays(DefaultScriptDays);
+    }
+
+    static bool ValidScriptPart(string? value) => value is { Length: > 0 and <= 64 } && value is not "." and not ".."
+        && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-');
 
     // A session id is at most 36 characters (a UUID).
     static bool ValidSession(string? s) => s is { Length: > 0 and <= 36 } && s.All(c => char.IsAsciiLetterOrDigit(c) || c == '-');
