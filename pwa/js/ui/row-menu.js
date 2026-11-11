@@ -3,6 +3,7 @@
 // Arrow keys move between items, Escape closes it, and focus goes back where it came from.
 import { h } from './dom.js';
 import { enter, leave } from './motion.js';
+import { designIcon } from './glyph.js';
 
 let nextDescription = 0;
 
@@ -29,12 +30,14 @@ export class RowMenu {
       const keyId = it.shortcut ? `row-menu-description-${++nextDescription}` : null;
       const reasonId = it.reason ? `row-menu-description-${++nextDescription}` : null;
       const button = h('button', {
-        type: 'button', role: 'menuitem', class: 'row-menu-item',
+        type: 'button', role: it.checked === undefined ? 'menuitem' : 'menuitemradio', class: 'row-menu-item',
+        'aria-label': it.name ?? null,
+        'aria-checked': it.checked === undefined ? null : String(it.checked),
         disabled: it.disabled && !it.reason ? true : null,
         'aria-disabled': it.disabled ? 'true' : null,
         'aria-describedby': [keyId, reasonId].filter(Boolean).join(' ') || null,
         onclick: () => { if (it.disabled) { return; } this.close(); it.run(); },
-      }, h('span', { class: 'row-menu-label' }, it.label));
+      }, it.checked === undefined ? null : designIcon('check', { cls: 'ab-icon-20' }), h('span', { class: 'row-menu-label' }, it.label));
       buttons.push(button);
       return h('div', { class: 'row-menu-entry', role: 'none' }, button,
       keyId ? h('span', { class: 'row-menu-key', id: keyId, 'aria-hidden': 'true' }, it.shortcut) : null,

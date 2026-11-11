@@ -644,6 +644,16 @@ body[data-conn="busy"] .sessions, body[data-conn="warn"] .sessions, body[data-co
   .sort { min-height: var(--tap); }
   .new-session { --new-size: var(--tap); }
 }
+/* H3 Sessions header (#1892): fixed icon targets, with the count below the row. */
+.sessions-head { margin-bottom: var(--ab-space-2); }
+.sessions-head .sort { width: 44px; min-width: 44px; height: 44px; min-height: 44px; padding: 0; border: 0; background: none; }
+.sessions-head .sort:hover { background: var(--ab-subtle); }
+.sessions-head > .row-menu { right: 0; top: 100%; }
+.row-menu-item[aria-checked] { display: flex; align-items: center; gap: var(--ab-space-2); }
+.row-menu-item[aria-checked="false"] .ab-icon { visibility: hidden; }
+.count-row .count { white-space: nowrap; align-self: flex-start; }
+.new-session { --new-size: 44px; border: 1.5px solid var(--ab-bridge); background: transparent; color: var(--ab-bridge); }
+
 @media (min-width: 760px) {
   .new-session.attention::after { top: -3px; right: -3px; box-shadow: 0 0 0 2px var(--ab-layer); }
 }

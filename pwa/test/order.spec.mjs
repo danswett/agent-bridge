@@ -4,7 +4,7 @@
 // the top once; a row not open with news gets the dot; ended sessions fold into Ended · N; and the
 // sort menu offers Most recent and Machine.
 import { test, expect } from '@playwright/test';
-import { open, view } from './nav.mjs';
+import { open, view, selectSort } from './nav.mjs';
 
 const COPILOT = '02d9e5d5-6b35-49bd-b083-39572fbff648';
 const CLAUDE = '6f1c2b7e-claude-example';
@@ -155,7 +155,7 @@ for (const { state, id = CODEX, sort, filter, needsOnly, direction = 'up', reaso
 ]) {
   test(`row menu explains ${state}; disabled moves leave it open and do nothing`, async ({ page }) => {
     await openDemo(page);
-    if (sort) { await page.locator('#session-sort').selectOption(sort); }
+    if (sort) { await selectSort(page, sort); }
     if (filter) { await page.locator('#search').fill(filter); }
     if (needsOnly) { await page.evaluate(() => window.agentBridgeDemo.page.view.setNeedsOnly(true)); }
     if (state === 'alone in Pinned') {
@@ -207,7 +207,7 @@ for (const { state, sort, filter, needsOnly, only } of [
     const pending = 'demo-pending-snapshot';
     await upsert(page, pending, { agent: 'copilot', title: 'Loading session', status: needsOnly ? 'waiting' : 'idle', startedAt: later(), updatedAt: later() });
     await expect.poll(() => order(page)).toEqual([pending, ...(only ? [] : FIRST)]);
-    if (sort) { await page.locator('#session-sort').selectOption(sort); }
+    if (sort) { await selectSort(page, sort); }
     if (filter) { await page.locator('#search').fill(filter); }
     if (needsOnly) { await page.evaluate(() => window.agentBridgeDemo.page.view.setNeedsOnly(true)); }
     const moves = [[pending, 'up'], [pending, 'down'], ...(!sort && !filter && !needsOnly && !only ? [[COPILOT, 'up']] : [])];
@@ -300,9 +300,10 @@ test('ended sessions fold into Ended · N at the bottom', async ({ page }) => {
 test('the sort menu offers Most recent and Machine, and remembers the choice', async ({ page }) => {
   await openDemo(page, '&machines=2', null);
   const sort = page.locator('#session-sort');
-  await expect(sort.locator('option')).toHaveText(['Your order', 'Most recent', 'Machine']);
-  await expect(sort).toHaveValue('yours');
-  await sort.selectOption('machine');
+  await expect(sort).toHaveAttribute('title', 'Sort sessions: Your order');
+  await sort.click();
+  await expect(page.getByRole('menuitemradio')).toHaveText(['Your order', 'Most recent', 'Machine']);
+  await page.getByRole('menuitemradio', { name: 'Machine', exact: true }).click();
   const hosts = await page.locator('.session').evaluateAll((els) => els.map((e) => e.dataset.hostId));
   // Demo machine, then Laptop: by name, each machine's rows together.
   expect(hosts).toEqual([...hosts].sort((a, b) => (a === 'demo' ? 0 : 1) - (b === 'demo' ? 0 : 1)));
@@ -311,7 +312,26 @@ test('the sort menu offers Most recent and Machine, and remembers the choice', a
   await expect(card(page, CODEX).getByRole('menuitem', { name: 'Move up' })).toBeDisabled();
   await page.keyboard.press('Escape');
   await reload(page);
-  await expect(sort).toHaveValue('machine');
+  await expect(sort).toHaveAttribute('title', 'Sort sessions: Machine');
+});
+
+test('the sort icon opens by keyboard and session news leaves its menu usable', async ({ page }) => {
+  await openDemo(page);
+  const sort = page.getByRole('button', { name: 'Sort sessions', exact: true });
+  await sort.focus();
+  await sort.press('ArrowDown');
+  const yours = page.getByRole('menuitemradio', { name: 'Your order, on this device' });
+  await expect(yours).toBeFocused();
+  await upsert(page, CODEX, { title: 'News while choosing a sort' });
+  await expect(card(page, CODEX)).toContainText('News while choosing a sort');
+  await expect(yours).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(sort).toHaveAttribute('title', 'Sort sessions: Most recent');
+  await expect(sort).toBeFocused();
+  await sort.click();
+  await page.locator('#sessions-h').click();
+  await expect(page.getByRole('menu', { name: 'Sort sessions' })).toHaveCount(0);
 });
 
 // The Move button (#1579, ui.md §6.1): grab, move, drop and cancel from the keyboard.
@@ -394,11 +414,11 @@ test('Move button: with one row, Up says First in Sessions', async ({ page }) =>
 test('Move button: absent in Most recent, Machine and while a search filters', async ({ page }) => {
   await openDemo(page, '&machines=2', null);
   await expect(page.getByRole('button', { name: /^Move / }).first()).toBeAttached();
-  await page.locator('#session-sort').selectOption('recent');
+  await selectSort(page, 'recent');
   await expect(page.locator('.drag-handle').first()).toBeHidden();
-  await page.locator('#session-sort').selectOption('machine');
+  await selectSort(page, 'machine');
   await expect(page.locator('.drag-handle').first()).toBeHidden();
-  await page.locator('#session-sort').selectOption('yours');
+  await selectSort(page, 'yours');
   await page.getByRole('searchbox', { name: 'Search sessions' }).fill('a');
   await expect(page.locator('.session[data-id]').first()).toBeVisible();
   await expect(page.locator('.drag-handle').first()).toBeHidden();
@@ -441,8 +461,10 @@ test('blocked storage lists sessions most recent first, and Your order cannot be
   await page.goto('?demo=1&static=1');
   await page.waitForSelector('html[data-demo-ready]');
   const sort = page.locator('#session-sort');
-  await expect(sort).toHaveValue('recent');
-  await expect(sort.locator('option[value="yours"]')).toBeDisabled();
+  await expect(sort).toHaveAttribute('title', 'Sort sessions: Most recent');
+  await sort.click();
+  await expect(page.getByRole('menuitemradio', { name: 'Your order, on this device' })).toBeDisabled();
+  await page.keyboard.press('Escape');
   const at = await page.evaluate(() => new Date(Date.now() + 60000).toISOString());
   await upsert(page, CODEX, { updatedAt: at, activity: { userMessage: at, userMessageAt: at } });
   await expect.poll(() => order(page), { timeout: 10000 }).toEqual([CODEX, COPILOT, CLAUDE, DELEGATING]);
@@ -462,7 +484,7 @@ test('storage that fills up while a row is drawn turns the list to Most recent a
   await page.evaluate(() => { window.__full = true; });
   // An open session's reply marks it seen, and that write is the one that fails.
   await upsert(page, CODEX, { updatedAt: later(), activity: { turn: 'reply-full-storage', userMessage: 'A new prompt', responseTurn: 'reply-full-storage' } });
-  await expect(page.locator('#session-sort')).toHaveValue('recent');
+  await expect(page.locator('#session-sort')).toHaveAttribute('title', 'Sort sessions: Most recent');
   await expect.poll(() => order(page)).toEqual([CODEX, COPILOT, CLAUDE, DELEGATING]);
 });
 
@@ -615,8 +637,9 @@ for (const width of [900, 1440]) {
 test('the sort menu names the order for this device, with no sync item', async ({ page }) => {
   await openDemo(page, '', null);
   const sort = page.locator('#session-sort');
-  await expect(sort.locator('option')).toHaveCount(3);
-  await expect(sort.getByRole('option', { name: 'Your order, on this device' })).toHaveCount(1);
+  await sort.click();
+  await expect(page.getByRole('menuitemradio')).toHaveCount(3);
+  await expect(page.getByRole('menuitemradio', { name: 'Your order, on this device' })).toHaveCount(1);
 });
 
 for (const width of [390, 1440]) {
@@ -626,7 +649,7 @@ test('news on the open session is read after it has been on screen for a second,
   await page.clock.install();
   await openDemo(page);
   await page.clock.pauseAt(new Date(Date.now() + 10_000));
-  await page.getByRole('combobox', { name: /sort/i }).selectOption('recent');
+  await selectSort(page, 'recent');
   await open(page, CLAUDE);
   await page.clock.runFor(1500);
   await upsert(page, CLAUDE, { updatedAt: later(), activity: { turn: 'reply-on-screen', responseTurn: 'reply-on-screen' } });

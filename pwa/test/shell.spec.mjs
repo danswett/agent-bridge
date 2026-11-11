@@ -2,7 +2,7 @@
 // phone, the page's title row and the bottom navigation. Every page is a route, so a reload stays
 // on it and the browser's own back goes between them.
 import { test, expect } from '@playwright/test';
-import { go, open } from './nav.mjs';
+import { go, open, selectSort } from './nav.mjs';
 import { BRAND } from '../js/brand.js';
 
 const CODEX = '019a1b2c-codex-example';
@@ -25,60 +25,63 @@ test.afterEach(async ({ page }) => {
 });
 
 for (const hasTouch of [false, true]) {
-  test.describe(`icon-only New session with ${hasTouch ? 'touch' : 'a pointer'}`, () => {
+  test.describe(`H3 Sessions header (#1892) with ${hasTouch ? 'touch' : 'a pointer'}`, () => {
     test.use({ hasTouch });
 
-    async function checkHeader(page, fullSort) {
+    async function checkHeader(page) {
       const fresh = page.locator('.new-session');
       await expect(fresh).toHaveText('');
       await expect(fresh).toHaveAccessibleName('New session');
       await expect(fresh).toHaveAttribute('title', 'New session');
       await expect(fresh).toHaveAttribute('href', '#/launch');
-      const touchOnly = await page.evaluate(() => matchMedia('(pointer: coarse) and (not (any-pointer: fine))').matches);
-      const size = touchOnly ? 44 : 32;
       const box = await fresh.boundingBox();
-      expect(box.width).toBe(size);
-      expect(box.height).toBe(size);
+      expect(box.width).toBe(44);
+      expect(box.height).toBe(44);
+      await expect(fresh).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
       const glyph = await fresh.locator('svg').boundingBox();
       expect(glyph.width).toBe(20);
       expect(glyph.height).toBe(20);
-      const sort = page.locator('#session-sort');
+      const sort = page.getByRole('button', { name: 'Sort sessions', exact: true });
+      await expect(sort).toHaveText('');
+      expect((await sort.boundingBox()).width).toBe(44);
+      expect((await sort.boundingBox()).height).toBe(44);
       for (const value of ['yours', 'recent', 'machine']) {
-        await sort.selectOption(value);
-        const fit = await sort.evaluate((el) => {
-          const probe = el.cloneNode(false);
-          probe.append(el.selectedOptions[0].cloneNode(true));
-          Object.assign(probe.style, { position: 'absolute', width: 'auto', maxWidth: 'none', visibility: 'hidden' });
-          el.parentElement.append(probe);
-          const needed = probe.getBoundingClientRect().width;
-          probe.remove();
-          return { width: el.getBoundingClientRect().width, needed, scroll: el.scrollWidth, client: el.clientWidth };
-        });
-        if (fullSort) {
-          expect(fit.width).toBeGreaterThanOrEqual(fit.needed);
-          expect(fit.scroll).toBeLessThanOrEqual(fit.client);
-        }
+        await selectSort(page, value);
+        const label = { yours: 'Your order', recent: 'Most recent', machine: 'Machine' }[value];
+        await expect(sort).toHaveAttribute('title', `Sort sessions: ${label}`);
+        await sort.click();
+        const selected = page.getByRole('menuitemradio', { checked: true });
+        await expect(selected).toContainText(label);
+        await expect(selected.locator('svg')).toBeVisible();
+        await page.keyboard.press('Escape');
+        await expect(sort).toBeFocused();
       }
       const head = await page.locator('.sessions-head').boundingBox();
       const current = await fresh.boundingBox();
       expect(current.x + current.width).toBeLessThanOrEqual(head.x + head.width + 0.5);
       const sortBox = await sort.boundingBox();
       expect(sortBox.x + sortBox.width).toBeLessThanOrEqual(current.x);
+      expect(sortBox.y + sortBox.height).toBeLessThanOrEqual(head.y + head.height);
+      await expect(sort).toBeInViewport({ ratio: 1 });
+      const count = page.locator('#session-count');
+      const countBox = await count.boundingBox();
+      expect(countBox.y - head.y - head.height).toBeCloseTo(8, 0);
+      expect(await count.evaluate((el) => el.scrollWidth <= el.clientWidth && el.getBoundingClientRect().height <= parseFloat(getComputedStyle(el).lineHeight) + 1)).toBe(true);
     }
 
     for (const width of [264, 320, 390, 760, 1024]) {
-      test(`a ${width} px list header preserves New and the sort label`, async ({ page }) => {
+      test(`a ${width} px list header preserves New and the sort icon`, async ({ page }) => {
         await page.setViewportSize({ width: 1440, height: 900 });
         await openDemo(page);
         await page.locator('.sessions-head').evaluate((el, width) => {
           el.style.width = `${width}px`;
         }, width);
         expect((await page.locator('.sessions-head').boundingBox()).width).toBeCloseTo(width, 0);
-        await checkHeader(page, width >= 320);
+        await checkHeader(page);
       });
     }
 
-    for (const width of [320, 390, 760, 1024]) {
+    for (const width of [320, 390, 760, 820, 1024, 1180]) {
       test(`the ${width} px window preserves New and Sort with 83 sessions`, async ({ page }) => {
         await page.setViewportSize({ width, height: 900 });
         await openDemo(page, '&machines=3');
@@ -90,8 +93,7 @@ for (const hasTouch of [false, true]) {
           }
         });
         await expect(page.locator('#session-list > .session')).toHaveCount(83);
-        const head = await page.locator('.sessions-head').boundingBox();
-        await checkHeader(page, head.width >= 320 || width >= 1024);
+        await checkHeader(page);
       });
     }
   });

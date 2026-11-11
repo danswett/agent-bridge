@@ -1175,6 +1175,22 @@
             </Setter.Value>
         </Setter>
     </Style>
+    <Style x:Key="AbIconSort" TargetType="ContentControl">
+        <Setter Property="Width" Value="20" />
+        <Setter Property="Height" Value="20" />
+        <Setter Property="IsTabStop" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ContentControl">
+                    <Viewbox Stretch="Uniform">
+                        <Canvas Width="20" Height="20">
+                            <Path Data="F1 M3,5 L17,5 M3,10 L13,10 M3,15 L9,15" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+                        </Canvas>
+                    </Viewbox>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
     <Style x:Key="AbIconStop" TargetType="ContentControl">
         <Setter Property="Width" Value="20" />
         <Setter Property="Height" Value="20" />

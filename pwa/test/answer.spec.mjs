@@ -4,7 +4,7 @@
 // every outcome, resends, a question changing under the person, and the keyboard.
 import { test, expect } from '@playwright/test';
 import { BRAND } from '../js/brand.js';
-import { open, view } from './nav.mjs';
+import { open, view, selectSort } from './nav.mjs';
 
 
 
@@ -826,7 +826,7 @@ test.describe('when the question changes', () => {
 test('a card held in Most recent while you type keeps your place', async ({ page }) => {
   await openDemo(page);
   // Most recent holds ordinary activity moves while a row or answer has focus (#1577).
-  await page.locator('#session-sort').selectOption('recent');
+  await selectSort(page, 'recent');
   const q = await ask(page, { id: 'q-move', message: 'Notes?', fields: [{ name: 'n', title: 'Notes', type: 'text' }] });
   const box = q.getByRole('textbox', { name: 'Notes' });
   await box.focus();

@@ -3,6 +3,12 @@
 // opened from its row (docs/design/ui.md §5.2: beside the list on a desktop, pushed on a phone).
 import { expect } from '@playwright/test';
 
+export async function selectSort(page, value) {
+  await page.getByRole('button', { name: 'Sort sessions', exact: true }).click();
+  const names = { yours: 'Your order, on this device', recent: 'Most recent', machine: 'Machine' };
+  await page.getByRole('menuitemradio', { name: names[value], exact: true }).click();
+}
+
 // A session's view in the session pane, by its id (and its machine, where two have the same id).
 export function view(page, id, hostId = null) {
   return page.locator(`.session-view[data-id="${id}"]${hostId ? `[data-host-id="${hostId}"]` : ''}`);

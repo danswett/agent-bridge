@@ -331,10 +331,10 @@ system text size the native apps already follow.
   other devices or to a machine. Default keeps nothing.
 - **Before the first paint:** the stored choice is applied before the page is drawn, so the
   app never opens at one size and then jumps to another.
-- **Narrow phones:** a page title never breaks inside a word. Where the Sessions title, Sort and
-  the icons don't fit on one line (under 370 px, or 390 px at Larger), the header takes the list
-  pane's two lines: the title and Sort, then the count and the icons, so Tab's order is still
-  the order drawn (§9.1).
+- **Narrow phones:** a page title never breaks inside a word. The H3 Sessions header (§6.1,
+  #1892) keeps its 44 × 44 px icon-only Sort button at both Default and Larger, not the
+  former text picker's 48 px minimum width. Title, Sort and New fit on one row at 320 px;
+  the count stays below it, and Tab's order is still the order drawn (§9.1).
 
 ## 5. Space, shape, layout and motion
 
@@ -627,6 +627,12 @@ that a control can be used while it moves.
 ## 6. Surfaces
 
 ### 6.1 Session list
+
+The PWA's H3 header (#1892) keeps title, Sort and New on one row. Sort is a fixed 44 × 44 px
+icon button named "Sort sessions"; its tooltip names the current order and the menu
+ticks that choice. New is a 44 px hollow Bridge plus with a 1.5 px border and transparent
+fill. The unwrapped count line sits 8 px below the row. Machine tabs and text edges
+are separate slices (#1894, #1893 respectively).
 
 The Windows header's New action is the 16 px plus alone in a fixed 32 x 32 Accent
 button (#1817). Its accessible name and tooltip stay "New session"; launch availability
