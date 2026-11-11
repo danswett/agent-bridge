@@ -6,7 +6,7 @@ import { availableParallelism } from 'node:os';
 
 mkdirSync('diag-output', { recursive: true });
 function patch(file, before, after) {
-  const text = readFileSync(file, 'utf8');
+  const text = readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
   if (text.split(before).length !== 2) { throw new Error(`Non-unique diagnostic patch: ${file}: ${before}`); }
   writeFileSync(file, text.replace(before, after));
 }
@@ -35,6 +35,33 @@ patch('test/return.spec.mjs', "test.skip('focus on the sort control", "test('foc
 copyFileSync('../quality/pwa-flake-fixture.mjs', 'test/diag-fixture.mjs');
 patch('test/history-perf.spec.mjs', "  const before = await pane.locator('.history-turn').count();",
   "  const before = await pane.locator('.history-turn').count(); await page.evaluate((before) => window.__diag('history.assertionBaseline', { before, expectedGreaterThan: before + 20 }), before);");
+if (process.env.DIAG_CONTROLS === 'true') {
+  // Reach the quarantined clock assertion using the same control's current identity.
+  patch('test/return.spec.mjs', "page.locator('.sessions-head select').first().focus()", "page.locator('#session-sort').focus()");
+  // Model the runner resuming the test only after background fill has reached its cap.
+  patch('test/history-perf.spec.mjs', "  await expect.poll(() => pane.locator('.history-turn').count()).toBeGreaterThan(12);",
+    "  await expect.poll(() => pane.locator('.history-turn').count()).toBeGreaterThan(12);\n  await page.waitForFunction(() => document.querySelectorAll('.session-view[data-id=\"long-1\"] .history-turn').length === 104);");
+  const title = "test('where the reader is is read when a question comes, though the scroll that took them there has yet to send its event', async ({ page }) => {\n  await openDemo(page, { height: 600 });";
+  patch('test/motion.spec.mjs', title, `${title}
+  await page.evaluate(() => {
+    const client = window.agentBridgeDemo.client;
+    const history = client.history.bind(client);
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    window.__releaseDiagHistory = () => {
+      window.__diag('diag.history.release');
+      release();
+      window.__releaseDiagHistory = null;
+    };
+    client.history = (id, opts) => {
+      const result = history(id, opts);
+      return id === '019a1b2c-codex-example' ? gate.then(() => result) : result;
+    };
+  });`);
+  // Land prepared history during the first question reveal, before native scrolling settles.
+  patch('js/ui/session-card.js', "      this.#scrollTo(view, scrollBehavior());\n    }\n  }",
+    "      this.#scrollTo(view, scrollBehavior());\n    }\n    if (this.#s.question?.id === 'q-race-end') { globalThis.__releaseDiagHistory?.(); }\n  }");
+}
 if (process.argv.includes('--prepare-only')) { process.exit(0); }
 const workers = [];
 if (process.env.DIAG_LOAD === 'loaded') {

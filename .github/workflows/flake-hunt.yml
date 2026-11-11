@@ -266,6 +266,7 @@ jobs:
       PWA_SKIP_E2E: '1'
       DIAG_BROWSER: ${{ matrix.browser }}
       DIAG_LOAD: ${{ matrix.load }}
+      DIAG_CONTROLS: ${{ inputs.filter == 'controls' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
