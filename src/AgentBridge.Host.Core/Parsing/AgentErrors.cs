@@ -67,7 +67,7 @@ internal static class AgentErrors
         }
         return attention with
         {
-            Message = IsEmptyResponse(data) ? EmptyResponseMessage : Template(AttentionKind.Error, errorClass, status, AgentKind.Copilot),
+            Message = CopilotTurnErrors.CanRetry(data) ? EmptyResponseMessage : Template(AttentionKind.Error, errorClass, status, AgentKind.Copilot),
             ErrorClass = errorClass,
         };
     }
@@ -77,9 +77,6 @@ internal static class AgentErrors
     internal static bool IsHostWedge(JsonElement data) =>
         Json.Str(data, "message") is { } m && m.Contains("session event delivery failed", StringComparison.Ordinal)
         && (m.Contains("did not acknowledge", StringComparison.Ordinal) || m.Contains("did not complete", StringComparison.Ordinal));
-
-    internal static bool IsEmptyResponse(JsonElement data) => Json.Str(data, "errorType") == "query"
-        && Json.Str(data, "message") == "No response was returned. Send your message again to retry.";
 
     // attention.message (#841, Engineering): composed by the host from the structured fields
     // alone, never from the agent's words. Redacting arbitrary error text is a blocklist that
