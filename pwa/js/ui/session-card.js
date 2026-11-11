@@ -518,7 +518,7 @@ export class SessionCard {
     Object.assign(this, { hostId, historyStore: history, fetchDetail, fetchDelegate, machineName, labelled, answering, onSelect, onPin, onBack, layout, viewing });
     this.#stale = stale;
     const n = ++seq;
-    this.ids = { row: `s${n}-row`, glyph: `s${n}-glyph`, unread: `s${n}-unread`, title: `s${n}-title`, conversation: `s${n}-conversation`, tools: `s${n}-tools`, details: `s${n}-details`, tabC: `s${n}-tab-c`, tabD: `s${n}-tab-d`, tabT: `s${n}-tab-t`, delegates: `s${n}-delegates`, delegate: `s${n}-delegate`, prompt: `s${n}-prompt`, events: `s${n}-events` };
+    this.ids = { row: `s${n}-row`, glyph: `s${n}-glyph`, title: `s${n}-title`, conversation: `s${n}-conversation`, tools: `s${n}-tools`, details: `s${n}-details`, tabC: `s${n}-tab-c`, tabD: `s${n}-tab-d`, tabT: `s${n}-tab-t`, delegates: `s${n}-delegates`, delegate: `s${n}-delegate`, prompt: `s${n}-prompt`, events: `s${n}-events` };
     this.#buildRow();
     this.#buildView();
     this.update(session);
@@ -539,13 +539,14 @@ export class SessionCard {
     e.rowLine1 = h('span', { class: 'row-line1' }, e.rowTitle);
     e.rowFacts = h('span', { class: 'row-facts' });
     e.rowAge = h('time', { class: 'row-age' });
+    e.rowNew = h('span', { class: 'row-new', 'aria-hidden': 'true' }, 'New');
     // Named by #nameRow (ui.md §9.1 A1). The spaces between its lines draw nothing in the grid,
     // but without them the title, the facts and the age read as run-together words
     // ("…AppWaiting on you"), which no name can contain (axe label-content-name-mismatch, #365).
     e.open = h('button', { type: 'button', class: 'row-main', id: this.ids.row, onclick: () => this.onSelect(this) },
       h('span', { class: 'row-glyph' }, e.rowGlyph), ' ',
       h('span', { class: 'row-text' }, e.rowLine1, ' ', e.rowFacts), ' ',
-      e.rowAge);
+      e.rowAge, e.rowNew);
     this.element = h('div', { class: 'session' }, e.open);
   }
 
@@ -1277,31 +1278,19 @@ export class SessionCard {
     return awayWords(this.#stale, now);
   }
 
-  // Activity since the session was last on screen (session-order.js): semibold, and the 6 px
-  // Bridge dot at the row's trailing edge in place of its age (ui.md §6.1), named for a screen
-  // reader.
+  // Only presentation: the response-turn cursor and read dwell belong to the list.
   setUnread(unread) {
     const e = this.els;
-    if (unread && !e.unread) {
-      e.unread = h('span', { class: 'unread-dot' }, h('span', { class: 'sr-only', id: this.ids.unread }, 'New message'));
-      e.rowLine1.append(e.unread);
-      this.element.classList.add('unread');
-      // Activity dot (ui.md §5.3): fades in, and later out; it never pulses or repeats.
-      enter(e.unread, 'activityDot');
-    } else if (!unread && e.unread) {
-      leave(e.unread, 'activityDot');
-      e.unread.remove();
-      e.unread = null;
-    }
+    e.unread = unread;
     this.element.classList.toggle('unread', unread);
     this.#nameRow();
   }
 
-  // The row's name with its age, or "New activity" where the dot is drawn in the age's place.
+  // The age stays spoken even when high contrast draws "New" in its place.
   #nameRow() {
     const e = this.els;
     const { drawn, unsaid } = this.#rowName;
-    e.open.setAttribute('aria-label', [...drawn, e.unread ? 'New message' : e.rowAge.textContent, ...unsaid].filter(Boolean).join(', '));
+    e.open.setAttribute('aria-label', [...drawn, e.unread ? 'New message' : null, e.rowAge.textContent, ...unsaid].filter(Boolean).join(', '));
   }
 
   setPinned(pinned) {

@@ -121,10 +121,11 @@ export class SessionOrder {
       const members = entries.filter((e) => this.groupFor(keyOf(e)) === group.id);
       const matching = members.filter((e) => matches(e) && (!needsOnly || needs(e)));
       const expanded = !this.isGroupCollapsed(group.id) || ((filtered || needsOnly) && matching.length > 0);
+      const unreadCount = matching.filter((e) => this.unread(keyOf(e), e.session.activity?.responseTurn)).length;
       return {
         ...group, count: matching.length, expanded,
         needs: matching.filter(needs).length,
-        unread: matching.some((e) => this.unread(keyOf(e), e.session.activity?.responseTurn)),
+        unread: unreadCount > 0, unreadCount,
         visible: expanded ? matching : matching.filter(needs),
       };
     }).filter((g) => g.count || (showEmpty && !filtered && !needsOnly));

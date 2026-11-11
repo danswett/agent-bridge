@@ -148,7 +148,7 @@ by `tools/design-gen` (#177).
 
 | Role | Dark | Light | Used for |
 |---|---|---|---|
-| Bridge | `#2DD4BF` | `#0B7A6E` | Primary actions, selection, focus, the mark, the "new activity" dot, an active collaborator link's dot (§6.7) |
+| Bridge | `#2DD4BF` | `#0B7A6E` | Primary actions, selection, focus, the mark, unread ages, an active collaborator link's dot (§6.7) |
 | Needs you | `#FFB224` | `#B87700` (text `#7A4600`) | Questions and approvals; a suspended collaborator link's dot and word (§6.7), which it can fix |
 | Active | `#4C9AFF` | `#0B63E5` | The `working` and `delegating` glyphs only |
 | Agent | `#A78BFA` | `#6D4AE0` | Driven by an agent, and a prompt an agent or a schedule sent (§6.4), and nothing else |
@@ -235,8 +235,9 @@ every colour from the generated roles (#177).
 ### 4.2 Rules
 
 - **Weights:** regular and semibold, with bold for Apple titles and medium for Android's
-  section headers (Material 3's Title Small), and italic for emphasis in agent text. A semibold
-  row title means *unread messages*, and nothing else uses weight.
+  section headers (Material 3's Title Small), and italic for emphasis in agent text. Unread
+  row titles are `text1` semibold with a semibold accent age; read titles recede to `text2`
+  regular. Weight alone is not the unread signal. Needs you titles stay `text1`.
 - **No synthesized styles.** Every weight and style the ramps use (`type.weights` ×
   `type.styles` in `tokens.json`: 400, 500, 600 and 700, upright and italic) is a real face
   in both Slipgates Sans and Slipgates Mono, and no client lets the platform fake a bold, an
@@ -560,7 +561,7 @@ easing in, its duration out, and how far it travels.
 | Arriving and leaving | A session row (also as Needs you shows or hides it), a Needs you entry, a delegate in the strip, a call in Tools, a line in the conversation (a delegate event, the Now line, a prompt you didn't type (#489), a receipt, a note, a question's card), an empty-state note, the Jump to latest pill (§6.4) | A host adds or removes it; a question is asked or answered; Needs you is turned on or off; the conversation is scrolled more than a screen from its end, or back to it (the pill) | The item fades in as its slot opens, and its neighbours ease aside (Easing aside). Leaving, it fades out where it was, quicker, as its slot eases closed. A session that ends, or leaves the list, while no card is held is the same: its card fades out where it was and the cards below ease up over `shift` to close the gap, as the cards a held card passes do in Reorder; they never jump into place (#659, replacing #605's departure jump). Items arriving in the same frame arrive together, as one block; one arriving while that block still eases joins its move. An approval's card and its command fade where they land and never travel of their own (D3, #659) | `listItem`: standard, decelerate; fast out | Windows: the list's `ItemContainerTransitions` stays empty, because `AddDeleteThemeTransition` slides an item in from the side and `RepositionThemeTransition` keeps its own timing; a composition fade on the item, and its neighbours as Easing aside. PWA: the tokens on the item; a copy of a leaving item, which nothing can find or tap, fades where it was. Apple: `.transition(.opacity)` in a change animated with the `standard` spring. Android: `animateItem` with the tokens' fade and placement specs | Cross-fade; a session card's gap closes with a short cross-fade (`value`), with no travel |
 | Easing aside | Every list and stack: the session list, Needs you, the strip, Tools, the conversation, the inspector, and what is below a banner or a disclosure | Something above or beside it arrives, leaves, opens, closes or changes height | The neighbour eases from where it was to where the change put it, keeping its order. Only a translation runs: the layout changes once, and nothing is laid out again every frame. A second change while it moves retargets it from where it is, on `decelerate` so it never slows to a stop and starts again, never queued behind it. When the person has scrolled away from the edge things arrive at (the top of Tools, the end of a conversation they scrolled back through), what they are reading stays where it is: the scroll is anchored to it, and an "N new" pill at that edge says what came and takes them there. A response streaming in grows as it arrives, unanimated. Anything moved above an answerable question is a move for Scroll to a question's wait, which counts from where the move comes to rest | `shift`: standard, standard | Windows: an implicit composition animation on each item's `Offset` (and `Translation` for what a layout change moves), not a theme transition. PWA: FLIP (measure, lay out once, translate from the old place to none) with the Web Animations API. Apple: the change inside `withAnimation` on the `standard` spring. Android: `animateItem`'s placement spec, and `animateContentSize` on a block | Instant |
 | Status glyph | A row, the session header, the delegate strip, a delegate event's line in the conversation (§6.4) | The state changes, such as working → idle | The old glyph cross-fades into the new one, with its colour, and the words cross-fade (Value change). The arc and the orbit turning are §2.1's, not this | `glyph`: fast, standard | The same on every platform: opacity on the two glyphs | Instant |
-| Activity dot | A row's trailing edge (§6.1) | The session updates while its row isn't open; the row is opened | The 6 px dot fades in, and later fades out. It never pulses, grows or repeats. The title's weight cross-fades (Value change) | `activityDot`: standard, decelerate; fast out | The same on every platform | Instant |
+| Unread treatment | A row's title and age (§6.1) | A new main-agent reply arrives; the reply is read | Title and age colours fade between read and unread; the age column never changes width. No dot | `value`: fast, standard | The same on every platform | Instant |
 | Value change | Details' values (Status, Model, Background, Turns, Compactions, Process, Updated), the status words on a row, in the header and in the strip; counts (Needs you · N, N finished, N new, Showing N of M); a title's weight; usage figures and bars | The value changes | The old value fades out as the new one fades in, in the same place, so nothing beside it jumps: numbers are tabular, and the value's cell keeps the wider of the two until the fade ends. A usage bar's fill eases to its reading (a horizontal scale). Changed at once: a value that changed less than 1 s before (it never strobes), an age or an elapsed time ticking, and a value drawn for the first time | `value`: fast, standard | Windows: the old text as a second `TextBlock` in the same cell, faded by composition. PWA: an absolutely placed copy of the old text faded out over the new. Apple: `.contentTransition(.opacity)`. Android: `Crossfade` | Cross-fade |
 | Selection | The list's 3×16 Bridge pill; the rail's pill | Choosing a row or a destination | The pill slides from the old row to the new one when both are on screen, and fades in when the old one isn't. The row's fill changes at once | `selection`: standard, standard | Windows: `NavigationView`'s own pill on the rail, and the same motion on the list. Apple: the system's selection | Instant |
 | Press | Every button, and every row | Pointer or touch down, and release | The pressed fill shows at once on press, and eases back on release. Nothing scales | `press`: fast, standard | Windows: the controls' own visual states. PWA: a transition on the background. Apple: the system button styles. Android: the ripple | Instant |
@@ -746,11 +747,12 @@ launch lineage may come later, on top of this, once hosts report it.
   list's leading inset: a chevron (→ collapsed, ↓ expanded), the name in the body face,
   semibold, then "· N", the rows shown in it on the machine chosen, in `text2`. A pinned row
   keeps its group (Pins, above) but shows, and is counted, only in Pinned: no group's count,
-  needs or dot includes it. Its trailing edge, while it is collapsed:
+  needs or unread count includes it. While it is collapsed:
   - with any row in it waiting on you: the `needs` glyph and "N needs you", in Needs you's
     text colour. A collapsed group never hides a question: Needs you's N counts its rows,
     its filter shows them (above), and notifications and badges are unchanged (§7);
-  - otherwise, with any row in it unread: the 6 px Bridge dot;
+  - otherwise, with any row in it unread: "N new", accent semibold, baseline aligned
+    8 px after the name, never in the trailing column. The name truncates, never the count;
   - otherwise nothing.
   Expanded, the trailing edge is empty, since its rows show their own state. A header has no
   status glyph, age or second line: a group isn't a session.
@@ -894,11 +896,14 @@ owner changes them too.
 
 **Row anatomy (two lines):**
 - **Leading:** the status glyph, aligned to line 1.
-- **Line 1:** the title. Semibold means unread messages, and the 6 px Bridge dot appears at
-  the trailing edge.
+- **Line 1:** an unread title is `text1` semibold; a read title is `text2` regular.
+  Needs you titles never recede; a completed reply's row recedes once read. Glyphs never dim.
 - **Line 2:** at most two facts, for example "3 delegates · DEV-VM1", "Editing
   LaunchView.xaml.cs · ULTRA" or "Driven by an agent · ULTRA" (in agent colour).
-- **Trailing:** the age (tabular), when there's no unread dot.
+- **Trailing:** one fixed-width, right-aligned age column (tabular). Unread ages are Bridge
+  semibold; read ages are `text2` regular. The 6 px dot is retired. In forced colours,
+  unread shows "New" in Highlight in the age slot; all titles stay WindowText.
+  The accessible name keeps "New message" and the age, including in high contrast.
 - **Never on a row:** the model, the repo SHA, turn and compaction counts, or the pid.
   Those live in session details. Nor a question's words: a waiting row says only its status
   ("Waiting on you", "Delegate *name* asks"), and the question is in the conversation (#253).
