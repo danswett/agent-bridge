@@ -106,8 +106,8 @@ public sealed class FleetListTests : IDisposable
     [InlineData("build\\uD83D\\uDE80box", "build\U0001F680box")]
     public async Task Parsing_rejects_hidden_or_invalid_Unicode_but_keeps_valid_emoji_pairs(string escaped, string? expected)
     {
-        var frame = Body($$"""
-            {"machine":"m2","name":"{{escaped}}","online":true,
+        var frame = Body($$$"""
+            {"machine":"m2","name":"{{{escaped}}}","online":true,
              "record":{"sessions":[{"id":"s1","node":"n1","name":"my project","state":"working","since":"2026-11-07T12:00:00Z"}]}}
             """);
         roster.Machines = RelayFleetRoster.Parse([frame]);
