@@ -39,6 +39,9 @@ export class SessionListView {
   #menu = new RowMenu();
   #heads = {};
   #groups = new Map();
+  #groupEditor = null;
+  #groupMenu = null;
+  #groupLeaving = null;
   #ended = null;
   #press = null;
   #swallowClick = false;
@@ -148,12 +151,13 @@ export class SessionListView {
     clearTimeout(this.#recentTimer);
     if (this.#recent.wait !== null) { this.#recentTimer = setTimeout(() => this.schedule(), this.#recent.wait); }
     const before = new Map();
-    if (this.#recent.moved.size) {
+    if (this.#recent.moved.size || this.#groupLeaving) {
       for (const el of this.container.querySelectorAll('.session')) {
         if (!el.getClientRects().length) { continue; }
         before.set(el, el.getBoundingClientRect());
       }
     }
+    if (this.#groupLeaving) { leave(this.#groupLeaving, 'listItem'); this.#groupLeaving = null; }
     const pane = this.container.closest('#list-pane');
     const scroller = !before.size ? null : pane && /auto|scroll/.test(getComputedStyle(pane).overflowY) ? pane : this.container.ownerDocument.scrollingElement;
     const anchor = scroller?.scrollTop > 0 ? [...before.keys()].find((el) => seen(el)) : null;
@@ -168,6 +172,7 @@ export class SessionListView {
     this.container.dataset.filtered = this.filter || this.needsOnly ? 'true' : 'false';
     this.onSorted?.();
     const live = new Set([...arranged.pinned, ...arranged.sessions].map((e) => SessionListView.key(e.hostId, e.session.id)));
+    if (this.#groupEditor && !live.has(this.#groupEditor.key)) { this.#groupEditor.close(); }
     // Moving a card takes focus out of it, and a card being answered moves when its
     // session updates in Most recent: the text box being typed in keeps focus and the caret.
     const focused = this.container.contains(document.activeElement) ? document.activeElement : null;
@@ -245,6 +250,7 @@ export class SessionListView {
         shown++;
       }
     }
+    if (this.#groupEditor?.form) { want.push(this.#groupEditor.form); }
     if ((pinnedShown || grouped.groups.length) && sessionsShown) { want.push(this.#head('sessions', 'Sessions')); }
     for (const entry of grouped.sessions.filter(keep)) {
       want.push(this.#cards.get(SessionListView.key(entry.hostId, entry.session.id)).element);
@@ -263,6 +269,12 @@ export class SessionListView {
       prev = el;
     }
     while (prev ? prev.nextSibling : this.container.firstChild) { (prev ? prev.nextSibling : this.container.firstChild).remove(); }
+    if (this.#menu.open && this.#groupMenu && !this.#groupMenu.element.isConnected) {
+      const card = this.#groupMenu;
+      this.#menu.close(false);
+      this.#refocus(rowsWere, rowsWere.indexOf(card.element), this.#groups.get(this.order.groupFor(this.#keyOf(card))));
+    }
+    if (!this.#menu.open) { this.#groupMenu = null; }
     for (const [key, card] of this.#cards) {
       if (!live.has(key)) {
         if (active && (card.element.contains(active) || card.view.contains(active))) { goneAt = rowsWere.indexOf(card.element); }
@@ -463,12 +475,16 @@ export class SessionListView {
   }
 
   stopRecent() {
+    this.#menu.close(false);
+    this.#groupMenu = null;
+    this.#groupEditor?.close(false, false);
     this.#recentListeners.abort();
     clearTimeout(this.#recentTimer);
     clearTimeout(this.#scrollTimer);
   }
 
   openMenu(card) {
+    this.#groupMenu = null;
     const key = this.#keyOf(card);
     const pinned = this.order.isPinned(key);
     const moveItem = (delta) => {
@@ -487,7 +503,86 @@ export class SessionListView {
     this.#menu.show(card.element, [
       moveItem(-1), moveItem(1),
       { label: pinned ? 'Unpin' : 'Pin', run: () => this.#pin(card, !pinned) },
+      { label: 'Move to group', disabled: !!this.#groupReason(card), reason: this.#groupReason(card), run: () => this.#chooseGroup(card) },
+      ...(this.order.groupFor(key) === null ? [] : [
+        { label: 'Remove from group', disabled: !!this.#groupReason(card), reason: this.#groupReason(card), run: () => this.#setGroup(card, null) },
+      ]),
     ], { back: card.els.open, label: `${card.session.title || 'Session'}: actions` });
+  }
+
+  #groupReason(card) {
+    const key = this.#keyOf(card);
+    return this.#cards.get(key) !== card ? 'The session is no longer in this list.'
+      : this.order.isPending(key) ? 'Wait for the session list to finish loading'
+      : this.order.sort !== 'yours' ? 'Switch to Your order to move sessions'
+      : this.filter || this.needsOnly ? 'Clear the search or machine filter to move sessions' : null;
+  }
+
+  #setGroup(card, id) {
+    const reason = this.#groupReason(card);
+    if (reason) { this.#say(reason); return; }
+    const old = this.order.groups.find((g) => g.id === this.order.groupFor(this.#keyOf(card)));
+    if (id !== null && this.order.isGroupCollapsed(id) && !this.order.isPinned(this.#keyOf(card)) && sessionStatus(card.session).glyph !== 'needs') {
+      this.#groupLeaving = card.element;
+    }
+    this.order.setGroup(this.#keyOf(card), id);
+    this.render();
+    if (!this.order.usable) { this.#say('Your order could not be saved on this device.'); return; }
+    if (!card.element.isConnected) { this.#groups.get(id)?.focus(); this.#say(''); }
+    else {
+      card.els.open.focus({ preventScroll: true });
+      card.element.scrollIntoView({ block: 'nearest' });
+      this.#say(id === null ? `Removed from ${old.name}` : `Moved to ${this.order.groups.find((g) => g.id === id).name}`);
+    }
+  }
+
+  #chooseGroup(card) {
+    this.#groupMenu = card;
+    const current = this.order.groupFor(this.#keyOf(card));
+    this.#menu.show(card.element, [
+      ...this.order.groups.map((g) => ({ label: g.name, checked: g.id === current, run: () => this.#setGroup(card, g.id) })),
+      { label: 'New group\u2026', run: () => this.#newGroup(card) },
+    ], { back: card.els.open, label: 'Move to group', sheet: matchMedia('(max-width: 759px)').matches });
+  }
+
+  #newGroup(card) {
+    this.#groupEditor?.close();
+    const phone = matchMedia('(max-width: 759px)').matches;
+    const id = `group-name-${crypto.randomUUID()}`;
+    const input = h('input', { id, class: 'text-input', 'aria-describedby': `${id}-error` });
+    const error = h('p', { id: `${id}-error`, class: 'answer-error', role: 'alert', hidden: true });
+    const form = h('form', { class: 'group-editor' },
+      h('label', { for: id }, 'Group name'), input, error,
+      h('button', { type: 'submit', class: 'button' }, 'Create group'),
+      h('button', { type: 'button', class: 'button secondary', onclick: () => close() }, 'Cancel'));
+    const dialog = phone ? h('dialog', { class: 'row-menu-sheet', 'aria-label': 'New group' }, h('h2', {}, 'New group'), form) : null;
+    const close = (refocus = true, redraw = true) => {
+      this.#groupEditor = null;
+      dialog?.close(); dialog?.remove(); form.remove();
+      if (redraw) { this.schedule(); }
+      if (refocus) { (card.els.open.isConnected ? card.els.open : this.heading())?.focus({ preventScroll: true }); }
+    };
+    form.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } });
+    dialog?.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      try {
+        const reason = this.#groupReason(card);
+        if (reason) { throw new RangeError(reason); }
+        const group = this.order.createGroup(input.value);
+        if (!this.order.usable) { throw new RangeError('Your order could not be saved on this device.'); }
+        close(false);
+        this.#setGroup(card, group);
+      } catch (e) {
+        if (!(e instanceof RangeError)) { throw e; }
+        error.textContent = e.message; error.hidden = false;
+        input.setAttribute('aria-invalid', 'true');
+        input.focus();
+      }
+    });
+    this.#groupEditor = { key: this.#keyOf(card), form: phone ? null : form, close };
+    if (dialog) { document.body.append(dialog); dialog.showModal(); } else { this.render(); }
+    input.focus();
   }
 
   #listen() {
