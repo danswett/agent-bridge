@@ -67,6 +67,33 @@ public sealed class MotionTests
         Assert.Equal(TimeSpan.FromSeconds(8), Catalogue.DelegatingPeriod);
     }
 
+    [Theory]
+    [InlineData("App.xaml", "BrushTransition", "ContentPresenter.BackgroundTransition", "Press", 1)]
+    [InlineData("SessionView.xaml", "ScalarTransition", "ContentControl.OpacityTransition", "Acknowledge", 1)]
+    [InlineData("SessionView.xaml", "ScalarTransition", "CheckGlyph.OpacityTransition", "Acknowledge", 1)]
+    public void Custom_control_transitions_use_catalogue_timings_without_animating_layout(
+        string file, string transition, string property, string entry, int count)
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "AgentBridge.slnx"))) { root = root.Parent; }
+        Assert.NotNull(root);
+        var doc = XDocument.Load(Path.Combine(root.FullName, "src", "AgentBridge.App", file));
+        var transitions = doc.Descendants().Where(e => e.Name.LocalName == transition &&
+            e.Parent?.Name.LocalName == property).ToList();
+        Assert.Equal(count, transitions.Count);
+        foreach (var item in transitions)
+        {
+            var key = $"AbMotion{entry}Duration";
+            Assert.Equal($"{{StaticResource {key}}}", (string?)item.Attribute("Duration"));
+            Assert.Equal(Catalogue[entry].Duration,
+                TimeSpan.Parse(Generated()(key)!, System.Globalization.CultureInfo.InvariantCulture));
+            Assert.Empty(item.Attributes().Where(a => a.Name.LocalName is
+                "Width" or "Height" or "Offset" or "EnableDependentAnimation"));
+        }
+        Assert.All(doc.Descendants().Attributes("Duration"),
+            duration => Assert.StartsWith("{StaticResource AbMotion", duration.Value, StringComparison.Ordinal));
+    }
+
     [Fact]
     public void A_missing_motion_resource_is_an_error_not_an_untimed_motion()
     {
