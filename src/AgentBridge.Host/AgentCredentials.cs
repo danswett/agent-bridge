@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -203,6 +204,65 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     // A launch's token is issued before its process exists, so it is bound to none and answers to
     // nobody until Bind. Launched agents may read only: the agents policy (§5.1) widens that later.
     public string? Prepare(string session, string launchId) => Mint(session, launchId, 0, default, AgentProtocol.ScopeRead);
+
+    // Called only by the person-authorized management path, never a remote/agent operation.
+    // No token is returned. Both hashes stand until caller verification can retire the old one.
+    public (AgentCredential Credential, string Path) MintScript(string name, TimeSpan? lifetime = null)
+    {
+        var now = time.GetUtcNow();
+        var credential = AgentCredential.Script(BlobFormat.Base64Url(RandomNumberGenerator.GetBytes(16)), machine, name, now, lifetime);
+        lock (gate)
+        {
+            if (problem is not null) { throw new InvalidOperationException("agent credentials are unavailable"); }
+            Prune(now);
+            if (problem is not null) { throw new InvalidOperationException("agent credentials are unavailable"); }
+            if (records.Count >= MaxCredentials) { throw new InvalidOperationException("too many live agent credentials"); }
+            if (records.Count(r => r.Credential.Kind == "script" && r.Credential.Principal == credential.Principal) >= 2)
+            {
+                throw new InvalidOperationException("two script credentials are already live for this name; revoke before minting another");
+            }
+            var folder = PrivateFolder.Ensure(Path.Combine(Path.GetDirectoryName(path)!, "script-credentials"),
+                "the script credential folder", "no script credential is issued");
+            // Hashing the validated principal also keeps case-distinct names distinct on Windows.
+            var final = Path.Combine(folder, Hash(credential.Principal!) + ".key");
+            var temp = Path.Combine(folder, $"{Guid.NewGuid():N}.tmp");
+            var clear = System.Text.Encoding.ASCII.GetBytes(AgentProtocol.TokenPrefix + BlobFormat.Base64Url(RandomNumberGenerator.GetBytes(32)));
+            try
+            {
+                using (var file = PrivateFolder.CreateNew(temp))
+                {
+                    file.Write(OperatingSystem.IsWindows() ? ProtectScript(clear) : clear);
+                    file.Flush(true);
+                }
+                records.Add(new Record(Convert.ToHexString(SHA256.HashData(clear)), credential));
+                // Commit the hash first: a crash can leave an unused hash, never a usable file
+                // without its hash. The existing file is untouched until the atomic replacement.
+                Save();
+                File.Move(temp, final, overwrite: true);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or CryptographicException)
+            {
+                if (records.RemoveAll(r => r.Credential.Id == credential.Id) > 0)
+                {
+                    try { Save(); }
+                    catch (Exception rollback) when (rollback is IOException or UnauthorizedAccessException) { Fault("could not roll back script credential issuance"); }
+                }
+                log("agent credentials: script credential issuance failed; the previous script file was not replaced");
+                throw new InvalidOperationException("could not store the script credential; no new credential was issued");
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(clear);
+                try { File.Delete(temp); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Fault("could not remove the protected script credential temporary file"); }
+            }
+            log($"agent credentials: issued script credential {credential.Id} for {credential.Principal}");
+            return (credential, final);
+        }
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    static byte[] ProtectScript(byte[] clear) => ProtectedData.Protect(clear, null, DataProtectionScope.CurrentUser);
 
     public void Bind(string launchId, int processId, DateTimeOffset startedAt)
     {
