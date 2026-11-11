@@ -265,7 +265,7 @@ test('readOnly set with an unknown newer-host reason shows no hint and leaves th
   const shadow = item(page, SHADOW);
   await expect(shadow.locator('.machine-diagnose-hint')).toHaveCount(0);
   await expect(shadow.locator('.machine-name')).toHaveText('DEV-VM1 (shadow)');
-  await expect(shadow.locator('.machine-view')).toBeVisible();
+  await expect(shadow.locator('.machine-button')).toBeVisible();
   expect(await demo(page, SHADOW, 'calls')).not.toContain('diagnostics.get');
 });
 
