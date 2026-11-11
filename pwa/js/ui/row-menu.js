@@ -12,15 +12,16 @@ export class RowMenu {
   #back = null;
   #off = null;
   #trigger = null;
+  #sheet = null;
 
   get open() { return !!this.#el; }
 
   // anchor: the element the menu is drawn in (positioned).
-  // items: [{ label, disabled, shortcut, reason, run }]; a reason keeps a disabled item focusable.
+  // items: [{ label, disabled, shortcut, reason, checked, run }]; a reason keeps a disabled item focusable.
   // back: what gets focus when the menu closes.
   // trigger: the button that opened it, if it is one (aria-expanded follows the menu, and a press
   // on it is its own to handle, not an outside press that closes the menu just before it reopens).
-  show(anchor, items, { back = null, label = 'Row actions', trigger = null } = {}) {
+  show(anchor, items, { back = null, label = 'Row actions', trigger = null, sheet = false } = {}) {
     this.close();
     this.#back = back;
     this.#trigger = trigger;
@@ -55,7 +56,14 @@ export class RowMenu {
         live[(i + step + live.length) % live.length].focus();
       }
     });
-    anchor.append(el);
+    if (sheet) {
+      this.#sheet = h('dialog', { class: 'row-menu-sheet', 'aria-label': label },
+        h('h2', {}, label), el,
+        h('button', { type: 'button', class: 'button secondary', onclick: () => this.close() }, 'Cancel'));
+      this.#sheet.addEventListener('cancel', (e) => { e.preventDefault(); this.close(); });
+      document.body.append(this.#sheet);
+      this.#sheet.showModal();
+    } else { anchor.append(el); }
     this.#el = el;
     // A press anywhere else closes it, as a native menu does.
     const outside = (e) => { if (!el.contains(e.target) && !trigger?.contains(e.target)) { this.close(false); } };
@@ -67,7 +75,7 @@ export class RowMenu {
     const bar = document.getElementById('nav');
     const fixed = bar && !bar.hidden && getComputedStyle(bar).position === 'fixed';
     const floor = fixed ? bar.getBoundingClientRect().top : window.innerHeight;
-    const up = r.bottom > floor && anchor.getBoundingClientRect().top - r.height > 0;
+    const up = !sheet && r.bottom > floor && anchor.getBoundingClientRect().top - r.height > 0;
     if (up) { el.classList.add('up'); }
     // Menu (ui.md §5.3): it settles in from its anchor, and is usable as it does.
     enter(el, 'menu', { dy: up ? 1 : -1 });
@@ -86,6 +94,9 @@ export class RowMenu {
     leave(this.#el, 'menu');
     this.#el.remove();
     this.#el = null;
+    this.#sheet?.close();
+    this.#sheet?.remove();
+    this.#sheet = null;
     if (refocus && had && this.#back?.isConnected) { this.#back.focus({ preventScroll: true }); }
     this.#back = null;
   }

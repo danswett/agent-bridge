@@ -144,3 +144,123 @@ test('arrows traverse group headers and visible rows in displayed order', async 
   await toggle.press('ArrowRight');
   await expect(first).toBeFocused();
 });
+
+for (const width of [1440, 390]) {
+  test.describe(`group row menu at ${width}px`, () => {
+    test.use({ viewport: { width, height: 900 } });
+    const menuAction = async (page, id, name) => {
+      await row(page, id).locator('.row-main').press('Shift+F10');
+      await page.getByRole('menuitem', { name, exact: true }).click();
+    };
+    const chooseGroup = async (page, id) => menuAction(page, id, 'Move to group');
+    const reload = async (page) => {
+      await page.reload();
+      await page.waitForSelector('html[data-demo-ready]');
+    };
+    const groupRows = (page, name) => page.locator('#session-list > *').evaluateAll((els, name) => {
+      const start = els.findIndex((e) => e.matches('.session-group-toggle') && e.querySelector('.group-name').textContent === name);
+      const ids = [];
+      for (let i = start + 1; start >= 0 && i < els.length && els[i].matches('.session'); i++) { ids.push(els[i].dataset.id); }
+      return ids;
+    }, name);
+
+    test('Move to group checks membership, moves to the top, survives reload and focuses a collapsed destination', async ({ page }) => {
+      await setup(page);
+      await page.evaluate((id) => {
+        const o = window.agentBridgeDemo.page.view.order;
+        const group = o.createGroup('Personal');
+        o.setGroup(`demo\n${id}`, group);
+        window.agentBridgeDemo.page.view.render();
+      }, COPILOT);
+      await chooseGroup(page, CLAUDE);
+      await expect(page.getByRole('menuitemradio', { name: 'Team', exact: true })).toBeChecked();
+      if (width === 390) { await expect(page.getByRole('dialog', { name: 'Move to group', exact: true })).toBeVisible(); }
+      await page.getByRole('menuitemradio', { name: 'Personal', exact: true }).click();
+      await expect.poll(() => groupRows(page, 'Personal')).toEqual([CLAUDE, COPILOT]);
+      await reload(page);
+      await expect.poll(() => groupRows(page, 'Personal')).toEqual([CLAUDE, COPILOT]);
+      await page.getByRole('button', { name: /^Team, 0 sessions/ }).click();
+      await chooseGroup(page, CLAUDE);
+      await page.evaluate(() => {
+        window.groupMotions = [];
+        const animate = Element.prototype.animate;
+        Element.prototype.animate = function (...args) { const a = animate.apply(this, args); window.groupMotions.push(a); return a; };
+      });
+      await page.getByRole('menuitemradio', { name: 'Team', exact: true }).click();
+      await expect(row(page, CLAUDE)).toHaveCount(0);
+      await expect(page.getByRole('button', { name: /^Team, 1 session/ })).toBeFocused();
+      expect(await page.evaluate(() => window.groupMotions.some((a) => a.id === 'ab-motion-listItem'))).toBe(true);
+      expect(await page.evaluate((id) => window.groupMotions.some((a) => a.id === 'ab-motion-shift' && a.effect.target.dataset.id === id), COPILOT)).toBe(true);
+    });
+
+    test('New group validates names inline, creates expanded at the foot and retains the row after reload', async ({ page }) => {
+      await setup(page);
+      await chooseGroup(page, CLAUDE);
+      await page.getByRole('menuitem', { name: 'New group\u2026', exact: true }).click();
+      const name = page.getByRole('textbox', { name: 'Group name', exact: true });
+      await expect(name).toBeFocused();
+      await name.fill(' team ');
+      await name.press('Enter');
+      await expect(page.locator('.group-editor').getByRole('alert')).toHaveText('A group with that name already exists.');
+      await expect(name).toHaveAttribute('aria-invalid', 'true');
+      await name.fill(' Personal ');
+      await name.press('Enter');
+      await expect(page.locator('.group-name')).toHaveText(['Team', 'Personal']);
+      await expect(page.getByRole('button', { name: /^Personal, 1 session/ })).toHaveAttribute('aria-expanded', 'true');
+      await expect(row(page, CLAUDE).locator('.row-main')).toBeFocused();
+      await reload(page);
+      await expect.poll(() => groupRows(page, 'Personal')).toEqual([CLAUDE]);
+    });
+
+    test('Pin and Unpin keep membership and Remove from group returns to the top of Sessions after reload', async ({ page }) => {
+      await setup(page);
+      await menuAction(page, CLAUDE, 'Pin');
+      await reload(page);
+      await expect(row(page, CLAUDE)).toHaveAttribute('data-pinned', 'true');
+      await chooseGroup(page, CLAUDE);
+      await expect(page.getByRole('menuitemradio', { name: 'Team', exact: true })).toBeChecked();
+      await page.keyboard.press('Escape');
+      await menuAction(page, CLAUDE, 'Unpin');
+      await expect.poll(() => groupRows(page, 'Team')).toEqual([CLAUDE, COPILOT]);
+      await menuAction(page, CLAUDE, 'Remove from group');
+      await expect(page.locator('.list-group[data-group="sessions"] + .session')).toHaveAttribute('data-id', CLAUDE);
+      await reload(page);
+      await expect(page.locator('.list-group[data-group="sessions"] + .session')).toHaveAttribute('data-id', CLAUDE);
+      await row(page, CLAUDE).locator('.row-main').press('Shift+F10');
+      await expect(page.getByRole('menuitem', { name: 'Remove from group', exact: true })).toHaveCount(0);
+    });
+
+    test('a chooser closes and returns focus to the group when its source becomes hidden or ends', async ({ page }) => {
+      await setup(page);
+      await header(page).click();
+      await chooseGroup(page, COPILOT);
+      await page.evaluate((id) => {
+        const d = window.agentBridgeDemo;
+        d.upsert({ ...d.host.get(id), status: 'idle', question: null });
+      }, COPILOT);
+      await expect(page.getByRole('menu')).toHaveCount(0);
+      await expect(page.getByRole('dialog')).toHaveCount(0);
+      await expect(header(page)).toBeFocused();
+      await header(page).click();
+      await chooseGroup(page, CLAUDE);
+      await page.evaluate((id) => window.agentBridgeDemo.remove(id), CLAUDE);
+      await expect(page.getByRole('menu')).toHaveCount(0);
+      await expect(page.getByRole('dialog')).toHaveCount(0);
+      await expect(page.getByRole('button', { name: /^Team, 1 session/ })).toBeFocused();
+    });
+
+    test('account cleanup dismisses the group chooser and new-group editor', async ({ page }) => {
+      await setup(page);
+      await chooseGroup(page, CLAUDE);
+      await page.evaluate(() => window.agentBridgeDemo.page.clear());
+      await expect(page.getByRole('menu')).toHaveCount(0);
+      await expect(page.getByRole('dialog')).toHaveCount(0);
+      await reload(page);
+      await chooseGroup(page, CLAUDE);
+      await page.getByRole('menuitem', { name: 'New group\u2026', exact: true }).click();
+      await page.evaluate(() => window.agentBridgeDemo.page.clear());
+      await expect(page.getByRole('textbox', { name: 'Group name', exact: true })).toHaveCount(0);
+      await expect(page.getByRole('dialog')).toHaveCount(0);
+    });
+  });
+}

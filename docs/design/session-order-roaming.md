@@ -98,6 +98,11 @@ G2 (#1615) draws those groups between Pinned and Sessions. Collapse is kept only
 local order, outside the group registers. Collapsed groups retain visible needs-you rows; search
 and Needs you temporarily expand matching groups without changing the saved collapse.
 
+G3a (#1859) wires Move to group, New group and Remove from group into the PWA row menu,
+using the same local records. The chooser checks current membership and uses a sheet on phones;
+desktop name entry is inline at the foot of the groups. Pin and Unpin retain membership.
+Touch entry and drag/group-edge moves remain separate G3 slices. Nothing syncs yet.
+
 Required vectors: concurrent move of the same row on two devices; insert at the same position;
 delete against move; rename against delete of a group; a stale write arriving after a newer one;
 equal counters; read marker from two devices; merge is the same in either order and repeating it

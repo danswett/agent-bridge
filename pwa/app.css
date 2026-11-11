@@ -878,6 +878,19 @@ html[data-touch-only-keys]:not([data-keyboard-seen]) .row-menu-key { display: no
 @media (pointer: coarse) and (not (any-pointer: fine)) { .row-menu-item { min-height: var(--tap); } }
 .row-menu-item:hover:not(:disabled):not([aria-disabled="true"]), .row-menu-item:focus-visible:not([data-focus-quiet]) { background: var(--ab-subtle); }
 .row-menu-item:disabled, .row-menu-item[aria-disabled="true"] { color: var(--ab-text2); cursor: default; }
+.row-menu-sheet {
+  width: min(480px, 100%); max-height: 85dvh; overflow: auto; margin: auto auto 0;
+  color: var(--ab-text); background: var(--ab-card); border: 1px solid var(--ab-stroke2);
+  border-radius: var(--ab-radius-card) var(--ab-radius-card) 0 0; padding: 16px;
+}
+.row-menu-sheet::backdrop { background: var(--ab-shell); opacity: .85; }
+.row-menu-sheet h2 { margin: 0 0 12px; }
+.row-menu-sheet .row-menu { position: static; max-width: none; box-shadow: none; border: 0; }
+.row-menu-sheet .row-menu-item { min-height: 44px; }
+.group-editor { padding: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+.group-editor label, .group-editor .answer-error { width: 100%; }
+.group-editor .text-input { width: 100%; }
+@media (forced-colors: active) { .row-menu-sheet { border-color: CanvasText; } }
 
 /* ---- a session's row (ui.md §6.1) ----
    Two lines: the glyph on line 1, the title, at most two facts under it, and the age or the new
