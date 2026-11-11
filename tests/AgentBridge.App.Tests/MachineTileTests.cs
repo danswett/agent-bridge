@@ -6,12 +6,33 @@ using Xunit;
 // vectors as the PWA's: a figure not reported yet is never 0 and never colour alone.
 public sealed class MachineTileTests
 {
-    [Fact]
-    public void Machines_buttons_share_one_44_pixel_target()
+    static XDocument MainWindow()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "src", "AgentBridge.App", "MainWindow.xaml"))) { dir = dir.Parent; }
-        var page = XDocument.Load(Path.Combine(dir!.FullName, "src", "AgentBridge.App", "MainWindow.xaml"));
+        return XDocument.Load(Path.Combine(dir!.FullName, "src", "AgentBridge.App", "MainWindow.xaml"));
+    }
+
+    [Fact]
+    public void Fleet_names_the_page_heading_and_navigation_without_renaming_the_route()
+    {
+        var page = MainWindow();
+        var nav = page.Descendants().Single(e => (string?)e.Attribute("AutomationProperties.AutomationId") == "NavMachines");
+        Assert.Equal("Fleet", (string?)nav.Attribute("AutomationProperties.Name"));
+        Assert.Equal("Fleet", (string?)nav.Attribute("ToolTipService.ToolTip"));
+        Assert.Equal("machines", (string?)nav.Attribute("Tag"));
+        var machines = page.Descendants().Single(e => (string?)e.Attribute("AutomationProperties.AutomationId") == "MachinesPane");
+        var heading = machines.Descendants().Single(e => (string?)e.Attribute("AutomationProperties.HeadingLevel") == "Level1");
+        Assert.Equal("Fleet", (string?)heading.Attribute("Text"));
+        Assert.DoesNotContain(page.Descendants(), e =>
+            (string?)e.Attribute("Text") == "Machines" &&
+            e.Attribute("AutomationProperties.HeadingLevel") is not null);
+    }
+
+    [Fact]
+    public void Machines_buttons_share_one_44_pixel_target()
+    {
+        var page = MainWindow();
         var machines = page.Descendants().Single(e => (string?)e.Attribute("AutomationProperties.AutomationId") == "MachinesPane");
         var ns = machines.Name.Namespace;
         var style = machines.Element(ns + "ScrollViewer.Resources")?.Elements(ns + "Style")

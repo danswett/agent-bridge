@@ -33,6 +33,25 @@ test.afterEach(async ({ page }) => {
 
 test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
 
+for (const width of [390, 1024, 1440]) {
+  test(`the Fleet page and navigation keep their name at ${width}px, including after reload`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await openDemo(page);
+    const nav = page.locator('[data-nav="machines"]');
+    await expect(nav).toHaveAccessibleName('Fleet');
+    await expect(nav).toHaveAttribute('title', 'Fleet');
+    await nav.click();
+    await expect(page).toHaveURL(/#\/machines$/);
+    await expect(page.locator('#machines').getByRole('heading', { name: 'Fleet', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Machines', exact: true })).toHaveCount(0);
+    await expect(page.locator('#machine-summary')).toHaveText('3 machines · 3 online');
+    await page.reload();
+    await expect(page.locator('#machines-h')).toBeVisible();
+    await expect(page.locator('#machines-h')).toHaveText('Fleet');
+    await expect(nav).toHaveAccessibleName('Fleet');
+  });
+}
+
 test('with more than one machine, every machine is shown at first: one list, newest first, each row naming its machine', async ({ page }) => {
   await openDemo(page);
   await expect(tab(page, 'all')).toHaveAttribute('aria-selected', 'true');

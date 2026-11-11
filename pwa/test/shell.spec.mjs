@@ -313,7 +313,7 @@ test.describe('on a phone', () => {
     const nav = page.locator('#nav');
     const bar = await nav.boundingBox();
     expect(bar.y + bar.height).toBe(844);
-    await expect(nav.locator('.nav-item:visible')).toHaveText(['Sessions', 'Machines', 'Usage', 'Settings']);
+    await expect(nav.locator('.nav-item:visible')).toHaveText(['Sessions', 'Fleet', 'Usage', 'Settings']);
     const current = nav.locator('[aria-current="page"]');
     await expect(current).toHaveText('Sessions');
     const indicator = await current.evaluate((e) => getComputedStyle(e, '::before').backgroundColor);

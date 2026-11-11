@@ -872,7 +872,7 @@ added the same evening; the timeline is drawn in
      §6.5). If focus was on a control the line replaces, focus moves to the line, which takes
      `tabindex="-1"`. It isn't announced separately: its words are what is read as focus lands.
      Focus never drops to the page.
-   - The machine tab and the Machines page (§6.6) carry the machine's own state.
+   - The machine tab and the Fleet page (§6.6) carry the machine's own state.
    - Only an error the person can act on (Couldn't reach, unsupported) shows, in rule 3's fixed
      slot, on one line, naming the machine ("Couldn't reach *machine*"). While it shows,
      "Updating…" doesn't. With more than one, the slot shows the first in machine order, plus
@@ -931,7 +931,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     opens its menu. Touch and the mouse reach More as any button.
   - It holds at the narrowest list (264, §5.2) and in one column. The PWA does the same
     (`js/ui/machine-tab-fit.js`, #351).
-- macOS: a "Machines" sidebar section.
+- macOS: a "Fleet" sidebar section.
 - iOS: a toolbar button.
 - Android: filter chips.
 
@@ -1917,9 +1917,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - The quiet window, the one-a-second announcement limit, `sendCheckHold` and the stall
     thresholds are named constants in one place per platform.
 
-### 6.6 Machines
+### 6.6 Fleet
 
-A page of its own on every client (the PWA's `#/machines`, the app's Machines). One row per
+A page of its own on every client (the PWA's `#/machines`, the app's Fleet). Its navigation
+label and page heading say "Fleet" everywhere; each individual item stays a "machine".
+Identifiers and URLs stay unchanged (#1734). One row per
 machine, online ones first, then the account's offline machines (#213):
 
 - **Line 1:** the machine icon, the name, and the trailing state ("Viewing", "Online",
@@ -2586,7 +2588,7 @@ step is read to a screen reader with its state and position first, for example "
 Connect its hooks". The *Start a new session* step is also Done once the host's own new-session test of an installed agent has passed (slice 3, #715). The stepper below replaces it.
 
 Settings with a guide. Six steps, in a stepper that **replaces Settings' own pane** while setup
-runs; the app rail stays, with Settings selected, so Sessions and Machines are one click away
+runs; the app rail stays, with Settings selected, so Sessions and Fleet are one click away
 and setup never traps the person (decision 4). The steps, in order, with their boards
 ([every board](proposals/384-first-run/contact-sheet.png)):
 
@@ -3288,7 +3290,7 @@ evidence that the bridge stopped while the machine is up, and it hasn't come bac
 It goes as soon as the host is listed online again, and when the machine is forgotten or the
 account changes.
 
-**On the Machines page (§6.6).** The machine's row stays an offline row, with line 2 saying why:
+**On the Fleet page (§6.6).** The machine's row stays an offline row, with line 2 saying why:
 
 - Line 1: the machine icon, the name, and "Offline", as any offline row.
 - Line 2: "Bridge isn't running · since *time*", in place of "Last seen…". The since time is
@@ -3373,7 +3375,7 @@ episode (A6). The row's accessible name reads "*machine*, offline, bridge isn't 
 
 | Use | Text |
 |---|---|
-| Machines row, line 2 | "Bridge isn't running · since *time*" |
+| Fleet row, line 2 | "Bridge isn't running · since *time*" |
 | Same, a machine that starts only at sign-in (`start` is `boot` or `logon`) | Line 1 keeps "Signed out: waiting for sign-in" / "Logon only: starts when you sign in"; no bridge alert is raised for it, as it is expected to be down until someone signs in |
 | Banner | "*machine*'s bridge isn't running · since *time*" |
 | Machine tab tooltip and "N more" entry | "*machine* · bridge isn't running" |
@@ -3383,7 +3385,7 @@ episode (A6). The row's accessible name reads "*machine*, offline, bridge isn't 
 
 **Platforms**
 
-- **Windows app and PWA:** the row on the Machines page, and the banner at the top of the
+- **Windows app and PWA:** the row on the Fleet page, and the banner at the top of the
   session list (in the list's header in the app), as §6.13's.
 - **Apple (#260):** note only. The same fields; the native form is that track's decision.
 
@@ -3492,7 +3494,7 @@ they are un-parked.
 - **Search:** finds sessions on every machine by the words of their title, repository, branch,
   agent or machine, titles starting with them first, then the most recently updated, whatever
   machine the list shows, and opens the one chosen as a notification does.
-- **Navigation:** a compact `NavigationView` rail (Sessions, Machines, Launch, Usage;
+- **Navigation:** a compact `NavigationView` rail (Sessions, Fleet, Launch, Usage;
   Settings at the foot) with a selection pill. Settings opens its one page (§6.9). **Not built
   yet (#384 slice 5):** Settings' own pane of sections beside the rail, which first-run
   setup's stepper replaces while it runs (§6.9, §6.10).
@@ -3529,7 +3531,7 @@ they are un-parked.
 
 **macOS (SwiftUI, #260):**
 - **Sidebar:** a translucent source list (a Needs You · N filter item, Pinned, your groups,
-  Sessions, Machines), 28 px rows, and a Bridge fill on the selected row. The toolbar's filter menu has
+  Sessions, Fleet), 28 px rows, and a Bridge fill on the selected row. The toolbar's filter menu has
   the same toggle.
 - **Menu bar:** an extra whose label is N. Its menu names the waiting sessions (machine and
   title, oldest first, at most 8) and Open Slipgates. An item opens its session at the
@@ -3544,7 +3546,7 @@ they are un-parked.
   nav-bar row above it), a search field, and inset grouped sections. The filter menu's first
   item is Needs you · N, and the filter button shows N while anything waits.
 - **Session:** a back button, a 28/34 title, the conversation, and delegates in a sheet.
-- **Navigation:** a tab bar (Sessions, Machines, Usage, Settings).
+- **Navigation:** a tab bar (Sessions, Fleet, Usage, Settings).
 - **Gestures:** swipe actions on rows (Pin, Ask main agent to stop).
 - **Badge:** the app icon's badge is N.
 
@@ -3567,14 +3569,14 @@ they are un-parked.
 - **Phone:**
   - a 24/32 title row with Search and New, and the sort menu between them;
   - machine tabs;
-  - a bottom navigation bar (Sessions, Machines, Usage, Settings) with a Bridge indicator. New
+  - a bottom navigation bar (Sessions, Fleet, Usage, Settings) with a Bridge indicator. New
     is the way to Launch.
   - The app bar comes back only as a strip while the connection has news (connecting,
     reconnecting, paused, an error), and as the search row while searching.
     - **The strip replaces the title row's content, at the same height** (#950), so nothing below it
       moves. After a return it shows only once §6.1's 3-second grace has run out with this
       client's own link still down, and it is announced once, politely. A machine's own news
-      is never the strip's: it is on its rows, its tab and the Machines page (§6.1, rule 8).
+      is never the strip's: it is on its rows, its tab and the Fleet page (§6.1, rule 8).
       Before #950 the strip and connection lines were inserted above the list, and the rows
       jumped down and back up on every return.
 - **App banners** sit at the top of the content, above the page, one card each (`card` fill,
@@ -3854,7 +3856,7 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
   Apple platforms) and close (Esc). Focus enters the dialog; Escape or Close returns it to
   the control that opened it.
 - **Focus stays on a pressed button (#369).** While its request is on its way, Send, End session
-  and Launch (and Forget, on Machines) are never disabled, which would drop keyboard focus to
+  and Launch (and Forget, on Fleet) are never disabled, which would drop keyboard focus to
   the top of the page. Each says it can't be pressed (`aria-disabled`), looks it, and does
   nothing when pressed again, by key, click or the form's submit, so a reply, an end or a
   launch goes once. Focus stays on it through the outcome, and between End session's two
