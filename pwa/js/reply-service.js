@@ -40,7 +40,7 @@ export class ReplyService extends AnswerService {
       send: async (client, data, entry, progress, stage) => {
         const files = entry?.answer?.attachments ?? [];
         const { account, generation, stamp } = retention.get(entry.answer);
-        const retainedStamp = await stamp;
+        const retainedStamp = files.length && account ? await stamp : null;
         const abort = new AbortController();
         this.#sending.set(entry.key, abort);
         try {
