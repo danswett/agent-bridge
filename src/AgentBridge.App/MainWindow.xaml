@@ -203,6 +203,11 @@
                      line 1, at most two facts on line 2, the machine's update inside its own row, and its buttons,
                      all one style, in one column under the text. -->
                 <ScrollViewer x:Name="MachinesPage" Grid.Row="1" Visibility="Collapsed" AutomationProperties.AutomationId="MachinesPane">
+                    <ScrollViewer.Resources>
+                        <Style TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+                            <Setter Property="MinHeight" Value="44" />
+                        </Style>
+                    </ScrollViewer.Resources>
                     <Grid>
                         <StackPanel MaxWidth="920" Padding="24,20,24,24" Spacing="12">
                             <Grid ColumnSpacing="12">
@@ -360,7 +365,6 @@
                                                     <local:WrapRow Spacing="8" Margin="0,8,0,0" Tag="{x:Bind}" AutomationProperties.AutomationId="MachineButtons" KeyDown="OnMachineDiagnosisKeyDown">
                                                         <Button
                                                             Content="Launch here"
-                                                            MinHeight="44"
                                                             Tag="{x:Bind}"
                                                             AutomationProperties.AutomationId="LaunchHere"
                                                             AutomationProperties.Name="{x:Bind LaunchHereName, Mode=OneWay}"

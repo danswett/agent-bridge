@@ -1,10 +1,36 @@
 using AgentBridge.App.Core;
+using System.Xml.Linq;
 using Xunit;
 
 // The machine tile's words and states (#1147, ui.md §6.6.1), from existing fields only. The same
 // vectors as the PWA's: a figure not reported yet is never 0 and never colour alone.
 public sealed class MachineTileTests
 {
+    [Fact]
+    public void Machines_buttons_share_one_44_pixel_target()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "src", "AgentBridge.App", "MainWindow.xaml"))) { dir = dir.Parent; }
+        var page = XDocument.Load(Path.Combine(dir!.FullName, "src", "AgentBridge.App", "MainWindow.xaml"));
+        var machines = page.Descendants().Single(e => (string?)e.Attribute("AutomationProperties.AutomationId") == "MachinesPane");
+        var ns = machines.Name.Namespace;
+        var style = machines.Element(ns + "ScrollViewer.Resources")?.Elements(ns + "Style")
+            .SingleOrDefault(e => (string?)e.Attribute("TargetType") == "Button" && e.Attribute(XName.Get("Key", "http://schemas.microsoft.com/winfx/2006/xaml")) is null);
+        Assert.NotNull(style);
+        Assert.Equal("{StaticResource DefaultButtonStyle}", (string?)style.Attribute("BasedOn"));
+        Assert.Equal("44", (string?)style.Elements(ns + "Setter").Single(e => (string?)e.Attribute("Property") == "MinHeight").Attribute("Value"));
+        var buttons = machines.Descendants().Where(e => e.Name.LocalName == "Button").ToList();
+
+        Assert.Contains(buttons, e => (string?)e.Attribute("AutomationProperties.AutomationId") == "LaunchHere");
+        foreach (var button in buttons)
+        {
+            foreach (var property in new[] { "Style", "Height", "MinHeight", "MaxHeight", "Padding" })
+            {
+                Assert.Null(button.Attribute(property));
+            }
+        }
+    }
+
     [Fact]
     public void Health_not_reported_says_so_in_words_and_never_shows_zero()
     {
