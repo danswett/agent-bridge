@@ -120,6 +120,8 @@ for (const disclosure of [false, true]) {
       await expect(pane).toContainText('Hide reasoning');
       await motionsDone(page);
       expect(await pane.evaluate((el) => el.scrollTop)).toBe(0);
+      await pane.locator('.stream > .agent-block > .response').evaluate((el) => { el.style.height = getComputedStyle(el).height; el.style.boxSizing = 'content-box'; el.style.paddingBlockStart = '40px'; });
+      await expect.poll(() => gap(pane)).toBeLessThan(4);
       await page.evaluate((id) => {
         const d = window.agentBridgeDemo;
         const s = d.host.get(id);

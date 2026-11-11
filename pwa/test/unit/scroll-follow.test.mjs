@@ -129,7 +129,7 @@ for (const growth of ['later response', 'same-frame response', 'padding', 'newly
     let visible = growth !== 'initially hidden content';
     let response = { getBoundingClientRect: () => ({ height: visible ? height : 0 }) };
     pane.children = growth === 'newly drawn history' ? [] : [response];
-    pane.ownerDocument.defaultView.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+    pane.ownerDocument.defaultView.ResizeObserver = class { observe(el, { box } = {}) { el.observedBox = box; } unobserve() {} disconnect() {} };
     const follow = new ScrollFollow(pane, { visible: () => visible });
     t.after(() => follow.dispose());
     pane.scrollHeight += 300;
@@ -143,7 +143,7 @@ for (const growth of ['later response', 'same-frame response', 'padding', 'newly
       if (growth === 'replacement reply') { response = { getBoundingClientRect: () => ({ height }) }; pane.children = [response]; }
       follow.after(false);
     };
-    const resize = () => follow.changed([{ target: response, contentRect: { height: height - padding }, borderBoxSize: [{ blockSize: height }] }]);
+    const resize = () => { if (growth !== 'padding' || response.observedBox === 'border-box') { follow.changed([{ target: response, contentRect: { height: height - padding }, borderBoxSize: [{ blockSize: height }] }]); } };
     if (growth === 'same-frame response') { grow(); }
     resize();
     assert.equal(pane.scrollTop, growth === 'same-frame response' ? 1240 : 900);

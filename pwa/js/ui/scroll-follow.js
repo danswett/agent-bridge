@@ -79,7 +79,7 @@ export class ScrollFollow {
         this.#sizes.set(el, removed.length ? Math.min(height, replaced) : height);
         replaced = Math.max(0, replaced - height);
       }
-      if (!this.#observed.has(el)) { this.#observer.observe(el); }
+      if (!this.#observed.has(el)) { this.#observer.observe(el, { box: 'border-box' }); }
     }
     this.#observed = next;
   }
