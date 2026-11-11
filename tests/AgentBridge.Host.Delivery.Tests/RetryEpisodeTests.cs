@@ -177,6 +177,26 @@ public sealed class RetryEpisodeTests
         Assert.Empty(h.Requests);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Cancellation_inside_observe_or_available_never_consumes_or_sends_an_attempt(bool availability, bool owner)
+    {
+        var h = new Harness();
+        using var cancel = new CancellationTokenSource();
+        h.Time.Advance(TimeSpan.FromSeconds(30));
+        h.OnObservation = availability ? null : cancel.Cancel;
+        h.OnAvailability = availability ? cancel.Cancel : null;
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            h.Episode.TryAsync(1, Guid.NewGuid(), owner ? RetryReason.Owner : RetryReason.Auto, cancel.Token));
+        Assert.Equal(RetryStop.Cancelled, h.Episode.Stop);
+        Assert.Empty(h.Episode.Attempts);
+        Assert.Empty(h.Requests);
+        Assert.False(await h.Send(RetryReason.Owner));
+    }
+
     [Fact]
     public async Task Read_only_delivery_and_a_new_non_transient_error_stop_before_sending()
     {
@@ -221,14 +241,15 @@ public sealed class RetryEpisodeTests
         public readonly List<string> Log = [];
         bool available = true;
         public TimeSpan ObservationDelay, AvailabilityDelay;
-        public bool Available { get { Time.Advance(AvailabilityDelay); return available; } set => available = value; }
+        public Action? OnObservation, OnAvailability;
+        public bool Available { get { OnAvailability?.Invoke(); Time.Advance(AvailabilityDelay); return available; } set => available = value; }
         public TaskCompletionSource<ReplyResult>? Pending;
         public ReplyResult Outcome = new(AnswerOutcome.Delivered);
         public Exception? Failure;
         public Harness(string error = Empty)
         {
             Initial = Current = new(JsonSerializer.Deserialize<JsonElement>(error), Time.GetUtcNow(), new(7, Time.GetUtcNow()), 0, true);
-            Episode = new(Guid.NewGuid(), () => { Time.Advance(ObservationDelay); return Current; }, this, Time, Log.Add);
+            Episode = new(Guid.NewGuid(), () => { OnObservation?.Invoke(); Time.Advance(ObservationDelay); return Current; }, this, Time, Log.Add);
         }
         public Task<bool> Send(RetryReason reason = RetryReason.Auto) =>
             Episode.TryAsync(Episode.NextAttempt, Guid.NewGuid(), reason);
