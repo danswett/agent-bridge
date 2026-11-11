@@ -688,13 +688,6 @@ export class SessionCard {
     };
     this.turns.onSettled = () => this.#wantEarlier();
     e.scroll = h('div', { class: 'stream-scroll' }, this.turns.element, e.stream);
-    this.#follow = new ScrollFollow(e.scroll, {
-      scroll: (fn) => this.collapse ? this.collapse.appScroll(fn) : fn(),
-      visible: () => this.viewing() && e.scroll.getClientRects().length > 0,
-      canFollow: () => !this.#s?.question,
-      canDefer: () => !!this.historyStore && (!e.user.hidden || !e.prompt.hidden || !e.agentBlock.hidden),
-      onFollow: () => this.update(this.#s),
-    });
     this.#watchHold(e.scroll);
     // An open question out of sight (#1657): one tap brings its card into view.
     e.waiting = h('button', { type: 'button', class: 'question-waiting', hidden: true, onclick: () => this.#showWaiting() }, 'Question waiting');
@@ -739,6 +732,15 @@ export class SessionCard {
     e.head = h('div', { class: 'session-head' }, e.bar, e.top);
     this.view = h('section', { class: 'session-view', 'aria-labelledby': this.ids.title, hidden: true, dataset: { tab: 'conversation' } },
       e.head, h('div', { class: 'view-body' }, e.conversation, e.inspector));
+    this.#follow = new ScrollFollow(e.scroll, {
+      input: this.view,
+      content: () => e.scroll.querySelectorAll('.response, .history-reply, .history-prompt, .history-tool, .user-message .bubble, .prompt-preview, .tool-line'),
+      scroll: (fn) => this.collapse ? this.collapse.appScroll(fn) : fn(),
+      visible: () => this.viewing() && e.scroll.getClientRects().length > 0,
+      canFollow: (revealed) => !this.#s?.question || !revealed,
+      canDefer: () => !!this.historyStore && (!e.user.hidden || !e.prompt.hidden || !e.agentBlock.hidden),
+      onFollow: () => this.update(this.#s),
+    });
     const foot = new CollapsingFoot({ view: this.view, slot: e.reply, bar: e.replyBar, copy: e.replyCopy, scroller: e.scroll });
     this.collapse = new CollapsingHeader({ view: this.view, head: e.head, top: e.top, bar: e.bar, scroller: e.scroll, foot });
     this.foot = foot;
@@ -772,8 +774,8 @@ export class SessionCard {
   }
 
   update(s) {
+    this.#follow.read();
     if (this.#s?.question && !s.question) { this.#follow.resume(); }
-    const heldTop = this.#follow.read();
     const displayed = this.#follow.display(s);
     const first = this.#s === null;
     // Whether the conversation is read to its end, before this update draws anything into it.
@@ -909,7 +911,7 @@ export class SessionCard {
       this.#renderFacts(rows);
     }
     this.#tickFacts(s, Date.now());
-    this.#follow.after(heldTop);
+    this.#follow.after(false);
     this.#bringQuestion(atEnd);
 
     // The tools shown follow the session: refetched (at most every 2 s) as it changes.
@@ -1152,7 +1154,7 @@ export class SessionCard {
   }
 
   #renderMessageTimes(snapshot = this.historyStore?.get(this.hostId, this.#s.id)) {
-    if (!this.#follow.following) { return; }
+    if (this.#follow.deferred) { return; }
     const times = liveMessageTimes(snapshot, this.#follow.shown ?? this.#s);
     setTime(this.els.userTime, times.prompt);
     setTime(this.els.promptAge, times.prompt);
@@ -1512,6 +1514,7 @@ export class SessionCard {
     if (readAt !== null && this.turns.latest) {
       const keep = () => { sc.scrollTop = readAt; };
       if (this.collapse) { this.collapse.appScroll(keep); } else { keep(); }
+      this.#follow.remember();
     }
     this.#wantEarlier();
     // Latest at the bottom, kept there until the person scrolls (#1646). A draw that showed
@@ -1521,8 +1524,8 @@ export class SessionCard {
     // a pressed mouse or one resting on the view (ui.md §5.3): the view stays put.
     const held = this.#placed && (this.#touches || this.#pressing || this.#hovering);
     if (this.#sticking() && drawn && sc.getClientRects().length && !held) {
+      this.#follow.after(!this.#placed);
       this.#placed = true;
-      this.#follow.after(sc.scrollTop);
     }
   }
 
@@ -1777,7 +1780,7 @@ export class SessionCard {
 
   #reading() {
     this.#follow.read();
-    return this.#follow.following;
+    return this.#follow.reading;
   }
 
   // Smoothly, and never into a conversation scrolled back through or held: atEnd is where the
@@ -1843,11 +1846,12 @@ export class SessionCard {
     // And what the reply area covers at the foot (scroll-padding-bottom).
     const bottom = box.bottom - (this.collapse?.footCovered() ?? 0);
     const moves = sc.getClientRects().length > 0 && (v.top < top - 1 || v.bottom > bottom + 1);
-    const scroll = () => this.#follow.appScroll(() => view.scrollIntoView({ block: 'nearest', behavior }));
+    let release;
+    const scroll = () => { release = this.#follow.appScroll(() => view.scrollIntoView({ block: 'nearest', behavior }), moves); };
     // A scroll the app makes leaves the header as it was.
     if (this.collapse) { this.collapse.appScroll(scroll); } else { scroll(); }
     this.#guard();
-    if (!moves || behavior !== 'smooth') { this.#follow.resume(); return; }
+    if (!moves || behavior !== 'smooth') { release(); return; }
     // Every step of the scroll re-arms it, so it runs out only after the question has stopped
     // moving: `scroll` fires in every engine, where `scrollend` isn't in Safari yet. Listening
     // stops at `scrollend`, once the steps stop, or as soon as the person takes the scroller
@@ -1859,6 +1863,7 @@ export class SessionCard {
     const done = (still) => {
       clearTimeout(settle);
       ended.abort();
+      release();
       if (still !== true && this.#revealing?.view === view) { this.#revealing = null; }
     };
     sc.addEventListener('scroll', () => {
@@ -1868,7 +1873,7 @@ export class SessionCard {
       settle = setTimeout(() => done(true), SCROLL_SETTLED_MS);
     }, { signal, passive: true });
     sc.addEventListener('scrollend', () => { this.#guard(); done(); }, { signal });
-    for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) { sc.addEventListener(type, () => done(), { signal, passive: true }); }
+    for (const type of ['wheel', 'touchstart', 'touchmove', 'pointerdown', 'keydown']) { this.view.addEventListener(type, () => done(), { signal, passive: true, capture: true }); }
     setTimeout(() => done(), 3 * QUESTION_ARRIVAL_GUARD_MS);
   }
 

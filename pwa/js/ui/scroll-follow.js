@@ -30,28 +30,29 @@ export class ScrollFollow {
   following = true;
   #top = 0;
   #max = 0;
-  #app = false;
+  #app = null;
   #listeners = new AbortController();
   #observer;
+  #observed = new Set();
+  #sizes = new WeakMap();
   shown = null;
   #latest = null;
   #pending = new Set();
   #tail = null;
   #rendered = null;
 
-  constructor(element, { scroll = (fn) => fn(), visible = () => element.getClientRects().length > 0, canFollow = () => true, canDefer = () => true, onFollow = () => {} } = {}) {
-    Object.assign(this, { element, scroll, visible, canFollow, canDefer, onFollow });
-    element.style.overflowAnchor = 'none';
+  constructor(element, { input = element, content = () => element.children, scroll = (fn) => fn(), visible = () => element.getClientRects().length > 0, canFollow = () => true, canDefer = () => true, onFollow = () => {} } = {}) {
+    Object.assign(this, { element, content, scroll, visible, canFollow, canDefer, onFollow });
     const { signal } = this.#listeners;
     element.addEventListener('scroll', () => this.read(), { signal, passive: true });
     for (const type of ['wheel', 'touchstart', 'touchmove', 'pointerdown', 'keydown']) {
-      element.addEventListener(type, () => { this.#app = false; }, { signal, passive: true });
+      input.addEventListener(type, () => { if (this.#app) { this.#app.active = false; } }, { signal, passive: true, capture: true });
     }
-    element.addEventListener('scrollend', () => { this.#app = false; this.remember(); }, { signal });
+    element.addEventListener('scrollend', () => { if (this.#app) { this.#app.active = false; } this.remember(); }, { signal });
     const win = element.ownerDocument.defaultView;
     if (typeof win.ResizeObserver === 'function') {
-      this.#observer = new win.ResizeObserver(() => this.changed());
-      for (const el of [element, ...element.children]) { this.#observer.observe(el); }
+      this.#observer = new win.ResizeObserver((entries) => this.changed(entries));
+      this.#observe();
     }
     this.remember();
   }
@@ -61,14 +62,25 @@ export class ScrollFollow {
     this.#max = this.element.scrollHeight - this.element.clientHeight;
   }
 
+  get reading() { return this.following && this.#max - this.#top <= BOTTOM_TOLERANCE_PX; }
+
+  #observe() {
+    if (!this.#observer) { return; }
+    const next = new Set(this.content());
+    for (const el of this.#observed) { if (!next.has(el)) { this.#observer.unobserve(el); } }
+    for (const el of next) { if (!this.#observed.has(el)) { this.#observer.observe(el); } }
+    this.#observed = next;
+  }
+
   read() {
     const el = this.element;
     if (!this.visible()) { return el.scrollTop; }
     const max = el.scrollHeight - el.clientHeight;
     // A changed extent is layout, not input. App writes have already recorded their position.
     const wasFollowing = this.following;
-    if (!this.#app && el.scrollTop !== this.#top && max === this.#max) {
+    if (!this.#app?.active && el.scrollTop !== this.#top && max === this.#max) {
       this.following = max - el.scrollTop <= BOTTOM_TOLERANCE_PX;
+      this.#app = null;
     }
     this.remember();
     if (!wasFollowing && this.following && this.#latest) {
@@ -81,7 +93,7 @@ export class ScrollFollow {
         this.#tail.root.remove();
       }
       this.#tail = null;
-      this.after(el.scrollTop);
+      this.after();
     }
     return el.scrollTop;
   }
@@ -101,17 +113,16 @@ export class ScrollFollow {
   // Keep the already visible exchange in its live DOM; append subsequent turns below it.
   snapshot(snapshot, inline) {
     const id = this.shown?.activity.turn;
-    if (this.following || this.#rendered?.id !== id) {
+    if (!this.#pending.size || this.#rendered?.id !== id) {
       this.#rendered = { id, turn: snapshot.turns.find((t) => t.id === id) };
     }
-    const head = this.following ? snapshot.turns : snapshot.turns.flatMap((t) => t.id === id ? (this.#rendered.turn ? [this.#rendered.turn] : []) : [t]);
+    const head = !this.#pending.size ? snapshot.turns : snapshot.turns.flatMap((t) => t.id === id ? (this.#rendered.turn ? [this.#rendered.turn] : []) : [t]);
     if (!this.#pending.size) { return { ...snapshot, turns: head }; }
     if (!this.#tail) {
       const view = new HistoryView();
       this.#tail = { view, root: h('div', { class: 'stream' }, view.element) };
       this.#tail.root.style.marginBlockStart = 'var(--ab-space-6)';
       this.element.append(this.#tail.root);
-      this.#observer?.observe(this.#tail.root);
     }
     const turns = snapshot.turns.filter((t) => this.#pending.has(t.id)).map(streamedTurn);
     this.#tail.view.render({ ...snapshot, turns }, null, inline);
@@ -120,6 +131,7 @@ export class ScrollFollow {
 
   get questionHost() { return this.#pending.size ? this.#tail?.root : null; }
   get hosted() { return this.#pending.size > 0 && this.#tail?.view.hosted; }
+  get deferred() { return this.#pending.size > 0; }
 
   place(slot, host) {
     if (slot.parentNode === host) { return; }
@@ -133,30 +145,44 @@ export class ScrollFollow {
     }
   }
 
-  after(top) {
-    if (!this.visible() || this.#app) { return; }
-    if (!this.following || this.canFollow()) {
-      const to = this.following ? this.element.scrollHeight : top;
-      if (this.element.scrollTop !== Math.min(to, Math.max(0, this.element.scrollHeight - this.element.clientHeight))) {
+  after(arrived = true) {
+    if (!this.visible()) { return; }
+    this.#observe();
+    if (this.#app?.active) { return; }
+    if (this.following && arrived && this.canFollow(this.#app !== null)) {
+      const to = this.element.scrollHeight;
+      if (this.element.scrollTop !== Math.max(0, to - this.element.clientHeight)) {
         this.scroll(() => { this.element.scrollTop = to; });
       }
     }
     this.remember();
   }
 
-  changed() {
+  changed(entries) {
+    let grew = false;
+    for (const { target, contentRect } of entries) {
+      if (!this.#observed.has(target)) { continue; }
+      grew ||= contentRect.height > (this.#sizes.get(target) ?? 0);
+      this.#sizes.set(target, contentRect.height);
+    }
     this.read();
-    if (this.following) { this.after(this.#top); }
+    if (this.following && grew) { this.after(); }
   }
 
   // A deliberate reveal (for example a question) is not the person's scroll input.
-  appScroll(change) {
-    this.#app = true;
+  appScroll(change, protect = true) {
+    const hold = this.#app = { active: true };
     change();
     this.remember();
+    return () => {
+      if (this.#app !== hold) { return; }
+      hold.active = false;
+      if (!protect) { this.#app = null; }
+      this.remember();
+    };
   }
 
-  resume() { this.#app = false; this.remember(); }
+  resume() { this.#app = null; this.remember(); }
 
   dispose() {
     this.#listeners.abort();
