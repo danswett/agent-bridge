@@ -63,6 +63,7 @@ export class ScrollFollow {
   }
 
   get reading() { return this.following && this.#max - this.#top <= BOTTOM_TOLERANCE_PX; }
+  get canPin() { return this.following && !this.#app?.active && this.canFollow(this.#app !== null); }
 
   #observe() {
     if (!this.#observer) { return; }
@@ -149,7 +150,7 @@ export class ScrollFollow {
     if (!this.visible()) { return; }
     this.#observe();
     if (this.#app?.active) { return; }
-    if (this.following && arrived && this.canFollow(this.#app !== null)) {
+    if (arrived && this.canPin) {
       const to = this.element.scrollHeight;
       if (this.element.scrollTop !== Math.max(0, to - this.element.clientHeight)) {
         this.scroll(() => { this.element.scrollTop = to; });
@@ -159,6 +160,7 @@ export class ScrollFollow {
   }
 
   changed(entries) {
+    if (!this.visible()) { return; }
     let grew = false;
     for (const { target, contentRect } of entries) {
       if (!this.#observed.has(target)) { continue; }

@@ -597,6 +597,20 @@ test('a finger held on the conversation keeps it where it is when a question arr
   await expect(v.locator('.question-slot .question')).not.toBeInViewport();
 });
 
+test('a response growing with a new question does not bypass a finger holding the conversation', async ({ page }) => {
+  await openDemo(page, { height: 900 });
+  await upsert(page, CODEX, { activity: { response: 'Short.', reasoning: null, userMessage: null, currentTool: null }, question: null, updatedAt: later() });
+  const v = await open(page, CODEX);
+  const scroller = v.locator('.stream-scroll');
+  expect(await scroller.evaluate((el) => el.scrollHeight <= el.clientHeight)).toBe(true);
+  await scroller.evaluate((el) => el.dispatchEvent(new Event('touchstart', { bubbles: true })));
+  const response = Array.from({ length: 60 }, (_, i) => `Held line ${i + 1}.`).join('\n\n');
+  await upsert(page, CODEX, { activity: { response }, question: { id: 'q-held-growth', kind: 'form', message: 'Carry on?', askedAt: later(), fields: [] }, updatedAt: later(3000) });
+  await expect(scroller).toContainText('Held line 60.');
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  expect(await scroller.evaluate((el) => el.scrollTop)).toBe(0);
+});
+
 test('a question that arrives with a longer response is brought into sight below all of it', async ({ page }) => {
   await openDemo(page, { height: 900 });
   await upsert(page, CODEX, { activity: { response: 'Short.', userMessage: null, reasoning: null, currentTool: null }, question: null, updatedAt: later() });

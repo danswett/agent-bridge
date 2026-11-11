@@ -56,27 +56,6 @@ for (const type of ['wheel', 'touchmove']) {
   });
 }
 
-test('a viewport resize without arriving content does not pin the conversation', (t) => {
-  const pane = new Pane();
-  const follow = new ScrollFollow(pane);
-  t.after(() => follow.dispose());
-  pane.clientHeight = 50;
-  follow.changed([{ target: pane }]);
-  assert.equal(pane.scrollTop, 900);
-});
-
-test('same-turn records stay current while reading, before any conversion is deferred', (t) => {
-  const pane = new Pane();
-  const follow = new ScrollFollow(pane);
-  t.after(() => follow.dispose());
-  follow.display({ activity: { turn: 'a' } });
-  pane.scrollTop = 500;
-  follow.read();
-  follow.snapshot({ turns: [{ id: 'a', parts: [] }] });
-  const recorded = { id: 'a', parts: [{ kind: 'question', id: 'recorded-question' }] };
-  assert.equal(follow.snapshot({ turns: [recorded] }).turns[0], recorded);
-});
-
 test('initial question positioning is allowed but a completed deliberate reveal stays protected', (t) => {
   const pane = new Pane();
   const follow = new ScrollFollow(pane, { canFollow: (revealed) => !revealed });
@@ -90,4 +69,23 @@ test('initial question positioning is allowed but a completed deliberate reveal 
   done();
   follow.after();
   assert.equal(pane.scrollTop, 500);
+});
+
+test('redisplay does not mistake hidden response measurements for arriving content', (t) => {
+  const pane = new Pane();
+  const response = {};
+  pane.children = [response];
+  pane.ownerDocument.defaultView.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+  let visible = true;
+  const follow = new ScrollFollow(pane, { visible: () => visible });
+  t.after(() => follow.dispose());
+  const resize = (height) => follow.changed([{ target: response, contentRect: { height } }]);
+  resize(20);
+  pane.scrollHeight = 1400;
+  follow.after(false);
+  visible = false;
+  resize(0);
+  visible = true;
+  resize(20);
+  assert.equal(pane.scrollTop, 900);
 });

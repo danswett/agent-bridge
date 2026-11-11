@@ -668,7 +668,7 @@ export class SessionCard {
       const sc = this.els.scroll;
       const before = sc.scrollHeight;
       const was = sc.scrollTop;
-      const follow = this.#sticking();
+      const follow = this.#sticking() && this.#follow.canPin;
       change();
       const grew = sc.scrollHeight - before;
       if (grew > 0) {
@@ -737,7 +737,7 @@ export class SessionCard {
       content: () => e.scroll.querySelectorAll('.response, .history-reply, .history-prompt, .history-tool, .user-message .bubble, .prompt-preview, .tool-line'),
       scroll: (fn) => this.collapse ? this.collapse.appScroll(fn) : fn(),
       visible: () => this.viewing() && e.scroll.getClientRects().length > 0,
-      canFollow: (revealed) => !this.#s?.question || !revealed,
+      canFollow: (revealed) => !this.#s?.question || (!revealed && !this.#touches && !this.#pressing && !this.#hovering),
       canDefer: () => !!this.historyStore && (!e.user.hidden || !e.prompt.hidden || !e.agentBlock.hidden),
       onFollow: () => this.update(this.#s),
     });
