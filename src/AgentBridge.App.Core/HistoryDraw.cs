@@ -16,7 +16,7 @@ public sealed record HistoryRow(string Id, HistoryDisclosure? Disclosure, string
 
 // A message's time as drawn, and its exact local time with seconds: what a tap, hover or focus
 // reveals, and the accessible name (fixed, so a screen reader never hears it tick).
-public sealed record MessageStamp(string Text, string Exact);
+public sealed record MessageStamp(string Text, string Exact, DateTimeOffset At);
 
 public sealed record HistoryTimes(MessageStamp? Prompt, MessageStamp? Reply);
 // A prompt the person didn't type, collapsed as the live card's is (#1611): its origin line and one
