@@ -24,6 +24,79 @@ test.afterEach(async ({ page }) => {
   expect(await page.evaluate(() => window.__cspViolations ?? [])).toEqual([]);
 });
 
+for (const hasTouch of [false, true]) {
+  test.describe(`icon-only New session with ${hasTouch ? 'touch' : 'a pointer'}`, () => {
+    test.use({ hasTouch });
+
+    async function checkHeader(page, fullSort) {
+      const fresh = page.locator('.new-session');
+      await expect(fresh).toHaveText('');
+      await expect(fresh).toHaveAccessibleName('New session');
+      await expect(fresh).toHaveAttribute('title', 'New session');
+      await expect(fresh).toHaveAttribute('href', '#/launch');
+      const touchOnly = await page.evaluate(() => matchMedia('(pointer: coarse) and (not (any-pointer: fine))').matches);
+      const size = touchOnly ? 44 : 32;
+      const box = await fresh.boundingBox();
+      expect(box.width).toBe(size);
+      expect(box.height).toBe(size);
+      const glyph = await fresh.locator('svg').boundingBox();
+      expect(glyph.width).toBe(20);
+      expect(glyph.height).toBe(20);
+      const sort = page.locator('#session-sort');
+      for (const value of ['yours', 'recent', 'machine']) {
+        await sort.selectOption(value);
+        const fit = await sort.evaluate((el) => {
+          const probe = el.cloneNode(false);
+          probe.append(el.selectedOptions[0].cloneNode(true));
+          Object.assign(probe.style, { position: 'absolute', width: 'auto', maxWidth: 'none', visibility: 'hidden' });
+          el.parentElement.append(probe);
+          const needed = probe.getBoundingClientRect().width;
+          probe.remove();
+          return { width: el.getBoundingClientRect().width, needed, scroll: el.scrollWidth, client: el.clientWidth };
+        });
+        if (fullSort) {
+          expect(fit.width).toBeGreaterThanOrEqual(fit.needed);
+          expect(fit.scroll).toBeLessThanOrEqual(fit.client);
+        }
+      }
+      const head = await page.locator('.sessions-head').boundingBox();
+      const current = await fresh.boundingBox();
+      expect(current.x + current.width).toBeLessThanOrEqual(head.x + head.width + 0.5);
+      const sortBox = await sort.boundingBox();
+      expect(sortBox.x + sortBox.width).toBeLessThanOrEqual(current.x);
+    }
+
+    for (const width of [264, 320, 390, 760, 1024]) {
+      test(`a ${width} px list header preserves New and the sort label`, async ({ page }) => {
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await openDemo(page);
+        await page.locator('.sessions-head').evaluate((el, width) => {
+          el.style.width = `${width}px`;
+        }, width);
+        expect((await page.locator('.sessions-head').boundingBox()).width).toBeCloseTo(width, 0);
+        await checkHeader(page, width >= 320);
+      });
+    }
+
+    for (const width of [320, 390, 760, 1024]) {
+      test(`the ${width} px window preserves New and Sort with 83 sessions`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 900 });
+        await openDemo(page, '&machines=3');
+        await page.evaluate(() => {
+          const demo = window.agentBridgeDemo;
+          const sample = demo.store.list()[0].session;
+          for (let i = demo.store.list().length; i < 83; i++) {
+            demo.upsert({ ...sample, id: `header-session-${i}`, title: `Session ${i}`, question: null });
+          }
+        });
+        await expect(page.locator('#session-list > .session')).toHaveCount(83);
+        const head = await page.locator('.sessions-head').boundingBox();
+        await checkHeader(page, head.width >= 320 || width >= 1024);
+      });
+    }
+  });
+}
+
 for (const width of [900, 1440]) {
   test.describe(`at ${width} px`, () => {
     test.use({ viewport: { width, height: 900 } });
