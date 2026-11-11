@@ -55,7 +55,8 @@ for (const [layout, viewport] of [
       if (layout === 'iPad') {
         expect(box.width).toBe(340);
         const anchor = await page.locator('#session-sort').boundingBox();
-        expect(box.x).toBeGreaterThanOrEqual(anchor.x + anchor.width);
+        const gap = box.x >= anchor.x + anchor.width ? box.x - anchor.x - anchor.width : anchor.x - box.x - box.width;
+        expect(gap).toBeCloseTo(12, 0);
       }
       expect(await dialog.evaluate((el) => parseFloat(getComputedStyle(el).paddingBottom))).toBe(50);
       const body = dialog.locator('.sg-sheet-body');
@@ -101,6 +102,23 @@ for (const [layout, viewport] of [
       await expect(body).toBeFocused();
       await page.keyboard.press('PageDown');
       await expect.poll(() => body.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+    });
+
+    test('an empty content element never adds a blank focus stop in either direction', async ({ page }) => {
+      await page.evaluate(async () => {
+        const { openSheet } = await import('./js/ui/sheet.js');
+        const keep = document.createElement('button');
+        keep.textContent = 'Keep group';
+        window.sheet = openSheet({
+          title: 'Delete group?', kind: 'alert', cancelLabel: null,
+          content: document.createElement('div'), footer: keep, initialFocus: keep,
+        });
+      });
+      const keep = page.getByRole('button', { name: 'Keep group' });
+      for (const key of ['Tab', 'Shift+Tab', 'Tab']) {
+        await page.keyboard.press(key);
+        await expect(keep).toBeFocused();
+      }
     });
 
     test('form, menu and alert choose their layout and an alert can focus its safe action', async ({ page }) => {

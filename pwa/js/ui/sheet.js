@@ -10,12 +10,14 @@ export function openSheet({ title, content = null, footer = null, kind = 'sheet'
   const id = `sg-sheet-${++nextSheet}`;
   const back = document.activeElement;
   const cancel = cancelLabel ? h('button', { type: 'button', class: 'sg-sheet-cancel' }, cancelLabel) : null;
+  const body = h('div', { class: 'sg-sheet-body', tabindex: '-1', role: 'region', 'aria-labelledby': id }, content);
+  const updateBodyFocus = () => { body.tabIndex = body.scrollHeight > body.clientHeight ? 0 : -1; };
   const dialog = h('dialog', {
     class: 'sg-sheet', tabindex: '-1', role: kind === 'alert' ? 'alertdialog' : 'dialog',
     'aria-modal': 'true', 'aria-labelledby': id, dataset: { kind, anchored: String(!!anchor) },
   },
   h('header', { class: 'sg-sheet-head' }, h('h2', { id }, title), cancel),
-  h('div', { class: 'sg-sheet-body', tabindex: '0', role: 'region', 'aria-labelledby': id }, content),
+  body,
   footer ? h('footer', { class: 'sg-sheet-foot' }, footer) : null);
   const listeners = new AbortController();
   const { signal } = listeners;
@@ -38,6 +40,7 @@ export function openSheet({ title, content = null, footer = null, kind = 'sheet'
   dialog.addEventListener('close', close, { signal });
   dialog.addEventListener('keydown', (e) => {
     if (e.key !== 'Tab') { return; }
+    updateBodyFocus();
     const items = [...dialog.querySelectorAll('button, [href], input, select, textarea, [tabindex]')]
       .filter((el) => el.tabIndex >= 0 && !el.matches(':disabled') && !el.closest('[inert]')
         && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden');
@@ -57,6 +60,7 @@ export function openSheet({ title, content = null, footer = null, kind = 'sheet'
     dialog.style.setProperty('--sheet-view-top', `${top}px`);
     dialog.style.setProperty('--sheet-view-height', `${height}px`);
     dialog.style.setProperty('--sheet-bottom', `${Math.max(0, win.innerHeight - height - top)}px`);
+    updateBodyFocus();
     if (!anchor || !win.matchMedia('(min-width: 760px)').matches || !['sheet', 'menu'].includes(kind)) { return; }
     const r = anchor.getBoundingClientRect();
     const box = dialog.getBoundingClientRect();
