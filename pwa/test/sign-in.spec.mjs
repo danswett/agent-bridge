@@ -901,7 +901,7 @@ test('the banner\'s and the sheet\'s names are the words shown, and a tap draws 
 // title focused), a sign-in under way from another
 // device (Show code, the sheet closed), the sheet with its code and the banner behind it, Failed,
 // an expired code, and signed in waiting for the sessions to confirm. Each is checked to be what it
-// says before it is taken, and attached to the test's results (CI keeps them as pwa-captures). In
+// says before it is taken, and attached to the test's results (CI keeps them as pwa-captures-*). In
 // Chromium: WebKit draws a screenshot with a style the CSP refuses, and the states are proven in
 // every browser above.
 async function capture(locator, name, testInfo) {
