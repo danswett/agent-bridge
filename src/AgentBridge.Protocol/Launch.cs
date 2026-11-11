@@ -41,6 +41,7 @@ public static partial class LaunchProtocol
     // the values name something this machine offers is the host's (launch.options).
     public static string? Check(LaunchRequest launch)
     {
+        if (launch.FleetName is not null && (launch.Resume is not null || launch.Transfer is not null)) { return "fleetName is only for a new session"; }
         if (launch.Agent is { } agent && !Agents.Contains(agent, StringComparer.Ordinal)) { return $"unknown agent '{Cut(agent)}'; this protocol launches {string.Join(", ", Agents)}"; }
         foreach (var (name, value) in new[] { ("workspace", launch.Workspace), ("resume", launch.Resume), ("profile", launch.Profile), ("model", launch.Model), ("effort", launch.Effort), ("context", launch.Context) })
         {
@@ -124,6 +125,7 @@ public sealed record LaunchRequest
     public string? Agent { get; init; }
     public string? Workspace { get; init; }
     public string? Resume { get; init; }
+    public string? FleetName { get; init; }
     public string? Profile { get; init; }
     public string? Model { get; init; }
     public string? Effort { get; init; }

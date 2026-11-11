@@ -292,7 +292,7 @@ from, who can set one, and how it is marked.
   prompt, which this note cannot rule out; the first user message is the other fallback
   (`SessionTracker.cs:304-309`, v1-sessions.md:1725), and the HA folder-leaf name is no better
   (`HaPayloads.cs:50-54`). So the host publishes only a **fleet name that a person set on
-  purpose**: a host setting in the host's own state (a rename in the app or the host CLI), keyed
+  purpose** (or the fixed launch rule below): a host setting in the host's own state, keyed
   by session id, never read from a transcript, `workspace.yaml` or a folder. A session with no
   fleet name is listed without one. Slice 3b builds the setting; until it exists no name is
   published and lookup by name returns `notFound`.
@@ -302,13 +302,13 @@ from, who can set one, and how it is marked.
   for this op (local-pipe.md:103); an agent session or any untraced process is refused like other
   acting ops (local-pipe.md:101, 104). The Windows app (slice 7) carries the rename entry point and
   the host CLI a `rename` command; the Mac and iOS apps and the PWA are not app callers
-  (local-pipe.md:102) and cannot set names. The same name can be given at launch (an optional
-  `fleetName` on `session.launch`). `session.launch` **refuses** a request carrying `fleetName`
-  (readable reason, no session started, never silently dropped) unless the caller is the app or
-  the host CLI. That covers the MCP `launch_agent_session` tool (local-pipe.md:218-219), agents
-  that hold a launch scope, and launches arriving over the phone or PWA channel; a channel launch
-  with `fleetName` is refused the same way. A person who wants names on a fleet of launched
-  sessions sets them there, not through the agents. The setting is stored in the host's state
+  (local-pipe.md:102) and cannot rename sessions. The owner-approved launch exception accepts
+  explicit `fleetName` only for a new host-created session: `SG ` plus one of `Chief of Staff`,
+  `Engineering Lead`, `Quality Lead`, `Product Lead`, `Creative Lead`, `Migration Lead`, `SRE Lead`,
+  `Reviewer [A-Z]`, or `(Builder|Worker) [0-9]{1,4}` (exact, ASCII). Live local/readable account matches
+  are refused; in-flight names stay reserved through late registration. The host logs only name,
+  new session id and caller. Agent rename/self-launch refusals remain. Fresh `fleetNames.launchRule`
+  in config defaults on when absent; off/invalid/unreadable refuses (App setter: #1832). Names are stored
   beside its other settings, keyed by session id, so it is as strong as the host's state-file
   protection: a same-user process that can write that file can change it (the pipe's agent rail
   is a safety rail, not a boundary, local-pipe.md:168). It is not an agent-writable path, but it
@@ -509,7 +509,7 @@ first draft of this note.
 | 2a | #1400 part one, relay: allow-list, host-only put, in-memory registry, `registry-get` paged one machine per frame, size and rate refusals | L* | 1 | Allow-list pin (seeded prompt, path and token never appear); other account never sees it; not in blob, log or metrics; unknown member refused; over 16 KiB refused with the socket open; a 64-machine-equivalent get never builds a frame over 24 KiB; stale `seq` and old epoch refused |
 | 2b | #1400 part two, relay: `registry-subscribe` and `registry-changed`, same-account fan-out, offline within 60 s, forgotten machines dropped | M* | 2a | Offline within 60 s with the clock faked; fan-out stays in the account; count equals the host's; forgotten machine's record gone |
 | 3a | Host publisher: debounce, heartbeat, epoch and seq, truncation with `total`, per-machine off switch | L* | 1 | Debounce and heartbeat timing with a fake clock; restart gives a new epoch that readers accept; 65 sessions give 64 and `truncated`; off switch sends an empty list |
-| 3b | Host fleet-name setting: `session.rename` pipe op (app, and host CLI; never agents), launch-time `fleetName` (refused from agent, MCP and channel callers), host-state storage, resume carry-over, host CLI `rename` command, ASCII filter, signing hook that stays off until `hostSign` | L* | 3a | Name filter table; a seeded prompt, a seeded Claude `aiTitle`, a seeded `workspace.yaml` name and a seeded folder name never appear; no setting means no name; agents and untraced callers refused the rename; `fleetName` on `session.launch` refused from an agent, the MCP tool and the channel; name kept across a linked resume and dropped otherwise; records carry no `sig` until `hostSign`, and verify against the vectors once it exists |
+| 3b | Host fleet-name setting: `session.rename` pipe op (app, and host CLI; never agents), launch-time `fleetName` (fixed SG list, new host-created sessions only; agent self-launch refused), host-state storage, resume carry-over, host CLI `rename` command, ASCII filter, signing hook that stays off until `hostSign` | L* | 3a | Name filter table; a seeded prompt, a seeded Claude `aiTitle`, a seeded `workspace.yaml` name and a seeded folder name never appear; no setting means no name; agents and untraced callers refused the rename; fixed-list `fleetName` accepted on new host-created channel launches; outside-list names, resume/transfer naming and agent self-launch refused; name kept across a linked resume and dropped otherwise; records carry no `sig` until `hostSign`, and verify against the vectors once it exists |
 | RC | **Reader core** in the host (C#) and the shared test vectors: host as a registry client (`registry-get`, `registry-subscribe`, `removed` handling), 60 s liveness, epoch/seq/at order, 24 h cache and revocation purge, signature and roster-key check once `hostSign` exists | M* | 1, 2b | Fake clock for liveness; old epoch and replayed `seq` refused; restart accepted; a forgotten machine that reconnects with its old epoch and a higher `seq` accepted after `removed`; cache purged on `removed` and on a get that omits the machine; unsigned record never `verified`; shared vectors replay the same in every client; PWA and Apple readers are in slices 6 and 8 |
 | 4 | #1412 agent op `fleet.list` on the pipe, scope check, in-session allow-list entry (typed forms only for callers without `agent.hello`; `include: "content"` needs `agent.hello`), MCP tool (after the #1401 audit log) | L | RC, 3a, #1401 | No read scope refused with a readable reason; only own account; allow-list pinned; an unattributed pipe caller is refused `include: "content"`; no `name` unless `include: "content"`, which taints; audited with the agent principal; works from the cached snapshot (marked stale) |
 | 5 | #1399 `fleet.find`: all seven results in the stated precedence, `found` only with the caller's `machine`, `unpinned` answer, 24 h cache, shadow check | M* | 4 | Found only from one verified live match on the given `machine`; a name alone gives `unpinned`; an impostor beside an offline original, and with no cache of the original, never gives `found`; precedence table cases (two unverified live matches give `unverified`; one verified plus one unverified live match gives `unverified`, with and without `machine`; truncated plus a verified match gives `incomplete`); no `node` in `unverified`, `unpinned` or `incomplete`; unsigned and other-account refused; the name is never echoed; a script checks names a person set with `session.rename` on all four machines with HA blocked (current `SG <role>` sessions get no name until a person sets one) |
@@ -544,8 +544,9 @@ review. Android waits on its client; a Linux client follows the same vectors.
    host setting (proposed `fleet.share`) that sends an empty list. A machine that is off shows
    as online with no sessions, not as missing.
 3. **Names are untrusted display text** (Engineering, Trust). Recommended: a name is published only
-   if a person set it on the host on purpose (`session.rename` or a launch-time `fleetName`, app
-   and host CLI callers only, stored in host state, no agent path); never read from a transcript (Claude `aiTitle` is
+   if a person set it on the host on purpose (`session.rename`, app and host CLI only), or a launch-time
+   `fleetName` matches the fixed SG list for a new host-created session (agents still cannot self-launch).
+   Stored in host state, never read from a transcript (Claude `aiTitle` is
    model-written), `workspace.yaml` (Copilot may fill it from the first prompt), prompt or folder;
    ASCII filter; agents get typed fields from `fleet.find` and `fleet.list`, and names only on
    `include: "content"` after `agent.hello`, which taints. Alternative: never give agents names.

@@ -98,6 +98,7 @@ Request `data`:
 | `agent` | A launcher `id` from `launch.options`. Absent: the machine's default; for a resume, the launcher the session lists |
 | `workspace` | A workspace `label`. Absent: the machine's default. Not with `resume` |
 | `resume` | A `resumable` session's `id`, to reopen it in its own folder, instead of starting a new one |
+| `fleetName` | Optional exact name from the fixed SG launch list ([Names](../design/fleet-session-registry.md#names)), only for a new host-created session, never `resume` or `transfer`. Outside-list names, live duplicates or a disabled/unreadable launch rule are refused before starting. Names grant no trust or routing authority |
 | `transfer` | With `sessions.transfer`: `{ from, session, command }`, a session from another machine of the account, brought here and resumed under a new id in `workspace`, which it then requires ([v1-transfer.md](v1-transfer.md)). Not with `resume` |
 | `profile` | Agency only: one of its `profiles`. Absent: its default |
 | `model`, `effort`, `context` | One of the agent's values, or `""` for the agent's own default over the machine's. Absent: the machine's default (`agents[].defaults`) |

@@ -150,6 +150,18 @@ public sealed class FleetNamesTests : IAsyncLifetime
     }
 
     [Fact]
+    public void App_config_edits_preserve_the_unknown_launch_name_off_switch()
+    {
+        var path = Path.Combine(fixture.Root, HostSettings.FileName);
+        File.WriteAllText(path, """{"version":1,"fleetNames":{"launchRule":"off","future":true},"future":{"keep":7}}""");
+        HostConfigFile.Patch(fixture.Root, remoteApproval: false, name: "Fixture", remoteFolderTrust: false);
+        using var saved = JsonDocument.Parse(File.ReadAllText(path));
+        Assert.Equal("off", saved.RootElement.GetProperty("fleetNames").GetProperty("launchRule").GetString());
+        Assert.True(saved.RootElement.GetProperty("fleetNames").GetProperty("future").GetBoolean());
+        Assert.Equal(7, saved.RootElement.GetProperty("future").GetProperty("keep").GetInt32());
+    }
+
+    [Fact]
     public async Task Unreadable_host_name_state_is_not_treated_as_an_empty_store()
     {
         await CallAsync(new { id = Id, name = "Original" });

@@ -310,7 +310,7 @@ public sealed class FleetPublisherTests
     }
 
     static string[] Fields(JsonElement e) => e.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal).ToArray();
-    static Session NewSession(int i) => new()
+    internal static Session NewSession(int i) => new()
     {
         Id = i.ToString("x16") + i.ToString("x16"), Agent = AgentKind.Copilot, Status = SessionStatus.Idle,
         StatusSince = Fixture.T0.AddSeconds(i), UpdatedAt = Fixture.T0,
@@ -318,7 +318,7 @@ public sealed class FleetPublisherTests
         Activity = new Activity { Response = "private transcript", UserMessage = "private prompt" },
     };
 
-    sealed class Source : ISessionSource
+    internal sealed class Source : ISessionSource
     {
         public List<Session> Sessions = Enumerable.Range(1, 3).Select(NewSession).ToList();
         public DiscoveryHeld? Held { get; set; }
