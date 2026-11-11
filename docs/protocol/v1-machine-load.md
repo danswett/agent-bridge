@@ -6,6 +6,10 @@ session process trees and headroom) must publish, what a session move carries an
 and rules as [v1-sessions.md](v1-sessions.md). Load records live in
 `src/AgentBridge.Protocol/MachineLoad.cs`; `vectors/machine-load.json` is generated through
 `ProtocolVectors.cs`, as for the other files ([vectors/README.md](vectors/README.md)).
+`Host.Core/Load/MachineLoadMapper.cs` maps sampler reports to these records, including
+Windows/Linux physical memory totals, writer-domain checks and the 64 KiB limit.
+Unknown agent kinds are `other`; handles and unattributed counts remain absent because
+the sampler does not measure them. This mapper does not register handlers or enable a host.
 
 Counts and sizes only. Nothing here carries a path, command line, PID, prompt, transcript or
 credential. Numerical machine totals and per-session figures were

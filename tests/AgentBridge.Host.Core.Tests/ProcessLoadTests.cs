@@ -41,7 +41,7 @@ public class ProcessLoadTests
         public readonly Table Table = new();
         public readonly Sessions Source = new();
         public readonly ProcessLoadSampler Sampler;
-        public Rig(int processors = 4, Func<int?>? runQueue = null) => Sampler = new ProcessLoadSampler(Source, Table, Time, processors, () => 8192 * Mib, runQueue: runQueue ?? (() => null));
+        public Rig(int processors = 4, Func<int?>? runQueue = null) => Sampler = new ProcessLoadSampler(Source, Table, Time, processors, () => 8192 * Mib, runQueue: runQueue ?? (() => null), totalMemory: () => 16384 * Mib);
         public void Bind(string id, int pid, DateTimeOffset? start = null) => Source.Roots[id] = new SessionProcess(pid, start ?? T0);
         public ProcessLoadReport Tick(int seconds = 5) { Time.Advance(TimeSpan.FromSeconds(seconds)); return Sampler.Sample(); }
     }
@@ -286,6 +286,7 @@ public class ProcessLoadTests
         Assert.Equal(4, machine.Processors);
         Assert.Equal(100.0, machine.CpuPercent);
         Assert.Equal(8192 * Mib, machine.AvailableMemoryBytes);
+        Assert.Equal(16384 * Mib, machine.TotalMemoryBytes);
     }
 
     [Fact]

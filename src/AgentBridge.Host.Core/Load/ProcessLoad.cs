@@ -37,7 +37,8 @@ public sealed record SessionLoad(LoadState State, int Processes, double? CpuPerc
 // highest single CPU sample, and the Processor Queue Length now, its mean and its highest. Null
 // is unknown, never 0.
 public sealed record MachineLoad(int Processors, double? CpuPercent, long? AvailableMemoryBytes,
-    double? WindowCpuMean = null, double? WindowCpuPeak = null, int? RunQueue = null, double? RunQueueAvg = null, int? RunQueueMax = null);
+    double? WindowCpuMean = null, double? WindowCpuPeak = null, int? RunQueue = null, double? RunQueueAvg = null, int? RunQueueMax = null,
+    long? TotalMemoryBytes = null);
 
 // SampledAt is when the snapshot was taken; a consumer compares it to its own clock for the age.
 public sealed record ProcessLoadReport(DateTimeOffset SampledAt, MachineLoad Machine, IReadOnlyDictionary<string, SessionLoad> Sessions);
@@ -56,6 +57,7 @@ public sealed class ProcessLoadSampler : IAsyncDisposable
     readonly TimeProvider time;
     readonly int processors;
     readonly Func<long?> availableMemory;
+    readonly Func<long?> totalMemory;
     readonly TimeSpan interval;
     readonly Func<int?> runQueue;
     readonly object gate = new();
@@ -69,7 +71,7 @@ public sealed class ProcessLoadSampler : IAsyncDisposable
     Task? loop;
 
     public ProcessLoadSampler(ISessionSource source, IProcessTable table, TimeProvider? time = null, int? processors = null,
-        Func<long?>? availableMemory = null, TimeSpan? interval = null, Func<int?>? runQueue = null)
+        Func<long?>? availableMemory = null, TimeSpan? interval = null, Func<int?>? runQueue = null, Func<long?>? totalMemory = null)
     {
         this.runQueue = runQueue ?? SystemRunQueue.Read;
         this.source = source;
@@ -77,6 +79,7 @@ public sealed class ProcessLoadSampler : IAsyncDisposable
         this.time = time ?? TimeProvider.System;
         this.processors = Math.Max(1, processors ?? Environment.ProcessorCount);
         this.availableMemory = availableMemory ?? SystemMemory.Available;
+        this.totalMemory = totalMemory ?? SystemMemory.Total;
         this.interval = interval ?? DefaultInterval;
     }
 
@@ -192,7 +195,7 @@ public sealed class ProcessLoadSampler : IAsyncDisposable
         var queues = window.Where(w => w.Queue is not null).Select(w => w.Queue!.Value).ToList();
         return new MachineLoad(processors, cpu, memory,
             cpus.Count > 0 ? Math.Round(cpus.Average(), 1) : null, cpus.Count > 0 ? cpus.Max() : null,
-            queue, queues.Count > 0 ? Math.Round(queues.Average(), 1) : null, queues.Count > 0 ? queues.Max() : null);
+            queue, queues.Count > 0 ? Math.Round(queues.Average(), 1) : null, queues.Count > 0 ? queues.Max() : null, totalMemory());
     }
 
     static bool Reused(ProcessReading parent, ProcessReading child) =>
@@ -364,20 +367,23 @@ static class SystemMemory
 {
     // Free physical memory now (Windows: GlobalMemoryStatusEx; Linux: MemAvailable), or null where
     // the OS will not say. The runtime's own figure is only as fresh as its last collection.
-    public static long? Available()
+    public static long? Available() => Read(total: false);
+    public static long? Total() => Read(total: true);
+
+    static long? Read(bool total)
     {
         try
         {
             if (OperatingSystem.IsWindows())
             {
                 var status = new MemoryStatus { Length = (uint)Marshal.SizeOf<MemoryStatus>() };
-                return GlobalMemoryStatusEx(ref status) ? (long)status.AvailablePhysical : null;
+                return GlobalMemoryStatusEx(ref status) ? (long)(total ? status.TotalPhysical : status.AvailablePhysical) : null;
             }
             if (OperatingSystem.IsLinux())
             {
                 foreach (var line in File.ReadLines("/proc/meminfo"))
                 {
-                    if (!line.StartsWith("MemAvailable:", StringComparison.Ordinal)) { continue; }
+                    if (!line.StartsWith(total ? "MemTotal:" : "MemAvailable:", StringComparison.Ordinal)) { continue; }
                     var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                     return parts.Length >= 2 && long.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var kib) ? kib * 1024 : null;
                 }
