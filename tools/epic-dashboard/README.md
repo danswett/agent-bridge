@@ -1,6 +1,9 @@
 # Epic dashboard (#756, part 1)
 
-[Epic dashboard](../../.github/workflows/epic-dashboard.yml) checks hourly at minute 23,
+The hourly workflow was retired in this PR (#1971); the generator and its tests remain.
+See https://roadmap.slipgates.com; the workflow and setup notes below are historical.
+
+Epic dashboard checked hourly at minute 23,
 on issue close/reopen, on main-push CI completion, and on manual dispatch. Only `main` in
 `danswett/agent-bridge` may run either job. Concurrent events coalesce. It rewrites only
 [#755's body](https://github.com/danswett/agent-bridge/issues/755), never comments or Project
