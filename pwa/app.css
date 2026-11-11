@@ -536,7 +536,8 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 /* The tile (#1147): the same sections in the same order on every width. */
 .machine-summary { margin: 0 0 var(--ab-space-3); color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-meta-line); }
 .machine-tile { display: grid; gap: var(--ab-space-2); padding: 0 var(--ab-space-3) var(--ab-space-3) calc(var(--ab-space-3) + 20px + var(--ab-space-3)); }
-.machine-tile > p, .tile-actions-note { margin: 0; font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
+.machine-tile > p, .tile-actions-note, .tile-health { margin: 0; font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
+.tile-health-icon { margin-inline-end: var(--ab-space-2); }
 .tile-label { font-weight: 600; color: var(--ab-text); }
 .tile-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ab-space-2); }
 .tile-actions .button { min-height: var(--tap); }
