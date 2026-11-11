@@ -180,6 +180,67 @@ test.describe('load bars', () => {
   }
 });
 
+test.describe('one truthful update line', () => {
+  test.use({ timezoneId: 'America/Los_Angeles' });
+  const now = new Date('2026-11-10T17:40:00Z');
+  const refused = "the release feed's rate limit refused the check (rate limit exceeded; check again after 9:46 AM); checking again after 9:46 AM";
+  const update = (page) => page.locator('#machine-list [data-device-id="demo"] .machine-update');
+  async function show(page, change) {
+    await page.clock.setFixedTime(now);
+    await page.goto('?demo=1&static=1&updates=1&updateNow=1#/machines');
+    await page.waitForSelector('html[data-demo-ready]');
+    await page.evaluate((c) => window.agentBridgeDemo.setUpdate({
+      ...window.agentBridgeDemo.host.update, current: '0.1.4415', available: null,
+      checkedAt: '2026-11-10T17:12:00Z', last: null, ...c,
+    }), change);
+  }
+
+  for (const outcome of ['failed', 'refused']) {
+    test(`a current machine with a ${outcome} release check shows the retry time once and no failure`, async ({ page }) => {
+      await show(page, { last: { outcome, reason: refused, at: now.toISOString() } });
+      const block = update(page);
+      await expect(block.locator('.machine-update-line')).toHaveText('Up to date (0.1.4415). Next check 9:46 AM.');
+      await expect(block.locator('p')).toHaveCount(1);
+      await expect(block).not.toContainText(/failed|refused|checked/i);
+      expect((await block.innerText()).match(/9:46 AM/g)).toHaveLength(1);
+      await expect(block.locator('button')).toHaveCount(0);
+      await block.getByRole('link', { name: 'Check now' }).click();
+      await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.check']);
+    });
+  }
+
+  test('a behind machine with a failed release check offers only Check now', async ({ page }) => {
+    await show(page, { available: '0.1.4448', last: { outcome: 'failed', reason: refused, at: now.toISOString() } });
+    const block = update(page);
+    await expect(block.locator('.machine-update-line')).toHaveText('Update available, but the check failed. Next try 9:46 AM.');
+    await expect(block.locator('p')).toHaveCount(1);
+    await expect(block).not.toContainText('Up to date');
+    expect((await block.innerText()).match(/9:46 AM/g)).toHaveLength(1);
+    await expect(block.getByRole('button')).toHaveCount(1);
+    await expect(block.getByRole('button', { name: 'Check now' })).toHaveClass(/\bprimary\b/);
+    await block.getByRole('button', { name: 'Check now' }).click();
+    await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.check']);
+  });
+
+  test('a current machine is quiet until its successful check is over one hour old', async ({ page }) => {
+    await show(page, {});
+    await expect(update(page).locator('p')).toHaveText(['Up to date (0.1.4415)']);
+    await show(page, { checkedAt: '2026-11-10T16:12:00Z' });
+    await expect(update(page).locator('p')).toHaveText(['Up to date (0.1.4415). Last checked 8:12 AM.']);
+  });
+
+  test('a refused first check never claims the machine is current', async ({ page }) => {
+    await show(page, { checkedAt: null, last: { outcome: 'failed', reason: refused, at: now.toISOString() } });
+    await expect(update(page)).not.toContainText('Up to date');
+    await expect(update(page)).toContainText('not checked for updates yet');
+  });
+
+  test('a successful check after a refusal removes the old retry time', async ({ page }) => {
+    await show(page, { last: { outcome: 'failed', reason: refused, at: '2026-11-10T17:00:00Z' } });
+    await expect(update(page).locator('p')).toHaveText(['Up to date (0.1.4415)']);
+  });
+});
+
 test('Launch here, with every machine shown, opens the panel on that machine and launches there, not on the one last used', async ({ page }) => {
   await openDemo(page);
   // The panel starts on the demo machine, so a press that did not move it would launch there.
