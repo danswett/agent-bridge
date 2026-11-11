@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  readUpdateState, readUpdateCommandResult, updateLine, lastLine, canInstall, canCheck, underWay, UpdateControl,
+  readUpdateState, readUpdateCommandResult, updateLine, updateDetails, lastLine, canInstall, canCheck, underWay, UpdateControl,
   canUpdateNow, updateNowReason, notUpdated, nowSheet, acceptOf, quiet, readBusy, nowAnnouncement, RESTARTING, BUSY_MOST,
 } from '../../js/update.js';
 import { signUpdateNow } from '../../js/transfer.js';
@@ -13,6 +13,24 @@ import { fromBase64url } from '../../js/blobs.js';
 
 const NOW = Date.parse('2026-11-02T18:00:00.000Z');
 const found = readUpdateState({ current: '0.4.0', installer: true, available: '0.5.0', checkedAt: '2026-11-02T17:55:00.000Z', phase: 'idle' });
+
+test('discovery quota uses singular for one remaining check and preserves zero and plural wording', () => {
+  for (const [gitHubRemaining, words] of [[0, 'no more checks'], [1, '1 more check'], [2, '2 more checks']]) {
+    const state = { gitHubRemaining, gitHubQuotaAt: '2026-11-02T17:55:00Z' };
+    assert.deepEqual(updateDetails(state, NOW), [`When last asked, GitHub allowed ${words} (5 min ago)`]);
+  }
+});
+
+for (const [minutes, words] of [[0, 'under a minute'], [59, '59 min'], [60, '1 h'], [125, '2 h']]) {
+  test(`discovery list and quota ages read as ${words} after ${minutes} minutes`, () => {
+    const at = new Date(NOW - minutes * 60000).toISOString();
+    const state = { checkSource: 'cdn', checkedAt: at, gitHubRemaining: 2, gitHubQuotaAt: at };
+    assert.deepEqual(updateDetails(state, NOW), [
+      `Update list from the release feed, ${words} old`,
+      `When last asked, GitHub allowed 2 more checks (${words} ago)`,
+    ]);
+  });
+}
 
 test('update discovery keeps the successful source and historical direct quota, including zero', () => {
   for (const remaining of [43, 0]) {
