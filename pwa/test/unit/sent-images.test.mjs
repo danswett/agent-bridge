@@ -3,15 +3,16 @@ import assert from 'node:assert/strict';
 import { SentImages } from '../../js/sent-images.js';
 
 function setup() {
-  let saved, now = 0, account = 'one', refuse = false;
+  const saved = new Map();
+  let now = 0, account = 'one', refuse = false;
   const store = new SentImages({
     account: () => account, now: () => now,
-    get: async () => structuredClone(saved),
-    put: async (_, value) => { if (refuse) { throw new DOMException('private detail', 'QuotaExceededError'); } saved = structuredClone(value); },
-    remove: async () => { saved = undefined; },
+    get: async (key) => structuredClone(saved.get(key)),
+    put: async (key, value) => { if (refuse) { throw new DOMException('private detail', 'QuotaExceededError'); } saved.set(key, structuredClone(value)); },
+    remove: async (key) => { saved.delete(key); },
   });
   const keep = (ref, size = 1, type = 'image/png', seed = 1) => store.remember([{ id: ref, ref }], [{ id: ref, name: 'same.png', type, bytes: new Uint8Array(size).fill(seed) }], account);
-  return { store, keep, saved: () => saved, clock: (v) => { now = v; }, account: (v) => { account = v; }, refuse: () => { refuse = true; } };
+  return { store, keep, saved: () => saved.get('sent-images'), clock: (v) => { now = v; }, account: (v) => { account = v; }, refuse: () => { refuse = true; } };
 }
 
 test('same-name sends bind distinct bytes by exact ref, never filename, on this account only', async () => {
@@ -58,4 +59,15 @@ test('quota refusal leaves a chip, clear deletes bytes, and late outcomes cannot
   s.account('two');
   await s.store.remember([{ id: 'old', ref: 'old' }], [{ id: 'old', type: 'image/png', bytes: new Uint8Array(1) }], 'one');
   assert.equal(await s.store.get('old'), null);
+});
+
+test('a clear in another tab prevents an earlier send from restoring bytes', async () => {
+  const saved = new Map();
+  let queue = Promise.resolve();
+  const options = { account: () => 'one', get: async (key) => saved.get(key), put: async (key, value) => saved.set(key, value), remove: async (key) => saved.delete(key), serial: (task) => { queue = queue.then(task); return queue; } };
+  const a = new SentImages(options), b = new SentImages(options);
+  const stamp = await b.stamp?.();
+  await a.clear();
+  await b.remember([{ id: 'old', ref: 'old' }], [{ id: 'old', type: 'image/png', bytes: new Uint8Array(1) }], 'one', stamp);
+  assert.equal(await b.get('old'), null);
 });

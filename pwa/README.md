@@ -362,6 +362,7 @@ Delivered image attachments can retain a sender-only preview on this device (#18
 The local account's store holds at most 32 raster images, 8 MiB total, for 24 hours;
 sign-out or forgetting a pairing clears it. Missing bytes or reply bindings (including
 Codex and older hosts) leave the named chip. Nothing fetches images from another device.
+Without Web Locks or BroadcastChannel, preview storage is disabled with a fixed console warning and chips remain.
 
 Each session has a reply box, at the foot of its conversation, when the machine's `hello` lists `sessions.reply`: a prompt for
 the session, typed into its input on the machine, whether it is idle or working. Enter is

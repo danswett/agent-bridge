@@ -52,8 +52,15 @@ for (const width of [390, 820]) {
       const other = await browser.newContext(); const otherPage = await other.newPage();
       await otherPage.goto('?demo=1&static=1'); await render(otherPage);
       await expect(otherPage.locator('.test-sent img')).toHaveCount(0); await other.close();
+      const sibling = await page.context().newPage();
+      await sibling.goto('?demo=1&static=1'); await render(sibling);
+      await expect(sibling.locator('.test-sent img')).toHaveCount(2);
+      await sibling.locator('.test-sent button').first().click();
       await page.evaluate(() => { window.revoked = []; const revoke = URL.revokeObjectURL; URL.revokeObjectURL = (url) => { window.revoked.push(url); revoke(url); }; window.testBubble.remove(); });
       await expect.poll(() => page.evaluate(() => window.revoked.length)).toBe(2);
+      await page.evaluate(async () => { const { sentImages } = await import('/js/sent-images.js'); await sentImages.clear(); });
+      await expect(sibling.getByRole('dialog')).toHaveCount(0);
+      await expect(sibling.locator('.test-sent img')).toHaveCount(0); await sibling.close();
     });
   });
   }

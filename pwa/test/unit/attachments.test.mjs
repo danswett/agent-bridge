@@ -114,7 +114,7 @@ test('only delivered attachment bindings retain the bytes this device sent', asy
   for (const outcome of ['delivered', 'refused', 'unconfirmed', 'no-binding', 'signed-out']) {
     const { client } = fakeHost();
     const kept = [];
-    const images = { account: 'account-a', generation: 0, remember: async (...args) => kept.push(args) };
+    const images = { account: 'account-a', generation: 0, stamp: async () => 'stamp', remember: async (...args) => kept.push(args) };
     const service = new ReplyService({ current: () => ({ client, hostId: 'h1' }), images });
     const make = ids();
     const files = await Promise.all([1, 2].map((seed) => prepareAttachment(file(filled(3, seed), 'same.png', 'image/png'), { uuid: make })));
@@ -124,7 +124,7 @@ test('only delivered attachment bindings retain the bytes this device sent', asy
     if (outcome === 'signed-out') { images.generation++; }
     client.replies[0].resolve({ outcome: ['no-binding', 'signed-out'].includes(outcome) ? 'delivered' : outcome, ...(outcome === 'no-binding' ? {} : { attachments: bindings }) });
     await flush();
-    assert.deepEqual(kept, outcome === 'delivered' ? [[bindings, files, 'account-a']] : []);
+    assert.deepEqual(kept, outcome === 'delivered' ? [[bindings, files, 'account-a', 'stamp']] : []);
     service.clear();
   }
 });

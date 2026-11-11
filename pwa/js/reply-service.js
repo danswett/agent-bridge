@@ -34,6 +34,7 @@ export class ReplyService extends AnswerService {
         const files = entry?.answer?.attachments ?? [];
         const images = options.images ?? sentImages, account = images.account;
         const generation = images.generation;
+        const stamp = files.length && account ? await images.stamp?.() : null;
         const abort = new AbortController();
         this.#sending.set(entry.key, abort);
         try {
@@ -51,7 +52,7 @@ export class ReplyService extends AnswerService {
           if (files.length) { progress({ sent: total, total, phase: 'reply' }); }
           // Its files' time is the tap's to sent, not the machine's.
           const result = await client.reply(data, { onProgress: stage, onSent: sent(entry) });
-          if (result.outcome === 'delivered' && result.attachments?.length && images.account === account && images.generation === generation) { await images.remember(result.attachments, files, account); }
+          if (result.outcome === 'delivered' && result.attachments?.length && images.account === account && images.generation === generation) { await images.remember(result.attachments, files, account, stamp); }
           return result;
         } catch (e) {
           if (abort.signal.aborted) { throw Object.assign(new Error(CANCELLED), { fromHost: true, reason: CANCELLED }); }
