@@ -69,6 +69,74 @@ public sealed class FleetListTests : IDisposable
         Assert.Contains("my project", named);
     }
 
+    static IReadOnlyList<FleetMachine> Frames(object? name, bool includeName = true)
+    {
+        var frame = new Dictionary<string, object?>
+        {
+            ["machine"] = "m2", ["online"] = true,
+            ["record"] = new { sessions = new[] { new { id = "s1", node = "n1", name = "my project", state = "working", since = Started } } }
+        };
+        if (includeName) { frame["name"] = name; }
+        return RelayFleetRoster.Parse([JsonSerializer.SerializeToElement(frame)]);
+    }
+
+    [Theory]
+    [InlineData("build-box", "build-box")]
+    [InlineData("  build box  ", "build box")]
+    [InlineData(null, null)]
+    [InlineData("", null)]
+    [InlineData("   ", null)]
+    [InlineData("line\nbreak", null)]
+    [InlineData(42, null)]
+    public void Parsing_preserves_only_valid_machine_names(object? input, string? expected)
+    {
+        var machine = JsonSerializer.SerializeToElement(Assert.Single(Frames(input)), Web);
+        Assert.Equal(expected, machine.GetProperty("name").GetString());
+    }
+
+    [Theory]
+    [InlineData(64, true)]
+    [InlineData(65, false)]
+    public void Parsing_accepts_the_machine_name_cap_but_never_truncates_an_overlong_name(int length, bool valid)
+    {
+        var name = new string('x', length);
+        var machine = JsonSerializer.SerializeToElement(Assert.Single(Frames(name)), Web);
+        Assert.Equal(valid ? name : null, machine.GetProperty("name").GetString());
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Listing_adds_only_machineName_from_the_registry_and_never_guesses_it(bool hasName)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        roster.Machines = Frames("build-box", includeName: hasName);
+        var reply = JsonSerializer.Serialize(await Op().HandleAsync(Hello(AgentProtocol.ScopeRead), Body("{}")), Web);
+        Assert.Equal(hasName
+            ? ["machine", "machineName", "machineOnline", "node", "secondsInState", "since", "state"]
+            : ["machine", "machineOnline", "node", "secondsInState", "since", "state"], Names(reply));
+        if (hasName) { Assert.Contains("\"machineName\":\"build-box\"", reply); }
+    }
+
+    [Fact]
+    public async Task Finding_carries_the_machine_display_name_without_changing_verification_or_the_machine_pin()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        roster.Machines = Frames("build-box");
+        var chan = Hello(AgentProtocol.ScopeRead);
+        async Task<JsonElement> Find(string machine) => JsonSerializer.SerializeToElement(
+            await Op().FindAsync(chan, Body(JsonSerializer.Serialize(new { name = "my project", machine }))), Web);
+        var unsigned = await Find("m2");
+        Assert.Equal("unverified", unsigned.GetProperty("result").GetString());
+        Assert.Equal("build-box", unsigned.GetProperty("machines")[0].GetProperty("machineName").GetString());
+        Assert.DoesNotContain("node", unsigned.GetRawText());
+        roster.Machines = roster.Machines.Select(m => m with { Verified = true }).ToList();
+        var verified = await Find("m2");
+        Assert.Equal("found", verified.GetProperty("result").GetString());
+        Assert.Equal("build-box", verified.GetProperty("session").GetProperty("machineName").GetString());
+        Assert.Equal("notFound", (await Find("build-box")).GetProperty("result").GetString());
+    }
+
     [Fact]
     public async Task Each_accepted_call_is_audited_with_the_agents_principal()
     {
@@ -115,8 +183,9 @@ public sealed class FleetListTests : IDisposable
 
     sealed class Roster : IFleetRoster
     {
+        public IReadOnlyList<FleetMachine>? Machines { get; set; }
         public Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<FleetMachine>>([new FleetMachine("m2", true, [new FleetSession("n1", "my project", "working", Started)])]);
+            Task.FromResult(Machines ?? [new FleetMachine("m2", true, [new FleetSession("n1", "my project", "working", Started)])]);
     }
 
     sealed class FixedTime(DateTimeOffset now) : TimeProvider
