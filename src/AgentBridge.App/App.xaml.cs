@@ -182,7 +182,10 @@ public partial class App : Application
         if (options.SelfTest is not null)
         {
             window.Activate();
-            _ = SelfTest.RunAsync(window, main, launch, options.SelfTest, demo!, remoteDemo!, code => { ExitCode = code; Quit(); });
+            Action<int> finished = code => { ExitCode = code; Quit(); };
+            _ = options.HistoryScrollBudget
+                ? SelfTest.RunHistoryScrollBudgetAsync(window, main, demo!, options.SelfTest, finished)
+                : SelfTest.RunAsync(window, main, launch, options.SelfTest, demo!, remoteDemo!, finished);
             return;
         }
 
