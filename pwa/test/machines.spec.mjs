@@ -925,7 +925,11 @@ for (const width of [320, 390, 759]) {
     await page.setViewportSize({ width, height: 800 });
     await openDemo(page);
     const bar = page.locator('#machine-tabs');
-    await bar.evaluate((el) => { el.style.maxWidth = '280px'; });
+    await bar.evaluate((el) => new Promise((resolve) => {
+      const resized = new ResizeObserver(() => { resized.disconnect(); resolve(); });
+      resized.observe(el);
+      el.style.maxWidth = '280px';
+    }));
     const more = bar.locator('.machine-more');
     const fits = () => bar.evaluate((el) => el.scrollWidth <= el.clientWidth);
     expect(await fits()).toBe(true);

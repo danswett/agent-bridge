@@ -13,7 +13,10 @@ test.describe('wide machine tabs scroll whole (#1894)', () => {
             const { renderMachineTabs } = await import('/js/ui/views.js');
             const presence = [
               { id: 'tab-first', kind: 'host', name: 'SixteenLettersAB' },
-              { id: 'tab-middle', kind: 'host', name: 'Middle workstation with a long name' },
+              { id: 'tab-middle', kind: 'host', name: 'DESKTOP-ABCDEFGH0' },
+              { id: 'tab-extra-1', kind: 'host', name: 'DESKTOP-ABCDEFGH1' },
+              { id: 'tab-extra-2', kind: 'host', name: 'DESKTOP-ABCDEFGH2' },
+              { id: 'tab-extra-3', kind: 'host', name: 'DESKTOP-ABCDEFGH3' },
               { id: 'tab-last', kind: 'host', name: 'Last workstation with a long name' },
             ];
             const draw = (current) => renderMachineTabs(document.getElementById('machine-tabs'), {
@@ -25,7 +28,7 @@ test.describe('wide machine tabs scroll whole (#1894)', () => {
           const bar = page.locator('#machine-tabs');
           const list = bar.getByRole('tablist');
           const tabs = list.getByRole('tab');
-          await expect(tabs).toHaveCount(4);
+          await expect(tabs).toHaveCount(7);
           await expect(bar.locator('.machine-more')).toHaveCount(0);
           const last = tabs.last();
           await expect(last).toHaveText('Last workstation\u2026');
@@ -57,8 +60,19 @@ test.describe('wide machine tabs scroll whole (#1894)', () => {
           await expect(tabs.first()).toHaveAttribute('aria-selected', 'true');
           await expect.poll(chosenFits).toBe(true);
           await expect.poll(() => fade('before')).toBe(false);
-          await page.evaluate(() => window.chooseFixtureMachine('tab-last'));
-          await expect(last).toHaveAttribute('aria-selected', 'true');
+          await page.keyboard.press('ArrowRight');
+          await page.keyboard.press('ArrowRight');
+          await expect(tabs.nth(2)).toHaveAttribute('aria-selected', 'true');
+          await expect.poll(chosenFits).toBe(true);
+          await list.evaluate((el) => new Promise((resolve) => {
+            const resized = new ResizeObserver(() => { resized.disconnect(); resolve(); });
+            resized.observe(el);
+            el.closest('.sessions').style.setProperty('--list-w', '400px');
+          }));
+          await expect.poll(chosenFits).toBe(true);
+          await page.keyboard.press('Home');
+          await page.evaluate(() => window.chooseFixtureMachine('tab-middle'));
+          await expect(tabs.nth(2)).toHaveAttribute('aria-selected', 'true');
           await expect.poll(chosenFits).toBe(true);
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         });
