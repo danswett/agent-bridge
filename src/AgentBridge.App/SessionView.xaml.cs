@@ -37,6 +37,7 @@ public sealed partial class SessionView : UserControl
     public SessionView()
     {
         InitializeComponent();
+        InitializeLatest();
         HistoryRows.ItemsSource = historyShown;
         Loaded += (_, _) =>
         {

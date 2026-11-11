@@ -108,6 +108,7 @@ public sealed partial class SessionView
     // Skipped if another session was opened, or the person took the view, meanwhile.
     void KeepPlace(bool atEnd, double offset, (string Id, double Top)? reading = null)
     {
+        if (latestUsed) { atEnd = latestPinned; }
         var (session, releases) = (shownHistory, pinReleases);
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
@@ -123,7 +124,7 @@ public sealed partial class SessionView
                     target = Math.Clamp(scroll.VerticalOffset + Top(row, scroll) - kept.Top, 0, scroll.ScrollableHeight);
                 }
             }
-            var off = reading is not null || atEnd || pinEnd ? Math.Abs(scroll.VerticalOffset - target) > 0.5 : scroll.VerticalOffset < target - 0.5;
+            var off = reading is not null || atEnd || pinEnd || latestUsed ? Math.Abs(scroll.VerticalOffset - target) > 0.5 : scroll.VerticalOffset < target - 0.5;
             if (off) { scroll.ChangeView(null, target, null, disableAnimation: true); }
         });
     }

@@ -60,6 +60,7 @@ static partial class SelfTest
             var remoteFacts = rows.FirstOrDefault(r => r.Card?.Id == "demo-remote-codex") is { } rc ? ById<TextBlock>(rc, "RowFacts") : null;
             Check(remoteFacts is not null && Text(remoteFacts).EndsWith(" · " + remote.MachineName, StringComparison.Ordinal), $"names the machine on another machine's row ({(remoteFacts is null ? "none" : Text(remoteFacts))})");
             await CheckEarlierHistory(window, main, Check);
+            await CheckEarlierHistory(window, main, Check, latest: true);
             await CheckRowAnatomy(rows, Check);
             CheckRowNames(window, rows, Check);
             await CheckSelectionBar(window, Check, outFile);
@@ -290,6 +291,7 @@ static partial class SelfTest
             await CheckSessionDetails(window, main, demo, Check, outFile);
             await CheckAnswerMoves(window, main, Check, outFile);
             await CheckHistoryScroll(window, main, Check);
+            await CheckLatest(window, main, Check);
             await CheckHistoryYourMessages(window, main, Check);
             await CheckMessageTimes(window, main, Check);
 
