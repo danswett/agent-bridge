@@ -29,7 +29,7 @@ public sealed record Arrangement(IReadOnlyList<OrderEntry> Pinned, IReadOnlyList
 //   * Your order (the default): a session never placed before goes to the top of the unpinned
 //     rows once, newest first when several arrive together, then stays where it is. Nothing a
 //     host sends moves a row; only a move does (Alt+Up/Down, a drag, the row menu).
-//   * Pinned rows sit above the rest. Most recent: the old order. Machine: by machine name, then
+//   * Pinned rows sit above the rest. Most recent: meaningful activity. Machine: by machine name, then
 //     your order. Each sorts within Pinned and within the rest; rows move only in Your order.
 //   * A session a host removed is kept in memory as ended, for the Ended group, until the app
 //     restarts. A machine that goes offline or out of view ends nothing.
@@ -49,6 +49,7 @@ public sealed class SessionOrder
     readonly string? path;
     readonly TimeProvider time;
     readonly State state;
+    readonly Dictionary<string, (Session Session, DateTimeOffset At)> activity = new(StringComparer.Ordinal);
     List<EndedSession> ended = [];
     // What the last Arrange showed, by group: moves are among the rows on screen, not among rows
     // remembered for sessions that aren't shown.
@@ -117,11 +118,31 @@ public sealed class SessionOrder
 
     public bool IsPinned(string key) => state.Pinned.Contains(key, StringComparer.Ordinal);
 
+    // Same events as pwa/js/sessions-store.js; a reconnect snapshot is a baseline, not activity.
+    public void Observe(string machine, Session next, bool snapshot = false)
+    {
+        var key = KeyOf(machine, next.Id);
+        var at = next.UpdatedAt;
+        if (activity.TryGetValue(key, out var was))
+        {
+            var prev = was.Session;
+            var mattered = prev.Status != next.Status || prev.Question?.Id != next.Question?.Id
+                || prev.Activity.UserMessage != next.Activity.UserMessage
+                || prev.Activity.Turn != next.Activity.Turn || prev.Activity.TurnCount != next.Activity.TurnCount;
+            if (snapshot || !mattered || at < was.At) { at = was.At; }
+        }
+        activity[key] = (next, at);
+    }
+
     // Last updated first; ties by id, then machine, so the order is stable.
     static int Newer(OrderEntry a, OrderEntry b)
     {
         var t = b.Session.UpdatedAt.CompareTo(a.Session.UpdatedAt);
-        if (t != 0) { return t; }
+        return t != 0 ? t : Tie(a, b);
+    }
+
+    static int Tie(OrderEntry a, OrderEntry b)
+    {
         var id = string.CompareOrdinal(a.Session.Id, b.Session.Id);
         return id != 0 ? id : string.CompareOrdinal(a.Machine, b.Machine);
     }
@@ -133,6 +154,7 @@ public sealed class SessionOrder
     // in reverse. Until then they show at the top, newest first.
     public Arrangement Arrange(IReadOnlyList<OrderEntry> entries, Func<string, string?>? nameOf = null, Func<string, bool>? shows = null, Func<string, bool>? settled = null)
     {
+        foreach (var e in entries) { Observe(e.Machine, e.Session, snapshot: settled?.Invoke(e.Machine) == false); }
         PlaceNew(entries.Where(e => settled?.Invoke(e.Machine) ?? true).ToList(), entries);
         var placed = state.Pinned.Concat(state.Order).ToHashSet(StringComparer.Ordinal);
         var unplaced = entries.Where(e => !placed.Contains(e.Key)).ToList();
@@ -141,9 +163,14 @@ public sealed class SessionOrder
         var rank = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var k in unplaced.Select(e => e.Key).Concat(state.Pinned).Concat(state.Order)) { rank.TryAdd(k, rank.Count); }
         int Yours(OrderEntry a, OrderEntry b) => rank[a.Key].CompareTo(rank[b.Key]);
+        int Recent(OrderEntry a, OrderEntry b)
+        {
+            var t = activity[b.Key].At.CompareTo(activity[a.Key].At);
+            return t != 0 ? t : Tie(a, b);
+        }
         Comparison<OrderEntry> by = Sort switch
         {
-            SessionSort.Recent => Newer,
+            SessionSort.Recent => Recent,
             SessionSort.Machine => (a, b) =>
             {
                 var n = string.Compare(nameOf?.Invoke(a.Machine) ?? "", nameOf?.Invoke(b.Machine) ?? "", StringComparison.CurrentCultureIgnoreCase);
@@ -268,6 +295,7 @@ public sealed class SessionOrder
     public void Ended(string machine, Session session)
     {
         var key = KeyOf(machine, session.Id);
+        activity.Remove(key);
         Drop(key);
         state.SeenTurns.Remove(key);
         Save();
@@ -281,6 +309,7 @@ public sealed class SessionOrder
     {
         var prefix = KeyOf(machine, "");
         bool Gone(string k) => k.StartsWith(prefix, StringComparison.Ordinal) && !liveIds.Contains(k[prefix.Length..]);
+        foreach (var k in activity.Keys.Where(Gone).ToList()) { activity.Remove(k); }
         var changed = state.Order.RemoveAll(Gone) + state.Pinned.RemoveAll(Gone) > 0;
         foreach (var k in state.SeenTurns.Keys.Where(Gone).ToList()) { state.SeenTurns.Remove(k); changed = true; }
         if (changed) { Save(); }
