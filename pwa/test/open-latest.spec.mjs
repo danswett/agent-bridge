@@ -95,7 +95,7 @@ for (const arriving of [false, true]) {
 }
 
 for (const disclosure of [false, true]) {
-  test(disclosure ? 'reasoning opened before the opening frame stays put, then response growth follows' : 'choosing an already selected row leaves its reading position alone', async ({ page }) => {
+  test(disclosure ? 'reasoning opened before the opening frame stays put through a machine refresh, then response growth follows' : 'choosing an already selected row leaves its reading position alone', async ({ page }) => {
     await page.setViewportSize({ width: 1100, height: 900 });
     await page.goto('?demo=1&static=1#/sessions');
     await page.waitForSelector('html[data-demo-ready]');
@@ -120,14 +120,23 @@ for (const disclosure of [false, true]) {
       await expect(pane).toContainText('Hide reasoning');
       await motionsDone(page);
       expect(await pane.evaluate((el) => el.scrollTop)).toBe(0);
-      await pane.locator('.stream > .agent-block > .response').evaluate((el) => { el.style.height = getComputedStyle(el).height; el.style.boxSizing = 'content-box'; el.style.paddingBlockStart = '40px'; });
-      await expect.poll(() => gap(pane)).toBeLessThan(4);
+      await page.evaluate(() => {
+        const d = window.agentBridgeDemo;
+        const link = d.hosts.link('demo');
+        link.machine = { ...link.machine, name: 'Workstation' };
+        d.page.refresh();
+      });
+      await expect(page.locator(`.session-view[data-id="${id}"]`)).toContainText('Workstation');
+      await motionsDone(page);
+      expect(await pane.evaluate((el) => el.scrollTop)).toBe(0);
       await page.evaluate((id) => {
         const d = window.agentBridgeDemo;
         const s = d.host.get(id);
         d.upsert({ ...s, activity: { ...s.activity, response: 'A new streamed response.\n\nAnother streamed paragraph.' }, updatedAt: new Date(Date.now() + 3000).toISOString() });
       }, id);
       await expect(pane).toContainText('A new streamed response.');
+      await expect.poll(() => gap(pane)).toBeLessThan(4);
+      await pane.locator('.stream > .agent-block > .response').evaluate((el) => { el.style.height = getComputedStyle(el).height; el.style.boxSizing = 'content-box'; el.style.paddingBlockStart = '40px'; });
       await expect.poll(() => gap(pane)).toBeLessThan(4);
     } else {
       await row.click();

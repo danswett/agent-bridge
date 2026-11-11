@@ -434,6 +434,8 @@ let seq = 0;
 export class SessionCard {
   #s = null;
   #last = {};
+  // Arrival identity survives machine-metadata redraws.
+  #arrival = null;
   #history = { loaded: false, loading: false };
   #panel = null;
   #receipt = null;
@@ -915,7 +917,10 @@ export class SessionCard {
       this.#renderFacts(rows);
     }
     this.#tickFacts(s, Date.now());
-    this.#follow.after(this.#changed('arrival', [displayed.activity.turn, voice.response ?? '']) && !first);
+    const arrival = JSON.stringify([displayed.activity.turn, voice.response ?? '']);
+    const arrived = this.#arrival !== arrival;
+    this.#arrival = arrival;
+    this.#follow.after(arrived && !first);
     this.#bringQuestion(atEnd);
 
     // The tools shown follow the session: refetched (at most every 2 s) as it changes.
