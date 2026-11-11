@@ -37,6 +37,7 @@ test('only added or modified pwa-ui specs survive deletes, renames and unrelated
     r.write(`pwa/test/${name}.spec.mjs`, 'changed');
   }
   r.write('pwa/test/e2e/e2e.spec.mjs');
+  r.write('pwa/test/nested/e2e/hidden.spec.mjs');
   r.write('pwa/test/unit/other.test.mjs');
   r.write('other/test/outside.spec.mjs');
   rmSync(path.join(r.cwd, 'pwa/test/deleted.spec.mjs'));
