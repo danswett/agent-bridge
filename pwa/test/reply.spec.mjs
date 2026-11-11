@@ -216,6 +216,8 @@ test.describe('on a phone', () => {
     test(`delivery preserves an active composition with ${draft ? 'the sent prefix' : 'an empty intermediate draft'}`, async ({ page }) => {
       await openDemo(page);
       const input = box(page, IDLE).getByRole('textbox', { name: 'Reply' });
+      await input.fill('discarded draft');
+      await input.fill('');
       await input.fill('first');
       await hold(page);
       await input.press('ControlOrMeta+Enter');
@@ -230,9 +232,12 @@ test.describe('on a phone', () => {
       expect(await composing.evaluate((el) => el.isConnected)).toBe(true);
       await expect(input).toHaveValue(draft);
       await expect(input).toBeFocused();
+      await input.press('ControlOrMeta+Enter');
+      await expect(box(page, IDLE).getByRole('alert')).toBeHidden();
       await input.dispatchEvent('compositionend', { data: draft });
       await expect(input).toHaveValue(draft ? 'next' : '');
       await expect(input).toBeFocused();
+      expect(await log(page)).toHaveLength(1);
     });
   }
 
