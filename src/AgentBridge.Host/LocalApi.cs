@@ -78,7 +78,12 @@ public static class LocalApi
         }
         if (Acts.Contains(op) && callers.Classify(channel) is { Kind: CallerKind.Agent } agent)
         {
-            throw Refuse(op, agent, "answering, replying, ending and launching sessions are for the person, from the app or a phone", log);
+            const string why = "answering, replying, ending and launching sessions are for the person, from the app or a phone";
+            if (op is LaunchProtocol.Launch or Ops.SessionStop && credentials?.Of(channel) is { } credential)
+            {
+                AuditRefusal(credentials, credential, op, data, audit, why);
+            }
+            throw Refuse(op, agent, why, log);
         }
         // What a device says it shows decides whether the person is using it, and a device in use
         // holds back the person's pushes (#1190): an agent saying it would silence them.
@@ -106,6 +111,23 @@ public static class LocalApi
             _ => hello,
         });
     };
+
+    static void AuditRefusal(AgentCredentials credentials, AgentCredential caller, string op, JsonElement data, AgentAuditLog? audit, string why)
+    {
+        string? Field(string name) => data.ValueKind == JsonValueKind.Object && data.TryGetProperty(name, out var v)
+            && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+        // A refused request is unvalidated: never copy arbitrary text as an id into the audit.
+        var request = Guid.TryParse(Field("request"), out var r) ? r.ToString("D") : Guid.NewGuid().ToString("D");
+        var target = op == LaunchProtocol.Launch ? "local" : Guid.TryParse(Field("id"), out var id) ? id.ToString("D") : "unknown";
+        var entry = new AgentAuditEntry("local", request, credentials.PrincipalOf(caller), caller.Chain, op, target, "refused", why);
+        bool written;
+        try { written = audit?.Append(entry, op == LaunchProtocol.Launch ? Field("prompt") : null) == true; }
+        catch (Exception) { throw AuditUnavailable(); }
+        if (!written) { throw AuditUnavailable(); }
+    }
+
+    static InvalidOperationException AuditUnavailable() =>
+        new("refused: auditUnwritable: the agent audit log could not be written; nothing was launched or stopped");
 
     static InvalidOperationException Refuse(string op, Caller caller, string why, Action<string>? log)
     {
