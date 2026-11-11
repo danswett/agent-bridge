@@ -74,9 +74,19 @@ Never hard-code a session or node id in a doc, script or message you keep. Sessi
   pwsh -Command "./tools/agents/wake-watch.ps1 -Team apple -Prs 406,405"
   ```
   `-IgnoreIds` skips comments that someone edits in place, such as rolling digests.
-- **Restart with `-Since`.** `-Since` defaults to the moment the watcher starts, so a comment posted while it was down (after a wake, while you handled it) would be missed. GitHub's `since` is inclusive and matches a comment's `updated_at`, so the comment that caused the wake would wake you again. Restart with `-Since` set to that comment's `updated_at` (printed in the WAKE line) plus 1 second, in UTC, and/or pass the ids of comments you've already handled in `-IgnoreIds`; the watcher prints the effective value on start. If a wake came from several comments, use the latest `updated_at` plus 1 second, or the earlier start time with every handled id in `-IgnoreIds`:
+- **Restart without cursor flags.** The watcher saves an inclusive watermark and handled comment
+  revisions under `~/.copilot/wake-watch/` (one hashed file per repository and team). A restart
+  resumes there, including comments posted while you handled the previous wake, without repeating
+  unchanged comments. An edit with a newer `updated_at` can wake you again. Only the first run
+  defaults to now. Progress is written atomically after every page succeeds, including empty polls;
+  failed reads never advance it. The file contains timestamps and comment ids, not comment bodies
+  or credentials. Unreadable state is an error, not a reset to now.
+  Run one watcher per team state file; use `-StatePath` for an independent consumer.
+  An explicit `-Since` resets saved progress for an intentional replay; `-IgnoreIds` still excludes
+  whole comments, including edits. Do not add a second to the cursor: another comment may have the
+  same timestamp. The watcher prints the effective UTC cursor on start:
   ```
-  pwsh -Command "./tools/agents/wake-watch.ps1 -Team apple -Prs 406,405 -Since 2026-11-06T22:10:01Z"
+  pwsh -Command "./tools/agents/wake-watch.ps1 -Team apple -Prs 406,405"
   pwsh -Command "./tools/agents/wake-watch.ps1 -Team apple -Prs 406,405 -Since 2026-11-06T22:05:00Z -IgnoreIds 4231234567,4231234999"
   ```
 - **Use REST for anything that polls.** Every session shares one GitHub account's GraphQL budget, about 5,000 points an hour. `gh pr view`, `gh pr checks`, `gh pr comment` and `gh issue comment` all spend it, and one afternoon it ran out and nothing could post for minutes. Read with `gh api repos/danswett/agent-bridge/pulls/<n>` and `.../commits/<sha>/check-runs`, and post with `gh api repos/danswett/agent-bridge/issues/<n>/comments -F body=@file`.

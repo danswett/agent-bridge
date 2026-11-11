@@ -73,7 +73,6 @@ no_test_paths:
   - .gitignore
   - LICENSE
   - tools/design-mockups/**     # renders reference images only; nothing ships or tests from it
-  - tools/agents/wake-watch.ps1 # session helper that polls GitHub for a team; nothing ships or tests from it
   - ops/**                      # SRE plan, runbooks, KQL and read-only operator probes; nothing ships from it
   - .github/dependabot.yml      # schedules update PRs; each PR's own changes select its tests
   - .github/CODEOWNERS          # who reviews what; CI's plan runs the whole ring for .github/ anyway
@@ -445,6 +444,17 @@ suites:
     runner: local
     triggers: [quality/post-receipt.ps1, quality/test-post-receipt.ps1]
     command: pwsh -NoProfile -File quality/test-post-receipt.ps1
+    where: ci.yml light
+    status: exists
+
+  - id: wake-watch-script
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [tools/agents/wake-watch.ps1, tools/agents/wake-watch.Tests.ps1, tools/agents/test-wake-watch.ps1]
+    command: pwsh -NoProfile -File tools/agents/test-wake-watch.ps1
     where: ci.yml light
     status: exists
 

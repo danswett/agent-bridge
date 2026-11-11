@@ -1180,6 +1180,10 @@ jobs:
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'post-receipt-script')) }}
         shell: pwsh
         run: pwsh -NoProfile -File quality/test-post-receipt.ps1
+      - name: The wake watcher resumes comments across restarts
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'wake-watch-script')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File tools/agents/test-wake-watch.ps1
       - name: The red-minutes figure counts spells the way the guardian does
         # A fixed run list: nothing reaches GitHub.
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'red-minutes-script')) }}

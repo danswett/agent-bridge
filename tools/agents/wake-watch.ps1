@@ -13,12 +13,51 @@ param(
   [int]$CommentSeconds = 60,
   [int]$CiSeconds = 180,
   [int]$MaxMinutes = 120,
-  [long[]]$IgnoreIds = @()                       # comment ids to skip, e.g. a rolling status comment edited in place
+  [long[]]$IgnoreIds = @(),                      # comment ids to skip, e.g. a rolling status comment edited in place
+  [string]$StatePath                            # defaults to a per-team file under ~/.copilot/wake-watch
 )
 $ErrorActionPreference = 'Stop'
 $repo = 'danswett/agent-bridge'
 $tags = @("[to:$($Team.ToLower())]", '[to:all]')
 $cache = @{}
+$teamKey = $Team.ToLowerInvariant()
+if (-not $StatePath) {
+  $key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
+      [Text.Encoding]::UTF8.GetBytes("$repo/$teamKey"))).ToLowerInvariant()
+  $StatePath = Join-Path $HOME ".copilot/wake-watch/$key.json"
+}
+$StatePath = [IO.Path]::GetFullPath($StatePath)
+function Get-Timestamp($value) {
+  ([DateTimeOffset]$value).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+}
+$handled = @{}
+if (-not $PSBoundParameters.ContainsKey('Since') -and (Test-Path -LiteralPath $StatePath)) {
+  $saved = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json -AsHashtable
+  if ($saved.version -ne 1 -or $saved.repo -ne $repo -or $saved.team -ne $teamKey -or
+      -not $saved.since -or $saved.handled -isnot [hashtable]) { throw "Invalid wake watcher state: $StatePath" }
+  $Since = Get-Timestamp $saved.since
+  $handled = $saved.handled
+}
+$Since = [DateTimeOffset]::Parse($Since).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+foreach ($id in @($handled.Keys)) {
+  if ($id -notmatch '^\d+$') { throw "Invalid handled comment id in $StatePath" }
+  $handled[$id] = Get-Timestamp $handled[$id]
+}
+
+function Save-Progress([string]$since, [hashtable]$seen) {
+  [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($StatePath))
+  $temporary = "$StatePath.$([Guid]::NewGuid().ToString('N')).tmp"
+  try {
+    $json = @{ version = 1; repo = $repo; team = $teamKey; since = $since; handled = $seen } |
+      ConvertTo-Json -Depth 4
+    [IO.File]::WriteAllText($temporary, $json)
+    [IO.File]::Move($temporary, $StatePath, $true)
+  } finally {
+    if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary }
+  }
+}
+# Keep the initial lower bound even if every request fails before the watcher stops.
+Save-Progress $Since $handled
 
 function Get-Api([string]$path) {
   $c = $cache[$path]
@@ -86,9 +125,25 @@ $deadline = (Get-Date).AddMinutes($MaxMinutes)
 $nextCi = Get-Date
 while ((Get-Date) -lt $deadline) {
   try {
-    $hits = @(Get-Comments $Since | ? {
-        $_.body -and $_.id -notin $IgnoreIds -and (Test-Tagged $_.body) })
-    if ($hits.Count) { $hits | % { "WAKE comment $($_.html_url) by $($_.user.login) at $($_.updated_at)" }; exit 0 }
+    # Keep the query URL fixed during this run so unchanged pages still use their ETags.
+    # Checkpoint only after every page succeeds, at the time before those reads began.
+    $watermark = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    if ([DateTimeOffset]::Parse($watermark) -lt [DateTimeOffset]::Parse($Since)) { $watermark = $Since }
+    $comments = @(Get-Comments $Since)
+    $hits = @($comments | ? {
+        $_.body -and $_.id -notin $IgnoreIds -and (Test-Tagged $_.body) -and
+        $handled[[string]$_.id] -ne (Get-Timestamp $_.updated_at) })
+    $nextHandled = @{}
+    foreach ($comment in $comments) {
+      # Only revisions on or after the inclusive boundary need deduplication on restart.
+      if ([DateTimeOffset]$comment.updated_at -ge [DateTimeOffset]::Parse($watermark)) {
+        $nextHandled[[string]$comment.id] = Get-Timestamp $comment.updated_at
+      }
+    }
+    Save-Progress $watermark $nextHandled
+    # The query still includes older revisions until this run exits; remember those in memory too.
+    foreach ($comment in $comments) { $handled[[string]$comment.id] = Get-Timestamp $comment.updated_at }
+    if ($hits.Count) { $hits | % { "WAKE comment $($_.html_url) by $($_.user.login) at $(Get-Timestamp $_.updated_at)" }; exit 0 }
     if ($Prs.Count -and (Get-Date) -ge $nextCi) {
       $nextCi = (Get-Date).AddSeconds($CiSeconds)
       foreach ($p in $Prs) {
