@@ -197,6 +197,24 @@ public sealed class RetryEpisodeTests
         Assert.False(await h.Send(RetryReason.Owner));
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Episode_cancel_inside_observe_or_available_never_consumes_or_sends_an_attempt(bool availability, bool owner)
+    {
+        var h = new Harness();
+        h.Time.Advance(TimeSpan.FromSeconds(30));
+        h.OnObservation = availability ? null : h.Episode.Cancel;
+        h.OnAvailability = availability ? h.Episode.Cancel : null;
+        Assert.False(await h.Send(owner ? RetryReason.Owner : RetryReason.Auto));
+        Assert.Equal(RetryStop.Cancelled, h.Episode.Stop);
+        Assert.Empty(h.Episode.Attempts);
+        Assert.Empty(h.Requests);
+        Assert.False(await h.Send(RetryReason.Owner));
+    }
+
     [Fact]
     public async Task Read_only_delivery_and_a_new_non_transient_error_stop_before_sending()
     {
