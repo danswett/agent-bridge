@@ -1538,7 +1538,7 @@ export class SessionCard {
     if (this.#receipt && this.#s.question && this.#receipt.questionId !== this.#s.question.id) { records.set(this.#receipt.questionId, this.#receipt.element); }
     const inline = { slot, questionId: this.#slotQuestion, activeId: this.#s.question?.id, records, kept };
     const snapshot = this.#follow.snapshot(full, inline);
-    const shown = snapshot.more && this.#atCap(snapshot) ? { ...snapshot, more: false, start: { limited: true } } : snapshot;
+    const shown = snapshot.more && this.#atCap(full) ? { ...snapshot, more: false, start: { limited: true } } : snapshot;
     const drawn = this.turns.render(shown, this.#follow.shown?.activity.turn ?? null, inline);
     this.#syncStoredLatest();
     // Not in a turn (none holds it, or the history is not drawn): back where the live exchange ends.

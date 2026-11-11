@@ -106,6 +106,33 @@ test('new live turns held below the reader do not offer a second earlier-page co
   await expect(v.getByRole('button', { name: 'Load earlier messages' })).toHaveCount(1);
 });
 
+test('live turns held below the reader count toward the earlier-history limit', async ({ page }) => {
+  test.setTimeout(120000);
+  await start(page, 700, 1440);
+  const v = view(page, ID);
+  const scroll = v.locator('.stream-scroll');
+  const button = v.getByRole('button', { name: 'Load earlier messages' });
+  await expect.poll(() => held(v)).toBe(105);
+  while (await held(v) < 445) {
+    const before = await held(v);
+    await button.evaluate((b) => b.click());
+    await expect.poll(() => held(v)).toBeGreaterThan(before);
+  }
+  expect(await held(v)).toBe(445);
+  await scroll.evaluate((el) => { el.scrollTop = el.clientHeight * 2; });
+  for (let n = 1; n <= 6; n += 1) {
+    await page.evaluate(({ id, n }) => {
+      const d = window.agentBridgeDemo;
+      const s = d.host.get(id);
+      d.upsert({ ...s, activity: { ...s.activity, turn: `cap-live-${n}`, responseTurn: `cap-live-${n}`, response: `New cap reply ${n}` } });
+    }, { id: ID, n });
+    await expect(scroll).toContainText(`New cap reply ${n}`);
+  }
+  await expect(v.locator('.history-top:visible')).toContainText('Start of available history');
+  await expect(button).toHaveCount(0);
+  await expect(v.locator('.history-turn', { hasText: 'Earlier prompt 700' })).toHaveCount(1);
+});
+
 test('past the 500-turn limit a person asking for more is told history stops there and keeps the newest turns', async ({ page }) => {
   test.setTimeout(120000);
   await start(page, 700, 1440);
