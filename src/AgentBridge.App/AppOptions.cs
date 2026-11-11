@@ -18,6 +18,7 @@ sealed record AppOptions
     public bool Demo { get; init; }
     // Draw the demo's cards, write what was drawn to this file and exit (CI's smoke test).
     public string? SelfTest { get; init; }
+    public bool HistoryScrollBudget { get; init; }
 
     public static AppOptions Parse(string[] args)
     {
@@ -31,6 +32,7 @@ sealed record AppOptions
                 case "-ToastActivated" or "--toast-activated": o = o with { ToastActivated = true }; break;
                 case "--demo": o = o with { Demo = true }; break;
                 case "--self-test" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true }; break;
+                case "--self-test-history-scroll" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true, HistoryScrollBudget = true }; break;
             }
         }
         return o;

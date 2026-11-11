@@ -1590,9 +1590,12 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   Try again, and the start line (#1285).*
   The Windows app now draws the stored turns above the latest exchange, oldest first, read-only,
   from the session history client (#292 W2a): the response text of each turn with its prompt, at
-  most 500 turns, with the H5 lines below.   It opens at the end, on the latest reply, once the turns are
-    drawn, and stays at the end as replies arrive until the person scrolls; once they scroll, a
-    new reply never moves the view (#1635, #1646). Reasoning, tool lines,
+  most 500 turns, with the H5 lines below. The newest held turn draws first; older held turns
+  fill in two at a time between input turns, paused during a scroll or pan, without moving what
+  the reader is looking at (#1767). This does not change host page sizes or transcript reads.
+  Turns stay virtualized; a realized turn measures all its response blocks together.
+  It opens at the end, on the latest reply, and stays there as replies arrive until the person
+  scrolls; once they scroll, a new reply never moves the view (#1635, #1646). Reasoning, tool lines,
   delegate events and questions are still to come. The Windows app loads earlier turns a page
   at a time through "Load earlier messages" or scrolling upward within a screen of the top
   (#1593 W2b-1). Both use the history client's cursor and deduplication; the first visible

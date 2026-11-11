@@ -92,7 +92,16 @@ public sealed partial class SessionView
         };
         scroll.DirectManipulationStarted += (_, _) => { keyTarget = null; panning = true; follow.PanStarted(); ReleasePin(); };
         scroll.DirectManipulationCompleted += (_, _) => { panning = false; follow.PanEnded(); };
-        scroll.PointerWheelChanged += (_, _) => ReleasePin();
+        scroll.AddHandler(UIElement.PointerWheelChangedEvent, new PointerEventHandler((_, _) => ReleasePin()), true);
+        // Take the view only when focus actually asks to scroll out of it, not on every Tab.
+        ConversationHeader.BringIntoViewRequested += FocusScroll;
+        ConversationFooter.BringIntoViewRequested += FocusScroll;
+        void FocusScroll(UIElement sender, BringIntoViewRequestedEventArgs e)
+        {
+            if (!Under(FocusManager.GetFocusedElement(ConversationList.XamlRoot) as DependencyObject, e.TargetElement)) { return; }
+            var top = e.TargetElement.TransformToVisual(scroll).TransformPoint(new Point(e.TargetRect.X, e.TargetRect.Y)).Y;
+            if (!ConversationKeyboard.WhollyInView(top, e.TargetRect.Height, scroll.ViewportHeight)) { ReleasePin(); }
+        }
         ConversationList.LayoutUpdated += OnConversationLaidOut;
         // Tunnelling, so the keys reach this before anything inside the list can take them: the list
         // would move between its items, a child might handle a key first (ui.md §6.4). What has focus
@@ -310,7 +319,7 @@ public sealed partial class SessionView
                 return;
             }
             target = blocks[at];
-            if (!ReferenceEquals(brought, target)) { ConversationList.ScrollIntoView(target, ScrollIntoViewAlignment.Leading); brought = target; }
+            if (!ReferenceEquals(brought, target)) { ReleasePin(); ConversationList.ScrollIntoView(target, ScrollIntoViewAlignment.Leading); brought = target; }
             ConversationList.UpdateLayout();
             if (ConversationList.ContainerFromIndex(at) is not { } container)
             {
@@ -414,6 +423,7 @@ public sealed partial class SessionView
     // the person pans or a scroll is under way, nor while a correction of ours is on its way.
     void OnConversationLaidOut(object? sender, object e)
     {
+        if (pinEnd) { return; }
         if (panning || scrolling || keyTarget is not null || anchoring is not null || anchor is not { } a || ConversationScroll is not { } scroll || !ConversationList.IsLoaded
             || ConversationList.ContainerFromIndex(a.Index) is not FrameworkElement c) { return; }
         if (a.Correction(anchorAt, scroll.VerticalOffset, Top(c, scroll), scroll.ScrollableHeight) is { } to) { Anchoring(scroll, to); }
