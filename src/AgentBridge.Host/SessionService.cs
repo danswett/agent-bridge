@@ -52,6 +52,7 @@ public sealed class SessionService
     public Fleet.FleetNames? FleetNames { get; init; }
     // Shared by hello and the relay load handlers; only the composition reads host settings.
     public Func<bool> LoadEnabled { get; init; } = () => true;
+    public LoadService? Load { get; init; }
 
     internal object RenameFleetSession(JsonElement data) =>
         (FleetNames ?? throw new InvalidOperationException("refused: fleet-name storage is not available on this host")).Rename(source, data);
@@ -238,6 +239,8 @@ public sealed class SessionService
             // Never this machine's pipe: a LocalChannel falls through to an unknown op.
             case DiagnosticsProtocol.Get when Diagnostics is not null && channel is SecureChannel:
                 return await Diagnostics.HandleAsync(channel, data);
+            case "load.get" or "load.subscribe" or "load.unsubscribe" when LoadEnabled() && Load is not null && channel is SecureChannel:
+                return await Load.HandleAsync(channel, op);
             case Ops.SessionsList:
                 return source.List(String(data, "cursor"));
             case Ops.SessionGet:

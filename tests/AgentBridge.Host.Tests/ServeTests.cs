@@ -11,7 +11,7 @@ using Xunit;
 // The host's Protocol v1 service end to end: fixture sessions read by the real
 // SessionSource, served through the in-process relay over a Noise channel, to a client.
 [Trait("Category", "Network")]
-public sealed class ServeTests : IAsyncLifetime
+public sealed partial class ServeTests : IAsyncLifetime
 {
     const string Id = "88888888-8888-4888-8888-888888888888";
     const string Other = "99999999-9999-4999-8999-999999999999";

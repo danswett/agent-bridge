@@ -1,6 +1,6 @@
 # Bridge Protocol v1: machine load and session move (contract)
 
-Status: **load records and vectors implemented; host handlers and session move remain contracts.** It settles what #1150 (host measures
+Status: **load records, vectors and host relay handlers implemented; session move remains a contract.** It settles what #1150 (host measures
 session process trees and headroom) must publish, what a session move carries and records
 (#1146, fleet #22), and where #1142 (real launch options) already stands. Same channel, framing
 and rules as [v1-sessions.md](v1-sessions.md). Load records live in
@@ -9,7 +9,9 @@ and rules as [v1-sessions.md](v1-sessions.md). Load records live in
 `Host.Core/Load/MachineLoadMapper.cs` maps sampler reports to these records, including
 Windows/Linux physical memory totals, writer-domain checks and the 64 KiB limit.
 Unknown agent kinds are `other`; handles and unattributed counts remain absent because
-the sampler does not measure them. This mapper does not register handlers or enable a host.
+the sampler does not measure them. `LoadService` maps the current shared sampler report on get,
+subscribe and session/process-change events, with a 15-second stale limit, one subscription per connection,
+response-before-update ordering and at most one update per second. Unsubscribe or channel close ends it.
 
 Counts and sizes only. Nothing here carries a path, command line, PID, prompt, transcript or
 credential. Numerical machine totals and per-session figures were
@@ -107,7 +109,7 @@ A record is at most 64 KiB as sent. A client that sees `state: "stale"` or `unav
 `load` only on the relay when `load.enabled` is true (boolean, default `true`, beside
 `launch.transfer.serve` in [host-config.md](../host-config.md), per the
 [owner-approved default-on amendment](https://github.com/danswett/agent-bridge/issues/1871#issuecomment-6790914065)).
-A person can turn it off; handlers remain the separate #1870 slice.
+A person can turn it off; disabled and local-pipe load requests remain unsupported.
 
 ## 2. Session move (#1146, fleet #22)
 
