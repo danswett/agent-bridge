@@ -110,6 +110,24 @@ function setup(host = fakeHost()) {
   return { ...host, conn, service, seen };
 }
 
+test('only delivered attachment bindings retain the bytes this device sent', async () => {
+  for (const outcome of ['delivered', 'refused', 'unconfirmed', 'no-binding']) {
+    const { client } = fakeHost();
+    const kept = [];
+    const images = { account: 'account-a', remember: async (...args) => kept.push(args) };
+    const service = new ReplyService({ current: () => ({ client, hostId: 'h1' }), images });
+    const make = ids();
+    const files = await Promise.all([1, 2].map((seed) => prepareAttachment(file(filled(3, seed), 'same.png', 'image/png'), { uuid: make })));
+    service.submit({ hostId: 'h1', sessionId: 's1', text: '', attachments: files });
+    while (!client.replies.length) { await flush(); }
+    const bindings = files.map((f, i) => ({ id: f.id, ref: `@/attachments/${i}-same.png` }));
+    client.replies[0].resolve({ outcome: outcome === 'no-binding' ? 'delivered' : outcome, ...(outcome === 'no-binding' ? {} : { attachments: bindings }) });
+    await flush();
+    assert.deepEqual(kept, outcome === 'delivered' ? [[bindings, files, 'account-a']] : []);
+    service.clear();
+  }
+});
+
 test('a reply sends its files first, reporting how much has gone, then names them', async () => {
   const { client, service, seen, log } = setup();
   const make = ids();
