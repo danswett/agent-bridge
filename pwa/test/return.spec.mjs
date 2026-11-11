@@ -26,12 +26,18 @@ async function openDemo(page) {
 async function comeBack(page) {
   await page.clock.install();
   await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
-  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await page.evaluate(() => new Promise((resolve) => {
+    const grace = window.agentBridgeDemo.grace;
+    const stop = grace.onChange(() => {
+      if (grace.active) { stop(); resolve(); }
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+  }));
 }
 
 test.use({ viewport: { width: 1440, height: 900 }, hasTouch: false });
 
-// Quarantined (#1493, #1474): turned the webkit job red on main; restore by 2026-11-12.
+// Quarantined (#1493, #1474): the historical WebKit grace failure remains unreproduced.
 test.skip('a machine that goes away just after a return reads as last seen for 3 s, then shows offline in place', async ({ page }) => {
   await openDemo(page);
   await comeBack(page);
@@ -150,10 +156,9 @@ test('End session held for a return is aria-disabled at once, a press says Updat
   expect(await page.evaluate(() => window.agentBridgeDemo.machines['demo-laptop'].stopLog.length)).toBe(0);
 });
 
-// Quarantined (#1493, #1474): turned the webkit job red on main; restore by 2026-11-12.
-test.skip('focus on the sort control when the strip takes the title row goes to the strip, never to the page', async ({ page }) => {
+test('focus on the sort control when the strip takes the title row goes to the strip, never to the page', async ({ page }) => {
   await openDemo(page);
-  await page.locator('.sessions-head select').first().focus();
+  await page.locator('#session-sort').focus();
   await comeBack(page);
   await page.evaluate(() => { window.agentBridgeDemo.connection.ready = false; window.agentBridgeDemo.page.refresh(); });
   await page.clock.runFor(3100);
