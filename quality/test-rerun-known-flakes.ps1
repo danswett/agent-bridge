@@ -86,6 +86,10 @@ $x = Run-Scenario @{ log = "2026-11-09T05:00:00Z   `e[31mFailed `e[1mA.B.C.Metho
 Assert ($x.Result.Rerun -and $x.Reran -eq 1 -and $x.Comments -eq 1) 'a known flake with ANSI escapes is read, re-run once and logged'
 $x = Run-Scenario @{ log = "  Failed A.B.C.Method [1 s]`n  `e[31mFailed New.Real.Failure`e[0m [1 s]" }
 Assert (-not $x.Result.Rerun -and $x.Reran -eq 0 -and $x.Comments -eq 0) 'an ANSI-escaped real failure beside a known flake stays red'
+foreach ($escape in @('[38:5:196m', '[?25l')) {
+    $x = Run-Scenario @{ log = "  Failed A.B.C.Method [1 s]`n  `e${escape}Failed New.Real.Failure`e[0m [1 s]" }
+    Assert (-not $x.Result.Rerun -and $x.Reran -eq 0 -and $x.Comments -eq 0) "a remaining ESC$escape cannot hide an unfiled failure beside a known flake"
+}
 $x = Run-Scenario @{} -DryRun
 Assert ($x.Result.Rerun -and $x.Reran -eq 0 -and $x.Comments -eq 0) 'a dry run re-runs and comments on nothing'
 $x = Run-Scenario @{ gate = $true }
