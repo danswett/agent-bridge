@@ -18,6 +18,7 @@
 // recent, as the issue asks: an order that can't be kept would be lost at the next reload.
 import { byActivity } from './sessions-store.js';
 import { groupOf, mergeOrder, nextCounter } from './order-merge.js';
+import { sessionStatus } from './status.js';
 
 const KEY = 'agent-bridge.app.order';
 export const SORTS = Object.freeze(['yours', 'recent', 'machine']);
@@ -60,6 +61,7 @@ function read(raw) {
     groupRecords,
     groupListed: Object.assign(Object.create(null), v?.groupListed),
     groupDeviceTag: typeof v?.groupDeviceTag === 'string' && /^[0-9a-f]{32}$/.test(v.groupDeviceTag) ? v.groupDeviceTag : null,
+    collapsedGroups: strings(v?.collapsedGroups).filter((id) => groupRecords.groups[id] && !groupRecords.groups[id].tombstone),
   };
 }
 
@@ -102,6 +104,32 @@ export class SessionOrder {
   }
 
   groupFor(key) { return groupOf(this.#state.groupRecords, key); }
+
+  isGroupCollapsed(id) { return this.#state.collapsedGroups.includes(id); }
+
+  setGroupCollapsed(id, collapsed) {
+    this.#requireGroup(id);
+    this.#state.collapsedGroups = this.#state.collapsedGroups.filter((key) => key !== id);
+    if (collapsed) { this.#state.collapsedGroups.push(id); }
+    this.#save();
+  }
+
+  // Only unpinned live entries enter this projection; collapse never changes membership.
+  groupRows(entries, { matches = () => true, filtered = false, needsOnly = false, showEmpty = true } = {}) {
+    const needs = (e) => sessionStatus(e.session).glyph === 'needs';
+    const groups = this.groups.map((group) => {
+      const members = entries.filter((e) => this.groupFor(keyOf(e)) === group.id);
+      const matching = members.filter((e) => matches(e) && (!needsOnly || needs(e)));
+      const expanded = !this.isGroupCollapsed(group.id) || ((filtered || needsOnly) && matching.length > 0);
+      return {
+        ...group, count: matching.length, expanded,
+        needs: matching.filter(needs).length,
+        unread: matching.some((e) => this.unread(keyOf(e), e.session.activity?.responseTurn)),
+        visible: expanded ? matching : matching.filter(needs),
+      };
+    }).filter((g) => g.count || (showEmpty && !filtered && !needsOnly));
+    return { groups, sessions: entries.filter((e) => this.groupFor(keyOf(e)) === null) };
+  }
 
   #groupName(name, except = null) {
     const trimmed = typeof name === 'string' ? name.trim() : '';
@@ -163,6 +191,7 @@ export class SessionOrder {
       delete s.groupListed[k];
     }
     this.#writeGroup('groups', id, null, true);
+    s.collapsedGroups = s.collapsedGroups.filter((key) => key !== id);
     this.#save();
   }
 

@@ -236,6 +236,7 @@ export class SessionsPage {
       answering: (hostId) => this.answering(hostId),
       order: this.order,
       shows: (hostId) => hosts.shows(hostId),
+      showEmptyGroups: () => hosts.all,
       settled: (hostId) => hosts.link(hostId)?.client?.synced !== false,
       stale: (hostId) => hosts.staleOf(hostId),
       heading: () => $('sessions-h'),

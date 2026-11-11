@@ -669,6 +669,14 @@ body[data-conn="busy"] .sessions, body[data-conn="warn"] .sessions, body[data-co
    then Ended · N, folded. */
 .list-group { margin: var(--ab-space-3) 0 var(--ab-space-1); padding: 0 var(--ab-space-3); font-size: var(--type-section); line-height: var(--type-section-line); font-weight: 600; color: var(--ab-text2); }
 .list-group:first-child { margin-top: 0; }
+.session-group-toggle { display: flex; align-items: center; gap: var(--ab-space-2); min-height: 44px; padding: 0 var(--ab-space-3); border: 0; background: none; color: var(--ab-text); font: inherit; font-weight: 600; text-align: left; cursor: pointer; min-width: 0; }
+.group-name { overflow-wrap: anywhere; min-width: 0; }
+.group-count { color: var(--ab-text2); font-weight: 400; }
+.group-chevron { width: 16px; height: 16px; flex: none; color: var(--ab-text2); transition: transform var(--ab-motion-disclosure-duration) var(--ab-motion-disclosure-ease); }
+.session-group-toggle[aria-expanded="true"] .group-chevron { transform: rotate(90deg); }
+.group-needs { display: flex; align-items: center; gap: var(--ab-space-2); color: var(--ab-needs-text); font-weight: 400; }
+.session-group-toggle > :is(.group-needs, .unread-dot) { margin-left: auto; }
+@media (min-width: 760px) and (any-pointer: fine) { .session-group-toggle { min-height: 36px; } }
 .ended-group > summary { cursor: pointer; color: var(--ab-text2); font-weight: 600; font-size: var(--type-section); line-height: var(--type-section-line); min-height: var(--tap); padding: 0 var(--ab-space-3); display: flex; align-items: center; }
 .ended-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
 .ended { display: flex; flex-wrap: wrap; gap: 0 var(--ab-space-2); padding: var(--ab-space-2) var(--ab-space-3) var(--ab-space-2) calc(var(--ab-space-3) + 16px + var(--ab-space-3)); color: var(--ab-text2); font-size: var(--type-row); line-height: var(--type-row-line); }

@@ -10,7 +10,7 @@ class MemoryStorage {
   setItem(k, v) { assert.equal(k, KEY); this.raw = v; }
 }
 const key = (id, host = 'h1') => orderKey(host, id);
-const entry = (id, hostId = 'h1') => ({ hostId, session: { id, updatedAt: '2026-11-10T12:00:00Z' } });
+const entry = (id, hostId = 'h1') => ({ hostId, session: { id, updatedAt: '2026-11-10T12:00:00Z', activity: { responseTurn: 'before' } } });
 const rows = [entry('a'), entry('b'), entry('c'), entry('d')];
 const ids = (entries) => entries.map((e) => e.session.id);
 
@@ -185,4 +185,75 @@ test('malformed group names do not break a legacy order or later group edits', (
   assert.equal(o.groups[0].id, id);
   assert.equal(o.sort, 'machine');
   assert.deepEqual(JSON.parse(storage.raw).order, [key('b'), key('a')]);
+});
+
+test('new groups expand and collapse stays on this device without entering roaming records', () => {
+  const storage = new MemoryStorage();
+  const o = new SessionOrder({ storage });
+  const id = o.createGroup('Team');
+  assert.equal(o.isGroupCollapsed(id), false);
+  const before = JSON.parse(storage.raw).groupRecords;
+  o.setGroupCollapsed(id, true);
+  assert.equal(new SessionOrder({ storage }).isGroupCollapsed(id), true);
+  assert.deepEqual(JSON.parse(storage.raw).groupRecords, before);
+  assert.equal(new SessionOrder({ storage: new MemoryStorage() }).isGroupCollapsed(id), false);
+  o.deleteGroup(id);
+  assert.equal(o.isGroupCollapsed(id), false);
+});
+
+test('collapsed groups keep needs-you rows visible and exclude pinned and ended members', () => {
+  const o = new SessionOrder({ storage: new MemoryStorage() });
+  const list = rows.map((e, i) => ({ ...e, session: { ...e.session, status: i < 2 ? 'waiting' : 'idle' } }));
+  o.arrange(list);
+  const id = o.createGroup('Team');
+  for (const e of list) { o.setGroup(key(e.session.id), id); }
+  o.setPinned(key('b'), true);
+  o.observe({ type: 'remove', ...list[3] });
+  o.setGroupCollapsed(id, true);
+  const arranged = o.arrange(list.slice(0, 3));
+  const { groups, sessions } = o.groupRows(arranged.sessions);
+  assert.equal(groups[0].count, 2);
+  assert.equal(groups[0].needs, 1);
+  assert.equal(groups[0].expanded, false);
+  assert.deepEqual(ids(groups[0].visible), ['a']);
+  assert.deepEqual(sessions, []);
+});
+
+test('search and Needs you temporarily expand matching groups without changing collapse', () => {
+  const storage = new MemoryStorage();
+  const o = new SessionOrder({ storage });
+  o.arrange(rows);
+  const id = o.createGroup('Team');
+  o.setGroup(key('a'), id);
+  o.setGroup(key('b'), id);
+  o.setGroupCollapsed(id, true);
+  const entries = o.arrange(rows).sessions;
+  const search = o.groupRows(entries, { matches: (e) => e.session.id === 'a', filtered: true });
+  assert.equal(search.groups[0].expanded, true);
+  assert.deepEqual(ids(search.groups[0].visible), ['a']);
+  const waiting = entries.map((e) => ({ ...e, session: { ...e.session, status: e.session.id === 'a' ? 'waiting' : 'idle' } }));
+  const needs = o.groupRows(waiting, { needsOnly: true });
+  assert.equal(needs.groups[0].expanded, true);
+  assert.deepEqual(ids(needs.groups[0].visible), ['a']);
+  assert.equal(new SessionOrder({ storage }).isGroupCollapsed(id), true);
+  assert.equal(o.groupRows(entries).groups[0].expanded, false);
+});
+
+test('empty groups show only without narrowing and collapsed unread marks exclude pins', () => {
+  const o = new SessionOrder({ storage: new MemoryStorage() });
+  o.arrange(rows);
+  const id = o.createGroup('Team');
+  o.createGroup('Empty');
+  o.setGroup(key('a'), id);
+  o.setGroup(key('b'), id);
+  o.setPinned(key('b'), true);
+  o.setGroupCollapsed(id, true);
+  const updated = rows.map((e) => ({ ...e, session: { ...e.session, updatedAt: '2026-11-11T12:00:00Z', activity: { responseTurn: 'after' } } }));
+  let entries = o.arrange(updated).sessions;
+  assert.equal(o.groupRows(entries).groups[0].unread, true);
+  o.markSeen(key('a'), updated[0].session.activity.responseTurn);
+  assert.equal(o.groupRows(entries).groups[0].unread, false);
+  assert.equal(o.groupRows(entries).groups.length, 2);
+  assert.equal(o.groupRows(entries, { showEmpty: false }).groups.length, 1);
+  assert.equal(o.groupRows(entries, { filtered: true, matches: () => false }).groups.length, 0);
 });
