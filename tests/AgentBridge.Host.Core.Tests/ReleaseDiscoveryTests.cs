@@ -324,22 +324,28 @@ public sealed class ReleaseDiscoveryTests : IDisposable
     }
 
     [Theory]
-    [InlineData(-25, false)]
-    [InlineData(1, false)]
-    [InlineData(-25, true)]
-    [InlineData(1, true)]
-    public async Task An_expired_or_future_grace_stays_closed_after_clock_changes(int hours, bool bootstrap)
+    [InlineData(-25, false, false)]
+    [InlineData(1, false, false)]
+    [InlineData(-25, true, false)]
+    [InlineData(1, true, false)]
+    [InlineData(-24, false, true)]
+    public async Task An_expired_or_future_grace_stays_closed_after_clock_changes(int hours, bool bootstrap, bool crossing)
     {
         Directory.CreateDirectory(folder);
-        var anchor = hours > 0 ? Now.AddMinutes(5) : Now.AddHours(hours);
+        var anchor = hours > 0 ? Now.AddMinutes(5) : Now.AddHours(hours).AddMinutes(crossing ? 1 : 0);
         File.WriteAllText(Path.Combine(folder, ReleaseDiscovery.FileName),
-            JsonSerializer.Serialize(new { url = Url, gitHubAnsweredAt = bootstrap ? (DateTimeOffset?)null : anchor, relayBootstrapAt = bootstrap ? anchor : (DateTimeOffset?)null, notBefore = Now.AddMinutes(30), problem = "limited" }));
-        github.Answer = _ => new(HttpStatusCode.Forbidden);
+            JsonSerializer.Serialize(new { url = Url, gitHubAnsweredAt = bootstrap ? (DateTimeOffset?)null : anchor, relayBootstrapAt = bootstrap ? anchor : (DateTimeOffset?)null, notBefore = crossing ? (DateTimeOffset?)null : Now.AddMinutes(30), problem = "limited" }));
+        github.Answer = _ =>
+        {
+            if (crossing) { time.Advance(TimeSpan.FromMinutes(2)); }
+            return new HttpResponseMessage(crossing ? HttpStatusCode.InternalServerError : HttpStatusCode.Forbidden);
+        };
         using var discovery = Discovery();
         await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
-        Assert.Empty(github.Requests);
+        if (!crossing) { Assert.Empty(github.Requests); }
         time.Advance(TimeSpan.FromMinutes(10));
-        await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
+        if (!crossing) { await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win")); }
+        github.Answer = _ => new(HttpStatusCode.Forbidden);
         foreach (var rollback in new[] { 2, 24 })
         {
             using var rolledBack = new ReleaseDiscovery(folder, github, new FakeTimeProvider(Now.AddHours(-rollback)), random: () => 0);
