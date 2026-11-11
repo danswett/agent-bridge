@@ -173,6 +173,23 @@ configured by `infra/ps-rule.yaml`) over each region's `.bicepparam`, production
 included. It is advisory: its findings are warnings and a table in the run's summary, and those
 already on main when it was added, with their fixes, are listed in #441.
 
+Both Key Vaults send the `audit` category group (no metrics) to the stamp's Log Analytics
+workspace, including on the base-only pass before the apps deploy. This records vault
+access, including reads of signing keys. Audit ingestion counts against the same daily cap
+(`logDailyCapGb`, normally 0.1 GB); its volume is tiny. No extra workspace or cap is created.
+The compiled-template regression is `infra/test-appinsights-wiring.sh`.
+
+The verified lean-stamp exceptions are named, with their reasons and source files, in
+`infra/ps-rule.yaml`. The advisory scan still leaves production's
+`Azure.KeyVault.PurgeProtect` on `kv-abrelay-prod-wus2` (the owner's irreversible decision),
+`Azure.AppInsights.LocalAuth` on `appi-agent-bridge-relay-wus2` (connection-string telemetry;
+Entra ingestion needs #1813), and `Azure.Storage.UseReplication` on `abblobprodwus2`,
+`abblobstgwus2`, `abrosterprodwus2` and `abrosterstgwus2`. The old disposable-data rationale
+does not cover retained feedback or signed-device trust; those four findings stay open.
+Roster soft-delete findings already pass and are not suppressed. No authentication,
+retention, replication, production purge-protection or scan-gate behavior is changed.
+These template changes reach Azure only through a separately owner-approved deployment.
+
 ## Building a stamp
 
 Everything below runs as the subscription's owner, with
@@ -551,7 +568,8 @@ within the 20-second shutdown timeout (10 seconds for the roster).
 `infra/modules/roster-store.bicep`, one per app (`deployRosterStore`), next to it:
 
 * A StorageV2 account of its own, **Standard_LRS, hot**, HTTPS and TLS 1.2 only, **shared keys
-  off**, no public blob access, no CORS (no browser reaches it), no soft delete or versioning.
+  off**, no public blob access, no CORS (no browser reaches it), and no versioning.
+  Blob and container soft delete retain data for 14 days to protect signed-device trust.
   Not the blob store's account: its lifecycle rule deletes every blob a day after it is written.
 * One private container, `roster`, holding one small JSON blob per account, named by an HMAC of
   the account id under a key from the token key. A **lifecycle rule** deletes a blob not

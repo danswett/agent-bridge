@@ -1,6 +1,7 @@
 # PSRule for Azure over the stamp (quality/README.md §3.3, "Supply chain"; the iac-scan suite).
 # .github/workflows/iac-scan.yml runs it on pull requests that touch infra/; locally:
-#   Assert-PSRule -Option infra/ps-rule.yaml -InputPath infra/ -Module PSRule.Rules.Azure -Format File
+#   $env:RELAY_DEPLOY_PRODUCTION='true'
+#   Invoke-PSRule -Option infra/ps-rule.yaml -InputPath infra/ -Module PSRule.Rules.Azure -Outcome Fail,Error
 # It reads each region's .bicepparam, expanded through main.bicep as the Bicep CLI builds it,
 # so the rules see the resources a deploy would submit.
 
@@ -22,3 +23,74 @@ include:
 output:
   culture:
     - en-US
+
+# Lean-stamp exceptions (#441, corrected by #1305). Exact names, never a rule-wide exclusion.
+# File references below are relative to infra/ unless they start with ../.
+suppression:
+  Azure.ContainerApp.PublicAccess:
+    # Public rendezvous for phones and hosts; authentication is in the relay, not a private
+    # network (../docs/relay-deploy.md; modules/relay-app.bicep's external ingress).
+    - cae-agent-bridge-relay-wus2
+  Azure.ContainerApp.RestrictIngress:
+    # The same roaming clients have no fixed source ranges (modules/relay-app.bicep ingress).
+    - agent-bridge-relay
+    - agent-bridge-relay-staging
+  Azure.KeyVault.Firewall:
+    # The consumption stamp has no VNet/fixed egress (main.bicep); the staging smoke test
+    # also reads its vault from a hosted runner (../.github/workflows/relay.yml).
+    - kv-abrelay-prod-wus2
+    - kv-abrelay-stg-wus2
+  Azure.Storage.Firewall:
+    # Browsers transfer ciphertext directly with user-delegation SAS; shared keys and public
+    # blob access are off (modules/blob-store.bicep; ../docs/relay-deploy.md, Blob store).
+    - abblobprodwus2
+    - abblobstgwus2
+    # Only the relay's identity reaches these containers, from consumption without fixed
+    # egress; shared keys are off (modules/roster-store.bicep; main.bicep).
+    - abrosterprodwus2
+    - abrosterstgwus2
+  Azure.ACR.ExportPolicy:
+    # Export restrictions need Premium/private networking. This Basic registry holds the
+    # public-source image, with no build secrets (main.bicep; ../src/AgentBridge.Relay/Dockerfile;
+    # ../.github/workflows/relay.yml's docker build).
+    - abrelaywus2
+  Azure.ACR.MinSku:
+    # Basic is the lean stamp's registry (main.bicep); another region gets its own stamp
+    # and registry (../docs/relay-deploy.md, Building a stamp).
+    - abrelaywus2
+  Azure.ACR.GeoReplica:
+    # Same per-region Basic registry choice, not a shared cross-region registry (main.bicep;
+    # ../docs/relay-deploy.md, Building a stamp).
+    - abrelaywus2
+  Azure.ContainerApp.AvailabilityZone:
+    # The lean consumption environment deliberately has zoneRedundant: false (main.bicep;
+    # ../docs/design.md, Lean until demand requires more).
+    - cae-agent-bridge-relay-wus2
+  Azure.ContainerApp.MinReplicas:
+    # Routing/presence are in memory: at most one replica; staging may scale to zero
+    # (regions/westus2.bicepparam; ../docs/relay-deploy.md, Why one replica).
+    - agent-bridge-relay
+    - agent-bridge-relay-staging
+  Azure.Log.Replication:
+    # Diagnostic logs have 30-day retention and a 0.1 GB daily cap, not a second-region
+    # recovery copy (main.bicep's logRetentionDays/logDailyCapGb; ../docs/design.md lean size).
+    - log-agent-bridge-relay-wus2
+  Azure.Storage.SoftDelete:
+    # Deleted transfers must be gone; feedback has its own 30-day immutability policy
+    # (modules/blob-store.bicep). Roster trust logs already have 14-day soft delete:
+    # do not suppress those accounts (modules/roster-store.bicep).
+    - abblobprodwus2
+    - abblobstgwus2
+  Azure.Storage.ContainerSoftDelete:
+    # Same deletion policy, with feedback separately retained (modules/blob-store.bicep).
+    - abblobprodwus2
+    - abblobstgwus2
+  Azure.KeyVault.PurgeProtect:
+    # Staging is disposable and must not irreversibly pin its vault name for 90 days
+    # (modules/relay-app.bicep's purge-protection comment; regions/westus2.bicepparam).
+    - kv-abrelay-stg-wus2
+
+# Intentionally open: production PurgeProtect (owner decision), AppInsights.LocalAuth
+# (connection-string telemetry; #1813), and Storage.UseReplication on all four accounts.
+# #441's disposable-data reason no longer holds: blob-store.bicep retains feedback,
+# and roster-store.bicep holds signed-device trust. No retention/auth/replication change.

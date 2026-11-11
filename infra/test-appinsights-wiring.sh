@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Production's Application Insights wiring (#1311, #569), checked on the compiled template:
+# Log Analytics wiring (#1305, #1311, #569), checked on the compiled template:
 # main.bicep declares the component and hands production (only) its connection string, relay-app
 # sets the app setting only when given one, and monitoring.bicep refers to the component instead of
-# declaring it (declaring it there made it circular with the app). Nothing here reaches Azure.
+# declaring it (declaring it there made it circular with the app). Both vaults send audit logs
+# to the same workspace, even before the apps deploy. Nothing here reaches Azure.
 # Run by relay.yml's infra job.
 set -euo pipefail
 
@@ -44,7 +45,25 @@ if not prod:
 if stag:
     fail.append("stagingApp must not get a connection string")
 
+for app in ("stagingApp", "productionApp"):
+    deployment = next(r for p, r in rows if p == "main" and r["_key"] == app)
+    workspace = deployment["properties"]["parameters"].get("workspaceId", {}).get("value")
+    if workspace != "[resourceId(\x27Microsoft.OperationalInsights/workspaces\x27, parameters(\x27logAnalyticsName\x27))]":
+        fail.append(app + " must receive the stamp workspace id")
+    diagnostics = [r for p, r in rows if p == "main/" + app and r["type"] == "Microsoft.Insights/diagnosticSettings"]
+    if len(diagnostics) != 1:
+        fail.append(app + " must declare one vault diagnostic setting")
+        continue
+    diagnostic = diagnostics[0]
+    if diagnostic.get("scope") != "[resourceId(\x27Microsoft.KeyVault/vaults\x27, parameters(\x27app\x27).keyVaultName)]" or "condition" in diagnostic:
+        fail.append(app + " diagnostics must cover its vault even before app deployment")
+    props = diagnostic["properties"]
+    if props.get("workspaceId") != "[parameters(\x27workspaceId\x27)]":
+        fail.append(app + " vault diagnostics must use the supplied workspace")
+    if props.get("logs") != [{"categoryGroup": "audit", "enabled": True}] or props.get("metrics"):
+        fail.append(app + " vault diagnostics must enable only audit logs, without metrics")
+
 if fail:
     print("\n".join("FAIL: " + f for f in fail)); sys.exit(1)
-print("ok: Application Insights wiring")
+print("ok: Application Insights and Key Vault audit wiring")
 '
