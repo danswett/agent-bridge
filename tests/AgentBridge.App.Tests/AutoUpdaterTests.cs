@@ -1276,6 +1276,15 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Unknown_update_check_metadata_is_not_reported_as_a_known_source_or_quota()
+    {
+        var state = UpdateProtocol.Fit(new UpdateState { CheckSource = "other", GitHubRemaining = -1, GitHubQuotaAt = Make.T0 });
+        Assert.Null(state.CheckSource);
+        Assert.Null(state.GitHubRemaining);
+        Assert.Null(state.GitHubQuotaAt);
+    }
+
+    [Fact]
     public async Task A_failed_check_does_not_replace_the_source_of_the_last_successful_check()
     {
         updater.CheckSource = "cdn";

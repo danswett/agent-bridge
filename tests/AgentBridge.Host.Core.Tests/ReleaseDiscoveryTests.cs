@@ -98,9 +98,15 @@ public sealed class ReleaseDiscoveryTests : IDisposable
         github.Answer = _ => Ok(Releases, "\"v1\"");
         await discovery.ReleasesAsync(Url, CancellationToken.None);
         time.Advance(ReleaseDiscovery.Interval);
-        github.Answer = _ => new HttpResponseMessage(HttpStatusCode.NotModified) { Headers = { ETag = new("\"v1\"") } };
+        github.Answer = _ =>
+        {
+            var answer = new HttpResponseMessage(HttpStatusCode.NotModified) { Headers = { ETag = new("\"v1\"") } };
+            answer.Headers.Add("X-RateLimit-Remaining", "36");
+            return answer;
+        };
 
         Assert.Equal(Releases, await discovery.ReleasesAsync(Url, CancellationToken.None));
+        Assert.Equal((36, time.GetUtcNow()), (discovery.GitHubRemaining, discovery.GitHubQuotaAt));
         // And the 304 starts a new interval: the next check soon after asks nothing.
         await discovery.ReleasesAsync(Url, CancellationToken.None);
 
