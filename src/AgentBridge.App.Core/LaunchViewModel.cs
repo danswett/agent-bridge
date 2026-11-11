@@ -821,10 +821,18 @@ public sealed partial class LaunchViewModel : Observable
             // A resume the host holds back while its discovery is held (#1064): the waiting form, not a refusal.
             "busy" when e.Payload is LaunchRequest { Resume: not null } && e.Reason is { } w && w.StartsWith("Held:", StringComparison.Ordinal)
                 => ($"{(string.IsNullOrEmpty(machineName) ? "The machine" : machineName)} is still finding its sessions. Try Launch again in a moment.", Tone.Progress),
-            "busy" => ($"Not launched: {Sentence(e.Reason ?? "the machine is busy with another launch")} Try again in a moment.", Tone.Warn),
+            "busy" => (BusyText(e.Reason), Tone.Warn),
             "refused" => ($"Not launched: {Sentence(e.Reason ?? "the machine refused it")}", Tone.Bad),
             _ => ($"Couldn't launch{(e.Reason is { } f ? $": {Sentence(f)}" : ". Check at the machine.")}{Again(e, machineName)}", Tone.Bad),
         };
+    }
+
+    static string BusyText(string? reason)
+    {
+        if (string.IsNullOrEmpty(reason)) { reason = "the machine is busy with another launch"; }
+        var prefix = reason.StartsWith("Busy:", StringComparison.Ordinal) || reason.StartsWith("Held:", StringComparison.Ordinal) ? "" : "Not launched: ";
+        var retry = reason.Contains("try again", StringComparison.OrdinalIgnoreCase) ? "" : " Try again in a moment.";
+        return $"{prefix}{Sentence(reason)}{retry}";
     }
 
     static string NameOr(string? name) => string.IsNullOrEmpty(name) ? "The machine" : name;

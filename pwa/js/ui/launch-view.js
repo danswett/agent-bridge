@@ -64,10 +64,14 @@ export function describeLaunch(entry, { machineName, session = entry?.detail?.se
       return { text: d.launched?.transfer ? `Session brought over and started${how}. The original is still on its machine.` : `Session started${how}.${session ? '' : ' Open it from the list.'}`, tone: 'ok' };
     case 'unconfirmed':
       return { text: `Launched${how}, but not confirmed${entry.reason ? `: ${sentence(entry.reason)}` : '. Check at the machine.'}`, tone: 'warn' };
-    case 'busy':
+    case 'busy': {
       // A resume the host holds back while its discovery is held (#1064): the waiting form, not a refusal.
       if (entry.answer?.resume && /^Held:/.test(entry.reason ?? '')) { return { text: `${machineName || 'The machine'} is still finding its sessions. Try Launch again in a moment.`, tone: 'progress' }; }
-      return { text: `Not launched: ${sentence(entry.reason ?? 'the machine is busy with another launch')} Try again in a moment.`, tone: 'warn' };
+      const reason = entry.reason || 'the machine is busy with another launch';
+      const prefix = /^(Busy:|Held:)/.test(reason) ? '' : 'Not launched: ';
+      const retry = /try again/i.test(reason) ? '' : ' Try again in a moment.';
+      return { text: `${prefix}${sentence(reason)}${retry}`, tone: 'warn' };
+    }
     case 'refused':
       return { text: `Not launched: ${sentence(entry.reason ?? 'the machine refused it')}`, tone: 'bad' };
     default:
