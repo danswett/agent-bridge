@@ -1,15 +1,26 @@
 using System.Collections.Concurrent;
+using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Load;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
 
 namespace AgentBridge.Host;
 
-public sealed class LoadService(Func<ProcessLoadReport?> current, Func<bool> enabled, Action<string>? log = null, TimeProvider? time = null)
+public sealed class LoadService
 {
-    readonly TimeProvider clock = time ?? TimeProvider.System;
+    readonly Func<ProcessLoadReport?> current;
+    readonly Func<bool> enabled;
+    readonly Action<string>? log;
+    readonly TimeProvider clock;
     readonly ConcurrentDictionary<IProtocolChannel, Subscription> subscriptions = new();
     public int Subscribers => subscriptions.Values.Count(s => s.Active);
+
+    public LoadService(ISessionSource source, Func<ProcessLoadReport?> current, Func<bool> enabled, Action<string>? log = null, TimeProvider? time = null)
+    {
+        this.current = current; this.enabled = enabled; this.log = log;
+        clock = time ?? TimeProvider.System;
+        source.Changed += (_, _) => Publish();
+    }
 
     AgentBridge.Protocol.MachineLoad Current()
     {
@@ -50,7 +61,7 @@ public sealed class LoadService(Func<ProcessLoadReport?> current, Func<bool> ena
         finally { state.Gate.Release(); }
     }
 
-    public void Publish(ProcessLoadReport report)
+    public void Publish()
     {
         foreach (var (channel, state) in subscriptions) { _ = PushAsync(channel, state); }
     }

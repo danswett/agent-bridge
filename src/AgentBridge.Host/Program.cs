@@ -677,8 +677,7 @@ async Task<int> ServeAsync(HostHandover handover)
         log: Log);
     var fleetNames = new AgentBridge.Host.Fleet.FleetNames(identity.Folder);
     var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare, name: fleetNames.Get, log: Log);
-    var loadService = new LoadService(() => load.Current, () => settings.LoadEnabled, Log);
-    load.Sampled += loadService.Publish;
+    var loadService = new LoadService(source, () => load.Current, () => settings.LoadEnabled, Log);
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log, peerUsage), launcher, transfers)
     {
         LoadEnabled = () => settings.LoadEnabled,

@@ -15,7 +15,7 @@ public sealed partial class ServeTests
 
     LoadService ServeLoad()
     {
-        var loads = new LoadService(() => loadReport, () => loadEnabled, time: loadTime);
+        var loads = new LoadService(source, () => loadReport, () => loadEnabled, time: loadTime);
         service = new(source, new("host-id", "Test host", "windows", "0.1.0"))
         { Load = loads, LoadEnabled = () => loadEnabled };
         host.Hub.Handler = service.HandleAsync;
@@ -58,27 +58,30 @@ public sealed partial class ServeTests
         Assert.Equal(25, Result(await ch.RequestAsync("load.subscribe", new { })).GetProperty("cpu").GetProperty("percent").GetDouble());
         Result(await ch.RequestAsync("load.subscribe", new { }));
         await HostWait.UntilAsync(() => loads.Subscribers == 1, "one active load subscription", Patience);
-        loads.Publish(loadReport);
+        loads.Publish();
         loadTime.Advance(TimeSpan.FromMilliseconds(999));
-        loads.Publish(loadReport);
+        loads.Publish();
         await LoadQuietAsync(ch);
         loadTime.Advance(TimeSpan.FromMilliseconds(1));
         loadReport = Reading(42);
-        loads.Publish(loadReport);
+        await ChangeAsync("activity publishes the current load", 4);
         var update = await NextAsync(ch);
         Assert.Equal(("load.update", 1L), (update.Name, update.Seq));
         Assert.Equal(42, update.Data.GetProperty("cpu").GetProperty("percent").GetDouble());
-        loads.Publish(loadReport);
+        loads.Publish();
+        await LoadQuietAsync(ch);
+        loadTime.Advance(TimeSpan.FromSeconds(5));
+        loadReport = Reading(43);
         await LoadQuietAsync(ch);
         Result(await ch.RequestAsync("load.unsubscribe", new { }));
         Assert.Equal(0, loads.Subscribers);
         loadTime.Advance(TimeSpan.FromSeconds(2));
-        loads.Publish(loadReport);
+        loads.Publish();
         await LoadQuietAsync(ch);
         Result(await ch.RequestAsync("load.subscribe", new { }));
         loadEnabled = false;
         loadTime.Advance(TimeSpan.FromSeconds(2));
-        loads.Publish(loadReport);
+        loads.Publish();
         await LoadQuietAsync(ch);
         await client.DisposeAsync();
         await HostWait.UntilAsync(() => loads.Subscribers == 0, "load subscription cleanup", Patience);

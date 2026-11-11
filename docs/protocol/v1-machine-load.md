@@ -10,7 +10,7 @@ and rules as [v1-sessions.md](v1-sessions.md). Load records live in
 Windows/Linux physical memory totals, writer-domain checks and the 64 KiB limit.
 Unknown agent kinds are `other`; handles and unattributed counts remain absent because
 the sampler does not measure them. `LoadService` maps the current shared sampler report on get,
-subscribe and sample events, with a 15-second stale limit, one subscription per connection,
+subscribe and session/process-change events, with a 15-second stale limit, one subscription per connection,
 response-before-update ordering and at most one update per second. Unsubscribe or channel close ends it.
 
 Counts and sizes only. Nothing here carries a path, command line, PID, prompt, transcript or
