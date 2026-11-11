@@ -890,17 +890,31 @@ test.describe('the session pane after #221\'s review', () => {
     await expect(session.locator('.row-status')).toHaveText('Delegate \u201cMain agent\u201d asks');
   });
 
-  test('the main agent\'s words are dated by when it wrote them, not by a delegate\'s later update', async ({ page }) => {
+  test('the main agent\'s words use matching recorded time, not its own or a delegate\'s later update', async ({ page }) => {
     await openDemo(page, '&delegates=1');
     const v = await open(page, 'demo-delegates');
     const said = new Date(Date.now() - 20 * 60000).toISOString();
-    await page.evaluate((at) => {
+    await page.evaluate(async (at) => {
       const d = window.agentBridgeDemo;
       const s = d.host.get('demo-delegates');
-      d.upsert({ ...s, updatedAt: new Date().toISOString(), activity: { ...s.activity, own: { ...s.activity.own, at } } });
+      const turn = 'main-recorded-time';
+      const response = 'The main agent recorded this answer.';
+      d.host.historyTurns.set(s.id, [{
+        id: turn, at, prompt: { text: 'Check the result.' },
+        parts: [{ id: 'main-recorded-reply', kind: 'response', at, text: response }],
+      }]);
+      d.upsert({
+        ...s, updatedAt: new Date().toISOString(),
+        activity: {
+          ...s.activity, turn, responseTurn: turn, userMessage: 'Check the result.',
+          source: { ...s.activity.source, response: 'agent-7' },
+          own: { ...s.activity.own, response, at: new Date().toISOString() },
+        },
+      });
+      await d.view.history.open(d.host.machine.id, s.id);
     }, said);
-    await expect(v.locator('.speaker-age')).toHaveText('20m ago');
-    await expect(v.locator('.speaker-age')).toHaveAttribute('datetime', said);
+    await expect(v.locator('.speaker-age .msg-time')).toHaveText('20 min ago');
+    await expect(v.locator('.speaker-age time')).toHaveAttribute('datetime', said);
     // The row still says when the session last changed.
     await expect(row(page, 'demo-delegates').locator('.row-age')).toHaveText('just now');
   });

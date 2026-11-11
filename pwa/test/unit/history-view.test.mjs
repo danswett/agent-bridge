@@ -2,9 +2,10 @@
 // meta line when there is nothing to show.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { WORDS, historyPlan, shownParts } from '../../js/ui/history-view.js';
+import { WORDS, historyPlan, shownParts, liveMessageTimes } from '../../js/ui/history-view.js';
 import { HistoryStore } from '../../js/history-store.js';
 import { readSession } from '../../js/protocol.js';
+import { NO_TIME } from '../../js/history.js';
 
 const turn = (id) => ({ id, prompt: null, parts: [] });
 const snap = (phase, turns = []) => ({ phase, turns });
@@ -45,4 +46,41 @@ test('a turn only activity has told keeps its reply once the next turn is the li
 test('a stored reply is drawn as it is, and the live words are not drawn beside it', () => {
   const stored = { id: 'a', parts: [{ kind: 'response', text: 'stored' }], live: { response: 'live' } };
   assert.deepEqual(shownParts(stored).map((p) => p.text), ['stored']);
+});
+
+const SENT = '2026-11-10T20:00:00Z';
+const REPLIED = '2026-11-10T20:01:00Z';
+const live = (extra = {}) => ({ activity: { turn: 'current', responseTurn: 'current', userMessage: 'Again', response: 'Done', ...extra } });
+const recorded = (extra = {}) => ({
+  id: 'current', at: SENT, prompt: { text: 'Again', from: 'person' },
+  parts: [{ kind: 'response', text: 'Done', at: REPLIED }], ...extra,
+});
+const none = { prompt: null, response: null };
+
+test('live times appear only when recorded history for that turn arrives', () => {
+  assert.deepEqual(liveMessageTimes(snap('loading'), live()), none);
+  assert.deepEqual(liveMessageTimes(snap('ready', [recorded()]), live()), { prompt: SENT, response: REPLIED });
+  assert.deepEqual(liveMessageTimes(snap('ready', [recorded()]), live({ turn: null })), none);
+  assert.deepEqual(liveMessageTimes(snap('ready', [recorded({ id: 'earlier' })]), live()), none);
+  assert.deepEqual(liveMessageTimes(snap('ready', [recorded({ prompt: null, parts: [] })]), live()), none);
+});
+
+test('provisional, unreadable and missing times never borrow a browser or session time', () => {
+  for (const extra of [{ provisional: true }, { unreadable: true }]) {
+    assert.deepEqual(liveMessageTimes(snap('ready', [recorded(extra)]), live()), none);
+  }
+  for (const at of [null, undefined, 'not a time', NO_TIME]) {
+    const t = recorded({ at, parts: [{ kind: 'response', text: 'Done', at }] });
+    assert.deepEqual(liveMessageTimes(snap('ready', [t]), { ...live(), updatedAt: SENT, statusSince: SENT }), none);
+  }
+});
+
+test('stale words within the same turn cannot date a newer live message', () => {
+  const t = recorded();
+  assert.deepEqual(liveMessageTimes(snap('ready', [t]), live({ userMessage: 'New prompt', response: 'New answer' })), none);
+  assert.deepEqual(liveMessageTimes(snap('ready', [t]), live({ responseTurn: 'earlier' })), { prompt: SENT, response: null });
+  assert.deepEqual(liveMessageTimes(snap('ready', [t]), live({ responseTurn: null })), { prompt: SENT, response: null });
+  assert.deepEqual(liveMessageTimes(snap('ready', [t]), live({ source: { response: 'delegate' }, own: { response: 'Main answer', at: SENT } })), { prompt: SENT, response: null });
+  t.parts.push({ kind: 'response', text: 'Later answer', at: SENT });
+  assert.deepEqual(liveMessageTimes(snap('ready', [t]), live()), { prompt: SENT, response: null });
 });

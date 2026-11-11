@@ -9,6 +9,8 @@ import { timeButton, timeRow, timeTicker } from './message-time-view.js';
 import { sentMessage } from './sent-message.js';
 import { renderResolved } from './question-view.js';
 import { closedQuestionIds } from '../history.js';
+import { liveVoice } from '../attribution.js';
+import { messageInstant } from './message-time.js';
 
 export const WORDS = {
   loading: 'Loading conversation\u2026',
@@ -55,6 +57,20 @@ export function historyPlan(snapshot, latestId = null) {
   else if (snapshot.phase === 'unavailable') { note = WORDS.unavailable; }
   else if (snapshot.phase === 'ready' && !snapshot.turns.length && !latestId) { note = WORDS.empty; }
   return { note, turns };
+}
+
+// Turn identity is required before comparing words: repeated text in another turn is not evidence.
+export function liveMessageTimes(snapshot, session) {
+  const a = session.activity;
+  const t = a.turn ? snapshot?.turns.find((t) => t.id === a.turn) : null;
+  const none = { prompt: null, response: null };
+  if (!t || t.provisional || t.unreadable) { return none; }
+  const dated = (at) => messageInstant(at) === null ? null : at;
+  const prompt = t.prompt && t.prompt.text === a.userMessage
+    && (t.prompt.from ?? 'person') === (a.userMessageFrom ?? 'person') ? dated(t.at) : null;
+  const reply = t.parts.findLast((p) => p.kind === 'response' && p.text);
+  const response = a.responseTurn === a.turn && reply && reply.text === liveVoice(session).response ? dated(reply.at) : null;
+  return { prompt, response };
 }
 
 // A time on its own line under what it dates, only when there is one to show.

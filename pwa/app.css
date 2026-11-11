@@ -1154,6 +1154,12 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 .msg-time-pop { position: fixed; z-index: 50; padding: var(--ab-space-1) var(--ab-space-2); background: var(--ab-card); color: var(--ab-text); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-control); font-size: var(--type-meta); line-height: var(--type-meta-line); white-space: nowrap; pointer-events: none; }
 .msg-time-pop[hidden] { display: none; }
 .user-message { justify-self: end; max-width: 85%; min-width: 0; }
+.user-message .msg-time-row { position: relative; }
+.user-message .msg-time { position: absolute; inset-inline-end: 0; max-width: 100%; }
+.user-message .msg-time time, .prompt-age .msg-time time, .speaker-age .msg-time time { display: block; overflow: hidden; text-overflow: ellipsis; }
+.stream > .prompt-origin .prompt-label { flex-wrap: nowrap; }
+.prompt-age, .speaker-age { position: relative; flex: 0 1 11ch; min-width: 0; height: var(--type-meta-line); align-self: center; }
+.prompt-age .msg-time, .speaker-age .msg-time { position: absolute; inset-inline-start: 0; max-width: 100%; }
 .bubble { padding: var(--ab-space-2) var(--ab-space-3); background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card); }
 .bubble .plain { margin: 0; }
 .sent-attachments { list-style: none; display: grid; gap: var(--ab-space-1); margin: 0; padding: 0; }
