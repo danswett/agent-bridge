@@ -22,7 +22,16 @@ exec "$@"
 EOF
 cat > "$work/bin/getent" <<'EOF'
 #!/usr/bin/env bash
+printf '%s\n' "${APT_DNS_OUTPUT:-}"
 exit "${APT_DNS_EXIT:-0}"
+EOF
+cat > "$work/bin/timeout" <<'EOF'
+#!/usr/bin/env bash
+echo "$*" >> "$TIMEOUT_LOG"
+if [ "${3:-}" = apt-get ] && [ -n "${APT_TIMEOUT_EXIT:-}" ]; then
+  shift 2; "$@"; exit "$APT_TIMEOUT_EXIT"
+fi
+exec /usr/bin/timeout "$@"
 EOF
 # apt-get records each call. A download is slow (it outlasts the limit) while the mirror list
 # still names the Azure mirror and APT_SLOW is set, so only leaving that mirror ends it. A
@@ -31,6 +40,9 @@ cat > "$work/bin/apt-get" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$APT_LOG"
 case "$*" in
+  *--no-download*)
+    [ -z "${APT_CACHE_ERROR:-}" ] || printf '%s\n' "$APT_CACHE_ERROR" >&2
+    exit "${APT_CACHE_EXIT:-0}" ;;
   update)
     if [ -n "${APT_UPDATE_ERROR:-}" ] && { [ "${APT_AZURE_ONLY:-}" != true ] || grep -q azure "$PLAYWRIGHT_APT_ETC/apt-mirrors.txt"; }; then
       printf '%s\n' "$APT_UPDATE_ERROR" >&2; exit "${APT_UPDATE_EXIT:-100}"
@@ -58,8 +70,9 @@ cat > "$work/bin/sleep" <<'EOF'
 if [ "$1" = 30 ]; then exec /usr/bin/sleep "$@"; fi
 echo "$*" >> "$SLEEP_LOG"
 EOF
-chmod +x "$work/bin/npx" "$work/bin/sudo" "$work/bin/apt-get" "$work/bin/sleep" "$work/bin/getent"
+chmod +x "$work/bin/npx" "$work/bin/sudo" "$work/bin/apt-get" "$work/bin/sleep" "$work/bin/getent" "$work/bin/timeout"
 export PATH="$work/bin:$PATH" NPX_LOG="$work/npx.log" APT_LOG="$work/apt.log" SLEEP_LOG="$work/sleep.log"
+export TIMEOUT_LOG="$work/timeout.log"
 export PLAYWRIGHT_APT_ETC="$work/apt" PLAYWRIGHT_APT_LIMIT=1s
 unset GITHUB_JOB
 export PLAYWRIGHT_APT_ATTEMPTS=1 PLAYWRIGHT_APT_RETRY_DELAY=0
@@ -67,6 +80,7 @@ export PLAYWRIGHT_APT_ATTEMPTS=1 PLAYWRIGHT_APT_RETRY_DELAY=0
 azure=$'http://azure.archive.ubuntu.com/ubuntu/\tpriority:1'
 canonical=$'https://archive.ubuntu.com/ubuntu/\tpriority:2'
 download='install -y --download-only --no-install-recommends libasound2t64 libgtk-4-1 xvfb'
+cached='install -y --no-install-recommends --no-download libasound2t64 libgtk-4-1 xvfb'
 failures=0
 
 # reset <mirror list lines...>: a fresh apt directory and logs, and the stand-ins' defaults.
@@ -74,16 +88,19 @@ reset() {
   rm -rf "$PLAYWRIGHT_APT_ETC"; mkdir -p "$PLAYWRIGHT_APT_ETC/sources.list.d"
   printf '%s\n' "$@" > "$PLAYWRIGHT_APT_ETC/apt-mirrors.txt"
   printf 'Types: deb\nURIs: mirror+file:/etc/apt/apt-mirrors.txt\n' > "$PLAYWRIGHT_APT_ETC/sources.list.d/ubuntu.sources"
-  : > "$NPX_LOG"; : > "$APT_LOG"; : > "$SLEEP_LOG"
+  : > "$NPX_LOG"; : > "$APT_LOG"; : > "$SLEEP_LOG"; : > "$TIMEOUT_LOG"
   export NPX_OUT='sudo -- sh -c "apt-get update&& apt-get install -y --no-install-recommends libasound2t64 libgtk-4-1 xvfb"'
   unset APT_SLOW APT_UPDATE_SLOW APT_UPDATE_EXIT APT_DOWNLOAD_EXIT APT_GETS PLAYWRIGHT_APT_FORCE_FALLBACK CHECK_BROWSERS
   unset APT_ERROR APT_FAIL_COUNT APT_AZURE_ONLY
-  unset APT_DNS_EXIT APT_UPDATE_ERROR
+  unset APT_DNS_EXIT APT_DNS_OUTPUT APT_UPDATE_ERROR
+  unset DEBS_CACHE_HIT APT_CACHE_ERROR APT_CACHE_EXIT APT_TIMEOUT_EXIT PLAYWRIGHT_APT_UPDATE_BUDGET
 }
 # check <name> <expected exit> <expected apt-get calls, one per line> [expected mirror list lines...]
 # download.sh is given CHECK_BROWSERS, chromium and webkit unless set.
 check() {
   local name="$1" want="$2" calls="$3" code=0 browsers; shift 3
+  # A successful download must now also leave the dependencies installed, offline.
+  if [ "$want" -eq 0 ] && [[ "$calls" == *"--download-only"* ]]; then calls+=$'\n'"$cached"; fi
   read -ra browsers <<< "${CHECK_BROWSERS:-chromium webkit}"
   bash "$here/download.sh" "${browsers[@]}" > "$work/out" 2>&1 || code=$?
   local problems=()
@@ -128,9 +145,13 @@ check "an update that times out switches to Canonical before its next update and
 reset "$azure" "$canonical"; export APT_UPDATE_SLOW=ignore
 check "an update killed after ignoring TERM switches to Canonical as a timeout" \
   0 "$(printf 'update\nupdate\n%s' "$download")" "$canonical"
-reset "$azure" "$canonical"; export APT_DNS_EXIT=1
+reset "$azure" "$canonical"; export APT_DNS_EXIT=1 APT_DNS_OUTPUT='getent lookup failed'
 check "a failed Azure name probe switches before the first update" \
   0 "$(printf 'update\n%s' "$download")" "$canonical"
+grep -q 'Azure DNS probe failed (exit 1)' "$work/out" \
+  || { echo "FAIL: the probe exit code was not logged"; failures=$((failures + 1)); }
+grep -qF 'getent lookup failed' "$work/out" \
+  || { echo "FAIL: the probe output was not logged"; failures=$((failures + 1)); }
 reset "$azure" "$canonical"; export APT_UPDATE_SLOW=all
 check "a Canonical update that also times out fails without trying Azure again" \
   124 "$(printf 'update\nupdate')" "$canonical"
@@ -220,6 +241,78 @@ check "a new invocation on a Canonical-only list recovers on its third download 
   0 "$(printf 'update\n%s\n%s\n%s' "$download" "$download" "$download")" "$canonical"
 [ "$(cat "$SLEEP_LOG")" = $'5\n20' ] \
   || { echo "FAIL: Canonical-only download did not use 5/20 second backoff"; failures=$((failures + 1)); }
+reset "$azure" "$canonical"; export DEBS_CACHE_HIT=true
+check "a cache hit installs offline without downloading packages again" \
+  0 "$(printf 'update\n%s' "$cached")" "$azure" "$canonical"
+reset "$azure" "$canonical"; export DEBS_CACHE_HIT=true APT_CACHE_EXIT=100 APT_CACHE_ERROR='E: Hash Sum mismatch'
+check "a corrupt cached package fails without another update or download" \
+  100 "$(printf 'update\n%s' "$cached")" "$azure" "$canonical"
+reset "$azure" "$canonical"; export DEBS_CACHE_HIT=true PLAYWRIGHT_APT_FORCE_FALLBACK=true CHECK_BROWSERS=chromium
+check "the forced proof downloads despite a cache hit" \
+  0 "$(printf 'update\n%s' "$download")" "$canonical"
+reset "$canonical"; export APT_TIMEOUT_EXIT=124; unset PLAYWRIGHT_APT_LIMIT
+check "Canonical timeouts use three sixty-second attempts then fail loudly" \
+  124 "$(printf 'update\nupdate\nupdate')" "$canonical"
+[ "$(grep -c -- '^--kill-after=30s 60s apt-get update$' "$TIMEOUT_LOG")" = 3 ] \
+  || { echo "FAIL: all three timeout attempts were not bounded at 60 seconds"; failures=$((failures + 1)); }
+[ "$(cat "$SLEEP_LOG")" = $'5\n20' ] \
+  || { echo "FAIL: timeout retries did not use 5/20 second backoff"; failures=$((failures + 1)); }
+export PLAYWRIGHT_APT_LIMIT=1s
+reset "$azure" "$canonical"; export DEBS_CACHE_HIT=true APT_DNS_EXIT=1
+export APT_UPDATE_ERROR="E: Failed to fetch https://archive.ubuntu.com/ubuntu/dists/noble/InRelease Temporary failure resolving 'archive.ubuntu.com'"
+check "a cache hit survives exhausted update DNS failures only by completing the offline install" \
+  0 "$(printf 'update\nupdate\nupdate\n%s' "$cached")" "$canonical"
+grep -q '^::warning.*apt update.*cached' "$work/out" \
+  || { echo "FAIL: using cached packages after failed update was not a loud warning"; failures=$((failures + 1)); }
+reset "$azure" "$canonical"; export APT_DNS_EXIT=1
+export APT_UPDATE_ERROR="E: Failed to fetch https://archive.ubuntu.com/ubuntu/dists/noble/InRelease Temporary failure resolving 'archive.ubuntu.com'"
+check "without a cache hit exhausted update DNS failures remain fatal" \
+  100 "$(printf 'update\nupdate\nupdate')" "$canonical"
+reset "$canonical"; export DEBS_CACHE_HIT=true APT_TIMEOUT_EXIT=124
+check "a cache hit survives three update timeouts only by completing the offline install" \
+  0 "$(printf 'update\nupdate\nupdate\n%s' "$cached")" "$canonical"
+reset "$canonical"; export DEBS_CACHE_HIT=true APT_UPDATE_SLOW=all PLAYWRIGHT_APT_UPDATE_BUDGET=3 PLAYWRIGHT_APT_LIMIT=30s
+budget_start=$SECONDS; code=0
+bash "$here/download.sh" chromium webkit > "$work/out" 2>&1 || code=$?
+if [ "$code" -eq 0 ] && [ "$((SECONDS - budget_start))" -le 8 ] &&
+  [ "$(tail -n 1 "$APT_LOG")" = "$cached" ] && ! grep -qvE "^update$|^$cached$" "$APT_LOG" &&
+  grep -q '^::warning::apt update' "$work/out"; then
+  echo "ok: a cache hit caps the entire update phase before its longer per-attempt limit"
+else
+  echo "FAIL: the whole-update deadline did not preserve the mandatory offline install"; cat "$work/out"; failures=$((failures + 1))
+fi
+export PLAYWRIGHT_APT_LIMIT=1s
+for fatal in 'Hash Sum mismatch' 'The following signatures could not be verified' 'Unable to locate package missing' 'Could not get lock /var/lib/apt/lists/lock'; do
+  reset "$canonical"; export DEBS_CACHE_HIT=true
+  export APT_UPDATE_ERROR=$'E: Failed to fetch https://archive.ubuntu.com/ubuntu/dists/noble/InRelease Connection failed\nE: '"$fatal"
+  check "a cache hit never masks mixed update errors ($fatal)" 100 update "$canonical"
+done
+reset "$canonical"; export DEBS_CACHE_HIT=true APT_UPDATE_EXIT=0
+export APT_UPDATE_ERROR='W: GPG error: https://archive.ubuntu.com noble InRelease: The following signatures could not be verified'
+check "a cache hit cannot ignore an exit-zero signature warning" 100 update "$canonical"
+reset "$canonical"; export DEBS_CACHE_HIT=true APT_CACHE_EXIT=100 APT_CACHE_ERROR='E: Unable to fetch some archives'
+export APT_UPDATE_ERROR='E: Failed to fetch https://archive.ubuntu.com/ubuntu/dists/noble/InRelease Connection failed'
+check "offline install failure after a cache-hit update warning is fatal without network fallback" \
+  100 "$(printf 'update\nupdate\nupdate\n%s' "$cached")" "$canonical"
+reset "$azure" "$canonical"; export APT_CACHE_EXIT=100 APT_CACHE_ERROR='E: Sub-process /usr/bin/dpkg returned an error code (1)'
+check "an offline install failure after downloading packages fails the step" \
+  100 "$(printf 'update\n%s\n%s' "$download" "$cached")" "$azure" "$canonical"
+reset "$azure" "$canonical"; export APT_TIMEOUT_EXIT=124
+export APT_UPDATE_ERROR=$'E: Failed to fetch http://azure.archive.ubuntu.com/ubuntu/dists/noble/InRelease Connection failed\nE: Hash Sum mismatch'
+check "a timeout with mixed integrity errors never retries or switches mirrors" 124 "update" "$azure" "$canonical"
+reset "$azure" "$canonical"; export DEBS_CACHE_HIT=true PLAYWRIGHT_APT_FORCE_FALLBACK=true APT_DNS_EXIT=1
+export APT_UPDATE_ERROR="E: Failed to fetch https://archive.ubuntu.com/ubuntu/dists/noble/InRelease Temporary failure resolving 'archive.ubuntu.com'"
+check "a forced proof cannot use a cache hit to ignore update DNS failures" \
+  100 "$(printf 'update\nupdate\nupdate')" "$canonical"
+! grep -q 'npx playwright install --with-deps' "$here/../../workflows/ci.yml" \
+  || { echo "FAIL: a downstream browser install would run apt update again"; failures=$((failures + 1)); }
+awk '
+  /^  [[:alnum:]_-]+:/ { actions=0 }
+  /uses: \.\/\.github\/actions\/playwright-system-packages/ { actions++ }
+  /npx playwright install / { if (actions-- <= 0) bad=1; installs++ }
+  END { exit bad || installs != 4 }
+' "$here/../../workflows/ci.yml" \
+  || { echo "FAIL: each of the four browser installs must follow its system-package action"; failures=$((failures + 1)); }
 
 for error in '404 Not Found' 'Hash Sum mismatch' 'Unable to locate package missing'; do
   reset "$azure" "$canonical"; export APT_ERROR="E: $error"
