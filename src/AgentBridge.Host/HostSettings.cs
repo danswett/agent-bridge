@@ -125,6 +125,7 @@ public sealed record HostSettings(bool RemoteApproval)
 
     public bool Push { get; init; } = true;
     public bool FleetShare { get; init; } = true;
+    public string FleetLaunchRule { get; init; } = "on";
     public bool LoadEnabled { get; init; } = true;
     public string LoadStatus => $"relay load sharing is {(LoadEnabled ? "on" : "off")} (load.enabled); machine totals and per-session numbers only";
 
@@ -158,7 +159,7 @@ public sealed record HostSettings(bool RemoteApproval)
     // anyway would read a setting meant as off as on.
     static HostSettings Off => Default with
     {
-        RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false }, Push = false, FleetShare = false, LoadEnabled = false, ReadOnly = true,
+        RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false }, Push = false, FleetShare = false, FleetLaunchRule = "off", LoadEnabled = false, ReadOnly = true,
         Usage = UsageSettings.Default with { Publish = false }, TrustedPeers = true, RemoteManage = false, RestoreOnStart = false, RestoreKept = true,
         EscapedApproval = AgentBridge.Protocol.EscapedApproval.Machine, EscapedApprovalDevices = [],
     };
@@ -205,6 +206,7 @@ public sealed record HostSettings(bool RemoteApproval)
             var (security, securityProblems) = SecuritySettings.Read(root.TryGetProperty("security", out var sec) ? sec : null);
             var settings = Default with
             {
+                FleetLaunchRule = ReadFleetLaunchRule(root),
                 Agents = agents,
                 AgentsProblems = agentsProblems.Count == 0 ? [] : agentsProblems,
                 AgentMessaging = agentMessaging,
@@ -384,6 +386,16 @@ public sealed record HostSettings(bool RemoteApproval)
             }
         }
         return problems.Count == 0 ? settings : settings with { PermissionProblems = problems };
+    }
+
+    internal static string ReadFleetLaunchRule(JsonElement root)
+    {
+        if (!root.TryGetProperty("fleetNames", out var section)) { return "on"; }
+        if (section.ValueKind != JsonValueKind.Object) { throw new JsonException("fleetNames is not an object"); }
+        if (!section.TryGetProperty("launchRule", out var value)) { return "on"; }
+        var rule = value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+        if (rule is not ("on" or "off")) { throw new JsonException("fleetNames.launchRule is not on or off"); }
+        return rule;
     }
 
     internal static readonly JsonDocumentOptions Options = new() { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };

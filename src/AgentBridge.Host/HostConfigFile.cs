@@ -42,8 +42,9 @@ public static class HostConfigFile
     // replaced by one that has lost whatever the person meant it to say. check, if given, sees the
     // text about to be written and throws to refuse it, leaving the file as it was.
     public static void Patch(string folder, bool? remoteApproval, string? name, bool? remoteFolderTrust = null, IReadOnlyList<string>? remoteFolderTrustDevices = null,
-        bool? devBoxKeepAwake = null, Action<string, string>? check = null, bool? phoneSignIn = null)
+        bool? devBoxKeepAwake = null, Action<string, string>? check = null, bool? phoneSignIn = null, string? fleetLaunchRule = null)
     {
+        if (fleetLaunchRule is not (null or "on" or "off")) { throw new ArgumentException("fleetNames.launchRule must be on or off"); }
         var path = Path.Combine(folder, HostSettings.FileName);
         JsonObject root;
         if (File.Exists(path))
@@ -89,6 +90,15 @@ public static class HostConfigFile
                 root["devBox"] = devBox = [];
             }
             devBox["keepAwake"] = keepAwake;
+        }
+        if (fleetLaunchRule is not null)
+        {
+            if (root["fleetNames"] is not JsonObject fleetNames)
+            {
+                if (root.ContainsKey("fleetNames")) { throw new InvalidOperationException($"fleetNames in {path} is not an object; fix it by hand first"); }
+                root["fleetNames"] = fleetNames = [];
+            }
+            fleetNames["launchRule"] = fleetLaunchRule;
         }
         if (name is not null)
         {

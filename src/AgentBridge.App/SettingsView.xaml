@@ -298,6 +298,15 @@
                     <Button Grid.Column="1" VerticalAlignment="Bottom" Content="Save name" Click="OnSaveName" IsEnabled="{x:Bind ViewModel.HostRunning, Mode=OneWay}" />
                 </Grid>
                 <ToggleSwitch
+                    Header="Allow fleet names for new sessions"
+                    AutomationProperties.AutomationId="FleetLaunchNames"
+                    IsEnabled="{x:Bind ViewModel.CanChangeFleetLaunchRule, Mode=OneWay}"
+                    IsOn="{x:Bind ViewModel.FleetLaunchNamesEnabled, Mode=TwoWay}" />
+                <TextBlock
+                    Style="{StaticResource AbSecondaryText}"
+                    TextWrapping="Wrap"
+                    Text="New sessions can receive an allowed, unique fleet name. Applies immediately; existing names and trust stay unchanged." />
+                <ToggleSwitch
                     Header="Let this app and my devices approve Copilot permission prompts"
                     AutomationProperties.AutomationId="RemoteApproval"
                     IsEnabled="{x:Bind ViewModel.HostRunning, Mode=OneWay}"

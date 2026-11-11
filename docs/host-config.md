@@ -4,7 +4,8 @@ What a host may do on its machine is set by the person who runs it, in `config.j
 profile's folder, beside the device key: `%LOCALAPPDATA%\AgentBridge\<profile>\config.json`
 on Windows, `~/.agent-bridge/<profile>/config.json` elsewhere (`default` unless
 `--profile` says otherwise). `agent-bridge-host serve` reads it when it starts; a change
-takes a restart. Nothing another device sends can change it.
+takes a restart unless noted below. `fleetNames.launchRule` is read fresh for each launch.
+Nothing another device sends can change it.
 
 Until the app has a settings screen, it is edited with the host's own commands, at the
 machine (below), or by hand. The app will edit the same file; this page is the schema both
@@ -27,6 +28,7 @@ follow.
   "delivery": { "readOnly": false },
   "sessions": { "restoreOnStart": true },
   "fleet": { "share": true },
+  "fleetNames": { "launchRule": "on" },
   "load": { "enabled": true },
   "launch": {
     "enabled": true,
@@ -78,7 +80,8 @@ follow.
 ```
 
 Comments and trailing commas are allowed. Absent and `null` mean the default,
-except an explicit `null` for `fleet` or `fleet.share` disables sharing with a problem.
+except an explicit `null` for `fleet` or `fleet.share` disables sharing with a problem,
+and `fleetNames` or `fleetNames.launchRule` set to `null` disables named launches with a problem.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -93,6 +96,7 @@ except an explicit `null` for `fleet` or `fleet.share` disables sharing with a p
 | `sessions.restoreOnStart` | `true` | After a reboot or a crash of the host, the sessions that died with it are restored, idle, through the resume path, one at a time, and what cannot be is offered to resume ([host-launch.md](host-launch.md#restoring-after-a-reboot-or-a-crash)). Nothing is ever typed into them. `false` restores nothing, only says what went, in `hello` and one notification, and keeps nothing waiting. A value that is not `true` or `false`, or a file that cannot be read, turns it off, but keeps what died offered (the person may have meant it on). Per machine
 | `push.enabled` | `true` | Notifications (Web Push) to the account's phones. `false` sends none and takes no subscription: `hello` leaves `push` out, and `push.subscribe` fails saying the machine doesn't send notifications. For a machine that should be seen but not heard from, as the shadow host beside agent-ha-bridge ([host-shadow.md](host-shadow.md#on-the-phone--relay)) |
 | `fleet.share` | `true` | Share this host's allow-listed session registry with its own account through the relay. `false` publishes an empty list: online with no sessions. Invalid or unreadable configuration disables sharing and reports a configuration problem. Restart-only; change through the existing `config set fleet.share false` command. Names come only from the host-owned fleet-name setting, never titles, prompts or folders |
+| `fleetNames.launchRule` | `"on"` | `"on"` allows the owner-approved fixed fleet-name rule for new sessions (#1829); `"off"` refuses named launches. Absent means on; any other value or an unreadable file fails closed. In the Windows app, Settings > **Allow fleet names for new sessions** saves this same key through the person-only local settings path. Agent sessions cannot change it. Applies to the next launch without restart; existing names, self-rename refusals and trust are unchanged |
 | `launch.enabled` | `true` | Launching from other devices at all. `false` leaves `sessions.launch` out of `hello` |
 | `launch.workspaces` | `[]` | **The approved folders.** A new session starts only in one of these, and a session is resumed only if it ran in one of these folders itself (or in a worktree this host or agent-ha-bridge made for an isolated one), as agent-ha-bridge has it: not in a folder below one. Each is a path, or `{ "path", "label", "isolate" }`. `path` is absolute (`~` is the home folder); `label` defaults to the folder's name, and is what a client names; `isolate: true` starts each new session in a git worktree of its own ([host-launch.md](host-launch.md#isolation)). A folder that does not exist, or a system folder (Windows, Program Files, ProgramData, temp, a drive root), is not offered. At most 64 |
 | `launch.defaultWorkspace` | first | The label a launch gets when it names none |

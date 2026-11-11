@@ -151,7 +151,6 @@ public sealed class HostControl
 
     HostStatus StatusLocked(bool fresh = false)
     {
-        var running = Volatile.Read(ref this.running);
         var now = Configured();
         return new HostStatus
         {
@@ -170,7 +169,7 @@ public sealed class HostControl
             AgentHaBridge = options.AgentHaBridge(),
             HomeAssistant = options.HomeAssistant(),
             Settings = now,
-            RestartRequired = now != running || options.AgentSetup?.RestartRequired == true,
+            RestartRequired = NeedsRestart(now) || options.AgentSetup?.RestartRequired == true,
             Log = options.Log,
             UpdateAsks = options.Updates?.Asks is { Count: > 0 } asks ? asks : null,
             ReadOnly = fresh && options.ReadOnlyNow is { } afresh ? afresh() : options.ReadOnly(),
@@ -188,9 +187,11 @@ public sealed class HostControl
         return Settings(settings, HostConfigFile.ReadName(options.Folder));
     }
 
+    bool NeedsRestart(HostSettingsView now) => now != (Volatile.Read(ref running) with { FleetLaunchRule = now.FleetLaunchRule });
+
     public static HostSettingsView Settings(HostSettings settings, string? name) =>
         new(settings.RemoteApproval, name, settings.Launch.RemoteFolderTrust, settings.Launch.RemoteFolderTrustDevices is { Count: > 0 } d ? d : null, settings.DevBox.KeepAwake,
-            settings.EscapedApproval, settings.EscapedApprovalDevices, settings.PhoneSignIn, settings.FleetShare);
+            settings.EscapedApproval, settings.EscapedApprovalDevices, settings.PhoneSignIn, settings.FleetShare, settings.FleetLaunchRule);
 
     // The relay loop reports each change of its connection here.
     public void SetRelay(RelayState state, string? detail = null)
@@ -300,19 +301,21 @@ public sealed class HostControl
             && !(before.RemoteFolderTrustDevices ?? []).ToHashSet(StringComparer.Ordinal).SetEquals(was.Where(d => d is not null)))
         {
             log("settings not changed by the app: the devices approved for folder trust changed meanwhile");
-            return new SettingsResult(before, before != Volatile.Read(ref running), Conflict: true);
+            return new SettingsResult(before, NeedsRestart(before), Conflict: true);
         }
         // The keep-awake is applied to the running service as well as saved, so what is saved must
         // read back as asked: a file the host rejects for another setting reads as all defaults,
         // keep-awake off, so the reply would say off while the service ran, and the next start
         // would turn it off with nothing said. Refused instead, the file as it was.
-        Action<string, string>? check = request.DevBoxKeepAwake is { } want ? (path, text) =>
+        Action<string, string>? check = request.DevBoxKeepAwake is not null || request.FleetLaunchRule is not null ? (path, text) =>
         {
             var (saved, problem) = HostSettings.Parse(text, path);
-            if (problem is not null) { throw new InvalidOperationException($"Dev Box keep-awake was not changed: {problem}; fix config.json first"); }
-            if (saved.DevBox.KeepAwake != want) { throw new InvalidOperationException($"Dev Box keep-awake was not changed: {path} would not read back as {(want ? "on" : "off")}; fix its devBox section first"); }
+            var setting = request.DevBoxKeepAwake is not null ? "Dev Box keep-awake" : "Fleet launch name rule";
+            if (problem is not null) { throw new InvalidOperationException($"{setting} was not changed: {problem}; fix config.json first"); }
+            if (request.DevBoxKeepAwake is { } want && saved.DevBox.KeepAwake != want) { throw new InvalidOperationException($"Dev Box keep-awake was not changed: {path} would not read back as {(want ? "on" : "off")}; fix its devBox section first"); }
+            if (request.FleetLaunchRule is { } rule && saved.FleetLaunchRule != rule) { throw new InvalidOperationException($"Fleet launch name rule was not changed: {path} would not read back as {rule}"); }
         } : null;
-        HostConfigFile.Patch(options.Folder, request.RemoteApproval, request.Name, request.RemoteFolderTrust, devices, request.DevBoxKeepAwake, check, request.PhoneSignIn);
+        HostConfigFile.Patch(options.Folder, request.RemoteApproval, request.Name, request.RemoteFolderTrust, devices, request.DevBoxKeepAwake, check, request.PhoneSignIn, request.FleetLaunchRule);
         // Answering folder-trust questions from devices applies at once, so it can be allowed
         // while a question waits; the rest when the host restarts.
         if (request.RemoteFolderTrust is { } trust && options.ApplyRemoteFolderTrust is { } apply)
@@ -333,9 +336,10 @@ public sealed class HostControl
             lock (gate) { running = running with { DevBoxKeepAwake = keepAwake }; }
         }
         log($"settings changed by the app{(request.RemoteApproval is { } r ? $": remote approval {(r ? "on" : "off")}" : "")}{(request.RemoteFolderTrust is { } t ? $"; folder trust from devices {(t ? "on" : "off")}" : "")}{(devices is not null ? $"; devices approved for folder trust: {(devices.Count == 0 ? "none" : string.Join(", ", devices.Select(d => d[..8])))}" : "")}{(request.DevBoxKeepAwake is { } k ? $"; Dev Box keep-awake {(k ? "on" : "off")}" : "")}{(request.PhoneSignIn is { } p ? $"; sign-in from devices {(p ? "on" : "off")} at the next start" : "")}{(request.Name is not null ? "; machine name changed" : "")}");
+        if (request.FleetLaunchRule is { } launchRule) { log($"fleet name launch rule changed by the app: {launchRule}"); }
         var now = Configured();
         Changed();
-        return new SettingsResult(now, now != Volatile.Read(ref running));
+        return new SettingsResult(now, NeedsRestart(now));
     }
 
     // Only ever with the relay that issued the account, so the app never sends the token
