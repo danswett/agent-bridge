@@ -1,4 +1,5 @@
 // A session starts scrolling within 200 ms of opening it, whatever its history's length (#1622).
+// The client budget starts with the newest page available, not waiting on a host or network.
 // The budget is for the page as it would be on a phone: chromium runs with the CPU slowed
 // (WebKit cannot be slowed, so it runs at full speed, which is the same bound, easier to meet).
 import { test, expect } from '@playwright/test';
@@ -25,7 +26,17 @@ async function longSession(page, browserName) {
 // as they are put in, not at the next frame), and the longest a frame was held up from then until
 // the older turns were all in, beyond the longest an idle frame took (a slow host's frame rate is not
 // the page's).
-function openAndTime(page) {
+async function openAndTime(page) {
+  // Prepare only the raw newest page outside the timer: the demo's timer-based transport and
+  // synthesis of 500 replies run on this same thread, unlike a real remote host. The actual
+  // request validation, result parsing, store update, opening and first draw stay timed.
+  await page.evaluate(async () => {
+    const client = window.agentBridgeDemo.client;
+    const request = client.request.bind(client);
+    const newest = await request('session.history', { id: 'long-1', limit: 5 });
+    client.request = (op, data) => op === 'session.history' && data.id === 'long-1' && !data.before && data.limit === 5
+      ? Promise.resolve(structuredClone(newest)) : request(op, data);
+  });
   return page.evaluate(() => new Promise((resolve) => {
     const frame = () => new Promise((r) => { requestAnimationFrame(() => r()); });
     (async () => {
