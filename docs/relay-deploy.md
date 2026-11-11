@@ -286,16 +286,6 @@ Production's alerts, its availability test and the resource group's budget are i
 [ops/alerts.md](../ops/alerts.md). Everything goes by email to one action group,
 `ag-agent-bridge-ops`, and nothing pages at night (owner, #568).
 
-## Saved searches (#1341)
-
-`infra/modules/saved-searches.bicep` deploys each `// ==== <id>: <description>` block of
-`ops/queries/relay.kql` as a Log Analytics saved search in the logs workspace: the name is the id,
-the display name is the description, the category is `Slipgates relay`. The file stays the one
-source and the module reads it with `loadTextContent`, so adding or removing a block needs no other
-edit. `RelayQueriesTests` fails CI on a repeated, empty or non-kebab id, a block with no query, or a
-first line with no `: description`. Like the rest of the stamp it reaches Azure only through
-`infra/deploy.ps1` and the owner's go-ahead.
-
 | Resource | What it watches |
 |---|---|
 | `ag-agent-bridge-ops` | The action group: one email receiver. Its address is never in the repository |
@@ -336,6 +326,16 @@ and about $2.50 for the GitHub watch (some 90,000 built-in Logic App actions, an
 A-GHA-SILENT log alert);
 alert rules and the action group's emails cost cents. Availability results go into the
 workspace, a few MB a day against its 0.1 GB daily cap.
+
+## Saved searches (#1341)
+
+`infra/modules/saved-searches.bicep` deploys each `// ==== <id>: <description>` block of
+`ops/queries/relay.kql` as a Log Analytics saved search in the logs workspace: the name is the id,
+the display name is the description, the category is `Slipgates relay`. The file stays the one
+source and the module reads it with `loadTextContent`, so adding or removing a block needs no other
+edit. `RelayQueriesTests` fails CI on a repeated, empty or non-kebab id, a block with no query, or a
+first line with no `: description`. Like the rest of the stamp it reaches Azure only through
+`infra/deploy.ps1` and the owner's go-ahead.
 
 ## Reading a disconnect
 
