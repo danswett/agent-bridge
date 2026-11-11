@@ -307,6 +307,35 @@ test.describe('one truthful update line', () => {
     await expect(update(page).locator('p')).toHaveText(['Up to date (0.1.4415). Last checked 8:12 AM.']);
   });
 
+  test('an available update has one primary Update now and a quiet check without changing health', async ({ page }) => {
+    await show(page, { available: '0.1.4462', last: null, busy: { working: 0, waiting: 0 } });
+    const block = update(page);
+    await expect(block.locator('.machine-update-line')).toHaveText('Update available: 0.1.4462 (running 0.1.4415).');
+    await expect(block.locator('p')).toHaveCount(1);
+    await expect(block.getByRole('button')).toHaveCount(1);
+    await expect(block.locator('.machine-update-now')).toHaveClass(/\bprimary\b/);
+    await expect(block.getByRole('link', { name: 'Check now' })).toBeVisible();
+    await expect(page.locator('#machine-list [data-device-id="demo"] .tile-health-word')).toHaveText('Not measured');
+    await block.locator('.machine-update-now').click();
+    await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map(({ op, now }) => ({ op, now }))))
+      .toEqual([{ op: 'update.install', now: true }]);
+  });
+
+  for (const available of [null, '0.1.4462']) {
+    test(`a failed update ${available ? 'behind' : 'on the current version'} never contradicts its status`, async ({ page }) => {
+      await show(page, { available, last: { outcome: 'failed', code: 'release-changed', at: now.toISOString() } });
+      const block = update(page);
+      await expect(block.locator('.machine-update-line')).toHaveText(available
+        ? 'Update available: 0.1.4462 (running 0.1.4415). Not updated: the update didn\'t take.'
+        : 'Up to date (0.1.4415)');
+      await expect(block.locator('p')).toHaveCount(1);
+      if (!available) {
+        await expect(block).not.toContainText(/failed|not updated/i);
+        await expect(block.getByRole('button')).toHaveCount(0);
+      }
+    });
+  }
+
   test('a refused first check never claims the machine is current', async ({ page }) => {
     await show(page, { checkedAt: null, last: { outcome: 'failed', reason: refused, at: now.toISOString() } });
     await expect(update(page)).not.toContainText('Up to date');

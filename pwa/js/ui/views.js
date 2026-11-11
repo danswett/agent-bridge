@@ -1049,7 +1049,7 @@ function updateRow(updates, id, name, now) {
     && s.last.reason?.startsWith("the release feed's rate limit refused the check");
   const checkFailed = heldCheck && !(Date.parse(s.checkedAt) > Date.parse(s.last.at));
   const compact = idle && (s.available ? checkFailed : s.current && s.checkedAt
-    && (!s.last || s.last.outcome === 'current' || heldCheck));
+    && (!s.last || ['current', 'failed', 'refused'].includes(s.last.outcome)));
   const retry = checkFailed ? s.last.reason.match(/checking again after (\d{1,2}:\d{2}(?:\s*[AP]M)?)\.?$/i)?.[1] : null;
   let said = updateLine(s, now);
   if (compact) {
@@ -1060,18 +1060,22 @@ function updateRow(updates, id, name, now) {
       said += `. Last checked ${checked}.`;
     }
   }
-  const last = compact || (heldCheck && !checkFailed) ? null : lastLine(s, now, { updateNow });
+  let last = compact || (heldCheck && !checkFailed) ? null : lastLine(s, now, { updateNow });
   const check = canCheck(s) && !busy && !asking;
   const install = canInstall(s) && !busy && !asking;
   const offerNow = !compact && updates.signs === true && canUpdateNow(s);
   const pressNow = offerNow && !busy && !asking;
+  if (idle && offerNow) {
+    said = `Update available: ${s.available} (running ${s.current ?? 'an older release'}).`;
+    if (last && ['failed', 'refused'].includes(s.last?.outcome)) { said += ` ${last}`; last = null; }
+  }
   const why = !compact && updates.signs === true ? updateNowReason(s) : null;
   const details = updateDetails(s, now);
   const key = [said, last, note, busy, asking, check, install, offerNow, pressNow, why, ...details];
   // Not disabled when it cannot be pressed: a disabled button loses focus, and the next draw
   // could not give it back. A press then does nothing (UpdateControl, and the host's own rules).
   const button = (cls, label, aria, can, onPress) => h('button', {
-    type: 'button', class: `button ${checkFailed ? 'primary' : 'secondary'} small ${cls}`, 'aria-label': aria,
+    type: 'button', class: `button ${checkFailed || cls === 'machine-update-now' ? 'primary' : 'secondary'} small ${cls}`, 'aria-label': aria,
     'aria-disabled': can ? null : 'true',
     onclick: (e) => { if (can) { onPress(e); } },
   }, label);
@@ -1090,11 +1094,11 @@ function updateRow(updates, id, name, now) {
       ...details.map((text) => h('p', { class: 'machine-update-detail' }, text)),
       note ? h('p', { class: 'machine-error', role: 'alert' }, note) : null,
       s.installer ? h('div', { class: 'machine-actions machine-update-actions' },
-        compact && !s.available ? h('a', {
+        (compact && !s.available) || offerNow ? h('a', {
           href: '#/machines', class: 'machine-update-check', 'aria-disabled': check ? null : 'true',
           onclick: (e) => { e.preventDefault(); if (check) { updates.press(id, 'check'); } },
         }, 'Check now') : button('machine-update-check', busy ? 'Asking…' : compact ? 'Check now' : 'Check', compact ? 'Check now' : `Check ${name} for updates`, check, () => updates.press(id, 'check')),
-        s.available && !compact ? button('machine-update-install', 'Install', `Install ${s.available} on ${name} when no session there is busy`, install, () => updates.press(id, 'install')) : null,
+        s.available && !compact && !offerNow ? button('machine-update-install', 'Install', `Install ${s.available} on ${name} when no session there is busy`, install, () => updates.press(id, 'install')) : null,
         offerNow ? button('machine-update-now', 'Update now', `Update now: ${s.available} on ${name}, without waiting`, pressNow, (e) => {
           const doc = e.currentTarget.ownerDocument;
           updates.pressNow(id, { machine: name, confirm: (sheet, { signal } = {}) => openUpdateNowSheet(sheet, { doc, returnFocus: refocus(doc), signal }) });
