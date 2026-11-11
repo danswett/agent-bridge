@@ -106,6 +106,7 @@ export function describeReply(entry, { machineName, stalled = false } = {}) {
 }
 
 export class ReplyBox {
+  #lifecycle = new AbortController();
   #unwatch = null;
   #receipt = null;
   // Whether the line says files are being read, which the receipt doesn't know of.
@@ -156,6 +157,12 @@ export class ReplyBox {
     this.#largeMax = largeMax;
     this.#phone = globalThis.matchMedia?.(PHONE) ?? null;
     this.#build();
+    const doc = this.els.input.ownerDocument;
+    const signal = this.#lifecycle.signal;
+    doc.addEventListener('visibilitychange', () => {
+      if (doc.visibilityState === 'hidden') { this.els.input.blur(); }
+    }, { signal });
+    doc.defaultView.addEventListener('pagehide', () => this.els.input.blur(), { signal });
     this.#place();
     this.#phone?.addEventListener('change', this.#onPhone);
     // The box's width decides where its words wrap, and it has none until it is drawn.
@@ -182,6 +189,7 @@ export class ReplyBox {
   }
 
   destroy() {
+    this.#lifecycle.abort();
     this.#unwatch?.();
     this.#receipt.destroy();
     clearTimeout(this.#busyTimer);
@@ -225,6 +233,18 @@ export class ReplyBox {
 
   get text() { return this.els.input.value; }
 
+  // An empty value assignment leaves native undo intact in WebKit; a fresh editor does not.
+  #clearUndo(keepFocus = true) {
+    const old = this.els.input;
+    const input = old.cloneNode(true);
+    input.value = '';
+    for (const event of ['oninput', 'onkeydown', 'onpaste']) { input[event] = old[event]; }
+    this.els.input = input;
+    const focused = keepFocus && old === old.ownerDocument.activeElement;
+    old.replaceWith(input);
+    if (focused) { input.focus({ preventScroll: true }); }
+  }
+
   // Words put in for the person to read and send, after anything already typed ("Ask main agent
   // to stop it", ui.md §6.3): nothing is sent until Send. What is there is kept as it is, its
   // trailing space or line break too: a reply on its way comes out of the box only while the box
@@ -248,24 +268,25 @@ export class ReplyBox {
     const id = this.idBase;
     const e = this.els = {};
     e.input = h('textarea', { id: `${id}-text`, rows: 2, class: 'text-input reply-input', placeholder: 'Message the main agent', 'aria-describedby': `${id}-hint ${id}-bytes ${id}-held` });
-    e.input.addEventListener('input', () => {
+    e.input.oninput = (ev) => {
+      if (!ev.isComposing && e.input.value === '') { this.#clearUndo(); }
       this.#clearError();
       // The receipt's room is kept from Send until the box is typed in again (ui.md §6.5).
       this.#end('edit');
       if (!e.status.textContent) { e.status.classList.remove('room'); }
       this.#sync();
-    });
+    };
     // Ctrl+Enter or Cmd+Enter sends, as in most chat boxes; Enter alone is a new line.
-    e.input.addEventListener('keydown', (ev) => {
+    e.input.onkeydown = (ev) => {
       if (isSendKey(ev)) { ev.preventDefault(); this.#send(); }
-    });
+    };
     // A pasted screenshot or copied file is attached; pasted text is left to the box.
-    e.input.addEventListener('paste', (ev) => {
+    e.input.onpaste = (ev) => {
       const files = [...(ev.clipboardData?.items ?? [])].filter((i) => i.kind === 'file').map((i) => i.getAsFile()).filter(Boolean);
       if (!files.length || !this.#attach) { return; }
       ev.preventDefault();
       this.#add(files);
-    });
+    };
     e.bytes = h('span', { class: 'bytes', id: `${id}-bytes`, 'aria-live': 'polite' });
     e.hint = h('p', { class: 'note reply-hint', id: `${id}-hint`, hidden: true }, 'Line breaks are sent as spaces: the session gets your reply as one line.');
     e.held = h('p', { class: 'note warn reply-held', id: `${id}-held`, hidden: true }, 'The session is waiting for an answer to its question. Answer that first, then reply.');
@@ -515,12 +536,14 @@ export class ReplyBox {
 
   #show(entry) {
     const e = this.els;
+    let cleared = false;
     if (entry?.state === 'done' && this.#sent?.request === entry.request) {
       if (entry.outcome === 'delivered') {
         // Delivered: what went comes out of the box, and only that. Anything typed while it was
         // on its way stays; a box no longer beginning with it has been rewritten, and is kept.
         const value = e.input.value;
         if (value.startsWith(this.#sent.text)) { e.input.value = value.slice(this.#sent.text.length).replace(/^\s+/, ''); }
+        cleared = e.input.value === '';
         for (const f of this.#sent.files) { if (f.url) { URL.revokeObjectURL(f.url); } }
         this.#files = this.#files.filter((f) => !this.#sent.files.includes(f));
         this.#renderFiles();
@@ -562,5 +585,6 @@ export class ReplyBox {
       this.#busyTimer = setTimeout(() => { this.#busyTimer = null; this.#end('pause'); this.#sync(); }, REPLY_BUSY_PAUSE_MS);
     }
     this.#sync();
+    if (cleared) { this.#clearUndo(false); }
   }
 }
