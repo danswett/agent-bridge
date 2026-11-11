@@ -2,7 +2,7 @@
 
 *Part of the [SRE plan](plan.md) §10.*
 
-An incident is anything that stops people using Agent Bridge, or is likely to soon: the relay
+An incident is anything that stops people using Slipgates, or is likely to soon: the relay
 unreachable, a bad release on machines, a key exposed. Declaring one is cheap. Declare when
 in doubt, and close it if it turns out to be nothing.
 
