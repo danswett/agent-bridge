@@ -7,11 +7,11 @@ const CODEX = '019a1b2c-codex-example';
 const QID = 'q-inline';
 const long = 'Lorem ipsum dolor sit amet. '.repeat(120);
 
-async function setup(page, { holdHistory = false } = {}) {
+async function setup(page, { holdHistory = false, promptFrom = null } = {}) {
   await page.setViewportSize({ width: 900, height: 700 });
   await page.goto('?demo=1&static=1&answerDelay=300');
   await page.waitForSelector('html[data-demo-ready]');
-  await page.evaluate(({ id, qid, long, holdHistory }) => {
+  await page.evaluate(({ id, qid, long, holdHistory, promptFrom }) => {
     const d = window.agentBridgeDemo;
     if (holdHistory) { d.host.holdResponses(); }
     const t = new Date(Date.now() + 1000).toISOString();
@@ -35,9 +35,9 @@ async function setup(page, { holdHistory = false } = {}) {
     const s = d.host.get(id);
     d.upsert({
       ...s, status: 'waiting', statusSince: t, updatedAt: t, question,
-      activity: { ...(s.activity ?? {}), turnCount: holdHistory ? 2 : 6, turn: `${id}-turn-${holdHistory ? 2 : 6}` },
+      activity: { ...(s.activity ?? {}), ...(promptFrom ? { userMessageFrom: promptFrom, userMessage: 'Asking prompt' } : {}), turnCount: holdHistory ? 2 : 6, turn: `${id}-turn-${holdHistory ? 2 : 6}` },
     });
-  }, { id: CODEX, qid: QID, long, holdHistory });
+  }, { id: CODEX, qid: QID, long, holdHistory, promptFrom });
   await open(page, CODEX);
   const card = view(page, CODEX);
   if (!holdHistory) { await expect(card.locator('.history .history-turn')).not.toHaveCount(0); }
@@ -170,6 +170,193 @@ test('a delayed answer receipt stays once in its own turn when another question 
   }, { id: CODEX });
   await expect(card.locator(`.history-turn[data-turn="${CODEX}-turn-2"] [data-question="${QID}"] .resolved-summary`)).toContainText('You answered');
   await expect(card.locator(`[data-question="${QID}"]`)).toHaveCount(1);
+});
+
+for (const width of [390, 1024]) {
+  for (const [recorded, refetch] of ['stored', 'omitted', 'empty'].flatMap((recorded) => ['success', 'failure'].map((refetch) => [recorded, refetch]))) {
+    test(`answered questions never stay below three later turns after a snapshot jump (${width}px, asking turn ${recorded}, refetch ${refetch})`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto('?demo=1&static=1&answerDelay=50');
+      await page.waitForSelector('html[data-demo-ready]');
+      await page.evaluate(({ id, qid }) => {
+        const d = window.agentBridgeDemo;
+        const at = new Date(Date.now() - 60000).toISOString();
+        const question = {
+          id: qid, kind: 'form', askedAt: at, message: 'Which database?',
+          fields: [{ name: 'answer', title: 'Database', type: 'choice', required: true, options: [{ value: 'pg', label: 'PostgreSQL' }] }],
+        };
+        window.pinnedCase = { question };
+        d.host.historyTurns.set(id, []);
+        d.upsert({
+          ...d.host.get(id), question, status: 'waiting',
+          activity: { turn: 'asking-turn', turnCount: 1, userMessage: 'Choose a database', response: null, responseTurn: null },
+        });
+      }, { id: CODEX, qid: QID });
+      const card = await open(page, CODEX);
+      const closed = card.locator(`.question.resolved[data-question="${QID}"]`);
+      await expect(card.locator('.stream > .question-slot .question:not(.resolved)')).toBeVisible();
+      await card.locator(`[data-question="${QID}"] .choice[data-value="pg"]`).click();
+      await page.waitForFunction((qid) => window.agentBridgeDemo.host.typed.some((t) => t.question === qid), QID);
+      await page.evaluate(async ({ id, recorded }) => {
+        const d = window.agentBridgeDemo;
+        const s = d.host.get(id);
+        const { question } = window.pinnedCase;
+        const at = (n) => new Date(Date.now() - 60000 + n * 1000).toISOString();
+        const asking = {
+          id: 'asking-turn', at: at(0), prompt: { text: 'Choose a database' },
+          parts: [{ id: 'asking-part', kind: 'question', at: at(0), question, outcome: 'delivered' }],
+        };
+        const later = [1, 2, 3].map((n) => ({
+          id: `later-${n}`, at: at(n), prompt: { text: `Later prompt ${n}` },
+          parts: [{ id: `later-reply-${n}`, kind: 'response', at: at(n), text: `Later reply ${n}` }],
+        }));
+        window.pinnedCase = { asking, later };
+        d.host.historyTurns.set(id, recorded === 'omitted' ? later : [{ ...asking, parts: recorded === 'empty' ? [] : asking.parts }, ...later]);
+        d.upsert({ ...s, question: null, status: 'idle', activity: {
+          turn: 'later-3', turnCount: 4, userMessage: 'Later prompt 3', responseTurn: 'later-3', response: 'Later reply 3',
+        } });
+        await d.view.history.open('demo', id, { session: d.host.get(id) });
+      }, { id: CODEX, recorded });
+      await expect(card.locator('.question:not(.resolved)')).toHaveCount(0);
+      const unplaced = card.locator('.question.resolved');
+      await expect.poll(() => unplaced.evaluateAll((nodes) => nodes.filter((n) => !n.closest('.history-turn')).length)).toBe(0);
+      await page.evaluate(({ id, refetch }) => {
+        const d = window.agentBridgeDemo, client = d.view.history.current('demo').client;
+        const ask = client.history.bind(client);
+        client.history = async (...args) => {
+          client.history = ask;
+          const result = await ask(...args);
+          if (refetch === 'failure') { throw new Error('refetch failed'); }
+          return result;
+        };
+        d.host.holdResponses();
+        window.pinnedCase.refetch = d.view.history.open('demo', id);
+      }, { id: CODEX, refetch });
+      await expect.poll(() => page.evaluate((id) => window.agentBridgeDemo.view.history.get('demo', id).loading, CODEX)).toBe('newest');
+      await page.evaluate((id) => {
+        const d = window.agentBridgeDemo;
+        d.upsert({ ...d.host.get(id), status: 'waiting', question: { ...window.pinnedCase.asking.parts[0].question, id: 'next-unrecorded' } });
+      }, CODEX);
+      await expect(card.locator('.stream > .question-slot .question:not(.resolved)')).toBeVisible();
+      await expect.poll(() => unplaced.evaluateAll((nodes) => nodes.filter((n) => !n.closest('.history-turn')).length)).toBe(0);
+      await page.evaluate(async () => { window.agentBridgeDemo.host.releaseResponses(); await window.pinnedCase.refetch; });
+      expect(await page.evaluate((id) => window.agentBridgeDemo.view.history.get('demo', id).error?.reason ?? null, CODEX)).toBe(refetch === 'failure' ? 'refetch failed' : null);
+      await expect.poll(() => unplaced.evaluateAll((nodes) => nodes.filter((n) => !n.closest('.history-turn')).length)).toBe(0);
+      await page.evaluate(async (id) => {
+        const d = window.agentBridgeDemo;
+        const { asking, later } = window.pinnedCase;
+        d.host.historyTurns.set(id, [asking, ...later]);
+        await d.view.history.open('demo', id, { session: d.host.get(id) });
+      }, CODEX);
+      await expect(card.locator('.history-turn[data-turn="asking-turn"]').locator('.resolved-summary')).toContainText('You answered');
+      await expect(closed).toHaveCount(1);
+      expect(await card.locator('.history-turn').evaluateAll((nodes) => nodes.map((n) => n.dataset.turn))).toEqual(['asking-turn', 'later-1', 'later-2']);
+      await expect(card.locator('.question:not(.resolved)')).toHaveAttribute('data-question', 'next-unrecorded');
+      await expect(card.locator('.question[data-arriving]')).toHaveCount(0);
+      await card.locator('[data-question="next-unrecorded"] .choice[data-value="pg"]').focus();
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => window.agentBridgeDemo.host.typed.some((t) => t.question === 'next-unrecorded'));
+      await page.evaluate(async (id) => {
+        const d = window.agentBridgeDemo;
+        const { asking, later } = window.pinnedCase;
+        later[2].parts.push({ ...asking.parts[0], id: 'next-part', question: { ...asking.parts[0].question, id: 'next-unrecorded' } });
+        d.host.historyTurns.set(id, [asking, ...later]);
+        await d.view.history.open('demo', id, { session: d.host.get(id) });
+      }, CODEX);
+      await expect(card.locator('.history-turn[data-turn="later-3"] .resolved-summary')).toContainText('You answered');
+      await page.evaluate((id) => {
+        const d = window.agentBridgeDemo;
+        d.upsert({ ...d.host.get(id), status: 'waiting', question: { ...window.pinnedCase.asking.parts[0].question, id: 'still-waiting' }, activity: {
+          turn: 'waiting-turn', turnCount: 5, userMessage: 'Another question', response: null, responseTurn: null,
+        } });
+      }, CODEX);
+      await expect(card.locator('.stream > .question-slot .question:not(.resolved)')).toBeVisible();
+      await expect(card.locator('.question.resolved')).toHaveCount(2);
+      expect(await card.locator('.question.resolved').evaluateAll((nodes) => nodes.map((n) => n.closest('.history-turn')?.dataset.turn))).toEqual(['asking-turn', 'later-3']);
+    });
+  }
+}
+
+test('a closed local receipt stays in its provisional asking turn while history is pending', async ({ page }) => {
+  const card = await setup(page, { holdHistory: true, promptFrom: 'schedule' });
+  await page.evaluate((id) => {
+    const d = window.agentBridgeDemo;
+    const s = d.host.get(id);
+    d.upsert({ ...s, question: null, status: 'idle' });
+    d.upsert({ ...d.host.get(id), activity: { ...s.activity, turn: 'later-live', userMessage: 'Later prompt', response: null, responseTurn: null } });
+  }, CODEX);
+  const closed = card.locator(`.question.resolved[data-question="${QID}"]`);
+  const asking = card.locator(`.history-turn[data-turn="${CODEX}-turn-2"]`);
+  await expect(asking.locator('.resolved-summary')).toContainText('Question closed');
+  await expect(closed).toHaveCount(1);
+  const prompt = asking.locator('.prompt-toggle');
+  await prompt.click();
+  await prompt.focus();
+  await page.evaluate((id) => {
+    const d = window.agentBridgeDemo, s = d.host.get(id);
+    d.upsert({ ...s, activity: { ...s.activity, responseTurn: s.activity.turn, response: 'A later reply' } });
+  }, CODEX);
+  await expect(prompt).toHaveAttribute('aria-expanded', 'true');
+  await expect(prompt).toBeFocused();
+  await closed.getByRole('button', { name: 'Show question' }).click();
+  await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
+  await expect.poll(() => page.evaluate((id) => window.agentBridgeDemo.view.history.get('demo', id).loading, CODEX)).toBeNull();
+  await expect(asking.locator('.resolved-record')).toBeVisible();
+  await expect(closed).toHaveCount(1);
+});
+
+test('a reader scrolled back keeps the closed receipt in its frozen asking turn', async ({ page }) => {
+  const card = await setup(page, { holdHistory: true });
+  await page.evaluate(({ id, long }) => {
+    const d = window.agentBridgeDemo;
+    const s = d.host.get(id);
+    d.upsert({ ...s, activity: { ...s.activity, userMessage: 'Asking prompt', responseTurn: s.activity.turn, response: long } });
+  }, { id: CODEX, long });
+  const scroller = card.locator('.stream-scroll');
+  await scroller.evaluate((el) => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
+  await page.evaluate((id) => {
+    const d = window.agentBridgeDemo;
+    const s = d.host.get(id);
+    d.upsert({ ...s, question: null, status: 'idle', activity: {
+      ...s.activity, turn: 'after-asking', userMessage: 'Later prompt', responseTurn: 'after-asking', response: 'Later reply',
+    } });
+  }, CODEX);
+  const asking = card.locator(`.history-turn[data-turn="${CODEX}-turn-2"]`);
+  await expect(asking.locator('.resolved-summary')).toContainText('Question closed');
+  await expect(card.locator('.question.resolved')).toHaveCount(1);
+  await expect(card.getByText('Later reply', { exact: true })).toBeVisible();
+  await expect.poll(() => scroller.evaluate((el) => el.scrollTop)).toBe(0);
+});
+
+test('a frozen local question does not return after a fresh page confirms its absence', async ({ page }) => {
+  const card = await setup(page, { holdHistory: true });
+  await page.evaluate(({ id, long }) => {
+    const d = window.agentBridgeDemo, s = d.host.get(id);
+    d.upsert({ ...s, question: null, status: 'idle', activity: { ...s.activity, responseTurn: s.activity.turn, response: long, reasoning: 'Thinking before the next turn' } });
+  }, { id: CODEX, long });
+  await expect(card.locator('.resolved-summary')).toContainText('Question closed');
+  await card.locator('.stream-scroll').evaluate(async (el) => {
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    el.dispatchEvent(new WheelEvent('wheel'));
+    el.scrollTop = 0; el.dispatchEvent(new Event('scroll'));
+  });
+  await page.evaluate(async (id) => {
+    const d = window.agentBridgeDemo, s = d.host.get(id);
+    d.upsert({ ...s, activity: { turn: 'after-asking', userMessage: 'Later prompt', responseTurn: 'after-asking', response: 'Later reply' } });
+    d.host.historyTurns.set(id, [
+      { id: `${id}-turn-2`, at: new Date().toISOString(), prompt: { text: 'Asking prompt' }, parts: [{ id: 'replacement-reply', kind: 'response', text: 'Stored replacement must remain deferred' }] },
+      { id: 'after-asking', at: new Date().toISOString(), prompt: { text: 'Later prompt' }, parts: [{ id: 'later-reply', kind: 'response', text: 'Later reply' }] },
+    ]);
+    d.host.releaseResponses();
+    await d.view.history.open('demo', id, { session: d.host.get(id) });
+  }, CODEX);
+  await expect(card.locator('.response').filter({ visible: true })).toHaveText(long.trim());
+  await expect(card.locator('.question.resolved')).toHaveCount(0);
+  await page.evaluate((id) => {
+    const d = window.agentBridgeDemo, s = d.host.get(id);
+    d.upsert({ ...s, updatedAt: new Date().toISOString() });
+  }, CODEX);
+  await expect(card.locator('.question.resolved')).toHaveCount(0);
 });
 
 test('delayed history and disjoint local closures share one newest-20 window', async ({ page }) => {
