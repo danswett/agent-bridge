@@ -1261,7 +1261,7 @@ public sealed class AutoUpdater
             // Settings may have checked, or changed the feed, meanwhile: still the very release
             // read above, or nothing is stopped.
             if (Stale() || Pending != to) { return Again(to); }
-            return await InstallAsync("the person chose Restart to update");
+            return await InstallAsync("the person chose Restart to update", confirm: confirm);
         }
         finally
         {
@@ -1397,12 +1397,14 @@ public sealed class AutoUpdater
     public const string NotNow = "not now";
     int claimed;
 
-    async Task WaitForFilesAsync()
+    async Task<bool> WaitForFilesAsync()
     {
+        var waited = false;
         try
         {
             await manager.WaitForInstallationFilesAsync(preflight,
-                why => { fileWait = $"{UpdateBlockedException.Prefix}{why}; waiting for Windows to release the files"; Changed(); }, time);
+                why => { waited = true; fileWait = $"{UpdateBlockedException.Prefix}{why}; waiting for Windows to release the files"; Changed(); }, time);
+            return waited;
         }
         finally { fileWait = null; Changed(); }
     }
@@ -1411,7 +1413,7 @@ public sealed class AutoUpdater
     // not, still on this version with the host back. answers: the press this install answers, as
     // the tick decided it, and whether the host departed for it (an Update now), which it then
     // answers whatever press has come since; else the one being carried out now.
-    async Task<string?> InstallAsync(string because, (string? Request, bool Departed)? answers = null)
+    async Task<string?> InstallAsync(string because, (string? Request, bool Departed)? answers = null, Func<string, Task<bool>>? confirm = null)
     {
         var to = Pending!;
         var source = updater.Source;
@@ -1423,7 +1425,23 @@ public sealed class AutoUpdater
         // The host comes back from a failed install, or from the app quitting mid-way (HostManager).
         try
         {
-            if (departed is null) { await WaitForFilesAsync(); }
+            if (departed is null && await WaitForFilesAsync())
+            {
+                if (answers is { Departed: false })
+                {
+                    var asked = Asked(UpdateAskKind.Install) is not null;
+                    if (Asked(UpdateAskKind.Install) != request || NowPress || Refused(WhyNot(asked)) || GoAhead(asked, time.GetUtcNow()) is null || Stale())
+                    {
+                        HoldOver(); Changed(); return NotNow;
+                    }
+                    if (await ProbeBusyAsync() is { } probe) { lastProbe = probe; Changed(); return NotNow; }
+                }
+                else if (WaitingOnYou is { } warning)
+                {
+                    if (confirm is null) { return warning; }
+                    if (!await confirm(warning)) { return NotNow; }
+                }
+            }
             if (updater.Ready != to || updater.Source != source) { throw new PackageReplacedException("while waiting for installation files"); }
             updatingIn = open ? to : null;
             installing = true;

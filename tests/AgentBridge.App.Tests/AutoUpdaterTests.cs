@@ -1448,6 +1448,32 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.True(updater.Applied);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Network")]
+    public async Task A_turn_starting_during_the_file_wait_is_rechecked_before_manual_or_automatic_install(bool automatic)
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
+        await auto.TickAsync();
+        if (automatic) { InstallBetweenTurns(); time.Advance(AutoUpdater.SettleFor); }
+        var released = false;
+        var warned = 0;
+        preflight = () => released ? null : "a fixture holding runtime.dll";
+        Task update = automatic ? auto.TickAsync()
+            : auto.RestartToUpdateAsync(_ => { warned++; return Task.FromResult(false); });
+        await Wait.UntilAsync(() => auto.State.Waiting?.Contains("fixture", StringComparison.Ordinal) == true, "the file wait");
+        await host.SendAsync(Events.SessionUpsert, Make.Session("s1", SessionStatus.Working));
+        await Wait.UntilAsync(() => !auto.Idle, "the turn that started while files were held");
+        released = true;
+
+        await InstallReleaseWaitTests.FinishAsync(update, () => !updater.Applied, held, time);
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Equal(automatic ? 0 : 1, warned);
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task A_retry_time_far_in_the_future_is_capped_once_so_it_stays_put_and_then_elapses()
