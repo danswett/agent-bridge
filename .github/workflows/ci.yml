@@ -1338,7 +1338,9 @@ jobs:
         shell: pwsh
         run: |
           pwsh -NoProfile -File quality/test-pages-workflow.ps1
+          $workflowExit = $LASTEXITCODE
           pwsh -NoProfile -File quality/test-pages-gate.ps1
+          if ($workflowExit -ne 0 -or $LASTEXITCODE -ne 0) { exit 1 }
       - name: Halt uploads validate before writing and verify the newest release
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'halts-upload-test')) }}
         shell: pwsh
