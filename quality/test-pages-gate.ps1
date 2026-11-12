@@ -128,6 +128,8 @@ foreach ($outcome in @('failure', 'cancelled', $null)) {
 }
 $resume.conclusion = 'success'
 if ((WorkflowGate @($manual, $resume)) -ne 'deploy') { throw 'explicit successful resume did not clear the rollback fence' }
+$tie = $resume.Clone(); $tie.created_at = $manual.created_at
+if ((WorkflowGate @($manual, $tie)) -ne 'skip') { throw 'equal-time rollback and resume must retain the fence' }
 $resume.status = 'in_progress'
 if ((WorkflowGate @($manual, $resume)) -ne 'skip') { throw 'pending resume cleared the rollback fence' }
 $manual.status = 'queued'; $manual.conclusion = $null

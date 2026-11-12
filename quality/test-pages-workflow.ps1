@@ -43,5 +43,31 @@ $at = $deploy.IndexOf('deploy-pages')
 Require ($at -ge 0 -and $deploy.IndexOf('sha256', [Math]::Max($at, 0)) -gt $at) 'no sha256 check of the live files after deploy-pages'
 Require ($deploy -match 'config\.js' -and $deploy -match 'sw\.js') 'the live check must cover config.js and sw.js'
 
+$ci = Get-Content -Raw (Join-Path $PSScriptRoot '..' '.github' 'workflows' 'ci.yml')
+$ciBlock = [regex]::Match($ci, '(?ms)^      - name: The Pages deploy waits for green main CI and checks the live site\r?\n.*?^        run: \|\r?\n(.*?)(?=^      - )')
+Require $ciBlock.Success 'the CI Pages test step must be executable offline'
+$ciStep = Join-Path ([IO.Path]::GetTempPath()) "pages-ci-$([guid]::NewGuid().ToString('N')).ps1"
+$savedExit = $global:LASTEXITCODE
+function Test-PagesCi([int[]]$exits) {
+    $state = @{ Index = 0; Files = @() }
+    function pwsh {
+        if ($args.Count -ne 3 -or $args[0] -ne '-NoProfile' -or $args[1] -ne '-File' -or $state.Index -ge 2) { throw 'unexpected CI test command' }
+        $state.Files += "$($args[2])"
+        $global:LASTEXITCODE = $exits[$state.Index]; $state.Index++
+    }
+    $global:LASTEXITCODE = 0
+    & $ciStep
+    $code = $LASTEXITCODE
+    Require (($state.Files -join ',') -ceq 'quality/test-pages-workflow.ps1,quality/test-pages-gate.ps1') 'CI must execute both Pages suites'
+    Require (($code -ne 0) -eq ($exits[0] -ne 0 -or $exits[1] -ne 0)) "CI must preserve either suite failure ($($exits -join '/'))"
+    Write-Host "CI Pages suite exits $($exits -join '/') => $code"
+}
+try {
+    Set-Content -LiteralPath $ciStep -Value ($ciBlock.Groups[1].Value -replace '(?m)^          ', '')
+    foreach ($pair in @(@(0, 0), @(1, 0), @(0, 1), @(1, 1))) { Test-PagesCi $pair }
+} finally {
+    Remove-Item -LiteralPath $ciStep
+    $global:LASTEXITCODE = $savedExit
+}
 if ($failures.Count) { $failures | ForEach-Object { Write-Host "FAIL: $_" }; exit 1 }
 Write-Host 'pages.yml waits for green main CI and verifies the live site: ok'
