@@ -1342,7 +1342,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             await auto.TickAsync();
         }
         Assert.Single(host.Sent(HostOps.Stop));
-        Assert.StartsWith("update failed, retrying at", auto.State.Waiting);
+        Assert.Equal("update failed; trying again soon, or at Restart to update", auto.State.Waiting);
 
         updater.ApplyFails = null;
         time.Advance(AutoUpdater.InstallAgainAfter);
@@ -1369,7 +1369,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.False(updater.Applied);
         Assert.Equal(UpdateBackoff.First, prefs.UpdateRetryAt!.Value - time.GetUtcNow());
         Assert.Contains(log, l => l.Contains("DiagTrack, pid 4242", StringComparison.Ordinal) && l.Contains("update failed, retrying at", StringComparison.Ordinal));
-        Assert.StartsWith("update failed, retrying at", auto.State.Waiting);
+        Assert.Equal("update failed; trying again soon, or at Restart to update", auto.State.Waiting);
 
         var wait = UpdateBackoff.First;
         for (var failures = 2; failures <= 5; failures++)
@@ -1412,7 +1412,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         Assert.False(updater.Applied);
         Assert.Empty(host.Sent(HostOps.Stop));
-        Assert.StartsWith("update failed, retrying at", auto.State.Waiting);
+        Assert.Equal("update failed; trying again soon, or at Restart to update", auto.State.Waiting);
     }
 
     [Fact]
@@ -1428,7 +1428,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         var capped = prefs.UpdateRetryAt;
         var waiting = auto.State.Waiting;
         Assert.Equal(start + UpdateBackoff.Cap, capped);
-        Assert.StartsWith("update failed, retrying at", waiting);
+        Assert.Equal("update failed; trying again soon, or at Restart to update", waiting);
 
         time.Advance(TimeSpan.FromMinutes(5));
         await auto.TickAsync();
@@ -1987,7 +1987,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         Assert.Equal(1, updater.Checks);
         Assert.Equal(UpdateOutcome.Failed, auto.State.Last!.Outcome);
-        Assert.Contains($"checking again after {reset.ToLocalTime():t}", auto.State.Last.Reason);
+        Assert.Equal("checking again soon", auto.State.Last.Reason);
 
         // Not at the next half hour: at GitHub's reset.
         time.Advance(TimeSpan.FromMinutes(44));
@@ -2194,7 +2194,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         await AskedAsync(UpdateAskKind.Check, "0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f");
         Assert.Equal(1, updater.Checks);
         Assert.Equal((UpdateOutcome.Failed, "0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f"), (prefs.LastUpdate!.Outcome, prefs.LastUpdate.Request));
-        Assert.Contains("rate limit", prefs.LastUpdate.Reason);
+        Assert.Equal("checking again soon", prefs.LastUpdate.Reason);
 
         // Over at its end: a check then that fails for anything else leaves the next to CheckEvery.
         updater.CheckFails = new HttpRequestException("No such host is known.");
@@ -2242,7 +2242,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         await auto.TickAsync();
         Assert.Equal(1, updater.Checks);
         Assert.Equal(UpdateOutcome.Failed, auto.State.Last!.Outcome);
-        Assert.Contains("rate limit", auto.State.Last.Reason);
+        Assert.Equal("checking again soon", auto.State.Last.Reason);
 
         // Not at the next half hour: an hour, then two, and never longer.
         time.Advance(AutoUpdater.CheckEvery);
@@ -2292,7 +2292,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         updater.CheckFails = Limited(time.GetUtcNow().AddMinutes(30));
         await auto.TickAsync();
         Assert.Equal(outcome, auto.State.Last!.Outcome);
-        if (outcome == UpdateOutcome.Failed) { Assert.Contains("rate limit", auto.State.Last.Reason); }
+        if (outcome == UpdateOutcome.Failed) { Assert.Equal("checking again soon", auto.State.Last.Reason); }
         time.Advance(TimeSpan.FromMinutes(29));
         await auto.TickAsync();
         Assert.Equal(2, updater.Checks);
@@ -2323,7 +2323,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             var request = Guid.NewGuid().ToString();
             await AskedAsync(kind, request);
             Assert.Equal((!newer && outcome == UpdateOutcome.Current ? UpdateOutcome.Refused : UpdateOutcome.Failed, request), (auto.State.Last!.Outcome, auto.State.Last.Request));
-            Assert.Contains($"checking again after {retry.ToLocalTime():t}", auto.State.Last.Reason);
+            Assert.Equal("checking again soon", auto.State.Last.Reason);
             Assert.Equal(newer ? "0.2.0" : null, auto.State.Available);
         }
         Assert.Equal(newer ? 3 : 2, updater.Checks);
@@ -2347,7 +2347,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             await AskedAsync(UpdateAskKind.Check, request);
             Assert.Equal((UpdateOutcome.Refused, request), (auto.State.Last!.Outcome, auto.State.Last.Request));
             Assert.Equal((UpdateOutcome.Refused, request), (prefs.LastUpdate!.Outcome, prefs.LastUpdate.Request));
-            Assert.Contains($"checking again after {retry.ToLocalTime():t}", auto.State.Last.Reason);
+            Assert.Equal("checking again soon", auto.State.Last.Reason);
             Assert.Null(observed.CheckedAt);
             Assert.Null(auto.State.Available);
         }
@@ -3918,7 +3918,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         Assert.Equal(1, updater.Downloads);
         Assert.Equal(UpdateOutcome.Failed, auto.State.Last!.Outcome);
-        Assert.Contains("tried again after", auto.State.Last.Reason);
+        Assert.Contains("trying again soon", auto.State.Last.Reason);
         time.Advance(AutoUpdater.DownloadAgainAfter);
         await AskedAsync(UpdateAskKind.Check, "9b8c7d6e-5f40-4321-8abc-def012345678");
         Assert.Equal(2, updater.Downloads);
@@ -3974,7 +3974,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         await AskedAsync(UpdateAskKind.Install, "9b8c7d6e-5f40-4321-8abc-def012345678");
         Assert.Equal(1, updater.Downloads);
         Assert.Equal(UpdateOutcome.Failed, auto.State.Last!.Outcome);
-        Assert.Contains("tried again after", auto.State.Last.Reason);
+        Assert.Contains("trying again soon", auto.State.Last.Reason);
 
         updater.DownloadFails = null;
         time.Advance(AutoUpdater.DownloadAgainAfter);

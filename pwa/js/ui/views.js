@@ -10,7 +10,7 @@ import { ReadDwell } from '../read-dwell.js';
 import { ago } from './time.js';
 import { whileVisible } from './ticker.js';
 import { enter, leave, seen, select as showSelection, slide } from './motion.js';
-import { updateLine, updateDetails, lastLine, canCheck, canInstall, canUpdateNow, updateNowReason, RESTARTING } from '../update.js';
+import { updateLine, updateDetails, lastLine, checkHeld, canCheck, canInstall, canUpdateNow, updateNowReason, RESTARTING } from '../update.js';
 import { openUpdateNowSheet } from './update-now-sheet.js';
 import { signInDevicesLines } from '../signin-devices.js';
 import { BRAND } from '../brand.js';
@@ -1070,11 +1070,7 @@ function updateRow(updates, id, name, now) {
   updates.restarting?.(id, true);
   const updateNow = updates.isUpdateNow?.(s.last?.request) ?? false;
   const idle = s.installer && s.phase === 'idle' && !s.waiting;
-  // Legacy hosts send the held check's retry clock only in this reason, in host-local time.
-  const heldCheck = idle && !updateNow && !s.last?.code && ['failed', 'refused'].includes(s.last?.outcome)
-    && s.last.reason?.startsWith("the release feed's rate limit refused the check");
-  const checkFailed = heldCheck && !(Date.parse(s.checkedAt) > Date.parse(s.last.at));
-  const retry = checkFailed ? s.last.reason.match(/checking again after (\d{1,2}:\d{2}(?:\s*[AP]M)?)\.?$/i)?.[1] : null;
+  const checkFailed = idle && !updateNow && checkHeld(s);
   let said = updateLine(s, now);
   if (idle) {
     said = s.available ? `Update available \u00b7 ${s.available} (running ${s.current ?? 'an older release'})`
@@ -1082,13 +1078,12 @@ function updateRow(updates, id, name, now) {
   }
   const checking = s.phase === 'checking';
   if (checking && !s.waiting) { said = 'Checking\u2026'; }
-  const last = heldCheck || (idle && s.last?.outcome === 'current') ? null : lastLine(s, now, { updateNow });
+  const last = checkFailed || (idle && s.last?.outcome === 'current') ? null : lastLine(s, now, { updateNow });
   const check = canCheck(s) && !busy && !asking;
   const install = canInstall(s) && !busy && !asking;
   const offerNow = updates.signs === true && canUpdateNow(s);
   const pressNow = offerNow && !busy && !asking;
-  const why = checkFailed && !offerNow ? `Last check was limited. ${retry ? `The machine said to try again after ${retry}.` : 'Try again later.'}`
-    : updates.signs === true ? updateNowReason(s) : null;
+  const why = updates.signs === true ? updateNowReason(s) : null;
   const details = updateDetails(s, now);
   const key = [said, last, note, busy, asking, check, install, offerNow, pressNow, why, ...details];
   const checkLabel = checking ? 'Checking\u2026' : busy ? 'Asking\u2026' : 'Check now';
@@ -1113,8 +1108,8 @@ function updateRow(updates, id, name, now) {
         glyph(['checking', 'downloading', 'installing', 'waiting'].includes(s.phase) ? 'working'
           : s.available ? 'needs' : idle && s.checkedAt ? 'done' : 'idle'), h('span', null, said)),
       last ? h('p', { class: 'machine-update-last' }, last) : null,
-      why ? h('p', { class: 'machine-update-why', id: checkFailed ? `update-check-${id}` : null }, why) : null,
-      ...details.map((text) => h('p', { class: 'machine-update-detail' }, text)),
+      why ? h('p', { class: 'machine-update-why' }, why) : null,
+      ...details.map((text) => h('p', { class: 'machine-update-detail', id: checkFailed ? `update-check-${id}` : null }, text)),
       note ? h('p', { class: 'machine-error', role: 'alert' }, note) : null,
       s.installer ? h('div', { class: 'machine-actions machine-update-actions' },
         !offerNow ? button('machine-update-check', checkLabel, `${checkLabel} on ${name}`, check, () => updates.press(id, 'check')) : null,
