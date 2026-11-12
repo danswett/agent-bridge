@@ -1230,8 +1230,10 @@ public sealed class ConnectionTests : IAsyncLifetime
     static bool Same(Session? held, Session sent) =>
         held is not null && JsonSerializer.Serialize(held, ProtocolJson.Options) == JsonSerializer.Serialize(sent, ProtocolJson.Options);
 
-    [Fact]
-    public async Task Handles_are_negotiated_and_an_unknown_handle_is_dropped_before_resubscribing()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Handles_are_negotiated_and_an_invalid_handle_is_dropped_before_resubscribing(bool malformedMap)
     {
         await using var other = Patching(Make.Session("a"));
         other.Capabilities.Add("sessions.handles");
@@ -1241,7 +1243,8 @@ public sealed class ConnectionTests : IAsyncLifetime
         await other.SendAsync(Events.SessionsSynced, new { revision = 1, handles = new { a = 1 } });
         await other.SendAsync(Events.SessionPatch, new { handle = 1, revision = 2, set = Make.Session("a", response: "handled") });
         await Wait.UntilAsync(() => conn.Sessions.Get("a")?.Activity.Response == "handled", "the handled patch");
-        await other.SendAsync(Events.SessionPatch, new { handle = 99, revision = 3, set = Make.Session("a", response: "wrong") });
+        if (malformedMap) { await other.SendAsync(Events.SessionsSynced, new { handles = new { a = "bad" } }); }
+        else { await other.SendAsync(Events.SessionPatch, new { handle = 99, revision = 3, set = Make.Session("a", response: "wrong") }); }
         await Wait.UntilAsync(() => other.Sent(Ops.SessionsSubscribe).Count == 2, "the full recovery");
         Assert.False(other.Sent(Ops.SessionsSubscribe)[1].TryGetProperty("since", out _));
         Assert.NotEqual("wrong", conn.Sessions.Get("a")?.Activity.Response);

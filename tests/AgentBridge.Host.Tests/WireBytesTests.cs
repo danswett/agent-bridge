@@ -23,11 +23,10 @@ public sealed class WireBytesTests : IAsyncLifetime
     static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
     const string Focused = "88888888-8888-4888-8888-888888888888";
 
-    // Lowering the deflate floor from 512 to 150 bytes (#2171) cuts this unchanged workload from
-    // 13,140 to 10,155 bytes: 2,985 of the 8,020-byte gap to #597's goal, still 5,035 over it.
-    // The budget adds 1,045 bytes (10.3%) of margin; reaching the goal needs further cuts.
+    // Handles (#2323) cut the unchanged #2171 workload from 10,155 to 9,606 bytes.
+    // The 10,600-byte budget adds 994 bytes (10.3%); the 5 KB goal remains unmet.
     const int Goal = 5 * 1024;
-    const int Budget = 9_000;
+    const int Budget = 10_600;
 
     // What each event costs beyond its (deflated) JSON: the AEAD tag, the channel header and the
     // relay's data frame (type byte and the peer id).
@@ -56,7 +55,7 @@ public sealed class WireBytesTests : IAsyncLifetime
         }
         source = new SessionSource(f.Options(), f.Processes, time);
         await source.RefreshAsync();
-        service = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0")) { Time = time };
+        service = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0") { Instance = "wire-test-run" }) { Time = time };
         relay = await TestRelay.StartAsync();
         var token = relay.TokenFor(1, "octo");
         host = await relay.ConnectAsync(token, "Test host", "host");
@@ -104,6 +103,12 @@ public sealed class WireBytesTests : IAsyncLifetime
         Assert.Equal(Events.SessionPatch, e.Name);
         Assert.Equal(Focused, e.Data.GetProperty("id").GetString());
         Assert.False(e.Data.TryGetProperty("handle", out _));
+        var resumed = await ch.RequestAsync(Ops.SessionsSubscribe, new { patch = true, handles = true, since = new { instance = "wire-test-run", revision = source.Revision } });
+        Assert.True(resumed.GetProperty("result").GetProperty("resumed").GetBoolean());
+        Assert.Equal(0, resumed.GetProperty("result").GetProperty("count").GetInt32());
+        e = await NextAsync(ch);
+        Assert.Equal(Events.SessionsSynced, e.Name);
+        Assert.Equal(QuietSessions + 1, e.Data.GetProperty("handles").EnumerateObject().Count());
     }
 
     [Fact]

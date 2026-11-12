@@ -293,7 +293,7 @@ public sealed class SessionService
                 await old.StopAsync();
             }
             if (!channel.IsOpen) { throw new IOException("the channel is closed"); }
-            var feed = new Feed(source.Subscribe(since), request.Patch == true, state, Time, QuietInterval);
+            var feed = new Feed(source.Subscribe(since), request.Patch == true, state, Time, QuietInterval, request.Handles == true);
             state.Feed = feed;
             FeedCreated?.Invoke(feed);
             // The snapshot waits until the response has gone (ChannelReply), so the client
@@ -588,7 +588,7 @@ public sealed class SessionService
 
     List<string> Offered(IProtocolChannel channel)
     {
-        List<string> offered = [Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus];
+        List<string> offered = [Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.SessionsHandles, Capabilities.HelloChanged, Capabilities.SessionsFocus];
         if (SignInEntrypointApproved && SignIn?.Offered(channel) == true) { offered.Add(AgentSignIn.Capability); }
         if (DevicesOffered(channel)) { offered.Add(AgentSignIn.DevicesCapability); }
         // Who may read history is narrowed by the channel's caller (LocalApi, RemoteAuthorization).
@@ -712,7 +712,7 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
     static string? String(JsonElement data, string name) =>
         data.ValueKind == JsonValueKind.Object && data.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
-    internal sealed class Feed(SessionSubscription subscription, bool patch, Subscriber state, TimeProvider time, TimeSpan quiet)
+    internal sealed class Feed(SessionSubscription subscription, bool patch, Subscriber state, TimeProvider time, TimeSpan quiet, bool useHandles = false)
     {
         // Put in the subscription's own queue, so what was held goes in order with everything else:
         // Tick when the quiet interval is up, Refocused when the client shows another session.
@@ -723,6 +723,10 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
         // got through: an event that could not be sent leaves the client on the one before, which
         // the next patch then goes on from.
         readonly Dictionary<string, (long Seq, JsonObject Json)> sent = new(StringComparer.Ordinal);
+        readonly Dictionary<string, int> handles = new(StringComparer.Ordinal);
+        int nextHandle;
+
+        int Handle(string id) => handles.TryGetValue(id, out var handle) ? handle : handles[id] = checked(++nextHandle);
         // With focus: the latest change of each session the client does not show, until the quiet
         // interval is up, and the latest revision read before its first held change (Floor). That
         // change was made after Floor, so nothing sent meanwhile says a later revision: a client
@@ -892,17 +896,28 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
             {
                 case Session session:
                     var json = SessionPatches.Json(session);
+                    var known = handles.ContainsKey(session.Id);
+                    var handle = useHandles ? Handle(session.Id) : (int?)null;
                     if (!live) { return (ev.Name, ev.Data, session.Id, json); }
-                    var next = sent.TryGetValue(session.Id, out var last)
-                        ? SessionPatches.Next(last.Json, last.Seq, json, ev.Revision)
-                        : SessionPatches.Whole(json, ev.Revision);
+                    var next = (!useHandles || known) && sent.TryGetValue(session.Id, out var last)
+                        ? SessionPatches.Next(last.Json, last.Seq, json, ev.Revision, handle)
+                        : SessionPatches.Next(null, 0, json, ev.Revision, known ? handle : null);
+                    if (next is not null && useHandles && !known) { next = next with { Handle = handle }; }
                     return next is null ? (null, ev.Data, null, null) : (Events.SessionPatch, next, session.Id, json);
                 case SessionRemoved removed:
                     sent.Remove(removed.Id);
                     return (ev.Name, removed with { Revision = ev.Revision }, null, null);
-                case SessionsSynced:
+                case SessionsSynced synced:
                     live = true;
-                    return (ev.Name, ev.Data, null, null);
+                    if (useHandles)
+                    {
+                        foreach (var id in synced.Live ?? []) { Handle(id); }
+                        var mapped = synced with { Handles = new Dictionary<string, int>(handles) };
+                        if (ProtocolJson.ByteCount(mapped) > ProtocolJson.MaxMessageBytes - 1024)
+                        { handles.Clear(); mapped = synced with { Handles = new Dictionary<string, int>() }; }
+                        return (ev.Name, mapped, null, null);
+                    }
+                    return (ev.Name, synced, null, null);
                 default:
                     return (ev.Name, ev.Data, null, null);
             }

@@ -91,9 +91,9 @@ with the wrong type):
 | `Option` | | `value`, `label` |
 | `DiscoveryHeld` | `reason` | `agents` (whole) |
 | `SessionList`, `SessionsSynced`, `DiscoveryChanged` | | `discoveryHeld` |
-| `SessionsSynced` | `live` (whole) | |
+| `SessionsSynced` | `live`, `handles` (each whole) | |
 | `RestoreRunResult` | `sessions` (whole) | |
-| `SessionPatch` | `id`, `base`, `set`, `append`, `subagents` | |
+| `SessionPatch` | `id`, `handle`, `base`, `set`, `append`, `subagents` | |
 | `SubagentsPatch` | `set`, `remove`, `order` (each whole) | |
 | `session.remove` data | `id` | |
 | `UsageWindow` ([v1-usage.md](v1-usage.md)) | `percent` | |
@@ -306,6 +306,7 @@ once whenever `machine.readOnly`, `machine.restore` or `capabilities` would diff
 | `sessions.read` | `sessions.list`, `session.get`, `sessions.subscribe` |
 | `sessions.history` | `session.history`: a session's earlier turns, a page at a time, for the conversation pane ([v1-history.md](v1-history.md)). Offered to a person's devices and the app; never to the HA connector or an agent on the pipe |
 | `sessions.patch` | `sessions.subscribe` takes `patch` and `since`: live changes as `session.patch`, only what changed ([Patches](#patches-sessionpatch)), and a reconnect to the same run of the host sent only the sessions that changed meanwhile ([Resuming](#resuming-without-a-snapshot)). Without it, or without asking, a client gets whole upserts and whole snapshots as before |
+| `sessions.handles` | With `patch: true`, `sessions.subscribe` also takes `handles: true`: the snapshot assigns small session handles and live patches can omit `id` |
 | `hello.changed` | `hello` takes `{ "changes": true }`, and the host then sends `hello.changed` on that channel when its `readOnly` or capabilities change ([Changes](#hello)). Without it, a client asks hello again to see a change |
 | `sessions.focus` | `sessions.focus`: the client says whether it is on screen and which session it shows. Live changes to the others then come together at most every 12 s, and a device on screen is not notified of finished turns ([sessions.focus](#sessionsfocus)). With `openQuestion` and `idleMs` it also says which question's card it shows and how long since the person's last input, and while the person uses a device the host holds back some pushes ([While the person uses a device](#while-the-person-uses-a-device-1190)). Without it, or until a client says, every change goes at once |
 | `sessions.answer` | `session.answer`. A host leaves it out when it cannot answer at all, for example while agent-ha-bridge's daemon runs for the same user, or on a platform without delivery yet. A client then shows questions read-only and says to answer at the machine |
@@ -412,6 +413,14 @@ ended before the new snapshot was taken would otherwise keep it on the list.
 
 #### Patches (`session.patch`)
 
+**Negotiated handles (#2323).** A client asks for `"handles": true` alongside `"patch": true` only when hello offers `sessions.handles`.
+For that subscriber, `sessions.synced` adds `"handles": { "<session id>": 1, ... }`, including unchanged live sessions on a resumed subscribe.
+Handles are distinct positive 32-bit integers, valid only on this subscription on this channel; each snapshot replaces the map. A map over the message budget is empty, with handles introduced on first whole patches instead.
+A patch then carries `"handle": 1` instead of `id`. A newly discovered session's first whole patch carries both `id` and `handle`,
+introducing the binding only after successful application; later patches omit `id`. A known handle must never name another id.
+An unknown handle without that whole-session introduction is dropped whole and the client subscribes again in full, as for a wrong `base`.
+Invalid or duplicate snapshot handles require a full subscribe. Old clients (including an old worker cache) never ask and keep ids; new clients against an old host never ask. No worker change is needed.
+
 A whole upsert is 1 to 40 KiB, sent again for any change: a sub-agent's status, a new
 `updatedAt`. Measured on 2026-11-03 (#597), a session idle for 40 s was upserted three times at
 21.7 KB, 16.6 KB of it `subagents` that had not changed. So a client that asked for `patch` gets
@@ -430,7 +439,8 @@ each live change as only what changed:
 
 | Field | Notes |
 |---|---|
-| `id` | The session |
+| `id` | The session; may be omitted when a negotiated `handle` names it |
+| `handle` | Optional negotiated session handle, scoped and introduced as above |
 | `base` | The `seq` of the event on this channel that last gave the client this session: an upsert of the snapshot, or an earlier patch. **Absent: the patch is the whole session**, applied to nothing, and it replaces whatever the client holds of it as an upsert would. A host sends the whole session when it has sent none of it on this subscription, and whenever that is smaller |
 | `revision` | Every change the host had made up to this revision has now been sent on this channel ([Resuming](#resuming-without-a-snapshot)). At most the host's `revision`, and lower while another session's change waits out its 250 ms. Absent from a host that cannot say |
 | `set` | A JSON merge patch ([RFC 7396](https://www.rfc-editor.org/rfc/rfc7396)) of the session as an upsert carries it: an object merges into the field's object member by member, `null` removes a field, and anything else (a list included) replaces the field whole. Holds `subagents` only whole, or `null` |
@@ -464,8 +474,8 @@ its tool history moved, say). An `append` is used only where the old text is all
 start of the new: a `response` cut to its last 16 KiB has moved, and is `set`. Hosts choose
 freely between a patch and a whole session; a client applies either.
 
-**Measured wire cost (#1334, #2171).** `WireBytesTests` replays 40 s of changes through the real host to a
-subscriber that asked for `patch`, sent `sessions.focus` and negotiated deflate: one focused
+**Measured wire cost (#1334, #2171, #2323).** `WireBytesTests` replays 40 s of changes through the real host to a
+subscriber that asked for `patch` and `handles`, sent `sessions.focus` and negotiated deflate: one focused
 session changing every second and four quiet ones changing every 250 ms. It counts each event as
 the `MessageDeflate.Pack` length of its `{ev, seq, data}` envelope plus 42 bytes (16 AEAD tag, 9
 channel header, 17 relay data frame). With the 150-byte deflate floor, the result is **10,155
@@ -473,7 +483,9 @@ bytes**, all 53 events `session.patch` (none a whole upsert). Lowering only the 
 bytes saves **2,985 bytes** from #1334's 13,140-byte baseline, closing 37.2% of the 8,020-byte gap
 to #597's 5,120-byte goal. The goal is **not met**: 5,035 bytes remain. The workload and patch
 JSON are unchanged. The test's budget drops from 14,500 to **11,200 bytes** (1,045 bytes, or
-10.3%, of margin) so that a regression fails; it is not a claim that 5 KB is met.
+10.3%, of margin). Negotiated handles lower the unchanged workload further to **9,606 bytes**
+(549 saved, 4,486 above the goal), still 53 patches and no whole upserts. The budget is now
+**10,600 bytes**, 994 bytes (10.3%) of margin. Snapshot maps and subscribe/focus requests are not counted; 5 KB is not met.
 
 #### Resuming without a snapshot
 

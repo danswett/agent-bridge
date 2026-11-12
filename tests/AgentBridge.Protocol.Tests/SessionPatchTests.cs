@@ -49,8 +49,7 @@ public class SessionPatchTests
     {
         var held = SessionPatches.Json(Base());
         var patch = SessionPatches.Next(held, 41, SessionPatches.Json(Base() with { Title = "Wrong" }), 7, handle: 1)!;
-        Assert.Equal(SessionPatches.NotOnHeld, Assert.Throws<SessionPatchException>(() =>
-            SessionPatches.Apply(held, 41, Wire(patch), new Dictionary<int, string>())).Message);
+        Assert.Equal(SessionPatches.NotOnHeld, Assert.Throws<SessionPatchException>(() => SessionPatches.Apply(held, 41, Wire(patch), new Dictionary<int, string>())).Message);
         Assert.Equal("Patches", held["title"]!.GetValue<string>());
     }
 

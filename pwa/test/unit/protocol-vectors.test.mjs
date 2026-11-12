@@ -24,7 +24,7 @@ import { readUsage } from '../../js/usage.js';
 import { readDiagnostics } from '../../js/diagnostics.js';
 import * as loadReaders from '../../js/load-feed.js';
 import { HostClient } from '../../js/host-client.js';
-import { PatchError, applyPatch, readPatch } from '../../js/session-patch.js';
+import { PatchError, applyPatch, readPatch, readHandles } from '../../js/session-patch.js';
 import { SessionsStore } from '../../js/sessions-store.js';
 import { AnswerService } from '../../js/answer-service.js';
 import { ReplyService } from '../../js/reply-service.js';
@@ -308,7 +308,7 @@ const CHECKS = {
   LaunchRequest: (j) => checkLaunch(j),
   // A patch the host sends, applied as host-client.js applies it to the session its context holds
   // (from the event at seq), which must then be its context's result exactly.
-  SessionPatch: (j, context) => {
+  SessionPatch: (j, context = {}) => {
     const patch = readPatch(j);
     assert.ok(patch, 'a patch the PWA cannot read at all');
     let applied;
@@ -616,11 +616,13 @@ for (const sequence of recordings) {
   test(`the recorded "${sequence.name}" patched step by step is exactly the session each upsert would be`, () => {
     let held = null;
     let heldSeq = null;
+    let handles = new Map();
     for (const e of sequence.events) {
+      if (e.synced) { handles = readHandles(e.synced.handles); continue; }
       if (e.upsert) { [held, heldSeq] = [e.upsert, e.seq]; continue; }
       const patch = readPatch(JSON.parse(JSON.stringify(e.patch)));
       assert.ok(patch, `seq ${e.seq} cannot be read`);
-      const applied = applyPatch(held, heldSeq, patch);
+      const applied = applyPatch(held, heldSeq, patch, handles);
       assert.deepEqual(applied, e.session, `seq ${e.seq}`);
       assert.deepEqual(readSession(applied), readSession(e.session), `seq ${e.seq}`);
       [held, heldSeq] = [applied, e.seq];
@@ -630,6 +632,7 @@ for (const sequence of recordings) {
   test(`the recorded "${sequence.name}" shown through a subscription for patches is each session as upserted`, async () => {
     const { t, client, store } = await subscribed({ patch: true });
     for (const e of sequence.events) {
+      if (e.synced) { t.host({ ev: 'sessions.synced', seq: e.seq, data: e.synced }); continue; }
       t.host({ ev: e.upsert ? 'session.upsert' : 'session.patch', seq: e.seq, data: e.upsert ?? e.patch });
       const expected = readSession(e.upsert ?? e.session);
       assert.deepEqual(store.get(expected.id), expected, `seq ${e.seq}`);

@@ -7578,7 +7578,8 @@
               }
             }
           },
-          "refusedBy": "parse"
+          "refusedBy": "SessionPatches.Apply",
+          "reason": "the patch is not on the session as held"
         },
         {
           "name": "wrong-type-id",
