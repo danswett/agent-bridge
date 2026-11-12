@@ -74,13 +74,14 @@ public sealed class AgentLimitsTests
     {
         var limits = Make();
         var settings = AgentLaunchLimits.Default;
-        Assert.True(limits.CheckLaunch("a", "r", "hash", settings).Allowed);
+        for (var i = 0; i < 3; i++) { Assert.True(limits.CheckLaunch("a", $"r{i}", "hash", settings).Allowed); }
         now = now.AddMinutes(16);
-        Assert.True(limits.CheckLaunch("a", "r", "hash", settings).Duplicate);
+        Assert.True(limits.CheckLaunch("a", "r0", "hash", settings).Duplicate);
         now = now.AddHours(-2);
-        Assert.True(limits.CheckLaunch("a", "r", "hash", settings).Duplicate);
+        Assert.True(limits.CheckLaunch("a", "r0", "hash", settings).Duplicate);
         now = now.AddHours(1);
-        Assert.True(limits.CheckLaunch("a", "r", "hash", settings).Allowed);
+        Assert.True(limits.CheckLaunch("a", "after-expiry", "hash", settings).Allowed);
+        Assert.True(limits.CheckLaunch("a", "r0", "hash", settings).Allowed);
         Assert.True(Make().CheckLaunch("a", "r", "hash", settings).Allowed);
     }
 
@@ -91,10 +92,10 @@ public sealed class AgentLimitsTests
         var settings = AgentLaunchLimits.Default with { LaunchesPerMachinePerHour = 1 };
         var results = new AgentLimitVerdict[32];
         Parallel.For(0, results.Length, i => results[i] = limits.CheckLaunch($"o{i}", $"r{i}", "hash", settings));
-        Assert.Single(results.Where(r => r.Allowed));
+        Assert.Single(results, r => r.Allowed);
         limits = Make();
         Parallel.For(0, results.Length, i => results[i] = limits.CheckLaunch("a", "r", "hash", settings));
-        Assert.Single(results.Where(r => r.Allowed));
+        Assert.Single(results, r => r.Allowed);
         Assert.Equal(31, results.Count(r => r.Duplicate && !r.Allowed));
     }
 
