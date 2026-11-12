@@ -27,21 +27,9 @@ async function openDemo(page) {
 async function comeBack(page) {
   await page.clock.install();
   await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
-  await page.evaluate(() => new Promise((resolve) => {
-    const grace = window.agentBridgeDemo.grace;
-    const stop = grace.onChange(() => {
-      if (grace.active) { stop(); resolve(); }
-    });
-    document.dispatchEvent(new Event('visibilitychange'));
-  }));
-}
-
-async function observeAwayReturn(page) {
-  await page.clock.install();
-  await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
   await page.evaluate(() => {
     const { grace, hosts } = window.agentBridgeDemo;
-    const trace = window.awayReturnTrace = { acceptedSince: null, events: [] };
+    const trace = window.returnTrace = { acceptedSince: null, events: [] };
     const record = (event, details = {}) => {
       const tab = document.querySelector('#machine-tabs .machine-tab[data-device-id="demo-laptop"]');
       const row = document.querySelector('.session[data-host-id="demo-laptop"][data-id="laptop-copilot-1"]');
@@ -82,9 +70,9 @@ async function observeAwayReturn(page) {
   });
 }
 
-async function advanceAwayClock(page, ms) {
+async function advanceReturnClock(page, ms) {
   const ready = await page.evaluate((ms) => {
-    const trace = window.awayReturnTrace;
+    const trace = window.returnTrace;
     const grace = window.agentBridgeDemo.grace;
     trace?.record('clock.before', { ms });
     return trace?.acceptedSince != null && grace.active && grace.since === trace.acceptedSince
@@ -94,20 +82,20 @@ async function advanceAwayClock(page, ms) {
     throw new Error('Return setup: refusing to advance fake time before a visible grace start is observed');
   }
   await page.clock.runFor(ms);
-  await page.evaluate((ms) => window.awayReturnTrace.record('clock.after', { ms }), ms);
+  await page.evaluate((ms) => window.returnTrace.record('clock.after', { ms }), ms);
 }
 
 test.use({ viewport: { width: 1440, height: 900 }, hasTouch: false });
 
 test.afterEach(async ({ page }, info) => {
-  if (info.title !== AWAY_RETURN || info.status === info.expectedStatus) { return; }
+  if (info.status === info.expectedStatus) { return; }
   const report = await page.evaluate(() => {
-    const trace = window.awayReturnTrace;
+    const trace = window.returnTrace;
     if (!trace) { return { setup: 'not installed', visibility: document.visibilityState, demoReady: !!window.agentBridgeDemo }; }
     const final = trace.record('failure');
     return { acceptedSince: trace.acceptedSince, events: trace.events, final };
   });
-  await info.attach('away-return-state.json', { body: JSON.stringify(report, null, 2), contentType: 'application/json' });
+  await info.attach('return-state.json', { body: JSON.stringify(report, null, 2), contentType: 'application/json' });
 });
 
 test('return_setup_refuses_to_advance_before_grace_starts', async ({ page }) => {
@@ -116,17 +104,30 @@ test('return_setup_refuses_to_advance_before_grace_starts', async ({ page }) => 
   await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
   expect(await page.evaluate(() => window.agentBridgeDemo.grace.active)).toBe(false);
   const before = await page.evaluate(() => Date.now());
-  await expect(advanceAwayClock(page, 1)).rejects.toThrow(
+  await expect(advanceReturnClock(page, 1)).rejects.toThrow(
     'Return setup: refusing to advance fake time before a visible grace start is observed');
   expect(await page.evaluate(() => Date.now())).toBe(before);
+});
+
+test('return setup refuses a grace notification after the page becomes hidden', async ({ page }) => {
+  await openDemo(page);
+  await page.evaluate(() => {
+    const grace = window.agentBridgeDemo.grace;
+    const stop = grace.onChange(() => {
+      stop();
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    });
+  });
+  await expect(comeBack(page)).rejects.toThrow(
+    'Return setup: visibilitychange did not produce an observed visible grace start');
 });
 
 // Quarantined (#1493, #1474): the historical WebKit grace failure remains unreproduced.
 test.skip(AWAY_RETURN, async ({ page }) => {
   await openDemo(page);
-  await observeAwayReturn(page);
+  await comeBack(page);
   await setOnline(page, false);
-  await advanceAwayClock(page, 1500);
+  await advanceReturnClock(page, 1500);
   await expect(card(page, IDLE).locator('.row-glyph .glyph')).not.toHaveAttribute('data-glyph', 'failed');
   await expect(card(page, IDLE).locator('.row-status')).not.toHaveText('Offline');
   await expect(card(page, IDLE)).not.toHaveAttribute('data-stale', /./);
@@ -134,7 +135,7 @@ test.skip(AWAY_RETURN, async ({ page }) => {
   const tab = page.locator('#machine-tabs .machine-tab[data-device-id="demo-laptop"]');
   await expect(tab).not.toHaveClass(/away/);
   await expect(tab).not.toHaveAttribute('aria-label', /offline/);
-  await advanceAwayClock(page, 1600);
+  await advanceReturnClock(page, 1600);
   await expect(tab).toHaveClass(/away/);
   await expect(tab).toHaveAttribute('aria-label', /offline/);
   await expect(card(page, IDLE)).toHaveAttribute('data-stale', 'offline');
@@ -245,7 +246,7 @@ test('focus on the sort control when the strip takes the title row goes to the s
   await page.locator('#session-sort').focus();
   await comeBack(page);
   await page.evaluate(() => { window.agentBridgeDemo.connection.ready = false; window.agentBridgeDemo.page.refresh(); });
-  await page.clock.runFor(3100);
+  await advanceReturnClock(page, 3100);
   await expect(page.locator('#connection-strip')).toBeVisible();
   await expect(page.locator('#connection-strip')).toBeFocused();
 });
@@ -262,17 +263,17 @@ test('a lane entry held for a return is aria-disabled at once, a press says Upda
   const approve = entry.locator('.needs-approve');
   await comeBack(page);
   await setOnline(page, false);
-  await page.clock.runFor(10);
+  await advanceReturnClock(page, 10);
   await expect(approve).toHaveAttribute('aria-disabled', 'true');
   expect(await approve.evaluate((b) => b.disabled)).toBe(false);
   await approve.evaluate((b) => b.click());
   await expect(entry.locator('.needs-updating')).toHaveText('Updating…');
   await expect(page.getByRole('alert').filter({ hasText: /\S/ })).toHaveCount(0);
   expect(await page.evaluate(() => window.agentBridgeDemo.machines['demo-laptop'].answerLog.length)).toBe(0);
-  await page.clock.runFor(600);
+  await advanceReturnClock(page, 600);
   await expect(entry).toHaveAttribute('data-hold', 'drawn');
   await setOnline(page, true);
-  await page.clock.runFor(4000);
+  await advanceReturnClock(page, 4000);
   await expect(approve).not.toHaveAttribute('aria-disabled', 'true');
   await expect(entry.locator('.needs-updating')).toBeHidden();
 });
