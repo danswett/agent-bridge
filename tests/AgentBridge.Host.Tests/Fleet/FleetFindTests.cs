@@ -56,6 +56,36 @@ public sealed class FleetFindTests : IDisposable
         JsonSerializer.SerializeToElement(await op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(data)), Web);
 
     [Fact]
+    public async Task A_unique_verified_live_name_is_found_without_a_machine_pin_and_returns_its_model()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var session = JsonSerializer.Deserialize<FleetSession>("""
+            {"id":"s-a","node":"n-a","name":"SG Quality","state":"working",
+             "since":"2026-11-07T12:00:00Z","model":"gpt-6.1-sol"}
+            """, Web)!;
+        var op = Op(M("a", true, null, verified: true) with { Sessions = [session] });
+        var result = await Find(op, new { name = "SG Quality", model = "caller-spoof" });
+        Assert.Equal("found", result.GetProperty("result").GetString());
+        var found = result.GetProperty("session");
+        Assert.Equal("n-a", found.GetProperty("node").GetString());
+        Assert.Equal("gpt-6.1-sol", found.GetProperty("model").GetString());
+        Assert.DoesNotContain("SG Quality", result.GetRawText());
+        Assert.DoesNotContain("caller-spoof", result.GetRawText());
+    }
+
+    [Fact]
+    public void The_roster_preserves_the_published_model_instead_of_guessing_one()
+    {
+        var frame = Body(new
+        {
+            machine = "a", online = true,
+            record = new { sessions = new[] { new { id = "s-a", node = "n-a", state = "working", since = Started, model = "gpt-6.1-sol" } } }
+        });
+        var session = Assert.Single(Assert.Single(RelayFleetRoster.Parse([frame])).Sessions);
+        Assert.Equal("gpt-6.1-sol", JsonSerializer.SerializeToElement(session, Web).GetProperty("model").GetString());
+    }
+
+    [Fact]
     public async Task A_name_alone_never_yields_found_or_a_node_and_an_impostor_beside_an_offline_original_is_unverified()
     {
         if (!OperatingSystem.IsWindows()) { return; }
