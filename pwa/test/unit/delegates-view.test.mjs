@@ -134,6 +134,27 @@ test('a fetch settling after hide neither follows queued changes nor arms a poll
   assert.equal(s.calls, 2);
 });
 
+test('a queued reload cancels a later change timer so hide leaves no orphan callback', async (t) => {
+  const s = setup(t);
+  let resolve;
+  s.fetch = () => new Promise((done) => { resolve = done; });
+  s.view.select(agent.id, session);
+  s.tick(0);
+  s.view.update({ subagents: [{ ...agent, line: 'First change' }] });
+  s.tick(2000);
+  s.view.update({ subagents: [{ ...agent, line: 'Second change' }] });
+  s.fetch = async () => agent;
+  resolve(agent);
+  await flush();
+  assert.equal(s.calls, 2);
+  assert.equal(s.pending.size, 1, 'only the resumed poll owns a timer');
+  s.show(false);
+  assert.equal(s.pending.size, 0);
+  const fired = s.fired;
+  s.tick(600000);
+  assert.equal(s.fired, fired);
+});
+
 test('an offscreen delegate leaves no polling timer and catches up when its pane is shown', async (t) => {
   const s = setup(t);
   s.view.select(agent.id, session);
