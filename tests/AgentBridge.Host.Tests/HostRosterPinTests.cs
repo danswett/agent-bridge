@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AgentBridge.Host;
 using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Roster;
@@ -27,9 +28,9 @@ public sealed class HostRosterPinTests : IDisposable
             genesis = genesis ?? Codec.Base64Url(w.Entry("G").Hash),
             heads = heads.Length == 0 ? [Codec.Base64Url(w.Entry("B").Hash)] : heads,
         }));
-    void Write(string text)
+    void Write(string text, string? path = null)
     {
-        using var stream = PrivateFolder.CreateNew(PathName);
+        using var stream = PrivateFolder.CreateNew(path ?? PathName);
         stream.Write(Encoding.UTF8.GetBytes(text));
         stream.Flush(flushToDisk: true);
     }
@@ -144,8 +145,138 @@ public sealed class HostRosterPinTests : IDisposable
         Assert.Equal("pin-unreadable", new HostRosterReader(PathName, () => w.Now).Update(Relay("G", "B"), RosterFixture.Account).Outcome);
     }
 
+    string TransitionPath => Path.Combine(folder, "roster-transition.json");
+    static readonly byte[] Nonce = new byte[32];
+    CommandContext Context => new(w.Id("H"), CommandAction.AcceptHostSign, Instant.Parse("2026-11-04T12:00:00.123456789Z"), Nonce: Nonce);
+    HostRosterReader PinnedReader()
+    {
+        if (!w.Labels.Contains("H")) { w.Add("H", "G", "H", "B", kind: "host"); Pin(); }
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        Assert.Equal("verified", reader.Update(Relay("G", "B", "H"), RosterFixture.Account).Outcome);
+        return reader;
+    }
+    PersonCommand Command(string by = "G", string request = "0f8fad5b-d9cb-469f-a165-70867728950e",
+        string issued = "2026-11-04T11:59:00Z", string expires = "2026-11-04T12:04:00Z")
+    {
+        var body = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            v = 1, action = CommandAction.AcceptHostSign, request, by = w.Id(by), target = new { machine = w.Id("H") },
+            nonce = Codec.Base64Url(Nonce), issuedAt = issued, expiresAt = expires, heads = new[] { Codec.Base64Url(w.Entry("H").Hash) },
+        });
+        return PersonCommand.Parse(Encoding.UTF8.GetBytes(PersonCommand.Canonical(body, World.Keys(by).Sign.Sign(PersonCommand.Signed(body)), null)));
+    }
+    JsonObject Snapshot() => JsonNode.Parse(File.ReadAllBytes(TransitionPath))!.AsObject();
+    void ReplaceSnapshot(JsonObject snapshot) { File.Delete(TransitionPath); Write(snapshot.ToJsonString(), TransitionPath); }
+
+    [Theory]
+    [InlineData("G", "unsupported-verifier")]
+    [InlineData("H", "signer")]
+    [InlineData("B", "probation")]
+    public void Transition_checks_refuse_without_writing_or_enabling_v2(string by, string reason)
+    {
+        var reader = PinnedReader();
+        var before = File.ReadAllBytes(PathName);
+        Assert.Equal(reason, reader.CheckAcceptHostSign(Command(by), Context));
+        Assert.Equal(reason, reader.CheckAcceptHostSign(Command(by), Context));
+        Assert.False(File.Exists(TransitionPath));
+        Assert.Equal(before, File.ReadAllBytes(PathName));
+        w.AddHostV2("v2", "G", "V2", "H");
+        Assert.Contains("version", reader.Update(Relay("G", "B", "H", "v2"), RosterFixture.Account).Reasons);
+        Assert.False(reader.Verified!.AcceptHostSign);
+    }
+
+    [Fact]
+    public void The_internal_replay_record_survives_restart_but_never_authorizes_a_transition()
+    {
+        var reader = PinnedReader();
+        var before = File.ReadAllBytes(PathName);
+        Assert.Null(reader.RecordCommand(Command(), Context));
+        Assert.Equal("2026-11-04T12:00:00.123456789Z", Snapshot()["highWater"]!.GetValue<string>());
+        var restarted = PinnedReader();
+        Assert.Equal("replay", restarted.RecordCommand(Command(), Context));
+        Assert.Equal("unsupported-verifier", restarted.CheckAcceptHostSign(Command(), Context));
+        Assert.False(restarted.Verified!.AcceptHostSign);
+        Assert.Equal(before, File.ReadAllBytes(PathName));
+    }
+
+    [Fact]
+    public void Persisted_floor_and_high_water_apply_after_restart_and_clock_rollback()
+    {
+        var reader = PinnedReader();
+        var later = Context with { Now = Instant.Parse("2026-11-04T12:03:00Z"), Floor = Instant.Parse("2026-11-04T12:00:00Z") };
+        Assert.Null(reader.RecordCommand(Command(issued: "2026-11-04T12:01:00Z"), later));
+        var restarted = PinnedReader();
+        Assert.Equal("floor", restarted.RecordCommand(Command(request: "00000000-0000-0000-0000-000000000001"), Context));
+        Assert.Equal("expired", restarted.RecordCommand(Command(issued: "2026-11-04T12:01:00Z", expires: "2026-11-04T12:02:00Z"), Context));
+        Assert.Equal("2026-11-04T12:01:00Z", Snapshot()["highestIssuedAt"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("account", "pin-mismatch")]
+    [InlineData("generation", "pin-mismatch")]
+    [InlineData("genesis", "pin-mismatch")]
+    [InlineData("v", "pin-unreadable")]
+    [InlineData("acceptHostSign", "pin-unreadable")]
+    [InlineData("extra", "pin-unreadable")]
+    [InlineData("requests", "pin-unreadable")]
+    [InlineData("heads", "pin-unreadable")]
+    public void A_snapshot_never_crosses_identity_or_repairs_invalid_state(string field, string reason)
+    {
+        var reader = PinnedReader();
+        Assert.Null(reader.RecordCommand(Command(), Context));
+        var snapshot = Snapshot();
+        snapshot[field] = field switch
+        {
+            "account" => JsonValue.Create("another-account"), "generation" => JsonValue.Create(new string('f', 32)),
+            "genesis" => JsonValue.Create(Codec.Base64Url(new byte[32])), "v" => JsonValue.Create(2),
+            "acceptHostSign" => JsonValue.Create(true), "requests" => new JsonArray(snapshot["requests"]![0]!.DeepClone(), snapshot["requests"]![0]!.DeepClone()),
+            "heads" => new JsonArray(), _ => JsonValue.Create("secret-marker"),
+        };
+        ReplaceSnapshot(snapshot);
+        var bytes = File.ReadAllBytes(TransitionPath);
+        var restarted = new HostRosterReader(PathName, () => w.Now);
+        Assert.Equal(reason, restarted.Update(Relay("G", "B", "H"), RosterFixture.Account).Outcome);
+        Assert.Null(restarted.Verified);
+        Assert.Equal(bytes, File.ReadAllBytes(TransitionPath));
+    }
+
+    [Fact]
+    public void A_full_replay_store_prunes_only_after_expiry_plus_120_seconds_to_the_nanosecond()
+    {
+        var reader = PinnedReader();
+        Assert.Null(reader.RecordCommand(Command(), Context));
+        var snapshot = Snapshot();
+        var replay = snapshot["requests"]![0]!;
+        snapshot["requests"] = new JsonArray(Enumerable.Range(0, 512).Select(i =>
+        {
+            var item = replay.DeepClone(); item["request"] = $"00000000-0000-0000-0000-{i:x12}"; return item;
+        }).ToArray());
+        ReplaceSnapshot(snapshot);
+        var command = Command(issued: "2026-11-04T12:05:00Z", expires: "2026-11-04T12:10:00Z");
+        var boundary = Context with { Now = Instant.Parse("2026-11-04T12:06:00Z") };
+        Assert.Equal("replay-full", reader.RecordCommand(command, boundary));
+        Assert.Null(reader.RecordCommand(command, boundary with { Now = Instant.Parse("2026-11-04T12:06:00.000000001Z") }));
+        Assert.Single(Snapshot()["requests"]!.AsArray());
+    }
+
+    [Fact]
+    public void A_failed_commit_preserves_the_snapshot_and_does_not_consume_the_request()
+    {
+        var reader = PinnedReader();
+        Assert.Null(reader.RecordCommand(Command(), Context));
+        var before = File.ReadAllBytes(TransitionPath);
+        var next = Command(request: "00000000-0000-0000-0000-000000000001");
+        reader.BeforeTransitionCommit = () => throw new IOException("secret-marker");
+        Assert.Equal("transition-store", reader.RecordCommand(next, Context));
+        Assert.Equal(before, File.ReadAllBytes(TransitionPath));
+        reader.BeforeTransitionCommit = null;
+        Assert.Null(reader.RecordCommand(next, Context));
+    }
+
     public void Dispose()
     {
+        File.Delete(TransitionPath);
+        File.Delete(TransitionPath + ".lock");
         File.Delete(PathName);
         Directory.Delete(folder);
     }
