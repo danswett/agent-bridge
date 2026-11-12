@@ -773,6 +773,7 @@ static partial class SelfTest
         var shown = ready.ShowAsync();
         Button? Send() => ById<Button>(ready, "FeedbackSend");
         void Press(Button b) => ((IInvokeProvider)new ButtonAutomationPeer(b).GetPattern(PatternInterface.Invoke)).Invoke();
+        bool Focused(Button b) => ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(ready.XamlRoot), b);
         await Until(() => probe.Request is not null, TimeSpan.FromSeconds(5));
         check(Send() is { IsEnabled: false } && probe.Sends == 0, "disables Send while the review is gathering");
         probe.Gathering!.SetResult(probe.Bundle());
@@ -797,17 +798,36 @@ static partial class SelfTest
         await Until(() => PreviewVisible() && Send()?.IsEnabled == true, TimeSpan.FromSeconds(5));
         check(await Until(() => Find<TextBlock>(ready).Any(b => b.Text == "The test note"), TimeSpan.FromSeconds(5)), "shows the gathered bundle's actual rows when expanded");
         probe.Sending = new TaskCompletionSource<FeedbackSendResult>();
-        if (Send() is { } sendButton) { Press(sendButton); }
-        check(Send() is { IsEnabled: false } && ById<StackPanel>(ready, "FeedbackChoices") is { IsEnabled: false }, "locks choices and Send while sending");
+        if (Send() is { } sendButton)
+        {
+            check(sendButton.Focus(FocusState.Keyboard) && Focused(sendButton), "focuses Send before the held upload");
+            Press(sendButton);
+            check(sendButton.IsEnabled && Focused(sendButton) && probe.Sends == 1
+                && ById<StackPanel>(ready, "FeedbackChoices") is { IsEnabled: false }, "keeps Send focusable and focused while locking choices during upload");
+            if (sendButton.IsEnabled) { Press(sendButton); }
+            check(probe.Sends == 1, "ignores a duplicate Send while the upload is held");
+        }
         probe.Sending.SetResult(new FeedbackSendResult.Failed(FeedbackFailureReason.Offline, FeedbackRetry.Now));
         probe.Sending = null;
         check(await Until(() => ById<Button>(ready, "FeedbackRetry") is { IsEnabled: true, Visibility: Visibility.Visible }, TimeSpan.FromSeconds(5))
             && ById<TextBlock>(ready, "FeedbackStatus")?.Text.Contains(FeedbackSendViewModel.FailedText, StringComparison.Ordinal) == true && probe.Sends == 1,
             "shows the failed reason with Retry after Send");
-        if (ById<Button>(ready, "FeedbackRetry") is { } retry) { Press(retry); }
+        probe.Sending = new TaskCompletionSource<FeedbackSendResult>();
+        if (ById<Button>(ready, "FeedbackRetry") is { } retry)
+        {
+            check(Focused(retry), "moves focus from Send to Retry after failure");
+            check(retry.Focus(FocusState.Keyboard) && Focused(retry), "focuses Retry before the held retry");
+            Press(retry);
+            check(retry.IsEnabled && retry.Visibility == Visibility.Visible && Focused(retry) && probe.Sends == 2, "keeps Retry alive and focused during upload");
+            if (retry.IsEnabled && retry.Visibility == Visibility.Visible) { Press(retry); }
+            check(probe.Sends == 2, "ignores a duplicate Retry while the upload is held");
+        }
+        probe.Sending.SetResult(new FeedbackSendResult.Sent(DateTimeOffset.Now));
+        probe.Sending = null;
         check(await Until(() => ById<TextBlock>(ready, "FeedbackStatus")?.Text.StartsWith("Thanks. Sent at", StringComparison.Ordinal) == true, TimeSpan.FromSeconds(5))
             && probe.Sends == 2 && probe.LastSent?.Items.Single().Summary == "The test note"
             && ById<TextBox>(ready, "FeedbackPreview")?.Text == probe.LastSent?.Text, "Retry sends the exact reviewed bundle and shows Sent");
+        check(ById<Button>(ready, "FeedbackClose") is { } focusedClose && Focused(focusedClose), "moves focus to Close after Sent");
         if (ById<Button>(ready, "FeedbackClose") is { } closeReady) { Press(closeReady); } else { ready.Hide(); check(false, "offers an accessible Close after Sent"); }
         await shown;
         check(note?.Text == "" && ById<TextBox>(ready, "FeedbackPreview")?.Text == "", "clears the note and exact preview when feedback closes");

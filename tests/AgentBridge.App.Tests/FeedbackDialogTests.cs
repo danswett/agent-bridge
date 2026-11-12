@@ -21,6 +21,10 @@ public class FeedbackDialogTests
             Assert.False(string.IsNullOrWhiteSpace((string?)control.Attribute("AutomationProperties.Name")));
         }
         Assert.Equal("False", (string?)controls.Single(e => (string?)e.Attribute(x + "Name") == "Turns").Attribute("IsChecked"));
+        var screenshot = dialog.Descendants().Single(e => (string?)e.Attribute("AutomationProperties.AutomationId") == "FeedbackScreenshot");
+        Assert.StartsWith((string)screenshot.Attribute("Content")!, (string?)screenshot.Attribute("AutomationProperties.Name"), StringComparison.Ordinal);
+        Assert.Contains("readonly HttpClient feedbackHttp = BlobHttp.CreateClient();",
+            File.ReadAllText(Path.Combine(root, "src", "AgentBridge.App", "App.xaml.cs")), StringComparison.Ordinal);
         Assert.Contains("encrypted on this device, processed automatically", dialog.ToString(), StringComparison.Ordinal);
     }
 }
