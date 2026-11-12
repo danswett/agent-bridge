@@ -16,10 +16,12 @@ public sealed partial class HostRosterReader
     readonly Pin? pin;
     readonly string? problem;
     readonly Func<TimeSpan> clock;
+    readonly object sync = new();
 
     public HostRosterReader(string pinPath, Func<TimeSpan> clock)
     {
         (pin, problem) = ReadPin(pinPath);
+        this.pinPath = pin is null ? pinPath : Path.GetFullPath(pinPath);
         this.clock = clock;
     }
 
@@ -27,12 +29,18 @@ public sealed partial class HostRosterReader
 
     public RosterCheck Update(RelayRoster? relay, string account)
     {
+        lock (sync) { return UpdateCore(relay, account); }
+    }
+
+    RosterCheck UpdateCore(RelayRoster? relay, string account)
+    {
         RosterCheck Failure(string code) =>
             new(code, relay?.Mode ?? "", relay?.Entries.Count ?? 0, 0, 0, 0, 0, 0, [], [code]);
         if (problem is not null) { return Failure(problem); }
         if (pin is null) { return relay is null ? Failure("unpinned") : HostRoster.Verify(relay, account, clock); }
         if (relay is null || relay.Entries.Count == 0) { return Failure("no-roster"); }
         if (account != pin.Account || relay.Generation != pin.Generation) { return Failure("pin-mismatch"); }
+        if (ReloadTransition() is { } issue) { return Failure(issue); }
 
         // Validate independently before offering anything to the retained, probation-bearing reader.
         var (check, candidate) = HostRoster.Read(relay, account, clock, new RosterVerifier(account, pin.Generation, clock));
@@ -40,7 +48,7 @@ public sealed partial class HostRosterReader
         {
             return Failure("pin-mismatch");
         }
-        if (pin.Heads.Concat(Verified?.Heads ?? []).Any(h => !Descends(candidate, h))) { return Failure("head-regress"); }
+        if (pin.Heads.Concat(TransitionHeads).Concat(Verified?.Heads ?? []).Any(h => !Descends(candidate, h))) { return Failure("head-regress"); }
         if (Verified is not null) { return HostRoster.Read(relay, account, clock, Verified).Check; }
         Verified = candidate;
         return check;
@@ -50,7 +58,7 @@ public sealed partial class HostRosterReader
         verifier.Holds(head) && verifier.Graph.Find(head) is { } before &&
         verifier.Heads.Any(h => verifier.Graph.Find(h) is { } after && (before == after || verifier.Graph.IsAncestor(before, after)));
 
-    static (Pin? Pin, string? Problem) ReadPin(string path)
+    static (T? Value, string? Problem) ReadPrivate<T>(string path, int limit, Func<byte[], T> parse) where T : class
     {
         try
         {
@@ -80,10 +88,25 @@ public sealed partial class HostRosterReader
             }
             else if (!PrivateFolder.IsPrivate(full)) { throw new InvalidDataException(); }
             using var stream = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.Read);
-            var bytes = new byte[4097];
+            var bytes = new byte[limit + 1];
             var count = stream.ReadAtLeast(bytes, bytes.Length, throwOnEndOfStream: false);
-            if (count > 4096) { throw new InvalidDataException(); }
-            using var document = JsonDocument.Parse(bytes.AsMemory(0, count));
+            if (count > limit) { throw new InvalidDataException(); }
+            return (parse(bytes[..count]), null);
+        }
+        catch (FileNotFoundException) { return (null, null); }
+        catch (DirectoryNotFoundException) { return (null, null); }
+        catch (InvalidDataException) { return (null, "pin-unreadable"); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException
+            or ArgumentException or FormatException or RosterFormatException or System.Security.SecurityException)
+        {
+            return (null, "pin-unreadable");
+        }
+    }
+
+    static (Pin? Pin, string? Problem) ReadPin(string path) =>
+        ReadPrivate(path, 4096, bytes =>
+        {
+            using var document = JsonDocument.Parse(bytes);
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object) { throw new InvalidDataException(); }
             var names = root.EnumerateObject().Select(p => p.Name).ToArray();
@@ -105,15 +128,6 @@ public sealed partial class HostRosterReader
             {
                 throw new InvalidDataException();
             }
-            return (new Pin(account, generation, genesis, heads), null);
-        }
-        catch (FileNotFoundException) { return (null, null); }
-        catch (DirectoryNotFoundException) { return (null, null); }
-        catch (InvalidDataException) { return (null, "pin-unreadable"); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException
-            or ArgumentException or RosterFormatException or System.Security.SecurityException)
-        {
-            return (null, "pin-unreadable");
-        }
-    }
+            return new Pin(account, generation, genesis, heads);
+        });
 }

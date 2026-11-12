@@ -482,6 +482,27 @@ operation. The running OFF verifier now explicitly reports `unpinned`. Observe/r
 integration and durable advancement of accepted heads remain follow-up #1358 work;
 this reader never advances a disk pin or claims rollback protection beyond it after restart.
 
+### Fail-closed transition persistence foundation (#2288, slice 2b-1)
+
+`roster-transition.json` is a separate version-1, owner-only, non-link snapshot,
+bounded at 256 KiB. Its exact fields are `v`, `account`, `generation`, `genesis`,
+`heads`, `acceptHostSign`, `highWater`, `floor`, `highestIssuedAt` and `requests`.
+Identity matches the existing pin; one to four sorted heads must be covered by the
+verified frontier. Times are RFC 3339 UTC with nanosecond precision; `floor` and
+`highestIssuedAt` may be null. Each replay record has exactly `request`, `issuedAt`
+and `expiresAt`; at most 512 unique lowercase UUID requests are retained.
+
+The internal record primitive requires a pinned verified reader and the normal
+person-command checks. It preserves high-water, floor and highest-issued marks,
+refuses `replay` or `replay-full`, and prunes only strictly after expiry plus 120
+seconds. A private flushed temporary file is atomically renamed under a file lock;
+failure is `transition-store`, not a successful command. The original pin is never
+written. Invalid or public state is `pin-unreadable`; another identity is
+`pin-mismatch`; neither is repaired. This binary accepts only `acceptHostSign: false`.
+The host command check never writes and ends in `unsupported-verifier` after its
+existing checks. No flag or caller boolean enables v2: positive transition and
+signed support evidence remain separate reviewed slices.
+
 ## Vectors
 
 [vectors/roster.json](vectors/roster.json) holds fixed test keys (`d`, `public`, `device`) and:

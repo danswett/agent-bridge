@@ -220,17 +220,18 @@ public sealed class HostRosterPinTests : IDisposable
     [InlineData("extra", "pin-unreadable")]
     [InlineData("requests", "pin-unreadable")]
     [InlineData("heads", "pin-unreadable")]
+    [InlineData("null-head", "pin-unreadable")]
     public void A_snapshot_never_crosses_identity_or_repairs_invalid_state(string field, string reason)
     {
         var reader = PinnedReader();
         Assert.Null(reader.RecordCommand(Command(), Context));
         var snapshot = Snapshot();
-        snapshot[field] = field switch
+        snapshot[field == "null-head" ? "heads" : field] = field switch
         {
             "account" => JsonValue.Create("another-account"), "generation" => JsonValue.Create(new string('f', 32)),
             "genesis" => JsonValue.Create(Codec.Base64Url(new byte[32])), "v" => JsonValue.Create(2),
             "acceptHostSign" => JsonValue.Create(true), "requests" => new JsonArray(snapshot["requests"]![0]!.DeepClone(), snapshot["requests"]![0]!.DeepClone()),
-            "heads" => new JsonArray(), _ => JsonValue.Create("secret-marker"),
+            "heads" => new JsonArray(), "null-head" => new JsonArray((JsonNode?)null), _ => JsonValue.Create("secret-marker"),
         };
         ReplaceSnapshot(snapshot);
         var bytes = File.ReadAllBytes(TransitionPath);
@@ -252,11 +253,50 @@ public sealed class HostRosterPinTests : IDisposable
             var item = replay.DeepClone(); item["request"] = $"00000000-0000-0000-0000-{i:x12}"; return item;
         }).ToArray());
         ReplaceSnapshot(snapshot);
+        reader = PinnedReader();
         var command = Command(issued: "2026-11-04T12:05:00Z", expires: "2026-11-04T12:10:00Z");
         var boundary = Context with { Now = Instant.Parse("2026-11-04T12:06:00Z") };
         Assert.Equal("replay-full", reader.RecordCommand(command, boundary));
         Assert.Null(reader.RecordCommand(command, boundary with { Now = Instant.Parse("2026-11-04T12:06:00.000000001Z") }));
         Assert.Single(Snapshot()["requests"]!.AsArray());
+    }
+
+    [Theory]
+    [InlineData("duplicate")]
+    [InlineData("missing")]
+    [InlineData("oversize")]
+    [InlineData("surrogate")]
+    public void Strict_snapshot_parsing_refuses_without_overwriting_the_file(string defect)
+    {
+        var reader = PinnedReader();
+        Assert.Null(reader.RecordCommand(Command(), Context));
+        var snapshot = Snapshot();
+        if (defect == "missing") { snapshot.Remove("floor"); }
+        var text = snapshot.ToJsonString();
+        text = defect switch
+        {
+            "duplicate" => text.Replace("\"v\":1", "\"v\":1,\"v\":1"),
+            "oversize" => text + new string(' ', 256 * 1024 + 1),
+            "surrogate" => text.Replace(snapshot["highWater"]!.GetValue<string>(), "\\ud800"),
+            _ => text,
+        };
+        File.Delete(TransitionPath);
+        Write(text, TransitionPath);
+        Assert.Equal("pin-unreadable", new HostRosterReader(PathName, () => w.Now).Update(Relay("G", "B", "H"), RosterFixture.Account).Outcome);
+        Assert.Equal(text, File.ReadAllText(TransitionPath));
+    }
+
+    [Theory]
+    [InlineData("highWater")]
+    [InlineData("floor")]
+    [InlineData("highestIssuedAt")]
+    public void An_in_process_snapshot_cannot_regress_cached_clock_marks(string field)
+    {
+        var reader = PinnedReader();
+        Assert.Null(reader.RecordCommand(Command(), Context with { Floor = Instant.Parse("2026-11-04T11:58:00Z") }));
+        var snapshot = Snapshot(); snapshot[field] = "2026-11-04T11:57:00Z";
+        ReplaceSnapshot(snapshot);
+        Assert.Equal("pin-unreadable", reader.CheckAcceptHostSign(Command(), Context));
     }
 
     [Fact]
