@@ -54,8 +54,10 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
     // known here, so the latest turn is unknown until a prompt that can be read.
     void Unreadable(ReadOnlySpan<byte> line)
     {
-        if (MayStartTurn(line)) { S.TurnId = null; }
+        if (MayStartTurn(line)) { UnreadableTurn(); }
     }
+
+    protected virtual void UnreadableTurn() => S.TurnId = null;
 
     // A line longer than the tail reads, of which only its start was seen: as history decides
     // (HistoryReader.Examine), by that start alone.

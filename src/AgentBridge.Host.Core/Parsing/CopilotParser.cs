@@ -323,6 +323,16 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         }
     }
 
+    protected override void UnreadableTurn()
+    {
+        base.UnreadableTurn();
+        _unknownReply = true;
+        _inAssistantTurn = false;
+        _pendingNotice = _activeNotice = null;
+        _replyTurn = null;
+        _turnError = null;
+    }
+
     // A shell the skim saw start may have ended in the bytes the tail never read (a transcript
     // past the skim budget); counted, it would read as running for as long as its CLI lives.
     // One started again or still running in the window is counted from there; a delegate's
