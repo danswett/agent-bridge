@@ -6,10 +6,12 @@ for (const width of [390, 1024]) {
     test.beforeEach(async ({ page }) => {
       await page.goto('?demo=1&static=1');
       await page.waitForSelector('html[data-demo-ready]');
-      await page.evaluate(() => {
+      await page.evaluate(async () => {
         // Hold native animations before the next frame can outlast their token duration.
         const animate = Element.prototype.animate;
         Element.prototype.animate = function (...args) { const a = animate.apply(this, args); a.pause(); a.currentTime = 0; return a; };
+        // Snapshot readiness precedes its motion-suppressed frame and the fonts' final layout.
+        await document.fonts.ready; await new Promise(requestAnimationFrame);
       });
     });
 
@@ -53,6 +55,7 @@ for (const width of [390, 1024]) {
     });
     test('a row-menu move eases both neighbours and a second change retargets from the drawn place on the token curve', async ({ page }) => {
       const result = await page.evaluate(async () => {
+        const { flip } = await import('./js/ui/motion.js');
         const rows = [...document.querySelectorAll('#session-list > .session')];
         const moved = rows[0], neighbour = rows[1];
         moved.querySelector('.row-main').dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true }));
@@ -62,7 +65,6 @@ for (const width of [390, 1024]) {
         if (!shift) { return null; }
         shift.pause(); shift.currentTime = 40;
         const before = neighbour.getBoundingClientRect().top;
-        const { flip } = await import('./js/ui/motion.js');
         flip(neighbour.parentElement, () => { moved.remove(); });
         await new Promise(requestAnimationFrame);
         const next = neighbour.getAnimations().find((a) => a.id === 'ab-motion-shift');
