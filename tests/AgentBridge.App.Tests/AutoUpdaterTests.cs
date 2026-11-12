@@ -212,6 +212,56 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task A_manual_restart_waits_for_a_busy_usage_probe_instead_of_silently_cancelling()
+    {
+        await StartAsync();
+        await auto.TickAsync();
+        var finishing = true;
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(finishing, "a usage probe is finishing"));
+        var press = auto.RestartToUpdateAsync();
+        await Wait.UntilAsync(() => host.Sent(HostOps.ProbeHold).Count > 0, "the manual usage hold");
+        Assert.False(press.IsCompleted);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        finishing = false;
+
+        Assert.Null(await press);
+        Assert.True(updater.Applied);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_device_install_that_becomes_busy_at_begin_stays_queued_until_a_quiet_moment()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.IdleFor);
+        var changed = false;
+        othersProbe = () =>
+        {
+            if (!changed && auto.State.Phase == UpdatePhase.Installing)
+            {
+                changed = true;
+                host.SendAsync(Events.SessionUpsert, Make.Session("s1", SessionStatus.Working)).GetAwaiter().GetResult();
+                Wait.UntilAsync(() => !auto.Idle, "the turn at begin").GetAwaiter().GetResult();
+            }
+            return null;
+        };
+        await auto.Ask(UpdateAskKind.Install, Press, time.GetUtcNow());
+        Assert.True(changed);
+        Assert.Equal(Press, auto.State.Request);
+        Assert.Null(prefs.LastUpdate);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        await GoIdleAsync("s1");
+        time.Advance(AutoUpdater.IdleFor);
+
+        await auto.TickAsync();
+
+        Assert.True(updater.Applied);
+        Assert.Single(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task Set_to_install_between_turns_a_gap_while_a_Codex_probe_finishes_on_the_host_waits_until_the_host_says_it_is_done()
     {
         InstallBetweenTurns();

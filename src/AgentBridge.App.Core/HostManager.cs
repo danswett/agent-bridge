@@ -1056,6 +1056,12 @@ public sealed class HostManager
         }
     }
 
+    public async Task WaitForUsageProbesAsync()
+    {
+        await using var ch = await connect(quit.Token);
+        await ProbesDoneAsync(ch, ProbeWait, "the host", quit.Token);
+    }
+
     static string FormatWait(TimeSpan wait) => wait >= TimeSpan.FromMinutes(1) ? $"{wait.TotalMinutes:0} minutes" : $"{wait.TotalSeconds:0} s";
 
     async Task WaitAsync(bool running, TimeSpan timeout, CancellationToken ct)

@@ -1401,9 +1401,10 @@ public sealed class AutoUpdater
         finally { fileWait = null; Changed(); }
     }
 
-    sealed class InstallRefusedException(string reason, string? code = null) : Exception(reason)
+    sealed class InstallRefusedException(string reason, string? code = null, bool hold = false) : Exception(reason)
     {
         public string? Code { get; } = code;
+        public bool Hold { get; } = hold;
     }
 
     // Null once the release has been applied (which, for real, ends this process); otherwise why
@@ -1428,7 +1429,8 @@ public sealed class AutoUpdater
             if (departed is null)
             {
                 await WaitForFilesAsync();
-                if (await ProbeBusyAsync() is { } probe) { lastProbe = probe; Changed(); return NotNow; }
+                if (local && host.State == LinkState.Connected) { await manager.WaitForUsageProbesAsync(); }
+                if (!local && await ProbeBusyAsync() is { } probe) { lastProbe = probe; Changed(); return NotNow; }
                 lastProbe = null;
                 var vetted = await VetAsync(asked, local);
                 if (vetted.Why is { } why) { throw new InstallRefusedException(why, vetted.Code); }
@@ -1490,6 +1492,7 @@ public sealed class AutoUpdater
         catch (InstallRefusedException e)
         {
             installing = false;
+            if (e.Hold) { HoldOver(); Changed(); return NotNow; }
             if (request is null) { Refused(e.Message); }
             else { End(UpdateOutcome.Refused, e.Message, e.Code); }
             HoldOver(); Changed(); return e.Message;
@@ -1520,7 +1523,8 @@ public sealed class AutoUpdater
             if (othersInPackage(host.Status?.ProcessId) is { } other) { throw new InstallRefusedException(other, UpdateCode.OtherProfile); }
             if (WhyNot(asked || local) is { } why) { throw new InstallRefusedException(why, ManageReason.Unavailable); }
             if (asked && host.Status?.ReadOnly is { } readOnly) { throw new InstallRefusedException($"this machine is read-only for other devices now: {readOnly}", ManageReason.ReadOnly); }
-            if (manager.UpdateUnderWay || lastProbe is not null || (!local && GoAhead(asked, time.GetUtcNow()) is null)) { throw new InstallRefusedException(NotNow); }
+            if (manager.UpdateUnderWay) { throw new UpdateUnderWayException(); }
+            if (lastProbe is not null || (!local && GoAhead(asked, time.GetUtcNow()) is null)) { throw new InstallRefusedException(NotNow, hold: true); }
             if (local && WaitingOnYou != confirmed) { throw new InstallRefusedException(NotNow); }
             if (updater.Ready != to || updater.Source != source || Stale()) { throw new PackageReplacedException("while validating the install"); }
         }
