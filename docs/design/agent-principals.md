@@ -193,6 +193,14 @@ The credential replaces `AGENT_HA_AGENT_TOKEN`, as design.md:495 planned.
 
 ### 3.4 Local agent → host authentication
 
+**Script caller slice (#2346, Windows).** A registered script uses the same hashed token store
+but authenticates as `script:<machine>/<name>`, without a session/process binding. Its complete,
+traceable ancestry must contain no named or host-known agent process. Only `fleet.list` and
+`fleet.find` are enabled, with the host's own account scope; unsigned results stay `unverified`.
+The connection retains its script restriction after expiry, record removal or a store fault,
+so it never falls back to person authority. See [script-credentials.md](script-credentials.md)
+for protected files, expiry and successful-read rotation. Session binding below is unchanged.
+
 The agent's tools (the MCP server of #45, or `agent-bridge-host agent …` for scripts) connect to
 the pipe and open with a new op:
 
