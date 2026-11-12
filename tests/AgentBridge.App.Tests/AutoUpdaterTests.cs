@@ -1363,7 +1363,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
         await auto.TickAsync();
         time.Advance(AutoUpdater.SettleFor);
-        await Wait.UntilAsync(() => prefs.UpdateFailures == 1, "the first failure", TimeSpan.FromSeconds(10));
+        await FailedAttemptAsync(1);
 
         Assert.Empty(host.Sent(HostOps.Stop));
         Assert.False(updater.Applied);
@@ -1375,9 +1375,10 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         for (var failures = 2; failures <= 5; failures++)
         {
             time.Advance(wait);
-            await auto.TickAsync();
+            var retry = auto.TickAsync();
             time.Advance(AutoUpdater.SettleFor);
-            await Wait.UntilAsync(() => prefs.UpdateFailures == failures, $"failure {failures}", TimeSpan.FromSeconds(10));
+            await FailedAttemptAsync(failures);
+            await retry;
             wait = prefs.UpdateRetryAt!.Value - time.GetUtcNow();
             // The failure may be stamped before or after the settle advance above, so the time left is
             // the backoff less at most that settle.
@@ -1392,6 +1393,13 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         time.Advance(AutoUpdater.SettleFor);
         await Wait.UntilAsync(() => updater.Applied, "the install once nothing holds a file", TimeSpan.FromSeconds(10));
         Assert.Single(host.Sent(HostOps.Stop));
+
+        async Task FailedAttemptAsync(int count)
+        {
+            await Wait.UntilAsync(() => auto.State.Waiting?.Contains("DiagTrack", StringComparison.Ordinal) == true, "the Windows file wait");
+            time.Advance(InstallationFiles.ReleaseWait + AutoUpdater.SettleFor);
+            await Wait.UntilAsync(() => prefs.UpdateFailures == count, $"failure {count}", TimeSpan.FromSeconds(10));
+        }
     }
 
     // Update.exe failing ends this process and starts the old app again: the next try is kept in the
@@ -1488,6 +1496,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.False(InstallHolder.Blocks(99, 99, @"C:\Windows\System32\svchost.exe", root));
         Assert.False(InstallHolder.Blocks(10, 99, root + @"current\agent-bridge-host.exe", root));
         Assert.True(InstallHolder.Blocks(10, 99, @"C:\Windows\System32\svchost.exe", root));
+        Assert.True(InstallHolder.Blocks(10, 99, null, root, "DiagTrack"));
+        Assert.False(InstallHolder.Blocks(10, 99, root + @"current\host.exe", root, "service"));
     }
 
     [Fact]
@@ -3318,11 +3328,12 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         preflight = () => "the Windows Search indexer (pid 9)";
         Departs(Committed);
 
-        await NowAsync();
+        var press = NowAsync();
+        await InstallReleaseWaitTests.FinishAsync(press, () => true, time);
 
         var last = auto.State.Last!;
         Assert.Equal((UpdateOutcome.Refused, ManageReason.Unavailable), (last.Outcome, last.Code));
-        Assert.Equal($"{UpdateBlockedException.Prefix}the Windows Search indexer (pid 9)", last.Reason);
+        Assert.Equal(new UpdateBlockedException("the Windows Search indexer (pid 9)").Message, last.Reason);
         Assert.Empty(Departed());
         Assert.Empty(host.Sent(HostOps.Stop));
     }

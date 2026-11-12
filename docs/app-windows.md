@@ -698,6 +698,12 @@ controls consume that same contract; this extraction does not disable or remove 
     which refuses while another profile's app or host runs from this installation (below), asking
     the host for its own pid first. The banner offers only a release the updater has ready: while a
     newer one found since is still downloading, or held after a failed download, it offers nothing.
+  * **Files held by Windows** (#2345, #2353): before stopping the host, wait at most two minutes
+    for Restart Manager's holders to release, with checks backing off to ten seconds.
+    An unreadable/changing holder list is unknown, never permission to install. A SYSTEM service
+    is named even when its image is unreadable. Waiting carries no Installing credit; timeout
+    keeps the old install intact with recovery text and the existing 10/20/40/60-minute backoff.
+    This path never stops a service or self-elevates; it does not replace the later slot design.
   * **Usage probes hold the host's stop** (#238): before the host is stopped, for an install or
     anything else (Settings' Stop, Restart and Restart to update), the app asks it to hold its
     usage probes (`host.probes.hold`) and waits until no Codex app-server it started to read

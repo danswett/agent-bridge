@@ -320,6 +320,7 @@ public sealed class AutoUpdater
     // the host's stop and the hand-over to Update.exe take, and goes if the install fails.
     public string? Updating => installing ? updatingIn : null;
     string? updatingIn;
+    string? fileWait;
 
     // The release downloaded and waiting for the person (the banner's and Settings'
     // Restart to update), or null while there is none, it is being installed, or the updater no
@@ -351,7 +352,7 @@ public sealed class AutoUpdater
                 requestNow = installRequest is not null && installNow is not null;
                 nowCode = requestNow ? nowWaiting : null;
             }
-            var now = installing ? UpdatePhase.Installing : updater.Phase;
+            var now = fileWait is not null ? UpdatePhase.Waiting : installing ? UpdatePhase.Installing : updater.Phase;
             // A release downloaded that will install because a device asked, once the host is idle,
             // or because this machine installs between turns. One downloaded and waiting for
             // Restart to update is plain Idle with it Available: a device's Install is then what
@@ -377,7 +378,7 @@ public sealed class AutoUpdater
                 Progress = now == UpdatePhase.Downloading ? updater.Progress : null,
                 // "Needs you" once the update has waited past WaitAtMost (#800), here too while the
                 // phase stays Idle: Waiting would hide the devices' Install, and say it installs.
-                Waiting = waiting ? (nowCode is not null ? NowWaits(nowCode) : WaitingFor()) : NeedsYou(time.GetUtcNow()),
+                Waiting = fileWait ?? (waiting ? (nowCode is not null ? NowWaits(nowCode) : WaitingFor()) : NeedsYou(time.GetUtcNow())),
                 Request = request,
                 // An Update now (#1159): the press in request is one, and, while it waits, why, as
                 // a code the devices word themselves (Waiting stays for the log and older clients).
@@ -1296,7 +1297,10 @@ public sealed class AutoUpdater
         }
     }
 
-    sealed class PackageReplacedException() : Exception("the package ready changed while the host stopped");
+    sealed class PackageReplacedException(string when = "while the host stopped") : Exception($"the package ready changed {when}")
+    {
+        public string When { get; } = when;
+    }
 
     // An Update now, its download checked and its probe hold over (Going, step 3): the release it
     // goes to must be the one the person was shown (else release-changed), and nothing may keep it
@@ -1321,12 +1325,17 @@ public sealed class AutoUpdater
                 code: UpdateCode.ReleaseChanged);
             return;
         }
-        string? blockers;
-        try { blockers = preflight is null ? null : await Task.Run(preflight); }
-        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { blockers = e.Message; }
-        if (blockers is not null)
+        try { await WaitForFilesAsync(); }
+        catch (UpdateBlockedException e)
         {
-            Finish(ref installRequest, request, UpdateOutcome.Refused, $"{UpdateBlockedException.Prefix}{blockers}", code: ManageReason.Unavailable);
+            if (DropExpired()) { return; }
+            Finish(ref installRequest, request, UpdateOutcome.Refused, e.Message, code: ManageReason.Unavailable);
+            return;
+        }
+        if (DropExpired()) { return; }
+        if (Pending != terms.Release)
+        {
+            Finish(ref installRequest, request, UpdateOutcome.Refused, "the release ready changed while waiting for installation files", code: UpdateCode.ReleaseChanged);
             return;
         }
         // Replaced, or dropped expired, while that was asked: the press the person made last is
@@ -1388,6 +1397,16 @@ public sealed class AutoUpdater
     public const string NotNow = "not now";
     int claimed;
 
+    async Task WaitForFilesAsync()
+    {
+        try
+        {
+            await manager.WaitForInstallationFilesAsync(preflight,
+                why => { fileWait = $"{UpdateBlockedException.Prefix}{why}; waiting for Windows to release the files"; Changed(); }, time);
+        }
+        finally { fileWait = null; Changed(); }
+    }
+
     // Null once the release has been applied (which, for real, ends this process); otherwise why
     // not, still on this version with the host back. answers: the press this install answers, as
     // the tick decided it, and whether the host departed for it (an Update now), which it then
@@ -1398,40 +1417,46 @@ public sealed class AutoUpdater
         var source = updater.Source;
         var request = answers is { } pinned ? pinned.Request : Asked(UpdateAskKind.Install);
         var departed = answers is { Departed: true } ? request : null;
-        log($"auto-update: installing {to}, as {because}");
         bool open;
         try { open = WindowOpen(); }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { open = false; }
-        updatingIn = open ? to : null;
-        installing = true;
-        Changed();
         // The host comes back from a failed install, or from the app quitting mid-way (HostManager).
         try
         {
-            await manager.StopAndApplyAsync(() => Record(prefs, save, updater, request, open), () =>
+            if (departed is null) { await WaitForFilesAsync(); }
+            if (updater.Ready != to || updater.Source != source) { throw new PackageReplacedException("while waiting for installation files"); }
+            updatingIn = open ? to : null;
+            installing = true;
+            Changed();
+            log($"auto-update: installing {to}, as {because}");
+            await manager.StopAndApplyAsync(() =>
+            {
+                if (updater.Ready != to || updater.Source != source) { throw new PackageReplacedException("while checking installation files"); }
+                Record(prefs, save, updater, request, open);
+            }, () =>
             {
                 // Settings' checks and downloads do not wait for this one: one may have replaced the
                 // package while the host stopped, and Velopack applies whatever is ready. Only the
                 // release chosen, from the source it was chosen on, is applied (Copilot, r4487830884).
                 if (updater.Ready != to || updater.Source != source) { throw new PackageReplacedException(); }
                 updater.ApplyAndRestart(to, HandedOver(prefs, save));
-            }, preflight);
+            }, preflight, waitForFiles: false);
             return null;
         }
         // Replaced while the host stopped: nothing failed, and the host is back (HostManager). What
         // is ready now is offered instead, with its own notes when it is installed.
-        catch (PackageReplacedException)
+        catch (PackageReplacedException e)
         {
             save(prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null, UpdateWindowOpen = false, UpdateHandedOver = false });
             installing = false;
             Pending = null;
             checkedAt = null;
             if (seenSource == updater.Source && updater.Ready is { } now) { Downloaded(now); }
-            log($"auto-update: not installing {to}: the package ready changed while the host stopped; {(Pending is { } next ? $"{next} is offered instead" : "checking again")}");
+            log($"auto-update: not installing {to}: the package ready changed {e.When}; {(Pending is { } next ? $"{next} is offered instead" : "checking again")}");
             // The host left for an Update now's press, which can't leave again: it ends here.
-            if (departed is not null) { End(UpdateOutcome.Refused, "the release ready changed while the host stopped", UpdateCode.ReleaseChanged); }
+            if (departed is not null) { End(UpdateOutcome.Refused, $"the release ready changed {e.When}", UpdateCode.ReleaseChanged); }
             Changed();
-            return $"the update downloaded changed while the host stopped ({to} is no longer the one ready): "
+            return $"the update downloaded changed {e.When} ({to} is no longer the one ready): "
                 + (Pending is { } offered ? $"{offered} is ready now, so choose Restart to update again" : "it is being checked for again");
         }
         // Another install got there first (Settings' Restart to update, or this one's other path):
