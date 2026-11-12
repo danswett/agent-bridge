@@ -80,7 +80,9 @@ closes (pwa/js/update.js:27). Each card has Check; the page has Check all; there
 
 **Goal.** Every online machine knows of a release within about 3 minutes, with no GitHub API call
 added to detection. GitHub stays in two places, both bounded: the 6-hourly revalidation, and the halt
-policy read (§4). Both are conditional; GitHub does not count a 304 against the rate limit.
+policy read (§4). Both are conditional, but GitHub exempts a 304 from the primary limit only for an
+authorized request, and machines call GitHub unauthenticated: a 304 still costs one of the 60 an hour per
+IP, shared by every machine behind it. §4 sets the budget; no machine credential is added.
 
 | Option | Verdict |
 |---|---|
@@ -105,6 +107,10 @@ policy read (§4). Both are conditional; GitHub does not count a 304 against the
    and the last list, with `AutoUpdate` on, starts the **expedited read**:
    - one release-relay read per new tag, ignoring `FreshUntil`, the app's `checksHeldUntil` and its
      cached failure (`CheckAgainAfter`), **for that read only**;
+   - **a global bound per machine:** at most one expedited read per 60 seconds whatever the tags.
+     Further valid tags inside the minute coalesce into the newest one, read when the minute ends; the
+     de-duplication memory is the last 16 tags, oldest dropped. A burst of distinct valid tags costs
+     one read a minute, not one each;
    - no GitHub call, early or otherwise; GitHub's backoff (`NotBefore`) is untouched;
    - the 6-hour revalidation and the 24-hour anchor still bind: if GitHub revalidation is due and the
      machine is not inside the `RelayWindow`, the hint does nothing and the machine waits for its normal
@@ -183,8 +189,15 @@ release relay's list may only tell a machine that something new exists; it never
 never clears a halt, and never hides one.
 
 **Cost.** The read moves into `ReleaseDiscovery`'s file and lock, so it is once per machine, not per
-process, and becomes conditional (ETag; a 304 is free). It is made at most once per `Interval`, and
-before each install decision when the last read is older than that.
+process, and becomes conditional (ETag). Machines are unauthenticated, so a 304 is **not** exempt: it
+costs one of the 60 an hour per IP, as does the 6-hourly revalidation. The budget is therefore **at
+most one policy read per machine per hour**, and an install decision uses the stored policy while it is
+fresh (below) rather than reading again. Ten machines behind one IP spend about 10 of 60 an hour on
+policy plus revalidation, leaving the rest for checks. If GitHub refuses (403/429) the read follows
+`NotBefore`; the policy then ages to stale after 6 hours and automatic installs and Update all hold,
+with the plain message of §2. Nothing relaxes the 6-hour deadline and the relay's list is never used in
+its place. Reading with a token would restore the exemption, but a credential on every machine is an
+owner decision not taken here; it is a candidate for a later slice.
 
 **Freshness and replay.**
 - A policy is **fresh** for 6 hours from GitHub's answer (`GithubRevalidateEvery`). Past that it is
@@ -205,7 +218,7 @@ shown on the card's menu as "Bad-release protection: checked 2 hours ago" or "co
 | One machine, a person's press | Refused `halted` | Goes, with the plain warning "Bad-release protection could not be checked on this machine" in the confirm; the signed args carry `unchecked: true`, without which the host refuses `policy-unreadable` |
 | Update all | Machine dropped, "halted" | **Refused** (§5 preflight); the signed args carry `batch: true`, and the host refuses `policy-unreadable` itself |
 
-The host enforces both, so a PWA that skips its own check still cannot push a fleet-wide install.
+The host enforces both, so a PWA that skips its own check cannot start a batch; a single press can still go with `unchecked` and a warning.
 
 ## 5. One press, Update all, and limits
 
@@ -236,8 +249,14 @@ that machine's handshake proved (update.js:473), through `SignedPress`.
 
 **Availability exclusions** (Product: never the last machine of a role, never the machine pressed from).
 - **Roles.** A role is an owner-set label per machine (app Settings; the roster's once #55 lands),
-  reported as optional `role` in hello (slice 3). A machine **with** a role is picked into a wave only
-  if another machine with that role is online, not in this wave, and not failed. A machine whose role
+  reported as `role` in hello by every new host, an empty string meaning none (slice 3). A machine **with** a role is picked into a wave only
+  if another machine with that role is **a protector**: online, reporting no pending, queued, waiting
+  or running update (`UpdateState.request` empty, not `updating`), not in this wave, not failed, not
+  sent Update when idle by this or another open batch, and not picked by a batch from another device
+  that this device can see (read in the pre-wave re-read). A machine sent Update when idle counts as
+  departing, so it is never anyone's protector. The contract is as strong as the re-read: a press by
+  another device between the re-read and the send can still race, and the host refuses `busy` only for
+  its own machine. That residual is stated, not hidden; the failure row names it. A machine whose role
   cannot be read (an old host, a status not yet received) is **not picked**: "update it on its own card".
   A machine reporting no role has none to protect.
 - **Origin.** The machine the press comes from is never in a wave. The `app` device knows its own
@@ -257,9 +276,15 @@ and is never credited with the replacement's outcome; the card shows that press'
 **Interrupted batch** (Product: stops when the app closes, then says so). The PWA keeps a **batch
 journal** in its own storage, keyed by the signed-in account: batch id, release, wave size, and per
 machine `selected | pressed(request) | ended(outcome)`, written before each press is sent and after each
-answer. It holds no signature, key or token, and nothing in it can authorise anything. On next open the
-PWA reconciles it: a pressed machine is matched to its host's `last` by request; a selected machine
-never pressed is counted. If any were not pressed, the Fleet page says "Update all stopped when the app
+answer. It holds no signature, key or token, and nothing in it can authorise anything. A row is written
+`pressed(request)` before the send and `ended(outcome)` only on a received answer or `last`; a pressed
+row with neither is **unconfirmed**. On next open the PWA reconciles it by reading each host's current
+`request` and `last`: the host's `request` or `last` equals the row's request → the press arrived, the
+row takes its state; neither does → it did not arrive (crash before dispatch) or its acknowledgment was
+lost, and it is counted as **not updated** and shown as "may not have been sent". Nothing is ever
+resent blindly: Update them now is a new Update all with a new preflight, confirm and signature, and
+the host's recorded `Again` answer makes a duplicate harmless. A selected machine never pressed is also
+counted. If any are not updated or unconfirmed, the Fleet page says "Update all stopped when the app
 closed: N machines not updated. Update them now." Update them now is a new Update all over those
 machines: new preflight, new confirm, fresh signatures. The banner goes when acted on or dismissed;
 a journal older than 7 days is dropped. Other devices see only what the hosts report.
@@ -334,9 +359,12 @@ all machines signs one per machine, never a batch. A host too old never offers i
 | GitHub limits the release relay | Stale with `Age`; over 1 hour rejected. | worker.test.mjs: ETag/304, stale-with-Age. |
 | GitHub holds a machine | Hint still read from the release relay once, no GitHub call. | AutoUpdaterTests: a machine held 2 hours gets a valid new release from a hint within one tick, and GitHub's fake sees no request. |
 | Hint past the windows | Revalidation due outside `RelayWindow`: hint does nothing. | ReleaseDiscoveryTests: 25 hours after GitHub's last answer a hint leaves the release unknown. |
-| Forged or spammed hint | One release-relay read per tag; no install; bad fields dropped. | ReleaseDiscoveryTests: 100 hints → 1 read; tag not in a valid list → no `available`. HostTests: `v0.1.1x`, an unknown channel, 300 bytes → dropped, not logged. |
+| Forged or spammed hint | At most one release-relay read a minute per machine; no install; bad fields dropped. | ReleaseDiscoveryTests: 100 hints → 1 read; a burst of 50 distinct increasing valid tags → 1 read per minute, newest coalesced, memory ≤ 16; tag not in a valid list → no `available`. HostTests: `v0.1.1x`, an unknown channel, 300 bytes → dropped, not logged. |
 | Halt hidden by the relay | Policy from GitHub only; relay list cannot clear. | HostTests: a relay list omitting the newest halt-bearing release leaves the halt; a GitHub answer whose newest release is older keeps it (replay). |
 | Halt policy stale or unreadable | Automatic install held; one press with warning; Update all refused. | AutoUpdaterTests: policy 7 hours old → no automatic install. UpdateServiceTests: `batch` press on `unreadable` → refused `policy-unreadable`; one press without `unchecked` → refused. update.test.mjs: preflight with one unreadable machine sends no press at all. |
+| GitHub 304s cost quota | Policy read ≤ 1 per machine per hour; refusal follows `NotBefore`; stale after 6 hours holds installs. | ReleaseDiscoveryTests: 10 machines' reads in 24 hours stay under 60 an hour; a 403 backs off and does not read the relay's list as policy. |
+| Interrupted send | Unconfirmed press counted "may not have been sent"; never resent blindly. | update.test.mjs: close after `pressed` before dispatch → banner counts it; lost acknowledgment with host `last` matching → row ends from the host. |
+| Protector departing | Idle-queued or batched machine is not a protector. | update.test.mjs: A sent Update when idle, B slow → B not picked; two concurrent batches never pick both of a role's machines in their re-reads. |
 | Policy fails between waves | Batch stops before the next wave. | update.test.mjs: wave 2's machine turns `stale` → nothing signed for wave 2. |
 | Bad hash | Fails its feed's SHA256 → `failed`, still on old. | Existing package-mismatch tests, plus one for a hint-driven download. |
 | Machine does not return | `restarting` → `slow` (3) → `didNotComeBack` (10); `last` replaces. | update.test.mjs, fake clock: each step at its time; each row of §3's failure table names its step and action. |
@@ -365,14 +393,14 @@ signing path, or the protocol, and need two families, both reading security-subj
 | 6 | Host and app: `bytes`/`total`/`downloaded`, `installing`, `leaving` with `backBy`, `back`, `step`. | 3 | **2F** |
 | 7a | PWA card: the four steps and states of §3, thresholds, the failure table. | 6 | 1F |
 | 7b | PWA fleet: version per card, "N machines behind", host/client mismatch warning, Check moves, release-notes line. | 6 | 1F |
-| 8 | Halt policy (§4): GitHub source in `ReleaseDiscovery`'s file, conditional; freshness; known halts kept; `policy` state; enforcement of `batch` and `unchecked`. | 3 | **2F** |
+| 8 | Halt policy (§4): GitHub source in `ReleaseDiscovery`'s file, conditional; freshness; known halts kept; `policy` state; enforcement of `batch` and `unchecked`; the `halted` refusal and the automatic-install hold. | 3 | **2F** |
 | 9a | PWA Update all core: pick, preflight, confirm, waves with role and origin exclusions, signing per wave. | 7a, 8 | **2F** |
 | 9b | PWA Update all run: stop/Continue, results, supersession, offline rows, batch journal and reopen banner. | 9a | **2F** |
 | 10 | Limits never met: Check from the last check; `retryAt` as a time; cap → Update when idle; Try again now. | 3 | **2F** |
 | 11 | Third mode `AsSoonAsReady`: enum, Settings, ui.md, the automatic departure, its caps. | #815, 6, **8 accepted** | **2F** |
 | 12 | Signed mode change `update.mode`; PWA three-choice list and Apply to all machines. | 11 | **2F** |
 | 13 | Later, owner-gated: fleet coordinator (§10.1). | owner decision on fleet #22 | **2F** |
-| 14 | Later: health-gated recovery (§10.2). | its own design | **2F** |
+| 14 | Later: health-gated recovery (§10.2). | its own design; after 8 and 9b | **2F** |
 
 Slices 5 and 11 come after slice 8 is accepted: no hint-driven or unattended install before the halt
 policy reads. Slices 1, 2, 3 and 8 can start at once; 10 needs only 3. Slices 7 and 9 were split
