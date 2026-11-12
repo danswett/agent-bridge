@@ -21,6 +21,19 @@ public sealed class AgentLiteKillTests : IDisposable
         public IReadOnlyList<LitePeer> All() => [];
     }
 
+    sealed class WatchClock(DateTimeOffset start) : FakeTimeProvider(start)
+    {
+        volatile bool armed;
+        public bool Armed => armed;
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = base.CreateTimer(callback, state, dueTime, period);
+            armed = true;
+            return timer;
+        }
+    }
+
     public AgentLiteKillTests() { Directory.CreateDirectory(root); }
     public void Dispose() { try { Directory.Delete(root, true); } catch (IOException) { } }
 
@@ -253,14 +266,18 @@ public sealed class AgentLiteKillTests : IDisposable
     public async Task A_kill_is_watched_before_the_send_can_advance_the_clock()
     {
         var folder = NewHost("a");
-        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var time = new WatchClock(DateTimeOffset.UtcNow);
         var host = new LiteKill(folder, new Peers(), time: time);
-        var outcome = await host.GuardAsync("r1", ct =>
+        var outcome = await host.GuardAsync("r1", async ct =>
         {
+            Assert.True(time.Armed, "The kill watcher must be armed on its clock before the send starts.");
+            var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = ct.Register(() => cancelled.TrySetResult());
             Host(folder).Kill();
             time.Advance(TimeSpan.FromSeconds(1));
+            await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(10));
             Assert.True(ct.IsCancellationRequested, "The first kill-watch tick must cancel the send without a queued watcher startup.");
-            return Task.FromCanceled<LiteOutcome>(ct);
+            return await Task.FromCanceled<LiteOutcome>(ct);
         }, default);
         Assert.Equal(LiteKind.Unconfirmed, outcome.Kind);
     }
