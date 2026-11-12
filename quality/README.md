@@ -25,6 +25,23 @@ planned, and is the source of truth the tooling below reads.
 | §8 | The plan, in phases |
 | §9 | Decisions for the owner |
 
+### Read-only PR CI waste measurement
+
+After building `tools/AgentBridge.Quality -c Release`, run
+`pwsh quality/ci-waste.ps1 -SnapshotFile runs.json` with read-only GitHub access.
+It reads the last 60 PR `ci.yml` run records and their latest-attempt jobs.
+`pwsh quality/ci-waste.ps1 -RunsFile runs.json` replays that snapshot offline,
+using this checkout's current ring-1 selector for observed head-to-head file deltas.
+The JSON separates cancellations, distinct-head overlaps (inferred supersession),
+and their union; job minutes are observed elapsed runner time, not billed minutes.
+It reports Chromium, app and installer time, plus cancelled runs with any app or
+PWA UI job over five minutes. Running jobs are clipped to snapshot time.
+`unknown_pushes` counts run records without a usable delta, including same-head
+reruns and branches whose predecessor falls outside the sample. Those are not
+classified as no-long-job pushes. A no-long-job delta that still started a long
+job is evidence for investigation, not proof the full PR diff needed no long job.
+No workflow, required check or merge rule is changed by this measurement (#2248).
+
 ## 1. Where we are (2026-11-02)
 
 The base is strong. CI already tests what ships, not just the code:
