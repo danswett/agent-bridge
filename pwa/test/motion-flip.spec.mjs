@@ -115,6 +115,27 @@ for (const width of [390, 1024]) {
       expect(shifts).toBe(0);
     });
 
+    test('a manual move during a neighbour shift starts from the drawn position', async ({ page }) => {
+      const positions = await page.evaluate(async () => {
+        const d = window.agentBridgeDemo, rows = [...document.querySelectorAll('#session-list > .session')];
+        const neighbour = rows[1];
+        d.client.store.remove(rows[0].dataset.id);
+        d.page.view.render();
+        await new Promise(requestAnimationFrame);
+        const shift = neighbour.getAnimations().find((a) => a.id === 'ab-motion-shift');
+        shift.pause(); shift.currentTime = 40;
+        const before = neighbour.getBoundingClientRect().top;
+        neighbour.querySelector('.row-main').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', altKey: true, bubbles: true }));
+        const reorder = neighbour.getAnimations().find((a) => a.id === 'ab-motion-reorder');
+        reorder.pause(); reorder.currentTime = 0;
+        const immediate = neighbour.getBoundingClientRect().top;
+        await new Promise(requestAnimationFrame);
+        return { before, immediate, after: neighbour.getBoundingClientRect().top };
+      });
+      expect(Math.abs(positions.immediate - positions.before)).toBeLessThan(1);
+      expect(Math.abs(positions.after - positions.before)).toBeLessThan(1);
+    });
+
     for (const reduced of [false, true]) {
       test(`delegate chips arrive, leave and ease aside${reduced ? ' without travel under reduced motion' : ''}`, async ({ page }) => {
         await page.setViewportSize({ width: 1440, height: 900 });
