@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { HostClient } from '../../js/host-client.js';
 import { LoadFeed } from '../../js/load-feed.js';
 import { loadBars } from '../../js/load-bars.js';
@@ -24,6 +25,21 @@ async function fake(t, { capabilities = ['load'], hold = [], result = sample() }
     update: (data) => transport.onmessage({ ev: 'load.update', seq: ++seq, data }) };
 }
 const flush = () => new Promise((resolve) => setImmediate(resolve));
+test('the shared capped MachineLoad vector feeds partial bars without exposing session rows', async (t) => {
+  const vectors = JSON.parse(readFileSync(new URL('../../../docs/protocol/vectors/machine-load.json', import.meta.url), 'utf8'));
+  const vector = vectors.records.MachineLoad.valid.find((v) => v.name === 'over-200-sessions');
+  assert.ok(vector, 'the shared 201-session vector exists');
+  assert.equal(vector.json.sessions.length, 201);
+  assert.equal(vector.reads.sessions.length, 200);
+  const raw = vector.reads, a = await fake(t, { result: raw }), feed = new LoadFeed();
+  await feed.attach('a', a.client);
+  assert.deepEqual(feed.load('a'), { state: 'partial', ageMs: raw.ageMs, staleAfterMs: raw.staleAfterMs,
+    cpu: { percent: raw.cpu.percent }, memory: { totalBytes: raw.memory.totalBytes, availableBytes: raw.memory.availableBytes } });
+  const bars = loadBars(feed.load('a'));
+  assert.equal(bars.state, 'partial');
+  assert.equal(bars.cpu.percent, raw.cpu.percent);
+  assert.equal(bars.memory.percent, 100 * (1 - raw.memory.availableBytes / raw.memory.totalBytes));
+});
 test('get then subscribe feeds exact machine figures and ignores all other fields', async (t) => {
   const a = await fake(t), b = await fake(t, { result: sample({ cpu: undefined }) });
   const changes = [];
