@@ -635,11 +635,20 @@ controls consume that same contract; this extraction does not disable or remove 
     granting this user alone, nothing inherited, `PrivateFolder`), and the copy is checked against
     the same checksum again from a handle that keeps it open, read-only to everyone else, until
     the app exits. The app then starts `Update.exe` itself,
-    as Velopack's `ApplyUpdatesAndRestart` would (`--silent apply --waitPid … --rootDir …`), but with
+    as Velopack's `ApplyUpdatesAndRestart` would (`--silent apply --rootDir …`), but with
     `--package` naming the copy, and silent (#1167), so Velopack's own "Installing Update" window
     never shows: the app's Updating screen stands in for it (below); `--packageDir` stays the shared packages folder, where
     `Update.exe` takes its install lock (`packages\.velopack_lock`), so profiles still can't
-    install over each other. The copy goes at the app's next start. What remains: `Update.exe`
+    install over each other. **Wait for the app** (#1173): the app launches `Update.exe` directly
+    (Velopack's `DefaultProcessImpl`, `Process.Start`) with `--wait`, so the installer waits for its
+    parent, this app. Velopack 1.2.161's `--waitPid` opens a synchronization-only handle, then queries
+    its exit code without query rights, logging "Access is denied" even after a successful wait.
+    Its parent-wait path requests limited-query rights too and checks creation times against PID
+    reuse. An isolated run of the real updater confirmed both paths wait until parent exit; only
+    the PID path then warns. This is not evidence that the earlier updates installed before exit.
+    Velopack's existing 60-second wait limit and continue-on-wait-error behavior are unchanged;
+    no elevation, process ACL change or extra helper is introduced.
+    The copy goes at the app's next start. What remains: `Update.exe`
     checks nothing itself when it opens the copy (it takes no checksum), so a process running as
     this same Windows user could still change the copy after the app exits; such a process could as
     well replace `Update.exe` or the app itself. A release whose feed gives no checksum is never installed. The checksum proves the
