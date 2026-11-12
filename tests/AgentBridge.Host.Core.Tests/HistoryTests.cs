@@ -1860,30 +1860,28 @@ public class HistoryTests
 
 // Found in review of #686: a main-agent error visited every delegate question still pending, so a
 // turn of many of each was quadratic within its 8 MiB, and the per-turn question cap is applied
-// only when the turn is built. Timed as a ratio, n against 64n, the fastest of three of each in
-// turns, in a collection nothing else runs alongside: linear reads about 64, each error passing over
-// every delegate question about 4,096 (#844's growth test, the same way).
+// only when the turn is built. Count part accesses rather than shared-runner time (#2244).
 [Collection(nameof(TurnBuilderGrowthTests))]
 public class TurnBuilderGrowthTests
 {
-    static double Settle(int n)
+    static long Settle(int n)
     {
-        var turn = new TurnBuilder("t", Fixture.T0, null);
+        var parts = new CountingParts();
+        var turn = new TurnBuilder("t", Fixture.T0, null, parts);
         for (var i = 0; i < n; i++)
         {
             turn.Asked(new Question { Id = "d" + i, Kind = QuestionKind.Approval, Message = "Push?", AskedAt = Fixture.T0, Agent = "agent-d" }, Fixture.T0);
         }
-        var clock = System.Diagnostics.Stopwatch.StartNew();
         for (var i = 0; i < n; i++)
         {
             turn.Asked(new Question { Id = "m" + i, Kind = QuestionKind.Approval, Message = "Push?", AskedAt = Fixture.T0 }, Fixture.T0);
             turn.Failed(Fixture.T0);
         }
-        var elapsed = clock.Elapsed.TotalMilliseconds;
+        var work = parts.Accesses;
         // The delegate's questions are still the person's; each of the main agent's was cancelled.
         Assert.True(turn.Pending("d0") && turn.Pending("d" + (n - 1)));
         Assert.False(turn.Pending("m0") || turn.Pending("m" + (n - 1)));
-        return elapsed;
+        return work;
     }
 
     sealed class CountingParts : IList<HistoryPart>
@@ -1996,24 +1994,16 @@ public class TurnBuilderGrowthTests
     }
 
     [Fact]
-    public void Repeated_errors_beside_many_delegate_questions_settle_in_linear_time()
+    public void Repeated_errors_beside_many_delegate_questions_settle_with_linear_work()
     {
-        Settle(500);
-        var (fewest, most) = (double.MaxValue, double.MaxValue);
-        for (var run = 0; run < 3; run++)
-        {
-            fewest = Math.Min(fewest, Settle(1_000));
-            most = Math.Min(most, Settle(64_000));
-        }
-        var ratio = most / Math.Max(fewest, 1);
-
-        Assert.True(ratio < 500, $"settling 64x the questions took {ratio:F1}x as long");
+        AssertLinearWork(Settle);
     }
 
     [Fact]
     public void The_linear_work_assertion_rejects_a_quadratic_settlement()
     {
-        AssertLinearWork(QuadraticSettlement);
+        var failure = Assert.Throws<Xunit.Sdk.TrueException>(() => AssertLinearWork(QuadraticSettlement));
+        Assert.Contains("doubling the questions visited parts", failure.Message, StringComparison.Ordinal);
     }
 }
 

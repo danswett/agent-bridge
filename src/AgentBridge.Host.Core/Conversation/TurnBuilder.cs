@@ -7,9 +7,9 @@ namespace AgentBridge.Host.Core.Conversation;
 // One turn as a history reader builds it from its records, in transcript order: a prompt, then
 // parts (docs/protocol/v1-history.md, Turn). A dialect says what each record adds; this keeps the
 // ids, ties a tool's or a question's end to its start, and applies the per-turn caps.
-internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? prompt)
+internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? prompt, IList<HistoryPart>? parts = null)
 {
-    readonly List<HistoryPart> _parts = [];
+    readonly IList<HistoryPart> _parts = parts ?? [];
     readonly Dictionary<string, int> _tools = new(StringComparer.Ordinal);
     readonly Dictionary<string, int> _questions = new(StringComparer.Ordinal);
     // The parts that may still be open, by index, so an abort or a delegate's end settles them
