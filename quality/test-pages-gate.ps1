@@ -6,8 +6,9 @@ $candidate = Join-Path $PSScriptRoot 'pages-candidate.ps1'
 $head = 'a' * 40
 $live = 'b' * 40
 $failures = 0
+$resumed = if ((Get-Command $gate).Parameters.ContainsKey('RollbackStatus')) { @{ RollbackStatus = 'ahead' } } else { @{} }
 function Check([string]$name, [string]$expect, [hashtable]$gateArgs) {
-    $got = (& $gate -Head $head -MainStatus ahead -Files @('pwa/index.html') @gateArgs)[0]
+    $got = (& $gate -Head $head -MainStatus ahead -Files @('pwa/index.html') @resumed @gateArgs)[0]
     if ($got -ne $expect) { Write-Host "FAIL: $name -> $got, expected $expect"; $script:failures++ }
 }
 Check 'a newer commit deploys' 'deploy' @{ Live = $live; Status = 'ahead' }
@@ -19,11 +20,11 @@ Check 'a compare that failed is skipped' 'skip' @{ Live = $live }
 Check 'an unreadable live site is skipped' 'skip' @{ Live = '' }
 Check 'a live version that is not a commit is skipped' 'skip' @{ Live = 'dev'; Status = 'behind' }
 foreach ($mainStatus in @('identical', 'ahead', 'behind', 'diverged', '')) {
-    $got = (& $gate -Head $head -Live $live -Status ahead -MainStatus $mainStatus -Files @('pwa/index.html'))[0]
+    $got = (& $gate -Head $head -Live $live -Status ahead -MainStatus $mainStatus -Files @('pwa/index.html') @resumed)[0]
     if (($got -eq 'deploy') -ne ($mainStatus -in @('identical', 'ahead'))) { throw 'main ancestry decision failed' }
 }
 foreach ($files in @(@('docs/status.md'), @('src/AgentBridge.Host/Program.cs'), @())) {
-    if ((& $gate -Head $head -Live $live -Status ahead -MainStatus ahead -Files $files)[0] -ne 'skip') { throw 'non-Pages change deployed' }
+    if ((& $gate -Head $head -Live $live -Status ahead -MainStatus ahead -Files $files @resumed)[0] -ne 'skip') { throw 'non-Pages change deployed' }
 }
 function Run([int]$number, [string]$sha) {
     @{ run_number = $number; head_sha = $sha; event = 'push'; head_branch = 'main'; jobs = @(
@@ -53,14 +54,15 @@ $new.jobs[1].conclusion = 'cancelled'
 if ((& $candidate -Runs @($new, $old)).sha -ne $live) { throw 'newest eligible SHA did not win' }
 $new = Run 3 $live; $new.jobs[1].conclusion = 'skipped'
 if ((& $candidate -Runs @($old, $new)).sha) { throw 'older evidence replaced the latest run for a SHA' }
-function Rollback($manual, [string]$relation = 'identical', [string]$sha = $head) {
+function Rollback($runs, [string]$relation = 'identical', [string]$sha = $head, [switch]$Unreadable, [int]$TotalCount = 0) {
     $gateArgs = @{ Head = $sha; Live = $live; Status = 'ahead'; MainStatus = 'ahead'; Files = @('pwa/index.html') }
-    if ((Get-Command $gate).Parameters.ContainsKey('ManualRun')) {
-        $gateArgs.ManualRun = $manual; $gateArgs.RollbackStatus = $relation
-    }
+    $helper = Join-Path $PSScriptRoot 'pages-rollback.ps1'
+    $state = if (Test-Path $helper) { & $helper -Runs @($runs) -Unreadable:$Unreadable -TotalCount $TotalCount } else { @{ held = $false } }
+    if (-not $state.held) { $relation = 'ahead' } elseif (-not $state.fence) { $relation = '' }
+    if ((Get-Command $gate).Parameters.ContainsKey('RollbackStatus')) { $gateArgs.RollbackStatus = $relation }
     (& $gate @gateArgs)[0]
 }
-$manual = @{ head_sha = $head; display_title = 'Pages rollback'; status = 'completed'; conclusion = 'success' }
+$manual = @{ head_sha = $head; display_title = 'Pages rollback'; status = 'completed'; conclusion = 'success'; event = 'workflow_dispatch'; head_branch = 'main'; created_at = '2026-11-11T18:00:00Z'; run_number = 90 }
 foreach ($tick in 1..2) {
     if ((Rollback $manual) -ne 'skip') { throw 'cron replayed bad B after rollback to good A, without new CI' }
 }
@@ -68,12 +70,19 @@ foreach ($relation in @('behind', 'diverged', '')) {
     if ((Rollback $manual $relation) -ne 'skip') { throw 'an unproven rollback fence was cleared' }
 }
 if ((Rollback $manual 'ahead' ('c' * 40)) -ne 'deploy') { throw 'newer green C did not clear the B rollback fence' }
-$manual.display_title = 'Pages resume'
+$resume = $manual.Clone(); $resume.display_title = 'Pages resume'; $resume.created_at = '2026-11-11T19:00:00Z'; $resume.run_number = 1
 foreach ($outcome in @('failure', 'cancelled', $null)) {
-    $manual.conclusion = $outcome
-    if ((Rollback $manual) -ne 'skip') { throw 'an unsuccessful resume cleared the rollback fence' }
+    $resume.conclusion = $outcome
+    if ((Rollback @($manual, $resume)) -ne 'skip') { throw 'an unsuccessful resume cleared the rollback fence' }
 }
-$manual.conclusion = 'success'
-if ((Rollback $manual) -ne 'deploy') { throw 'explicit successful resume did not clear the rollback fence' }
+$resume.conclusion = 'success'
+if ((Rollback @($manual, $resume)) -ne 'deploy') { throw 'explicit successful resume did not clear the rollback fence' }
+$resume.status = 'in_progress'
+if ((Rollback @($manual, $resume)) -ne 'skip') { throw 'pending resume cleared the rollback fence' }
+$manual.status = 'queued'; $manual.conclusion = $null
+if ((Rollback $manual) -ne 'skip') { throw 'pending rollback did not hold the fence' }
+if ((Rollback @() -Unreadable) -ne 'skip') { throw 'unreadable history cleared the rollback fence' }
+if ((Rollback @($resume) -TotalCount 101) -ne 'skip') { throw 'truncated history cleared the rollback fence' }
+if ((Rollback @()) -ne 'skip') { throw 'expired history cleared the rollback fence' }
 if ($failures) { exit 1 }
 Write-Host 'pages gate: ok'
