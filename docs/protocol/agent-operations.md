@@ -34,7 +34,8 @@ Operations an agent calls on the local pipe after `agent.hello`, on its own cred
 
 ## `fleet.find`
 
-The table below describes current behavior. Engineering approved the
+The table lists implemented selector branches; production matches stay `unverified`
+(or `incomplete`). Engineering approved the
 [#2360 replacement contract](../design/fleet-session-registry.md#approved-replacement-contract-2360-not-implemented)
 as a future change; this documentation PR does not implement it or enable routing.
 
@@ -70,18 +71,32 @@ public-safe role label; the trimmed 1-64 ASCII `A-Za-z0-9 _.+()-` filter cannot 
 ordinary words are non-private. Names remain untrusted content, only explicitly included
 in `fleet.list`; `fleet.find` never echoes them or grants agent rename authority.
 
-This **intentionally changes today's ambiguous-on-live-duplicates behavior**. Current
-callers see `ambiguous` for two or more verified live exact-name matches. After the
-dependent implementation, they see `found` for one strictly newest process only when
+This **intentionally changes the implemented ambiguous-on-verified-duplicates branch**.
+Today in practice every live name match is `unverified` (unless `incomplete` wins):
+`RelayFleetRoster.Parse` never sets `Verified` (`src/AgentBridge.Host/Fleet/FleetList.cs:13,50-103`).
+Only verified fixtures reach today's `ambiguous`/`found` branches (`FleetList.cs:185-204`).
+After the dependent implementation, callers see `found` for one strictly newest process only when
 every live match verifies and carries a valid signed host-observed `startedAt`.
 Equal, missing or unprovable ordering returns an explicit `ambiguous` refusal, never a
 chosen session. Offline/stale predecessors do not compete. Never order by state `since`,
 record `at`, `seq`, epoch, arrival or node text.
+One legacy unsigned same-name machine blocks selection during rollout. The planned wire
+start uses UTC `YYYY-MM-DDTHH:mm:ssZ`, floored whole seconds; it is not exposed to agents.
+Cross-machine selection needs independently trusted start-time error bounds <=60 seconds
+per host and a gap strictly >122 seconds to every competing live match. Closer pairs or
+missing historical clock evidence remain ambiguous; fresh snapshot time is not that evidence.
+The app and existing CLI rename path must show the relay disclosure and live-duplicate
+warning. Same-user state tampering can still squat a newer name; names never grant identity
+or send authority. #2360 slice 1 tests that acknowledged boundary.
 
 `startedAt` stays identical when only the host restarts, and renews for a resumed/replaced
 session process. The four bounded code slices require a host-restart acceptance test
 with a still-live session process, not an inferred filesystem or transcript time.
-None enables routing. #1776's separately enrolled host signing and independently trusted
+Slices 2a and 4 own that restart test; a null observation omits the field.
+None enables routing. Slice 3 depends on #1776's separately delivered reader core, which
+must parse/preserve canonical at/seq/epoch/sig and enforce enrolled key, replay, freshness,
+revocation/cache and clock evidence; that is not hidden inside the selector slice.
+#1776's separately enrolled host signing and independently trusted
 reader state gate verification; no interim key. Current unsigned matches stay
 `unverified`, without a routable node. Incomplete-before-unverified precedence,
 authenticated account scope, optional machine filter and caller machine/node pinning
