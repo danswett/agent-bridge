@@ -41,6 +41,7 @@ public sealed class HistoryDrawTests
         var turn = Turn(1, "Earlier answer");
         Assert.Single(HistoryDraw.Rows([turn], "prompt 1", liveTurn: "t2"));
         Assert.Empty(HistoryDraw.Rows([turn], "a shortened live prompt", liveTurn: "t1"));
+        Assert.Equal(["t2"], HistoryDraw.Rows([turn, Turn(2, "Notification reply", from: UserMessageFrom.Notification)], "a shortened live prompt", liveTurn: "t1").Select(r => r.Id));
     }
 
     static HistoryPart Asked(string id, QuestionOutcome? outcome = null) => new()

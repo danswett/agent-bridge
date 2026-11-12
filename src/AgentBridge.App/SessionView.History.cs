@@ -62,19 +62,20 @@ public sealed partial class SessionView
     void ShowHistory()
     {
         var turns = history?.Turns ?? [];
-        var key = (history, history?.State, history?.HasOlder, history?.Start, Card?.Session.Activity.Turn, Card?.UserMessage);
-        var retained = turns.Take(turns.Count - (turns.Count > 0 && turns[^1].Id == Card?.Session.Activity.Turn ? 1 : 0)).ToArray();
+        var liveTurn = Card?.LiveTurn;
+        var key = (history, history?.State, history?.HasOlder, history?.Start, liveTurn, Card?.UserMessage);
+        var retained = turns.Where(t => t.Id != liveTurn).ToArray();
         if (Equals(historyDrawKey, key) && historyDrawn.SequenceEqual(retained)) { return; }
         historyDrawKey = key;
         historyDrawn = retained;
         var from = Math.Max(0, turns.Count - historyVisible);
-        if (from > 0 && from == turns.Count - 1 && turns[^1].Id == Card?.Session.Activity.Turn) { from--; }
+        if (from > 0 && from == turns.Count - 1 && turns[^1].Id == liveTurn) { from--; }
         // A live arrival extends what is already drawn instead of dropping its oldest visible turn.
         if (rowsOf == shownHistory && historyShown.FirstOrDefault() is { } first)
         {
             for (var i = 0; i < from; i++) { if (turns[i].Id == first.Id) { from = i; break; } }
         }
-        var rows = HistoryDraw.Rows(turns.Skip(from).ToArray(), Card?.UserMessage, openPrompts, liveTurn: Card?.Session.Activity.Turn);
+        var rows = HistoryDraw.Rows(turns.Skip(from).ToArray(), Card?.UserMessage, openPrompts, liveTurn: liveTurn);
         historyVisible = Math.Max(1, turns.Count - from);
         var line = history is null ? null : HistoryDraw.Line(history.State, rows.Count, !string.IsNullOrEmpty(Card?.UserMessage), history.Start);
         var scroll = ConversationScroll;

@@ -100,9 +100,11 @@ public sealed class SessionHistoryRepliesTests
                 card.Update(earlier with { Activity = earlier.Activity with { Notice = notification } });
                 Assert.False(card.HasVoice);
                 Assert.False(card.HasUserMessage);
+                Assert.Empty(card.UserMessage);
+                Assert.Equal(["earlier", "notice"], HistoryDraw.Rows(card.Stored!.Turns, card.UserMessage, liveTurn: card.LiveTurn).Select(r => r.Id));
                 card.Update(queued);
             }
-            var notice = HistoryDraw.Rows(card.Stored!.Turns, card.UserMessage)[1];
+            var notice = HistoryDraw.Rows(card.Stored!.Turns, card.UserMessage, liveTurn: card.LiveTurn)[1];
             Assert.Equal("notice", notice.Id);
             Assert.Equal("Notification reply", Assert.Single(notice.Blocks).Text);
             Assert.False(card.HasVoice);
@@ -111,7 +113,7 @@ public sealed class SessionHistoryRepliesTests
             card.Update(Snapshot("owner", "Owner question", "Owner answer", "owner", 2));
             Assert.True(card.HasVoice);
             Assert.Equal("Owner answer", card.Response);
-            Assert.Equal("Notification reply", HistoryDraw.Rows(card.Stored.Turns, card.UserMessage)[1].Blocks[0].Text);
+            Assert.Equal("Notification reply", HistoryDraw.Rows(card.Stored.Turns, card.UserMessage, liveTurn: card.LiveTurn)[1].Blocks[0].Text);
         }
         finally { card.Detach(); }
     }

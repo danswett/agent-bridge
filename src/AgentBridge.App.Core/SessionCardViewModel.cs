@@ -188,7 +188,8 @@ public sealed partial class SessionCardViewModel : Observable
     public DateTimeOffset RowAt => SilentSince ?? session.UpdatedAt;
     public string Reasoning => Voice.Reasoning ?? "";
     public bool HasReasoning => ctx.ShowDetail() && Reasoning.Length > 0;
-    public string UserMessage => !string.IsNullOrEmpty(session.Activity.UserMessage) ? session.Activity.UserMessage : stored?.PromptFor(session.Activity.Turn)?.Text ?? "";
+    public string? LiveTurn => Archived ? null : session.Activity.Turn;
+    public string UserMessage => Archived ? "" : !string.IsNullOrEmpty(session.Activity.UserMessage) ? session.Activity.UserMessage : stored?.PromptFor(session.Activity.Turn)?.Text ?? "";
     // The person's own last message, as a bubble; a prompt they didn't type is the Prompt line
     // instead (#489).
     bool Archived => stored?.HasAfter(session.Activity.Turn) == true;

@@ -57,11 +57,11 @@ public static class HistoryDraw
         IDictionary<string, ClosedQuestion>? closed = null, string? activeQuestion = null, string? liveTurn = null)
     {
         clock ??= MessageClock.Local;
+        if (!string.IsNullOrEmpty(liveTurn)) { turns = [.. turns.Where(t => t.Id != liveTurn || closed is not null && t.Parts.Any(IsClosed))]; }
         var count = turns.Count;
         bool IsClosed(HistoryPart part) => part.Kind == HistoryPartKind.Question && part.Question is { } q && q.Id != activeQuestion;
         // The current view still draws Blocks. A mixed-items view opts in with its disclosure cache.
-        if (count > 0 && (!string.IsNullOrEmpty(liveTurn) ? turns[^1].Id == liveTurn
-            : !string.IsNullOrWhiteSpace(livePrompt) && turns[^1].Prompt is { } last && last.Text.Trim() == livePrompt.Trim())
+        if (count > 0 && string.IsNullOrEmpty(liveTurn) && !string.IsNullOrWhiteSpace(livePrompt) && turns[^1].Prompt is { } last && last.Text.Trim() == livePrompt.Trim()
             && (closed is null || !turns[^1].Parts.Any(IsClosed))) { count--; }
         var from = Math.Max(0, count - HistoryLimits.Kept);
         var retained = closed is null ? new HashSet<string>() : turns.Skip(from).Take(count - from).Where(t => t.Unreadable != true)
