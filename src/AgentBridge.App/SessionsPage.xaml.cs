@@ -18,10 +18,12 @@ public sealed partial class SessionsPage : UserControl
     MainViewModel? viewModel;
     // Set while the list is being told what is selected, so its event is not taken for a choice.
     bool syncing;
+    readonly Motion.RowShift rowShift;
 
     public SessionsPage()
     {
         InitializeComponent();
+        rowShift = Motion.Shift(List, () => ready && Layout?.ShowList == true);
         ListColumn.Width = new GridLength(DesignLayout.List);
         Motion.Banner(FleetNote);
         ListPane.SizeChanged += OnListPaneSized;
@@ -76,6 +78,7 @@ public sealed partial class SessionsPage : UserControl
             readying = false;
             ready = IsLoaded && viewModel.Sessions.Count > 0 && ListPane.Visibility == Visibility.Visible && List.ActualHeight > 0;
             Session.Ready = ready;
+            rowShift.Refresh();
         });
     }
 
@@ -175,7 +178,7 @@ public sealed partial class SessionsPage : UserControl
         }
     }
 
-    // A session a host added fades in where it lands; its neighbours take their places at once.
+    // A session a host added fades in where it lands; its neighbours ease aside.
     void OnArrived(SessionCardViewModel card)
     {
         if (!ready || Layout?.ShowList != true) { return; }
@@ -237,6 +240,8 @@ public sealed partial class SessionsPage : UserControl
     // list has settled. A session moved (a remove and an insert) is listed again by then.
     void OnSessionsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        rowShift.Changing(e.Action == NotifyCollectionChangedAction.Remove
+            ? e.OldItems!.Cast<object>() : []);
         if (!ready) { Ready(); }
         // Rows coming, going or moving can scroll the list to keep those in sight in place, which
         // moves Needs you: not a scroll of the person's, even while they are scrolling (#491).

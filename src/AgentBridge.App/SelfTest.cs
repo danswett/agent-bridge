@@ -63,7 +63,7 @@ static partial class SelfTest
             await CheckRowAnatomy(rows, Check);
             CheckRowNames(window, rows, Check);
             await CheckSelectionBar(window, Check, outFile);
-            await CheckRowMotion(window, Check, outFile);
+            await CheckRowMotion(window, Check);
 
             // A session chosen in the list is the session pane's, with its question's controls.
             var approval = await Choose(window, main, "demo-approval", "Option:approve");

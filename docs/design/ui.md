@@ -577,6 +577,11 @@ for neighbours. The PWA retargets from the current on-screen positions with FLIP
 the scrolled list and keeps the focused element. Reduced motion is instant; re-sorting
 makes no screen-reader announcement. The 500 ms approval wait still counts from rest.
 
+Windows session rows use token-timed implicit composition offsets for neighbour shifts.
+A departure's composition surface is drawn only, and its source container cannot recycle
+until the exit fade completes or is cancelled. Unloading the list releases both; reduced
+motion closes the gap without travel. Strip, Tools and conversation motion follow in A2.
+
 **Not in the design:**
 - **Loops** other than the two glyphs and an in-flight progress ring: no pulsing dot, badge
   or Needs you toggle, no shimmer, no animated placeholder.

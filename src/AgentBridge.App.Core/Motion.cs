@@ -37,7 +37,7 @@ public sealed class MotionCatalogue
 {
     // Every entry in ui.md §5.3's catalogue, by its tokens.json name with a capital.
     public static readonly IReadOnlyList<string> Names =
-        ["Push", "Pane", "Tab", "Disclosure", "ListItem", "Glyph", "ActivityDot", "Selection", "Press", "Acknowledge", "Toast", "Sheet", "Menu", "Scroll", "Reorder"];
+        ["Push", "Pane", "Tab", "Disclosure", "ListItem", "Shift", "Glyph", "ActivityDot", "Value", "Selection", "Press", "Acknowledge", "Toast", "Sheet", "Menu", "Scroll", "Reorder", "Collapse"];
 
     readonly Dictionary<string, MotionEntry> entries;
 
