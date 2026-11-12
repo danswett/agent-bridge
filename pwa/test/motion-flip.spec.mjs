@@ -136,6 +136,41 @@ for (const width of [390, 1024]) {
       expect(Math.abs(positions.after - positions.before)).toBeLessThan(1);
     });
 
+    for (const via of ['Alt+Down', 'menu']) {
+      test(`${via} keeps row identity, focus and a press begun before the move`, async ({ page }) => {
+        const id = await page.locator('#session-list > .session').nth(1).getAttribute('data-id');
+        const button = page.locator(`#session-list > .session[data-id="${id}"] > .row-main`);
+        const focused = await button.evaluate((el) => {
+          const d = window.agentBridgeDemo, row = el.parentElement;
+          window.keptMotion = { button: el, row, downs: 0, clicks: 0 };
+          el.addEventListener('pointerdown', () => window.keptMotion.downs++);
+          el.addEventListener('click', () => window.keptMotion.clicks++);
+          el.focus();
+          d.page.view.order.move(row.dataset.key, -1); d.page.view.render();
+          const kept = document.activeElement === el;
+          d.page.view.order.move(row.dataset.key, 1); d.page.view.render();
+          return kept && document.activeElement === el;
+        });
+        expect(focused).toBe(true);
+        await button.hover();
+        await page.mouse.down();
+        if (via === 'Alt+Down') { await button.press('Alt+ArrowDown'); }
+        else {
+          await button.press('Shift+F10');
+          await page.getByRole('menuitem', { name: /Move down/ }).evaluate((el) => el.click());
+        }
+        await page.evaluate(() => { for (const a of document.getAnimations()) { a.pause(); a.currentTime = 0; } });
+        expect(await button.evaluate((el) => el === window.keptMotion.button && el.parentElement === window.keptMotion.row)).toBe(true);
+        expect(await button.evaluate((el) => document.activeElement === el)).toBe(true);
+        expect(await button.evaluate((el) => [...el.parentElement.parentElement.children].indexOf(el.parentElement))).toBe(2);
+        const box = await button.boundingBox();
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await page.mouse.up();
+        expect(await page.evaluate(() => [window.keptMotion.downs, window.keptMotion.clicks])).toEqual([1, 1]);
+        expect(await button.evaluate((el) => el === window.keptMotion.button && el.parentElement === window.keptMotion.row)).toBe(true);
+      });
+    }
+
     for (const reduced of [false, true]) {
       test(`delegate chips arrive, leave and ease aside${reduced ? ' without travel under reduced motion' : ''}`, async ({ page }) => {
         await page.setViewportSize({ width: 1440, height: 900 });
@@ -147,15 +182,19 @@ for (const width of [390, 1024]) {
           const agent = (id) => ({ id, name: id, status: 'running', startedAt: new Date().toISOString() });
           strip.update({ subagents: [agent('first'), agent('second')] });
           const initial = strip.item('second').getAnimations().length;
+          const kept = strip.item('second'); kept.focus();
           strip.update({ subagents: [agent('second'), agent('third')] });
           await new Promise(requestAnimationFrame);
           const shifted = strip.item('second').getAnimations();
           const arrived = strip.item('third').getAnimations();
-          return { initial, ids: shifted.map((a) => a.id), arrived: arrived.map((a) => a.id),
+          return { initial, same: strip.item('second') === kept, focused: document.activeElement === kept,
+            ids: shifted.map((a) => a.id), arrived: arrived.map((a) => a.id),
             travel: shifted.some((a) => a.effect.getKeyframes().some((f) => f.transform && f.transform !== 'none')),
             exits: document.getAnimations().filter((a) => a.id === 'ab-motion-listItem' && a.effect.target.inert).length };
         });
         expect(result.initial).toBe(0);
+        expect(result.same).toBe(true);
+        expect(result.focused).toBe(true);
         expect(result.ids).toContain(reduced ? 'ab-motion-value' : 'ab-motion-shift');
         expect(result.travel).toBe(!reduced);
         expect(result.arrived).toContain('ab-motion-listItem');

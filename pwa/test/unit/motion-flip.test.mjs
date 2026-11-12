@@ -29,6 +29,18 @@ test('same-frame list mutations take effect immediately and coalesce into one to
     assert.equal(animations[0].options.duration, 167);
     assert.equal(animations[0].keyframes[0].transform, 'translate(0px, -80px)');
     assert.equal(animations[0].keyframes.at(-1).transform, 'none');
+    let visibility;
+    doc.addEventListener = (_, fn) => { visibility = fn; };
+    doc.removeEventListener = () => { visibility = null; };
+    motion.flip(container, () => { top += 40; });
+    doc.visibilityState = 'hidden'; visibility?.();
+    doc.visibilityState = 'visible'; visibility?.();
+    frames.shift()();
+    assert.equal(animations.length, 1, 'returning from a hidden tab must not replay old positions');
+    doc.visibilityState = 'hidden';
+    const result = motion.flip(container, () => { top += 40; return top; });
+    assert.equal(result, 260, 'hidden mutations still take effect immediately');
+    assert.equal(frames.length, 0, 'a hidden update must not queue a stale frame');
   } finally { globalThis.getComputedStyle = previous; }
 });
 

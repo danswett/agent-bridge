@@ -222,6 +222,12 @@ const flips = new WeakMap();
 // drawn positions before cancelling a running shift, so another change never jumps back.
 // Keep it running through mutate(): a leaving item's copy must see that same drawn position.
 export function flip(container, mutate, { entry = 'shift', viewport = false } = {}) {
+  const doc = container.ownerDocument;
+  if (doc.visibilityState === 'hidden') {
+    const pending = flips.get(container);
+    if (pending) { pending.hidden = true; }
+    return mutate();
+  }
   let state = flips.get(container);
   if (!state) {
     state = { origin: container.getBoundingClientRect(), viewport: false, before: new Map(), interrupted: new Set(), animations: [], entries: new Map() };
@@ -237,10 +243,13 @@ export function flip(container, mutate, { entry = 'shift', viewport = false } = 
       }
     }
     flips.set(container, state);
-    container.ownerDocument.defaultView.requestAnimationFrame(() => {
+    const visibility = () => { state.hidden ||= doc.visibilityState === 'hidden'; };
+    doc.addEventListener?.('visibilitychange', visibility);
+    doc.defaultView.requestAnimationFrame(() => {
+      doc.removeEventListener?.('visibilitychange', visibility);
       flips.delete(container);
       for (const a of state.animations) { a.cancel(); }
-      if (!container.isConnected) { return; }
+      if (!container.isConnected || state.hidden || doc.visibilityState === 'hidden') { return; }
       const origin = state.viewport ? state.origin : container.getBoundingClientRect();
       const after = new Map([...container.children].filter((el) => el.getClientRects().length).map((el) => [el, el.getBoundingClientRect()]));
       const slotsChanged = state.before.size !== after.size || [...after.keys()].some((el) => !state.before.has(el));
