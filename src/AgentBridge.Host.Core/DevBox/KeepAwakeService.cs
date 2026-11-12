@@ -108,6 +108,7 @@ public sealed class KeepAwakeService : IAsyncDisposable
     // Completed to bring the next pass forward (keep-awake just turned on); replaced once seen.
     TaskCompletionSource woken = new(TaskCreationOptions.RunContinuationsAsynchronously);
     volatile bool enabled;
+    bool started;
     Task? loop;
     (DateTimeOffset At, KeepAwakeResult Result)? last;
     DateTimeOffset? next;
@@ -119,7 +120,8 @@ public sealed class KeepAwakeService : IAsyncDisposable
         this.options = options;
         this.log = log ?? (_ => { });
         enabled = options.Settings.KeepAwake;
-        (var identity, identityProblem) = options.FindIdentity();
+        (var identity, var problem) = options.FindIdentity();
+        identityProblem = problem;
         isDevBox = identity is not null || identityProblem is not null;
     }
 
@@ -131,11 +133,14 @@ public sealed class KeepAwakeService : IAsyncDisposable
         get => enabled;
         set
         {
-            if (enabled == value) { return; }
-            enabled = value;
+            lock (sync)
+            {
+                if (enabled == value) { return; }
+                enabled = value;
+                woken.TrySetResult();
+                if (started && value) { StartLoop(TimeSpan.Zero); }
+            }
             log($"keep-awake is {(value ? "on" : "off")} (devBox.keepAwake, set by the app; applies now)");
-            // Turned on: a pass now, rather than up to an interval from now.
-            if (value) { lock (sync) { woken.TrySetResult(); } }
             Changed?.Invoke();
         }
     }
@@ -161,27 +166,47 @@ public sealed class KeepAwakeService : IAsyncDisposable
         }
         else if (enabled)
         {
-            log("keep-awake is on (devBox.keepAwake) but this machine is not a Dev Box (it has no Dev Box agent settings); it is looked for again before every pass");
+            log("keep-awake is on (devBox.keepAwake) but this machine is not a Dev Box (it has no Dev Box agent settings); no keep-awake scheduler is started");
         }
-        // Started whether or not this looks like a Dev Box now: the agent's settings file can be
-        // unreadable for a moment (the agent rewriting or updating it), and one bad read at logon
-        // must not leave the Dev Box to hibernate until the host restarts. agent-ha-bridge's task
-        // read it afresh on every run too.
-        loop ??= Task.Run(async () =>
+        lock (sync)
         {
-            var wait = options.FirstPass;
-            while (!stop.IsCancellationRequested)
+            started = true;
+            StartLoop(options.FirstPass);
+        }
+    }
+
+    // Called with sync held; an unreadable Dev Box identity still counts as a Dev Box.
+    void StartLoop(TimeSpan firstWait)
+    {
+        if (!enabled || !isDevBox || stop.IsCancellationRequested || loop is not null) { return; }
+        loop = Task.Run(async () =>
+        {
+            var wait = firstWait;
+            while (true)
             {
                 DateTimeOffset due;
-                lock (sync) { next = due = options.Time.GetUtcNow() + wait; }
+                lock (sync)
+                {
+                    if (stop.IsCancellationRequested || !enabled || !isDevBox)
+                    {
+                        next = null;
+                        loop = null;
+                        return;
+                    }
+                    next = due = options.Time.GetUtcNow() + wait;
+                }
                 Changed?.Invoke();
                 try { await WaitAsync(due); }
                 catch (OperationCanceledException) { break; }
                 try
                 {
-                    if (enabled) { await PassAsync(dryRun: false, stop.Token); }
-                    // Off, it still looks, so the app offers the switch once this is seen to be a Dev Box.
-                    else { Identify(); }
+                    bool run;
+                    lock (sync)
+                    {
+                        run = enabled;
+                        if (woken.Task.IsCompleted) { woken = new(TaskCreationOptions.RunContinuationsAsynchronously); }
+                    }
+                    if (run) { await PassAsync(dryRun: false, stop.Token); }
                 }
                 catch (OperationCanceledException) when (stop.IsCancellationRequested) { break; }
                 catch (Exception e) { Record(new KeepAwakeResult(KeepAwakeResult.Failed, $"the pass failed: {e.GetType().Name}: {e.Message}")); }
@@ -214,29 +239,21 @@ public sealed class KeepAwakeService : IAsyncDisposable
     {
         Task signal;
         lock (sync) { signal = woken.Task; }
-        using var waiting = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
-        // The clock can move between reading it and the timer being registered: a timer made after
-        // that move is due its delay from the later time, so it fires late or, on a clock nobody
-        // advances again, never. Reading the clock once more after registering shows whether it
-        // moved; if so the timer is made again from the later time. Once it did not move, any
-        // later move reaches the registered timer.
+        var elapsed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Register before reading the clock: a fake clock may jump during registration (#241).
+        // Never retry merely because real time passed while setting up a timer (#2283).
+        using var timer = options.Time.CreateTimer(_ => elapsed.TrySetResult(), null,
+            Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         while (true)
         {
-            var before = options.Time.GetUtcNow();
-            var remaining = due - before;
+            stop.Token.ThrowIfCancellationRequested();
+            var remaining = due - options.Time.GetUtcNow();
             if (remaining <= TimeSpan.Zero) { break; }
-            using var attempt = CancellationTokenSource.CreateLinkedTokenSource(waiting.Token);
-            var delay = Task.Delay(remaining, options.Time, attempt.Token);
-            if (options.Time.GetUtcNow() != before) { attempt.Cancel(); continue; }
-            await Task.WhenAny(signal, delay);
-            break;
+            timer.Change(remaining, Timeout.InfiniteTimeSpan);
+            if (await Task.WhenAny(signal, elapsed.Task).WaitAsync(stop.Token) == signal) { break; }
+            elapsed = new(TaskCreationOptions.RunContinuationsAsynchronously);
         }
-        waiting.Cancel();
         stop.Token.ThrowIfCancellationRequested();
-        lock (sync)
-        {
-            if (woken.Task.IsCompleted) { woken = new(TaskCreationOptions.RunContinuationsAsynchronously); }
-        }
     }
 
     // One pass now: with dryRun, only reads Dev Center and says what it would do.
@@ -291,9 +308,11 @@ public sealed class KeepAwakeService : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         stop.Cancel();
-        if (loop is not null)
+        Task? running;
+        lock (sync) { running = loop; }
+        if (running is not null)
         {
-            try { await loop; }
+            try { await running; }
             catch (OperationCanceledException) { }
         }
         stop.Dispose();

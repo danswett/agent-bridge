@@ -67,18 +67,24 @@ public sealed class KeepAwakeSchedulerTests(ITestOutputHelper output)
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Shutdown_does_not_wait_for_the_first_pass_or_the_interval_timer(bool interval)
+    [InlineData("first")]
+    [InlineData("interval")]
+    [InlineData("woken")]
+    public async Task Shutdown_does_not_wait_for_the_first_pass_interval_or_wake_signal(string waiting)
     {
         var clock = new Clock();
         var service = Service(clock);
         service.Start();
         await clock.Registered();
-        if (interval)
+        if (waiting == "interval")
         {
             clock.Advance(TimeSpan.FromSeconds(30));
             await clock.Registered();
+        }
+        else if (waiting == "woken")
+        {
+            service.Enabled = false;
+            service.Enabled = true;
         }
 
         await service.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1));
@@ -101,6 +107,27 @@ public sealed class KeepAwakeSchedulerTests(ITestOutputHelper output)
         service.Enabled = true;
         await clock.Registered();
         Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task Reenabling_during_wait_cleanup_does_not_leave_a_second_pass_pending()
+    {
+        var clock = new Clock();
+        var admitted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        KeepAwakeService? service = null;
+        await using var owned = service = Service(clock, called: () =>
+        {
+            var signal = (TaskCompletionSource)typeof(KeepAwakeService)
+                .GetField("woken", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(service)!;
+            admitted.TrySetResult(signal.Task.IsCompleted);
+        });
+        clock.OnRelease = () => { clock.OnRelease = null; service.Enabled = true; };
+        service.Start();
+        await clock.Registered();
+
+        service.Enabled = false;
+
+        Assert.False(await admitted.Task.WaitAsync(TimeSpan.FromSeconds(5)));
     }
 
     [Fact]
@@ -131,7 +158,7 @@ public sealed class KeepAwakeSchedulerTests(ITestOutputHelper output)
         clock.Advance(TimeSpan.FromSeconds(30));
         await clock.Registered();
         Assert.False(passed.Task.IsCompleted);
-        Assert.Equal(2, clock.Timers);
+        Assert.Equal(1, clock.Timers);
 
         clock.Advance(TimeSpan.FromSeconds(10));
         await passed.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -197,6 +224,7 @@ public sealed class KeepAwakeSchedulerTests(ITestOutputHelper output)
         public int ActiveTimers => Volatile.Read(ref active);
         public TimeSpan Offset { get; set; }
         public Action? BeforeFirstTimer { get; set; }
+        public Action? OnRelease { get; set; }
         public override DateTimeOffset GetUtcNow() => base.GetUtcNow() + Offset;
         public Task Registered() => registered.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         public Task Released() => released.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
@@ -222,6 +250,7 @@ public sealed class KeepAwakeSchedulerTests(ITestOutputHelper output)
             {
                 timer.Dispose();
                 Interlocked.Decrement(ref clock.active);
+                clock.OnRelease?.Invoke();
                 clock.released.Writer.TryWrite(true);
             }
             public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }

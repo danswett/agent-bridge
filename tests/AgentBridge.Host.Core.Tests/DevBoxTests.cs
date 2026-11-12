@@ -548,7 +548,8 @@ public sealed class DevBoxTests : IDisposable
 
         service.Start();
         await Until(() => service.State.NextAt is not null, "the first pass to be scheduled");
-        await Until(() => time.Timers >= 2, "the timer to be made again from the later reading");
+        await Until(() => time.Timers >= 1, "the timer to be registered before reading the remaining time");
+        Assert.Equal(1, time.Timers);
         time.Advance(service.State.NextAt!.Value - time.GetUtcNow());
 
         await Until(() => dc.Calls.Count == 1, "the first pass");
