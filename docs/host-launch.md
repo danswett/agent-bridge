@@ -98,6 +98,16 @@ differences, each deliberate:
 | Incomplete discovery | Every launch refused while it lasts (`Launch held: waiting on …`) | Only what reads an absence waits: a resume of a held agent's session, or of one not on the list, and a new Codex session are `busy`, saying what holds it; nothing is reclaimed. Other new sessions start ([v1-launch.md](protocol/v1-launch.md#while-discovery-is-held)) |
 | macOS and Linux | tmux | Not offered yet |
 
+## Session discovery cadence (#2296)
+
+File watchers wake the source immediately, with a 50 ms debounce for bursts. A quiet
+source with no sessions or discovery hold reconciles every 15 seconds, including when
+watchers are unavailable or drop events. Sessions and holds retain the active poll
+interval (one second by default), as do the 30 seconds after a watcher wake or an
+observed session process exit. Transcript wakes cannot postpone reconciliation.
+These deadlines use monotonic time, not the wall clock. Session watchdogs and explicit
+launch-time refreshes keep their existing behavior; shutdown cancels every wait.
+
 ## In order, for every launch
 
 1. Request UUID (`refused` otherwise). Every outcome is remembered for 15 minutes and

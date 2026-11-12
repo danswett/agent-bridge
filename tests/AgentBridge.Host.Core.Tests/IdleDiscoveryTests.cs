@@ -57,11 +57,16 @@ public class IdleDiscoveryTests
         time.Advance(TimeSpan.FromSeconds(1));
         Assert.Equal(TimeSpan.FromSeconds(1), await time.NextTimer());
         Assert.Null(source.Get(Id));
-        time.Advance(TimeSpan.FromSeconds(30));
-        Assert.Equal(TimeSpan.FromSeconds(15), await time.NextTimer());
+        for (var second = 1; second < 30; second++)
+        {
+            time.Advance(TimeSpan.FromSeconds(1));
+            Assert.Equal(TimeSpan.FromSeconds(1), await time.NextTimer());
+        }
+        time.Advance(TimeSpan.FromSeconds(1));
+        Assert.Equal(TimeSpan.FromSeconds(14), await time.NextTimer());
 
         f.Processes.Run(AgentKind.Copilot, 100);
-        time.Advance(TimeSpan.FromSeconds(14));
+        time.Advance(TimeSpan.FromSeconds(13));
         Assert.Null(source.Get(Id));
         time.Advance(TimeSpan.FromSeconds(1));
         Assert.Equal(TimeSpan.FromSeconds(1), await time.NextTimer());
@@ -110,14 +115,93 @@ public class IdleDiscoveryTests
         Assert.Null(source.Held);
     }
 
-    static SessionSource Source(Fixture f, CountingClock time) => new(new SessionSourceOptions
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Explicit_refresh_shortens_an_armed_idle_wait_for_sessions_and_holds(bool held)
+    {
+        using var f = new Fixture();
+        var time = new CountingClock();
+        await using var source = Source(f, time);
+        await source.StartAsync();
+        Assert.Equal(TimeSpan.FromSeconds(15), await time.NextTimer());
+        time.Advance(TimeSpan.FromSeconds(1));
+        if (held) { f.Processes.Unreadable(AgentKind.Copilot); }
+        else
+        {
+            Fixture.Append(f.CopilotSession(Id, 100), Copilot.User("go", 3601));
+            f.Processes.Run(AgentKind.Copilot, 100);
+        }
+
+        await source.RefreshAsync();
+
+        Assert.Equal(TimeSpan.FromMilliseconds(50), await time.NextTimer());
+        time.Advance(TimeSpan.FromMilliseconds(50));
+        Assert.Equal(TimeSpan.FromMilliseconds(950), await time.NextTimer());
+        time.Advance(TimeSpan.FromMilliseconds(950));
+        Assert.Equal(TimeSpan.FromSeconds(1), await time.NextTimer());
+        if (held) { Assert.NotNull(source.Held); }
+        else { Assert.NotNull(source.Get(Id)); }
+    }
+
+    [Fact]
+    public async Task A_silent_working_session_still_reaches_its_watchdog_deadline()
+    {
+        using var f = new Fixture();
+        Fixture.Append(f.CopilotSession(Id, 100), Copilot.User("go", 3600), Copilot.TurnStart(3600));
+        f.Processes.Run(AgentKind.Copilot, 100);
+        var time = new CountingClock();
+        await using var source = Source(f, time, TimeSpan.FromSeconds(5));
+        await source.StartAsync();
+        Assert.Equal(TimeSpan.FromSeconds(1), await time.NextTimer());
+        for (var second = 1; second <= 5; second++)
+        {
+            Assert.Null(source.Get(Id)!.Attention);
+            time.Advance(TimeSpan.FromSeconds(1));
+            Assert.Equal(TimeSpan.FromSeconds(1), await time.NextTimer());
+            if (second < 5) { Assert.Null(source.Get(Id)!.Attention); }
+        }
+        Assert.Equal(AttentionKind.NotResponding, source.Get(Id)!.Attention?.Kind);
+    }
+
+    [Theory]
+    [InlineData("idle")]
+    [InlineData("active")]
+    [InlineData("debouncing")]
+    public async Task Shutdown_cancels_each_discovery_wait_without_advancing_time(string state)
+    {
+        using var f = new Fixture();
+        if (state == "active")
+        {
+            Fixture.Append(f.CopilotSession(Id, 100), Copilot.User("go", 1));
+            f.Processes.Run(AgentKind.Copilot, 100);
+        }
+        var time = new CountingClock();
+        var source = Source(f, time);
+        try
+        {
+            await source.StartAsync();
+            await time.NextTimer();
+            if (state == "debouncing")
+            {
+                Signal(source, Path.Combine(f.Root, "events.jsonl"));
+                Assert.Equal(TimeSpan.FromMilliseconds(50), await time.NextTimer());
+            }
+        }
+        finally { await source.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1)); }
+        var callbacks = time.Callbacks;
+        time.Advance(TimeSpan.FromDays(1));
+        Assert.Equal(callbacks, time.Callbacks);
+    }
+
+    static SessionSource Source(Fixture f, CountingClock time, TimeSpan? watchdog = null) => new(new SessionSourceOptions
     {
         CopilotHome = f.CopilotHome,
         ClaudeHome = f.ClaudeHome,
         CodexHome = f.CodexHome,
         CoalesceInterval = TimeSpan.Zero,
         UseFileSystemWatcher = false,
-        NotRespondingAfter = TimeSpan.MaxValue,
+        NotRespondingAfter = watchdog ?? TimeSpan.MaxValue,
         NotRespondingBusyAfter = TimeSpan.MaxValue,
     }, f.Processes, time);
 
