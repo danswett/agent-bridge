@@ -32,7 +32,7 @@ test('a release the machine found is shown, and Install downloads it, installs i
 
   await expect(block.locator('.machine-update-line')).toHaveText(/^(Downloading 0\.2\.0 \(50%\)|Installing 0\.2\.0: its app and host restart)\u2026$/);
   await expect(block.locator('.machine-update-line')).toHaveText('Up to date · 0.2.0');
-  await expect(block.locator('.machine-update-last')).toHaveText('Updated from 0.1.0 to 0.2.0 just now.');
+  await expect(block.locator('.machine-update-last')).toHaveText('Updated to 0.2.0.');
   // Nothing newer: Install goes, Check stays.
   await expect(block.locator('.machine-update-install')).toHaveCount(0);
   await expect(block.locator('.machine-update-check')).toBeVisible();

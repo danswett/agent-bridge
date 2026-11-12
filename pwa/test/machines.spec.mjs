@@ -423,16 +423,27 @@ test.describe('one truthful update line', () => {
     });
   }
 
-  test('a behind machine with a limited check keeps the known release and a disabled secondary Check now', async ({ page }) => {
-    await show(page, { available: '0.1.4448', last: { outcome: 'failed', reason: refused, at: now.toISOString() } });
-    const block = update(page);
-    await expect(block.locator('.machine-update-line')).toHaveText('Update available · 0.1.4448 (running 0.1.4415)');
-    await expect(block).not.toContainText('Up to date');
-    expect((await block.innerText()).match(/9:46 AM/g)).toHaveLength(1);
-    await expect(block.getByRole('button')).toHaveCount(1);
-    await expect(block.getByRole('button', { name: 'Check now' })).toHaveClass(/\bsecondary\b/);
-    await expect(block.getByRole('button', { name: 'Check now' })).toBeDisabled();
-  });
+  for (const canUpdateNow of [true, false]) {
+    test(`a limited check keeps the known release usable through ${canUpdateNow ? 'Update now' : 'legacy Install'}`, async ({ page }) => {
+      await show(page, { available: '0.1.4448', canUpdateNow, busy: { working: 0, waiting: 0 },
+        last: { outcome: 'failed', reason: refused, at: now.toISOString() } });
+      const block = update(page);
+      await expect(block.locator('.machine-update-line')).toHaveText('Update available · 0.1.4448 (running 0.1.4415)');
+      await expect(block).not.toContainText('Up to date');
+      const action = block.locator(canUpdateNow ? '.machine-update-now' : '.machine-update-install');
+      await expect(action).toBeEnabled();
+      if (canUpdateNow) {
+        await expect(action).toHaveClass(/\bprimary\b/);
+        await expect(block.locator('.machine-update-check')).toHaveCount(0);
+        await expect(block).not.toContainText(/9:46 AM|Can't check/);
+      } else {
+        await expect(block.locator('.machine-update-check')).toBeDisabled();
+        await expect(block.locator('.machine-update-why')).toHaveText("Can't check right now. Try again at 9:46 AM.");
+      }
+      await action.click();
+      await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.install']);
+    });
+  }
 
   test('a current machine shows a quiet check age without exposing feed or quota plumbing', async ({ page }) => {
     await show(page, {});
@@ -508,12 +519,13 @@ test.describe('one truthful update line', () => {
   for (const width of [390, 820, 1180]) {
     test(`the update block has a 44px secondary Check now and wraps within its card at ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
+      await page.clock.install({ time: now });
       await show(page, {});
       const block = update(page), check = block.getByRole('button', { name: 'Check now', exact: true });
       await expect(check).toHaveClass(/\bsecondary\b/);
       expect((await check.boundingBox()).height).toBeGreaterThanOrEqual(44);
       await expect(block.locator('.glyph')).toHaveCount(1);
-      await page.clock.pauseAt(now);
+      await page.clock.pauseAt(new Date(now.getTime() + 60_000));
       await check.click();
       await page.clock.runFor(50);
       await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.check']);
@@ -525,8 +537,11 @@ test.describe('one truthful update line', () => {
       }));
       await page.clock.runFor(50);
       await expect(block.locator('.machine-update-line')).toHaveText('Update available · 0.1.4462 (running 0.1.4384)');
+      const text = block.locator('.machine-update-line > span:last-child');
+      const normalSize = await text.evaluate((e) => parseFloat(getComputedStyle(e).fontSize));
       for (const scale of [1, 2]) {
         await page.evaluate((scale) => document.documentElement.style.setProperty('--text-scale', String(scale)), scale);
+        expect(await text.evaluate((e) => parseFloat(getComputedStyle(e).fontSize))).toBeCloseTo(normalSize * scale, 2);
         const fit = await block.evaluate((e) => {
           const card = e.getBoundingClientRect();
           return [...e.querySelectorAll('p, button')].every((n) => {

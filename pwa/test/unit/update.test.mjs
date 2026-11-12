@@ -101,7 +101,7 @@ test('a machine whose update waits for a question to be answered says so in the 
 
 test('the last outcome reads as what happened', () => {
   const at = '2026-11-02T17:00:00.000Z';
-  assert.equal(lastLine({ last: { outcome: 'updated', from: '0.4.0', to: '0.5.0', at } }, NOW), 'Updated from 0.4.0 to 0.5.0 1h 0m ago.');
+  assert.equal(lastLine({ last: { outcome: 'updated', from: '0.4.0', to: '0.5.0', at } }, NOW), 'Updated to 0.5.0.');
   assert.equal(lastLine({ last: { outcome: 'refused', reason: "another profile's host runs from this installation", at } }, NOW), "Not updated: another profile's host runs from this installation.");
   assert.equal(lastLine({ last: { outcome: 'failed', reason: 'the package is damaged', at } }, NOW), 'The update failed: the package is damaged.');
   assert.equal(lastLine(found, NOW), null);

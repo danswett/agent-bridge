@@ -286,7 +286,7 @@ export function lastLine(s, now = Date.now(), { updateNow = false } = {}) {
     }
   }
   switch (l.outcome) {
-    case 'updated': return `Updated from ${l.from ?? 'an older release'} to ${l.to ?? 'a newer one'} ${ago(l.at, now)}.`;
+    case 'updated': return `Updated to ${l.to ?? 'the new release'}.`;
     case 'current': return `Already up to date when asked ${ago(l.at, now)}.`;
     case 'refused': return `Not updated: ${sentence(l.reason ?? 'refused')}`;
     default: return `The update failed: ${sentence(l.reason ?? 'no reason given')}`;

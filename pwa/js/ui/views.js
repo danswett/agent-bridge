@@ -1085,9 +1085,9 @@ function updateRow(updates, id, name, now) {
   const last = heldCheck ? null : lastLine(s, now, { updateNow });
   const check = canCheck(s) && !busy && !asking && !checkFailed;
   const install = canInstall(s) && !busy && !asking;
-  const offerNow = !checkFailed && updates.signs === true && canUpdateNow(s);
+  const offerNow = updates.signs === true && canUpdateNow(s);
   const pressNow = offerNow && !busy && !asking;
-  const why = checkFailed ? `Can't check right now. ${retry ? `Try again at ${retry}.` : 'Try again later.'}`
+  const why = checkFailed && !offerNow ? `Can't check right now. ${retry ? `Try again at ${retry}.` : 'Try again later.'}`
     : updates.signs === true ? updateNowReason(s) : null;
   const details = updateDetails(s, now);
   const key = [said, last, note, busy, asking, check, install, offerNow, pressNow, why, ...details];
@@ -1117,7 +1117,7 @@ function updateRow(updates, id, name, now) {
       note ? h('p', { class: 'machine-error', role: 'alert' }, note) : null,
       s.installer ? h('div', { class: 'machine-actions machine-update-actions' },
         !offerNow ? button('machine-update-check', checking ? 'Checking\u2026' : busy ? 'Asking\u2026' : 'Check now', checking ? 'Checking\u2026' : 'Check now', check, () => updates.press(id, 'check')) : null,
-        s.available && !checkFailed && !offerNow ? button('machine-update-install', 'Install', `Install ${s.available} on ${name} when no session there is busy`, install, () => updates.press(id, 'install')) : null,
+        s.available && !offerNow ? button('machine-update-install', 'Install', `Install ${s.available} on ${name} when no session there is busy`, install, () => updates.press(id, 'install')) : null,
         offerNow ? button('machine-update-now', 'Update now', `Update now: ${s.available} on ${name}, without waiting`, pressNow, (e) => {
           const doc = e.currentTarget.ownerDocument;
           updates.pressNow(id, { machine: name, confirm: (sheet, { signal } = {}) => openUpdateNowSheet(sheet, { doc, returnFocus: refocus(doc), signal }) });

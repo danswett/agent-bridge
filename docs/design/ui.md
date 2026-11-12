@@ -1955,6 +1955,7 @@ machine, online ones first, then the account's offline machines (#213):
   or "Not checked yet". When **Update now** is offered it is the only primary action and
   Check now is absent. Feed/quota sentences are hidden; a limited check alone adds
   "Can't check right now. Try again at *time*." as the disabled Check now button's reason.
+  A check limit never hides Update now or the legacy Install action for a known update.
 - **Update now** (#1159; built in the PWA, slice 3; the Windows app's is slice 4; Creative's rules, 6711605555, are spelled out in
   [v1-update.md](../protocol/v1-update.md#what-the-person-sees)): beside Install, only when an
   update is ready and this device can carry it out; otherwise the row says why in text2. A quiet
