@@ -69,7 +69,7 @@ const tokens = (page) => page.evaluate(() => {
     return m ? Number(m[1]) * (m[2] === 's' ? 1000 : 1) : 0;
   };
   const out = {};
-  for (const entry of ['push', 'pane', 'tab', 'disclosure', 'list-item', 'glyph', 'activity-dot', 'selection', 'press', 'acknowledge', 'toast', 'menu', 'scroll', 'reorder']) {
+  for (const entry of ['push', 'pane', 'tab', 'disclosure', 'list-item', 'shift', 'value', 'glyph', 'activity-dot', 'selection', 'press', 'acknowledge', 'toast', 'menu', 'scroll', 'reorder']) {
     out[entry.replace(/-(\w)/g, (_, c) => c.toUpperCase())] = [ms(`--ab-motion-${entry}-duration`), ms(`--ab-motion-${entry}-exit-duration`)].filter((v) => v > 0);
   }
   out.crossFade = ms('--ab-motion-cross-fade');

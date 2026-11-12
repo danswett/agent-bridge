@@ -9,7 +9,7 @@ import { RecentOrder } from '../recent-order.js';
 import { ReadDwell } from '../read-dwell.js';
 import { ago } from './time.js';
 import { whileVisible } from './ticker.js';
-import { enter, leave, seen, select as showSelection, slide } from './motion.js';
+import { enter, flip, leave, seen, select as showSelection, slide } from './motion.js';
 import { updateLine, updateDetails, lastLine, checkHeld, canCheck, canInstall, canUpdateNow, updateNowReason, RESTARTING } from '../update.js';
 import { openUpdateNowSheet } from './update-now-sheet.js';
 import { signInDevicesLines } from '../signin-devices.js';
@@ -50,6 +50,7 @@ export class SessionListView {
   #held = false;
   // Drawn once: what comes after is news, and may move.
   #drawn = false;
+  #motionRow = null;
   #recent = new RecentOrder();
   #recentTimer = null;
   #scrollTimer = null;
@@ -144,6 +145,17 @@ export class SessionListView {
   }
 
   #draw() {
+    if (!this.#drawn) { this.#layout(); return; }
+    const settled = !this.sessions.list().some(({ hostId }) => !this.settled(hostId));
+    const ownMove = this.#motionRow;
+    let anchored = false;
+    flip(this.container, () => { anchored = this.#layout(); }, {
+      entry: (el) => !settled || el === ownMove ? null : this.#recent.moved.has(el.dataset.key) ? 'reorder' : 'shift',
+      viewport: () => anchored,
+    });
+  }
+
+  #layout() {
     const entries = this.sessions.list();
     const sort = this.order.sort;
     const held = this.#recentHolds.size > 0 || !!this.#recentFocus?.isConnected;
@@ -151,7 +163,7 @@ export class SessionListView {
     clearTimeout(this.#recentTimer);
     if (this.#recent.wait !== null) { this.#recentTimer = setTimeout(() => this.schedule(), this.#recent.wait); }
     const before = new Map();
-    if (this.#recent.moved.size || this.#groupLeaving) {
+    if (this.#drawn) {
       for (const el of this.container.querySelectorAll('.session')) {
         if (!el.getClientRects().length) { continue; }
         before.set(el, el.getBoundingClientRect());
@@ -160,10 +172,8 @@ export class SessionListView {
     if (this.#groupLeaving) { leave(this.#groupLeaving, 'listItem'); this.#groupLeaving = null; }
     const pane = this.container.closest('#list-pane');
     const scroller = !before.size ? null : pane && /auto|scroll/.test(getComputedStyle(pane).overflowY) ? pane : this.container.ownerDocument.scrollingElement;
+    const scrollTop = scroller?.scrollTop;
     const anchor = scroller?.scrollTop > 0 ? [...before.keys()].find((el) => seen(el)) : null;
-    for (const el of before.keys()) {
-      for (const a of el.getAnimations?.() ?? []) { if (/^ab-motion-(reorder|shift)$/.test(a.id)) { a.cancel(); } }
-    }
     const matches = (e) => this.#matches(e.hostId, e.session);
     const keep = (e) => matches(e) && (!this.needsOnly || sessionStatus(e.session).glyph === 'needs');
     const grouped = this.order.groupRows(arranged.sessions, { matches, filtered: !!this.filter, needsOnly: this.needsOnly, showEmpty: this.showEmptyGroups() });
@@ -186,7 +196,7 @@ export class SessionListView {
     // attached or a question half answered, kept current for when search lets it back in.
     let shown = 0;
     // Arriving and leaving (ui.md §5.3): a session that came or went after its machine's list was
-    // placed fades, where it is; its neighbours take their places at once. A machine's first list,
+    // placed fades, where it is; its neighbours ease aside. A machine's first list,
     // a machine still sending its list, a machine no longer shown, and search (which only hides a
     // card) are none of that.
     const arrived = [];
@@ -301,11 +311,6 @@ export class SessionListView {
       const delta = anchor.getBoundingClientRect().top - before.get(anchor).top;
       if (delta) { this.onAnchor?.(); scroller.scrollTop += delta; }
     }
-    for (const [el, was] of before) {
-      if (!el.isConnected) { continue; }
-      const at = el.getBoundingClientRect();
-      slide(el, this.#recent.moved.has(el.dataset.key) ? 'reorder' : 'shift', was.left - at.left, was.top - at.top);
-    }
     for (const key of arrived) {
       const el = this.#cards.get(key)?.element;
       if (el?.isConnected) { enter(el, 'listItem'); }
@@ -316,6 +321,7 @@ export class SessionListView {
     this.onRender?.(entries.length);
     // A save that failed while drawing (storage full) turned the list to Most recent: draw it so.
     if (this.order.sort !== sort) { this.schedule(); }
+    return scroller?.scrollTop !== scrollTop;
   }
 
   // A focused session ended, or its group now hides its row, leaving focus on the page
@@ -413,14 +419,14 @@ export class SessionListView {
     return true;
   }
 
-  // Reorder (ui.md §5.3): the row moved slides to its new place; the rows it passed take theirs
-  // at once, so nothing but the person's row moves.
+  // The held row keeps its synchronous move and scroll; FLIP draws its neighbours.
   #moved(el, draw) {
     const before = el.isConnected ? el.getBoundingClientRect() : null;
     // A move made while the last one still slides goes on from where the row is seen now: the
     // last slide goes, so the new place is measured without its translation.
-    for (const a of el.getAnimations?.() ?? []) { if (a.id === 'ab-motion-reorder') { a.cancel(); } }
-    draw();
+    for (const a of el.getAnimations?.() ?? []) { if (/^ab-motion-(reorder|shift)$/.test(a.id)) { a.cancel(); } }
+    this.#motionRow = el;
+    try { draw(); } finally { this.#motionRow = null; }
     if (!before || !el.isConnected) { return; }
     const after = el.getBoundingClientRect();
     slide(el, 'reorder', before.left - after.left, before.top - after.top);
