@@ -1,4 +1,5 @@
 import { hostJsonBytes } from './answers.js';
+import { isProtocolTime } from './protocol-time.js';
 
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const int32 = (v) => Number.isInteger(v) && v >= -2147483648 && v <= 2147483647;
@@ -30,7 +31,7 @@ export function readMachineLoad(raw) {
     if (state === 'fresh') { state = 'partial'; }
   }
   const read = { state, sessions, ...fields(raw, { ageMs: int64, staleAfterMs: int64 }) };
-  if (typeof raw.sampledAt === 'string' && Number.isFinite(Date.parse(raw.sampledAt))) { read.sampledAt = raw.sampledAt; }
+  if (isProtocolTime(raw.sampledAt)) { read.sampledAt = raw.sampledAt; }
   for (const [key, decode] of [['cpu', readMachineLoadCpu], ['memory', readMachineLoadMemory], ['unattributed', readUnattributedLoad]]) {
     const value = decode(raw[key]);
     if (value !== null) { read[key] = value; }
@@ -47,9 +48,8 @@ function readLoad(raw) {
     console.error('Ignoring malformed or oversized machine load');
     return null;
   }
-  const load = readMachineLoad(raw);
-  const { state } = load, { ageMs, staleAfterMs } = raw;
-  const cpu = numbers(load.cpu, ['percent']), memory = numbers(load.memory, ['totalBytes', 'availableBytes']);
+  const { state, ageMs, staleAfterMs } = raw;
+  const cpu = numbers(raw.cpu, ['percent']), memory = numbers(raw.memory, ['totalBytes', 'availableBytes']);
   if (cpu.percent > 100) { delete cpu.percent; }
   return { state, ageMs, staleAfterMs, ...(Object.keys(cpu).length ? { cpu } : {}),
     ...(Object.keys(memory).length ? { memory } : {}) };

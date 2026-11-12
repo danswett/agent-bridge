@@ -60,3 +60,12 @@ test('unknown fields at every record level are dropped while all known numerical
   for (const record of [raw, raw.cpu, raw.memory, raw.unattributed, ...raw.sessions]) { record.future = 'ignored'; }
   assert.deepEqual(readers.readMachineLoad(raw), expected);
 });
+
+test('sample times reject calendar rollover and out-of-range dates and offsets as C# does', () => {
+  for (const sampledAt of ['2026-02-30T00:00:00.000Z', '2025-02-29T00:00:00.000Z',
+    '0000-01-01T00:00:00.000Z', '2026-11-11T24:00:00.000Z', '2026-11-11T12:00:00.000+14:01']) {
+    assert.equal(readers.readMachineLoad({ sampledAt }).sampledAt, undefined, sampledAt);
+  }
+  const sampledAt = '2024-02-29T12:00:00.000Z';
+  assert.equal(readers.readMachineLoad({ sampledAt }).sampledAt, sampledAt);
+});

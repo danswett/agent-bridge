@@ -140,3 +140,40 @@ test('a failed old unsubscribe cannot block a healthy replacement client', async
   await pending;
   assert.deepEqual(b.ops(), ['load.get', 'load.subscribe']);
 });
+
+test('the bars-only feed preserves finite fractional and huge memory figures as before', async (t) => {
+  for (const memory of [{ totalBytes: 100.5, availableBytes: 25.5 }, { totalBytes: 2 ** 63, availableBytes: 2 ** 62 }]) {
+    const raw = sample({ memory }), a = await fake(t, { result: raw }), feed = new LoadFeed();
+    await feed.attach('a', a.client);
+    assert.deepEqual(feed.load('a'), raw);
+    a.update(sample({ memory, cpu: { percent: 12.5 } }));
+    assert.deepEqual(feed.load('a'), sample({ memory, cpu: { percent: 12.5 } }));
+  }
+});
+
+test('the bars-only feed ignores 201 sessions without changing the host freshness state', async (t) => {
+  const raw = sample({ sessions: Array.from({ length: 201 }, (_, i) => ({ session: `s-${i}`, workingSetBytes: i })) });
+  const a = await fake(t, { result: raw }), feed = new LoadFeed();
+  await feed.attach('a', a.client);
+  assert.deepEqual(feed.load('a'), sample());
+  a.update({ ...raw, cpu: { percent: 12.5 } });
+  assert.deepEqual(feed.load('a'), sample({ cpu: { percent: 12.5 } }));
+});
+
+test('get, subscribe and updates all retain the malformed and oversized record guards', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  for (const raw of [null, [], sample({ state: 'future' }), sample({ ageMs: -1 }),
+    sample({ staleAfterMs: undefined }), sample({ future: 'x'.repeat(65536) })]) {
+    let now = 0;
+    const a = await fake(t, { result: raw }), feed = new LoadFeed({ now: () => now });
+    await feed.attach('a', a.client);
+    assert.equal(feed.load('a'), null);
+    a.update(sample());
+    assert.deepEqual(feed.load('a'), sample());
+    now += 1000;
+    const errors = console.error.mock.callCount();
+    a.update(raw);
+    assert.deepEqual(feed.load('a'), sample());
+    assert.equal(console.error.mock.callCount(), errors + 1);
+  }
+});
