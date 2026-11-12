@@ -73,24 +73,27 @@ test('an ask made fresh after an event is not answered by one sent before it, wh
   assert.deepEqual(cache.get('a').options, { n: 'new' });
 });
 
-test('a machine marked stale is not answered from an ask already on its way, and is asked again', async (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+test('a machine marked stale is not answered from an ask already on its way, and is asked again', async () => {
   const cache = new LaunchOptionsCache();
   const started = Promise.withResolvers();
+  const firstReply = Promise.withResolvers();
+  const refreshed = Promise.withResolvers();
   let calls = 0;
+  cache.watch(() => { if (calls === 2) { refreshed.resolve(); } });
   const load = () => {
     calls += 1;
-    started.resolve();
-    return new Promise((r) => setTimeout(() => r({ calls }), 5));
+    if (calls === 1) {
+      started.resolve();
+      return firstReply.promise;
+    }
+    return { calls };
   };
   cache.sync([{ hostId: 'a', load }]);
   await started.promise;
   cache.stale('a');
   cache.sync([{ hostId: 'a', load }]);
-  const waited = new Promise((r) => setTimeout(r, 40));
-  // Both timers can be overdue before the serial refresh has completed.
-  t.mock.timers.tick(40);
-  await waited;
+  firstReply.resolve({ calls: 1 });
+  await refreshed.promise;
   assert.equal(calls, 2);
   assert.equal(cache.get('a').options.calls, 2);
 });
