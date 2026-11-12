@@ -102,6 +102,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
         long parsed;
         // Lines Back has parsed looking for turns' starts.
         int examined;
+        long completeEnd;
         readonly SortedSet<long> cycleGaps = [];
 
         public HistoryResult Page(string? before, int limit)
@@ -113,6 +114,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                     ? new HistoryResult { Turns = [], Start = new HistoryStart { Limited = true }, Partial = true }
                     : HistoryResult.StaleCursor;
             }
+            completeEnd = last;
             long end;
             var depth = 0;
             var checkedGrowth = false;
@@ -334,7 +336,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             var nextCycle = end;
             var unknownCycle = false;
             var nextQueued = true;
-            if (copilot && end < length) { nextCycle = NextCycle(end, out unknownCycle, out nextQueued); }
+            if (copilot && end < completeEnd) { nextCycle = NextCycle(end, out unknownCycle, out nextQueued); }
             var keep = marks.Longest - 1;
             // The first bytes of the line being read that a later chunk held, so a mark split
             // between two chunks is found.
@@ -515,7 +517,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
 
         long NextCycle(long from, out bool unknown, out bool queued)
         {
-            var to = Math.Min(length, from + Math.Min(b.TurnBytes, Math.Max(0, b.ScanBytes - scanned)));
+            var to = Math.Min(completeEnd, from + Math.Min(b.TurnBytes, Math.Max(0, b.ScanBytes - scanned)));
             var next = to;
             var found = false;
             var limited = false;
@@ -543,7 +545,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                 found = true;
                 return false;
             }, dropped: (_, offset) => { limited = true; next = offset; cycleGaps.Add(offset); return false; });
-            unknown = limited || (!found && to < length);
+            unknown = limited || (!found && to < completeEnd);
             queued = nextQueued;
             return next;
         }

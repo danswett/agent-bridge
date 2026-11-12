@@ -176,6 +176,24 @@ public class HistoryTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task An_unfinished_last_record_cannot_abandon_the_active_owners_tool_on_any_page(bool cursorPage)
+    {
+        await using var s = new Copilot_();
+        await s.After(Copilot.User("Owner", 1), Copilot.TurnStart(2),
+            Copilot.User("Queued", 3), Copilot.ToolStart("running", "powershell", new { command = "work" }, 4));
+
+        foreach (var suffix in new[] { "", "{\"type\":\"assistant.turn_end\",\"data\":" })
+        {
+            File.AppendAllText(s.Events, suffix);
+            var newest = await s.Page(limit: cursorPage ? 1 : 2);
+            var owner = cursorPage ? (await s.Page(newest.Before, limit: 1)).Turns!.Single() : newest.Turns![0];
+            Assert.Equal(ToolStatus.Running, owner.Parts.Single(p => p.Tool is not null).Tool!.Status);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task An_idle_prompt_at_end_of_file_closes_the_previous_turns_work_on_every_page(bool queuedBeforeIdle)
     {
         await using var s = new Copilot_();
