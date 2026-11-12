@@ -343,7 +343,11 @@ Devices cannot change it yet; that waits for #801's settings path.
 ## Machine and session load in the log
 
 So a saturated machine is visible (#1150), the host takes one shared snapshot of the machine's
-processes every 5 seconds and writes a line to `logs\host.log` at most once a minute:
+processes every 5 seconds while sessions, relay load sharing or the HA connector need it, and
+writes a line to `logs\host.log` at most once a minute. With no sessions or feeds it samples
+every 60 seconds for that log alone. `load.enabled=false` disables relay sharing, not HA or local
+session collection. A newly active consumer gets a fresh baseline immediately; CPU stays
+unknown until the next sample, rather than reusing the idle interval as a fresh load window:
 
 ```
 load: machine cpu 92% of 8 cores, 310 MiB memory available; sessions: 3f2a9c1d cpu 41% working set 880 MiB 6 procs; 9be0aa12 cpu 7% working set 420 MiB 3 procs
@@ -352,7 +356,7 @@ load: machine cpu 92% of 8 cores, 310 MiB memory available; sessions: 3f2a9c1d c
 - Each session's figure covers its process and everything below it, found through the process
   the host already records for the session (id plus start time, so a reused id is not counted).
 - `cpu` is the processor time used between two snapshots, as a share of the whole machine, so
-  it is a rate over the last 5 seconds, not a point reading. The first snapshot has no earlier
+  it is a rate over the sampling interval (5 seconds active, 60 seconds idle), not a point reading. The first snapshot has no earlier
   one, so it reads `unknown`.
 - `working set` is the memory resident in RAM. Pages shared between processes count once per
   process, so the sum can overstate.

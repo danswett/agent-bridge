@@ -11,14 +11,19 @@ public sealed class ProcessLoadDemandTests
     static readonly TimeSpan Idle = TimeSpan.FromSeconds(60);
     static readonly DateTimeOffset Started = new(2026, 11, 1, 0, 0, 0, TimeSpan.Zero);
 
-    sealed class Clock : FakeTimeProvider
+    sealed class Clock : TimeProvider
     {
+        readonly FakeTimeProvider inner = new();
         public readonly Channel<TimeSpan> Armed = Channel.CreateUnbounded<TimeSpan>();
         public TimeSpan Skew;
-        public override DateTimeOffset GetUtcNow() => base.GetUtcNow() + Skew;
+        public override DateTimeOffset GetUtcNow() => inner.GetUtcNow() + Skew;
+        public override long GetTimestamp() => inner.GetTimestamp();
+        public override long TimestampFrequency => inner.TimestampFrequency;
+        public void SetUtcNow(DateTimeOffset value) => inner.SetUtcNow(value);
+        public void Advance(TimeSpan value) => inner.Advance(value);
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
-            var timer = base.CreateTimer(callback, state, dueTime, period);
+            var timer = inner.CreateTimer(callback, state, dueTime, period);
             Armed.Writer.TryWrite(dueTime);
             return timer;
         }
@@ -118,11 +123,41 @@ public sealed class ProcessLoadDemandTests
         r.Time.Skew = TimeSpan.FromDays(-2);
         r.Time.Advance(Idle - TimeSpan.FromSeconds(1));
         Assert.Equal(reads, r.Table.Reads);
+        r.Table.Cpu += 120;
         r.Time.Advance(TimeSpan.FromSeconds(1));
-        Assert.Null((await r.Report()).Machine.CpuPercent);
+        Assert.Equal(50, (await r.Report()).Machine.CpuPercent);
+        r.Time.Skew = TimeSpan.FromDays(2);
+        r.Table.Cpu += 120;
+        r.Time.Advance(Idle);
+        Assert.Equal(50, (await r.Report()).Machine.CpuPercent);
         await r.Sampler.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(30));
         r.Source.Present(true);
         r.Time.Advance(TimeSpan.FromHours(1));
-        Assert.Equal(reads + 1, r.Table.Reads);
+        Assert.Equal(reads + 2, r.Table.Reads);
+    }
+
+    [Fact]
+    public async Task Concurrent_consumer_and_session_changes_do_not_rearm_the_active_timer()
+    {
+        await using var r = new Rig();
+        r.Sampler.SetConsumerDemand(true);
+        r.Sampler.Start();
+        await r.Armed(Active);
+        await r.Report();
+        r.Time.Advance(TimeSpan.FromSeconds(4));
+        Parallel.For(0, 20, _ => { r.Sampler.SetConsumerDemand(true); r.Source.Present(true); });
+        r.Time.Advance(TimeSpan.FromSeconds(1));
+        await r.Report();
+        Assert.False(r.Time.Armed.Reader.TryRead(out _));
+
+        r.Sampler.SetConsumerDemand(false);
+        r.Source.Present(false);
+        await r.Armed(Idle);
+        Assert.False(r.Time.Armed.Reader.TryRead(out _));
+        await r.Sampler.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(30));
+        var reads = r.Table.Reads;
+        r.Sampler.SetConsumerDemand(true);
+        r.Time.Advance(TimeSpan.FromHours(1));
+        Assert.Equal(reads, r.Table.Reads);
     }
 }
