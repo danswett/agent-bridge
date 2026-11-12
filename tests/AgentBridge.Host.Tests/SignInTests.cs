@@ -20,6 +20,80 @@ public sealed class SignInTests
         Json(new { kind = "code", userCode = code ?? SyntheticCode, verificationUri = uri ?? "https://github.com/login/device", expiresAt = time.GetUtcNow().AddSeconds(10) });
 
     [Fact]
+    public async Task Enabled_sign_in_with_no_flows_arms_no_repeating_timer()
+    {
+        await using var h = await Harness.CreateAsync();
+        Assert.Equal(0, h.Clock.Armed);
+        h.Time.Advance(TimeSpan.FromHours(1));
+        Assert.Equal(0, h.Clock.Fired);
+        Assert.Equal(0, h.Clock.Repeating);
+    }
+
+    [Fact]
+    public async Task Last_flow_and_request_expiry_disarm_the_sign_in_scheduler()
+    {
+        await using var h = await Harness.CreateAsync();
+        h.Recovery.ModelEvidence = true;
+        var phone = h.Phone();
+        var start = h.Start(phone);
+        await start.Then(phone);
+        var flow = Json(start.Result).GetProperty("flow").GetString();
+        await h.Service.CancelAsync(phone, Json(new { flow }));
+        Assert.Equal(1, h.Clock.Armed);
+        h.Time.Advance(h.Service.Kept + TimeSpan.FromTicks(1));
+        Assert.Equal(0, h.Clock.Armed);
+        var fired = h.Clock.Fired;
+        h.Time.Advance(TimeSpan.FromHours(1));
+        Assert.Equal(fired, h.Clock.Fired);
+        Assert.Equal(0, h.Clock.Repeating);
+    }
+
+    [Theory]
+    [InlineData("data")]
+    [InlineData("revocation")]
+    [InlineData("expiry")]
+    public async Task Data_revocation_and_code_expiry_end_active_flow_without_periodic_idle_sweeps(string cause)
+    {
+        await using var h = await Harness.CreateAsync();
+        var phone = h.Phone();
+        await h.Start(phone).Then(phone);
+        await h.Factory.Started.Task.WaitAsync(Patience);
+        h.Factory.Process.OutputPipe.Put(Frame(h.Time));
+        await phone.Code.Task.WaitAsync(Patience);
+        if (cause == "data")
+        {
+            Fixture.Append(h.Events, AuthError(3));
+            await h.Source.RefreshAsync();
+        }
+        else if (cause == "revocation")
+        {
+            h.Authority.Denial = "revoked";
+            h.Authority.Change();
+        }
+        else { h.Time.Advance(TimeSpan.FromSeconds(10)); }
+        await h.Factory.Process.Disposing.Task.WaitAsync(Patience);
+        Assert.Equal(0, h.Service.CodesHeld);
+        Assert.Equal(0, h.Recovery.Resumes);
+        Assert.Equal(0, h.Clock.Repeating);
+    }
+
+    [Theory]
+    [InlineData(-3600)]
+    [InlineData(3600)]
+    public async Task Utc_jumps_cannot_extend_the_monotonic_flow_limit(int jump)
+    {
+        await using var h = await Harness.CreateAsync(TimeSpan.FromSeconds(20));
+        h.Recovery.ModelEvidence = true;
+        var phone = h.Phone();
+        await h.Start(phone).Then(phone);
+        h.Clock.UtcOffset = TimeSpan.FromSeconds(jump);
+        h.Time.Advance(TimeSpan.FromSeconds(20));
+        Assert.Equal("expired", (await phone.Done.Task.WaitAsync(Patience)).GetProperty("outcome").GetString());
+        Assert.False(h.Service.FlowRunning);
+        Assert.Equal(0, h.Clock.Repeating);
+    }
+
+    [Fact]
     public void Approved_native_command_disables_debug_logging_and_never_uses_a_shell_or_inherited_token()
     {
         using var fixture = new Fixture();
@@ -876,6 +950,7 @@ public sealed class SignInTests
     {
         public Fixture Fixture { get; } = new();
         public FakeTimeProvider Time => Fixture.Time;
+        public CountingClock Clock = null!;
         public string Events = "";
         public SessionSource Source = null!;
         public StateSource States = null!;
@@ -899,7 +974,8 @@ public sealed class SignInTests
             Assert.Equal(AttentionKind.SignInNeeded, h.Source.Get(Id)!.Attention!.Kind);
             h.Resolver = new(h.Source);
             h.States = new(h.Source);
-            TimeProvider clock = manualSweeps ? new ManualSweepClock(h.Time) : h.Time;
+            h.Clock = new(h.Time);
+            TimeProvider clock = manualSweeps ? new ManualSweepClock(h.Time) : h.Clock;
             h.Service = new(h.States, h.Authority, h.Resolver, h.Recovery, new(h.Factory, h.Time), () => h.ReadOnly, clock)
                 { Enabled = true, Limit = limit ?? TimeSpan.FromMinutes(10) };
             return h;
@@ -1020,6 +1096,46 @@ public sealed class SignInTests
             public bool Change(TimeSpan dueTime, TimeSpan period) => true;
             public void Dispose() { }
             public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
+        sealed class CountingClock(FakeTimeProvider inner) : TimeProvider
+        {
+            public int Armed;
+            public int Fired;
+            public int Repeating;
+            public TimeSpan UtcOffset;
+            public override DateTimeOffset GetUtcNow() => inner.GetUtcNow() + UtcOffset;
+            public override long GetTimestamp() => inner.GetTimestamp();
+            public override long TimestampFrequency => inner.TimestampFrequency;
+            public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+            {
+                var timer = new CountedTimer(this);
+                timer.Inner = inner.CreateTimer(_ =>
+                {
+                    if (period == Timeout.InfiniteTimeSpan) { timer.SetArmed(false); }
+                    Interlocked.Increment(ref Fired);
+                    callback(state);
+                }, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+                timer.Change(dueTime, period);
+                return timer;
+            }
+            sealed class CountedTimer(CountingClock clock) : ITimer
+            {
+                public ITimer Inner = null!;
+                int armed;
+                public void SetArmed(bool value)
+                {
+                    var next = value ? 1 : 0;
+                    Interlocked.Add(ref clock.Armed, next - Interlocked.Exchange(ref armed, next));
+                }
+                public bool Change(TimeSpan dueTime, TimeSpan period)
+                {
+                    if (period != Timeout.InfiniteTimeSpan) { Interlocked.Increment(ref clock.Repeating); }
+                    SetArmed(dueTime != Timeout.InfiniteTimeSpan);
+                    return Inner.Change(dueTime, period);
+                }
+                public void Dispose() { SetArmed(false); Inner.Dispose(); }
+                public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+            }
         }
     }
     sealed class Factory : IPrivateSignInProcessFactory
