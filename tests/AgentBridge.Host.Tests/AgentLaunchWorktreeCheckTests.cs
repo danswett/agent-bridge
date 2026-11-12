@@ -51,16 +51,16 @@ public sealed class AgentLaunchWorktreeCheckTests : IDisposable
     [Fact]
     public void A_nonisolated_workspace_or_failed_creation_is_refused()
     {
-        Assert.Contains("isolated", Check(Workspace with { Isolate = false }));
-        Assert.NotNull(Check(result: created with { Problem = "creation failed" }));
-        Assert.NotNull(Check(result: created with { Worktree = null }));
-        Assert.NotNull(Check(result: created with { Path = null }));
+        Assert.Equal("Agent launches require an isolated workspace.", Check(Workspace with { Isolate = false }));
+        Assert.Equal("A fresh isolated worktree was not created.", Check(result: created with { Problem = "creation failed" }));
+        Assert.Equal("A fresh isolated worktree was not created.", Check(result: created with { Worktree = null }));
+        Assert.Equal("A fresh isolated worktree was not created.", Check(result: created with { Path = null }));
     }
 
     [Fact]
     public void A_primary_checkout_or_unmarked_worktree_is_not_owned_by_the_host()
     {
-        Assert.NotNull(Check(result: created with { Path = repository, Worktree = repository }));
+        Assert.Equal("The worktree is not marked as created by this host.", Check(result: created with { Path = repository, Worktree = repository }));
         File.Delete(Marker);
         Assert.Contains("host", Check());
     }
@@ -76,10 +76,10 @@ public sealed class AgentLaunchWorktreeCheckTests : IDisposable
     [Fact]
     public void The_launch_path_must_match_the_approved_subdirectory()
     {
-        Assert.NotNull(Check(result: created with { Path = repository }));
-        Assert.NotNull(Check(result: created with { Path = Path.Combine(tree, "src") }));
-        Assert.NotNull(Check(Workspace with { Path = Path.Combine(repository, "src") }));
-        Assert.NotNull(Check(result: created with { Path = Path.Combine(tree, "missing") }));
+        Assert.Equal("The launch path does not match the approved isolated workspace.", Check(result: created with { Path = repository }));
+        Assert.Equal("The launch path does not match the approved isolated workspace.", Check(result: created with { Path = Path.Combine(tree, "src") }));
+        Assert.Equal("The launch path does not match the approved isolated workspace.", Check(Workspace with { Path = Path.Combine(repository, "src") }));
+        Assert.Equal("The isolated worktree or approved workspace cannot be read.", Check(result: created with { Path = Path.Combine(tree, "missing") }));
     }
 
     [Fact]
@@ -148,8 +148,14 @@ public sealed class AgentLaunchWorktreeCheckTests : IDisposable
             Assert.Equal(0, process.ExitCode);
         }
         else { Directory.CreateSymbolicLink(link, outside); }
-        Assert.NotNull(Check());
-        Directory.Delete(link);
+        try
+        {
+            Assert.Equal("A worktree link prevents verification of project configuration.", Check());
+        }
+        finally
+        {
+            Directory.Delete(link);
+        }
         Assert.True(Directory.Exists(outside));
     }
 
