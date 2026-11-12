@@ -59,7 +59,8 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
                 foreach (var entry in k.EnumerateArray())
                 {
                     if (!entry.TryGetProperty("machine", out var km) || km.GetString() is not { } knownId) { continue; }
-                    known.Add(new FleetMachine(knownId, false, [], Name: MachineName(entry), LastSeen: LastSeen(entry)));
+                    known.Add(new FleetMachine(knownId, entry.TryGetProperty("online", out var knownOnline) && knownOnline.ValueKind == JsonValueKind.True, [],
+                        Name: MachineName(entry), LastSeen: LastSeen(entry)));
                 }
             }
             if (!f.TryGetProperty("machine", out var m) || m.GetString() is not { } id) { continue; }
