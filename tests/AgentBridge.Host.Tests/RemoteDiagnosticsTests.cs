@@ -48,6 +48,17 @@ public sealed class RemoteDiagnosticsTests
         JournalContract.Draft(kind, outcome, version: version, durationMs: 12);
 
     [Fact]
+    public async Task Snapshot_without_a_restart_marker_reports_unknown_never_a_guess()
+    {
+        var snapshot = await Diagnostics().SnapshotAsync(10, time.GetUtcNow());
+        var wire = JsonSerializer.SerializeToElement(snapshot, ProtocolJson.Options).GetProperty("lastRestart");
+
+        Assert.True(wire.TryGetProperty("cause", out var cause));
+        Assert.Equal("unknown", cause.GetString());
+        Assert.Equal(time.GetUtcNow().AddMinutes(-90), snapshot.LastRestart.At);
+    }
+
+    [Fact]
     public async Task Nothing_from_the_sources_but_codes_versions_and_times_reaches_the_snapshot()
     {
         var journal = new DiagnosticsJournal(time);
