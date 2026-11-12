@@ -1,13 +1,33 @@
+using System.Diagnostics;
 using System.Reflection;
 using System.Threading.Channels;
 using AgentBridge.Host.Core.DevBox;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
+using Xunit.Abstractions;
 
-public sealed class KeepAwakeSchedulerTests
+public sealed class KeepAwakeSchedulerTests(ITestOutputHelper output)
 {
     static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-09-30T22:00:00Z");
     static readonly DevBoxIdentity Box = new(new Uri("https://fake.devcenter.azure.com"), "fake-project", "fake-box");
+
+    [Fact]
+    public async Task Real_clock_movement_during_registration_does_not_create_retry_timers()
+    {
+        var clock = new RealClock();
+        var passed = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var service = Service(clock, called: () => passed.TrySetResult(clock.Timers),
+            firstPass: TimeSpan.FromMilliseconds(250));
+        var watch = Stopwatch.StartNew();
+        service.Start();
+
+        var completed = await Task.WhenAny(passed.Task, clock.Retried.Task).WaitAsync(TimeSpan.FromSeconds(5));
+
+        var count = passed.Task.IsCompleted ? await passed.Task : clock.Timers;
+        output.WriteLine($"Real UTC clock: {count} timers in {watch.Elapsed.TotalMilliseconds:F3} ms.");
+        Assert.Same(passed.Task, completed);
+        Assert.Equal(1, await passed.Task);
+    }
 
     [Theory]
     [InlineData(false, true)]
@@ -120,12 +140,13 @@ public sealed class KeepAwakeSchedulerTests
         await passed.Task.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
-    static KeepAwakeService Service(Clock clock, bool enabled = true, bool devBox = true, Action? called = null) =>
+    static KeepAwakeService Service(TimeProvider clock, bool enabled = true, bool devBox = true, Action? called = null, TimeSpan? firstPass = null) =>
         new(new KeepAwakeOptions
         {
             Settings = new DevBoxSettings { KeepAwake = enabled },
             FindIdentity = () => (devBox ? Box : null, null),
             Time = clock,
+            FirstPass = firstPass ?? TimeSpan.FromSeconds(30),
             Token = new Token(),
             Http = new Http(called),
             Lock = new DelegateKeepAwakeLock(() => new MemoryStream()),
@@ -142,6 +163,27 @@ public sealed class KeepAwakeSchedulerTests
         {
             called?.Invoke();
             return Task.FromResult(new DevCenterResponse(200, """{"value":[]}"""));
+        }
+    }
+
+    sealed class RealClock : TimeProvider
+    {
+        int timers;
+        public int Timers => Volatile.Read(ref timers);
+        public TaskCompletionSource Retried { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override DateTimeOffset GetUtcNow() => System.GetUtcNow();
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var before = System.GetUtcNow();
+            var timer = System.CreateTimer(callback, state, dueTime, period);
+            // Cross a real clock tick even on VMs with coarse clock resolution; never advance fake time.
+            if (!SpinWait.SpinUntil(() => System.GetUtcNow() != before, TimeSpan.FromSeconds(1)))
+            {
+                timer.Dispose();
+                throw new TimeoutException("The system UTC clock did not advance.");
+            }
+            if (Interlocked.Increment(ref timers) > 1) { Retried.TrySetResult(); }
+            return timer;
         }
     }
 
