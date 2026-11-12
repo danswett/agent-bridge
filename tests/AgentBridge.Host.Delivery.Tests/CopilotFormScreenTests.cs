@@ -23,8 +23,8 @@ public class CopilotFormScreenTests
         {
             var data = new TheoryData<int, int, bool>();
             foreach (var columns in new[] { 80, 120, 200 })
-            foreach (var field in new[] { 0, 1, 2 })
-            foreach (var marked in new[] { false, true }) { data.Add(columns, field, marked); }
+            foreach (var index in new[] { 0, 1, 2 })
+            foreach (var marked in new[] { false, true }) { data.Add(columns, index, marked); }
             return data;
         }
     }
