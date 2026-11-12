@@ -8,6 +8,54 @@ using Xunit;
 public sealed class ReleaseEligibilityTests
 {
     [Fact]
+    public async Task Repeated_policy_checks_reuse_one_verified_GitHub_answer()
+    {
+        var metadataReads = 0;
+        var body = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2349"]}""");
+        using var http = new HttpClient(new Handler(uri =>
+        {
+            if (uri.AbsoluteUri != GitHubHaltListSource.Releases) { return body; }
+            metadataReads++;
+            return Metadata("2349", body);
+        }));
+        var eligibility = new ReleaseEligibility(new GitHubHaltListSource(http));
+
+        for (var i = 0; i < 3; i++)
+        {
+            Assert.Equal(new HaltCheck(true), await eligibility.IsHalted("0.1.2349"));
+        }
+
+        Assert.Equal(1, metadataReads);
+    }
+
+    [Fact]
+    public async Task An_older_GitHub_answer_cannot_remove_a_previously_verified_halt()
+    {
+        var body = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2349"]}""");
+        var run = "2349";
+        using var http = new HttpClient(new Handler(uri =>
+            uri.AbsoluteUri == GitHubHaltListSource.Releases ? Metadata(run, body) : body));
+        var eligibility = new ReleaseEligibility(new GitHubHaltListSource(http));
+        Assert.Equal(new HaltCheck(true), await eligibility.IsHalted("0.1.2349"));
+
+        run = "2348";
+        body = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
+
+        Assert.Equal(new HaltCheck(true), await eligibility.IsHalted("0.1.2349"));
+    }
+
+    static byte[] Metadata(string run, byte[] body) => JsonSerializer.SerializeToUtf8Bytes(new[]
+    {
+        new
+        {
+            tag_name = "v0.1." + run, draft = false,
+            assets = new[] { new { name = "halts.json",
+                browser_download_url = $"https://github.com/danswett/agent-bridge/releases/download/v0.1.{run}/halts.json",
+                size = body.Length, digest = "sha256:" + Convert.ToHexString(SHA256.HashData(body)) } },
+        },
+    });
+
+    [Fact]
     public async Task A_published_empty_halt_list_means_none_are_halted()
     {
         var eligibility = new ReleaseEligibility(new Source("""{"v":1,"halted":[]}"""));
