@@ -412,6 +412,32 @@ test.describe('one truthful update line', () => {
     }), change);
   }
 
+  for (const [phase, label] of [['idle', 'Check now'], ['checking', 'Checking\u2026'], ['asking', 'Asking\u2026']]) {
+    test(`the ${phase} check control names each machine`, async ({ page }) => {
+      await show(page, {});
+      await page.evaluate(async (phase) => {
+        const { renderMachines } = await import('/js/ui/views.js');
+        const list = document.createElement('ul');
+        list.id = 'update-names-fixture'; list.className = 'machines';
+        document.getElementById('machines').append(list);
+        renderMachines(list, {
+          presence: ['Workshop', 'Laptop'].map((name) => ({ id: name, name, kind: 'host' })),
+          me: 'phone', current: 'all', onSelect() {},
+          updates: {
+            state: () => ({ installer: true, phase: phase === 'checking' ? 'checking' : 'idle', current: '0.1.0' }),
+            stateOf: () => ({ busy: phase === 'asking' }), press() {}, checkAll() {},
+          },
+        });
+      }, phase);
+      const checks = page.locator('#update-names-fixture .machine-update-check');
+      await expect(checks).toHaveCount(2);
+      for (const [i, machine] of ['Workshop', 'Laptop'].entries()) {
+        await expect(checks.nth(i)).toHaveText(label);
+        await expect(checks.nth(i)).toHaveAccessibleName(`${label} on ${machine}`);
+      }
+    });
+  }
+
   for (const outcome of ['failed', 'refused']) {
     test(`a current machine with a ${outcome} limited check disables Check now and explains when to retry`, async ({ page }) => {
       await show(page, { last: { outcome, reason: refused, at: now.toISOString() } });
@@ -419,7 +445,7 @@ test.describe('one truthful update line', () => {
       await expect(block.locator('.machine-update-line')).toHaveText('Up to date · 0.1.4415');
       await expect(block.locator('.machine-update-why')).toHaveText("Can't check right now. Try again at 9:46 AM.");
       expect((await block.innerText()).match(/9:46 AM/g)).toHaveLength(1);
-      await expect(block.getByRole('button', { name: 'Check now', exact: true })).toBeDisabled();
+      await expect(block.getByRole('button', { name: 'Check now on Demo machine', exact: true })).toBeDisabled();
       await block.locator('.machine-update-check').evaluate((e) => e.click());
       expect(await page.evaluate(() => window.agentBridgeDemo.updateLog)).toEqual([]);
     });
@@ -465,7 +491,7 @@ test.describe('one truthful update line', () => {
     await expect(check).toBeFocused();
     await set({ phase: 'idle', checkedAt: now.toISOString(), last: { outcome: 'current', at: now.toISOString() } });
     await expect(block.locator('p')).toHaveText(['Up to date · 0.1.4415', 'Checked under a minute ago']);
-    await expect(block.getByRole('button', { name: 'Check now', exact: true })).toBeFocused();
+    await expect(block.getByRole('button', { name: 'Check now on Demo machine', exact: true })).toBeFocused();
     await expect(check).toBeEnabled();
     await expect(block.getByRole('button')).toHaveCount(1);
   });
@@ -577,7 +603,7 @@ test.describe('one truthful update line', () => {
       await page.setViewportSize({ width, height: 900 });
       await page.clock.install({ time: now });
       await show(page, {});
-      const block = update(page), check = block.getByRole('button', { name: 'Check now', exact: true });
+      const block = update(page), check = block.getByRole('button', { name: 'Check now on Demo machine', exact: true });
       await expect(check).toHaveClass(/\bsecondary\b/);
       expect((await check.boundingBox()).height).toBeGreaterThanOrEqual(44);
       await expect(block.locator('.glyph')).toHaveCount(1);
@@ -586,7 +612,7 @@ test.describe('one truthful update line', () => {
       await page.clock.runFor(50);
       await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.check']);
       await expect(block.locator('.machine-update-line')).toHaveText('Checking…');
-      await expect(block.getByRole('button', { name: 'Checking…', exact: true })).toBeDisabled();
+      await expect(block.getByRole('button', { name: 'Checking… on Demo machine', exact: true })).toBeDisabled();
       await expect(block.locator('.machine-update-actions .glyph')).toHaveCount(1);
       await page.evaluate(() => window.agentBridgeDemo.setUpdate({
         ...window.agentBridgeDemo.host.update, phase: 'idle', available: '0.1.4462', current: '0.1.4384',

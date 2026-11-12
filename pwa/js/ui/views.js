@@ -1091,6 +1091,7 @@ function updateRow(updates, id, name, now) {
     : updates.signs === true ? updateNowReason(s) : null;
   const details = updateDetails(s, now);
   const key = [said, last, note, busy, asking, check, install, offerNow, pressNow, why, ...details];
+  const checkLabel = checking ? 'Checking\u2026' : busy ? 'Asking\u2026' : 'Check now';
   // Not disabled when it cannot be pressed: a disabled button loses focus, and the next draw
   // could not give it back. A press then does nothing (UpdateControl, and the host's own rules).
   const button = (cls, label, aria, can, onPress) => h('button', {
@@ -1116,7 +1117,7 @@ function updateRow(updates, id, name, now) {
       ...details.map((text) => h('p', { class: 'machine-update-detail' }, text)),
       note ? h('p', { class: 'machine-error', role: 'alert' }, note) : null,
       s.installer ? h('div', { class: 'machine-actions machine-update-actions' },
-        !offerNow ? button('machine-update-check', checking ? 'Checking\u2026' : busy ? 'Asking\u2026' : 'Check now', checking ? 'Checking\u2026' : 'Check now', check, () => updates.press(id, 'check')) : null,
+        !offerNow ? button('machine-update-check', checkLabel, `${checkLabel} on ${name}`, check, () => updates.press(id, 'check')) : null,
         s.available && !offerNow ? button('machine-update-install', 'Install', `Install ${s.available} on ${name} when no session there is busy`, install, () => updates.press(id, 'install')) : null,
         offerNow ? button('machine-update-now', 'Update now', `Update now: ${s.available} on ${name}, without waiting`, pressNow, (e) => {
           const doc = e.currentTarget.ownerDocument;
