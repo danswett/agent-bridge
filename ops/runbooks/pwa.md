@@ -7,12 +7,10 @@ failing to install (a release the worker could not keep whole; #650).
 
 ## How the PWA ships
 
-`pages.yml` runs when `ci.yml` completes on `main` (`workflow_run`), and only a successful push
-run deploys: it builds the exact commit CI tested (`workflow_run.head_sha`), never the branch's
-moving head. A red CI run deploys nothing. Main moves faster than CI finishes, so the newest
-green commit deploys; a run is skipped only when its commit is already live or older than the
-live one (the live commit is the `APP_VERSION` in the served `config.js`;
-quality/pages-gate.ps1). The build job holds no publishing token; the deploy
+`pages.yml` checks the newest 20 main-push CI runs every five minutes and at CI completion.
+Plan, all six pwa-ui shards, pwa-e2e and product (ubuntu-latest) must succeed; other jobs do not gate.
+Only Pages-path changes proven on main and newer than a known live APP_VERSION deploy.
+Manual rollback below remains exempt. The build job holds no publishing token; the deploy
 job publishes the artifact, then fetches the live `config.js` and `sw.js` and compares their
 sha256 with the built files, retrying for about five minutes while Pages propagates. A mismatch
 fails the job. The service worker is stamped with a hash of the served files
@@ -31,7 +29,7 @@ have from the worker's cache, without asking the network (#609).
    `main` and the commit goes in `ref`. If the environment's rule has changed and the run is
    refused, don't relax it in an incident without the owner.
 2. **Then fix forward.** Revert or fix the PR through a PR (Quality merges, AGENTS.md). Its green
-   CI run on `main` deploys the fix. Until it merges, a later green `main` run would deploy `main`
+   named PWA jobs on `main` deploy the fix. Until it merges, a later passing `main` run could deploy
    over the rollback, so hold merges that touch the PWA.
 3. **On a phone, after the fix is deployed:** close and reopen the PWA, and press Reload when
    it offers it. If it still shows the bad build, pull to refresh once. The service worker
@@ -44,5 +42,5 @@ disposable host.
 
 ## Afterwards
 
-If main CI would have caught it, it should have: Pages deploys only after a green main run (REL-4),
+If PWA CI would have caught it, it should have: Pages deploys only after its named jobs pass,
 so add the missing test.
