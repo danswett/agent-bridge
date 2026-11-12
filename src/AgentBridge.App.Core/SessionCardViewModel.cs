@@ -378,12 +378,15 @@ public sealed partial class SessionCardViewModel : Observable
             // capabilities takes its draft along instead.
             var draft = question.UnsentText();
             if (q is not null && q.Id == question.Id) { rebuilt = question; carried = draft; }
-            else if (draft.Length > 0)
+            else
             {
-                OrphanText = draft;
-                OrphanNote = "The question changed before you sent your answer. It was answered at the machine, or the agent moved on. What you typed is kept here.";
+                if (draft.Length > 0)
+                {
+                    OrphanText = draft;
+                    OrphanNote = "The question changed before you sent your answer. It was answered at the machine, or the agent moved on. What you typed is kept here.";
+                }
+                if (ctx.Deliveries.Get(question.Key) is not null) { receiptKey = question.Key; }
             }
-            else if (ctx.Deliveries.Get(question.Key) is not null) { receiptKey = question.Key; }
             question.Detach();
             Question = null;
         }
@@ -437,9 +440,9 @@ public sealed partial class SessionCardViewModel : Observable
     void UpdateReceipt()
     {
         var e = receiptKey is null ? null : ctx.Deliveries.Get(receiptKey);
-        // A line about why an answer could not go has no cause once its question is gone (#1193,
-        // #1195): busy goes with its pause, the rest become one neutral closed line for a few seconds.
-        if (e is not null && !QuestionViewModel.OutlivesQuestion(e))
+        // Failed and refused attempts remain visible (#2212). Stale and offline become the
+        // neutral closed line; busy still clears with its question (#1193, #1195).
+        if (e is not null && !QuestionViewModel.OutlivesQuestion(e, keepFailures: true))
         {
             receiptKey = null;
             if (question is null && e.Outcome != "busy") { ShowClosed(); return; }
