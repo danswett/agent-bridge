@@ -97,7 +97,7 @@ public static class HistoryDraw
             }
             if (part.Kind != HistoryPartKind.Response || string.IsNullOrEmpty(part.Text)) { continue; }
             cut |= part.Truncated == true;
-            replyAt ??= part.At;
+            if (part.At != default) { replyAt ??= part.At; }
             foreach (var block in MarkdownModel.Parse(part.Text).Select(b => new ConversationBlock(b)))
             {
                 blocks.Add(block);
@@ -105,7 +105,7 @@ public static class HistoryDraw
             }
         }
         // A prompt has no time of its own and takes its turn's; a reply takes its first part's.
-        var times = new HistoryTimes(turn.Prompt is null ? null : clock.Stamp(turn.At), replyAt is { } at ? clock.Stamp(at) : null);
+        var times = new HistoryTimes(turn.Prompt is null || turn.At == default ? null : clock.Stamp(turn.At), replyAt is { } at ? clock.Stamp(at) : null);
         if (PromptOrigin.OfHistory(turn.Prompt) is not { } origin) { return new(turn.Id, null, turn.Prompt?.Text, blocks, cut ? CutShort : null, times) { Items = items }; }
         if (kept is null || !kept.TryGetValue(turn.Id, out var disclosure) || disclosure.Origin.Text != origin.Text || disclosure.Origin.Label != origin.Label)
         {

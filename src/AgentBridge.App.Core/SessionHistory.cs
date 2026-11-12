@@ -18,6 +18,8 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
 {
     readonly object gate = new();
     readonly List<HistoryTurn> held = [];
+    readonly Dictionary<string, long> live = [];
+    long observed;
     // Pages read past turns already held after a stale cursor: the held turns are at most Kept, a page is
     // at least one turn, so this bounds a host that keeps answering with pages of the same turns.
     const int MaxRestartPages = HistoryLimits.Kept / HistoryLimits.DefaultTurns + 5;
@@ -89,48 +91,48 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
         lock (gate) { return held.Find(t => t.Id == id)?.Prompt; }
     }
 
+    internal bool HasAfter(string? id) { lock (gate) { return !string.IsNullOrEmpty(id) && held.Count > 0 && held[^1].Id != id; } }
+
     // Keep live words before a later snapshot replaces them. The prompt and reply can name
     // different turns when the person is queued behind a notification (#2144).
     internal void Observe(Session session)
     {
         var a = session.Activity;
-        if (string.IsNullOrEmpty(a.Turn)) { return; }
         var changed = false;
         lock (gate)
         {
-            var current = held.FindIndex(t => t.Id == a.Turn);
-            if (current < 0)
+            // default is an unknown LOCAL time, never a sent time (HistoryDraw); only wire history supplies one.
+            HistoryTurn Held(string id) => held.Find(t => t.Id == id) ?? new HistoryTurn { Id = id, At = default };
+            void Keep(HistoryTurn turn, bool before = false)
             {
-                held.Add(new HistoryTurn
+                var at = held.FindIndex(t => t.Id == turn.Id);
+                if (at >= 0) { turn = turn with { Prompt = turn.Prompt ?? held[at].Prompt, Parts = turn.Parts.Count == 0 ? held[at].Parts : turn.Parts }; }
+                if (at >= 0 && held[at] == turn with { Parts = held[at].Parts } && held[at].Parts.SequenceEqual(turn.Parts)) { return; }
+                var replied = at < 0 || !held[at].Parts.Where(p => p.Kind == HistoryPartKind.Response).Select(p => (p.Id, p.Text))
+                    .SequenceEqual(turn.Parts.Where(p => p.Kind == HistoryPartKind.Response).Select(p => (p.Id, p.Text)));
+                if (at >= 0) { held[at] = turn; }
+                else
                 {
-                    Id = a.Turn, At = session.UpdatedAt,
-                    Prompt = string.IsNullOrEmpty(a.UserMessage) ? null : new HistoryPrompt
-                    {
-                        Text = a.UserMessage, From = a.UserMessageFrom, Label = a.UserMessageLabel,
-                    },
-                });
-                current = held.Count - 1;
+                    var index = before ? held.FindIndex(t => t.Id == a.Turn || t.Id == a.Notice?.Id) : held.Count;
+                    held.Insert(index < 0 ? held.Count : index, turn);
+                }
+                if (replied) { live[turn.Id] = ++observed; }
                 changed = true;
             }
-            else if (held[current].Prompt is null && !string.IsNullOrEmpty(a.UserMessage))
+            if (a.Notice is { } carried && held.All(t => t.Id != a.Turn)) { Keep(carried); }
+            if (!string.IsNullOrEmpty(a.Turn))
             {
-                held[current] = held[current] with
+                var current = Held(a.Turn);
+                if (current.Prompt is null && !string.IsNullOrEmpty(a.UserMessage))
                 {
-                    Prompt = new HistoryPrompt { Text = a.UserMessage, From = a.UserMessageFrom, Label = a.UserMessageLabel },
-                };
-                changed = true;
+                    current = current with { Prompt = new HistoryPrompt { Text = a.UserMessage, From = a.UserMessageFrom, Label = a.UserMessageLabel } };
+                }
+                Keep(current);
             }
             var voice = Attribution.MainVoiceOf(session);
             if (!string.IsNullOrEmpty(a.ResponseTurn) && !string.IsNullOrEmpty(voice.Response))
             {
-                var at = held.FindIndex(t => t.Id == a.ResponseTurn);
-                if (at < 0)
-                {
-                    // Opening mid-run can first reveal an earlier reply without its prompt.
-                    held.Insert(current, new HistoryTurn { Id = a.ResponseTurn, At = session.UpdatedAt });
-                    at = current;
-                }
-                var turn = held[at];
+                var turn = Held(a.ResponseTurn);
                 var parts = turn.Parts.ToList();
                 var last = parts.FindLastIndex(p => p.Kind == HistoryPartKind.Response);
                 if (last < 0 || parts[last].Text != voice.Response || (parts[last].Truncated == true) != voice.ResponseTruncated)
@@ -138,14 +140,14 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                     var part = new HistoryPart
                     {
                         Id = last < 0 ? $"{turn.Id}:live" : parts[last].Id,
-                        Kind = HistoryPartKind.Response, At = session.UpdatedAt,
+                        Kind = HistoryPartKind.Response, At = default,
                         Text = voice.Response, Truncated = voice.ResponseTruncated ? true : null,
                     };
                     if (last < 0) { parts.Add(part); } else { parts[last] = part; }
-                    held[at] = turn with { Parts = parts };
-                    changed = true;
+                    Keep(turn with { Parts = parts }, before: true);
                 }
             }
+            if (a.Notice is { } notice) { Keep(notice); }
             TrimOldest();
         }
         if (changed) { Changed?.Invoke(); }
@@ -184,6 +186,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
     {
         var over = held.Count - HistoryLimits.Kept;
         if (over <= 0) { return; }
+        foreach (var turn in held.Take(over)) { live.Remove(turn.Id); }
         held.RemoveRange(0, over);
         before = null;
         OldestDropped = true;
@@ -199,6 +202,8 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
             var pages = 0;
             while (true)
             {
+                long started;
+                lock (gate) { started = observed; }
                 var result = await host.ReadAsync<HistoryResult>(HistoryProtocol.Op, new HistoryRequest { Id = sessionId, Before = asked }, ct: ct);
                 if (result.Missing == true) { Settle(HistoryLoad.Gone); return; }
                 if (result.Unavailable is { } why) { Settle(HistoryLoad.NoHistory, why, unavailable: true); return; }
@@ -213,7 +218,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                 }
                 if (result.Turns is null) { Settle(HistoryLoad.Failed); return; }
 
-                var added = Merge(result, atNewestEnd: asked is null);
+                var added = Merge(result, atNewestEnd: asked is null, started);
                 lock (gate)
                 {
                     loadedNewest = true;
@@ -250,7 +255,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
     // the rest go in the page's order, next to the turns of the page already held (v1-history.md
     // Live turns and history 3 to 6); time only places a run with no neighbour held. An older page that overfills the cap lets the newest go (H6).
     // Returns how many turns were new.
-    int Merge(HistoryResult page, bool atNewestEnd)
+    int Merge(HistoryResult page, bool atNewestEnd, long started)
     {
         var added = 0;
         lock (gate)
@@ -261,12 +266,22 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                 var at = held.FindIndex(t => t.Id == turn.Id);
                 if (at >= 0)
                 {
-                    // A page captured before the live reply must not erase words already shown.
-                    held[at] = turn.Parts.Any(p => p.Kind == HistoryPartKind.Response && !string.IsNullOrEmpty(p.Text))
-                        ? turn : turn with { Parts = [.. turn.Parts, .. held[at].Parts.Where(p => p.Kind == HistoryPartKind.Response)] };
+                    var prior = held[at];
+                    var reply = turn.Parts.LastOrDefault(p => p.Kind == HistoryPartKind.Response && !string.IsNullOrEmpty(p.Text));
+                    var retained = prior.Parts.LastOrDefault(p => p.Kind == HistoryPartKind.Response && !string.IsNullOrEmpty(p.Text));
+                    var keep = retained is not null && (reply is null || live.GetValueOrDefault(turn.Id) > started && reply.Text != retained.Text);
+                    held[at] = turn with
+                    {
+                        Prompt = turn.Prompt ?? prior.Prompt,
+                        Parts = keep ? [.. turn.Parts.Where(p => p.Kind != HistoryPartKind.Response), .. prior.Parts.Where(p => p.Kind == HistoryPartKind.Response)] : turn.Parts,
+                    };
                 }
                 else if (fresh.All(t => t.Id != turn.Id)) { fresh.Add(turn); }
             }
+            // Wire order repairs provisional/coalesced snapshots; clocks cannot.
+            var ordered = page.Turns!.DistinctBy(t => t.Id).Select(t => held.Find(h => h.Id == t.Id)).OfType<HistoryTurn>().ToArray();
+            var slots = held.Select((t, i) => (t, i)).Where(x => ordered.Any(t => t.Id == x.t.Id)).Select(x => x.i).ToArray();
+            for (var i = 0; i < slots.Length; i++) { held[slots[i]] = ordered[i]; }
             added = fresh.Count;
             // Timestamps can tie or run backwards, so a new turn goes beside its page neighbour that is held, not by time.
             var order = page.Turns!.Select(t => t.Id).ToList();
@@ -286,7 +301,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                 if (index < 0)
                 {
                     // No turn of this page is held: by time, an older page above a tie and the newest page below it.
-                    index = held.FindIndex(t => atNewestEnd ? t.At > turn.At : t.At >= turn.At);
+                    index = held.FindIndex(t => t.At == default || (atNewestEnd ? t.At > turn.At : t.At >= turn.At));
                     if (index < 0) { index = held.Count; }
                 }
                 held.Insert(index, turn);
@@ -297,6 +312,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                 var over = held.Count - HistoryLimits.Kept;
                 if (over > 0)
                 {
+                    foreach (var turn in held.Skip(held.Count - over)) { live.Remove(turn.Id); }
                     held.RemoveRange(held.Count - over, over);
                     NewestDropped = true;
                 }

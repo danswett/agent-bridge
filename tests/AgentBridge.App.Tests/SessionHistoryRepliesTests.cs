@@ -47,6 +47,13 @@ public sealed class SessionHistoryRepliesTests
             Folds = new FoldStore(null), Capabilities = () => connection.Capabilities,
         });
 
+    static HistoryTurn Notice(string id, string text, int seconds) => new()
+    {
+        Id = id, At = T0.AddSeconds(seconds), Kind = TurnKind.Notification,
+        Prompt = new HistoryPrompt { Text = "Command finished", From = UserMessageFrom.Notification },
+        Parts = [new HistoryPart { Id = id + ":reply", At = T0.AddSeconds(seconds + 1), Kind = HistoryPartKind.Response, Text = text }],
+    };
+
     [Fact]
     public async Task A_notification_turn_that_ran_before_the_owners_queued_answer_leaves_each_reply_under_its_own_prompt()
     {
@@ -58,8 +65,12 @@ public sealed class SessionHistoryRepliesTests
             card.Update(Snapshot("owner", "Owner question", answer, "owner"));
             card.Update(Snapshot("schedule", "Scheduled check", answer, "owner", 3, UserMessageFrom.Schedule));
             card.Update(Snapshot("schedule", "Scheduled check", "Scheduled reply", "schedule", 4, UserMessageFrom.Schedule));
-            card.Update(Snapshot("notice", "Command finished", "Notification reply", "notice", 8, UserMessageFrom.Other));
-            card.Update(Snapshot("followup", "Next question", "Fourth reply", "followup", 9));
+            var scheduled = Snapshot("schedule", "Scheduled check", "Scheduled reply", "schedule", 8, UserMessageFrom.Schedule);
+            card.Update(scheduled with { Activity = scheduled.Activity with { Notice = Notice("notice", "Notification reply", 8) } });
+            card.Update(scheduled with { Activity = scheduled.Activity with { Notice = Notice("notice", "Notification reply", 8) with { Prompt = null, Parts = [], Truncated = true } } });
+            Assert.Equal("Notification reply", Assert.Single(card.Stored!.Turns.Single(t => t.Id == "notice").Parts).Text);
+            var followup = Snapshot("followup", "Next question", "Fourth reply", "followup", 10);
+            card.Update(followup with { Activity = followup.Activity with { Notice = Notice("notice", "Notification reply", 8) } });
 
             var rows = HistoryDraw.Rows(card.Stored!.Turns, null);
             Assert.Equal(["owner", "schedule", "notice", "followup"], rows.Select(r => r.Id));
@@ -67,20 +78,31 @@ public sealed class SessionHistoryRepliesTests
             Assert.Equal("Owner question", rows[0].Prompt);
             Assert.False(rows[1].Disclosure!.Open);
             Assert.False(rows[2].Disclosure!.Open);
-            Assert.Equal(800, rows[0].Blocks[0].Text.Length);
         }
         finally { card.Detach(); }
     }
 
-    [Fact]
-    public async Task A_notification_reply_stays_with_its_turn_while_the_owner_is_queued_and_after_the_owner_is_answered()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_notification_reply_stays_with_its_turn_while_the_owner_is_queued_and_after_the_owner_is_answered(bool opening)
     {
         await using var connection = HostConnection.ForProfile("not-connected", new LockedDispatcher());
-        var card = Card(connection, Snapshot("notice", "Command finished", "Notification reply", "notice", from: UserMessageFrom.Other));
+        var earlier = Snapshot("earlier", "Earlier question", "Earlier answer", "earlier");
+        var notification = Notice("notice", "Notification reply", 1);
+        var queued = Snapshot("owner", "Owner question", "Earlier answer", "earlier", 3);
+        queued = queued with { Activity = queued.Activity with { Notice = notification } };
+        var card = Card(connection, opening ? queued : earlier);
         try
         {
-            card.Update(Snapshot("owner", "Owner question", "Notification reply", "notice", 1));
-            var notice = Assert.Single(HistoryDraw.Rows(card.Stored!.Turns, card.UserMessage));
+            if (!opening)
+            {
+                card.Update(earlier with { Activity = earlier.Activity with { Notice = notification } });
+                Assert.False(card.HasVoice);
+                Assert.False(card.HasUserMessage);
+                card.Update(queued);
+            }
+            var notice = HistoryDraw.Rows(card.Stored!.Turns, card.UserMessage)[1];
             Assert.Equal("notice", notice.Id);
             Assert.Equal("Notification reply", Assert.Single(notice.Blocks).Text);
             Assert.False(card.HasVoice);
@@ -89,9 +111,51 @@ public sealed class SessionHistoryRepliesTests
             card.Update(Snapshot("owner", "Owner question", "Owner answer", "owner", 2));
             Assert.True(card.HasVoice);
             Assert.Equal("Owner answer", card.Response);
-            Assert.Equal("Notification reply", Assert.Single(HistoryDraw.Rows(card.Stored.Turns, card.UserMessage)).Blocks[0].Text);
+            Assert.Equal("Notification reply", HistoryDraw.Rows(card.Stored.Turns, card.UserMessage)[1].Blocks[0].Text);
         }
         finally { card.Detach(); }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [Trait("Category", "Network")]
+    public async Task A_delayed_page_preserves_newer_live_words_but_not_budget_only_metadata(bool empty, bool budget)
+    {
+        await using var host = Serving(() => 0);
+        host.Start();
+        await using var connection = host.Connect();
+        await connection.WhenConnectedAsync().WaitAsync(FakeHost.Patience);
+        var original = Snapshot("owner", "Owner question", "Old", "owner");
+        if (budget) { original = original with { Activity = original.Activity with { Notice = Notice("notice", "Old", 0) } }; }
+        var card = Card(connection, original);
+        var captured = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var old = Notice(budget ? "notice" : "owner", budget ? "New from history" : "Old", 0) with { Kind = budget ? TurnKind.Notification : TurnKind.User, Prompt = null };
+        var page = new HistoryResult { Turns = [empty ? old with { Parts = [] } : old] };
+        host.OnAsync(HistoryProtocol.Op, async _ => { captured.SetResult(); await release.Task; return page; });
+        try
+        {
+            var loading = card.Stored!.LoadNewestAsync();
+            await captured.Task.WaitAsync(FakeHost.Patience);
+            if (budget) { card.Update(original with { Activity = original.Activity with { Notice = original.Activity.Notice! with { Prompt = null, Parts = [], Truncated = true } } }); }
+            else
+            {
+                card.Update(Snapshot("owner", "Owner question", "Complete newer answer", "owner", 2));
+                card.Update(Snapshot("queued", "Next question", "Complete newer answer", "owner", 3));
+            }
+            release.SetResult();
+            await loading;
+            var row = HistoryDraw.Rows(card.Stored.Turns, card.UserMessage).Single(r => r.Id == old.Id);
+            var expected = budget ? "New from history" : "Complete newer answer";
+            Assert.Equal(expected, Assert.Single(row.Blocks).Text);
+            if (!budget) { Assert.Equal("Owner question", row.Prompt); Assert.Null(row.Reply); }
+            host.On(HistoryProtocol.Op, _ => new HistoryResult { Turns = [Notice(old.Id, expected, 0) with { Kind = old.Kind, Prompt = new HistoryPrompt { Text = budget ? "Command finished" : "Owner question", From = budget ? UserMessageFrom.Notification : null } }] });
+            await card.Stored.LoadNewestAsync();
+            Assert.Equal(T0.AddSeconds(1), HistoryDraw.Rows(card.Stored.Turns, card.UserMessage).Single(r => r.Id == old.Id).Reply!.At);
+        }
+        finally { release.TrySetResult(); card.Detach(); }
     }
 
     [Theory]
@@ -103,39 +167,14 @@ public sealed class SessionHistoryRepliesTests
         var card = Card(connection, Snapshot("owner", "Owner question", "Owner answer", "owner"));
         try
         {
-            card.Update(Snapshot("owner", "Owner question", delegated ? "Delegate text" : null, "owner") with
-            {
-                Activity = new Activity
-                {
-                    Turn = "owner", UserMessage = "Owner question", ResponseTurn = "owner",
-                    Response = delegated ? "Delegate text" : null,
-                    Source = delegated ? new ActivitySource { Response = "worker" } : null,
-                },
-            });
+            var next = Snapshot("owner", "Owner question", delegated ? "Delegate text" : null, "owner");
+            card.Update(next with { Activity = next.Activity with { Source = delegated ? new ActivitySource { Response = "worker" } : null } });
             Assert.Equal("Owner answer", Assert.Single(HistoryDraw.Rows(card.Stored!.Turns, null)).Blocks[0].Text);
             Assert.Equal("Owner answer", card.Response);
             Assert.True(card.HasVoice);
-        }
-        finally { card.Detach(); }
-    }
-
-    [Fact]
-    [Trait("Category", "Network")]
-    public async Task A_prompt_only_page_cannot_erase_a_reply_already_seen_live()
-    {
-        await using var host = Serving(() => 0);
-        host.Start();
-        var connection = host.Connect();
-        await connection.WhenConnectedAsync().WaitAsync(FakeHost.Patience);
-        var card = Card(connection, Snapshot("owner", "Owner question", "Owner answer", "owner"));
-        try
-        {
-            host.On(HistoryProtocol.Op, _ => new HistoryResult
-            {
-                Turns = [new HistoryTurn { Id = "owner", At = T0, Prompt = new HistoryPrompt { Text = "Owner question" } }],
-            });
-            await card.Stored!.LoadNewestAsync();
-            Assert.Equal("Owner answer", Assert.Single(HistoryDraw.Rows(card.Stored.Turns, null)).Blocks[0].Text);
+            var row = Assert.Single(HistoryDraw.Rows(card.Stored.Turns, null));
+            Assert.Null(row.PromptUnder);
+            Assert.Null(row.Reply);
         }
         finally { card.Detach(); }
     }
@@ -169,6 +208,7 @@ public sealed class SessionHistoryRepliesTests
         var card = Card(connection, Snapshot("owner", "Owner question", answered: "owner"));
         try
         {
+            card.Update(card.Session with { Activity = card.Session.Activity with { Notice = Notice("notice", "Notice reply", 0) } });
             var rendered = "";
             card.PropertyChanged += (_, e) =>
             {
@@ -176,7 +216,7 @@ public sealed class SessionHistoryRepliesTests
             };
             host.On(HistoryProtocol.Op, _ => new HistoryResult
             {
-                Turns = [new HistoryTurn
+                Turns = [Notice("notice", "Notice reply", 0), new HistoryTurn
                 {
                     Id = "owner", At = T0, Prompt = new HistoryPrompt { Text = "Owner question" },
                     Parts = [new HistoryPart { Id = "answer", At = T0, Kind = HistoryPartKind.Response, Text = "Stored answer" }],

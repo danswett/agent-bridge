@@ -85,17 +85,13 @@ public sealed partial class SessionCardViewModel : Observable
     public string ReplySendTooltip => ctx.ReturnSends() ? "Send (Enter)" : "Send (Ctrl+Enter)";
     SessionHistory? stored;
     // The turns the host stores for this session (#292), read as the pane draws them; null with no host to ask.
-    public SessionHistory? Stored
+    public SessionHistory? Stored => stored ??= CreateHistory();
+    SessionHistory? CreateHistory()
     {
-        get
-        {
-            if (stored is null && ctx.Host is { } host)
-            {
-                stored = new SessionHistory(host, session.Id);
-                stored.Changed += OnStoredChanged;
-            }
-            return stored;
-        }
+        if (ctx.Host is not { } host) { return null; }
+        var result = new SessionHistory(host, session.Id);
+        result.Changed += OnStoredChanged;
+        return result;
     }
     // Its delegates (ui.md §6.3): the strip, the Delegates tab, the inspector and the
     // conversation's one-line events.
@@ -178,7 +174,7 @@ public sealed partial class SessionCardViewModel : Observable
     // like no answer, and never filled with the delegate's text.
     public bool ResponseDropped => !HasResponse && Voice.ResponseDropped;
     // The label line shows for the main agent's words, or for the note that they were left out.
-    public bool HasVoice => (HasResponse || ResponseDropped) && !(stored is not null && HasResponse
+    public bool HasVoice => !Archived && (HasResponse || ResponseDropped) && !(stored is not null && HasResponse
         && session.Activity is { Turn: { Length: > 0 } turn, ResponseTurn: { Length: > 0 } answered } && turn != answered);
     // When the main agent last wrote what is shown: own.at for its own text beside a delegate's,
     // which moves the session's updatedAt without touching the main agent's answer; else the
@@ -195,7 +191,8 @@ public sealed partial class SessionCardViewModel : Observable
     public string UserMessage => !string.IsNullOrEmpty(session.Activity.UserMessage) ? session.Activity.UserMessage : stored?.PromptFor(session.Activity.Turn)?.Text ?? "";
     // The person's own last message, as a bubble; a prompt they didn't type is the Prompt line
     // instead (#489).
-    public bool HasUserMessage => UserMessage.Length > 0 && Prompt is null;
+    bool Archived => stored?.HasAfter(session.Activity.Turn) == true;
+    public bool HasUserMessage => !Archived && UserMessage.Length > 0 && Prompt is null;
     // A message sent mid-turn is the latest turn's, but the words still being written answer an
     // earlier one (ResponseTurn, v1-history): it stays below them, by time sent, until the agent
     // starts answering it (#1613).
@@ -213,7 +210,7 @@ public sealed partial class SessionCardViewModel : Observable
     // Worked out once an update, not on every binding: it reveals and trims the whole prompt.
     PromptOrigin? prompt;
     public PromptOrigin? Prompt => prompt;
-    public bool HasPrompt => Prompt is not null;
+    public bool HasPrompt => !Archived && Prompt is not null;
     public bool PromptIsSchedule => Prompt?.Schedule == true;
     public bool PromptIsDriven => Prompt is { Schedule: false };
     public string PromptLabel => Prompt?.Label ?? "";
