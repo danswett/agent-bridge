@@ -3500,15 +3500,10 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Contains("resume=left resumes=3", await AttemptLineAsync());
     }
 
-    [Fact]
-    public async Task A_form_answered_afresh_that_stops_again_is_never_reset_a_second_time()
-        => await RedoneFormAsync();
-
-    [Fact]
-    public async Task A_form_answered_afresh_is_not_reset_again_when_the_test_observes_Esc_after_the_result()
-        => await RedoneFormAsync(observeAfterResult: true);
-
-    async Task RedoneFormAsync(bool observeAfterResult = false)
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_form_answered_afresh_that_stops_again_is_never_reset_a_second_time(bool observeAfterResult)
     {
         Serve(Answerer(resume: true));
         await AskFieldsAsync(TwoLists, 2, TwoPicked);
