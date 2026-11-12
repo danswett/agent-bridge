@@ -40,6 +40,8 @@ PWA UI job over five minutes. Running jobs are clipped to snapshot time.
 reruns and branches whose predecessor falls outside the sample. Those are not
 classified as no-long-job pushes. A no-long-job delta that still started a long
 job is evidence for investigation, not proof the full PR diff needed no long job.
+Ref identity is ordinal and case-sensitive. Only first attempts can supply push
+evidence; replay also rejects reruns and deltas without an exact-ref predecessor.
 No workflow, required check or merge rule is changed by this measurement (#2248).
 
 ## 1. Where we are (2026-11-02)

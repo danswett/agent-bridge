@@ -60,6 +60,36 @@ public class CiWasteScriptTests
             .Single(row => row.GetProperty("job").GetString() == "app-installer").GetProperty("minutes").GetDouble());
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_later_attempt_is_unknown_push_evidence_in_collection_and_replay(bool collect)
+    {
+        var rerun = Run(9, "fix/x", "b", 5, 28, "success", ["docs/guide.md"], Job("pwa-ui (chromium)", 21, 27));
+        rerun["run_attempt"] = 2;
+        rerun["run_started_at"] = At(20);
+        using var report = await Measure([Run(8, "fix/x", "a", 0, 10, "success", null), rerun], collect);
+        Assert.Equal(0, report.RootElement.GetProperty("no_long_job_pushes").GetInt32());
+        Assert.Equal(0, report.RootElement.GetProperty("no_long_job_pushes_that_started_long_jobs").GetInt32());
+        Assert.Equal(2, report.RootElement.GetProperty("unknown_pushes").GetInt32());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Case_only_ref_differences_never_create_supersession_waste_or_cross_ref_deltas(bool collect)
+    {
+        using var report = await Measure([
+            Run(10, "fix/x", "a", 0, 10, "success", null, Job("app (win-x64)", 1, 7)),
+            Run(11, "Fix/x", "b", 5, 15, "success", ["docs/guide.md"],
+                Job("pwa-ui (chromium)", 6, 12)),
+        ], collect);
+        Assert.Equal(0, report.RootElement.GetProperty("superseded").GetInt32());
+        Assert.Equal(0, report.RootElement.GetProperty("wasted_long_job_minutes").GetDouble());
+        Assert.Equal(0, report.RootElement.GetProperty("no_long_job_pushes").GetInt32());
+        Assert.Equal(2, report.RootElement.GetProperty("unknown_pushes").GetInt32());
+    }
+
     static string At(double minute) => new DateTimeOffset(2026, 11, 10, 8, 0, 0, TimeSpan.Zero)
         .AddMinutes(minute).ToString("O");
 
@@ -72,23 +102,25 @@ public class CiWasteScriptTests
         status = conclusion is null ? start.HasValue ? "in_progress" : "queued" : "completed",
     };
 
-    static object Run(int id, string branch, string sha, int start, int end, string? conclusion,
-        string[]? files, params object[] jobs) => new
+    static Dictionary<string, object?> Run(int id, string branch, string sha, int start, int end, string? conclusion,
+        string[]? files, params object[] jobs) => new()
         {
-            id,
-            head_branch = branch,
-            head_sha = sha,
-            created_at = At(start),
-            updated_at = At(end),
-            status = conclusion is null ? "in_progress" : "completed",
-            conclusion,
-            jobs,
-            files,
-            html_url = $"https://example.test/runs/{id}",
-            head_repository = new { full_name = "example/repo" },
+            ["id"] = id,
+            ["head_branch"] = branch,
+            ["head_sha"] = sha,
+            ["created_at"] = At(start),
+            ["run_started_at"] = At(start),
+            ["run_attempt"] = 1,
+            ["updated_at"] = At(end),
+            ["status"] = conclusion is null ? "in_progress" : "completed",
+            ["conclusion"] = conclusion,
+            ["jobs"] = jobs,
+            ["files"] = files,
+            ["html_url"] = $"https://example.test/runs/{id}",
+            ["head_repository"] = new { full_name = "example/repo" },
         };
 
-    static async Task<JsonDocument> Measure(object[] runs)
+    static async Task<JsonDocument> Measure(object[] runs, bool collect = false)
     {
         var folder = Fixture.ScratchFolder();
         try
@@ -101,8 +133,31 @@ public class CiWasteScriptTests
                 RedirectStandardError = true,
                 WorkingDirectory = ChangedFiles.RepoRoot(AppContext.BaseDirectory),
             };
-            foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-File",
-                         Path.Combine(start.WorkingDirectory, "quality", "ci-waste.ps1"), "-RunsFile", input })
+            start.Environment["CI_WASTE_FIXTURE"] = input;
+            start.Environment["CI_WASTE_SCRIPT"] = Path.Combine(start.WorkingDirectory, "quality", "ci-waste.ps1");
+            string[] args = collect ? ["-NoProfile", "-NonInteractive", "-Command", """
+                function global:gh {
+                    param($command, $path)
+                    if ($command -ne 'api') { throw "Unexpected gh command: $command" }
+                    $fixture = Get-Content $env:CI_WASTE_FIXTURE -Raw | ConvertFrom-Json
+                    $global:LASTEXITCODE = 0
+                    if ($path -match '/actions/workflows/ci.yml/runs\?') {
+                        $value = @{ workflow_runs = $fixture.runs }
+                    } elseif ($path -match '/actions/runs/(\d+)/jobs\?') {
+                        $run = $fixture.runs | Where-Object id -eq $Matches[1]
+                        if (-not $run) { throw "Unexpected jobs read: $path" }
+                        $value = @{ jobs = @($run.jobs) }
+                    } elseif ($path -match '/compare/[^/]+\.\.\.([^?]+)') {
+                        $run = $fixture.runs | Where-Object head_sha -eq $Matches[1]
+                        if ($null -eq $run.files) { throw "Unexpected comparison: $path" }
+                        $value = @{ status = 'ahead'; files = @($run.files | ForEach-Object { @{ filename = $_ } }) }
+                    } else { throw "Unexpected GitHub read: $path" }
+                    $value | ConvertTo-Json -Depth 30
+                }
+                & $env:CI_WASTE_SCRIPT
+                """]
+                : ["-NoProfile", "-NonInteractive", "-File", start.Environment["CI_WASTE_SCRIPT"]!, "-RunsFile", input];
+            foreach (var arg in args)
                 start.ArgumentList.Add(arg);
             using var process = Process.Start(start) ?? throw new InvalidOperationException("pwsh did not start.");
             var stdout = process.StandardOutput.ReadToEndAsync();

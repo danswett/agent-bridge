@@ -28,6 +28,9 @@ function Read-GitHub([string]$path) {
     ($text -join "`n") | ConvertFrom-Json -AsHashtable
 }
 function Branch($run) { "$($run.head_repository.full_name):$($run.head_branch)" }
+function Test-PushDelta($run, $previous, [string]$key) {
+    $run.run_attempt -eq 1 -and $previous.ContainsKey($key) -and $previous[$key] -cne $run.head_sha
+}
 function Began($run) {
     if ($run['run_started_at']) { [datetimeoffset]$run.run_started_at } else { [datetimeoffset]$run.created_at }
 }
@@ -41,14 +44,14 @@ if ($RunsFile) {
 } else {
     $runs = @((Read-GitHub "repos/$Repo/actions/workflows/ci.yml/runs?event=pull_request&per_page=$Limit").workflow_runs)
     $now = [datetimeoffset]::UtcNow
-    $previous = @{}
+    $previous = [System.Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
     foreach ($run in ($runs | Sort-Object { [datetimeoffset]$_.created_at })) {
         $id = $run.id
         $run.jobs = @((Read-GitHub "repos/$Repo/actions/runs/$id/jobs?filter=latest&per_page=100").jobs)
         if ($run.jobs.Count -ge 100) { throw "Run $id has potentially truncated jobs; refuse partial totals." }
         $run.files = $null
         $key = Branch $run
-        if ($previous.ContainsKey($key) -and $previous[$key] -ne $run.head_sha) {
+        if (Test-PushDelta $run $previous $key) {
             $base = $previous[$key]
             $comparison = Read-GitHub "repos/$Repo/compare/$base...$($run.head_sha)?per_page=100"
             if ($comparison.status -eq 'ahead' -and @($comparison.files).Count -lt 300) {
@@ -66,6 +69,13 @@ if ($RunsFile) {
 
 $now = [datetimeoffset]$snapshot.captured_at
 $runs = @($snapshot.runs)
+# Revalidate cached deltas too: an older collector may have attributed files to a rerun or another ref.
+$previous = [System.Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
+foreach ($run in ($runs | Sort-Object { [datetimeoffset]$_.created_at })) {
+    $key = Branch $run
+    if (-not (Test-PushDelta $run $previous $key)) { $run.files = $null }
+    $previous[$key] = $run.head_sha
+}
 $totals = @{}
 foreach ($name in 'pwa-ui chromium', 'app', 'app-installer') {
     $totals[$name] = @{ job = $name; started = 0; minutes = 0.0; wasted_minutes = 0.0 }
@@ -75,7 +85,7 @@ $rows = @(foreach ($run in $runs) {
     $start = Began $run
     $key = Branch $run
     $superseded = @($runs | Where-Object {
-        (Branch $_) -eq $key -and $_.head_sha -ne $run.head_sha -and
+        [string]::Equals((Branch $_), $key, [StringComparison]::Ordinal) -and $_.head_sha -cne $run.head_sha -and
         (Began $_) -gt $start -and (Began $_) -lt $end
     }).Count -gt 0
     $cancelled = $run.conclusion -eq 'cancelled'
