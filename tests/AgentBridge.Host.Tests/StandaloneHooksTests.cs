@@ -19,6 +19,7 @@ public sealed class StandaloneHooksTests : IDisposable
     readonly CodexRunner codex = new();
     readonly Locator locator = new();
     readonly List<string> links = [];
+    Process? runningHook;
     string? active;
     string Profile => Path.Combine(root, "profiles", "default");
     string Source => Path.Combine(root, "source.exe");
@@ -1143,6 +1144,39 @@ public sealed class StandaloneHooksTests : IDisposable
         {
             if (!child.HasExited) { child.Kill(entireProcessTree: true); }
             await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Process")]
+    public async Task Cleanup_waits_for_a_replaced_Windows_hook_that_outlives_the_test_body()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var fixture = new StandaloneHooksTests();
+        File.Copy(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"), fixture.Source, overwrite: true);
+        await fixture.Setup.InstallAsync("copilot", false, TextWriter.Null);
+        using var running = Process.Start(new ProcessStartInfo(fixture.Hook, "/d /c set /p answer=ready")
+        {
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true,
+        })!;
+        fixture.runningHook = running;
+        try
+        {
+            Assert.True(await ReadHookReadinessAsync(running) > 0);
+            File.WriteAllText(fixture.Source, "the next hook version");
+            StandaloneHooks.Refresh(fixture.Profile, fixture.Source);
+            Assert.True(File.Exists(fixture.Hook + ".old"));
+            Assert.False(running.HasExited);
+
+            fixture.Dispose();
+
+            Assert.False(Directory.Exists(fixture.root));
+        }
+        finally
+        {
+            if (!running.HasExited) { running.Kill(entireProcessTree: true); }
+            Assert.True(running.WaitForExit(TimeSpan.FromSeconds(5)));
+            if (Directory.Exists(fixture.root)) { fixture.Dispose(); }
         }
     }
 
