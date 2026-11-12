@@ -1079,7 +1079,7 @@ public sealed class StandaloneHooksTests : IDisposable
         })!;
         try
         {
-            Assert.True(await running.StandardOutput.ReadAsync(new char[1], 0, 1).WaitAsync(TimeSpan.FromSeconds(5)) > 0);
+            Assert.True(await ReadHookReadinessAsync(running) > 0);
             Assert.False(running.HasExited);
             File.WriteAllText(Source, "the next hook version");
 
@@ -1090,8 +1090,71 @@ public sealed class StandaloneHooksTests : IDisposable
         }
         finally
         {
-            if (!running.HasExited) { running.Kill(entireProcessTree: true); }
-            await running.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            try
+            {
+                // Complete cmd's input handshake so normal exit releases the renamed
+                // image before the enclosing fixture deletes it.
+                if (!running.HasExited)
+                {
+                    running.StandardInput.WriteLine("release");
+                    running.StandardInput.Close();
+                }
+                await running.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            finally
+            {
+                if (!running.HasExited)
+                {
+                    running.Kill(entireProcessTree: true);
+                    await running.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                }
+            }
+        }
+    }
+
+    // Redirected stdout is a synchronous pipe; its blocking read must not queue behind
+    // other process tests' occupied thread-pool workers.
+    internal static Task<int> ReadHookReadinessAsync(Process running) =>
+        Task.Factory.StartNew(() => running.StandardOutput.Read(new char[1], 0, 1),
+            CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+    [Fact]
+    [Trait("Category", "Process")]
+    public async Task Windows_hook_readiness_does_not_wait_for_a_busy_thread_pool()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
+        {
+            UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardOutput = true, RedirectStandardError = true,
+        };
+        start.ArgumentList.Add(typeof(AgentBridge.Host.Tests.Program).Assembly.Location);
+        start.ArgumentList.Add("hook-readiness-contention");
+        using var child = Process.Start(start)!;
+        try
+        {
+            var output = child.StandardOutput.ReadToEndAsync();
+            var error = child.StandardError.ReadToEndAsync();
+            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.True(child.ExitCode == 0, await output + await error);
+        }
+        finally
+        {
+            if (!child.HasExited) { child.Kill(entireProcessTree: true); }
+            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Process")]
+    public async Task Refresh_replaces_the_running_Windows_hook_fifty_consecutive_times()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        for (var run = 0; run < 50; run++)
+        {
+            using var fixture = new StandaloneHooksTests();
+            await fixture.Refresh_replaces_the_Windows_hook_while_its_previous_image_is_running();
         }
     }
 
