@@ -546,18 +546,19 @@ public sealed class HostManager
     // preflight: names what already keeps the update from replacing the installation, or null; asked
     // before anything is recorded or stopped, so an update that cannot finish costs no host stop
     // (#1092: a service holding a file made a retry loop that dropped the relay every 3 minutes).
-    public async Task WaitForInstallationFilesAsync(Func<string?>? preflight, Action<string>? waiting = null, TimeProvider? time = null)
+    public async Task WaitForInstallationFilesAsync(Func<string?>? preflight, Action<string>? waiting = null, TimeProvider? time = null, InstallationFiles.Budget? fileBudget = null)
     {
-        if (await InstallationFiles.AwaitReleaseAsync(preflight, time ?? Time, quit.Token, waiting, Log) is { } blockers)
+        if (await InstallationFiles.AwaitReleaseAsync(preflight, time ?? Time, quit.Token, waiting, Log, fileBudget) is { } blockers)
         {
             throw new UpdateBlockedException(blockers);
         }
     }
 
-    public async Task StopAndApplyAsync(Action begin, Action apply, Func<string?>? preflight = null, bool waitForFiles = true)
+    public async Task StopAndApplyAsync(Action begin, Action apply, Func<string?>? preflight = null, bool waitForFiles = true, InstallationFiles.Budget? fileBudget = null)
     {
-        if (waitForFiles) { await WaitForInstallationFilesAsync(preflight); }
-        else if (preflight is not null && await Task.Run(preflight) is { } blockers) { throw new UpdateBlockedException(blockers); }
+        fileBudget ??= new InstallationFiles.Budget(Time);
+        if (waitForFiles) { await WaitForInstallationFilesAsync(preflight, fileBudget: fileBudget); }
+        if (await fileBudget.ProbeOnceAsync(preflight, quit.Token) is { } blockers) { throw new UpdateBlockedException(blockers); }
         Task stop;
         lock (updating)
         {

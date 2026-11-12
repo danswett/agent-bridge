@@ -88,6 +88,34 @@ public sealed class InstallReleaseWaitTests : IAsyncLifetime
         Assert.Empty(host.Sent(HostOps.Stop));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_clear_scan_followed_by_a_stalled_final_probe_uses_the_remaining_deadline_and_can_be_quit(bool quitting)
+    {
+        var clock = new FakeTimeProvider(Make.T0);
+        var manager = Manager(clock);
+        var budget = new InstallationFiles.Budget(clock);
+        await manager.WaitForInstallationFilesAsync(() => null, fileBudget: budget);
+        clock.Advance(TimeSpan.FromSeconds(90));
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var begun = false;
+        var update = manager.StopAndApplyAsync(() => begun = true, () => begun = true,
+            () => { entered.TrySetResult(); release.Task.GetAwaiter().GetResult(); return null; }, waitForFiles: false, fileBudget: budget);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (quitting) { manager.Quit(TimeSpan.FromSeconds(1), _ => { }); }
+            else { clock.Advance(TimeSpan.FromSeconds(30)); }
+            if (quitting) { await Assert.ThrowsAsync<OperationCanceledException>(() => update.WaitAsync(TimeSpan.FromSeconds(5))); }
+            else { await Assert.ThrowsAsync<UpdateBlockedException>(() => update.WaitAsync(TimeSpan.FromSeconds(5))); }
+            Assert.False(begun);
+            Assert.Empty(host.Sent(HostOps.Stop));
+        }
+        finally { release.TrySetResult(); }
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task A_real_held_file_that_releases_is_rechecked_before_the_host_stops_and_the_update_continues()

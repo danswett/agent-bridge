@@ -1325,7 +1325,8 @@ public sealed class AutoUpdater
                 code: UpdateCode.ReleaseChanged);
             return;
         }
-        try { await WaitForFilesAsync(); }
+        var fileBudget = new InstallationFiles.Budget(time);
+        try { await WaitForFilesAsync(fileBudget); }
         catch (UpdateBlockedException e)
         {
             if (DropExpired()) { return; }
@@ -1363,7 +1364,7 @@ public sealed class AutoUpdater
                 log($"update now: pressed on {by ?? "another device"}, going over {(accept is null ? "nothing busy" : $"{accept.Working} with a turn running and {accept.Waiting} with a question or approval waiting{(accept.Unknown == true ? ", with sessions not yet reported" : "")}")}");
                 // The host left for this press: it is the one installed and answered, even should
                 // another have replaced it while the host was asked.
-                await InstallAsync(because, (request, true));
+                await InstallAsync(because, (request, true), fileBudget: fileBudget);
                 return;
             case UpdateDepartOutcome.Waiting:
                 var code = UpdateProtocol.IsCode(left.Code) ? left.Code : UpdateWaitingCode.Unknown;
@@ -1397,13 +1398,13 @@ public sealed class AutoUpdater
     public const string NotNow = "not now";
     int claimed;
 
-    async Task<bool> WaitForFilesAsync()
+    async Task<bool> WaitForFilesAsync(InstallationFiles.Budget? fileBudget = null)
     {
         var waited = false;
         try
         {
             await manager.WaitForInstallationFilesAsync(preflight,
-                why => { waited = true; fileWait = $"{UpdateBlockedException.Prefix}{why}; waiting for Windows to release the files"; Changed(); }, time);
+                why => { waited = true; fileWait = $"{UpdateBlockedException.Prefix}{why}; waiting for Windows to release the files"; Changed(); }, time, fileBudget);
             return waited;
         }
         finally { fileWait = null; Changed(); }
@@ -1413,10 +1414,11 @@ public sealed class AutoUpdater
     // not, still on this version with the host back. answers: the press this install answers, as
     // the tick decided it, and whether the host departed for it (an Update now), which it then
     // answers whatever press has come since; else the one being carried out now.
-    async Task<string?> InstallAsync(string because, (string? Request, bool Departed)? answers = null, Func<string, Task<bool>>? confirm = null)
+    async Task<string?> InstallAsync(string because, (string? Request, bool Departed)? answers = null, Func<string, Task<bool>>? confirm = null, InstallationFiles.Budget? fileBudget = null)
     {
         var to = Pending!;
         var source = updater.Source;
+        fileBudget ??= new InstallationFiles.Budget(time);
         var request = answers is { } pinned ? pinned.Request : Asked(UpdateAskKind.Install);
         var departed = answers is { Departed: true } ? request : null;
         bool open;
@@ -1425,7 +1427,7 @@ public sealed class AutoUpdater
         // The host comes back from a failed install, or from the app quitting mid-way (HostManager).
         try
         {
-            if (departed is null && await WaitForFilesAsync())
+            if (departed is null && await WaitForFilesAsync(fileBudget))
             {
                 if (answers is { Departed: false })
                 {
@@ -1458,7 +1460,7 @@ public sealed class AutoUpdater
                 // release chosen, from the source it was chosen on, is applied (Copilot, r4487830884).
                 if (updater.Ready != to || updater.Source != source) { throw new PackageReplacedException(); }
                 updater.ApplyAndRestart(to, HandedOver(prefs, save));
-            }, preflight, waitForFiles: false);
+            }, preflight, waitForFiles: false, fileBudget: fileBudget);
             return null;
         }
         // Replaced while the host stopped: nothing failed, and the host is back (HostManager). What
