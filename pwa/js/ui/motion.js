@@ -224,7 +224,7 @@ const flips = new WeakMap();
 export function flip(container, mutate, { entry = 'shift' } = {}) {
   let state = flips.get(container);
   if (!state) {
-    state = { before: new Map(), interrupted: new Set(), animations: [], entries: new Map() };
+    state = { origin: container.getBoundingClientRect(), before: new Map(), interrupted: new Set(), animations: [], entries: new Map() };
     for (const el of container.children) {
       if (!el.getClientRects().length) { continue; }
       state.before.set(el, el.getBoundingClientRect());
@@ -241,14 +241,18 @@ export function flip(container, mutate, { entry = 'shift' } = {}) {
       flips.delete(container);
       for (const a of state.animations) { a.cancel(); }
       if (!container.isConnected) { return; }
-      const positions = [...state.before].filter(([el]) => el.parentElement === container && el.getClientRects().length)
-        .map(([el, was]) => [el, was, el.getBoundingClientRect()]);
+      const origin = container.getBoundingClientRect();
+      const after = new Map([...container.children].filter((el) => el.getClientRects().length).map((el) => [el, el.getBoundingClientRect()]));
+      const slotsChanged = state.before.size !== after.size || [...after.keys()].some((el) => !state.before.has(el));
+      const positions = [...state.before].filter(([el]) => after.has(el)).map(([el, was]) => [el, was, after.get(el)]);
       for (const [el, was, at] of positions) {
         const name = state.entries.get(el);
-        const x = was.left - at.left, y = was.top - at.top;
+        // Only internal placement: moving the list must not pull rows over adjacent controls.
+        const x = was.left - state.origin.left - (at.left - origin.left);
+        const y = was.top - state.origin.top - (at.top - origin.top);
         if (!name || (!x && !y)) { continue; }
         const t = timing(name, { doc: el.ownerDocument });
-        if (!t.duration) { if (name === 'shift') { enter(el, 'value'); } continue; }
+        if (!t.duration) { if (name === 'shift' && slotsChanged) { enter(el, 'value'); } continue; }
         if (state.interrupted.has(el)) { t.easing = timing('listItem', { doc: el.ownerDocument }).easing; }
         run(el, [{ transform: `translate(${x}px, ${y}px)` }, { transform: 'none' }], name, t);
       }

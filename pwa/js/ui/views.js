@@ -147,8 +147,9 @@ export class SessionListView {
   #draw() {
     if (!this.#drawn || this.sessions.list().some(({ hostId }) => !this.settled(hostId))) { this.#layout(); return; }
     const ownMove = this.#motionRow;
-    flip(this.container, () => this.#layout(), {
-      entry: (el) => el === ownMove ? null : this.#recent.moved.has(el.dataset.key) ? 'reorder' : 'shift',
+    let anchored = false;
+    flip(this.container, () => { anchored = this.#layout(); }, {
+      entry: (el) => anchored || el === ownMove ? null : this.#recent.moved.has(el.dataset.key) ? 'reorder' : 'shift',
     });
   }
 
@@ -169,6 +170,7 @@ export class SessionListView {
     if (this.#groupLeaving) { leave(this.#groupLeaving, 'listItem'); this.#groupLeaving = null; }
     const pane = this.container.closest('#list-pane');
     const scroller = !before.size ? null : pane && /auto|scroll/.test(getComputedStyle(pane).overflowY) ? pane : this.container.ownerDocument.scrollingElement;
+    const scrollTop = scroller?.scrollTop;
     const anchor = scroller?.scrollTop > 0 ? [...before.keys()].find((el) => seen(el)) : null;
     const matches = (e) => this.#matches(e.hostId, e.session);
     const keep = (e) => matches(e) && (!this.needsOnly || sessionStatus(e.session).glyph === 'needs');
@@ -317,6 +319,7 @@ export class SessionListView {
     this.onRender?.(entries.length);
     // A save that failed while drawing (storage full) turned the list to Most recent: draw it so.
     if (this.order.sort !== sort) { this.schedule(); }
+    return scroller?.scrollTop !== scrollTop;
   }
 
   // A focused session ended, or its group now hides its row, leaving focus on the page

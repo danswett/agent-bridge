@@ -17,7 +17,7 @@ test('same-frame list mutations take effect immediately and coalesce into one to
       getAnimations: () => [],
       animate: (keyframes, options) => { const a = { keyframes, options }; animations.push(a); return a; },
     };
-    const container = { children: [child], ownerDocument: doc, isConnected: true };
+    const container = { children: [child], ownerDocument: doc, isConnected: true, getBoundingClientRect: () => ({ top: 0, left: 0 }) };
     child.parentElement = container;
     motion.flip(container, () => { top += 40; });
     motion.flip(container, () => { top += 40; });
@@ -29,5 +29,23 @@ test('same-frame list mutations take effect immediately and coalesce into one to
     assert.equal(animations[0].options.duration, 167);
     assert.equal(animations[0].keyframes[0].transform, 'translate(0px, -80px)');
     assert.equal(animations[0].keyframes.at(-1).transform, 'none');
+  } finally { globalThis.getComputedStyle = previous; }
+});
+
+test('moving a list surface never slides its rows back across adjacent controls', () => {
+  const frames = [];
+  let top = 0, moves = 0;
+  const doc = { documentElement: {}, defaultView: { requestAnimationFrame: (fn) => frames.push(fn) } };
+  const box = () => ({ top, left: 0, width: 100, height: 40 });
+  const child = { ownerDocument: doc, isConnected: true, getClientRects: () => [{}],
+    getBoundingClientRect: box, getAnimations: () => [], animate: () => { moves++; return {}; } };
+  const container = { children: [child], ownerDocument: doc, isConnected: true, getBoundingClientRect: box };
+  child.parentElement = container;
+  const previous = globalThis.getComputedStyle;
+  globalThis.getComputedStyle = () => ({ getPropertyValue: (key) => key.endsWith('-duration') ? '167ms' : 'linear' });
+  try {
+    motion.flip(container, () => { top += 100; });
+    frames.shift()();
+    assert.equal(moves, 0);
   } finally { globalThis.getComputedStyle = previous; }
 });
