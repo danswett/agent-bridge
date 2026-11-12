@@ -72,6 +72,51 @@ public class HistoryTests
     static string Scheduled(string text, int s, string source) =>
         Copilot.Event("user.message", new { content = text, source, attachments = Array.Empty<object>(), delivery = "idle" }, s);
 
+    [Fact]
+    public async Task Queued_owner_reply_across_spans_is_attributed_to_its_own_turn()
+    {
+        await using var s = new Copilot_();
+        var lines = File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, "fixtures", "copilot", "queued-owner-history.jsonl"));
+        await s.After(lines[..3]);
+        Assert.Empty((await s.Page()).Turns!.Single(t => Prompt(t) == "Queued owner B").Parts);
+
+        await s.After(lines[3..5]);
+        var waiting = (await s.Page()).Turns!;
+        Assert.Equal("Answer A", waiting.Single(t => Prompt(t) == "Owner A").Parts.Single().Text);
+        Assert.Empty(waiting.Single(t => Prompt(t) == "Queued owner B").Parts);
+
+        await s.After(lines[5..]);
+        var turns = (await s.Page()).Turns!;
+        Assert.Equal(["Owner A", "Queued owner B", "Background completion", "Scheduled work"], turns.Select(Prompt));
+        Assert.Equal(["Answer A", "Answer B", "Notice reply", "Scheduled reply"],
+            turns.Select(t => t.Parts.Single(p => p.Kind == HistoryPartKind.Response).Text));
+        Assert.Null(turns[1].Prompt!.From);
+        Assert.NotNull(turns[2].Prompt!.From);
+        Assert.Equal(UserMessageFrom.Schedule, turns[3].Prompt!.From);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task Queued_owner_history_is_identical_on_each_page_and_after_restart(int limit)
+    {
+        await using var s = new Copilot_();
+        await s.After(File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, "fixtures", "copilot", "queued-owner-history.jsonl")));
+        var whole = (await s.Page()).Turns!;
+        await s.RestartAsync();
+        var pages = new List<HistoryTurn>();
+        string? before = null;
+        do
+        {
+            var page = await s.Page(before, limit);
+            pages.InsertRange(0, page.Turns!);
+            before = page.Before;
+        } while (before is not null);
+        Assert.Equal(["Answer A", "Answer B", "Notice reply", "Scheduled reply"],
+            pages.Select(t => t.Parts.Single(p => p.Kind == HistoryPartKind.Response).Text));
+        Assert.Equal(JsonSerializer.Serialize(whole, ProtocolJson.Options), JsonSerializer.Serialize(pages, ProtocolJson.Options));
+    }
+
     // Found rebasing #686 onto #841: activity shows the CLI's turn-error notice redacted (#840),
     // but history read the same message's content as written, so an earlier turn's notice showed
     // what the latest turn's hid.
