@@ -7,12 +7,10 @@ failing to install (a release the worker could not keep whole; #650).
 
 ## How the PWA ships
 
-`pages.yml` runs when `ci.yml` completes on `main` (`workflow_run`), and only a successful push
-run deploys: it builds the exact commit CI tested (`workflow_run.head_sha`), never the branch's
-moving head. A red CI run deploys nothing. Main moves faster than CI finishes, so the newest
-green commit deploys; a run is skipped only when its commit is already live or older than the
-live one (the live commit is the `APP_VERSION` in the served `config.js`;
-quality/pages-gate.ps1). The build job holds no publishing token; the deploy
+`pages.yml` checks the newest 20 main-push CI runs every five minutes and at CI completion.
+Plan, all six pwa-ui shards, pwa-e2e and product (ubuntu-latest) must succeed; other jobs do not gate.
+Only Pages-path changes proven on main and newer than a known live APP_VERSION deploy.
+Manual rollback below remains exempt. The build job holds no publishing token; the deploy
 job publishes the artifact, then fetches the live `config.js` and `sw.js` and compares their
 sha256 with the built files, retrying for about five minutes while Pages propagates. A mismatch
 fails the job. The service worker is stamped with a hash of the served files
@@ -31,8 +29,11 @@ have from the worker's cache, without asking the network (#609).
    `main` and the commit goes in `ref`. If the environment's rule has changed and the run is
    refused, don't relax it in an incident without the owner.
 2. **Then fix forward.** Revert or fix the PR through a PR (Quality merges, AGENTS.md). Its green
-   CI run on `main` deploys the fix. Until it merges, a later green `main` run would deploy `main`
-   over the rollback, so hold merges that touch the PWA.
+   named PWA jobs can deploy only a head proven newer than the main SHA at the rollback request.
+   Cron cannot replay the same bad SHA. Pending, failed or cancelled manual runs stay conservative.
+   To explicitly resume, run `gh workflow run pages.yml -R danswett/agent-bridge --ref main` without
+   `ref`; only its completed-success `Pages resume` run clears the fence. This deploys current main.
+   Use fresh dispatches: manual reruns (all jobs or failed jobs) are refused before publishing.
 3. **On a phone, after the fix is deployed:** close and reopen the PWA, and press Reload when
    it offers it. If it still shows the bad build, pull to refresh once. The service worker
    checks for a new release on each start.
@@ -44,5 +45,10 @@ disposable host.
 
 ## Afterwards
 
-If main CI would have caught it, it should have: Pages deploys only after a green main run (REL-4),
+Rollback state lives in manual Pages run history: one page of at most 100 runs, ordered by creation
+time, recognizing only main-branch `Pages rollback` and `Pages resume`. Unknown ancestry, lookup
+failure or no boundary in that page blocks automation. Retention (90 days) can age the boundary out;
+perform the explicit manual resume above to re-establish it. First deployment also needs that resume.
+
+If PWA CI would have caught it, it should have: Pages deploys only after its named jobs pass,
 so add the missing test.
