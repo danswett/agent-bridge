@@ -96,11 +96,11 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         requestedSchema = new { properties = new { pick = new { type = "string", @enum = new[] { "a", "b" } } }, required = new[] { "pick" } },
     }, s);
 
-    async Task<SecureChannel> OpenAsync()
-    {
-        await client.Relay.WaitForPeerAsync(p => p.Id == host.Id, Patience);
-        return await client.Hub.OpenAsync(host.Id);
-    }
+    Task<SecureChannel> OpenAsync() => ReplyChannel.OpenAsync(
+        () => client.Relay.WaitForPeerAsync(p => p.Id == host.Id, Patience),
+        () => host.Relay.WaitForPeerAsync(p => p.Id == client.Id, Patience),
+        () => client.Hub.OpenAsync(host.Id),
+        () => TestTimeoutDiagnostics.Describe());
 
     static async Task<(string Outcome, string? Reason)> ReplyAsync(SecureChannel ch, string text, string? request = null, string id = Id, object? attachments = null)
     {
