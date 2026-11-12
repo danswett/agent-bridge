@@ -201,6 +201,61 @@ test('launch maps permissions, remembers the outcome, and read_launch_result ret
   connection.close(); host.close();
 });
 
+test('a coordinator MCP launch defaults omitted roles and preserves an explicit unlisted role', async (t) => {
+  const host = await fakeHost({
+    hello: () => ({ capabilities: CAPS }), 'agent.hello': () => ({ principal: 'p' }),
+    'session.launch': () => ({ outcome: 'started', session: 's9' }),
+  });
+  t.after(() => host.close());
+  const { client, connection } = await clientFor(host);
+  t.after(() => connection.close());
+
+  for (const options of [{}, { role: undefined }, { role: 'unlisted' }]) {
+    const out = await call(client, 'launch_agent_session', { agent: 'copilot', prompt: 'go', ...options });
+    assert.equal(out.outcome, 'started');
+  }
+  assert.deepEqual(host.seen.filter((r) => r.op === 'session.launch').map((r) => r.data.role), ['default', 'default', 'unlisted']);
+});
+
+test('caller-supplied origin fields cannot select or bypass the MCP default role', async (t) => {
+  const host = await fakeHost({
+    hello: () => ({ capabilities: CAPS }), 'agent.hello': () => ({ principal: 'p' }),
+    'session.launch': () => ({ outcome: 'started' }),
+  });
+  t.after(() => host.close());
+  const { client, connection } = await clientFor(host);
+  t.after(() => connection.close());
+
+  for (const origin of ['person', 'coordinator']) {
+    await call(client, 'launch_agent_session', { agent: 'copilot', origin, coordinator: origin === 'coordinator' });
+  }
+
+  const launches = host.seen.filter((r) => r.op === 'session.launch');
+  assert.equal(launches.length, 2);
+  for (const { data } of launches) {
+    assert.equal(data.role, 'default');
+    assert.equal(Object.hasOwn(data, 'origin'), false);
+    assert.equal(Object.hasOwn(data, 'coordinator'), false);
+  }
+});
+
+test('null, empty and whitespace-only roles are rejected without forwarding a launch', async (t) => {
+  const host = await fakeHost({
+    hello: () => ({ capabilities: CAPS }), 'agent.hello': () => ({ principal: 'p' }),
+    'session.launch': () => ({ outcome: 'started' }),
+  });
+  t.after(() => host.close());
+  const { client, connection } = await clientFor(host);
+  t.after(() => connection.close());
+
+  for (const role of [null, '', ' \t ']) {
+    const out = await client.callTool({ name: 'launch_agent_session', arguments: { agent: 'copilot', role } });
+    assert.equal(out.isError, true, JSON.stringify(role));
+    assert.match(out.content[0].text, /role/);
+  }
+  assert.equal(host.seen.some((r) => r.op === 'session.launch'), false);
+});
+
 test('without a credential only read tools are listed and dispatched', async () => {
   const host = await fakeHost({ hello: () => ({ capabilities: CAPS }), 'session.reply': () => ({ outcome: 'delivered' }), 'sessions.list': () => ({ sessions: [] }) });
   const { client, connection } = await clientFor(host, { AGENT_BRIDGE_TOKEN: '' });
