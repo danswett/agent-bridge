@@ -1130,6 +1130,7 @@ public sealed class StandaloneHooksTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Process")]
     public async Task Refresh_replaces_the_running_Windows_hook_fifty_consecutive_times()
     {
         if (!OperatingSystem.IsWindows()) { return; }
