@@ -13,8 +13,14 @@ public class ProcessLoadTests
     sealed class Table : IProcessTable
     {
         public List<ProcessReading>? Readings { get; set; } = [];
+        public ManualResetEventSlim? ReadGate { get; set; }
         public int Reads;
-        public IReadOnlyList<ProcessReading>? Read() { Reads++; return Readings; }
+        public IReadOnlyList<ProcessReading>? Read()
+        {
+            ReadGate?.Wait();
+            Reads++;
+            return Readings;
+        }
     }
 
     sealed class Sessions : ISessionSource
@@ -317,14 +323,19 @@ public class ProcessLoadTests
     public async Task The_sampler_samples_every_five_seconds_by_default_and_stops_when_disposed()
     {
         var r = new Rig();
+        using var readGate = new ManualResetEventSlim();
+        await using var sampler = r.Sampler;
         r.Bind("s1", 10);
         r.Table.Readings = [P(10, 1, 0, 10)];
+        r.Table.ReadGate = readGate;
         var seen = new List<ProcessLoadReport>();
         r.Sampler.Sampled += seen.Add;
         Assert.Equal(TimeSpan.FromSeconds(5), ProcessLoadSampler.DefaultInterval);
 
         r.Sampler.Start();
-        await Until(() => r.Table.Reads >= 1);
+        // Hold the fake read past Until's budget; always release it before disposal.
+        try { await Until(() => r.Table.Reads >= 1); }
+        finally { readGate.Set(); }
         r.Time.Advance(TimeSpan.FromSeconds(5));
         await Until(() => r.Table.Reads >= 2);
         await r.Sampler.DisposeAsync();
