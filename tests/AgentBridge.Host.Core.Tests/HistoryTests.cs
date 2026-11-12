@@ -117,6 +117,62 @@ public class HistoryTests
         Assert.Equal(JsonSerializer.Serialize(whole, ProtocolJson.Options), JsonSerializer.Serialize(pages, ProtocolJson.Options));
     }
 
+    [Theory]
+    [InlineData("system", TurnKind.Notification)]
+    [InlineData("schedule-2", TurnKind.Scheduled)]
+    public void A_queued_non_owner_prompt_cannot_take_the_active_owners_reply(string source, TurnKind kind)
+    {
+        using var f = new Fixture();
+        var turns = ReadAlone(f, [
+            Copilot.User("Owner", 1), Copilot.TurnStart(2),
+            Scheduled("Background", 3, source),
+            Copilot.TurnEnd(4, "delegate"),
+            Copilot.TurnStart(5, "delegate"),
+            Copilot.Assistant("Owner answer", 6), Copilot.TurnEnd(7),
+            Copilot.TurnStart(8), Copilot.Assistant("Background answer", 9),
+        ]).Turns!;
+
+        Assert.Equal([TurnKind.User, kind], turns.Select(t => t.Kind));
+        Assert.Equal(["Owner answer", "Background answer"],
+            turns.Select(t => t.Parts.Single(p => p.Kind == HistoryPartKind.Response).Text));
+    }
+
+    [Theory]
+    [InlineData("user")]
+    [InlineData("system")]
+    [InlineData("schedule-2")]
+    public void An_unreadable_cycle_boundary_never_gives_a_queued_reply_to_the_previous_owner(string source)
+    {
+        using var f = new Fixture();
+        var page = ReadAlone(f, [
+            Copilot.User("Owner", 1), Copilot.TurnStart(2),
+            Scheduled("Queued", 3, source),
+            Copilot.Assistant("Owner answer", 4), Copilot.TurnEnd(5),
+            "{\"type\":\"assistant.turn_start\",\"data\":",
+            Copilot.Assistant("Queued answer", 7), Copilot.TurnEnd(8),
+        ]);
+
+        Assert.Equal(["Owner answer"], page.Turns![0].Parts.Where(p => p.Kind == HistoryPartKind.Response).Select(p => p.Text));
+        Assert.Empty(page.Turns[1].Parts);
+        Assert.True(page.Turns[1].Truncated);
+        Assert.True(page.Partial);
+    }
+
+    [Fact]
+    public async Task Queuing_another_prompt_leaves_the_active_owners_tool_running_on_every_page()
+    {
+        await using var s = new Copilot_();
+        await s.After(Copilot.User("Owner", 1), Copilot.TurnStart(2),
+            Copilot.User("Queued", 3), Copilot.ToolStart("running", "powershell", new { command = "work" }, 4));
+
+        var together = (await s.Page()).Turns!;
+        Assert.Equal(ToolStatus.Running, together[0].Parts.Single(p => p.Tool is not null).Tool!.Status);
+        var newest = await s.Page(limit: 1);
+        var earlier = (await s.Page(newest.Before, limit: 1)).Turns!.Single();
+        Assert.Equal(ToolStatus.Running, earlier.Parts.Single(p => p.Tool is not null).Tool!.Status);
+        Assert.Equal(JsonSerializer.Serialize(together[0], ProtocolJson.Options), JsonSerializer.Serialize(earlier, ProtocolJson.Options));
+    }
+
     // Found rebasing #686 onto #841: activity shows the CLI's turn-error notice redacted (#840),
     // but history read the same message's content as written, so an earlier turn's notice showed
     // what the latest turn's hid.

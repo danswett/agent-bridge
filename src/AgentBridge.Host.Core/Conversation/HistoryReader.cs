@@ -82,7 +82,11 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
 
     // A record that may start a turn, found going back: where its line starts and ends (past its
     // newline), the turn's id, and what started it (null for one that could not be read).
-    sealed record Start(long Offset, long End, byte[] Id, HistoryPrompt? Prompt, DateTimeOffset? At);
+    sealed record Start(long Offset, long End, byte[] Id, HistoryPrompt? Prompt, DateTimeOffset? At)
+    {
+        public long From { get; set; } = End;
+        public bool Unknown { get; set; }
+    }
 
     sealed class Pass(HistoryReader reader, SafeFileHandle file, string sessionId, HistoryDialect dialect, HistoryContext context, IReadOnlySet<string> agentTurns, CancellationToken cancellation)
     {
@@ -97,6 +101,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
         long parsed;
         // Lines Back has parsed looking for turns' starts.
         int examined;
+        readonly SortedSet<long> cycleGaps = [];
 
         public HistoryResult Page(string? before, int limit)
         {
@@ -131,7 +136,11 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             var want = Math.Min(limit, HistoryLimits.Kept - depth);
             if (want <= 0) { return HistoryResult.StaleCursor; }
 
-            var (starts, reachedStart) = Back(end, want);
+            // A cursor is still sealed to the prompt, not to the later assistant cycle that
+            // consumes it. Include that prompt to recover the older page's actual end.
+            var scanEnd = dialect is CopilotHistory && before is not null ? NextNewline(end)!.Value : end;
+            var (starts, reachedStart) = Back(scanEnd, want + (scanEnd != end ? 1 : 0), boundary: scanEnd != end ? end : null);
+            if (scanEnd != end && starts.Count > 0) { end = starts[0].From; starts.RemoveAt(0); }
             if (starts.Count == 0)
             {
                 if (checkedGrowth && !reachedStart) { return HistoryResult.StaleCursor; }
@@ -145,10 +154,11 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             // prompts were charged as Back parsed them.
             var turns = new List<HistoryTurn>();
             var built = new List<TurnBuilder>();
+            long SpanEnd(int i) => i == 0 ? end : dialect is CopilotHistory ? starts[i - 1].From : starts[i - 1].Offset;
             for (var i = 0; i < starts.Count; i++)
             {
-                var spanEnd = i == 0 ? end : starts[i - 1].Offset;
-                var cost = Math.Min(spanEnd - starts[i].End, b.TurnBytes);
+                var spanEnd = SpanEnd(i);
+                var cost = Math.Min(Math.Max(0, spanEnd - starts[i].From), b.TurnBytes);
                 if (i > 0 && parsed + cost > b.PageBytes) { break; }
                 parsed += cost;
                 built.Add(Builder(starts[i]));
@@ -156,10 +166,15 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             // Built oldest first, so a delegate's start is known before its report.
             for (var i = built.Count - 1; i >= 0; i--)
             {
-                var spanEnd = i == 0 ? end : starts[i - 1].Offset;
+                var spanEnd = SpanEnd(i);
                 Fill(built[i], starts[i], spanEnd);
             }
-            for (var i = 0; i < built.Count; i++) { turns.Add(built[i].Build(latest: before is null && i == 0)); }
+            for (var i = 0; i < built.Count; i++)
+            {
+                var spanEnd = SpanEnd(i);
+                var active = spanEnd == last && !Gaps(starts[i].From, spanEnd).Any();
+                turns.Add(built[i].Build(latest: active));
+            }
 
             var n = HistoryBudget.FitsInPage(turns);
             var page = turns.Take(n).Reverse().ToList();
@@ -306,10 +321,16 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
         // first; and whether it got back to the transcript's start, so nothing is before them.
         // Every line is searched whole for a turn's marks (TurnMarks) as its chunks go by, so a
         // line costs a parse only when it may start a turn, wherever in it its type is.
-        (List<Start> Starts, bool ReachedStart) Back(long end, int want, long stop = 0)
+        (List<Start> Starts, bool ReachedStart) Back(long end, int want, long stop = 0, long? boundary = null)
         {
             var starts = new List<Start>();
-            var marks = dialect.Marks;
+            var copilot = dialect is CopilotHistory;
+            var marks = copilot ? TurnMarks.CopilotHistory : dialect.Marks;
+            var pending = new List<Start>();
+            var older = false;
+            var nextCycle = end;
+            var unknownCycle = false;
+            if (copilot && end < length) { nextCycle = NextCycle(end, out unknownCycle); }
             var keep = marks.Longest - 1;
             // The first bytes of the line being read that a later chunk held, so a mark split
             // between two chunks is found.
@@ -324,7 +345,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                 while (pos > stop)
                 {
                     cancellation.ThrowIfCancellationRequested();
-                    if (scanned >= b.ScanBytes) { return (starts, false); }
+                    if (scanned >= b.ScanBytes || (starts.Count >= want && pos < starts[^1].Offset - b.TurnBytes)) { return Finish(false); }
                     var n = (int)Math.Min(b.ChunkBytes, pos - stop);
                     pos -= n;
                     scanned += n;
@@ -334,19 +355,30 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                     {
                         if (chunk[i] != '\n') { continue; }
                         Mark(chunk.AsSpan(i + 1, segmentEnd - i - 1), segmentEnd == n);
-                        if (!Line(pos + i + 1, chunk.AsSpan(0, n), pos)) { return (starts, false); }
-                        if (starts.Count >= want) { return (starts, next == stop); }
+                        if (!Line(pos + i + 1, chunk.AsSpan(0, n), pos)) { return Finish(false); }
+                        if (starts.Count >= want && pending.Count == 0) { return Finish(next == stop); }
                         segmentEnd = i;
                     }
                     // The rest belongs to a line that began in an earlier chunk, or at the start.
                     var rest = chunk.AsSpan(0, segmentEnd);
                     Mark(rest, segmentEnd == n);
                     Carry(rest, segmentEnd == n);
-                    if (pos == stop && !Line(stop, chunk.AsSpan(0, n), stop)) { return (starts, false); }
+                    if (pos == stop && !Line(stop, chunk.AsSpan(0, n), stop)) { return Finish(false); }
                 }
-                return (starts, next == stop);
+                return Finish(next == stop);
             }
             finally { ArrayPool<byte>.Shared.Return(chunk); }
+
+            (List<Start>, bool) Finish(bool reached)
+            {
+                if (!reached)
+                {
+                    foreach (var s in pending) { s.From = s.End; s.Unknown = true; cycleGaps.Add(s.Offset); }
+                }
+                // Several prompts queued before one cycle: only the last can own that cycle.
+                for (var i = 1; i < starts.Count; i++) { starts[i].From = Math.Min(starts[i].From, starts[i - 1].From); }
+                return (starts, reached && !older);
+            }
 
             void Mark(ReadOnlySpan<byte> piece, bool joined)
             {
@@ -379,7 +411,25 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                 // came after its first 4 KiB was a turn's middle here while live had lost the turn,
                 // so activity.turn was absent with no unreadable turn to show (review of #686).
                 var tooLong = next - lineStart - 1 > b.MaxLineBytes;
-                var go = lineStart >= next || (!tooLong && found is not (true, false)) || Examine(lineStart, next, inChunk, chunkAt, starts);
+                var cycle = 0;
+                var count = starts.Count;
+                var skipped = false;
+                var go = lineStart >= next || (!tooLong && found is not (true, false)) || Examine(lineStart, next, inChunk, chunkAt, starts, want, boundary, out cycle, out skipped);
+                older |= skipped;
+                if (copilot)
+                {
+                    if (starts.Count > count) { pending.Add(starts[^1]); }
+                    if (cycle != 0)
+                    {
+                        foreach (var s in pending)
+                        {
+                            if (cycle != 2) { s.From = cycle == 3 ? s.End : nextCycle; s.Unknown = cycle == 3 || unknownCycle; }
+                        }
+                        pending.Clear();
+                        if (cycle == 1) { nextCycle = lineStart; unknownCycle = false; }
+                        if (cycle == 3) { nextCycle = lineStart; unknownCycle = true; cycleGaps.Add(lineStart); }
+                    }
+                }
                 next = lineStart;
                 found = default;
                 carried = 0;
@@ -390,8 +440,10 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
         // One line found going back, [start, end) with its newline, which carries a turn's marks:
         // a turn's start, or not. False, adding nothing, when parsing it would spend more than the
         // request may (PageBytes; the first line examined is always read).
-        bool Examine(long start, long end, ReadOnlySpan<byte> chunk, long chunkAt, List<Start> starts)
+        bool Examine(long start, long end, ReadOnlySpan<byte> chunk, long chunkAt, List<Start> starts, int want, long? boundary, out int cycle, out bool skipped)
         {
+            cycle = 0;
+            skipped = false;
             var content = ContentLength(start, end);
             if (content <= 0) { return true; }
             cancellation.ThrowIfCancellationRequested();
@@ -401,15 +453,19 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                 // (TranscriptTail.Dropped), so only one whose start may begin a turn is taken as
                 // a turn that can't be read, as there.
                 var head = Head(start, content, chunk, chunkAt);
-                if (!dialect.MayStart(head)) { return true; }
-                starts.Add(new Start(start, end, TurnIds.RawOfLong(head, content, start), null, null));
+                cycle = 3;
+                if (dialect.MayStart(head))
+                {
+                    if (starts.Count < want) { starts.Add(new Start(start, end, TurnIds.RawOfLong(head, content, start), null, null)); }
+                    else { skipped = true; }
+                }
                 return true;
             }
             // Every line parsed is charged, a turn's start or not: a record carrying a turn's mark in
             // its text is parsed to learn it is not one, and charging only after the first prompt
             // let those cost without bound (found in review of #292). The first is always read, so a
             // page can always make progress past one line up to MaxLineBytes.
-            if (examined++ > 0 && parsed + content > b.PageBytes) { return false; }
+            if (start != boundary && examined++ > 0 && parsed + content > b.PageBytes) { return false; }
             parsed += content;
             var line = new byte[content];
             ReadAt(line, start);
@@ -422,11 +478,51 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                 at = prompt is null ? null : Json.Time(doc.RootElement, "timestamp");
             }))
             {
-                starts.Add(new Start(start, end, TurnIds.Raw(line), null, null));
+                cycle = 3;
+                if (dialect.MayStart(line))
+                {
+                    if (starts.Count < want) { starts.Add(new Start(start, end, TurnIds.Raw(line), null, null)); }
+                    else { skipped = true; }
+                }
                 return true;
             }
-            if (prompt is not null) { starts.Add(new Start(start, end, TurnIds.Raw(line), prompt, at)); }
+            if (dialect is CopilotHistory && Json.Str(doc.RootElement, "agentId") is not { Length: > 0 })
+            {
+                cycle = Json.Str(doc.RootElement, "type") switch
+                {
+                    "assistant.turn_start" => 1,
+                    "assistant.turn_end" or "abort" or "session.resume" or "session.shutdown" => 2,
+                    _ => 0,
+                };
+            }
+            if (prompt is not null)
+            {
+                if (starts.Count < want) { starts.Add(new Start(start, end, TurnIds.Raw(line), prompt, at)); }
+                else { skipped = true; }
+            }
             return true;
+        }
+
+        long NextCycle(long from, out bool unknown)
+        {
+            var to = Math.Min(length, from + Math.Min(b.TurnBytes, Math.Max(0, b.ScanBytes - scanned)));
+            var next = to;
+            var found = false;
+            var limited = false;
+            Forward(from, to, (line, offset) =>
+            {
+                scanned += line.Length + 1;
+                if (line.Span.IndexOf("\"assistant.turn_start\""u8) < 0) { return true; }
+                if (!Charge(line.Length)) { limited = true; next = offset; cycleGaps.Add(offset); return false; }
+                using var doc = Parse(line);
+                if (doc is null) { limited = true; next = offset; cycleGaps.Add(offset); return false; }
+                if (Json.Str(doc.RootElement, "agentId") is { Length: > 0 } || Json.Str(doc.RootElement, "type") != "assistant.turn_start") { return true; }
+                next = offset;
+                found = true;
+                return false;
+            }, dropped: (_, offset) => { limited = true; next = offset; cycleGaps.Add(offset); return false; });
+            unknown = limited || (!found && to < length);
+            return next;
         }
 
         // A line's first HeadBytes, from the chunk in hand when it holds them.
@@ -473,14 +569,19 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             var id = Attachments.Base64Url(s.Id);
             // A prompt the host knew an agent sent (#489) is the agent's here too, as it was live.
             var prompt = s.Prompt is { From: null } p && agentTurns.Contains(id) ? p with { From = UserMessageFrom.Agent } : s.Prompt;
-            return new TurnBuilder(id, s.At ?? DateTimeOffset.UnixEpoch, prompt) { Unreadable = s.Prompt is null };
+            return new TurnBuilder(id, s.At ?? DateTimeOffset.UnixEpoch, prompt) { Unreadable = s.Prompt is null, Truncated = s.Unknown };
         }
+
+        IEnumerable<long> Gaps(long from, long to) => cycleGaps.GetViewBetween(from, Math.Max(from, to));
 
         // The rest of a turn after its prompt: everything up to the next turn, or its last TurnBytes
         // when it is longer, which leaves the turn marked as read only in part.
         void Fill(TurnBuilder turn, Start s, long spanEnd)
         {
-            var from = s.End;
+            var from = turn.Unreadable ? s.End : s.From;
+            if (s.Unknown && !turn.Unreadable) { return; }
+            // An unknown later cycle must not extend an earlier owner's body through its reply.
+            foreach (var gap in Gaps(from, spanEnd)) { spanEnd = gap; turn.Truncated = true; break; }
             if (spanEnd - from > b.TurnBytes)
             {
                 from = spanEnd - b.TurnBytes;
