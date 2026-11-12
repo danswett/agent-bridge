@@ -3502,6 +3502,13 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
     [Fact]
     public async Task A_form_answered_afresh_that_stops_again_is_never_reset_a_second_time()
+        => await RedoneFormAsync();
+
+    [Fact]
+    public async Task A_form_answered_afresh_is_not_reset_again_when_the_test_observes_Esc_after_the_result()
+        => await RedoneFormAsync(observeAfterResult: true);
+
+    async Task RedoneFormAsync(bool observeAfterResult = false)
     {
         Serve(Answerer(resume: true));
         await AskFieldsAsync(TwoLists, 2, TwoPicked);
@@ -3511,6 +3518,8 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var ch = await OpenAsync();
 
         var answering = AnswerResultAsync(ch, TwoPicked, Guid.NewGuid().ToString());
+        // A loaded runner may not schedule the observer until the reset budget has elapsed.
+        if (observeAfterResult) { await answering; }
         await Wait.UntilAsync(() => Escaped(), "the Esc that resets the form", Patience);
         Fixture.Append(events, Copilot.ToolDone("q2", second++), Copilot.ToolStart("q3", "ask_user", new { message = "Tell me", requestedSchema = new { properties = TwoLists } }, second++));
         asked = true;
