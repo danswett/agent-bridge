@@ -1312,7 +1312,12 @@ public class HistoryTests
     [InlineData(true)]
     public void Many_aborts_and_delegate_ends_after_many_parts_settle_what_is_open_in_linear_work(bool quadratic)
     {
-        TurnBuilderGrowthTests.AssertLinearWork(Settle);
+        if (quadratic)
+        {
+            var failure = Assert.Throws<Xunit.Sdk.TrueException>(() => TurnBuilderGrowthTests.AssertLinearWork(Settle));
+            Assert.Contains("doubling the questions visited parts", failure.Message, StringComparison.Ordinal);
+        }
+        else { TurnBuilderGrowthTests.AssertLinearWork(Settle); }
 
         long Settle(int n)
         {
