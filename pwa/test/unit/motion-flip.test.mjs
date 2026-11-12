@@ -49,3 +49,23 @@ test('moving a list surface never slides its rows back across adjacent controls'
     assert.equal(moves, 0);
   } finally { globalThis.getComputedStyle = previous; }
 });
+
+test('a same-frame reading-anchor exclusion overrides an earlier reorder', () => {
+  const frames = [];
+  let top = 100, moves = 0;
+  const doc = { documentElement: {}, defaultView: { requestAnimationFrame: (fn) => frames.push(fn) } };
+  const child = { ownerDocument: doc, isConnected: true, getClientRects: () => [{}],
+    getBoundingClientRect: () => ({ top, left: 0 }), getAnimations: () => [],
+    animate: () => { moves++; return {}; } };
+  const container = { children: [child], ownerDocument: doc, isConnected: true,
+    getBoundingClientRect: () => ({ top: 0, left: 0 }) };
+  child.parentElement = container;
+  const previous = globalThis.getComputedStyle;
+  globalThis.getComputedStyle = () => ({ getPropertyValue: (key) => key.endsWith('-duration') ? '167ms' : 'linear' });
+  try {
+    motion.flip(container, () => { top += 40; }, { entry: 'reorder' });
+    motion.flip(container, () => { top += 40; }, { entry: () => null });
+    frames.shift()();
+    assert.equal(moves, 0);
+  } finally { globalThis.getComputedStyle = previous; }
+});

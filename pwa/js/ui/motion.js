@@ -260,9 +260,10 @@ export function flip(container, mutate, { entry = 'shift' } = {}) {
   }
   const result = mutate();
   for (const el of container.children) {
-    // An explicit reorder, or a row whose caller draws its own move, wins over a redraw.
-    if (state.entries.get(el) !== null && state.entries.get(el) !== 'reorder') {
-      state.entries.set(el, typeof entry === 'function' ? entry(el) : entry);
+    // Exclusions always win; a redraw must not downgrade an explicit reorder to a shift.
+    const name = typeof entry === 'function' ? entry(el) : entry;
+    if (name === null || (state.entries.get(el) !== null && state.entries.get(el) !== 'reorder')) {
+      state.entries.set(el, name);
     }
   }
   return result;
