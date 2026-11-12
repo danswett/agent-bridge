@@ -159,6 +159,7 @@ test('an open delegate that is running is fetched again, as a host sends nothing
 });
 
 test('a hidden delegate stops polling and returns with its last words and current age before refreshing', async ({ page }) => {
+  await page.clock.install();
   await openDemo(page);
   await showList(page);
   await openRow(page, 'demo-agent-suite');
@@ -166,7 +167,6 @@ test('a hidden delegate stops polling and returns with its last words and curren
   await expect(latest).toContainText('The suite fails on HEAD');
   const age = await fact(page, 'status').textContent();
   await latest.locator(':scope > *').first().evaluate((el) => { el.dataset.kept = 'true'; });
-  await page.clock.install();
   const before = await fetches(page, 'demo-agent-suite');
   await page.evaluate(() => {
     Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
