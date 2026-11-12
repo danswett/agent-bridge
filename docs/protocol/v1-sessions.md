@@ -1192,8 +1192,10 @@ With `sessions.attach.blob`, a file over 256 KiB goes through the relay's blob s
    bytes the host has opened, for progress.
 
 A blob that does not open, does not match its SHA-256 or cannot be fetched fails the next
-`attachment.start` for it once, with the reason, and is dropped; the client seals and
-uploads it again under a new id. A host that has no relay with a blob store just then
+`attachment.start` for it once, with a fixed safe reason, and is dropped; the client seals
+and uploads it again under a new id. A reply naming the failed attachment is refused
+with that same safe reason, never blob-fetch exception text, paths or URLs.
+A host that has no relay with a blob store just then
 fails `attachment.start` with a `blob` and stops offering `sessions.attach.blob`.
 `attachment.chunk` for an attachment started with a `blob` fails.
 
