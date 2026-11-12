@@ -482,6 +482,10 @@ test.describe('approved Fleet card structure', () => {
         window.drawStructure();
       }, scale);
       const cards = page.locator('#structure-fixture > .machine');
+      const disclosures = page.locator('#structure-fixture .tile-running-toggle');
+      await expect(disclosures).toHaveCount(2);
+      await expect(disclosures.nth(0)).toHaveAccessibleName('Running, 2 sessions on Small');
+      await expect(disclosures.nth(1)).toHaveAccessibleName('Running, 2 sessions on Large');
       expect(await cards.first().locator('.machine-name').evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeCloseTo(baseNameSize * scale / 100);
       for (const card of await cards.all()) {
         await expect(card.locator('.tile-health-word')).toHaveText('Not measured yet');
