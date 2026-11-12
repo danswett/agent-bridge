@@ -1,3 +1,5 @@
+using System.Text.Json;
+using AgentBridge.Host.Core;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -47,6 +49,91 @@ public sealed class AgentAdoptionTests : IDisposable
         store.Adopt("sess-1", 100, Started, AgentProtocol.ScopeRead);
         Assert.NotNull(store.Claim(Inside()).Token);
         Assert.Null(store.Claim(Inside()).Token);
+    }
+
+    [Fact]
+    public void A_save_failure_refuses_the_claim_and_faults_the_store_without_retaining_a_credential()
+    {
+        var store = Store();
+        store.Adopt("sess-1", 100, Started, AgentProtocol.ScopeRead);
+        Directory.CreateDirectory(Path.Combine(root, AgentCredentials.FileName + ".tmp"));
+        var claim = store.Claim(Inside());
+        Assert.Null(claim.Token);
+        Assert.NotNull(claim.Refusal);
+        Assert.NotNull(store.Problem);
+        Assert.Equal(0, store.Count);
+        Assert.Null(store.Claim(Inside()).Token);
+    }
+
+    [Theory]
+    [InlineData(CallerKind.App)]
+    [InlineData(CallerKind.HostCli)]
+    public async Task Only_a_person_can_open_and_withdraw_an_adoption_for_a_discovered_process(CallerKind kind)
+    {
+        using var fixture = new Fixture();
+        const string id = "88888888-8888-4888-8888-888888888888";
+        fixture.CopilotSession(id, 100);
+        fixture.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = new SessionSource(fixture.Options(), fixture.Processes, TimeProvider.System);
+        await source.RefreshAsync();
+        var store = Store();
+        var handler = LocalApi.Handler(new SessionService(source, new("machine1", "Fixture", "windows", "0.1.0")),
+            null!, new FixedCallerGuard(new Caller(kind, "person")), credentials: store);
+        var channel = new FakeChannel();
+        var adopted = Assert.IsType<AgentAdoptResult>(await handler(channel, AgentProtocol.Adopt, Body(new { session = id })));
+        Assert.Equal(AgentProtocol.ScopeRead, adopted.Scope);
+        Assert.Equal(0, store.Count);
+        var revoked = Assert.IsType<AgentRevokeResult>(await handler(channel, AgentProtocol.Revoke, Body(new { session = id })));
+        Assert.True(revoked.Revoked);
+        await Assert.ThrowsAsync<ArgumentException>(() => handler(channel, AgentProtocol.Adopt, Body(new { session = "missing" })));
+        await Assert.ThrowsAsync<ArgumentException>(() => handler(channel, AgentProtocol.Adopt, Body(new { session = id, scope = AgentProtocol.ScopeReadReply })));
+    }
+
+    [Theory]
+    [InlineData(AgentProtocol.Adopt)]
+    [InlineData(AgentProtocol.Revoke)]
+    public async Task Adoption_management_rechecks_callers_and_refuses_agents_and_untraced_processes(string op)
+    {
+        var store = Store();
+        foreach (var kind in new[] { CallerKind.Agent, CallerKind.Other })
+        {
+            var handler = LocalApi.Handler(null!, null!, new FreshCaller(kind), credentials: store);
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => handler(new FakeChannel(), op, Body(new { session = "sess-1" })));
+            Assert.Contains("only the app or host command line", error.Message);
+        }
+        Assert.Equal(0, store.Count);
+    }
+
+    [Fact]
+    public async Task Claims_without_OS_peer_ancestry_or_from_an_authenticated_connection_are_refused()
+    {
+        var store = Store();
+        store.Adopt("sess-1", 100, Started, AgentProtocol.ScopeRead);
+        var handler = LocalApi.Handler(null!, null!, new FixedCallerGuard(new(CallerKind.Agent, "agent")), credentials: store);
+        var channel = new FakeChannel();
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, AgentProtocol.Credential, Body(new { })));
+        Assert.Contains("refused:", error.Message);
+        store.Accept(channel, store.Claim(Inside()).Credential!);
+        error = await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, AgentProtocol.Credential, Body(new { })));
+        Assert.Contains("already credentialed", error.Message);
+    }
+
+    [Theory]
+    [InlineData(AgentProtocol.Adopt)]
+    [InlineData(AgentProtocol.Revoke)]
+    [InlineData(AgentProtocol.Credential)]
+    public async Task Relay_session_handlers_never_serve_adoption_operations(string op)
+    {
+        var result = await new SessionService(null!, new("machine1", "Fixture", "windows", "0.1.0"))
+            .HandleAsync(new FakeChannel(), op, Body(new { session = "sess-1" }));
+        Assert.Null(result);
+    }
+
+    static JsonElement Body(object value) => JsonSerializer.SerializeToElement(value, ProtocolJson.Options);
+
+    sealed class FreshCaller(CallerKind kind) : ICallerGuard
+    {
+        public Caller Classify(IProtocolChannel channel, bool fresh = false) => new(fresh ? kind : CallerKind.App, "fixture");
     }
 
     [Fact]
