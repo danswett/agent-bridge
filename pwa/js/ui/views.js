@@ -145,11 +145,12 @@ export class SessionListView {
   }
 
   #draw() {
-    if (!this.#drawn || this.sessions.list().some(({ hostId }) => !this.settled(hostId))) { this.#layout(); return; }
+    if (!this.#drawn) { this.#layout(); return; }
+    const settled = !this.sessions.list().some(({ hostId }) => !this.settled(hostId));
     const ownMove = this.#motionRow;
     let anchored = false;
     flip(this.container, () => { anchored = this.#layout(); }, {
-      entry: (el) => el === ownMove ? null : this.#recent.moved.has(el.dataset.key) ? 'reorder' : 'shift',
+      entry: (el) => !settled || el === ownMove ? null : this.#recent.moved.has(el.dataset.key) ? 'reorder' : 'shift',
       viewport: () => anchored,
     });
   }

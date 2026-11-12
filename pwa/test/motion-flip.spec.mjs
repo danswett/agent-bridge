@@ -98,22 +98,28 @@ for (const width of [390, 1024]) {
       expect(Math.abs(positions.copy - positions.before)).toBeLessThan(1);
     });
 
-    test('an incomplete initial snapshot never shifts the rows already received', async ({ page }) => {
-      const shifts = await page.evaluate(async () => {
-        const d = window.agentBridgeDemo, drawn = [];
-        const animate = Element.prototype.animate;
-        Element.prototype.animate = function (...args) { const a = animate.apply(this, args); drawn.push(a); return a; };
-        const template = d.host.get(document.querySelector('.session').dataset.id);
-        d.client.synced = false;
-        for (let i = 0; i < 2; i++) {
-          d.client.store.upsert({ ...template, id: `snapshot-${i}` });
-          d.page.view.render();
-          await new Promise(requestAnimationFrame);
-        }
-        return drawn.filter((a) => /^ab-motion-(shift|reorder)$/.test(a.id)).length;
+    for (const pending of [false, true]) {
+      test(`an incomplete initial snapshot never shifts the rows already received${pending ? ' after a queued settled update' : ''}`, async ({ page }) => {
+        const shifts = await page.evaluate(async (pending) => {
+          const d = window.agentBridgeDemo, drawn = [];
+          const animate = Element.prototype.animate;
+          Element.prototype.animate = function (...args) { const a = animate.apply(this, args); drawn.push(a); return a; };
+          const template = d.host.get(document.querySelector('.session').dataset.id);
+          if (pending) {
+            d.client.store.upsert({ ...template, id: 'before-incomplete-snapshot' });
+            d.page.view.render();
+          }
+          d.client.synced = false;
+          for (let i = 0; i < 2; i++) {
+            d.client.store.upsert({ ...template, id: `snapshot-${i}` });
+            d.page.view.render();
+            await new Promise(requestAnimationFrame);
+          }
+          return drawn.filter((a) => /^ab-motion-(shift|reorder)$/.test(a.id)).length;
+        }, pending);
+        expect(shifts).toBe(0);
       });
-      expect(shifts).toBe(0);
-    });
+    }
 
     test('a manual move during a neighbour shift starts from the drawn position', async ({ page }) => {
       const positions = await page.evaluate(async () => {
@@ -182,6 +188,9 @@ for (const width of [390, 1024]) {
           const agent = (id) => ({ id, name: id, status: 'running', startedAt: new Date().toISOString() });
           strip.update({ subagents: [agent('first'), agent('second')] });
           const initial = strip.item('second').getAnimations().length;
+          // Hold at creation: a loaded runner may miss the entire short fade before its next frame.
+          const animate = Element.prototype.animate;
+          Element.prototype.animate = function (...args) { const a = animate.apply(this, args); a.pause(); a.currentTime = 0; return a; };
           const kept = strip.item('second'); kept.focus();
           strip.update({ subagents: [agent('second'), agent('third')] });
           await new Promise(requestAnimationFrame);
