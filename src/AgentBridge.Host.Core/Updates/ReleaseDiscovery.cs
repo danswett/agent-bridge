@@ -617,7 +617,12 @@ public sealed partial class ReleaseDiscovery : IDisposable
             if (!File.Exists(StatePath)) { return memory; }
             var disk = JsonSerializer.Deserialize(File.ReadAllText(StatePath), ReleaseDiscoveryJson.Default.State) ?? new State();
             var policy = MergePolicy(memory.HaltPolicy, disk.HaltPolicy);
-            if (unsaved && disk.Saved == underneath) { return memory = memory with { HaltPolicy = policy }; }
+            if (unsaved && disk.Saved == underneath)
+            {
+                var now = time.GetUtcNow();
+                var backoff = Sane(disk, now).NotBefore > (Sane(memory, now).NotBefore ?? DateTimeOffset.MinValue) ? disk : memory;
+                return memory = memory with { HaltPolicy = policy, NotBefore = backoff.NotBefore, Failures = backoff.Failures, Problem = backoff.Problem };
+            }
             disk = disk with { HaltPolicy = policy };
             (unsaved, underneath) = (false, disk.Saved);
             return memory = disk;
