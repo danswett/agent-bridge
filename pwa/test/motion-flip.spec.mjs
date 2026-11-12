@@ -6,26 +6,28 @@ for (const width of [390, 1024]) {
     test.beforeEach(async ({ page }) => {
       await page.goto('?demo=1&static=1');
       await page.waitForSelector('html[data-demo-ready]');
+      await page.evaluate(() => {
+        // Hold native animations before the next frame can outlast their token duration.
+        const animate = Element.prototype.animate;
+        Element.prototype.animate = function (...args) { const a = animate.apply(this, args); a.pause(); a.currentTime = 0; return a; };
+      });
     });
 
     test('a row leaves where it was while its neighbour eases up without relayout, then a burst opens one slot', async ({ page }) => {
       const sample = await page.evaluate(async () => {
         const d = window.agentBridgeDemo;
         const rows = [...document.querySelectorAll('#session-list > .session')];
-        const neighbour = rows[1], removed = rows[0];
-        const before = neighbour.getBoundingClientRect().top;
+        const neighbour = rows[1], removed = rows[0], before = neighbour.getBoundingClientRect().top;
         d.client.store.remove(removed.dataset.id);
         d.page.view.render();
         await new Promise(requestAnimationFrame);
         const shift = neighbour.getAnimations().find((a) => a.id === 'ab-motion-shift');
         if (!shift) { return { shifted: false }; }
         shift.pause(); shift.currentTime = 40;
-        const layout = [neighbour.offsetTop, neighbour.offsetHeight];
-        const mid = neighbour.getBoundingClientRect().top;
+        const layout = [neighbour.offsetTop, neighbour.offsetHeight], mid = neighbour.getBoundingClientRect().top;
         shift.currentTime = 120;
         const nextLayout = [neighbour.offsetTop, neighbour.offsetHeight];
-        shift.finish();
-        const end = neighbour.getBoundingClientRect().top;
+        shift.finish(); const end = neighbour.getBoundingClientRect().top;
         const { timing } = await import('./js/ui/motion.js');
         const animate = neighbour.animate.bind(neighbour), moves = [];
         neighbour.animate = (...args) => { const a = animate(...args); moves.push(a); return a; };
@@ -49,7 +51,6 @@ for (const width of [390, 1024]) {
       expect(sample.arrivals).toBe(1);
       expect(sample.burstFrom).not.toBe('none');
     });
-
     test('a row-menu move eases both neighbours and a second change retargets from the drawn place on the token curve', async ({ page }) => {
       const result = await page.evaluate(async () => {
         const rows = [...document.querySelectorAll('#session-list > .session')];
@@ -75,7 +76,6 @@ for (const width of [390, 1024]) {
       expect(result.oldState).toBe('idle');
       expect(result.easing).toBe(result.token);
     });
-
     test('a moving row leaves from its drawn position rather than its layout destination', async ({ page }) => {
       const positions = await page.evaluate(async () => {
         const { flip, leave } = await import('./js/ui/motion.js');
@@ -97,7 +97,6 @@ for (const width of [390, 1024]) {
       });
       expect(Math.abs(positions.copy - positions.before)).toBeLessThan(1);
     });
-
     for (const pending of [false, true]) {
       test(`an incomplete initial snapshot never shifts the rows already received${pending ? ' after a queued settled update' : ''}`, async ({ page }) => {
         const shifts = await page.evaluate(async (pending) => {
@@ -120,7 +119,6 @@ for (const width of [390, 1024]) {
         expect(shifts).toBe(0);
       });
     }
-
     test('a manual move during a neighbour shift starts from the drawn position', async ({ page }) => {
       const positions = await page.evaluate(async () => {
         const d = window.agentBridgeDemo, rows = [...document.querySelectorAll('#session-list > .session')];
@@ -188,9 +186,6 @@ for (const width of [390, 1024]) {
           const agent = (id) => ({ id, name: id, status: 'running', startedAt: new Date().toISOString() });
           strip.update({ subagents: [agent('first'), agent('second')] });
           const initial = strip.item('second').getAnimations().length;
-          // Hold at creation: a loaded runner may miss the entire short fade before its next frame.
-          const animate = Element.prototype.animate;
-          Element.prototype.animate = function (...args) { const a = animate.apply(this, args); a.pause(); a.currentTime = 0; return a; };
           const kept = strip.item('second'); kept.focus();
           strip.update({ subagents: [agent('second'), agent('third')] });
           await new Promise(requestAnimationFrame);
