@@ -1665,7 +1665,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 - **Code blocks** (#296): in the Code role (§4.3), wrapped to the block's width rather than
   scrolled sideways, with Copy in the top-right corner above the code (with the copy icon in the app):
   "Copy", then "Copied" (or "Copy failed") for 1.5 s, named "Copy code" whatever it shows, the
-  outcome said to a screen reader. Every code block reads strictly left to right, and a
+  outcome said to a screen reader. A paragraph holding only one bare inline code span uses this same block and Copy
+  in the Windows app and PWA (#1433, #1432). Inline code within a sentence, multiple
+  spans, headings and table cells keep their existing inline rendering; plain text is
+  never detected as a command. Approvals remain literal and have no Copy.
+  Every code block reads strictly left to right, and a
   character that is not on screen as it runs (bidi controls, zero-width and other format or
   invisible characters, and a bare carriage return, which a shell does not take as a line break)
   is drawn as a visible escape such as `\u2067` (#220, the owner's
