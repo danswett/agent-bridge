@@ -80,7 +80,7 @@ public sealed class ReleaseEligibility(IHaltListSource source)
 public sealed class GitHubHaltListSource(HttpClient http, ReleaseDiscovery discovery) : IHaltListSource
 {
     const string Repository = "danswett/agent-bridge";
-    public const string Releases = ReleaseDiscovery.GitHubList;
+    public const string Releases = ReleaseDiscovery.HaltPolicyList;
     public HaltPolicySnapshot Snapshot => discovery.HaltPolicy;
     public IReadOnlyCollection<string> KnownHalts => Snapshot.Policy?.Halted ?? [];
 

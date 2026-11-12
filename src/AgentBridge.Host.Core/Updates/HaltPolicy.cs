@@ -10,7 +10,8 @@ public sealed record HaltPolicySnapshot(VerifiedHaltPolicy? Policy, DateTimeOffs
 public sealed partial class ReleaseDiscovery
 {
     public static readonly TimeSpan PolicyInterval = TimeSpan.FromHours(1);
-    internal sealed record HaltPolicyCache(VerifiedHaltPolicy? Policy, DateTimeOffset? At, DateTimeOffset NotBefore, string? ETag);
+    public const string HaltPolicyList = "https://api.github.com/repos/danswett/agent-bridge/releases?per_page=100";
+    internal sealed record HaltPolicyCache(VerifiedHaltPolicy? Policy, DateTimeOffset? At, DateTimeOffset NotBefore, string? ETag, DateTimeOffset? AttemptedAt = null);
 
     public HaltPolicySnapshot HaltPolicy => PolicyView(memory.HaltPolicy);
 
@@ -27,18 +28,25 @@ public sealed partial class ReleaseDiscovery
         try
         {
             using var held = await LockAsync(cancellationToken);
-            var state = Read();
             var now = time.GetUtcNow();
+            var state = Sane(Read(), now);
             var policy = state.HaltPolicy ?? new(null, null, DateTimeOffset.MinValue, null);
             if (held is null)
             {
                 log?.Invoke("update policy: shared lock unavailable; no policy request made");
                 return PolicyView(policy);
             }
+            if (policy.AttemptedAt is { } attempted && attempted > now)
+            {
+                var hold = policy.NotBefore - attempted;
+                policy = policy with { At = null, NotBefore = now + (hold > PolicyInterval ? hold : PolicyInterval), AttemptedAt = now };
+                state = state with { HaltPolicy = policy };
+                Write(state);
+            }
             if (now < policy.NotBefore || state.NotBefore is { } until && now < until) { return PolicyView(policy); }
             // Persist the attempt before sending: cancellation, a crash or another process
             // must not spend another unauthenticated request inside the hour.
-            policy = policy with { NotBefore = now + PolicyInterval };
+            policy = policy with { NotBefore = now + PolicyInterval, AttemptedAt = now };
             // Until the result commits, another process must not retain an old all-clear
             // if this process crashes or cannot save a newly learned halt.
             state = state with { HaltPolicy = policy with { At = null } };
@@ -48,7 +56,7 @@ public sealed partial class ReleaseDiscovery
                 log?.Invoke("update policy: request budget could not be saved; no policy request made");
                 return PolicyView(policy);
             }
-            var answer = await AskAsync(GitHubList, policy.ETag, cancellationToken);
+            var answer = await AskAsync(HaltPolicyList, policy.ETag, cancellationToken);
             state = ObservedQuota(state, answer);
             now = time.GetUtcNow();
             try
@@ -70,7 +78,7 @@ public sealed partial class ReleaseDiscovery
                 {
                     if (answer.Status is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
                     {
-                        state = BackedOff(state, answer, now, GitHubList);
+                        state = BackedOff(state, answer, now, HaltPolicyList);
                         if (answer.Wait is { } wait && now + wait > policy.NotBefore) { policy = policy with { NotBefore = now + wait }; }
                     }
                     log?.Invoke("update policy: GitHub policy unavailable; stored policy was not renewed");

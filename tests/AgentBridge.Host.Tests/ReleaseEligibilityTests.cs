@@ -13,10 +13,10 @@ public sealed class ReleaseEligibilityTests : IDisposable
     readonly FakeTimeProvider time = new(new DateTimeOffset(2026, 11, 12, 0, 0, 0, TimeSpan.Zero));
     readonly List<IDisposable> clients = [];
 
-    GitHubHaltListSource Policy(HttpMessageHandler handler)
+    GitHubHaltListSource Policy(HttpMessageHandler handler, TimeProvider? clock = null)
     {
         var http = new HttpClient(handler);
-        var discovery = new ReleaseDiscovery(folder, handler, time, random: () => 0);
+        var discovery = new ReleaseDiscovery(folder, handler, clock ?? time, random: () => 0);
         clients.Add(http);
         clients.Add(discovery);
         return new(http, discovery);
@@ -29,15 +29,18 @@ public sealed class ReleaseEligibilityTests : IDisposable
     }
 
     [Fact]
-    public async Task Repeated_policy_checks_reuse_one_verified_GitHub_answer()
+    public async Task Repeated_policy_checks_share_the_publishers_100_release_window_and_one_GitHub_read()
     {
         var metadataReads = 0;
         var body = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2349"]}""");
+        var empty = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
         var handler = new Handler(uri =>
         {
-            if (uri.AbsoluteUri != GitHubHaltListSource.Releases) { return body; }
+            if (uri.Host != "api.github.com") { return uri.AbsolutePath.Contains("/v0.1.2349/") ? body : empty; }
             metadataReads++;
-            return Metadata("2349", body);
+            var releases = Enumerable.Repeat(Metadata("1", empty), 99).Append(Metadata("2349", body))
+                .Select(json => Encoding.UTF8.GetString(json)[1..^1]);
+            return Encoding.UTF8.GetBytes("[" + string.Join(",", uri.Query.Contains("per_page=100", StringComparison.Ordinal) ? releases : releases.Take(10)) + "]");
         });
 
         for (var i = 0; i < 3; i++)
@@ -68,6 +71,25 @@ public sealed class ReleaseEligibilityTests : IDisposable
         time.Advance(TimeSpan.FromHours(1));
         run = "2349";
         Assert.Equal(new HaltCheck(false), await eligibility.IsHalted("0.1.2349"));
+    }
+
+    [Fact]
+    public async Task A_clock_correction_rebounds_the_policy_hold_without_trusting_future_freshness()
+    {
+        var reads = 0;
+        var body = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
+        var handler = new Handler(uri =>
+        {
+            if (uri.AbsoluteUri != GitHubHaltListSource.Releases) { return body; }
+            reads++;
+            return Metadata("2349", body);
+        });
+        await Policy(handler, new FakeTimeProvider(time.GetUtcNow().AddDays(1))).ReadAsync(default);
+        var source = Policy(handler);
+        await Assert.ThrowsAsync<IOException>(() => source.ReadAsync(default));
+        time.Advance(TimeSpan.FromHours(1));
+        await source.ReadAsync(default);
+        Assert.Equal(2, reads);
     }
 
     [Fact]
@@ -108,7 +130,7 @@ public sealed class ReleaseEligibilityTests : IDisposable
                 relayReads++;
                 return new(HttpStatusCode.OK) { Content = new StringContent(relay), Headers = { Age = TimeSpan.Zero } };
             }
-            if (request.RequestUri.AbsoluteUri != GitHubHaltListSource.Releases) { return new(HttpStatusCode.OK) { Content = new ByteArrayContent(body) }; }
+            if (request.RequestUri.AbsoluteUri is not (GitHubHaltListSource.Releases or ReleaseDiscovery.GitHubList)) { return new(HttpStatusCode.OK) { Content = new ByteArrayContent(body) }; }
             metadataReads++;
             return new(HttpStatusCode.OK) { Content = new StringContent(direct) };
         });

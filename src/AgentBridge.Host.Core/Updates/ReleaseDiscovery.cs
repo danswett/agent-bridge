@@ -486,7 +486,7 @@ public sealed partial class ReleaseDiscovery : IDisposable
         try
         {
             using var response = await http.SendAsync(request, cancellationToken);
-            if (url == GitHubList && int.TryParse(Header(response, "X-RateLimit-Remaining"), NumberStyles.None, CultureInfo.InvariantCulture, out var remaining))
+            if (url is GitHubList or HaltPolicyList && int.TryParse(Header(response, "X-RateLimit-Remaining"), NumberStyles.None, CultureInfo.InvariantCulture, out var remaining))
             {
                 quota = new(remaining, time.GetUtcNow());
             }
