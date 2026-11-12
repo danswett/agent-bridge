@@ -85,7 +85,18 @@ public sealed partial class SessionCardViewModel : Observable
     public string ReplySendTooltip => ctx.ReturnSends() ? "Send (Enter)" : "Send (Ctrl+Enter)";
     SessionHistory? stored;
     // The turns the host stores for this session (#292), read as the pane draws them; null with no host to ask.
-    public SessionHistory? Stored => stored ??= ctx.Host is { } host ? new SessionHistory(host, session.Id) : null;
+    public SessionHistory? Stored
+    {
+        get
+        {
+            if (stored is null && ctx.Host is { } host)
+            {
+                stored = new SessionHistory(host, session.Id);
+                stored.Changed += OnStoredChanged;
+            }
+            return stored;
+        }
+    }
     // Its delegates (ui.md §6.3): the strip, the Delegates tab, the inspector and the
     // conversation's one-line events.
     public DelegatesViewModel Delegates { get; }
@@ -158,15 +169,17 @@ public sealed partial class SessionCardViewModel : Observable
     // untrusted, must not pass as the main agent's.
     public bool Attributed => Voice.Attributed;
     public string Speaker => Attributed ? "Main agent" : AgentName;
-    public string Response => Voice.Response ?? "";
+    HistoryPart? HeldReply => stored?.ReplyFor(session.Activity.ResponseTurn ?? session.Activity.Turn);
+    public string Response => Voice.Response ?? HeldReply?.Text ?? "";
     public bool HasResponse => Response.Length > 0;
-    public bool ResponseTruncated => Voice.ResponseTruncated;
+    public bool ResponseTruncated => Voice.Response is null ? HeldReply?.Truncated == true : Voice.ResponseTruncated;
     // The main agent had a response, but the session budget left it out to make room for its
     // delegates (own.response dropped, own.responseTruncated kept): said so, rather than looking
     // like no answer, and never filled with the delegate's text.
-    public bool ResponseDropped => Voice.ResponseDropped;
+    public bool ResponseDropped => !HasResponse && Voice.ResponseDropped;
     // The label line shows for the main agent's words, or for the note that they were left out.
-    public bool HasVoice => HasResponse || ResponseDropped;
+    public bool HasVoice => (HasResponse || ResponseDropped) && !(stored is not null && HasResponse
+        && session.Activity is { Turn: { Length: > 0 } turn, ResponseTurn: { Length: > 0 } answered } && turn != answered);
     // When the main agent last wrote what is shown: own.at for its own text beside a delegate's,
     // which moves the session's updatedAt without touching the main agent's answer; else the
     // session's age, as on its row.
@@ -179,14 +192,14 @@ public sealed partial class SessionCardViewModel : Observable
     public DateTimeOffset RowAt => SilentSince ?? session.UpdatedAt;
     public string Reasoning => Voice.Reasoning ?? "";
     public bool HasReasoning => ctx.ShowDetail() && Reasoning.Length > 0;
-    public string UserMessage => session.Activity.UserMessage ?? "";
+    public string UserMessage => !string.IsNullOrEmpty(session.Activity.UserMessage) ? session.Activity.UserMessage : stored?.PromptFor(session.Activity.Turn)?.Text ?? "";
     // The person's own last message, as a bubble; a prompt they didn't type is the Prompt line
     // instead (#489).
-    public bool HasUserMessage => !string.IsNullOrEmpty(session.Activity.UserMessage) && Prompt is null;
+    public bool HasUserMessage => UserMessage.Length > 0 && Prompt is null;
     // A message sent mid-turn is the latest turn's, but the words still being written answer an
     // earlier one (ResponseTurn, v1-history): it stays below them, by time sent, until the agent
     // starts answering it (#1613).
-    public bool UserMessageBelow => HasUserMessage && HasVoice
+    public bool UserMessageBelow => HasUserMessage && (HasResponse || ResponseDropped)
         && session.Activity is { Turn: { Length: > 0 } turn, ResponseTurn: { Length: > 0 } answered } && turn != answered;
     public bool UserMessageAbove => HasUserMessage && !UserMessageBelow;
 
@@ -322,9 +335,8 @@ public sealed partial class SessionCardViewModel : Observable
         var first = !synced;
         synced = true;
         session = next;
-        promptSeen = prompts.Observe(next);
-        prompt = PromptOrigin.Of(next, promptSeen.Repeat);
-        if (promptSeen.Fresh) { promptOpen = false; }
+        Stored?.Observe(next);
+        RefreshPrompt();
         Sync();
         Delegates.Update(next, ctx.Time.GetUtcNow());
         // A new question opens a folded card: it waits on you, and must not stay folded away.
@@ -333,6 +345,33 @@ public sealed partial class SessionCardViewModel : Observable
         RaiseAll();
         if (HistoryOpen && lastHistoryAt != next.UpdatedAt.ToString("O")) { _ = LoadHistoryAsync(); }
     }
+
+    void RefreshPrompt()
+    {
+        var shown = session;
+        if (string.IsNullOrEmpty(shown.Activity.UserMessage) && stored?.PromptFor(shown.Activity.Turn) is { } held)
+        {
+            shown = shown with { Activity = shown.Activity with { UserMessage = held.Text, UserMessageFrom = held.From, UserMessageLabel = held.Label } };
+        }
+        promptSeen = prompts.Observe(shown);
+        prompt = PromptOrigin.Of(shown, promptSeen.Repeat);
+        if (promptSeen.Fresh) { promptOpen = false; }
+    }
+
+    void OnStoredChanged() => (ctx.Ui ?? ctx.Deliveries.Ui).Post(() =>
+    {
+        RefreshPrompt();
+        foreach (var name in ConversationProperties) { Raise(name); }
+    });
+
+    static readonly string[] ConversationProperties =
+    [
+        nameof(Response), nameof(HasResponse), nameof(ResponseTruncated), nameof(ResponseDropped), nameof(HasVoice),
+        nameof(UserMessage), nameof(HasUserMessage), nameof(UserMessageAbove), nameof(UserMessageBelow),
+        nameof(Prompt), nameof(HasPrompt), nameof(PromptIsSchedule), nameof(PromptIsDriven), nameof(PromptLabel),
+        nameof(PromptBy), nameof(HasPromptBy), nameof(PromptPreview), nameof(HasPromptPreview), nameof(PromptText),
+        nameof(PromptAgeText), nameof(HasPromptAge), nameof(PromptToggleName), nameof(PromptToggleText), nameof(PromptOpen),
+    ];
 
     // The host's capabilities changed (it restarted, or agent-ha-bridge started or stopped).
     public void CapabilitiesChanged()
@@ -572,6 +611,7 @@ public sealed partial class SessionCardViewModel : Observable
 
     public void Detach()
     {
+        if (stored is not null) { stored.Changed -= OnStoredChanged; }
         ctx.Deliveries.Changed -= OnDelivery;
         question?.Detach();
         reply?.Detach();

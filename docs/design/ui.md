@@ -1597,8 +1597,15 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   Try again, and the start line (#1285).*
   The Windows app now draws the stored turns above the latest exchange, oldest first, read-only,
   from the session history client (#292 W2a): the response text of each turn with its prompt, at
-  most 500 turns, with the H5 lines below. The newest held turn draws first; older held turns
-  fill in two at a time between input turns, paused during a scroll or pan, without moving what
+  most 500 turns, with the H5 lines below.
+  Live Windows replies stay with their `responseTurn` when a scheduled or notification turn
+  arrives (#2144). A queued owner's prompt does not take the earlier turn's reply; it remains
+  unanswered until its own reply arrives. Live/history deduplication uses turn ids where available,
+  not matching prompt text. A prompt-only history refresh keeps a reply already seen live.
+  Budget-trimmed live prompts keep their held text and origin; history-loaded replies refresh
+  the live pane without waiting for another session update.
+  The newest held turn draws first; older held turns fill in two at a time between input turns,
+  paused during a scroll or pan, without moving what
   the reader is looking at (#1767). This does not change host page sizes or transcript reads.
   Turns stay virtualized; a realized turn measures all its response blocks together.
   It opens at the end, on the latest reply, and stays there as replies arrive until the person

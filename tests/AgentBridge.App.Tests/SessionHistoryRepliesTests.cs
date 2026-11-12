@@ -94,6 +94,101 @@ public sealed class SessionHistoryRepliesTests
         finally { card.Detach(); }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_empty_or_delegate_only_snapshot_does_not_clear_a_held_main_agent_reply(bool delegated)
+    {
+        await using var connection = HostConnection.ForProfile("not-connected", new LockedDispatcher());
+        var card = Card(connection, Snapshot("owner", "Owner question", "Owner answer", "owner"));
+        try
+        {
+            card.Update(Snapshot("owner", "Owner question", delegated ? "Delegate text" : null, "owner") with
+            {
+                Activity = new Activity
+                {
+                    Turn = "owner", UserMessage = "Owner question", ResponseTurn = "owner",
+                    Response = delegated ? "Delegate text" : null,
+                    Source = delegated ? new ActivitySource { Response = "worker" } : null,
+                },
+            });
+            Assert.Equal("Owner answer", Assert.Single(HistoryDraw.Rows(card.Stored!.Turns, null)).Blocks[0].Text);
+            Assert.Equal("Owner answer", card.Response);
+            Assert.True(card.HasVoice);
+        }
+        finally { card.Detach(); }
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_prompt_only_page_cannot_erase_a_reply_already_seen_live()
+    {
+        await using var host = Serving(() => 0);
+        host.Start();
+        var connection = host.Connect();
+        await connection.WhenConnectedAsync().WaitAsync(FakeHost.Patience);
+        var card = Card(connection, Snapshot("owner", "Owner question", "Owner answer", "owner"));
+        try
+        {
+            host.On(HistoryProtocol.Op, _ => new HistoryResult
+            {
+                Turns = [new HistoryTurn { Id = "owner", At = T0, Prompt = new HistoryPrompt { Text = "Owner question" } }],
+            });
+            await card.Stored!.LoadNewestAsync();
+            Assert.Equal("Owner answer", Assert.Single(HistoryDraw.Rows(card.Stored.Turns, null)).Blocks[0].Text);
+        }
+        finally { card.Detach(); }
+    }
+
+    [Theory]
+    [InlineData(UserMessageFrom.Person)]
+    [InlineData(UserMessageFrom.Schedule)]
+    public async Task A_budget_trimmed_live_prompt_stays_visible_with_its_original_origin(UserMessageFrom from)
+    {
+        await using var connection = HostConnection.ForProfile("not-connected", new LockedDispatcher());
+        var original = Snapshot("owner", "Original prompt", "Owner answer", "owner", from: from);
+        var card = Card(connection, original);
+        try
+        {
+            card.Update(original with { Activity = original.Activity with { UserMessage = null } });
+            Assert.Equal("Original prompt", card.UserMessage);
+            Assert.Equal(from == UserMessageFrom.Person, card.HasUserMessage);
+            Assert.Equal(from == UserMessageFrom.Schedule, card.HasPrompt);
+        }
+        finally { card.Detach(); }
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_reply_loaded_from_history_refreshes_the_live_response_without_another_session_update()
+    {
+        await using var host = Serving(() => 0);
+        host.Start();
+        await using var connection = host.Connect();
+        await connection.WhenConnectedAsync().WaitAsync(FakeHost.Patience);
+        var card = Card(connection, Snapshot("owner", "Owner question", answered: "owner"));
+        try
+        {
+            var rendered = "";
+            card.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(card.Response)) { rendered = card.Response; }
+            };
+            host.On(HistoryProtocol.Op, _ => new HistoryResult
+            {
+                Turns = [new HistoryTurn
+                {
+                    Id = "owner", At = T0, Prompt = new HistoryPrompt { Text = "Owner question" },
+                    Parts = [new HistoryPart { Id = "answer", At = T0, Kind = HistoryPartKind.Response, Text = "Stored answer" }],
+                }],
+            });
+            await card.Stored!.LoadNewestAsync();
+            Assert.Equal("Stored answer", rendered);
+            Assert.True(card.HasVoice);
+        }
+        finally { card.Detach(); }
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task Five_turns_the_live_session_said_in_ten_seconds_stay_five_entries_after_the_page_that_has_them()

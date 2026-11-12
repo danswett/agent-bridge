@@ -51,16 +51,17 @@ public static class HistoryDraw
     public const string Unreadable = "A turn here couldn't be read";
     public const string CutShort = "Cut short · see the machine";
 
-    // The turns to draw. The newest held turn is the live exchange when its prompt is the card's
-    // (the card draws it, so it is not drawn twice); no live prompt, as for a session just begun, drops nothing.
+    // The live turn is drawn by the card, not twice. Prompt matching is only for older hosts
+    // without turn ids: repeated or budget-shortened prompts cannot identify a turn (#2144).
     public static IReadOnlyList<HistoryRow> Rows(IReadOnlyList<HistoryTurn> turns, string? livePrompt, IDictionary<string, HistoryDisclosure>? kept = null, MessageClock? clock = null,
-        IDictionary<string, ClosedQuestion>? closed = null, string? activeQuestion = null)
+        IDictionary<string, ClosedQuestion>? closed = null, string? activeQuestion = null, string? liveTurn = null)
     {
         clock ??= MessageClock.Local;
         var count = turns.Count;
         bool IsClosed(HistoryPart part) => part.Kind == HistoryPartKind.Question && part.Question is { } q && q.Id != activeQuestion;
         // The current view still draws Blocks. A mixed-items view opts in with its disclosure cache.
-        if (count > 0 && !string.IsNullOrWhiteSpace(livePrompt) && turns[^1].Prompt is { } last && last.Text.Trim() == livePrompt.Trim()
+        if (count > 0 && (!string.IsNullOrEmpty(liveTurn) ? turns[^1].Id == liveTurn
+            : !string.IsNullOrWhiteSpace(livePrompt) && turns[^1].Prompt is { } last && last.Text.Trim() == livePrompt.Trim())
             && (closed is null || !turns[^1].Parts.Any(IsClosed))) { count--; }
         var from = Math.Max(0, count - HistoryLimits.Kept);
         var retained = closed is null ? new HashSet<string>() : turns.Skip(from).Take(count - from).Where(t => t.Unreadable != true)

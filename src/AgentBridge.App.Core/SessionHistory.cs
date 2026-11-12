@@ -79,6 +79,78 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
         return true;
     }
 
+    internal HistoryPart? ReplyFor(string? id)
+    {
+        lock (gate) { return held.Find(t => t.Id == id)?.Parts.LastOrDefault(p => p.Kind == HistoryPartKind.Response && !string.IsNullOrEmpty(p.Text)); }
+    }
+
+    internal HistoryPrompt? PromptFor(string? id)
+    {
+        lock (gate) { return held.Find(t => t.Id == id)?.Prompt; }
+    }
+
+    // Keep live words before a later snapshot replaces them. The prompt and reply can name
+    // different turns when the person is queued behind a notification (#2144).
+    internal void Observe(Session session)
+    {
+        var a = session.Activity;
+        if (string.IsNullOrEmpty(a.Turn)) { return; }
+        var changed = false;
+        lock (gate)
+        {
+            var current = held.FindIndex(t => t.Id == a.Turn);
+            if (current < 0)
+            {
+                held.Add(new HistoryTurn
+                {
+                    Id = a.Turn, At = session.UpdatedAt,
+                    Prompt = string.IsNullOrEmpty(a.UserMessage) ? null : new HistoryPrompt
+                    {
+                        Text = a.UserMessage, From = a.UserMessageFrom, Label = a.UserMessageLabel,
+                    },
+                });
+                current = held.Count - 1;
+                changed = true;
+            }
+            else if (held[current].Prompt is null && !string.IsNullOrEmpty(a.UserMessage))
+            {
+                held[current] = held[current] with
+                {
+                    Prompt = new HistoryPrompt { Text = a.UserMessage, From = a.UserMessageFrom, Label = a.UserMessageLabel },
+                };
+                changed = true;
+            }
+            var voice = Attribution.MainVoiceOf(session);
+            if (!string.IsNullOrEmpty(a.ResponseTurn) && !string.IsNullOrEmpty(voice.Response))
+            {
+                var at = held.FindIndex(t => t.Id == a.ResponseTurn);
+                if (at < 0)
+                {
+                    // Opening mid-run can first reveal an earlier reply without its prompt.
+                    held.Insert(current, new HistoryTurn { Id = a.ResponseTurn, At = session.UpdatedAt });
+                    at = current;
+                }
+                var turn = held[at];
+                var parts = turn.Parts.ToList();
+                var last = parts.FindLastIndex(p => p.Kind == HistoryPartKind.Response);
+                if (last < 0 || parts[last].Text != voice.Response || (parts[last].Truncated == true) != voice.ResponseTruncated)
+                {
+                    var part = new HistoryPart
+                    {
+                        Id = last < 0 ? $"{turn.Id}:live" : parts[last].Id,
+                        Kind = HistoryPartKind.Response, At = session.UpdatedAt,
+                        Text = voice.Response, Truncated = voice.ResponseTruncated ? true : null,
+                    };
+                    if (last < 0) { parts.Add(part); } else { parts[last] = part; }
+                    held[at] = turn with { Parts = parts };
+                    changed = true;
+                }
+            }
+            TrimOldest();
+        }
+        if (changed) { Changed?.Invoke(); }
+    }
+
     // StartReached only rules out older pages: the newest page can still be read again for what the session has grown.
     bool Begin(bool newest)
     {
@@ -187,7 +259,12 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
             foreach (var turn in page.Turns!)
             {
                 var at = held.FindIndex(t => t.Id == turn.Id);
-                if (at >= 0) { held[at] = turn; }
+                if (at >= 0)
+                {
+                    // A page captured before the live reply must not erase words already shown.
+                    held[at] = turn.Parts.Any(p => p.Kind == HistoryPartKind.Response && !string.IsNullOrEmpty(p.Text))
+                        ? turn : turn with { Parts = [.. turn.Parts, .. held[at].Parts.Where(p => p.Kind == HistoryPartKind.Response)] };
+                }
                 else if (fresh.All(t => t.Id != turn.Id)) { fresh.Add(turn); }
             }
             added = fresh.Count;

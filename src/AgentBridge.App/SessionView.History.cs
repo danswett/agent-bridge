@@ -60,12 +60,13 @@ public sealed partial class SessionView
     {
         var turns = history?.Turns ?? [];
         var from = Math.Max(0, turns.Count - historyVisible);
+        if (from > 0 && from == turns.Count - 1 && turns[^1].Id == Card?.Session.Activity.Turn) { from--; }
         // A live arrival extends what is already drawn instead of dropping its oldest visible turn.
         if (rowsOf == shownHistory && historyShown.FirstOrDefault() is { } first)
         {
             for (var i = 0; i < from; i++) { if (turns[i].Id == first.Id) { from = i; break; } }
         }
-        var rows = HistoryDraw.Rows(turns.Skip(from).ToArray(), Card?.UserMessage, openPrompts);
+        var rows = HistoryDraw.Rows(turns.Skip(from).ToArray(), Card?.UserMessage, openPrompts, liveTurn: Card?.Session.Activity.Turn);
         historyVisible = Math.Max(1, turns.Count - from);
         var line = history is null ? null : HistoryDraw.Line(history.State, rows.Count, !string.IsNullOrEmpty(Card?.UserMessage), history.Start);
         var scroll = ConversationScroll;
