@@ -417,6 +417,94 @@ test.describe('held update clocks', () => {
   });
 });
 
+test.describe('approved Fleet card structure', () => {
+  test.use({ isMobile: true });
+  for (const [width, scale] of [[390, 100], [390, 200], [768, 100], [1024, 100]]) {
+    test(`cards keep their hierarchy, disclosures and aligned bars at ${width}px and ${scale}% text`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.addInitScript(() => { Object.defineProperty(navigator, 'standalone', { value: true }); });
+      await openDemo(page);
+      await go(page, 'machines');
+      await page.evaluate(async (scale) => {
+        document.documentElement.style.setProperty('--text-scale', scale / 100);
+        const { renderMachines } = await import('/js/ui/views.js');
+        document.getElementById('machine-list').hidden = true;
+        const list = document.createElement('ul');
+        list.id = 'structure-fixture'; list.className = 'machines';
+        document.getElementById('machines').append(list);
+        const hosts = ['Small', 'Large'].map((name, i) => ({ id: `structure-${i}`, name, kind: 'host' }));
+        window.structureCalls = [];
+        window.drawStructure = (version = '0.1.1', state = 'fresh') => renderMachines(list, {
+          presence: hosts, current: hosts[1].id, me: 'phone',
+          facts: () => ({ sessions: '2 sessions', version }),
+          load: (id) => ({ state, ageMs: state === 'fresh' ? 12000 : 240000, staleAfterMs: 15000,
+            cpu: { percent: id === hosts[0].id ? 7.2 : 97.6 },
+            memory: { totalBytes: 32e9, availableBytes: id === hosts[0].id ? 20e9 : 1e9 } }),
+          onSelect: (id) => window.structureCalls.push(id), onLaunch() {},
+        });
+        window.drawStructure();
+      }, scale);
+      const cards = page.locator('#structure-fixture > .machine');
+      await expect(cards.first().locator('.machine-name')).toHaveCSS('font-size', `${(width < 760 ? 15 : 14) * scale / 100}px`);
+      for (const card of await cards.all()) {
+        await expect(card.locator('.tile-health-word')).toHaveText('Not measured yet');
+        await expect(card.locator('.tile-health-icon')).toBeVisible();
+        await expect(card.getByText('Updated 12 s ago', { exact: true })).toBeVisible();
+        await expect(card.locator('.machine-load-label')).toHaveText(['CPU', 'Memory']);
+        await expect(card.locator('.machine-load-state')).toHaveText(['\u25cf Fresh', '\u25cf Fresh']);
+        const running = card.getByRole('button', { name: /^Running, 2/ });
+        await expect(running).toHaveAttribute('aria-expanded', 'false');
+        await expect(card.getByText('Running: 2 sessions', { exact: true })).toHaveCount(0);
+        await expect(card.locator('.machine-status')).toHaveText('2 sessions · 0.1.1');
+        await expect(card.locator('.machine-state')).toContainText('Online');
+        await expect(card.locator('.machine-state [aria-hidden="true"]')).toBeVisible();
+        const actions = [card.getByRole('button', { name: /^Launch here/ }), card.getByRole('button', { name: /^Show sessions/ })];
+        const boxes = await Promise.all(actions.map((a) => a.boundingBox()));
+        expect(Math.abs(boxes[0].y - boxes[1].y)).toBeLessThanOrEqual(0.5);
+        for (const a of actions) { expect((await a.boundingBox()).height).toBeGreaterThanOrEqual(44); }
+      }
+      await expect(cards.first().locator('.machine-load-value')).toHaveText(['7%', '38%']);
+      await expect(cards.last().locator('.machine-load-value')).toHaveText(['98%', '97%']);
+      await expect(cards.first().getByText('20 GB free', { exact: true })).toBeVisible();
+      await expect(cards.last().getByText('1 GB free', { exact: true })).toBeVisible();
+      const bars = await page.locator('#structure-fixture .machine-load-track').evaluateAll((els) => els.map((el) => {
+        const r = el.getBoundingClientRect(), card = el.closest('.machine').getBoundingClientRect();
+        return { left: r.left - card.left, right: card.right - r.right };
+      }));
+      for (const bar of bars) {
+        expect(Math.abs(bar.left - bars[0].left)).toBeLessThanOrEqual(0.5);
+        expect(Math.abs(bar.right - bars[0].right)).toBeLessThanOrEqual(0.5);
+      }
+      const presentation = await cards.evaluateAll((els) => els.map((card) => ({
+        bold: [...card.querySelectorAll('*')].filter((el) => el.childNodes.length && [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) && Number(getComputedStyle(el).fontWeight) >= 600).map((el) => el.className),
+        band: getComputedStyle(card.querySelector('.machine-block')).backgroundColor,
+        clipped: [...card.querySelectorAll('*')].some((el) => el.clientWidth && el.scrollWidth > el.clientWidth + 1),
+      })));
+      for (const p of presentation) {
+        expect(p.bold).toEqual(['machine-name']);
+        expect(p.band).toBe('rgba(0, 0, 0, 0)');
+        expect(p.clipped).toBe(false);
+      }
+      const running = cards.first().getByRole('button', { name: /^Running, 2/ });
+      await running.click();
+      await expect(running).toHaveAttribute('aria-expanded', 'true');
+      await running.focus();
+      await page.evaluate(() => window.drawStructure('0.1.2'));
+      await expect(running).toHaveAttribute('aria-expanded', 'true');
+      await expect(running).toBeFocused();
+      await cards.last().getByRole('button', { name: /^Show sessions/ }).tap();
+      expect(await page.evaluate(() => window.structureCalls)).toEqual(['structure-1']);
+      await page.evaluate(() => window.drawStructure('0.1.2', 'stale'));
+      for (const card of await cards.all()) {
+        await expect(card.getByText('Last measured 4 min ago', { exact: true })).toBeVisible();
+        await expect(card.getByRole('meter')).toHaveCount(0);
+        await expect(card.getByText(/GB free/)).toHaveCount(0);
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    });
+  }
+});
+
 test.describe('one truthful update line', () => {
   test.use({ timezoneId: 'America/Los_Angeles' });
   const now = new Date('2026-11-10T17:40:00Z');
