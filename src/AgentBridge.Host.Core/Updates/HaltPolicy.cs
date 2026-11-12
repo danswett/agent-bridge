@@ -18,7 +18,6 @@ public sealed partial class ReleaseDiscovery
     HaltPolicySnapshot PolicyView(HaltPolicyCache? policy) => new(policy?.Policy, policy?.At,
         !unsaved && policy?.Policy is not null && policy.At is { } at && at <= time.GetUtcNow()
         && time.GetUtcNow() - at < GithubRevalidateEvery);
-    // Only verified GitHub assets enter this cache; relay metadata never does.
     public async Task<HaltPolicySnapshot> ReadHaltPolicyAsync(
         Func<string, CancellationToken, Task<VerifiedHaltPolicy>> verify, CancellationToken cancellationToken = default)
     {
@@ -29,15 +28,10 @@ public sealed partial class ReleaseDiscovery
             var now = time.GetUtcNow();
             var state = Sane(Read(), now);
             var policy = state.HaltPolicy ?? new(null, null, DateTimeOffset.MinValue, null);
-            if (held is null)
+            if (held is null) { log?.Invoke("update policy: shared lock unavailable; no policy request made"); return PolicyView(policy); }
+            if (policy.AttemptedAt > now || policy.NotBefore > now + PolicyInterval + BackoffJitter)
             {
-                log?.Invoke("update policy: shared lock unavailable; no policy request made");
-                return PolicyView(policy);
-            }
-            if (policy.AttemptedAt is { } attempted && attempted > now)
-            {
-                var hold = policy.NotBefore - attempted;
-                policy = policy with { At = null, NotBefore = now + (hold > PolicyInterval ? hold : PolicyInterval), AttemptedAt = now, Attempt = NextAttempt(policy) };
+                policy = policy with { At = null, NotBefore = now + PolicyInterval, AttemptedAt = now, Attempt = NextAttempt(policy) };
                 state = state with { HaltPolicy = policy };
                 Write(state);
             }

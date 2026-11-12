@@ -37,21 +37,23 @@ public sealed class ReleaseEligibilityTests : IDisposable
                 .Select(json => Encoding.UTF8.GetString(json)[1..^1]);
             return Encoding.UTF8.GetBytes("[" + string.Join(",", uri.Query.Contains("per_page=100", StringComparison.Ordinal) ? releases : releases.Take(10)) + "]");
         });
-        for (var i = 0; i < 3; i++)
-        { Assert.Equal(new HaltCheck(true), await new ReleaseEligibility(Policy(handler)).IsHalted("0.1.2349")); }
+        for (var i = 0; i < 3; i++) { Assert.Equal(new HaltCheck(true), await new ReleaseEligibility(Policy(handler)).IsHalted("0.1.2349")); }
         Assert.Equal(1, handler.Requests.Count(uri => uri.Host == "api.github.com"));
     }
 
-    [Fact]
-    public async Task A_clock_correction_rebounds_the_policy_hold_without_trusting_future_freshness()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_clock_correction_rebounds_the_policy_hold_without_trusting_future_freshness(bool legacy)
     {
         var body = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
         var handler = ByteReplies(uri => uri.AbsoluteUri == GitHubHaltListSource.Releases ? Metadata("2349", body) : body);
         await Policy(handler, new FakeTimeProvider(time.GetUtcNow().AddDays(1))).ReadAsync(default);
+        if (legacy) { ForgetObservation("attemptedAt"); }
         var source = Policy(handler);
         await Assert.ThrowsAsync<IOException>(() => source.ReadAsync(default));
         time.Advance(TimeSpan.FromHours(1));
-        await source.ReadAsync(default);
+        Assert.Equal(new HaltCheck(false), await new ReleaseEligibility(source).IsHalted("0.1.2349"));
         Assert.Equal(2, handler.Requests.Count(uri => uri.Host == "api.github.com"));
     }
 
@@ -79,8 +81,7 @@ public sealed class ReleaseEligibilityTests : IDisposable
         {
             await FailOrdinaryWrite(writer);
             (run, body, failSave) = ("2349", Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2349"]}"""), true);
-            Assert.Equal(new HaltCheck(true), await eligibility.IsHalted("0.1.2349"));
-            Assert.False(source.Snapshot.Fresh);
+            Assert.Equal((new HaltCheck(true), false), (await eligibility.IsHalted("0.1.2349"), source.Snapshot.Fresh));
             Assert.Equal(new HaltCheck(null, ReleaseBlockedReason.HaltListUnavailable), await new ReleaseEligibility(Policy(handler)).IsHalted("0.1.2350"));
             failSave = false;
             Directory.Delete(Path.Combine(folder, ReleaseDiscovery.FileName + ".tmp"));
@@ -88,13 +89,11 @@ public sealed class ReleaseEligibilityTests : IDisposable
             await writer.ReleasesAsync(ReleaseDiscovery.GitHubList, default);
         }
         (run, body) = ("2348", Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}"""));
-        Assert.Equal(new HaltCheck(true), await eligibility.IsHalted("0.1.2349"));
-        Assert.Equal(failedCommit ? null : first, source.Snapshot.At);
+        Assert.Equal((new HaltCheck(true), failedCommit ? null : first), (await eligibility.IsHalted("0.1.2349"), source.Snapshot.At));
         Assert.Equal(2, handler.Requests.Count(uri => uri.AbsoluteUri == GitHubHaltListSource.Releases));
         time.Advance(failedCommit ? TimeSpan.FromMinutes(59) : TimeSpan.FromHours(1));
         if (!failedCommit) { run = "2349"; }
-        Assert.Equal(new HaltCheck(failedCommit), await eligibility.IsHalted("0.1.2349"));
-        Assert.Equal(!failedCommit, source.Snapshot.Fresh);
+        Assert.Equal((new HaltCheck(failedCommit), !failedCommit), (await eligibility.IsHalted("0.1.2349"), source.Snapshot.Fresh));
     }
 
     [Theory]
@@ -133,16 +132,20 @@ public sealed class ReleaseEligibilityTests : IDisposable
         Directory.Delete(Path.Combine(folder, ReleaseDiscovery.FileName + ".tmp"));
     }
 
-    void ForgetObservation()
+    void ForgetObservation(string property = "verified")
     {
         var path = Path.Combine(folder, ReleaseDiscovery.FileName);
         var state = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
-        state["haltPolicy"]!["verified"] = 0;
+        state["haltPolicy"]!.AsObject().Remove(property);
         File.WriteAllText(path, state.ToJsonString());
     }
 
-    [Fact]
-    public async Task A_relay_writer_cannot_replace_the_policy_or_erase_a_failed_policy_refusal()
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    public async Task A_later_relay_or_GitHub_success_keeps_the_failed_refusal_until_expiry_or_clock_correction(bool relayWriter, bool rollback)
     {
         var body = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2349"]}""");
         var (refuse, cdnFails) = (false, false);
@@ -168,18 +171,24 @@ public sealed class ReleaseEligibilityTests : IDisposable
         await discovery.ReleasesAsync(ReleaseDiscovery.GitHubList, b => b, default, "0.1.1", "win");
         time.Advance(TimeSpan.FromHours(1));
         refuse = true;
-        using var refuser = new ReleaseDiscovery(folder, handler, time, random: () => 0);
+        var deadline = time.GetUtcNow().AddMinutes(61);
+        using var refuser = new ReleaseDiscovery(folder, handler, time, random: () => 1);
         await refuser.ReadHaltPolicyAsync((_, _) => throw new Xunit.Sdk.XunitException("A refusal must not verify an asset."));
         Directory.Delete(Path.Combine(folder, ReleaseDiscovery.FileName + ".tmp"));
         time.Advance(TimeSpan.FromMinutes(1));
-        Assert.Equal(relay, await discovery.ReleasesAsync(ReleaseDiscovery.GitHubList, b => b, default, "0.1.1", "win"));
+        Assert.Equal(relayWriter ? relay : direct, await discovery.ReleasesAsync(ReleaseDiscovery.GitHubList, b => b, default, "0.1.1", relayWriter ? "win" : null));
         Assert.Equal(new HaltCheck(true), await new ReleaseEligibility(Policy(handler)).IsHalted("0.1.2349"));
-        Assert.Equal(1, handler.Requests.Count(uri => uri.AbsoluteUri == ReleaseDiscovery.CdnList));
-        Assert.Equal(3, handler.Requests.Count(uri => uri.Host == "api.github.com"));
-        time.Advance(ReleaseDiscovery.Interval);
+        var calls = relayWriter ? 3 : 4;
+        Assert.Equal((relayWriter ? 1 : 0, calls), (handler.Requests.Count(uri => uri.AbsoluteUri == ReleaseDiscovery.CdnList), handler.Requests.Count(uri => uri.Host == "api.github.com")));
+        time.Advance(relayWriter ? ReleaseDiscovery.Interval : TimeSpan.Zero);
         cdnFails = true;
-        await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => refuser.ReleasesAsync(ReleaseDiscovery.GitHubList, b => b, default, "0.1.1", "win"));
-        Assert.Equal(3, handler.Requests.Count(uri => uri.Host == "api.github.com"));
+        var held = await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => refuser.ReleasesAsync(ReleaseDiscovery.GitHubList, b => b, default, "0.1.1", relayWriter ? "win" : null));
+        Assert.Equal((true, deadline, calls), (held.Limited, held.RetryAt, handler.Requests.Count(uri => uri.Host == "api.github.com")));
+        time.Advance(TimeSpan.FromMinutes(1));
+        Assert.Equal(deadline, (await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => refuser.ReleasesAsync(ReleaseDiscovery.GitHubList, default))).RetryAt);
+        time.AdjustTime(rollback ? time.GetUtcNow().AddHours(-1) : deadline);
+        Assert.Equal(direct, await refuser.ReleasesAsync(ReleaseDiscovery.GitHubList, default));
+        Assert.Equal(calls + 1, handler.Requests.Count(uri => uri.Host == "api.github.com"));
     }
 
     [Fact]
@@ -210,8 +219,7 @@ public sealed class ReleaseEligibilityTests : IDisposable
         time.Advance(TimeSpan.FromMinutes(1));
         await source.ReadAsync(default);
         Assert.Equal(time.GetUtcNow(), source.Snapshot.At);
-        Assert.Equal(2, handler.Requests.Count(uri => uri.AbsoluteUri == GitHubHaltListSource.Releases));
-        Assert.Equal(1, handler.Requests.Count(uri => uri.Host != "api.github.com"));
+        Assert.Equal((2, 1), (handler.Requests.Count(uri => uri.AbsoluteUri == GitHubHaltListSource.Releases), handler.Requests.Count(uri => uri.Host != "api.github.com")));
     }
 
     [Fact]
@@ -240,9 +248,8 @@ public sealed class ReleaseEligibilityTests : IDisposable
         Assert.Equal(3, handler.Requests.Count(uri => uri.AbsoluteUri == GitHubHaltListSource.Releases));
         time.Advance(TimeSpan.FromHours(4));
         var eligibility = new ReleaseEligibility(source);
-        Assert.Equal(new HaltCheck(null, ReleaseBlockedReason.HaltListUnavailable), await eligibility.IsHalted("0.1.2350"));
-        Assert.Equal(new HaltCheck(true), await eligibility.IsHalted("0.1.2349"));
-        Assert.False(source.Snapshot.Fresh);
+        Assert.Equal((new HaltCheck(null, ReleaseBlockedReason.HaltListUnavailable), new HaltCheck(true), false),
+            (await eligibility.IsHalted("0.1.2350"), await eligibility.IsHalted("0.1.2349"), source.Snapshot.Fresh));
         Assert.Contains("0.1.2349", source.Snapshot.Policy!.Body);
         Assert.Equal(4, handler.Requests.Count(uri => uri.AbsoluteUri == GitHubHaltListSource.Releases));
     }
@@ -250,8 +257,7 @@ public sealed class ReleaseEligibilityTests : IDisposable
     static byte[] Metadata(string run, byte[] body, string asset = "halts.json") => JsonSerializer.SerializeToUtf8Bytes(new[] {
         new { tag_name = "v0.1." + run, draft = false, assets = new[] { new { name = asset,
                 browser_download_url = $"https://github.com/danswett/agent-bridge/releases/download/v0.1.{run}/{asset}",
-                size = body.Length, digest = "sha256:" + Convert.ToHexString(SHA256.HashData(body)) } },
-        },
+                size = body.Length, digest = "sha256:" + Convert.ToHexString(SHA256.HashData(body)) } } },
     });
 
     [Fact]
@@ -321,8 +327,7 @@ public sealed class ReleaseEligibilityTests : IDisposable
             json is null ? throw new IOException("unreadable") : Task.FromResult(Encoding.UTF8.GetBytes(json));
     }
 
-    static ReplyHandler ByteReplies(Func<Uri, byte[]> read) => new(request =>
-        new(HttpStatusCode.OK) { Content = new ByteArrayContent(read(request.RequestUri!)) });
+    static ReplyHandler ByteReplies(Func<Uri, byte[]> read) => new(request => new(HttpStatusCode.OK) { Content = new ByteArrayContent(read(request.RequestUri!)) });
 
     sealed class Handler(Func<Uri, byte[]> read) : HttpMessageHandler
     {
