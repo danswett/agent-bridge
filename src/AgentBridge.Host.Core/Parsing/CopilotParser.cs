@@ -73,6 +73,9 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
 
     protected override Conversation.TurnMarks Turns => Conversation.TurnMarks.Copilot;
 
+    protected override bool MayStartTurn(ReadOnlySpan<byte> line) =>
+        base.MayStartTurn(line) || line.IndexOf("\"assistant.turn_start\""u8) >= 0;
+
     // The main agent's replies too, for activity.own: a session whose delegates filled the
     // parsed window had no reply of the main agent's in it. A delegate's carries an agentId,
     // and is not wanted; a main reply quoting that word is merely missed, except while the

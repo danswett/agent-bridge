@@ -47,11 +47,10 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
     // without history.
     protected virtual Conversation.TurnMarks? Turns => null;
 
-    bool MayStartTurn(ReadOnlySpan<byte> line) => Turns?.MayStart(line) == true;
+    protected virtual bool MayStartTurn(ReadOnlySpan<byte> line) => Turns?.MayStart(line) == true;
 
-    // A line that could not be read but may have started a turn: history shows that turn as one it
-    // can't read, under that line's id, so what follows is not the last prompt's. Its id is not
-    // known here, so the latest turn is unknown until a prompt that can be read.
+    // An unreadable turn boundary makes reply ownership unknown until a readable boundary
+    // establishes it. History gives an unreadable prompt its own id, never the last prompt's.
     void Unreadable(ReadOnlySpan<byte> line)
     {
         if (MayStartTurn(line)) { UnreadableTurn(); }
