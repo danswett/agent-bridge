@@ -809,6 +809,7 @@ static partial class SelfTest
             && ById<TextBox>(ready, "FeedbackPreview")?.Text == probe.LastSent?.Text, "Retry sends the exact reviewed bundle and shows Sent");
         if (ById<Button>(ready, "FeedbackClose") is { } closeReady) { Press(closeReady); } else { ready.Hide(); check(false, "offers an accessible Close after Sent"); }
         await shown;
+        check(note?.Text == "" && ById<TextBox>(ready, "FeedbackPreview")?.Text == "", "clears the note and exact preview when feedback closes");
     }
 
     sealed class FeedbackDialogProbe : IFeedbackBundleSource, IFeedbackSender

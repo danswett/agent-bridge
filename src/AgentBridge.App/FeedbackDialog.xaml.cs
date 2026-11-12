@@ -54,6 +54,7 @@ public sealed partial class FeedbackDialog : ContentDialog
             if (review is not null) { review.Note = ""; review.ScreenshotPng = null; review.IncludeSessionTurns = false; }
             DataContext = null;
             Note.Text = "";
+            Preview.Text = "";
         };
         retryClock.Tick += (_, _) => send?.RefreshRetry();
         Draw();
