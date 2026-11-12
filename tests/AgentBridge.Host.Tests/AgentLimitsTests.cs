@@ -70,6 +70,36 @@ public sealed class AgentLimitsTests
     }
 
     [Fact]
+    public void A_request_is_remembered_for_the_whole_hour_and_the_clock_stepping_back_does_not_clear_it()
+    {
+        var limits = Make();
+        var settings = AgentLaunchLimits.Default;
+        for (var i = 0; i < 3; i++) { Assert.True(limits.CheckLaunch("a", $"r{i}", "hash", settings).Allowed); }
+        now = now.AddMinutes(16);
+        Assert.True(limits.CheckLaunch("a", "r0", "hash", settings).Duplicate);
+        now = now.AddHours(-2);
+        Assert.True(limits.CheckLaunch("a", "r0", "hash", settings).Duplicate);
+        now = now.AddHours(1);
+        Assert.True(limits.CheckLaunch("a", "after-expiry", "hash", settings).Allowed);
+        Assert.True(limits.CheckLaunch("a", "r0", "hash", settings).Allowed);
+        Assert.True(Make().CheckLaunch("a", "r", "hash", settings).Allowed);
+    }
+
+    [Fact]
+    public void Concurrent_distinct_requests_cannot_both_take_the_last_slot_and_identical_requests_admit_once()
+    {
+        var limits = Make();
+        var settings = AgentLaunchLimits.Default with { LaunchesPerMachinePerHour = 1 };
+        var results = new AgentLimitVerdict[32];
+        Parallel.For(0, results.Length, i => results[i] = limits.CheckLaunch($"o{i}", $"r{i}", "hash", settings));
+        Assert.Single(results, r => r.Allowed);
+        limits = Make();
+        Parallel.For(0, results.Length, i => results[i] = limits.CheckLaunch("a", "r", "hash", settings));
+        Assert.Single(results, r => r.Allowed);
+        Assert.Equal(31, results.Count(r => r.Duplicate && !r.Allowed));
+    }
+
+    [Fact]
     public void A_flood_of_new_origins_never_wipes_a_live_window_and_a_full_table_refuses_a_new_origin()
     {
         var limits = Make();

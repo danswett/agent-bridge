@@ -1,10 +1,22 @@
 namespace AgentBridge.Host;
 
-public sealed record AgentLaunchPolicyVerdict(bool Allowed, string? Reason, AgentLaunchLimits? Limits);
+public sealed record AgentLaunchPolicyVerdict(bool Allowed, string? Reason, AgentLaunchLimits? Limits,
+    int RetryAfterSeconds = 0, bool Duplicate = false);
 
-// B1 checks policy only. The pipe stays closed until scope, content and caps are enforced in B2.
-public sealed class AgentLaunchGate(string folder)
+// The pipe stays closed until the caller/content checks and launch-service wiring land.
+public sealed class AgentLaunchGate(string folder, Func<DateTimeOffset>? clock = null)
 {
+    readonly AgentLimits limits = new(clock);
+
+    public AgentLaunchPolicyVerdict CheckLaunch(string origin, string request, string requestSha256)
+    {
+        var policy = CheckPolicy();
+        if (!policy.Allowed || policy.Limits is null) { return policy; }
+        var result = limits.CheckLaunch(origin, request, requestSha256, policy.Limits);
+        return policy with { Allowed = result.Allowed, Reason = result.Reason,
+            RetryAfterSeconds = result.RetryAfterSeconds, Duplicate = result.Duplicate };
+    }
+
     public AgentLaunchPolicyVerdict CheckPolicy()
     {
         var (policy, problem) = HostSettings.CurrentAgents(folder);

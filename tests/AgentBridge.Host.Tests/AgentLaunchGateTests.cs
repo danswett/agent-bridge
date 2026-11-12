@@ -16,6 +16,94 @@ public sealed class AgentLaunchGateTests : IDisposable
     static string Config(string limits, string launch = """{"enabled":true}""") =>
         """{"agents":{"enabled":true,"launch":""" + launch + ""","limits":""" + limits + "}}";
 
+    [Fact]
+    public void A_fourth_launch_by_one_agent_in_an_hour_and_the_eleventh_on_the_machine_are_refused_rate_limited_with_retry_seconds()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var gate = new AgentLaunchGate(folder, () => now);
+        Write(Config(DefaultLimits));
+        for (var i = 0; i < 3; i++) { Assert.True(gate.CheckLaunch("a", $"r{i}", "hash").Allowed); }
+        now = now.AddSeconds(10);
+        var own = gate.CheckLaunch("a", "fourth", "hash");
+        Assert.False(own.Allowed);
+        Assert.Equal("rate-limited", own.Reason);
+        Assert.Equal(3590, own.RetryAfterSeconds);
+        for (var i = 0; i < 7; i++) { Assert.True(gate.CheckLaunch($"o{i}", "r", "hash").Allowed); }
+        var machine = gate.CheckLaunch("another", "eleventh", "hash");
+        Assert.False(machine.Allowed);
+        Assert.Equal("rate-limited", machine.Reason);
+        Assert.Equal(3590, machine.RetryAfterSeconds);
+        now = now.AddSeconds(3590);
+        Assert.True(gate.CheckLaunch("a", "after-expiry", "hash").Allowed);
+    }
+
+    [Fact]
+    public void The_same_request_id_and_hash_spends_the_cap_once_and_a_different_hash_with_the_same_id_is_refused_and_counted()
+    {
+        var gate = new AgentLaunchGate(folder);
+        var settings = DefaultLimits.Replace(":3", ":2").Replace("}", ""","launchAttemptsPerOriginPerHour":3}""");
+        Write(Config(settings));
+        Assert.True(gate.CheckLaunch("a", "r", "original").Allowed);
+        for (var i = 0; i < 25; i++)
+        {
+            var repeat = gate.CheckLaunch("a", "r", "original");
+            Assert.False(repeat.Allowed);
+            Assert.True(repeat.Duplicate);
+        }
+        for (var i = 0; i < 2; i++)
+        {
+            var mismatch = gate.CheckLaunch("a", "r", "changed");
+            Assert.False(mismatch.Allowed);
+            Assert.False(mismatch.Duplicate);
+            Assert.Equal("requestReused", mismatch.Reason);
+        }
+        var exhausted = gate.CheckLaunch("a", "r", "changed");
+        Assert.Equal("rate-limited", exhausted.Reason);
+        Assert.InRange(exhausted.RetryAfterSeconds, 1, 3600);
+        Assert.True(gate.CheckLaunch("a", "r", "original").Duplicate);
+        Assert.True(gate.CheckLaunch("other", "r", "changed").Allowed);
+        Write(Config(settings.Replace("Hour\":3", "Hour\":20")));
+        Assert.True(gate.CheckLaunch("a", "second", "hash").Allowed);
+        Assert.Equal("rate-limited", gate.CheckLaunch("a", "third", "hash").Reason);
+    }
+
+    [Fact]
+    public void Lowering_a_live_cap_keeps_its_hits_and_waits_until_enough_of_them_expire()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var gate = new AgentLaunchGate(folder, () => now);
+        Write(Config(DefaultLimits));
+        Assert.True(gate.CheckLaunch("a", "first", "hash").Allowed);
+        now = now.AddMinutes(1);
+        Assert.True(gate.CheckLaunch("a", "second", "hash").Allowed);
+        now = now.AddMinutes(1);
+        Write(Config(DefaultLimits.Replace(":3", ":1")));
+        Assert.Equal(3540, gate.CheckLaunch("a", "third", "hash").RetryAfterSeconds);
+        now = now.AddMinutes(59);
+        Assert.True(gate.CheckLaunch("a", "after-expiry", "hash").Allowed);
+        Write(Config(DefaultLimits.Replace(":3", ":0")));
+        Assert.False(gate.CheckLaunch("other", "bad-policy", "hash").Allowed);
+        Write(Config(DefaultLimits, """{"enabled":false}"""));
+        Assert.False(gate.CheckLaunch("other", "disabled", "hash").Allowed);
+    }
+
+    [Fact]
+    public void An_absent_attempt_setting_defaults_to_twenty_and_a_lower_setting_applies_without_restart()
+    {
+        var gate = new AgentLaunchGate(folder);
+        Write(Config(DefaultLimits));
+        Assert.True(gate.CheckLaunch("a", "r", "hash").Allowed);
+        for (var i = 0; i < 19; i++)
+        {
+            Assert.Equal("requestReused", gate.CheckLaunch("a", "r", "changed").Reason);
+        }
+        Assert.Equal("rate-limited", gate.CheckLaunch("a", "r", "changed").Reason);
+        Assert.True(gate.CheckLaunch("other", "r", "hash").Allowed);
+        Write(Config(DefaultLimits.Replace("}", ""","launchAttemptsPerOriginPerHour":1}""")));
+        Assert.Equal("rate-limited", gate.CheckLaunch("other", "r", "changed").Reason);
+        Assert.True(gate.CheckLaunch("other", "r", "hash").Duplicate);
+    }
+
     [Theory]
     [InlineData("{}")]
     [InlineData("""{"agents":{"enabled":true}}""")]
@@ -80,6 +168,15 @@ public sealed class AgentLaunchGateTests : IDisposable
     [InlineData("launchesPerOriginPerHour", null)]
     [InlineData("launchesPerMachinePerHour", null)]
     [InlineData("agentLaunchedIdleHours", null)]
+    [InlineData("launchAttemptsPerOriginPerHour", "0")]
+    [InlineData("launchAttemptsPerOriginPerHour", "-1")]
+    [InlineData("launchAttemptsPerOriginPerHour", "21")]
+    [InlineData("launchAttemptsPerOriginPerHour", "1.5")]
+    [InlineData("launchAttemptsPerOriginPerHour", "\"20\"")]
+    [InlineData("launchAttemptsPerOriginPerHour", "null")]
+    [InlineData("launchAttemptsPerOriginPerHour", "true")]
+    [InlineData("launchAttemptsPerOriginPerHour", "{}")]
+    [InlineData("launchAttemptsPerOriginPerHour", "[]")]
     public void A_bad_or_missing_limit_is_reported_at_load_and_never_admitted(string key, string? value)
     {
         var values = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(DefaultLimits)!;
@@ -92,6 +189,7 @@ public sealed class AgentLaunchGateTests : IDisposable
         Assert.False(result.Allowed);
         Assert.Contains($"agents.limits.{key}", result.Reason);
         Assert.Null(result.Limits);
+        Assert.False(new AgentLaunchGate(folder).CheckLaunch("a", "r", "hash").Allowed);
     }
 
     [Theory]
