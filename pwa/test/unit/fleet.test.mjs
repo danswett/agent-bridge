@@ -337,6 +337,11 @@ test('a machine shown that cannot show sessions is still looked at for its statu
 // Updates (#51): read with the look at each machine, followed on a machine shown, and looked at
 // every few seconds instead of every minute while one is under way.
 const found = { current: '0.4.0', installer: true, available: '0.5.0', phase: 'idle' };
+const subscribeUpdate = async (onState) => {
+  const state = readUpdateState(found);
+  onState?.(state);
+  return state;
+};
 
 test("each machine's update state is read with its look, and dropped when it stops offering updates", async () => {
   let now = 0;
@@ -381,7 +386,7 @@ test("a machine shown is followed on its own channel, and a press goes on that c
   const client = {
     synced: true,
     on: (type, fn) => { if (type === 'update') { onUpdate = fn; } },
-    subscribeUpdate: async () => readUpdateState(found),
+    subscribeUpdate,
     request: async (op, data) => { sent.push({ op, data }); return { outcome: 'accepted' }; },
   };
   hosts.view({ id: 'v', client, machine: {}, capabilities: ['sessions.read', 'update'] });
@@ -407,7 +412,7 @@ test("a machine shown is followed on its own channel, and a press goes on that c
 test("a press signed for a machine is made with the key that machine's channel proved, on its own channel or a short one", async () => {
   const { connection, hosts, fleet } = fleetWith({ b: { machine: {}, capabilities: ['update'], update: found } });
   const sent = [];
-  const client = { synced: true, on: () => {}, subscribeUpdate: async () => readUpdateState(found), request: async (op, data) => { sent.push({ op, data }); return {}; } };
+  const client = { synced: true, on: () => {}, subscribeUpdate, request: async (op, data) => { sent.push({ op, data }); return {}; } };
   hosts.view({ id: 'v', client, channel: { hs: { remoteStatic: new Uint8Array([1, 2]) } }, machine: {}, capabilities: ['sessions.read', 'update'] });
   await flush();
   await fleet.idle();
@@ -447,6 +452,28 @@ for (const state of [readUpdateState({ ...found, last: {
   }
 }
 
+test('gap recovery applies an update snapshot before a later event in the same task', async () => {
+  const { hosts, fleet } = fleetWith({});
+  const sent = [];
+  const transport = { send: (message) => { sent.push(message); }, close() {} };
+  const client = new HostClient(transport);
+  try {
+    hosts.view({ id: 'v', client, machine: {}, capabilities: ['sessions.read', 'update'] });
+    await flush();
+    transport.onmessage({ re: sent.find((m) => m.op === 'update.subscribe').id, ok: true, result: found });
+    await flush();
+    transport.onmessage({ ev: 'unknown', seq: 2, data: {} });
+    await flush();
+    const requests = sent.filter((m) => m.op === 'update.subscribe');
+    assert.equal(requests.length, 2);
+    const newer = readUpdateState({ ...found, current: '0.5.0', available: null });
+    transport.onmessage({ re: requests[1].id, ok: true, result: found });
+    transport.onmessage({ ev: 'update.state', seq: 3, data: newer });
+    await flush();
+    assert.deepEqual(fleet.update('v'), newer);
+  } finally { fleet.clear(); client.close(); }
+});
+
 test('a machine shown that starts offering updates on a refreshed hello is followed from then, on the same channel', async () => {
   const { hosts, fleet } = fleetWith({});
   let subscribed = 0;
@@ -454,7 +481,7 @@ test('a machine shown that starts offering updates on a refreshed hello is follo
   const client = {
     synced: true,
     on: (type, fn) => { if (type === 'update') { listeners.push(fn); } },
-    subscribeUpdate: async () => { subscribed++; return readUpdateState(found); },
+    subscribeUpdate: (onState) => { subscribed++; return subscribeUpdate(onState); },
   };
   // Read-only at first (agent-ha-bridge running there): no updates offered.
   const link = hosts.view({ id: 'v', client, machine: {}, capabilities: ['sessions.read'] });
@@ -513,7 +540,7 @@ test('a look that finds no updates, ending after its machine is shown, leaves wh
   fleet.probe();
   while (!asked) { await flush(); }
   // Chosen while the look waits on its usage; agent-ha-bridge stopped there meanwhile.
-  const client = { synced: true, on() {}, subscribeUsage: async () => usage(10), subscribeUpdate: async () => readUpdateState(found) };
+  const client = { synced: true, on() {}, subscribeUsage: async () => usage(10), subscribeUpdate };
   hosts.view({ id: 'a', client, machine: {}, capabilities: ['usage', 'update'] });
   await flush();
   assert.equal(fleet.update('a').available, '0.5.0');
@@ -531,7 +558,7 @@ test("a machine shown whose update subscription failed is subscribed again at it
   const client = {
     synced: true,
     on() {},
-    subscribeUpdate: async () => { tries++; if (tries === 1) { throw new Error('timed out'); } return readUpdateState(found); },
+    subscribeUpdate: async (onState) => { tries++; if (tries === 1) { throw new Error('timed out'); } return subscribeUpdate(onState); },
   };
   hosts.view({ id: 'v', client, machine: {}, capabilities: ['sessions.read', 'update'] });
   await flush();
