@@ -44,6 +44,31 @@ public sealed class SignedCommandVectorTests
 
     static readonly CommandBody Transfer = Body(TransferProtocol.Action, Session, Target);
 
+    [Theory]
+    [InlineData("""{"now":true,"release":"0.1.123"}""")]
+    [InlineData("""{"now":true,"release":"0.1.123","batch":true,"unchecked":false}""")]
+    [InlineData("""{"now":true,"release":"0.1.123","batch":false,"unchecked":true}""")]
+    public void Old_and_new_update_args_parse_and_verify_and_the_MAC_covers_each_flag(string json)
+    {
+        var body = Body(UpdateProtocol.NowAction, null!, MachineId) with
+        {
+            Target = new CommandTarget { Machine = MachineId }, Args = JsonSerializer.Deserialize<JsonElement>(json),
+        };
+        var signed = SignedCommands.Sign(Phone, Machine.Public, body);
+        var (read, problem) = SignedCommands.Verify(Machine, signed, UpdateProtocol.NowAction, DateTimeOffset.FromUnixTimeSeconds(Issued + 60));
+        Assert.Null(problem);
+        var parsed = UpdateNowRules.Read(read!);
+        Assert.Null(parsed.Problem);
+        Assert.Equal(json, JsonSerializer.Serialize(parsed.Args, ProtocolJson.Options));
+        foreach (var flag in new[] { "batch", "unchecked" }.Where(f => json.Contains(f, StringComparison.Ordinal)))
+        {
+            var changed = JsonSerializer.SerializeToNode(body, ProtocolJson.Options)!;
+            changed["args"]![flag] = !changed["args"]![flag]!.GetValue<bool>();
+            var tampered = signed with { Body = BlobFormat.Base64Url(Encoding.UTF8.GetBytes(changed.ToJsonString())) };
+            Assert.NotNull(SignedCommands.Verify(Machine, tampered, UpdateProtocol.NowAction, DateTimeOffset.FromUnixTimeSeconds(Issued + 60)).Problem);
+        }
+    }
+
     // The longest Update now a client can send (#1159, docs/protocol/v1-update.md): 32 listed
     // sessions, each a UUID (every agent's session id) with the longest state, every count at its
     // largest that still adds up, unknown shown, and a release of 64 characters.
