@@ -1,7 +1,7 @@
-using System.Globalization;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text.Json;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.Host;
 
@@ -60,14 +60,7 @@ public sealed class ReleaseEligibility(IHaltListSource source)
     public static bool IsNewer(string target, string installed) =>
         TryRun(target, out var next) && TryRun(installed, out var current) && next > current;
 
-    internal static bool TryRun(string? version, out long run)
-    {
-        run = 0;
-        if (version is null || !version.StartsWith("0.1.", StringComparison.Ordinal)) { return false; }
-        var number = version.AsSpan(4);
-        return number.Length is > 0 and <= 19 && long.TryParse(number, NumberStyles.None, CultureInfo.InvariantCulture, out run)
-            && number.SequenceEqual(run.ToString(CultureInfo.InvariantCulture));
-    }
+    internal static bool TryRun(string? version, out long run) => ReleaseVersions.TryRun(version, out run);
 
     static HaltCheck Unavailable() => new(null, ReleaseBlockedReason.HaltListUnavailable);
 }
