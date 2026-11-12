@@ -85,6 +85,16 @@ for (const phone of [false, true]) {
       const item = row(page, '019a1b2c-codex-example');
       const button = item.locator('.row-main');
       const grip = item.locator('.drag-handle');
+      const inks = await page.evaluate(() => {
+        const probe = document.createElement('i');
+        document.body.append(probe);
+        const colors = ['--ab-text3', '--ab-text'].map((token) => {
+          probe.style.color = `var(${token})`;
+          return getComputedStyle(probe).color;
+        });
+        probe.remove();
+        return colors;
+      });
       await button.press('Shift+F10');
       await item.getByRole('menuitem', { name: 'Pin', exact: true }).click();
       const measure = () => item.evaluate((el) => {
@@ -125,6 +135,8 @@ for (const phone of [false, true]) {
             await expect(grip).toHaveCSS('display', 'none');
           } else {
             await expect(grip).toBeVisible();
+            await expect(grip).toHaveCSS('opacity', '1');
+            await expect(grip).toHaveCSS('color', inks[input === 'rest' ? 0 : 1]);
           }
         }
       }
