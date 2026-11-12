@@ -134,9 +134,11 @@ public class CopilotTests
         var scheduled = await s.After(Copilot.User("watch CI", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3),
             Sourced("[Scheduled prompt #4] Check CI on #455 and report.", "schedule-4", 10, new { delivery = "idle", messageId = "m10", turnId = "t10" }), Copilot.TurnStart(11));
         Assert.Equal(("[Scheduled prompt #4] Check CI on #455 and report.", UserMessageFrom.Schedule, "4"), From(scheduled));
+        Assert.Equal(TurnKind.Scheduled, scheduled.Activity.Kind);
 
         var mine = await s.After(Copilot.TurnEnd(12), Copilot.User("thanks", 13), Copilot.TurnStart(14));
         Assert.Equal(("thanks", (UserMessageFrom?)null, (string?)null), From(mine));
+        Assert.Equal(TurnKind.User, mine.Activity.Kind);
     }
 
     [Theory]

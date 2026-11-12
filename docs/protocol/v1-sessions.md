@@ -2107,6 +2107,19 @@ session left under an agent's control still says so while it is idle. It says so
 
 ### Activity
 
+**Turn attribution (#2145).** `kind` optionally marks the current prompt as `user` or
+`scheduled`. `notice` optionally carries the latest system-notification turn in the
+[history Turn format](v1-history.md#turn), with its own `id`, `kind: notification`,
+prompt and latest nonempty response part. Its text never replaces `response`,
+`own.response` or `responseTurn`. Empty/tool-only messages leave notice text intact.
+A queued owner prompt changes `turn`, but the assistant cycle already running keeps
+its reply target until the next `assistant.turn_start`. Older clients ignore these
+additions. If the session budget cannot carry notice text, it retains the notice's
+id, time and kind with `truncated: true`; clients fetch that turn from stored history.
+After unread transcript bytes, an unattributed reply is carried separately as
+`notice.kind: unknown`, with its own record id and `truncated: true`, never guessed
+to be the owner's answer. The next known assistant cycle reestablishes attribution.
+
 | Field | Type | Notes |
 |---|---|---|
 | `response` | string? (Markdown) | The latest assistant text, at most 16 KiB. When it's longer, the **end** is kept and `responseTruncated` is true. It may be a subagent's, including a background agent's while the session itself is idle, as on agent-ha-bridge's card; `source.response` then names it. `status`, `userMessage` and `model` are always the session's own |
