@@ -14,21 +14,18 @@ import { fromBase64url } from '../../js/blobs.js';
 const NOW = Date.parse('2026-11-02T18:00:00.000Z');
 const found = readUpdateState({ current: '0.4.0', installer: true, available: '0.5.0', checkedAt: '2026-11-02T17:55:00.000Z', phase: 'idle' });
 
-test('discovery quota uses singular for one remaining check and preserves zero and plural wording', () => {
-  for (const [gitHubRemaining, words] of [[0, 'no more checks'], [1, '1 more check'], [2, '2 more checks']]) {
+test('historical discovery quota alone never adds a visible allowance', () => {
+  for (const gitHubRemaining of [0, 1, 2]) {
     const state = { gitHubRemaining, gitHubQuotaAt: '2026-11-02T17:55:00Z' };
-    assert.deepEqual(updateDetails(state, NOW), [`When last asked, GitHub allowed ${words} (5 min ago)`]);
+    assert.deepEqual(updateDetails(state, NOW), []);
   }
 });
 
 for (const [minutes, words] of [[0, 'under a minute'], [59, '59 min'], [60, '1 h'], [125, '2 h']]) {
-  test(`discovery list and quota ages read as ${words} after ${minutes} minutes`, () => {
+  test(`the quiet check age reads as ${words} after ${minutes} minutes`, () => {
     const at = new Date(NOW - minutes * 60000).toISOString();
     const state = { checkSource: 'cdn', checkedAt: at, gitHubRemaining: 2, gitHubQuotaAt: at };
-    assert.deepEqual(updateDetails(state, NOW), [
-      `Update list from the release feed, ${words} old`,
-      `When last asked, GitHub allowed 2 more checks (${words} ago)`,
-    ]);
+    assert.deepEqual(updateDetails(state, NOW), [`Checked ${words} ago`]);
   });
 }
 
@@ -104,7 +101,7 @@ test('a machine whose update waits for a question to be answered says so in the 
 
 test('the last outcome reads as what happened', () => {
   const at = '2026-11-02T17:00:00.000Z';
-  assert.equal(lastLine({ last: { outcome: 'updated', from: '0.4.0', to: '0.5.0', at } }, NOW), 'Updated from 0.4.0 to 0.5.0 1h 0m ago.');
+  assert.equal(lastLine({ last: { outcome: 'updated', from: '0.4.0', to: '0.5.0', at } }, NOW), 'Updated to 0.5.0.');
   assert.equal(lastLine({ last: { outcome: 'refused', reason: "another profile's host runs from this installation", at } }, NOW), "Not updated: another profile's host runs from this installation.");
   assert.equal(lastLine({ last: { outcome: 'failed', reason: 'the package is damaged', at } }, NOW), 'The update failed: the package is damaged.');
   assert.equal(lastLine(found, NOW), null);

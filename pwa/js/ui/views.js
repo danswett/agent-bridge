@@ -1074,37 +1074,32 @@ function updateRow(updates, id, name, now) {
   const heldCheck = idle && !updateNow && !s.last?.code && ['failed', 'refused'].includes(s.last?.outcome)
     && s.last.reason?.startsWith("the release feed's rate limit refused the check");
   const checkFailed = heldCheck && !(Date.parse(s.checkedAt) > Date.parse(s.last.at));
-  const compact = idle && (s.available ? checkFailed : s.current && s.checkedAt
-    && (!s.last || ['current', 'failed', 'refused'].includes(s.last.outcome)));
   const retry = checkFailed ? s.last.reason.match(/checking again after (\d{1,2}:\d{2}(?:\s*[AP]M)?)\.?$/i)?.[1] : null;
   let said = updateLine(s, now);
-  if (compact) {
-    said = s.available ? 'Update available, but the check failed.' : `Up to date (${s.current})`;
-    if (retry) { said += `${s.available ? '' : '.'} Next ${s.available ? 'try' : 'check'} ${retry}.`; }
-    else if (!s.available && !checkFailed && now - Date.parse(s.checkedAt) > 3600000) {
-      const checked = new Date(s.checkedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' });
-      said += `. Last checked ${checked}.`;
-    }
+  if (idle) {
+    said = s.available ? `Update available \u00b7 ${s.available} (running ${s.current ?? 'an older release'})`
+      : Number.isFinite(Date.parse(s.checkedAt)) ? `Up to date \u00b7 ${s.current ?? 'unknown'}` : 'Not checked yet';
   }
-  let last = compact || (heldCheck && !checkFailed) ? null : lastLine(s, now, { updateNow });
+  const checking = s.phase === 'checking';
+  if (checking && !s.waiting) { said = 'Checking\u2026'; }
+  const last = heldCheck || (idle && s.last?.outcome === 'current') ? null : lastLine(s, now, { updateNow });
   const check = canCheck(s) && !busy && !asking;
   const install = canInstall(s) && !busy && !asking;
-  const offerNow = !compact && updates.signs === true && canUpdateNow(s);
+  const offerNow = updates.signs === true && canUpdateNow(s);
   const pressNow = offerNow && !busy && !asking;
-  if (idle && offerNow) {
-    said = `Update available: ${s.available} (running ${s.current ?? 'an older release'}).`;
-    if (last && ['failed', 'refused'].includes(s.last?.outcome)) { said += ` ${last}`; last = null; }
-  }
-  const why = !compact && updates.signs === true ? updateNowReason(s) : null;
+  const why = checkFailed && !offerNow ? `Last check was limited. ${retry ? `The machine said to try again after ${retry}.` : 'Try again later.'}`
+    : updates.signs === true ? updateNowReason(s) : null;
   const details = updateDetails(s, now);
   const key = [said, last, note, busy, asking, check, install, offerNow, pressNow, why, ...details];
+  const checkLabel = checking ? 'Checking\u2026' : busy ? 'Asking\u2026' : 'Check now';
   // Not disabled when it cannot be pressed: a disabled button loses focus, and the next draw
   // could not give it back. A press then does nothing (UpdateControl, and the host's own rules).
   const button = (cls, label, aria, can, onPress) => h('button', {
-    type: 'button', class: `button ${checkFailed || cls === 'machine-update-now' ? 'primary' : 'secondary'} small ${cls}`, 'aria-label': aria,
+    type: 'button', class: `button ${cls === 'machine-update-now' ? 'primary' : 'secondary'} small ${cls}`, 'aria-label': aria,
     'aria-disabled': can ? null : 'true',
+    'aria-describedby': cls === 'machine-update-check' && checkFailed ? `update-check-${id}` : null,
     onclick: (e) => { if (can) { onPress(e); } },
-  }, label);
+  }, cls === 'machine-update-check' && checking ? glyph('working') : null, label);
   // Back to Update now once its confirmation closes, or to the row's first action: the row has
   // been drawn again meanwhile.
   const refocus = (doc) => () => {
@@ -1114,17 +1109,16 @@ function updateRow(updates, id, name, now) {
   return {
     key,
     el: h('div', { class: 'machine-update' },
-      h('p', { class: 'machine-update-line' }, said),
+      h('p', { class: 'machine-update-line' },
+        glyph(['checking', 'downloading', 'installing', 'waiting'].includes(s.phase) ? 'working'
+          : s.available ? 'needs' : idle && s.checkedAt ? 'done' : 'idle'), h('span', null, said)),
       last ? h('p', { class: 'machine-update-last' }, last) : null,
-      why ? h('p', { class: 'machine-update-why' }, why) : null,
+      why ? h('p', { class: 'machine-update-why', id: checkFailed ? `update-check-${id}` : null }, why) : null,
       ...details.map((text) => h('p', { class: 'machine-update-detail' }, text)),
       note ? h('p', { class: 'machine-error', role: 'alert' }, note) : null,
       s.installer ? h('div', { class: 'machine-actions machine-update-actions' },
-        (compact && !s.available) || offerNow ? h('a', {
-          href: '#/machines', class: 'machine-update-check', 'aria-disabled': check ? null : 'true',
-          onclick: (e) => { e.preventDefault(); if (check) { updates.press(id, 'check'); } },
-        }, 'Check now') : button('machine-update-check', busy ? 'Asking…' : compact ? 'Check now' : 'Check', compact ? 'Check now' : `Check ${name} for updates`, check, () => updates.press(id, 'check')),
-        s.available && !compact && !offerNow ? button('machine-update-install', 'Install', `Install ${s.available} on ${name} when no session there is busy`, install, () => updates.press(id, 'install')) : null,
+        !offerNow ? button('machine-update-check', checkLabel, `${checkLabel} on ${name}`, check, () => updates.press(id, 'check')) : null,
+        s.available && !offerNow ? button('machine-update-install', 'Install', `Install ${s.available} on ${name} when no session there is busy`, install, () => updates.press(id, 'install')) : null,
         offerNow ? button('machine-update-now', 'Update now', `Update now: ${s.available} on ${name}, without waiting`, pressNow, (e) => {
           const doc = e.currentTarget.ownerDocument;
           updates.pressNow(id, { machine: name, confirm: (sheet, { signal } = {}) => openUpdateNowSheet(sheet, { doc, returnFocus: refocus(doc), signal }) });
@@ -1293,7 +1287,9 @@ function machineRow({ id, name, select = null, selected = false, facts, state, o
   errors.forEach((p, i) => { p.id = `machine-error-${id}-${i}`; });
   if (errors.length) {
     const ids = errors.map((p) => p.id).join(' ');
-    for (const b of within.flatMap((el) => [...el.querySelectorAll('.machine-more button')])) { b.setAttribute('aria-describedby', ids); }
+    for (const b of within.flatMap((el) => [...el.querySelectorAll('.machine-more button')])) {
+      b.setAttribute('aria-describedby', [b.getAttribute('aria-describedby'), ids].filter(Boolean).join(' '));
+    }
   }
   return h('li', { class: `machine${offline ? ' offline' : ''}${selected ? ' selected' : ''}`, dataset: { deviceId: id, deviceName: name } }, block, errors, tile);
 }
@@ -1357,7 +1353,7 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
   // Every change redraws the list, so the button that had focus is replaced: Forget's first
   // press redraws it armed, and a keyboard's second press must land on the new one.
   const active = list.ownerDocument?.activeElement;
-  const had = active && list.contains(active) ? { id: active.closest('li')?.dataset.deviceId, cls: ['machine-forget', 'machine-button', 'machine-update-check', 'machine-update-install', 'machine-update-now', 'machine-check-all', 'machine-diagnose', 'machine-diagnose-close', 'machine-diagnose-review', 'machine-diagnose-copy', 'machine-diagnostics', 'machine-launch', 'machine-view'].find((c) => active.classList.contains(c)) } : null;
+  const had = active && list.contains(active) ? { id: active.closest('li')?.dataset.deviceId, cls: ['machine-forget', 'machine-button', 'machine-update-check', 'machine-update-install', 'machine-update-now', 'machine-check-all', 'machine-diagnose', 'machine-diagnose-close', 'machine-diagnose-review', 'machine-diagnose-copy', 'machine-diagnostics', 'machine-launch', 'machine-view', 'machine'].find((c) => active.classList.contains(c)) } : null;
   list.replaceChildren(...hosts.map((d) => {
     const selected = d.id === current || (all && hosts.length === 1);
     return machineRow({
@@ -1400,7 +1396,10 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
       onclick: () => updates.checkAll(updating.map((d) => d.id)),
     }, updating.length > 1 ? 'Check all machines for updates' : 'Check for updates'))] : []));
   if (had?.id && had.cls) {
-    const again = [...list.children].find((li) => li.dataset.deviceId === had.id)?.querySelector(`.${had.cls}`);
+    const row = [...list.children].find((li) => li.dataset.deviceId === had.id);
+    const again = (had.cls === 'machine' ? row : row?.querySelector(`.${had.cls}`)) ?? row?.querySelector('.machine-update-now')
+      ?? row?.querySelector('.machine-update-check') ?? row;
+    if (again === row && row) { row.tabIndex = -1; }
     again?.focus();
   }
   return hosts.length;

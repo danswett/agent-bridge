@@ -329,7 +329,7 @@ test.describe('load bars', () => {
     await draw(page, { ...full, ageMs: 2001 });
     await expect(word).toHaveAttribute('data-kept', 'true');
     await draw(page, full, true, '0.1.2');
-    await expect(page.locator('#load-fixture-list .machine-update-line')).toContainText('0.1.2 is available');
+    await expect(page.locator('#load-fixture-list .machine-update-line')).toContainText('Update available · 0.1.2');
     await expect(word).toHaveText('Fresh');
   });
 
@@ -397,59 +397,197 @@ test.describe('one truthful update line', () => {
   test.use({ timezoneId: 'America/Los_Angeles' });
   const now = new Date('2026-11-10T17:40:00Z');
   const refused = "the release feed's rate limit refused the check (rate limit exceeded; check again after 9:46 AM); checking again after 9:46 AM";
+  const retryReason = 'Last check was limited. The machine said to try again after 9:46 AM.';
   const update = (page) => page.locator('#machine-list [data-device-id="demo"] .machine-update');
   async function show(page, change) {
     await page.clock.setFixedTime(now);
     await page.goto('?demo=1&static=1&updates=1&updateNow=1#/machines');
     await page.waitForSelector('html[data-demo-ready]');
+    await expect.poll(() => page.evaluate(() => [...window.agentBridgeDemo.host.transports]
+      .some((t) => t.updateSubscribed))).toBe(true);
+    // Drain the subscription's initial reply before seeding a newer event on the same channel.
+    await page.evaluate(() => window.agentBridgeDemo.client.request('update.get'));
     await page.evaluate((c) => window.agentBridgeDemo.setUpdate({
       ...window.agentBridgeDemo.host.update, current: '0.1.4415', available: null,
       checkedAt: '2026-11-10T17:12:00Z', last: null, ...c,
     }), change);
   }
 
-  for (const outcome of ['failed', 'refused']) {
-    test(`a current machine with a ${outcome} release check shows the retry time once and no failure`, async ({ page }) => {
-      await show(page, { last: { outcome, reason: refused, at: now.toISOString() } });
-      const block = update(page);
-      await expect(block.locator('.machine-update-line')).toHaveText('Up to date (0.1.4415). Next check 9:46 AM.');
-      await expect(block.locator('p')).toHaveCount(1);
-      await expect(block).not.toContainText(/failed|refused|checked/i);
-      expect((await block.innerText()).match(/9:46 AM/g)).toHaveLength(1);
-      await expect(block.locator('button')).toHaveCount(0);
-      await block.getByRole('link', { name: 'Check now' }).click();
-      await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.check']);
+  for (const [kind, waiting] of [
+    ['Needs you', 'Needs you: restart the app to finish its update.'],
+    ['Update ready', 'Update ready \u00b7 waiting for a question to be answered'],
+  ]) {
+    test(`checking preserves the ${kind} waiting line`, async ({ page }) => {
+      await show(page, { phase: 'checking', waiting });
+      await expect(update(page).locator('.machine-update-line')).toHaveText(waiting);
     });
   }
 
-  test('a behind machine with a failed release check offers only Check now', async ({ page }) => {
-    await show(page, { available: '0.1.4448', last: { outcome: 'failed', reason: refused, at: now.toISOString() } });
-    const block = update(page);
-    await expect(block.locator('.machine-update-line')).toHaveText('Update available, but the check failed. Next try 9:46 AM.');
-    await expect(block.locator('p')).toHaveCount(1);
-    await expect(block).not.toContainText('Up to date');
-    expect((await block.innerText()).match(/9:46 AM/g)).toHaveLength(1);
-    await expect(block.getByRole('button')).toHaveCount(1);
-    await expect(block.getByRole('button', { name: 'Check now' })).toHaveClass(/\bprimary\b/);
-    await block.getByRole('button', { name: 'Check now' }).click();
-    await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.check']);
-  });
-
-  test('a current machine is quiet until its successful check is over one hour old', async ({ page }) => {
+  test('a refusal note preserves the check retry description', async ({ page }) => {
     await show(page, {});
-    await expect(update(page).locator('p')).toHaveText(['Up to date (0.1.4415)']);
-    await show(page, { checkedAt: '2026-11-10T16:12:00Z' });
-    await expect(update(page).locator('p')).toHaveText(['Up to date (0.1.4415). Last checked 8:12 AM.']);
+    const machine = page.locator('#machine-list > [data-device-id="demo"]');
+    const check = update(page).locator('.machine-update-check');
+    const note = 'This check was refused.';
+    await page.evaluate((note) => window.agentBridgeDemo.host.scriptUpdates([note]), note);
+    await check.click();
+    await expect(machine.locator('.machine-error')).toHaveText(note);
+    await page.evaluate((reason) => window.agentBridgeDemo.setUpdate({
+      ...window.agentBridgeDemo.host.update, last: { outcome: 'failed', reason, at: '2026-11-10T17:40:00Z' },
+    }), refused);
+    await expect(check).toBeEnabled();
+    await expect(check).toHaveAccessibleDescription(`${retryReason} ${note}`);
   });
 
-  test('an available update has one primary Update now and a quiet check without changing health', async ({ page }) => {
+  for (const refusal of [null, 'The feed still refuses this check.']) {
+    test(refusal ? 'a retried check shows a host refusal and remains usable'
+      : 'a past limited check permits another manual request without an automatic state change', async ({ page }) => {
+      await show(page, { automatic: false, last: { outcome: 'failed', reason: refused, at: now.toISOString() } });
+      const check = update(page).locator('.machine-update-check');
+      await expect(update(page).locator('.machine-update-why')).toContainText('9:46 AM');
+      await page.clock.setFixedTime(new Date('2026-11-10T17:47:00Z'));
+      await page.evaluate(() => window.agentBridgeDemo.setUpdate({ ...window.agentBridgeDemo.host.update }));
+      await expect(check).toBeEnabled();
+      if (refusal) { await page.evaluate((note) => window.agentBridgeDemo.host.scriptUpdates([note]), refusal); }
+      await check.click();
+      const requests = () => page.evaluate(() => window.agentBridgeDemo.updateLog.map(({ op }) => op));
+      await expect.poll(requests).toEqual(['update.check']);
+      if (refusal) {
+        await expect(page.locator('#machine-list > [data-device-id="demo"] .machine-error')).toHaveText(refusal);
+        await expect(check).toBeEnabled();
+        await check.click();
+        await expect.poll(requests).toEqual(['update.check', 'update.check']);
+      }
+    });
+  }
+
+  for (const [phase, label] of [['idle', 'Check now'], ['checking', 'Checking\u2026'], ['asking', 'Asking\u2026']]) {
+    test(`the ${phase} check control names each machine`, async ({ page }) => {
+      await show(page, {});
+      await page.evaluate(async (phase) => {
+        const { renderMachines } = await import('/js/ui/views.js');
+        const list = document.createElement('ul');
+        list.id = 'update-names-fixture'; list.className = 'machines';
+        document.getElementById('machines').append(list);
+        renderMachines(list, {
+          presence: ['Workshop', 'Laptop'].map((name) => ({ id: name, name, kind: 'host' })),
+          me: 'phone', current: 'all', onSelect() {},
+          updates: {
+            state: () => ({ installer: true, phase: phase === 'checking' ? 'checking' : 'idle', current: '0.1.0' }),
+            stateOf: () => ({ busy: phase === 'asking' }), press() {}, checkAll() {},
+          },
+        });
+      }, phase);
+      const checks = page.locator('#update-names-fixture .machine-update-check');
+      await expect(checks).toHaveCount(2);
+      for (const [i, machine] of ['Workshop', 'Laptop'].entries()) {
+        await expect(checks.nth(i)).toHaveText(label);
+        await expect(checks.nth(i)).toHaveAccessibleName(`${label} on ${machine}`);
+      }
+    });
+  }
+
+  for (const outcome of ['failed', 'refused']) {
+    test(`a current machine with a ${outcome} limited check keeps Check now and explains the machine retry clock`, async ({ page }) => {
+      await show(page, { last: { outcome, reason: refused, at: now.toISOString() } });
+      const block = update(page);
+      await expect(block.locator('.machine-update-line')).toHaveText('Up to date · 0.1.4415');
+      await expect(block.locator('.machine-update-why')).toHaveText(retryReason);
+      expect((await block.innerText()).match(/9:46 AM/g)).toHaveLength(1);
+      await expect(block.getByRole('button', { name: 'Check now on Demo machine', exact: true })).toBeEnabled();
+    });
+  }
+
+  for (const canUpdateNow of [true, false]) {
+    test(`a limited check keeps the known release usable through ${canUpdateNow ? 'Update now' : 'legacy Install'}`, async ({ page }) => {
+      await show(page, { available: '0.1.4448', canUpdateNow, busy: { working: 0, waiting: 0 },
+        last: { outcome: 'failed', reason: refused, at: now.toISOString() } });
+      const block = update(page);
+      await expect(block.locator('.machine-update-line')).toHaveText('Update available · 0.1.4448 (running 0.1.4415)');
+      await expect(block).not.toContainText('Up to date');
+      const action = block.locator(canUpdateNow ? '.machine-update-now' : '.machine-update-install');
+      await expect(action).toBeEnabled();
+      if (canUpdateNow) {
+        await expect(action).toHaveClass(/\bprimary\b/);
+        await expect(block.locator('.machine-update-check')).toHaveCount(0);
+        await expect(block).not.toContainText(/9:46 AM|Can't check/);
+      } else {
+        await expect(block.locator('.machine-update-check')).toBeEnabled();
+        await expect(block.locator('.machine-update-why')).toHaveText(retryReason);
+      }
+      await action.click();
+      await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.install']);
+    });
+  }
+
+  test('a current machine shows a quiet check age without exposing feed or quota plumbing', async ({ page }) => {
+    await show(page, {});
+    await expect(update(page).locator('p')).toHaveText(['Up to date · 0.1.4415', 'Checked 28 min ago']);
+    await show(page, { checkedAt: '2026-11-10T16:12:00Z' });
+    await expect(update(page).locator('p')).toHaveText(['Up to date · 0.1.4415', 'Checked 1 h ago']);
+  });
+
+  test('a current check keeps two text lines and Check now focus through redraws', async ({ page }) => {
+    await show(page, {});
+    const block = update(page), check = block.locator('.machine-update-check');
+    await expect(block.locator('.machine-update-line')).toHaveText('Up to date · 0.1.4415');
+    await check.focus();
+    const set = (change) => page.evaluate((c) => window.agentBridgeDemo.setUpdate({ ...window.agentBridgeDemo.host.update, ...c }), change);
+    await set({ phase: 'checking' });
+    await expect(block.locator('.machine-update-line')).toHaveText('Checking…');
+    await expect(check).toBeFocused();
+    await set({ phase: 'idle', checkedAt: now.toISOString(), last: { outcome: 'current', at: now.toISOString() } });
+    await expect(block.locator('p')).toHaveText(['Up to date · 0.1.4415', 'Checked under a minute ago']);
+    await expect(block.getByRole('button', { name: 'Check now on Demo machine', exact: true })).toBeFocused();
+    await expect(check).toBeEnabled();
+    await expect(block.getByRole('button')).toHaveCount(1);
+  });
+
+  test('a successful Check now moves keyboard focus to Update now', async ({ page }) => {
+    await page.clock.install({ time: now });
+    await show(page, { busy: { working: 0, waiting: 0 } });
+    const block = update(page), check = block.locator('.machine-update-check');
+    await expect(block.locator('.machine-update-line')).toHaveText('Up to date · 0.1.4415');
+    await page.clock.pauseAt(new Date(now.getTime() + 60_000));
+    await check.focus();
+    await page.keyboard.press('Enter');
+    await page.clock.runFor(50);
+    await expect(check).toHaveText('Checking…');
+    await expect(check).toBeFocused();
+    await page.evaluate(() => window.agentBridgeDemo.setUpdate({
+      ...window.agentBridgeDemo.host.update, available: '0.1.4462',
+    }));
+    await page.clock.runFor(400);
+    await expect(block.locator('.machine-update-line')).toHaveText('Update available · 0.1.4462 (running 0.1.4415)');
+    await expect(check).toHaveCount(0);
+    await expect(block.locator('.machine-update-now')).toBeFocused();
+    expect(await page.evaluate(() => window.agentBridgeDemo.updateLog.map(({ op }) => op))).toEqual(['update.check']);
+    await page.evaluate(() => window.agentBridgeDemo.setUpdate({
+      ...window.agentBridgeDemo.host.update, available: null,
+    }));
+    await page.clock.runFor(50);
+    await expect(check).toBeFocused();
+    await page.evaluate(() => window.agentBridgeDemo.setUpdate({
+      ...window.agentBridgeDemo.host.update, installer: false,
+    }));
+    await page.clock.runFor(50);
+    await expect(block.getByRole('button')).toHaveCount(0);
+    const machine = page.locator('#machine-list > [data-device-id="demo"]');
+    await expect(machine).toBeFocused();
+    await page.evaluate(() => window.agentBridgeDemo.setUpdate({
+      ...window.agentBridgeDemo.host.update, checkedAt: '2026-11-10T17:00:00Z',
+    }));
+    await page.clock.runFor(50);
+    await expect(machine).toBeFocused();
+  });
+
+  test('an available update has only primary Update now without changing health', async ({ page }) => {
     await show(page, { available: '0.1.4462', last: null, busy: { working: 0, waiting: 0 } });
     const block = update(page);
-    await expect(block.locator('.machine-update-line')).toHaveText('Update available: 0.1.4462 (running 0.1.4415).');
-    await expect(block.locator('p')).toHaveCount(1);
+    await expect(block.locator('.machine-update-line')).toHaveText('Update available · 0.1.4462 (running 0.1.4415)');
     await expect(block.getByRole('button')).toHaveCount(1);
     await expect(block.locator('.machine-update-now')).toHaveClass(/\bprimary\b/);
-    await expect(block.getByRole('link', { name: 'Check now' })).toBeVisible();
+    await expect(block.getByRole('link')).toHaveCount(0);
+    await expect(block.locator('.machine-update-check')).toHaveCount(0);
     await expect(page.locator('#machine-list [data-device-id="demo"] .tile-health-word')).toHaveText('Not measured');
     await block.locator('.machine-update-now').click();
     await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map(({ op, now }) => ({ op, now }))))
@@ -461,60 +599,88 @@ test.describe('one truthful update line', () => {
       await show(page, { available, last: { outcome: 'failed', code: 'release-changed', at: now.toISOString() } });
       const block = update(page);
       await expect(block.locator('.machine-update-line')).toHaveText(available
-        ? 'Update available: 0.1.4462 (running 0.1.4415). Not updated: the update didn\'t take.'
-        : 'Up to date (0.1.4415)');
-      await expect(block.locator('p')).toHaveCount(1);
-      if (!available) {
-        await expect(block).not.toContainText(/failed|not updated/i);
-        await expect(block.getByRole('button')).toHaveCount(0);
-      }
+        ? 'Update available · 0.1.4462 (running 0.1.4415)'
+        : 'Up to date · 0.1.4415');
+      await expect(block.locator('.machine-update-last')).toHaveText("Not updated: the update didn't take.");
     });
   }
 
   test('a refused first check never claims the machine is current', async ({ page }) => {
     await show(page, { checkedAt: null, last: { outcome: 'failed', reason: refused, at: now.toISOString() } });
     await expect(update(page)).not.toContainText('Up to date');
-    await expect(update(page)).toContainText('not checked for updates yet');
+    await expect(update(page).locator('.machine-update-line')).toHaveText('Not checked yet');
   });
 
   test('a successful check after a refusal removes the old retry time', async ({ page }) => {
     await show(page, { last: { outcome: 'failed', reason: refused, at: '2026-11-10T17:00:00Z' } });
-    await expect(update(page).locator('p')).toHaveText(['Up to date (0.1.4415)']);
+    await expect(update(page).locator('p')).toHaveText(['Up to date · 0.1.4415', 'Checked 28 min ago']);
   });
 
-  test('discovery details preserve the status and actions while source, quota and their ages change independently', async ({ page }) => {
+  test('only the check age is shown while historical source and quota change independently', async ({ page }) => {
     await show(page, {
       checkSource: 'cdn', checkedAt: '2026-11-10T17:28:00Z',
       gitHubRemaining: 43, gitHubQuotaAt: '2026-11-10T17:35:00Z',
-      last: { outcome: 'failed', reason: refused, at: now.toISOString() },
+      last: null,
     });
     const block = update(page);
     const details = block.locator('.machine-update-detail');
     const set = (change) => page.evaluate((c) => window.agentBridgeDemo.setUpdate({ ...window.agentBridgeDemo.host.update, ...c }), change);
-    await expect(details).toHaveText([
-      'Update list from the release feed, 12 min old',
-      'When last asked, GitHub allowed 43 more checks (5 min ago)',
-    ]);
-    await expect(block.locator('.machine-update-line')).toHaveText('Up to date (0.1.4415). Next check 9:46 AM.');
-    await expect(block.getByRole('link', { name: 'Check now' })).toBeVisible();
-    await expect(block.locator('button')).toHaveCount(0);
+    await expect(details).toHaveText(['Checked 12 min ago']);
+    await expect(block.getByRole('button', { name: 'Check now' })).toBeEnabled();
     await set({ gitHubRemaining: 0 });
-    await expect(details.nth(1)).toHaveText('When last asked, GitHub allowed no more checks (5 min ago)');
+    await expect(block.getByRole('button', { name: 'Check now' })).toBeEnabled();
     await set({ checkSource: 'github', checkedAt: '2026-11-10T17:41:00Z' });
-    await expect(details.first()).toHaveText('Update list from GitHub, under a minute old');
-    await expect(details.nth(1)).toHaveText('When last asked, GitHub allowed no more checks (5 min ago)');
+    await expect(details).toHaveText(['Checked under a minute ago']);
     await set({ checkSource: 'unknown', gitHubQuotaAt: now.toISOString() });
-    await expect(details).toHaveText(['When last asked, GitHub allowed no more checks (under a minute ago)']);
+    await expect(details).toHaveText(['Checked under a minute ago']);
     await set({ checkSource: 'cdn', checkedAt: 'not a time' });
-    await expect(details).toHaveCount(1);
-    await set({ checkedAt: '2026-11-10T17:28:00Z', gitHubQuotaAt: 'not a time' });
-    await expect(details).toHaveText(['Update list from the release feed, 12 min old']);
-    await set({ checkSource: null, gitHubRemaining: null, gitHubQuotaAt: null });
     await expect(details).toHaveCount(0);
+    await set({ checkedAt: '2026-11-10T17:28:00Z', gitHubQuotaAt: 'not a time' });
+    await expect(details).toHaveText(['Checked 12 min ago']);
+    await set({ checkSource: null, gitHubRemaining: null, gitHubQuotaAt: null });
+    await expect(details).toHaveText(['Checked 12 min ago']);
+    await expect(block).not.toContainText(/release feed|GitHub|more checks/);
     await show(page, {});
-    await expect(update(page).locator('.machine-update-detail')).toHaveCount(0);
-    await expect(update(page).locator('p')).toHaveText(['Up to date (0.1.4415)']);
+    await expect(update(page).locator('p')).toHaveText(['Up to date · 0.1.4415', 'Checked 28 min ago']);
   });
+
+  for (const width of [390, 820, 1180]) {
+    test(`the update block has a 44px secondary Check now and wraps within its card at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.clock.install({ time: now });
+      await show(page, {});
+      const block = update(page), check = block.getByRole('button', { name: 'Check now on Demo machine', exact: true });
+      await expect(check).toHaveClass(/\bsecondary\b/);
+      expect((await check.boundingBox()).height).toBeGreaterThanOrEqual(44);
+      await expect(block.locator('.glyph')).toHaveCount(1);
+      await page.clock.pauseAt(new Date(now.getTime() + 60_000));
+      await check.click();
+      await page.clock.runFor(50);
+      await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.check']);
+      await expect(block.locator('.machine-update-line')).toHaveText('Checking…');
+      await expect(block.getByRole('button', { name: 'Checking… on Demo machine', exact: true })).toBeDisabled();
+      await expect(block.locator('.machine-update-actions .glyph')).toHaveCount(1);
+      await page.evaluate(() => window.agentBridgeDemo.setUpdate({
+        ...window.agentBridgeDemo.host.update, phase: 'idle', available: '0.1.4462', current: '0.1.4384',
+      }));
+      await page.clock.runFor(50);
+      await expect(block.locator('.machine-update-line')).toHaveText('Update available · 0.1.4462 (running 0.1.4384)');
+      const text = block.locator('.machine-update-line > span:last-child');
+      const normalSize = await text.evaluate((e) => parseFloat(getComputedStyle(e).fontSize));
+      for (const scale of [1, 2]) {
+        await page.evaluate((scale) => document.documentElement.style.setProperty('--text-scale', String(scale)), scale);
+        expect(await text.evaluate((e) => parseFloat(getComputedStyle(e).fontSize))).toBeCloseTo(normalSize * scale, 2);
+        const fit = await block.evaluate((e) => {
+          const card = e.getBoundingClientRect();
+          return [...e.querySelectorAll('p, button')].every((n) => {
+            const r = n.getBoundingClientRect();
+            return r.left >= card.left && r.right <= card.right && n.scrollWidth <= n.clientWidth;
+          });
+        });
+        expect(fit).toBe(true);
+      }
+    });
+  }
 });
 
 test('Launch here, with every machine shown, opens the panel on that machine and launches there, not on the one last used', async ({ page }) => {
@@ -1076,7 +1242,7 @@ test('on a phone the Machines page keeps every row to two aligned lines, with it
   await page.goto('?demo=1&static=1&machines=3&updates=1&offline=1#/machines');
   await page.waitForSelector('html[data-demo-ready]');
   const rowOf = (id) => page.locator(`#machine-list > li[data-device-id="${id}"]`);
-  await expect(rowOf('demo').locator('.machine-update-line')).toHaveText('0.2.0 is available (running 0.1.0).');
+  await expect(rowOf('demo').locator('.machine-update-line')).toHaveText('Update available · 0.2.0 (running 0.1.0)');
   await expect(page.locator('#machine-list .machine.offline')).toHaveCount(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
 
