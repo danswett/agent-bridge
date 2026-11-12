@@ -524,6 +524,7 @@ export class DelegateDetail {
   // Nothing is fetched for a delegate nobody can see: its session left, its pane hidden, or the
   // app in the background. Visibility or shown() wakes it, without a hidden polling timer.
   #tick() {
+    clearTimeout(this.#state.timer);
     this.#state.timer = null;
     if (!this.#id) { return; }
     if (document.hidden || this.element.getClientRects().length === 0) { this.#state.skipped = true; return; }

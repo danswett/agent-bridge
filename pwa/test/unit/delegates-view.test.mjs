@@ -146,6 +146,7 @@ test('a queued reload cancels a later change timer so hide leaves no orphan call
   s.fetch = async () => agent;
   resolve(agent);
   await flush();
+  await flush();
   assert.equal(s.calls, 2);
   assert.equal(s.pending.size, 1, 'only the resumed poll owns a timer');
   s.show(false);
