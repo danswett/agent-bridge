@@ -335,7 +335,7 @@ public sealed class LaunchTests : IDisposable
 
     [Theory]
     [MemberData(nameof(Refusals))]
-    public async Task A_request_naming_what_this_machine_does_not_offer_is_refused_in_the_daemons_words(string name)
+    public async Task A_request_naming_what_this_machine_does_not_offer_is_refused_without_echoing_a_workspace(string name)
     {
         var recorded = Loaded.Value["refusals"]![name]!.AsObject();
         await using var c = await Ready();
@@ -343,16 +343,56 @@ public sealed class LaunchTests : IDisposable
         await Launch(c, AgentUser);
         if (recorded["refused"]!.GetValue<bool>())
         {
+            // Keep the daemon recording intact; workspace refusals deliberately omit its echo.
+            var note = name == "unknownWorkspace" ? "Unknown workspace - this machine has agent-bridge, scratch" : recorded["note"]!.GetValue<string>();
             Assert.Empty(launched);
-            Assert.Equal(recorded["note"]!.GetValue<string>(), Note);
+            Assert.Equal(note, Note);
             Assert.Equal("refused", Outcome()["outcome"]!.GetValue<string>());
-            Assert.Equal(recorded["note"]!.GetValue<string>(), Outcome()["note"]!.GetValue<string>());
+            Assert.Equal(note, Outcome()["note"]!.GetValue<string>());
         }
         else
         {
             var r = Assert.Single(launched);
             Assert.Equal(("copilot", "scratch", "gpt-5.5", "", LaunchProtocol.AllowAll), (r.Agent, r.Workspace, r.Model, r.Effort, r.Permissions));
         }
+    }
+
+    [Fact]
+    public async Task Launch_with_unknown_path_like_workspace_does_not_echo_it()
+    {
+        await using var c = await Ready();
+        Payload(new JsonObject
+        {
+            ["request"] = "req-01901-abcd",
+            ["settings"] = new JsonObject { ["workspace"] = @"C:\synthetic-private-workspace" },
+        });
+        await Launch(c, AgentUser);
+
+        Assert.Empty(launched);
+        var outcome = Outcome();
+        Assert.Equal("refused", outcome["outcome"]!.GetValue<string>());
+        Assert.Equal("", outcome["session"]!.GetValue<string>());
+        Assert.Null(outcome["launched"]);
+        foreach (var text in new[] { Note, outcome["note"]!.GetValue<string>() })
+        {
+            Assert.DoesNotContain(@"C:\", text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("synthetic-private-workspace", text, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("Unknown workspace - this machine has agent-bridge, scratch", text);
+        }
+    }
+
+    [Fact]
+    public async Task A_card_with_an_unknown_path_like_workspace_does_not_echo_it()
+    {
+        await using var c = await Ready();
+        var entity = Entity("select", "new_workspace");
+        ha.States[entity] = (await ha.GetStateAsync(entity))! with { State = @"C:\synthetic-private-workspace" };
+        await Launch(c);
+
+        Assert.Empty(launched);
+        Assert.DoesNotContain(@"C:\", Note, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("synthetic-private-workspace", Note, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("Unknown workspace - this machine has agent-bridge, scratch", Note);
     }
 
     [Theory]
