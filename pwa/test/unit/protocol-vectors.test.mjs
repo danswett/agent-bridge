@@ -442,11 +442,11 @@ const BUILDS = {
 
 // Records the PWA neither reads nor builds through a function these tests can call, and why.
 const NOT_REPLAYED = {
-  MachineLoad: 'the relay load reader follows in #1872',
-  SessionLoad: 'read within MachineLoad, whose reader follows in #1872',
-  MachineLoadCpu: 'read within MachineLoad, whose reader follows in #1872',
-  MachineLoadMemory: 'read within MachineLoad, whose reader follows in #1872',
-  UnattributedLoad: 'read within MachineLoad, whose reader follows in #1872',
+  MachineLoad: 'full-record reader and replay follow in #2158; LoadFeed reads only a projection',
+  SessionLoad: 'full-record reader and replay follow in #2158; LoadFeed ignores sessions',
+  MachineLoadCpu: 'full-record reader and replay follow in #2158; LoadFeed reads only percent',
+  MachineLoadMemory: 'full-record reader and replay follow in #2158; LoadFeed reads only total and available bytes',
+  UnattributedLoad: 'full-record reader and replay follow in #2158; LoadFeed ignores unattributed load',
   SubscribeResult: 'the PWA waits for sessions.synced and uses nothing of this result',
   SubscribeSince: 'built only within SubscribeRequest, from what the store holds',
   PushSubscribeRequest: 'PushRegistrar sends the browser\'s own subscription, from a private method',
