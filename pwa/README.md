@@ -560,6 +560,8 @@ in the demo's own storage).
 A held release check says "Checked 20 minutes ago · checking again soon", without
 quota wording or a retry clock. Legacy hosts' hold reasons are recognised only by
 their fixed prefix; their machine-local times are never parsed or displayed.
+New app reasons retain that clock-free prefix so an already installed PWA still
+recognises the hold; the new PWA normalises it to the plain wording above.
 Successful checks clear that wording. The host's existing hold and retry schedule
 are unchanged (#2227); the structured UTC deadline belongs to protocol slice #2229.
 

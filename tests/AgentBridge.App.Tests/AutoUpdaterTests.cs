@@ -1907,6 +1907,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     static ReleaseDiscoveryException Limited(DateTimeOffset retryAt) =>
         new("GitHub is limiting how often this network can check for updates.", retryAt, limited: true);
 
+    const string HeldCheckReason = "the release feed's rate limit refused the check; checking again soon";
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task A_new_app_held_check_keeps_the_reason_recognised_by_an_already_installed_PWA()
@@ -1938,11 +1940,11 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         await auto.TickAsync();
 
-        Assert.Equal("checking again soon", auto.State.Last!.Reason);
+        Assert.Equal(HeldCheckReason, auto.State.Last!.Reason);
         Assert.Contains(log, l => l.Contains(reset.ToUniversalTime().ToString("O"), StringComparison.Ordinal));
         time.Advance(TimeSpan.FromMinutes(2));
         await AskedAsync(UpdateAskKind.Check);
-        Assert.Equal("checking again soon", auto.State.Last!.Reason);
+        Assert.Equal(HeldCheckReason, auto.State.Last!.Reason);
         Assert.Equal(1, updater.Checks);
     }
 
@@ -2007,7 +2009,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         Assert.Equal(1, updater.Checks);
         Assert.Equal(UpdateOutcome.Failed, auto.State.Last!.Outcome);
-        Assert.Equal("checking again soon", auto.State.Last.Reason);
+        Assert.Equal(HeldCheckReason, auto.State.Last.Reason);
 
         // Not at the next half hour: at GitHub's reset.
         time.Advance(TimeSpan.FromMinutes(44));
@@ -2214,7 +2216,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         await AskedAsync(UpdateAskKind.Check, "0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f");
         Assert.Equal(1, updater.Checks);
         Assert.Equal((UpdateOutcome.Failed, "0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f"), (prefs.LastUpdate!.Outcome, prefs.LastUpdate.Request));
-        Assert.Equal("checking again soon", prefs.LastUpdate.Reason);
+        Assert.Equal(HeldCheckReason, prefs.LastUpdate.Reason);
 
         // Over at its end: a check then that fails for anything else leaves the next to CheckEvery.
         updater.CheckFails = new HttpRequestException("No such host is known.");
@@ -2262,7 +2264,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         await auto.TickAsync();
         Assert.Equal(1, updater.Checks);
         Assert.Equal(UpdateOutcome.Failed, auto.State.Last!.Outcome);
-        Assert.Equal("checking again soon", auto.State.Last.Reason);
+        Assert.Equal(HeldCheckReason, auto.State.Last.Reason);
 
         // Not at the next half hour: an hour, then two, and never longer.
         time.Advance(AutoUpdater.CheckEvery);
@@ -2312,7 +2314,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         updater.CheckFails = Limited(time.GetUtcNow().AddMinutes(30));
         await auto.TickAsync();
         Assert.Equal(outcome, auto.State.Last!.Outcome);
-        if (outcome == UpdateOutcome.Failed) { Assert.Equal("checking again soon", auto.State.Last.Reason); }
+        if (outcome == UpdateOutcome.Failed) { Assert.Equal(HeldCheckReason, auto.State.Last.Reason); }
         time.Advance(TimeSpan.FromMinutes(29));
         await auto.TickAsync();
         Assert.Equal(2, updater.Checks);
@@ -2343,7 +2345,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             var request = Guid.NewGuid().ToString();
             await AskedAsync(kind, request);
             Assert.Equal((!newer && outcome == UpdateOutcome.Current ? UpdateOutcome.Refused : UpdateOutcome.Failed, request), (auto.State.Last!.Outcome, auto.State.Last.Request));
-            Assert.Equal("checking again soon", auto.State.Last.Reason);
+            Assert.Equal(HeldCheckReason, auto.State.Last.Reason);
             Assert.Equal(newer ? "0.2.0" : null, auto.State.Available);
         }
         Assert.Equal(newer ? 3 : 2, updater.Checks);
@@ -2367,7 +2369,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             await AskedAsync(UpdateAskKind.Check, request);
             Assert.Equal((UpdateOutcome.Refused, request), (auto.State.Last!.Outcome, auto.State.Last.Request));
             Assert.Equal((UpdateOutcome.Refused, request), (prefs.LastUpdate!.Outcome, prefs.LastUpdate.Request));
-            Assert.Equal("checking again soon", auto.State.Last.Reason);
+            Assert.Equal(HeldCheckReason, auto.State.Last.Reason);
             Assert.Null(observed.CheckedAt);
             Assert.Null(auto.State.Available);
         }

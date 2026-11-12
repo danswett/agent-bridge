@@ -1168,7 +1168,8 @@ public sealed class AutoUpdater
         // so Settings' can no longer succeed while this one is under way.
         heldAt = time.GetUtcNow();
         log($"auto-update: checks held until {until.ToUniversalTime():O} UTC: {failure}");
-        checksHeld = "checking again soon";
+        // Cached PWAs classify a held check by this prefix, not a protocol code.
+        checksHeld = "the release feed's rate limit refused the check; checking again soon";
         // Not over an outcome the devices may not have seen yet: the update just made (its first
         // check, right after the restart, is the likeliest to be refused) or a press answered.
         var last = prefs().LastUpdate;
