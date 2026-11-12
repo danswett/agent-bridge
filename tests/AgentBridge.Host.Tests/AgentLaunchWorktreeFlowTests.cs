@@ -23,7 +23,7 @@ public sealed class AgentLaunchWorktreeFlowTests : LaunchFlowFixture
     }
 
     JsonElement Audit() => JsonSerializer.Deserialize<JsonElement>(Assert.Single(File.ReadAllLines(
-        Assert.Single(Directory.GetFiles(Path.Combine(f.Root, "audit-profile", AgentAuditLog.FolderName), "launches-*.jsonl")))));
+        Assert.Single(Directory.GetFiles(Path.Combine(f.Root, "audit-profile", AgentAuditLog.FolderName), "launches-*.jsonl"))).Skip(1)));
 
     LaunchRequest Request() => new()
     {
