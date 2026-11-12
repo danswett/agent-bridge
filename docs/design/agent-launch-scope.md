@@ -6,6 +6,10 @@ Home Assistant retirement epic (#1396). It decides what slices 2b (#1404), 2c (#
 for the first version; where the two disagree for v1, this note wins, and agent-principals.md
 stays the long-term design. Times are Pacific.
 
+**Pending-launch extension (#2357 / #1472):** §13 proposes the pre-session Needs-you
+record and typed `needsPerson` result. It is docs only, not a new permission grant;
+its host and client code slices wait on #1413 C1. The earlier scope rules remain.
+
 ## Owner summary (one page)
 
 **Fleet workers (decide first).** Workers are launched today through Home Assistant with
@@ -122,7 +126,8 @@ agents exactly as today. The gate runs, in order, refusing at the first failure:
    full** (§5), so at least 24 hours. Identical or not is judged by `requestSha256` (§6), the
    SHA-256 of the request's normalised launch fields, prompt included, recorded on each line;
    the prompt itself is never recorded. A repeat with the same hash gets the recorded outcome
-   (`unconfirmed` when only `reserved` or `interrupted` is recorded); one with a different hash
+   (`unconfirmed` when only `reserved` or `interrupted` is recorded; §13's typed
+   `needsPerson` when a startup question is positively observed); one with a different hash
    is refused (`requestReused`) and **counts against the attempt limit** (step 4), so a loop of
    mismatched repeats is limited like any other. Neither is counted against the caps or started
    again;
@@ -272,7 +277,7 @@ running with Allow all does not widen it.
 | `limits.fleetLaunchesPerMachinePerHour` | **8** | this machine, the fleet grant (§11); the dispatcher allows 6 workers per machine. Separate from the agent caps: fleet launches do not use up agents' 10, nor agents the fleet's 8 |
 
 **What counts:** each distinct (principal, `request`) whose **last** line is `reserved` (written
-at §2 step 5, before the start), `interrupted`, `started`, `unconfirmed` or `failed`. A request
+at §2 step 5, before the start), `interrupted`, `started`, `unconfirmed`, `failed`, or a post-start pending outcome from §13. A request
 whose last line is `busy` or `refused` does not count, before or after a restart, which is what
 releasing its slot (§2) means. So a launch counts once, and a host that crashed between the two
 lines still counts it. A `reserved` line with no outcome found
@@ -383,7 +388,9 @@ file as well, so an hour that spans midnight is whole.
 **Launch result:** `outcome`, `reason`, `code`, `retryAfter`, `session` (the new id), and
 `launched` with `agent`, `workspace`, `worktree`, `model`, `effort`, `context`, `permissions`.
 Not `cwd` (a path), `resume`, `transfer` or `profile` (v1-launch.md:133-137 lists them for person
-clients).
+clients). §13 adds typed pending identity and machine fields for the origin's own launch,
+not question text or answer authority. `unconfirmed` still means uncertainty, never permission
+to retry; a positively observed startup question becomes `needsPerson`.
 
 **Reading a result back:** a repeat of the same `session.launch` with the same `request` returns
 the remembered outcome and starts nothing (v1-launch.md:94). That is the readback; no new op.
@@ -525,3 +532,253 @@ Each has a recommended default; the summary's list is the same.
 8. Ask-only in v1 means no bypass flag, no extra arguments, no Agency and no agent project
    configuration in the worktree, with the user's own agent settings still applying
    **(recommended)**; or wait for AP8's provably forced-ask launch before any agent launch.
+
+## 13. Pending launches and Needs you (#2357 / #1472)
+
+**Status: proposed design extension, not implemented.** This covers a host-owned launch
+that stops before its session is ready, including when no session exists yet. It changes
+neither ask-only policy nor the person-only trust boundary. #149 requires folder trust,
+sign-in, permission/bypass confirmation and an unknown startup question to stay distinct.
+No paging, owner alerts, HA fallback, host setup or credentials changes are included.
+
+### 13.1 Placement, identity and bounds
+
+The pending-launch component runs in **each participating host**, with that host's launch
+service and existing profile lock. There is no dedicated fleet machine, coordinator or
+new watcher. Like session truth in [client-protocol.md](client-protocol.md#placement-and-state),
+this state belongs to the host that owns the actual process; it cannot be transferred to
+another host or reconstructed from relay presence. One live host still serves its own
+launches and the remaining fleet. If the target leaves, its record becomes unavailable,
+not closed; another host never starts its replacement merely because it disappeared.
+
+**Proposed storage:** one versioned, atomically replaced, flushed pending journal in the
+host's private profile, owner-only and protected like its credential store. It holds the
+current startup attempt and action replay/result entries; §6's separate launch audit holds
+terminal identity/outcome evidence. No workspace file, fleet git file or named machine is
+the record's home. Client copies are disposable caches. The relay transports encrypted
+host snapshots; question text, paths and sign-in material never enter registry metadata.
+
+The host creates the journal entry after the audited reservation and **before process
+start**, so clients do not need a registered session to discover it. Bind it to the
+authenticated account, origin principal and launch request; all are host-derived except
+the validated request UUID. A request-supplied account or principal confers no authority.
+One `(account, origin principal, launch request)` has one entry and one request hash (§2).
+Repeating identical bytes reads its current result; different bytes are `requestReused`.
+
+State flow: `starting` becomes `needsPerson` only when a startup question is observed,
+then `answering`, back to `needsPerson` for a new question, or `started` once ready.
+Closing becomes `dismissed`, `withdrawn` or `expired` only after the process is gone;
+an uncertain effect stays held for reconciliation. The `starting` entry has no question
+deadline and is not counted in Needs you; the existing startup wait still applies.
+Set `expiresAt` once on first question observation. A provisional session registration
+does not retire the record: the host must positively observe that the session is ready.
+
+| Stored field | Meaning |
+|---|---|
+| `v`, `pending`, `request`, `requestSha256` | Journal version, host-generated pending UUID, original launch UUID and normalized request hash |
+| `account`, `origin`, `machine` | Authenticated account/principal and this host's device identity, never a display-name routing key |
+| `agent`, `workspace`, `startedAt`, `expiresAt` | Settled launcher, approved workspace label, launch start and fixed question deadline; UTC on the wire, viewer-local in clients |
+| `state`, `revision` | Startup state and monotonically increasing record revision |
+| `question` | New question UUID, typed kind, first observation, exact complete warning/choices when safely readable, exact folder/root scope for trust, and digest of the full observed screen |
+| `process` | Private process id **and start time**, owned launch process-group binding, and any provisional session id; never exposed to agent callers |
+| `action` | Bound action request, actor, question/revision, choice digest, durable pre-action marker and eventual result; no credential or answer text |
+
+Proposed bounds, **not approved tuning rules**: one unresolved startup record per host,
+matching its existing busy serialization; two minutes to answer from the first observed
+question, never renewed by rereads, repeated launches or a replacement question; 32 KiB
+for the pending journal's live entry. Retained action results use the bounded replay
+store; terminal request identities use §6's existing 24-hour-minimum readback window.
+Do not evict unresolved evidence to make room. A full/unwritable journal refuses a new
+start and reports why; if recording a question fails after start, hold that attempt and
+report storage failure. No Answer or reassignment is allowed until storage and process
+reconciliation recover; missing evidence never authorizes an unrecorded close.
+
+Warning display uses the existing 2 KiB bound in
+[v1-launch.md](../protocol/v1-launch.md#folder-trust). An incomplete, unreadable, oversized
+or secret-bearing warning is explicitly read-only, never a truncated approval. Persist
+the non-secret question and scope when safe; sign-in passwords, tokens, device codes and
+credential entry are not collected, relayed or audited. A read-only reason explains
+missing exact text without substituting invented words. Journal damage/unknown versions
+fail closed, retain evidence and never authorize typing or guessed process termination.
+
+### 13.2 Typed result and origin behavior
+
+`session.launch` gains `outcome: needsPerson` only on positive observation of a startup
+question. It is not `started`, `refused`, or uncertain `unconfirmed`. The process may
+exist without a session; a provisional registration is not proof it is ready.
+The proposed origin projection is:
+
+```text
+outcome: needsPerson
+code: startupQuestion
+request: <original launch UUID>
+machine: <authenticated target device id>
+machineName: <optional validated display name>
+pending: <pending UUID>
+questionKind: folderTrust | signIn | permission | unknown
+expiresAt: <fixed deadline>
+```
+
+The machine identity lets the launcher exclude that target without reading free text.
+Machine display-name validation follows [agent-operations.md](../protocol/agent-operations.md);
+it is never a pin. An agent sees only its own typed result, no warning, path, choices,
+sign-in material or other principal's pending identity. Another agent's launch gets
+`busy` with a fixed reason and retry timing, not that pending record. Same-request
+readback returns the **current** pending or terminal result, including after restart.
+No client parses a sentence or a registry status to decide this outcome.
+
+**No automatic retry.** While its record is open, the origin must not launch again on
+that machine, answer or bypass the prompt, impersonate a person, change trust settings,
+or send a reply/Enter into the waiting window. Launch scope and hourly attempt limits
+still apply. Every post-process-start pending/terminal outcome counts once against the
+launch cap; dismissing/expiring it does not refund a started attempt (§5).
+
+**Cancellation before reassignment:** proposed `launch.pending.withdraw` withdraws only
+the authenticated origin's own unready launch, with original request, pending UUID and
+revision. It answers no question and types no keys. It shares the close path with a
+person's Dismiss, not `session.stop`, and cannot close an unrelated or ready session.
+This is a proposed narrow launch-cancellation grant, **not an existing agent/script op**.
+Until granted and implemented, an agent waits for a person's Dismiss and reads it back.
+Only a confirmed `withdrawn`, `dismissed` or `expired` result with `closed: true` permits
+a new assignment elsewhere. A changed target uses a fresh request, linked to the old
+request by the dispatcher's assignment; the old entry never migrates or reopens.
+If readiness won the race, return `started` with its session, and start no replacement.
+Offline, timeout, unknown close outcome or expiry alone is never closure evidence.
+Cross-machine **agent** launch still waits on §9/#55; this adds no remote launch grant.
+
+### 13.3 Common client card
+
+PWA and Windows implement the same host record, with macOS and other shipped clients
+adopting it later. Proposed `launch.pending` capability supplies a bounded person-only
+snapshot in `launch.options.pending` and `launch.pending.subscribe` / snapshot-and-change
+events on the encrypted host channel. Reconnect, missing revision or event gaps require
+a fresh snapshot. The event names/wire vectors are pinned in the host slice before use;
+none exists by virtue of this document. No fake session is inserted into `sessions.list`.
+
+**Wording/layout for Creative review**, one card per pending UUID in Needs you:
+
+```text
+Needs you
+<Machine display name> · <Agent label>
+<Exact startup question, or explicit cannot-read-safely reason>
+Started <time> · Waiting until <time>
+[Answer]  [Dismiss]
+Dismiss closes this waiting launch. It does not answer the question.
+```
+
+Answer opens the exact question and full trust folder/root scope, warnings and choices,
+with an explicit final person choice; opening the detail view sends nothing. Use the
+existing protected trust renderer, not ordinary Markdown or command-copy controls.
+No preselected approving choice, hidden/shortened scope or color-only distinction.
+Long text wraps; keyboard focus, accessible names, screen-reader state changes and
+disabled-action reasons work at narrow widths. Machine/agent labels are untrusted
+display content, escaped as required; they are not links, commands or routing keys.
+
+For sign-in, bypass permission confirmation, hook review or an unknown prompt,
+Answer opens **read-only** details with "Answer at the machine" and the host's reason.
+It neither enters credentials nor enables a new remote permission path. Folder-trust
+Answer is enabled only where its existing person/device/policy checks permit it.
+Dismiss invokes the protected close operation; while closing it shows progress and
+remains counted. It removes the card only after confirmed closure. An unavailable host
+shows stale/unavailable, disables answers, and never reports a locally hidden card as
+Dismissed. An already ready launch becomes the real session; it is not closed by Dismiss.
+Older clients/hosts lacking the capability retain explicit unconfirmed/read-only
+behavior; no compatibility path answers a prompt or silently claims parity.
+
+### 13.4 Person boundary, delivery and audit
+
+Same authenticated account only, and the host rechecks current authorization on every
+snapshot, subscription event and action. Person clients use their paired encrypted
+channel; account sign-in, a client-kind string, an HA token or a host signing key alone
+is not person authority. Agents, script credentials and services cannot read the card's
+protected text or invoke Answer/Dismiss; attempted bypasses are refused and audited.
+The origin's typed readback/withdrawal projection is deliberately separate.
+
+Folder trust reuses `launch.trust.answer` **unchanged**, including the machine's
+default-off remote-trust setting, individually approved person device, exact question/
+choice signature, and screen guard before each key and inside the injector slot.
+The question id maps to the exact pending revision; changed words/root/options create
+a new id without extending expiry. No generic startup-answer op or `session.reply`
+fallback is introduced. Nothing answers Bypass Permissions remotely.
+
+Proposed `launch.pending.dismiss` requires a trusted local person app or a verified,
+approved same-account person device, a fresh explicit confirmation bound to this host,
+pending UUID and revision, and durable single-use action evidence before closing.
+Remote dismissal's exact person-command encoding/allow-list is a host-slice design
+dependency, not permission to accept today's weaker presence/kind-only MAC as enough.
+Reuse [devices.md](../protocol/devices.md#vetoes-person-commands-and-head-attestations)
+and its required replay/high-water-mark checks; disable remote Dismiss until those
+checks and the new action vectors exist. Local Dismiss still cannot be agent-driven.
+
+All readiness, Answer, Dismiss, withdrawal and expiry transitions share the host's
+per-launch lock. Persist the action claim before the effect; never replay keys or
+termination after an interrupted action without reconciliation. Closing verifies the
+owned startup process group by process id/start time, requests its termination without
+selecting "No" or pressing Esc/Enter, and observes it gone before committing `closed`.
+Never kill by process name, broaden to other windows, or reclaim an uncertain worktree.
+A ready session wins with `started`; its ordinary stop remains a separate person action.
+
+Extend §6's **launch** audit, not a new activity stream: reserve/start, `needsPerson`,
+answer attempted/refused/claimed/result, dismiss/withdraw/expiry attempted/result and
+restart reconciliation, all with original request, pending UUID, question UUID/revision,
+verified actor, machine, question kind, action request, outcome and refusal code.
+Record scope/choice **digests**, never raw question, answer, sign-in material, token,
+prompt or filesystem path. Audit and journal writes must succeed before an action;
+on failure refuse, report the reason and retain pending evidence. Interrupted actions
+remain unknown until reconciled; audit evidence never manufactures an approving answer.
+
+### 13.5 Failure and race contract
+
+| Case | Required result |
+|---|---|
+| Host restarts before process start | Reconcile the reservation; no launch replay. An interrupted attempt follows §2/§5 |
+| Host restarts with a pending process | Restore identity/deadline; positively rebind the exact process and reread the screen. Changed question gets a new id. An interrupted answer never types again; read-only uncertainty persists until reconciled |
+| Target goes offline / client is offline | No closure inferred. Client resyncs on reconnect; target enforces expiry without a client |
+| Question expires, including clock rollback | Refuse further answers at/after deadline using a persisted clock high-water mark; initiate the same close path. Report `expired, closed: true` only after the owned startup process is gone |
+| Close cannot identify/terminate the process | Explicit `unconfirmed`, `closed: false`; retain the busy hold and evidence, no replacement |
+| Same action replay / two clients or people answer | Same action returns its recorded result; only the first valid claim for that question/revision can act. The loser gets already-handled/stale, never a second key |
+| Answer races Dismiss, withdrawal, expiry or readiness | One lock/claim chooses the transition. Closing rejects late answers; answering blocks close until its effect is reconciled; already-ready returns the session, never stops it |
+| Answer was delivered but acknowledgement was lost | Readback/reconciliation, never resend keys. A later startup question is a new question, not proof that the old answer failed |
+| Person answers directly at the machine | Observe ready/session or the next exact question; update the original record, never auto-launch another |
+| Record/account/policy changes or old question is answered | Recheck account, device approval, scope and screen at effect time; stale/unauthorized refuses with no action |
+
+### 13.6 Bounded implementation cuts
+
+**Host slice (~300 changed lines, including focused tests): blocked on #1413 C1**
+(principal-keyed cap/result/options shape). Add pending lifecycle/journal, typed origin
+projection and common person snapshot, guarded close and audit wiring. Reuse existing
+trust delivery. Pin additive records, action encodings and C#/PWA vectors first; where
+replay/person-command enforcement is unavailable, remote actions remain disabled.
+If this cannot fit 400 lines, Engineering cuts persistence/protocol support separately
+before delivery; the estimate is not permission for a larger PR.
+
+Failing-first acceptance: record exists before registration; exact observed folder
+trust vs sign-in/permission produces `needsPerson`; no known question remains generic
+unconfirmed; same request reads once and changed bytes refuse; other principal/account
+cannot read/act; agents/scripts cannot Answer/Dismiss; journal/audit failure blocks
+effects; expiry, restart, duplicate/two-person answers, changed screen, answer/close/
+ready races and lost acknowledgement never type twice or duplicate a launch;
+withdrawal cannot stop a ready/unrelated process; no replacement before proven closure.
+
+**Client slice (~300 changed lines, including focused tests): blocked on #1413 C1
+and the host slice's pinned protocol.** Shared projection and PWA/Windows card/detail,
+subscription resync and guarded actions. macOS adopts the same contract when its
+client work resumes; it is not claimed implemented by this cut. Creative's wording/
+layout receipt is required, not an optional post-merge refinement.
+
+Failing-first acceptance: pending without session is counted/shown once; machine,
+agent and exact question/scope render safely; Answer requires a deliberate choice;
+unsupported/secret-bearing questions stay answer-at-machine; Dismiss progress/failure
+does not hide an open launch; ready removes pending in favor of its session; offline,
+gap/reconnect and two-client stale actions resync; keyboard, screen reader, narrow
+layout and protected trust rendering preserve the same authority in both clients.
+
+### 13.7 Open choices before code
+
+Engineering/Product must settle the proposed one-record cap, two-minute fixed deadline
+and journal/replay byte budgets; they are recommendations, not new machine settings.
+Confirm the narrow origin-only withdrawal grant versus person-only cancellation; the
+latter blocks unattended reassignment until a person dismisses. Pin the common event
+names and remote-dismiss person-command action with its prerequisite enforcement.
+Creative must approve the card wording, read-only Answer treatment and closing/error
+layout. No new sign-in or permission answer channel is decided here.
