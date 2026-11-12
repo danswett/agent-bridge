@@ -703,6 +703,11 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
   ("Groups", below), but never into or out of Pinned: Pin and Unpin do that. A row dragged
   into or out of Pinned is pinned or unpinned; a row dragged into a group, or onto a group's
   header, open or collapsed, joins that group.
+- **Touch-only grip rest state:** where there is no hover (a phone or a tablet with no
+  pointer), the handle's gutter stays reserved so rows do not shift, but nothing is drawn in
+  it; a tap on a row shows the hint that moving is in the row menu. In a filtered Your order
+  with two or more movable sessions the gutter is still reserved, and the grip is drawn on the
+  movable rows (#1641).
 - **Pins:** a pinned row goes to the foot of Pinned, and an unpinned one to the top of
   its group, or of Sessions when it is in none. Pinning keeps a row's group: it shows in
   Pinned only, and comes back to its group when unpinned.
