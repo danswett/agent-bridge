@@ -14,6 +14,7 @@ Require ($on -match '(?m)^\s+types: \[completed\]') 'workflow_run must fire on c
 Require ($on -match '(?m)^\s+branches: \[main\]') 'workflow_run must be limited to main'
 Require ($on -match '(?ms)^  workflow_dispatch:.*?^\s+ref:') 'workflow_dispatch needs a ref input, for rollback'
 Require ($on -match "cron: '\*/5 \* \* \* \*'") 'Pages needs a five-minute named-job check'
+Require ($text -match '(?m)^run-name: .*Pages rollback.*Pages resume' -and $text -match 'event=workflow_dispatch&per_page=1' -and $text -match '-ManualRun \$manual -RollbackStatus') 'manual rollback must fence automatic deployment until a newer head or successful explicit resume'
 
 $build = [regex]::Match($text, '(?ms)^  build:\r?\n(.*?)^  deploy:').Groups[1].Value
 $deploy = [regex]::Match($text, '(?ms)^  deploy:\r?\n(.*)').Groups[1].Value

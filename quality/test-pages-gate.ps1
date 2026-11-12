@@ -53,5 +53,27 @@ $new.jobs[1].conclusion = 'cancelled'
 if ((& $candidate -Runs @($new, $old)).sha -ne $live) { throw 'newest eligible SHA did not win' }
 $new = Run 3 $live; $new.jobs[1].conclusion = 'skipped'
 if ((& $candidate -Runs @($old, $new)).sha) { throw 'older evidence replaced the latest run for a SHA' }
+function Rollback($manual, [string]$relation = 'identical', [string]$sha = $head) {
+    $gateArgs = @{ Head = $sha; Live = $live; Status = 'ahead'; MainStatus = 'ahead'; Files = @('pwa/index.html') }
+    if ((Get-Command $gate).Parameters.ContainsKey('ManualRun')) {
+        $gateArgs.ManualRun = $manual; $gateArgs.RollbackStatus = $relation
+    }
+    (& $gate @gateArgs)[0]
+}
+$manual = @{ head_sha = $head; display_title = 'Pages rollback'; status = 'completed'; conclusion = 'success' }
+foreach ($tick in 1..2) {
+    if ((Rollback $manual) -ne 'skip') { throw 'cron replayed bad B after rollback to good A, without new CI' }
+}
+foreach ($relation in @('behind', 'diverged', '')) {
+    if ((Rollback $manual $relation) -ne 'skip') { throw 'an unproven rollback fence was cleared' }
+}
+if ((Rollback $manual 'ahead' ('c' * 40)) -ne 'deploy') { throw 'newer green C did not clear the B rollback fence' }
+$manual.display_title = 'Pages resume'
+foreach ($outcome in @('failure', 'cancelled', $null)) {
+    $manual.conclusion = $outcome
+    if ((Rollback $manual) -ne 'skip') { throw 'an unsuccessful resume cleared the rollback fence' }
+}
+$manual.conclusion = 'success'
+if ((Rollback $manual) -ne 'deploy') { throw 'explicit successful resume did not clear the rollback fence' }
 if ($failures) { exit 1 }
 Write-Host 'pages gate: ok'
