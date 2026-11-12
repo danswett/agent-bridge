@@ -924,6 +924,11 @@ public static class ProtocolVectors
 
     static void Update(VectorFileBuilder f)
     {
+        f.Context("release-hints", new
+        {
+            now = T0, hello = new { releaseHint = true },
+            frame = new { t = "release.hint", tag = "v0.1.201", channel = "win", seenAt = T0 },
+        });
         var last = new UpdateResult { Outcome = UpdateOutcome.Updated, From = "0.1.199", To = "0.1.200", Request = Request, At = T0 };
         f.Record<UpdateResult>(Host)
             .Valid("updated", last)

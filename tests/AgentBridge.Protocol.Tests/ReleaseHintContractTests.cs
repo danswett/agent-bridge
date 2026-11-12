@@ -35,11 +35,19 @@ public sealed class ReleaseHintContractTests
     [InlineData("06:00:00Z", "06:05:01Z", "seenAt")]
     [InlineData("06:00:00Z", "06:00:00+01:00", "seenAt")]
     [InlineData("06:00:00Z", "06:00:00", "seenAt")]
+    [InlineData("2026-11-12T06:00:00Z", "2026-11-12T06:00:00.123456789012345678901Z", "seenAt")]
+    [InlineData("\"seenAt\":\"2026-11-12T06:00:00Z\"", "\"seenAt\":42", "seenAt")]
+    [InlineData("\"channel\":\"win\",", "", "channel")]
     [InlineData("\"tag\":\"v0.1.123\"", "\"tag\":42", "tag")]
     [InlineData("\"t\":\"release.hint\"", "\"t\":\"secret-frame\"", "t")]
     [InlineData("\"channel\":\"win\"", "\"channel\":\"win\",\"channel\":\"win\"", "channel")]
     [InlineData("{", "{\"secret-field\":\"secret-value\",", "frame")]
     [InlineData("}", "", "frame")]
+    [InlineData("v0.1.123", "v0.1.\\uD800", "tag")]
+    [InlineData("win", "\\uD800", "channel")]
+    [InlineData("release.hint", "\\uD800", "t")]
+    [InlineData("2026-11-12T06:00:00Z", "\\uD800", "seenAt")]
+    [InlineData("\"tag\"", "\"\\uD800\"", "frame")]
     public void Bad_hints_are_dropped_counted_and_log_only_the_field(string before, string after, string field)
     {
         var reader = Activator.CreateInstance(Reader)!;
@@ -66,13 +74,37 @@ public sealed class ReleaseHintContractTests
         Assert.Equal(accepted ? Array.Empty<string>() : ["frame"], log);
     }
 
+    [Fact]
+    public void The_frame_limit_is_UTF8_bytes_not_character_count()
+    {
+        var text = Valid.Replace("win", new string('\u754c', 60));
+        Assert.True(text.Length < 256);
+        var reader = Activator.CreateInstance(Reader)!;
+        var log = new List<string>();
+        Assert.Null(Reader.GetMethod("Read")!.Invoke(reader, [Encoding.UTF8.GetBytes(text), Now, (Action<string>)log.Add]));
+        Assert.Equal(["frame"], log);
+    }
+
     [Theory]
     [InlineData("{}", false)]
     [InlineData("""{"releaseHint":true}""", true)]
     [InlineData("""{"releaseHint":false}""", false)]
     [InlineData("""{"releaseHint":"true"}""", false)]
+    [InlineData("""{"releaseHint":true,"releaseHint":false}""", false)]
+    [InlineData("[]", false)]
     public void The_hello_capability_is_optional_and_only_literal_true_opts_in(string hello, bool capable) =>
         Assert.Equal(capable, Reader.GetMethod("IsCapable")!.Invoke(null, [JsonSerializer.Deserialize<JsonElement>(hello)]));
+
+    [Fact]
+    public void The_shared_hint_and_capability_vectors_parse_and_the_future_boundary_is_inclusive()
+    {
+        var vector = VectorFiles.Read("update.json")["contexts"]!["release-hints"]!;
+        var reader = Activator.CreateInstance(Reader)!;
+        var frame = Encoding.UTF8.GetBytes(vector["frame"]!.ToJsonString());
+        var at = vector["now"]!.GetValue<DateTimeOffset>();
+        Assert.NotNull(Reader.GetMethod("Read")!.Invoke(reader, [frame, at.AddMinutes(-5), (Action<string>)(_ => Assert.Fail("valid hint dropped"))]));
+        Assert.Equal(true, Reader.GetMethod("IsCapable")!.Invoke(null, [JsonSerializer.SerializeToElement(vector["hello"])]));
+    }
 
     [Theory]
     [InlineData("""{"now":true,"release":"0.1.123"}""")]

@@ -69,6 +69,19 @@ public sealed class SignedCommandVectorTests
         }
     }
 
+    [Theory]
+    [InlineData("batch", "null")]
+    [InlineData("batch", "\"true\"")]
+    [InlineData("unchecked", "1")]
+    [InlineData("unchecked", "null")]
+    [InlineData("batch", "true,\"batch\":false")]
+    public void Optional_update_flags_refuse_non_booleans_and_duplicates(string flag, string value)
+    {
+        var body = Body(UpdateProtocol.NowAction, null!, MachineId) with
+        { Args = JsonSerializer.Deserialize<JsonElement>($"{{\"now\":true,\"release\":\"0.1.123\",\"{flag}\":{value}}}") };
+        Assert.NotNull(UpdateNowRules.Read(body).Problem);
+    }
+
     // The longest Update now a client can send (#1159, docs/protocol/v1-update.md): 32 listed
     // sessions, each a UUID (every agent's session id) with the longest state, every count at its
     // largest that still adds up, unknown shown, and a release of 64 characters.
@@ -132,6 +145,11 @@ public sealed class SignedCommandVectorTests
         // Update now's press at its longest (#1159): the only action whose body may pass 2048
         // characters, up to 4096, as its args carry the confirmation's 32 sessions.
         Valid("an-update-now-at-its-longest", LongestUpdateNow, UpdateProtocol.NowAction);
+        Valid("an-update-now-with-batch-and-unchecked", Body(UpdateProtocol.NowAction, null!, MachineId) with
+        {
+            Target = new CommandTarget { Machine = MachineId },
+            Args = JsonSerializer.SerializeToElement(new UpdateNowArgs { Now = true, Release = "0.1.201", Batch = true, Unchecked = true }, ProtocolJson.Options),
+        }, UpdateProtocol.NowAction);
 
         var refused = new JsonArray();
         var signed = SignedCommands.Sign(Phone, Machine.Public, Transfer);
