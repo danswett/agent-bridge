@@ -16,6 +16,10 @@ Require ($on -match '(?ms)^  workflow_dispatch:.*?^\s+ref:') 'workflow_dispatch 
 Require ($on -match "cron: '\*/5 \* \* \* \*'") 'Pages needs a five-minute named-job check'
 Require ($text -match '(?m)^run-name: .*Pages rollback.*Pages resume' -and $text -match 'event=workflow_dispatch&per_page=100' -and $text -match 'quality/pages-rollback\.ps1' -and $text -match '-RollbackStatus \$rollbackStatus') 'manual rollback must fence automatic deployment until a newer head or successful explicit resume'
 
+$gate = [regex]::Match($text, '(?ms)^  gate:\r?\n(.*?)^  build:').Groups[1].Value
+$permissions = [regex]::Match($gate, '(?ms)^    permissions:\r?\n(.*?)(?=^    \S)').Groups[1].Value
+$scopes = @($permissions -split '\r?\n' | ForEach-Object { ($_ -replace '\s+#.*$', '').Trim() } | Where-Object { $_ -and $_ -notmatch '^#' } | Sort-Object)
+Require ($text -match '(?m)^permissions: \{\}$' -and $scopes.Count -eq 3 -and ($scopes -join ',') -ceq 'actions: read,contents: read,pages: read') 'the gate must have exactly actions:read, contents:read and pages:read with no inherited or added writes'
 $build = [regex]::Match($text, '(?ms)^  build:\r?\n(.*?)^  deploy:').Groups[1].Value
 $deploy = [regex]::Match($text, '(?ms)^  deploy:\r?\n(.*)').Groups[1].Value
 $guard = [regex]::Match($deploy, '(?m)^\s+run: (if \(\$env:GITHUB_EVENT_NAME[^\r\n]+)').Groups[1].Value
