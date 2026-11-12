@@ -1909,6 +1909,26 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task A_new_app_held_check_keeps_the_reason_recognised_by_an_already_installed_PWA()
+    {
+        // The same vector drives the frozen old-PWA action selection in update.test.mjs.
+        var expected = JsonSerializer.Deserialize<UpdateState>(File.ReadAllText(
+            Path.Combine(AppContext.BaseDirectory, "fixtures", "updates", "held-check.json")), ProtocolJson.Options)!;
+        await StartAsync();
+        await AskedAsync(UpdateAskKind.Check, "available");
+        time.Advance(AutoUpdater.CheckEvery);
+        updater.CheckFails = Limited(time.GetUtcNow().AddMinutes(45));
+
+        await AskedAsync(UpdateAskKind.Check, "held");
+
+        Assert.Equal(expected.Available, auto.State.Available);
+        Assert.Equal(expected.Last!.Outcome, auto.State.Last!.Outcome);
+        Assert.Equal(expected.Last.Reason, auto.State.Last.Reason);
+        Assert.Null(auto.State.Last.Code);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task A_held_check_reports_plain_retry_words_and_logs_its_deadline_in_UTC()
     {
         updater.Found = null;
