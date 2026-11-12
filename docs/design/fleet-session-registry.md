@@ -68,7 +68,7 @@ view; its pairing is a separate design (S6). Another account's sessions never ap
 
 **What is true today, and what is not promised.** Protected `hostSign` custody landed in #1782;
 registry signing and trusted reader integration remain held under #1776. Device agreement keys
-cannot sign (agent-principals.md section 8.10); custody alone does not establish enrolled authority.
+cannot sign (agent-principals.md section 2); custody alone does not establish enrolled authority.
 Until the signing and verification dependencies land,
 **the relay can invent, change, hide or replay any record, and no client can tell.** So
 an unsigned record is only a display hint, like presence is today: clients may show
@@ -91,7 +91,7 @@ purpose, which marks it as having read untrusted content.
 2. Owner: whether each machine can switch sharing off, and the default (proposed: on for
    own-account, with a per-machine off switch).
 3. #2360 confirms existing person-only `session.rename` through the Windows app backend or
-   host CLI; the new app enrollment entry point and CLI disclosure belong to slice 1 below.
+   host CLI; the new app enrollment entry point and CLI disclosure belong to S-N1 below.
 4. Engineering: records stay unverified until #1776's signing and trusted readers land; nothing may rely on
    them for routing before then. Confirm, and decide whether roster v2 must land before slice 2.
 5. Engineering: confirm the build order, the resized slices and the numeric limits.
@@ -204,15 +204,16 @@ socket (`RelayHub.cs:261-264`). So no frame may ever be built from "all machines
   open and the old record stays in place. (A frame above 65,561 bytes still closes the socket,
   as today, but a conforming host never builds one.)
 * **More than 64 usable sessions.** The host publishes the 64 with the most recent state change, sets
-  `truncated: true` and `total` to the usable count (both signed once signing exists). Nothing is
+  `truncated: true` and `total` to the usable count; planned byte fitting may publish fewer
+  (59 in the estimate above), also marked truncated. Both fields are signed once signing exists. Nothing is
   silently dropped: see "Names and lookup" for how `fleet.find` reports an incomplete list.
   Hitting the cap is logged on the host as a count, never a name.
 * **Planned byte truncation.** The arithmetic is a conservative estimate, not a serializer
-  guarantee. Slice 2 must fit actual signed bytes, mark any count/byte omission `truncated`,
-  and use `total > published count`, not today's `total > 64` (`RosterFields.cs:52`);
+  guarantee. S-N2a fits signed bytes, marks count/byte omissions `truncated`; S-N2b validates
+  `total > published count`, not today's `total > 64` (`RosterFields.cs:52`);
   change that rule with the extension, with a 64-to-59 case
   and encoding-boundary tests. Today the publisher rejects oversized records rather than
-  byte-truncating (`FleetPublisher.cs:58-61`). The 16/24 KiB and 64-session caps do not rise.
+  byte-truncating (`FleetPublisher.cs:57-60`). The 16/24 KiB and 64-session caps do not rise.
 
 ## Relay frames
 
@@ -309,8 +310,8 @@ from, who can set one, and how it is marked.
   empty name clears it). By the pipe's caller table it is allowed only to the app
   (local-pipe.md:102, "Everything") and to the host's own command line
   (local-pipe.md:103); an agent session or any untraced process is refused like other
-  acting ops (local-pipe.md:101, 104). #2360 slice 1 owns the Windows app enrollment entry
-  point and disclosure/warning on the existing CLI `rename` path; slice 7 consumes it,
+  acting ops (local-pipe.md:101, 104). S-N1 owns the Windows app enrollment entry
+  point and disclosure/warning on the existing CLI `rename` path; legacy slice 7 consumes it,
   not a second rename implementation. The Mac and iOS apps and the PWA are not app callers
   (local-pipe.md:102) and cannot rename sessions. The owner-approved launch exception accepts
   explicit `fleetName` only for a new host-created session: `SG ` plus one of `Chief of Staff`,
@@ -340,11 +341,16 @@ from, who can set one, and how it is marked.
   labels; never infer them. The filter excludes path separators, colon and at-sign, but
   cannot prove ordinary words are public-safe. Blank clears the host-owned setting; a
   rejected or failed durable save must not change the published name.
-  Slice 1 displays this before the app save and before the CLI invokes rename. It also
-  warns on a readable live duplicate: "Another live session uses this label. Lookup may
-  select your newer session instead. Choose a different label or rename the other session."
-  An unreadable/incomplete duplicate check must say it cannot establish uniqueness, not
-  silently claim there is no duplicate. The warning is UX, not tamper-proof protection.
+  S-N1 shows disclosure before App/HostCli rename. After fresh caller and id/name validation,
+  the host checks live `ISessionSource.Snapshot()` IDs via `FleetNames.Get` and its private
+  `IScopedFleetRoster.ReadScopedAsync()` (`Program.cs:859-861`, `FleetList.cs:40-47`), excluding
+  only (own machine, target id), matching exactly. This is future work: today's handler
+  only delegates save (`SessionService.cs:57-58`); no agent fleet op or new read authority.
+  Result adds `duplicateStatus`: present for an observed live match; absent for none in
+  complete views; otherwise unknown (unavailable/truncated/older-host missing status).
+  No other names/nodes. App/CLI show present/unknown with the save result, never silently absent.
+  Dynamic warning is after save; it is no uniqueness proof, ban, credential or retry.
+  Present: "Another live session uses this label; lookup may select your newer session."
 * **Marked as untrusted.** Every client renders a name as plain text, never as markup or a
   template (HA's component must neutralise template markers as HA does today, `HaPayloads.cs:25-31`).
   In the agent surfaces (see "Who may read") the name is not part of the typed result; it is
@@ -443,8 +449,9 @@ values refuse. Native precision differs
 For different machines, require independently trusted start-time error bounds of at most
 60 seconds per host and gap >122 seconds from the newest to every live candidate
 (two 60-second errors plus two seconds for flooring).
-At/below the gap, without the bound, or with unprovable ordering from clock steps, refuse
-`ambiguous`. Snapshot freshness proves no historical accuracy; clock evidence is absent today.
+At/below the gap or without proof, return `ambiguous`. A reader cannot detect a historical
+same-host clock step from these timestamps; same-host duplicates also need trusted creation-order
+evidence or remain ambiguous. Snapshot freshness proves no historical accuracy; evidence is absent today.
 Cross-machine activation is held for that external prerequisite; start time is not exposed to agents.
 
 This changes two distinct live sessions with the same name too: there is no inferred
@@ -570,7 +577,7 @@ first draft of this note.
 | 2a | #1400 part one, relay: allow-list, host-only put, in-memory registry, `registry-get` paged one machine per frame, size and rate refusals | L* | 1 | Allow-list pin (seeded prompt, path and token never appear); other account never sees it; not in blob, log or metrics; unknown member refused; over 16 KiB refused with the socket open; a 64-machine-equivalent get never builds a frame over 24 KiB; stale `seq` and old epoch refused |
 | 2b | #1400 part two, relay: `registry-subscribe` and `registry-changed`, same-account fan-out, offline within 60 s, forgotten machines dropped | M* | 2a | Offline within 60 s with the clock faked; fan-out stays in the account; count equals the host's; forgotten machine's record gone |
 | 3a | Host publisher: debounce, heartbeat, epoch and seq, truncation with `total`, per-machine off switch | L* | 1 | Debounce and heartbeat timing with a fake clock; restart gives a new epoch that readers accept; 65 sessions give 64 and `truncated`; off switch sends an empty list |
-| 3b | Existing host-owned setting/CLI and fixed SG launch rule (`FleetNames.cs:11-54`, `Program.cs:162-181`, `FleetLaunchNames.cs:36-76`); new enrollment UX is #2360 slice 1, not another rename op | L* historical | 3a | Retain source/filter/caller refusals; add disclosure, duplicate warning and squat cases in #2360 slice 1; signing remains #1776 |
+| 3b | Existing host-owned setting/CLI and fixed SG launch rule (`FleetNames.cs:11-54`, `Program.cs:162-181`, `FleetLaunchNames.cs:36-76`); new enrollment UX is S-N1, not another rename op | L* historical | 3a | Retain source/filter/caller refusals; S-N1 adds disclosure, warning and squat cases; signing remains #1776 |
 | RC | **Reader core** in the host (C#) and the shared test vectors: host as a registry client (`registry-get`, `registry-subscribe`, `removed` handling), 60 s liveness, epoch/seq/at order, 24 h cache and revocation purge, signature and roster-key check once `hostSign` exists | M* | 1, 2b | Fake clock for liveness; old epoch and replayed `seq` refused; restart accepted; a forgotten machine that reconnects with its old epoch and a higher `seq` accepted after `removed`; cache purged on `removed` and on a get that omits the machine; unsigned record never `verified`; shared vectors replay the same in every client; PWA and Apple readers are in slices 6 and 8 |
 | 4 | Existing agent-only `fleet.list` (`FleetList.cs:140-154,215-227`); RC cache remains future | L historical | RC, 3a, #1401 | No-hello/read-scope refusals; account isolation; names only as explicit content; audit before read |
 | 5 | Existing name-only `fleet.find` (`FleetList.cs:161-204`); #2360 changes only verified duplicate selection after external RC | M* historical | 4, RC | Production live names unverified; current verified fixtures ambiguous; future provably newest found, equal/close/unprovable ambiguous; scope and incomplete/unverified precedence unchanged |
@@ -590,54 +597,45 @@ cannot be returned, so slice 9 (the scripts) cannot switch off HA name lookup be
 roster v2 a real dependency of #1399's acceptance criterion "correct with HA blocked"; see
 Decision 4. #2151 removes the caller's machine requirement, not R's verification gate.
 
-### #2360 follow-on slices
-
-Engineering-approved source and tie policy above governs these four workstreams.
-Each PR is at most 400 changed lines; workstream 2 is pre-split below.
-**No slice enables routing**, establishes `verified`, or replaces #1776. Reader selection
-uses only verification established by that independent work. Keep publication display-only
-until then.
-
-**External RC prerequisite to slice 3:** #1776 separately delivers canonical
-`at/seq/epoch/sig` parsing, enrolled-key/signature checks, freshness/replay, trusted retained
-roster/cache/revocation and clock evidence. `FleetList.Parse` does none (`FleetList.cs:50-103`).
-RC has its own bounded PRs, not hidden implementation inside the selector slice.
-
-1. **Person enrollment UX.** Use existing person-only `session.rename` for Copilot, Claude
-   and Codex, with the relay disclosure above. Tests: explicit save/clear reaches the
-   publisher, invalid/failed save does not change publication, agent/script rename refuses;
-   seeded `user_named`, titles, summaries, prompts, HA labels, folders and account text are
-   never auto-enrolled. App and CLI duplicate warnings are tested. The squat case tampers
-   same-user name state, reloads the host and publishes a later same-name process: show the
-   acknowledged ownership limit, never new credential/send authority; unsigned still refuses.
-2. **Ordering contract/publication, pre-split PRs:** 2a host process binding/publication and
-   host-restart test (null start omitted, not invented); 2b relay allow-list/byte-budget
-   truncation contract; 2c C#/PWA/Apple shared vectors. Each independently <=400 lines.
-   Tests cover flooring, omitted/null observation, resume renewal, legacy records and byte
-   limits. Coordinate signed vectors with #1776; no reader-selection activation.
-3. **Verified reader selection.** After #1776 verifies signed ordering fields, test newest
-   among both-live old/new sessions in both frame orders and across machines. A recent state
-   change on the older process cannot win; offline/stale old does not compete.
-   Equal/missing/unprovable order or clock steps, cross-machine gaps <=122 seconds and absent trusted
-   clock bounds are ambiguous; test skew that would otherwise select the older process.
-   Altered/replayed name/start fails verification; unsigned, incomplete and cross-account never yield a routable node.
-4. **Guidance and hosted conformance.** Public-safe enrollment guidance and synthetic
-   end-to-end host/relay fixtures, including host restart with the session process still
-   alive and unchanged `startedAt`. Preserve #2354's additive machine projection, exact
-   lookup, content opt-in, authenticated scope and refusal behavior.
-
-Slices 2a and 4 own the required **host-restart acceptance test** for the stability claim:
-restart only the disposable host, retain the session process, and assert identical
-`startedAt` and unchanged selection despite a new epoch, sequence and snapshot time.
-Process replacement must renew; 2a/4 exercise restart, not just a constant vector.
-Code needs failing-first hosted assertion-red proof and retained output. No routing/live changes;
-fleet wrapper refusal is separate #605. Quality owns gates/arming/merge and exact-head receipts.
-
 Order: 1 first; 2a and 3a in parallel; then 2b, 3b; RC; 4; 5; clients 6 to 8 any order after RC (slice 7 also after 3b); 9
 after 5 and R; 10 after 2b, RC and 5. Slices 2a, 2b, 3a, 3b (fleet-name caller policy),
 RC, 4 (fleet-read
 allow-list, local-pipe.md:101) and 5 touch sensitive paths: both independent receipts and a Trust
 review. Android waits on its client; a Linux client follows the same vectors.
+
+### #2360 follow-on slices (S-N1 to S-N4)
+
+Four workstreams, each PR <=400 lines; S-N2 is pre-split. S-N IDs are distinct from legacy rows.
+**No S-N slice enables routing or sets verified.** Names stay display-only pending #1776; selection needs all prerequisites below.
+
+**Prerequisites to S-N3:** #1776 owns signing, roster-key/signature, seq/epoch/at checks and
+vectors ([accepted split](https://github.com/danswett/agent-bridge/issues/1776#issuecomment-6778908679)).
+Retained-roster integration (#1358 state), cache/revocation and trusted creation-order/clock-error
+proof need separate accepted issues/owners; unowned here. Legacy RC is not ownership.
+#1776's machine-pin text is stale against #2151; this PR neither amends nor enlarges it.
+
+1. **S-N1 person enrollment UX.** Existing App/HostCli rename for all three agents; disclosure
+   and warning above. Test save/clear publication, invalid/failed save unchanged, all forbidden
+   title/workspace/HA/folder sources excluded. Squat: A live/named, B live/newer; inject B's same
+   label in saved host state and reload. Rename A: assert typed present and visible warning
+   (today's id/name-only result fails); labels still publish, unsigned find stays unverified.
+   Agent/script rename refuses before any warning-data read.
+2. **S-N2, three <=400-line PRs:** S-N2a host binding/publication/restart (null omitted);
+   S-N2b allow-list, `total > published count` not `total > 64` (64/59 test); S-N2c shared C#/PWA/Apple vectors.
+   Test flooring/null omission, resume renewal, legacy records and byte limits; signed vectors
+   coordinate with #1776, without selection activation.
+3. **S-N3 signed-start decode/selection.** After accepted prerequisites, test old/new live on same/different
+   hosts, both frame orders; state-change recency cannot win, offline/stale does not compete.
+   Equal/missing/unprovable order, cross-host <=122 s gaps, absent bounds and reversed skew refuse ambiguous.
+   Clock-step fixture lacks proof; tampered/replayed name/start fails verification; unsigned/incomplete/cross-account never route.
+4. **S-N4 guidance/conformance.** Public-safe enrollment and synthetic end-to-end host/relay
+   restart with still-live session. Preserve #2354 machine projection, exact lookup, content
+   opt-in, authenticated scope and refusals.
+
+**Restart acceptance:** S-N2a restarts only a disposable host, retains its live session process,
+asserts identical `startedAt` despite new epoch/seq/at; replacement renews it. S-N4 additionally
+checks unchanged verified-fixture selection after S-N3. Exercise restart, not a constant vector.
+Hosted failing-first red proof/output; no live changes; wrapper #605 separate. Quality owns gates/merge/receipts.
 
 ## Decisions
 
@@ -653,7 +651,7 @@ review. Android waits on its client; a Linux client follows the same vectors.
    model-written), `workspace.yaml` (Copilot may fill it from the first prompt), prompt or folder;
    ASCII filter; agents get typed fields from `fleet.find` and `fleet.list`, and names only on
    `include: "content"` after `agent.hello`, which taints. Existing App/HostCli backend permits
-   rename; slice 1 owns new app enrollment and CLI disclosure/warning, not a new authority.
+   rename; S-N1 owns app enrollment and CLI disclosure/warning, not a new authority.
 4. **Signing and routing** (Engineering). #2360 confirms: records are unverified until #1776's
    roster-v2 enrollment, signing and trusted reader dependencies land; `fleet.find` returns
    `found` only for verified live records. No routing from unverified records and no interim

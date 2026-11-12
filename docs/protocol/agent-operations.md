@@ -85,17 +85,18 @@ start uses UTC `YYYY-MM-DDTHH:mm:ssZ`, floored whole seconds; it is not exposed 
 Cross-machine selection needs independently trusted start-time error bounds <=60 seconds
 per host and a gap strictly >122 seconds to every competing live match. Closer pairs or
 missing historical clock evidence remain ambiguous; fresh snapshot time is not that evidence.
-The app and existing CLI rename path must show the relay disclosure and live-duplicate
-warning. Same-user state tampering can still squat a newer name; names never grant identity
-or send authority. #2360 slice 1 tests that acknowledged boundary.
+S-N1 uses the host's private local-name/scoped-relay data inside the existing App/HostCli
+rename path, never agent-only fleet ops. Its typed duplicate status is shown with the save
+result; static relay disclosure is before the call. Same-user tampering can still squat a
+name; the concrete warning-result fixture must fail on today's id/name-only response.
 
 `startedAt` stays identical when only the host restarts, and renews for a resumed/replaced
 session process. The four bounded code slices require a host-restart acceptance test
 with a still-live session process, not an inferred filesystem or transcript time.
-Slices 2a and 4 own that restart test; a null observation omits the field.
-None enables routing. Slice 3 depends on #1776's separately delivered reader core, which
-must parse/preserve canonical at/seq/epoch/sig and enforce enrolled key, replay, freshness,
-revocation/cache and clock evidence; that is not hidden inside the selector slice.
+S-N2a/S-N4 own restart; null observation omits the field. No S-N slice enables routing.
+S-N3 needs #1776's scoped signing/key/seq/epoch/at checks plus separately accepted owners
+for retained roster/cache, reader revocation, creation-order/clock evidence and trusted
+start-time error bounds. Those extras are unowned blockers here, not assigned to #1776.
 #1776's separately enrolled host signing and independently trusted
 reader state gate verification; no interim key. Current unsigned matches stay
 `unverified`, without a routable node. Incomplete-before-unverified precedence,
