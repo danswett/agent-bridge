@@ -14,6 +14,18 @@ preserve the put path's relaxed escaping and are byte-budget tested. Records are
 unsigned; signing, name-lookup authority and the 24-hour dual run (slice 11) remain open.
 This is not deployment or live-parity evidence. HA remains the explicit rollback.
 
+Implementation update, November 11, 2026 (Pacific), #2151: name-only lookup replaces
+the first-machine-pin requirement, following fleet #171/#433. A unique verified live
+match returns `found`; every result carries `fleetScope`, the authenticated relay
+account ID captured with that roster read. Caller-supplied scope/account fields cannot
+select another fleet. Missing scope refuses explicitly. Reconnect during a read refuses.
+Verification is unchanged: real unsigned records remain `unverified` until `hostSign`.
+The typed result carries optional `model` only when supplied by the authenticated
+roster, never inferred from the request or name. The publisher and relay allow-list
+still exclude model; this does not enable live model-checked broadcasts (#416).
+The operation runs on any connected host; nodes leaving are handled by the relay's
+existing liveness rules. No placement pin, persistent lookup state or new component is added.
+
 All line references are to `main` at 796fbcce1.
 
 ## Summary in plain English
@@ -76,9 +88,7 @@ purpose, which marks it as having read untrusted content.
    them for routing before then. Confirm, and decide whether roster v2 must land before slice 2.
 5. Engineering: confirm the build order, the resized slices and the numeric limits.
 6. Owner: non-person client pairing (Decision 6 below).
-7. Engineering and Trust: a name alone never finds a session; the caller must give the machine,
-   and a person confirms it once (otherwise an impostor on another machine could win while the
-   real one is offline).
+7. Superseded by #2151: name-only lookup is canonical; verification remains required.
 
 ## What exists today
 
@@ -180,7 +190,7 @@ The host publishes one snapshot of its own sessions. All members are required un
   line/paragraph separator characters (Cc, Cf, Cs, Zl, Zp) are rejected before trimming;
   ordinary Unicode and valid emoji pairs stay. Missing, non-string, empty, overlong or
   excluded-character values are omitted, never guessed.
-  This adds no relay disclosure; `machine` remains the ID and lookup pin, not the display name.
+  This adds no relay disclosure; `machine` remains the ID and optional lookup filter, not the display name.
 
 ## Size and paging
 
@@ -334,33 +344,32 @@ from, who can set one, and how it is marked.
 
 The stable key is `node` (`agent_bridge_<16 hex>`, local-pipe.md:194), the id used by `agent.send`.
 `id` (16 hex) is the session id. Lookup is a filter over the same list, not a second source of
-truth.
+truth. The launch-time fleet name is the canonical lookup key; routing still uses the
+resolved machine/node, never a node ID typed by a person.
 
 ```
 { "op": "fleet.find", "data": { "name": "SG Quality Lead", "machine": "<optional device id>" } }
--> { "result": "found",      "session": { "id", "node", "machine", "state", "since" } }
--> { "result": "unpinned",   "machines": [ { "machine", "online", "verified" } … ] }
--> { "result": "ambiguous",  "candidates": [ { "id", "node", "machine", "state", "since",
+-> { "result": "found",      "fleetScope": "<account id>", "session": { "id", "node", "machine", "state", "since", "model"? } }
+-> { "result": "ambiguous",  "fleetScope": "<account id>", "candidates": [ { "id", "node", "machine", "state", "since",
                                                "online" } … ] }
--> { "result": "offline",    "machines": [ { "machine", "lastSeen" } … ] }
--> { "result": "unverified", "machines": [ { "machine", "online" } … ] }
--> { "result": "incomplete", "machines": [ "<device id>" … ] }
--> { "result": "notFound" }
+-> { "result": "offline",    "fleetScope": "<account id>", "machines": [ { "machine" } … ] }
+-> { "result": "unverified", "fleetScope": "<account id>", "machines": [ { "machine", "online" } … ] }
+-> { "result": "incomplete", "fleetScope": "<account id>", "machines": [ "<device id>" … ] }
+-> { "result": "notFound",   "fleetScope": "<account id>" }
 ```
 
 Every `session` and candidate holds typed fields only; **the session name is never echoed back**.
 Where a reply includes a machine object, session or candidate, it may also carry `machineName`
 as described above. `incomplete` still lists only machine IDs. Display names do not verify a
 record or alter any lookup result. Only
-verified, live records ever contribute a `node`: `unverified`, `unpinned` and `incomplete` answers
-list machines and flags, never a node to route to. `unpinned` lists, for each machine holding a
-match, `machine`, `online`, `verified`, and the matching session's `state` and `since`, so a person
-can confirm the first pin.
+verified, live records ever contribute a `node`: `unverified` and `incomplete` answers
+list machines and flags, never a node to route to. `model` is omitted when unavailable;
+callers requiring model binding must refuse missing/mismatched values, never guess.
 
 **Scope.** With `machine` given, only that machine's records are matched: a same-name session on
-another machine does not make a pinned lookup `ambiguous`, `offline` or `unverified`. Without
-`machine`, all machines in the reader's records (live and cached) are matched, so an impostor
-elsewhere is seen and the answer is `unpinned`, `ambiguous` or another non-`found` result.
+another machine does not affect that filtered lookup. Without `machine`, all live machines
+in the caller account are matched. The optional machine filter is compatibility, not a
+first-pin requirement. Scope comes from the authenticated connection, never request fields.
 
 **Result precedence.** The reader computes matches within that scope, then returns the first
 rule that applies:
@@ -370,25 +379,16 @@ rule that applies:
    duplicate could be hidden.
 2. `unverified`: at least one live unverified match, whether or not a verified live match also
    exists.
-3. `ambiguous`: two or more verified live matches, or one verified live match plus any match on an
-   offline or stale machine in the reader's cache (flagged `online: false`).
+3. `ambiguous`: two or more verified live matches, including duplicates on the same machine.
 4. `offline`: matches exist only on offline or stale machines.
-5. `unpinned`: exactly one verified live match and no other live match, verified or not, but the
-   caller gave no `machine`.
-6. `found`: exactly one verified live match and no other live match, verified or not, in scope,
-   the caller gave that `machine`, and rules 1 to 5 do not apply.
-7. `notFound`: otherwise.
+5. `found`: exactly one verified live match in scope, with or without `machine`.
+   Offline/stale matches do not create a live duplicate.
+6. `notFound`: otherwise.
 
-* **`found` needs `machine`.** A name alone never yields `found`. The relay serves an offline
-  machine with no sessions (`known`), and a reader with no cache (a new PWA, a restarted host, any
-  reader after 24 h) cannot see an offline original, so an impostor named like it, published by
-  another real machine of the same account, would be the only match. Requiring the caller to name
-  the machine closes this: the caller got that machine from a person's choice or an earlier pin,
-  not from the name. **Stated limit:** the first time a name is turned into a machine, a person
-  must confirm it from the `unpinned` answer (machine, state, time shown). Nothing in this note
-  stops a same-account machine from publishing a name that another machine also uses; only the
-  person's first pin and, later, signed per-machine name claims (not in scope, needs roster v2)
-  can. Do not defer the `machine` requirement: signing does not fix this.
+* **Name-only is not identity proof.** A verified same-account machine can claim another
+  session's name while the original is offline. Removing the first pin does not solve
+  that limitation. Signature verification remains mandatory; unsigned records never
+  yield `found`. Signed name ownership remains separate roster-v2 work.
 * **Exact match**, case-sensitive, trimmed. Never fuzzy. A caller that wants a fragment search
   filters `fleet.list` itself.
 * **Callers pin.** A caller that is about to act, `agent.send` above all, passes the `machine` and
@@ -512,7 +512,7 @@ first draft of this note.
 | 3b | Host fleet-name setting: `session.rename` pipe op (app, and host CLI; never agents), launch-time `fleetName` (fixed SG list, new host-created sessions only; agent self-launch refused), host-state storage, resume carry-over, host CLI `rename` command, ASCII filter, signing hook that stays off until `hostSign` | L* | 3a | Name filter table; a seeded prompt, a seeded Claude `aiTitle`, a seeded `workspace.yaml` name and a seeded folder name never appear; no setting means no name; agents and untraced callers refused the rename; fixed-list `fleetName` accepted on new host-created channel launches; outside-list names, resume/transfer naming and agent self-launch refused; name kept across a linked resume and dropped otherwise; records carry no `sig` until `hostSign`, and verify against the vectors once it exists |
 | RC | **Reader core** in the host (C#) and the shared test vectors: host as a registry client (`registry-get`, `registry-subscribe`, `removed` handling), 60 s liveness, epoch/seq/at order, 24 h cache and revocation purge, signature and roster-key check once `hostSign` exists | M* | 1, 2b | Fake clock for liveness; old epoch and replayed `seq` refused; restart accepted; a forgotten machine that reconnects with its old epoch and a higher `seq` accepted after `removed`; cache purged on `removed` and on a get that omits the machine; unsigned record never `verified`; shared vectors replay the same in every client; PWA and Apple readers are in slices 6 and 8 |
 | 4 | #1412 agent op `fleet.list` on the pipe, scope check, in-session allow-list entry (typed forms only for callers without `agent.hello`; `include: "content"` needs `agent.hello`), MCP tool (after the #1401 audit log) | L | RC, 3a, #1401 | No read scope refused with a readable reason; only own account; allow-list pinned; an unattributed pipe caller is refused `include: "content"`; no `name` unless `include: "content"`, which taints; audited with the agent principal; works from the cached snapshot (marked stale) |
-| 5 | #1399 `fleet.find`: all seven results in the stated precedence, `found` only with the caller's `machine`, `unpinned` answer, 24 h cache, shadow check | M* | 4 | Found only from one verified live match on the given `machine`; a name alone gives `unpinned`; an impostor beside an offline original, and with no cache of the original, never gives `found`; precedence table cases (two unverified live matches give `unverified`; one verified plus one unverified live match gives `unverified`, with and without `machine`; truncated plus a verified match gives `incomplete`); no `node` in `unverified`, `unpinned` or `incomplete`; unsigned and other-account refused; the name is never echoed; a script checks names a person set with `session.rename` on all four machines with HA blocked (current `SG <role>` sessions get no name until a person sets one) |
+| 5 | #1399/#2151 `fleet.find`: name-only, explicit account scope, optional supplied model, verification unchanged | M* | 4 | Unique verified live name found without a machine; duplicates ambiguous; unknown notFound; wrong-account/request-scope spoofing cannot select or duplicate a match; missing scope refuses; truncation and unverified precedence preserved; no node in unverified/incomplete; no echoed name or inferred model. Live acceptance still needs hostSign. |
 | 6 | PWA adoption, including the PWA reader (JS port of RC) | M | RC, 2b | Vector mirror passes; fleet view from one socket; offline machine shown stale; unverified label |
 | 7 | Windows app adoption, including the rename entry point | M | RC, 2b, 3b | Count matches the registry; fleet view works without per-host channels; rename from the app sets a name |
 | 8 | Apple adoption, including the Swift reader (port of RC) | M | RC, 2b | Vector mirror passes; same view tests |
@@ -527,8 +527,7 @@ estimate for the host side is unchanged only if `hostSign` (R) is built elsewher
 Until R lands, slices 1 to 8 still ship and the fleet view works, labelled "unverified"; `found`
 cannot be returned, so slice 9 (the scripts) cannot switch off HA name lookup before R. That makes
 roster v2 a real dependency of #1399's acceptance criterion "correct with HA blocked"; see
-Decision 4. Separately, `found` needs the caller's `machine` even after R (see "Names and
-lookup"); R does not remove that.
+Decision 4. #2151 removes the caller's machine requirement, not R's verification gate.
 
 Order: 1 first; 2a and 3a in parallel; then 2b, 3b; RC; 4; 5; clients 6 to 8 any order after RC (slice 7 also after 3b); 9
 after 5 and R; 10 after 2b, RC and 5. Slices 2a, 2b, 3a, 3b (it adds the `session.rename` pipe op
@@ -558,9 +557,8 @@ review. Android waits on its client; a Linux client follows the same vectors.
    by `registry-get` or `registry-subscribe`, one machine per frame, 64 sessions, 16 KiB per
    record, 24 KiB per frame, one get per 2 s. Confirm the numbers.
 6. **Non-person client pairing** (Owner, tracked in S6). Needed before S8, not before slices 1 to 9.
-7. **`found` needs the caller's `machine`** (Engineering, Trust). Recommended: yes; a name alone
-   gives `unpinned` and a person confirms the machine once. Alternative: signed per-machine name
-   claims, which need roster v2 and more design.
+7. **Name-only lookup** (#2151, fleet #171/#433). Supersedes the first-machine-pin
+   recommendation; a unique verified live name may be found within authenticated account scope.
 
 ## What Trust should review
 
@@ -570,7 +568,8 @@ review. Android waits on its client; a Linux client follows the same vectors.
 * Same-account fan-out, host-only put, and refusal of cross-account requests.
 * The name rules, the "untrusted display text" marking, that `fleet.find` never echoes a name, and
   that no agent-written title (Claude `aiTitle`, Copilot `name:`) reaches the relay.
-* That `found` needs the caller's `machine`, and the stated first-pin limit.
+* That name-only `found` requires one verified live match, carries authenticated account scope,
+  and never invents model metadata; the stated same-account name-ownership limit remains.
 * That the relay's power is stated honestly: today it can forge, alter, hide and replay records and
   no client can tell; after `hostSign` it can read, withhold and replay within 60 s, not forge.
 * That `found` and `agent.send` are never produced or driven by an unverified, stale or offline

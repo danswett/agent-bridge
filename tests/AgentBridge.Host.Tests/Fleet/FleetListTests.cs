@@ -153,7 +153,7 @@ public sealed class FleetListTests : IDisposable
     }
 
     [Fact]
-    public async Task Finding_carries_the_machine_display_name_without_changing_verification_or_the_machine_pin()
+    public async Task Finding_carries_the_machine_display_name_without_changing_verification_or_optional_machine_filtering()
     {
         if (!OperatingSystem.IsWindows()) { return; }
         roster.Machines = Frames("build-box");
@@ -169,9 +169,9 @@ public sealed class FleetListTests : IDisposable
         Assert.Equal("found", verified.GetProperty("result").GetString());
         Assert.Equal("build-box", verified.GetProperty("session").GetProperty("machineName").GetString());
         Assert.Equal("notFound", (await Find("build-box")).GetProperty("result").GetString());
-        var unpinned = await Find(null);
-        Assert.Equal("unpinned", unpinned.GetProperty("result").GetString());
-        Assert.Equal("build-box", unpinned.GetProperty("machines")[0].GetProperty("machineName").GetString());
+        var named = await Find(null);
+        Assert.Equal("found", named.GetProperty("result").GetString());
+        Assert.Equal("build-box", named.GetProperty("session").GetProperty("machineName").GetString());
         var machine = roster.Machines[0];
         roster.Machines = [machine, machine with { Id = "m3" }];
         var ambiguous = await Find(null);
@@ -250,11 +250,12 @@ public sealed class FleetListTests : IDisposable
     static string[] Names(string json) =>
         JsonDocument.Parse(json).RootElement.GetProperty("sessions")[0].EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal).ToArray();
 
-    sealed class Roster : IFleetRoster
+    sealed class Roster : IScopedFleetRoster
     {
         public IReadOnlyList<FleetMachine>? Machines { get; set; }
         public Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) =>
             Task.FromResult(Machines ?? [new FleetMachine("m2", true, [new FleetSession("n1", "my project", "working", Started)])]);
+        public async Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct) => new("account-a", await ReadAsync(ct));
     }
 
     sealed class FixedTime(DateTimeOffset now) : TimeProvider

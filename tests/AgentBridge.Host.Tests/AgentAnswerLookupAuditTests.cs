@@ -114,7 +114,7 @@ public sealed class AgentAnswerLookupAuditTests : IDisposable
         public override DateTimeOffset GetUtcNow() => throw new IOException("private store failure");
     }
 
-    sealed class Roster : IFleetRoster
+    sealed class Roster : IScopedFleetRoster
     {
         public int Reads;
         public Action? BeforeRead;
@@ -124,6 +124,7 @@ public sealed class AgentAnswerLookupAuditTests : IDisposable
             Reads++;
             return Task.FromResult<IReadOnlyList<FleetMachine>>([]);
         }
+        public async Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct) => new("account-a", await ReadAsync(ct));
     }
 
     sealed class Chan : IProtocolChannel

@@ -35,13 +35,14 @@ Optional `"machine"` (1 to 64 of letters, digits, `.`, `_`, `-`) limits the matc
 | --- | --- | --- |
 | `incomplete` | A live machine in scope published a truncated list, so a duplicate could be hidden | `machines`: ids |
 | `unverified` | A live match exists and records are unsigned (no `hostSign` yet) | `machines`: `{ machine, online }`, no node |
-| `ambiguous` | Two or more verified live matches, or one plus a match on an offline machine | `candidates`: `{ id, node, machine, state, since, online }`, including offline matches with `online: false` and no `node` |
+| `ambiguous` | Two or more verified live matches, including on one machine | `candidates`: `{ id, node, machine, state, since, online, model? }` |
 | `offline` | Matches only on offline machines | `machines`: `{ machine }` |
-| `unpinned` | One verified live match and no `machine` given | `machines`: `{ machine, online, verified, state, since }` |
-| `found` | One verified live match on the given `machine` | `session`: `{ id, node, machine, state, since, online }` |
+| `found` | One verified live match, with or without a `machine` filter | `session`: `{ id, node, machine, state, since, online, model? }` |
 | `notFound` | Otherwise | none |
 
 - Every machine object, session and candidate above also carries optional `machineName` under the same rules as `fleet.list`; `incomplete` remains an array of IDs. A display name is never a machine pin.
+- Every result carries `fleetScope`, the authenticated relay account ID captured with the roster. Request `account`/`fleetScope` fields are ignored; missing authenticated scope refuses explicitly. Reconnect during the read refuses rather than mixing scopes.
+- Name-only lookup is canonical (#2151); offline matches do not create a live duplicate. `model` is carried only when the authenticated roster supplies a string, never inferred from caller data or names. Missing model is omitted, so model-dependent callers fail closed. No publisher or relay allow-list change supplies model today.
 - Until `hostSign` exists no record is verified, so today a live match answers `unverified` and `found` is not returned: a name alone, or an impostor machine of the same account beside an offline original, never yields a routable node. **Deviation from issue #1399**, which asked for a plain found/ambiguous/not-found; the design governs.
 - The name is trimmed, then matched exactly and case-sensitively; it is refused if empty or over 64 characters (before any audit entry). It is never echoed back, so the call does not taint the caller with session text.
 - Same account, scope and refusal rules as `fleet.list`. Each accepted call invokes the same `AuditFleetList` hook.

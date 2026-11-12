@@ -3,7 +3,9 @@ using AgentBridge.Host;
 using AgentBridge.Host.Fleet;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
+using AgentBridge.Relay;
 using AgentBridge.Transport;
+using AgentBridge.Transport.Tests;
 using Xunit;
 
 public sealed class FleetFindTests : IDisposable
@@ -22,9 +24,21 @@ public sealed class FleetFindTests : IDisposable
 
     public void Dispose() { try { Directory.Delete(root, true); } catch (IOException) { } }
 
-    sealed class Roster(params FleetMachine[] machines) : IFleetRoster
+    sealed class Roster(params FleetMachine[] machines) : IScopedFleetRoster
     {
+        public string Scope { get; init; } = "account-a";
         public Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<FleetMachine>>(machines);
+        public Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct) => Task.FromResult(new FleetRosterSnapshot(Scope, machines));
+    }
+
+    sealed class RegistryRoster(SessionRegistry registry, string account) : IScopedFleetRoster
+    {
+        public async Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) => (await ReadScopedAsync(ct)).Machines;
+        public Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct) => Task.FromResult(new FleetRosterSnapshot(account,
+            RelayFleetRoster.Parse(registry.Read(account).Select(r => Body(new
+            {
+                machine = r.Machine, online = r.Fresh, record = JsonSerializer.Deserialize<JsonElement>(r.Json),
+            }))).Select(m => m with { Verified = true }).ToList()));
     }
 
     sealed class Chan : IProtocolChannel
@@ -56,6 +70,110 @@ public sealed class FleetFindTests : IDisposable
         JsonSerializer.SerializeToElement(await op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(data)), Web);
 
     [Fact]
+    public async Task A_unique_verified_live_name_is_found_without_a_machine_pin_and_returns_its_model()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var session = JsonSerializer.Deserialize<FleetSession>("""
+            {"id":"s-a","node":"n-a","name":"SG Quality","state":"working",
+             "since":"2026-11-07T12:00:00Z","model":"gpt-6.1-sol"}
+            """, Web)!;
+        var op = Op(M("a", true, null, verified: true) with { Sessions = [session] });
+        var result = await Find(op, new { name = "SG Quality", model = "caller-spoof" });
+        Assert.Equal("found", result.GetProperty("result").GetString());
+        var found = result.GetProperty("session");
+        Assert.Equal("n-a", found.GetProperty("node").GetString());
+        Assert.Equal("gpt-6.1-sol", found.GetProperty("model").GetString());
+        Assert.DoesNotContain("SG Quality", result.GetRawText());
+        Assert.DoesNotContain("caller-spoof", result.GetRawText());
+    }
+
+    [Fact]
+    public void The_roster_preserves_a_supplied_model_instead_of_guessing_one()
+    {
+        var frame = Body(new
+        {
+            machine = "a", online = true,
+            record = new { sessions = new[] { new { id = "s-a", node = "n-a", state = "working", since = Started, model = "gpt-6.1-sol" } } }
+        });
+        var session = Assert.Single(Assert.Single(RelayFleetRoster.Parse([frame])).Sessions);
+        Assert.Equal("gpt-6.1-sol", JsonSerializer.SerializeToElement(session, Web).GetProperty("model").GetString());
+    }
+
+    [Theory]
+    [InlineData(false, "notFound")]
+    [InlineData(true, "found")]
+    public async Task A_name_in_another_account_cannot_be_selected_or_create_ambiguity_by_spoofing_the_scope(bool ownMatch, string expected)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var registry = new SessionRegistry(TimeProvider.System);
+        foreach (var account in ownMatch ? new[] { "account-a", "account-b" } : ["account-b"])
+        {
+            var hex = new string('a', 16);
+            Assert.Null(registry.Put(account, "fixture", Body(new
+            {
+                v = 1, machine = "fixture", epoch = hex, seq = 1, at = DateTimeOffset.UtcNow, truncated = false,
+                sessions = new[] { new { id = hex, node = "agent_bridge_" + hex, name = "SG Quality", state = "idle", since = Started } },
+            })));
+        }
+        var op = new FleetList(store, new RegistryRoster(registry, "account-a"), audit: new AgentAuditLog(root));
+        var result = await Find(op, new { name = "SG Quality", account = "account-b", fleetScope = "account-b" });
+        Assert.Equal(expected, result.GetProperty("result").GetString());
+        Assert.Equal("account-a", result.GetProperty("fleetScope").GetString());
+        Assert.DoesNotContain("account-b", result.GetRawText());
+    }
+
+    [Fact, Trait("Category", "Network")]
+    public async Task A_real_relay_connection_supplies_its_account_scope_and_never_resolves_another_accounts_name()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        await using var relay = await TestRelay.StartAsync();
+        await using var own = await relay.ConnectAsync(relay.TokenFor(1, "own"), "own-host", "host");
+        await using var other = await relay.ConnectAsync(relay.TokenFor(2, "other"), "other-host", "host");
+        var hex = new string('b', 16);
+        await other.Relay.RegistryPutAsync(Body(new
+        {
+            v = 1, machine = other.Id, epoch = hex, seq = 1, at = DateTimeOffset.UtcNow, truncated = false,
+            sessions = new[] { new { id = hex, node = "agent_bridge_" + hex, name = "SG Other", state = "idle", since = Started } },
+        }));
+        var roster = new RelayFleetRoster();
+        roster.Attach(own.Relay);
+        var result = await Find(new FleetList(store, roster, audit: new AgentAuditLog(root)),
+            new { name = "SG Other", fleetScope = other.Relay.AccountId, account = other.Relay.AccountId });
+        Assert.Equal("notFound", result.GetProperty("result").GetString());
+        Assert.Equal(own.Relay.AccountId, result.GetProperty("fleetScope").GetString());
+        Assert.NotEqual(own.Relay.AccountId, other.Relay.AccountId);
+        Assert.DoesNotContain("node", result.GetRawText());
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    public async Task A_roster_without_authenticated_scope_refuses_instead_of_returning_a_success_shaped_answer(string scope)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var op = new FleetList(store, new Roster { Scope = scope }, audit: new AgentAuditLog(root));
+        var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() => Find(op, new { name = "SG Quality" }));
+        Assert.Contains("no authenticated account scope", refusal.Message);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(42)]
+    public async Task Missing_or_non_string_roster_models_are_never_inferred_from_the_name_or_the_request(object? model)
+    {
+        var frame = Body(new
+        {
+            machine = "a", online = true,
+            record = new { sessions = new[] { new { id = "s-a", node = "n-a", name = "SG Quality", state = "idle", since = Started, model } } }
+        });
+        var machine = Assert.Single(RelayFleetRoster.Parse([frame])) with { Verified = true };
+        if (!OperatingSystem.IsWindows()) { return; }
+        var result = await Find(Op(machine), new { name = "SG Quality", model = "caller-spoof" });
+        Assert.Equal("found", result.GetProperty("result").GetString());
+        Assert.False(result.GetProperty("session").TryGetProperty("model", out _));
+    }
+
+    [Fact]
     public async Task A_name_alone_never_yields_found_or_a_node_and_an_impostor_beside_an_offline_original_is_unverified()
     {
         if (!OperatingSystem.IsWindows()) { return; }
@@ -69,18 +187,15 @@ public sealed class FleetFindTests : IDisposable
     }
 
     [Fact]
-    public async Task Verified_matches_are_pinned_ambiguous_or_found_only_with_the_machine_and_the_name_is_never_echoed()
+    public async Task Verified_names_are_found_ambiguous_or_unknown_without_echoing_the_name()
     {
         if (!OperatingSystem.IsWindows()) { return; }
         var one = Op(M("a", true, "SG Quality", verified: true), M("b", true, null, verified: true));
-        var unpinned = await Find(one, new { name = "SG Quality" });
-        Assert.Equal("unpinned", unpinned.GetProperty("result").GetString());
-        var pin = unpinned.GetProperty("machines").EnumerateArray().Single();
-        Assert.Equal("a", pin.GetProperty("machine").GetString());
-        Assert.True(pin.GetProperty("verified").GetBoolean());
-        Assert.True(pin.TryGetProperty("state", out _) && pin.TryGetProperty("since", out _));
+        var named = await Find(one, new { name = "SG Quality" });
+        Assert.Equal("found", named.GetProperty("result").GetString());
+        Assert.Equal("a", named.GetProperty("session").GetProperty("machine").GetString());
         var trimmed = await Find(one, new { name = " SG Quality " });
-        Assert.Equal("unpinned", trimmed.GetProperty("result").GetString());
+        Assert.Equal("found", trimmed.GetProperty("result").GetString());
         var pinned = await Find(one, new { name = "SG Quality", machine = "a" });
         Assert.Equal("found", pinned.GetProperty("result").GetString());
         Assert.Equal(["id", "machine", "node", "online", "since", "state"], pinned.GetProperty("session").EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal));
@@ -88,14 +203,17 @@ public sealed class FleetFindTests : IDisposable
         var amb = await Find(two, new { name = "SG Quality" });
         Assert.Equal("ambiguous", amb.GetProperty("result").GetString());
         var withOffline = await Find(Op(M("a", true, "SG Quality", verified: true), M("c", false, "SG Quality")), new { name = "SG Quality" });
-        Assert.Equal("ambiguous", withOffline.GetProperty("result").GetString());
-        var cands = withOffline.GetProperty("candidates").EnumerateArray().OrderBy(c => c.GetProperty("machine").GetString(), StringComparer.Ordinal).ToList();
-        Assert.Equal(["a", "c"], cands.Select(c => c.GetProperty("machine").GetString()));
-        Assert.Equal([true, false], cands.Select(c => c.GetProperty("online").GetBoolean()));
-        Assert.Equal(JsonValueKind.Null, cands[1].GetProperty("node").ValueKind);
-        var none = await Find(one, new { name = "SG Nobody" });
-        foreach (var r in new[] { unpinned, trimmed, pinned, amb, none })
+        Assert.Equal("found", withOffline.GetProperty("result").GetString());
+        var sameMachine = await Find(Op(M("a", true, "SG Quality", verified: true) with
         {
+            Sessions = [new("n-1", "SG Quality", "idle", Started), new("n-2", "SG Quality", "working", Started)],
+        }), new { name = "SG Quality" });
+        Assert.Equal("ambiguous", sameMachine.GetProperty("result").GetString());
+        var none = await Find(one, new { name = "SG Nobody" });
+        Assert.Equal("notFound", none.GetProperty("result").GetString());
+        foreach (var r in new[] { named, trimmed, pinned, amb, none, sameMachine, withOffline })
+        {
+            Assert.Equal("account-a", r.GetProperty("fleetScope").GetString());
             Assert.DoesNotContain("SG Quality", r.GetRawText());
             Assert.DoesNotContain("SG Nobody", r.GetRawText());
         }
