@@ -121,6 +121,19 @@ test('return_setup_refuses_to_advance_before_grace_starts', async ({ page }) => 
   expect(await page.evaluate(() => Date.now())).toBe(before);
 });
 
+test('return setup refuses a grace notification after the page becomes hidden', async ({ page }) => {
+  await openDemo(page);
+  await page.evaluate(() => {
+    const grace = window.agentBridgeDemo.grace;
+    const stop = grace.onChange(() => {
+      stop();
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    });
+  });
+  await expect(comeBack(page)).rejects.toThrow(
+    'Return setup: visibilitychange did not produce an observed visible grace start');
+});
+
 // Quarantined (#1493, #1474): the historical WebKit grace failure remains unreproduced.
 test.skip(AWAY_RETURN, async ({ page }) => {
   await openDemo(page);
