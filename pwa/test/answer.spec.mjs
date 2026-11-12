@@ -58,7 +58,90 @@ const choice = (extra = {}) => ({
 // #908: Other the CLI offers and the machine can't send yet, shown disabled with why.
 const OTHER_NOT_SENDABLE = "Your own answer can't be sent from here yet. Pick an option, or answer at the machine.";
 
-test('Other the machine cannot send yet is shown disabled, its label unchanged, with why under the choices and as their description', async ({ page, browserName }) => {
+const answerTapState = (option) => option.evaluateAll(([el]) => {
+  const r = el?.getBoundingClientRect();
+  return {
+    box: r && r.width > 0 && r.height > 0 ? { x: r.x, y: r.y, width: r.width, height: r.height } : null,
+    arriving: el?.closest('.question')?.hasAttribute('data-arriving') ?? null,
+  };
+});
+
+async function answerTapSetup(option, trace) {
+  await option.scrollIntoViewIfNeeded();
+  let previous = null;
+  await expect.poll(async () => {
+    const now = await answerTapState(option);
+    trace.samples.push(now);
+    const ready = !!now.box && now.arriving === false && previous?.arriving === false
+      && JSON.stringify(now.box) === JSON.stringify(previous.box);
+    previous = now;
+    return ready;
+  }, { message: 'the option is present, in the same box twice and out of its arrival wait' }).toBe(true);
+  trace.before = previous;
+  await option.click();
+  trace.after = await answerTapState(option);
+}
+
+async function answerTap(page, q, info) {
+  const option = q.locator('.choice[data-value="sqlite"]');
+  const trace = { samples: [], before: null, after: null };
+  try {
+    await option.evaluate((el) => {
+      window.__answerTapEvents = [];
+      const record = (e) => {
+        if (!el.contains(e.target)) { return; }
+        const { x, y, width, height } = el.getBoundingClientRect();
+        window.__answerTapEvents.push({
+          event: e.type, box: { x, y, width, height },
+          arriving: el.closest('.question')?.hasAttribute('data-arriving') ?? null,
+        });
+      };
+      document.addEventListener('pointerdown', record, true);
+      document.addEventListener('click', record, true);
+    });
+    await answerTapSetup(option, trace);
+    await expect.poll(() => log(page)).toHaveLength(1);
+    expect((await log(page))[0].fields).toEqual({ answer: 'sqlite' });
+  } finally {
+    trace.after ??= await answerTapState(option);
+    trace.events = await page.evaluate(() => window.__answerTapEvents);
+    trace.sent = await log(page);
+    // Keep successful traces too, so idle and loaded repeats can be compared (#1690).
+    await info.attach('answer-tap.json', { body: JSON.stringify(trace, null, 2), contentType: 'application/json' });
+  }
+}
+
+const tapBox = { x: 20, y: 30, width: 100, height: 44 };
+const tapSample = (box = tapBox, arriving = false) => ({ box, arriving });
+// Controlled locators isolate each gate, without relying on a slow tap to catch the race.
+for (const [condition, samples] of [
+  ['absent', [tapSample(null), tapSample(null), tapSample(), tapSample()]],
+  ['arrival re-armed', [tapSample(), tapSample(tapBox, true), tapSample(), tapSample()]],
+  ['moving', [tapSample(), tapSample({ ...tapBox, y: 60 }), tapSample({ ...tapBox, y: 60 })]],
+]) {
+  test(`answer_tap_setup_refuses_to_tap_while_the_question_is_still_arriving (${condition})`, async () => {
+    let reads = 0, taps = 0;
+    const option = {
+      scrollIntoViewIfNeeded: async () => {},
+      evaluateAll: async () => samples[Math.min(reads++, samples.length - 1)],
+      click: async () => {
+        expect(reads, 'no tap before the row is present, arrival-clear and stable twice').toBeGreaterThanOrEqual(samples.length);
+        taps += 1;
+      },
+    };
+    await answerTapSetup(option, { samples: [] });
+    expect(taps).toBe(1);
+  });
+}
+
+test('answer_tap_setup_sends_once_after_the_unavailable_other_question_has_settled', async ({ page }, info) => {
+  test.skip(process.env.PWA_ANSWER_TAP_PROBE !== '1', 'opt-in investigation; the original WebKit quarantine stays in place (#1690)');
+  await openDemo(page);
+  const q = await ask(page, choice({ required: false, otherUnavailable: 'otherNotSendable' }));
+  await answerTap(page, q, info);
+});
+
+test('Other the machine cannot send yet is shown disabled, its label unchanged, with why under the choices and as their description', async ({ page, browserName }, info) => {
   // Quarantined on webkit (#1690): the tap on the option sends nothing on the Linux runner, twice in a row on #1694 and earlier on PRs with no answer change; restore by 2026-11-13.
   test.skip(browserName === 'webkit', 'the tap sends nothing on webkit in CI, #1690');
   await openDemo(page);
@@ -73,12 +156,9 @@ test('Other the machine cannot send yet is shown disabled, its label unchanged, 
   const described = (loc) => loc.evaluate((el) => (el.getAttribute('aria-describedby') ?? '').split(' ').map((i) => document.getElementById(i)?.textContent ?? '').join(' '));
   expect(await described(q.locator('.choices'))).toBe(OTHER_NOT_SENDABLE);
   expect(await described(other)).toBe(OTHER_NOT_SENDABLE);
-  // No box to type in, and the options still answer on a tap. Tapped as open() left it, with
-  // the question's arrival wait over: nothing has moved it since.
+  // Looking at the note can outlast open()'s wait: check the option again at the tap (#491).
   await expect(q.locator('.other-box')).toHaveCount(0);
-  await q.locator('.choice[data-value="sqlite"]').click();
-  await expect.poll(() => log(page)).toHaveLength(1);
-  expect((await log(page))[0].fields).toEqual({ answer: 'sqlite' });
+  await answerTap(page, q, info);
 });
 
 // The acceptance captures, apart from the tap above: resizing the page and scrolling the note
