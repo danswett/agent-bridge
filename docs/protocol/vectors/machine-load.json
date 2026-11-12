@@ -2771,6 +2771,87 @@
           }
         },
         {
+          "name": "mixed-case-names",
+          "json": {
+            "STATE": "stale",
+            "sTaTe": "fresh",
+            "sampledAT": "2025-01-02T03:04:05.000Z",
+            "AGEMs": 100,
+            "sTaleAfterMS": 15000,
+            "CPU": {
+              "PERCENT": 1,
+              "pErCeNt": 25,
+              "CORES": 8
+            },
+            "MEMORY": {
+              "TOTALBYTES": 17179869184,
+              "availableBYTES": 8589934592,
+              "COMMITTEDPERCENT": 50
+            },
+            "SESSIONS": [
+              {
+                "SESSION": "s-1",
+                "AGENT": "AGENCY",
+                "PROCESSES": 3,
+                "CPUPERCENT": 12.5,
+                "WORKINGSETBYTES": 104857600,
+                "worKingSetBytes": 7,
+                "HANDLES": 42,
+                "HANDLEKIND": "FDS",
+                "stAte": "partial"
+              }
+            ],
+            "UNATTRIBUTED": {
+              "PROCESSES": 1,
+              "WORKINGSETBYTES": 1048576
+            }
+          },
+          "reads": {
+            "sampledAt": "2025-01-02T03:04:05.000Z",
+            "ageMs": 100,
+            "state": "fresh",
+            "staleAfterMs": 15000,
+            "cpu": {
+              "percent": 25,
+              "cores": 8
+            },
+            "memory": {
+              "totalBytes": 17179869184,
+              "availableBytes": 8589934592,
+              "committedPercent": 50
+            },
+            "sessions": [
+              {
+                "session": "s-1",
+                "agent": "other",
+                "processes": 3,
+                "cpuPercent": 12.5,
+                "workingSetBytes": 104857600,
+                "handles": 42,
+                "handleKind": "other",
+                "state": "partial"
+              }
+            ],
+            "unattributed": {
+              "processes": 1,
+              "workingSetBytes": 1048576
+            }
+          }
+        },
+        {
+          "name": "offset-submillisecond-sampled-at",
+          "json": {
+            "state": "fresh",
+            "sampledAt": "2025-01-02T03:04:05.1234567+02:30",
+            "sessions": []
+          },
+          "reads": {
+            "sampledAt": "2025-01-02T00:34:05.123Z",
+            "state": "fresh",
+            "sessions": []
+          }
+        },
+        {
           "name": "unknown-state",
           "json": {
             "state": "future",

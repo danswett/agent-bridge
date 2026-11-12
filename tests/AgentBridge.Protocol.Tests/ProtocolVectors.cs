@@ -163,6 +163,14 @@ public static class ProtocolVectors
             .Reads("over-200-sessions", Broken(full, j => j["sessions"] = JsonSerializer.SerializeToNode(
                 Enumerable.Range(0, 201).Select(i => new SessionLoad { Session = $"s-{i}", WorkingSetBytes = i }),
                 ProtocolJson.Options)))
+            .Reads("mixed-case-names", """
+                {"STATE":"stale","sTaTe":"fresh","sampledAT":"2025-01-02T03:04:05.000Z","AGEMs":100,"sTaleAfterMS":15000,
+                 "CPU":{"PERCENT":1,"pErCeNt":25,"CORES":8},
+                 "MEMORY":{"TOTALBYTES":17179869184,"availableBYTES":8589934592,"COMMITTEDPERCENT":50},
+                 "SESSIONS":[{"SESSION":"s-1","AGENT":"AGENCY","PROCESSES":3,"CPUPERCENT":12.5,"WORKINGSETBYTES":104857600,"wor\u212AingSetBytes":7,"HANDLES":42,"HANDLEKIND":"FDS","stAte":"partial"}],
+                 "UNATTRIBUTED":{"PROCESSES":1,"WORKINGSETBYTES":1048576}}
+                """)
+            .Reads("offset-submillisecond-sampled-at", """{"state":"fresh","sampledAt":"2025-01-02T03:04:05.1234567+02:30","sessions":[]}""")
             .Reads("unknown-state", """{"state":"future","sessions":[]}""")
             .Reads("no-figure", """{"state":"partial","cpu":{},"memory":{},"sessions":[]}""");
     }

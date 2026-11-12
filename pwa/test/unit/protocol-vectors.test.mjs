@@ -22,6 +22,7 @@ import { acceptOf, nowArgs, readBusy, readUpdateCommandResult, readUpdateState }
 import { readSignInDevices } from '../../js/signin-devices.js';
 import { readUsage } from '../../js/usage.js';
 import { readDiagnostics } from '../../js/diagnostics.js';
+import * as loadReaders from '../../js/load-feed.js';
 import { HostClient } from '../../js/host-client.js';
 import { PatchError, applyPatch, readPatch } from '../../js/session-patch.js';
 import { SessionsStore } from '../../js/sessions-store.js';
@@ -157,6 +158,11 @@ const inSnapshot = (key) => (j) => {
   return readDiagnostics({ ...s, [key]: j })?.[key] ?? null;
 };
 const READS = {
+  MachineLoad: { read: (j) => loadReaders.readMachineLoad(j), exact: true },
+  SessionLoad: { read: (j) => loadReaders.readSessionLoad(j), exact: true },
+  MachineLoadCpu: { read: (j) => loadReaders.readMachineLoadCpu(j), exact: true },
+  MachineLoadMemory: { read: (j) => loadReaders.readMachineLoadMemory(j), exact: true },
+  UnattributedLoad: { read: (j) => loadReaders.readUnattributedLoad(j), exact: true },
   MachineInfo: { read: (j) => readHello({ protocol: 1, machine: j, capabilities: [] }).machine },
   HelloResult: { read: readHello },
   ToolCall: { read: readTool },
@@ -442,11 +448,6 @@ const BUILDS = {
 
 // Records the PWA neither reads nor builds through a function these tests can call, and why.
 const NOT_REPLAYED = {
-  MachineLoad: 'full-record reader and replay follow in #2158; LoadFeed reads only a projection',
-  SessionLoad: 'full-record reader and replay follow in #2158; LoadFeed ignores sessions',
-  MachineLoadCpu: 'full-record reader and replay follow in #2158; LoadFeed reads only percent',
-  MachineLoadMemory: 'full-record reader and replay follow in #2158; LoadFeed reads only total and available bytes',
-  UnattributedLoad: 'full-record reader and replay follow in #2158; LoadFeed ignores unattributed load',
   SubscribeResult: 'the PWA waits for sessions.synced and uses nothing of this result',
   SubscribeSince: 'built only within SubscribeRequest, from what the store holds',
   PushSubscribeRequest: 'PushRegistrar sends the browser\'s own subscription, from a private method',
@@ -542,7 +543,9 @@ for (const [record, r] of records) {
   if (reads) {
     for (const v of r.valid) {
       test(`a ${record} "${v.name}" reads with every part the PWA uses intact`,       () => agrees(`${record}/${v.name}`, 'read', async () => {
-        holds(await reads.read(JSON.parse(JSON.stringify(v.json))), v.reads ?? v.json, reads.unread);
+        const read = await reads.read(JSON.parse(JSON.stringify(v.json)));
+        holds(read, v.reads ?? v.json, reads.unread);
+        if (reads.exact) { assert.deepEqual(read, v.reads ?? v.json); }
       }));
     }
     for (const v of r.refused.filter((x) => x.refusedBy === 'parse')) {

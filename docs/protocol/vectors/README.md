@@ -17,7 +17,7 @@ are generated.
 | `manage.json` | `manage.get`, `manage.state`, `manage.restart` and `manage.hooks.repair` (#801), and the held `manage.config.set` and `manage.haToken.set` |
 | `update.json` | `update.get`, `update.state`, `update.check` and `update.install`, Update now's press, `busy` and codes (#1159) included |
 | `usage.json` | `usage.get`, `usage.update` and shared readings |
-| `machine-load.json` | Numerical `MachineLoad`, `SessionLoad`, CPU, memory and unattributed readings (C# replay; PWA reader follows in #1872) |
+| `machine-load.json` | Numerical `MachineLoad`, `SessionLoad`, CPU, memory and unattributed readings, replayed by C# and the PWA's complete `load-feed.js` readers (#2158) |
 | `history.json` | `session.history`: its request, pages, turns, prompts and their senders, each part (responses, reasoning, tools, delegate events, questions and approvals with their outcomes), and the `missing`, `stale` and `unavailable` results ([v1-history.md](../v1-history.md)) |
 | `diagnostics.json` | `diagnostics.get`'s snapshot and its sections, and the content-free journal entries it carries (#802, #737) |
 | `signed-command.json` | Fixed keys, the commands they sign with the MAC each gives, and commands the machine must refuse; among them Update now's press at its longest, the one body past 2048 characters any action takes (up to 4096, for `update.install.now` only) |
