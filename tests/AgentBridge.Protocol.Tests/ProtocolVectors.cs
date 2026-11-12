@@ -160,6 +160,9 @@ public static class ProtocolVectors
             .Valid("stale", full with { State = MachineLoadState.Stale, AgeMs = 16000 })
             .Valid("first-sample-no-cpu", full with { Cpu = null, Sessions = [session with { CpuPercent = null }] })
             .Valid("unavailable", new MachineLoad())
+            .Reads("over-200-sessions", Broken(full, j => j["sessions"] = JsonSerializer.SerializeToNode(
+                Enumerable.Range(0, 201).Select(i => new SessionLoad { Session = $"s-{i}", WorkingSetBytes = i }),
+                ProtocolJson.Options)))
             .Reads("unknown-state", """{"state":"future","sessions":[]}""")
             .Reads("no-figure", """{"state":"partial","cpu":{},"memory":{},"sessions":[]}""");
     }
