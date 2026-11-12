@@ -1949,6 +1949,12 @@ machine, online ones first, then the account's offline machines (#213):
   "Update ready · waiting for a question to be answered", never "answer at the machine".
   Every action is the same small secondary button. Check for updates, for every machine at once,
   sits under the rows in the same column.
+- **PWA update block (#2187):** one glyph and status line, one text2 "Checked 36 min ago"
+  line when known, then a 44 px secondary **Check now** button, never a link. Status reads
+  "Up to date · *version*", "Update available · *version* (running *version*)", "Checking…",
+  or "Not checked yet". When **Update now** is offered it is the only primary action and
+  Check now is absent. Feed/quota sentences are hidden; a limited check alone adds
+  "Can't check right now. Try again at *time*." as the disabled Check now button's reason.
 - **Update now** (#1159; built in the PWA, slice 3; the Windows app's is slice 4; Creative's rules, 6711605555, are spelled out in
   [v1-update.md](../protocol/v1-update.md#what-the-person-sees)): beside Install, only when an
   update is ready and this device can carry it out; otherwise the row says why in text2. A quiet

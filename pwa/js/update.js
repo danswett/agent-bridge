@@ -125,23 +125,15 @@ export function readUpdateState(raw) {
   };
 }
 
-// Product's secondary discovery detail (#927); quota is a past observation, not an allowance now.
+// The card's quiet age; historical source and quota are not an allowance to check now (#2187).
 export function updateDetails(s, now = Date.now()) {
   const age = (value) => {
     const at = timestamp(value);
     return at ? Math.max(0, Math.floor((now - Date.parse(at)) / 60000)) : null;
   };
   const words = (minutes) => minutes < 1 ? 'under a minute' : minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h`;
-  const source = s?.checkSource === 'cdn' ? 'the release feed' : s?.checkSource === 'github' ? 'GitHub' : null;
   const checked = age(s?.checkedAt);
-  const remaining = quota(s?.gitHubRemaining);
-  const observed = age(s?.gitHubQuotaAt);
-  const lines = [];
-  if (source && checked !== null) { lines.push(`Update list from ${source}, ${words(checked)} old`); }
-  if (remaining !== null && observed !== null) {
-    lines.push(`When last asked, GitHub allowed ${remaining === 0 ? 'no more checks' : `${remaining} more check${remaining === 1 ? '' : 's'}`} (${words(observed)} ago)`);
-  }
-  return lines;
+  return checked === null ? [] : [`Checked ${words(checked)} ago`];
 }
 
 // update.check's and update.install's result. An unknown outcome reads as refused.

@@ -523,6 +523,10 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .machine-more:empty { display: none; }
 .machine-update, .machine-signin, .machine-diagnose-hint { font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
 .machine-update p, .machine-signin p { margin: 0; }
+.machine-update { min-width: 0; overflow-wrap: anywhere; }
+.machine-update-line { display: flex; align-items: baseline; gap: var(--ab-space-2); color: var(--ab-text); }
+.machine-update-line > span:last-child { min-width: 0; }
+.machine-update-line > .glyph { flex-shrink: 0; align-self: start; margin-top: 2px; }
 .machine-diagnose-hint { margin: 0; }
 .machine-actions { display: flex; flex-wrap: wrap; gap: var(--ab-space-2); margin-top: var(--ab-space-2); }
 .machine-update-actions { align-items: center; }
@@ -533,6 +537,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 /* Check for updates, for every machine at once: the same button, in the same column. */
 .machine-updates { list-style: none; padding: var(--ab-space-1) 0 0 calc(1px + var(--ab-space-3) + 20px + var(--ab-space-3)); }
 .button.small { min-height: 32px; padding: 0 var(--ab-space-3); border-radius: var(--ab-radius-control); font-size: var(--type-meta); }
+.machine-update-actions .button { min-height: var(--tap); max-width: 100%; white-space: normal; }
 @media (pointer: coarse) and (not (any-pointer: fine)) { .button.small { min-height: var(--tap); padding: 0 var(--ab-space-4); } }
 
 /* The tile (#1147): the same sections in the same order on every width. */

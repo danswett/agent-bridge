@@ -402,6 +402,8 @@ test.describe('one truthful update line', () => {
     await page.clock.setFixedTime(now);
     await page.goto('?demo=1&static=1&updates=1&updateNow=1#/machines');
     await page.waitForSelector('html[data-demo-ready]');
+    await expect.poll(() => page.evaluate(() => [...window.agentBridgeDemo.host.transports]
+      .some((t) => t.updateSubscribed))).toBe(true);
     await page.evaluate((c) => window.agentBridgeDemo.setUpdate({
       ...window.agentBridgeDemo.host.update, current: '0.1.4415', available: null,
       checkedAt: '2026-11-10T17:12:00Z', last: null, ...c,
@@ -513,18 +515,20 @@ test.describe('one truthful update line', () => {
       await expect(block.locator('.glyph')).toHaveCount(1);
       await page.clock.pauseAt(now);
       await check.click();
+      await page.clock.runFor(50);
       await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.check']);
-      await page.evaluate(() => window.agentBridgeDemo.setUpdate({ ...window.agentBridgeDemo.host.update, phase: 'checking' }));
       await expect(block.locator('.machine-update-line')).toHaveText('Checking…');
       await expect(block.getByRole('button', { name: 'Checking…', exact: true })).toBeDisabled();
       await expect(block.locator('.machine-update-actions .glyph')).toHaveCount(1);
+      await page.evaluate(() => window.agentBridgeDemo.setUpdate({
+        ...window.agentBridgeDemo.host.update, phase: 'idle', available: '0.1.4462', current: '0.1.4384',
+      }));
+      await page.clock.runFor(50);
+      await expect(block.locator('.machine-update-line')).toHaveText('Update available · 0.1.4462 (running 0.1.4384)');
       for (const scale of [1, 2]) {
-        await block.evaluate((e, scale) => {
-          e.style.fontSize = `${14 * scale}px`;
-          e.style.lineHeight = '1.5';
-        }, scale);
+        await page.evaluate((scale) => document.documentElement.style.setProperty('--text-scale', String(scale)), scale);
         const fit = await block.evaluate((e) => {
-          const card = e.closest('.machine').getBoundingClientRect();
+          const card = e.getBoundingClientRect();
           return [...e.querySelectorAll('p, button')].every((n) => {
             const r = n.getBoundingClientRect();
             return r.left >= card.left && r.right <= card.right && n.scrollWidth <= n.clientWidth;
