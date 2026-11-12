@@ -14,6 +14,23 @@ import { fromBase64url } from '../../js/blobs.js';
 const NOW = Date.parse('2026-11-02T18:00:00.000Z');
 const found = readUpdateState({ current: '0.4.0', installer: true, available: '0.5.0', checkedAt: '2026-11-02T17:55:00.000Z', phase: 'idle' });
 
+test('a legacy held check is plain retry wording, never a parsed machine clock or quota', () => {
+  for (const reason of [
+    "the release feed's rate limit refused the check (rate limit exceeded); checking again after 9:46 AM",
+    "the release feed's rate limit refused the check; checking again after not-a-clock",
+    'checking again soon',
+  ]) {
+    const state = readUpdateState({
+      installer: true, checkedAt: '2026-11-02T17:40:00Z', checkSource: 'github',
+      gitHubRemaining: 0, gitHubQuotaAt: '2026-11-02T17:59:00Z',
+      last: { outcome: 'failed', reason, at: '2026-11-02T17:59:00Z' },
+    });
+    assert.equal(lastLine(state, NOW), 'Checking again soon.');
+    assert.deepEqual(updateDetails(state, NOW), ['Checked 20 minutes ago \u00b7 checking again soon']);
+    assert.ok(canCheck(state));
+  }
+});
+
 test('historical discovery quota alone never adds a visible allowance', () => {
   for (const gitHubRemaining of [0, 1, 2]) {
     const state = { gitHubRemaining, gitHubQuotaAt: '2026-11-02T17:55:00Z' };

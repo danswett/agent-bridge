@@ -1907,6 +1907,53 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     static ReleaseDiscoveryException Limited(DateTimeOffset retryAt) =>
         new("GitHub is limiting how often this network can check for updates.", retryAt, limited: true);
 
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_held_check_reports_plain_retry_words_and_logs_its_deadline_in_UTC()
+    {
+        updater.Found = null;
+        var reset = time.GetUtcNow().AddMinutes(45);
+        updater.CheckFails = Limited(reset);
+        await StartAsync();
+
+        await auto.TickAsync();
+
+        Assert.Equal("checking again soon", auto.State.Last!.Reason);
+        Assert.Contains(log, l => l.Contains(reset.ToUniversalTime().ToString("O"), StringComparison.Ordinal));
+        time.Advance(TimeSpan.FromMinutes(2));
+        await AskedAsync(UpdateAskKind.Check);
+        Assert.Equal("checking again soon", auto.State.Last!.Reason);
+        Assert.Equal(1, updater.Checks);
+    }
+
+    [Fact]
+    public async Task A_held_download_has_no_machine_local_retry_clock()
+    {
+        var observed = new ObservedUpdater(updater, time);
+        await observed.CheckAsync();
+        updater.DownloadFails = new IOException("the connection was reset");
+        await Assert.ThrowsAsync<IOException>(() => observed.DownloadAsync(_ => { }));
+
+        var heldDownload = await Assert.ThrowsAsync<DownloadHeldException>(() => observed.DownloadAsync(_ => { }));
+
+        Assert.Equal("downloading 0.2.0 failed just now; trying again soon", heldDownload.Message);
+        Assert.Equal(1, updater.Downloads);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_install_retry_hold_has_no_machine_local_retry_clock()
+    {
+        InstallBetweenTurns();
+        await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
+        prefs = prefs with { UpdateFailures = 3, UpdateRetryAt = time.GetUtcNow().AddMinutes(40) };
+
+        await auto.TickAsync();
+
+        Assert.Equal("update failed; trying again soon, or at Restart to update", auto.State.Waiting);
+        Assert.False(updater.Applied);
+    }
+
     // GitHub's API, answering the release list as a test says.
     sealed class FakeGitHub(Func<HttpResponseMessage> answer) : HttpMessageHandler
     {

@@ -393,6 +393,27 @@ test.describe('load bars', () => {
   }
 });
 
+test.describe('held update clocks', () => {
+  test.use({ timezoneId: 'Asia/Tokyo' });
+  test('a legacy hold shows a quiet age and checking again soon in another time zone', async ({ page }) => {
+    await page.clock.setFixedTime(new Date('2026-11-10T17:40:00Z'));
+    await page.goto('?demo=1&static=1&updates=1&updateNow=1#/machines');
+    await page.waitForSelector('html[data-demo-ready]');
+    await page.evaluate(() => window.agentBridgeDemo.setUpdate({
+      ...window.agentBridgeDemo.host.update, current: '0.1.4415', available: null,
+      checkedAt: '2026-11-10T17:20:00Z', checkSource: 'github',
+      gitHubRemaining: 0, gitHubQuotaAt: '2026-11-10T17:39:00Z',
+      last: {
+        outcome: 'failed', at: '2026-11-10T17:39:00Z',
+        reason: "the release feed's rate limit refused the check; checking again after 9:46 AM",
+      },
+    }));
+    const block = page.locator('#machine-list [data-device-id="demo"] .machine-update');
+    await expect(block.locator('.machine-update-detail')).toHaveText(['Checked 20 minutes ago \u00b7 checking again soon']);
+    await expect(block).not.toContainText(/9:46|AM|PM|limit|quota|failed|refused/i);
+  });
+});
+
 test.describe('one truthful update line', () => {
   test.use({ timezoneId: 'America/Los_Angeles' });
   const now = new Date('2026-11-10T17:40:00Z');
