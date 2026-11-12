@@ -17,10 +17,13 @@ Require ($on -match "cron: '\*/5 \* \* \* \*'") 'Pages needs a five-minute named
 Require ($text -match '(?m)^run-name: .*Pages rollback.*Pages resume' -and $text -match 'event=workflow_dispatch&per_page=100' -and $text -match 'quality/pages-rollback\.ps1' -and $text -match '-RollbackStatus \$rollbackStatus') 'manual rollback must fence automatic deployment until a newer head or successful explicit resume'
 
 $gate = [regex]::Match($text, '(?ms)^  gate:\r?\n(.*?)^  build:').Groups[1].Value
+$gateOutputs = [regex]::Match($gate, '(?ms)^    outputs:\r?\n(.*?)(?=^    \S)').Groups[1].Value
+Require ($gateOutputs -cmatch '(?m)^      deploy: \$\{\{ steps\.decide\.outputs\.deploy \}\}\r?$' -and $gateOutputs -cmatch '(?m)^      sha: \$\{\{ steps\.decide\.outputs\.sha \}\}\r?$') 'the gate must export the deciding step deploy and SHA outputs'
 $permissions = [regex]::Match($gate, '(?ms)^    permissions:\r?\n(.*?)(?=^    \S)').Groups[1].Value
 $scopes = @($permissions -split '\r?\n' | ForEach-Object { ($_ -replace '\s+#.*$', '').Trim() } | Where-Object { $_ -and $_ -notmatch '^#' } | Sort-Object)
 Require ($text -match '(?m)^permissions: \{\}\r?$' -and $scopes.Count -eq 3 -and ($scopes -join ',') -ceq 'actions: read,contents: read,pages: read') 'the gate must have exactly actions:read, contents:read and pages:read with no inherited or added writes'
 $build = [regex]::Match($text, '(?ms)^  build:\r?\n(.*?)^  deploy:').Groups[1].Value
+Require ($build -cmatch "(?m)^    if: needs\.gate\.outputs\.deploy == 'true'\r?$") 'the build must wait for the gate deploy output'
 $deploy = [regex]::Match($text, '(?ms)^  deploy:\r?\n(.*)').Groups[1].Value
 $guard = [regex]::Match($deploy, '(?m)^\s+run: (if \(\$env:GITHUB_EVENT_NAME[^\r\n]+)').Groups[1].Value
 Require ($guard -ne '' -and $deploy.IndexOf($guard) -lt $deploy.IndexOf('configure-pages')) 'a rollback rerun after a later resume must be refused before publishing, including failed-job reruns'
@@ -31,7 +34,7 @@ foreach ($case in @(@('workflow_dispatch', '1', $false), @('workflow_dispatch', 
 }
 Require ($text -match 'quality/pages-gate\.ps1' -and $text -notmatch 'commits/main') 'the gate must skip only a commit already live or older, not one that is not main''s tip'
 Require ($text -match 'quality/pages-candidate\.ps1' -and $text -match 'per_page=20' -and $text -notmatch 'workflow_run\.conclusion') 'Pages must select bounded same-SHA named-job evidence, not the whole CI conclusion'
-Require ($build -match 'TARGET_SHA: \$\{\{ needs\.gate\.outputs\.sha') 'the build job must build the selected tested SHA'
+Require ($build -cmatch '(?m)^          TARGET_SHA: \$\{\{ needs\.gate\.outputs\.sha \|\| inputs\.ref \|\| github\.sha \}\}\r?$') 'the build must prefer the tested SHA, then the manual rollback ref, then the current SHA'
 Require ($build -match 'merge-base --is-ancestor \"\$TARGET_SHA\" origin/main') 'the build job must prove the commit is on main before building it'
 Require ($build -notmatch '(?m)^\s+ref: ') 'the build job must not check out an event-supplied ref (CodeQL cache-poisoning)'
 Require ($build -notmatch '(?m)^\s+(pages|id-token): write') 'the build job must hold no publishing token'
