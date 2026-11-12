@@ -103,17 +103,35 @@ test('Other the machine cannot send yet is captured disabled with why under it, 
   expect(await log(page)).toEqual([]);
 });
 
-test('a refusal for Other the machine cannot send yet is said in the same words, after Not sent', async ({ page }) => {
-  await openDemo(page);
-  const q = await ask(page, choice({ required: false, allowOther: true }));
-  await script(page, { outcome: 'refused', reason: OTHER_NOT_SENDABLE, code: 'otherNotSendable' });
-  await q.locator('.other-toggle').click();
-  await q.locator('.other-box textarea').fill('DuckDB');
-  await q.locator('button.send').click();
-  await expect(q.locator('.answer-status')).toHaveText(`Not sent · ${OTHER_NOT_SENDABLE}`);
-  // A refusal: nothing went, so the person may answer again.
-  await expect(q.locator('button.send')).toBeEnabled();
-});
+for (const moved of [false, true]) {
+  test(`a refusal for Other the machine cannot send yet is said in the same words, after Not sent${moved ? ', while a late move guards pointer clicks' : ''}`, async ({ page }) => {
+    await openDemo(page);
+    const q = await ask(page, choice({ required: false, allowOther: true }));
+    await script(page, { outcome: 'refused', reason: OTHER_NOT_SENDABLE, code: 'otherNotSendable' });
+    const toggle = q.locator('.other-toggle');
+    if (moved) {
+      await page.clock.install();
+      await page.clock.pauseAt(new Date(Date.now() + 1000));
+      // Force the guarded-click ordering, not a claim about its natural failure rate (#2071).
+      await toggle.evaluate((button) => {
+        button.style.transform = 'translateX(12px)';
+        button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+      });
+      await expect(q).toHaveAttribute('data-arriving', '');
+      await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    }
+    await toggle.click();
+    if (moved) { await page.clock.resume(); }
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    await q.locator('.other-box textarea').fill('DuckDB');
+    await q.locator('button.send').click();
+    await expect(q.locator('.answer-status')).toHaveText(`Not sent · ${OTHER_NOT_SENDABLE}`);
+    expect(await log(page)).toEqual([expect.objectContaining({ question: 'q-choice', fields: { answer: { other: 'DuckDB' } } })]);
+    expect(await typed(page)).toEqual([]);
+    // A refusal: nothing went, so the person may answer again.
+    await expect(q.locator('button.send')).toBeEnabled();
+  });
+}
 
 test.afterEach(async ({ page }) => {
   expect(await page.evaluate(() => window.__cspViolations ?? [])).toEqual([]);
