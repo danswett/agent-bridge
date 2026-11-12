@@ -774,11 +774,20 @@ static partial class SelfTest
         Button? Send() => ById<Button>(ready, "FeedbackSend");
         void Press(Button b) => ((IInvokeProvider)new ButtonAutomationPeer(b).GetPattern(PatternInterface.Invoke)).Invoke();
         bool Focused(Button b) => ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(ready.XamlRoot), b);
+        void CheckCurrentNames()
+        {
+            foreach (var id in new[] { "FeedbackScreenshotStatus", "FeedbackRetryHint" })
+            {
+                var line = ById<TextBlock>(ready, id);
+                check(line is not null && new TextBlockAutomationPeer(line).GetName() == line.Text, $"{id} reads its current visible text");
+            }
+        }
         await Until(() => probe.Request is not null, TimeSpan.FromSeconds(5));
         check(Send() is { IsEnabled: false } && probe.Sends == 0, "disables Send while the review is gathering");
         probe.Gathering!.SetResult(probe.Bundle());
         probe.Gathering = null;
         check(await Until(() => ById<TextBox>(ready, "FeedbackPreview")?.Text.Length > 0, TimeSpan.FromSeconds(5)), "gathers the exact preview");
+        CheckCurrentNames();
         var note = ById<TextBox>(ready, "FeedbackNote");
         var turns = ById<CheckBox>(ready, "FeedbackTurns");
         var included = ById<Expander>(ready, "FeedbackIncluded");
@@ -812,6 +821,7 @@ static partial class SelfTest
         check(await Until(() => ById<Button>(ready, "FeedbackRetry") is { IsEnabled: true, Visibility: Visibility.Visible }, TimeSpan.FromSeconds(5))
             && ById<TextBlock>(ready, "FeedbackStatus")?.Text.Contains(FeedbackSendViewModel.FailedText, StringComparison.Ordinal) == true && probe.Sends == 1,
             "shows the failed reason with Retry after Send");
+        CheckCurrentNames();
         probe.Sending = new TaskCompletionSource<FeedbackSendResult>();
         if (ById<Button>(ready, "FeedbackRetry") is { } retry)
         {
