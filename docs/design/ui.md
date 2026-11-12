@@ -1601,6 +1601,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   fill in two at a time between input turns, paused during a scroll or pan, without moving what
   the reader is looking at (#1767). This does not change host page sizes or transcript reads.
   Turns stay virtualized; a realized turn measures all its response blocks together.
+  Windows replies, including `activity.notice`, stay under their owning turn (#2144), never a
+  queued owner's. Live/history deduplication uses ids; delayed pages cannot erase newer live
+  replies. Trimmed prompts keep their text and origin; loaded replies refresh the live pane.
+  Provisional live messages show no sent time until matching history supplies it.
   It opens at the end, on the latest reply, and stays there as replies arrive until the person
   scrolls; once they scroll, a new reply never moves the view (#1635, #1646). Reasoning, tool lines,
   delegate events and questions are still to come. The Windows app loads earlier turns a page
