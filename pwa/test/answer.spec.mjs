@@ -120,11 +120,12 @@ for (const moved of [false, true]) {
       await expect(q).toHaveAttribute('data-arriving', '');
       await expect(toggle).toHaveAttribute('aria-expanded', 'false');
     }
-    await toggle.click();
+    // Refusal wording is independent of pointer clicks still guarded by late layout (#2071).
+    await toggle.press('Space');
     if (moved) { await page.clock.resume(); }
     await expect(toggle).toHaveAttribute('aria-expanded', 'true');
     await q.locator('.other-box textarea').fill('DuckDB');
-    await q.locator('button.send').click();
+    await q.locator('button.send').press('Enter');
     await expect(q.locator('.answer-status')).toHaveText(`Not sent · ${OTHER_NOT_SENDABLE}`);
     expect(await log(page)).toEqual([expect.objectContaining({ question: 'q-choice', fields: { answer: { other: 'DuckDB' } } })]);
     expect(await typed(page)).toEqual([]);
