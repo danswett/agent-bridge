@@ -127,17 +127,8 @@ public sealed class LiteKill : ILiteMode
         try
         {
             if (!On) { return new LiteOutcome(LiteKind.Off, "off", request); }
-            // A kill from another process is noticed within a second; On cancels the flights.
-            var token = watch.Token;
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    using var tick = new PeriodicTimer(TimeSpan.FromSeconds(1));
-                    while (await tick.WaitForNextTickAsync(token)) { if (!On) { CancelFlights(); } }
-                }
-                catch (Exception e) when (e is OperationCanceledException or ObjectDisposedException) { }
-            });
+            // Arm the first tick before sending, not in a queued thread-pool work item.
+            _ = WatchAsync(watch.Token);
             return await send(flight.Token);
         }
         catch (OperationCanceledException) when (flight.IsCancellationRequested && !ct.IsCancellationRequested)
@@ -145,6 +136,16 @@ public sealed class LiteKill : ILiteMode
             return new LiteOutcome(LiteKind.Unconfirmed, "killed", request);
         }
         finally { watch.Cancel(); inFlight.TryRemove(flight, out _); }
+    }
+
+    async Task WatchAsync(CancellationToken token)
+    {
+        try
+        {
+            using var tick = new PeriodicTimer(TimeSpan.FromSeconds(1), time);
+            while (await tick.WaitForNextTickAsync(token).ConfigureAwait(false)) { if (!On) { CancelFlights(); } }
+        }
+        catch (Exception e) when (e is OperationCanceledException or ObjectDisposedException) { }
     }
 
     // In front of the hub's handler, so the kill op is judged here: only a pinned own host, and
