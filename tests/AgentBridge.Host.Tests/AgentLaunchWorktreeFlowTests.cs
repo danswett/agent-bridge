@@ -213,4 +213,45 @@ public sealed class AgentLaunchWorktreeFlowTests : LaunchFlowFixture
         Assert.Equal("{}\n", File.ReadAllText(Path.Combine(tree, ".mcp.json")));
         Assert.Equal("refused", Audit().GetProperty("outcome").GetString());
     }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_root_substituted_during_creation_cannot_authorize_removal_of_an_older_same_base_tree(bool link)
+    {
+        Repository();
+        var older = Worktrees.Create(app, Config());
+        Assert.Null(older.Problem);
+        var olderTree = Assert.IsType<string>(older.Worktree);
+        var contents = File.ReadAllText(Path.Combine(olderTree, "README.md"));
+        var marker = Path.Combine(Worktrees.AdminFolder(olderTree)!, Worktrees.Marker);
+        File.WriteAllText(marker, "older tree marker");
+        var swapped = Path.Combine(f.Root, "substituted-root.txt");
+        var script = Path.Combine(f.Root, "substitute-root.ps1");
+        File.WriteAllText(script, $$"""
+            param([string]$Target)
+            $ErrorActionPreference = 'Stop'
+            $older = '{{olderTree.Replace("'", "''")}}'
+            [System.IO.Directory]::Move($Target, "$Target-retained")
+            if ({{(link ? "$true" : "$false")}}) {
+                if ($IsWindows) { New-Item -ItemType Junction -Path $Target -Target $older | Out-Null }
+                else { [System.IO.Directory]::CreateSymbolicLink($Target, $older) | Out-Null }
+            } else { [System.IO.Directory]::Move($older, $Target) }
+            [System.IO.File]::WriteAllText('{{swapped.Replace("'", "''")}}', $Target)
+            """);
+        var hook = Path.Combine(app, ".git", "hooks", "post-checkout");
+        Git(app, "config", "core.hooksPath", Path.GetDirectoryName(hook)!);
+        File.WriteAllText(hook, $"#!/bin/sh\nroot=\"$(pwd -P)\"\ncd ..\npwsh -NoProfile -NonInteractive -File '{script.Replace("'", "'\\''")}' \"$root\"\n");
+        if (!OperatingSystem.IsWindows()) { File.SetUnixFileMode(hook, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute); }
+
+        var result = await Service(check: (_, _, _) => "Fixture creation-time refusal.").LaunchAsync(Request(), Principal);
+
+        var target = File.ReadAllText(swapped);
+        Assert.Equal(LaunchOutcome.Refused, result.Outcome);
+        Assert.Contains("retained", result.Reason);
+        Assert.Empty(starter.Specs);
+        Assert.Equal(contents, File.ReadAllText(Path.Combine(link ? olderTree : target, "README.md")));
+        Assert.Equal("older tree marker", File.ReadAllText(marker));
+        Assert.Equal("refused", Audit().GetProperty("outcome").GetString());
+    }
 }

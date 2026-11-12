@@ -136,18 +136,65 @@ public static class Worktrees
 
         try { Directory.CreateDirectory(root); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Refused($"The worktree root cannot be created: {e.Message}"); }
-        string? createdBase = null;
+        string? createdBase = null, expectedTarget = null, adminRoot = null;
+        string[]? priorAdmins = null;
+        Creation? creation = null;
         if (launchRequest is not null)
         {
             var commit = Git.Run(repository, ["rev-parse", "--verify", baseRef + "^{commit}"]);
             if (!commit.Ok) { return Refused("The isolated base commit cannot be verified before creation."); }
             createdBase = commit.Output.Trim();
+            try
+            {
+                if (Folders.Physical(root) is not { } parent || CommonDir(repository) is not { } common
+                    || !NoLinks(common, ["worktrees"]))
+                {
+                    return Refused("The intended worktree parent or repository administration cannot be verified before creation.");
+                }
+                target = expectedTarget = Path.Combine(parent, Path.GetFileName(target));
+                if (Directory.EnumerateFileSystemEntries(parent).Any(p => Folders.Same(p, target)))
+                {
+                    return Refused("The intended worktree target is no longer unused; existing paths were preserved.");
+                }
+                adminRoot = Path.Combine(common, "worktrees");
+                priorAdmins = Directory.Exists(adminRoot) ? Directory.GetFileSystemEntries(adminRoot) : [];
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                return Refused($"Creation ownership cannot be established before adding the worktree ({e.GetType().Name}).");
+            }
         }
         var add = Git.Run(repository, ["worktree", "add", "--detach", target, createdBase ?? baseRef], TimeSpan.FromMinutes(5));
-        if (!add.Ok || !Directory.Exists(target)) { return Refused($"Could not create an isolated worktree: {add.Said}"); }
+        if (!add.Ok || !Directory.Exists(target))
+        {
+            return launchRequest is null ? Refused($"Could not create an isolated worktree: {add.Said}")
+                : Result(null, $"Could not establish the new worktree after creation; it was retained without cleanup. {add.Said}");
+        }
         detail.Add($"created {target} at {baseRef}");
 
-        if (AdminFolder(target) is not { } admin) { detail.Add("its git administration folder cannot be found, so it carries no marker"); }
+        if (launchRequest is { } request)
+        {
+            try
+            {
+                if (expectedTarget is null || adminRoot is null || priorAdmins is null || createdBase is null
+                    || Folders.Physical(target) is not { } physicalCreated || !Folders.Same(physicalCreated, expectedTarget)
+                    || !NoLinks(target, [".git"]) || AdminFolder(target) is not { } createdAdmin
+                    || Path.GetDirectoryName(createdAdmin) is not { } adminParent || !Folders.Same(adminParent, adminRoot)
+                    || !NoLinks(adminRoot, [Path.GetFileName(createdAdmin)]) || priorAdmins.Any(p => Folders.Same(p, createdAdmin))
+                    || File.Exists(Path.Combine(createdAdmin, Marker)) || File.Exists(Path.Combine(createdAdmin, AgentHaBridgeMarker))
+                    || !Folders.Same(Path.GetFullPath(File.ReadAllText(Path.Combine(createdAdmin, "gitdir")).Trim(), createdAdmin), Path.Combine(expectedTarget, ".git")))
+                {
+                    return Result(null, "Creation changed the intended worktree path or did not establish new administration; it was retained without cleanup.");
+                }
+                creation = new Creation(request, expectedTarget, createdAdmin, createdBase);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                return Result(null, $"Creation ownership cannot be verified; the new path was retained without cleanup ({e.GetType().Name}).");
+            }
+        }
+
+        if ((creation?.Admin ?? AdminFolder(target)) is not { } admin) { detail.Add("its git administration folder cannot be found, so it carries no marker"); }
         else
         {
             try { File.WriteAllText(Path.Combine(admin, Marker), DateTimeOffset.Now.ToString("o", CultureInfo.InvariantCulture)); }
@@ -168,11 +215,7 @@ public static class Worktrees
         WorktreeResult Result(string? path, string? problem)
         {
             var result = new WorktreeResult(path, target, problem, string.Join("; ", detail));
-            if (result.Worktree is { } folder && launchRequest is { } request && createdBase is { } commit
-                && Folders.Physical(folder) is { } tree && AdminFolder(tree) is { } admin)
-            {
-                creations.Add(result, new Creation(request, tree, admin, commit));
-            }
+            if (creation is not null) { creations.Add(result, creation); }
             return result;
         }
     }

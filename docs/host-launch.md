@@ -200,6 +200,10 @@ confirmed; other agents fail closed. A missing or thrown check also refuses.
 
 A refusal removes only the new tree, using an in-memory creation receipt bound to this
 request and the immutable creation commit, using protected, nonrecursive removal.
+Before adding it, the host binds the unused target to its physical parent and snapshots the
+repository's worktree administration. Before writing a marker or issuing a receipt, it requires
+that exact nonlinked target and a new administration folder pointing back to it. A relocated
+or substituted root is refused and retained without cleanup, never marked or adopted as owned.
 A pre-existing or copied result
 cannot authorize deletion. New commits (including checkout-hook commits), changed, linked,
 ignored or otherwise unsafe data are retained with a readable cleanup reason, never
