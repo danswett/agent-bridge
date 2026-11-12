@@ -1831,7 +1831,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_blob_the_host_cannot_open_is_refused_with_the_reason_and_nothing_is_typed()
+    public async Task A_blob_the_host_cannot_open_is_refused_with_a_safe_reason_and_nothing_is_typed()
     {
         using var blobs = HostBlobs();
         using var store = ServeAttachments(blobs);
@@ -1839,7 +1839,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
 
         var e = await Assert.ThrowsAsync<InvalidOperationException>(() => SendLargeAsync(ch, Png(300_000), "shot.png", key: new byte[32]));
 
-        Assert.StartsWith("the attachment in the blob store is not what was sent (a part of the blob was changed", e.Message);
+        Assert.Equal("the attachment in the blob store is not what was sent, so it was dropped; send it again", e.Message);
         Assert.Empty(injector.Plans);
         await HostWait.UntilAsync(() => RelayStore.Stored.Count == 0, "the unusable blob to be deleted");
     }
