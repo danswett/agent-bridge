@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.Host.Lite;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 namespace AgentBridge.Host.Tests;
@@ -243,6 +244,22 @@ public sealed class AgentLiteKillTests : IDisposable
         await started.Task;
         Host(folder).Kill();
         var outcome = await send.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(LiteKind.Unconfirmed, outcome.Kind);
+    }
+
+    [Fact]
+    public async Task A_kill_is_watched_before_the_send_can_advance_the_clock()
+    {
+        var folder = NewHost("a");
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var host = new LiteKill(folder, new Peers(), time: time);
+        var outcome = await host.GuardAsync("r1", ct =>
+        {
+            Host(folder).Kill();
+            time.Advance(TimeSpan.FromSeconds(1));
+            Assert.True(ct.IsCancellationRequested, "The first kill-watch tick must cancel the send without a queued watcher startup.");
+            return Task.FromCanceled<LiteOutcome>(ct);
+        }, default);
         Assert.Equal(LiteKind.Unconfirmed, outcome.Kind);
     }
 
