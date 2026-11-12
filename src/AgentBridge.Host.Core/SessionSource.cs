@@ -185,7 +185,14 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         lock (_gate) { return _entries.TryGetValue(id, out var e) ? e.GuardForm : null; }
     }
 
-    public void AnswerAttemptsChanged() => _wake.Writer.TryWrite(true);
+    public void AnswerAttemptsChanged() => Wake(activity: true);
+
+    void Wake(bool activity)
+    {
+        // Record activity before coalescing: a queued reschedule must not hide a data wake.
+        if (activity) { lock (_gate) { _lastActivity = _time.GetTimestamp(); } }
+        _wake.Writer.TryWrite(activity);
+    }
 
     public Session? GetUnbudgeted(string id)
     {
@@ -330,7 +337,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         {
             var before = DiscoveryDelay();
             Pass(discover: true);
-            if (_loop is not null && DiscoveryDelay() < before) { _wake.Writer.TryWrite(true); }
+            if (_loop is not null && DiscoveryDelay() < before) { Wake(activity: false); }
         }
         finally { _pass.Release(); }
     }
@@ -353,8 +360,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             {
                 try
                 {
-                    await _wake.Reader.ReadAsync(linked.Token).ConfigureAwait(false);
-                    woke = true;
+                    woke = await _wake.Reader.ReadAsync(linked.Token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
                 catch (OperationCanceledException) { return; }
@@ -1325,7 +1331,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             watcher.Created += OnFileEvent;
             watcher.Deleted += OnFileEvent;
             watcher.Renamed += OnFileEvent;
-            watcher.Error += (_, _) => { _discoverRequested = true; _wake.Writer.TryWrite(true); };
+            watcher.Error += (_, _) => { _discoverRequested = true; Wake(activity: true); };
             watcher.EnableRaisingEvents = true;
             lock (_gate) { _watchers.Add(watcher); }
         }
@@ -1345,7 +1351,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             try { TranscriptWritten?.Invoke(e.FullPath); }
             catch (Exception) { }
         }
-        _wake.Writer.TryWrite(true);
+        Wake(activity: true);
     }
 
     // A transcript (a .jsonl under the agents' folders) was written to, as the file watcher heard

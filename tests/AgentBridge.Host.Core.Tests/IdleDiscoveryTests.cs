@@ -135,13 +135,37 @@ public class IdleDiscoveryTests
 
         await source.RefreshAsync();
 
-        Assert.Equal(TimeSpan.FromMilliseconds(50), await time.NextTimer());
-        time.Advance(TimeSpan.FromMilliseconds(50));
-        Assert.Equal(TimeSpan.FromMilliseconds(950), await time.NextTimer());
-        time.Advance(TimeSpan.FromMilliseconds(950));
         Assert.Equal(TimeSpan.FromSeconds(1), await time.NextTimer());
-        if (held) { Assert.NotNull(source.Held); }
+        time.Advance(TimeSpan.FromSeconds(1));
+        Assert.Equal(TimeSpan.FromSeconds(1), await time.NextTimer());
+        if (held)
+        {
+            Assert.NotNull(source.Held);
+            f.Processes.Unreadable(AgentKind.Copilot, false);
+            await source.RefreshAsync();
+            time.Advance(TimeSpan.FromSeconds(1));
+            Assert.Equal(TimeSpan.FromSeconds(14), await time.NextTimer());
+            Assert.Null(source.Held);
+        }
         else { Assert.NotNull(source.Get(Id)); }
+    }
+
+    [Fact]
+    public async Task A_data_wake_coalesced_behind_a_reschedule_still_keeps_active_recovery()
+    {
+        using var f = new Fixture();
+        var time = new CountingClock();
+        await using var source = Source(f, time);
+        var wake = (Channel<bool>)typeof(SessionSource)
+            .GetField("_wake", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(source)!;
+        Assert.True(wake.Writer.TryWrite(false));
+        Signal(source, Path.Combine(f.Root, "events.jsonl"));
+
+        await source.StartAsync();
+
+        Assert.Equal(TimeSpan.FromSeconds(1), await time.NextTimer());
+        time.Advance(TimeSpan.FromSeconds(1));
+        Assert.Equal(TimeSpan.FromSeconds(1), await time.NextTimer());
     }
 
     [Fact]
