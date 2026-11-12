@@ -482,9 +482,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card);
 }
 .machine.offline { background: none; border-style: dashed; }
-/* The selected tint is on the block, not the row, so a refusal line under it stays on the row's surface (#858). */
 .machine-block { border-radius: inherit; }
-.machine.selected > .machine-block { background: var(--ab-selected); }
 .machine-block:has(~ .machine-error) { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .machine.selected::before {
   content: ""; position: absolute; left: -1px; top: var(--ab-space-4); width: 3px; height: 16px; border-radius: 2px; background: var(--ab-bridge);
@@ -502,10 +500,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .machine-button .icon, .machine-row .icon { grid-column: 1; grid-row: 1; align-self: start; width: 20px; height: 20px; --ab-icon-stroke: 1.5; color: var(--ab-text2); }
 .machine-name { grid-column: 2; grid-row: 1; font-weight: 600; font-size: var(--type-row); line-height: var(--type-row-line); overflow-wrap: anywhere; }
 .machine-state { grid-column: 3; grid-row: 1; color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-row-line); white-space: nowrap; }
-.machine.selected .machine-state { color: var(--ab-bridge); font-weight: 600; }
-/* Bridge words on light's selected tint are under 4.5:1 (4.46:1 over the layer, 4.09:1 over a
-   phone's shell; #366), so there they take the text colour (ui.md §9.1 A8). Dark keeps Bridge,
-   and forced colours their system pair. */
+.machine.selected .machine-state { color: var(--ab-bridge); }
 @media (prefers-color-scheme: light) and (forced-colors: none) {
   .machine.selected .machine-state, .machine.selected .button.secondary:not(.armed) { color: var(--ab-text); }
 }
@@ -544,15 +539,26 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .machine-summary { margin: 0 0 var(--ab-space-3); color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-meta-line); }
 .machine-tile { display: grid; gap: var(--ab-space-2); padding: 0 var(--ab-space-3) var(--ab-space-3) calc(var(--ab-space-3) + 20px + var(--ab-space-3)); }
 .machine-tile > p, .tile-actions-note, .tile-health { margin: 0; font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
+.tile-measured { min-height: var(--type-meta-line); }
 .tile-health-icon { margin-inline-end: var(--ab-space-2); }
-.tile-label { font-weight: 600; color: var(--ab-text); }
-.tile-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ab-space-2); }
-.tile-actions .button { min-height: var(--tap); }
+.tile-label { font-weight: 400; color: var(--ab-text2); }
+.tile-health-word { color: var(--ab-text); }
+.tile-running-toggle {
+  display: flex; align-items: center; gap: var(--ab-space-2); width: 100%; min-height: var(--tap);
+  padding: 0; border: 0; background: none; font: inherit; font-size: var(--type-meta); color: var(--ab-text); text-align: start; cursor: pointer;
+}
+.tile-running-toggle .icon { flex: none; margin-inline-start: auto; }
+.tile-running-toggle[aria-expanded="true"] .icon { transform: rotate(90deg); }
+.tile-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--ab-space-2); }
+.tile-actions-note { grid-column: 1 / -1; }
+.tile-actions .button { min-width: 0; min-height: var(--tap); padding: var(--ab-space-2); white-space: normal; }
+.machine .button { font-weight: 400; }
 .machine-tile .machine-more { padding: 0; }
-.machine-load { display: grid; grid-template-columns: minmax(5rem, 1fr) minmax(0, 2fr) auto; align-items: center; gap: var(--ab-space-2); font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
+.machine-load { display: grid; grid-template-columns: 7ch minmax(0, 1fr) 8ch; align-items: center; gap: var(--ab-space-2); font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
 .machine-load-track { height: 10px; border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-control); overflow: hidden; background: var(--ab-subtle); }
 .machine-load-fill { display: block; height: 100%; background: var(--ab-text2); }
-.machine-load-value { font-variant-numeric: tabular-nums; color: var(--ab-text); }
+.machine-load-value { font-variant-numeric: tabular-nums; color: var(--ab-text); text-align: end; }
+.machine-load-note { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: var(--ab-space-2); }
 .machine-load.missing .machine-load-track { border-style: dashed; background: none; }
 @media (forced-colors: active) {
   .machine-load-track { forced-color-adjust: none; border-color: CanvasText; background: Canvas; }
