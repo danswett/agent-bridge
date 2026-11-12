@@ -225,7 +225,6 @@ test.describe('live load wiring', () => {
       await go(page, 'machines');
       await attach(page);
       await expect(tile(page).getByRole('meter', { includeHidden: true })).toHaveCount(2);
-      await row(page, target).click();
       const action = tile(page, target).locator('.machine-view');
       await action.scrollIntoViewIfNeeded();
       const held = await action.elementHandle(), box = await action.boundingBox();
@@ -538,23 +537,108 @@ test('Launch here, with another machine shown, opens the panel on the pressed ma
   await launchHere(page);
 });
 
-test.describe('from 900 px', () => {
-  test.use({ viewport: { width: 1000, height: 700 } });
+test.describe('expanded Fleet grid', () => {
+  test.use({ isMobile: true });
 
-  test('the list is on the left and the picked machine\'s tile on the right, without leaving the page', async ({ page }) => {
-    await openDemo(page);
-    await go(page, 'machines');
-    const tile = (id) => page.locator(`#machine-list [data-device-id="${id}"] .machine-tile`);
-    await expect(tile(LAPTOP)).toBeHidden();
-    await row(page, LAPTOP).click();
-    await expect(tile(LAPTOP)).toBeVisible();
-    await expect(page.locator('#machines')).toBeVisible();
-    const [list, detail] = await Promise.all([row(page, LAPTOP).boundingBox(), tile(LAPTOP).boundingBox()]);
-    expect(detail.x).toBeGreaterThan(list.x + list.width);
-    await row(page, SHADOW).click();
-    await expect(tile(SHADOW)).toBeVisible();
-    await expect(tile(LAPTOP)).toBeHidden();
-  });
+  for (const [width, height, columns] of [[390, 844, 1], [768, 1024, 2], [1024, 768, 2], [1600, 1000, 4]]) {
+    test(`all eight cards are expanded and their actions reachable at ${width}px`, async ({ page, browserName }) => {
+      await page.setViewportSize({ width, height });
+      await page.addInitScript((phone) => {
+        Object.defineProperty(navigator, 'standalone', { value: true });
+        Object.defineProperty(navigator, 'userAgentData', { value: undefined });
+        Object.defineProperty(navigator, 'maxTouchPoints', { value: 5 });
+        Object.defineProperty(navigator, 'userAgent', { value: phone
+          ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15'
+          : 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15' });
+      }, width < 760);
+      await openDemo(page);
+      await go(page, 'machines');
+      await expect(page.locator('html')).toHaveAttribute('data-platform', width < 760 ? 'ios' : 'ipados');
+      await expect(page.locator('html')).toHaveAttribute('data-standalone', 'true');
+      await page.evaluate(async () => {
+        const { renderMachines } = await import('/js/ui/views.js');
+        document.documentElement.style.setProperty('--env-safe-top', '24px');
+        document.documentElement.style.setProperty('--env-safe-bottom', '20px');
+        document.getElementById('machine-list').hidden = true;
+        const list = document.createElement('ul');
+        list.id = 'grid-fixture'; list.className = 'machines';
+        document.getElementById('machines').append(list);
+        const hosts = Array.from({ length: 8 }, (_, i) => ({ id: `grid-${i}`, name: `Machine ${i + 1}`, kind: 'host', lastSeen: '2026-11-11T18:00:00Z' }));
+        window.gridCalls = [];
+        const record = (action, id) => window.gridCalls.push(`${action}:${id}`);
+        renderMachines(list, {
+          presence: hosts.slice(0, 6), known: hosts, me: 'phone', current: 'all',
+          facts: () => ({ sessions: '2 sessions', version: '0.1.1' }),
+          onSelect: (id) => record('sessions', id), onLaunch: (id) => record('launch', id),
+          updates: {
+            state: () => ({ installer: true, phase: 'idle', current: '0.1.1', checkedAt: '2026-11-11T18:00:00Z' }),
+            stateOf: () => ({}), press: (id) => record('check', id), checkAll() {},
+          },
+          forget: { stateOf: () => ({}), press: (id) => record('forget', id) },
+        });
+      });
+      const cards = page.locator('#grid-fixture > .machine');
+      await expect(cards).toHaveCount(8);
+      for (let i = 0; i < 8; i++) {
+        const card = cards.nth(i);
+        await expect(card).toBeVisible();
+        await expect(card.locator('.machine-name')).toHaveText(`Machine ${i + 1}`);
+        if (i < 6) {
+          await expect(card.getByRole('region', { name: `Machine ${i + 1}`, exact: true })).toBeVisible();
+          await expect(card.locator('.machine-load-value')).toHaveText(['No figure', 'No figure']);
+          await expect(card.locator('.tile-running')).toHaveText('Running: 2 sessions');
+          await expect(card.locator('.machine-status')).toContainText('0.1.1');
+        } else {
+          await expect(card).toHaveClass(/\boffline\b/);
+          await expect(card.locator('.machine-seen')).toContainText('Last seen');
+          await expect(card.locator('.tile-health-word')).toHaveText('Offline');
+          await expect(card.locator('.machine-launch')).toHaveCount(0);
+        }
+      }
+      const geometry = await cards.evaluateAll((els) => {
+        const rect = (el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right }; };
+        return { cards: els.map(rect), list: rect(els[0].parentElement), page: rect(document.querySelector('[data-route="machines"]')), gap: parseFloat(getComputedStyle(els[0].parentElement).columnGap) };
+      });
+      const xs = [...new Set(geometry.cards.map((r) => Math.round(r.x)))];
+      expect(xs).toHaveLength(columns);
+      expect(Math.abs(geometry.list.width - geometry.page.width)).toBeLessThanOrEqual(1);
+      expect(Math.abs(geometry.cards[columns - 1].right - geometry.list.right)).toBeLessThanOrEqual(1);
+      for (const r of geometry.cards) {
+        expect(Math.abs(r.width - geometry.cards[0].width)).toBeLessThanOrEqual(1);
+        expect(r.height).toBeLessThan(height - 80);
+      }
+      for (let i = 1; i < columns; i++) {
+        expect(geometry.cards[i].x - geometry.cards[i - 1].right).toBeCloseTo(geometry.gap, 0);
+      }
+      await expect(page.locator('#grid-fixture .detail, #grid-fixture [aria-expanded]')).toHaveCount(0);
+      // Tab follows DOM/card order; touch must reach even the last card above the bottom bar.
+      const actions = page.locator('#grid-fixture :is(button, a[href])');
+      await actions.first().focus();
+      for (let i = 0; i < await actions.count(); i++) {
+        // Windows/macOS WebKit skips links with Tab (keyboard.spec's reachLink).
+        if (browserName === 'webkit' && await actions.nth(i).evaluate((el) => el.matches('a[href]') && el !== document.activeElement)) {
+          await actions.nth(i).focus();
+        }
+        await expect(actions.nth(i)).toBeFocused();
+        await page.keyboard.press('Tab');
+      }
+      for (let i = 0; i < 8; i++) {
+        for (const cls of i < 6 ? ['machine-launch', 'machine-view', 'machine-update-check'] : ['machine-forget']) {
+          const action = cards.nth(i).locator(`.${cls}`);
+          await action.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+          const box = await action.boundingBox();
+          expect(box.y).toBeGreaterThanOrEqual(width < 760 ? 0 : 80);
+          expect(box.y + box.height).toBeLessThanOrEqual(height - (width < 760 ? 76 : 20));
+          await action.tap();
+        }
+      }
+      expect(await page.evaluate(() => window.gridCalls)).toEqual([
+        ...Array.from({ length: 6 }, (_, i) => [`launch:grid-${i}`, `sessions:grid-${i}`, `check:grid-${i}`]).flat(),
+        'forget:grid-6', 'forget:grid-7',
+      ]);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    });
+  }
 });
 
 test('picking one machine shows only its sessions, unlabelled, and the choice is remembered, as All is', async ({ page }) => {

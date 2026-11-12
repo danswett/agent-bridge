@@ -1231,9 +1231,6 @@ function announceUpdates(list, updates, hosts) {
   region.textContent = said.join('. ');
 }
 
-const MASTER_DETAIL = '(min-width: 900px)';
-// The machine whose tile shows beside the list from 900 px, where a person picked one.
-const picked = new WeakMap();
 const drawnMachineLoads = new WeakMap();
 
 function machineLoadBar(bar, label) {
@@ -1277,7 +1274,7 @@ function machineTile({ name, raw, bars, onSelect, onLaunch, more }) {
 
 // One row: the icon and the trailing state on line 1 with the name, the facts on line 2, and
 // anything more (updates, Forget, an error) under them in the same text column.
-function machineRow({ id, name, select = null, selected = false, detail = false, facts, state, offline = false, more = [], tile = null }) {
+function machineRow({ id, name, select = null, selected = false, facts, state, offline = false, more = [], tile = null }) {
   const parts = [
     icon('machine'),
     h('span', { class: 'machine-name' }, name),
@@ -1298,7 +1295,7 @@ function machineRow({ id, name, select = null, selected = false, detail = false,
     const ids = errors.map((p) => p.id).join(' ');
     for (const b of within.flatMap((el) => [...el.querySelectorAll('.machine-more button')])) { b.setAttribute('aria-describedby', ids); }
   }
-  return h('li', { class: `machine${offline ? ' offline' : ''}${selected ? ' selected' : ''}${detail ? ' detail' : ''}`, dataset: { deviceId: id, deviceName: name } }, block, tile, errors);
+  return h('li', { class: `machine${offline ? ' offline' : ''}${selected ? ' selected' : ''}`, dataset: { deviceId: id, deviceName: name } }, block, errors, tile);
 }
 
 export function renderMachines(list, { presence, me, current, onSelect, onLaunch = () => {}, status = () => '', facts = null, load = () => null, known = null, forget = null, updates = null, signInDevices = null, diagnose = null, now = Date.now() }) {
@@ -1334,13 +1331,6 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
     summary.textContent = total ? `${total} machine${total === 1 ? '' : 's'} \u00b7 ${hosts.length} online` : '';
     summary.hidden = total === 0;
   }
-  // From 900 px the tile beside the list is the one picked there, else the machine viewed, else the first.
-  const detailId = hosts.some((d) => d.id === picked.get(list)) ? picked.get(list) : (hosts.find((d) => d.id === current) ?? hosts[0])?.id;
-  const pick = (id) => {
-    if (!list.ownerDocument?.defaultView?.matchMedia?.(MASTER_DETAIL).matches) { return onSelect(id); }
-    picked.set(list, id);
-    for (const li of list.children) { li.classList.toggle('detail', li.dataset.deviceId === id); }
-  };
   // Drawn again only when something in it changes. It is asked to redraw on every session
   // update of every machine shown, and a button replaced between a tap's touch and its release
   // takes no click: a tap at startup, with every machine sending its sessions, was lost.
@@ -1371,7 +1361,7 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
   list.replaceChildren(...hosts.map((d) => {
     const selected = d.id === current || (all && hosts.length === 1);
     return machineRow({
-      id: d.id, name: d.name, select: () => pick(d.id), selected, detail: d.id === detailId,
+      id: d.id, name: d.name, select: () => onSelect(d.id), selected,
       facts: lines.get(d.id).el, state: selected ? 'Viewing' : 'Online',
       tile: machineTile({
         name: d.name, raw: facts?.(d.id) ?? null, bars: loads.get(d.id), onSelect: () => onSelect(d.id), onLaunch: () => onLaunch(d.id),
