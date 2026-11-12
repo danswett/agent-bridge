@@ -189,6 +189,27 @@ Worktrees are under `launch.worktrees.root`, by default `~/repos/wt`, the same r
 agent-ha-bridge uses: shared with other sessions and other repositories. This host never
 sweeps it, and never touches a worktree it did not create.
 
+### Agent-created worktree check (#2285, #1447 W2)
+
+For a host-supplied `agent:` principal, the launcher checks only the result of this
+launch's `Worktrees.Create`, immediately after creation and before reservation, credentials
+or process start. Existing trees, resumes and transfers cannot take this path. W1's check
+requires isolation, host provenance, the approved repository/subdirectory, detached HEAD
+and clean state, and refuses Claude project configuration or links. Only Claude's list is
+confirmed; other agents fail closed. A missing or thrown check also refuses.
+
+A refusal removes only the new tree, using an in-memory creation receipt bound to this
+request and the immutable creation commit, using protected, nonrecursive removal.
+A pre-existing or copied result
+cannot authorize deletion. New commits (including checkout-hook commits), changed, linked,
+ignored or otherwise unsafe data are retained with a readable cleanup reason, never
+force-deleted. The refusal writes one agent audit
+record; an unavailable audit is reported explicitly. Repeating the request returns its
+remembered result without another tree or audit, and a removed tree spends no worktree slot.
+The start turn is released on refusal. Hourly caps and pipe activation remain separate work:
+the local pipe still refuses agent launches. Person launches and folder-trust handling are
+unchanged; user-profile agent settings still apply.
+
 ## Reclaiming finished worktrees
 
 agent-ha-bridge's `Remove-BridgeFinishedWorktree`, protection for protection. It runs where
