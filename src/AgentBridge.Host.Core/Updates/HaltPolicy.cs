@@ -19,8 +19,7 @@ public sealed partial class ReleaseDiscovery
         !unsaved && policy?.Policy is not null && policy.At is { } at && at <= time.GetUtcNow()
         && time.GetUtcNow() - at < GithubRevalidateEvery);
 
-    // verify checks GitHub's asset URL, digest and policy schema before anything is kept.
-    // Neither the ordinary list's Body nor a relay's ETag can enter this cache.
+    // Only verified GitHub assets enter this cache; relay metadata never does.
     public async Task<HaltPolicySnapshot> ReadHaltPolicyAsync(
         Func<string, CancellationToken, Task<VerifiedHaltPolicy>> verify, CancellationToken cancellationToken = default)
     {
@@ -44,11 +43,9 @@ public sealed partial class ReleaseDiscovery
                 Write(state);
             }
             if (now < policy.NotBefore || state.NotBefore is { } until && now < until) { return PolicyView(policy); }
-            // Persist the attempt before sending: cancellation, a crash or another process
-            // must not spend another unauthenticated request inside the hour.
+            // Reserve the shared hourly budget before any request.
             policy = policy with { NotBefore = now + PolicyInterval, AttemptedAt = now };
-            // Until the result commits, another process must not retain an old all-clear
-            // if this process crashes or cannot save a newly learned halt.
+            // Clear freshness durably before a request can discover a new halt.
             state = state with { HaltPolicy = policy with { At = null } };
             Write(state);
             if (unsaved)
@@ -61,17 +58,11 @@ public sealed partial class ReleaseDiscovery
             now = time.GetUtcNow();
             try
             {
-                if (answer.Status == HttpStatusCode.NotModified && policy.Policy is not null)
-                {
-                    policy = policy with { At = now };
-                }
+                if (answer.Status == HttpStatusCode.NotModified && policy.Policy is not null) { policy = policy with { At = now }; }
                 else if (answer.Status == HttpStatusCode.OK && answer.Body is { } body)
                 {
                     var verified = await verify(body, cancellationToken);
-                    if (policy.Policy is null || verified.Release >= policy.Policy.Release)
-                    {
-                        policy = policy with { Policy = verified, At = now, ETag = answer.ETag };
-                    }
+                    if (policy.Policy is null || verified.Release >= policy.Policy.Release) { policy = policy with { Policy = verified, At = now, ETag = answer.ETag }; }
                     else { log?.Invoke("update policy: older GitHub policy ignored; known halts retained"); }
                 }
                 else
@@ -79,7 +70,7 @@ public sealed partial class ReleaseDiscovery
                     if (answer.Status is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
                     {
                         state = BackedOff(state, answer, now, HaltPolicyList);
-                        if (answer.Wait is { } wait && now + wait > policy.NotBefore) { policy = policy with { NotBefore = now + wait }; }
+                        if (answer.Wait is { } wait && now + Clamp(wait) > policy.NotBefore) { policy = policy with { NotBefore = now + Clamp(wait) }; }
                     }
                     log?.Invoke("update policy: GitHub policy unavailable; stored policy was not renewed");
                 }

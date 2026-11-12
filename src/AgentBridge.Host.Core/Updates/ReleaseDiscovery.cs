@@ -617,6 +617,15 @@ public sealed partial class ReleaseDiscovery : IDisposable
             if (!File.Exists(StatePath)) { return memory; }
             var disk = JsonSerializer.Deserialize(File.ReadAllText(StatePath), ReleaseDiscoveryJson.Default.State) ?? new State();
             if (unsaved && disk.Saved == underneath) { return memory; }
+            // Shared writes must carry forward verified policy knowledge and its request budget.
+            var known = memory.HaltPolicy;
+            if (known?.Policy is { } before && (disk.HaltPolicy?.Policy is not { } after || after.Release < before.Release
+                || after.Release == before.Release && after.Body != before.Body && disk.HaltPolicy?.At is null))
+            {
+                var budget = disk.HaltPolicy is { } shared && shared.NotBefore > known.NotBefore ? shared : known;
+                disk = disk with { HaltPolicy = known with { At = null, NotBefore = budget.NotBefore, AttemptedAt = budget.AttemptedAt } };
+                log?.Invoke("update policy: verified policy retained across shared-state replacement");
+            }
             (unsaved, underneath) = (false, disk.Saved);
             return memory = disk;
         }
