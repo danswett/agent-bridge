@@ -2073,12 +2073,18 @@ machine, online ones first, then the account's offline machines (#213):
          (the host's working-set sum, labelled "memory in use", not unique RAM). Fewer than three: show
          those; none: "No session to pause." and no Relieve (rule 7).
        - A change of the Health word is announced once, politely; refreshed figures are not announced.
+       - **PWA card structure (#2188):** the existing load feed reports freshness, not a health band,
+         so Health says "Not measured yet". CPU and Memory use fixed label/bar/value columns and
+         whole percentages; memory also shows free GB. Each bar has its freshness mark and word.
+         Age is "Updated 12 s ago" or "Last measured 4 min ago", from the record, never a new timer.
     4. **Can run.** Collapsed line "2 agents · 6 models". Open: each agent with its models, efforts and
        contexts exactly as the host lists them. Not reported: the section is hidden.
     5. **Running.** Collapsed line with counts by state, "3 working · 5 idle · 1 needs you", zero
        counts left out. Open: one session row per session (the §5.1 row: title, state; line 2 "model ·
        effort · context"), the first five, then "Show all N" in place. Not reported: the count from
        line 2 only. "Needs you" rows open the session as in the lane (§6.1).
+       The bounded PWA #2188 disclosure opens **Show sessions** through the existing machine
+       callback; the inline session list is a follow-up. Can run stays absent when unreported.
     6. **Launch here.** In Actions when the machine is Online and not View only. Opens the New
        session flow with this machine chosen. Offline, View only and "Discovery held" hide it, and a
        line says why in text, not only a tooltip.

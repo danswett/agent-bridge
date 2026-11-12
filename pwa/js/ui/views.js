@@ -1222,38 +1222,54 @@ function announceUpdates(list, updates, hosts) {
 
 const drawnMachineLoads = new WeakMap();
 
-function machineLoadBar(bar, label) {
+function measurementAge(bars) {
+  if (bars?.ageMs == null || bars.state === 'offline') { return ''; }
+  const seconds = Math.floor(bars.ageMs / 1000);
+  const age = seconds < 60 ? `${seconds} s` : seconds < 3600 ? `${Math.floor(seconds / 60)} min` : `${Math.floor(seconds / 3600)} h`;
+  return `${['fresh', 'partial'].includes(bars.state) ? 'Updated' : 'Last measured'} ${age} ago`;
+}
+
+function machineLoadBar(bar, label, bars) {
   const missing = bar?.percent == null;
+  const text = missing ? 'No figure' : `${Math.round(bar.percent)}%`;
   const fill = missing ? null : h('span', { class: 'machine-load-fill' });
   if (fill) { fill.style.width = `${bar.percent}%`; }
   return h('div', { class: `machine-load${missing ? ' missing' : ''}` },
-    h('span', null, label),
+    h('span', { class: 'machine-load-label' }, label),
     h('div', {
       class: 'machine-load-track', role: missing ? null : 'meter', 'aria-hidden': missing ? 'true' : null,
       'aria-label': missing ? null : label, 'aria-valuemin': missing ? null : 0,
-      'aria-valuemax': missing ? null : 100, 'aria-valuenow': bar?.percent, 'aria-valuetext': missing ? null : bar.text,
+      'aria-valuemax': missing ? null : 100, 'aria-valuenow': bar?.percent, 'aria-valuetext': missing ? null : text,
     }, fill),
-    h('span', { class: 'machine-load-value' }, missing ? 'No figure' : bar.text));
+    h('span', { class: 'machine-load-value' }, text),
+    h('span', { class: 'machine-load-note' },
+      h('span', { class: 'machine-load-state' }, h('span', { 'aria-hidden': 'true' }, bars?.icon ?? '\u25cb'), ` ${bars?.word ?? 'Unavailable'}`),
+      bar?.free ? h('span', null, bar.free) : null));
 }
 
 function machineHealth(bars) {
   return h('p', { class: 'tile-health' },
     h('span', { class: 'tile-label' }, 'Health: '),
-    h('span', { class: 'tile-health-icon', 'aria-hidden': 'true' }, bars?.icon ?? '\u25cb'),
-    h('span', { class: 'tile-health-word' }, bars?.word ?? 'Not measured'));
+    h('span', { class: 'tile-health-icon', 'aria-hidden': 'true' }, bars?.state === 'offline' ? '\u2298' : '\u25cb'),
+    h('span', { class: 'tile-health-word' }, bars?.state === 'offline' ? 'Offline' : 'Not measured yet'));
 }
 
 // A machine's tile (#1147 S1), its sections in one order: Health, Can run, Running, Actions. Only
-// what a host reports is shown; no load record means Not measured, not a diagnosis.
-// Running is the session count. Updates, sign-in and Diagnose follow in `more`.
-function machineTile({ name, raw, bars, onSelect, onLaunch, more }) {
+// what a host reports is shown; freshness is not a health diagnosis.
+function machineTile({ name, raw, bars, onSelect, onLaunch, more, expanded = false }) {
   const why = raw?.held ? `Discovery is held: ${raw.held}` : raw?.readOnly ? `This machine is view only: ${raw.readOnly}` : null;
   const running = !raw?.sessions ? 'Not reported yet' : raw.sessions.startsWith('0 ') ? 'No sessions running' : raw.sessions;
-  const line = (cls, label, text) => h('p', { class: cls }, h('span', { class: 'tile-label' }, `${label}: `), text);
+  const contents = h('div', { hidden: !expanded },
+    h('button', { type: 'button', class: 'button secondary small machine-running-view', onclick: onSelect }, 'Show sessions'));
+  const toggle = h('button', { type: 'button', class: 'tile-running-toggle', 'aria-expanded': String(expanded), onclick: () => {
+    contents.hidden = !contents.hidden;
+    toggle.setAttribute('aria-expanded', String(!contents.hidden));
+  } }, h('span', { class: 'tile-label' }, 'Running, '), h('span', null, running), icon('chevron'));
   return h('section', { class: 'machine-tile', 'aria-label': name },
     machineHealth(bars),
-    machineLoadBar(bars?.cpu, 'CPU (whole machine)'), machineLoadBar(bars?.memory, 'Memory used'),
-    line('tile-running', 'Running', running),
+    h('p', { class: 'tile-measured' }, measurementAge(bars)),
+    machineLoadBar(bars?.cpu, 'CPU', bars), machineLoadBar(bars?.memory, 'Memory', bars),
+    h('div', { class: 'tile-running' }, toggle, contents),
     h('div', { class: 'tile-actions' },
       why ? h('p', { class: 'tile-actions-note' }, why)
         : h('button', { type: 'button', class: 'button secondary small machine-launch', 'aria-label': `Launch here on ${name}`, onclick: onLaunch }, 'Launch here'),
@@ -1267,7 +1283,7 @@ function machineRow({ id, name, select = null, selected = false, facts, state, o
   const parts = [
     icon('machine'),
     h('span', { class: 'machine-name' }, name),
-    h('span', { class: 'machine-state' }, state),
+    h('span', { class: 'machine-state' }, state === 'Online' ? [h('span', { 'aria-hidden': 'true' }, '\u25cf'), ' '] : null, state),
     h('span', { class: 'machine-sub' }, facts),
   ];
   const head = select
@@ -1296,7 +1312,11 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
   // The accessor may retain a record after its machine leaves; presence, not the record, is online truth.
   const loads = new Map([...hosts, ...offline].map((d) => {
     const online = hosts.some((host) => host.id === d.id), record = load(d.id);
-    return [d.id, online && record == null ? null : loadBars(record, { online })];
+    const bars = online && record == null ? null : loadBars(record, { online });
+    if (bars?.memory.percent != null) {
+      bars.memory.free = `${(record.memory.availableBytes / 1e9).toLocaleString(undefined, { maximumFractionDigits: 1 })} GB free`;
+    }
+    return [d.id, bars];
   }));
   const rows = new Map(hosts.map((d) => [d.id, updateRow(updates, d.id, d.name, now)]));
   // A machine that left for an Update now reads "Restarting to update…" for a while (#1159, until
@@ -1328,16 +1348,17 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
   const key = JSON.stringify([current, hosts.map((d) => [d.id, d.name, lines.get(d.id).key, rows.get(d.id).key, signInRows.get(d.id).key, diagnoses.get(d.id).key]),
     // lastSeen itself, not only how it reads: Forget sends it, to tell a machine that came back.
     offline.map((k) => [k.id, k.name, k.lastSeen, k.start ?? null, ago(k.lastSeen, now), forget?.stateOf(k.id) ?? null]), !!forget, [...restarting]]);
-  const loadKey = JSON.stringify([...loads].map(([id, bars]) => [id, bars?.state, bars?.cpu, bars?.memory]));
+  const loadKey = JSON.stringify([...loads].map(([id, bars]) => [id, bars?.state, bars?.cpu, bars?.memory, measurementAge(bars)]));
   if (drawnAs.get(list) === key) {
     if (drawnMachineLoads.get(list) !== loadKey) {
       // Load-only changes must not remove a button between pointer down and release.
       for (const row of list.children) {
         const bars = loads.get(row.dataset.deviceId);
-        row.querySelector('.tile-health')?.replaceWith(machineHealth(bars));
+        const age = row.querySelector('.tile-measured');
+        if (age) { age.textContent = measurementAge(bars); }
         const tracks = row.querySelectorAll('.machine-load');
-        tracks[0]?.replaceWith(machineLoadBar(bars?.cpu, 'CPU (whole machine)'));
-        tracks[1]?.replaceWith(machineLoadBar(bars?.memory, 'Memory used'));
+        tracks[0]?.replaceWith(machineLoadBar(bars?.cpu, 'CPU', bars));
+        tracks[1]?.replaceWith(machineLoadBar(bars?.memory, 'Memory', bars));
       }
       drawnMachineLoads.set(list, loadKey);
     }
@@ -1348,15 +1369,16 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
   // Every change redraws the list, so the button that had focus is replaced: Forget's first
   // press redraws it armed, and a keyboard's second press must land on the new one.
   const active = list.ownerDocument?.activeElement;
-  const had = active && list.contains(active) ? { id: active.closest('li')?.dataset.deviceId, cls: ['machine-forget', 'machine-button', 'machine-update-check', 'machine-update-install', 'machine-update-now', 'machine-check-all', 'machine-diagnose', 'machine-diagnose-close', 'machine-diagnose-review', 'machine-diagnose-copy', 'machine-diagnostics', 'machine-launch', 'machine-view', 'machine'].find((c) => active.classList.contains(c)) } : null;
+  const had = active && list.contains(active) ? { id: active.closest('li')?.dataset.deviceId, cls: ['machine-forget', 'machine-button', 'machine-update-check', 'machine-update-install', 'machine-update-now', 'machine-check-all', 'machine-diagnose', 'machine-diagnose-close', 'machine-diagnose-review', 'machine-diagnose-copy', 'machine-diagnostics', 'machine-launch', 'machine-view', 'tile-running-toggle', 'machine-running-view', 'machine'].find((c) => active.classList.contains(c)) } : null;
+  const expanded = new Set([...list.querySelectorAll('.tile-running-toggle[aria-expanded="true"]')].map((el) => el.closest('li').dataset.deviceId));
   list.replaceChildren(...hosts.map((d) => {
     const selected = d.id === current || (all && hosts.length === 1);
     return machineRow({
       id: d.id, name: d.name, select: () => onSelect(d.id), selected,
-      facts: lines.get(d.id).el, state: selected ? 'Viewing' : 'Online',
+      facts: lines.get(d.id).el, state: 'Online',
       tile: machineTile({
         name: d.name, raw: facts?.(d.id) ?? null, bars: loads.get(d.id), onSelect: () => onSelect(d.id), onLaunch: () => onLaunch(d.id),
-        more: [rows.get(d.id).el, signInRows.get(d.id).el, diagnoses.get(d.id).el],
+        more: [rows.get(d.id).el, signInRows.get(d.id).el, diagnoses.get(d.id).el], expanded: expanded.has(d.id),
       }),
     });
   }), ...leftNow.map((id) => machineRow({
