@@ -45,6 +45,7 @@ public class CopilotFormScreenTests
         var title = Titles[field];
         var bar = Wrap(marked ? $"[{title}]" : title, columns - 8).ToList();
         var middle = bar.Count / 2;
+        if (bar.Count == 1 && !marked) { bar[middle] = " " + bar[middle] + " "; }
         bar[middle] = (field > 0 ? "\u2190 " : "") + bar[middle] + (field < 2 ? " \u2192" : "");
         var rule = new string('\u2500', columns - 2);
         var inputRule = " " + new string('\u2500', columns - 4);
