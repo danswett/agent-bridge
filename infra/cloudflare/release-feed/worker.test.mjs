@@ -181,13 +181,21 @@ for (const [label, failure] of [
   });
 }
 
-test('client Authorization is never forwarded to GitHub', async (t) => {
+test('client Authorization is not forwarded and secrets and upstream validators stay out of responses', async (t) => {
   reset(t);
-  upstream = [ok('[]'), ok('[]')];
-  await get(P, { authorization: 'Bearer untrusted-client-token' });
+  upstream = [
+    { ...ok('[]'), headers: { etag: '"github-one"' } },
+    { ...ok('[]'), headers: { etag: '"github-two"' } },
+  ];
+  const anonymous = await get(P, { authorization: 'Bearer untrusted-client-token' });
   assert.equal(calls[0].headers.get('authorization'), null);
-  await get(`${P}?page=2`, { authorization: 'Bearer untrusted-client-token' }, { GITHUB_TOKEN: 'worker-only-token' });
+  const authenticated = await get(`${P}?page=2`, { authorization: 'Bearer untrusted-client-token' }, { GITHUB_TOKEN: 'worker-only-token' });
   assert.equal(calls[1].headers.get('authorization'), 'Bearer worker-only-token');
+  for (const response of [anonymous, authenticated]) {
+    assert.equal(response.headers.get('authorization'), null);
+    assert.equal(response.headers.get('x-upstream-etag'), null);
+    assert.doesNotMatch([...response.headers.values()].join('\n'), /untrusted-client-token|worker-only-token|github-(one|two)/);
+  }
 });
 
 for (const [label, env, seconds] of [
