@@ -2,7 +2,7 @@ namespace AgentBridge.Host;
 
 // The verdict of a rate check. A refusal is always 'rate-limited' with the whole seconds until
 // the oldest hit leaves its window, so an agent is told when to try again and never just "no".
-public readonly record struct AgentLimitVerdict(bool Allowed, string? Reason, int RetryAfterSeconds)
+public readonly record struct AgentLimitVerdict(bool Allowed, string? Reason, int RetryAfterSeconds, bool Duplicate = false)
 {
     public const string RateLimited = "rate-limited";
 
@@ -75,6 +75,9 @@ public sealed class AgentLimits
             return AgentLimitVerdict.Admit;
         }
     }
+
+    public AgentLimitVerdict CheckLaunch(string origin, string request, string requestSha256, AgentLaunchLimits limits) =>
+        CheckLaunch(origin);
 
     public AgentLimitVerdict CheckRead(string origin)
     {
