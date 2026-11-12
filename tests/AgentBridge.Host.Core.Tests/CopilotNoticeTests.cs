@@ -9,6 +9,58 @@ using Xunit;
 
 public class CopilotNoticeTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void An_unreadable_or_dropped_owner_record_cannot_reuse_a_completed_notices_reply_target(bool skim, bool dropped)
+    {
+        var state = new SessionState();
+        var parser = new CopilotParser(state, TimeProvider.System);
+        void Read(string line)
+        {
+            if (skim) { parser.Skim(Encoding.UTF8.GetBytes(line)); }
+            else { parser.Parse(Encoding.UTF8.GetBytes(line)); }
+        }
+        foreach (var line in new[] { Copilot.User("Owner question.", 1), Copilot.TurnStart(2),
+            Copilot.Assistant("Owner answer.", 3), Copilot.TurnEnd(4), Notice(5), Copilot.TurnStart(6),
+            Copilot.Assistant("Completed notice reply.", 7), Copilot.TurnEnd(8) }) { Read(line); }
+        var completed = state.Notice!.Id;
+        if (dropped) { ((ILineSink)parser).Dropped(Encoding.UTF8.GetBytes("{\"type\":\"user.message\",\"data\":")); }
+        else { Read("{\"type\":\"user.message\",\"data\":"); }
+        Read(Copilot.TurnStart(10));
+        Read(Copilot.Assistant("Reply after the unreadable owner record.", 11));
+
+        Assert.Equal("Owner answer.", state.OwnResponse);
+        Assert.NotEqual(completed, state.Notice!.Id);
+        Assert.Equal(TurnKind.Unknown, state.Notice.Kind);
+        Assert.Equal("Reply after the unreadable owner record.", state.Notice.Parts.Single().Text);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_turn_error_after_skipped_bytes_stays_a_host_composed_error_not_an_unknown_notice(bool skim)
+    {
+        var state = new SessionState();
+        var parser = new CopilotParser(state, TimeProvider.System);
+        parser.Skim(Encoding.UTF8.GetBytes(Copilot.User("Owner question.", 1)));
+        parser.Skim(Encoding.UTF8.GetBytes(Copilot.TurnStart(2)));
+        ((ILineSink)parser).Skipped();
+        foreach (var line in new[]
+        {
+            Copilot.Event("session.error", new { errorType = "session", statusCode = 429, message = "Synthetic private error." }, 3),
+            Copilot.Assistant("\u26A0\uFE0F Turn error: Synthetic private error.", 4),
+        })
+        {
+            if (skim) { parser.Skim(Encoding.UTF8.GetBytes(line)); }
+            else { parser.Parse(Encoding.UTF8.GetBytes(line)); }
+        }
+        Assert.Equal("\u26A0\uFE0F Turn error: Copilot hit a rate limit (429).", state.OwnResponse);
+        Assert.Null(state.Notice);
+    }
+
     [Fact]
     public void Skipped_bytes_never_promote_a_reply_with_unknown_ownership_to_the_owner()
     {
