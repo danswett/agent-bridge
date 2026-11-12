@@ -52,7 +52,7 @@ public sealed class PackageHandoffTests : IDisposable
         // it may until the installer opens it.
         File.WriteAllText(shared, "release from feed A");
         IReadOnlyList<string>? handed = null;
-        using var held = handoff.Launch(copy, 4242, Path.Combine(root, "install"), Packages, ["--background", "--profile", "work"], args => handed = args);
+        using var held = handoff.Launch(copy, Path.Combine(root, "install"), Packages, ["--background", "--profile", "work"], args => handed = args);
 
         Assert.NotNull(handed);
         var package = After(handed, "--package");
@@ -71,7 +71,7 @@ public sealed class PackageHandoffTests : IDisposable
         File.WriteAllText(copy.Package, "tampered");
         var started = false;
 
-        Assert.Throws<PackageMismatchException>(() => handoff.Launch(copy, 4242, Path.Combine(root, "install"), Packages, [], _ => started = true));
+        Assert.Throws<PackageMismatchException>(() => handoff.Launch(copy, Path.Combine(root, "install"), Packages, [], _ => started = true));
 
         Assert.False(started);
     }
@@ -82,7 +82,7 @@ public sealed class PackageHandoffTests : IDisposable
     {
         var handoff = new PackageHandoff(Mark, ProfileCopies);
         var copy = handoff.Prepare(Downloaded(), "0.2.0", Source);
-        using (var held = handoff.Launch(copy, 4242, Path.Combine(root, "install"), Packages, [], _ => { }))
+        using (var held = handoff.Launch(copy, Path.Combine(root, "install"), Packages, [], _ => { }))
         {
             // Windows keeps the file as held (the app runs only there); elsewhere sharing is advisory.
             if (OperatingSystem.IsWindows())
@@ -92,7 +92,7 @@ public sealed class PackageHandoffTests : IDisposable
             }
         }
         // A starter that fails lets it go, so the next attempt can make another.
-        Assert.Throws<InvalidOperationException>(() => handoff.Launch(copy, 4242, Path.Combine(root, "install"), Packages, [], _ => throw new InvalidOperationException("Update.exe did not start")));
+        Assert.Throws<InvalidOperationException>(() => handoff.Launch(copy, Path.Combine(root, "install"), Packages, [], _ => throw new InvalidOperationException("Update.exe did not start")));
         File.WriteAllText(copy.Package, "replaced once let go");
     }
 
@@ -122,7 +122,7 @@ public sealed class PackageHandoffTests : IDisposable
         var install = Path.Combine(root, "install");
         IReadOnlyList<string>? handed = null;
 
-        using var held = handoff.Launch(copy, 4242, install, Packages, ["--background", "--profile", "work"], args => handed = args);
+        using var held = handoff.Launch(copy, install, Packages, ["--background", "--profile", "work"], args => handed = args);
 
         Assert.Equal(["--silent", "apply", "--package", copy.Package, "--wait", "--rootDir", install, "--packageDir", Packages, "--", "--background", "--profile", "work"], handed);
         Assert.NotEqual(Path.GetFullPath(Packages), Path.GetFullPath(Path.GetDirectoryName(copy.Package)!));
@@ -136,7 +136,7 @@ public sealed class PackageHandoffTests : IDisposable
         var copy = handoff.Prepare(Downloaded(), "0.2.0", Source);
         IReadOnlyList<string>? handed = null;
 
-        using var held = handoff.Launch(copy, 4242, Path.Combine(root, "install"), Packages, ["--background"], args => handed = args);
+        using var held = handoff.Launch(copy, Path.Combine(root, "install"), Packages, ["--background"], args => handed = args);
 
         Assert.NotNull(handed);
         Assert.Equal("--silent", handed[0]);
@@ -153,12 +153,11 @@ public sealed class PackageHandoffTests : IDisposable
         string[] restartArgs = restart ? ["--background", "--profile", "two words"] : [];
         IReadOnlyList<string>? handed = null;
 
-        using var held = handoff.Launch(copy, 4242, Path.Combine(root, "install"), Packages, restartArgs, args => handed = args);
+        using var held = handoff.Launch(copy, Path.Combine(root, "install"), Packages, restartArgs, args => handed = args);
 
         Assert.NotNull(handed);
         Assert.Contains("--wait", handed);
         Assert.DoesNotContain("--waitPid", handed);
-        Assert.DoesNotContain("4242", handed);
         Assert.Equal(restartArgs, handed.SkipWhile(a => a != "--").Skip(1));
     }
 

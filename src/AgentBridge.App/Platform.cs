@@ -206,13 +206,14 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         handedOver?.Dispose();
         handedOver = null;
         var copy = handoff.Prepare(file, version, source!);
-        handedOver = handoff.Launch(copy, (uint)Environment.ProcessId, root, packages, ["--background", "--profile", profile],
+        // DefaultProcessImpl uses Process.Start directly, so this app is Update.exe's parent.
+        handedOver = handoff.Launch(copy, root, packages, ["--background", "--profile", profile],
             args => locator.Process.StartProcess(updateExe, args, Path.GetDirectoryName(updateExe)!, false));
         // Update.exe has started: the next start may say the install didn't take (#1167). Best
         // effort; it must not keep this process from exiting.
         try { handedOverTo?.Invoke(); }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { log?.Invoke($"update: the hand-over could not be recorded: {e.Message}"); }
-        // As ApplyUpdatesAndRestart ends: Update.exe waits for this process to exit (--waitPid).
+        // As ApplyUpdatesAndRestart ends: Update.exe waits for this process to exit (--wait).
         locator.Process.Exit(0);
     }
 }
