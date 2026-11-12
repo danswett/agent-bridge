@@ -470,6 +470,44 @@ test.describe('one truthful update line', () => {
     await expect(block.getByRole('button')).toHaveCount(1);
   });
 
+  test('a successful Check now moves keyboard focus to Update now', async ({ page }) => {
+    await page.clock.install({ time: now });
+    await show(page, { busy: { working: 0, waiting: 0 } });
+    const block = update(page), check = block.locator('.machine-update-check');
+    await expect(block.locator('.machine-update-line')).toHaveText('Up to date · 0.1.4415');
+    await page.clock.pauseAt(new Date(now.getTime() + 60_000));
+    await check.focus();
+    await page.keyboard.press('Enter');
+    await page.clock.runFor(50);
+    await expect(check).toHaveText('Checking…');
+    await expect(check).toBeFocused();
+    await page.evaluate(() => window.agentBridgeDemo.setUpdate({
+      ...window.agentBridgeDemo.host.update, available: '0.1.4462',
+    }));
+    await page.clock.runFor(400);
+    await expect(block.locator('.machine-update-line')).toHaveText('Update available · 0.1.4462 (running 0.1.4415)');
+    await expect(check).toHaveCount(0);
+    await expect(block.locator('.machine-update-now')).toBeFocused();
+    expect(await page.evaluate(() => window.agentBridgeDemo.updateLog.map(({ op }) => op))).toEqual(['update.check']);
+    await page.evaluate(() => window.agentBridgeDemo.setUpdate({
+      ...window.agentBridgeDemo.host.update, available: null,
+    }));
+    await page.clock.runFor(50);
+    await expect(check).toBeFocused();
+    await page.evaluate(() => window.agentBridgeDemo.setUpdate({
+      ...window.agentBridgeDemo.host.update, installer: false,
+    }));
+    await page.clock.runFor(50);
+    await expect(block.getByRole('button')).toHaveCount(0);
+    const machine = page.locator('#machine-list > [data-device-id="demo"]');
+    await expect(machine).toBeFocused();
+    await page.evaluate(() => window.agentBridgeDemo.setUpdate({
+      ...window.agentBridgeDemo.host.update, checkedAt: '2026-11-10T17:00:00Z',
+    }));
+    await page.clock.runFor(50);
+    await expect(machine).toBeFocused();
+  });
+
   test('an available update has only primary Update now without changing health', async ({ page }) => {
     await show(page, { available: '0.1.4462', last: null, busy: { working: 0, waiting: 0 } });
     const block = update(page);

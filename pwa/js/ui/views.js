@@ -1350,7 +1350,7 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
   // Every change redraws the list, so the button that had focus is replaced: Forget's first
   // press redraws it armed, and a keyboard's second press must land on the new one.
   const active = list.ownerDocument?.activeElement;
-  const had = active && list.contains(active) ? { id: active.closest('li')?.dataset.deviceId, cls: ['machine-forget', 'machine-button', 'machine-update-check', 'machine-update-install', 'machine-update-now', 'machine-check-all', 'machine-diagnose', 'machine-diagnose-close', 'machine-diagnose-review', 'machine-diagnose-copy', 'machine-diagnostics', 'machine-launch', 'machine-view'].find((c) => active.classList.contains(c)) } : null;
+  const had = active && list.contains(active) ? { id: active.closest('li')?.dataset.deviceId, cls: ['machine-forget', 'machine-button', 'machine-update-check', 'machine-update-install', 'machine-update-now', 'machine-check-all', 'machine-diagnose', 'machine-diagnose-close', 'machine-diagnose-review', 'machine-diagnose-copy', 'machine-diagnostics', 'machine-launch', 'machine-view', 'machine'].find((c) => active.classList.contains(c)) } : null;
   list.replaceChildren(...hosts.map((d) => {
     const selected = d.id === current || (all && hosts.length === 1);
     return machineRow({
@@ -1393,7 +1393,10 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
       onclick: () => updates.checkAll(updating.map((d) => d.id)),
     }, updating.length > 1 ? 'Check all machines for updates' : 'Check for updates'))] : []));
   if (had?.id && had.cls) {
-    const again = [...list.children].find((li) => li.dataset.deviceId === had.id)?.querySelector(`.${had.cls}`);
+    const row = [...list.children].find((li) => li.dataset.deviceId === had.id);
+    const again = (had.cls === 'machine' ? row : row?.querySelector(`.${had.cls}`)) ?? row?.querySelector('.machine-update-now')
+      ?? row?.querySelector('.machine-update-check') ?? row;
+    if (again === row && row) { row.tabIndex = -1; }
     again?.focus();
   }
   return hosts.length;
