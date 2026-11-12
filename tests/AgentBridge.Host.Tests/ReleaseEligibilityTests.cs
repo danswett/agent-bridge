@@ -134,6 +134,7 @@ public sealed class ReleaseEligibilityTests : IDisposable
         var handler = new Handler(uri => uri.Host == "api.github.com" ? Metadata("2349", body) : body);
         await Policy(handler).ReadAsync(default);
         if (legacy) { ForgetObservation(); }
+        var oldState = File.ReadAllText(Path.Combine(folder, ReleaseDiscovery.FileName));
         using var writer = new ReleaseDiscovery(folder, handler, time, random: () => 0);
         await writer.ReleasesAsync(ReleaseDiscovery.GitHubList, default);
         time.Advance(TimeSpan.FromHours(1));
@@ -146,7 +147,10 @@ public sealed class ReleaseEligibilityTests : IDisposable
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => refresh.ReadHaltPolicyAsync((_, _) =>
         { cancel.Cancel(); return Task.FromCanceled<VerifiedHaltPolicy>(cancel.Token); }, cancel.Token));
         await writer.ReleasesAsync(ReleaseDiscovery.GitHubList, default);
-        Assert.Equal(new HaltCheck(true), await new ReleaseEligibility(Policy(handler)).IsHalted("0.1.2349"));
+        var eligibility = new ReleaseEligibility(Policy(handler));
+        Assert.Equal(new HaltCheck(true), await eligibility.IsHalted("0.1.2349"));
+        if (legacy) { File.WriteAllText(Path.Combine(folder, ReleaseDiscovery.FileName), oldState); }
+        Assert.Equal(new HaltCheck(true), await eligibility.IsHalted("0.1.2349"));
     }
 
     void ForgetObservation()

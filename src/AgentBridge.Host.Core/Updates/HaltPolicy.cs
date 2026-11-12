@@ -15,11 +15,9 @@ public sealed partial class ReleaseDiscovery
         DateTimeOffset? AttemptedAt = null, long Attempt = 0, long Verified = 0);
 
     public HaltPolicySnapshot HaltPolicy => PolicyView(memory.HaltPolicy);
-
     HaltPolicySnapshot PolicyView(HaltPolicyCache? policy) => new(policy?.Policy, policy?.At,
         !unsaved && policy?.Policy is not null && policy.At is { } at && at <= time.GetUtcNow()
         && time.GetUtcNow() - at < GithubRevalidateEvery);
-
     // Only verified GitHub assets enter this cache; relay metadata never does.
     public async Task<HaltPolicySnapshot> ReadHaltPolicyAsync(
         Func<string, CancellationToken, Task<VerifiedHaltPolicy>> verify, CancellationToken cancellationToken = default)
@@ -44,9 +42,8 @@ public sealed partial class ReleaseDiscovery
                 Write(state);
             }
             if (now < policy.NotBefore || state.NotBefore is { } until && now < until) { return PolicyView(policy); }
-            // Reserve the shared hourly budget before any request.
+            // Reserve budget and revoke freshness durably before any request.
             policy = policy with { NotBefore = now + PolicyInterval, AttemptedAt = now, Attempt = NextAttempt(policy) };
-            // Clear freshness durably before a request can discover a new halt.
             state = state with { HaltPolicy = policy with { At = null } };
             Write(state);
             if (unsaved)
@@ -59,8 +56,7 @@ public sealed partial class ReleaseDiscovery
             now = time.GetUtcNow();
             try
             {
-                if (answer.Status == HttpStatusCode.NotModified && policy.Policy is not null && policy.ETag is not null)
-                { policy = policy with { At = now, Verified = policy.Attempt }; }
+                if (answer.Status == HttpStatusCode.NotModified && policy.Policy is not null && policy.ETag is not null) { policy = policy with { At = now, Verified = policy.Attempt }; }
                 else if (answer.Status == HttpStatusCode.OK && answer.Body is { } body)
                 {
                     var verified = await verify(body, cancellationToken);
@@ -91,7 +87,6 @@ public sealed partial class ReleaseDiscovery
 
     static long NextAttempt(HaltPolicyCache policy) =>
         policy.Attempt >= policy.Verified && policy.Attempt is >= 0 and < long.MaxValue ? policy.Attempt + 1 : throw new IOException("update policy: cache generation unavailable");
-
     // Verification generations, not Saved or clock stamps, order same-release changes.
     static HaltPolicyCache? MergePolicy(HaltPolicyCache? known, HaltPolicyCache? disk)
     {
@@ -99,7 +94,8 @@ public sealed partial class ReleaseDiscovery
         if (disk is null) { return known with { At = null }; }
         var (before, after) = (known.Policy, disk.Policy);
         var chosen = before is not null && (after is null || (before.Release, known.Verified).CompareTo((after.Release, disk.Verified)) > 0) ? known with { At = null } : disk;
-        if (before is not null && after is not null && before.Release == after.Release && known.Verified == disk.Verified && before.Body != after.Body)
+        if (before is not null && after is not null && before.Release == after.Release && known.Verified == disk.Verified
+            && (before.Body != after.Body || !(before.Halted ?? []).SequenceEqual(after.Halted ?? [], StringComparer.Ordinal)))
         { chosen = chosen with { Policy = before with { Halted = [.. (before.Halted ?? []).Union(after.Halted ?? [], StringComparer.Ordinal)] }, At = null, ETag = null }; }
         var budget = known.Attempt > disk.Attempt || known.Attempt == disk.Attempt && known.NotBefore > disk.NotBefore ? known : disk;
         return chosen with { Attempt = budget.Attempt, NotBefore = budget.NotBefore, AttemptedAt = budget.AttemptedAt };
