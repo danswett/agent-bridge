@@ -125,6 +125,11 @@ export function readUpdateState(raw) {
   };
 }
 
+// Old hosts put a machine-local clock in this reason. Recognise the hold, never parse its time.
+const checkHoldReason = (s) => !s?.last?.code && ['failed', 'refused'].includes(s?.last?.outcome)
+  && (s.last.reason === 'checking again soon' || s.last.reason?.startsWith("the release feed's rate limit refused the check"));
+export const checkHeld = (s) => checkHoldReason(s) && !(Date.parse(s.checkedAt) > Date.parse(s.last.at));
+
 // The card's quiet age; historical source and quota are not an allowance to check now (#2187).
 export function updateDetails(s, now = Date.now()) {
   const age = (value) => {
@@ -133,6 +138,11 @@ export function updateDetails(s, now = Date.now()) {
   };
   const words = (minutes) => minutes < 1 ? 'under a minute' : minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h`;
   const checked = age(s?.checkedAt);
+  if (checkHeld(s)) {
+    const when = checked === null ? 'Not checked yet' : checked < 1 ? 'Checked just now'
+      : `Checked ${checked} minute${checked === 1 ? '' : 's'} ago`;
+    return [`${when} \u00b7 checking again soon`];
+  }
   return checked === null ? [] : [`Checked ${words(checked)} ago`];
 }
 
@@ -277,6 +287,7 @@ export function updateLine(s, now = Date.now()) {
 export function lastLine(s, now = Date.now(), { updateNow = false } = {}) {
   const l = s?.last;
   if (!l) { return null; }
+  if (!updateNow && checkHoldReason(s)) { return checkHeld(s) ? 'Checking again soon.' : null; }
   if (updateNow || l.code) {
     switch (l.outcome) {
       case 'updated': return `Updated to ${l.to ?? 'the new release'}.`;

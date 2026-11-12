@@ -426,7 +426,7 @@ public sealed class AutoUpdater
         }
         // Install between turns: the gap settling, or the backstop's time.
         var now = time.GetUtcNow();
-        if (FailedRetryAt(now) is { } retryAt) { return $"update failed, retrying at {retryAt.ToLocalTime():t}, or at Restart to update"; }
+        if (FailedRetryAt(now) is not null) { return "update failed; trying again soon, or at Restart to update"; }
         var at = ForcedAt(now);
         var until = at > now ? $"; it installs anyway at {at.ToLocalTime():g} unless a question is waiting then" : "";
         return Idle ? "it installs between turns, as soon as this machine's sessions are read and still idle"
@@ -1167,7 +1167,9 @@ public sealed class AutoUpdater
         // (Copilot, 31b83040). The shared updater now runs checks one at a time (ObservedUpdater),
         // so Settings' can no longer succeed while this one is under way.
         heldAt = time.GetUtcNow();
-        checksHeld = $"the release feed's rate limit refused the check ({failure}); checking again after {until.ToLocalTime():t}";
+        log($"auto-update: checks held until {until.ToUniversalTime():O} UTC: {failure}");
+        // Cached PWAs classify a held check by this prefix, not a protocol code.
+        checksHeld = "the release feed's rate limit refused the check; checking again soon";
         // Not over an outcome the devices may not have seen yet: the update just made (its first
         // check, right after the restart, is the likeliest to be refused) or a press answered.
         var last = prefs().LastUpdate;

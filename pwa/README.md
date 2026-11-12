@@ -557,6 +557,14 @@ small secondary buttons, and Check for updates under the rows in the same column
 sends a new one; `?usage=0` plays a host without it; `?keep=1` keeps readings between visits,
 in the demo's own storage).
 
+A held release check says "Checked 20 minutes ago · checking again soon", without
+quota wording or a retry clock. Legacy hosts' hold reasons are recognised only by
+their fixed prefix; their machine-local times are never parsed or displayed.
+New app reasons retain that clock-free prefix so an already installed PWA still
+recognises the hold; the new PWA normalises it to the plain wording above.
+Successful checks clear that wording. The host's existing hold and retry schedule
+are unchanged (#2227); the structured UTC deadline belongs to protocol slice #2229.
+
 ### Markdown
 
 Agent text is rendered by `js/markdown.js`, written for this app rather than vendored.
@@ -608,8 +616,8 @@ span in a sentence this way, and NEL and the separators in prose.
 The Fleet update block (#2187) shows a status glyph and word, a quiet "Checked" age and a
 44 px secondary Check now button. Update now is the only primary action when offered;
 Check now then drops out. Historical feed/quota metadata stays hidden. A limited check
-describes its historical retry clock without locking Check now: only the host knows when
-that legacy hold expires. Known update actions remain usable. Reader and age cases are in
+says "checking again soon" without a machine-local clock or locking Check now: only the
+host knows when that hold expires. Known update actions remain usable. Reader and age cases are in
 `test/unit/update.test.mjs`; phone/iPad states and geometry are in `test/machines.spec.mjs`.
 
 Settings > Reply box keeps Return key in replies on this device only (#1877): New line
