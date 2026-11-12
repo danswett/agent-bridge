@@ -1090,8 +1090,25 @@ public sealed class StandaloneHooksTests : IDisposable
         }
         finally
         {
-            if (!running.HasExited) { running.Kill(entireProcessTree: true); }
-            await running.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            try
+            {
+                // Complete cmd's input handshake so normal exit releases the renamed
+                // image before the enclosing fixture deletes it.
+                if (!running.HasExited)
+                {
+                    running.StandardInput.WriteLine("release");
+                    running.StandardInput.Close();
+                }
+                await running.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            finally
+            {
+                if (!running.HasExited)
+                {
+                    running.Kill(entireProcessTree: true);
+                    await running.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                }
+            }
         }
     }
 
