@@ -53,17 +53,19 @@ No machine names, account names or network details go into results.
 
 ### 2.3 What is measured, and how
 
-Everything is on the **real clock**. Fake clocks prove logic; they cannot show a spin like #2283,
-which only appeared because real time moves between two reads.
+Everything is on the **real clock**. Fake clocks prove logic, but a fake clock that moves only when
+the test advances it cannot show a spin like #2283, which only appeared because real time moves
+between two reads. A stepping fake clock, which moves forward a little on every read, can; §5's
+per-PR timer count uses one, and the real-clock gates stay the backstop.
 
 | Measure | How | Notes |
 |---|---|---|
 | CPU seconds per minute | Process CPU time at the start and end of the window (Windows `Process.TotalProcessorTime`, Linux `/proc/<pid>/stat`, macOS `proc_pid_rusage`), divided by wall minutes | 0.6 s/min is 1% of one core. Also report percent of one core and of the machine |
 | Thread attribution | Per-thread CPU time sampled every 10 s, so threads that start or end inside the window are counted; top 5 threads with names | Never measure CPU while tracing: #2284 showed EventPipe itself cost 2.7 s in 2 minutes. Stacks are a separate run, only when over budget |
-| Wakeups per second | Windows: `\Thread(<process>/*)\Context Switches/sec` summed; Linux: voluntary and involuntary context switches from `/proc/<pid>/task/*/status`; PWA: timer and animation-frame callbacks counted by an init script | Also count timers created per second (in-process meter, slice 3), the measure that would have caught #2283 directly |
+| Wakeups per second | Windows: `\Thread(<process>/*)\Context Switches/sec` summed; Linux: voluntary and involuntary context switches from `/proc/<pid>/task/*/status`; PWA: timer and animation-frame callbacks counted by an init script | Also count timers created per second (in-process meter, slices 3a and 3b), the measure that would have caught #2283 directly |
 | Working set and private bytes | Sampled every 10 s. **Startup**: the highest value in the first 60 s. **Steady**: the median of the last 5 minutes | PWA: JS heap used (CDP `Performance.getMetrics`) |
 | GC allocation rate | `GC.GetTotalAllocatedBytes` and GC counts from the in-process meter, read at start and end | Not `dotnet-counters`: it attaches EventPipe and perturbs CPU |
-| Network | Bytes in and out, messages and requests per minute, **per endpoint role** (relay socket, release relay, GitHub, usage APIs, peers). Host and app: the in-process meter. PWA: Playwright's request and WebSocket frame events | Endpoints are named by role, never by URL or address. Payload content is never recorded |
+| Network | Bytes in and out, messages and requests per minute, **per endpoint role** (relay socket, release relay, GitHub, usage APIs, peers). Host and app: the in-process meter (slice 3c). PWA: Playwright's request and WebSocket frame events | Endpoints are named by role, never by URL or address. Payload content is never recorded. WebSocket keepalive frames are counted apart from messages (§3) |
 | Battery (laptop only) | One hour on battery, SRUM energy estimate per app (`powercfg /srumutil`) | Manual, recorded but not gated |
 
 ### 2.4 Procedure
@@ -112,7 +114,7 @@ Each run writes one JSON file, schema `agent-bridge.efficiency/1`:
 
 Results are **artifacts, not committed**: CI keeps them as `efficiency-<component>-<platform>` for
 90 days, and a local run writes under the user's temp folder. What is committed is the budget file
-(slice 11) and a summary row per release in the weekly quality report. Times shown to people are
+(slice 11a) and a summary row per release in the weekly quality report. Times shown to people are
 Pacific; the file stores UTC.
 
 ## 3. Budget proposal
@@ -121,29 +123,40 @@ Every number below is a **PROPOSAL** until the baseline (slice 4) lands and the 
 
 | Measure | Host idle | App hidden | App visible | PWA visible | PWA hidden |
 |---|---|---|---|---|---|
-| CPU s/min (median) | 0.3 (0.5% of a core) | 0.1 | 0.3 | 0.3 main-thread busy | 0 after rest |
-| Wakeups per second | 4 | 2 | 10 | 1 timer callback | 1 per minute |
+| CPU s/min (median) | 0.3 (0.5% of a core) | 0.1 | 0.5 | 0.3 main-thread busy | 0 after rest |
+| Wakeups per second | 4 | 2 | 10 | 1 timer callback | 0 after rest |
 | Startup memory | 120 MB working set | 200 MB working set | same | 30 MB JS heap | same |
 | Steady memory | 80 MB private | 120 MB private, 60 MB working set | 160 MB private | 20 MB JS heap at 50 sessions | not higher than visible |
 | 24 h growth | 5% | 5% | 5% | 5% over a 2 h soak | n/a |
 | Allocation | 50 KB/s | 10 KB/s | 50 KB/s | n/a | n/a |
 | Idle network | 1 KB/min, 4 messages/min, 6 HTTP requests/hour | 0.5 KB/min, 3 messages/min | same as hidden | 2 KB/min, 5 frames/min | 0 bytes, 0 requests |
+| Keepalive frames | 6 a minute each way today; 3 after slice 10 | none (no relay socket) | none | 3 pings in and 3 pongs out a minute, answered by the browser | none (socket closed) |
 
 Rationale:
 - The one clean number is #2284's unprofiled capture: 0.312 CPU s/min with the window visible (an
   older build, on a VM). The bad cases are #2283's 59 CPU s/min on the laptop and about 10 CPU s/min
-  on VMs. Budgets near 0.3 sit next to the clean case and 30 to 200 times below the bad ones, so a
-  spin can never pass a gate, even with noise.
-- Hidden is stricter than visible: a hidden window has nothing to draw.
-- Network: the host's relay socket pings every 20 s (3 a minute); anything beyond that while idle
-  is chatter. Six HTTP requests an hour covers update and usage checks at their current periods.
+  on VMs. The app-visible budget of 0.5 leaves that clean case about 60% headroom rather than
+  failing it by a few hundredths; the baseline (slice 4) replaces it. Budgets of 0.1 to 0.5 sit
+  about 20 to 600 times below the bad cases, so a spin can never pass a gate, even with noise.
+- Hidden is stricter than visible: a hidden window has nothing to draw. A hidden PWA, after its
+  rest (§2.1), has nothing to do at all, so its budget is zero, which is what §5's gate checks.
+- Network: messages count application messages only. Keepalive is its own row: both ends of the
+  relay socket ping every 20 s and each ping is answered, so an idle host today sends 6 control
+  frames a minute (3 pings, 3 pongs) and receives 6; one side pinging (H10, slice 10) halves that.
+  Keepalive bytes do count toward the KB/min budget. The PWA's frame count is data frames: the
+  browser answers the relay's pings itself and the page cannot see them. Beyond keepalive, anything
+  sent while idle is chatter. Six HTTP requests an hour covers update and usage checks at their
+  current periods.
 - Memory: there is no measurement yet. These are typical for a .NET service and a WinUI 3 app and
   will be replaced by the baseline plus 25% headroom.
 
-**Ratchet rule.** Budgets only tighten. After a change makes a median at least 20% better on three
-nightly runs in a row, the budget becomes that median plus 25%, by a pull request. A budget is
-raised only by a pull request that names the cause, with the owner's approval. A regression that is
-accepted on purpose is the same: the pull request says why.
+**Ratchet rule.** Budgets only tighten. An improvement is measured against the median of the 7
+nightly runs before the change. When a change makes the nightly median at least 20% better than
+that for three nightly runs in a row, the budget becomes the smaller of the current budget and the
+new median times 1.25, by a pull request. So the ratchet can never raise a budget: one far above the
+new median drops to it plus 25%, and one already close stays. A budget is raised only by a pull
+request that names the cause, with the owner's approval. A regression that is accepted on purpose
+is the same: the pull request says why.
 
 ## 4. Design rules for engineers
 
@@ -176,21 +189,32 @@ runner minute is shared (#1248). So the gates split by cost and determinism:
 
 | Gate | Where and when | Clock | Fails when | Cost |
 |---|---|---|---|---|
-| Idle timer count | Ring 1, per PR, in the existing test jobs when host, app or PWA code changes | Fake, counted | An idle host or app composition creates or fires more timers per simulated hour than the budget file allows; a hidden PWA fires any timer or sends any frame after its rest | Seconds, no new job |
+| Idle timer count | Ring 1, per PR, in the existing test jobs when host, app or PWA code changes | Stepping fake clock, counted | An idle host or app composition creates or fires more timers per simulated hour than the budget file allows; a hidden PWA fires any timer or sends any frame after its rest (its budget is zero, §3) | Seconds, no new job |
 | Payload size | Ring 1, per PR, in the protocol job | n/a | A protocol vector for a message type is over its byte budget | Seconds |
-| Spin detector | Ring 2, `perf.yml` on each push to main, Linux and Windows | Real | Host or app idle CPU over 6 s/min (10% of a core) after subtracting the control, confirmed by one rerun | About 2 runner minutes per platform, reusing the build |
+| Spin detector | Ring 2, `perf.yml`, Linux and Windows. `perf.yml` runs only on each push to main and by hand today, never on a pull request, and this keeps that | Real | Host or app idle CPU over 6 s/min (10% of a core) after subtracting the control, confirmed by one rerun | About 2 runner minutes per platform, reusing the build |
 | Idle budget | Ring 3, nightly on the lab VM | Real | The median of 5 runs is over budget and a rerun of 3 agrees | Inside the nightly window |
 | Memory soak | Ring 3 nightly (2 h) and weekly (24 h) on the lab VM | Real | Steady memory over budget, or growth over the budget's rate | Lab time only |
 | Laptop check | Ring 4, before promotion to stable | Real | Over budget on the reference laptop, on AC and battery | Manual, minutes |
 
 How they stay non-flaky:
-- **Per PR is deterministic only.** Counting timers on a fake clock is exact and catches the
-  #2283 class (timers created per second) without wall-clock noise. Real-clock runs never gate a PR.
-- **Real-clock gates use a coarse ceiling or a median.** The spin detector's ceiling is 20 times the
-  budget, so noise cannot trip it but a spin cannot hide. The nightly gate uses the median of 5 and a
-  confirming rerun, on a quiet machine with the quiet check of §2.4, minus the control process.
+- **Per PR is deterministic only.** The timer count runs on a stepping fake clock: every read of
+  the time moves it forward 1 ms, as real time moves between two reads. A loop like #2283's, which
+  makes a timer again whenever the clock moved since it last read it, then makes a new timer on
+  every pass until the wait is due (hundreds of thousands for a wait of minutes), and the count of
+  timers created goes far over the ceiling, with no wall-clock noise. A fake clock that moves only
+  when the test advances it would hide that loop (§2.3). Spins the stepping clock does not reach
+  are left to the real-clock spin detector, the backstop. Real-clock runs never gate a PR.
+- **Real-clock gates use a coarse ceiling or a median.** The spin detector's ceiling of 6 s/min is
+  at least 12 times every host and app idle CPU budget, so noise cannot trip it but a spin cannot
+  hide. The nightly gate uses the median of 5 and a confirming rerun, on a quiet machine with the
+  quiet check of §2.4, minus the control process.
 - **Relative where it can be.** Nightly compares against the rolling median of the last 7 nights as
   well as the absolute budget, and flags a 25% jump even under budget.
+
+The spin detector is the first thing in `perf.yml` that gates. Today `perf.yml`'s header and
+[quality/perf.md](../../quality/perf.md) both say nothing there gates, so slice 12a updates both
+to say the spin detector does, with its coarse ceiling, while perf-hook and bench-micro still only
+record.
 
 Failure handling: a ring 1 failure blocks the merge like any test. A confirmed ring 2 or 3 failure
 opens (or updates) one issue with the JSON artifact, the commit range since the last pass, and the
@@ -206,7 +230,8 @@ that flakes goes on the flake list like any test (`quality/publish-flakes.ps1`).
 `requestAnimationFrame`. For each, record: does it run while idle, its period, whether it stops when
 its feature is off or its view is hidden, and whether an event could replace it. Then confirm with
 the meter (timers created and fired per owner) on the real clock. The list below comes from a grep
-of `main` on 2026-11-12 and is **unverified** except where marked.
+of `main` on 2026-11-12 and is **unverified** except where marked. The host part of this audit is
+#2295 (docs only); it filed #2297 for H2, #2296 for H3 and #2298 for H5.
 
 ### 6.1 First inventory, ranked
 
@@ -243,29 +268,42 @@ working and delegating sessions, on the compositor, and stop under reduced motio
 
 ## 7. Slices
 
-Each slice is 400 changed lines or fewer, starts with a failing test, and is one PR. **2F** marks a
-sensitive slice (host core, update path, credentials, the wire, CI or a new project file): two
-model families read every changed file whole.
+Each slice is 400 changed lines or fewer, starts with a failing test, and is one PR. Slices 3, 7, 11
+and 12 are split into lettered parts to keep to that, so the numbers the existing issues use stay
+the same. **2F** marks a sensitive slice (host core, update path, credentials, the wire, CI or a
+new project file): two model families read every changed file whole.
 
-| # | Slice | Depends on | Review |
-|---|---|---|---|
-| 1 | Baseline harness: a measuring tool that attaches to a process and writes `agent-bridge.efficiency/1` (CPU, threads, wakeups, memory, control process, quiet check). Tests with a synthetic idle and a synthetic busy child | none | 2F (new project file) |
-| 2 | #2283: `KeepAwakeService` awaits to the due time; no scheduler when off or not a Dev Box; prompt stop | none (in flight) | 2F |
-| 3 | In-process meter for host and app: a counting `TimeProvider` (timers created and fired, per owner), allocated bytes, GC counts, bytes and messages per endpoint role; read over the local pipe's diagnostics | 1 | 2F |
-| 4 | First baseline: host, app and PWA on the laptop and VM classes, before and after slice 2; #2284 on the reported version; mark each row of §6.1 verified or cleared; replace §3's numbers, still PROPOSAL | 1, 2, 3 | 1F (docs) |
-| 5 | Host: the sign-in sweep timer only while a flow is open (H2) | 3 | 2F (credentials) |
-| 6 | Host: discovery driven by watcher and process-exit events, with a slow safety pass (H3) | 3, 4 | 2F |
-| 7 | Host: remaining idle wakeups (H4 to H9): await to due times, sample only while observed | 3, 4 | 2F |
-| 8 | Desktop app: nothing ticks while hidden; relative times redrawn when they change; the `Rendering` handler bounded (A1, A2, A3) | 4 | 1F + Creative |
-| 9 | PWA: no timer while hidden in the delegates view; fleet changes pushed, with a slow safety probe (P1, P2); clock-counted Playwright tests | 1 | 1F + Creative |
-| 10 | Network: one keepalive side (H10), usage and peer chatter by change rather than period (H6, H7), with #2225's release hints | 4; #2225 slices 3 to 5 | 2F (wire, update path) |
-| 11 | Per-PR gates: idle timer count for host and app compositions, PWA hidden-zero test, payload sizes per message type; the committed budget file; catalog rows | 3 (5, 6, 7 to tighten) | 2F (CI) |
-| 12 | Real-clock gates: the spin detector in `perf.yml`, the nightly idle budget and memory soak on the lab, the weekly 24 h soak, the failure issue and the report row | 1, 4, 11, owner approval of §3 | 2F (CI) |
+| # | Slice | Depends on | Issue | Review |
+|---|---|---|---|---|
+| 1 | Baseline harness: a measuring tool that attaches to a process and writes `agent-bridge.efficiency/1` (CPU, threads, wakeups, memory, control process, quiet check). Tests with a synthetic idle and a synthetic busy child | none | #2294 | 2F (new project file) |
+| 2 | #2283: `KeepAwakeService` awaits to the due time; no scheduler when off or not a Dev Box; prompt stop | none (in flight) | #2283 | 2F |
+| 3a | Host meter: a counting `TimeProvider` (timers created and fired, per owner), allocated bytes and GC counts, in the host's composition; read over the local pipe's diagnostics | 1 | none yet | 2F |
+| 3b | App meter: the same counting `TimeProvider`, allocation and GC counts in the desktop app's composition, readable by slice 1's tool | 3a | none yet | 1F |
+| 3c | Network meter: bytes and messages per endpoint role in the host and the app, keepalive frames counted apart | 3a, 3b | none yet | 2F (the wire) |
+| 4 | First baseline: host, app and PWA on the laptop and VM classes, before and after slice 2; #2284 on the reported version; mark each row of §6.1 verified or cleared, starting from #2295's host audit; replace §3's numbers, still PROPOSAL | 1, 2, 3a, 3b, 3c | none yet | 1F (docs) |
+| 5 | Host: the sign-in sweep timer only while a flow is open (H2) | 3a | #2297 | 2F (credentials) |
+| 6 | Host: discovery driven by watcher and process-exit events, with a slow safety pass (H3) | 3a, 4 | #2296 | 2F |
+| 7a | Host: process-load sampling only while a consumer needs it (H5) | 3a, 4 | #2298 | 2F |
+| 7b | Host: the hook intake safety sweep backs off when idle (H4) | 3a, 4 | #2301 | 2F |
+| 7c | Host: the usage monitor awaits its next due probe instead of a 15 s tick (H6, wakeups only; what it probes and when is slice 10's) | 3a, 4 | none yet | 2F |
+| 7d | Host: `HelloCheck` and the restore recorder await due times and stop once settled (H8, H9) | 3a, 4 | none yet | 2F |
+| 8 | Desktop app: nothing ticks while hidden; relative times redrawn when they change; the `Rendering` handler bounded (A1, A2, A3) | 3b, 4 | none yet | 1F + Creative |
+| 9 | PWA: no timer while hidden in the delegates view; fleet changes pushed, with a slow safety probe (P1, P2); clock-counted Playwright tests | 1 | #2300 | 1F + Creative |
+| 10 | Network: one keepalive side (H10), usage and peer chatter by change rather than period (H6, H7), with #2225's release hints | 3c, 4; #2225 slices 3 to 5 | none yet | 2F (wire, update path) |
+| 11a | Per-PR gate, host: the committed budget file, and the host idle timer count on the stepping fake clock (§5), its ceiling starting at today's counts; catalog row | 2, 3a | none yet | 2F (CI) |
+| 11b | Per-PR gate, app: idle timer count for the app's visible and hidden compositions, hidden at zero | 3b, 8, 11a | none yet | 2F (CI) |
+| 11c | Per-PR gate, PWA: the hidden-zero test across every view: after its rest, no timer fires and no frame is sent | 9, 11a | none yet | 2F (CI) |
+| 11d | Per-PR gate, payloads: a byte budget per message type, checked over the protocol vectors | 11a | none yet | 2F (CI, wire) |
+| 12a | Spin detector in `perf.yml` (ring 2), and the failure issue that every real-clock gate opens or updates; `perf.yml`'s header and quality/perf.md updated to say it gates | 1, 11a | none yet | 2F (CI) |
+| 12b | Nightly idle budget on the lab VM (ring 3), with the rolling-median check, and the report row | 4, 12a, owner approval of §3 | none yet | 2F (CI) |
+| 12c | Memory soak on the lab VM: nightly 2 h and weekly 24 h | 12b | none yet | 2F (CI) |
 
-**Order.** 1 and 2 start now, in parallel. Then 3, then 4 (baseline and host audit). Then the host
-fixes 5, 6 and 7 in parallel, with 9 able to start after 1. Then 8 (it needs 4's desktop
-attribution), then 10. Gates last: 11, then 12. Slice 11 can land earlier with today's counts as its
-ceiling if a regression appears first; the ratchet then tightens it.
+**Order.** 1 and 2 start now, in parallel; 9 can start once 1 lands. Then 3a, 3b and 3c, then 4
+(baseline, building on #2295's host audit). Then the host fixes 5, 6 and 7a to 7d in parallel (5
+needs only 3a). Then 8 (it needs 4's desktop attribution), then 10. Gates: 11a can land as soon as
+2 and 3a do, with today's counts as its ceiling, and each host fix lowers its own count in the
+budget file in the same PR. 11b waits for 8 and 11c for 9, since neither hidden-zero check can pass
+before those fixes; 11d needs only 11a. Then 12a, 12b and 12c.
 
 ## 8. Open question for the owner
 
