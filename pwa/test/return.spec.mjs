@@ -11,6 +11,7 @@ const LAPTOP = 'demo-laptop';
 const IDLE = 'laptop-copilot-1';
 const ASK = 'laptop-ask-1';
 const AWAY_RETURN = 'a machine that goes away just after a return reads as last seen for 3 s, then shows offline in place';
+const HELD_QUESTION_RETURN = 'a question held through a return keeps its row and Needs you\'s count until the grace ends';
 
 const card = (page, id) => page.locator(`.session[data-host-id="${LAPTOP}"][data-id="${id}"]`);
 const sv = (page, id) => page.locator(`.session-view[data-host-id="${LAPTOP}"][data-id="${id}"]`);
@@ -36,15 +37,15 @@ async function comeBack(page) {
   }));
 }
 
-async function observeAwayReturn(page) {
+async function observeAwayReturn(page, rowId = IDLE) {
   await page.clock.install();
   await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
-  await page.evaluate(() => {
+  await page.evaluate((rowId) => {
     const { grace, hosts } = window.agentBridgeDemo;
     const trace = window.awayReturnTrace = { acceptedSince: null, events: [] };
     const record = (event, details = {}) => {
       const tab = document.querySelector('#machine-tabs .machine-tab[data-device-id="demo-laptop"]');
-      const row = document.querySelector('.session[data-host-id="demo-laptop"][data-id="laptop-copilot-1"]');
+      const row = document.querySelector(`.session[data-host-id="demo-laptop"][data-id="${rowId}"]`);
       const strip = document.querySelector('#connection-strip');
       const link = hosts.link('demo-laptop');
       const state = {
@@ -53,7 +54,11 @@ async function observeAwayReturn(page) {
         machine: { online: hosts.isOnline('demo-laptop'), phase: link?.phase, synced: link?.client?.synced, stale: hosts.staleOf('demo-laptop') },
         render: {
           tab: { class: tab?.className, label: tab?.getAttribute('aria-label') },
-          row: { stale: row?.getAttribute('data-stale'), status: row?.querySelector('.row-status')?.textContent, glyph: row?.querySelector('.row-glyph .glyph')?.getAttribute('data-glyph') },
+          row: { id: rowId, present: !!row, stale: row?.getAttribute('data-stale'), status: row?.querySelector('.row-status')?.textContent, glyph: row?.querySelector('.row-glyph .glyph')?.getAttribute('data-glyph') },
+          needsYou: {
+            count: document.querySelectorAll('#needs-you .needs-entry[data-host-id="demo-laptop"]').length,
+            heading: document.querySelector('#needs-you .needs-you-head')?.textContent,
+          },
           strip: { hidden: strip?.hidden, text: strip?.textContent },
           slot: document.querySelector('#return-slot')?.textContent,
           hostStateHidden: document.querySelector('#host-state')?.hidden,
@@ -79,7 +84,7 @@ async function observeAwayReturn(page) {
     if (trace.acceptedSince === null || trace.acceptedSince !== grace.since || document.visibilityState !== 'visible') {
       throw new Error('Return setup: visibilitychange did not produce an observed visible grace start');
     }
-  });
+  }, rowId);
 }
 
 async function advanceAwayClock(page, ms) {
@@ -100,14 +105,16 @@ async function advanceAwayClock(page, ms) {
 test.use({ viewport: { width: 1440, height: 900 }, hasTouch: false });
 
 test.afterEach(async ({ page }, info) => {
-  if (info.title !== AWAY_RETURN || info.status === info.expectedStatus) { return; }
+  const attachment = info.title === AWAY_RETURN ? 'away-return-state.json'
+    : info.title === HELD_QUESTION_RETURN ? 'held-question-return-state.json' : null;
+  if (!attachment || info.status === info.expectedStatus) { return; }
   const report = await page.evaluate(() => {
     const trace = window.awayReturnTrace;
     if (!trace) { return { setup: 'not installed', visibility: document.visibilityState, demoReady: !!window.agentBridgeDemo }; }
     const final = trace.record('failure');
     return { acceptedSince: trace.acceptedSince, events: trace.events, final };
   });
-  await info.attach('away-return-state.json', { body: JSON.stringify(report, null, 2), contentType: 'application/json' });
+  await info.attach(attachment, { body: JSON.stringify(report, null, 2), contentType: 'application/json' });
 });
 
 test('return_setup_refuses_to_advance_before_grace_starts', async ({ page }) => {
@@ -332,7 +339,7 @@ test('an offline machine\'s line takes the place of the reply box\'s actions and
 });
 
 async function advanceHeldQuestionClock(page, ms) {
-  await page.clock.runFor(ms);
+  await advanceAwayClock(page, ms);
 }
 
 test('held_question_setup_refuses_to_advance_before_grace_starts', async ({ page }) => {
@@ -346,14 +353,14 @@ test('held_question_setup_refuses_to_advance_before_grace_starts', async ({ page
   expect(await page.evaluate(() => Date.now())).toBe(before);
 });
 
-test('a question held through a return keeps its row and Needs you\'s count until the grace ends', async ({ page, browserName }) => {
+test(HELD_QUESTION_RETURN, async ({ page, browserName }) => {
   // Quarantined on webkit (#1693, #1692): failed on a PR with no pwa/ change; restore by 2026-11-13.
   test.skip(browserName === 'webkit', 'flaky on webkit, #1693');
   await openDemo(page);
   const entries = page.locator(`#needs-you .needs-entry[data-host-id="${LAPTOP}"]`);
   await expect(entries).toHaveCount(1);
   const head = await page.locator('#needs-you .needs-you-head').textContent();
-  await comeBack(page);
+  await observeAwayReturn(page, ASK);
   await setOnline(page, false);
   await advanceHeldQuestionClock(page, 1500);
   await expect(entries).toHaveCount(1);
