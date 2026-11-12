@@ -41,7 +41,7 @@ namespace AgentBridge.Host.Core.Updates;
 // The relay controls Age, so GitHub revalidation is due every GithubRevalidateEvery regardless.
 // On rate-limit refusals, validated relay lists are allowed for GithubRelayAtMost from GitHubAnsweredAt,
 // or one persisted bootstrap if missing. Relay replies never renew it; invalid anchors require GitHub success.
-public sealed class ReleaseDiscovery : IDisposable
+public sealed partial class ReleaseDiscovery : IDisposable
 {
     // The switch, on now the relay is live (SRE's Worker, #927): flipped by a release, never by a setting.
     public const bool ReadCdnFirst = true;
@@ -681,6 +681,7 @@ public sealed class ReleaseDiscovery : IDisposable
         public bool RelayExpired { get; init; }
         // What GitHub's last list offered each channel (ChannelNewest), never a relay's.
         public Dictionary<string, string>? Floors { get; init; }
+        public HaltPolicyCache? HaltPolicy { get; init; }
     }
 }
 
