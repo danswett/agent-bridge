@@ -75,19 +75,58 @@ public class CiWasteScriptTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Case_only_ref_differences_never_create_supersession_waste_or_cross_ref_deltas(bool collect)
+    [InlineData(99, 1, false)]
+    [InlineData(100, 0, false)]
+    [InlineData(99, 1, true)]
+    [InlineData(100, 0, true)]
+    public async Task A_full_comparison_page_is_unknown_push_evidence(int count, int known, bool collect)
     {
+        using var report = await Measure([
+            Run(12, "page", "a", 0, 10, "success", null),
+            Run(13, "page", "b", 20, 25, "success",
+                Enumerable.Range(0, count).Select(i => $"docs/{i}.md").ToArray()),
+        ], collect);
+        Assert.Equal(known, report.RootElement.GetProperty("no_long_job_pushes").GetInt32());
+        Assert.Equal(2 - known, report.RootElement.GetProperty("unknown_pushes").GetInt32());
+    }
+
+    [Theory]
+    [InlineData(1, 10, 0)]
+    [InlineData(2, 10, 0)]
+    [InlineData(1, 0, 1)]
+    public async Task Supersession_requires_a_newer_first_attempt_not_an_older_heads_late_start(int attempt, int start, int expected)
+    {
+        var old = Run(14, "late", "a", 0, 18, "success", null, Job("app (win-x64)", start + 1, start + 7));
+        old["run_attempt"] = attempt;
+        old["run_started_at"] = At(start);
+        using var report = await Measure([old,
+            Run(15, "late", "b", 5, 15, "success", ["docs/guide.md"], Job("app (win-x64)", 6, 12))]);
+        Assert.Equal(expected, report.RootElement.GetProperty("superseded").GetInt32());
+        Assert.Equal(expected * 6, report.RootElement.GetProperty("wasted_long_job_minutes").GetDouble());
+    }
+
+    [Theory]
+    [InlineData(false, null)]
+    [InlineData(false, "b")]
+    [InlineData(false, "a")]
+    [InlineData(true, null)]
+    public async Task Case_only_ref_differences_never_create_supersession_waste_or_cross_ref_deltas(bool collect, string? cachedBase)
+    {
+        var valid = collect || cachedBase == "a";
+        var last = Run(16, "fix/x", "c", 20, 25, "success",
+            valid ? ["src/AgentBridge.App/View.cs", "docs/guide.md"] : ["docs/guide.md"]);
+        last["expected_base"] = "a";
+        if (cachedBase is not null) last["delta_base_sha"] = cachedBase;
         using var report = await Measure([
             Run(10, "fix/x", "a", 0, 10, "success", null, Job("app (win-x64)", 1, 7)),
             Run(11, "Fix/x", "b", 5, 15, "success", ["docs/guide.md"],
                 Job("pwa-ui (chromium)", 6, 12)),
+            last,
         ], collect);
         Assert.Equal(0, report.RootElement.GetProperty("superseded").GetInt32());
         Assert.Equal(0, report.RootElement.GetProperty("wasted_long_job_minutes").GetDouble());
         Assert.Equal(0, report.RootElement.GetProperty("no_long_job_pushes").GetInt32());
-        Assert.Equal(2, report.RootElement.GetProperty("unknown_pushes").GetInt32());
+        Assert.Equal(valid ? 2 : 3, report.RootElement.GetProperty("unknown_pushes").GetInt32());
     }
 
     static string At(double minute) => new DateTimeOffset(2026, 11, 10, 8, 0, 0, TimeSpan.Zero)
@@ -147,8 +186,9 @@ public class CiWasteScriptTests
                         $run = $fixture.runs | Where-Object id -eq $Matches[1]
                         if (-not $run) { throw "Unexpected jobs read: $path" }
                         $value = @{ jobs = @($run.jobs) }
-                    } elseif ($path -match '/compare/[^/]+\.\.\.([^?]+)') {
-                        $run = $fixture.runs | Where-Object head_sha -eq $Matches[1]
+                    } elseif ($path -match '/compare/([^/]+)\.\.\.([^?]+)') {
+                        $run = $fixture.runs | Where-Object head_sha -eq $Matches[2]
+                        if ($run.PSObject.Properties['expected_base'] -and $run.expected_base -cne $Matches[1]) { throw "Unexpected comparison base: $path" }
                         if ($null -eq $run.files) { throw "Unexpected comparison: $path" }
                         $value = @{ status = 'ahead'; files = @($run.files | ForEach-Object { @{ filename = $_ } }) }
                     } else { throw "Unexpected GitHub read: $path" }

@@ -50,11 +50,13 @@ if ($RunsFile) {
         $run.jobs = @((Read-GitHub "repos/$Repo/actions/runs/$id/jobs?filter=latest&per_page=100").jobs)
         if ($run.jobs.Count -ge 100) { throw "Run $id has potentially truncated jobs; refuse partial totals." }
         $run.files = $null
+        $run.delta_base_sha = $null
         $key = Branch $run
         if (Test-PushDelta $run $previous $key) {
             $base = $previous[$key]
             $comparison = Read-GitHub "repos/$Repo/compare/$base...$($run.head_sha)?per_page=100"
-            if ($comparison.status -eq 'ahead' -and @($comparison.files).Count -lt 300) {
+            if ($comparison.status -eq 'ahead' -and @($comparison.files).Count -lt 100) {
+                $run.delta_base_sha = $base
                 $run.files = @($comparison.files | ForEach-Object {
                     $_.filename
                     if ($_['previous_filename']) { $_.previous_filename }
@@ -69,11 +71,19 @@ if ($RunsFile) {
 
 $now = [datetimeoffset]$snapshot.captured_at
 $runs = @($snapshot.runs)
-# Revalidate cached deltas too: an older collector may have attributed files to a rerun or another ref.
+# Legacy caches lack base provenance; reject refs with any case-colliding aliases.
 $previous = [System.Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
+$refs = [System.Collections.Generic.Dictionary[string, System.Collections.Generic.HashSet[string]]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($run in $runs) {
+    $key = Branch $run
+    if (-not $refs.ContainsKey($key)) { $refs[$key] = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal) }
+    [void]$refs[$key].Add($key)
+}
 foreach ($run in ($runs | Sort-Object { [datetimeoffset]$_.created_at })) {
     $key = Branch $run
-    if (-not (Test-PushDelta $run $previous $key)) { $run.files = $null }
+    $base = if ($run.ContainsKey('delta_base_sha')) { $run.delta_base_sha } elseif ($refs[$key].Count -eq 1 -and $previous.ContainsKey($key)) { $previous[$key] }
+    if (-not (Test-PushDelta $run $previous $key) -or $base -isnot [string] -or $base -cne $previous[$key] -or
+        ($null -ne $run.files -and $run.files.Count -ge 100)) { $run.files = $null }
     $previous[$key] = $run.head_sha
 }
 $totals = @{}
@@ -86,6 +96,7 @@ $rows = @(foreach ($run in $runs) {
     $key = Branch $run
     $superseded = @($runs | Where-Object {
         [string]::Equals((Branch $_), $key, [StringComparison]::Ordinal) -and $_.head_sha -cne $run.head_sha -and
+        $_.run_attempt -eq 1 -and [datetimeoffset]$_.created_at -gt [datetimeoffset]$run.created_at -and
         (Began $_) -gt $start -and (Began $_) -lt $end
     }).Count -gt 0
     $cancelled = $run.conclusion -eq 'cancelled'
