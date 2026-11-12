@@ -1082,7 +1082,7 @@ function updateRow(updates, id, name, now) {
   }
   const checking = s.phase === 'checking';
   if (checking) { said = 'Checking\u2026'; }
-  const last = heldCheck ? null : lastLine(s, now, { updateNow });
+  const last = heldCheck || (idle && s.last?.outcome === 'current') ? null : lastLine(s, now, { updateNow });
   const check = canCheck(s) && !busy && !asking && !checkFailed;
   const install = canInstall(s) && !busy && !asking;
   const offerNow = updates.signs === true && canUpdateNow(s);

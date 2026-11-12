@@ -404,6 +404,8 @@ test.describe('one truthful update line', () => {
     await page.waitForSelector('html[data-demo-ready]');
     await expect.poll(() => page.evaluate(() => [...window.agentBridgeDemo.host.transports]
       .some((t) => t.updateSubscribed))).toBe(true);
+    // Drain the subscription's initial reply before seeding a newer event on the same channel.
+    await page.evaluate(() => window.agentBridgeDemo.client.request('update.get'));
     await page.evaluate((c) => window.agentBridgeDemo.setUpdate({
       ...window.agentBridgeDemo.host.update, current: '0.1.4415', available: null,
       checkedAt: '2026-11-10T17:12:00Z', last: null, ...c,
@@ -450,6 +452,22 @@ test.describe('one truthful update line', () => {
     await expect(update(page).locator('p')).toHaveText(['Up to date · 0.1.4415', 'Checked 28 min ago']);
     await show(page, { checkedAt: '2026-11-10T16:12:00Z' });
     await expect(update(page).locator('p')).toHaveText(['Up to date · 0.1.4415', 'Checked 1 h ago']);
+  });
+
+  test('a current check keeps two text lines and Check now focus through redraws', async ({ page }) => {
+    await show(page, {});
+    const block = update(page), check = block.locator('.machine-update-check');
+    await expect(block.locator('.machine-update-line')).toHaveText('Up to date · 0.1.4415');
+    await check.focus();
+    const set = (change) => page.evaluate((c) => window.agentBridgeDemo.setUpdate({ ...window.agentBridgeDemo.host.update, ...c }), change);
+    await set({ phase: 'checking' });
+    await expect(block.locator('.machine-update-line')).toHaveText('Checking…');
+    await expect(check).toBeFocused();
+    await set({ phase: 'idle', checkedAt: now.toISOString(), last: { outcome: 'current', at: now.toISOString() } });
+    await expect(block.locator('p')).toHaveText(['Up to date · 0.1.4415', 'Checked under a minute ago']);
+    await expect(block.getByRole('button', { name: 'Check now', exact: true })).toBeFocused();
+    await expect(check).toBeEnabled();
+    await expect(block.getByRole('button')).toHaveCount(1);
   });
 
   test('an available update has only primary Update now without changing health', async ({ page }) => {
