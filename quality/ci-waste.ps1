@@ -39,8 +39,8 @@ function Long-Job([string]$name) {
 if ($RunsFile) {
     $snapshot = Get-Content $RunsFile -Raw | ConvertFrom-Json -AsHashtable
 } else {
-    $now = [datetimeoffset]::UtcNow
     $runs = @((Read-GitHub "repos/$Repo/actions/workflows/ci.yml/runs?event=pull_request&per_page=$Limit").workflow_runs)
+    $now = [datetimeoffset]::UtcNow
     $previous = @{}
     foreach ($run in ($runs | Sort-Object { [datetimeoffset]$_.created_at })) {
         $id = $run.id
@@ -120,9 +120,11 @@ $longJobs = @($totals.Values | Sort-Object job | ForEach-Object {
     $_
 })
 $noLongPushes = @($rows | Where-Object { $_.no_long_job_push -eq $true })
+$plannerSha = git -C $root rev-parse HEAD
+if ($LASTEXITCODE) { throw 'Reading the planner revision failed.' }
 [ordered]@{
     captured_at = $snapshot.captured_at
-    planner_sha = (git -C $root rev-parse HEAD)
+    planner_sha = $plannerSha
     runs = $runs.Count
     cancelled = @($rows | Where-Object cancelled).Count
     superseded = @($rows | Where-Object superseded).Count
