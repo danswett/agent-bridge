@@ -665,6 +665,8 @@ The Fleet update-line ordering regression in `test/machines.spec.mjs` delivers a
 subscription response and a newer event in one task (#1959). `HostClient` applies
 the subscription snapshot synchronously through `subscribeUpdate(onState)`, before
 later wire events; a promise continuation must not restore the older state.
+The update fixture also waits for that initial snapshot before changing the demo
+host: the demo-ready marker covers sessions, not update subscriptions.
 
 On a ready PR, `pwa-ui` then repeats only added or modified specs since the PR's
 merge base five times, with zero retries, in the same Chromium and WebKit shards.

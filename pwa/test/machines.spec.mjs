@@ -450,14 +450,7 @@ test.describe('one truthful update line', () => {
   test('a failed-check event delivered with the subscription snapshot keeps the truthful update line', async ({ page }) => {
     await show(page, {});
     await page.evaluate(async ({ reason, at }) => {
-      const { host, hosts, page: demoPage } = window.agentBridgeDemo;
-      await new Promise((resolve) => {
-        const done = () => {
-          if (demoPage.updates.state('demo')) { unwatch(); resolve(); }
-        };
-        const unwatch = demoPage.updates.fleet.onChange(done);
-        done();
-      });
+      const { host, hosts } = window.agentBridgeDemo;
       host.capabilities = host.capabilities.filter((c) => c !== 'update');
       await hosts.refresh('demo');
       const receive = host.receive.bind(host);
