@@ -44,6 +44,36 @@ public sealed class StandaloneHooksTests : IDisposable
 
     public void Dispose()
     {
+        if (runningHook is { } running)
+        {
+            try
+            {
+                try
+                {
+                    if (!running.HasExited)
+                    {
+                        running.StandardInput.WriteLine("release");
+                        running.StandardInput.Close();
+                    }
+                    // Wait on the process handle: an exit notification can precede
+                    // Windows releasing the renamed executable image.
+                    Assert.True(running.WaitForExit(TimeSpan.FromSeconds(5)), "The fixture hook did not exit after releasing stdin.");
+                }
+                finally
+                {
+                    if (!running.WaitForExit(TimeSpan.Zero))
+                    {
+                        running.Kill(entireProcessTree: true);
+                        Assert.True(running.WaitForExit(TimeSpan.FromSeconds(5)), "The fixture hook did not exit after being killed.");
+                    }
+                }
+            }
+            finally
+            {
+                running.Dispose();
+                runningHook = null;
+            }
+        }
         foreach (var link in links) { Directory.Delete(link); }
         Directory.Delete(root, recursive: true);
     }
@@ -1074,43 +1104,18 @@ public sealed class StandaloneHooksTests : IDisposable
         if (!OperatingSystem.IsWindows()) { return; }
         File.Copy(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"), Source, overwrite: true);
         await Setup.InstallAsync("copilot", false, TextWriter.Null);
-        using var running = Process.Start(new ProcessStartInfo(Hook, "/d /c set /p answer=ready")
+        var running = runningHook = Process.Start(new ProcessStartInfo(Hook, "/d /c set /p answer=ready")
         {
             UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true,
         })!;
-        try
-        {
-            Assert.True(await ReadHookReadinessAsync(running) > 0);
-            Assert.False(running.HasExited);
-            File.WriteAllText(Source, "the next hook version");
+        Assert.True(await ReadHookReadinessAsync(running) > 0);
+        Assert.False(running.HasExited);
+        File.WriteAllText(Source, "the next hook version");
 
-            StandaloneHooks.Refresh(Profile, Source);
+        StandaloneHooks.Refresh(Profile, Source);
 
-            Assert.Equal("the next hook version", File.ReadAllText(Hook));
-            Assert.False(running.HasExited);
-        }
-        finally
-        {
-            try
-            {
-                // Complete cmd's input handshake so normal exit releases the renamed
-                // image before the enclosing fixture deletes it.
-                if (!running.HasExited)
-                {
-                    running.StandardInput.WriteLine("release");
-                    running.StandardInput.Close();
-                }
-                await running.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
-            }
-            finally
-            {
-                if (!running.HasExited)
-                {
-                    running.Kill(entireProcessTree: true);
-                    await running.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
-                }
-            }
-        }
+        Assert.Equal("the next hook version", File.ReadAllText(Hook));
+        Assert.False(running.HasExited);
     }
 
     // Redirected stdout is a synchronous pipe; its blocking read must not queue behind
@@ -1159,6 +1164,7 @@ public sealed class StandaloneHooksTests : IDisposable
         {
             UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true,
         })!;
+        using var exitWitness = Process.GetProcessById(running.Id);
         fixture.runningHook = running;
         try
         {
@@ -1166,16 +1172,17 @@ public sealed class StandaloneHooksTests : IDisposable
             File.WriteAllText(fixture.Source, "the next hook version");
             StandaloneHooks.Refresh(fixture.Profile, fixture.Source);
             Assert.True(File.Exists(fixture.Hook + ".old"));
-            Assert.False(running.HasExited);
+            Assert.False(exitWitness.WaitForExit(TimeSpan.Zero));
 
             fixture.Dispose();
 
+            Assert.True(exitWitness.WaitForExit(TimeSpan.Zero));
             Assert.False(Directory.Exists(fixture.root));
         }
         finally
         {
-            if (!running.HasExited) { running.Kill(entireProcessTree: true); }
-            Assert.True(running.WaitForExit(TimeSpan.FromSeconds(5)));
+            if (!exitWitness.WaitForExit(TimeSpan.Zero)) { exitWitness.Kill(entireProcessTree: true); }
+            Assert.True(exitWitness.WaitForExit(TimeSpan.FromSeconds(5)));
             if (Directory.Exists(fixture.root)) { fixture.Dispose(); }
         }
     }
