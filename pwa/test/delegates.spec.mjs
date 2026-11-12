@@ -170,6 +170,7 @@ test('a hidden delegate stops polling and returns with its last words and curren
   const before = await fetches(page, 'demo-agent-suite');
   await page.evaluate(() => {
     Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
     document.dispatchEvent(new Event('visibilitychange'));
   });
   await page.clock.runFor(600000);
@@ -177,9 +178,10 @@ test('a hidden delegate stops polling and returns with its last words and curren
   await page.evaluate(() => {
     window.agentBridgeDemo.host.holdResponses();
     Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
     document.dispatchEvent(new Event('visibilitychange'));
   });
-  expect(await fetches(page, 'demo-agent-suite')).toBe(before + 1);
+  await expect.poll(() => fetches(page, 'demo-agent-suite')).toBe(before + 1);
   await expect(latest.locator(':scope > [data-kept="true"]')).toHaveCount(1);
   await expect(fact(page, 'status')).not.toHaveText(age);
   await expect(pane(page).locator('[role="status"]')).toBeHidden();

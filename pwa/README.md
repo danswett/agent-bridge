@@ -613,6 +613,11 @@ span in a sentence this way, and NEL and the separators in prose.
 
 ## Tests
 
+The open delegate detail (#2300) clears its polling timer while the document is hidden.
+On return it redraws ages and fetches once, keeping the last words while the fetch is
+pending or fails. Fake-clock cases are in `test/unit/delegates-view.test.mjs`;
+`test/delegates.spec.mjs` checks the retained content and catch-up in both browsers.
+
 The Fleet update block (#2187) shows a status glyph and word, a quiet "Checked" age and a
 44 px secondary Check now button. Update now is the only primary action when offered;
 Check now then drops out. Historical feed/quota metadata stays hidden. A limited check
