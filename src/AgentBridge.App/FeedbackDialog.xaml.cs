@@ -100,6 +100,8 @@ public sealed partial class FeedbackDialog : ContentDialog
         var changed = Status.Text != text;
         Status.Text = text;
         ScreenshotStatus.Text = review?.ScreenshotPng is { Length: > 0 } ? "Screenshot included; expand What's included to review it." : "No screenshot included.";
+        AutomationProperties.SetName(ScreenshotStatus, ScreenshotStatus.Text);
+        AutomationProperties.SetName(RetryHint, RetryHint.Text);
         AutomationProperties.SetName(Status, Status.Text);
         if (changed) { FrameworkElementAutomationPeer.CreatePeerForElement(Status)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged); }
     }
