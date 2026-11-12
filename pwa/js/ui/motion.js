@@ -221,10 +221,10 @@ const flips = new WeakMap();
 // Mutations act now; one frame measures the final layout for the whole burst. Capture the
 // drawn positions before cancelling a running shift, so another change never jumps back.
 // Keep it running through mutate(): a leaving item's copy must see that same drawn position.
-export function flip(container, mutate, { entry = 'shift' } = {}) {
+export function flip(container, mutate, { entry = 'shift', viewport = false } = {}) {
   let state = flips.get(container);
   if (!state) {
-    state = { origin: container.getBoundingClientRect(), before: new Map(), interrupted: new Set(), animations: [], entries: new Map() };
+    state = { origin: container.getBoundingClientRect(), viewport: false, before: new Map(), interrupted: new Set(), animations: [], entries: new Map() };
     for (const el of container.children) {
       if (!el.getClientRects().length) { continue; }
       state.before.set(el, el.getBoundingClientRect());
@@ -241,13 +241,13 @@ export function flip(container, mutate, { entry = 'shift' } = {}) {
       flips.delete(container);
       for (const a of state.animations) { a.cancel(); }
       if (!container.isConnected) { return; }
-      const origin = container.getBoundingClientRect();
+      const origin = state.viewport ? state.origin : container.getBoundingClientRect();
       const after = new Map([...container.children].filter((el) => el.getClientRects().length).map((el) => [el, el.getBoundingClientRect()]));
       const slotsChanged = state.before.size !== after.size || [...after.keys()].some((el) => !state.before.has(el));
       const positions = [...state.before].filter(([el]) => after.has(el)).map(([el, was]) => [el, was, after.get(el)]);
       for (const [el, was, at] of positions) {
         const name = state.entries.get(el);
-        // Only internal placement: moving the list must not pull rows over adjacent controls.
+        // Internal placement cannot cross adjacent controls; anchored layouts keep viewport positions.
         const x = was.left - state.origin.left - (at.left - origin.left);
         const y = was.top - state.origin.top - (at.top - origin.top);
         if (!name || (!x && !y)) { continue; }
@@ -259,6 +259,7 @@ export function flip(container, mutate, { entry = 'shift' } = {}) {
     });
   }
   const result = mutate();
+  state.viewport ||= typeof viewport === 'function' ? viewport() : viewport;
   for (const el of container.children) {
     // Exclusions always win; a redraw must not downgrade an explicit reorder to a shift.
     const name = typeof entry === 'function' ? entry(el) : entry;

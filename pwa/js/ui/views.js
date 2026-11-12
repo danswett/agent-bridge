@@ -149,7 +149,8 @@ export class SessionListView {
     const ownMove = this.#motionRow;
     let anchored = false;
     flip(this.container, () => { anchored = this.#layout(); }, {
-      entry: (el) => anchored || el === ownMove ? null : this.#recent.moved.has(el.dataset.key) ? 'reorder' : 'shift',
+      entry: (el) => el === ownMove ? null : this.#recent.moved.has(el.dataset.key) ? 'reorder' : 'shift',
+      viewport: () => anchored,
     });
   }
 

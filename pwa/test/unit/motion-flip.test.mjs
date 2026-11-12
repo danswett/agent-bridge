@@ -50,7 +50,7 @@ test('moving a list surface never slides its rows back across adjacent controls'
   } finally { globalThis.getComputedStyle = previous; }
 });
 
-test('a same-frame reading-anchor exclusion overrides an earlier reorder', () => {
+test('a same-frame explicit exclusion overrides an earlier reorder', () => {
   const frames = [];
   let top = 100, moves = 0;
   const doc = { documentElement: {}, defaultView: { requestAnimationFrame: (fn) => frames.push(fn) } };
