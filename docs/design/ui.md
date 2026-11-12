@@ -3508,7 +3508,8 @@ they are un-parked.
   while its cause stands, except for a failed or refused answer delivery on the session card
   (#2212): its existing red "Your answer: Couldn't send it: …" or
   "Your answer: The machine refused this answer: …" receipt stays after the question closes,
-  even when the outcome arrives later. Keeping a typed draft when the question closes no longer
+  even when the outcome arrives later, but only while no question is live. A new question or the
+  same question returning clears that card receipt. Keeping a typed draft when the question closes no longer
   suppresses its receipt.
   When the question it was about closes, a stale
   answer line becomes the neutral "No longer waiting" (no tone, never prefixed "Your answer:"),

@@ -1190,7 +1190,8 @@ answer's card then says "You answered · *value*" in text2 (a tap's option, free
 line cut to about 40 characters, nothing for a form of several fields). There is no badge and no
 "Delivered" line. Any other outcome returns Send to rest at once and says why on the line. A
 failed or refused answer delivery keeps its existing red receipt on the session card after the
-question closes, including an outcome arriving after closure (#2212). A typed unsent answer is
+question closes, including an outcome arriving after closure, while no question is live (#2212).
+A new question or the same question returning clears that card receipt. A typed unsent answer is
 still kept when the question closes, without suppressing its receipt. Stale and offline still
 become the brief neutral "No longer waiting" line, and busy still clears; delivery, retry, toast
 and closed-question history behavior is unchanged. A stage only moves forward, across resends

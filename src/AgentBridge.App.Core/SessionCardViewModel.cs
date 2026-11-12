@@ -440,9 +440,9 @@ public sealed partial class SessionCardViewModel : Observable
     void UpdateReceipt()
     {
         var e = receiptKey is null ? null : ctx.Deliveries.Get(receiptKey);
-        // Failed and refused attempts remain visible (#2212). Stale and offline become the
-        // neutral closed line; busy still clears with its question (#1193, #1195).
-        if (e is not null && !QuestionViewModel.OutlivesQuestion(e, keepFailures: true))
+        // Failed and refused attempts remain visible only while no question is live (#2212).
+        // Stale and offline become the neutral closed line; busy still clears (#1193, #1195).
+        if (e is not null && !QuestionViewModel.OutlivesQuestion(e, keepFailures: question is null))
         {
             receiptKey = null;
             if (question is null && e.Outcome != "busy") { ShowClosed(); return; }
