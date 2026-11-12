@@ -129,6 +129,67 @@ test('changed lists get a new validator and stale conditional answers keep their
   assert.equal(stale.headers.get('age'), '3601', 'clients can still reject a list over one hour old');
 });
 
+test('a changed GitHub list replaces an expired copy that holds an upstream ETag', async (t) => {
+  const advance = reset(t);
+  upstream = [{ ...ok('[{"tag_name":"v0.1.1"}]'), headers: { etag: '"github-old"' } }];
+  const first = await get(P);
+  const oldTag = first.headers.get('etag');
+  advance(300);
+  upstream = [{ ...ok('[{"tag_name":"v0.1.2"}]'), headers: { etag: '"github-new"' } }];
+  const changed = await get(P, { 'if-none-match': oldTag });
+  assert.equal(calls[1].headers.get('if-none-match'), '"github-old"');
+  assert.equal(changed.status, 200);
+  assert.equal(await changed.text(), '[{"tag_name":"v0.1.2"}]');
+  assert.notEqual(changed.headers.get('etag'), oldTag);
+  assert.equal(changed.headers.get('age'), '0');
+  advance(1);
+  const hit = await get(P);
+  assert.equal(await hit.text(), '[{"tag_name":"v0.1.2"}]');
+  assert.equal(hit.headers.get('etag'), changed.headers.get('etag'));
+  assert.equal(hit.headers.get('age'), '1');
+  assert.equal(calls.length, 2, 'the replacement is cached');
+  advance(299);
+  upstream = [{ status: 304, body: null }];
+  const validated = await get(P, { 'if-none-match': changed.headers.get('etag') });
+  assert.equal(calls[2].headers.get('if-none-match'), '"github-new"');
+  assert.equal(validated.status, 304, 'the replacement upstream ETag is cached too');
+});
+
+for (const [label, failure] of [
+  ['403', { status: 403, body: '{}' }],
+  ['500', { status: 500, body: 'unavailable' }],
+  ['network error', new Error('network')],
+]) {
+  test(`a ${label} with an upstream ETag keeps the stale list and its growing Age`, async (t) => {
+    const advance = reset(t);
+    const body = '[{"tag_name":"v0.1.1"}]';
+    upstream = [{ ...ok(body), headers: { etag: '"github-list"' } }];
+    const first = await get(P);
+    const etag = first.headers.get('etag');
+    advance(300);
+    for (const [age, headers, status] of [[300, {}, 200], [3601, { 'if-none-match': etag }, 304]]) {
+      upstream = [failure];
+      const stale = await get(P, headers);
+      assert.equal(calls.at(-1).headers.get('if-none-match'), '"github-list"');
+      assert.equal(stale.status, status);
+      assert.equal(await stale.text(), status === 200 ? body : '');
+      assert.equal(stale.headers.get('etag'), etag);
+      assert.equal(stale.headers.get('age'), String(age));
+      advance(3301);
+    }
+    assert.equal(calls.length, 3, 'failed refreshes do not renew freshness');
+  });
+}
+
+test('client Authorization is never forwarded to GitHub', async (t) => {
+  reset(t);
+  upstream = [ok('[]'), ok('[]')];
+  await get(P, { authorization: 'Bearer untrusted-client-token' });
+  assert.equal(calls[0].headers.get('authorization'), null);
+  await get(`${P}?page=2`, { authorization: 'Bearer untrusted-client-token' }, { GITHUB_TOKEN: 'worker-only-token' });
+  assert.equal(calls[1].headers.get('authorization'), 'Bearer worker-only-token');
+});
+
 for (const [label, env, seconds] of [
   ['without a token', {}, 300],
   ['with an empty token', { GITHUB_TOKEN: '' }, 300],

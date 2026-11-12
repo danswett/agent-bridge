@@ -24,6 +24,8 @@ unauthenticated GitHub rate limit. It serves one route only:
 Risk: Cloudflare egress IPs are shared, so GitHub may rate limit the refresh. Stale-on-error covers short
 gaps. Creating the optional read-only token secret remains an owner decision; this code does not
 create a credential or deploy anything. Without it, freshness stays at 300 seconds.
+After owner approval, the deployment operator can run `wrangler secret put GITHUB_TOKEN` from this
+directory and enter the read-only token at the prompt; never put its value in `wrangler.toml`.
 The relay remains untrusted transport: client `CdnProblem` validation is unchanged, and clients
 still reject lists older than one hour using `Age`.
 
