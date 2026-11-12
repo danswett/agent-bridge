@@ -443,6 +443,19 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         lock (gate) { return Remove(r => r.Credential.Kind == "session" && r.Credential.Session == session, why); }
     }
 
+    public bool RevokeScript(string name)
+    {
+        if (!ValidScriptPart(name)) { throw new ArgumentException("invalid script name", nameof(name)); }
+        var principal = $"script:{machine}/{name}";
+        lock (gate)
+        {
+            if (problem is not null) { throw new InvalidOperationException("agent credentials are unavailable"); }
+            var removed = Remove(r => r.Credential.Kind == "script" && r.Credential.Principal == principal, "revoked by a person at this machine");
+            if (problem is not null) { throw new InvalidOperationException("could not save script revocation; the credential store is unavailable"); }
+            return removed;
+        }
+    }
+
     // A session's process ended: whatever it held dies with it (§3.4 "Revocation").
     public int RevokeEnded(Func<int, DateTimeOffset, bool> sameProcessAlive)
     {

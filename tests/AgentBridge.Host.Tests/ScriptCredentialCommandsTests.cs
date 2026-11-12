@@ -28,6 +28,36 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
         .SelectMany(File.ReadAllLines).Select(s => JsonSerializer.Deserialize<JsonElement>(s)).ToArray();
 
     [Fact]
+    public void Revoking_a_script_name_removes_both_rotations_durably_without_revoking_other_grants()
+    {
+        var first = credentials.MintScript("pump-wake");
+        credentials.MintScript("pump-wake");
+        credentials.MintScript("other-script");
+        credentials.Mint("session1", "launch1", 100, DateTimeOffset.UtcNow, AgentProtocol.ScopeRead);
+        credentials.Accept(channel, first.Credential);
+        Assert.NotNull(credentials.Of(channel));
+        Assert.True(credentials.RevokeScript("pump-wake"));
+        Assert.Null(credentials.Of(channel));
+        Assert.False(credentials.IsLive(first.Credential));
+        Assert.Equal(2, credentials.Count);
+        Assert.Equal(2, new AgentCredentials(fixture.Root, "machine1").Count);
+        Assert.False(credentials.RevokeScript("pump-wake"));
+    }
+
+    [Fact]
+    public void Revoking_a_script_name_reports_invalid_input_and_persistence_failure_without_claiming_success()
+    {
+        credentials.MintScript("pump-wake");
+        var invalid = Assert.Throws<ArgumentException>(() => credentials.RevokeScript("../private-input"));
+        Assert.DoesNotContain("private-input", invalid.Message);
+        Assert.Equal(1, credentials.Count);
+        Directory.CreateDirectory(Path.Combine(fixture.Root, AgentCredentials.FileName + ".tmp"));
+        var failed = Assert.Throws<InvalidOperationException>(() => credentials.RevokeScript("pump-wake"));
+        Assert.Contains("could not save", failed.Message);
+        Assert.NotNull(credentials.Problem);
+    }
+
+    [Fact]
     public async Task Add_places_a_protected_secret_once_and_only_returns_safe_metadata()
     {
         var result = JsonSerializer.SerializeToElement(await Handler()(channel, "scripts.add", Name()), ProtocolJson.Options);
