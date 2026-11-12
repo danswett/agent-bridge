@@ -15,18 +15,15 @@ public sealed class KeepAwakeSchedulerTests(ITestOutputHelper output)
     public async Task Real_clock_movement_during_registration_does_not_create_retry_timers()
     {
         var clock = new RealClock();
-        var passed = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-        await using var service = Service(clock, called: () => passed.TrySetResult(clock.Timers),
+        await using var service = Service(clock, called: clock.PassReached,
             firstPass: TimeSpan.FromMilliseconds(250));
         var watch = Stopwatch.StartNew();
         service.Start();
 
-        var completed = await Task.WhenAny(passed.Task, clock.Retried.Task).WaitAsync(TimeSpan.FromSeconds(5));
+        var count = await clock.Observed.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        var count = passed.Task.IsCompleted ? await passed.Task : clock.Timers;
-        output.WriteLine($"Real UTC clock: {count} timers in {watch.Elapsed.TotalMilliseconds:F3} ms.");
-        Assert.Same(passed.Task, completed);
-        Assert.Equal(1, await passed.Task);
+        output.WriteLine($"Real UTC clock: first outcome {count} timers, {clock.Timers} observed in {watch.Elapsed.TotalMilliseconds:F3} ms.");
+        Assert.Equal(1, count);
     }
 
     [Theory]
@@ -170,7 +167,8 @@ public sealed class KeepAwakeSchedulerTests(ITestOutputHelper output)
     {
         int timers;
         public int Timers => Volatile.Read(ref timers);
-        public TaskCompletionSource Retried { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<int> Observed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public void PassReached() => Observed.TrySetResult(Timers);
         public override DateTimeOffset GetUtcNow() => System.GetUtcNow();
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
@@ -182,7 +180,8 @@ public sealed class KeepAwakeSchedulerTests(ITestOutputHelper output)
                 timer.Dispose();
                 throw new TimeoutException("The system UTC clock did not advance.");
             }
-            if (Interlocked.Increment(ref timers) > 1) { Retried.TrySetResult(); }
+            var count = Interlocked.Increment(ref timers);
+            if (count > 1) { Observed.TrySetResult(count); }
             return timer;
         }
     }
