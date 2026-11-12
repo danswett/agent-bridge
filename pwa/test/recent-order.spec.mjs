@@ -220,13 +220,24 @@ test('a timed anchoring scroll protects unchanged visible approval controls for 
   await expect(page.locator('#needs-you .needs-you-list')).not.toHaveAttribute('data-arriving', '');
 });
 
-test('a normal-motion batch glides and anchors the row being read', async ({ page }) => {
+async function normalMotionBatch(page, initialBatch = false) {
   await setup(page, 1440);
+  if (initialBatch) {
+    await page.evaluate(() => {
+      const animate = Element.prototype.animate;
+      Element.prototype.animate = function (...args) {
+        const a = animate.apply(this, args);
+        if (this.matches('.session')) { a.playbackRate = 0.1; }
+        return a;
+      };
+    });
+  }
   await page.evaluate((id) => {
     const d = window.agentBridgeDemo;
     for (let i = 0; i < 12; i++) { d.upsert({ ...d.host.get(id), id: `batch-${String(i).padStart(2, '0')}` }); }
   }, D);
   await page.clock.runFor(6000);
+  if (initialBatch) { await firstBatch(page, C); }
   const pane = page.locator('#list-pane');
   await pane.evaluate((el) => { el.scrollTop = 300; });
   await pane.dispatchEvent('scroll');
@@ -239,8 +250,23 @@ test('a normal-motion batch glides and anchors the row being read', async ({ pag
     return { id: row.dataset.id, top: row.getBoundingClientRect().top, scroll: el.scrollTop };
   });
   expect(anchor.scroll).toBeGreaterThan(0);
+  if (initialBatch) {
+    await page.evaluate(() => {
+      for (const a of document.getAnimations()) {
+        if (/^ab-motion-(reorder|shift)$/.test(a.id)) { a.finish(); }
+      }
+    });
+  }
   await update(page, 'batch-11');
   await page.clock.runFor(5000);
   expect(Math.abs(await row(page, anchor.id).evaluate((el) => el.getBoundingClientRect().top) - anchor.top)).toBeLessThan(2);
   expect(await page.evaluate(() => window.__recentMoves.some((a) => a.id === 'ab-motion-reorder'))).toBe(true);
+}
+
+test('a normal-motion batch glides and anchors the row being read', async ({ page }) => {
+  await normalMotionBatch(page);
+});
+
+test('a normal-motion batch anchors the row after an initial glide finishes', async ({ page }) => {
+  await normalMotionBatch(page, true);
 });
