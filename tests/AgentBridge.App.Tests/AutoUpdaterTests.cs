@@ -1417,6 +1417,31 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task Waiting_for_Windows_to_release_installation_files_is_not_reported_as_installing()
+    {
+        await StartAsync();
+        await auto.TickAsync();
+        var probes = 0;
+        var premature = 0;
+        preflight = () => Interlocked.Increment(ref probes) == 1 ? "a fixture holding runtime.dll" : null;
+        auto.StateChanged += () =>
+        {
+            if (Volatile.Read(ref probes) < 2 && auto.State.Phase == UpdatePhase.Installing)
+            {
+                Interlocked.Exchange(ref premature, 1);
+            }
+        };
+
+        var update = auto.RestartToUpdateAsync();
+        await InstallReleaseWaitTests.FinishAsync(update, () => Volatile.Read(ref probes) < 2, held, time);
+
+        Assert.Equal(0, premature);
+        Assert.Null(await update);
+        Assert.True(updater.Applied);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task A_retry_time_far_in_the_future_is_capped_once_so_it_stays_put_and_then_elapses()
     {
         InstallBetweenTurns();
