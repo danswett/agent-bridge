@@ -154,7 +154,13 @@ public sealed class FleetFindTests : IDisposable
         Assert.Equal(own.Id, Assert.Single(reply.GetProperty("machines").EnumerateArray()).GetProperty("machine").GetString());
         Assert.Equal(own.Id, Assert.Single(reply.GetProperty("sessions").EnumerateArray()).GetProperty("machine").GetString());
         Assert.DoesNotContain(other.Id, reply.GetRawText());
-        Assert.DoesNotContain(other.Relay.AccountId!, reply.GetRawText());
+        Assert.NotEqual(own.Relay.AccountId, other.Relay.AccountId);
+        Assert.Equal(["machines", "sessions"], reply.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal));
+        Assert.All(reply.GetProperty("machines").EnumerateArray(), m =>
+            Assert.Equal(["lastSeen", "machine", "machineName", "state"], m.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal)));
+        Assert.All(reply.GetProperty("sessions").EnumerateArray(), s =>
+            Assert.Equal(["machine", "machineName", "machineOnline", "node", "secondsInState", "since", "state"],
+                s.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal)));
     }
 
     [Fact, Trait("Category", "Network")]
