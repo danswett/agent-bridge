@@ -158,6 +158,33 @@ public sealed class FleetFindTests : IDisposable
     }
 
     [Fact, Trait("Category", "Network")]
+    public async Task A_real_roster_read_keeps_a_disconnected_machine_after_its_session_record_is_gone()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        await using var own = await relay.ConnectAsync(relay.TokenFor(1, "own"), "own-host", "host");
+        await using var leaving = await relay.ConnectAsync(relay.TokenFor(1, "leaving"), "offline-box", "host");
+        await own.Relay.WaitForPeerAsync(p => p.Id == leaving.Id, TimeSpan.FromSeconds(10));
+        var hex = new string('a', 16);
+        await leaving.Relay.RegistryPutAsync(Body(new
+        {
+            v = 1, machine = leaving.Id, epoch = hex, seq = 1, at = DateTimeOffset.UtcNow, truncated = false,
+            sessions = new[] { new { id = hex, node = "agent_bridge_" + hex, state = "idle", since = Started } },
+        }));
+        await leaving.DisposeAsync();
+        await Wait.UntilAsync(() => own.Relay.Known?.Any(k => k.Id == leaving.Id) == true, "the disconnected machine is known");
+        var metadata = Assert.Single(own.Relay.Known!, k => k.Id == leaving.Id);
+        var roster = new RelayFleetRoster();
+        roster.Attach(own.Relay);
+        var snapshot = await roster.ReadScopedAsync(default);
+        Assert.Equal(own.Relay.AccountId, snapshot.FleetScope);
+        var gone = Assert.Single(snapshot.Machines, m => m.Id == leaving.Id);
+        Assert.False(gone.Online);
+        Assert.Empty(gone.Sessions);
+        Assert.Equal(metadata.Name, gone.Name);
+        Assert.Equal(metadata.LastSeen, gone.LastSeen);
+    }
+
+    [Fact, Trait("Category", "Network")]
     public async Task A_real_relay_connection_supplies_its_account_scope_and_never_resolves_another_accounts_name()
     {
         if (!OperatingSystem.IsWindows()) { return; }

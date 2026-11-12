@@ -361,6 +361,31 @@ public sealed class FleetListTests : IDisposable
         Assert.Equal(legacy, reply.GetProperty("sessions").GetRawText());
     }
 
+    [Theory]
+    [InlineData(true, "unverified")]
+    [InlineData(false, "offline")]
+    public async Task Known_metadata_never_fills_a_missing_display_name_in_legacy_session_or_find_replies(bool online, string result)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        roster.Machines = RelayFleetRoster.Parse(new[]
+        {
+            JsonSerializer.SerializeToElement(new
+            {
+                machine = "m2", online,
+                record = new { sessions = new[] { new { node = "n1", name = "my project", state = "working", since = Started } } },
+            }),
+            Body("""{"known":[{"machine":"m2","name":"old-name","lastSeen":"2026-11-07T11:00:00Z"}]}"""),
+        });
+        var chan = Hello(AgentProtocol.ScopeRead);
+        var op = Op();
+        var reply = JsonSerializer.SerializeToElement(await op.HandleAsync(chan, Body("{}")), Web);
+        var legacy = $$"""[{"machine":"m2","node":"n1","state":"working","since":"2026-11-07T12:00:00+00:00","secondsInState":90,"machineOnline":{{online.ToString().ToLowerInvariant()}}}]""";
+        Assert.Equal(legacy, reply.GetProperty("sessions").GetRawText());
+        var found = JsonSerializer.SerializeToElement(await op.FindAsync(chan, Body("""{"name":"my project"}""")), Web);
+        Assert.Equal(result, found.GetProperty("result").GetString());
+        Assert.False(found.GetProperty("machines")[0].TryGetProperty("machineName", out _));
+    }
+
     static string[] Names(string json) =>
         JsonDocument.Parse(json).RootElement.GetProperty("sessions")[0].EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal).ToArray();
 

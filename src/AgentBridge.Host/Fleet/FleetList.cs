@@ -42,7 +42,7 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     {
         var current = Volatile.Read(ref relay) ?? throw new InvalidOperationException("refused: this host isn't connected to the relay");
         if (string.IsNullOrWhiteSpace(current.AccountId)) { throw new InvalidOperationException("refused: the fleet connection has no authenticated account scope"); }
-        var frames = await current.RegistryGetAsync(ct);
+        var frames = await current.RegistryGetAsync(includeKnown: true, ct: ct);
         if (!ReferenceEquals(current, Volatile.Read(ref relay))) { throw new InvalidOperationException("refused: the fleet connection changed during lookup"); }
         return new(current.AccountId, Parse(frames));
     }
@@ -85,7 +85,12 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
             else
             {
                 var machine = machines[index];
-                machines[index] = machine with { Name = machine.Name ?? entry.Name, LastSeen = machine.LastSeen ?? entry.LastSeen };
+                // A fallback name must not change legacy session or find replies.
+                machines[index] = machine with
+                {
+                    Name = machine.Name ?? (machine.Sessions.Count == 0 ? entry.Name : null),
+                    LastSeen = machine.LastSeen ?? entry.LastSeen,
+                };
             }
         }
         return machines;
