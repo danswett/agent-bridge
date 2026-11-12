@@ -1,10 +1,16 @@
 import { test, expect } from '@playwright/test';
+import { motionsDone } from './nav.mjs';
 
 const COPILOT = '02d9e5d5-6b35-49bd-b083-39572fbff648';
 const CLAUDE = '6f1c2b7e-claude-example';
 const CODEX = '019a1b2c-codex-example';
 const row = (page, id) => page.locator(`.session[data-id="${id}"]`);
 const header = (page) => page.getByRole('button', { name: /^Team, 2 sessions/ });
+
+async function expectGroupMotions(page) {
+  expect(await page.evaluate(() => window.groupMotions.some((a) => a.id === 'ab-motion-listItem'))).toBe(true);
+  expect(await page.evaluate((id) => window.groupMotions.some((a) => a.id === 'ab-motion-shift' && a.effect.target.dataset.id === id), COPILOT)).toBe(true);
+}
 
 async function setup(page) {
   await page.goto('?demo=1&static=1');
@@ -25,6 +31,32 @@ async function setup(page) {
   await page.reload();
   await page.waitForSelector('html[data-demo-ready]');
 }
+
+test('group motion checks wait for a queued frame after the rows have settled', async ({ page }) => {
+  await setup(page);
+  await motionsDone(page);
+  await page.evaluate(async (id) => {
+    const { enter, slide } = await import('/js/ui/motion.js');
+    const target = document.querySelector(`.session[data-id="${id}"]`);
+    const records = [enter(target, 'listItem')];
+    Object.defineProperty(window, 'groupMotions', {
+      get() { window.groupMotionsReads = (window.groupMotionsReads ?? 0) + 1; return records; },
+    });
+    window.releaseGroupMotions = () => new Promise((resolve) => {
+      requestAnimationFrame(() => {
+        records.push(slide(target, 'shift', 0, 1));
+        resolve();
+      });
+    });
+  }, COPILOT);
+  const checked = expectGroupMotions(page).then(
+    () => ({ passed: true }),
+    (error) => ({ passed: false, error: error.message }),
+  );
+  await page.waitForFunction(() => window.groupMotionsReads >= 2);
+  await page.evaluate(() => window.releaseGroupMotions());
+  expect(await checked).toEqual({ passed: true });
+});
 
 test('a collapsed group keeps its needs-you row visible, counts it, and remembers collapse', async ({ page }) => {
   await setup(page);
@@ -181,6 +213,7 @@ for (const width of [1440, 390]) {
       await expect.poll(() => groupRows(page, 'Personal')).toEqual([CLAUDE, COPILOT]);
       await page.getByRole('button', { name: /^Team, 0 sessions/ }).click();
       await chooseGroup(page, CLAUDE);
+      await motionsDone(page);
       await page.evaluate(() => {
         window.groupMotions = [];
         const animate = Element.prototype.animate;
@@ -189,8 +222,7 @@ for (const width of [1440, 390]) {
       await page.getByRole('menuitemradio', { name: 'Team', exact: true }).click();
       await expect(row(page, CLAUDE)).toHaveCount(0);
       await expect(page.getByRole('button', { name: /^Team, 1 session/ })).toBeFocused();
-      expect(await page.evaluate(() => window.groupMotions.some((a) => a.id === 'ab-motion-listItem'))).toBe(true);
-      expect(await page.evaluate((id) => window.groupMotions.some((a) => a.id === 'ab-motion-shift' && a.effect.target.dataset.id === id), COPILOT)).toBe(true);
+      await expectGroupMotions(page);
     });
 
     test('New group validates names inline, creates expanded at the foot and retains the row after reload', async ({ page }) => {
