@@ -17,8 +17,7 @@ for (const width of [390, 1024]) {
 
     test('a row leaves where it was while its neighbour eases up without relayout, then a burst opens one slot', async ({ page }) => {
       const sample = await page.evaluate(async () => {
-        const d = window.agentBridgeDemo;
-        const rows = [...document.querySelectorAll('#session-list > .session')];
+        const d = window.agentBridgeDemo, rows = [...document.querySelectorAll('#session-list > .session')];
         const neighbour = rows[1], removed = rows[0], before = neighbour.getBoundingClientRect().top;
         d.client.store.remove(removed.dataset.id);
         d.page.view.render();
@@ -141,7 +140,6 @@ for (const width of [390, 1024]) {
       expect(Math.abs(positions.immediate - positions.before)).toBeLessThan(1);
       expect(Math.abs(positions.after - positions.before)).toBeLessThan(1);
     });
-
     for (const via of ['Alt+Down', 'menu']) {
       test(`${via} keeps row identity, focus and a press begun before the move`, async ({ page }) => {
         const id = await page.locator('#session-list > .session').nth(1).getAttribute('data-id');
@@ -176,7 +174,6 @@ for (const width of [390, 1024]) {
         expect(await button.evaluate((el) => el === window.keptMotion.button && el.parentElement === window.keptMotion.row)).toBe(true);
       });
     }
-
     for (const reduced of [false, true]) {
       test(`delegate chips arrive, leave and ease aside${reduced ? ' without travel under reduced motion' : ''}`, async ({ page }) => {
         await page.setViewportSize({ width: 1440, height: 900 });
