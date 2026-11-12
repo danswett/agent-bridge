@@ -13,7 +13,7 @@
                          Text="{Binding Note, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          AutomationProperties.AutomationId="FeedbackNote" AutomationProperties.Name="What happened?" />
                 <StackPanel Spacing="8">
-                    <Button Content="Choose screenshot (PNG)" Click="OnScreenshot" AutomationProperties.AutomationId="FeedbackScreenshot" AutomationProperties.Name="Choose an optional PNG screenshot" />
+                    <Button Content="Choose screenshot (PNG)" Click="OnScreenshot" AutomationProperties.AutomationId="FeedbackScreenshot" AutomationProperties.Name="Choose screenshot (PNG), optional" />
                     <Button Content="Remove screenshot" Click="OnRemoveScreenshot" AutomationProperties.AutomationId="FeedbackRemoveScreenshot" AutomationProperties.Name="Remove screenshot" />
                 </StackPanel>
                 <TextBlock x:Name="ScreenshotStatus" TextWrapping="Wrap" AutomationProperties.AutomationId="FeedbackScreenshotStatus" AutomationProperties.Name="Screenshot choice" />

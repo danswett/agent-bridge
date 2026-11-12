@@ -31,7 +31,7 @@ public partial class App : Application
     ToastResponder? responder;
     RegisteredWaitHandle? showWait;
     bool quitting;
-    readonly HttpClient feedbackHttp = new();
+    readonly HttpClient feedbackHttp = BlobHttp.CreateClient();
 
     internal App(AppOptions options, SingleInstance single, bool installed)
     {

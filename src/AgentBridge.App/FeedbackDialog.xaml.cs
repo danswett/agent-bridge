@@ -17,6 +17,7 @@ public sealed partial class FeedbackDialog : ContentDialog
     readonly DispatcherTimer retryClock = new() { Interval = TimeSpan.FromSeconds(1) };
     bool closed;
     bool choosingScreenshot;
+    Button? sendingAction;
 
     public FeedbackDialog(IFeedbackBundleSource? source = null, IFeedbackSender? sender = null, string? sessionId = null, string? sessionTitle = null)
     {
@@ -67,13 +68,20 @@ public sealed partial class FeedbackDialog : ContentDialog
 
     void Draw()
     {
+        var focused = Send.FocusState != FocusState.Unfocused ? Send : Retry.FocusState != FocusState.Unfocused ? Retry : null;
+        var sending = send?.IsSending == true;
         Preview.Text = review?.PreviewText ?? "";
         Choices.Visibility = Included.Visibility = Ui.Show(review is not null);
         Choices.IsEnabled = send is not null && !choosingScreenshot && !send.IsSending && send.State != FeedbackSendState.Sent;
-        Send.Visibility = Ui.Show(send is not null && send.State is FeedbackSendState.Gathering or FeedbackSendState.Ready or FeedbackSendState.Sending);
-        Send.IsEnabled = send?.CanSend == true && !choosingScreenshot && PreviewVisible;
-        Retry.Visibility = Ui.Show(send is { State: FeedbackSendState.Failed, RetryAt: not null } || send?.CanRetry == true);
-        Retry.IsEnabled = send?.CanRetry == true && !choosingScreenshot && PreviewVisible;
+        Send.Visibility = Ui.Show(send is { State: FeedbackSendState.Gathering or FeedbackSendState.Ready } || sending && sendingAction == Send);
+        Send.IsEnabled = sending && sendingAction == Send || send?.CanSend == true && !choosingScreenshot && PreviewVisible;
+        Retry.Visibility = Ui.Show(sending && sendingAction == Retry || send is { State: FeedbackSendState.Failed, RetryAt: not null } || send?.CanRetry == true);
+        Retry.IsEnabled = sending && sendingAction == Retry || send?.CanRetry == true && !choosingScreenshot && PreviewVisible;
+        if (focused is { Visibility: Visibility.Collapsed })
+        {
+            var target = Retry.Visibility == Visibility.Visible && Retry.IsEnabled ? Retry : GetTemplateChild("CloseButton") as Button;
+            target?.Focus(FocusState.Programmatic);
+        }
         RetryHint.Text = send?.RetryHint ?? "";
         var text = choosingScreenshot ? "Reading screenshot..." : (send?.Message ?? FeedbackSenderFactory.UnavailableText);
         if (text.Length == 0) { text = PreviewVisible ? "Ready to send feedback." : "Expand What's included to review the report before sending."; }
@@ -96,8 +104,8 @@ public sealed partial class FeedbackDialog : ContentDialog
         if (changed) { FrameworkElementAutomationPeer.CreatePeerForElement(Status)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged); }
     }
 
-    async void OnSend(object sender, RoutedEventArgs e) { if (send is not null && !choosingScreenshot && PreviewVisible) { await send.SendAsync(); } }
-    async void OnRetry(object sender, RoutedEventArgs e) { if (send is not null && !choosingScreenshot && PreviewVisible) { await send.RetryAsync(); } }
+    async void OnSend(object sender, RoutedEventArgs e) { if (send?.CanSend == true && !choosingScreenshot && PreviewVisible) { sendingAction = Send; await send.SendAsync(); } }
+    async void OnRetry(object sender, RoutedEventArgs e) { if (send?.CanRetry == true && !choosingScreenshot && PreviewVisible) { sendingAction = Retry; await send.RetryAsync(); } }
     void OnTurns(object sender, RoutedEventArgs e) { if (review is not null) { review.IncludeSessionTurns = Turns.IsChecked == true; } }
     void OnRemoveScreenshot(object sender, RoutedEventArgs e) { if (review is not null) { review.ScreenshotPng = null; Draw(); } }
 
