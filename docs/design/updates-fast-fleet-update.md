@@ -188,6 +188,9 @@ asset, the asset's `sha256:` digest from GitHub's metadata, and the body checked
 release relay's list may only tell a machine that something new exists; it never supplies the digest,
 never clears a halt, and never hides one.
 
+The policy metadata list is limited to 1 MiB, even without Content-Length. An oversized
+list or a saved policy with a null or missing body is unreadable; known positive halts remain.
+
 **Cost.** The read moves into `ReleaseDiscovery`'s file and lock, so it is once per machine, not per
 process, and becomes conditional (ETag). Machines are unauthenticated, so a 304 is **not** exempt: it
 costs one of the 60 an hour per IP, as does the 6-hourly revalidation. The budget is therefore **at

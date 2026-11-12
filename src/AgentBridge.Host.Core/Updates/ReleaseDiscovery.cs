@@ -485,7 +485,10 @@ public sealed partial class ReleaseDiscovery : IDisposable
         Quota? quota = null;
         try
         {
-            using var response = await http.SendAsync(request, cancellationToken);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(http.Timeout);
+            using var response = await http.SendAsync(request, url == HaltPolicyList
+                ? HttpCompletionOption.ResponseHeadersRead : HttpCompletionOption.ResponseContentRead, timeout.Token);
             if (url is GitHubList or HaltPolicyList && int.TryParse(Header(response, "X-RateLimit-Remaining"), NumberStyles.None, CultureInfo.InvariantCulture, out var remaining))
             {
                 quota = new(remaining, time.GetUtcNow());
@@ -495,7 +498,8 @@ public sealed partial class ReleaseDiscovery : IDisposable
             if (status == HttpStatusCode.NotModified) { return new Answer(status, ETag: tag, Quota: quota); }
             if (status == HttpStatusCode.OK)
             {
-                var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                if (url == HaltPolicyList) { await response.Content.LoadIntoBufferAsync(PolicyLargest, timeout.Token); }
+                var body = await response.Content.ReadAsStringAsync(timeout.Token);
                 // Only a list is kept: anything else would be served as the answer for an interval.
                 return IsList(body) ? new Answer(status, body, tag, Quota: quota) : new Answer(status, Problem: Problems.Unexpected, Quota: quota);
             }

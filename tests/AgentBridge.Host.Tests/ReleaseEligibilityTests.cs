@@ -76,9 +76,11 @@ public sealed class ReleaseEligibilityTests : IDisposable
         else { policy["body"] = null; }
         File.WriteAllText(path, state.ToJsonString());
 
-        var eligibility = new ReleaseEligibility(Policy(handler));
+        var source = Policy(handler);
+        var eligibility = new ReleaseEligibility(source);
         Assert.Equal(new HaltCheck(true), await eligibility.IsHalted("0.1.2349"));
         Assert.Equal(new HaltCheck(null, ReleaseBlockedReason.HaltListUnavailable), await eligibility.IsHalted("0.1.2350"));
+        Assert.False(source.Snapshot.Fresh);
         Assert.Equal(new ReleaseEligibilityResult(false, ReleaseBlockedReason.Halted), await eligibility.Evaluate("0.1.2349", "0.1.999"));
         Assert.Equal(new ReleaseEligibilityResult(false, ReleaseBlockedReason.HaltListUnavailable), await eligibility.Evaluate("0.1.2350", "0.1.999"));
         Assert.Equal(2, handler.Requests.Count);
