@@ -337,6 +337,7 @@ issuedAt, expiresAt, heads }`, with exactly the members its action has:
 | `update` | `nonce` | none |
 | `forget` | none | none |
 | `attest` | `nonce` | none |
+| `accept-host-sign` | `nonce` | none |
 
 `request` and `session` are lowercase UUIDs; `machine`, `by` and `to` device ids; `question` 1 to
 128 characters of `A–Z a–z 0–9 . _ : -`; `choice` 1 to 256 UTF-8 bytes with no control character;
@@ -350,6 +351,26 @@ minutes after), `future` (issued over 2 minutes after `now`), `expired` (expirin
 (a head the host does not hold: it syncs, then asks again), and for `attest` given the last
 attestation's heads, `regress` (one of those is neither named nor an ancestor of one named).
 Times compare exactly, to the nanosecond.
+
+**`accept-host-sign` (#2287, #1825 slice 2a)** uses this existing v1 person-command
+framing and the `command` presence challenge, not a host-signature domain. Its body
+has exactly `v`, `action`, `request`, `by`, `target: { machine }`, `nonce`,
+`issuedAt`, `expiresAt` and `heads`. It names one receiving host and that channel's
+32-byte hello nonce; no session, question, `to`, `choice` or cosignature is allowed.
+The stateless checks require an active, non-probationary, non-held person's device
+with its recorded presence. A host or unrostered agent principal is `signer`;
+a host key substituted for a person's signature is `signature`; a person's key
+shared with `hostSign` is `host-key`. A cosigner-only wrapper is `unknown-member`,
+not authority from a second signer. An eligible person is not disqualified merely
+because it has cosigned a roster entry.
+
+This slice implements only the command contract and shared C#/PWA checks. Passing
+them does not enable `AcceptHostSign`, approve a host add, or persist a transition.
+The receiving host must still meet the pinned-roster, freshness, signed-verifier
+capability and durable replay/transition obligations in
+[the transition design](../design/roster-v2-transition.md) before enabling v2.
+Reusing an old channel's nonce is `nonce`; detecting a reused request on the same
+channel needs the durable replay store, not this stateless parser.
 
 The library holds no state, so these are **the host's obligations** (R6, and R2 for freshness),
 which no caller may skip:
