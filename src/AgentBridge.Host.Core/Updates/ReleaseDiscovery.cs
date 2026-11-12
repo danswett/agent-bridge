@@ -616,14 +616,11 @@ public sealed partial class ReleaseDiscovery : IDisposable
         {
             if (!File.Exists(StatePath)) { return memory; }
             var disk = JsonSerializer.Deserialize(File.ReadAllText(StatePath), ReleaseDiscoveryJson.Default.State) ?? new State();
-            var policy = MergePolicy(memory.HaltPolicy, disk.HaltPolicy);
-            if (unsaved && disk.Saved == underneath)
-            {
-                var now = time.GetUtcNow();
-                var backoff = Sane(disk, now).NotBefore > (Sane(memory, now).NotBefore ?? DateTimeOffset.MinValue) ? disk : memory;
-                return memory = memory with { HaltPolicy = policy, NotBefore = backoff.NotBefore, Failures = backoff.Failures, Problem = backoff.Problem };
-            }
-            disk = disk with { HaltPolicy = policy };
+            var now = time.GetUtcNow();
+            var backoff = Sane(memory, now).NotBefore is { } wait && wait > now && wait > (Sane(disk, now).NotBefore ?? DateTimeOffset.MinValue) ? memory : disk;
+            disk = disk with { HaltPolicy = MergePolicy(memory.HaltPolicy, disk.HaltPolicy),
+                NotBefore = backoff.NotBefore, Failures = backoff.Failures, Problem = backoff.Problem };
+            if (unsaved && disk.Saved == underneath) { return memory = memory with { HaltPolicy = disk.HaltPolicy, NotBefore = disk.NotBefore, Failures = disk.Failures, Problem = disk.Problem }; }
             (unsaved, underneath) = (false, disk.Saved);
             return memory = disk;
         }
