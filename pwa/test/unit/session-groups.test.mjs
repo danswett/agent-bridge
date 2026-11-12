@@ -257,3 +257,89 @@ test('empty groups show only without narrowing and collapsed unread marks exclud
   assert.equal(o.groupRows(entries, { showEmpty: false }).groups.length, 1);
   assert.equal(o.groupRows(entries, { filtered: true, matches: () => false }).groups.length, 0);
 });
+
+function edgeFixture() {
+  const storage = new MemoryStorage();
+  const o = new SessionOrder({ storage });
+  const list = [...rows, entry('e'), entry('f')];
+  o.arrange(list);
+  const first = o.createGroup('First');
+  const second = o.createGroup('Second');
+  o.setGroup(key('b'), first);
+  o.setGroup(key('a'), first);
+  o.setGroup(key('c'), second);
+  o.setGroup(key('d'), first);
+  o.setPinned(key('d'), true);
+  o.arrange(list);
+  const snapshot = (order = o) => {
+    const arranged = order.arrange(list);
+    const grouped = order.groupRows(arranged.sessions);
+    return { pinned: ids(arranged.pinned), groups: grouped.groups.map((g) => ids(g.visible)), sessions: ids(grouped.sessions) };
+  };
+  return { o, storage, list, first, second, snapshot };
+}
+
+for (const { name, id, delta, group, expected } of [
+  { name: 'last group row moves down to the top of the next group', id: 'b', delta: 1, group: 'second', expected: [['a'], ['b', 'c'], ['e', 'f']] },
+  { name: 'first group row moves up to the foot of the previous group', id: 'c', delta: -1, group: 'first', expected: [['a', 'b', 'c'], [], ['e', 'f']] },
+  { name: 'last row of the last group moves down to the top of Sessions', id: 'c', delta: 1, group: null, expected: [['a', 'b'], [], ['c', 'e', 'f']] },
+  { name: 'first Sessions row moves up to the foot of the last group', id: 'e', delta: -1, group: 'second', expected: [['a', 'b'], ['c', 'e'], ['f']] },
+]) {
+  test(`keyboard ${name} and persists membership and order after reload`, () => {
+    const f = edgeFixture();
+    assert.equal(f.o.moveAcrossGroups(key(id), delta), true);
+    const again = new SessionOrder({ storage: f.storage });
+    assert.equal(again.groupFor(key(id)), group === null ? null : f[group]);
+    const state = f.snapshot(again);
+    assert.deepEqual([...state.groups, state.sessions], expected);
+    assert.deepEqual(state.pinned, ['d']);
+    assert.equal(again.groupFor(key('d')), f.first);
+  });
+}
+
+test('keyboard moves within a group follow displayed neighbours rather than the flat stored order', () => {
+  const f = edgeFixture();
+  assert.equal(f.o.moveAcrossGroups(key('a'), 1), true);
+  assert.deepEqual(f.snapshot().groups, [['b', 'a'], ['c']]);
+  assert.equal(f.o.moveAcrossGroups(key('a'), -1), true);
+  assert.deepEqual(f.snapshot(new SessionOrder({ storage: f.storage })).groups, [['a', 'b'], ['c']]);
+});
+
+test('keyboard moves skip collapsed groups in both directions and can enter an empty expanded group', () => {
+  const f = edgeFixture();
+  f.o.setGroupCollapsed(f.second, true);
+  assert.equal(f.o.moveAcrossGroups(key('b'), 1), true);
+  assert.equal(f.o.groupFor(key('b')), null);
+  f.snapshot();
+  assert.equal(f.o.moveAcrossGroups(key('b'), -1), true);
+  assert.equal(f.o.groupFor(key('b')), f.first);
+  f.snapshot();
+  const empty = f.o.createGroup('Empty');
+  assert.equal(f.o.moveAcrossGroups(key('b'), 1), true);
+  assert.equal(f.o.groupFor(key('b')), empty);
+  assert.deepEqual(f.snapshot(new SessionOrder({ storage: f.storage })).groups, [['a'], [], ['b']]);
+});
+
+test('keyboard moves stop at both unpinned edges and never take a pinned row out of Pinned', () => {
+  const f = edgeFixture();
+  const before = f.storage.raw;
+  for (const [id, delta] of [['a', -1], ['f', 1], ['d', -1], ['d', 1]]) {
+    assert.equal(f.o.moveAcrossGroups(key(id), delta), false);
+  }
+  assert.equal(f.storage.raw, before);
+  assert.deepEqual(f.snapshot(), { pinned: ['d'], groups: [['a', 'b'], ['c']], sessions: ['e', 'f'] });
+});
+
+test('keyboard group moves wait for both rows to be placed and refuse other sorts', () => {
+  const f = edgeFixture();
+  f.o.arrange([...f.list, entry('pending', 'h2')], { settled: (h) => h !== 'h2' });
+  assert.equal(f.o.moveAcrossGroups(key('pending', 'h2'), -1), false);
+  f.o.setGroup(key('pending', 'h2'), f.second);
+  f.o.synced('h2', new Set());
+  f.o.arrange([...f.list, entry('pending', 'h2')], { settled: (h) => h !== 'h2' });
+  assert.equal(f.o.moveAcrossGroups(key('b'), 1), false);
+  for (const sort of ['recent', 'machine']) {
+    f.o.setSort(sort);
+    assert.equal(f.o.moveAcrossGroups(key('a'), 1), false);
+  }
+});
