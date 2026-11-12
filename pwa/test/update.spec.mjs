@@ -26,12 +26,12 @@ test.afterEach(async ({ page }) => {
 test('a release the machine found is shown, and Install downloads it, installs it and says it updated', async ({ page }) => {
   await openDemo(page);
   const block = updateOf(page);
-  await expect(block.locator('.machine-update-line')).toHaveText('0.2.0 is available (running 0.1.0).');
+  await expect(block.locator('.machine-update-line')).toHaveText('Update available · 0.2.0 (running 0.1.0)');
 
   await block.getByRole('button', { name: 'Install 0.2.0 on Demo machine when no session there is busy' }).click();
 
   await expect(block.locator('.machine-update-line')).toHaveText(/^(Downloading 0\.2\.0 \(50%\)|Installing 0\.2\.0: its app and host restart)\u2026$/);
-  await expect(block.locator('.machine-update-line')).toHaveText(/^Up to date: 0\.2\.0, checked /);
+  await expect(block.locator('.machine-update-line')).toHaveText('Up to date · 0.2.0');
   await expect(block.locator('.machine-update-last')).toHaveText('Updated from 0.1.0 to 0.2.0 just now.');
   // Nothing newer: Install goes, Check stays.
   await expect(block.locator('.machine-update-install')).toHaveCount(0);
@@ -50,7 +50,7 @@ test("a press the machine refuses says why on the machine's row, and Check all a
   await block.locator('.machine-update-install').click();
 
   await expect(rowOf(page).getByRole('alert')).toHaveText("Only a person's phone, browser or Windows app can ask a machine to update.");
-  await expect(block.locator('.machine-update-line')).toHaveText('0.2.0 is available (running 0.1.0).');
+  await expect(block.locator('.machine-update-line')).toHaveText('Update available · 0.2.0 (running 0.1.0)');
 
   // On the selected row the line is on the row's plain surface, not the selected tint, directly under
   // the block, and every button that can cause it points at it (#858).
