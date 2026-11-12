@@ -259,12 +259,24 @@ public sealed class FleetListTests : IDisposable
             """{"machine":"expired","online":false,"lastSeen":"2026-11-07T11:59:00Z","record":null}""",
             """
             {"known":[
-              {"machine":"live","name":"old-name","lastSeen":"2026-11-07T11:00:00Z"},
-              {"machine":"expired","name":"quiet-box","lastSeen":"2026-11-07T11:58:00Z"},
+              {"machine":"live","name":"old-name","online":true,"lastSeen":"2026-11-07T11:00:00Z"},
+              {"machine":"expired","name":"quiet-box","online":true,"lastSeen":"2026-11-07T11:58:00Z"},
               {"machine":"gone","name":"offline-box","lastSeen":"2026-11-06T12:00:00Z"}]}
             """,
         }.Select(Body);
         return RelayFleetRoster.Parse(knownFirst ? frames.Reverse() : frames);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Known_machines_without_registry_records_use_supplied_socket_liveness(bool online)
+    {
+        var frame = Body($$"""{"known":[{"machine":"connected","online":{{online.ToString().ToLowerInvariant()}}}]}""");
+        var machine = Assert.Single(RelayFleetRoster.Parse([frame]));
+        Assert.Equal(online, machine.Online);
+        Assert.Empty(machine.Sessions);
+        Assert.Null(machine.LastSeen);
     }
 
     [Theory]

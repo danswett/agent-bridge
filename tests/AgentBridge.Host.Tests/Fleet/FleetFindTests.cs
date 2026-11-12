@@ -123,6 +123,26 @@ public sealed class FleetFindTests : IDisposable
         Assert.DoesNotContain("account-b", result.GetRawText());
     }
 
+    [Fact, Trait("Category", "Network")]
+    public async Task Connected_machines_without_a_registry_record_are_online_including_the_callers_own_host()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        await using var relay = await TestRelay.StartAsync();
+        await using var own = await relay.ConnectAsync(relay.TokenFor(1, "own"), "own-host", "host");
+        await using var peer = await relay.ConnectAsync(relay.TokenFor(1, "own"), "peer-host", "host");
+        await using var app = await relay.ConnectAsync(relay.TokenFor(1, "own"), "own-app", "app");
+        await using var foreign = await relay.ConnectAsync(relay.TokenFor(2, "other"), "foreign-host", "host");
+        var roster = new RelayFleetRoster();
+        roster.Attach(own.Relay);
+        var op = new FleetList(store, roster, audit: new AgentAuditLog(root));
+        var reply = JsonSerializer.SerializeToElement(await op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { })), Web);
+        Assert.Empty(reply.GetProperty("sessions").EnumerateArray());
+        var machines = reply.GetProperty("machines").EnumerateArray().ToList();
+        Assert.Equal(new[] { own.Id, peer.Id }.Order(StringComparer.Ordinal),
+            machines.Select(m => m.GetProperty("machine").GetString()).Order(StringComparer.Ordinal));
+        Assert.All(machines, m => Assert.Equal("online", m.GetProperty("state").GetString()));
+    }
+
     [Theory, Trait("Category", "Network")]
     [InlineData(false, false)]
     [InlineData(true, false)]
