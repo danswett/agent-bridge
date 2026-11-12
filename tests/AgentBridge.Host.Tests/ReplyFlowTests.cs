@@ -861,6 +861,35 @@ public sealed class ReplyFlowTests : IAsyncLifetime
 
     const string FreshSession = "88888888-8888-4888-8888-888888888888";
 
+    [Theory]
+    [InlineData("unreadable")]
+    [InlineData("folder-trust")]
+    [InlineData("startup-question")]
+    public async Task A_first_reply_without_a_followed_launch_carries_the_starting_code_and_its_screen_sub_kind(string kind)
+    {
+        var (transcript, ch) = await FreshAsync(_ => kind switch
+        {
+            "folder-trust" => CopilotTrustQuestion,
+            "startup-question" => ["Hooks need review"],
+            _ => null,
+        });
+
+        var response = await ch.RequestAsync(Ops.SessionReply, new { id = FreshSession, request = Guid.NewGuid().ToString(), text = "hello" });
+        var reply = response.GetProperty("result");
+
+        Assert.Equal("refused", reply.GetProperty("outcome").GetString());
+        Assert.Equal(kind switch
+        {
+            "folder-trust" => FirstReplyWords.AskingTrust("Copilot", false),
+            "startup-question" => FirstReplyWords.AskingAtMachine("Copilot"),
+            _ => FirstReplyWords.WaitingToStart,
+        }, reply.GetProperty("reason").GetString());
+        Assert.Empty(injector.Plans);
+        Assert.False(File.Exists(transcript));
+        Assert.Equal("starting", reply.GetProperty("code").GetString());
+        Assert.Equal(kind, reply.GetProperty("subKind").GetString());
+    }
+
     // A session just started with no first prompt has no transcript yet (Copilot writes it with the
     // first prompt), and its window is what says whether it is ready (#1018).
     async Task<(string Transcript, SecureChannel Channel)> FreshAsync(Func<int, IReadOnlyList<string>?> screen)

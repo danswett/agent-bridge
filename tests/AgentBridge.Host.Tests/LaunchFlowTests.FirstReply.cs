@@ -24,9 +24,9 @@ public sealed partial class LaunchFlowTests
     ];
 
     // The launching device and a second one; replies go from the second.
-    async Task<(SecureChannel Launching, SecureChannel Other, LaunchService Launcher)> ServeWithRepliesAsync(LaunchConfig config, TimeSpan? readyWait = null)
+    async Task<(SecureChannel Launching, SecureChannel Other, LaunchService Launcher)> ServeWithRepliesAsync(LaunchConfig config, TimeSpan? readyWait = null, TimeSpan? follow = null)
     {
-        var launcher = Launcher(config, readyWait: readyWait);
+        var launcher = Launcher(config, readyWait: readyWait, follow: follow);
         var replier = new ReplyService(source, f.Processes, probe, new AnyTarget(), screens, new ReplyOptions
         {
             CopilotHome = f.CopilotHome,
@@ -45,6 +45,67 @@ public sealed partial class LaunchFlowTests
     {
         var r = await RequestAsync(ch, Ops.SessionReply, new { id = session, request = Guid.NewGuid().ToString(), text });
         return (r.GetProperty("outcome").GetString()!, r.TryGetProperty("reason", out var reason) ? reason.GetString() : null);
+    }
+
+    [Theory]
+    [InlineData("unreadable")]
+    [InlineData("folder-trust")]
+    [InlineData("startup-question")]
+    [InlineData("never-ready")]
+    public async Task A_reply_to_a_session_still_starting_is_refused_with_the_starting_code_and_the_words_as_fallback(string kind)
+    {
+        screens.Rows = kind switch
+        {
+            "folder-trust" => TrustRows,
+            "startup-question" => ["Hooks need review"],
+            _ => [],
+        };
+        var (launching, other, _) = await ServeWithRepliesAsync(Config(), readyWait: TimeSpan.FromMilliseconds(100),
+            follow: kind == "never-ready" ? TimeSpan.FromSeconds(1) : null);
+        await LaunchAsync(launching, new { agent = "copilot", workspace = "App" });
+        var id = Assert.Single(starter.Specs).Environment![Launchers.SessionVariable]!;
+        if (kind == "never-ready")
+        {
+            await WaitWhileClockRunsAsync(() => Task.FromResult(logged.Any(l => l.Contains("wait until a prompt is typed at the machine", StringComparison.Ordinal))));
+        }
+
+        var reply = await RequestAsync(other, Ops.SessionReply, new { id, request = Guid.NewGuid().ToString(), text = "hello from the phone" });
+
+        Assert.Equal("refused", reply.GetProperty("outcome").GetString());
+        Assert.Equal(kind switch
+        {
+            "folder-trust" => FirstReplyWords.AskingTrust("Copilot", false),
+            "startup-question" => FirstReplyWords.AskingAtMachine("Copilot"),
+            "never-ready" => FirstReplyWords.NotSeenReady("Copilot"),
+            _ => FirstReplyWords.StillStarting("Copilot", false),
+        }, reply.GetProperty("reason").GetString());
+        Assert.Empty(screens.Typed);
+        Assert.Equal("starting", reply.GetProperty("code").GetString());
+        Assert.Equal(kind, reply.GetProperty("subKind").GetString());
+    }
+
+    [Fact]
+    public async Task A_starting_refusal_is_remembered_after_ready_and_a_fresh_retry_checks_the_full_gate()
+    {
+        screens.Rows = TrustRows;
+        var (launching, other, launcher) = await ServeWithRepliesAsync(Config());
+        var asking = await LaunchAsync(launching, new { agent = "copilot", workspace = "App" });
+        var request = new { id = asking.Session!, request = Guid.NewGuid().ToString(), text = "hello from the phone" };
+        var refused = await RequestAsync(other, Ops.SessionReply, request);
+        Assert.Equal("starting", refused.GetProperty("code").GetString());
+        screens.Rows = CopilotReady;
+        await WaitAsync(() => Task.FromResult(launcher.HeldForReply(asking.Session!) is null));
+        Assert.Empty(screens.Typed);
+
+        var replay = await RequestAsync(other, Ops.SessionReply, request);
+        Assert.Equal(refused.GetRawText(), replay.GetRawText());
+        probe.Reason = "agent-ha-bridge is running for this user";
+        var retry = await RequestAsync(other, Ops.SessionReply, new { request.id, request = Guid.NewGuid().ToString(), request.text });
+        Assert.Equal("refused", retry.GetProperty("outcome").GetString());
+        Assert.Equal(probe.Reason, retry.GetProperty("reason").GetString());
+        Assert.False(retry.TryGetProperty("code", out _));
+        Assert.False(retry.TryGetProperty("subKind", out _));
+        Assert.Empty(screens.Typed);
     }
 
     [Fact]
