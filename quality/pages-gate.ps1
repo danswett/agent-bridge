@@ -11,11 +11,13 @@ param(
     [string]$Live = '',
     [string]$Status = '',
     [string]$MainStatus = '',
-    [string[]]$Files = @()
+    [string[]]$Files = @(),
+    [string]$RollbackStatus = ''
 )
 $ErrorActionPreference = 'Stop'
 
 if ($MainStatus -notin @('ahead', 'identical')) { 'skip'; 'main-ancestry-unproven'; return }
+if ($RollbackStatus -ne 'ahead') { 'skip'; 'rollback-held'; return }
 if ($Live -notmatch '^[0-9a-f]{40}$') { 'skip'; 'live-sha-unavailable'; return }
 if ($Live -eq $Head -or $Status -eq 'identical') { 'skip'; 'already-live'; return }
 if ($Status -ne 'ahead') { 'skip'; 'live-ancestry-unproven'; return }

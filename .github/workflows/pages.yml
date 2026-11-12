@@ -1,4 +1,5 @@
 name: Pages
+run-name: ${{ github.event_name == 'workflow_dispatch' && (inputs.ref != '' && 'Pages rollback' || 'Pages resume') || 'Pages' }}
 
 # Publishes the spikes' browser self-tests, so they can be run on real devices (an
 # iPhone's Safari in particular) without any server: https://danswett.github.io/agent-bridge/
@@ -18,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Commit to build and deploy (a rollback); empty builds the ref the run was started on
+        description: Commit to roll back to; empty deploys the current ref and resumes automatic deployment
         required: false
         type: string
 
@@ -86,6 +87,20 @@ jobs:
             $head = $candidate.sha; $live = ''; $status = ''; $files = @()
             $mainStatus = (Read-Api "repos/$env:GITHUB_REPOSITORY/compare/$head...main").status
             try {
+              $history = Read-Api "repos/$env:GITHUB_REPOSITORY/actions/workflows/pages.yml/runs?branch=main&event=workflow_dispatch&per_page=100"
+              if ($null -eq $history.workflow_runs -or $null -eq $history.total_count) { throw 'rollback-history-unavailable' }
+              $rollback = & quality/pages-rollback.ps1 -Runs @($history.workflow_runs) -TotalCount $history.total_count
+            } catch {
+              Write-Warning 'rollback-history-unavailable'
+              $rollback = & quality/pages-rollback.ps1 -Unreadable
+            }
+            Write-Host $rollback.reason
+            $rollbackStatus = if ($rollback.held) { '' } else { 'ahead' }
+            if ($rollback.fence) {
+              try { $rollbackStatus = (Read-Api "repos/$env:GITHUB_REPOSITORY/compare/$($rollback.fence)...$head").status }
+              catch { Write-Warning 'rollback-ancestry-unavailable' }
+            }
+            try {
               $site = (Read-Api "repos/$env:GITHUB_REPOSITORY/pages").html_url.TrimEnd('/')
               $prefix = if ($env:APP_AT_ROOT -eq 'true') { '' } else { '/app' }
               $config = Invoke-RestMethod -Uri "$site$prefix/config.js?gate=$env:GITHUB_RUN_ID" -Headers @{ 'Cache-Control' = 'no-cache' }
@@ -95,7 +110,7 @@ jobs:
                 $status = $compare.status; $files = @($compare.files.filename)
               }
             } catch { Write-Warning 'live-version-unreadable' }
-            $verdict = & quality/pages-gate.ps1 -Head $head -Live $live -Status "$status" -MainStatus $mainStatus -Files $files
+            $verdict = & quality/pages-gate.ps1 -Head $head -Live $live -Status "$status" -MainStatus $mainStatus -Files $files -RollbackStatus $rollbackStatus
             Write-Host $verdict[1]
             "sha=$head" >> $env:GITHUB_OUTPUT
             "### Pages candidate $head ($($verdict[1]))" >> $env:GITHUB_STEP_SUMMARY
@@ -207,6 +222,9 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
+      - name: Manual operations require a fresh dispatch
+        shell: pwsh
+        run: if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and [int]$env:GITHUB_RUN_ATTEMPT -gt 1) { throw 'manual-rerun-refused-dispatch-again' }
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - id: deploy
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
