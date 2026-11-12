@@ -238,11 +238,13 @@ public sealed class AgentLiteKillTests : IDisposable
     public async Task A_kill_by_another_process_cancels_the_sends_in_flight()
     {
         var folder = NewHost("a");
-        var host = Host(folder);
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var host = new LiteKill(folder, new Peers(), time: time);
         var started = new TaskCompletionSource();
         var send = host.GuardAsync("r1", async ct => { started.SetResult(); await Task.Delay(Timeout.Infinite, ct); return new LiteOutcome(LiteKind.Delivered, null, "r1"); }, default);
         await started.Task;
         Host(folder).Kill();
+        time.Advance(TimeSpan.FromSeconds(1));
         var outcome = await send.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal(LiteKind.Unconfirmed, outcome.Kind);
     }
