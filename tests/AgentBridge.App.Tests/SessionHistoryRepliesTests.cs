@@ -34,6 +34,66 @@ public sealed class SessionHistoryRepliesTests
 
     static int[] Numbers(SessionHistory h) => [.. h.Turns.Select(t => int.Parse(t.Id[1..]))];
 
+    static Session Snapshot(string turn, string prompt, string? reply = null, string? answered = null, int seconds = 0, UserMessageFrom? from = null) =>
+        Make.Session(updated: T0.AddSeconds(seconds)) with
+        {
+            Activity = new Activity { Turn = turn, UserMessage = prompt, UserMessageFrom = from, Response = reply, ResponseTurn = answered },
+        };
+
+    static SessionCardViewModel Card(HostConnection connection, Session session) =>
+        new(session, new CardContext
+        {
+            Host = connection, Deliveries = new Deliveries(connection, new LockedDispatcher()),
+            Folds = new FoldStore(null), Capabilities = () => connection.Capabilities,
+        });
+
+    [Fact]
+    public async Task A_notification_turn_that_ran_before_the_owners_queued_answer_leaves_each_reply_under_its_own_prompt()
+    {
+        await using var connection = HostConnection.ForProfile("not-connected", new LockedDispatcher());
+        var answer = new string('a', 800);
+        var card = Card(connection, Snapshot("owner", "Owner question"));
+        try
+        {
+            card.Update(Snapshot("owner", "Owner question", answer, "owner"));
+            card.Update(Snapshot("schedule", "Scheduled check", answer, "owner", 3, UserMessageFrom.Schedule));
+            card.Update(Snapshot("schedule", "Scheduled check", "Scheduled reply", "schedule", 4, UserMessageFrom.Schedule));
+            card.Update(Snapshot("notice", "Command finished", "Notification reply", "notice", 8, UserMessageFrom.Other));
+            card.Update(Snapshot("followup", "Next question", "Fourth reply", "followup", 9));
+
+            var rows = HistoryDraw.Rows(card.Stored!.Turns, null);
+            Assert.Equal(["owner", "schedule", "notice", "followup"], rows.Select(r => r.Id));
+            Assert.Equal([answer, "Scheduled reply", "Notification reply", "Fourth reply"], rows.Select(r => Assert.Single(r.Blocks).Text));
+            Assert.Equal("Owner question", rows[0].Prompt);
+            Assert.False(rows[1].Disclosure!.Open);
+            Assert.False(rows[2].Disclosure!.Open);
+            Assert.Equal(800, rows[0].Blocks[0].Text.Length);
+        }
+        finally { card.Detach(); }
+    }
+
+    [Fact]
+    public async Task A_notification_reply_stays_with_its_turn_while_the_owner_is_queued_and_after_the_owner_is_answered()
+    {
+        await using var connection = HostConnection.ForProfile("not-connected", new LockedDispatcher());
+        var card = Card(connection, Snapshot("notice", "Command finished", "Notification reply", "notice", from: UserMessageFrom.Other));
+        try
+        {
+            card.Update(Snapshot("owner", "Owner question", "Notification reply", "notice", 1));
+            var notice = Assert.Single(HistoryDraw.Rows(card.Stored!.Turns, card.UserMessage));
+            Assert.Equal("notice", notice.Id);
+            Assert.Equal("Notification reply", Assert.Single(notice.Blocks).Text);
+            Assert.False(card.HasVoice);
+            Assert.Empty(card.Stored.Turns.Single(t => t.Id == "owner").Parts);
+
+            card.Update(Snapshot("owner", "Owner question", "Owner answer", "owner", 2));
+            Assert.True(card.HasVoice);
+            Assert.Equal("Owner answer", card.Response);
+            Assert.Equal("Notification reply", Assert.Single(HistoryDraw.Rows(card.Stored.Turns, card.UserMessage)).Blocks[0].Text);
+        }
+        finally { card.Detach(); }
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task Five_turns_the_live_session_said_in_ten_seconds_stay_five_entries_after_the_page_that_has_them()
