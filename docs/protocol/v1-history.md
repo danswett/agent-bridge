@@ -137,7 +137,13 @@ names as written here; whether hosts should refuse the rest is #897.
 
 ### Turn
 
-A prompt and everything until the next prompt (H7).
+A prompt and the work it owns (H7). For Copilot, a prompt queued during an assistant
+cycle does not take that cycle's reply: it owns work from the next main-agent
+`assistant.turn_start`. Notification and scheduled prompts obey the same boundary,
+never borrowing an owner's answer. Cursor identity remains the prompt record; the
+cycle boundary is recovered independently of page size and after host restart.
+If the bounded read cannot recover ownership, the turn is marked `truncated` rather
+than guessing which reply it owns.
 
 | Field | Type | Notes |
 |---|---|---|

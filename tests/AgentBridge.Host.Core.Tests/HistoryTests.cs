@@ -72,6 +72,146 @@ public class HistoryTests
     static string Scheduled(string text, int s, string source) =>
         Copilot.Event("user.message", new { content = text, source, attachments = Array.Empty<object>(), delivery = "idle" }, s);
 
+    [Fact]
+    public async Task Queued_owner_reply_across_spans_is_attributed_to_its_own_turn()
+    {
+        await using var s = new Copilot_();
+        var lines = File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, "fixtures", "copilot", "queued-owner-history.jsonl"));
+        await s.After(lines[..3]);
+        Assert.Empty((await s.Page()).Turns!.Single(t => Prompt(t) == "Queued owner B").Parts);
+
+        await s.After(lines[3..5]);
+        var waiting = (await s.Page()).Turns!;
+        Assert.Equal("Answer A", waiting.Single(t => Prompt(t) == "Owner A").Parts.Single().Text);
+        Assert.Empty(waiting.Single(t => Prompt(t) == "Queued owner B").Parts);
+
+        await s.After(lines[5..]);
+        var turns = (await s.Page()).Turns!;
+        Assert.Equal(["Owner A", "Queued owner B", "Background completion", "Scheduled work"], turns.Select(Prompt));
+        Assert.Equal(["Answer A", "Answer B", "Notice reply", "Scheduled reply"],
+            turns.Select(t => t.Parts.Single(p => p.Kind == HistoryPartKind.Response).Text));
+        Assert.Null(turns[1].Prompt!.From);
+        Assert.NotNull(turns[2].Prompt!.From);
+        Assert.Equal(UserMessageFrom.Schedule, turns[3].Prompt!.From);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task Queued_owner_history_is_identical_on_each_page_and_after_restart(int limit)
+    {
+        await using var s = new Copilot_();
+        await s.After(File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, "fixtures", "copilot", "queued-owner-history.jsonl")));
+        var whole = (await s.Page()).Turns!;
+        await s.RestartAsync();
+        var pages = new List<HistoryTurn>();
+        string? before = null;
+        do
+        {
+            var page = await s.Page(before, limit);
+            pages.InsertRange(0, page.Turns!);
+            before = page.Before;
+        } while (before is not null);
+        Assert.Equal(["Answer A", "Answer B", "Notice reply", "Scheduled reply"],
+            pages.Select(t => t.Parts.Single(p => p.Kind == HistoryPartKind.Response).Text));
+        Assert.Equal(JsonSerializer.Serialize(whole, ProtocolJson.Options), JsonSerializer.Serialize(pages, ProtocolJson.Options));
+    }
+
+    [Theory]
+    [InlineData("system", TurnKind.Notification)]
+    [InlineData("schedule-2", TurnKind.Scheduled)]
+    public void A_queued_non_owner_prompt_cannot_take_the_active_owners_reply(string source, TurnKind kind)
+    {
+        using var f = new Fixture();
+        var turns = ReadAlone(f, [
+            Copilot.User("Owner", 1), Copilot.TurnStart(2),
+            Scheduled("Background", 3, source),
+            Copilot.TurnEnd(4, "delegate"),
+            Copilot.TurnStart(5, "delegate"),
+            Copilot.Assistant("Owner answer", 6), Copilot.TurnEnd(7),
+            Copilot.TurnStart(8), Copilot.Assistant("Background answer", 9),
+        ]).Turns!;
+
+        Assert.Equal([TurnKind.User, kind], turns.Select(t => t.Kind));
+        Assert.Equal(["Owner answer", "Background answer"],
+            turns.Select(t => t.Parts.Single(p => p.Kind == HistoryPartKind.Response).Text));
+    }
+
+    [Theory]
+    [InlineData("user")]
+    [InlineData("system")]
+    [InlineData("schedule-2")]
+    public void An_unreadable_cycle_boundary_never_gives_a_queued_reply_to_the_previous_owner(string source)
+    {
+        using var f = new Fixture();
+        var page = ReadAlone(f, [
+            Copilot.User("Owner", 1), Copilot.TurnStart(2),
+            Scheduled("Queued", 3, source),
+            Copilot.Assistant("Owner answer", 4), Copilot.TurnEnd(5),
+            "{\"type\":\"assistant.turn_start\",\"data\":",
+            Copilot.Assistant("Queued answer", 7), Copilot.TurnEnd(8),
+        ]);
+
+        Assert.Equal(["Owner answer"], page.Turns![0].Parts.Where(p => p.Kind == HistoryPartKind.Response).Select(p => p.Text));
+        Assert.Empty(page.Turns[1].Parts);
+        Assert.True(page.Turns[1].Truncated);
+        Assert.True(page.Partial);
+    }
+
+    [Fact]
+    public async Task Queuing_another_prompt_leaves_the_active_owners_tool_running_on_every_page()
+    {
+        await using var s = new Copilot_();
+        await s.After(Copilot.User("Owner", 1), Copilot.TurnStart(2),
+            Copilot.User("Queued", 3), Copilot.ToolStart("running", "powershell", new { command = "work" }, 4));
+
+        var together = (await s.Page()).Turns!;
+        Assert.Equal(ToolStatus.Running, together[0].Parts.Single(p => p.Tool is not null).Tool!.Status);
+        var newest = await s.Page(limit: 1);
+        var earlier = (await s.Page(newest.Before, limit: 1)).Turns!.Single();
+        Assert.Equal(ToolStatus.Running, earlier.Parts.Single(p => p.Tool is not null).Tool!.Status);
+        Assert.Equal(JsonSerializer.Serialize(together[0], ProtocolJson.Options), JsonSerializer.Serialize(earlier, ProtocolJson.Options));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_unfinished_last_record_cannot_abandon_the_active_owners_tool_on_any_page(bool cursorPage)
+    {
+        await using var s = new Copilot_();
+        await s.After(Copilot.User("Owner", 1), Copilot.TurnStart(2),
+            Copilot.User("Queued", 3), Copilot.ToolStart("running", "powershell", new { command = "work" }, 4));
+
+        foreach (var suffix in new[] { "", "{\"type\":\"assistant.turn_end\",\"data\":" })
+        {
+            File.AppendAllText(s.Events, suffix);
+            var newest = await s.Page(limit: cursorPage ? 1 : 2);
+            var owner = cursorPage ? (await s.Page(newest.Before, limit: 1)).Turns!.Single() : newest.Turns![0];
+            Assert.Equal(ToolStatus.Running, owner.Parts.Single(p => p.Tool is not null).Tool!.Status);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_idle_prompt_at_end_of_file_closes_the_previous_turns_work_on_every_page(bool queuedBeforeIdle)
+    {
+        await using var s = new Copilot_();
+        var lines = new List<string> { Copilot.User("Owner", 1) };
+        if (queuedBeforeIdle) { lines.Add(Copilot.TurnStart(2)); }
+        lines.Add(Copilot.ToolStart("ask", "ask_user", new { message = "Which?", requestedSchema = new { properties = new { x = new { type = "string" } } } }, 3));
+        if (queuedBeforeIdle) { lines.AddRange([Copilot.User("Queued", 4), Copilot.TurnEnd(5)]); }
+        lines.Add(Copilot.User("Idle prompt", 6));
+        await s.After([.. lines]);
+
+        var whole = (await s.Page()).Turns!;
+        Assert.Equal(ToolStatus.Failed, whole[0].Parts.Single(p => p.Tool is not null).Tool!.Status);
+        Assert.Equal(QuestionOutcome.Cancelled, whole[0].Parts.Single(p => p.Question is not null).Outcome);
+        var newest = await s.Page(limit: queuedBeforeIdle ? 2 : 1);
+        var earlier = (await s.Page(newest.Before, limit: 1)).Turns!.Single();
+        Assert.Equal(JsonSerializer.Serialize(whole[0], ProtocolJson.Options), JsonSerializer.Serialize(earlier, ProtocolJson.Options));
+    }
+
     // Found rebasing #686 onto #841: activity shows the CLI's turn-error notice redacted (#840),
     // but history read the same message's content as written, so an earlier turn's notice showed
     // what the latest turn's hid.
