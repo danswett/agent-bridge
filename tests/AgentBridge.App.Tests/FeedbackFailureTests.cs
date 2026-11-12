@@ -297,6 +297,75 @@ public sealed class FeedbackFailureTests
         Assert.Equal(new ReportThisContext("reply", "failed"), got);
     }
 
+    // Exercise drawing independently: failed deliveries do not outlive their questions (#1193).
+    static void Draw(SessionCardViewModel card, ReceiptLine line) =>
+        typeof(SessionCardViewModel).GetMethod("DrawReceipt", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(card, [line]);
+
+    static SessionCardViewModel Card(HostConnection host) => new(Make.Session(), new CardContext
+    {
+        Deliveries = new Deliveries(host, InlineDispatcher.Instance),
+        Folds = new FoldStore(null),
+        Capabilities = () => [],
+    });
+
+    [Fact]
+    public async Task The_card_offers_Report_this_only_while_a_failed_answer_receipt_is_drawn()
+    {
+        await using var host = HostConnection.ForProfile("unused-feedback-fixture", InlineDispatcher.Instance);
+        var card = Card(host);
+        try
+        {
+            Assert.False(card.ReportThis.Visible);
+            var changed = new List<string?>();
+            card.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+            var line = new ReceiptLine("failed", "Couldn't send it.", "private message text", Tone.Bad, ReceiptMark.None, null);
+
+            Draw(card, line);
+
+            Assert.True(card.ReportThis.Visible);
+            Assert.Equal(ReportThisOffer.For("answer", line).Speech, card.ReportThis.Speech);
+            ReportThisContext? opened = null;
+            Assert.True(card.ReportThis.Press(c => opened = c));
+            Assert.Equal(new ReportThisContext("answer", "failed"), opened);
+            Assert.DoesNotContain("private message text", opened!.ToString());
+            Assert.Contains(nameof(SessionCardViewModel.ReportThis), changed);
+
+            changed.Clear();
+            Draw(card, ReceiptLine.None);
+
+            Assert.False(card.ReportThis.Visible);
+            Assert.False(card.ReportThis.Press(_ => Assert.Fail("opened after clearing")));
+            Assert.Contains(nameof(SessionCardViewModel.ReportThis), changed);
+        }
+        finally { card.Detach(); }
+    }
+
+    [Theory]
+    [InlineData(Tone.Ok, "delivered")]
+    [InlineData(Tone.Warn, "unconfirmed")]
+    [InlineData(Tone.Progress, "sending")]
+    [InlineData(Tone.None, "closed")]
+    [InlineData(Tone.Bad, "none")]
+    [InlineData(Tone.Bad, "quiet")]
+    [InlineData(Tone.Bad, "")]
+    public async Task A_new_non_reportable_receipt_hides_the_cards_previous_offer(Tone tone, string key)
+    {
+        await using var host = HostConnection.ForProfile("unused-feedback-fixture", InlineDispatcher.Instance);
+        var card = Card(host);
+        try
+        {
+            Draw(card, new ReceiptLine("failed", "Couldn't send it.", null, Tone.Bad, ReceiptMark.None, null));
+            Assert.True(card.ReportThis.Visible);
+
+            Draw(card, new ReceiptLine(key, "Next receipt", null, tone, ReceiptMark.None, null));
+
+            Assert.False(card.ReportThis.Visible);
+            Assert.Null(card.ReportThis.Context);
+            Assert.False(card.ReportThis.Press(_ => Assert.Fail("opened a stale failure")));
+        }
+        finally { card.Detach(); }
+    }
+
     [Theory]
     [InlineData(Tone.Ok)]
     [InlineData(Tone.Warn)]
