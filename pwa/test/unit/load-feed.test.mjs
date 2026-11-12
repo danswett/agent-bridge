@@ -152,7 +152,9 @@ test('the bars-only feed preserves finite fractional and huge memory figures as 
 });
 
 test('the bars-only feed ignores 201 sessions without changing the host freshness state', async (t) => {
-  const raw = sample({ sessions: Array.from({ length: 201 }, (_, i) => ({ session: `s-${i}`, workingSetBytes: i })) });
+  const vectors = JSON.parse(readFileSync(new URL('../../../docs/protocol/vectors/machine-load.json', import.meta.url), 'utf8'));
+  const sessions = vectors.records.MachineLoad.valid.find((v) => v.name === 'over-200-sessions').json.sessions;
+  const raw = sample({ sessions });
   const a = await fake(t, { result: raw }), feed = new LoadFeed();
   await feed.attach('a', a.client);
   assert.deepEqual(feed.load('a'), sample());

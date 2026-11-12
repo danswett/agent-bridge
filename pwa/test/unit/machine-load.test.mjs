@@ -5,9 +5,10 @@ import * as readers from '../../js/load-feed.js';
 
 const records = JSON.parse(readFileSync(new URL('../../../docs/protocol/vectors/machine-load.json', import.meta.url))).records;
 const full = () => structuredClone(records.MachineLoad.valid.find((v) => v.name === 'full').json);
+const overCap = () => records.MachineLoad.valid.find((v) => v.json.sessions?.length === 201);
 
 test('the shared 201-session input retains exactly the largest 200 working sets and becomes partial', () => {
-  const vector = records.MachineLoad.valid.find((v) => v.json.sessions?.length === 201);
+  const vector = overCap();
   assert.ok(vector, 'the shared #1876 cap vector must exist, not a local replacement');
   const read = readers.readMachineLoad(vector.json);
   assert.deepEqual(read, vector.reads);
@@ -18,7 +19,7 @@ test('the shared 201-session input retains exactly the largest 200 working sets 
 });
 
 test('capping sessions never improves a worse state, even when state follows sessions on the wire', () => {
-  const sessions = Array.from({ length: 201 }, (_, i) => ({ session: `s-${i}`, workingSetBytes: i }));
+  const vector = overCap(), sessions = structuredClone(vector.json.sessions);
   for (const [state, expected] of [['fresh', 'partial'], ['partial', 'partial'], ['stale', 'stale'],
     ['unavailable', 'unavailable'], ['future', 'unavailable'], [undefined, 'unavailable']]) {
     const raw = { sessions, ...(state === undefined ? {} : { state }) };
@@ -26,8 +27,7 @@ test('capping sessions never improves a worse state, even when state follows ses
     const read = readers.readMachineLoad(raw);
     assert.equal(read.state, expected);
     assert.equal(read.sessions.length, 200);
-    assert.equal(read.sessions[0].session, 's-200');
-    assert.equal(read.sessions.at(-1).session, 's-1');
+    assert.deepEqual(read.sessions, vector.reads.sessions);
     assert.deepEqual(raw, before, 'decoding must not sort or truncate the input');
   }
 });
