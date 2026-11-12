@@ -13,13 +13,24 @@ function Assert([bool]$Ok, [string]$Name) {
     if ($Ok) { "ok   $Name" } else { "FAIL $Name"; $script:failures++ }
 }
 
-function Invoke-Script([hashtable]$Overrides, [string]$Key) {
+function Invoke-Script([hashtable]$Overrides, [string]$Key, [string]$EnvKey) {
     $a = @{ Pr = 7; Head = $head; CommentUrl = $comment; Receipt = 'independent-review=claude-sonnet-5.5', 'independent-review-2=gemini-3.8-flash' }
     foreach ($k in $Overrides.Keys) { $a[$k] = $Overrides[$k] }
-    $argList = @('-NoProfile', '-File', $script, '-DryRun', '-KeyPath', $Key)
+    $argList = @('-NoProfile', '-NonInteractive', '-File', $script, '-DryRun')
+    if ($PSBoundParameters.ContainsKey('Key')) { $argList += @('-KeyPath', $Key) }
     foreach ($k in $a.Keys) { $argList += "-$k"; $argList += @($a[$k]) -join ',' }
-    $out = & pwsh @argList 2>&1 | Out-String
-    [pscustomobject]@{ Exit = $LASTEXITCODE; Out = $out }
+    $oldProfile = $env:USERPROFILE
+    $oldKey = $env:AGENT_BRIDGE_RECEIPTS_KEY_PATH
+    try {
+        $env:USERPROFILE = $tmp
+        $env:AGENT_BRIDGE_RECEIPTS_KEY_PATH = $EnvKey
+        $out = & pwsh @argList 2>&1 | Out-String
+        [pscustomobject]@{ Exit = $LASTEXITCODE; Out = $out }
+    }
+    finally {
+        $env:USERPROFILE = $oldProfile
+        $env:AGENT_BRIDGE_RECEIPTS_KEY_PATH = $oldKey
+    }
 }
 
 try {
@@ -28,6 +39,23 @@ try {
     $key = Join-Path $tmp 'test.pem'
     Set-Content -Path $key -Value $pem -NoNewline
     $keyBody = ($pem -split "`n")[1].Trim()
+    $keyDir = Join-Path $tmp '.agent-bridge-receipts'
+    New-Item -ItemType Directory $keyDir | Out-Null
+    Set-Content -LiteralPath (Join-Path $keyDir 'a.pem') -Value $pem -NoNewline
+    $otherRsa = [Security.Cryptography.RSA]::Create(2048)
+    $otherPem = $otherRsa.ExportRSAPrivateKeyPem()
+    Set-Content -LiteralPath (Join-Path $keyDir 'b.pem') -Value $otherPem -NoNewline
+    $otherKeyBody = ($otherPem -split "`n")[1].Trim()
+
+    $r = Invoke-Script @{}
+    Assert ($r.Exit -ne 0 -and $r.Out -match 'explicit.*KeyPath.*AGENT_BRIDGE_RECEIPTS_KEY_PATH' -and $r.Out -notmatch 'jwt ok') 'two PEMs without a pin are refused clearly'
+    Assert (-not $r.Out.Contains($keyBody) -and -not $r.Out.Contains($otherKeyBody) -and $r.Out -notmatch 'PRIVATE KEY') 'an unpinned refusal never prints key material'
+
+    $r = Invoke-Script @{} -EnvKey $key
+    Assert ($r.Exit -eq 0 -and $r.Out -match 'jwt ok') 'an environment pin signs offline'
+
+    $r = Invoke-Script @{} $key -EnvKey (Join-Path $tmp 'missing.pem')
+    Assert ($r.Exit -eq 0 -and $r.Out -match 'jwt ok') 'an explicit key overrides the environment pin'
 
     $r = Invoke-Script @{} $key
     Assert ($r.Exit -eq 0) 'dry run exits 0'
@@ -51,8 +79,22 @@ try {
 
     $r = Invoke-Script @{} (Join-Path $tmp 'missing.pem')
     Assert ($r.Exit -ne 0 -and $r.Out -match 'No App key found' -and $r.Out -notmatch 'jwt ok') 'refuses a missing key'
+
+    foreach ($case in @(
+            @{ Name = 'a directory argument'; Key = $keyDir; EnvKey = $key },
+            @{ Name = 'a directory environment pin'; EnvKey = $keyDir },
+            @{ Name = 'a missing environment pin'; EnvKey = (Join-Path $tmp 'missing.pem') },
+            @{ Name = 'a missing argument despite a valid environment pin'; Key = (Join-Path $tmp 'missing.pem'); EnvKey = $key })) {
+        $argsForCase = @{ Overrides = @{}; EnvKey = $case.EnvKey }
+        if ($case.ContainsKey('Key')) { $argsForCase.Key = $case.Key }
+        $r = Invoke-Script @argsForCase
+        Assert ($r.Exit -ne 0 -and $r.Out -match 'existing file' -and $r.Out -match 'AGENT_BRIDGE_RECEIPTS_KEY_PATH' -and $r.Out -notmatch 'jwt ok') "refuses $($case.Name) without fallback"
+        Assert (-not $r.Out.Contains($keyBody) -and -not $r.Out.Contains($otherKeyBody) -and $r.Out -notmatch 'PRIVATE KEY') "refusing $($case.Name) never prints key material"
+    }
 }
 finally {
+    if ($rsa) { $rsa.Dispose() }
+    if ($otherRsa) { $otherRsa.Dispose() }
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
 
