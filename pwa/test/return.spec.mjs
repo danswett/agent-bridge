@@ -331,6 +331,21 @@ test('an offline machine\'s line takes the place of the reply box\'s actions and
   await expect(page.locator('#host-state')).toBeHidden();
 });
 
+async function advanceHeldQuestionClock(page, ms) {
+  await page.clock.runFor(ms);
+}
+
+test('held_question_setup_refuses_to_advance_before_grace_starts', async ({ page }) => {
+  await openDemo(page);
+  await page.clock.install();
+  await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
+  expect(await page.evaluate(() => window.agentBridgeDemo.grace.active)).toBe(false);
+  const before = await page.evaluate(() => Date.now());
+  await expect(advanceHeldQuestionClock(page, 1)).rejects.toThrow(
+    'Return setup: refusing to advance fake time before a visible grace start is observed');
+  expect(await page.evaluate(() => Date.now())).toBe(before);
+});
+
 test('a question held through a return keeps its row and Needs you\'s count until the grace ends', async ({ page, browserName }) => {
   // Quarantined on webkit (#1693, #1692): failed on a PR with no pwa/ change; restore by 2026-11-13.
   test.skip(browserName === 'webkit', 'flaky on webkit, #1693');
@@ -340,10 +355,10 @@ test('a question held through a return keeps its row and Needs you\'s count unti
   const head = await page.locator('#needs-you .needs-you-head').textContent();
   await comeBack(page);
   await setOnline(page, false);
-  await page.clock.runFor(1500);
+  await advanceHeldQuestionClock(page, 1500);
   await expect(entries).toHaveCount(1);
   await expect(page.locator('#needs-you .needs-you-head')).toHaveText(head);
   await expect(card(page, ASK)).not.toHaveAttribute('data-stale', /./);
-  await page.clock.runFor(1600);
+  await advanceHeldQuestionClock(page, 1600);
   await expect(entries).toHaveCount(0);
 });
