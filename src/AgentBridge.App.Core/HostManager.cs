@@ -558,7 +558,7 @@ public sealed class HostManager
     {
         fileBudget ??= new InstallationFiles.Budget(Time);
         if (waitForFiles) { await WaitForInstallationFilesAsync(preflight, fileBudget: fileBudget); }
-        if (await fileBudget.ProbeOnceAsync(preflight, quit.Token) is { } blockers) { throw new UpdateBlockedException(blockers); }
+        await CheckInstallationFilesAsync(preflight, fileBudget);
         Task stop;
         lock (updating)
         {
@@ -609,6 +609,11 @@ public sealed class HostManager
             throw;
         }
         finally { lock (updating) { installing = false; } }
+    }
+
+    public async Task CheckInstallationFilesAsync(Func<string?>? preflight, InstallationFiles.Budget budget)
+    {
+        if (await budget.ProbeOnceAsync(preflight, quit.Token) is { } blockers) { throw new UpdateBlockedException(blockers); }
     }
 
     // The app quitting: an update that had stopped the host, or was stopping it, and not applied,

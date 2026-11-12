@@ -108,7 +108,7 @@ public sealed class InstallReleaseWaitTests : IAsyncLifetime
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
             if (quitting) { manager.Quit(TimeSpan.FromSeconds(1), _ => { }); }
             else { clock.Advance(TimeSpan.FromSeconds(30)); }
-            if (quitting) { await Assert.ThrowsAsync<OperationCanceledException>(() => update.WaitAsync(TimeSpan.FromSeconds(5))); }
+            if (quitting) { await Assert.ThrowsAnyAsync<OperationCanceledException>(() => update.WaitAsync(TimeSpan.FromSeconds(5))); }
             else { await Assert.ThrowsAsync<UpdateBlockedException>(() => update.WaitAsync(TimeSpan.FromSeconds(5))); }
             Assert.False(begun);
             Assert.Empty(host.Sent(HostOps.Stop));

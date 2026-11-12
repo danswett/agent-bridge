@@ -1025,9 +1025,9 @@ public sealed class AutoUpdater
     // Why not now, with it as an Update now's code (UpdateResult.Code): another profile running from
     // this installation other-profile, a machine read-only for other devices now read-only, and
     // anything else (a development copy, the host gone or its status unreadable) unavailable.
-    async Task<(string? Why, string? Code)> VetAsync(bool asked = false)
+    async Task<(string? Why, string? Code)> VetAsync(bool asked = false, bool local = false)
     {
-        if (WhyNot(asked) is { } why) { return (why, ManageReason.Unavailable); }
+        if (WhyNot(asked || local) is { } why) { return (why, ManageReason.Unavailable); }
         HostStatus fresh;
         try { fresh = await host.CallAsync<HostStatus>(HostOps.Status, timeout: TimeSpan.FromSeconds(10)); }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
@@ -1250,14 +1250,6 @@ public sealed class AutoUpdater
             if (Pending is not { } to) { return "no update has been downloaded yet"; }
             if (Stale()) { return Again(to); }
             if (await OthersAsync() is { } others) { return others; }
-            if (WaitingOnYou is { } warning && confirm is not null)
-            {
-                if (!await confirm(warning)) { return NotNow; }
-                // The dialog may have stayed open a long while: another profile may have started
-                // from this installation since (Velopack would stop it too), or Settings installed.
-                if (installing || manager.UpdateUnderWay) { return "an update is already being installed"; }
-                if (await OthersAsync() is { } since) { return since; }
-            }
             // Settings may have checked, or changed the feed, meanwhile: still the very release
             // read above, or nothing is stopped.
             if (Stale() || Pending != to) { return Again(to); }
@@ -1325,8 +1317,7 @@ public sealed class AutoUpdater
                 code: UpdateCode.ReleaseChanged);
             return;
         }
-        var fileBudget = new InstallationFiles.Budget(time);
-        try { await WaitForFilesAsync(fileBudget); }
+        try { await WaitForFilesAsync(); }
         catch (UpdateBlockedException e)
         {
             if (DropExpired()) { return; }
@@ -1364,7 +1355,7 @@ public sealed class AutoUpdater
                 log($"update now: pressed on {by ?? "another device"}, going over {(accept is null ? "nothing busy" : $"{accept.Working} with a turn running and {accept.Waiting} with a question or approval waiting{(accept.Unknown == true ? ", with sessions not yet reported" : "")}")}");
                 // The host left for this press: it is the one installed and answered, even should
                 // another have replaced it while the host was asked.
-                await InstallAsync(because, (request, true), fileBudget: fileBudget);
+                await InstallAsync(because, (request, true));
                 return;
             case UpdateDepartOutcome.Waiting:
                 var code = UpdateProtocol.IsCode(left.Code) ? left.Code : UpdateWaitingCode.Unknown;
@@ -1398,60 +1389,66 @@ public sealed class AutoUpdater
     public const string NotNow = "not now";
     int claimed;
 
-    async Task<bool> WaitForFilesAsync(InstallationFiles.Budget? fileBudget = null)
+    async Task WaitForFilesAsync()
     {
-        var waited = false;
+        var fileBudget = new InstallationFiles.Budget(time);
         try
         {
             await manager.WaitForInstallationFilesAsync(preflight,
-                why => { waited = true; fileWait = $"{UpdateBlockedException.Prefix}{why}; waiting for Windows to release the files"; Changed(); }, time, fileBudget);
-            return waited;
+                why => { fileWait = $"{UpdateBlockedException.Prefix}{why}; waiting for Windows to release the files"; Changed(); }, time, fileBudget);
+            await manager.CheckInstallationFilesAsync(preflight, fileBudget);
         }
         finally { fileWait = null; Changed(); }
+    }
+
+    sealed class InstallRefusedException(string reason, string? code = null) : Exception(reason)
+    {
+        public string? Code { get; } = code;
     }
 
     // Null once the release has been applied (which, for real, ends this process); otherwise why
     // not, still on this version with the host back. answers: the press this install answers, as
     // the tick decided it, and whether the host departed for it (an Update now), which it then
     // answers whatever press has come since; else the one being carried out now.
-    async Task<string?> InstallAsync(string because, (string? Request, bool Departed)? answers = null, Func<string, Task<bool>>? confirm = null, InstallationFiles.Budget? fileBudget = null)
+    async Task<string?> InstallAsync(string because, (string? Request, bool Departed)? answers = null, Func<string, Task<bool>>? confirm = null)
     {
         var to = Pending!;
         var source = updater.Source;
-        fileBudget ??= new InstallationFiles.Budget(time);
         var request = answers is { } pinned ? pinned.Request : Asked(UpdateAskKind.Install);
         var departed = answers is { Departed: true } ? request : null;
+        var local = answers is null;
+        var asked = !local && request is not null;
+        string? confirmed = null;
         bool open;
         try { open = WindowOpen(); }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { open = false; }
         // The host comes back from a failed install, or from the app quitting mid-way (HostManager).
         try
         {
-            if (departed is null && await WaitForFilesAsync(fileBudget))
+            if (departed is null)
             {
-                if (answers is { Departed: false })
-                {
-                    var asked = Asked(UpdateAskKind.Install) is not null;
-                    if (Asked(UpdateAskKind.Install) != request || NowPress || Refused(WhyNot(asked)) || GoAhead(asked, time.GetUtcNow()) is null || Stale())
-                    {
-                        HoldOver(); Changed(); return NotNow;
-                    }
-                    if (await ProbeBusyAsync() is { } probe) { lastProbe = probe; Changed(); return NotNow; }
-                }
-                else if (WaitingOnYou is { } warning)
+                await WaitForFilesAsync();
+                if (await ProbeBusyAsync() is { } probe) { lastProbe = probe; Changed(); return NotNow; }
+                lastProbe = null;
+                var vetted = await VetAsync(asked, local);
+                if (vetted.Why is { } why) { throw new InstallRefusedException(why, vetted.Code); }
+                if (local && WaitingOnYou is { } warning)
                 {
                     if (confirm is null) { return warning; }
                     if (!await confirm(warning)) { return NotNow; }
+                    confirmed = warning;
+                    vetted = await VetAsync(local: true);
+                    if (vetted.Why is { } since) { throw new InstallRefusedException(since, vetted.Code); }
                 }
             }
-            if (updater.Ready != to || updater.Source != source) { throw new PackageReplacedException("while waiting for installation files"); }
+            Validate();
             updatingIn = open ? to : null;
             installing = true;
             Changed();
             log($"auto-update: installing {to}, as {because}");
             await manager.StopAndApplyAsync(() =>
             {
-                if (updater.Ready != to || updater.Source != source) { throw new PackageReplacedException("while checking installation files"); }
+                Validate();
                 Record(prefs, save, updater, request, open);
             }, () =>
             {
@@ -1460,7 +1457,7 @@ public sealed class AutoUpdater
                 // release chosen, from the source it was chosen on, is applied (Copilot, r4487830884).
                 if (updater.Ready != to || updater.Source != source) { throw new PackageReplacedException(); }
                 updater.ApplyAndRestart(to, HandedOver(prefs, save));
-            }, preflight, waitForFiles: false, fileBudget: fileBudget);
+            }, waitForFiles: false);
             return null;
         }
         // Replaced while the host stopped: nothing failed, and the host is back (HostManager). What
@@ -1490,6 +1487,13 @@ public sealed class AutoUpdater
             Changed();
             return already;
         }
+        catch (InstallRefusedException e)
+        {
+            installing = false;
+            if (request is null) { Refused(e.Message); }
+            else { End(UpdateOutcome.Refused, e.Message, e.Code); }
+            HoldOver(); Changed(); return e.Message;
+        }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
             // Still this version: nothing to announce. Still offered while the updater has it
@@ -1506,6 +1510,19 @@ public sealed class AutoUpdater
             if (request is null) { Remember(UpdateOutcome.Failed, e.Message, to, null); }
             else { End(UpdateOutcome.Failed, e.Message); }
             return $"installing {to} failed: {e.Message}";
+        }
+
+        void Validate()
+        {
+            if (updater.Ready != to || updater.Source != source || Stale()) { throw new PackageReplacedException("while preparing the install"); }
+            if (departed is not null) { return; }
+            if (!local && (Asked(UpdateAskKind.Install) != request || NowPress)) { throw new InstallRefusedException(NotNow); }
+            if (othersInPackage(host.Status?.ProcessId) is { } other) { throw new InstallRefusedException(other, UpdateCode.OtherProfile); }
+            if (WhyNot(asked || local) is { } why) { throw new InstallRefusedException(why, ManageReason.Unavailable); }
+            if (asked && host.Status?.ReadOnly is { } readOnly) { throw new InstallRefusedException($"this machine is read-only for other devices now: {readOnly}", ManageReason.ReadOnly); }
+            if (manager.UpdateUnderWay || lastProbe is not null || (!local && GoAhead(asked, time.GetUtcNow()) is null)) { throw new InstallRefusedException(NotNow); }
+            if (local && WaitingOnYou != confirmed) { throw new InstallRefusedException(NotNow); }
+            if (updater.Ready != to || updater.Source != source || Stale()) { throw new PackageReplacedException("while validating the install"); }
         }
 
         // How the press this answered ended: the one being carried out, or the Update now the host

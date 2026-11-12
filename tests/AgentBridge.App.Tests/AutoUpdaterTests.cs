@@ -1474,6 +1474,77 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal(automatic ? 0 : 1, warned);
     }
 
+    [Theory]
+    [InlineData("final-scan")]
+    [InlineData("usage-probe")]
+    [InlineData("confirm")]
+    [Trait("Category", "Network")]
+    public async Task A_turn_arriving_during_a_clear_scan_usage_probe_or_confirmation_is_not_stopped(string phase)
+    {
+        await StartAsync(null, Make.Session("s1", phase == "confirm" ? SessionStatus.Working : SessionStatus.Idle));
+        await auto.TickAsync();
+        var changed = false;
+        void Turn()
+        {
+            if (changed) { return; }
+            changed = true;
+            host.SendAsync(Events.SessionUpsert, Make.Session("s2", SessionStatus.Working)).GetAwaiter().GetResult();
+            Wait.UntilAsync(() => connection.Sessions.All.Any(s => s.Id == "s2"), "the new turn").GetAwaiter().GetResult();
+        }
+        var scans = 0;
+        preflight = () => { if (phase == "final-scan" && ++scans == 2) { Turn(); } return null; };
+        host.On(HostOps.ProbeHold, _ => { if (phase == "usage-probe") { Turn(); } return new ProbeHoldResult(false); });
+
+        await auto.RestartToUpdateAsync(_ => { if (phase == "confirm") { Turn(); return Task.FromResult(true); } return Task.FromResult(false); });
+
+        Assert.True(changed);
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    [Trait("Category", "Network")]
+    public async Task A_remote_install_rechecks_read_only_and_other_profiles_after_the_file_wait(bool readOnly)
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.IdleFor);
+        var scans = 0;
+        preflight = () =>
+        {
+            if (++scans == 1) { return "a fixture holding runtime.dll"; }
+            if (readOnly) { host.Status = host.Status with { ReadOnly = "became read-only during the file wait" }; }
+            else { others = "another profile started during the file wait"; }
+            return null;
+        };
+        var press = auto.Ask(UpdateAskKind.Install, Press, time.GetUtcNow());
+
+        await InstallReleaseWaitTests.FinishAsync(press, () => !updater.Applied, held, time);
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Equal(UpdateOutcome.Refused, prefs.LastUpdate!.Outcome);
+        Assert.Contains(readOnly ? "read-only" : "another profile", prefs.LastUpdate.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Time_in_a_local_confirmation_does_not_exhaust_the_completed_file_check_budget()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        await auto.TickAsync();
+        var scans = 0;
+        preflight = () => ++scans == 1 ? "a fixture holding runtime.dll" : null;
+        var update = auto.RestartToUpdateAsync(_ => { time.Advance(TimeSpan.FromMinutes(3)); return Task.FromResult(true); });
+
+        await InstallReleaseWaitTests.FinishAsync(update, () => scans < 2, held, time);
+
+        Assert.Null(await update);
+        Assert.True(updater.Applied);
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task A_retry_time_far_in_the_future_is_capped_once_so_it_stays_put_and_then_elapses()
