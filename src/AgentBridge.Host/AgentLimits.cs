@@ -1,7 +1,7 @@
 namespace AgentBridge.Host;
 
 // The verdict of a rate check. A refusal is always 'rate-limited' with the whole seconds until
-// the oldest hit leaves its window, so an agent is told when to try again and never just "no".
+// enough hits leave its window, so an agent is told when to try again and never just "no".
 public readonly record struct AgentLimitVerdict(bool Allowed, string? Reason, int RetryAfterSeconds, bool Duplicate = false)
 {
     public const string RateLimited = "rate-limited";
@@ -9,11 +9,9 @@ public readonly record struct AgentLimitVerdict(bool Allowed, string? Reason, in
     public static AgentLimitVerdict Admit { get; } = new(true, null, 0);
 }
 
-// Sliding in-memory rate windows for agent-to-agent traffic to local targets (#720 S4b, design
-// 5.5). Pure and unwired: nothing calls it yet, and the limits are constructor arguments. The
-// windows live in memory on purpose, so a restart resets them. Keys are opaque session ids; they
-// are never logged or returned. Every check is all-or-nothing: a refusal records no hit in any
-// window, so a refused message cannot use up a slot it was never given.
+// Sliding in-memory windows; a restart resets them. Message/read limits are constructor
+// arguments; the launch gate supplies freshly read policy. Refusals spend no launch slot,
+// but distinct requests and mismatched retries spend the separate attempt budget.
 public sealed class AgentLimits
 {
     static readonly TimeSpan Minute = TimeSpan.FromMinutes(1);
@@ -25,7 +23,10 @@ public sealed class AgentLimits
     readonly object gate = new();
     readonly Dictionary<(string, string), Window> pairs = [];
     readonly Dictionary<string, Window> targets = [], originLaunches = [], reads = [];
+    readonly Dictionary<string, Window> launchAttempts = [];
+    readonly Dictionary<(string Origin, string Request), (string Hash, DateTimeOffset At)> launchRequests = [];
     readonly Window machineLaunches = new(Hour);
+    DateTimeOffset? lastLaunchCheck;
 
     public AgentLimits(
         Func<DateTimeOffset>? clock = null,
@@ -65,19 +66,66 @@ public sealed class AgentLimits
     {
         lock (gate)
         {
-            var now = clock();
-            var own = Get(originLaunches, origin, Hour, now);
-            if (own is null) { return Refuse(3600); }
-            var wait = Math.Max(own.WaitFor(now, launchesPerOrigin), machineLaunches.WaitFor(now, launchesPerMachine));
-            if (wait > 0) { return Refuse(wait); }
-            own.Hit(now);
-            machineLaunches.Hit(now);
-            return AgentLimitVerdict.Admit;
+            return CheckLaunch(origin, LaunchTime(), launchesPerOrigin, launchesPerMachine);
         }
     }
 
-    public AgentLimitVerdict CheckLaunch(string origin, string request, string requestSha256, AgentLaunchLimits limits) =>
-        CheckLaunch(origin);
+    public AgentLimitVerdict CheckLaunch(string origin, string request, string requestSha256, AgentLaunchLimits limits)
+    {
+        var originLimit = Positive(limits.LaunchesPerOriginPerHour);
+        var machineLimit = Positive(limits.LaunchesPerMachinePerHour);
+        var attemptLimit = Positive(limits.LaunchAttemptsPerOriginPerHour);
+        lock (gate)
+        {
+            var now = LaunchTime();
+            var key = (origin, request);
+            var known = launchRequests.TryGetValue(key, out var remembered);
+            if (known && remembered.Hash == requestSha256) { return new(false, "duplicate", 0, Duplicate: true); }
+            // Never evict a live request to admit a flood of new ids.
+            if (!known && launchRequests.Count >= MaxKeys)
+            {
+                return Refuse(Math.Max(1, (int)Math.Ceiling((launchRequests.Values.Min(r => r.At) + Hour - now).TotalSeconds)));
+            }
+            var attempts = Get(launchAttempts, origin, Hour, now);
+            if (attempts is null) { return Refuse(3600); }
+            var wait = attempts.WaitFor(now, attemptLimit);
+            if (wait > 0) { return Refuse(wait); }
+            attempts.Hit(now);
+            if (known) { return new(false, "requestReused", 0); }
+            launchRequests.Add(key, (requestSha256, now));
+            return CheckLaunch(origin, now, originLimit, machineLimit);
+        }
+    }
+
+    AgentLimitVerdict CheckLaunch(string origin, DateTimeOffset now, int originLimit, int machineLimit)
+    {
+        var own = Get(originLaunches, origin, Hour, now);
+        if (own is null) { return Refuse(3600); }
+        var wait = Math.Max(own.WaitFor(now, originLimit), machineLaunches.WaitFor(now, machineLimit));
+        if (wait > 0) { return Refuse(wait); }
+        own.Hit(now);
+        machineLaunches.Hit(now);
+        return AgentLimitVerdict.Admit;
+    }
+
+    DateTimeOffset LaunchTime()
+    {
+        var now = clock();
+        if (lastLaunchCheck is { } last && now < last)
+        {
+            // A duplicate must observe rollback too, without recording another hit.
+            foreach (var window in originLaunches.Values.Concat(launchAttempts.Values)) { window.WaitFor(now, int.MaxValue); }
+            machineLaunches.WaitFor(now, int.MaxValue);
+        }
+        lastLaunchCheck = now;
+        foreach (var entry in launchRequests.ToArray())
+        {
+            var at = entry.Value.At > now ? now : entry.Value.At;
+            if (now - at >= Hour) { launchRequests.Remove(entry.Key); }
+            else if (at != entry.Value.At) { launchRequests[entry.Key] = (entry.Value.Hash, at); }
+        }
+        return now;
+    }
 
     public AgentLimitVerdict CheckRead(string origin)
     {
@@ -115,7 +163,7 @@ public sealed class AgentLimits
     {
         readonly Queue<DateTimeOffset> hits = new();
 
-        // Zero when another hit is admitted; otherwise the seconds until the oldest hit leaves.
+        // A lowered limit can need several hits to expire before another is admitted.
         public int WaitFor(DateTimeOffset now, int limit)
         {
             // A clock stepped back leaves hits in the future; count them as now, so the wait is
@@ -123,7 +171,7 @@ public sealed class AgentLimits
             if (hits.Any(h => h > now)) { var kept = hits.Select(h => h > now ? now : h).ToArray(); hits.Clear(); foreach (var h in kept) { hits.Enqueue(h); } }
             while (hits.Count > 0 && now - hits.Peek() >= span) { hits.Dequeue(); }
             if (hits.Count < limit) { return 0; }
-            var seconds = (int)Math.Ceiling((hits.Peek() + span - now).TotalSeconds);
+            var seconds = (int)Math.Ceiling((hits.ElementAt(hits.Count - limit) + span - now).TotalSeconds);
             return Math.Max(1, seconds);
         }
 
