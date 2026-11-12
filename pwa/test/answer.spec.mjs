@@ -735,6 +735,35 @@ test.describe('outcomes', () => {
     expect(second.request).not.toBe(first.request);
   });
 
+  test('a three-field long-title card can retry a refusal and deliver Red, Yes and Test from the phone', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openDemo(page);
+    const colour = 'Which of these three colors would you prefer for the status indicator light today';
+    const enabled = 'Would you like this status indicator light to remain enabled while the machine is working on the next task in this session';
+    const notes = 'Please describe anything else you would like us to know before we apply this status indicator preference to the current session';
+    const q = await ask(page, { id: 'q-long-three', message: 'Three preferences.', fields: [
+      { name: 'colour', title: colour, type: 'choice', required: true, options: ['Red', 'Green', 'Blue'].map((value) => ({ value, label: value })) },
+      { name: 'enabled', title: enabled, type: 'boolean', required: true },
+      { name: 'notes', title: notes, type: 'text', required: true },
+    ] }, COPILOT);
+    await q.getByRole('radio', { name: 'Red', exact: true }).check();
+    await q.getByRole('button', { name: 'Yes', exact: true }).click();
+    await q.getByRole('textbox', { name: notes }).fill('Test');
+    await script(page, { outcome: 'refused', reason: `the form on the session's screen was not at the field "${colour}"` });
+    const send = q.getByRole('button', { name: 'Send answer' });
+    await send.click();
+    await expect(q.locator('.answer-status')).toContainText('The machine refused this answer:');
+    await expect(send).toBeEnabled();
+    await expect(q.getByRole('textbox', { name: notes })).toHaveValue('Test');
+    await send.click();
+    await expect(q).toHaveCount(0);
+    const [first, second] = await log(page);
+    expect(second.fields).toEqual({ colour: 'Red', enabled: true, notes: 'Test' });
+    expect(second.request).not.toBe(first.request);
+    expect(await typed(page)).toHaveLength(1);
+    await expect(card(page, COPILOT).locator('.reply-input')).toBeEnabled();
+  });
+
   test('a lost response is resent with the same request, and the answer is typed once', async ({ page }) => {
     await openDemo(page, '&timeout=600&retry=100');
     await script(page, { outcome: 'delivered', drop: true });
