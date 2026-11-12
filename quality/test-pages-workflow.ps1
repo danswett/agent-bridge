@@ -19,7 +19,7 @@ Require ($text -match '(?m)^run-name: .*Pages rollback.*Pages resume' -and $text
 $gate = [regex]::Match($text, '(?ms)^  gate:\r?\n(.*?)^  build:').Groups[1].Value
 $permissions = [regex]::Match($gate, '(?ms)^    permissions:\r?\n(.*?)(?=^    \S)').Groups[1].Value
 $scopes = @($permissions -split '\r?\n' | ForEach-Object { ($_ -replace '\s+#.*$', '').Trim() } | Where-Object { $_ -and $_ -notmatch '^#' } | Sort-Object)
-Require ($text -match '(?m)^permissions: \{\}$' -and $scopes.Count -eq 3 -and ($scopes -join ',') -ceq 'actions: read,contents: read,pages: read') 'the gate must have exactly actions:read, contents:read and pages:read with no inherited or added writes'
+Require ($text -match '(?m)^permissions: \{\}\r?$' -and $scopes.Count -eq 3 -and ($scopes -join ',') -ceq 'actions: read,contents: read,pages: read') 'the gate must have exactly actions:read, contents:read and pages:read with no inherited or added writes'
 $build = [regex]::Match($text, '(?ms)^  build:\r?\n(.*?)^  deploy:').Groups[1].Value
 $deploy = [regex]::Match($text, '(?ms)^  deploy:\r?\n(.*)').Groups[1].Value
 $guard = [regex]::Match($deploy, '(?m)^\s+run: (if \(\$env:GITHUB_EVENT_NAME[^\r\n]+)').Groups[1].Value
