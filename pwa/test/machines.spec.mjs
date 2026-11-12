@@ -525,7 +525,7 @@ test.describe('approved Fleet card structure', () => {
       const running = cards.first().getByRole('button', { name: /^Running, 2/ });
       await running.click();
       await expect(running).toHaveAttribute('aria-expanded', 'true');
-      await cards.first().locator('.tile-running').getByRole('button', { name: 'Show running sessions on Small', exact: true }).tap();
+      await cards.first().locator('.tile-running').getByRole('button', { name: 'View sessions on Small', exact: true }).tap();
       await running.focus();
       await page.evaluate(() => window.drawStructure('0.1.2'));
       await expect(running).toHaveAttribute('aria-expanded', 'true');
