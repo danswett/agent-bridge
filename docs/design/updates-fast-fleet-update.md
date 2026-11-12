@@ -1,393 +1,399 @@
 # Fast updates and Update all (#2225)
 
-Status: design for review, revision 2. Engineering owns it; Product ranked the epic 4 (P1) on #2225.
+Status: design for review, revision 3. Engineering owns it; Product ranked the epic 4 (P1) on #2225.
 Scope: how a machine learns of a release within minutes, one press (or one Update all) that takes
 every machine across, progress that is only ever the machine's own word, and three update modes.
 Not in scope (parked by Product): scheduling and per-machine channels.
 
-Revision 2 follows Engineering's brief (#2225, comment 6815111084) on Creative's receipt (comment
-6815094187; board in the studio, PR 30 at 2bc31243). It changes §3, §4, §5, §6, §8 and §9.
+Revision 3 answers both receipts on PR 2226 (Reviewer M, comment 6815300702; Reviewer H, 6815482733)
+under Engineering's brief (#2225, 6815507156). It adds §4 (halt policy) and §10 (later designs), and
+changes §2, §3, §5, §8 and §9. Product's rulings stand: Update all stops when the app closes, pressed
+machines carry on, and an unreadable halt list blocks Update all while one machine may be pressed
+with a warning. v1 recovery is forward only (Product confirmed, point 8).
 
-Citations are to `main` at 0e17432. "App" is the Windows app (Slipgates), "host" its bridge.
+Citations are to `main` at 5226150 (no cited source changed since 0e17432). "App" is the Windows app
+(Slipgates), "host" its bridge, "relay" the Slipgates relay, "release relay" the Cloudflare Worker.
 
 ## 1. Where things stand
 
-**Who checks, and how often.**
-- The app checks on start and every 30 minutes (`CheckEvery`, src/AgentBridge.App.Core/AutoUpdater.cs:72),
-  every 5 minutes after a host failed an update (`CheckAfterFailedHost`, :75). The tick decides at :806-817.
-- Every check on a machine goes through one shared cache, `ReleaseDiscovery`
-  (src/AgentBridge.Host.Core/Updates/ReleaseDiscovery.cs:9-41). It asks the list at most once per
-  `Interval` of 10 minutes plus up to 2 minutes of jitter (:63-64), whichever process or profile asks.
-- The list comes first from the release relay at `releases.slipgates.com` (`ReadCdnFirst`, :47; `CdnList`, :51),
-  and from GitHub's API (60 an hour per IP, unauthenticated, :10-11) when the relay is unusable, or every
-  6 hours anyway (`GithubRevalidateEvery`, :57).
-- The release relay is a Cloudflare Worker (infra/cloudflare/release-feed/worker.js) that caches GitHub's
-  list for 5 minutes (`FRESH_SECONDS`, :7) and serves a stale copy up to 24 hours with its real `Age`
-  (:8, :88). It sends no ETag and has no 304. It serves the list only; packages come from GitHub (:2-3).
-- Hosts check too, for Home Assistant's update entity, through the same cache
-  (src/AgentBridge.Host/HostUpdates.cs:27, :88-96).
+**Checks.** The app checks on start and every 30 minutes (`CheckEvery`, src/AgentBridge.App.Core/AutoUpdater.cs:72),
+every 5 after a host failed an update (:75). Every check on a machine, app's and host's
+(src/AgentBridge.Host/HostUpdates.cs:27), goes through one cache, `ReleaseDiscovery`
+(src/AgentBridge.Host.Core/Updates/ReleaseDiscovery.cs), at most once per `Interval` of 10 minutes plus
+up to 2 of jitter (:63-64). It asks the release relay first (`CdnList`, :51), and GitHub's API
+(unauthenticated, 60 an hour per IP) when the relay's list fails its checks, or at least every 6 hours
+(`GithubRevalidateEvery`, :57). Under a GitHub refusal a relay list may be used for up to 24 hours from
+GitHub's last answer (`GithubRelayAtMost`, :58; `RelayWindow`, :281-286). GitHub requests carry an ETag
+(:247); a relay list is kept without one (:234). The release relay (infra/cloudflare/release-feed/worker.js) caches
+GitHub's list for 5 minutes (:7), serves stale up to 24 hours with its real `Age` (:8, :88), sends no
+ETag, and serves the list only; packages come from GitHub.
 
-**Worst case today** from publish to a machine knowing: 5 minutes (relay) + 12 minutes (cache) + 30 minutes
-(app tick) = about 47 minutes. Under a GitHub refusal the app holds checks, doubling up to 2 hours
-(`CheckBackoffAtMost`, AutoUpdater.cs:146; `HoldChecks`, :1159), and says "checking again after
-{until.ToLocalTime():t}" (:1170): the app machine's clock time, shown as-is on a phone in another zone.
+**Worst case today:** 5 (release relay) + 12 (cache) + 30 (app tick) = about 47 minutes. After a GitHub
+refusal the app holds checks, doubling up to 2 hours (`checksHeldUntil`, AutoUpdater.cs:199, :1159-1170);
+`CheckAsync` refuses before reaching discovery while held (:959), and answers from its cached failure
+for 1 minute (`CheckAgainAfter`, :113, :951). Three strings put the app machine's local time in what the
+phone reads: :1170 ("checking again after"), :429 ("retrying at") and ObservedUpdater.cs:107 (download held).
 
-**Trust today.** It is set up in three places, and this design keeps all three as they are.
-1. Publish. CI publishes a draft, downloads it back, checks every PE file against the pinned
-   publisher's Authenticode EKU and each feed's hashes against its packages, and only then makes it
-   public (build/publish-prerelease.ps1:19-23, :349-388; build/app-signing.ps1:1-11).
-2. Discovery. A list from the relay is used only if every asset is under this repository's own
-   download URL, nothing is a draft, and the channel's newest is no older than GitHub's last list or
-   what is installed (`CdnProblem`, ReleaseDiscovery.cs:373-401). The relay is untrusted transport (:30-31).
-3. Install. The package must match its feed's SHA256, checked again in the copy Update.exe opens
-   (src/AgentBridge.App/Platform.cs:95-97, :166-170, #984). The client does not check Authenticode itself.
+**Trust, kept as it is.** (1) Publish: CI downloads the draft back and checks each feed's hashes; files
+we own must carry the pinned publisher's Authenticode EKU, and other PE files a valid signature from
+their own publisher (build/app-signing.ps1:59-65; build/publish-prerelease.ps1:349-388). (2) Discovery:
+a relay list is used only if every asset is under this repository's download URL, nothing is a draft,
+and the channel's newest is no older than GitHub's last list or what is installed (`CdnProblem`,
+ReleaseDiscovery.cs:373-401); the relay is untrusted transport. (3) Install: the package must match its
+feed's SHA256 (src/AgentBridge.App/Platform.cs:95-97, :166-170).
 
-**Halt list.** `ReleaseEligibility` and `GitHubHaltListSource` exist
-(src/AgentBridge.Host/ReleaseEligibility.cs:19-60, :77-80), but nothing in `src/` constructs them: no
-updater consults `halts.json` yet. The source reads `api.github.com?per_page=100` (:80), which is quota.
+**Halt list.** `ReleaseEligibility` and `GitHubHaltListSource` exist (src/AgentBridge.Host/ReleaseEligibility.cs:19-113)
+but nothing in `src/` constructs them. The source takes the newest release and its `halts.json` digest
+from GitHub's HTTPS API (`?per_page=100`, no ETag, :80) and checks the body's SHA256 against it (:103-108).
 
-**Modes today** (src/AgentBridge.App.Core/Stores.cs:80-106, app preferences, per machine and profile):
-`AutoUpdate` (default on) checks and downloads in the background. `WhenUpdateReady` is
-`RestartToUpdate` (default, waits for a press, #516) or `InstallBetweenTurns` (first gap with no turn
-running and no question waiting, or the 6-hour backstop, #689; AutoUpdater.cs:437, `WaitAtMost` :137).
-Unknown values read as `RestartToUpdate` (Stores.cs:84). The phone only shows the choice; it is set in
-the app's Settings (docs/design/ui.md:1977-1991). An app from before #516 installs by itself after 6 hours.
+**Modes** (src/AgentBridge.App.Core/Stores.cs:80-106, per machine and profile): `AutoUpdate` (default
+on); `WhenUpdateReady` is `RestartToUpdate` (default, #516) or `InstallBetweenTurns` (#689, 6-hour
+backstop). Unknown values read as `RestartToUpdate` (:84). The phone only shows the choice (docs/design/ui.md:1977-1991).
 
-**Presses today** (docs/protocol/v1-update.md; src/AgentBridge.Host/UpdateService.cs):
-- `update.check` and `update.install {request}` go only through the relay's Noise channel, only from a
-  `pwa` or `app` device, and never to a read-only machine (UpdateService.cs:8-21, :289-325).
-- Limits, kept by each machine's own host: 3 presses of each kind per device per 10 minutes, keyed
-  by device and kind (`pressed`, :64; :326-345), at most 8 waiting (`MaxAsks`, :43), and the same request
-  is the same press (v1-update.md:47-56). A refusal says "too many presses … try again in 7 minutes"
-  in `reason`; the PWA words code `rate-limited` as "try again in a few minutes" (pwa/js/update.js:225).
-- Install waits until no session has been busy for 2 minutes (`IdleFor`, AutoUpdater.cs:96).
-- Update now (#1159) is `update.install {now: SignedCommand}`. It passes the same signed-command gate as
-  `manage.*` (src/AgentBridge.Host/SignedPress.cs:7-18, :55-73): the MAC verified for this machine, the
-  action `update.install.now`, the release and the request; the signer must be the sending device, a
-  person's device connected now, and not the app beside this host. It needs `permissions.remoteManage`
-  (UpdateService.cs:185, :652), is recorded durably before the app is asked
-  (src/AgentBridge.Host/UpdateNow.cs:210-216), lives 15 minutes (src/AgentBridge.Protocol/Update.cs:33),
-  and is its own kind for the per-device limit (`NowKind`, UpdateService.cs:41). A second Update now
-  while one is under way is refused `busy` (:478).
-- Restart cap: Update now spends 1 restart per machine in 6 hours of its own, then the 2 in 6 hours it
-  shares with `manage.restart` (src/AgentBridge.Host/ManageService.cs:29-30, :39-40, :432-445). Past it the
-  card shows "Update now is available again at …" in place of the button (update.js:180-183).
-- Leaving takes #805's lease, compares busy with what the person accepted, then announces (UpdateService.cs:498-640).
-  #815's planned announcement is not built, so it leaves on a `Legacy` receipt (:635-637).
+**Presses** (docs/protocol/v1-update.md; src/AgentBridge.Host/UpdateService.cs):
+- `update.check` and `update.install` come only over the relay's Noise channel, from a `pwa` or `app`
+  device, never to a read-only machine. Limits per machine's own host: 3 presses per device per kind per
+  10 minutes (`pressed`, :64), 8 waiting (`MaxAsks`, :43).
+- Update now (#1159) is `update.install {now: SignedCommand}` through the `SignedPress` gate
+  (src/AgentBridge.Host/SignedPress.cs:55-76): a person's device, not the app beside this host, not
+  read-only, `remoteManage` on. **The signed command must reach the host within 120 seconds of signing**
+  (`ManageProtocol.MaxLifetime`, src/AgentBridge.Protocol/Manage.cs:42; SignedPress.cs:83-89). **The
+  work it starts lives 15 minutes** from the same signature (`NowLife`, Update.cs:33).
+- A press spends its device's `NowKind` budget before it is decided (UpdateService.cs:407-419), so a
+  press answered `confirm` (busier than accepted, :465-468) has spent one.
+- A second Update now is refused `busy` only while one is queued, carried or departing (:478, `UnderWay`
+  :196-206). `Carrying` excludes `Waiting` (:210): a press waiting for quiet or a usage check is
+  **replaced** by a newer one, and `AutoUpdater.Ask` (:510-557) gives the replaced request no result.
+- Restart cap: Update now spends its own 1 in 6 hours first, then the 2 in 6 hours shared with
+  `manage.restart` (src/AgentBridge.Host/ManageService.cs:29-40).
 
-**What the phone sees.**
-- `UpdateState` has `phase` idle, checking, downloading, waiting or installing, and `progress` 0-100
-  (Update.cs:153, :175-219), real bytes from Velopack (src/AgentBridge.App.Core/ObservedUpdater.cs:59, :93-114).
-- The PWA reads `update.get` once a minute, or every 10 s while an update is under way (v1-update.md:939-941).
-- "Restarting to update…" for 90 s after the channel closes on an Update now, then plain Offline
-  (pwa/js/update.js:27, :497-519).
-- The first start after an update reports `last` updated or failed, with the request
-  (`Record`, `Announce`, AutoUpdater.cs:1482, :1515).
-- The app watches the new host for 10 minutes and records `failed` if it cannot start 3 times or never
-  reaches a relay that answers (src/AgentBridge.App.Core/HostWatch.cs:11-19). Nothing tells the phone.
-- Each card has a Check (Check now) button (pwa/js/ui/views.js:1124-1126); the page has Check all
-  (:1400-1401). There is no Update all.
+**After handover.** Checks before handover (checksum, lease, busy compare) keep the old version running.
+After it, `Platform.ApplyAndRestart` (Platform.cs:186) starts Update.exe and the old app exits; the new
+app's `WatchHostAsync` (AutoUpdater.cs:83-91, HostWatch.cs:11-19) records `failed` if its host cannot
+start 3 times or reach the relay in 10 minutes, then looks for a fix every 5 minutes. Recovery is forward only.
+
+**The phone** reads `UpdateState` (`phase`, `progress`, `request`, `last`; Update.cs:175-219) once a
+minute, every 10 s while updating; shows "Restarting to update…" for 90 s after an Update now's channel
+closes (pwa/js/update.js:27). Each card has Check; the page has Check all; there is no Update all.
 
 ## 2. Detection
 
-**Goal.** Every online machine knows of a published release within about 3 minutes, without any
-machine using GitHub quota.
+**Goal.** Every online machine knows of a release within about 3 minutes, with no GitHub API call
+added to detection. GitHub stays in two places, both bounded: the 6-hourly revalidation, and the halt
+policy read (§4). Both are conditional; GitHub does not count a 304 against the rate limit.
 
 | Option | Verdict |
 |---|---|
-| A. Poll GitHub's API faster | Rejected: quota, and the brief forbids it. |
-| B. Poll the release relay faster from every machine | Part of the answer: no GitHub quota. But N machines × 1 a minute is waste, and the relay stays 5 minutes stale. |
-| C. CI pushes to every machine | Rejected: CI would need a credential that reaches machines, a new trust path. |
-| D. The relay (the existing always-on service) watches the release relay once a minute and sends connected hosts an untrusted *release hint* | Chosen. One fetch per relay instance, no new service, no new secret. |
-| E. The PWA notices one machine is ahead and presses Check on the others | Fallback only: it works only while a PWA is open. |
+| A. Poll GitHub faster | Rejected: quota. |
+| B. Every machine polls the release relay faster | Fallback only: N × 1/min is waste. |
+| C. CI pushes to machines | Rejected: a credential that reaches machines is a new trust path. |
+| D. The relay watches the release relay once a minute and sends hosts an untrusted *release hint* | Chosen. One fetch per relay instance, no new service. |
+| E. The PWA presses Check when one machine is ahead | Rejected: works only while a PWA is open. |
 
-**The chosen path (D, backed by B).**
-1. **Release relay.** Freshness drops from 300 s to 60 s, and it answers with an ETag and a 304, so a
-   conditional poll costs nothing. To keep its own GitHub refreshes safe at that rate it uses a
-   read-only GitHub token as a Worker secret (the README already names this owner decision). Without a
-   token it stays at 300 s.
-2. **Relay hint.** The relay asks the release relay's list once a minute, conditionally, reads the newest
-   tag per channel without validating it, and sends `release.hint {tag, channel, seenAt}` to every
-   connected host that advertised `releaseHint` in hello: on change, and on every connect. Never shown,
-   never trusted.
-3. **Host to app.** The host passes the hint to its app on the existing pipe report (`HostStatus`).
-4. **App.** If the hinted tag is newer than both the installed version and the last list, and
-   `AutoUpdate` is on, the app runs its normal check now.
-   - `ReleaseDiscovery` gets the hint. When the cached list lacks the tag it asks the release relay now,
-     ignoring `FreshUntil`. It never asks GitHub early.
-   - Every existing rule applies: `CdnProblem`, the floor, checksums.
-   - At most one hint-driven check per tag, and one per `CheckAgainAfter` (1 minute, AutoUpdater.cs:113).
-     A hostile relay can cause at most one release-relay fetch per minute per machine, and no install.
-5. **Fallback poll (B).** The 30-minute tick stays for machines and relays without the capability. A
-   capable host with no hint for 10 minutes polls the release relay conditionally every 5 minutes.
+**The path.**
+1. **Release relay.** Freshness 60 s instead of 300 s, with ETag and 304. At that rate its own GitHub
+   refreshes need a read-only token as a Worker secret (owner decision; its README's "No secrets" line
+   changes with it). Without a token it stays at 300 s.
+2. **Relay hint.** The relay reads the release relay's list once a minute, conditionally, and sends
+   `release.hint {tag, channel, seenAt}` to each connected host that advertised `releaseHint`: on change
+   and on connect. Never shown, never trusted.
+3. **Validation, at host and app, before any use or log.** `tag` matches `^v0\.1\.[0-9]{1,19}$` and
+   `ReleaseEligibility.TryRun`; `channel` is one of the app's Velopack channels (`win`, `win-arm64`);
+   `seenAt` is UTC, under 40 characters, not ahead of now by more than 5 minutes; the frame is under
+   256 bytes. Anything else is dropped and counted; the log names the field, never the value.
+4. **Host to app** on the existing pipe report. **App:** a valid tag newer than the installed version
+   and the last list, with `AutoUpdate` on, starts the **expedited read**:
+   - one release-relay read per new tag, ignoring `FreshUntil`, the app's `checksHeldUntil` and its
+     cached failure (`CheckAgainAfter`), **for that read only**;
+   - no GitHub call, early or otherwise; GitHub's backoff (`NotBefore`) is untouched;
+   - the 6-hour revalidation and the 24-hour anchor still bind: if GitHub revalidation is due and the
+     machine is not inside the `RelayWindow`, the hint does nothing and the machine waits for its normal
+     GitHub check. The trust deadline is never removed or extended by a hint;
+   - every existing rule applies: `CdnProblem`, the floor, checksums. A tag not in a valid list is no
+     `available`. A hostile relay causes at most one release-relay read per tag, and no install.
+5. **Fallback.** The 30-minute tick stays for machines and relays without the capability. There is no
+   5-minute poll: `ReleaseDiscovery`'s 10-minute `Interval` is unchanged, and the release-relay ETag
+   client is new in slice 5 (it needs slice 2's ETag).
 
-**Worst-case latency (machine online).**
-| Step | With token | Without |
-|---|---|---|
-| GitHub publishes → release relay fresh | 60 s | 300 s |
-| Release relay → relay hint | 60 s | 60 s |
-| Hint → app check → `available` | a few seconds | a few seconds |
-| Total to `available` | about 2-3 min | about 6-7 min |
+**Latency, machine online:** release relay fresh (60 s with token, 300 s without) + hint (≤ 60 s) +
+check (seconds) = about 2-3 minutes, or 6-7 without the token. A held machine gets the same, inside its windows.
 
-**When the feed is limited or unreachable.**
-- **Release relay down.** No hints. Machines fall back to their poll, then to GitHub as today
-  (ReleaseDiscovery.cs:146-181).
-- **GitHub limits the release relay.** It serves stale with its `Age` (worker.js:88). Clients reject a copy
-  older than 1 hour (`CdnOldest`, ReleaseDiscovery.cs:55), so a stale copy never says "up to date".
-- **GitHub limits a machine.** The hold is unchanged (`Held`, :569). Its end goes out as a UTC instant
-  (`checksHeldUntil`, new) for ordering and the log. A person never sees it as a limit: the card says
-  "Checked 20 minutes ago · checking again soon". The local clock-time string (AutoUpdater.cs:1170)
-  leaves the state, which also fixes the zone bug.
-
-**Offline machines.** On reconnect the relay sends the latest hint at once.
-**Mixed versions.** A host without `releaseHint` is never sent the frame and keeps the 30-minute tick. A
-relay without the frame sends nothing, and capable hosts fall back. An app from before #516 is unchanged;
-the Fleet header counts it as behind, not failed.
+**Limited or unreachable.** Release relay down: no hints; the normal check as today. GitHub limits the
+release relay: it serves stale with `Age`; clients reject a copy older than 1 hour (`CdnOldest`, :55).
+GitHub limits a machine: the hold stays; its end goes out as a UTC instant (`checksHeldUntil`, slice 3);
+the card says "Checked 20 minutes ago · checking again soon". **Offline:** on reconnect the relay sends
+the latest hint. **Mixed versions:** a host without `releaseHint` gets no frame and keeps the tick.
 
 ## 3. Per-machine state machine
 
-**Rule.** Every state the phone shows is either a fact the host reported (in `UpdateState` or `last`) or
-an inference marked as one. The phone never animates progress it was not given. Elapsed time is fine;
-a fake percentage is not.
+**Rule.** Every state the phone shows is a fact the host reported, or an inference marked as one. No
+progress is animated that was not given. Elapsed time is fine; a fake percentage is not.
 
-**Ordered states.**
-| # | State | Source | Entered on | Left on |
-|---|---|---|---|---|
-| 1 | `current` | host | no `available`, and a `checkedAt` | hint, check |
-| 2 | `checking` | host | `phase: checking` | the check ends |
-| 3 | `behind` | host | `available` set, not downloaded | download starts |
-| 4 | `downloading(bytes, total)` | host | `phase: downloading`, `progress`, new `bytes`/`total` | done or failed |
-| 5 | `ready` | host | new `downloaded: true` (checksum passed, ObservedUpdater `Ready`) | press or mode |
-| 6 | `waiting(code)` | host | `phase: waiting`, `waitingCode` | goes or refused |
-| 7 | `installing(at)` | host | new `installing` instant (older host: `phase: installing`) | `leaving` |
-| 8 | `leaving(to, at, backBy)` | host | new `leaving`, in the last `update.state` before the host stops | channel closes |
-| 9 | `restarting` | **PWA inference** | channel closed while `leaving` set, before `backBy` | host returns, or `backBy` |
-| 10 | `back(from, to, at)` | host | new `back` with this press's `request`, `current` = `to` | 10 minutes, or dismissed |
-| 11 | `slow` | **PWA inference** | `backBy` passed (3 minutes after `at`), no channel | host returns, or 10 min |
-| 12 | `didNotComeBack` | **PWA inference** | 10 minutes after `at` with no channel | host returns |
-| 13 | `failed(code, retryAt)` | host | `last` outcome `failed` or `refused`, with code | next press, or dismissed |
-
-**New optional `UpdateState` fields, and what an old client does.**
-| Field | Set by | Meaning | An old PWA | A new PWA, old host |
-|---|---|---|---|---|
-| `installing` | app, via host | UTC instant the install began: package verified, lease held | ignores it; reads `phase: installing` as today | uses `phase: installing` for step 2 |
-| `leaving` | host | `{to, at, backBy}`, sent just before it stops; `backBy` = `at` + 3 minutes | ignores it; 90 s "Restarting…" then Offline | today's 90 s rule, then Offline |
-| `back` | new host | `{from, to, request, at}`, in its state for 10 minutes after the app's `Announce` | reads `last` as today | infers from `current` = target on reconnect, marked as inference |
-| `bytes`, `total`, `downloaded`, `mode`, `checksHeldUntil` | app | §2, §5 | ignores them | `progress` only; no mode line |
-
-A client ignores a field it does not know; `[UnknownAs]` rules stand.
-
-**Creative's four steps.** The card shows an ordered list of four named steps (Creative, rule A4).
-| Step | Shown as current while | Source | Old host |
+| # | State | Source | Entered on |
 |---|---|---|---|
-| Downloading (bar and %) | state 4 | host: `bytes`/`total`, else `progress` | `progress`: host |
-| Installing | states 5-8 after a press or mode decision | host: `installing`, `leaving` | `phase: installing`: host |
-| Restarting | states 9 and 11 | **inference**: channel closed after `leaving` | **inference**: closed after `installing`, 90 s |
-| Back online | state 10 | host: `back` | host: `current` on reconnect, tied to the press by inference |
+| 1 | `current` | host | no `available`, a `checkedAt` |
+| 2 | `checking` | host | `phase: checking` |
+| 3 | `behind` | host | `available`, not downloaded |
+| 4 | `downloading(bytes, total)` | host | `phase: downloading`, new `bytes`/`total` |
+| 5 | `ready` | host | new `downloaded: true` (checksum passed) |
+| 6 | `waiting(code)` | host | `phase: waiting`, `waitingCode` |
+| 7 | `installing(at)` | host | new `installing` instant (old host: `phase: installing`) |
+| 8 | `leaving(to, at, backBy)` | host | new `leaving`, in the last state before the host stops |
+| 9 | `restarting` | **PWA inference** | channel closed while `leaving` set, before `backBy` |
+| 10 | `back(from, to, at)` | host | new `back` with this press's `request`, `current` = `to` |
+| 11 | `slow` | **PWA inference** | `backBy` (3 min after `at`) passed, no channel |
+| 12 | `didNotComeBack` | **PWA inference** | 10 minutes after `at`, no channel |
+| 13 | `failed(code, step, retryAt)` | host | `last` `failed` or `refused`, with code |
 
-Waiting (state 6) sits before Installing as Creative's waiting line, never as a step. Health bars read
-"Not measured while updating" from state 7 to state 10.
+**New optional `UpdateState` fields** (slice 3): `installing`, `leaving {to, at, backBy}`, `back {from,
+to, request, at}`, `bytes`, `total`, `downloaded`, `mode`, `checksHeldUntil`, `policy` (§4), and
+`step` on `last`. An old PWA ignores them and reads `phase` as today; a new PWA facing an old host uses
+`phase`, then the 90 s rule, then Offline. `[UnknownAs]` rules stand.
 
-**Thresholds: one set.** `slow` at 3 minutes, `didNotComeBack` at 10 minutes.
-- 3 minutes is Creative's "not back after 3 minutes" card. A normal restart is under a minute
-  (`PAUSE_LINE`, update.js:310), so 3 is three times normal and early enough for a person to act. The host
-  sets it as `backBy`, so it can be tuned host-side later. It replaces this design's earlier 5 minutes.
-- 10 minutes is the app's own `HostWatch.Window` (HostWatch.cs:18). Until then the app may still be
-  starting the host (3 tries), so the phone never declares failure before the machine does.
-- So `slow` shows Creative's card c (numbered steps, Keep waiting, Try again, which reconnects and sends
-  no press). `didNotComeBack` keeps the steps, drops Keep waiting, and says "Did not come back. At the
-  machine, open Slipgates; if it will not start, install <version> from its release page"
-  (ops/runbooks/windows-release.md, Mitigate 3).
-- If the host returns on the **old** version, its `last` says `failed`, and the PWA shows state 13.
-- A host's `last` always replaces an inference. The 90 s `RESTART_SHOWN_MS` (update.js:27) stays only
-  for hosts that send no `leaving`.
-- A failed download is state 13 with `retryAt` from `ObservedUpdater` (10 minutes, doubling to 4 hours;
-  ObservedUpdater.cs:32-33): "Download failed · trying again in 10 minutes", with Try again now (§4).
-- Success stays 10 minutes or until dismissed; a failure stays until dismissed (Creative, rules A7-A8).
+**Creative's four steps** (rule A4): Downloading (host `bytes`/`total`, else `progress`), Installing
+(host `installing`, `leaving`), Restarting (**inference**: channel closed after `leaving`), Back online
+(host `back`; old host: `current` on reconnect, by inference). Waiting is Creative's waiting line before
+Installing, never a step. Health bars read "Not measured while updating" from state 7 to 10.
 
-**Events (wire).** `update.state` gains the optional fields above. `release.hint` is relay to host only.
+**Thresholds.** `slow` at 3 minutes: three times a normal restart (`PAUSE_LINE`, update.js:310), and
+Creative's card c (Keep waiting; Try again reconnects and sends no press). `didNotComeBack` at 10: the
+app's own `HostWatch.Window`, so the phone never declares failure before the machine could. The 90 s
+`RESTART_SHOWN_MS` stays only for hosts that send no `leaving`. A host's `last` always replaces an inference.
 
-## 4. One press, Update all, and limits
+**Failure is plain and says what next** (Product, point 8). v1 does not keep the old version running
+once handover starts; recovery is forward only. Every failure card names the last step reached and one
+next action:
+| Last step reached | Card says | Next action |
+|---|---|---|
+| Downloading | "Download failed · trying again in 10 minutes" | Try again now (§5) |
+| Installing, before handover | "Not installed: <reason>. Still on <old>." | Try again, or Update when idle |
+| Restarting, came back on the old version | "Update did not take. Still on <old>." | Try again |
+| Restarting, came back on the new version, host failed | "Updated, but its bridge did not start" | "Open Slipgates at the machine; a fix is looked for every 5 minutes" |
+| Did not come back | "Did not come back after 10 minutes" | "At the machine, open Slipgates; if it will not start, install <version> from its release page" |
+The release link is built from the validated tag with the fixed prefix
+`https://github.com/danswett/agent-bridge/releases/tag/`, never from a host's text. Success stays 10
+minutes or until dismissed; a failure until dismissed (Creative, A7-A8).
 
-**One machine.**
-- Update now is the card's one primary, Update, wherever `canUpdateNow` is true. A quiet machine goes
-  on one press. A busy one gets Creative's confirm, whose buttons map to presses: **Update now** =
-  `update.install {now}` with `accept`; **Update when idle** = `update.install` (no `now`); **Cancel**.
-- Install remains where the app is too old (`old-app`) or remote management is off.
+## 4. Halt policy
 
-**Update all.** A PWA action over the machines shown. No new op, no new signature, no new trust.
-1. **Pick.** Machines `behind` or `ready` for the newest release they report. Dropped, each with its
-   reason as a disabled row: read-only, no installed app, `canUpdateNow` false with no Install fallback,
-   a different release.
-2. **Confirm.** Creative's sheet: a row per machine (version change, "2 sessions will pause", checkbox),
-   built from each machine's `nowSheet` (update.js:314). One confirm covers each machine's `accept` as
-   shown. A machine that answers `confirm` (busier now) asks again for that machine only.
-3. **Waves.** The first wave is the single least busy machine. After it, two at a time. A wave ends
-   when each of its machines is `back`, `failed` or `didNotComeBack`, or was pressed with Update when idle
-   (that row reads "updates when its sessions are quiet" and holds no wave).
-   - Each press is signed when its wave starts, so none lapses (15 minutes, Update.cs:33) while waiting.
-   - **Pause on the first failure.** A `failed` or `didNotComeBack` stops new presses: "Paused: 1 failed.
-     Continue / Stop". Machines already pressed carry on. A `refused` row (for example `busy`) does not pause.
-   - **Continue** resumes waves of two over the unpressed machines, in order. Each is read again at its
-     wave: one now current is dropped, one busier than accepted gets its own confirm, and each is signed
-     then. The failed machine is not pressed again; Try the failed again does that, as a new press.
-   - **Stop** leaves the unpressed machines unpressed, listed "not pressed". Closing the PWA while paused
-     is Stop.
-   - Product's "keep one per role" needs roles on the roster (#55). Until then the waves stand in for it.
-4. **Sign.** Each machine gets its own `update.install {now}`: its own request, `target.machine`,
-   `release` and `accept`, signed with the key that machine's handshake proved (update.js:473), through
-   the same `SignedPress` gate. Nothing is batch-signed.
-5. **Results.** A row per machine, then the state machine above. The bar reads "Updating 2 of 4 · 1 done
-   · 1 waiting"; the end reads "3 updated, 1 failed" with Try the failed again.
+**Source.** The authoritative policy and its digest come from GitHub's own HTTPS API, as
+`GitHubHaltListSource` does today: the newest non-draft release by run number, its single `halts.json`
+asset, the asset's `sha256:` digest from GitHub's metadata, and the body checked against it. The
+release relay's list may only tell a machine that something new exists; it never supplies the digest,
+never clears a halt, and never hides one.
 
-**Idempotence.**
-- **The same device presses twice.** Update all is disabled while a run is open (it is running, not
-  limited), and each press is single-flight (update.js:401, :428).
-- **A resend of the same press.** It gets the recorded answer (`Again`, UpdateService.cs:424-436).
-- **Another device presses Update all.** Each machine refuses `busy` (:478); its row reads "already updating".
-- **Again after it succeeded.** The machine is `current` and is not picked.
+**Cost.** The read moves into `ReleaseDiscovery`'s file and lock, so it is once per machine, not per
+process, and becomes conditional (ETag; a 304 is free). It is made at most once per `Interval`, and
+before each install decision when the last read is older than that.
 
-**Refused, and stays refused.** A press from a machine or agent (SignedPress.cs:73); the app beside the
-host (:74); a read-only machine (:75); `remoteManage` off; an app too old for Update now; a changed
-release (UpdateService.cs:459-462); a halted release (new, §7); a press older than 15 minutes. Owner-only
-presses wait for the roster (#55); today "a person's device on the account" is the rule (SignedPress.cs:21-22).
+**Freshness and replay.**
+- A policy is **fresh** for 6 hours from GitHub's answer (`GithubRevalidateEvery`). Past that it is
+  **stale**, and stale counts as unreadable below.
+- **Known halts are kept.** Each halt is stored with the release whose list carried it. A later answer
+  removes it only if it comes from GitHub, is fresh, and its newest release is at least as new as that
+  one. An answer whose newest release is older (a replay, or a list that omits the newest release)
+  removes nothing.
+- A policy GitHub did not answer can never clear a halt, whatever the release relay says.
 
-**If the PWA closes mid-run.** Pressed machines carry on; unpressed ones stay unpressed. The next open
-shows what each machine reports. There is no host-side fleet coordinator (§9).
+**Availability is observable.** `UpdateState.policy {state: ok | stale | unreadable, at}` (slice 3),
+shown on the card's menu as "Bad-release protection: checked 2 hours ago" or "could not be checked".
 
-**Limits a person meets (owner's rule).** The rule is about what a person meets: never an allowance, a
-rate-limit message or a disabled button in ordinary use.
-- **Check now leaves the card.** Checks are automatic (§2). Check for updates stays in the card menu and
-  in Settings; Check all moves from the page into the Fleet page menu.
-- **The abuse guards stay** on the relay path: 3 presses per device per kind per 10 minutes, and 8 waiting
-  per machine (UpdateService.cs:42-48). They stop a stolen token or a stuck client, not a person.
-- **Update all never reaches them.** Both are kept per machine, in that machine's own host, and the
-  per-device count is keyed by device and kind (UpdateService.cs:64). Update all sends exactly one
-  Update now to each machine, so across N machines it spends 1 of 3 on each, whatever N is. Try the
-  failed again spends a second; a third is still allowed. It opens no new relay connection, so the
-  relay's connect and sign-in limits (src/AgentBridge.Relay/RelayApp.cs:105-112) do not apply. Tested (§7).
-- **The PWA's own automatic checks** (option E) spend Check presses. A Check past the device's limit
-  is answered from the machine's last check instead of being refused, which is what a press within a
-  minute already gets (v1-update.md:54). No person sees a refused Check.
-- **A refusal by a limit is a plain retry time.** `UpdateCommandResult` gains `retryAt` (UTC) with
-  `rate-limited`. The PWA says "Not updated yet. Try again after 9:12 PM", in the viewer's time, never
-  "too many presses". An old host sends no `retryAt`; the PWA then says "Try again in a few minutes".
-- **The restart cap is never a disabled button.** At the cap (`updateNowWhy: restart-cap`), the card's
-  Update and Update all send Update when idle instead, and the row says "updates when its sessions are
-  quiet". Install has no restart cap, since it never restarts over a busy session (v1-update.md:642).
-  The cap itself is unchanged.
-- **A failed download's Try again now works.** Today a release whose download failed is not downloaded
-  again for 10 minutes, whoever asks (v1-update.md:55). A person's press now starts it once at once; the
-  hold still governs background retries, and the per-device limit bounds the presses.
-- **GitHub's quota hold** is shown as "checking again soon" (§2), never as a limit or a time.
+**What each path does.**
+| Path | Halted | Policy stale or unreadable |
+|---|---|---|
+| Automatic install (any mode, hint or tick) | Never | Held; "waiting to check for bad releases" |
+| One machine, a person's press | Refused `halted` | Goes, with the plain warning "Bad-release protection could not be checked on this machine" in the confirm; the signed args carry `unchecked: true`, without which the host refuses `policy-unreadable` |
+| Update all | Machine dropped, "halted" | **Refused** (§5 preflight); the signed args carry `batch: true`, and the host refuses `policy-unreadable` itself |
 
-The last four are changes; they are slice 10 (§8).
+The host enforces both, so a PWA that skips its own check still cannot push a fleet-wide install.
 
-## 5. Three modes
+## 5. One press, Update all, and limits
 
-**When an update is ready** gets three values, stored where it is today (app preferences,
-`WhenUpdateReady`, Stores.cs:103), per machine and profile. Labels are Creative's.
+**One machine.** Update now is the card's primary wherever `canUpdateNow`. A busy machine gets
+Creative's confirm: **Update now** = `update.install {now}` with `accept`; **Update when idle** =
+`update.install`; **Cancel**. Install remains where the app is too old or remote management is off.
 
+**Update all.** A PWA action. No batch signature, no new trust: each machine gets its own
+`update.install {now}`, its own request, `target.machine`, `release` and `accept`, signed with the key
+that machine's handshake proved (update.js:473), through `SignedPress`.
+1. **Pick.** Machines `behind` or `ready` for the newest release they report. Dropped, each a disabled
+   row with its reason: read-only, offline, no installed app, too old for Update now (it is updated on its
+   own card), halted, a different release, or an availability exclusion (below).
+2. **Preflight.** Every picked machine must report `policy: ok`. If any does not, Update all does not
+   start: "Bad-release protection could not be checked on <machine>. Untick it, or update it on its own."
+3. **Confirm.** Creative's sheet: a row per machine (version change, "2 sessions will pause",
+   checkbox), from each machine's `nowSheet` (update.js:314). One confirm covers each row's `accept`.
+4. **Waves.** Wave size is a setting, default 2 (Product). The first wave is the single least busy
+   machine. A wave ends when each machine is `back`, `failed`, `didNotComeBack`, `superseded`, or was
+   sent Update when idle. Before each later wave: re-read each machine; drop one now current; re-run the
+   preflight (a machine now not `ok` stops the batch as a failure would); re-confirm one busier than
+   accepted; then sign. A signature is made only as its press is sent, so none nears its 120 seconds.
+5. **Stop on first failure.** A `failed` or `didNotComeBack` stops new presses: "Stopped: 1 failed.
+   Continue / Stop". Pressed machines carry on. Continue resumes with step 4 over the rest; the failed
+   machine is not pressed again (Try the failed again does that, as a new press). A `refused` row
+   (`busy`, `confirm` declined) and an offline machine do not stop the batch; they end "not updated".
+6. **Results.** "Updating 2 of 4 · 1 done"; then "3 updated, 1 failed" with Try the failed again.
+
+**Availability exclusions** (Product: never the last machine of a role, never the machine pressed from).
+- **Roles.** A role is an owner-set label per machine (app Settings; the roster's once #55 lands),
+  reported as optional `role` in hello (slice 3). A machine **with** a role is picked into a wave only
+  if another machine with that role is online, not in this wave, and not failed. A machine whose role
+  cannot be read (an old host, a status not yet received) is **not picked**: "update it on its own card".
+  A machine reporting no role has none to protect.
+- **Origin.** The machine the press comes from is never in a wave. The `app` device knows its own
+  machine. A `pwa` device knows it from a per-device "this device is <machine>" fact, set when the app
+  opens it, or by the person once in the PWA's Settings. A phone (installed standalone on a mobile OS)
+  is no machine. A desktop browser without the fact asks in the confirm sheet "Which machine are you
+  on?" (one of the machines, or "none of these"); Update all does not start until it is answered.
+- Wave size alone is never treated as this protection.
+
+**A waiting press replaced by another device.** While a machine's press waits (`waiting(code)`, for
+quiet or a usage check), another device's Update now is accepted and replaces it (`AutoUpdater.Ask`),
+and the replaced request gets no result of its own. The batch watches `UpdateState.request`: if it
+changes away from the batch's request before a terminal `last` for it, that row ends **superseded**,
+"taken over by a press from another device". It is neither done nor failed, does not stop the batch,
+and is never credited with the replacement's outcome; the card shows that press's progress as usual.
+
+**Interrupted batch** (Product: stops when the app closes, then says so). The PWA keeps a **batch
+journal** in its own storage, keyed by the signed-in account: batch id, release, wave size, and per
+machine `selected | pressed(request) | ended(outcome)`, written before each press is sent and after each
+answer. It holds no signature, key or token, and nothing in it can authorise anything. On next open the
+PWA reconciles it: a pressed machine is matched to its host's `last` by request; a selected machine
+never pressed is counted. If any were not pressed, the Fleet page says "Update all stopped when the app
+closed: N machines not updated. Update them now." Update them now is a new Update all over those
+machines: new preflight, new confirm, fresh signatures. The banner goes when acted on or dismissed;
+a journal older than 7 days is dropped. Other devices see only what the hosts report.
+
+**Idempotence.** Update all is disabled while a batch is open on this device; each press is
+single-flight (update.js:401, :428). A resend gets its recorded answer (`Again`, UpdateService.cs:427-436).
+A press while another's is carried or queued is refused `busy` ("already updating"); one while
+another's waits is the supersession above. A machine already `current` is not picked.
+
+**Refused, and stays refused.** A press from a machine or agent (SignedPress.cs:73), the app beside the
+host (:74), a read-only machine (:75), `remoteManage` off, an app too old, a changed release, a halted
+release, an unreadable policy for a batch (§4), a command received more than 120 seconds after signing,
+work not done within 15 minutes. Owner-only presses wait for the roster (#55).
+
+**Limits a person meets (owner's rule: no allowance, rate-limit message or disabled button in ordinary use).**
+- **Check now leaves the card;** Check for updates stays in the card menu and Settings; Check all moves to the page menu.
+- **The abuse guards stay:** 3 presses per device per kind per 10 minutes, 8 waiting, per machine.
+- **What Update all spends.** One `NowKind` press per machine from this device. A busy confirm that
+  is accepted spends a second (the retry is a new signed press), and Try the failed again another, so
+  within 10 minutes a machine that already took a press from this device, or two confirms, can reach the
+  guard. Then the row is not a refusal message: it shows `retryAt` as a time (below). The guard stays.
+- **A Check past the limit** is answered from the machine's last check, as a press within a minute is.
+- **A limit is a plain time.** `UpdateCommandResult` gains `retryAt` (UTC) with `rate-limited`: "Not
+  updated yet. Try again after 9:12 PM", in the viewer's time. An old host: "Try again in a few minutes".
+- **The restart cap is never a disabled button:** at `restart-cap`, Update and Update all send Update when
+  idle; the row says "updates when its sessions are quiet". The cap is unchanged.
+- **A failed download's Try again now** starts it once at once; the hold governs background retries.
+- **GitHub's hold** reads "checking again soon" (§2), never a limit or a time.
+
+## 6. Three modes
+
+**When an update is ready** gets three values (app preferences, `WhenUpdateReady`, Stores.cs:103):
 | Label | Value | Behaviour |
 |---|---|---|
-| Restart to update (default) | `RestartToUpdate` | Downloads, shows `ready`, waits for a press (local or remote). |
-| Install between turns | `InstallBetweenTurns` | As today: first gap with no turn running and no question waiting, else the 6-hour backstop. |
-| Install as soon as available | `AsSoonAsReady` (new) | Installs once `ready`. Takes #805's lease (purpose Update), which waits only for typing or delivery in flight, not for turns. Creative's pause warning sits under it. |
+| Restart to update (default) | `RestartToUpdate` | Downloads, shows `ready`, waits for a press. |
+| Install between turns | `InstallBetweenTurns` | As today: first gap, else the 6-hour backstop. |
+| Install as soon as available | `AsSoonAsReady` (new) | Installs once `ready`, through #805's lease (waits for typing or delivery in flight, not turns). Creative's pause warning sits under it. |
 
-**How the third mode goes.** It uses the departure Update now uses (`DepartAsync`) with an automatic
-request, and the host announces it planned (#498/#815), so sessions resume after.
-- It is offered only once #815's planned announcement is built; until then no client shows it.
-  `SignedPress` grants a `Legacy` departure only to a person's press (SignedPress.cs:15-17), and this keeps that.
-- The 6-hour cap applies to it: at most one automatic restart per machine in 6 hours. Past it the
-  machine waits for the next gap, as Install between turns does.
+- The third mode departs as Update now does (`DepartAsync`) with an automatic request and a planned
+  announcement, so it is offered only once #815's announcement is built; `SignedPress` grants a `Legacy`
+  departure only to a person's press (SignedPress.cs:15-17), and this keeps that.
+- **Restart caps.** It has its own 1 automatic restart per machine in 6 hours, and each counts in the
+  2-in-6-hours total shared with `manage.restart` and Update now (ManageService.cs:29-30). Past either,
+  it waits for the next gap, as Install between turns does.
+- Automatic installs in every mode need a fresh, readable halt policy (§4).
+- A press wins over any mode. Turning `AutoUpdate` off stops checks, downloads and hints, not presses.
+- `UpdateState.mode` (read-only) lets the phone word `ready`.
 
-**A press wins over any mode.** Update now goes when confirmed; Update when idle waits for quiet; a mode
-governs only installs nobody pressed. Turning `AutoUpdate` off stops checks, downloads and hint-driven
-checks, not presses.
+**Changing the mode from the phone.** `update.mode {mode, now: SignedCommand}`, through the same
+`SignedPress` gate, recorded durably and idempotent by request; the host hands it to its app. Apply to
+all machines signs one per machine, never a batch. A host too old never offers it. Setting
+`AsSoonAsReady` remotely is refused until the mode ships. **Migration:** an older app reads
+`AsSoonAsReady` as `RestartToUpdate` (`[UnknownAs]`), the safe direction; no file format changes.
 
-**The phone sees the mode.** `UpdateState.mode` (read-only) words `ready` ("installs at the next gap",
-"waiting for your press").
-
-**Changing the mode from the phone (resolves the old open question 4).** Creative's per-machine
-three-choice list and the fleet-level **Apply to all machines** are both included. Each is a signed
-per-machine mode change, so it needs a new op:
-- `update.mode {mode, now: SignedCommand}`, action `update.mode`, naming the machine, the mode and a
-  request. It passes the same `SignedPress` gate as Update now: a person's device, connected now, not
-  the app beside the host, not read-only, `remoteManage` on. Recorded durably, idempotent by request.
-- The host hands it to its app over the pipe; the app stores it and reports `mode`. A host or app too
-  old for it never offers it (a hello capability), and the row stays read-only there.
-- **Apply to all machines** confirms with a list of what changes, then signs one `update.mode` per
-  machine, never a batch. Rows report per machine; a refusal names its reason.
-- Setting `AsSoonAsReady` remotely is refused until the mode itself ships (#815 gate).
-- It is its own two-family slice after the mode slice (§8, slice 12).
-
-**Migration.** Existing values keep their meaning; unset still means `DefaultWhenReady`. An older app
-reads `AsSoonAsReady` as `RestartToUpdate` (`[UnknownAs]`, Stores.cs:84), the safe direction. ui.md's
-two-choice text becomes three in the mode slice. No file format changes.
-
-## 6. Product suggestions and Creative's (one line each)
-- Version on each card and "N machines behind" with Update all in the Fleet header, from host-reported `current` (#586).
-- Halt: wire the halt list (§7, slice 8) before Update all ships; rollback stays "a newer build" (#568, #580).
-- Failed update: keep the old version until `back` is proven; no rollback button in v1 (#581, #1173).
+## 7. Product and Creative suggestions (one line each)
+- Version on each card, "N machines behind" with Update all in the Fleet header, and a warning when a host and its client differ (#586).
+- Halt policy wired before Update all and before any hint-driven install (§4, slice 8).
+- No rollback in v1; failure says what happened and what next (§3). Health-gated recovery is §10.
 - Sessions survive: the third mode waits for the planned announcement (#954, #498).
-- Success and failure stay in-app; no new push types.
-- Show the PWA's own version beside the fleet's (#1246).
-- Fix first: #1740, #1920 and #1173, as Product asks. §2's hold wording covers the zone part.
-- **Later: hold a machine on a version.** Needs a per-machine skip that the halt list and Update all both honour; halt first.
-- **Later: mixed-version warning on Move to machine.** Needs a defined cross-version compatibility rule, which does not exist yet.
-- **Later: release-notes sheet.** Needs an owner for notes content; until then What's new opens the release page.
-- **Later: quiet hours for the two faster modes.** That is scheduling, which Product parked.
-- **Active role colour:** Creative's to name as a token (the board uses blue); the slices use that token.
-- **Contrast:** checked in the PWA slices on real WebKit and forced colours, not by token choice alone.
+- In-app only; no new push types. The PWA's own version beside the fleet's (#1246).
+- Release notes: one plain line before Update, from the release body, else What's new opens the release page.
+- Fix first: #1740, #1920 and #1173, as Product asks.
+- **Later:** hold a machine on a version (after the core flow); mixed-version warning on Move to
+  machine (needs a compatibility rule). Quiet hours: not in scope (Product).
+- Active role colour is Creative's token; contrast is checked on real WebKit and forced colours.
 
-## 7. Failure modes and their tests
+## 8. Failure modes and their tests
 
 | Failure | Behaviour | Test (file) |
 |---|---|---|
-| Release relay unreachable | No hints; the 5-minute poll, then GitHub as today. | ReleaseDiscoveryTests: hint with relay down asks nothing early. AutoUpdaterTests: poll after 10 min without hints. |
-| GitHub limits the release relay | Stale with `Age`; over 1 hour rejected; the hint stops advancing. | worker.test.mjs: ETag/304, stale-with-Age. ReleaseDiscoveryTests: an old copy is not "up to date". |
-| GitHub limits a machine | Hold as today; `checksHeldUntil` in UTC; "checking again soon". | AutoUpdaterTests: no local-time string. update.test.mjs: the card shows no time or limit. |
-| Forged or spammed hint | One release-relay fetch per tag and per minute; no install. | ReleaseDiscoveryTests: 100 hints → 1 fetch; a tag not in a valid list → no `available`. |
-| Bad signature or hash | Fails its feed's SHA256 → `failed`, old version kept (Platform.cs:166-170). | Existing package-mismatch tests stay green; one added for a hint-driven download. |
-| Partial download | Hold (10 min to 4 h); state 13 with `retryAt`; never `ready`. A person's Try again now starts it once. | AutoUpdaterTests: a cut-off download never sets `downloaded`; a press skips the hold once, a background retry does not. |
-| Machine does not return | `restarting` → `slow` at 3 min → `didNotComeBack` at 10; replaced by `last` on return. | update.test.mjs, fake clock: each step at its time; old version back shows `failed`. |
-| Update all across many machines | One press per machine; never `rate-limited`. | update.test.mjs: Update all over 12 machines sends 12 presses, each 1st of its machine, none refused. UpdateServiceTests: "Update now after three Installs from the same device is accepted"; "a third press from one device in 10 minutes is accepted". |
-| A limit is reached anyway | Check: answered from the last check. Install or Update now: `retryAt`, worded as a time. | UpdateServiceTests: a fourth Check is accepted with the cached state; a fourth Install carries `retryAt`. update.test.mjs: no "too many" text. |
-| Restart cap reached | Update sends Update when idle; no disabled button. | update.test.mjs: `restart-cap` → Install sent, quiet line shown. |
-| Two presses / two Update alls | Same request: recorded answer. Second Update now: `busy`. Same device: one per machine. | UpdateNowTests: a parallel second press is refused. update.test.mjs: double click sends one per machine. |
-| Update during a running turn | Restart to update and Install between turns never go over a turn. Update now only within `accept`. Install as soon as available waits for #815. | UpdateFlowTests: busier than accepted → confirm. AutoUpdaterTests: the third mode hidden without #815. |
-| Update all fails midway | Paused; no new presses; Continue re-reads and signs the rest; Stop lists "not pressed". | update.test.mjs: a failure in wave 1 → wave 2 never signed; Continue signs wave 2 fresh and skips the failed machine. |
-| Host/PWA version skew | New fields optional; old PWA reads 5 phases; old host gets no hint and keeps the 90 s rule. | Protocol tests: an old `UpdateState` round-trips. update.test.mjs: no `leaving` → 90 s path. |
-| Halted release | Not offered, not installed. Missing list: hold an automatic install, allow a press with a warning. | Host.Tests: `ReleaseEligibility` wired; a halted tag is never `ready`. |
-| Remote mode change | Signed per machine; refused without `remoteManage`, from an agent, or for the third mode before #815. | UpdateServiceTests: an unsigned `update.mode` is refused. update.test.mjs: Apply to all signs one per machine. |
+| Release relay unreachable | No hints; the normal check. | ReleaseDiscoveryTests: a hint with the relay down asks nothing else. |
+| GitHub limits the release relay | Stale with `Age`; over 1 hour rejected. | worker.test.mjs: ETag/304, stale-with-Age. |
+| GitHub holds a machine | Hint still read from the release relay once, no GitHub call. | AutoUpdaterTests: a machine held 2 hours gets a valid new release from a hint within one tick, and GitHub's fake sees no request. |
+| Hint past the windows | Revalidation due outside `RelayWindow`: hint does nothing. | ReleaseDiscoveryTests: 25 hours after GitHub's last answer a hint leaves the release unknown. |
+| Forged or spammed hint | One release-relay read per tag; no install; bad fields dropped. | ReleaseDiscoveryTests: 100 hints → 1 read; tag not in a valid list → no `available`. HostTests: `v0.1.1x`, an unknown channel, 300 bytes → dropped, not logged. |
+| Halt hidden by the relay | Policy from GitHub only; relay list cannot clear. | HostTests: a relay list omitting the newest halt-bearing release leaves the halt; a GitHub answer whose newest release is older keeps it (replay). |
+| Halt policy stale or unreadable | Automatic install held; one press with warning; Update all refused. | AutoUpdaterTests: policy 7 hours old → no automatic install. UpdateServiceTests: `batch` press on `unreadable` → refused `policy-unreadable`; one press without `unchecked` → refused. update.test.mjs: preflight with one unreadable machine sends no press at all. |
+| Policy fails between waves | Batch stops before the next wave. | update.test.mjs: wave 2's machine turns `stale` → nothing signed for wave 2. |
+| Bad hash | Fails its feed's SHA256 → `failed`, still on old. | Existing package-mismatch tests, plus one for a hint-driven download. |
+| Machine does not return | `restarting` → `slow` (3) → `didNotComeBack` (10); `last` replaces. | update.test.mjs, fake clock: each step at its time; each row of §3's failure table names its step and action. |
+| Update all over many machines | One press per machine; prior presses and confirms counted. | update.test.mjs: 12 fresh machines → 12 presses, none refused. UpdateServiceTests: a machine with 2 earlier presses from the device plus 1 confirm refuses the batch press with `retryAt`, worded as a time. |
+| Second device during waiting | Replacement accepted; batch row `superseded`. | AutoUpdaterTests + update.test.mjs: for both waiting-for-quiet and waiting-for-usage-check, a second device's press replaces the batch's; the row ends superseded, is not credited with the replacement's `back`, and the batch goes on. |
+| Simultaneous presses | Same request: recorded answer; second while carried: `busy`. | UpdateNowTests: parallel second press refused. update.test.mjs: double click sends one per machine. |
+| Availability exclusions | Last of a role and the origin machine never picked; unknown role not picked. | update.test.mjs: two machines of role A, wave size 2 → one per wave; an old host without `role` → not picked; a desktop browser with no origin fact → sheet asks, nothing sent. |
+| Offline or cannot sign | Row "not updated"; batch goes on. | update.test.mjs: a machine offline at its wave and one whose signing throws → neither stops the batch. |
+| App closes mid-batch | Pressed carry on; banner on next open. | update.test.mjs: close after wave 1, reopen → "Update all stopped when the app closed: 2 machines not updated"; Update them now re-runs preflight and signs fresh; the journal holds no signature. |
+| Update all fails midway | Stopped; Continue re-reads and signs the rest. | update.test.mjs: a failure in wave 1 → wave 2 never signed. |
+| Host/PWA version skew | New fields optional. | Protocol tests: an old `UpdateState` round-trips; no `leaving` → 90 s path. |
+| Remote mode change | Signed per machine. | UpdateServiceTests: unsigned `update.mode` refused. update.test.mjs: Apply to all signs one per machine. |
 
-## 8. Slices
+## 9. Slices
 
-Each slice is 400 lines or fewer and starts with its tests. Rows marked **2F** touch the update,
-install or signing path, or the relay protocol, and need two families; both read security-subject docs in full.
+Each slice is 400 lines or fewer and starts with its tests. **2F** rows touch the update, install or
+signing path, or the protocol, and need two families, both reading security-subject docs in full.
 
 | # | Slice | Depends on | Review |
 |---|---|---|---|
-| 1 | `checksHeldUntil` as UTC; drop the local-time string; the card says "checking again soon". | — | 1F |
-| 2 | Release relay: ETag + 304; freshness 60 s when a token secret is set (owner decision), else 300 s. | — | 1F + SRE |
-| 3 | Protocol: `release.hint`, `releaseHint` capability, optional `UpdateState` fields (`bytes`, `total`, `downloaded`, `installing`, `leaving`, `back`, `mode`), `retryAt` on results. v1-update.md. | — | **2F** |
-| 4 | Relay: conditional poll of the release relay once a minute; hint on change and on connect, capable hosts only. | 3 | **2F** |
-| 5 | Host and app: hint over the pipe; `ReleaseDiscovery` hint path (release relay only, once per tag, 1/min); 5-minute fallback poll. | 3 | **2F** |
-| 6 | Host and app: report `bytes`/`total`/`downloaded` and `installing`; `leaving` with `backBy` = `at` + 3 min; `back` for 10 minutes. | 3 | **2F** |
-| 7 | PWA card: the four steps and states of §3 (3 and 10 minutes), version per card, "N machines behind"; Check now off the card, Check all into the page menu; What's new opens the release page. | 6 | 1F |
-| 8 | Halt list wired into the app's install path, reading `halts.json` via the shared list (no API quota). | — | **2F** |
-| 9 | PWA Update all: confirm sheet, least-busy first then two at a time, Paused with Continue/Stop, results, the many-machines limit tests. | 7, 8 | **2F** |
-| 10 | Limits never met: Check past the limit answered from the last check; `retryAt` worded as a time; restart cap falls back to Update when idle; a person's Try again now skips the download hold once. | 3 | **2F** |
-| 11 | Third mode `AsSoonAsReady`, labelled "Install as soon as available": enum, app Settings, ui.md's three choices, the automatic departure through the lease, its 6-hour cap. | #815 built, 6 | **2F** |
-| 12 | Signed mode change: `update.mode` op through `SignedPress`, capability, app storage; PWA per-machine three-choice list and Apply to all machines (one signature per machine). | 11 | **2F** |
+| 1 | Drop the local-time strings (AutoUpdater.cs:1170, :429; ObservedUpdater.cs:107); the card says "checking again soon". No wire change. | — | 1F |
+| 2 | Release relay: ETag + 304; 60 s with a token secret (owner decision), else 300 s; README's "No secrets" line. | — | 1F + SRE |
+| 3 | Protocol: `release.hint` with its validation, `releaseHint` capability, `role` in hello, `UpdateState` fields (§3, incl. `checksHeldUntil`, `policy`), `step` on `last`, `retryAt`, `batch` and `unchecked` signed args. v1-update.md. | — | **2F** |
+| 4 | Relay: conditional release-relay poll once a minute; hints to capable hosts. | 3 | **2F** |
+| 5 | Host and app: hint over the pipe; expedited read (§2.4) past the app's hold, within the windows; release-relay ETag client. The 10-minute `Interval` stays. | 2, 3, **8 accepted** | **2F** |
+| 6 | Host and app: `bytes`/`total`/`downloaded`, `installing`, `leaving` with `backBy`, `back`, `step`. | 3 | **2F** |
+| 7a | PWA card: the four steps and states of §3, thresholds, the failure table. | 6 | 1F |
+| 7b | PWA fleet: version per card, "N machines behind", host/client mismatch warning, Check moves, release-notes line. | 6 | 1F |
+| 8 | Halt policy (§4): GitHub source in `ReleaseDiscovery`'s file, conditional; freshness; known halts kept; `policy` state; enforcement of `batch` and `unchecked`. | 3 | **2F** |
+| 9a | PWA Update all core: pick, preflight, confirm, waves with role and origin exclusions, signing per wave. | 7a, 8 | **2F** |
+| 9b | PWA Update all run: stop/Continue, results, supersession, offline rows, batch journal and reopen banner. | 9a | **2F** |
+| 10 | Limits never met: Check from the last check; `retryAt` as a time; cap → Update when idle; Try again now. | 3 | **2F** |
+| 11 | Third mode `AsSoonAsReady`: enum, Settings, ui.md, the automatic departure, its caps. | #815, 6, **8 accepted** | **2F** |
+| 12 | Signed mode change `update.mode`; PWA three-choice list and Apply to all machines. | 11 | **2F** |
+| 13 | Later, owner-gated: fleet coordinator (§10.1). | owner decision on fleet #22 | **2F** |
+| 14 | Later: health-gated recovery (§10.2). | its own design | **2F** |
 
-**Changed in revision 2.** Slices 1, 3, 6, 7, 9 and 11 changed; 10 and 12 are new; 2, 4, 5 and 8 are as
-before. Slices 1, 2, 3 and 8 can start at once; 10 needs only 3.
+Slices 5 and 11 come after slice 8 is accepted: no hint-driven or unattended install before the halt
+policy reads. Slices 1, 2, 3 and 8 can start at once; 10 needs only 3. Slices 7 and 9 were split
+because each ran past 400 lines.
 
-## 9. Open questions
-1. **Owner.** Give the release relay a read-only GitHub token as a Worker secret (60 s instead of 300 s)?
-2. **Product.** Should Update all go on if the PWA closes? That needs a host-side coordinator, which is
-   new always-on state. This design stops instead, and a pause is a Stop.
-3. **Product.** When the halt list cannot be read, should a person's press still go, with a warning? This
-   design says yes for a press and no for an automatic install.
-4. **Creative.** The Active role's colour token, and owner sign-off on the board at 2bc31243.
+## 10. Later designs (pointers, not v1)
+
+**10.1 Fleet coordinator (owner-gated, fleet #22).** Product wants a run that outlives the phone, but
+not at the cost of security, so v1 stops. Today a phone cannot sign later waves in advance: a signed
+command must reach the host within 120 seconds, and the work it starts lives 15 minutes. A coordinator
+therefore needs delegated signing. **Recommended owner answer:** a person signs one bounded *batch
+grant* naming the exact machines, release, wave size, each machine's `accept`, and an expiry of at most
+1 hour, with presence (WebAuthn where the device has it); it is carried by one of the owner's own hosts,
+never the relay; each host verifies the grant against the roster (#55) itself, acts on it at most once,
+only for that release, and still applies §4 and every refusal above. No code until the owner decides.
+
+**10.2 Health-gated recovery.** v1 does not give "the old version keeps running until the new one is
+proven" (Product confirmed). That needs Update.exe to keep the old install, a start-and-health gate on
+the new host, and a way back to the old one if the gate fails: its own design, after the core flow.
+
+## 11. Open questions
+1. **Owner.** A read-only GitHub token as a Worker secret for the release relay (60 s instead of 300 s)?
+2. **Owner.** The coordinator's delegated signing (§10.1) on fleet #22.
+3. **Creative.** The Active role's colour token, and owner sign-off on the board at 2bc31243.
