@@ -10,6 +10,8 @@ public class EfficiencyBaselineTests
     [InlineData("exit")]
     [InlineData("replacement")]
     [InlineData("readonly")]
+    [InlineData("no-survivors")]
+    [InlineData("partial")]
     public async Task The_baseline_contract_holds_without_real_clock_waits(string scenario)
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
