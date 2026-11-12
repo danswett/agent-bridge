@@ -484,6 +484,10 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .machine.offline { background: none; border-style: dashed; }
 .machine-block { border-radius: inherit; }
 .machine-block:has(~ .machine-error) { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.machine.selected::before {
+  content: ""; position: absolute; left: -1px; top: var(--ab-space-4); width: 3px; height: 16px; border-radius: 2px; background: var(--ab-bridge);
+}
+@media (forced-colors: active) { .machine.selected::before { forced-color-adjust: none; background: Highlight; } }
 .machine-button, .machine-row {
   width: 100%; min-height: var(--tap); display: grid;
   grid-template-columns: 20px minmax(0, 1fr) auto; grid-template-rows: auto auto; column-gap: var(--ab-space-3); row-gap: 2px;
@@ -491,10 +495,15 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   font: inherit; color: var(--ab-text); background: none; border: 0; border-radius: var(--ab-radius-card);
 }
 .machine-button { cursor: pointer; }
+.machine-button:hover { background: var(--ab-subtle); }
 /* The icon sits on line 1, centred on its 20 px line, never on the row's middle. */
 .machine-button .icon, .machine-row .icon { grid-column: 1; grid-row: 1; align-self: start; width: 20px; height: 20px; --ab-icon-stroke: 1.5; color: var(--ab-text2); }
 .machine-name { grid-column: 2; grid-row: 1; font-weight: 600; font-size: var(--type-row); line-height: var(--type-row-line); overflow-wrap: anywhere; }
 .machine-state { grid-column: 3; grid-row: 1; color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-row-line); white-space: nowrap; }
+.machine.selected .machine-state { color: var(--ab-bridge); }
+@media (prefers-color-scheme: light) and (forced-colors: none) {
+  .machine.selected .machine-state, .machine.selected .button.secondary:not(.armed) { color: var(--ab-text); }
+}
 .machine-sub {
   grid-column: 2 / 4; grid-row: 2; min-width: 0; color: var(--ab-text2);
   font-size: var(--type-meta); line-height: var(--type-meta-line); font-variant-numeric: tabular-nums;

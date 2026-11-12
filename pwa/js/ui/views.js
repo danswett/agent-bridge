@@ -1260,7 +1260,7 @@ function machineTile({ name, raw, bars, onSelect, onLaunch, more, expanded = fal
   const why = raw?.held ? `Discovery is held: ${raw.held}` : raw?.readOnly ? `This machine is view only: ${raw.readOnly}` : null;
   const running = !raw?.sessions ? 'Not reported yet' : raw.sessions.startsWith('0 ') ? 'No sessions running' : raw.sessions;
   const contents = h('div', { hidden: !expanded },
-    h('button', { type: 'button', class: 'button secondary small machine-running-view', onclick: onSelect }, 'Show sessions'));
+    h('button', { type: 'button', class: 'button secondary small machine-running-view', 'aria-label': `Show running sessions on ${name}`, onclick: onSelect }, 'Show running sessions'));
   const toggle = h('button', { type: 'button', class: 'tile-running-toggle', 'aria-expanded': String(expanded), onclick: () => {
     contents.hidden = !contents.hidden;
     toggle.setAttribute('aria-expanded', String(!contents.hidden));
@@ -1283,7 +1283,7 @@ function machineRow({ id, name, select = null, selected = false, facts, state, o
   const parts = [
     icon('machine'),
     h('span', { class: 'machine-name' }, name),
-    h('span', { class: 'machine-state' }, state === 'Online' ? [h('span', { 'aria-hidden': 'true' }, '\u25cf'), ' '] : null, state),
+    h('span', { class: 'machine-state' }, ['Online', 'Viewing'].includes(state) ? [h('span', { 'aria-hidden': 'true' }, state === 'Viewing' ? '\u25c9' : '\u25cf'), ' '] : null, state),
     h('span', { class: 'machine-sub' }, facts),
   ];
   const head = select
@@ -1313,10 +1313,8 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
   const loads = new Map([...hosts, ...offline].map((d) => {
     const online = hosts.some((host) => host.id === d.id), record = load(d.id);
     const bars = online && record == null ? null : loadBars(record, { online });
-    if (bars?.memory.percent != null) {
-      bars.memory.free = `${(record.memory.availableBytes / 1e9).toLocaleString(undefined, { maximumFractionDigits: 1 })} GB free`;
-    }
-    return [d.id, bars];
+    const free = bars?.memory.percent == null ? null : `${(record.memory.availableBytes / 1e9).toLocaleString(undefined, { maximumFractionDigits: 1 })} GB free`;
+    return [d.id, bars ? { ...bars, memory: { ...bars.memory, free } } : null];
   }));
   const rows = new Map(hosts.map((d) => [d.id, updateRow(updates, d.id, d.name, now)]));
   // A machine that left for an Update now reads "Restarting to update…" for a while (#1159, until
@@ -1375,7 +1373,7 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
     const selected = d.id === current || (all && hosts.length === 1);
     return machineRow({
       id: d.id, name: d.name, select: () => onSelect(d.id), selected,
-      facts: lines.get(d.id).el, state: 'Online',
+      facts: lines.get(d.id).el, state: selected ? 'Viewing' : 'Online',
       tile: machineTile({
         name: d.name, raw: facts?.(d.id) ?? null, bars: loads.get(d.id), onSelect: () => onSelect(d.id), onLaunch: () => onLaunch(d.id),
         more: [rows.get(d.id).el, signInRows.get(d.id).el, diagnoses.get(d.id).el], expanded: expanded.has(d.id),

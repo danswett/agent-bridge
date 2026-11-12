@@ -421,12 +421,47 @@ test.describe('held update clocks', () => {
 
 test.describe('approved Fleet card structure', () => {
   test.use({ isMobile: true });
+  for (const mode of ['dark', 'light', 'contrast']) {
+    test(`the current machine keeps its visible cue, hover and contrast in ${mode}`, async ({ page, browserName }) => {
+      test.skip(mode === 'contrast' && browserName === 'webkit', 'WebKit has no forced-colors emulation');
+      await page.emulateMedia({ colorScheme: mode === 'dark' ? 'dark' : 'light', forcedColors: mode === 'contrast' ? 'active' : 'none' });
+      await openDemo(page);
+      await page.evaluate((id) => window.agentBridgeDemo.hosts.select(id), LAPTOP);
+      await go(page, 'machines');
+      const current = page.locator(`#machine-list [data-device-id="${LAPTOP}"]`);
+      await expect(current.locator('.machine-button')).toHaveAttribute('aria-current', 'true');
+      await expect(current.locator('.machine-state')).toContainText('Viewing');
+      const cue = await current.evaluate((el) => {
+        const s = getComputedStyle(el, '::before'), probe = document.createElement('span');
+        probe.style.color = 'Highlight'; el.append(probe);
+        const highlight = getComputedStyle(probe).color; probe.remove();
+        return { content: s.content, width: parseFloat(s.width), height: parseFloat(s.height), color: s.backgroundColor, adjust: s.forcedColorAdjust, highlight };
+      });
+      expect(cue.content).not.toBe('none');
+      expect(cue.width).toBeGreaterThan(0);
+      expect(cue.height).toBeGreaterThan(cue.width);
+      if (mode === 'contrast') {
+        expect(cue.adjust).toBe('none');
+        expect(cue.color).toBe(cue.highlight);
+      }
+      if (mode === 'light') {
+        const text = await page.locator('body').evaluate((el) => getComputedStyle(el).color);
+        await expect(current.locator('.machine-state')).toHaveCSS('color', text);
+        await expect(current.locator('.machine-launch')).toHaveCSS('color', text);
+      }
+      const transparent = /^rgba\(\d+, \d+, \d+, 0\)$/;
+      await expect(current.locator('.machine-block')).toHaveCSS('background-color', transparent);
+      await current.locator('.machine-button').hover();
+      await expect(current.locator('.machine-button')).not.toHaveCSS('background-color', transparent);
+    });
+  }
   for (const [width, scale] of [[390, 100], [390, 200], [768, 100], [1024, 100]]) {
     test(`cards keep their hierarchy, disclosures and aligned bars at ${width}px and ${scale}% text`, async ({ page }) => {
       await page.setViewportSize({ width, height: 1000 });
       await page.addInitScript(() => { Object.defineProperty(navigator, 'standalone', { value: true }); });
       await openDemo(page);
       await go(page, 'machines');
+      const baseNameSize = await page.locator('#machine-list .machine-name').first().evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
       await page.evaluate(async (scale) => {
         document.documentElement.style.setProperty('--text-scale', scale / 100);
         const { renderMachines } = await import('/js/ui/views.js');
@@ -447,7 +482,7 @@ test.describe('approved Fleet card structure', () => {
         window.drawStructure();
       }, scale);
       const cards = page.locator('#structure-fixture > .machine');
-      await expect(cards.first().locator('.machine-name')).toHaveCSS('font-size', `${(width < 760 ? 15 : 14) * scale / 100}px`);
+      expect(await cards.first().locator('.machine-name').evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeCloseTo(baseNameSize * scale / 100);
       for (const card of await cards.all()) {
         await expect(card.locator('.tile-health-word')).toHaveText('Not measured yet');
         await expect(card.locator('.tile-health-icon')).toBeVisible();
@@ -458,7 +493,7 @@ test.describe('approved Fleet card structure', () => {
         await expect(running).toHaveAttribute('aria-expanded', 'false');
         await expect(card.getByText('Running: 2 sessions', { exact: true })).toHaveCount(0);
         await expect(card.locator('.machine-status')).toHaveText('2 sessions · 0.1.1');
-        await expect(card.locator('.machine-state')).toContainText('Online');
+        await expect(card.locator('.machine-state')).toContainText(await card.locator('[aria-current="true"]').count() ? 'Viewing' : 'Online');
         await expect(card.locator('.machine-state [aria-hidden="true"]')).toBeVisible();
         const actions = [card.getByRole('button', { name: /^Launch here/ }), card.getByRole('button', { name: /^Show sessions/ })];
         const boxes = await Promise.all(actions.map((a) => a.boundingBox()));
@@ -490,7 +525,7 @@ test.describe('approved Fleet card structure', () => {
       const running = cards.first().getByRole('button', { name: /^Running, 2/ });
       await running.click();
       await expect(running).toHaveAttribute('aria-expanded', 'true');
-      await cards.first().locator('.tile-running').getByRole('button', { name: 'Show sessions', exact: true }).tap();
+      await cards.first().locator('.tile-running').getByRole('button', { name: 'Show running sessions on Small', exact: true }).tap();
       await running.focus();
       await page.evaluate(() => window.drawStructure('0.1.2'));
       await expect(running).toHaveAttribute('aria-expanded', 'true');
@@ -500,6 +535,7 @@ test.describe('approved Fleet card structure', () => {
       await page.evaluate(() => window.drawStructure('0.1.3'));
       await expect(showRunning).toBeFocused();
       await page.keyboard.press('Enter');
+      await expect(cards.first().getByRole('button', { name: /^Show sessions/ })).toHaveCount(1);
       await cards.last().getByRole('button', { name: /^Show sessions/ }).tap();
       expect(await page.evaluate(() => window.structureCalls)).toEqual(['structure-0', 'structure-0', 'structure-1']);
       await page.evaluate(() => window.drawStructure('0.1.2', 'stale'));
@@ -507,6 +543,8 @@ test.describe('approved Fleet card structure', () => {
         await expect(card.getByText('Last measured 4 min ago', { exact: true })).toBeVisible();
         await expect(card.getByRole('meter')).toHaveCount(0);
         await expect(card.getByText(/GB free/)).toHaveCount(0);
+        await expect(card.locator('.machine-load-value')).toHaveText(['No figure', 'No figure']);
+        expect(await card.evaluate((el) => [...el.querySelectorAll('*')].some((e) => e.clientWidth && e.scrollWidth > e.clientWidth + 1))).toBe(false);
       }
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     });
