@@ -6,7 +6,7 @@ namespace AgentBridge.App.Tests;
 public class FeedbackDialogTests
 {
     [Fact]
-    public void The_review_dialog_names_its_controls_and_keeps_optional_content_closed()
+    public void The_review_dialog_names_its_controls_and_keeps_session_turns_opt_in()
     {
         var root = AppContext.BaseDirectory;
         while (!File.Exists(Path.Combine(root, "AgentBridge.slnx"))) { root = Path.GetDirectoryName(root)!; }
@@ -20,7 +20,6 @@ public class FeedbackDialogTests
             Assert.False(string.IsNullOrWhiteSpace((string?)control.Attribute("AutomationProperties.AutomationId")));
             Assert.False(string.IsNullOrWhiteSpace((string?)control.Attribute("AutomationProperties.Name")));
         }
-        Assert.Equal("False", (string?)controls.Single(e => e.Name.LocalName == "Expander").Attribute("IsExpanded"));
         Assert.Equal("False", (string?)controls.Single(e => (string?)e.Attribute(x + "Name") == "Turns").Attribute("IsChecked"));
         Assert.Contains("encrypted on this device, processed automatically", dialog.ToString(), StringComparison.Ordinal);
     }

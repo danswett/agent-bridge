@@ -772,6 +772,66 @@ static partial class SelfTest
         check(!wrong && window.AppWindow.IsVisible, "shows the window from the tray's Send feedback, and only that");
         await Unavailable("the tray");
         window.ShowInFront();
+
+        var probe = new FeedbackDialogProbe();
+        var ready = new FeedbackDialog(probe, probe, "feedback-demo", "Feedback test session") { XamlRoot = window.RootElement.XamlRoot };
+        var shown = ready.ShowAsync();
+        Button? Send() => ById<Button>(ready, "FeedbackSend");
+        void Press(Button b) => ((IInvokeProvider)new ButtonAutomationPeer(b).GetPattern(PatternInterface.Invoke)).Invoke();
+        await Until(() => probe.Request is not null, TimeSpan.FromSeconds(5));
+        check(Send() is { IsEnabled: false } && probe.Sends == 0, "disables Send while the review is gathering");
+        probe.Gathering!.SetResult(probe.Bundle());
+        probe.Gathering = null;
+        check(await Until(() => Send()?.IsEnabled == true, TimeSpan.FromSeconds(5)), "gathers the review before enabling Send");
+        var note = ById<TextBox>(ready, "FeedbackNote");
+        var turns = ById<CheckBox>(ready, "FeedbackTurns");
+        var included = ById<Expander>(ready, "FeedbackIncluded");
+        check(note is not null && turns is { IsChecked: false, Content: string label } && label.Contains("Feedback test session", StringComparison.Ordinal)
+            && included is { IsExpanded: false } && probe.Sends == 0, "offers the note and named off-by-default turns, with What's included collapsed and nothing sent");
+        if (note is not null) { note.Text = "The test note"; }
+        check(await Until(() => probe.Request?.Note == "The test note" && Send()?.IsEnabled == true, TimeSpan.FromSeconds(5)), "regathers when the note changes");
+        if (turns is not null) { turns.IsChecked = true; }
+        check(await Until(() => probe.Request?.SessionTurnsFor == "feedback-demo" && Send()?.IsEnabled == true, TimeSpan.FromSeconds(5))
+            && probe.Sends == 0, "includes only the named session after the person opts in, without sending");
+        if (included is not null) { included.IsExpanded = true; }
+        check(await Until(() => Find<TextBlock>(ready).Any(b => b.Text == "The test note"), TimeSpan.FromSeconds(5)), "shows the gathered bundle's actual rows when expanded");
+        probe.Sending = new TaskCompletionSource<FeedbackSendResult>();
+        if (Send() is { } sendButton) { Press(sendButton); }
+        check(Send() is { IsEnabled: false } && ById<StackPanel>(ready, "FeedbackChoices") is { IsEnabled: false }, "locks choices and Send while sending");
+        probe.Sending.SetResult(new FeedbackSendResult.Failed(FeedbackFailureReason.Offline, FeedbackRetry.Now));
+        probe.Sending = null;
+        check(await Until(() => ById<Button>(ready, "FeedbackRetry") is { IsEnabled: true, Visibility: Visibility.Visible }, TimeSpan.FromSeconds(5))
+            && ById<TextBlock>(ready, "FeedbackStatus")?.Text.Contains(FeedbackSendViewModel.FailedText, StringComparison.Ordinal) == true && probe.Sends == 1,
+            "shows the failed reason with Retry after Send");
+        if (ById<Button>(ready, "FeedbackRetry") is { } retry) { Press(retry); }
+        check(await Until(() => ById<TextBlock>(ready, "FeedbackStatus")?.Text.StartsWith("Thanks. Sent at", StringComparison.Ordinal) == true, TimeSpan.FromSeconds(5))
+            && probe.Sends == 2 && probe.LastSent?.Items.Single().Summary == "The test note"
+            && ById<TextBox>(ready, "FeedbackPreview")?.Text == probe.LastSent?.Text, "Retry sends the exact reviewed bundle and shows Sent");
+        if (ById<Button>(ready, "FeedbackClose") is { } closeReady) { Press(closeReady); } else { ready.Hide(); check(false, "offers an accessible Close after Sent"); }
+        await shown;
+    }
+
+    sealed class FeedbackDialogProbe : IFeedbackBundleSource, IFeedbackSender
+    {
+        public FeedbackRequest? Request;
+        public FeedbackBundle? LastSent;
+        public int Sends;
+        public TaskCompletionSource<FeedbackGatherResult>? Gathering = new();
+        public TaskCompletionSource<FeedbackSendResult>? Sending;
+        public FeedbackGatherResult Bundle() => new FeedbackGatherResult.Ready(new FeedbackBundle(
+            JsonSerializer.SerializeToUtf8Bytes(new { note = Request?.Note ?? "" }), new byte[16], DateTimeOffset.UnixEpoch,
+            [new FeedbackItem("note", "Note", Request?.Note ?? "", 2, true)]));
+        public Task<FeedbackGatherResult> GatherAsync(FeedbackRequest request, IProgress<FeedbackGatherStage>? progress, CancellationToken ct)
+        {
+            Request = request;
+            return Gathering?.Task ?? Task.FromResult(Bundle());
+        }
+        public Task<FeedbackSendResult> SendAsync(FeedbackBundle bundle, CancellationToken ct)
+        {
+            LastSent = bundle;
+            Sends++;
+            return Sending?.Task ?? Task.FromResult<FeedbackSendResult>(new FeedbackSendResult.Sent(DateTimeOffset.Now));
+        }
     }
 
     // The Windows shell (ui.md §7, #180): the 48 px title bar with the mark, the name and the search

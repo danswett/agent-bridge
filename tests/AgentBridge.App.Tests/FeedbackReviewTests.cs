@@ -34,6 +34,32 @@ public sealed class FeedbackReviewTests
     }
 
     [Fact]
+    public async Task The_exact_preview_cannot_outlive_its_gather_or_return_after_close()
+    {
+        var (vm, send, source, _) = Make();
+        vm.Start();
+        vm.Note = "new request";
+        var bundle = new FeedbackBundle(System.Text.Encoding.UTF8.GetBytes("{\"note\":\"[redacted]\"}"),
+            new byte[16], DateTimeOffset.UnixEpoch, []);
+        await Finish(source.Calls[0].Done, t => t.SetResult(new FeedbackGatherResult.Ready(bundle)));
+        Assert.Empty(vm.PreviewText);
+        Assert.False(send.CanSend);
+        await Finish(source.Calls[1].Done, t => t.SetResult(new FeedbackGatherResult.Ready(bundle)));
+        Assert.Equal(bundle.Text, vm.PreviewText);
+        Assert.True(send.CanSend);
+        vm.Note = "another request";
+        Assert.Empty(vm.PreviewText);
+        Assert.False(send.CanSend);
+        await Finish(source.Calls[2].Done, t => t.SetResult(new FeedbackGatherResult.Refused(FeedbackRefusalReason.NoteTooLong)));
+        Assert.Empty(vm.PreviewText);
+        vm.Note = "last request";
+        vm.Close();
+        await Finish(source.Calls[3].Done, t => t.SetResult(new FeedbackGatherResult.Ready(bundle)));
+        Assert.Empty(vm.PreviewText);
+        Assert.False(send.CanSend);
+    }
+
+    [Fact]
     public async Task Rows_come_from_the_gathered_bundle_and_start_collapsed_with_turns_off()
     {
         var (vm, send, source, _) = Make();

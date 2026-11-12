@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.App.Core;
+using AgentBridge.App.Core.Feedback;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -30,6 +31,7 @@ public partial class App : Application
     ToastResponder? responder;
     RegisteredWaitHandle? showWait;
     bool quitting;
+    readonly HttpClient feedbackHttp = new();
 
     internal App(AppOptions options, SingleInstance single, bool installed)
     {
@@ -175,6 +177,19 @@ public partial class App : Application
         var launch = new LaunchViewModel(main, ui);
         // Where the window was left, kept beside the settings (#180).
         window = new MainWindow(main, launch, options.SelfTest is not null, Path.Combine(appData, $"{options.Profile}-window.json"));
+        var feedback = new FeedbackSenderFactory(Prefs, () => (link as RelayFleetLink)?.Relay, feedbackHttp);
+        window.CreateFeedback = () =>
+        {
+            var card = main.Selected;
+            var host = card is null ? connection : main.AllMachines.FirstOrDefault(m => ReferenceEquals(m.Host.Sessions.Get(card.Id), card.Session))?.Host;
+            var sources = new AppFeedbackSources(
+                () => AppFeedbackSources.Describe(version, prefs.Prereleases ? "prerelease" : "stable",
+                    main.AllMachines.Select(m => m.Host.Hello?.Machine.HostVersion).OfType<string>().ToList()),
+                appData, prefsFile, _ => Task.FromResult(connection.Status?.Agents),
+                (id, max, ct) => host is null ? Task.FromResult<HistoryResult?>(null)
+                    : host.ReadAsync<HistoryResult>(HistoryProtocol.Op, new HistoryRequest { Id = id, Limit = max }, ct: ct));
+            return new FeedbackDialog(new FeedbackBundleSource(sources), feedback.TryCreate(), host is null ? null : card?.Id, card?.Title);
+        };
         // The panes' widths as their dividers were left, beside them too (#297); the self-test's are its own.
         window.Sessions.Widths = new PaneWidths(options.SelfTest is null ? Path.Combine(appData, $"{options.Profile}-panes.json") : null);
         window.CloseRequested += OnWindowClosing;
@@ -400,6 +415,7 @@ public partial class App : Application
         manager?.Quit(TimeSpan.FromSeconds(25), AppLog.Write);
         showWait?.Unregister(null);
         tray?.Dispose();
+        feedbackHttp.Dispose();
         tray = null;
         var c = connection;
         var d = demo;

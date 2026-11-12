@@ -1,0 +1,51 @@
+<ContentDialog
+    x:Class="AgentBridge.App.FeedbackDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Send feedback" CloseButtonText="Close" DefaultButton="Close"
+    AutomationProperties.AutomationId="FeedbackDialog" AutomationProperties.Name="Send feedback">
+    <ScrollViewer MaxHeight="560" AutomationProperties.AutomationId="FeedbackScroll" AutomationProperties.Name="Feedback review">
+        <StackPanel Spacing="12" MinWidth="280">
+            <TextBlock Text="Your report is encrypted on this device, processed automatically. Nothing is sent until you press Send."
+                       TextWrapping="Wrap" AutomationProperties.AutomationId="FeedbackPrivacy" AutomationProperties.Name="How feedback is processed" />
+            <StackPanel x:Name="Choices" Spacing="12" AutomationProperties.AutomationId="FeedbackChoices" AutomationProperties.Name="Optional feedback content">
+                <TextBox x:Name="Note" Header="What happened?" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="140"
+                         Text="{Binding Note, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         AutomationProperties.AutomationId="FeedbackNote" AutomationProperties.Name="What happened?" />
+                <StackPanel Spacing="8">
+                    <Button Content="Choose screenshot (PNG)" Click="OnScreenshot" AutomationProperties.AutomationId="FeedbackScreenshot" AutomationProperties.Name="Choose an optional PNG screenshot" />
+                    <Button Content="Remove screenshot" Click="OnRemoveScreenshot" AutomationProperties.AutomationId="FeedbackRemoveScreenshot" AutomationProperties.Name="Remove screenshot" />
+                </StackPanel>
+                <TextBlock x:Name="ScreenshotStatus" TextWrapping="Wrap" AutomationProperties.AutomationId="FeedbackScreenshotStatus" AutomationProperties.Name="Screenshot choice" />
+                <CheckBox x:Name="Turns" IsChecked="False" Checked="OnTurns" Unchecked="OnTurns"
+                          AutomationProperties.AutomationId="FeedbackTurns" AutomationProperties.Name="Include session turns" />
+            </StackPanel>
+            <Expander x:Name="Included" Header="What's included" IsExpanded="{Binding RowsExpanded, Mode=TwoWay}" HorizontalAlignment="Stretch"
+                      AutomationProperties.AutomationId="FeedbackIncluded" AutomationProperties.Name="What's included">
+                <StackPanel Spacing="8">
+                    <ItemsControl ItemsSource="{Binding Rows}" AutomationProperties.AutomationId="FeedbackRows" AutomationProperties.Name="Items in this report">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="0,4">
+                                    <TextBlock Text="{Binding Label}" FontWeight="SemiBold" AutomationProperties.AutomationId="FeedbackRowLabel" AutomationProperties.Name="{Binding Label}" />
+                                    <TextBlock Text="{Binding Summary}" TextWrapping="Wrap" AutomationProperties.AutomationId="FeedbackRowSummary" AutomationProperties.Name="{Binding Summary}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBox x:Name="Preview" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="240"
+                             AutomationProperties.AutomationId="FeedbackPreview" AutomationProperties.Name="Exact redacted report to send" />
+                </StackPanel>
+            </Expander>
+            <TextBlock x:Name="Status" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"
+                       AutomationProperties.AutomationId="FeedbackStatus" AutomationProperties.Name="Feedback result" />
+            <TextBlock x:Name="RetryHint" TextWrapping="Wrap" AutomationProperties.AutomationId="FeedbackRetryHint" AutomationProperties.Name="When feedback can be retried" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button x:Name="Send" Content="Send" Click="OnSend" Visibility="Collapsed" Style="{StaticResource AccentButtonStyle}"
+                        AutomationProperties.AutomationId="FeedbackSend" AutomationProperties.Name="Send feedback" />
+                <Button x:Name="Retry" Content="Retry" Click="OnRetry" Visibility="Collapsed"
+                        AutomationProperties.AutomationId="FeedbackRetry" AutomationProperties.Name="Retry sending feedback" />
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</ContentDialog>
