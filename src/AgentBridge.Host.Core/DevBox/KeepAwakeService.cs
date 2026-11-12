@@ -250,6 +250,9 @@ public sealed class KeepAwakeService : IAsyncDisposable
             var remaining = due - options.Time.GetUtcNow();
             if (remaining <= TimeSpan.Zero) { break; }
             timer.Change(remaining, Timeout.InfiniteTimeSpan);
+            var remainingAfterArming = due - options.Time.GetUtcNow();
+            if (remainingAfterArming <= TimeSpan.Zero) { break; }
+            if (remainingAfterArming < remaining) { timer.Change(remainingAfterArming, Timeout.InfiniteTimeSpan); }
             if (await Task.WhenAny(signal, elapsed.Task).WaitAsync(stop.Token) == signal) { break; }
             elapsed = new(TaskCreationOptions.RunContinuationsAsynchronously);
         }
