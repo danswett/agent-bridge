@@ -20,22 +20,19 @@ namespace AgentBridge.Host.Delivery.Copilot;
 //   * Then the fields (`Uxn`): with more than one, a tab bar (`Da`) naming each in order, on
 //     one row (` <label> ` a column apart, the selected one `[<label>]` where colour is
 //     unavailable); then only the
-//     field being answered, headed on a row of its own: a list, a Yes/No or a multi-select
+//     field being answered, its heading wrapped like the message: a list, a Yes/No or a multi-select
 //     (`Dxn`, `Oxn`, `Nxn`) as `<title ?? name>:`, a text or number box (`Fxn`, `Lxn`) as
 //     `<title ?? name>` with no colon (and " * <error>" beside it while its input is invalid).
 //     The box itself is drawn between two rules or, with the CLI's prompt frame on, between
 //     a row of "▄" and a row of "▀" (Box).
 //     The bar shows every label only while they all fit across the window; otherwise it
 //     shows those around the selected one, between arrows (`Da`, read in Bars). Whole, the bar
-//     read at the first field vouches for every later field's title before the first key:
-//     it holds every label and more, so each heading, drawn in the same column, fits on its
-//     row too; and a title the console draws other than as written (a line break, a character
-//     it shows otherwise) is drawn so in the bar too, and refused there. Windowed, it vouches
-//     for none of the hidden titles, so it is refused, named, with nothing typed. Copilot CLI
-//     1.0.106 draws it as `_l`: whole where it fits the console less four columns, else the
+//     read at a field checks all the titles it shows. Windowed, it vouches for none of the
+//     hidden titles: each later field's heading and hints are checked before its keys.
+//     Copilot CLI 1.0.106 draws it as `_l`: whole where it fits the console less four columns, else the
 //     most labels that fit around the selected one (`kHi`, any such run), else that label
-//     alone however long it is, wrapped onto as many rows as it takes (Wrapped), all refused
-//     as windows. Above the form, 1.0.106 may draw its own strip ("Current Sessions Issues
+//     alone however long it is, wrapped onto as many rows as it takes (Wrapped). Above the
+//     form, 1.0.106 may draw its own strip ("Current Sessions Issues
 //     ..."), outside the frame and not read.
 //   * Under it, the key hints (`Ft`, joined by " · ", wrapping): "enter accept", "tab next"
 //     unless at the last field, "shift+tab prev" unless at the first, "ctrl+d decline",
@@ -467,14 +464,15 @@ public static partial class CopilotFormScreen
         }
         // The heading as drawn, its spaces read as they are: with no tab bar (a form of one
         // field), "Pick  one:" or "Pick\u00A0one:" is another form's, not "Pick one:" (#1137
-        // review).
+        // review). Long headings wrap just as the message does (#2190); accepting the bar
+        // alone left these forms refused at their heading. Keep the input below its last row.
         at = Next(rows, at);
-        if (at >= rows.Count || rows[at].Trim(' ') != heading) { return found.Fail(FormCheck.FieldHeading, at, off); }
-        if (Hints(rows, at + 1, index, form.Fields.Count, form.Fields[index].Kind is CopilotFieldKind.Text or CopilotFieldKind.Number) is not var (start, end, cancels))
+        if (!Drawn(rows, ref at, heading, top.Trim(' ').Length - 2)) { return found.Fail(FormCheck.FieldHeading, at, off); }
+        if (Hints(rows, at, index, form.Fields.Count, form.Fields[index].Kind is CopilotFieldKind.Text or CopilotFieldKind.Number) is not var (start, end, cancels))
         {
-            return found.Fail(FormCheck.Hints, at + 1, off);
+            return found.Fail(FormCheck.Hints, at, off);
         }
-        (found.Heading, found.Hints, found.Cancels) = (at, start, cancels);
+        (found.Heading, found.Hints, found.Cancels) = (at - 1, start, cancels);
         // A permission prompt drawn against the form: one ending just above its frame, read by
         // its structure (CopilotPermissionScreen.Ends), not by any row of the session's output
         // above it reading "1. Yes", which refused every answer to a form under an agent's
