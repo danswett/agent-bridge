@@ -183,8 +183,17 @@ public sealed class AgentAuditLog
 
     static IEnumerable<string> Files(string folder, bool launch) =>
         Directory.EnumerateFiles(folder, $"{(launch ? "launches" : "agents")}-*.jsonl")
-            .Where(f => TryDay(Path.GetFileName(f).Replace("launches-", "agents-", StringComparison.Ordinal), out _)).Order(StringComparer.Ordinal);
+            .Select(f => TryDay(Path.GetFileName(f).Replace("launches-", "agents-", StringComparison.Ordinal), out _)
+                ? f : throw new IOException("the agent audit folder contains an invalid day name")).Order(StringComparer.Ordinal);
     static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    static bool CompleteObject(byte[] bytes)
+    {
+        var reader = new Utf8JsonReader(bytes, isFinalBlock: false, state: default);
+        using var doc = JsonDocument.TryParseValue(ref reader, out var parsed) ? parsed : null;
+        return doc is not null && doc.RootElement.ValueKind == JsonValueKind.Object
+            && !reader.Read() && reader.BytesConsumed == bytes.Length;
+    }
+
     static (string Hash, bool HasLine) TailHash(string? file, bool promoteTail = false)
     {
         if (file is null) { return (Genesis, false); }
@@ -196,16 +205,14 @@ public sealed class AgentAuditLog
             var tail = new byte[checked((int)(stream.Length - end - 1))];
             stream.Position = end + 1;
             stream.ReadExactly(tail);
-            var reader = new Utf8JsonReader(tail, isFinalBlock: false, state: default);
-            using var doc = JsonDocument.TryParseValue(ref reader, out var parsed) ? parsed : null;
-            if (doc is not null && doc.RootElement.ValueKind == JsonValueKind.Object
-                && !reader.Read() && reader.BytesConsumed == tail.Length) { return (Hash(tail), true); }
+            if (CompleteObject(tail)) { return (Hash(tail), true); }
         }
         if (end < 0) { return (Genesis, false); }
         var start = PreviousNewline(stream, end) + 1;
         var bytes = new byte[checked((int)(end - start))];
         stream.Position = start;
         stream.ReadExactly(bytes);
+        if (!CompleteObject(bytes)) { throw new IOException("the agent audit day ends with an incomplete terminated line"); }
         return (Hash(bytes), true);
     }
 
@@ -249,7 +256,8 @@ public sealed class AgentAuditLog
         return peek.ReadByte() != '\n';
     }
 
-    static string FileFor(DateTimeOffset day, bool launch) => $"{(launch ? "launches" : "agents")}-{day.UtcDateTime:yyyy-MM-dd}.jsonl";
+    static string FileFor(DateTimeOffset day, bool launch) =>
+        (launch ? "launches-" : "agents-") + day.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + ".jsonl";
 
     static bool TryDay(string name, out DateTime day)
     {
@@ -269,6 +277,7 @@ public sealed class AgentAuditLog
         foreach (var f in new DirectoryInfo(folder).EnumerateFiles("agents-*.jsonl"))
         {
             if (TryDay(f.Name, out var day)) { files.Add((day, f)); }
+            else { throw new IOException("the agent audit folder contains an invalid day name"); }
         }
         files.Sort((a, b) => a.Day.CompareTo(b.Day));
         // A future-dated file (clock stepped back) is never deleted, so it must not count or it would wipe every real day.
