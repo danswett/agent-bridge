@@ -57,10 +57,13 @@ public sealed partial class FeedbackDialog : ContentDialog
             Preview.Text = "";
         };
         retryClock.Tick += (_, _) => send?.RefreshRetry();
+        Included.RegisterPropertyChangedCallback(Expander.IsExpandedProperty, (_, _) => Draw());
+        Preview.SizeChanged += (_, _) => Draw();
         Draw();
     }
 
     void OnState(object? sender, PropertyChangedEventArgs e) => Draw();
+    bool PreviewVisible => Included.IsExpanded && Preview.ActualHeight > 0 && Preview.Visibility == Visibility.Visible;
 
     void Draw()
     {
@@ -68,12 +71,12 @@ public sealed partial class FeedbackDialog : ContentDialog
         Choices.Visibility = Included.Visibility = Ui.Show(review is not null);
         Choices.IsEnabled = send is not null && !choosingScreenshot && !send.IsSending && send.State != FeedbackSendState.Sent;
         Send.Visibility = Ui.Show(send is not null && send.State is FeedbackSendState.Gathering or FeedbackSendState.Ready or FeedbackSendState.Sending);
-        Send.IsEnabled = send?.CanSend == true && !choosingScreenshot;
+        Send.IsEnabled = send?.CanSend == true && !choosingScreenshot && PreviewVisible;
         Retry.Visibility = Ui.Show(send is { State: FeedbackSendState.Failed, RetryAt: not null } || send?.CanRetry == true);
-        Retry.IsEnabled = send?.CanRetry == true && !choosingScreenshot;
+        Retry.IsEnabled = send?.CanRetry == true && !choosingScreenshot && PreviewVisible;
         RetryHint.Text = send?.RetryHint ?? "";
         var text = choosingScreenshot ? "Reading screenshot..." : (send?.Message ?? FeedbackSenderFactory.UnavailableText);
-        if (text.Length == 0) { text = "Ready to send feedback."; }
+        if (text.Length == 0) { text = PreviewVisible ? "Ready to send feedback." : "Expand What's included to review the report before sending."; }
         if (send is { State: FeedbackSendState.Failed, FailureReason: { } reason })
         {
             text += " " + (reason switch
@@ -93,8 +96,8 @@ public sealed partial class FeedbackDialog : ContentDialog
         if (changed) { FrameworkElementAutomationPeer.CreatePeerForElement(Status)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged); }
     }
 
-    async void OnSend(object sender, RoutedEventArgs e) { if (send is not null && !choosingScreenshot) { await send.SendAsync(); } }
-    async void OnRetry(object sender, RoutedEventArgs e) { if (send is not null && !choosingScreenshot) { await send.RetryAsync(); } }
+    async void OnSend(object sender, RoutedEventArgs e) { if (send is not null && !choosingScreenshot && PreviewVisible) { await send.SendAsync(); } }
+    async void OnRetry(object sender, RoutedEventArgs e) { if (send is not null && !choosingScreenshot && PreviewVisible) { await send.RetryAsync(); } }
     void OnTurns(object sender, RoutedEventArgs e) { if (review is not null) { review.IncludeSessionTurns = Turns.IsChecked == true; } }
     void OnRemoveScreenshot(object sender, RoutedEventArgs e) { if (review is not null) { review.ScreenshotPng = null; Draw(); } }
 

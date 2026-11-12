@@ -1096,8 +1096,8 @@ Settings, and stays off. Closing the window keeps the app in the notification ar
 menu opens the window, quits it (which leaves the host running), or offers Send feedback
 (#738). Both entries open the review/send dialog: a note, optional PNG screenshot, a collapsed
 **What's included** list, and off-by-default turns naming the selected session. The report is
-"encrypted on this device, processed automatically"; nothing sends before **Send**. Gathering
-disables Send; failures show a reason and **Retry** when permitted, and Sent confirms with Close.
+"encrypted on this device, processed automatically"; expand **What's included** to show the exact
+preview before Send enables. Failures show a reason and **Retry** when permitted; Sent confirms with Close.
 TooLarge and Refused explain why nothing was sent. Without an available sender (including the
 unissued production key), it shows "Sending feedback isn't available right now" and only Close.
 The self-test opens both entries (the tray through `TrayIcon.Run` from a hidden window) and

@@ -51,14 +51,11 @@ There is no offline queue and nothing is written to disk. The window keeps the n
 ## Review step (Windows)
 `FeedbackReviewViewModel` drives the review before sending. It gathers through `IFeedbackBundleSource` and hands each bundle to `FeedbackSendViewModel.Ready`; `Rows` has one entry per bundle item (label, summary, optional), and `RowsExpanded` starts collapsed. Session turns are a separate option, off by default, named after the session. Changing the note, the screenshot or that option gathers again with a new `FeedbackRequest`, cancels the earlier gather, and drops any gather that finishes after a newer request or after Close. A refusal (`FeedbackRefusalReason`) or a failed gather shows through the send view model (`TooLarge` for `BundleTooLarge`, `Refused` for the rest, `Failed` for an error). Nothing is sent until `SendAsync` is called.
 
-Settings and the tray open `FeedbackDialog`, with the wording "encrypted on this device, processed automatically".
-The note takes focus; **What's included** stays collapsed until expanded. A PNG is chosen explicitly
-and can be removed; turns name the selected session and start off. Sending locks the choices.
-The visible result uses the send view model's message, failure reason and retry delay; **Retry**
-calls `RetryAsync` only when permitted. Sent confirms with Close; closing cancels work and clears
-the in-memory choices. No available sender means no gathering or Send button, only the unavailable text.
-`PreviewText` comes from the same gathered bundle as Send, is set before Send is enabled, and is
-cleared on a new gather, refusal or close; a late gather cannot restore an older preview.
+Settings and the tray open `FeedbackDialog`: a focused note, explicit optional PNG, off-by-default named
+turns, and "encrypted on this device, processed automatically". **What's included** starts collapsed;
+Send and Retry require its expanded, visible exact preview. Sending locks choices; results use the send model.
+Close cancels and clears the draft. `PreviewText` is that same bundle's Text; a new gather, refusal or close
+clears it, and stale gathers cannot restore it. An unavailable sender means no gathering or Send button.
 
 ## Sources and availability (Windows)
 

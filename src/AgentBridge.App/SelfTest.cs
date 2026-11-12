@@ -746,11 +746,6 @@ static partial class SelfTest
                 ((IInvokeProvider)new ButtonAutomationPeer(close).GetPattern(PatternInterface.Invoke)).Invoke();
             }
             else { dialog?.Hide(); check(false, $"finds Close in the feedback dialog from {from}"); }
-            // Also dismiss the old placeholder on a failing-first run, so the tray can be tested.
-            foreach (var popup in VisualTreeHelper.GetOpenPopupsForXamlRoot(window.RootElement.XamlRoot))
-            {
-                if (popup.Child is ContentDialog old) { old.Hide(); }
-            }
             check(await Until(() => Dialog() is null && !window.FeedbackOpen, TimeSpan.FromSeconds(5)), $"closes the feedback dialog opened from {from}");
         }
 
@@ -782,18 +777,24 @@ static partial class SelfTest
         check(Send() is { IsEnabled: false } && probe.Sends == 0, "disables Send while the review is gathering");
         probe.Gathering!.SetResult(probe.Bundle());
         probe.Gathering = null;
-        check(await Until(() => Send()?.IsEnabled == true, TimeSpan.FromSeconds(5)), "gathers the review before enabling Send");
+        check(await Until(() => ById<TextBox>(ready, "FeedbackPreview")?.Text.Length > 0, TimeSpan.FromSeconds(5)), "gathers the exact preview");
         var note = ById<TextBox>(ready, "FeedbackNote");
         var turns = ById<CheckBox>(ready, "FeedbackTurns");
         var included = ById<Expander>(ready, "FeedbackIncluded");
         check(note is not null && turns is { IsChecked: false, Content: string label } && label.Contains("Feedback test session", StringComparison.Ordinal)
-            && included is { IsExpanded: false } && probe.Sends == 0, "offers the note and named off-by-default turns, with What's included collapsed and nothing sent");
+            && included is { IsExpanded: false } && Send() is { IsEnabled: false } && probe.Sends == 0, "keeps Send disabled while the exact preview is hidden, with turns off and nothing sent");
         if (note is not null) { note.Text = "The test note"; }
-        check(await Until(() => probe.Request?.Note == "The test note" && Send()?.IsEnabled == true, TimeSpan.FromSeconds(5)), "regathers when the note changes");
+        check(await Until(() => probe.Request?.Note == "The test note" && Send()?.IsEnabled == false, TimeSpan.FromSeconds(5)), "regathers without enabling Send while the preview is hidden");
         if (turns is not null) { turns.IsChecked = true; }
-        check(await Until(() => probe.Request?.SessionTurnsFor == "feedback-demo" && Send()?.IsEnabled == true, TimeSpan.FromSeconds(5))
+        check(await Until(() => probe.Request?.SessionTurnsFor == "feedback-demo" && Send()?.IsEnabled == false, TimeSpan.FromSeconds(5))
             && probe.Sends == 0, "includes only the named session after the person opts in, without sending");
         if (included is not null) { included.IsExpanded = true; }
+        bool PreviewVisible() => included is { IsExpanded: true } && ById<TextBox>(ready, "FeedbackPreview") is { ActualHeight: > 0, Visibility: Visibility.Visible };
+        check(await Until(() => PreviewVisible() && Send()?.IsEnabled == true, TimeSpan.FromSeconds(5)), "enables Send only after the exact preview is visible");
+        if (included is not null) { included.IsExpanded = false; }
+        check(Send() is { IsEnabled: false }, "disables Send again when the exact preview is hidden");
+        if (included is not null) { included.IsExpanded = true; }
+        await Until(() => PreviewVisible() && Send()?.IsEnabled == true, TimeSpan.FromSeconds(5));
         check(await Until(() => Find<TextBlock>(ready).Any(b => b.Text == "The test note"), TimeSpan.FromSeconds(5)), "shows the gathered bundle's actual rows when expanded");
         probe.Sending = new TaskCompletionSource<FeedbackSendResult>();
         if (Send() is { } sendButton) { Press(sendButton); }

@@ -12,12 +12,17 @@ public sealed class FeedbackReviewTests
         public Task<FeedbackSendResult> SendAsync(FeedbackBundle bundle, CancellationToken cancel) { Calls++; Sent.Add(bundle); if (Hold is { } hold) { cancel.Register(() => hold.TrySetCanceled(cancel)); return hold.Task; } return Task.FromResult<FeedbackSendResult>(new FeedbackSendResult.Sent(DateTimeOffset.UnixEpoch)); }
     }
 
-    sealed class Source : IFeedbackBundleSource
+    sealed class Completion(Source source) : TaskCompletionSource<FeedbackGatherResult> { public Source Source { get; } = source; }
+
+    sealed class Source : IFeedbackBundleSource, IUiDispatcher
     {
-        public List<(FeedbackRequest Request, TaskCompletionSource<FeedbackGatherResult> Done)> Calls = new();
+        public TaskCompletionSource Applied = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly IUiDispatcher ui = new LockedDispatcher();
+        public void Post(Action action) { ui.Post(action); var applied = Applied; Applied = new(TaskCreationOptions.RunContinuationsAsynchronously); applied.SetResult(); }
+        public List<(FeedbackRequest Request, Completion Done)> Calls = new();
         public Task<FeedbackGatherResult> GatherAsync(FeedbackRequest request, IProgress<FeedbackGatherStage>? progress, CancellationToken cancel)
         {
-            var done = new TaskCompletionSource<FeedbackGatherResult>();
+            var done = new Completion(this);
             Calls.Add((request, done));
             return done.Task;
         }
@@ -25,12 +30,19 @@ public sealed class FeedbackReviewTests
 
     static FeedbackBundle Bundle(params string[] labels) => new(new byte[] { 1 }, new byte[16], DateTimeOffset.UnixEpoch,
         labels.Select((l, i) => new FeedbackItem("i" + i, l, "summary " + l, 1, i > 0)).ToList());
-    static async Task Finish(TaskCompletionSource<FeedbackGatherResult> done, Action<TaskCompletionSource<FeedbackGatherResult>> set) { set(done);     await Task.Delay(100); }    static (FeedbackReviewViewModel Vm, FeedbackSendViewModel Send, Source Source, FakeSender Sender) Make()
+    static async Task Finish(Completion done, Action<Completion> set)
+    {
+        var applied = done.Source.Applied.Task;
+        set(done);
+        await applied.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    static (FeedbackReviewViewModel Vm, FeedbackSendViewModel Send, Source Source, FakeSender Sender) Make()
     {
         var sender = new FakeSender();
         var send = new FeedbackSendViewModel(sender);
         var source = new Source();
-        return (new FeedbackReviewViewModel(source, send, "s1", "Build fix"), send, source, sender);
+        return (new FeedbackReviewViewModel(source, send, "s1", "Build fix", source), send, source, sender);
     }
 
     [Fact]
@@ -179,7 +191,6 @@ public sealed class FeedbackReviewTests
         if (fail) { sender.Hold.SetResult(new FeedbackSendResult.Failed(FeedbackFailureReason.UploadRejected, FeedbackRetry.Now)); }
         else { send.Cancel(); }
         await sending;
-        await Task.Delay(100);
 
         Assert.Equal(gathers + 1, source.Calls.Count);
         Assert.Null(source.Calls[^1].Request.SessionTurnsFor);
