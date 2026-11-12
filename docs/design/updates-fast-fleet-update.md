@@ -199,6 +199,8 @@ with the plain message of §2. Nothing relaxes the 6-hour deadline and the relay
 its place. Reading with a token would restore the exemption, but a credential on every machine is an
 owner decision not taken here; it is a candidate for a later slice.
 
+Known rate-limit deadlines survive another process's later GitHub 200/304, even with a fresh canonical body: success does not revoke Retry-After/reset. This deliberately holds discovery for at most 60 minutes plus 60 seconds jitter; reads never extend it, expiry releases it, and out-of-range backwards-clock waits are normalized. Relay use still follows §2.
+
 **Freshness and replay.**
 - A policy is **fresh** for 6 hours from GitHub's answer (`GithubRevalidateEvery`). Past that it is
   **stale**, and stale counts as unreadable below.
@@ -405,6 +407,8 @@ signing path, or the protocol, and need two families, both reading security-subj
 Slices 5 and 11 come after slice 8 is accepted: no hint-driven or unattended install before the halt
 policy reads. Slices 1, 2, 3 and 8 can start at once; 10 needs only 3. Slices 7 and 9 were split
 because each ran past 400 lines.
+
+**Slice 8 split.** 8a (#2230) supplies the authoritative file/lock policy cache. 8b (#2234), after 8a and slice 3, adds §4's install/host checks and gates slices 5, 9a and 11. Metadata-cap/null-Body follow-ups are in #2246.
 
 ## 10. Later designs (pointers, not v1)
 
