@@ -10,7 +10,7 @@ namespace AgentBridge.Host;
 
 // Dormant foundation: the enrollment writer and live observe integration are separate slices.
 // The disk pin is read once, never created or advanced by a relay snapshot.
-public sealed class HostRosterReader
+public sealed partial class HostRosterReader
 {
     sealed record Pin(string Account, string Generation, byte[] Genesis, byte[][] Heads);
     readonly Pin? pin;
