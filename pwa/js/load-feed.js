@@ -1,5 +1,43 @@
 import { hostJsonBytes } from './answers.js';
 
+const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+const int32 = (v) => Number.isInteger(v) && v >= -2147483648 && v <= 2147483647;
+const int64 = (v) => Number.isInteger(v) && v >= -(2 ** 63) && v < 2 ** 63;
+const fields = (raw, shape) => object(raw)
+  ? Object.fromEntries(Object.entries(shape).filter(([k, fits]) => fits(raw[k])).map(([k]) => [k, raw[k]])) : null;
+const enumOf = (v, known, fallback) => known.includes(v) ? v : fallback;
+const stateOf = (v, session = false) => enumOf(v, session ? ['fresh', 'partial'] : ['fresh', 'partial', 'stale'], 'unavailable');
+
+export const readMachineLoadCpu = (raw) => fields(raw, { percent: Number.isFinite, cores: int32 });
+export const readMachineLoadMemory = (raw) => fields(raw, { totalBytes: int64, availableBytes: int64, committedPercent: Number.isFinite });
+export const readUnattributedLoad = (raw) => fields(raw, { processes: int32, workingSetBytes: int64 });
+
+export function readSessionLoad(raw) {
+  if (!object(raw) || typeof raw.session !== 'string') { return null; }
+  const read = { session: raw.session, agent: enumOf(raw.agent, ['agency', 'direct', 'copilot', 'claude', 'codex'], 'other'),
+    state: stateOf(raw.state, true), ...fields(raw, { processes: int32, cpuPercent: Number.isFinite, workingSetBytes: int64, handles: int32 }) };
+  if (typeof raw.handleKind === 'string') { read.handleKind = enumOf(raw.handleKind, ['handles', 'fds'], 'other'); }
+  return read;
+}
+
+// Complete record reading is separate from the feed's guarded bars-only projection.
+export function readMachineLoad(raw) {
+  if (!object(raw)) { return null; }
+  let sessions = Array.isArray(raw.sessions) ? raw.sessions.map(readSessionLoad).filter(Boolean) : [];
+  let state = stateOf(raw.state);
+  if (sessions.length > 200) {
+    sessions = [...sessions].sort((a, b) => (b.workingSetBytes ?? -Infinity) - (a.workingSetBytes ?? -Infinity)).slice(0, 200);
+    if (state === 'fresh') { state = 'partial'; }
+  }
+  const read = { state, sessions, ...fields(raw, { ageMs: int64, staleAfterMs: int64 }) };
+  if (typeof raw.sampledAt === 'string' && Number.isFinite(Date.parse(raw.sampledAt))) { read.sampledAt = raw.sampledAt; }
+  for (const [key, decode] of [['cpu', readMachineLoadCpu], ['memory', readMachineLoadMemory], ['unattributed', readUnattributedLoad]]) {
+    const value = decode(raw[key]);
+    if (value !== null) { read[key] = value; }
+  }
+  return read;
+}
+
 const nonnegative = (n) => Number.isFinite(n) && n >= 0;
 const numbers = (raw, keys) => Object.fromEntries(keys.filter((k) => nonnegative(raw?.[k])).map((k) => [k, raw[k]]));
 function readLoad(raw) {
@@ -9,8 +47,9 @@ function readLoad(raw) {
     console.error('Ignoring malformed or oversized machine load');
     return null;
   }
-  const { state, ageMs, staleAfterMs } = raw;
-  const cpu = numbers(raw.cpu, ['percent']), memory = numbers(raw.memory, ['totalBytes', 'availableBytes']);
+  const load = readMachineLoad(raw);
+  const { state } = load, { ageMs, staleAfterMs } = raw;
+  const cpu = numbers(load.cpu, ['percent']), memory = numbers(load.memory, ['totalBytes', 'availableBytes']);
   if (cpu.percent > 100) { delete cpu.percent; }
   return { state, ageMs, staleAfterMs, ...(Object.keys(cpu).length ? { cpu } : {}),
     ...(Object.keys(memory).length ? { memory } : {}) };
