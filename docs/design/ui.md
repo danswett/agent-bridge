@@ -3466,7 +3466,7 @@ against that platform's own guidelines before it is built.
 **Lines that outlive their cause, on every client (#1193):** a line says something about a
 cause: a question waiting, a press counting down, a machine busy. When the cause is gone, an
 amber or red line becomes a neutral closed line, or goes. It never sits. The rule, and what each
-line does:
+line does (the Windows card's failed/refused answer receipt is an exception, #2212, below):
 - **A closed line stays at least 5 s** (`LINGER_READ_MS`, as an entry in the Needs you lane,
   §6.1), so it can be read, and then goes unless it is part of the conversation (below).
 - **A question that has left the session's list** is shown as the question as it was asked, kept
@@ -3505,12 +3505,19 @@ they are un-parked.
 
 **Windows (WinUI 3):**
 - **Lines that outlive their cause (#1193, #1195):** an error or warning line lasts only
-  while its cause stands. When the question it was about closes, a refused, stale or failed
+  while its cause stands, except for a failed or refused answer delivery on the session card
+  (#2212): its existing red "Your answer: Couldn't send it: …" or
+  "Your answer: The machine refused this answer: …" receipt stays after the question closes,
+  even when the outcome arrives later, but only while no question is live. A new question or the
+  same question returning clears that card receipt. Keeping a typed draft when the question closes no longer
+  suppresses its receipt.
+  When the question it was about closes, a stale
   answer line becomes the neutral "No longer waiting" (no tone, never prefixed "Your answer:"),
   is kept 5 s so it can be read, then goes; a busy line goes with its 2 s pause. A held
   answer ("offline", the machine was not connected so nothing was sent) says why it could not
-  go, so it is treated like a refused one. Only delivered and unconfirmed ("Sent, but not
-  confirmed") lines stay. A toast that says an
+  go, so it becomes the same neutral closed line. Delivered and unconfirmed ("Sent, but not
+  confirmed") lines stay as before. Toast and closed-question history rules are unchanged:
+  a toast that says an
   answer did not go is withdrawn when its question closes, and one that would arrive after is
   not shown.
 - **Window:** Mica, with a custom 48 px title bar carrying the mark, the app name (12/16)
