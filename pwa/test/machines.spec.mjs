@@ -447,6 +447,44 @@ test.describe('one truthful update line', () => {
     });
   }
 
+  test('a failed-check event delivered with the subscription snapshot keeps the truthful update line', async ({ page }) => {
+    await show(page, {});
+    await page.evaluate(async ({ reason, at }) => {
+      const { host, hosts, page: demoPage } = window.agentBridgeDemo;
+      await new Promise((resolve) => {
+        const done = () => {
+          if (demoPage.updates.state('demo')) { unwatch(); resolve(); }
+        };
+        const unwatch = demoPage.updates.fleet.onChange(done);
+        done();
+      });
+      host.capabilities = host.capabilities.filter((c) => c !== 'update');
+      await hosts.refresh('demo');
+      const receive = host.receive.bind(host);
+      host.receive = (transport, request) => {
+        if (request.op !== 'update.subscribe') { return receive(transport, request); }
+        host.receive = receive;
+        const deliver = transport.deliver;
+        // Keep wire order, but deliver both frames in one task before promise continuations.
+        transport.deliver = (message) => transport.onmessage(message);
+        try {
+          receive(transport, request);
+          host.setUpdate({ ...host.update, available: '0.1.4448',
+            last: { outcome: 'failed', reason, at } });
+        } finally { transport.deliver = deliver; }
+      };
+      host.capabilities.push('update');
+      await hosts.refresh('demo');
+    }, { reason: refused, at: now.toISOString() });
+    const block = update(page);
+    await expect(block.locator('.machine-update-line')).toHaveText('Update available \u00b7 0.1.4448 (running 0.1.4415)');
+    await expect(block.locator('.machine-update-detail')).toHaveText([heldDetail]);
+    await expect(block.locator('p')).toHaveCount(2);
+    await expect(block).not.toContainText('Up to date');
+    await expect(block.getByRole('button')).toHaveCount(1);
+    await expect(block.locator('.machine-update-now')).toHaveClass(/\bprimary\b/);
+  });
+
   test('a refusal note preserves the plain check hold description', async ({ page }) => {
     await show(page, {});
     const machine = page.locator('#machine-list > [data-device-id="demo"]');

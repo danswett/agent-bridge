@@ -4,6 +4,7 @@ import { FleetStatus, PROBE_EVERY_MS } from '../../js/fleet.js';
 import { UsageBook } from '../../js/usage.js';
 import { SessionsStore } from '../../js/sessions-store.js';
 import { readUpdateState } from '../../js/update.js';
+import { HostClient } from '../../js/host-client.js';
 
 const flush = async () => { for (let i = 0; i < 10; i++) { await new Promise((r) => setImmediate(r)); } };
 const usage = (percent) => ({ agents: [{ agent: 'copilot', label: 'GitHub Copilot', account: 'octo', source: 'api', measuredAt: '2026-10-28T20:00:00.000Z', windows: [{ key: 'plan', label: 'Plan', percent }] }] });
@@ -420,6 +421,31 @@ test("a press signed for a machine is made with the key that machine's channel p
   assert.deepEqual(keys, [[1, 2], null]);
   fleet.clear();
 });
+
+for (const state of [readUpdateState({ ...found, last: {
+  outcome: 'failed', reason: 'release check failed', at: '2026-11-10T17:40:00Z',
+} }), readUpdateState({ ...found, current: '0.5.0', available: null })]) {
+  for (const eventFirst of [false, true]) {
+    test(`update frames keep ${state.last ? 'a failed check' : 'a completed update'} in wire order when the event arrives ${eventFirst ? 'before' : 'after'} the snapshot`, async () => {
+      const { hosts, fleet } = fleetWith({});
+      const sent = [];
+      const transport = { send: (message) => { sent.push(message); }, close() {} };
+      const client = new HostClient(transport);
+      hosts.view({ id: 'v', client, machine: {}, capabilities: ['sessions.read', 'update'] });
+      await flush();
+      const request = sent.find((message) => message.op === 'update.subscribe');
+
+      const snapshot = { re: request.id, ok: true, result: found };
+      const event = { ev: 'update.state', seq: 1, data: state };
+      for (const frame of eventFirst ? [event, snapshot] : [snapshot, event]) { transport.onmessage(frame); }
+      await flush();
+
+      assert.deepEqual(fleet.update('v'), eventFirst ? readUpdateState(found) : state);
+      fleet.clear();
+      client.close();
+    });
+  }
+}
 
 test('a machine shown that starts offering updates on a refreshed hello is followed from then, on the same channel', async () => {
   const { hosts, fleet } = fleetWith({});
