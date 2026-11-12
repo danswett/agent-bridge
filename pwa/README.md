@@ -661,6 +661,13 @@ running another checkout's tests at the same time. CI splits the run over severa
 (quality/README.md §4.7): Chromium, three WebKit shards (`--shard`), and `test/e2e` alone in
 the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `test/e2e` out.
 
+The Fleet update-line ordering regression in `test/machines.spec.mjs` delivers a
+subscription response and a newer event in one task (#1959). `HostClient` applies
+the subscription snapshot synchronously through `subscribeUpdate(onState)`, before
+later wire events; a promise continuation must not restore the older state.
+The update fixture also waits for that initial snapshot before changing the demo
+host: the demo-ready marker covers sessions, not update subscriptions.
+
 On a ready PR, `pwa-ui` then repeats only added or modified specs since the PR's
 merge base five times, with zero retries, in the same Chromium and WebKit shards.
 Deleted and renamed-away paths and `test/e2e` are excluded; no changed spec skips
