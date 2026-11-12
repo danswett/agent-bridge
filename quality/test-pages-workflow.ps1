@@ -18,6 +18,13 @@ Require ($text -match '(?m)^run-name: .*Pages rollback.*Pages resume' -and $text
 
 $build = [regex]::Match($text, '(?ms)^  build:\r?\n(.*?)^  deploy:').Groups[1].Value
 $deploy = [regex]::Match($text, '(?ms)^  deploy:\r?\n(.*)').Groups[1].Value
+$guard = [regex]::Match($deploy, '(?m)^\s+run: (if \(\$env:GITHUB_EVENT_NAME[^\r\n]+)').Groups[1].Value
+Require ($guard -ne '' -and $deploy.IndexOf($guard) -lt $deploy.IndexOf('configure-pages')) 'a rollback rerun after a later resume must be refused before publishing, including failed-job reruns'
+foreach ($case in @(@('workflow_dispatch', '1', $false), @('workflow_dispatch', '2', $true), @('schedule', '2', $false))) {
+    $env:GITHUB_EVENT_NAME = $case[0]; $env:GITHUB_RUN_ATTEMPT = $case[1]; $refused = $false
+    try { & ([scriptblock]::Create($guard)) } catch { $refused = $_.Exception.Message -eq 'manual-rerun-refused-dispatch-again' }
+    Require ($refused -eq $case[2]) 'the publishing guard must refuse only a repeated manual deployment'
+}
 Require ($text -match 'quality/pages-gate\.ps1' -and $text -notmatch 'commits/main') 'the gate must skip only a commit already live or older, not one that is not main''s tip'
 Require ($text -match 'quality/pages-candidate\.ps1' -and $text -match 'per_page=20' -and $text -notmatch 'workflow_run\.conclusion') 'Pages must select bounded same-SHA named-job evidence, not the whole CI conclusion'
 Require ($build -match 'TARGET_SHA: \$\{\{ needs\.gate\.outputs\.sha') 'the build job must build the selected tested SHA'
