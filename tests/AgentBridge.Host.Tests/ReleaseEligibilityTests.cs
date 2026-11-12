@@ -88,17 +88,24 @@ public sealed class ReleaseEligibilityTests : IDisposable
     public async Task A_failed_policy_commit_retains_the_halt_across_another_writer_and_an_older_answer(string firstRun)
     {
         var failSave = false;
+        var policyReads = 0;
         var run = firstRun;
         var body = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
         var handler = new Handler(uri =>
         {
-            if (uri.Host == "api.github.com") { return Metadata(run, body); }
+            if (uri.AbsoluteUri == GitHubHaltListSource.Releases) { policyReads++; }
+            if (uri.Host == "api.github.com" && !failSave) { return Metadata(run, body); }
             if (failSave) { Directory.CreateDirectory(Path.Combine(folder, ReleaseDiscovery.FileName + ".tmp")); }
-            return body;
+            return uri.Host == "api.github.com" ? Metadata(run, body) : body;
         });
         var source = Policy(handler);
         await source.ReadAsync(default);
         time.Advance(TimeSpan.FromHours(1));
+        using var writer = new ReleaseDiscovery(folder, handler, time, random: () => 0);
+        await writer.ReleasesAsync(ReleaseDiscovery.GitHubList, default);
+        failSave = true;
+        await writer.ReleasesAsync(ReleaseDiscovery.GitHubList + "&alternate=1", default);
+        Directory.Delete(Path.Combine(folder, ReleaseDiscovery.FileName + ".tmp"));
         run = "2349";
         body = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2349"]}""");
         failSave = true;
@@ -108,14 +115,46 @@ public sealed class ReleaseEligibilityTests : IDisposable
         failSave = false;
         Directory.Delete(Path.Combine(folder, ReleaseDiscovery.FileName + ".tmp"));
         time.Advance(TimeSpan.FromMinutes(1));
-        using (var writer = new ReleaseDiscovery(folder, handler, time, random: () => 0))
-        { await writer.ReleasesAsync(ReleaseDiscovery.GitHubList, default); }
-        Assert.Equal(new HaltCheck(true), await new ReleaseEligibility(source).IsHalted("0.1.2349"));
-        time.Advance(TimeSpan.FromMinutes(59));
+        await writer.ReleasesAsync(ReleaseDiscovery.GitHubList, default);
         run = "2348";
         body = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
         Assert.Equal(new HaltCheck(true), await new ReleaseEligibility(source).IsHalted("0.1.2349"));
+        Assert.Equal(2, policyReads);
+        time.Advance(TimeSpan.FromMinutes(59));
+        Assert.Equal(new HaltCheck(true), await new ReleaseEligibility(source).IsHalted("0.1.2349"));
         Assert.False(source.Snapshot.Fresh);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_older_ordinary_writer_cannot_erase_a_same_release_halt_during_a_cancelled_refresh(bool legacy)
+    {
+        var body = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
+        var handler = new Handler(uri => uri.Host == "api.github.com" ? Metadata("2349", body) : body);
+        await Policy(handler).ReadAsync(default);
+        if (legacy) { ForgetObservation(); }
+        using var writer = new ReleaseDiscovery(folder, handler, time, random: () => 0);
+        await writer.ReleasesAsync(ReleaseDiscovery.GitHubList, default);
+        time.Advance(TimeSpan.FromHours(1));
+        body = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2349"]}""");
+        await Policy(handler).ReadAsync(default);
+        if (legacy) { ForgetObservation(); }
+        time.Advance(TimeSpan.FromHours(1));
+        using var refresh = new ReleaseDiscovery(folder, handler, time, random: () => 0);
+        using var cancel = new CancellationTokenSource();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => refresh.ReadHaltPolicyAsync((_, _) =>
+        { cancel.Cancel(); return Task.FromCanceled<VerifiedHaltPolicy>(cancel.Token); }, cancel.Token));
+        await writer.ReleasesAsync(ReleaseDiscovery.GitHubList, default);
+        Assert.Equal(new HaltCheck(true), await new ReleaseEligibility(Policy(handler)).IsHalted("0.1.2349"));
+    }
+
+    void ForgetObservation()
+    {
+        var path = Path.Combine(folder, ReleaseDiscovery.FileName);
+        var state = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
+        state["haltPolicy"]!["verified"] = 0;
+        File.WriteAllText(path, state.ToJsonString());
     }
 
     [Fact]
