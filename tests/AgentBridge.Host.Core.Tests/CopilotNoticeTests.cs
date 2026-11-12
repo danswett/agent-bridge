@@ -10,11 +10,15 @@ using Xunit;
 public class CopilotNoticeTests
 {
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    [InlineData(true, true)]
-    public void An_unreadable_or_dropped_owner_record_cannot_reuse_a_completed_notices_reply_target(bool skim, bool dropped)
+    [InlineData(false, false, "user.message")]
+    [InlineData(false, true, "user.message")]
+    [InlineData(true, false, "user.message")]
+    [InlineData(true, true, "user.message")]
+    [InlineData(false, false, "assistant.turn_start")]
+    [InlineData(false, true, "assistant.turn_start")]
+    [InlineData(true, false, "assistant.turn_start")]
+    [InlineData(true, true, "assistant.turn_start")]
+    public void An_unreadable_or_dropped_turn_boundary_cannot_reuse_a_completed_notices_reply_target(bool skim, bool dropped, string type)
     {
         var state = new SessionState();
         var parser = new CopilotParser(state, TimeProvider.System);
@@ -25,17 +29,19 @@ public class CopilotNoticeTests
         }
         foreach (var line in new[] { Copilot.User("Owner question.", 1), Copilot.TurnStart(2),
             Copilot.Assistant("Owner answer.", 3), Copilot.TurnEnd(4), Notice(5), Copilot.TurnStart(6),
-            Copilot.Assistant("Completed notice reply.", 7), Copilot.TurnEnd(8) }) { Read(line); }
+            Copilot.Assistant("Completed notice reply.", 7), Copilot.User("Queued owner question.", 8),
+            Copilot.TurnEnd(9) }) { Read(line); }
         var completed = state.Notice!.Id;
-        if (dropped) { ((ILineSink)parser).Dropped(Encoding.UTF8.GetBytes("{\"type\":\"user.message\",\"data\":")); }
-        else { Read("{\"type\":\"user.message\",\"data\":"); }
-        Read(Copilot.TurnStart(10));
-        Read(Copilot.Assistant("Reply after the unreadable owner record.", 11));
+        var damaged = $"{{\"type\":\"{type}\",\"data\":";
+        if (dropped) { ((ILineSink)parser).Dropped(Encoding.UTF8.GetBytes(damaged)); }
+        else { Read(damaged); }
+        if (type == "user.message") { Read(Copilot.TurnStart(10)); }
+        Read(Copilot.Assistant("Reply after the unreadable boundary.", 11));
 
         Assert.Equal("Owner answer.", state.OwnResponse);
         Assert.NotEqual(completed, state.Notice!.Id);
         Assert.Equal(TurnKind.Unknown, state.Notice.Kind);
-        Assert.Equal("Reply after the unreadable owner record.", state.Notice.Parts.Single().Text);
+        Assert.Equal("Reply after the unreadable boundary.", state.Notice.Parts.Single().Text);
     }
 
     [Theory]
