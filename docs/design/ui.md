@@ -1947,14 +1947,16 @@ machine, online ones first, then the account's offline machines (#213):
   Its update line shows a "Needs you" line from the host (#800) in any phase, in the host's words.
   While the six-hour backstop skips for a question waiting (below), it reads exactly
   "Update ready · waiting for a question to be answered", never "answer at the machine".
-  Every action is the same small secondary button. Check for updates, for every machine at once,
-  sits under the rows in the same column.
+  Actions use small secondary buttons, except the primary Update now. Check for updates, for
+  every machine at once, sits under the rows in the same column.
 - **PWA update block (#2187):** one glyph and status line, one text2 "Checked 36 min ago"
   line when known, then a 44 px secondary **Check now** button, never a link. Status reads
   "Up to date · *version*", "Update available · *version* (running *version*)", "Checking…",
   or "Not checked yet". When **Update now** is offered it is the only primary action and
   Check now is absent. Feed/quota sentences are hidden; a limited check alone adds
-  "Can't check right now. Try again at *time*." as the disabled Check now button's reason.
+  "Last check was limited. The machine said to try again after *time*." as Check now's description.
+  That legacy clock has no date or timezone: Check now stays usable and the host enforces its
+  real hold. A busy or checking machine still disables the action.
   A check limit never hides Update now or the legacy Install action for a known update.
 - **Update now** (#1159; built in the PWA, slice 3; the Windows app's is slice 4; Creative's rules, 6711605555, are spelled out in
   [v1-update.md](../protocol/v1-update.md#what-the-person-sees)): beside Install, only when an

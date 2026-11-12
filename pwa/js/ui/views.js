@@ -1081,13 +1081,13 @@ function updateRow(updates, id, name, now) {
       : Number.isFinite(Date.parse(s.checkedAt)) ? `Up to date \u00b7 ${s.current ?? 'unknown'}` : 'Not checked yet';
   }
   const checking = s.phase === 'checking';
-  if (checking) { said = 'Checking\u2026'; }
+  if (checking && !s.waiting) { said = 'Checking\u2026'; }
   const last = heldCheck || (idle && s.last?.outcome === 'current') ? null : lastLine(s, now, { updateNow });
-  const check = canCheck(s) && !busy && !asking && !checkFailed;
+  const check = canCheck(s) && !busy && !asking;
   const install = canInstall(s) && !busy && !asking;
   const offerNow = updates.signs === true && canUpdateNow(s);
   const pressNow = offerNow && !busy && !asking;
-  const why = checkFailed && !offerNow ? `Can't check right now. ${retry ? `Try again at ${retry}.` : 'Try again later.'}`
+  const why = checkFailed && !offerNow ? `Last check was limited. ${retry ? `The machine said to try again after ${retry}.` : 'Try again later.'}`
     : updates.signs === true ? updateNowReason(s) : null;
   const details = updateDetails(s, now);
   const key = [said, last, note, busy, asking, check, install, offerNow, pressNow, why, ...details];
@@ -1287,7 +1287,9 @@ function machineRow({ id, name, select = null, selected = false, facts, state, o
   errors.forEach((p, i) => { p.id = `machine-error-${id}-${i}`; });
   if (errors.length) {
     const ids = errors.map((p) => p.id).join(' ');
-    for (const b of within.flatMap((el) => [...el.querySelectorAll('.machine-more button')])) { b.setAttribute('aria-describedby', ids); }
+    for (const b of within.flatMap((el) => [...el.querySelectorAll('.machine-more button')])) {
+      b.setAttribute('aria-describedby', [b.getAttribute('aria-describedby'), ids].filter(Boolean).join(' '));
+    }
   }
   return h('li', { class: `machine${offline ? ' offline' : ''}${selected ? ' selected' : ''}`, dataset: { deviceId: id, deviceName: name } }, block, errors, tile);
 }

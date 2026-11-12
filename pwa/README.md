@@ -608,7 +608,8 @@ span in a sentence this way, and NEL and the separators in prose.
 The Fleet update block (#2187) shows a status glyph and word, a quiet "Checked" age and a
 44 px secondary Check now button. Update now is the only primary action when offered;
 Check now then drops out. Historical feed/quota metadata stays hidden. A limited check
-disables Check now with its retry reason, never an already-known update action. Reader and age cases are in
+describes its historical retry clock without locking Check now: only the host knows when
+that legacy hold expires. Known update actions remain usable. Reader and age cases are in
 `test/unit/update.test.mjs`; phone/iPad states and geometry are in `test/machines.spec.mjs`.
 
 Settings > Reply box keeps Return key in replies on this device only (#1877): New line

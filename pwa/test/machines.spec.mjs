@@ -397,6 +397,7 @@ test.describe('one truthful update line', () => {
   test.use({ timezoneId: 'America/Los_Angeles' });
   const now = new Date('2026-11-10T17:40:00Z');
   const refused = "the release feed's rate limit refused the check (rate limit exceeded; check again after 9:46 AM); checking again after 9:46 AM";
+  const retryReason = 'Last check was limited. The machine said to try again after 9:46 AM.';
   const update = (page) => page.locator('#machine-list [data-device-id="demo"] .machine-update');
   async function show(page, change) {
     await page.clock.setFixedTime(now);
@@ -410,6 +411,53 @@ test.describe('one truthful update line', () => {
       ...window.agentBridgeDemo.host.update, current: '0.1.4415', available: null,
       checkedAt: '2026-11-10T17:12:00Z', last: null, ...c,
     }), change);
+  }
+
+  for (const [kind, waiting] of [
+    ['Needs you', 'Needs you: restart the app to finish its update.'],
+    ['Update ready', 'Update ready \u00b7 waiting for a question to be answered'],
+  ]) {
+    test(`checking preserves the ${kind} waiting line`, async ({ page }) => {
+      await show(page, { phase: 'checking', waiting });
+      await expect(update(page).locator('.machine-update-line')).toHaveText(waiting);
+    });
+  }
+
+  test('a refusal note preserves the check retry description', async ({ page }) => {
+    await show(page, {});
+    const machine = page.locator('#machine-list > [data-device-id="demo"]');
+    const check = update(page).locator('.machine-update-check');
+    const note = 'This check was refused.';
+    await page.evaluate((note) => window.agentBridgeDemo.host.scriptUpdates([note]), note);
+    await check.click();
+    await expect(machine.locator('.machine-error')).toHaveText(note);
+    await page.evaluate((reason) => window.agentBridgeDemo.setUpdate({
+      ...window.agentBridgeDemo.host.update, last: { outcome: 'failed', reason, at: '2026-11-10T17:40:00Z' },
+    }), refused);
+    await expect(check).toBeEnabled();
+    await expect(check).toHaveAccessibleDescription(`${retryReason} ${note}`);
+  });
+
+  for (const refusal of [null, 'The feed still refuses this check.']) {
+    test(refusal ? 'a retried check shows a host refusal and remains usable'
+      : 'a past limited check permits another manual request without an automatic state change', async ({ page }) => {
+      await show(page, { automatic: false, last: { outcome: 'failed', reason: refused, at: now.toISOString() } });
+      const check = update(page).locator('.machine-update-check');
+      await expect(update(page).locator('.machine-update-why')).toContainText('9:46 AM');
+      await page.clock.setFixedTime(new Date('2026-11-10T17:47:00Z'));
+      await page.evaluate(() => window.agentBridgeDemo.setUpdate({ ...window.agentBridgeDemo.host.update }));
+      await expect(check).toBeEnabled();
+      if (refusal) { await page.evaluate((note) => window.agentBridgeDemo.host.scriptUpdates([note]), refusal); }
+      await check.click();
+      const requests = () => page.evaluate(() => window.agentBridgeDemo.updateLog.map(({ op }) => op));
+      await expect.poll(requests).toEqual(['update.check']);
+      if (refusal) {
+        await expect(page.locator('#machine-list > [data-device-id="demo"] .machine-error')).toHaveText(refusal);
+        await expect(check).toBeEnabled();
+        await check.click();
+        await expect.poll(requests).toEqual(['update.check', 'update.check']);
+      }
+    });
   }
 
   for (const [phase, label] of [['idle', 'Check now'], ['checking', 'Checking\u2026'], ['asking', 'Asking\u2026']]) {
@@ -439,15 +487,13 @@ test.describe('one truthful update line', () => {
   }
 
   for (const outcome of ['failed', 'refused']) {
-    test(`a current machine with a ${outcome} limited check disables Check now and explains when to retry`, async ({ page }) => {
+    test(`a current machine with a ${outcome} limited check keeps Check now and explains the machine retry clock`, async ({ page }) => {
       await show(page, { last: { outcome, reason: refused, at: now.toISOString() } });
       const block = update(page);
       await expect(block.locator('.machine-update-line')).toHaveText('Up to date · 0.1.4415');
-      await expect(block.locator('.machine-update-why')).toHaveText("Can't check right now. Try again at 9:46 AM.");
+      await expect(block.locator('.machine-update-why')).toHaveText(retryReason);
       expect((await block.innerText()).match(/9:46 AM/g)).toHaveLength(1);
-      await expect(block.getByRole('button', { name: 'Check now on Demo machine', exact: true })).toBeDisabled();
-      await block.locator('.machine-update-check').evaluate((e) => e.click());
-      expect(await page.evaluate(() => window.agentBridgeDemo.updateLog)).toEqual([]);
+      await expect(block.getByRole('button', { name: 'Check now on Demo machine', exact: true })).toBeEnabled();
     });
   }
 
@@ -465,8 +511,8 @@ test.describe('one truthful update line', () => {
         await expect(block.locator('.machine-update-check')).toHaveCount(0);
         await expect(block).not.toContainText(/9:46 AM|Can't check/);
       } else {
-        await expect(block.locator('.machine-update-check')).toBeDisabled();
-        await expect(block.locator('.machine-update-why')).toHaveText("Can't check right now. Try again at 9:46 AM.");
+        await expect(block.locator('.machine-update-check')).toBeEnabled();
+        await expect(block.locator('.machine-update-why')).toHaveText(retryReason);
       }
       await action.click();
       await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.install']);
