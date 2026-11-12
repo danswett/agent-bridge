@@ -56,14 +56,15 @@ No machine names, account names or network details go into results.
 Everything is on the **real clock**. Fake clocks prove logic, but a fake clock that moves only when
 the test advances it cannot show a spin like #2283, which only appeared because real time moves
 between two reads. A stepping fake clock, which moves forward a little on every read, can; §5's
-per-PR timer count uses one. It does not replace the real clock: CPU and network are gated on the
-real clock on every pull request that reaches the host, app, PWA or protocol (§5), and again,
-more precisely, every night.
+per-PR timer count uses one. It does not replace the real clock: CPU, network and memory are gated
+on the real clock on every pull request that reaches the host, app, PWA or protocol (§5), and
+again, more precisely, every night.
 
 Two forms of the procedure in §2.4 use these measures. The **full form** (3 minute warm-up, 5
 minute windows, repeated) is for the baseline, the nightly gate and the laptop. The **per-PR
 short form** fits a pull request: 60 s of warm-up that is not counted, then 3 samples of 30 s, and
-the median of the 3, with the control process measured in the same window. It is coarser, so it is
+the median of the 3, with the control process measured in the same window. Its memory phase then
+runs 10 short activity cycles and samples memory at rest after each (§5.1). It is coarser, so it is
 judged with a noise margin (§5), never against the bare budget.
 
 | Measure | How | Notes |
@@ -136,6 +137,7 @@ Every number below is a **PROPOSAL** until the baseline (slice 4) lands and the 
 | Startup memory | 120 MB working set | 200 MB working set | same | 30 MB JS heap | same |
 | Steady memory | 80 MB private | 120 MB private, 60 MB working set | 160 MB private | 20 MB JS heap at 50 sessions | not higher than visible |
 | 24 h growth | 5% | 5% | 5% | 5% over a 2 h soak | n/a |
+| Growth over 10 PR cycles (§5.1) | 3 MB private | 3 MB private | 5 MB private | 2 MB JS heap | n/a |
 | Allocation | 50 KB/s | 10 KB/s | 50 KB/s | n/a | n/a |
 | Idle network | 1 KB/min, 4 messages/min, 6 HTTP requests/hour | 0.5 KB/min, 3 messages/min | same as hidden | 2 KB/min, 5 frames/min | 0 bytes, 0 requests |
 | Keepalive frames | 6 a minute each way today; 3 after slice 10 | none (no relay socket) | none | 3 pings in and 3 pongs out a minute, answered by the browser | none (socket closed) |
@@ -147,7 +149,8 @@ Rationale:
   failing it by a few hundredths; the baseline (slice 4) replaces it. Budgets of 0.1 to 0.5 sit
   about 20 to 600 times below the bad cases, so a spin can never pass a gate, even with noise.
 - Hidden is stricter than visible: a hidden window has nothing to draw. A hidden PWA, after its
-  rest (§2.1), has nothing to do at all, so its budget is zero, which is what §5's gate checks.
+  rest (§2.1), has nothing to do at all, so its budget is zero. A zero budget is judged by exact
+  counts (no timer, frame or request), with CPU held only to a noise floor (§5.1).
 - Network: messages count application messages only. Keepalive is its own row: both ends of the
   relay socket ping every 20 s and each ping is answered, so an idle host today sends 6 control
   frames a minute (3 pings, 3 pongs) and receives 6; one side pinging (H10, slice 10) halves that.
@@ -156,7 +159,9 @@ Rationale:
   sent while idle is chatter. Six HTTP requests an hour covers update and usage checks at their
   current periods.
 - Memory: there is no measurement yet. These are typical for a .NET service and a WinUI 3 app and
-  will be replaced by the baseline plus 25% headroom.
+  will be replaced by the baseline plus 25% headroom. The per-PR cycle growth is small on purpose:
+  10 cycles of the same work should leave memory where it was, so anything that keeps a few MB per
+  cycle is a leak, not noise.
 
 **Ratchet rule.** Budgets only tighten. An improvement is measured against the median of the 7
 nightly runs before the change. When a change makes the nightly median at least 20% better than
@@ -202,9 +207,9 @@ and before a release:
 |---|---|---|---|---|
 | Idle timer count | Ring 1, per PR, in the existing test jobs when host, app or PWA code changes | Stepping fake clock, counted | An idle host or app composition creates or fires more timers per simulated hour than the budget file allows; a hidden PWA fires any timer or sends any frame after its rest (its budget is zero, §3) | Seconds, no new job |
 | Payload size | Ring 1, per PR, in the protocol job | n/a | A protocol vector for a message type is over its byte budget | Seconds |
-| Real-clock idle gate | Ring 1, per PR, a job in `ci.yml` on Linux (host, PWA) and Windows (host, app), on pull requests whose change reaches the paths below | Real | CPU: the median, less the control, is over the spin ceiling (at once), or over the budget plus its margin on the run and on one rerun. Network: idle messages, bytes or requests over budget plus tolerance on the run and on one rerun; a hidden PWA sends or receives anything after its rest; any message observed is over its type's byte budget | About 12 runner minutes per selected PR, about 6 minutes of wall clock |
+| Real-clock idle gate | Ring 1, per PR, a job in `ci.yml` on Linux (host, PWA) and Windows (host, app), on pull requests whose change reaches the paths below | Real | CPU: the median, less the control, is over the spin ceiling (at once), or over the budget plus its margin on the run and on one rerun. Network: idle messages, bytes or requests over budget plus tolerance on the run and on one rerun; a hidden PWA counts any timer, frame or request after its rest; any message observed is over its type's byte budget. Memory: growth over 10 activity cycles is over 10 times its ceiling (at once), or over its ceiling on the run and on one rerun; steady memory is over budget plus margin | About 15 runner minutes for a host-only PR, up to about 21 when app and PWA paths change too; about 9 to 12 minutes of wall clock |
 | Idle budget | Ring 3, nightly on the lab VM | Real | The median of 5 full-form runs is over budget (no margin) and a rerun of 3 agrees | Inside the nightly window |
-| Memory soak | Ring 3 nightly (2 h) and weekly (24 h) on the lab VM | Real | Steady memory over budget, or growth over the budget's rate | Lab time only |
+| Memory soak | Ring 3 nightly (2 h) and weekly (24 h) on the lab VM: the long-horizon check behind the per-PR memory verdict | Real | Steady memory over budget, or growth over the budget's rate | Lab time only |
 | Laptop check | Ring 4, before promotion to stable | Real | Over budget on the reference laptop, on AC and battery | Manual, minutes |
 
 ### 5.1 The per-PR real-clock idle gate
@@ -226,47 +231,88 @@ of 30 s, the median, and the control process (an empty .NET process, or a blank 
 in the same window.
 
 **CPU verdict.** The number judged is the component's median less the control's.
-- Over the **spin ceiling**, 20 times the component's budget (6 s/min for the host's 0.3), fails at
-  once. A spin is not noise, and nothing near it can pass.
+- Over the **spin ceiling**, 20 times the larger of the component's budget and the 0.15 s/min
+  margin floor (6 s/min for the host's 0.3), fails at once. A spin is not noise, and nothing near it
+  can pass.
 - Within the budget plus its **margin**, passes. The margin is a PROPOSAL of 50% of the budget, and
   never less than 0.15 s/min, so the host passes up to 0.45 s/min. A pass above the bare budget is
   reported as "within margin", so the trend is visible.
 - Between the two is **borderline**: the variant is measured once more (3 more samples), and fails
   only if that median is also over budget plus margin. There is one rerun, never best-of-many.
 
+**Hidden PWA verdict.** Its budget is zero, so it is judged by counts, not by a CPU number.
+Counting starts 5 s after its rest ends, so the step that closes the socket is not caught on the
+edge. From then on, through the 90 s window, an init script and Playwright count timer callbacks,
+animation frames, WebSocket frames and requests, and every one of them must be exactly zero: no
+tolerance and no rerun, since a count is not noisy. Main-thread CPU, less the blank page's, is
+still measured, but only as a noise check under the same rule as above with a zero budget: up to
+the 0.15 s/min floor passes (so 0.01 s/min is fine), over it is borderline and rerun once, and
+over 3 s/min (20 times the floor) fails at once. The fake-clock hidden-zero test (slice 11c) and
+this real-clock count check the same thing in two ways.
+
 **Network verdict.** Counts are far less noisy than CPU, so they are judged over the whole 90 s
 window rather than by median. Application messages and bytes per minute may be up to 25% over
 budget, and at least one message, since a periodic message or a keepalive can fall either side of
 the window's edge; keepalive frames are judged against their own row of §3. The hourly HTTP budget
 cannot be read in 90 s, so the window may hold at most one request beyond those the warm-up
-excludes; the hourly rate is judged nightly. A hidden PWA after its rest sends and receives nothing
-at all, with no tolerance. Every message seen is also checked against its type's byte budget, which
-catches a real payload growing where the protocol vectors did not. Over tolerance gets the same
-one rerun as CPU.
+excludes; the hourly rate is judged nightly. A hidden PWA is judged by its counts (above). Every
+message seen is also checked against its type's byte budget, which catches a real payload growing
+where the protocol vectors did not. Over tolerance gets the same one rerun as CPU.
+
+**Memory verdict.** An idle window of 90 s cannot show a leak, so memory has its own phase, run
+after the CPU and network window on the same warm process. Which components it covers depends on
+the change: the host on every selected pull request (in the Linux job), the desktop app when the
+change reaches `src/AgentBridge.App*/`, and the PWA when it reaches `pwa/`; a change to the
+protocol, the transport, the relay or the shared build files runs all three.
+- **Cycles.** A scripted cycle does a small, fixed piece of real work and returns to idle: a
+  session starts, sends 20 hook events, asks a question that is answered, and ends; the app opens
+  and closes that session's view; the PWA opens it and goes back to the list. One cycle runs
+  untimed as a warm-up, then 10 more. After each, the component rests 5 s and its working set and
+  private bytes (JS heap for the PWA) are sampled: 10 samples. The control process is sampled the
+  same way.
+- **Growth.** Growth is the median of the last 3 samples less the median of the first 3, in private
+  bytes (JS heap for the PWA), judged against the cycle-growth row of §3: 3 MB for the host. Working
+  set is not judged for growth, since the operating system trims it at will.
+- **Steady memory.** The median of the last 3 samples, working set and private bytes, must be
+  within the steady budget of §3 plus a margin, a PROPOSAL of 25%.
+- **Verdict.** Growth more than 10 times its ceiling (30 MB for the host) fails at once. Growth
+  over its ceiling, or steady memory over budget plus margin, gets one rerun: 10 more cycles on
+  the same process, judged the same way. A real leak keeps growing and fails it; a one-time cache
+  filling up does not, and passes. There is one rerun, never more.
+- **Control and not measured.** If the control's private bytes move more than 1 MB across its 10
+  samples, or a sample is missing, the phase is retried once and then fails as "not measured". A
+  cycle that fails to complete is a test failure, not "not measured".
 
 **Hosted-runner noise, honestly.** An idle process's own CPU time is not inflated by neighbours on
 the same host the way wall time is, but it still varies: runner CPUs differ in speed, and the
 runtime does background work (tiered compilation, GC) that a 60 s warm-up does not fully finish.
+Memory varies too: the garbage collector decides when to return memory, so private bytes after a
+cycle carry a few MB of noise, which the medians of 3 and the rerun on the same process absorb.
 That is why the per-PR gate uses a margin, a median, a control and one rerun, while the nightly gate
 judges the bare budget with the full form. Before any of this, a quiet check (§2.4) runs; a run
 whose control process is over 0.1 s/min, or whose quiet check fails, is retried once, and if it
 fails again the job fails as **"not measured"**. It never passes unmeasured, and a recurring "not
-measured" goes on the flake list like any other flake. The gate **never widens a budget or a margin
-by itself**: both live in the budget file and change only by a pull request with the owner's
-approval. Slice 4 checks the proposed margin against 10 runs per hosted platform; if the spread
-there is wider than the margin, the owner chooses between a wider margin and a larger runner, and
-the budget itself does not move.
+measured" goes on the flake list like any other flake. The gate **never widens a budget, a margin
+or a ceiling by itself**: all of them live in the budget file and change only by a pull request
+with the owner's approval. Slice 4 checks the proposed CPU margin and memory ceilings against 10
+runs per hosted platform; if the spread there is wider, the owner chooses between a wider margin
+and a larger runner, and the budget itself does not move.
 
-**Cost.** About 6 runner minutes on Linux and 6 on Windows per selected pull request (two variants
-each, with start-up and teardown), run in parallel, so about 6 minutes of wall clock; a borderline
-rerun adds about 2 minutes. Drafts, docs-only changes and unrelated paths cost nothing.
+**Cost.** The CPU and network window costs about 6 runner minutes on Linux and 6 on Windows per
+selected pull request (two variants each, with start-up and teardown). The memory phase adds
+about 3 runner minutes per component it covers (11 cycles of about 15 s): about 3 for a host-only
+change, up to about 9 when the app and the PWA are covered too. So a selected pull request costs
+about 15 to 21 runner minutes, and the parallel Linux and Windows jobs take about 9 to 12 minutes
+of wall clock. A rerun adds about 2 minutes for CPU or network and about 3 for memory. Drafts,
+docs-only changes and unrelated paths cost nothing.
 
 ### 5.2 What stays nightly and before release
 
 The precise gates stay off the pull request because they need time no pull request can spend: the
 nightly idle budget (full form, median of 5, no margin, against the absolute budget and the rolling
 median of the last 7 nights, flagging a 25% jump even under budget), the 2 h and 24 h memory soaks,
-and the laptop check. The ratchet of §3 reads only nightly medians; per-PR runs never move a budget.
+which stay the long-horizon check for leaks too slow for 10 cycles to show, and the laptop check.
+The ratchet of §3 reads only nightly medians; per-PR runs never move a budget.
 
 How the counted checks stay exact: the timer count runs on a stepping fake clock, where every read
 of the time moves it forward 1 ms, as real time moves between two reads. A loop like #2283's, which
@@ -279,11 +325,11 @@ The idle gate is not in `perf.yml`. That workflow runs only on each push to main
 its header and [quality/perf.md](../../quality/perf.md) say nothing there gates, which stays true.
 Slice 12a adds a line to quality/perf.md pointing to the idle gate.
 
-Failure handling: a ring 1 failure, the real-clock idle gate included, fails the pull request's
-checks and so blocks the merge like any test. A confirmed ring 3 failure opens (or updates) one
-issue with the JSON artifact, the commit range since the last pass, and the top threads; it blocks
-promotion to `beta` but never blocks unrelated merges. A gate that flakes goes on the flake list like
-any test (`quality/publish-flakes.ps1`).
+Failure handling: a ring 1 failure, the real-clock idle gate and its memory verdict included, fails
+the pull request's checks and so blocks the merge like any test. A confirmed ring 3 failure opens
+(or updates) one issue with the JSON artifact, the commit range since the last pass, and the top
+threads; it blocks promotion to `beta` but never blocks unrelated merges. A gate that flakes goes
+on the flake list like any test (`quality/publish-flakes.ps1`).
 
 ## 6. Idle-timer audit
 
@@ -343,7 +389,7 @@ new project file): two model families read every changed file whole.
 | 3a | Host meter: a counting `TimeProvider` (timers created and fired, per owner), allocated bytes and GC counts, in the host's composition; read over the local pipe's diagnostics | 1 | none yet | 2F |
 | 3b | App meter: the same counting `TimeProvider`, allocation and GC counts in the desktop app's composition, readable by slice 1's tool | 3a | none yet | 1F |
 | 3c | Network meter: bytes and messages per endpoint role in the host and the app, keepalive frames counted apart | 3a, 3b | none yet | 2F (the wire) |
-| 4 | First baseline: host, app and PWA on the laptop and VM classes, before and after slice 2; #2284 on the reported version; mark each row of §6.1 verified or cleared, starting from #2295's host audit; 10 short-form runs per hosted platform to check §5.1's margin; replace §3's numbers, still PROPOSAL | 1, 2, 3a, 3b, 3c | none yet | 1F (docs) |
+| 4 | First baseline: host, app and PWA on the laptop and VM classes, before and after slice 2; #2284 on the reported version; mark each row of §6.1 verified or cleared, starting from #2295's host audit; 10 short-form runs per hosted platform to check §5.1's CPU margin and memory ceilings; replace §3's numbers, still PROPOSAL | 1, 2, 3a, 3b, 3c | none yet | 1F (docs) |
 | 5 | Host: the sign-in sweep timer only while a flow is open (H2) | 3a | #2297 | 2F (credentials) |
 | 6 | Host: discovery driven by watcher and process-exit events, with a slow safety pass (H3) | 3a, 4 | #2296 | 2F |
 | 7a | Host: process-load sampling only while a consumer needs it (H5) | 3a, 4 | #2298 | 2F |
@@ -360,9 +406,11 @@ new project file): two model families read every changed file whole.
 | 12a | Per-PR real-clock idle gate, host CPU: the `ci.yml` job on Linux and Windows with its catalog row and path filter (§5.1); short form, control process, quiet check, spin ceiling, margin, one rerun and "not measured"; margins and the spin multiple added to the budget file; a line in quality/perf.md pointing to it. Until the owner approves §3, it fails only over the spin ceiling and reports the budget comparison | 1, 11a | none yet | 2F (CI) |
 | 12b | Per-PR real-clock idle gate, desktop app CPU: the Windows job measures the app hidden, then visible, beside the host | 8, 12a | none yet | 2F (CI) |
 | 12c | Per-PR real-clock idle gate, network: host and app messages, bytes, keepalive frames and requests from the meter, with §5.1's tolerance, and each observed message against its type's byte budget | 3c, 12a, 12b | none yet | 2F (CI, the wire) |
-| 12d | Per-PR real-clock idle gate, PWA: visible main-thread CPU and frames, and hidden after rest with nothing sent or received, in the Linux job | 9, 11c, 12a | none yet | 2F (CI) |
-| 12e | Nightly idle budget on the lab VM (ring 3), full form with the rolling-median check, the failure issue, and the report row; the only input to the ratchet | 4, 12a, owner approval of §3 | none yet | 2F (CI) |
-| 12f | Memory soak on the lab VM: nightly 2 h and weekly 24 h | 12e | none yet | 2F (CI) |
+| 12d | Per-PR real-clock idle gate, PWA: visible main-thread CPU and frames, and the hidden verdict of §5.1 (exact zero counts after rest, CPU held to the noise floor), in the Linux job | 9, 11c, 12a | none yet | 2F (CI) |
+| 12e | Per-PR memory verdict, host: the scripted activity cycle for the host fixture, 10 samples at rest, growth and steady verdicts, the control, one rerun on the same process and "not measured" (§5.1); cycle-growth ceilings and the memory margin added to the budget file. Failing first: `Memory_verdict_fails_when_growth_stays_over_its_ceiling_through_the_rerun`, beside `Memory_verdict_passes_when_a_one_time_cache_stops_growing_in_the_rerun` and `Memory_verdict_reports_not_measured_when_the_control_moves` | 1, 12a | none yet | 2F (CI) |
+| 12f | Per-PR memory verdict, app and PWA: their cycle steps, and covering each only when the change reaches its paths. Failing first: `Memory_phase_covers_the_app_only_when_the_change_reaches_its_paths` and `Pwa_memory_cycle_fails_when_the_js_heap_keeps_growing` | 12b, 12d, 12e | none yet | 2F (CI) |
+| 12g | Nightly idle budget on the lab VM (ring 3), full form with the rolling-median check, the failure issue, and the report row; the only input to the ratchet | 4, 12a, owner approval of §3 | none yet | 2F (CI) |
+| 12h | Memory soak on the lab VM: nightly 2 h and weekly 24 h, the long-horizon check behind 12e and 12f | 12g | none yet | 2F (CI) |
 
 **Order.** 1 and 2 start now, in parallel; 9 can start once 1 lands. Then 3a, 3b and 3c, then 4
 (baseline, building on #2295's host audit). Then the host fixes 5, 6 and 7a to 7d in parallel (5
@@ -372,8 +420,10 @@ budget file in the same PR. 11b waits for 8 and 11c for 9, since neither hidden-
 before those fixes; 11d needs only 11a. The per-PR real-clock gate follows the same rule: 12a can
 land right after 11a, failing pull requests on a spin from the start, and judges the budget plus
 margin once the owner approves §3; 12b waits for 8, so the app is not held to a hidden spin
-ceiling of 2 s/min while its 1 s tick (A1) still runs; 12c and 12d follow. Then the nightly 12e and
-the soaks in 12f.
+ceiling of 3 s/min while its 1 s tick (A1) still runs; 12c and 12d follow. The memory verdict
+follows the same pattern: 12e can land right after 12a, failing a pull request at once on growth
+of 10 times the ceiling, and judges the ceiling and steady budget once the owner approves §3; 12f
+follows 12b and 12d. Then the nightly 12g and the soaks in 12h.
 
 ## 8. Open question for the owner
 
