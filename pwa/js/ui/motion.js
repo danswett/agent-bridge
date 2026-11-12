@@ -216,6 +216,54 @@ export function slide(el, entry, fromX, fromY, { pseudo = null, scaleX = 1 } = {
   return run(el, [{ transform: `translate(${fromX}px, ${fromY}px)${scale}`, ...origin }, { transform: 'none', ...origin }], entry, t, pseudo ? { pseudoElement: pseudo } : {});
 }
 
+const flips = new WeakMap();
+
+// Mutations act now; one frame measures the final layout for the whole burst. Capture the
+// drawn positions before cancelling a running shift, so another change never jumps back.
+// Keep it running through mutate(): a leaving item's copy must see that same drawn position.
+export function flip(container, mutate, { entry = 'shift' } = {}) {
+  let state = flips.get(container);
+  if (!state) {
+    state = { before: new Map(), interrupted: new Set(), animations: [], entries: new Map() };
+    for (const el of container.children) {
+      if (!el.getClientRects().length) { continue; }
+      state.before.set(el, el.getBoundingClientRect());
+    }
+    for (const el of state.before.keys()) {
+      for (const a of el.getAnimations?.() ?? []) {
+        if (!/^ab-motion-(shift|reorder)$/.test(a.id)) { continue; }
+        state.interrupted.add(el);
+        state.animations.push(a);
+      }
+    }
+    flips.set(container, state);
+    container.ownerDocument.defaultView.requestAnimationFrame(() => {
+      flips.delete(container);
+      for (const a of state.animations) { a.cancel(); }
+      if (!container.isConnected) { return; }
+      const positions = [...state.before].filter(([el]) => el.parentElement === container && el.getClientRects().length)
+        .map(([el, was]) => [el, was, el.getBoundingClientRect()]);
+      for (const [el, was, at] of positions) {
+        const name = state.entries.get(el);
+        const x = was.left - at.left, y = was.top - at.top;
+        if (!name || (!x && !y)) { continue; }
+        const t = timing(name, { doc: el.ownerDocument });
+        if (!t.duration) { if (name === 'shift') { enter(el, 'value'); } continue; }
+        if (state.interrupted.has(el)) { t.easing = timing('listItem', { doc: el.ownerDocument }).easing; }
+        run(el, [{ transform: `translate(${x}px, ${y}px)` }, { transform: 'none' }], name, t);
+      }
+    });
+  }
+  const result = mutate();
+  for (const el of container.children) {
+    // An explicit reorder, or a row whose caller draws its own move, wins over a redraw.
+    if (state.entries.get(el) !== null && state.entries.get(el) !== 'reorder') {
+      state.entries.set(el, typeof entry === 'function' ? entry(el) : entry);
+    }
+  }
+  return result;
+}
+
 // Where an element is on screen (its box), or null when none of it shows: off the viewport, or
 // scrolled out of a list that clips it. What an indicator may slide from (ui.md §5.3, Selection).
 export function seen(el) {

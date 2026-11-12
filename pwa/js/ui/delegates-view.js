@@ -15,6 +15,7 @@ import { glyph, setGlyph } from './glyph.js';
 import { renderMarkdown } from '../markdown.js';
 import { askToStopText, delegateList, delegateName, delegateState, delegateTime, descendants } from '../attribution.js';
 import { clock, localTime } from './time.js';
+import { enter, flip, leave } from './motion.js';
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const TOOL_GLYPH = { running: 'working', done: 'done', failed: 'failed' };
@@ -178,6 +179,7 @@ function nestedCounts(list, ids) {
 
 export class DelegateStrip {
   #items = new Map();
+  #drawn = false;
   #open = false;
   #session = null;
   #selected = null;
@@ -197,6 +199,12 @@ export class DelegateStrip {
   }
 
   update(session, now = Date.now(), selected = this.#selected) {
+    if (!this.#drawn) { this.#update(session, now, selected); this.#drawn = true; return; }
+    flip(this.element, () => this.#update(session, now, selected));
+  }
+
+  #update(session, now, selected) {
+    const previous = new Set(this.element.children);
     const was = this.#selected;
     this.#session = session;
     this.#selected = selected;
@@ -209,8 +217,13 @@ export class DelegateStrip {
     const top = (rows) => rows.filter((r) => !r.parent || r.parent === r.id);
     const active = d ? top(d.active) : [];
     const finished = d ? top(d.finished) : [];
-    this.element.hidden = !d || (active.length === 0 && finished.length === 0 && !d.more);
-    if (!d) { return; }
+    if (!d) {
+      if (this.#drawn) { for (const el of previous) { leave(el, 'listItem'); } }
+      this.element.hidden = true;
+      this.element.replaceChildren();
+      this.#items.clear();
+      return;
+    }
     // An open delegate stays in view as it finishes, and a finished one chosen is shown: the fold
     // opens then, once, so it can still be shut over it.
     const finishedNow = new Set(finished.map((r) => r.id));
@@ -232,10 +245,13 @@ export class DelegateStrip {
       this.more.textContent = `${plural(d.more, 'more delegate', 'more delegates')} not listed`;
       els.push(this.more);
     }
+    if (this.#drawn) { for (const el of previous) { if (!els.includes(el)) { leave(el, 'listItem'); } } }
+    this.element.hidden = active.length === 0 && finished.length === 0 && !d.more;
     keepFocus(this.element, () => {
       els.forEach((el, i) => { if (this.element.children[i] !== el) { this.element.insertBefore(el, this.element.children[i] ?? null); } });
       while (this.element.children.length > els.length) { this.element.lastElementChild.remove(); }
     });
+    if (this.#drawn) { for (const el of els) { if (!previous.has(el)) { enter(el, 'listItem'); } } }
     for (const id of [...this.#items.keys()]) { if (!live.has(id)) { this.#items.delete(id); } }
   }
 

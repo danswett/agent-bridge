@@ -18,6 +18,7 @@ test('same-frame list mutations take effect immediately and coalesce into one to
       animate: (keyframes, options) => { const a = { keyframes, options }; animations.push(a); return a; },
     };
     const container = { children: [child], ownerDocument: doc, isConnected: true };
+    child.parentElement = container;
     motion.flip(container, () => { top += 40; });
     motion.flip(container, () => { top += 40; });
     assert.equal(top, 180, 'the real layout must never wait for animation');

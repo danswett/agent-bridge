@@ -465,6 +465,9 @@ through.*
 > [proposals/659-no-pop-motion.md](proposals/659-no-pop-motion.md); the clients follow in #684
 > (Windows) and #685 (PWA).
 
+PWA session rows and delegate-strip chips now ease their neighbours with frame-coalesced,
+retargetable `shift` motion (#2105), including row-menu moves. The other #685 slices follow.
+
 Motion shows where something came from and where it went. It answers the person or a
 change, and never runs for its own sake. The values are in `tokens.json` under `motion`,
 generated as `--ab-motion-*` for the PWA and `AbMotion*` resources for the app
