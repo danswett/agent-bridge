@@ -176,6 +176,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     // The person withdraws an adoption or the credential it gave. True when anything was there.
     public bool Revoke(string session, string why)
     {
+        if (!ValidSession(session)) { throw new ArgumentException("a revocation is for a session id", nameof(session)); }
         lock (gate)
         {
             var waiting = pending.RemoveAll(p => p.Session == session) > 0;

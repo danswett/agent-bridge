@@ -88,6 +88,7 @@ public sealed class AgentAdoptionTests : IDisposable
         Assert.True(revoked.Revoked);
         await Assert.ThrowsAsync<ArgumentException>(() => handler(channel, AgentProtocol.Adopt, Body(new { session = "missing" })));
         await Assert.ThrowsAsync<ArgumentException>(() => handler(channel, AgentProtocol.Adopt, Body(new { session = id, scope = AgentProtocol.ScopeReadReply })));
+        await Assert.ThrowsAsync<ArgumentException>(() => handler(channel, AgentProtocol.Revoke, Body(new { session = "../invalid" })));
     }
 
     [Theory]
