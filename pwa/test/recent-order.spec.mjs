@@ -220,6 +220,12 @@ test('a timed anchoring scroll protects unchanged visible approval controls for 
   await expect(page.locator('#needs-you .needs-you-list')).not.toHaveAttribute('data-arriving', '');
 });
 
+async function rowMotionsDone(page) {
+  // The fake clock does not advance native Web Animations.
+  await expect.poll(() => page.locator('.session').evaluateAll((els) =>
+    els.every((el) => el.getAnimations().length === 0))).toBe(true);
+}
+
 async function normalMotionBatch(page, initialBatch = false) {
   await setup(page, 1440);
   if (initialBatch) {
@@ -242,6 +248,7 @@ async function normalMotionBatch(page, initialBatch = false) {
   await pane.evaluate((el) => { el.scrollTop = 300; });
   await pane.dispatchEvent('scroll');
   await page.clock.runFor(200);
+  await rowMotionsDone(page);
   const anchor = await pane.evaluate((el) => {
     const row = [...el.querySelectorAll('.session')].find((r) => r.getBoundingClientRect().bottom > el.getBoundingClientRect().top);
     window.__recentMoves = [];
@@ -259,6 +266,7 @@ async function normalMotionBatch(page, initialBatch = false) {
   }
   await update(page, 'batch-11');
   await page.clock.runFor(5000);
+  await rowMotionsDone(page);
   expect(Math.abs(await row(page, anchor.id).evaluate((el) => el.getBoundingClientRect().top) - anchor.top)).toBeLessThan(2);
   expect(await page.evaluate(() => window.__recentMoves.some((a) => a.id === 'ab-motion-reorder'))).toBe(true);
 }
