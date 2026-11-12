@@ -326,6 +326,9 @@ public sealed class FleetListTests : IDisposable
         Assert.Equal(90, session.GetProperty("secondsInState").GetInt64());
         Assert.Equal(request.Contains("content"), session.TryGetProperty("name", out _));
         Assert.DoesNotContain("other", reply.GetRawText());
+        roster.Machines = ExpiredFrames(knownFirst: true);
+        var reordered = JsonSerializer.SerializeToElement(await Op().HandleAsync(Hello(AgentProtocol.ScopeRead), Body(request)), Web);
+        Assert.Equal(reply.GetProperty("machines").GetRawText(), reordered.GetProperty("machines").GetRawText());
     }
 
     [Fact]
@@ -343,6 +346,19 @@ public sealed class FleetListTests : IDisposable
         var absent = JsonSerializer.SerializeToElement(await op.FindAsync(chan, Body("""{"name":"missing"}""")), Web);
         Assert.Equal("notFound", absent.GetProperty("result").GetString());
         Assert.False(absent.TryGetProperty("machines", out _));
+    }
+
+    [Theory]
+    [InlineData("{}",
+        """[{"machine":"m2","node":"n1","state":"working","since":"2026-11-07T12:00:00+00:00","secondsInState":90,"machineOnline":true,"machineName":"build-box"}]""")]
+    [InlineData("""{"include":"content"}""",
+        """[{"machine":"m2","node":"n1","state":"working","since":"2026-11-07T12:00:00+00:00","secondsInState":90,"machineOnline":true,"name":"my project","machineName":"build-box"}]""")]
+    public async Task Adding_machine_rows_keeps_the_legacy_sessions_bytes_unchanged(string request, string legacy)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        roster.Machines = Frames("build-box");
+        var reply = JsonSerializer.SerializeToElement(await Op().HandleAsync(Hello(AgentProtocol.ScopeRead), Body(request)), Web);
+        Assert.Equal(legacy, reply.GetProperty("sessions").GetRawText());
     }
 
     static string[] Names(string json) =>

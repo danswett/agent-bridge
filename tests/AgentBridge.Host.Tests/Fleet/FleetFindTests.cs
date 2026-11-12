@@ -122,6 +122,41 @@ public sealed class FleetFindTests : IDisposable
         Assert.DoesNotContain("account-b", result.GetRawText());
     }
 
+    [Theory, Trait("Category", "Network")]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Listing_with_a_session_or_registered_script_credential_never_exposes_another_accounts_machine(bool script)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        await using var relay = await TestRelay.StartAsync();
+        await using var own = await relay.ConnectAsync(relay.TokenFor(1, "own"), "own-host", "host");
+        await using var other = await relay.ConnectAsync(relay.TokenFor(2, "other"), "other-host", "host");
+        foreach (var (connection, hex) in new[]
+        {
+            (own, new string('a', 16)),
+            (other, new string('b', 16)),
+        })
+        {
+            await connection.Relay.RegistryPutAsync(Body(new
+            {
+                v = 1, machine = connection.Id, epoch = hex, seq = 1, at = DateTimeOffset.UtcNow, truncated = false,
+                sessions = new[] { new { id = hex, node = "agent_bridge_" + hex, state = "idle", since = Started } },
+            }));
+        }
+        var roster = new RelayFleetRoster();
+        roster.Attach(own.Relay);
+        var chan = script ? new Chan() : Hello(AgentProtocol.ScopeRead);
+        if (script) { store.Accept(chan, store.MintScript("roster-reader").Credential); }
+        var op = new FleetList(store, roster, audit: new AgentAuditLog(root));
+        var handler = LocalApi.Handler(null!, null!, null!, credentials: store, fleet: op);
+        var reply = JsonSerializer.SerializeToElement(await handler(chan, FleetList.Op,
+            Body(new { account = other.Relay.AccountId, fleetScope = other.Relay.AccountId })), Web);
+        Assert.Equal(own.Id, Assert.Single(reply.GetProperty("machines").EnumerateArray()).GetProperty("machine").GetString());
+        Assert.Equal(own.Id, Assert.Single(reply.GetProperty("sessions").EnumerateArray()).GetProperty("machine").GetString());
+        Assert.DoesNotContain(other.Id, reply.GetRawText());
+        Assert.DoesNotContain(other.Relay.AccountId!, reply.GetRawText());
+    }
+
     [Fact, Trait("Category", "Network")]
     public async Task A_real_relay_connection_supplies_its_account_scope_and_never_resolves_another_accounts_name()
     {
