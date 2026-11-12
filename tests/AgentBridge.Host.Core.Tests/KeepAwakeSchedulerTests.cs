@@ -145,6 +145,24 @@ public sealed class KeepAwakeSchedulerTests(ITestOutputHelper output)
         await passed.Task.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
+    [Theory]
+    [InlineData(10)]
+    [InlineData(30)]
+    public async Task A_clock_jump_inside_the_first_positive_timer_change_keeps_the_original_due_time(int seconds)
+    {
+        var clock = new Clock();
+        clock.BeforeFirstArm = () => clock.Advance(TimeSpan.FromSeconds(seconds));
+        var passed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var service = Service(clock, called: () => passed.TrySetResult());
+        service.Start();
+        Assert.Null(await Record.ExceptionAsync(async () =>
+        {
+            await clock.Registered();
+            if (seconds < 30) { await clock.Registered(); clock.Advance(TimeSpan.FromSeconds(30 - seconds)); }
+            await passed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }));
+    }
+
     [Fact]
     public async Task A_timer_that_fires_before_the_wall_clock_due_time_waits_again_without_running_a_pass()
     {
@@ -224,6 +242,7 @@ public sealed class KeepAwakeSchedulerTests(ITestOutputHelper output)
         public int ActiveTimers => Volatile.Read(ref active);
         public TimeSpan Offset { get; set; }
         public Action? BeforeFirstTimer { get; set; }
+        public Action? BeforeFirstArm;
         public Action? OnRelease { get; set; }
         public override DateTimeOffset GetUtcNow() => base.GetUtcNow() + Offset;
         public Task Registered() => registered.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
@@ -242,8 +261,9 @@ public sealed class KeepAwakeSchedulerTests(ITestOutputHelper output)
         {
             public bool Change(TimeSpan dueTime, TimeSpan period)
             {
+                if (dueTime > TimeSpan.Zero) { Interlocked.Exchange(ref clock.BeforeFirstArm, null)?.Invoke(); }
                 var changed = timer.Change(dueTime, period);
-                clock.registered.Writer.TryWrite(true);
+                if (dueTime > TimeSpan.Zero) { clock.registered.Writer.TryWrite(true); }
                 return changed;
             }
             public void Dispose()

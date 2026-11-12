@@ -548,7 +548,7 @@ public sealed class DevBoxTests : IDisposable
 
         service.Start();
         await Until(() => service.State.NextAt is not null, "the first pass to be scheduled");
-        await Until(() => time.Timers >= 1, "the timer to be registered before reading the remaining time");
+        await time.Armed.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(1, time.Timers);
         time.Advance(service.State.NextAt!.Value - time.GetUtcNow());
 
@@ -559,15 +559,28 @@ public sealed class DevBoxTests : IDisposable
     {
         int moved;
         int timers;
+        readonly TaskCompletionSource armed = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public int Timers => Volatile.Read(ref timers);
+        public Task Armed => armed.Task;
 
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
             if (Interlocked.Exchange(ref moved, 1) == 0) { Advance(by); }
             var timer = base.CreateTimer(callback, state, dueTime, period);
             Interlocked.Increment(ref timers);
-            return timer;
+            return new ArmedTimer(timer, armed);
+        }
+        sealed class ArmedTimer(ITimer timer, TaskCompletionSource armed) : ITimer
+        {
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                var changed = timer.Change(dueTime, period);
+                if (dueTime > TimeSpan.Zero) { armed.TrySetResult(); }
+                return changed;
+            }
+            public void Dispose() => timer.Dispose();
+            public ValueTask DisposeAsync() => timer.DisposeAsync();
         }
     }
 
