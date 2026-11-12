@@ -178,7 +178,7 @@ public sealed class ReleaseEligibilityTests : IDisposable
         Assert.Equal(3, handler.Requests.Count(uri => uri.Host == "api.github.com"));
         time.Advance(ReleaseDiscovery.Interval);
         cdnFails = true;
-        Assert.Equal(relay, await refuser.ReleasesAsync(ReleaseDiscovery.GitHubList, b => b, default, "0.1.1", "win"));
+        await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => refuser.ReleasesAsync(ReleaseDiscovery.GitHubList, b => b, default, "0.1.1", "win"));
         Assert.Equal(3, handler.Requests.Count(uri => uri.Host == "api.github.com"));
     }
 
