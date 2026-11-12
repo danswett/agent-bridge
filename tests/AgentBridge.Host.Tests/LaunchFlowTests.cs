@@ -303,15 +303,20 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Equal(["alpha", "githubiq"], Denied(args));
     }
 
-    [Fact]
-    public async Task A_role_not_in_the_map_gets_no_servers_and_a_similar_role_name_is_not_matched()
+    [Theory]
+    [InlineData("review-2")]
+    [InlineData("default")]
+    public async Task A_role_not_in_the_map_gets_no_servers_and_a_similar_role_name_is_not_matched(string role)
     {
         OwnerMcp("alpha");
-        var request = new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App", Role = "review-2" };
+        var request = new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App", Role = role };
 
+        Assert.Null(LaunchProtocol.Check(request));
         await Launcher(Config(c => c with { WorkerMcp = new Dictionary<string, IReadOnlyList<string>> { ["review"] = ["alpha"] } })).LaunchAsync(request, "phone");
 
-        Assert.Equal(["alpha"], Denied(Assert.Single(starter.Specs).Arguments));
+        var args = Assert.Single(starter.Specs).Arguments;
+        Assert.Equal(["alpha"], Denied(args));
+        Assert.Contains("--disable-builtin-mcps", args);
     }
 
     [Fact]
