@@ -1230,6 +1230,23 @@ public sealed class ConnectionTests : IAsyncLifetime
     static bool Same(Session? held, Session sent) =>
         held is not null && JsonSerializer.Serialize(held, ProtocolJson.Options) == JsonSerializer.Serialize(sent, ProtocolJson.Options);
 
+    [Fact]
+    public async Task Handles_are_negotiated_and_an_unknown_handle_is_dropped_before_resubscribing()
+    {
+        await using var other = Patching(Make.Session("a"));
+        other.Capabilities.Add("sessions.handles");
+        await using var conn = other.Connect();
+        await Wait.UntilAsync(() => conn.Sessions.Complete, "the snapshot");
+        Assert.True(other.Sent(Ops.SessionsSubscribe).Single().GetProperty("handles").GetBoolean());
+        await other.SendAsync(Events.SessionsSynced, new { revision = 1, handles = new { a = 1 } });
+        await other.SendAsync(Events.SessionPatch, new { handle = 1, revision = 2, set = Make.Session("a", response: "handled") });
+        await Wait.UntilAsync(() => conn.Sessions.Get("a")?.Activity.Response == "handled", "the handled patch");
+        await other.SendAsync(Events.SessionPatch, new { handle = 99, revision = 3, set = Make.Session("a", response: "wrong") });
+        await Wait.UntilAsync(() => other.Sent(Ops.SessionsSubscribe).Count == 2, "the full recovery");
+        Assert.False(other.Sent(Ops.SessionsSubscribe)[1].TryGetProperty("since", out _));
+        Assert.NotEqual("wrong", conn.Sessions.Get("a")?.Activity.Response);
+    }
+
     static Subagent Sub(string id, SubagentStatus status) => new() { Id = id, Kind = SubagentKind.Task, Name = id, Status = status, StartedAt = Make.T0 };
 
     static string[] Ids(SessionStore store) => [.. store.All.Select(s => s.Id).Order(StringComparer.Ordinal)];
