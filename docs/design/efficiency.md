@@ -39,6 +39,17 @@ Non-goals:
 "Idle" is a state of the product, not of the machine. Live fleet updates from other machines can
 still arrive on a real fleet; the lab fixture has none, so its idle is strict.
 
+**Active session.** #2293 also wants network per active session, so the baseline has one active
+scenario beside idle: the 20-session fixture with 1, then 3, sessions working. In each, a scripted
+agent (slice 3d) writes a transcript line every 2 s, sends 10 hook events a minute and asks one
+question a minute, which is answered; a viewer is attached to each working session (the PWA on
+that session's page and the desktop app on its view). It reports bytes in and out, messages and
+requests per minute per endpoint role, and the per-session cost: the active numbers less idle,
+divided by the number of working sessions, so the 1 and 3 session runs also show that cost grows
+no faster than the sessions do. CPU and memory are recorded too. The nightly gate (§5.2) judges it
+against §3's per-session network row; per PR, the byte budget per message type (slices 11d and
+12c) covers the size of what an active session sends.
+
 ### 2.2 Machines
 
 - **Reference laptop class:** Windows 11 x64 laptop, hybrid cores, 16 or more logical CPUs,
@@ -121,10 +132,12 @@ Each run writes one JSON file, schema `agent-bridge.efficiency/1`:
 }
 ```
 
-Results are **artifacts, not committed**: CI keeps them as `efficiency-<component>-<platform>` for
-90 days, and a local run writes under the user's temp folder. What is committed is the budget file
-(slice 11a) and a summary row per release in the weekly quality report. Times shown to people are
-Pacific; the file stores UTC.
+Results are **artifacts**: CI keeps them as `efficiency-<component>-<platform>` for 90 days, and a
+local run writes under the user's temp folder. What is committed in the repository is the budget
+file (slice 11a); the baseline itself, as a table of medians with min and max per component,
+scenario (idle and active) and machine class, in `docs/design/efficiency-baseline.md` (slice 4),
+updated when a later baseline replaces it; and a summary row per release in the weekly quality
+report. Times shown to people are Pacific; the file stores UTC.
 
 ## 3. Budget proposal
 
@@ -132,7 +145,7 @@ Every number below is a **PROPOSAL** until the baseline (slice 4) lands and the 
 
 | Measure | Host idle | App hidden | App visible | PWA visible | PWA hidden |
 |---|---|---|---|---|---|
-| CPU s/min (median) | 0.3 (0.5% of a core) | 0.1 | 0.5 | 0.3 main-thread busy | 0 after rest |
+| CPU s/min (median) | 0.3 (0.5% of a core) | 0.1 | 0.5 | 0.3 main-thread busy | 0, judged by zero counts with a 0.15 noise floor (§5.1) |
 | Wakeups per second | 4 | 2 | 10 | 1 timer callback | 0 after rest |
 | Startup memory | 120 MB working set | 200 MB working set | same | 30 MB JS heap | same |
 | Steady memory | 80 MB private | 120 MB private, 60 MB working set | 160 MB private | 20 MB JS heap at 50 sessions | not higher than visible |
@@ -140,7 +153,8 @@ Every number below is a **PROPOSAL** until the baseline (slice 4) lands and the 
 | Growth over 10 PR cycles (§5.1) | 3 MB private | 3 MB private | 5 MB private | 2 MB JS heap | n/a |
 | Allocation | 50 KB/s | 10 KB/s | 50 KB/s | n/a | n/a |
 | Idle network | 1 KB/min, 4 messages/min, 6 HTTP requests/hour | 0.5 KB/min, 3 messages/min | same as hidden | 2 KB/min, 5 frames/min | 0 bytes, 0 requests |
-| Keepalive frames | 6 a minute each way today; 3 after slice 10 | none (no relay socket) | none | 3 pings in and 3 pongs out a minute, answered by the browser | none (socket closed) |
+| Keepalive frames | 6 a minute each way today; 3 after slice 10a | none (no relay socket) | none | 3 pings in and 3 pongs out a minute, answered by the browser | none (socket closed) |
+| Network per active session (§2.1) | Slice 4's baseline plus 25% | n/a | Slice 4's baseline plus 25% | Slice 4's baseline plus 25% | n/a |
 
 Rationale:
 - The one clean number is #2284's unprofiled capture: 0.312 CPU s/min with the window visible (an
@@ -153,7 +167,7 @@ Rationale:
   counts (no timer, frame or request), with CPU held only to a noise floor (§5.1).
 - Network: messages count application messages only. Keepalive is its own row: both ends of the
   relay socket ping every 20 s and each ping is answered, so an idle host today sends 6 control
-  frames a minute (3 pings, 3 pongs) and receives 6; one side pinging (H10, slice 10) halves that.
+  frames a minute (3 pings, 3 pongs) and receives 6; one side pinging (H10, slice 10a) halves that.
   Keepalive bytes do count toward the KB/min budget. The PWA's frame count is data frames: the
   browser answers the relay's pings itself and the page cannot see them. Beyond keepalive, anything
   sent while idle is chatter. Six HTTP requests an hour covers update and usage checks at their
@@ -310,7 +324,8 @@ docs-only changes and unrelated paths cost nothing.
 
 The precise gates stay off the pull request because they need time no pull request can spend: the
 nightly idle budget (full form, median of 5, no margin, against the absolute budget and the rolling
-median of the last 7 nights, flagging a 25% jump even under budget), the 2 h and 24 h memory soaks,
+median of the last 7 nights, flagging a 25% jump even under budget), the active-session scenario
+of §2.1 (median of 5) against §3's per-session network row, the 2 h and 24 h memory soaks,
 which stay the long-horizon check for leaks too slow for 10 cycles to show, and the laptop check.
 The ratchet of §3 reads only nightly medians; per-PR runs never move a budget.
 
@@ -323,7 +338,7 @@ would hide that loop (§2.3); the real-clock idle gate catches what the counting
 
 The idle gate is not in `perf.yml`. That workflow runs only on each push to main and by hand, and
 its header and [quality/perf.md](../../quality/perf.md) say nothing there gates, which stays true.
-Slice 12a adds a line to quality/perf.md pointing to the idle gate.
+Slice 12a2 adds a line to quality/perf.md pointing to the idle gate.
 
 Failure handling: a ring 1 failure, the real-clock idle gate and its memory verdict included, fails
 the pull request's checks and so blocks the merge like any test. A confirmed ring 3 failure opens
@@ -377,53 +392,62 @@ working and delegating sessions, on the compositor, and stop under reduced motio
 
 ## 7. Slices
 
-Each slice is 400 changed lines or fewer, starts with a failing test, and is one PR. Slices 3, 7, 11
-and 12 are split into lettered parts to keep to that, so the numbers the existing issues use stay
-the same. **2F** marks a sensitive slice (host core, update path, credentials, the wire, CI or a
-new project file): two model families read every changed file whole.
+Each slice is 400 changed lines or fewer, starts with a failing test, and is one PR. The line
+column is an estimate of changed lines, tests included; any slice estimated over 400 is split into
+lettered parts (and 12a into 12a1 and 12a2), so the numbers the existing issues use stay the same.
+**2F** marks a sensitive slice (host core, update path, credentials, the wire, CI or a new project
+file): two model families read every changed file whole.
 
-| # | Slice | Depends on | Issue | Review |
-|---|---|---|---|---|
-| 1 | Baseline harness: a measuring tool that attaches to a process and writes `agent-bridge.efficiency/1` (CPU, threads, wakeups, memory, control process, quiet check). Tests with a synthetic idle and a synthetic busy child | none | #2294 | 2F (new project file) |
-| 2 | #2283: `KeepAwakeService` awaits to the due time; no scheduler when off or not a Dev Box; prompt stop | none (in flight) | #2283 | 2F |
-| 3a | Host meter: a counting `TimeProvider` (timers created and fired, per owner), allocated bytes and GC counts, in the host's composition; read over the local pipe's diagnostics | 1 | none yet | 2F |
-| 3b | App meter: the same counting `TimeProvider`, allocation and GC counts in the desktop app's composition, readable by slice 1's tool | 3a | none yet | 1F |
-| 3c | Network meter: bytes and messages per endpoint role in the host and the app, keepalive frames counted apart | 3a, 3b | none yet | 2F (the wire) |
-| 4 | First baseline: host, app and PWA on the laptop and VM classes, before and after slice 2; #2284 on the reported version; mark each row of §6.1 verified or cleared, starting from #2295's host audit; 10 short-form runs per hosted platform to check §5.1's CPU margin and memory ceilings; replace §3's numbers, still PROPOSAL | 1, 2, 3a, 3b, 3c | none yet | 1F (docs) |
-| 5 | Host: the sign-in sweep timer only while a flow is open (H2) | 3a | #2297 | 2F (credentials) |
-| 6 | Host: discovery driven by watcher and process-exit events, with a slow safety pass (H3) | 3a, 4 | #2296 | 2F |
-| 7a | Host: process-load sampling only while a consumer needs it (H5) | 3a, 4 | #2298 | 2F |
-| 7b | Host: the hook intake safety sweep backs off when idle (H4) | 3a, 4 | #2301 | 2F |
-| 7c | Host: the usage monitor awaits its next due probe instead of a 15 s tick (H6, wakeups only; what it probes and when is slice 10's) | 3a, 4 | none yet | 2F |
-| 7d | Host: `HelloCheck` and the restore recorder await due times and stop once settled (H8, H9) | 3a, 4 | none yet | 2F |
-| 8 | Desktop app: nothing ticks while hidden; relative times redrawn when they change; the `Rendering` handler bounded (A1, A2, A3) | 3b, 4 | none yet | 1F + Creative |
-| 9 | PWA: no timer while hidden in the delegates view; fleet changes pushed, with a slow safety probe (P1, P2); clock-counted Playwright tests | 1 | #2300 | 1F + Creative |
-| 10 | Network: one keepalive side (H10), usage and peer chatter by change rather than period (H6, H7), with #2225's release hints | 3c, 4; #2225 slices 3 to 5 | none yet | 2F (wire, update path) |
-| 11a | Per-PR gate, host: the committed budget file, and the host idle timer count on the stepping fake clock (§5), its ceiling starting at today's counts; catalog row | 2, 3a | none yet | 2F (CI) |
-| 11b | Per-PR gate, app: idle timer count for the app's visible and hidden compositions, hidden at zero | 3b, 8, 11a | none yet | 2F (CI) |
-| 11c | Per-PR gate, PWA: the hidden-zero test across every view: after its rest, no timer fires and no frame is sent | 9, 11a | none yet | 2F (CI) |
-| 11d | Per-PR gate, payloads: a byte budget per message type, checked over the protocol vectors | 11a | none yet | 2F (CI, wire) |
-| 12a | Per-PR real-clock idle gate, host CPU: the `ci.yml` job on Linux and Windows with its catalog row and path filter (§5.1); short form, control process, quiet check, spin ceiling, margin, one rerun and "not measured"; margins and the spin multiple added to the budget file; a line in quality/perf.md pointing to it. Until the owner approves §3, it fails only over the spin ceiling and reports the budget comparison | 1, 11a | none yet | 2F (CI) |
-| 12b | Per-PR real-clock idle gate, desktop app CPU: the Windows job measures the app hidden, then visible, beside the host | 8, 12a | none yet | 2F (CI) |
-| 12c | Per-PR real-clock idle gate, network: host and app messages, bytes, keepalive frames and requests from the meter, with §5.1's tolerance, and each observed message against its type's byte budget | 3c, 12a, 12b | none yet | 2F (CI, the wire) |
-| 12d | Per-PR real-clock idle gate, PWA: visible main-thread CPU and frames, and the hidden verdict of §5.1 (exact zero counts after rest, CPU held to the noise floor), in the Linux job | 9, 11c, 12a | none yet | 2F (CI) |
-| 12e | Per-PR memory verdict, host: the scripted activity cycle for the host fixture, 10 samples at rest, growth and steady verdicts, the control, one rerun on the same process and "not measured" (§5.1); cycle-growth ceilings and the memory margin added to the budget file. Failing first: `Memory_verdict_fails_when_growth_stays_over_its_ceiling_through_the_rerun`, beside `Memory_verdict_passes_when_a_one_time_cache_stops_growing_in_the_rerun` and `Memory_verdict_reports_not_measured_when_the_control_moves` | 1, 12a | none yet | 2F (CI) |
-| 12f | Per-PR memory verdict, app and PWA: their cycle steps, and covering each only when the change reaches its paths. Failing first: `Memory_phase_covers_the_app_only_when_the_change_reaches_its_paths` and `Pwa_memory_cycle_fails_when_the_js_heap_keeps_growing` | 12b, 12d, 12e | none yet | 2F (CI) |
-| 12g | Nightly idle budget on the lab VM (ring 3), full form with the rolling-median check, the failure issue, and the report row; the only input to the ratchet | 4, 12a, owner approval of §3 | none yet | 2F (CI) |
-| 12h | Memory soak on the lab VM: nightly 2 h and weekly 24 h, the long-horizon check behind 12e and 12f | 12g | none yet | 2F (CI) |
+| # | Slice | Lines (est.) | Depends on | Issue | Review |
+|---|---|---|---|---|---|
+| 1 | Baseline harness: a measuring tool that attaches to a process and writes `agent-bridge.efficiency/1` (CPU, threads, wakeups, memory, control process, quiet check). Tests with a synthetic idle and a synthetic busy child | 350 | none | #2294 | 2F (new project file) |
+| 2 | #2283: `KeepAwakeService` awaits to the due time; no scheduler when off or not a Dev Box; prompt stop | 150 | none (in flight) | #2283 | 2F |
+| 3a | Host meter: a counting `TimeProvider` (timers created and fired, per owner), allocated bytes and GC counts, in the host's composition; read over the local pipe's diagnostics | 300 | 1 | none yet | 2F |
+| 3b | App meter: the same counting `TimeProvider`, allocation and GC counts in the desktop app's composition, readable by slice 1's tool | 150 | 3a | none yet | 1F |
+| 3c | Network meter: bytes and messages per endpoint role in the host and the app, keepalive frames counted apart | 350 | 3a, 3b | none yet | 2F (the wire) |
+| 3d | Active-session driver: the scripted agent and attached viewer of §2.1, reused by slice 12e's cycles | 300 | 1 | none yet | 1F |
+| 4 | First baseline: host, app and PWA, idle and active (§2.1), on the laptop and VM classes, before and after slice 2; #2284 on the reported version; mark each row of §6.1 verified or cleared, starting from #2295's host audit; 10 short-form runs per hosted platform to check §5.1's CPU margin and memory ceilings; commit the numbers in `docs/design/efficiency-baseline.md` (§2.5) and replace §3's, still PROPOSAL | 250 | 1, 2, 3a, 3b, 3c, 3d | none yet | 1F (docs) |
+| 5 | Host: the sign-in sweep timer only while a flow is open (H2) | 250 | 3a | #2297 | 2F (credentials) |
+| 6 | Host: discovery driven by watcher and process-exit events, with a slow safety pass (H3) | 350 | 3a, 4 | #2296 | 2F |
+| 7a | Host: process-load sampling only while a consumer needs it (H5) | 350 | 3a, 4 | #2298 | 2F |
+| 7b | Host: the hook intake safety sweep backs off when idle (H4) | 250 | 3a, 4 | #2301 | 2F |
+| 7c | Host: the usage monitor awaits its next due probe instead of a 15 s tick (H6, wakeups only; what it probes and when is slice 10b's) | 200 | 3a, 4 | none yet | 2F |
+| 7d | Host: `HelloCheck` and the restore recorder await due times and stop once settled (H8, H9) | 250 | 3a, 4 | none yet | 2F |
+| 8a | Desktop app: nothing ticks while hidden; relative times redrawn when they change (A1) | 300 | 3b, 4 | none yet | 1F + Creative |
+| 8b | Desktop app: the `Rendering` handler bounded; old hosts asked by event, not every 10 s (A2, A3) | 200 | 8a | none yet | 1F + Creative |
+| 9a | PWA: no timer while hidden in the delegates view or any other view (P2); clock-counted tests | 300 | 1 | #2300 | 1F + Creative |
+| 9b | PWA: fleet changes pushed, with a slow safety probe instead of the 60 s probe (P1) | 350 | 9a | none yet | 2F (the wire) + Creative |
+| 10a | Network: one keepalive side (H10) | 150 | 3c, 4 | none yet | 2F (the wire) |
+| 10b | Network: usage probes by change rather than period (H6), with #2225's release hints | 300 | 7c, 10a; #2225 slices 3 to 5 | none yet | 2F (wire, update path) |
+| 10c | Network: peer usage by change rather than a 5-minute ask of each peer (H7) | 350 | 10b | none yet | 2F (the wire) |
+| 11a | Per-PR gate, host: the committed budget file, and the host idle timer count on the stepping fake clock (§5), its ceiling starting at today's counts; catalog row | 300 | 2, 3a | none yet | 2F (CI) |
+| 11b | Per-PR gate, app: idle timer count for the app's visible and hidden compositions, hidden at zero | 200 | 3b, 8a, 11a | none yet | 2F (CI) |
+| 11c | Per-PR gate, PWA: the hidden-zero test across every view: after its rest, no timer fires and no frame is sent | 250 | 9a, 11a | none yet | 2F (CI) |
+| 11d | Per-PR gate, payloads: a byte budget per message type, checked over the protocol vectors | 250 | 11a | none yet | 2F (CI, wire) |
+| 12a1 | Per-PR real-clock idle gate, CPU verdict: reads short-form samples and applies the spin ceiling, margin, one rerun and "not measured" (§5.1); margins and the spin multiple added to the budget file; tests on recorded samples. Until the owner approves §3, it fails only over the spin ceiling and reports the budget comparison | 300 | 1, 11a | none yet | 2F (CI) |
+| 12a2 | Per-PR real-clock idle gate, host job: the `ci.yml` job on Linux and Windows with its catalog row and path filter (§5.1), running the host's short form through 12a1; a line in quality/perf.md pointing to it | 250 | 12a1 | none yet | 2F (CI) |
+| 12b | Per-PR real-clock idle gate, desktop app CPU: the Windows job measures the app hidden, then visible, beside the host | 200 | 8a, 12a2 | none yet | 2F (CI) |
+| 12c | Per-PR real-clock idle gate, network: host and app messages, bytes, keepalive frames and requests from the meter, with §5.1's tolerance, and each observed message against its type's byte budget | 350 | 3c, 12a2, 12b | none yet | 2F (CI, the wire) |
+| 12d | Per-PR real-clock idle gate, PWA: visible main-thread CPU and frames, and the hidden verdict of §5.1 (exact zero counts after rest, CPU held to the noise floor), in the Linux job | 350 | 9a, 11c, 12a2 | none yet | 2F (CI) |
+| 12e | Per-PR memory verdict, host: the activity cycle (driven by 3d), 10 samples at rest, growth and steady verdicts, the control, one rerun on the same process and "not measured" (§5.1); cycle-growth ceilings and the memory margin added to the budget file. Failing first: `Memory_verdict_fails_when_growth_stays_over_its_ceiling_through_the_rerun`, beside `Memory_verdict_passes_when_a_one_time_cache_stops_growing_in_the_rerun` and `Memory_verdict_reports_not_measured_when_the_control_moves` | 350 | 3d, 12a2 | none yet | 2F (CI) |
+| 12f | Per-PR memory verdict, app and PWA: their cycle steps, and covering each only when the change reaches its paths. Failing first: `Memory_phase_covers_the_app_only_when_the_change_reaches_its_paths` and `Pwa_memory_cycle_fails_when_the_js_heap_keeps_growing` | 300 | 12b, 12d, 12e | none yet | 2F (CI) |
+| 12g | Nightly idle budget on the lab VM (ring 3), full form with the rolling-median check, the failure issue, and the report row; the only input to the ratchet | 300 | 4, 12a1, owner approval of §3 | none yet | 2F (CI) |
+| 12h | Memory soak on the lab VM: nightly 2 h and weekly 24 h, the long-horizon check behind 12e and 12f | 250 | 12g | none yet | 2F (CI) |
+| 12i | Nightly active-session scenario (§2.1) against §3's per-session network row, median of 5, and its report row | 250 | 3d, 12g | none yet | 2F (CI) |
 
-**Order.** 1 and 2 start now, in parallel; 9 can start once 1 lands. Then 3a, 3b and 3c, then 4
-(baseline, building on #2295's host audit). Then the host fixes 5, 6 and 7a to 7d in parallel (5
-needs only 3a). Then 8 (it needs 4's desktop attribution), then 10. Gates: 11a can land as soon as
-2 and 3a do, with today's counts as its ceiling, and each host fix lowers its own count in the
-budget file in the same PR. 11b waits for 8 and 11c for 9, since neither hidden-zero check can pass
-before those fixes; 11d needs only 11a. The per-PR real-clock gate follows the same rule: 12a can
-land right after 11a, failing pull requests on a spin from the start, and judges the budget plus
-margin once the owner approves §3; 12b waits for 8, so the app is not held to a hidden spin
-ceiling of 3 s/min while its 1 s tick (A1) still runs; 12c and 12d follow. The memory verdict
-follows the same pattern: 12e can land right after 12a, failing a pull request at once on growth
-of 10 times the ceiling, and judges the ceiling and steady budget once the owner approves §3; 12f
-follows 12b and 12d. Then the nightly 12g and the soaks in 12h.
+**Order.** 1 and 2 start now, in parallel; 9a can start once 1 lands, and 9b after it. Then 3a to
+3d, then 4 (baseline, building on #2295's host audit). Then the host fixes 5, 6 and 7a to 7d in
+parallel (5 needs only 3a). Then 8a and 8b (they need 4's desktop attribution), then 10a to 10c.
+Gates: 11a can land as soon as 2 and 3a do, with today's counts as its ceiling, and each host fix
+lowers its own count in the budget file in the same PR. 11b waits for 8a and 11c for 9a, since
+neither hidden-zero check can pass before those fixes; 11d needs only 11a. The per-PR real-clock
+gate follows the same rule: 12a1 and 12a2 can land right after 11a, failing pull requests on a
+spin from the start, and judge the budget plus margin once the owner approves §3; 12b waits for
+8a, so the app is not held to a hidden spin ceiling of 3 s/min while its 1 s tick (A1) still runs;
+12c and 12d follow. The memory verdict follows the same pattern: 12e can land right after 12a2,
+failing a pull request at once on growth of 10 times the ceiling, and judges the ceiling and
+steady budget once the owner approves §3; 12f follows 12b and 12d. Then the nightly 12g and 12i,
+and the soaks in 12h.
 
 ## 8. Open question for the owner
 
