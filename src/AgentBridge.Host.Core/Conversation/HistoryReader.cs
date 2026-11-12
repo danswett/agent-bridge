@@ -86,6 +86,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
     {
         public long From { get; set; } = End;
         public bool Unknown { get; set; }
+        public bool Queued { get; set; }
     }
 
     sealed class Pass(HistoryReader reader, SafeFileHandle file, string sessionId, HistoryDialect dialect, HistoryContext context, IReadOnlySet<string> agentTurns, CancellationToken cancellation)
@@ -140,7 +141,8 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             // consumes it. Include that prompt to recover the older page's actual end.
             var scanEnd = dialect is CopilotHistory && before is not null ? NextNewline(end)!.Value : end;
             var (starts, reachedStart) = Back(scanEnd, want + (scanEnd != end ? 1 : 0), boundary: scanEnd != end ? end : null);
-            if (scanEnd != end && starts.Count > 0) { end = starts[0].From; starts.RemoveAt(0); }
+            var queuedEnd = false;
+            if (scanEnd != end && starts.Count > 0) { queuedEnd = starts[0].Queued; end = starts[0].From; starts.RemoveAt(0); }
             if (starts.Count == 0)
             {
                 if (checkedGrowth && !reachedStart) { return HistoryResult.StaleCursor; }
@@ -172,7 +174,8 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             for (var i = 0; i < built.Count; i++)
             {
                 var spanEnd = SpanEnd(i);
-                var active = spanEnd == last && !Gaps(starts[i].From, spanEnd).Any();
+                var active = spanEnd == last && (i == 0 ? before is null || queuedEnd : starts[i - 1].Queued)
+                    && !Gaps(starts[i].From, spanEnd).Any();
                 turns.Add(built[i].Build(latest: active));
             }
 
@@ -330,7 +333,8 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             var older = false;
             var nextCycle = end;
             var unknownCycle = false;
-            if (copilot && end < length) { nextCycle = NextCycle(end, out unknownCycle); }
+            var nextQueued = true;
+            if (copilot && end < length) { nextCycle = NextCycle(end, out unknownCycle, out nextQueued); }
             var keep = marks.Longest - 1;
             // The first bytes of the line being read that a later chunk held, so a mark split
             // between two chunks is found.
@@ -376,7 +380,12 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                     foreach (var s in pending) { s.From = s.End; s.Unknown = true; cycleGaps.Add(s.Offset); }
                 }
                 // Several prompts queued before one cycle: only the last can own that cycle.
-                for (var i = 1; i < starts.Count; i++) { starts[i].From = Math.Min(starts[i].From, starts[i - 1].From); }
+                for (var i = 1; i < starts.Count; i++)
+                {
+                    if (starts[i].From < starts[i - 1].From) { continue; }
+                    starts[i].From = starts[i - 1].From;
+                    starts[i].Queued &= starts[i - 1].Queued;
+                }
                 return (starts, reached && !older);
             }
 
@@ -423,10 +432,11 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                     {
                         foreach (var s in pending)
                         {
+                            s.Queued = cycle == 1 && nextQueued;
                             if (cycle != 2) { s.From = cycle == 3 ? s.End : nextCycle; s.Unknown = cycle == 3 || unknownCycle; }
                         }
                         pending.Clear();
-                        if (cycle == 1) { nextCycle = lineStart; unknownCycle = false; }
+                        if (cycle == 1) { nextCycle = lineStart; unknownCycle = false; nextQueued = true; }
                         if (cycle == 3) { nextCycle = lineStart; unknownCycle = true; cycleGaps.Add(lineStart); }
                     }
                 }
@@ -503,25 +513,38 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             return true;
         }
 
-        long NextCycle(long from, out bool unknown)
+        long NextCycle(long from, out bool unknown, out bool queued)
         {
             var to = Math.Min(length, from + Math.Min(b.TurnBytes, Math.Max(0, b.ScanBytes - scanned)));
             var next = to;
             var found = false;
             var limited = false;
+            var idle = false;
+            var nextQueued = true;
             Forward(from, to, (line, offset) =>
             {
                 scanned += line.Length + 1;
-                if (line.Span.IndexOf("\"assistant.turn_start\""u8) < 0) { return true; }
+                if (!TurnMarks.CopilotHistory.MayStart(line.Span)) { return true; }
                 if (!Charge(line.Length)) { limited = true; next = offset; cycleGaps.Add(offset); return false; }
                 using var doc = Parse(line);
                 if (doc is null) { limited = true; next = offset; cycleGaps.Add(offset); return false; }
-                if (Json.Str(doc.RootElement, "agentId") is { Length: > 0 } || Json.Str(doc.RootElement, "type") != "assistant.turn_start") { return true; }
+                if (Json.Str(doc.RootElement, "agentId") is { Length: > 0 }) { return true; }
+                var type = Json.Str(doc.RootElement, "type");
+                if (type is "assistant.turn_end" or "abort" or "session.resume" or "session.shutdown") { idle = true; return true; }
+                if (idle && type == "user.message" && dialect.Start(doc.RootElement) is not null)
+                {
+                    next = NextNewline(offset)!.Value;
+                    nextQueued = false;
+                    found = true;
+                    return false;
+                }
+                if (type != "assistant.turn_start") { return true; }
                 next = offset;
                 found = true;
                 return false;
             }, dropped: (_, offset) => { limited = true; next = offset; cycleGaps.Add(offset); return false; });
             unknown = limited || (!found && to < length);
+            queued = nextQueued;
             return next;
         }
 

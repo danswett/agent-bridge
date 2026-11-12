@@ -173,6 +173,27 @@ public class HistoryTests
         Assert.Equal(JsonSerializer.Serialize(together[0], ProtocolJson.Options), JsonSerializer.Serialize(earlier, ProtocolJson.Options));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_idle_prompt_at_end_of_file_closes_the_previous_turns_work_on_every_page(bool queuedBeforeIdle)
+    {
+        await using var s = new Copilot_();
+        var lines = new List<string> { Copilot.User("Owner", 1) };
+        if (queuedBeforeIdle) { lines.Add(Copilot.TurnStart(2)); }
+        lines.Add(Copilot.ToolStart("ask", "ask_user", new { message = "Which?", requestedSchema = new { properties = new { x = new { type = "string" } } } }, 3));
+        if (queuedBeforeIdle) { lines.AddRange([Copilot.User("Queued", 4), Copilot.TurnEnd(5)]); }
+        lines.Add(Copilot.User("Idle prompt", 6));
+        await s.After([.. lines]);
+
+        var whole = (await s.Page()).Turns!;
+        Assert.Equal(ToolStatus.Failed, whole[0].Parts.Single(p => p.Tool is not null).Tool!.Status);
+        Assert.Equal(QuestionOutcome.Cancelled, whole[0].Parts.Single(p => p.Question is not null).Outcome);
+        var newest = await s.Page(limit: queuedBeforeIdle ? 2 : 1);
+        var earlier = (await s.Page(newest.Before, limit: 1)).Turns!.Single();
+        Assert.Equal(JsonSerializer.Serialize(whole[0], ProtocolJson.Options), JsonSerializer.Serialize(earlier, ProtocolJson.Options));
+    }
+
     // Found rebasing #686 onto #841: activity shows the CLI's turn-error notice redacted (#840),
     // but history read the same message's content as written, so an earlier turn's notice showed
     // what the latest turn's hid.
