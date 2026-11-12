@@ -23,7 +23,9 @@ export function readSessionLoad(raw) {
   const read = { session, agent: enumOf(field(data, 'agent'), ['agency', 'direct', 'copilot', 'claude', 'codex'], 'other'),
     state: stateOf(field(data, 'state'), true), ...fields(data, { processes: int32, cpuPercent: Number.isFinite, workingSetBytes: int64, handles: int32 }) };
   const handleKind = field(data, 'handleKind');
-  if (typeof handleKind === 'string') { read.handleKind = enumOf(handleKind, ['handles', 'fds'], 'other'); }
+  if (typeof handleKind === 'string' && wellFormed(handleKind) === handleKind) {
+    read.handleKind = enumOf(handleKind, ['handles', 'fds'], 'other');
+  }
   return read;
 }
 

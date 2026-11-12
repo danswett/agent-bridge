@@ -48,6 +48,10 @@ test('malformed nested records and strict session identities are omitted without
     sessions: [{ session: 's-1', agent: 'other', state: 'unavailable', handleKind: 'other' }] });
   assert.deepEqual(readers.readMachineLoad({ cpu: {}, memory: {}, unattributed: {} }),
     { state: 'unavailable', sessions: [], cpu: {}, memory: {}, unattributed: {} });
+  for (const handleKind of ['\uD800', '\uDC00']) {
+    assert.deepEqual(readers.readSessionLoad({ session: 's-1', handleKind }),
+      { session: 's-1', agent: 'other', state: 'unavailable' });
+  }
   for (const read of [readers.readMachineLoad, readers.readSessionLoad, readers.readMachineLoadCpu,
     readers.readMachineLoadMemory, readers.readUnattributedLoad]) {
     for (const raw of [null, [], 42, 'load']) { assert.equal(read(raw), null); }
