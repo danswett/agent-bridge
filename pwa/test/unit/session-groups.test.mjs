@@ -251,8 +251,10 @@ test('empty groups show only without narrowing and collapsed unread marks exclud
   const updated = rows.map((e) => ({ ...e, session: { ...e.session, updatedAt: '2026-11-11T12:00:00Z', activity: { responseTurn: 'after' } } }));
   let entries = o.arrange(updated).sessions;
   assert.equal(o.groupRows(entries).groups[0].unread, true);
+  assert.equal(o.groupRows(entries).groups[0].unreadCount, 1);
   o.markSeen(key('a'), updated[0].session.activity.responseTurn);
   assert.equal(o.groupRows(entries).groups[0].unread, false);
+  assert.equal(o.groupRows(entries).groups[0].unreadCount, 0);
   assert.equal(o.groupRows(entries).groups.length, 2);
   assert.equal(o.groupRows(entries, { showEmpty: false }).groups.length, 1);
   assert.equal(o.groupRows(entries, { filtered: true, matches: () => false }).groups.length, 0);

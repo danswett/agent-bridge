@@ -715,21 +715,20 @@ body[data-conn="busy"] .sessions, body[data-conn="warn"] .sessions, body[data-co
 .list-group { margin: var(--ab-space-3) 0 var(--ab-space-1); padding: 0 var(--ab-space-3); font-size: var(--type-section); line-height: var(--type-section-line); font-weight: 600; color: var(--ab-text2); }
 .list-group:first-child { margin-top: 0; }
 .session-group-toggle { display: flex; align-items: center; gap: var(--ab-space-2); min-height: 44px; padding: 0 var(--ab-space-3); border: 0; background: none; color: var(--ab-text); font: inherit; font-weight: 600; text-align: left; cursor: pointer; min-width: 0; }
-.group-name { overflow-wrap: anywhere; min-width: 0; }
-.group-count { color: var(--ab-text2); font-weight: 400; }
+.group-label { display: flex; align-items: baseline; gap: var(--ab-space-2); min-width: 0; }
+.group-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.group-unread { color: var(--ab-bridge); font-weight: 600; white-space: nowrap; flex: none; }
+.group-count { color: var(--ab-text2); font-weight: 400; margin-left: auto; white-space: nowrap; flex: none; }
 .group-chevron { width: 16px; height: 16px; flex: none; color: var(--ab-text2); transition: transform var(--ab-motion-disclosure-duration) var(--ab-motion-disclosure-ease); }
 .session-group-toggle[aria-expanded="true"] .group-chevron { transform: rotate(90deg); }
 .group-needs { display: flex; align-items: center; gap: var(--ab-space-2); color: var(--ab-needs-text); font-weight: 400; }
-.session-group-toggle > :is(.group-needs, .unread-dot) { margin-left: auto; }
+.session-group-toggle > .group-needs { flex: none; }
 @media (min-width: 760px) and (any-pointer: fine) { .session-group-toggle { min-height: 36px; } }
 .ended-group > summary { cursor: pointer; color: var(--ab-text2); font-weight: 600; font-size: var(--type-section); line-height: var(--type-section-line); min-height: var(--tap); padding: 0 var(--ab-space-3); display: flex; align-items: center; }
 .ended-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
 .ended { display: flex; flex-wrap: wrap; gap: 0 var(--ab-space-2); padding: var(--ab-space-2) var(--ab-space-3) var(--ab-space-2) calc(var(--ab-space-3) + 16px + var(--ab-space-3)); color: var(--ab-text2); font-size: var(--type-row); line-height: var(--type-row-line); }
 .ended-title { color: var(--ab-text); overflow-wrap: anywhere; min-width: 0; }
 .ended-meta { font-size: var(--type-meta); }
-/* The "new activity" dot: 6 px, Bridge, at the title's trailing edge. */
-.unread-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ab-bridge); flex: none; }
-@media (forced-colors: active) { .unread-dot { background: Highlight; forced-color-adjust: none; } }
 /* Needs you · N (ui.md §6.1, #165): every pending question, above the list and apart from it, in
    the Needs you role, each entry marked with its glyph (#178). */
 .needs-you { margin: 8px 0 14px; padding: 10px 12px; border: 1px solid var(--ab-needs); border-radius: var(--radius); background: var(--ab-needs-fill); }
@@ -910,8 +909,8 @@ html[data-touch-only-keys]:not([data-keyboard-seen]) .row-menu-key { display: no
 @media (forced-colors: active) { .row-menu-sheet { border-color: CanvasText; } }
 
 /* ---- a session's row (ui.md §6.1) ----
-   Two lines: the glyph on line 1, the title, at most two facts under it, and the age or the new
-   activity dot at the trailing edge. A grid item is min-width:auto, so a long unbroken title or
+   Two lines: the glyph on line 1, the title, at most two facts under it, and the age at the
+   trailing edge. A grid item is min-width:auto, so a long unbroken title or
    path would otherwise make the row wider than the screen. */
 .session { position: relative; min-width: 0; border-radius: var(--ab-radius-control); }
 .row-main {
@@ -924,8 +923,11 @@ html[data-touch-only-keys]:not([data-keyboard-seen]) .row-menu-key { display: no
 .row-glyph { grid-column: 1; grid-row: 1; display: flex; align-items: center; height: var(--type-row-line); }
 .row-text { grid-column: 2; grid-row: 1; min-width: 0; display: grid; }
 .row-line1 { display: flex; align-items: center; min-width: 0; }
-.row-title { min-width: 0; font-size: var(--type-row); line-height: var(--type-row-line); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.session.unread .row-title { font-weight: 600; }
+.row-title { min-width: 0; font-size: var(--type-row); line-height: var(--type-row-line); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ab-text2); font-weight: 400; }
+.session.unread .row-title { color: var(--ab-text); font-weight: 600; }
+.session:has(> .row-main .row-glyph [data-glyph="needs"]) .row-title { color: var(--ab-text); }
+.row-title, .row-age { transition: color var(--ab-motion-value-duration) var(--ab-motion-value-ease); }
+@media (prefers-reduced-motion: reduce) { .row-title, .row-age { transition: none; } }
 /* Line 2: one line, cut short at its end; a separator never starts it. */
 .row-facts {
   min-width: 0; color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-meta-line);
@@ -933,12 +935,22 @@ html[data-touch-only-keys]:not([data-keyboard-seen]) .row-menu-key { display: no
 }
 .row-status[data-tone="needs"] { color: var(--ab-needs-text); }
 .row-status[data-tone="agent"] { color: var(--ab-agent-text); }
-.row-age {
+.row-age, .row-new {
   grid-column: 3; grid-row: 1; color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-row-line);
-  font-variant-numeric: tabular-nums; white-space: nowrap;
+  width: 7em; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 400;
 }
-.session.unread .row-age { display: none; }
-.session.unread .unread-dot { margin-left: auto; padding-left: var(--ab-space-2); box-sizing: content-box; background-clip: content-box; }
+.session.unread .row-age { color: var(--ab-bridge); font-weight: 600; }
+@media (prefers-color-scheme: light) and (forced-colors: none) {
+  .session.unread.selected .row-age,
+  .session.unread > .row-main:is(:hover, :active) .row-age { color: var(--ab-text); }
+}
+.row-new { display: none; }
+@media (forced-colors: active) {
+  .row-title, .session.unread .row-title { color: WindowText; }
+  .session.unread .row-age { display: none; }
+  .session.unread .row-new { display: block; font-weight: 600; }
+  .row-new, .group-unread { color: Highlight; forced-color-adjust: none; }
+}
 /* Selected: a quiet fill and the 3 x 16 Bridge pill at the leading edge, never a status colour. */
 .session.selected .row-main { background: var(--ab-selected); }
 .row-main { position: relative; }

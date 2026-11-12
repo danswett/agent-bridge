@@ -1,7 +1,7 @@
 // The person's order (#164, ui.md §1 principle 2 and §6.1), in demo mode: rows never move on
 // their own; Alt+Up/Down, a drag by the handle and the row menu (a long press on a phone, a
 // right-click) move them and pin them, and every move survives a reload; a new session lands at
-// the top once; a row not open with news gets the dot; ended sessions fold into Ended · N; and the
+// the top once; a row not open with news gets the unread age; ended sessions fold into Ended · N; and the
 // sort menu offers Most recent and Machine.
 import { test, expect } from '@playwright/test';
 import { open, view, selectSort } from './nav.mjs';
@@ -241,29 +241,30 @@ for (const touch of [false, true]) {
   });
 }
 
-test('Copilot, Claude and Codex rows get new message dots only for new response turns', async ({ page }) => {
+test('Copilot, Claude and Codex rows get unread ages only for new response turns', async ({ page }) => {
   await openDemo(page);
   for (const id of [COPILOT, CLAUDE, CODEX]) {
     await open(page, DELEGATING);
     const row = card(page, id);
-    await expect(row.locator('.unread-dot')).toHaveCount(0);
+    await expect(row).not.toHaveClass(/unread/);
     await upsert(page, id, { updatedAt: later(), status: 'working', activity: { userMessage: 'Next prompt', currentTool: { name: 'test' } } });
     await expect(row).toHaveAttribute('data-status', 'working');
-    await expect(row.locator('.unread-dot')).toHaveCount(0);
+    await expect(row).not.toHaveClass(/unread/);
     await upsert(page, id, { activity: { turn: 'reply-z', response: 'A new reply', responseTurn: 'reply-z' } });
-    await expect(row.locator('.unread-dot')).toBeVisible();
+    await expect(row).toHaveClass(/unread/);
     await expect(row.locator('.row-main')).toHaveAccessibleName(/New message/);
-    await expect(row.locator('.row-age')).toBeHidden();
+    await expect(row.locator('.row-age')).toBeVisible();
+    await expect(row.locator('.row-age')).toHaveCSS('font-weight', '600');
     expect(await row.locator('.row-title').evaluate((e) => getComputedStyle(e).fontWeight)).toBe('600');
     await open(page, id);
-    await expect(row.locator('.unread-dot')).toHaveCount(0);
+    await expect(row).not.toHaveClass(/unread/);
     await open(page, DELEGATING);
     await upsert(page, id, { updatedAt: later() });
-    await expect(row.locator('.unread-dot')).toHaveCount(0);
+    await expect(row).not.toHaveClass(/unread/);
     await upsert(page, id, { activity: { turn: 'reply-a', responseTurn: 'reply-a' } });
-    await expect(row.locator('.unread-dot')).toBeVisible();
+    await expect(row).toHaveClass(/unread/);
     await page.evaluate((id) => window.agentBridgeDemo.page.showSession(id), id);
-    await expect(row.locator('.unread-dot')).toHaveCount(0);
+    await expect(row).not.toHaveClass(/unread/);
   }
   expect(await order(page)).toEqual(FIRST);
 });
@@ -654,12 +655,12 @@ test('news on the open session is read after it has been on screen for a second,
   await page.clock.runFor(1500);
   await upsert(page, CLAUDE, { updatedAt: later(), activity: { turn: 'reply-on-screen', responseTurn: 'reply-on-screen' } });
   await page.clock.runFor(50);
-  await expect(card(page, CLAUDE).locator('.unread-dot')).toHaveCount(1);
+  await expect(card(page, CLAUDE)).toHaveClass(/unread/);
   const before = await order(page);
   await page.clock.runFor(900);
-  await expect(card(page, CLAUDE).locator('.unread-dot')).toHaveCount(1);
+  await expect(card(page, CLAUDE)).toHaveClass(/unread/);
   await page.clock.runFor(100);
-  await expect(card(page, CLAUDE).locator('.unread-dot')).toHaveCount(0);
+  await expect(card(page, CLAUDE)).not.toHaveClass(/unread/);
   expect(await order(page)).toEqual(before);
 });
 });
@@ -674,8 +675,8 @@ test('news that comes while the window is not focused is not read until it is fo
   await page.evaluate(() => { document.hasFocus = () => false; window.dispatchEvent(new Event('blur')); });
   await upsert(page, CLAUDE, { updatedAt: later(), activity: { turn: 'reply-unfocused', responseTurn: 'reply-unfocused' } });
   await page.clock.runFor(3000);
-  await expect(card(page, CLAUDE).locator('.unread-dot')).toHaveCount(1);
+  await expect(card(page, CLAUDE)).toHaveClass(/unread/);
   await page.evaluate(() => { document.hasFocus = () => true; window.dispatchEvent(new Event('focus')); });
   await page.clock.runFor(1100);
-  await expect(card(page, CLAUDE).locator('.unread-dot')).toHaveCount(0);
+  await expect(card(page, CLAUDE)).not.toHaveClass(/unread/);
 });

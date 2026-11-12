@@ -69,7 +69,7 @@ const tokens = (page) => page.evaluate(() => {
     return m ? Number(m[1]) * (m[2] === 's' ? 1000 : 1) : 0;
   };
   const out = {};
-  for (const entry of ['push', 'pane', 'tab', 'disclosure', 'list-item', 'glyph', 'activity-dot', 'selection', 'press', 'acknowledge', 'toast', 'menu', 'scroll', 'reorder']) {
+  for (const entry of ['push', 'pane', 'tab', 'disclosure', 'list-item', 'glyph', 'selection', 'press', 'acknowledge', 'toast', 'menu', 'scroll', 'reorder']) {
     out[entry.replace(/-(\w)/g, (_, c) => c.toUpperCase())] = [ms(`--ab-motion-${entry}-duration`), ms(`--ab-motion-${entry}-exit-duration`)].filter((v) => v > 0);
   }
   out.crossFade = ms('--ab-motion-cross-fade');
@@ -111,7 +111,7 @@ async function conversationReady(v, turns = 2) {
 }
 
 // The motions a person sets off on a desktop: choosing a row, its menu, a move, a disclosure,
-// the inspector, and the news that comes (a glyph changing, a row arriving and going, a dot).
+// the inspector, and the news that comes (a glyph changing, a row arriving and going, an unread age).
 async function desktopTour(page) {
   await row(page, CLAUDE).locator('.row-main').click();
   await expect(row(page, CLAUDE)).toHaveClass(/selected/);
@@ -129,7 +129,7 @@ async function desktopTour(page) {
   await expect(copilot.locator('.inspector')).toBeVisible();
   await upsert(page, CODEX, { status: 'working', statusSince: later(), updatedAt: later(), activity: { turn: 'motion-reply', responseTurn: 'motion-reply', response: 'A new reply.' } });
   await expect(row(page, CODEX).locator('.glyph')).toHaveAttribute('data-glyph', 'working');
-  await expect(row(page, CODEX).locator('.unread-dot')).toBeVisible();
+  await expect(row(page, CODEX)).toHaveClass(/unread/);
   await upsert(page, 'demo-motion', { agent: 'copilot', title: 'Arrives and goes', status: 'idle', startedAt: later(), updatedAt: later() });
   await expect(row(page, 'demo-motion')).toHaveCount(1);
   await page.evaluate(() => window.agentBridgeDemo.remove('demo-motion'));
@@ -146,7 +146,7 @@ test('nothing moves as the app starts, and every motion a desktop then draws is 
   const t = await tokens(page);
   const drawn = await motions(page);
   const ids = new Set(drawn.map((m) => m.id));
-  for (const entry of ['selection', 'menu', 'reorder', 'disclosure', 'pane', 'glyph', 'listItem', 'activityDot']) {
+  for (const entry of ['selection', 'menu', 'reorder', 'disclosure', 'pane', 'glyph', 'listItem']) {
     expect(ids, `drew ${entry}`).toContain(`ab-motion-${entry}`);
   }
   for (const m of drawn) {

@@ -228,7 +228,7 @@ export class SessionListView {
         card.setPinned(isPinned);
         card.handle.setAttribute('aria-label', `Move ${titleOf(card)}`);
         card.setStale(this.stale(hostId));
-        // On screen, its news is seen as it comes; otherwise its row gets the dot. A session's
+        // On screen, its news is seen as it comes; otherwise its row gets the unread age. A session's
         // view stays on screen while search hides its row, so this comes before search's say.
         const responseTurn = s.activity?.responseTurn;
         if (card.selected) { reading = true; this.dwell.watch(key, responseTurn, this.order.unread(key, responseTurn) && this.viewing() && this.awake()); }
@@ -351,10 +351,11 @@ export class SessionListView {
     let head = this.#groups.get(group.id);
     if (!head) {
       head = h('button', { type: 'button', class: 'session-group-toggle', dataset: { group: group.id } },
-        icon('chevron', 'group-chevron'), h('span', { class: 'group-name' }),
+        icon('chevron', 'group-chevron'),
+        h('span', { class: 'group-label' }, h('span', { class: 'group-name' }),
+          h('span', { class: 'group-unread', 'aria-hidden': 'true', hidden: true })),
         h('span', { class: 'group-count' }),
-        h('span', { class: 'group-needs', hidden: true }, glyph('needs'), h('span')),
-        h('span', { class: 'unread-dot', 'aria-hidden': 'true', hidden: true }));
+        h('span', { class: 'group-needs', hidden: true }, glyph('needs'), h('span')));
       const toggle = (collapsed) => {
         if (this.filter || this.needsOnly) { return; }
         this.order.setGroupCollapsed(group.id, collapsed);
@@ -365,14 +366,17 @@ export class SessionListView {
       this.#groups.set(group.id, head);
     }
     const needs = !group.expanded && group.needs ? `${group.needs} needs you` : '';
+    const unread = !group.expanded && !needs ? group.unreadCount : 0;
     head.setAttribute('aria-expanded', String(group.expanded));
     head.setAttribute('aria-disabled', String(!!(this.filter || this.needsOnly)));
-    head.setAttribute('aria-label', `${group.name}, ${group.count} ${group.count === 1 ? 'session' : 'sessions'}${needs ? `, ${needs}` : !group.expanded && group.unread ? ', New activity' : ''}`);
+    const news = unread ? `${unread} ${unread === 1 ? 'session' : 'sessions'} with new messages` : needs;
+    head.setAttribute('aria-label', `${group.name} group, ${group.expanded ? 'expanded' : 'collapsed'}${news ? `, ${news}` : ''}, ${group.count} ${group.count === 1 ? 'session' : 'sessions'}`);
     head.querySelector('.group-name').textContent = group.name;
     head.querySelector('.group-count').textContent = `\u00b7 ${group.count}`;
     head.querySelector('.group-needs').hidden = !needs;
     head.querySelector('.group-needs > span:last-child').textContent = needs;
-    head.querySelector('.unread-dot').hidden = group.expanded || !!needs || !group.unread;
+    head.querySelector('.group-unread').hidden = !unread;
+    head.querySelector('.group-unread').textContent = unread ? `${unread} new` : '';
     return head;
   }
 

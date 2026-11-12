@@ -4,7 +4,7 @@ const COPILOT = '02d9e5d5-6b35-49bd-b083-39572fbff648';
 const CLAUDE = '6f1c2b7e-claude-example';
 const CODEX = '019a1b2c-codex-example';
 const row = (page, id) => page.locator(`.session[data-id="${id}"]`);
-const header = (page) => page.getByRole('button', { name: /^Team, 2 sessions/ });
+const header = (page) => page.getByRole('button', { name: /^Team group,.*2 sessions$/ });
 
 async function setup(page) {
   await page.goto('?demo=1&static=1');
@@ -55,7 +55,7 @@ test('group disclosure keys toggle and search opens without changing the saved c
   }
   await toggle.press('ArrowLeft');
   await page.evaluate(() => window.agentBridgeDemo.page.view.setFilter('Refactor the'));
-  const found = page.getByRole('button', { name: /^Team, 1 session/ });
+  const found = page.getByRole('button', { name: /^Team group,.*1 session$/ });
   await expect(found).toHaveAttribute('aria-expanded', 'true');
   await found.evaluate((el) => el.click());
   await expect(found).toHaveAttribute('aria-expanded', 'true');
@@ -70,7 +70,7 @@ test('Needs you opens the group temporarily and unread is marked only while coll
   const toggle = header(page);
   await toggle.click();
   await page.evaluate(() => window.agentBridgeDemo.page.view.setNeedsOnly(true));
-  const needs = page.getByRole('button', { name: /^Team, 1 session/ });
+  const needs = page.getByRole('button', { name: /^Team group,.*1 session$/ });
   await expect(needs).toHaveAttribute('aria-expanded', 'true');
   await needs.press('ArrowLeft');
   await expect(needs).toHaveAttribute('aria-expanded', 'true');
@@ -83,9 +83,10 @@ test('Needs you opens the group temporarily and unread is marked only while coll
     d.upsert({ ...other, updatedAt: new Date(Date.now() + 1000).toISOString(), activity: { ...other.activity, responseTurn: 'group-unread' } });
   });
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-  await expect(toggle.locator('.unread-dot')).toBeVisible();
+  await expect(toggle.locator('.group-unread')).toBeVisible();
+  await expect(toggle.locator('.group-unread')).toHaveText('1 new');
   await toggle.click();
-  await expect(toggle.locator('.unread-dot')).toBeHidden();
+  await expect(toggle.locator('.group-unread')).toBeHidden();
 });
 
 test('focus returns to the group when its visible needs-you row becomes hidden', async ({ page }) => {
@@ -179,7 +180,7 @@ for (const width of [1440, 390]) {
       await expect.poll(() => groupRows(page, 'Personal')).toEqual([CLAUDE, COPILOT]);
       await reload(page);
       await expect.poll(() => groupRows(page, 'Personal')).toEqual([CLAUDE, COPILOT]);
-      await page.getByRole('button', { name: /^Team, 0 sessions/ }).click();
+      await page.getByRole('button', { name: /^Team group,.*0 sessions$/ }).click();
       await chooseGroup(page, CLAUDE);
       await page.evaluate(() => {
         window.groupMotions = [];
@@ -188,7 +189,7 @@ for (const width of [1440, 390]) {
       });
       await page.getByRole('menuitemradio', { name: 'Team', exact: true }).click();
       await expect(row(page, CLAUDE)).toHaveCount(0);
-      await expect(page.getByRole('button', { name: /^Team, 1 session/ })).toBeFocused();
+      await expect(page.getByRole('button', { name: /^Team group,.*1 session$/ })).toBeFocused();
       expect(await page.evaluate(() => window.groupMotions.some((a) => a.id === 'ab-motion-listItem'))).toBe(true);
       expect(await page.evaluate((id) => window.groupMotions.some((a) => a.id === 'ab-motion-shift' && a.effect.target.dataset.id === id), COPILOT)).toBe(true);
     });
@@ -206,7 +207,7 @@ for (const width of [1440, 390]) {
       await name.fill(' Personal ');
       await name.press('Enter');
       await expect(page.locator('.group-name')).toHaveText(['Team', 'Personal']);
-      await expect(page.getByRole('button', { name: /^Personal, 1 session/ })).toHaveAttribute('aria-expanded', 'true');
+      await expect(page.getByRole('button', { name: /^Personal group,.*1 session$/ })).toHaveAttribute('aria-expanded', 'true');
       await expect(row(page, CLAUDE).locator('.row-main')).toBeFocused();
       await reload(page);
       await expect.poll(() => groupRows(page, 'Personal')).toEqual([CLAUDE]);
@@ -246,7 +247,7 @@ for (const width of [1440, 390]) {
       await page.evaluate((id) => window.agentBridgeDemo.remove(id), CLAUDE);
       await expect(page.getByRole('menu')).toHaveCount(0);
       await expect(page.getByRole('dialog')).toHaveCount(0);
-      await expect(page.getByRole('button', { name: /^Team, 1 session/ })).toBeFocused();
+      await expect(page.getByRole('button', { name: /^Team group,.*1 session$/ })).toBeFocused();
     });
 
     test('account cleanup dismisses the group chooser and new-group editor', async ({ page }) => {
