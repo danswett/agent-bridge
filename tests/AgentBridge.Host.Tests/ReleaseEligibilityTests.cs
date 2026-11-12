@@ -82,11 +82,13 @@ public sealed class ReleaseEligibilityTests : IDisposable
         Assert.Equal(2, reads);
     }
 
-    [Fact]
-    public async Task A_failed_policy_commit_retains_the_halt_across_another_writer_and_an_older_answer()
+    [Theory]
+    [InlineData("2348")]
+    [InlineData("2349")]
+    public async Task A_failed_policy_commit_retains_the_halt_across_another_writer_and_an_older_answer(string firstRun)
     {
         var failSave = false;
-        var run = "2348";
+        var run = firstRun;
         var body = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
         var handler = new Handler(uri =>
         {

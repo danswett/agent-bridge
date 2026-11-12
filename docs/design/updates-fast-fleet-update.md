@@ -406,12 +406,10 @@ Slices 5 and 11 come after slice 8 is accepted: no hint-driven or unattended ins
 policy reads. Slices 1, 2, 3 and 8 can start at once; 10 needs only 3. Slices 7 and 9 were split
 because each ran past 400 lines.
 
-**Slice 8 implementation split (#2230, #2234).** 8a (#2230) supplies the authoritative policy
-cache in `ReleaseDiscovery`'s existing file and lock, separate from the relay release list.
-`GitHubHaltListSource` verifies the asset URL, digest and schema; conditional reads are hourly,
-304 renews six-hour freshness, and an older answer cannot replace the stored policy or renew it.
-8b (#2234), after 8a and slice 3, wires offer/download/install boundaries and the signed host
-checks in §4. Slices 5, 9a and 11 require 8b, not just the policy foundation.
+**Slice 8 implementation split.** 8a (#2230) supplies the file/lock policy cache: verified GitHub URL/digest/schema,
+hourly conditional reads and six-hour freshness; neither relay lists nor older replies can clear or renew it.
+8b (#2234), after 8a and slice 3, wires §4's install boundaries and signed host checks.
+Slices 5, 9a and 11 require 8b, not just 8a. Metadata-cap and null-Body follow-ups are in #2246.
 
 ## 10. Later designs (pointers, not v1)
 
