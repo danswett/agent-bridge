@@ -41,8 +41,9 @@ public sealed class AgentAuditLog
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { DefaultIgnoreCondition = JsonIgnoreCondition.Never };
 
     sealed record Line(DateTimeOffset At, string Direction, string Request, string Principal, string[] Chain, string Action,
-        string Target, string Outcome, string Reason, string? DataSha256, int? TextLength);
+        string Target, string Outcome, string Reason, string? DataSha256, int? TextLength, int V = 1, string PreviousSha256 = "");
 
+    static readonly string Genesis = new('0', 64);
     readonly object gate = new();
     readonly string profile;
     readonly TimeProvider time;
@@ -70,13 +71,23 @@ public sealed class AgentAuditLog
             var line = new Line(now, Cap(entry.Direction, MaxField), Cap(entry.Request, MaxField), Cap(entry.Principal, MaxField), chain,
                 Cap(entry.Action, MaxField), Cap(entry.Target, MaxField), Cap(entry.Outcome, MaxField), Cap(entry.Reason, MaxReason),
                 bytes is null ? null : Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), bytes?.Length);
-            var data = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(line, Json) + "\n");
             lock (gate)
             {
                 var folder = PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded");
+                using var folderLock = Lock(folder);
                 var launch = entry.Action == "session.launch";
                 var file = Path.Combine(folder, FileFor(now, launch));
+                if (Files(folder, launch).Any(f => StringComparer.Ordinal.Compare(f, file) > 0)) { throw new IOException("the agent audit clock moved backwards"); }
                 var length = File.Exists(file) ? new FileInfo(file).Length : 0;
+                // Only this file receives a separator; predecessor tails still require LF.
+                var tail = TailHash(length > 0 ? file : null, promoteTail: true);
+                var previousFile = tail.HasLine ? null : Files(folder, launch).LastOrDefault(f => StringComparer.Ordinal.Compare(f, file) < 0);
+                var predecessor = TailHash(previousFile);
+                if (previousFile is not null && !predecessor.HasLine) { throw new IOException("the previous agent audit day has no complete line"); }
+                var previous = tail.HasLine ? tail.Hash : predecessor.Hash;
+                var header = tail.HasLine ? "" : JsonSerializer.Serialize(new { v = 1, previousSha256 = previous }, Json) + "\n";
+                line = line with { PreviousSha256 = header.Length == 0 ? previous : Hash(Encoding.UTF8.GetBytes(header[..^1])) };
+                var data = Encoding.UTF8.GetBytes(header + JsonSerializer.Serialize(line, Json) + "\n");
                 // Include a separator after a torn line, and refuse before creating or changing any file.
                 var torn = length > 0 && EndsWithoutNewline(file);
                 var used = launch ? new DirectoryInfo(folder).EnumerateFiles("launches-*.jsonl").Sum(f => f.Length) : length;
@@ -111,6 +122,105 @@ public sealed class AgentAuditLog
             }
             return false;
         }
+    }
+
+    // The oldest retained header is the pruning anchor. A6 adds a durable head to detect terminal truncation.
+    public (bool Intact, bool LegacyPrefix) Verify(bool launch = false)
+    {
+        var legacy = false;
+        try
+        {
+            lock (gate)
+            {
+                var folder = PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded");
+                using var folderLock = Lock(folder);
+                string? previous = null;
+                var chained = false;
+                foreach (var file in Files(folder, launch))
+                {
+                    var index = 0;
+                    var fragment = false;
+                    foreach (var raw in File.ReadLines(file).SkipLast(new FileInfo(file).Length > 0 && EndsWithoutNewline(file) ? 1 : 0))
+                    {
+                        var reader = new Utf8JsonReader(Encoding.UTF8.GetBytes(raw), isFinalBlock: false, state: default);
+                        using var doc = JsonDocument.TryParseValue(ref reader, out var parsed) ? parsed : null;
+                        // Only the next valid link can prove this fragment was bypassed during crash recovery.
+                        if (doc is null) { if (fragment) { return (false, legacy); } fragment = true; continue; }
+                        if (reader.Read() || reader.BytesConsumed != Encoding.UTF8.GetByteCount(raw)) { return (false, legacy); }
+                        var root = doc.RootElement;
+                        if (!root.TryGetProperty("v", out var version))
+                        {
+                            if (chained || fragment) { return (false, legacy); }
+                            legacy = true;
+                        }
+                        else
+                        {
+                            if (!version.TryGetInt32(out var v) || v != 1 || root.TryGetProperty("action", out _) == (index == 0)
+                                || !root.TryGetProperty("previousSha256", out var link) || link.ValueKind != JsonValueKind.String
+                                || link.GetString() is not { Length: 64 } hash || hash.Any(c => !char.IsAsciiHexDigitLower(c))
+                                || previous is not null && previous != hash) { return (false, legacy); }
+                            chained = true;
+                        }
+                        fragment = false;
+                        previous = Hash(Encoding.UTF8.GetBytes(raw));
+                        index++;
+                    }
+                    if (index == 0 || fragment) { return (false, legacy); }
+                }
+                return (true, legacy);
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
+        { log($"agent audit chain could not be verified: {e.GetType().Name}"); return (false, legacy); }
+    }
+
+    static FileStream Lock(string folder)
+    {
+        var options = new FileStreamOptions { Mode = FileMode.OpenOrCreate, Access = FileAccess.ReadWrite, Share = FileShare.None };
+        if (!OperatingSystem.IsWindows()) { options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite; }
+        return new FileStream(folder + ".lock", options);
+    }
+
+    static IEnumerable<string> Files(string folder, bool launch) =>
+        Directory.EnumerateFiles(folder, $"{(launch ? "launches" : "agents")}-*.jsonl")
+            .Where(f => TryDay(Path.GetFileName(f).Replace("launches-", "agents-", StringComparison.Ordinal), out _)).Order(StringComparer.Ordinal);
+    static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    static (string Hash, bool HasLine) TailHash(string? file, bool promoteTail = false)
+    {
+        if (file is null) { return (Genesis, false); }
+        using var stream = File.OpenRead(file);
+        var end = PreviousNewline(stream, stream.Length);
+        stream.Position = end + 1;
+        if (promoteTail && (stream.ReadByte() is '{' or ' ' or '\t' or '\r'))
+        {
+            var tail = new byte[checked((int)(stream.Length - end - 1))];
+            stream.Position = end + 1;
+            stream.ReadExactly(tail);
+            var reader = new Utf8JsonReader(tail, isFinalBlock: false, state: default);
+            using var doc = JsonDocument.TryParseValue(ref reader, out var parsed) ? parsed : null;
+            if (doc is not null && doc.RootElement.ValueKind == JsonValueKind.Object
+                && !reader.Read() && reader.BytesConsumed == tail.Length) { return (Hash(tail), true); }
+        }
+        if (end < 0) { return (Genesis, false); }
+        var start = PreviousNewline(stream, end) + 1;
+        var bytes = new byte[checked((int)(end - start))];
+        stream.Position = start;
+        stream.ReadExactly(bytes);
+        return (Hash(bytes), true);
+    }
+
+    static long PreviousNewline(FileStream stream, long position)
+    {
+        Span<byte> buffer = stackalloc byte[4096];
+        while (position > 0)
+        {
+            var count = (int)Math.Min(buffer.Length, position);
+            stream.Position = position -= count;
+            stream.ReadExactly(buffer[..count]);
+            var index = buffer[..count].LastIndexOf((byte)'\n');
+            if (index >= 0) { return position + index; }
+        }
+        return -1;
     }
 
     // The folder's DACL is inherited by new files, but a file already there can carry a looser one.
