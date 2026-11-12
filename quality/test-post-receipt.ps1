@@ -48,7 +48,8 @@ try {
     $otherKeyBody = ($otherPem -split "`n")[1].Trim()
 
     $r = Invoke-Script @{}
-    Assert ($r.Exit -ne 0 -and $r.Out -match 'explicit.*KeyPath.*AGENT_BRIDGE_RECEIPTS_KEY_PATH' -and $r.Out -notmatch 'jwt ok') 'two PEMs without a pin are refused clearly'
+    # PowerShell wraps error messages at the console width, including Linux's narrower default.
+    Assert ($r.Exit -ne 0 -and $r.Out -match '(?s)explicit.*KeyPath.*AGENT_BRIDGE_RECEIPTS_KEY_PATH' -and $r.Out -notmatch 'jwt ok') 'two PEMs without a pin are refused clearly'
     Assert (-not $r.Out.Contains($keyBody) -and -not $r.Out.Contains($otherKeyBody) -and $r.Out -notmatch 'PRIVATE KEY') 'an unpinned refusal never prints key material'
 
     $r = Invoke-Script @{} -EnvKey $key
