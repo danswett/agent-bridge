@@ -53,6 +53,7 @@ public sealed class ScriptCallerTests : IDisposable
     [Theory]
     [InlineData(false, "pwsh.exe", false)]
     [InlineData(true, null, false)]
+    [InlineData(true, "", false)]
     [InlineData(true, "copilot.exe", false)]
     [InlineData(true, "claude.exe", false)]
     [InlineData(true, "codex.exe", false)]
@@ -65,6 +66,8 @@ public sealed class ScriptCallerTests : IDisposable
         var ancestry = new ProcessAncestry(image is null ? [] :
             [new PeerProcess(300, Started, "pwsh.exe"), new PeerProcess(100, Started, image)], complete);
         Assert.Null(store.Check(minted.Token, ancestry).Accepted);
+        Assert.Null(store.Check(minted.Token, Outside, agentCaller: true).Accepted);
+        Assert.Null(store.Check(minted.Token, new([new PeerProcess(300, null, "pwsh.exe")], true)).Accepted);
         Assert.NotNull(store.Check(minted.Token, Outside).Accepted);
     }
 
@@ -86,13 +89,15 @@ public sealed class ScriptCallerTests : IDisposable
         var store = Store();
         var channel = new Chan();
         store.Accept(channel, Mint(store).Credential);
-        var handler = LocalApi.Handler(null!, null!, new FixedCallerGuard(new(CallerKind.App, "fixture app")), credentials: store);
+        var lines = new List<string>();
+        var handler = LocalApi.Handler(null!, null!, new FixedCallerGuard(new(CallerKind.App, "fixture app")), credentials: store, log: lines.Add);
         foreach (var now in new[] { Started, Started.AddHours(1) })
         {
             clock.Now = now;
             var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, op, Empty));
             Assert.Contains("fleet.list and fleet.find", refusal.Message);
         }
+        Assert.All(lines, line => Assert.Contains("script:machine1/dispatcher", line));
     }
 
     [Fact]
@@ -137,10 +142,75 @@ public sealed class ScriptCallerTests : IDisposable
         Assert.DoesNotContain("node", reply.GetRawText());
         Assert.Equal(1, Store().Count);
         Assert.Null(store.Of(oldChannel));
+        var handler = LocalApi.Handler(null!, null!, new FixedCallerGuard(new(CallerKind.App, "fixture app")), credentials: store);
+        Assert.Contains("fleet.list and fleet.find", (await Assert.ThrowsAsync<InvalidOperationException>(
+            () => handler(oldChannel, "session.launch", Empty))).Message);
         Assert.Null(Store().Check(old.Token, Outside).Accepted);
         Assert.NotNull(Store().Check(newer.Token, Outside).Accepted);
         Assert.Contains("script:machine1/dispatcher", string.Join("\n",
             Directory.GetFiles(Path.Combine(root, AgentAuditLog.FolderName), "agents-*.jsonl").Select(File.ReadAllText)));
+    }
+
+    [Fact]
+    public async Task A_script_cannot_send_through_the_direct_entry_point()
+    {
+        var store = Store();
+        var channel = new Chan();
+        store.Accept(channel, Mint(store).Credential);
+        var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            AgentBridge.Host.Lite.LiteAgentSend.HandleAsync(store, null, channel, Empty, windows: true));
+        Assert.Contains("fleet.list and fleet.find", refusal.Message);
+    }
+
+    [Fact]
+    public async Task Expiry_during_a_fleet_read_refuses_the_result_without_retiring_the_old_hash()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var store = Store();
+        Mint(store);
+        var newer = Mint(store);
+        var channel = new Chan();
+        store.Accept(channel, newer.Credential);
+        var roster = new Roster { OnRead = () => clock.Now = Started.AddHours(1) };
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new FleetList(store, roster, audit: new AgentAuditLog(root)).HandleAsync(channel, Empty));
+        Assert.Equal(2, Store().Count);
+    }
+
+    [Fact]
+    public async Task A_rotation_save_failure_refuses_the_read_and_invalidates_open_grants()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var store = Store();
+        Mint(store);
+        var newer = Mint(store);
+        var channel = new Chan();
+        store.Accept(channel, newer.Credential);
+        Directory.CreateDirectory(Path.Combine(root, AgentCredentials.FileName + ".tmp"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new FleetList(store, new Roster(), audit: new AgentAuditLog(root)).HandleAsync(channel, Empty));
+        Assert.NotNull(store.Problem);
+        Assert.False(store.IsLive(newer.Credential));
+        Assert.Equal(2, Store().Count);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_oversized_fleet_reply_never_retires_the_old_hash(bool find)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var store = Store();
+        Mint(store);
+        var newer = Mint(store);
+        var channel = new Chan();
+        store.Accept(channel, newer.Credential);
+        var roster = new Roster { Machines = Enumerable.Range(0, 1024).Select(i =>
+            new FleetMachine($"machine{i}", true, [new("fixture", "SG Quality", "working", Started)], Name: new string('m', 64))).ToArray() };
+        var op = new FleetList(store, roster, audit: new AgentAuditLog(root));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => find
+            ? op.FindAsync(channel, JsonSerializer.SerializeToElement(new { name = "SG Quality" })) : op.HandleAsync(channel, Empty));
+        Assert.Equal(2, Store().Count);
     }
 
     [Fact]
@@ -167,9 +237,14 @@ public sealed class ScriptCallerTests : IDisposable
     sealed class Roster : IScopedFleetRoster
     {
         public bool Fail { get; set; }
-        public Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) => Fail
-            ? Task.FromException<IReadOnlyList<FleetMachine>>(new IOException("fixture roster failure"))
-            : Task.FromResult<IReadOnlyList<FleetMachine>>([new("machine2", true, [new("fixture", "SG Quality", "working", Started)])]);
+        public Action? OnRead { get; init; }
+        public IReadOnlyList<FleetMachine>? Machines { get; init; }
+        public Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct)
+        {
+            OnRead?.Invoke();
+            return Fail ? Task.FromException<IReadOnlyList<FleetMachine>>(new IOException("fixture roster failure"))
+                : Task.FromResult<IReadOnlyList<FleetMachine>>(Machines ?? [new("machine2", true, [new("fixture", "SG Quality", "working", Started)])]);
+        }
         public async Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct) => new("account-a", await ReadAsync(ct));
     }
 

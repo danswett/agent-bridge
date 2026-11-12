@@ -30,6 +30,7 @@ public static class LocalApi
 
     static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log, RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet, AgentAuditLog? audit, RefusalAudits refusals) => async (channel, op, data) =>
     {
+        credentials?.CheckScriptOperation(channel, op, log);
         if (op == Fleet.FleetNames.Op)
         {
             var caller = callers.Classify(channel, fresh: true);
@@ -50,7 +51,7 @@ public static class LocalApi
                 try { request = data.Deserialize<AgentHelloRequest>(ProtocolJson.Options) ?? throw new ArgumentException("agent.hello needs a token"); }
                 catch (JsonException) { throw new ArgumentException("agent.hello needs a token"); }
                 var ancestry = (channel as LocalChannel)?.Peer?.Ancestry ?? ProcessAncestry.Unknown;
-                var decision = credentials.Check(request.Token, ancestry);
+                var decision = credentials.Check(request.Token, ancestry, agentCaller: callers.Classify(channel, fresh: true).Kind == CallerKind.Agent);
                 if (decision.Accepted is not { } credential)
                 {
                     log?.Invoke($"local pipe: refused agent.hello: {decision.Refusal}");

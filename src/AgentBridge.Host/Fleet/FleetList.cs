@@ -115,7 +115,9 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         var withNames = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("include", out var inc) && inc.ValueKind == JsonValueKind.String && inc.GetString() == "content";
         LocalApi.AuditAgentAction(credentials!, caller, Op, "fleet", "attempted", auditLog ?? audit);
         AuditFleetList?.Invoke(credentials!.PrincipalOf(caller));
-        return new { sessions = await ListAsync(withNames, ct) };
+        var result = new { sessions = await ListAsync(withNames, ct) };
+        credentials!.CompleteFleetRead(caller, result);
+        return result;
     }
 
     // fleet.find (#1399, design "Names and lookup"): a filter over the same roster. The name is
@@ -142,6 +144,14 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         var snapshot = await scoped.ReadScopedAsync(ct);
         var fleetScope = snapshot.FleetScope;
         if (string.IsNullOrWhiteSpace(fleetScope)) { throw new InvalidOperationException("refused: fleet.find has no authenticated account scope"); }
+        var result = Find(snapshot, name, machine);
+        credentials!.CompleteFleetRead(caller, result);
+        return result;
+    }
+
+    static object Find(FleetRosterSnapshot snapshot, string name, string? machine)
+    {
+        var fleetScope = snapshot.FleetScope;
         var scope = snapshot.Machines.Where(x => machine is null || x.Id == machine).ToList();
         var incomplete = scope.Where(x => x.Online && x.Truncated).Select(x => x.Id).ToList();
         if (incomplete.Count > 0) { return new { result = "incomplete", fleetScope, machines = incomplete }; }
@@ -170,6 +180,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
 
     AgentCredential Authorize(IProtocolChannel channel, string op)
     {
+        credentials?.CheckScriptOperation(channel, op);
         if (credentials is null || !OperatingSystem.IsWindows()) { throw new InvalidOperationException($"refused: {op} isn't available on this host"); }
         if (credentials.Of(channel) is not { } caller)
         {
