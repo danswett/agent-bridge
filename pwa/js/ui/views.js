@@ -1261,7 +1261,7 @@ function machineTile({ name, raw, bars, onSelect, onLaunch, more, expanded = fal
   const running = !raw?.sessions ? 'Not reported yet' : raw.sessions.startsWith('0 ') ? 'No sessions running' : raw.sessions;
   const contents = h('div', { hidden: !expanded },
     h('button', { type: 'button', class: 'button secondary small machine-running-view', 'aria-label': `View sessions on ${name}`, onclick: onSelect }, 'View sessions'));
-  const toggle = h('button', { type: 'button', class: 'tile-running-toggle', 'aria-expanded': String(expanded), onclick: () => {
+  const toggle = h('button', { type: 'button', class: 'tile-running-toggle', 'aria-label': `Running, ${running} on ${name}`, 'aria-expanded': String(expanded), onclick: () => {
     contents.hidden = !contents.hidden;
     toggle.setAttribute('aria-expanded', String(!contents.hidden));
   } }, h('span', { class: 'tile-label' }, 'Running, '), h('span', null, running), icon('chevron'));
