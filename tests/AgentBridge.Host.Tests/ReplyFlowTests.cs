@@ -769,13 +769,16 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     public Task Two_replies_of_the_same_words_need_two_prompts_one_each() => TwoRepliesAsync();
 
     [Fact]
+    public Task Identical_replies_settle_even_when_the_clock_driver_cannot_resume() => TwoRepliesAsync(holdClockDriver: true);
+
+    [Fact]
     public async Task Fifty_pairs_of_identical_replies_each_need_their_own_prompt()
     {
         var ch = await OpenAsync();
         for (var pair = 0; pair < 50; pair++) { await TwoRepliesAsync(ch); }
     }
 
-    async Task TwoRepliesAsync(SecureChannel? channel = null)
+    async Task TwoRepliesAsync(SecureChannel? channel = null, bool holdClockDriver = false)
     {
         // A slow test continuation must not spend either reply's confirmation window (#1995).
         await using var clock = new PollClock(frozen: true);
@@ -797,10 +800,22 @@ public sealed class ReplyFlowTests : IAsyncLifetime
 
         var recorded = await Task.WhenAny(first, second).WaitAsync(Patience);
         Assert.Equal("delivered", (await recorded).Outcome);
-        clock.Run();
+        using var release = new ManualResetEventSlim(!holdClockDriver);
+        var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var hold = holdClockDriver ? clock.CreateTimer(_ =>
+        {
+            held.TrySetResult();
+            release.Wait();
+        }, null, TimeSpan.Zero, Timeout.InfiniteTimeSpan) : null;
+        try
+        {
+            if (holdClockDriver) { await held.Task.WaitAsync(Patience); }
+            clock.Run();
 
-        // That prompt is the record of one of them, never of both.
-        Assert.Equal(["delivered", "unconfirmed"], new[] { (await first).Outcome, (await second).Outcome }.Order());
+            // That prompt is the record of one of them, never of both.
+            Assert.Equal(["delivered", "unconfirmed"], new[] { (await first).Outcome, (await second).Outcome }.Order());
+        }
+        finally { release.Set(); }
     }
 
     [Fact]
