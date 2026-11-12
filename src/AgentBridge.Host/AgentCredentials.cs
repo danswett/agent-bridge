@@ -152,6 +152,13 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             string token;
             try { token = Mint(adoption.Session, AdoptedLaunch, adoption.RootPid, adoption.RootStartUtc, adoption.Scope); }
             catch (InvalidOperationException e) { return Declined(e.Message); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                records.RemoveAll(r => r.Credential.Session == adoption.Session);
+                pending.Remove(adoption);
+                Fault("could not save an adopted credential");
+                return Declined("the credential store is unavailable");
+            }
             pending.Remove(adoption);
             if (problem is not null) { return AgentClaimDecision.Refused($"the credential store is unavailable: {problem}"); }
             var issued = records.First(r => r.Credential.Session == adoption.Session).Credential;

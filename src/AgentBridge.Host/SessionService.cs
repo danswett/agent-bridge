@@ -57,6 +57,8 @@ public sealed class SessionService
     internal object RenameFleetSession(JsonElement data) =>
         (FleetNames ?? throw new InvalidOperationException("refused: fleet-name storage is not available on this host")).Rename(source, data);
 
+    internal SessionProcess? ProcessOf(string id) => source.Get(id) is not null ? source.ProcessOf(id) : null;
+
     // hello's machine.restore (#780): what went with the machine or the host when it last stopped, or
     // null. Set, it offers sessions.restore.
     public Func<RestoreNotice?>? Restore { get; init; }

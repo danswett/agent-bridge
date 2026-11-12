@@ -144,6 +144,13 @@ var pretty = new JsonSerializerOptions(ProtocolJson.Options) { WriteIndented = !
 
 switch (command)
 {
+    case "agents":
+        return await AgentAdoptionCommands.RunAsync(arguments, Refused, async (profile, op, data) =>
+        {
+            await using var local = await LocalClient.ConnectAsync(LocalEndpoint.For(Path.Combine(Identity.DefaultRoot, profile)));
+            await local.HelloAsync();
+            return await local.CallAsync(op, data);
+        }, Console.Out, Console.Error);
     case "sessions":
         {
             await using var source = new SessionSource(options);
@@ -342,6 +349,7 @@ switch (command)
     default:
         Console.Error.WriteLine("usage: agent-bridge-host sessions [--compact] | get <id> | watch [--json] | usage | sign-in --relay <url> | serve [--relay <url>] [--name <name>] [--local-only] | whoami");
         Console.Error.WriteLine("       agent-bridge-host rename <session-id> \"<fleet name>\" [--profile <name>] (empty name clears)");
+        Console.Error.WriteLine("       " + AgentAdoptionCommands.Usage);
         Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]");
         Console.Error.WriteLine("       " + OwnPeerCommands.Usage);
         Console.Error.WriteLine("       " + AgentBridge.Host.Shadow.ShadowCommand.Usage);

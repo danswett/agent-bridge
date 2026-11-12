@@ -70,6 +70,7 @@ public sealed class AgentAdoptionTests : IDisposable
     [InlineData(CallerKind.HostCli)]
     public async Task Only_a_person_can_open_and_withdraw_an_adoption_for_a_discovered_process(CallerKind kind)
     {
+        if (!OperatingSystem.IsWindows()) { return; }
         using var fixture = new Fixture();
         const string id = "88888888-8888-4888-8888-888888888888";
         fixture.CopilotSession(id, 100);
@@ -130,6 +131,53 @@ public sealed class AgentAdoptionTests : IDisposable
     }
 
     static JsonElement Body(object value) => JsonSerializer.SerializeToElement(value, ProtocolJson.Options);
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task The_real_pipe_delivers_a_token_once_and_refuses_expired_and_authenticated_claims()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var time = new Clock(DateTimeOffset.UtcNow);
+        var store = Store(time);
+        var handler = LocalApi.Handler(null!, null!, new FixedCallerGuard(new(CallerKind.Agent, "agent")), credentials: store);
+        await using var server = LocalServer.Start(LocalEndpoint.For(root), handler);
+        await using var channel = await LocalClient.ConnectAsync(LocalEndpoint.For(root));
+        using var process = System.Diagnostics.Process.GetCurrentProcess();
+        store.Adopt("sess-1", process.Id, process.StartTime.ToUniversalTime(), AgentProtocol.ScopeRead);
+        var claim = await channel.CallAsync<AgentCredentialResult>(AgentProtocol.Credential);
+        var refused = await Assert.ThrowsAsync<HostErrorException>(() => channel.CallAsync(AgentProtocol.Credential));
+        Assert.Contains("refused:", refused.Message);
+        await channel.CallAsync(AgentProtocol.Hello, new AgentHelloRequest { Token = claim.Token });
+        refused = await Assert.ThrowsAsync<HostErrorException>(() => channel.CallAsync(AgentProtocol.Credential));
+        Assert.Contains("already credentialed", refused.Message);
+        store.Revoke("sess-1", "test");
+        store.Adopt("sess-1", process.Id, process.StartTime.ToUniversalTime(), AgentProtocol.ScopeRead);
+        time.Now += TimeSpan.FromMinutes(AgentProtocol.AdoptionMinutes);
+        refused = await Assert.ThrowsAsync<HostErrorException>(() => channel.CallAsync(AgentProtocol.Credential));
+        Assert.Contains("no adoption window", refused.Message);
+        store.Adopt("sess-1", process.Id, process.StartTime.ToUniversalTime(), AgentProtocol.ScopeRead);
+        Directory.CreateDirectory(Path.Combine(root, AgentCredentials.FileName + ".tmp"));
+        refused = await Assert.ThrowsAsync<HostErrorException>(() => channel.CallAsync(AgentProtocol.Credential));
+        Assert.Equal("refused: the credential store is unavailable", refused.Message);
+        Assert.Equal(0, store.Count);
+        Assert.DoesNotContain(lines, l => l.Contains(claim.Token));
+    }
+
+    [Fact]
+    public async Task A_revoke_that_cannot_be_saved_reports_refusal_and_leaves_the_store_faulted()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var store = Store();
+        store.Adopt("sess-1", 100, Started, AgentProtocol.ScopeRead);
+        var token = store.Claim(Inside()).Token!;
+        Directory.CreateDirectory(Path.Combine(root, AgentCredentials.FileName + ".tmp"));
+        var handler = LocalApi.Handler(null!, null!, new FixedCallerGuard(new(CallerKind.App, "person")), credentials: store);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            handler(new FakeChannel(), AgentProtocol.Revoke, Body(new { session = "sess-1" })));
+        Assert.Equal("refused: the credential store is unavailable", error.Message);
+        Assert.NotNull(store.Problem);
+        Assert.Null(store.Check(token, Inside()).Accepted);
+    }
 
     sealed class FreshCaller(CallerKind kind) : ICallerGuard
     {

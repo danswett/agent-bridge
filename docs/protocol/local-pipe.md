@@ -100,7 +100,7 @@ host also asks *which* process each request comes from, op by op:
 |---|---|---|
 | **Inside an agent session** | The connecting process, or any process it descends from, is a live session's own process (by id and start time, so a reused id does not count), one a launch started, any agent CLI found running (Copilot, Claude, Codex, including under Node or Bun), or an executable named `copilot`, `claude`, `codex` or `agency` | Read: `hello` (offering only `sessions.read` and `usage`), `sessions.list`, `session.get`, `sessions.subscribe`, `usage.*`, `launch.options`, `host.status`, `host.subscribe`. Everything else is refused: `refused: this connection is from pid 4120, inside the copilot session 1a2b3c4d (pid 3112); …`. That includes `session.history` (`…; reading a session's history is for the person, from the app or a phone`, [v1-history.md](v1-history.md#security-and-authorization)) and `sessions.focus` (`…; telling the host the person is using the app is for the person, from the app or a phone`): a device in use holds back the person's pushes ([v1-sessions.md](v1-sessions.md#while-the-person-uses-a-device-1190)) |
 | **The app** | Not inside an agent session, its whole ancestry read, and its executable is `AgentBridge.exe` (the app) in the host's own folder, which is how the app ships | Everything, `host.manage` included |
-| **The host's command line** | Not inside an agent session, its whole ancestry read, and its executable is this host's own (`agent-bridge-host`, as `migrate` and `rollback` run it) | What anything else may, `session.rename`, and `host.restart`, which a migration and a rollback need to hand the hook spool over and back ([migration.md](../migration.md)). Nothing else the app may |
+| **The host's command line** | Not inside an agent session, its whole ancestry read, and its executable is this host's own (`agent-bridge-host`, as `migrate` and `rollback` run it) | What anything else may, `session.rename`, `agent.adopt`, `agent.revoke`, and `host.restart`, which a migration and a rollback need to hand the hook spool over and back ([migration.md](../migration.md)). Nothing else the app may |
 | **Anything else of the user's** | Neither, a process that could not be traced, or one whose ancestry could be read only in part (an agent may be above what was read) | The sessions ops as before except `session.rename`, `host.status` and `host.subscribe`; not the other management ops (`only the Slipgates app beside this host may stop, restart, sign in, change settings or read the relay account`) |
 
 The ancestry is read when the connection is accepted (`GetNamedPipeClientProcessId`, then one
@@ -199,17 +199,41 @@ session replaces its old one, so a resumed session's old token is dead. This sli
 holds a credential; what each scope may do, and minting at launch, follow in later slices. Until
 then an agent connection is refused the acting ops exactly as before.
 
-### Adopting a session the host did not launch (records only)
+### Adopting a session the host did not launch
 
 `agent.adopt` and `agent.revoke` (a person at the machine) and `agent.credential` (the adopted
 session) have records, `AgentAdoptRequest/Result`, `AgentRevokeRequest/Result` and
-`AgentCredentialResult`, but no pipe op serves them yet. The store behind them is in the host:
+`AgentCredentialResult`, served on the Windows local pipe only, never on a relay channel.
+Adopt/revoke require fresh caller classification as the app or this host's own command line,
+outside every agent session; partial or untraced ancestry is refused.
+The store behind them is in the host:
 an adoption is held in memory for 10 minutes, the session claims it once from inside its own
 process tree (never by `AGENT_BRIDGE_SESSION`), and the credential is then issued as any other.
-Scope is `read` unless the person picks `read+reply`; `read+reply+launch` cannot be adopted.
+Scope is currently limited to `read`; requests for more are refused. The store records
+support `read+reply`, but widening needs the adopted-session policy wiring in a later slice.
 Adopting again, or revoking, ends the earlier credential and its open connections at once.
 Adoption alone never makes a manual session a reply target. Known gap: a session nested inside
 an adopted one is covered by the same adoption and can claim it during the window.
+
+| Op | Data | Result |
+|---|---|---|
+| `agent.adopt` | `{ "session": "<listed session id>", "scope": "read" }` (scope optional) | `{ "session", "scope", "expiresAt" }`; nothing minted yet |
+| `agent.revoke` | `{ "session": "<session id>" }` | `{ "session", "revoked" }` |
+| `agent.credential` | `{}` | `{ "token", "principal", "scope", "expiresAt" }`, once to the proven process tree |
+
+Claims use only the pipe peer's OS-read ancestry. Missing, partial, unrelated or ambiguous
+ancestry, an expired window and a second claim all fail with
+`refused: no adoption window is available for this caller`. A connection that passed
+`agent.hello` gets `refused: this connection is already credentialed`. Failed persistence
+faults the store and returns `refused: the credential store is unavailable`, never a token.
+Adoption does not advertise any relay capability or change reply eligibility.
+
+At the machine, a person runs `agent-bridge-host agents adopt <session>` or
+`agent-bridge-host agents revoke <session>`; both refuse inside an agent session (exit 4).
+Inside the adopted session, `agent-bridge-host agents credential` prints only its one-shot
+token to stdout. Keep that secret in the session, never in transcripts or logs.
+All three accept `--profile <name>`, require an already-running host, and exit nonzero
+on refusal; an absent adoption/credential makes the revoke command exit 1.
 
 ### `fleet.list` and `fleet.find`
 
