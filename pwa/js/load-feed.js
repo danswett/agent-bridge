@@ -1,39 +1,51 @@
-import { hostJsonBytes } from './answers.js';
+import { hostJsonBytes, wellFormed } from './answers.js';
 import { isProtocolTime } from './protocol-time.js';
 
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const int32 = (v) => Number.isInteger(v) && v >= -2147483648 && v <= 2147483647;
 const int64 = (v) => Number.isInteger(v) && v >= -(2 ** 63) && v < 2 ** 63;
-const fields = (raw, shape) => object(raw)
-  ? Object.fromEntries(Object.entries(shape).filter(([k, fits]) => fits(raw[k])).map(([k]) => [k, raw[k]])) : null;
+const asciiKey = (name) => name.replace(/[A-Z]/g, (c) => c.toLowerCase());
+const members = (raw) => object(raw)
+  ? new Map(Object.entries(raw).map(([name, value]) => [asciiKey(name), value])) : null;
+const field = (raw, name) => raw.get(asciiKey(name));
+const fields = (raw, shape) => raw
+  ? Object.fromEntries(Object.entries(shape).filter(([k, fits]) => fits(field(raw, k))).map(([k]) => [k, field(raw, k)])) : null;
 const enumOf = (v, known, fallback) => known.includes(v) ? v : fallback;
 const stateOf = (v, session = false) => enumOf(v, session ? ['fresh', 'partial'] : ['fresh', 'partial', 'stale'], 'unavailable');
 
-export const readMachineLoadCpu = (raw) => fields(raw, { percent: Number.isFinite, cores: int32 });
-export const readMachineLoadMemory = (raw) => fields(raw, { totalBytes: int64, availableBytes: int64, committedPercent: Number.isFinite });
-export const readUnattributedLoad = (raw) => fields(raw, { processes: int32, workingSetBytes: int64 });
+export const readMachineLoadCpu = (raw) => fields(members(raw), { percent: Number.isFinite, cores: int32 });
+export const readMachineLoadMemory = (raw) => fields(members(raw), { totalBytes: int64, availableBytes: int64, committedPercent: Number.isFinite });
+export const readUnattributedLoad = (raw) => fields(members(raw), { processes: int32, workingSetBytes: int64 });
 
 export function readSessionLoad(raw) {
-  if (!object(raw) || typeof raw.session !== 'string') { return null; }
-  const read = { session: raw.session, agent: enumOf(raw.agent, ['agency', 'direct', 'copilot', 'claude', 'codex'], 'other'),
-    state: stateOf(raw.state, true), ...fields(raw, { processes: int32, cpuPercent: Number.isFinite, workingSetBytes: int64, handles: int32 }) };
-  if (typeof raw.handleKind === 'string') { read.handleKind = enumOf(raw.handleKind, ['handles', 'fds'], 'other'); }
+  const data = members(raw), session = data && field(data, 'session');
+  if (typeof session !== 'string' || wellFormed(session) !== session) { return null; }
+  const read = { session, agent: enumOf(field(data, 'agent'), ['agency', 'direct', 'copilot', 'claude', 'codex'], 'other'),
+    state: stateOf(field(data, 'state'), true), ...fields(data, { processes: int32, cpuPercent: Number.isFinite, workingSetBytes: int64, handles: int32 }) };
+  const handleKind = field(data, 'handleKind');
+  if (typeof handleKind === 'string') { read.handleKind = enumOf(handleKind, ['handles', 'fds'], 'other'); }
   return read;
 }
 
 // Complete record reading is separate from the feed's guarded bars-only projection.
 export function readMachineLoad(raw) {
-  if (!object(raw)) { return null; }
-  let sessions = Array.isArray(raw.sessions) ? raw.sessions.map(readSessionLoad).filter(Boolean) : [];
-  let state = stateOf(raw.state);
+  const data = members(raw);
+  if (!data) { return null; }
+  const givenSessions = field(data, 'sessions');
+  let sessions = Array.isArray(givenSessions) ? givenSessions.map(readSessionLoad).filter(Boolean) : [];
+  let state = stateOf(field(data, 'state'));
   if (sessions.length > 200) {
     sessions = [...sessions].sort((a, b) => (b.workingSetBytes ?? -Infinity) - (a.workingSetBytes ?? -Infinity)).slice(0, 200);
     if (state === 'fresh') { state = 'partial'; }
   }
-  const read = { state, sessions, ...fields(raw, { ageMs: int64, staleAfterMs: int64 }) };
-  if (isProtocolTime(raw.sampledAt)) { read.sampledAt = raw.sampledAt; }
+  const read = { state, sessions, ...fields(data, { ageMs: int64, staleAfterMs: int64 }) };
+  const sampledAt = field(data, 'sampledAt');
+  if (isProtocolTime(sampledAt)) {
+    const time = new Date(sampledAt), year = time.getUTCFullYear();
+    if (year >= 1 && year <= 9999) { read.sampledAt = time.toISOString(); }
+  }
   for (const [key, decode] of [['cpu', readMachineLoadCpu], ['memory', readMachineLoadMemory], ['unattributed', readUnattributedLoad]]) {
-    const value = decode(raw[key]);
+    const value = decode(field(data, key));
     if (value !== null) { read[key] = value; }
   }
   return read;

@@ -7,6 +7,14 @@ const records = JSON.parse(readFileSync(new URL('../../../docs/protocol/vectors/
 const full = () => structuredClone(records.MachineLoad.valid.find((v) => v.name === 'full').json);
 const overCap = () => records.MachineLoad.valid.find((v) => v.json.sessions?.length === 201);
 
+for (const name of ['mixed-case-names', 'offset-submillisecond-sampled-at']) {
+  test(`the shared ${name} MachineLoad vector reads exactly as C# does`, () => {
+    const vector = records.MachineLoad.valid.find((v) => v.name === name);
+    assert.ok(vector, 'the C#-generated shared parity vector must exist');
+    assert.deepEqual(readers.readMachineLoad(vector.json), vector.reads);
+  });
+}
+
 test('the shared 201-session input retains exactly the largest 200 working sets and becomes partial', () => {
   const vector = overCap();
   assert.ok(vector, 'the shared #1876 cap vector must exist, not a local replacement');
@@ -46,6 +54,22 @@ test('malformed nested records and strict session identities are omitted without
   }
 });
 
+test('unreadable strict session identities are refused without repairing them', () => {
+  const control = { session: 's-\uD83D\uDE00', agent: 'other', state: 'unavailable' };
+  assert.deepEqual(readers.readSessionLoad({ session: control.session }), control);
+  for (const session of ['\uD800', '\uDC00']) {
+    assert.equal(readers.readSessionLoad({ session }), null);
+  }
+});
+
+test('machine load omits unreadable session rows but retains a valid surrogate pair unchanged', () => {
+  const control = { session: 's-\uD83D\uDE00', agent: 'other', state: 'unavailable' };
+  for (const session of ['\uD800', '\uDC00']) {
+    const raw = { sessions: [{ session }, { session: control.session }] };
+    assert.deepEqual(readers.readMachineLoad(raw).sessions, [control]);
+  }
+});
+
 test('record decoding preserves finite percentages but omits nonfinite and unrepresentable counts', () => {
   assert.deepEqual(readers.readMachineLoadCpu({ percent: 101.25, cores: 1.5 }), { percent: 101.25 });
   assert.deepEqual(readers.readMachineLoadCpu({ percent: Infinity, cores: 2147483648 }), {});
@@ -63,7 +87,8 @@ test('unknown fields at every record level are dropped while all known numerical
 
 test('sample times reject calendar rollover and out-of-range dates and offsets as C# does', () => {
   for (const sampledAt of ['2026-02-30T00:00:00.000Z', '2025-02-29T00:00:00.000Z',
-    '0000-01-01T00:00:00.000Z', '2026-11-11T24:00:00.000Z', '2026-11-11T12:00:00.000+14:01']) {
+    '0000-01-01T00:00:00.000Z', '2026-11-11T24:00:00.000Z', '2026-11-11T12:00:00.000+14:01',
+    '0001-01-01T00:00:00+14:00', '9999-12-31T23:59:59-14:00']) {
     assert.equal(readers.readMachineLoad({ sampledAt }).sampledAt, undefined, sampledAt);
   }
   const sampledAt = '2024-02-29T12:00:00.000Z';
