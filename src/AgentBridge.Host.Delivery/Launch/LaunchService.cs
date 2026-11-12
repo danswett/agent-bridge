@@ -1078,18 +1078,18 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 var made = await Task.Run(() => Worktrees.Create(directory, Config, options.LocalNow, new HeldWorktreeUsage(source, options.WorktreeUsage), m => log($"launch {Short(key)}: worktree: {m}"), launchRequest: agentPrincipal is null ? null : key));
                 if (agentPrincipal is not null)
                 {
-                    string? refusal;
+                    string? worktreeRefusal;
                     try
                     {
-                        refusal = options.AgentWorktreeCheck is { } check ? check(isolated, made, plan.Launcher.Id)
+                        worktreeRefusal = options.AgentWorktreeCheck is { } check ? check(isolated, made, plan.Launcher.Id)
                             : "This host has no agent worktree check; nothing was started.";
                     }
                     catch (Exception e)
                     {
                         log($"launch {Short(key)}: agent worktree check failed: {e.GetType().Name}");
-                        refusal = "The agent worktree check could not be completed; nothing was started.";
+                        worktreeRefusal = "The agent worktree check could not be completed; nothing was started.";
                     }
-                    if (refusal is not null)
+                    if (worktreeRefusal is not null)
                     {
                         string? cleanup;
                         try { cleanup = await Task.Run(() => Worktrees.DiscardCreated(made, key)); }
@@ -1098,8 +1098,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                             log($"launch {Short(key)}: refused worktree cleanup failed: {e.GetType().Name}");
                             cleanup = "Its cleanup could not be completed safely.";
                         }
-                        if (cleanup is not null) { refusal += $" The new worktree was retained: {cleanup}"; }
-                        return RefuseAgentWorktree(key, agentPrincipal, refusal);
+                        if (cleanup is not null) { worktreeRefusal += $" The new worktree was retained: {cleanup}"; }
+                        return RefuseAgentWorktree(key, agentPrincipal, worktreeRefusal);
                     }
                 }
                 if (made.Detail.Length > 0) { log($"launch {Short(key)}: worktree: {made.Detail}"); }
