@@ -113,7 +113,9 @@ for (const phone of [false, true]) {
           if (input === 'hover' && !phone) { await button.hover(); }
           if (input === 'key') {
             await button.focus();
-            await page.keyboard.press('Shift');
+            await page.keyboard.press('Shift+Tab');
+            await page.keyboard.press('Tab');
+            await expect(button).toBeFocused();
           }
           const box = await measure();
           expect(box.rowX, `${sort}, ${input}: card edge aligns with its heading`).toBe(box.headingX);
