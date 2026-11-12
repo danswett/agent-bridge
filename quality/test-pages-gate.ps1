@@ -54,13 +54,49 @@ $new.jobs[1].conclusion = 'cancelled'
 if ((& $candidate -Runs @($new, $old)).sha -ne $live) { throw 'newest eligible SHA did not win' }
 $new = Run 3 $live; $new.jobs[1].conclusion = 'skipped'
 if ((& $candidate -Runs @($old, $new)).sha) { throw 'older evidence replaced the latest run for a SHA' }
-function Rollback($runs, [string]$relation = 'identical', [string]$sha = $head, [switch]$Unreadable, [int]$TotalCount = 0) {
-    $gateArgs = @{ Head = $sha; Live = $live; Status = 'ahead'; MainStatus = 'ahead'; Files = @('pwa/index.html') }
-    $helper = Join-Path $PSScriptRoot 'pages-rollback.ps1'
-    $state = if (Test-Path $helper) { & $helper -Runs @($runs) -Unreadable:$Unreadable -TotalCount $TotalCount } else { @{ held = $false } }
-    if (-not $state.held) { $relation = 'ahead' } elseif (-not $state.fence) { $relation = '' }
-    if ((Get-Command $gate).Parameters.ContainsKey('RollbackStatus')) { $gateArgs.RollbackStatus = $relation }
-    (& $gate @gateArgs)[0]
+$root = Split-Path -Parent $PSScriptRoot
+$workflow = Get-Content -Raw (Join-Path $root '.github' 'workflows' 'pages.yml')
+$block = [regex]::Match($workflow, '(?ms)^  gate:\r?\n.*?^        run: \|\r?\n(.*?)(?=^  build:)')
+if (-not $block.Success) { throw 'the actual Pages gate shell block was not found' }
+function Rollback($runs, [string]$relation = 'identical', [string]$sha = $head, [switch]$Unreadable, [int]$TotalCount = 0, [switch]$AncestryError) {
+    $dir = Join-Path ([IO.Path]::GetTempPath()) "pages-gate-$([guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory $dir | Out-Null
+    $saved = @{}; foreach ($key in @('GITHUB_EVENT_NAME', 'GITHUB_REPOSITORY', 'GITHUB_OUTPUT', 'GITHUB_STEP_SUMMARY', 'GITHUB_RUN_ID', 'APP_AT_ROOT')) { $saved[$key] = [Environment]::GetEnvironmentVariable($key) }
+    $ci = Run 2 $sha; $jobs = $ci.jobs; $ci.Remove('jobs'); $ci.id = 1; $siteVersion = $live; $fencePath = "compare/$head...$sha"
+    $historyPath = 'actions/workflows/pages.yml/runs?branch=main&event=workflow_dispatch&per_page=100'
+    $replies = @{
+        'actions/workflows/ci.yml/runs?branch=main&event=push&per_page=20' = @{ workflow_runs = @($ci) }
+        'actions/runs/1/jobs?filter=latest&per_page=100' = @{ jobs = $jobs }
+        $historyPath = @{ workflow_runs = @($runs); total_count = [Math]::Max($TotalCount, @($runs).Count) }
+        $fencePath = @{ status = $relation }
+        "compare/$sha...main" = @{ status = 'ahead' }
+        "compare/$live...$sha" = @{ status = 'ahead'; files = @(@{ filename = 'pwa/index.html' }) }
+        'pages' = @{ html_url = 'https://pages.invalid/' }
+    }
+    $calls = [System.Collections.Generic.List[string]]::new()
+    function gh {
+        $path = "$($args[1])" -replace '^repos/example/repo/', ''
+        $calls.Add($path)
+        if ($args.Count -ne 2 -or $args[0] -ne 'api' -or -not $replies.ContainsKey($path)) { throw "unexpected API call: $args" }
+        $global:LASTEXITCODE = 0
+        if (($Unreadable -and $path -eq $historyPath) -or ($AncestryError -and $path -eq $fencePath)) { $global:LASTEXITCODE = 1; return }
+        $replies[$path] | ConvertTo-Json -Depth 10 -Compress
+    }
+    function Invoke-RestMethod($Uri, $Headers) { if ($Uri -ne 'https://pages.invalid/config.js?gate=1') { throw "unexpected site request: $Uri" }; 'APP_VERSION = "' + $siteVersion + '"' }
+    Push-Location $root
+    try {
+        $env:GITHUB_EVENT_NAME = 'schedule'; $env:GITHUB_REPOSITORY = 'example/repo'; $env:GITHUB_RUN_ID = '1'; $env:APP_AT_ROOT = 'true'
+        $env:GITHUB_OUTPUT = Join-Path $dir 'output'; $env:GITHUB_STEP_SUMMARY = Join-Path $dir 'summary'
+        $step = Join-Path $dir 'gate.ps1'; Set-Content -LiteralPath $step -Value ($block.Groups[1].Value -replace '(?m)^          ', '')
+        & $step
+        $output = @(Get-Content $env:GITHUB_OUTPUT); $decision = @($output | Where-Object { $_ -match '^deploy=(true|false)$' })
+        if ($decision.Count -ne 1 -or $output -notcontains "sha=$sha" -or @($calls | Where-Object { $_ -eq $historyPath }).Count -ne 1 -or @($calls | Where-Object { -not $replies.ContainsKey($_) }).Count) { throw 'the actual gate must emit its tested SHA and decision after one bounded history read' }
+        if ($decision[0] -eq 'deploy=true') { 'deploy' } else { 'skip' }
+    } finally {
+        Pop-Location
+        foreach ($key in $saved.Keys) { [Environment]::SetEnvironmentVariable($key, $saved[$key]) }
+        Remove-Item -LiteralPath $dir -Recurse
+    }
 }
 $manual = @{ head_sha = $head; display_title = 'Pages rollback'; status = 'completed'; conclusion = 'success'; event = 'workflow_dispatch'; head_branch = 'main'; created_at = '2026-11-11T18:00:00Z'; run_number = 90 }
 foreach ($tick in 1..2) {
@@ -82,6 +118,7 @@ if ((Rollback @($manual, $resume)) -ne 'skip') { throw 'pending resume cleared t
 $manual.status = 'queued'; $manual.conclusion = $null
 if ((Rollback $manual) -ne 'skip') { throw 'pending rollback did not hold the fence' }
 if ((Rollback @() -Unreadable) -ne 'skip') { throw 'unreadable history cleared the rollback fence' }
+if ((Rollback $manual -AncestryError) -ne 'skip') { throw 'failed ancestry lookup cleared the rollback fence' }
 if ((Rollback @($resume) -TotalCount 101) -ne 'skip') { throw 'truncated history cleared the rollback fence' }
 if ((Rollback @()) -ne 'skip') { throw 'expired history cleared the rollback fence' }
 if ($failures) { exit 1 }
