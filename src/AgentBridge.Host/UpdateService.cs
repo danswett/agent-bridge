@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AgentBridge.Host.Core.Updates;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -94,6 +95,8 @@ public sealed class UpdateService
     // The same, perhaps a moment old (SharedAgentHaBridgeProbe), for what hello offers only:
     // everything that acts on an update asks ReadOnly. ReadOnly where not set.
     public Func<string?>? OfferedReadOnly { get; init; }
+    internal Func<CancellationToken, Task<HaltPolicySnapshot>> ReadHaltPolicy { get; init; } =
+        _ => Task.FromResult(new HaltPolicySnapshot(null, null, false));
     // Raised when the asks change, so the host's status (which the app follows) is sent again.
     public event Action? AsksChanged;
 
