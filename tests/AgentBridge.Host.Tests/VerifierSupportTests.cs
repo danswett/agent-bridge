@@ -92,7 +92,30 @@ public sealed class VerifierSupportTests
     public void Version_support_is_strict_and_per_member(string versions)
     {
         Assert.Null(Check(Wire()));
-        Assert.Equal(Unsupported, Check(Wire(b => b["versions"] = JsonNode.Parse(versions))));
+        foreach (var member in Members)
+        {
+            Assert.Equal(Unsupported, Check(Wire(b => { if (b["by"]!.GetValue<string>() == member.Id) { b["versions"] = JsonNode.Parse(versions); } })));
+        }
+    }
+
+    [Fact]
+    public void Command_heads_must_cover_the_collection_frontier_even_when_consent_matches()
+    {
+        Assert.Null(Check(Wire()));
+        var proposed = JsonNode.Parse(Command)!.AsObject();
+        proposed["heads"] = new JsonArray(JsonValue.Create(B(Repeat(0x11))));
+        var command = Consent(proposed.ToJsonString());
+        var wire = Wire(b => b["consent"] = B(Framing.Sha256(PersonCommand.Signed(command.BodyBytes))));
+        Assert.Equal(Unsupported, Check(wire, Context with { Command = command }));
+    }
+
+    [Theory]
+    [InlineData("issuedAt", "2026-11-12T18:00:01Z")]
+    [InlineData("expiresAt", "2026-11-12T18:09:59Z")]
+    public void Resigned_valid_times_must_match_the_retained_host_window(string field, string time)
+    {
+        Assert.Null(Check(Wire()));
+        Assert.Equal(Unsupported, Check(Wire(b => b[field] = time)));
     }
 
     [Fact]
