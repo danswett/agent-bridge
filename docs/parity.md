@@ -39,8 +39,8 @@ Agents: **Cp** Copilot CLI, **Cl** Claude Code, **Cx** Codex, **All**.
 | `Verified` | 43 |
 | `Verified (historical)` | 5 |
 | `Implemented, untested live` | 54 |
-| `Partial` | 1 |
-| `Missing` | 9 |
+| `Partial` | 2 |
+| `Missing` | 8 |
 | `Intentionally different` | 20 |
 | `N/A` | 12 |
 | `In flight (…)` | 6: Claude/Codex live 6 |
