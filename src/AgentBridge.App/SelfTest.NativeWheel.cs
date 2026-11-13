@@ -1,4 +1,6 @@
 using System.Runtime.InteropServices;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Input;
 
 namespace AgentBridge.App;
 
@@ -43,6 +45,90 @@ static partial class SelfTest
         return length == 0 ? $"class unavailable (Win32 error {Marshal.GetLastPInvokeError()})" : new string(name, 0, length);
     }
 
+    static NativeInputTarget ReadNativeInput(MainWindow window)
+    {
+        var focus = GetFocus();
+        var thread = GetWindowThreadProcessId(focus, out var process);
+        var owner = GetWindowThreadProcessId(window.Handle, out var ownerProcess);
+        return new(window.Handle, focus, GetAncestor(focus, 2), GetForegroundWindow(), thread, process, owner, ownerProcess);
+    }
+
+    static InvalidOperationException NativeInputRefused(MainWindow window, string why) =>
+        new($"Native input refused: {why}; {PostedInputTarget(window).Detail}; {ForegroundOwner(GetForegroundWindow())}");
+
+    static nint VerifiedNativeTarget(MainWindow window)
+    {
+        var state = ReadNativeInput(window);
+        if (!state.Ready) { throw NativeInputRefused(window, "foreground or focused child ownership was not verified"); }
+        return state.Focus;
+    }
+
+    static async Task PrepareNativeInput(MainWindow window, DependencyObject? intended = null)
+    {
+        intended ??= FocusManager.GetFocusedElement(window.RootElement.XamlRoot) as DependencyObject;
+        var before = $"{PostedInputTarget(window).Detail}; {ForegroundOwner(GetForegroundWindow())}";
+        if (GetForegroundWindow() != window.Handle)
+        {
+            window.Activate();
+            TrayIcon.SetForegroundWindow(window.Handle);
+            if (!await Until(() => GetForegroundWindow() == window.Handle, TimeSpan.FromMilliseconds(400)))
+            {
+                var other = GetWindowThreadProcessId(GetForegroundWindow(), out _);
+                var current = GetCurrentThreadId();
+                var attached = other != 0 && other != current && AttachThreadInput(current, other, true);
+                AppLog.Write($"self-test: foreground fallback attached {attached}, Win32 error {Marshal.GetLastPInvokeError()}, from thread {current} to {other}");
+                try { TrayIcon.SetForegroundWindow(window.Handle); }
+                finally
+                {
+                    if (attached && !AttachThreadInput(current, other, false))
+                    {
+                        throw NativeInputRefused(window, $"could not detach foreground thread (Win32 error {Marshal.GetLastPInvokeError()})");
+                    }
+                }
+                await Until(() => GetForegroundWindow() == window.Handle, TimeSpan.FromMilliseconds(400));
+            }
+        }
+        var focus = GetFocus();
+        if (GetForegroundWindow() == window.Handle && intended is not null
+            && (focus == 0 || focus == window.Handle))
+        {
+            var held = new Windows.Foundation.TypedEventHandler<UIElement, BringIntoViewRequestedEventArgs>((_, e) => e.Handled = true);
+            window.RootElement.BringIntoViewRequested += held;
+            try
+            {
+                if (!(await FocusManager.TryFocusAsync(intended, FocusState.Programmatic)).Succeeded)
+                {
+                    throw NativeInputRefused(window, "the intended XAML element refused focus");
+                }
+            }
+            finally { window.RootElement.BringIntoViewRequested -= held; }
+        }
+        var target = PostedTarget(window.Handle).Target;
+        AppLog.Write($"self-test: native input before: {before}; after: {PostedInputTarget(window).Detail}; {CaptureNativeWheel(window, target, GetFocus(), GetForegroundWindow()).Detail}");
+        VerifiedNativeTarget(window);
+    }
+
+    static void NativeInputSent(MainWindow window, nint target, string method) =>
+        AppLog.Write($"self-test: {method} sent; {PostedInputTarget(window).Detail}; after: {CaptureNativeWheel(window, target, GetFocus(), GetForegroundWindow()).Detail}");
+
+    static unsafe string ForegroundOwner(nint foreground)
+    {
+        var title = stackalloc char[512];
+        var length = GetWindowTextW(foreground, title, 512);
+        GetWindowThreadProcessId(foreground, out var pid);
+        string process;
+        try { using var owner = System.Diagnostics.Process.GetProcessById((int)pid); process = owner.ProcessName; }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { process = $"unavailable ({e.Message})"; }
+        return $"foreground owner: handle {foreground:X}; class {NativeWheelClass(foreground)}; title {System.Text.Json.JsonSerializer.Serialize(new string(title, 0, length))}; process {process} ({pid})";
+    }
+
+    [LibraryImport("kernel32.dll")]
+    private static partial uint GetCurrentThreadId();
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool AttachThreadInput(uint from, uint to, [MarshalAs(UnmanagedType.Bool)] bool attach);
+    [LibraryImport("user32.dll", SetLastError = true)]
+    private static unsafe partial int GetWindowTextW(nint hwnd, char* text, int maximum);
     [LibraryImport("user32.dll", SetLastError = true)]
     private static unsafe partial int GetClassNameW(nint hwnd, char* name, int maximum);
 }

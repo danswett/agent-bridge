@@ -94,12 +94,8 @@ static partial class SelfTest
                 shown.CopiedSaid += counted;
                 async Task<string> Enter(Func<bool> done)
                 {
-                    var by = SelfTest.Press(window.Handle, VirtualKey.Enter, foreground: true, extended: false);
-                    if (!await Until(done, TimeSpan.FromSeconds(2)) && by == "SendInput")
-                    {
-                        by = SelfTest.Press(window.Handle, VirtualKey.Enter, foreground: false, extended: false);
-                        await Until(done, TimeSpan.FromSeconds(2));
-                    }
+                    var by = await SelfTest.Press(window, VirtualKey.Enter, foreground: true, extended: false);
+                    await Until(done, TimeSpan.FromSeconds(2));
                     return by;
                 }
                 copy!.Focus(FocusState.Keyboard);

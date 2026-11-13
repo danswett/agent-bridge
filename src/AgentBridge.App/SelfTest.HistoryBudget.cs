@@ -114,28 +114,31 @@ static partial class SelfTest
             }
             var timer = window.DispatcherQueue.CreateTimer();
             timer.Interval = TimeSpan.FromMilliseconds(16);
-            timer.Tick += (_, _) =>
+            timer.Tick += async (_, _) =>
             {
                 if (from is not null || main.Selected != card || scroll.ScrollableHeight <= 0
                     || scroll.VerticalOffset < scroll.ScrollableHeight - 1.5) { return; }
                 openedAtBottom = true;
                 if (!list.Focus(FocusState.Programmatic)) { return; }
                 from = scroll.VerticalOffset;
-                method = Press(window.Handle, VirtualKey.PageUp, foreground: false);
+                try { method = await Press(window, VirtualKey.PageUp, foreground: false); }
+                catch (Exception e) { done.TrySetException(e); }
             };
             scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
             scroll.ViewChanged += Changed;
             try
             {
+                await PrepareNativeInput(window, list);
                 watch.Start();
                 timer.Start();
                 window.Sessions.Rows.SelectedItem = card;
                 await Task.WhenAny(done.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+                if (done.Task.IsFaulted) { await done.Task; }
                 if (done.Task.IsCompleted && ById<ItemsRepeater>(away, "History") is { } historyRows)
                 {
                     check(await Until(() => !moving, TimeSpan.FromSeconds(2)), "finishes the first native scroll");
                     fillingStartedMs = watch.Elapsed.TotalMilliseconds;
-                    Press(window.Handle, VirtualKey.PageUp, foreground: false);
+                    await Press(window, VirtualKey.PageUp, foreground: false);
                     await Until(() => fillingInputMs is not null, TimeSpan.FromSeconds(2));
                     check(await Until(() => !moving, TimeSpan.FromSeconds(2)), "finishes native scrolling during older drawing");
                     if (Enumerable.Range(0, historyRows.ItemsSourceView?.Count ?? 0).Select(i => historyRows.TryGetElement(i)).OfType<FrameworkElement>()
@@ -199,7 +202,7 @@ static partial class SelfTest
                 && historyList.TryGetElement((historyList.ItemsSourceView?.Count ?? 0) - 1) is { } last
                 && ById<Button>(last, "CopyCode") is { } copy && copy.Focus(FocusState.Programmatic))
             {
-                var tab = Press(window.Handle, VirtualKey.Tab, foreground: false, extended: false, shift: true);
+                var tab = await Press(window, VirtualKey.Tab, foreground: false, extended: false, shift: true);
                 bool tookView;
                 try
                 {
@@ -225,7 +228,7 @@ static partial class SelfTest
             if (ById<Button>(away, "HeaderPin") is { } pin && ById<Button>(away, "Details") is { } details
                 && pin.Focus(FocusState.Programmatic) && ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(pin.XamlRoot), pin))
             {
-                Press(window.Handle, VirtualKey.Tab, foreground: false, extended: false);
+                await Press(window, VirtualKey.Tab, foreground: false, extended: false);
                 var tabbed = await Until(() => ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(pin.XamlRoot), details), TimeSpan.FromSeconds(3));
                 var response = card.Response + "\n\n" + string.Join("\n\n", Enumerable.Repeat("An arriving paragraph while header focus moves.", 20));
                 await demo.PutAsync(fixture with { Activity = fixture.Activity with { Response = response } });
@@ -254,7 +257,7 @@ static partial class SelfTest
                     return WheelHistoryCount() > 0 && !wheelMoving && scroll.ScrollableHeight > 0
                         && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5;
                 }, TimeSpan.FromSeconds(10));
-                var wheelPost = Wheel(window, list);
+                var wheelPost = await Wheel(window, list);
                 var wheeled = await Until(() => wheelReceivedCount is not null
                     && scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
                 var wheelObserved = CaptureNativeWheel(window, wheelPost.Target, GetFocus(), GetForegroundWindow());
@@ -325,14 +328,17 @@ static partial class SelfTest
         }
     }
 
-    static (nint Target, int X, int Y, NativeWheelSnapshot Sent) Wheel(MainWindow window, ListView list)
+    static async Task<(nint Target, int X, int Y, NativeWheelSnapshot Sent)> Wheel(MainWindow window, ListView list)
     {
+        await PrepareNativeInput(window, list);
         var point = list.TransformToVisual(window.RootElement).TransformPoint(new Windows.Foundation.Point(list.ActualWidth / 2, list.ActualHeight / 2));
         var scale = list.XamlRoot.RasterizationScale;
         var mouse = new WheelPoint { X = (int)(point.X * scale), Y = (int)(point.Y * scale) };
         if (ClientToScreen(window.Handle, ref mouse) == 0) { throw new InvalidOperationException("The wheel target could not be located."); }
-        var (target, focus) = PostedTarget(window.Handle);
+        var focus = GetFocus();
+        var target = VerifiedNativeTarget(window);
         var sent = CaptureNativeWheel(window, target, focus, GetForegroundWindow());
+        if (VerifiedNativeTarget(window) != target) { throw NativeInputRefused(window, "native focus changed before the wheel post"); }
         if (!PostMessageW(target, 0x020A, (nint)(120 << 16), (mouse.Y << 16) | (mouse.X & 0xffff))) { throw new InvalidOperationException($"The native wheel message could not be posted ({sent.Detail})."); }
         return (target, mouse.X, mouse.Y, sent);
     }

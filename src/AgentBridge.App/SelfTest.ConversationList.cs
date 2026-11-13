@@ -314,12 +314,8 @@ static partial class SelfTest
             scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
             try
             {
-                method = Press(window.Handle, VirtualKey.Tab, foreground: true, extended: false);
-                if (!await Until(() => seen, TimeSpan.FromSeconds(2)) && method == "SendInput")
-                {
-                    method = Press(window.Handle, VirtualKey.Tab, foreground: false, extended: false);
-                    await Until(() => seen, TimeSpan.FromSeconds(2));
-                }
+                method = await Press(window, VirtualKey.Tab, foreground: true, extended: false);
+                await Until(() => seen, TimeSpan.FromSeconds(2));
             }
             finally { scroll.RemoveHandler(UIElement.PreviewKeyDownEvent, heard); }
             if (!seen) { return ($"Tab reaching the conversation ({method})", method); }
@@ -393,12 +389,8 @@ static partial class SelfTest
         scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
         try
         {
-            method = Press(window.Handle, VirtualKey.Tab, foreground: true, extended: false, shift: true);
-            if (!await Until(() => seen, TimeSpan.FromSeconds(2)) && method == "SendInput")
-            {
-                method = Press(window.Handle, VirtualKey.Tab, foreground: false, extended: false, shift: true);
-                await Until(() => seen, TimeSpan.FromSeconds(2));
-            }
+            method = await Press(window, VirtualKey.Tab, foreground: true, extended: false, shift: true);
+            await Until(() => seen, TimeSpan.FromSeconds(2));
         }
         finally
         {
@@ -484,12 +476,8 @@ static partial class SelfTest
             scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
             try
             {
-                method = Press(window.Handle, VirtualKey.Tab, foreground: true, extended: false, shift: !forward);
-                if (!await Until(() => seen, TimeSpan.FromSeconds(2)) && method == "SendInput")
-                {
-                    method = Press(window.Handle, VirtualKey.Tab, foreground: false, extended: false, shift: !forward);
-                    await Until(() => seen, TimeSpan.FromSeconds(2));
-                }
+                method = await Press(window, VirtualKey.Tab, foreground: true, extended: false, shift: !forward);
+                await Until(() => seen, TimeSpan.FromSeconds(2));
             }
             finally
             {
@@ -588,12 +576,8 @@ static partial class SelfTest
             string method;
             try
             {
-                method = Press(window.Handle, VirtualKey.Tab, foreground: true, extended: false);
-                if (!await Until(() => seen, TimeSpan.FromSeconds(2)) && method == "SendInput")
-                {
-                    method = Press(window.Handle, VirtualKey.Tab, foreground: false, extended: false);
-                    await Until(() => seen, TimeSpan.FromSeconds(2));
-                }
+                method = await Press(window, VirtualKey.Tab, foreground: true, extended: false);
+                await Until(() => seen, TimeSpan.FromSeconds(2));
             }
             finally { scroll.RemoveHandler(UIElement.PreviewKeyDownEvent, heard); }
             Log($"Tab pressed by {method}, {(seen ? "seen" : "not seen")} at the conversation");

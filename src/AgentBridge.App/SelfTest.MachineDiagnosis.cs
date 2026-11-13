@@ -50,7 +50,7 @@ static partial class SelfTest
             trace.Note($"SetForegroundWindow returned {foreground}");
             var focused = button?.Focus(FocusState.Keyboard) == true && await Until(() => ReferenceEquals(FocusManager.GetFocusedElement(window.RootElement.XamlRoot), button), TimeSpan.FromSeconds(2));
             trace.Note($"before Escape: focused {focused}, open {Open()}");
-            var pressedBy = focused ? Press(window.Handle, VirtualKey.Escape, foreground: true, extended: false) : "none";
+            var pressedBy = focused ? await Press(window, VirtualKey.Escape, foreground: true, extended: false) : "none";
             trace.Note($"Escape pressed by {pressedBy}");
             var closed = focused && await Until(() => trace.SawEscape && !Open(), TimeSpan.FromSeconds(5));
             trace.Note($"after Escape: closed {closed}, open {Open()}");

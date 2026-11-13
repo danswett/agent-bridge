@@ -53,13 +53,9 @@ static partial class SelfTest
                 var focused = FocusManager.GetFocusedElement(list.XamlRoot);
                 var from = scroll.VerticalOffset;
                 var target = PostedInputTarget(window).Detail;
-                var method = Press(window.Handle, key, foreground: true);
-                if (!await Until(() => seen.Contains(key), TimeSpan.FromSeconds(2)) && method == "SendInput")
-                {
-                    target = PostedInputTarget(window).Detail;
-                    method = Press(window.Handle, key, foreground: false);
-                    await Until(() => seen.Contains(key), TimeSpan.FromSeconds(2));
-                }
+                var method = await Press(window, key, foreground: true);
+                target = PostedInputTarget(window).Detail;
+                await Until(() => seen.Contains(key), TimeSpan.FromSeconds(2));
                 methods.Add($"{key} by {method}");
                 if (!seen.Contains(key)) { return ($"{key} reaching the conversation (sent: {target}; now: {PostedInputTarget(window).Detail})", string.Join(", ", methods), method == "PostMessage"); }
                 if (!await Until(() => Math.Abs(scroll.VerticalOffset - from) >= 0.5, TimeSpan.FromSeconds(2))) { return ($"{key} scrolling the text: still at {from:0.#} px", string.Join(", ", methods), false); }
@@ -121,11 +117,12 @@ static partial class SelfTest
     // A key pressed as the keyboard presses it, with Shift held about it when asked. Posted, the key
     // carries no Shift of its own: the app reads modifiers from this thread's keyboard state, which
     // only input read from the queue sets, so Shift is set down there until Unshift (after the key is seen).
-    static string Press(nint window, VirtualKey key, bool foreground, bool extended = true, bool shift = false)
+    static async Task<string> Press(MainWindow window, VirtualKey key, bool foreground, bool extended = true, bool shift = false)
     {
+        await PrepareNativeInput(window);
         var vk = (ushort)key;
         var scan = (ushort)MapVirtualKeyW(vk, 0);
-        if (foreground && GetForegroundWindow() == window)
+        if (foreground)
         {
             // The navigation keys are extended keys: without the flag, Page Down is the keypad's 3. Tab is not.
             var flag = extended ? 0x1u : 0u;
@@ -138,11 +135,19 @@ static partial class SelfTest
             KeyInput[] inputs = shift
                 ? [new KeyInput { Type = 1, Vk = ShiftKey, Scan = shiftScan }, .. keys, new KeyInput { Type = 1, Vk = ShiftKey, Scan = shiftScan, Flags = 0x2 }]
                 : keys;
-            if (SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<KeyInput>()) == inputs.Length) { return "SendInput"; }
+            var target = VerifiedNativeTarget(window);
+            if (SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<KeyInput>()) != inputs.Length) { throw NativeInputRefused(window, "SendInput did not accept the complete key"); }
+            NativeInputSent(window, target, $"SendInput {key}");
+            return "SendInput";
         }
+        var to = VerifiedNativeTarget(window);
         if (shift) { Shifted(true); }
-        var (to, _) = PostedTarget(window);
-        PostKey(to, key, extended);
+        if (!PostKey(to, key, extended))
+        {
+            if (shift) { Shifted(false); }
+            throw NativeInputRefused(window, "PostMessage did not accept the key");
+        }
+        NativeInputSent(window, to, $"PostMessage {key}");
         return "PostMessage";
     }
 
