@@ -78,9 +78,9 @@ public sealed class DeliveryAdmissionTests
         var program = File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.Host", "Program.cs"));
         Assert.Single(Regex.Matches(program, @"new DeliveryGate\(").Cast<Match>());
         Assert.Contains("relayBlobs, codexUnsettled, deliveryGate)", program);
-        Assert.Matches(@"Launcher\(source, g5, attachments, transfers, deliveryGate(, restore)?(, agentCredentials)?(, diagnosticsJournal)?, machine\.Name\)", program);
+        Assert.Matches(@"Launcher\(source, g5, attachments, transfers, deliveryGate(, restore)?(, agentCredentials)?(, diagnosticsJournal)?, machine\.Name, agentAudit\)", program);
         // Launches only carry an agent credential when the host hands its store to the launcher and the launcher on to LaunchService (#720).
-        Assert.Contains("restore, agentCredentials, diagnosticsJournal, machine.Name)", program);
+        Assert.Contains("restore, agentCredentials, diagnosticsJournal, machine.Name, agentAudit)", program);
         Assert.Contains("MachineName = machineName,", program);
         Assert.Contains("Log, attachments, credentials: credentials, account: new CopilotLaunchAccount(launchHttp, log: Log))", program);
         // The lease every planned departure takes is composed with remote management (#801), over the same gate.

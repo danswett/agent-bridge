@@ -1,0 +1,9 @@
+name: Prepare the hosted Arm64 foreground
+description: Dismiss the Microsoft account popup before foreground-dependent native checks (#2027).
+runs:
+  using: composite
+  steps:
+    - shell: pwsh
+      run: |
+        . (Join-Path $env:GITHUB_ACTION_PATH 'dismiss.ps1')
+        Invoke-Arm64PopupDismiss

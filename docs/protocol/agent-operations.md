@@ -5,7 +5,7 @@ Operations an agent calls on the local pipe after `agent.hello`, on its own cred
 | Operation | Scope | What it does |
 | --- | --- | --- |
 | `agent.send` | read+reply | Sends text to one session; see [local-pipe.md](local-pipe.md#agentsend-ap5-lite). |
-| `fleet.list` | read | Lists the sessions of the agent's own account, across its machines, with optional machine display names. |
+| `fleet.list` | read | Lists the sessions and online/offline machines of the agent's own account, with optional machine display names. |
 | `fleet.find` | read | Finds one session of the agent's own account by exact name, with optional machine display names; answers `unverified` until records are signed. |
 
 ## `fleet.list`
@@ -14,14 +14,23 @@ Operations an agent calls on the local pipe after `agent.hello`, on its own cred
 { "id": 3, "op": "fleet.list", "data": { "include": "content" } }
 ```
 
-`include` is optional. Reply: `{ "sessions": [ { "machine", "machineName"?, "node", "state", "since", "secondsInState", "machineOnline", "name"? } ] }`.
+`include` is optional. Reply:
+
+```text
+{
+  "sessions": [ { "machine", "machineName"?, "node", "state", "since", "secondsInState", "machineOnline", "name"? } ],
+  "machines": [ { "machine", "state", "machineName"?, "lastSeen"? } ]
+}
+```
 
 - Only the caller's own account is listed; the relay sends no other account's machines, and the request carries no account or principal.
-- Only those fields come back: no prompt or question text, paths or tokens. `name` is a person's text, so it is returned only with `include: "content"`.
+- Only those fields come back: no prompt or question text, paths or tokens. `name` is a person's text, so it is returned only with `include: "content"`. The additive `machines` field does not change the existing `sessions` projection; older clients may ignore it.
 - `machineName` is the relay's existing machine display name, independent of `include`: at most 64 raw UTF-16 code units, then trimmed. Control, format, unpaired surrogate and line/paragraph separator characters (Cc, Cf, Cs, Zl, Zp) are rejected before trimming; ordinary Unicode and valid emoji pairs stay. Missing, non-string, empty, overlong or invalid values are omitted, never guessed. It is display text, not an identity; `machine` remains the ID.
-- A machine that is offline or has not reported lately has no fresh record, so its sessions are not listed (`machineOnline` is true for every row returned).
+- `machines` includes the caller's account-scoped registry and `known` machines, ordered by machine ID. Its `state` is `online` or `offline`. An expired registry record stays offline; a known-only machine uses the relay's supplied socket `online` flag, so a connected host without a record remains online, without invented sessions. A missing flag from an older relay is treated as offline. Registry liveness and supplied metadata win regardless of frame order; `known` fills only missing last-seen metadata and missing display names on machines with no sessions. A registry machine with sessions keeps its original display name, including omission, so session and lookup replies stay unchanged. `known` never overrides a registry machine's liveness.
+- `lastSeen` is the existing relay metadata timestamp, serialized like session `since`. Missing or null metadata omits the field; no current-time or other default is invented. Invalid timestamps fail the read explicitly. No new relay disclosure or persistence is added.
+- A machine that is offline or has not reported lately has no fresh record, so its sessions are not listed (`machineOnline` is true for every row returned from the relay). `fleet.find` verification, matching and result precedence are unchanged; a known-only machine has no session to match.
 - Each accepted call invokes the `AuditFleetList` hook with the agent's principal. It records nothing until the audit log (#1401) is assigned to it.
-- Reads the relay registry (see [roster.md](roster.md)); needs a relay connection.
+- Reads the relay registry including its terminal `known` metadata (see [roster.md](roster.md)); needs a relay connection. The transport's default registry read remains records-only; the fleet reader explicitly includes `known`.
 
 ## `fleet.find`
 

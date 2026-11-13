@@ -247,6 +247,157 @@ public sealed class FleetListTests : IDisposable
         var e = await Assert.ThrowsAsync<InvalidOperationException>(() => new RelayFleetRoster().ReadAsync(default));
         Assert.Contains("isn't connected to the relay", e.Message);
     }
+
+    static IReadOnlyList<FleetMachine> ExpiredFrames(bool knownFirst = false)
+    {
+        var frames = new[]
+        {
+            """
+            {"machine":"live","name":"build-box","online":true,"lastSeen":"2026-11-07T12:01:00Z",
+             "record":{"sessions":[{"id":"s1","node":"n1","name":"my project","state":"working","since":"2026-11-07T12:00:00Z"}]}}
+            """,
+            """{"machine":"expired","online":false,"lastSeen":"2026-11-07T11:59:00Z","record":null}""",
+            """
+            {"known":[
+              {"machine":"live","name":"old-name","online":true,"lastSeen":"2026-11-07T11:00:00Z"},
+              {"machine":"expired","name":"quiet-box","online":true,"lastSeen":"2026-11-07T11:58:00Z"},
+              {"machine":"gone","name":"offline-box","lastSeen":"2026-11-06T12:00:00Z"}]}
+            """,
+        }.Select(Body);
+        return RelayFleetRoster.Parse(knownFirst ? frames.Reverse() : frames);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Known_machines_without_registry_records_use_supplied_socket_liveness(bool online)
+    {
+        var frame = Body($$"""{"known":[{"machine":"connected","online":{{online.ToString().ToLowerInvariant()}}}]}""");
+        var machine = Assert.Single(RelayFleetRoster.Parse([frame]));
+        Assert.Equal(online, machine.Online);
+        Assert.Empty(machine.Sessions);
+        Assert.Null(machine.LastSeen);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Parsing_keeps_known_machines_without_duplicating_or_overriding_registry_liveness(bool knownFirst)
+    {
+        var parsed = ExpiredFrames(knownFirst).ToDictionary(m => m.Id);
+        Assert.Equal(3, parsed.Count);
+        Assert.True(parsed["live"].Online);
+        Assert.Equal("build-box", parsed["live"].Name);
+        Assert.Single(parsed["live"].Sessions);
+        Assert.False(parsed["expired"].Online);
+        Assert.Equal("quiet-box", parsed["expired"].Name);
+        Assert.Empty(parsed["expired"].Sessions);
+        Assert.False(parsed["gone"].Online);
+        Assert.Empty(parsed["gone"].Sessions);
+        Assert.All(parsed.Values, m => Assert.False(m.Verified));
+        var expired = JsonSerializer.SerializeToElement(parsed["expired"], Web);
+        Assert.Equal(Started.AddMinutes(-1), expired.GetProperty("lastSeen").GetDateTimeOffset());
+        var gone = JsonSerializer.SerializeToElement(parsed["gone"], Web);
+        Assert.Equal(Started.AddDays(-1), gone.GetProperty("lastSeen").GetDateTimeOffset());
+    }
+
+    [Theory]
+    [InlineData("\"not-a-time\"", typeof(FormatException))]
+    [InlineData("42", typeof(InvalidOperationException))]
+    public void Invalid_last_seen_is_refused_instead_of_inventing_machine_freshness(string value, Type error)
+    {
+        var frame = Body($$"""{"machine":"expired","online":false,"record":null,"lastSeen":{{value}}}""");
+        Assert.Throws(error, () => RelayFleetRoster.Parse([frame]));
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("""{"include":"content","account":"other"}""")]
+    public async Task Listing_retains_expired_machines_as_offline_with_last_seen_and_leaves_live_sessions_unchanged(string request)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        roster.Machines = ExpiredFrames();
+        var reply = JsonSerializer.SerializeToElement(await Op().HandleAsync(Hello(AgentProtocol.ScopeRead), Body(request)), Web);
+        var machines = reply.GetProperty("machines").EnumerateArray().ToDictionary(m => m.GetProperty("machine").GetString()!);
+        Assert.Equal(3, machines.Count);
+        foreach (var id in new[] { "expired", "gone" })
+        {
+            var machine = machines[id];
+            Assert.Equal("offline", machine.GetProperty("state").GetString());
+            Assert.Equal(["lastSeen", "machine", "machineName", "state"], machine.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal));
+            Assert.False(machine.TryGetProperty("node", out _));
+        }
+        Assert.Equal(Started.AddMinutes(-1), machines["expired"].GetProperty("lastSeen").GetDateTimeOffset());
+        Assert.Equal("quiet-box", machines["expired"].GetProperty("machineName").GetString());
+        Assert.Equal("online", machines["live"].GetProperty("state").GetString());
+        Assert.Equal(Started.AddMinutes(1), machines["live"].GetProperty("lastSeen").GetDateTimeOffset());
+        var session = Assert.Single(reply.GetProperty("sessions").EnumerateArray());
+        Assert.Equal("live", session.GetProperty("machine").GetString());
+        Assert.Equal("working", session.GetProperty("state").GetString());
+        Assert.True(session.GetProperty("machineOnline").GetBoolean());
+        Assert.Equal(90, session.GetProperty("secondsInState").GetInt64());
+        Assert.Equal(request.Contains("content"), session.TryGetProperty("name", out _));
+        Assert.DoesNotContain("other", reply.GetRawText());
+        roster.Machines = ExpiredFrames(knownFirst: true);
+        var reordered = JsonSerializer.SerializeToElement(await Op().HandleAsync(Hello(AgentProtocol.ScopeRead), Body(request)), Web);
+        Assert.Equal(reply.GetProperty("machines").GetRawText(), reordered.GetProperty("machines").GetRawText());
+    }
+
+    [Fact]
+    public async Task Listing_a_machine_without_last_seen_never_invents_a_time_or_changes_find_results()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        roster.Machines = Frames("build-box");
+        var chan = Hello(AgentProtocol.ScopeRead);
+        var op = Op();
+        var before = JsonSerializer.Serialize(await op.FindAsync(chan, Body("""{"name":"my project"}""")), Web);
+        var reply = JsonSerializer.SerializeToElement(await op.HandleAsync(chan, Body("{}")), Web);
+        Assert.False(Assert.Single(reply.GetProperty("machines").EnumerateArray()).TryGetProperty("lastSeen", out _));
+        Assert.Equal(before, JsonSerializer.Serialize(await op.FindAsync(chan, Body("""{"name":"my project"}""")), Web));
+        roster.Machines = ExpiredFrames();
+        var absent = JsonSerializer.SerializeToElement(await op.FindAsync(chan, Body("""{"name":"missing"}""")), Web);
+        Assert.Equal("notFound", absent.GetProperty("result").GetString());
+        Assert.False(absent.TryGetProperty("machines", out _));
+    }
+
+    [Theory]
+    [InlineData("{}",
+        """[{"machine":"m2","node":"n1","state":"working","since":"2026-11-07T12:00:00+00:00","secondsInState":90,"machineOnline":true,"machineName":"build-box"}]""")]
+    [InlineData("""{"include":"content"}""",
+        """[{"machine":"m2","node":"n1","state":"working","since":"2026-11-07T12:00:00+00:00","secondsInState":90,"machineOnline":true,"name":"my project","machineName":"build-box"}]""")]
+    public async Task Adding_machine_rows_keeps_the_legacy_sessions_bytes_unchanged(string request, string legacy)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        roster.Machines = Frames("build-box");
+        var reply = JsonSerializer.SerializeToElement(await Op().HandleAsync(Hello(AgentProtocol.ScopeRead), Body(request)), Web);
+        Assert.Equal(legacy, reply.GetProperty("sessions").GetRawText());
+    }
+
+    [Theory]
+    [InlineData(true, "unverified")]
+    [InlineData(false, "offline")]
+    public async Task Known_metadata_never_fills_a_missing_display_name_in_legacy_session_or_find_replies(bool online, string result)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        roster.Machines = RelayFleetRoster.Parse(new[]
+        {
+            JsonSerializer.SerializeToElement(new
+            {
+                machine = "m2", online,
+                record = new { sessions = new[] { new { node = "n1", name = "my project", state = "working", since = Started } } },
+            }),
+            Body("""{"known":[{"machine":"m2","name":"old-name","lastSeen":"2026-11-07T11:00:00Z"}]}"""),
+        });
+        var chan = Hello(AgentProtocol.ScopeRead);
+        var op = Op();
+        var reply = JsonSerializer.SerializeToElement(await op.HandleAsync(chan, Body("{}")), Web);
+        var legacy = $$"""[{"machine":"m2","node":"n1","state":"working","since":"2026-11-07T12:00:00+00:00","secondsInState":90,"machineOnline":{{online.ToString().ToLowerInvariant()}}}]""";
+        Assert.Equal(legacy, reply.GetProperty("sessions").GetRawText());
+        var found = JsonSerializer.SerializeToElement(await op.FindAsync(chan, Body("""{"name":"my project"}""")), Web);
+        Assert.Equal(result, found.GetProperty("result").GetString());
+        Assert.False(found.GetProperty("machines")[0].TryGetProperty("machineName", out _));
+    }
+
     static string[] Names(string json) =>
         JsonDocument.Parse(json).RootElement.GetProperty("sessions")[0].EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal).ToArray();
 
