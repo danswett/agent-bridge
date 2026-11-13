@@ -28,7 +28,7 @@ static partial class SelfTest
         var focused = FocusManager.GetFocusedElement(window.RootElement.XamlRoot) as DependencyObject;
         var focusState = focused is Control { FocusState: not FocusState.Unfocused } element ? element.FocusState : FocusState.Programmatic;
         var selected = window.Sessions.Rows.SelectedItem;
-        var (target, inWindow, detail) = PostedInputTarget(window);
+        var (_, inWindow, detail) = PostedInputTarget(window);
         detail = $"job: {job ?? "unset"}; process: {architecture}; {detail}";
         var ready = focused is not null && inWindow;
         var received = false;
@@ -40,7 +40,7 @@ static partial class SelfTest
         window.RootElement.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
         try
         {
-            posted = ready && PostKey(target, VirtualKey.F24, extended: false);
+            posted = ready && PostKey(window.Handle, VirtualKey.F24, extended: false);
             if (posted) { await Until(() => received, TimeSpan.FromSeconds(3)); }
         }
         finally
@@ -64,6 +64,7 @@ static partial class SelfTest
         ready &= selectionKept;
         if (!selectionKept) { check(false, "leaves selection unchanged after the independent F24 canary"); }
         result["postedInputCanary"] = new PostedCanary(eligible, ready, posted, received, detail);
+        if (!received) { AppLog.Write($"self-test: posted F24 not received; {ForegroundOwner()}"); }
         if (received) { check(true, "receives the independent posted F24 canary; input checks stay strict"); }
         else if (!eligible || !ready || !posted || DateTimeOffset.UtcNow >= PostedQuarantineExpiry)
         {
@@ -84,7 +85,7 @@ static partial class SelfTest
             check(true, "posted F24 input not delivered on ARM64 installer (quarantined, issues 2471, 2476, 2483, expires 2026-11-20; owner SG Builder 1981 fix; Engineering Lead accountable; 2483 posts no input: Chief runner-cohort exception, not a proven delivery cause)");
         }
         quarantine.Checks.Add(new { name, detail });
-        AppLog.Write($"self-test: quarantined: {name}: {System.Text.Json.JsonSerializer.Serialize(detail)}");
+        AppLog.Write($"self-test: quarantined: {name}: {System.Text.Json.JsonSerializer.Serialize(detail)}; {ForegroundOwner()}");
         return true;
     }
 
@@ -103,14 +104,55 @@ static partial class SelfTest
             $"window: {window.Handle:X}; target: {target:X}; native focus: {focus:X}; target root: {root:X}; target in window: {root == window.Handle}; foreground: {foreground:X}; foreground matches: {foreground == window.Handle}; XAML focus: {FocusedName(window)}");
     }
 
-    static bool PostKey(nint target, VirtualKey key, bool extended)
+    static bool PostKey(nint window, VirtualKey key, bool extended)
     {
         var scan = (ushort)MapVirtualKeyW((uint)key, 0);
         var lParam = 1 | ((nint)scan << 16) | (extended ? (nint)(1 << 24) : 0);
-        var down = PostMessageW(target, 0x0100, (nint)(ushort)key, lParam);
-        var up = PostMessageW(target, 0x0101, (nint)(ushort)key, lParam | (1 << 30) | unchecked((nint)(1u << 31)));
+        var down = PostNativeInput(window, 0x0100, (nint)(ushort)key, lParam);
+        var up = PostNativeInput(window, 0x0101, (nint)(ushort)key, lParam | (1 << 30) | unchecked((nint)(1u << 31)));
         return down && up;
     }
+
+    static nint PrepareNativeInput(nint window)
+    {
+        AppLog.Write($"self-test: native input start: {ForegroundOwner()}");
+        nint focus = 0, root = 0, foreground = 0;
+        uint thread = 0, process = 0;
+        var ready = false;
+        try
+        {
+            NativeInputSetup.RequireForeground(() =>
+            {
+                if (window != 0 && GetForegroundWindow() != window) { TrayIcon.SetForegroundWindow(window); }
+                focus = GetFocus();
+                thread = GetWindowThreadProcessId(focus, out process);
+                root = GetAncestor(focus, 2);
+                foreground = GetForegroundWindow();
+                ready = NativeInputSetup.TargetReady(window, focus, root, foreground,
+                    GetCurrentThreadId(), (uint)Environment.ProcessId, thread, process);
+                return window != 0 && foreground == window;
+            }, ForegroundOwner);
+        }
+        catch (InvalidOperationException e) { AppLog.Write(e.Message); throw; }
+        if (!ready)
+        {
+            var failure = $"setup: posted input target not ready (window: {window:X}; native focus: {focus:X}; root: {root:X}; thread: {thread}; process: {process}; sampled foreground: {foreground:X}; {ForegroundOwner()})";
+            AppLog.Write(failure);
+            throw new InvalidOperationException(failure);
+        }
+        return focus;
+    }
+
+    static bool PostNativeInput(nint window, uint message, nint wParam, nint lParam)
+    {
+        var target = PrepareNativeInput(window);
+        var posted = PostMessageW(target, message, wParam, lParam);
+        if (!posted) { AppLog.Write($"self-test: message {message:X} not posted (target: {target:X}; {ForegroundOwner()})"); }
+        return posted;
+    }
+
+    [LibraryImport("kernel32.dll")]
+    private static partial uint GetCurrentThreadId();
 
     [LibraryImport("user32.dll")]
     private static partial nint GetAncestor(nint window, uint flags);
