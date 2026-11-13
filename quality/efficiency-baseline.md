@@ -8,9 +8,9 @@ pwsh quality/efficiency-baseline.ps1 -DurationSeconds 30 -SampleIntervalSeconds 
 ```
 
 The host (`agent-bridge-host`) and desktop (`AgentBridge`) are discovered by process
-name. Override with `-HostProcessId` / `-DesktopProcessId`; multiple matches require
-an explicit ID, never an arbitrary choice. Missing or inaccessible targets produce
-`unavailable` with a reason. `out/` is already ignored. Results can contain machine
+name. Override with `-HostProcessId` / `-DesktopProcessId`; ambiguous, missing or
+inaccessible targets report `unavailable.process` with an explicit-ID hint, while
+other targets continue. `out/` is already ignored. Results can contain machine
 names and executable versions: review before publishing; do not commit captures.
 
 Schema: [efficiency-baseline.schema.json](efficiency-baseline.schema.json), version 1.
@@ -29,10 +29,15 @@ This bounded slice does **not** close #2294. GC/EventPipe collection, per-endpoi
 host network capture and browser/PWA HAR/CDP collectors are follow-up slices.
 Those fields are always `null` with reasons, including when tools are installed;
 no unsupported metric is inferred. No browser process is mislabeled as the PWA.
+Version 1 permits numeric GC rates and a network object with `endpoints` entries:
+`endpoint` (role), `bytesInPerMinute`, `bytesOutPerMinute`, `requestsPerMinute`.
+Adding collected values is additive within version 1; unknown fields are rejected.
 There is no background component or persistent measurement state: it runs wherever
 invoked, stops with that invocation, and writes only the requested JSON artifact.
 
 Tests: `dotnet test tests/AgentBridge.Quality.Tests -c Release --filter FullyQualifiedName~EfficiencyBaselineTests`.
 The same dependency-free fixture assertions can run directly with
 `pwsh quality/efficiency-baseline.Tests.ps1 -Scenario elapsed` (also `exit`,
-`replacement`, `readonly`, `no-survivors`, `partial`). Injected tests never sleep.
+`replacement`, `readonly`, `no-survivors`, `partial`, `ambiguous`, `metric-values`).
+Injected tests never sleep. The AST read-only check rejects named mutation commands,
+`Invoke-Expression` and dynamic call operators; it is a guard, not a proof.

@@ -50,9 +50,9 @@ function Get-EfficiencySnapshot([int] $ProcessId) {
     } finally { if ($null -ne $process) { $process.Dispose() } }
 }
 
-function ConvertTo-EfficiencyTarget($ProcessId, [object[]] $Samples) {
+function ConvertTo-EfficiencyTarget($Target, [object[]] $Samples) {
     $result = [ordered]@{
-        status = 'unavailable'; processId = $ProcessId; buildVersion = $null; sampleCount = 0
+        status = 'unavailable'; processId = $Target.processId; buildVersion = $null; sampleCount = 0
         cpuSecondsPerMinute = $null; workingSetBytes = $null; privateBytes = $null; topThreads = $null
         gcAllocationBytesPerSecond = $null; network = $null
         unavailable = @{
@@ -60,8 +60,8 @@ function ConvertTo-EfficiencyTarget($ProcessId, [object[]] $Samples) {
             network = 'No per-process ETW/proxy or browser HAR/CDP collector in this process-only slice.'
         }
     }
-    if (-not $ProcessId) {
-        $result.unavailable.process = 'Target not found, or browser target requires a separate collector.'
+    if (-not $Target.processId) {
+        $result.unavailable.process = $Target.unavailable
         return $result
     }
     $valid = @($Samples | Where-Object { -not $_.data.unavailable.ContainsKey('process') })
@@ -115,23 +115,23 @@ function Invoke-EfficiencyBaseline {
         [scriptblock] $UtcNow = { [datetime]::UtcNow }
     )
     $watch = [Diagnostics.Stopwatch]::StartNew()
-    $startUtc = & $UtcNow
+    $startUtc = $UtcNow.InvokeReturnAsIs()
     $samples = @{}
     foreach ($name in 'host', 'desktop', 'pwa') { $samples[$name] = [Collections.Generic.List[object]]::new() }
     $count = 0
     while ($true) {
         foreach ($name in 'host', 'desktop', 'pwa') {
-            if ($Targets[$name]) {
-                $data = & $ReadSnapshot $Targets[$name]
-                $samples[$name].Add(@{ elapsedSeconds = [double](& $Elapsed); data = $data })
+            if ($Targets[$name].processId) {
+                $data = $ReadSnapshot.InvokeReturnAsIs($Targets[$name].processId)
+                $samples[$name].Add(@{ elapsedSeconds = [double]$Elapsed.InvokeReturnAsIs(); data = $data })
             }
         }
         $count++
-        $elapsedSeconds = [double](& $Elapsed)
+        $elapsedSeconds = [double]$Elapsed.InvokeReturnAsIs()
         if ($elapsedSeconds -ge $DurationSeconds) { break }
-        & $Wait ([math]::Min($SampleIntervalSeconds, $DurationSeconds - $elapsedSeconds))
+        $null = $Wait.InvokeReturnAsIs([math]::Min($SampleIntervalSeconds, $DurationSeconds - $elapsedSeconds))
     }
-    $endUtc = & $UtcNow
+    $endUtc = $UtcNow.InvokeReturnAsIs()
     $targetsResult = [ordered]@{}
     foreach ($name in 'host', 'desktop', 'pwa') {
         $targetsResult[$name] = ConvertTo-EfficiencyTarget $Targets[$name] $samples[$name].ToArray()
@@ -143,14 +143,23 @@ function Invoke-EfficiencyBaseline {
     }
 }
 
-function Resolve-EfficiencyProcess([int] $ProcessId, [string] $Name) {
-    if ($ProcessId) { return $ProcessId }
-    $found = [Diagnostics.Process]::GetProcessesByName($Name)
+function Resolve-EfficiencyProcess([int] $ProcessId, [string] $Name,
+    [scriptblock] $Find = { param($name) [Diagnostics.Process]::GetProcessesByName($name) }) {
+    $result = @{ processId = $null; unavailable = $null }
+    if ($ProcessId) { $result.processId = $ProcessId; return $result }
+    $hint = if ($Name -eq 'agent-bridge-host') { '-HostProcessId' } else { '-DesktopProcessId' }
+    $found = @()
     try {
-        if ($found.Count -gt 1) { throw "Multiple $Name processes; specify the target process ID explicitly." }
-        if ($found.Count -eq 1) { return $found[0].Id }
-        return $null
+        $found = @($Find.Invoke($Name))
+        if ($found.Count -gt 1) { $result.unavailable = "Multiple $Name processes; specify $hint explicitly." }
+        elseif ($found.Count -eq 1) { $result.processId = $found[0].Id }
+        else { $result.unavailable = "No $Name process found; specify $hint if it has another name." }
+    } catch [ComponentModel.Win32Exception], [InvalidOperationException], [NotSupportedException], [Management.Automation.MethodInvocationException] {
+        $failure = $_.Exception.GetBaseException()
+        if ($failure -isnot [ComponentModel.Win32Exception] -and $failure -isnot [InvalidOperationException] -and $failure -isnot [NotSupportedException]) { throw }
+        $result.unavailable = "Process discovery unavailable: $($failure.Message) Specify $hint explicitly."
     } finally { foreach ($process in $found) { $process.Dispose() } }
+    return $result
 }
 
 if ($MyInvocation.InvocationName -ne '.') {
@@ -158,7 +167,7 @@ if ($MyInvocation.InvocationName -ne '.') {
     $targets = @{
         host = Resolve-EfficiencyProcess $HostProcessId 'agent-bridge-host'
         desktop = Resolve-EfficiencyProcess $DesktopProcessId 'AgentBridge'
-        pwa = $null
+        pwa = @{ processId = $null; unavailable = 'Browser target requires a separate collector.' }
     }
     $result = Invoke-EfficiencyBaseline -DurationSeconds $DurationSeconds -SampleIntervalSeconds $SampleIntervalSeconds -Targets $targets
     $path = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputPath)
