@@ -145,6 +145,8 @@ public sealed record UpdateNowArgs
     public bool Now { get; init; }
     public string? Release { get; init; }
     public UpdateBusy? Accept { get; init; }
+    public bool? Batch { get; init; }
+    public bool? Unchecked { get; init; }
 }
 
 // What the machine's updater is doing. An unknown phase reads as Idle: nothing a client would

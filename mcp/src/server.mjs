@@ -43,7 +43,7 @@ const SCHEMAS = {
       effort: str('Effort.'),
       context: str('Context.'),
       permissions: { type: 'string', enum: ['Ask permission', 'Allow all'] },
-      role: str('Coordinators only: the job this worker is for (letters, digits, hyphens). A worker with a role gets only the MCP servers the host lists for that role; leave it out for a person\'s own session.'),
+      role: str('Worker role (letters, digits, hyphens). Omitted: default, which keeps no MCP servers unless launch.workerMcp.default lists them. For more, pass an explicit listed role. Cost/context control, not a security boundary: the host narrows direct copilot only; Claude and Codex are not narrowed, Agency uses its profile. Null or blank roles are rejected.'),
     },
   },
   read_launch_result: { type: 'object', required: ['request'], properties: { machine: str('Ignored.'), request: str('The "request" launch_agent_session returned.') } },
@@ -105,6 +105,7 @@ function validate(name, args) {
       requireString('prompt', { max: MAX_TEXT, optional: true });
       requireRequestKey({ optional: true });
       for (const key of ['agent', 'workspace', 'profile', 'resume', 'model', 'effort', 'context', 'permissions', 'role']) requireString(key, { optional: true });
+      if (args.role !== undefined && !args.role.trim()) throw new PipeError('role must not be blank; omit it to use the default worker role.');
       break;
     case 'read_launch_result':
       requireRequestKey();

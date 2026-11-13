@@ -198,21 +198,125 @@ public sealed class CardTests : IAsyncLifetime
         card.Detach();
     }
 
-    [Fact]
-    public async Task A_refusal_that_arrives_after_the_question_closed_shows_the_neutral_line_and_not_your_answer()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public Task A_failed_answer_delivery_leaves_a_Bad_receipt_after_the_question_closes(bool closesFirst, bool typed) =>
+        CheckFailedAnswerReceipt(failed: true, closesFirst, typed);
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public Task A_refused_answer_delivery_leaves_a_Bad_receipt_after_the_question_closes(bool closesFirst, bool typed) =>
+        CheckFailedAnswerReceipt(failed: false, closesFirst, typed);
+
+    async Task CheckFailedAnswerReceipt(bool failed, bool closesFirst, bool typed)
     {
         var gate = new TaskCompletionSource();
-        host.OnAsync(Ops.SessionAnswer, async _ => { await FakeHost.Until(gate.Task); return new AnswerResult(AnswerOutcome.Refused, "the prompt changed"); });
-        var card = new SessionCardViewModel(Make.Session(question: Make.Choice()), Context());
-        card.Question!.Choose(card.Question.Fields[0].Options[0]);
-        await Wait.UntilAsync(() => host.Sent(Ops.SessionAnswer).Count() == 1, "sent");
-        card.Update(Make.Session());
+        host.OnAsync(Ops.SessionAnswer, async _ =>
+        {
+            await FakeHost.Until(gate.Task);
+            if (failed) { throw new InvalidOperationException("no"); }
+            return new AnswerResult(AnswerOutcome.Refused, "no");
+        });
+        var card = new SessionCardViewModel(Make.Session(question: typed ? Make.Free() : Make.Choice()), Context());
+        var q = card.Question!;
+        try
+        {
+            if (typed) { q.FreeText = "my careful answer"; q.Send(); }
+            else { q.Choose(q.Fields[0].Options[0]); }
+            await Wait.UntilAsync(() => host.Sent(Ops.SessionAnswer).Count() == 1, "sent");
+            if (closesFirst) { card.Update(Make.Session()); }
 
-        gate.SetResult();
+            gate.SetResult();
+            await Wait.UntilAsync(() => deliveries.Get(q.Key)?.State == (failed ? DeliveryState.Failed : DeliveryState.Done), "the failed or refused delivery");
+            await Wait.UntilAsync(() => closesFirst ? card.ReceiptText.Length > 0 : q.StatusTone == Tone.Bad, "the failure presentation");
+            if (!closesFirst)
+            {
+                Assert.Equal(failed, q.ShowResend);
+                Assert.Equal(!failed, q.CanAnswer);
+                card.Update(Make.Session());
+                if (typed) { Assert.Equal("my careful answer", card.OrphanText); }
+            }
 
-        await Wait.UntilAsync(() => card.ReceiptText == "No longer waiting", "the neutral line");
-        Assert.Equal(Tone.None, card.ReceiptTone);
-        card.Detach();
+            Assert.Null(card.Question);
+            Assert.True(card.HasReceipt);
+            Assert.Equal(Tone.Bad, card.ReceiptTone);
+            Assert.Equal(failed ? "Your answer: Couldn't send it: no." : "Your answer: The machine refused this answer: no.", card.ReceiptText);
+            Assert.Equal(ReceiptMark.None, card.ReceiptMark);
+            var text = card.ReceiptText;
+            clock.Advance(TimeSpan.FromSeconds(6));
+            card.Update(Make.Session());
+            Assert.True(card.HasReceipt);
+            Assert.Equal((text, Tone.Bad), (card.ReceiptText, card.ReceiptTone));
+            Assert.Single(host.Sent(Ops.SessionAnswer));
+        }
+        finally { gate.TrySetResult(); card.Detach(); }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public Task A_failure_receipt_clears_when_a_new_question_becomes_live(bool refused, bool arrivesLast) =>
+        CheckLiveQuestionReceipt(returning: false, refused, arrivesLast);
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public Task A_failure_receipt_clears_when_its_question_returns(bool refused, bool arrivesLast) =>
+        CheckLiveQuestionReceipt(returning: true, refused, arrivesLast);
+
+    async Task CheckLiveQuestionReceipt(bool returning, bool refused, bool arrivesLast)
+    {
+        var gate = new TaskCompletionSource();
+        host.OnAsync(Ops.SessionAnswer, async _ =>
+        {
+            await FakeHost.Until(gate.Task);
+            if (!refused) { throw new InvalidOperationException("no"); }
+            return new AnswerResult(AnswerOutcome.Refused, "no");
+        });
+        var asked = Make.Choice();
+        var card = new SessionCardViewModel(Make.Session(question: asked), Context());
+        var key = card.Question!.Key;
+        var finished = false;
+        deliveries.Changed += e =>
+        {
+            if (e.Key == key && e.State == (refused ? DeliveryState.Done : DeliveryState.Failed)) { finished = true; }
+        };
+        var live = Make.Session(question: returning ? asked : Make.Choice("q2"));
+        try
+        {
+            card.Question!.Choose(card.Question.Fields[0].Options[0]);
+            await Wait.UntilAsync(() => host.Sent(Ops.SessionAnswer).Count() == 1, "sent");
+            card.Update(Make.Session());
+            if (arrivesLast) { card.Update(live); }
+            gate.SetResult();
+            await Wait.UntilAsync(() => finished, "the outcome applied to the card");
+            if (!arrivesLast)
+            {
+                Assert.Equal(Tone.Bad, card.ReceiptTone);
+                card.Update(live);
+            }
+
+            var q = card.Question!;
+            Assert.Equal(live.Question!.Id, q.Id);
+            Assert.False(card.HasReceipt);
+            Assert.Equal("", card.ReceiptText);
+            Assert.Equal(Tone.None, card.ReceiptTone);
+            Assert.Equal(returning ? Tone.Bad : Tone.None, q.StatusTone);
+            Assert.Equal(returning && !refused, q.ShowResend);
+            Assert.Equal(!returning || refused, q.CanAnswer);
+            Assert.Single(host.Sent(Ops.SessionAnswer));
+        }
+        finally { gate.TrySetResult(); card.Detach(); }
     }
 
     [Fact]

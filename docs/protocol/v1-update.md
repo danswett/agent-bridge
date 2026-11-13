@@ -59,6 +59,26 @@ longer, and the caveat stays until no such app is left.
 hello's `capabilities` include `update` on a channel through the relay to a machine that is not
 read-only. The pipe never offers it.
 
+### Release hint contract (#2240)
+
+The relay hello may optionally carry `releaseHint: true`; absent, false, a duplicate or any
+non-boolean value does not opt in. This is a relay-hello field, not a Noise hello capability.
+Advertising it and sending hints belong to later slices; this slice only defines parsing.
+
+| Relay control frame field | Required validation |
+|---|---|
+| `t` | Exactly `release.hint` |
+| `tag` | `^v0\.1\.[0-9]{1,19}$`, also the existing release eligibility rule: canonical decimal run, no leading zeros except zero itself, at most Int64.MaxValue |
+| `channel` | Exactly `win` or `win-arm64` |
+| `seenAt` | UTC ISO timestamp ending `Z`, under 40 characters, at most five minutes ahead of now |
+
+The **whole UTF-8 frame is under 256 bytes**. Missing, duplicate, extra, malformed or invalid
+fields drop the frame and increment `ReleaseHints.Dropped`. Its diagnostic callback receives
+only `t`, `tag`, `channel`, `seenAt` or `frame`, never an input value or an unrecognised field name.
+The bounded reader returns untrusted control JSON, not release authority. No hint is trusted,
+shown, used to install or followed as a URL; it carries no URL. Detection and host/app use are
+later slices. Shared examples are `vectors/update.json`'s `release-hints` context.
+
 ## Ops
 
 | Op | Data | Result |
@@ -236,6 +256,15 @@ can't be replayed as a forced one, nor an Update now for one release or machine 
 command lives at most **2 minutes** from `issuedAt`, as a manage command does; the press it
 starts lives at most **15 minutes** from that `issuedAt` ([After the press](#the-confirmation)).
 
+Optional booleans in those signed `args` are reserved for the later halt-policy enforcement
+slice (#2234); this contract change parses them but makes no policy decision.
+
+Absent flags are omitted, so old bodies and signatures remain unchanged. Present values must
+be booleans, not null, strings or numbers; duplicate flags are refused. Both flags are inside
+the exact signed body bytes, so adding, removing or changing either invalidates its MAC.
+Older hosts may refuse these new args; parsing support is not evidence that policy enforcement
+exists. Clients must not send them until the corresponding host behavior ships.
+
 **Replay, durably** (security review, Medium 3). The host records each `request` it verifies in
 its profile folder (`update-now.json`, as `manage.json` keeps `manage.*`'s), written
 through **before** the ask is handed to the app, and keeps it for the press's longest life, 15
@@ -263,6 +292,8 @@ not the authority. Its `args`, signed with the rest:
 | `now` | `true` | Required. Anything else is refused `bad-args` |
 | `release` | string | The release the person was shown (`available`). Anything else at the press, or at the departure, is refused `release-changed` |
 | `accept` | `UpdateBusy`? | What the person confirmed it may go over: the counts, `unknown` if it was shown, `sessions`, the ids and states the confirmation listed, and past 32 `moreApprovals` and `moreOther`, how many approvals and other busy sessions it left out. Each count is at most 1,000,000 (`UpdateProtocol.BusyMost`, far past any machine's sessions, so no sum of them overflows); more is `bad-args`. Absent: the one-press case, valid only while the machine is quiet |
+| `batch` | bool? | Optional. This press belongs to Update all; unreadable/stale policy must refuse it once #2234 ships |
+| `unchecked` | bool? | Optional. The single-machine warning about unreadable protection was accepted; never overrides `batch`; enforcement is #2234 |
 
 Anything else in `args`, or a `contentSha256`, is refused `bad-args`.
 

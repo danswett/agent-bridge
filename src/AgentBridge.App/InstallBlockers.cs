@@ -12,32 +12,46 @@ namespace AgentBridge.App;
 // and never an exception. Processes running from the installation itself are not blockers: the
 // update stops them (the host is stopped for it, and Update.exe ends the rest of the package).
 // Unelevated, Restart Manager still lists a service's process; only its path can't be read by
-// MainModule, so it is read with QueryFullProcessImageName, and a process whose path still can't
-// be read is not counted (InstallHolder.Blocks).
+// MainModule, so it is read with QueryFullProcessImageName. A positive service identity still
+// counts if that too fails; an unidentified holder remains unknown, never clear (#2345).
 static class InstallBlockers
 {
     const int MoreData = 234;
     const int Batch = 200;
     const int MostNamed = 5;
+    static readonly object scan = new();
 
     // The processes outside the installation holding files in it, as "name (service, pid n)", or
-    // null when there are none or it can't be told.
+    // null only when the completed scan found none; a failed scan is explicitly unknown.
     public static string? Find()
     {
+        if (!Monitor.TryEnter(scan)) { return InstallationFiles.Unknown; }
         try
         {
-            if (!OperatingSystem.IsWindows() || !VelopackLocator.IsCurrentSet) { return null; }
-            if (VelopackLocator.Current.RootAppDir is not { Length: > 0 } root) { return null; }
+            if (!OperatingSystem.IsWindows()) { return null; }
+            if (!VelopackLocator.IsCurrentSet) { return InstallationFiles.Unknown; }
+            if (VelopackLocator.Current.RootAppDir is not { Length: > 0 } root) { return InstallationFiles.Unknown; }
             var current = Path.Combine(root, "current");
-            if (!Directory.Exists(current)) { return null; }
+            if (!Directory.Exists(current)) { return InstallationFiles.Unknown; }
             var files = Directory.EnumerateFiles(current, "*", SearchOption.AllDirectories).ToList();
             var own = Path.GetFullPath(root).TrimEnd('\\') + "\\";
-            var found = Held(files).Where(p => InstallHolder.Blocks(p.Pid, Environment.ProcessId, ImagePath(p.Pid), own)).ToList();
-            if (found.Count == 0) { return null; }
+            var held = Held(files).Select(p => (p.Pid, p.Name, p.Service, Image: ImagePath(p.Pid))).ToList();
+            var found = held.Where(p => InstallHolder.Blocks(p.Pid, Environment.ProcessId, p.Image, own, p.Service)).ToList();
+            if (found.Count == 0)
+            {
+                return held.Any(p => p.Pid != Environment.ProcessId && string.IsNullOrWhiteSpace(p.Image) && string.IsNullOrWhiteSpace(p.Service))
+                    ? InstallationFiles.Unknown : null;
+            }
             var names = found.Take(MostNamed).Select(p => p.Service.Length > 0 ? $"{p.Name} ({p.Service}, pid {p.Pid})" : $"{p.Name} (pid {p.Pid})");
             return string.Join(", ", names) + (found.Count > MostNamed ? $" and {found.Count - MostNamed} more" : "");
         }
-        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { return null; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception
+            or InvalidOperationException or ArgumentException or NotSupportedException or DllNotFoundException or EntryPointNotFoundException)
+        {
+            AppLog.Write($"installation file holders could not be checked: {e.Message}");
+            return InstallationFiles.Unknown;
+        }
+        finally { Monitor.Exit(scan); }
     }
 
     // OpenProcess with limited query rights works for elevated and other users' processes, which
@@ -72,21 +86,25 @@ static class InstallBlockers
     {
         var found = new List<(int, string, string)>();
         var key = new StringBuilder(33);
-        if (RmStartSession(out var session, 0, key) != 0) { return found; }
+        var started = RmStartSession(out var session, 0, key);
+        if (started != 0) { throw new System.ComponentModel.Win32Exception(started); }
         try
         {
             for (var i = 0; i < files.Count; i += Batch)
             {
                 var part = files.Skip(i).Take(Batch).ToArray();
-                if (RmRegisterResources(session, (uint)part.Length, part, 0, null, 0, null) != 0) { return found; }
+                var registered = RmRegisterResources(session, (uint)part.Length, part, 0, null, 0, null);
+                if (registered != 0) { throw new System.ComponentModel.Win32Exception(registered); }
             }
             uint have = 0;
             RmProcessInfo[] info = [];
+            var attempts = 0;
             while (true)
             {
                 var result = RmGetList(session, out var needed, ref have, info, out _);
                 if (result == 0) { break; }
-                if (result != MoreData) { return found; }
+                if (result != MoreData) { throw new System.ComponentModel.Win32Exception(result); }
+                if (++attempts > 5) { throw new InvalidOperationException("the Windows file-holder list kept changing"); }
                 info = new RmProcessInfo[needed];
                 have = needed;
             }

@@ -160,6 +160,17 @@ public static class ProtocolVectors
             .Valid("stale", full with { State = MachineLoadState.Stale, AgeMs = 16000 })
             .Valid("first-sample-no-cpu", full with { Cpu = null, Sessions = [session with { CpuPercent = null }] })
             .Valid("unavailable", new MachineLoad())
+            .Reads("over-200-sessions", Broken(full, j => j["sessions"] = JsonSerializer.SerializeToNode(
+                Enumerable.Range(0, 201).Select(i => new SessionLoad { Session = $"s-{i}", WorkingSetBytes = i }),
+                ProtocolJson.Options)))
+            .Reads("mixed-case-names", """
+                {"STATE":"stale","sTaTe":"fresh","sampledAT":"2025-01-02T03:04:05.000Z","AGEMs":100,"sTaleAfterMS":15000,
+                 "CPU":{"PERCENT":1,"pErCeNt":25,"CORES":8},
+                 "MEMORY":{"TOTALBYTES":17179869184,"availableBYTES":8589934592,"COMMITTEDPERCENT":50},
+                 "SESSIONS":[{"SESSION":"s-1","AGENT":"AGENCY","PROCESSES":3,"CPUPERCENT":12.5,"WORKINGSETBYTES":104857600,"wor\u212AingSetBytes":7,"HANDLES":42,"HANDLEKIND":"FDS","stAte":"partial"}],
+                 "UNATTRIBUTED":{"PROCESSES":1,"WORKINGSETBYTES":1048576}}
+                """)
+            .Reads("offset-submillisecond-sampled-at", """{"state":"fresh","sampledAt":"2025-01-02T03:04:05.1234567+02:30","sessions":[]}""")
             .Reads("unknown-state", """{"state":"future","sessions":[]}""")
             .Reads("no-figure", """{"state":"partial","cpu":{},"memory":{},"sessions":[]}""");
     }
@@ -371,7 +382,7 @@ public static class ProtocolVectors
             .Valid("full", FullActivity)
             .Valid("empty", new Activity())
             // Who wrote the latest prompt when it was not the person (#489).
-            .Valid("a-scheduled-prompt", new Activity { UserMessage = "[Scheduled prompt #4] Check CI and report.", UserMessageFrom = UserMessageFrom.Schedule, UserMessageLabel = "4", TurnCount = 3 })
+            .Valid("a-scheduled-prompt", new Activity { Kind = TurnKind.Scheduled, UserMessage = "[Scheduled prompt #4] Check CI and report.", UserMessageFrom = UserMessageFrom.Schedule, UserMessageLabel = "4", TurnCount = 3 })
             .Valid("a-prompt-an-agent-sent", new Activity { UserMessage = "Carry on with the next step.", UserMessageFrom = UserMessageFrom.Agent })
             .Reads("an-unknown-sender-reads-as-other-never-the-person", """{"userMessage":"Carry on.","userMessageFrom":"robot"}""")
             .Refused("a-sender-that-is-not-text", """{"userMessage":"Carry on.","userMessageFrom":4}""");
@@ -913,6 +924,11 @@ public static class ProtocolVectors
 
     static void Update(VectorFileBuilder f)
     {
+        f.Context("release-hints", new
+        {
+            now = T0, hello = new { releaseHint = true },
+            frame = new { t = "release.hint", tag = "v0.1.201", channel = "win", seenAt = T0 },
+        });
         var last = new UpdateResult { Outcome = UpdateOutcome.Updated, From = "0.1.199", To = "0.1.200", Request = Request, At = T0 };
         f.Record<UpdateResult>(Host)
             .Valid("updated", last)

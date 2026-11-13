@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.Host.Lite;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 namespace AgentBridge.Host.Tests;
@@ -18,6 +19,19 @@ public sealed class AgentLiteKillTests : IDisposable
             return ids.Contains(deviceId);
         }
         public IReadOnlyList<LitePeer> All() => [];
+    }
+
+    sealed class WatchClock(DateTimeOffset start) : FakeTimeProvider(start)
+    {
+        volatile bool armed;
+        public bool Armed => armed;
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = base.CreateTimer(callback, state, dueTime, period);
+            armed = true;
+            return timer;
+        }
     }
 
     public AgentLiteKillTests() { Directory.CreateDirectory(root); }
@@ -237,12 +251,34 @@ public sealed class AgentLiteKillTests : IDisposable
     public async Task A_kill_by_another_process_cancels_the_sends_in_flight()
     {
         var folder = NewHost("a");
-        var host = Host(folder);
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var host = new LiteKill(folder, new Peers(), time: time);
         var started = new TaskCompletionSource();
         var send = host.GuardAsync("r1", async ct => { started.SetResult(); await Task.Delay(Timeout.Infinite, ct); return new LiteOutcome(LiteKind.Delivered, null, "r1"); }, default);
         await started.Task;
         Host(folder).Kill();
+        time.Advance(TimeSpan.FromSeconds(1));
         var outcome = await send.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(LiteKind.Unconfirmed, outcome.Kind);
+    }
+
+    [Fact]
+    public async Task A_kill_is_watched_before_the_send_can_advance_the_clock()
+    {
+        var folder = NewHost("a");
+        var time = new WatchClock(DateTimeOffset.UtcNow);
+        var host = new LiteKill(folder, new Peers(), time: time);
+        var outcome = await host.GuardAsync("r1", async ct =>
+        {
+            Assert.True(time.Armed, "The kill watcher must be armed on its clock before the send starts.");
+            var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = ct.Register(() => cancelled.TrySetResult());
+            Host(folder).Kill();
+            time.Advance(TimeSpan.FromSeconds(1));
+            await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.True(ct.IsCancellationRequested, "The first kill-watch tick must cancel the send without a queued watcher startup.");
+            return await Task.FromCanceled<LiteOutcome>(ct);
+        }, default);
         Assert.Equal(LiteKind.Unconfirmed, outcome.Kind);
     }
 

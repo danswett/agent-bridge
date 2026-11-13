@@ -77,6 +77,11 @@ not sent. Unknown, nonfinite or out-of-domain figures are omitted, never clamped
 Record decoding checks representation and finiteness only, not these domain limits; the later
 host mapper enforces this writer policy. This record-only slice adds no host behavior.
 
+The PWA record reader receives already-parsed JavaScript numbers. Beyond the writer's
+interoperable integer range, distinct Int64 tokens may become the same Number, and a
+value accepted by C# may be omitted by the PWA's representation guard. Lossless ingress
+is separate work; this slice does not relax that guard or alter the writer policy.
+
 Also not in v1 of this record: disk growth per session. Process I/O write bytes are not retained disk
 size and a recursive workspace scan per tick is not allowed, so the field is absent until a
 metadata-only measure is agreed (a later change adds `workspaceBytes`, sampled at most once a

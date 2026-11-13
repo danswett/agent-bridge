@@ -39,6 +39,7 @@ import { RowMenu } from './row-menu.js';
 import { phoneMedia } from '../phone-viewport.js';
 import { LoadFeed } from '../load-feed.js';
 import { glyph } from './glyph.js';
+import { whileVisible } from './ticker.js';
 
 // Needs you's answers (Approve once, Deny, Resend) wait as a question's do (ui.md §5.3): any
 // change to the lane can put Approve once under a pointer aimed at something else (an entry
@@ -175,6 +176,7 @@ export class SessionsPage {
   // From Escape's pop until its popstate lands: a second press then would pop past the list.
   #escaping = false;
   #timingTimer = null;
+  #unwatchTimings = null;
   #sortEvents = null;
   #sortPopup = new RowMenu();
   #loads = null;
@@ -201,7 +203,23 @@ export class SessionsPage {
     const accepts = (hostId) => !!hosts.route(hostId);
     this.answers = new AnswerService({ current, accepts, ...timing, marks: 'answer' });
     this.turns = new TurnClock();
-    this.#timingTimer = setInterval(() => { void connection.reportTimings?.(() => this.turns.drain()); }, 60000);
+    const doc = globalThis.document;
+    let timingPending = false;
+    const flushTimings = () => {
+      timingPending = !connection.ready;
+      if (!timingPending) { void connection.reportTimings?.(() => this.turns.drain()); }
+    };
+    this.#timingTimer = whileVisible(flushTimings, 60000);
+    const hidden = () => { if (doc?.visibilityState === 'hidden') { timingPending = false; } };
+    doc?.addEventListener('visibilitychange', hidden);
+    const unready = connection.on?.('ready', () => {
+      if (timingPending && doc?.visibilityState !== 'hidden') { flushTimings(); }
+    });
+    this.#unwatchTimings = () => {
+      timingPending = false;
+      unready?.();
+      doc?.removeEventListener('visibilitychange', hidden);
+    };
     this.replies = new ReplyService({ current, accepts, ...timing, blobs, onTap: (e) => this.turns.sent(e.hostId, e.sessionId) });
     this.stops = new StopService({ current, accepts, ...timing });
     this.launches = new LaunchService({ current, accepts, ...timing });
@@ -805,8 +823,10 @@ export class SessionsPage {
     this.#sortPopup.close(false);
     this.#sortEvents?.abort();
     this.view.stopRecent();
-    clearInterval(this.#timingTimer);
+    this.#timingTimer?.stop();
     this.#timingTimer = null;
+    this.#unwatchTimings?.();
+    this.#unwatchTimings = null;
     // The account's session is no longer shown: said before the page lets go of what says it.
     try { this.opened(null); } catch (e) { console.error(e); }
     this.#unroute?.();

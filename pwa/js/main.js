@@ -323,12 +323,16 @@ const replacedBanner = new LastingBanner({ show: () => reveal($('replaced-banner
 // An installed PWA keeps running the code it has until restarted (S5 limitation), so a
 // new version is announced with a reload button instead of waiting for a force-quit.
 function registerServiceWorker() {
-  if (!('serviceWorker' in navigator)) { return; }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') { appRelease.auto(); }
+  });
+  if (!('serviceWorker' in navigator)) { appRelease.auto(); return; }
   const hadController = !!navigator.serviceWorker.controller;
   // Only an app running a release it has can be stuck on it: without one, each load is the network's.
   const releases = new ReleaseWatch({
     onChange: (stuck) => {
       stuckBanner.set(stuck && hadController);
+      appRelease.installFailed(stuck && hadController ? $('stuck-banner').querySelector('span').textContent : '');
     },
   });
   // Which release is in control, read again after each takeover; only the latest read counts.
@@ -357,10 +361,7 @@ function registerServiceWorker() {
     reg.addEventListener('updatefound', () => releases.watch(reg.installing));
     // One the browser found on its own as this page loaded, before it could listen.
     releases.watch(reg.installing);
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') { reg.update().catch(() => {}); }
-    });
-  }).catch((e) => console.warn('service worker:', e.message));
+  }).catch((e) => console.warn('service worker:', e.message)).finally(() => appRelease.auto());
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     releases.tookOver();
     learn();

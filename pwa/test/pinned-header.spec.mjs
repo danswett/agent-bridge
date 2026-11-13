@@ -2,7 +2,7 @@
 // menu, Search and New in one 48 px row, on a phone (the page scrolls) and beside a session (the
 // list pane scrolls). The count line and machine tabs scroll away; no row hides under the row.
 import { test, expect } from '@playwright/test';
-import { selectSort } from './nav.mjs';
+import { selectSort, motionsDone } from './nav.mjs';
 
 async function openLong(page) {
   await page.goto('?demo=1&static=1');
@@ -38,6 +38,7 @@ async function pinned(page) {
   expect(box.y - paneTop).toBeLessThan(2);
   await expect(page.locator('#sessions-h')).toBeInViewport();
   // Nothing scrolled under the row is the row's to hide: the first row below it is whole on screen.
+  await motionsDone(page);
   const covered = await page.evaluate(() => {
     const h = document.querySelector('.sessions-head').getBoundingClientRect();
     return [...document.querySelectorAll('.session')].filter((r) => {
