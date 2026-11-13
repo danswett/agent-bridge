@@ -48,15 +48,33 @@ test('timings pause while hidden, survive an offline return, and stop with the s
   await page.clock.runFor(60000);
   expect(await page.evaluate(() => window.__timingCalls)).toBe(0);
   expect(await page.evaluate(() => window.agentBridgeDemo.page.turns.recent())).toEqual([sample]);
-  await page.evaluate(() => { window.__timingConnection.relay.open = true; });
-  await visibility(false);
-  await visibility(true);
+  await page.evaluate(() => {
+    setTimeout(() => {
+      window.__timingConnection.relay.open = true;
+      window.agentBridgeDemo.connection.emit('ready');
+    }, 100);
+  });
+  await page.clock.runFor(100);
   await expect.poll(() => posts.length).toBe(1);
+  expect(await page.evaluate(() => window.__timingCalls)).toBe(1);
+  await page.evaluate(() => window.agentBridgeDemo.connection.emit('ready'));
+  expect(await page.evaluate(() => window.__timingCalls)).toBe(1);
   expect(posts[0]).toEqual({
     body: { samples: [{ app: 'PWA', route: 'send-to-settled', ms: sample.ms, at: sample.at }] },
     token: 'Bearer test-account-token',
   });
   expect(await page.evaluate(() => window.agentBridgeDemo.page.turns.drain())).toEqual([]);
+  await page.evaluate(() => { window.__timingConnection.relay.open = false; });
+  await visibility(false);
+  await visibility(true);
+  await visibility(false);
+  const hiddenCalls = await page.evaluate(() => window.__timingCalls);
+  await page.evaluate(() => {
+    window.__timingConnection.relay.open = true;
+    window.agentBridgeDemo.connection.emit('ready');
+  });
+  expect(await page.evaluate(() => window.__timingCalls)).toBe(hiddenCalls);
+  await visibility(true);
   await page.evaluate(() => {
     const turns = window.agentBridgeDemo.page.turns;
     turns.sent('test', 'next'); turns.seen('test', 'next', 'working'); turns.seen('test', 'next', 'idle');
@@ -67,8 +85,15 @@ test('timings pause while hidden, survive an offline return, and stop with the s
   expect(await page.evaluate(() => window.agentBridgeDemo.page.turns.recent().length)).toBe(1);
   await page.clock.runFor(60000);
   await expect.poll(() => posts.length).toBe(2);
+  await page.evaluate(() => { window.__timingConnection.relay.open = false; });
+  await visibility(false);
+  await visibility(true);
   await page.evaluate(() => window.agentBridgeDemo.page.clear());
   const calls = await page.evaluate(() => window.__timingCalls);
+  await page.evaluate(() => {
+    window.__timingConnection.relay.open = true;
+    window.agentBridgeDemo.connection.emit('ready');
+  });
   await visibility(false);
   await visibility(true);
   await page.clock.runFor(120000);
