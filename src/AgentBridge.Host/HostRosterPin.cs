@@ -58,7 +58,7 @@ public sealed partial class HostRosterReader
         (frontier ?? verifier.Heads).Any(h => verifier.Holds(h) && verifier.Graph.Find(h) is { } after &&
             (before == after || verifier.Graph.IsAncestor(before, after)));
 
-    static (T? Value, string? Problem) ReadPrivate<T>(string path, int limit, Func<byte[], T> parse) where T : class
+    internal static (T? Value, string? Problem) ReadPrivate<T>(string path, int limit, Func<byte[], T> parse) where T : class
     {
         try
         {

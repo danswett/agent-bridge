@@ -2,6 +2,7 @@
 // secret). The page shows a code; the user enters it at github.com; the relay then issues
 // its own token for this account.
 import { sleep } from './bytes.js';
+import { clearReplies, replyAccount, withReplies } from './reply-state.js';
 
 export async function startDeviceFlow(base) {
   const r = await fetch(`${base}/v1/auth/device`, { method: 'POST' });
@@ -45,6 +46,18 @@ export const accountStore = {
   },
   // The relay's token as issued. The product will keep a short-lived token and refresh it;
   // that needs relay support that does not exist yet.
-  save(account, storage = localStorage) { storage.setItem(ACCOUNT, JSON.stringify(account)); },
-  clear(storage = localStorage) { storage.removeItem(ACCOUNT); },
+  save(account, storage = localStorage) {
+    return withReplies(storage, () => {
+      const previous = replyAccount(this.load(storage));
+      storage.setItem(ACCOUNT, JSON.stringify(account));
+      if (previous !== replyAccount(account)) { clearReplies(previous, storage); }
+    });
+  },
+  clear(storage = localStorage) {
+    return withReplies(storage, () => {
+      const previous = replyAccount(this.load(storage));
+      storage.removeItem(ACCOUNT);
+      clearReplies(previous, storage);
+    });
+  },
 };

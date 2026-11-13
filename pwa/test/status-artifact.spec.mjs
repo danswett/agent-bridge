@@ -122,6 +122,7 @@ for (const phone of [false, true]) {
         for (const input of ['rest', 'hover', 'key']) {
           if (input === 'hover' && !phone) { await button.hover(); }
           if (input === 'key') {
+            await page.mouse.move(0, 0);
             await button.focus();
             await page.keyboard.press('Shift+Tab');
             await page.keyboard.press('Tab');
@@ -152,25 +153,64 @@ for (const phone of [false, true]) {
         await page.locator('#list-pane').screenshot({ path: screenshot });
         await info.attach('list-264', { path: screenshot, contentType: 'image/png' });
       }
+      await page.mouse.move(0, 0);
+      await page.keyboard.press('Control+k');
+      const search = page.getByRole('searchbox', { name: 'Search sessions' });
       await page.evaluate(() => {
         const demo = window.agentBridgeDemo;
         for (const [id, title] of [
-          ['019a1b2c-codex-example', 'Gutter match one'],
-          ['6f1c2b7e-claude-example', 'Gutter match two'],
+          ['019a1b2c-codex-example', 'Gutter match pair one'],
+          ['6f1c2b7e-claude-example', 'Gutter match pair two'],
+          ['02d9e5d5-6b35-49bd-b083-39572fbff648', 'Gutter match three'],
         ]) { demo.upsert({ ...demo.host.get(id), title }); }
+        const now = new Date().toISOString();
+        demo.upsert({
+          id: 'demo-filter-four', title: 'Gutter match four', agent: 'copilot', status: 'idle',
+          startedAt: now, updatedAt: now, statusSince: now, activity: {},
+        });
       });
-      await page.keyboard.press('Control+k');
-      const search = page.getByRole('searchbox', { name: 'Search sessions' });
-      for (const [query, count, inset] of [['Gutter match one', 1, 0], ['Gutter match', 2, 24]]) {
+      for (const [query, count] of [['Gutter match pair one', 1], ['Gutter match pair', 2], ['Gutter match', 4]]) {
         await search.fill(query);
         await expect(page.locator('.session')).toHaveCount(count);
         const box = await measure();
-        expect(box.glyphX, `${count} filtered rows reserve the appropriate column`).toBe(mainOffset + inset);
+        console.log(`${info.project.name}, ${phone ? 'touch' : 'desktop'}, ${count} filtered matches: ${JSON.stringify(box)}`);
+        expect.soft(box.glyphX, `${count} filtered rows have no empty Move column`).toBe(mainOffset);
         expect(box.rowX).toBe(box.headingX);
         expect(box.overlap).toBe(0);
-        // Filtering still disables reordering; reserving its column never enables a move.
+        // Filtering disables moving, so neither a grip nor its column is needed.
         await expect(grip).toHaveCSS('display', 'none');
       }
+    });
+
+    test('named Your order groups keep row edges on their own heading edge', async ({ page }, info) => {
+      await page.goto('?demo=1&static=1');
+      await page.waitForSelector('html[data-demo-ready]');
+      await selectSort(page, 'yours');
+      const ids = ['019a1b2c-codex-example', '6f1c2b7e-claude-example'];
+      const first = row(page, ids[0]);
+      await first.locator('.row-main').press('Shift+F10');
+      await page.getByRole('menuitem', { name: 'Move to group', exact: true }).click();
+      await page.getByRole('menuitem', { name: /^New group/ }).click();
+      await page.getByRole('textbox', { name: 'Group name', exact: true }).fill('Gutter group');
+      await page.getByRole('button', { name: 'Create group', exact: true }).click();
+      const second = row(page, ids[1]);
+      await second.locator('.row-main').press('Shift+F10');
+      await page.getByRole('menuitem', { name: 'Move to group', exact: true }).click();
+      await page.getByRole('menuitemradio', { name: 'Gutter group', exact: true }).click();
+      const heading = page.getByRole('button', { name: /^Gutter group, 2 sessions/ });
+      await expect(heading).toHaveAttribute('aria-expanded', 'true');
+      await motionsDone(page);
+      const headBox = await heading.boundingBox();
+      for (const id of ids) {
+        const item = row(page, id);
+        const box = await item.boundingBox();
+        expect(box.x, 'grouped row starts at its own heading edge').toBe(headBox.x);
+        const glyph = await item.locator('.row-glyph').boundingBox();
+        expect(glyph.x - box.x, 'unfiltered grouped rows keep the Move column').toBe(36);
+      }
+      const screenshot = info.outputPath('grouped-order.png');
+      await page.locator('#list-pane').screenshot({ path: screenshot });
+      await info.attach('grouped-order', { path: screenshot, contentType: 'image/png' });
     });
   });
 }

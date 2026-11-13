@@ -38,6 +38,7 @@ using AgentBridge.Transport;
 //                                               phones of questions and finished turns. One per
 //                                               profile; it logs to <profile>\logs\host.log too
 //   agent-bridge-host whoami                    this device and the account it signed in to
+//   agent-bridge-host devices descriptor        dormant: refuses until the pinned reader is wired
 //   agent-bridge-host usage                     ask each agent for its allowance once, as JSON
 //                                               (serve does it on a timer; docs/protocol/v1-usage.md)
 //   agent-bridge-host workspace list|add|remove the folders sessions may be launched in from
@@ -55,6 +56,8 @@ using AgentBridge.Transport;
 //                                               profile has taken over agent-ha-bridge's hook
 //                                               spool, its heartbeat, and the hooks' timings
 //                                               (docs/host-hooks.md)
+//   agent-bridge-host audit [--action <action>] [--outcome <outcome>] [--since <time>]
+//                                               read known audit metadata, without changing the profile
 //   agent-bridge-host migrate [--dry-run] | rollback [--dry-run] | migration status
 //                                               move this machine's hooks and settings from
 //                                               agent-ha-bridge to this host, and back
@@ -81,7 +84,19 @@ string? Option(string name)
 }
 bool Flag(string name) => arguments.Contains(name);
 
+if (command == "audit")
+{
+    return AuditCommands.Run(arguments, Identity.DefaultRoot, Console.Out, Console.Error);
+}
+
 // Inventory must return before even intake or device/account identity files are opened.
+if (command == "devices" && arguments.ElementAtOrDefault(1) == "descriptor")
+{
+    // No verified reader is wired here yet; neither identity nor custody may be opened.
+    Console.Error.WriteLine("no-switch");
+    return 3;
+}
+
 if (command == "ha" && HaCommands.TryInventoryCommand(arguments, Identity.DefaultRoot, Console.Out, Console.Error) is { } inventoryExit)
 {
     return inventoryExit;
