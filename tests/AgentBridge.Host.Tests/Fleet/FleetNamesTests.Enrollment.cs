@@ -53,11 +53,13 @@ public sealed partial class FleetNamesTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Unavailable_or_unscoped_rosters_are_unknown_not_absent(bool emptyScope)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task Unavailable_unscoped_or_malformed_rosters_are_unknown_not_absent(bool emptyScope, bool malformed)
     {
-        roster.Read = _ => emptyScope ? Task.FromResult(new FleetRosterSnapshot("", []))
+        roster.Read = _ => malformed ? throw new FormatException("invalid registry timestamp")
+            : emptyScope ? Task.FromResult(new FleetRosterSnapshot("", []))
             : throw new InvalidOperationException("registry unavailable");
         var result = await CallAsync(new { id = Id, name = "SG Quality Lead" });
         Assert.Equal("unknown", result.GetProperty("duplicateStatus").GetString());
