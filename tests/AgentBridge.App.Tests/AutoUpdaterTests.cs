@@ -1597,6 +1597,64 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task A_file_held_during_the_local_confirmation_is_checked_again_before_the_host_stops()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        await auto.TickAsync();
+        var path = Path.Combine(app, "held-during-dialog.dll");
+        File.WriteAllText(path, "old install");
+        FileStream? holder = null;
+        var scans = 0;
+        preflight = () =>
+        {
+            Interlocked.Increment(ref scans);
+            try { using var check = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None); return null; }
+            catch (IOException) { return "a fixture holding held-during-dialog.dll"; }
+        };
+        try
+        {
+            var why = await auto.RestartToUpdateAsync(_ =>
+            {
+                holder = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                time.Advance(TimeSpan.FromMinutes(3));
+                return Task.FromResult(true);
+            });
+            Assert.Contains("held-during-dialog.dll", why, StringComparison.Ordinal);
+            Assert.True(scans >= 3);
+            Assert.False(updater.Applied);
+            Assert.Null(prefs.UpdatedFrom);
+            Assert.Empty(host.Sent(HostOps.Stop));
+        }
+        finally { holder?.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Network")]
+    public async Task A_local_restart_can_recover_a_stopped_or_reconnecting_host_after_its_warning(bool reconnecting)
+    {
+        var disconnected = false;
+        linkConnect = ct => !disconnected ? LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct)
+            : reconnecting ? new TaskCompletionSource<LocalChannel>().Task.WaitAsync(ct)
+            : Task.FromException<LocalChannel>(new HostNotRunningException("stopped"));
+        await StartAsync();
+        await auto.TickAsync();
+        await host.StopAsync();
+        disconnected = true;
+        connection.Reconnect();
+        await Wait.UntilAsync(() => connection.State == (reconnecting ? LinkState.Connecting : LinkState.NotRunning), "the disconnected host");
+        var warnings = 0;
+
+        var why = await auto.RestartToUpdateAsync(_ => { warnings++; return Task.FromResult(true); });
+
+        Assert.Null(why);
+        Assert.True(updater.Applied);
+        Assert.Equal(reconnecting ? 1 : 0, warnings);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task A_retry_time_far_in_the_future_is_capped_once_so_it_stays_put_and_then_elapses()
     {
         InstallBetweenTurns();

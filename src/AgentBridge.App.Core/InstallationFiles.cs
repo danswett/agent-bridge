@@ -5,10 +5,14 @@ public static class InstallationFiles
     public const string Unknown = "Windows file holders could not be checked";
     public static readonly TimeSpan ReleaseWait = TimeSpan.FromMinutes(2);
 
-    public sealed record Budget(TimeProvider Time)
+    public sealed class Budget(TimeProvider time)
     {
-        public long Began { get; } = Time.GetTimestamp();
-        public TimeSpan Remaining => ReleaseWait - Time.GetElapsedTime(Began);
+        public TimeProvider Time { get; } = time;
+        public long Began { get; } = time.GetTimestamp();
+        TimeSpan excluded;
+        public TimeSpan Elapsed => Time.GetElapsedTime(Began) - excluded;
+        public TimeSpan Remaining => ReleaseWait - Elapsed;
+        public void ExcludeSince(long timestamp) => excluded += Time.GetElapsedTime(timestamp);
         public async Task<string?> ProbeOnceAsync(Func<string?>? probe, CancellationToken cancellation)
         {
             if (probe is null) { return null; }
@@ -31,15 +35,14 @@ public static class InstallationFiles
         if (leftAtStart <= TimeSpan.Zero) { return Unknown; }
         using var deadline = new CancellationTokenSource(leftAtStart, time);
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellation, deadline.Token);
-        var began = budget.Began;
         var delay = TimeSpan.FromSeconds(1);
         var last = Unknown;
-        while (!deadline.IsCancellationRequested && time.GetElapsedTime(began) < ReleaseWait)
+        while (!deadline.IsCancellationRequested && budget.Elapsed < ReleaseWait)
         {
             try
             {
                 var held = await Task.Run(probe, stop.Token).WaitAsync(stop.Token);
-                if (time.GetElapsedTime(began) >= ReleaseWait) { return last; }
+                if (budget.Elapsed >= ReleaseWait) { return last; }
                 if (held is null) { return null; }
                 last = string.IsNullOrWhiteSpace(held) ? Unknown : held;
             }
@@ -51,7 +54,7 @@ public static class InstallationFiles
                 last = Unknown;
             }
             waiting?.Invoke(last);
-            var left = ReleaseWait - time.GetElapsedTime(began);
+            var left = budget.Remaining;
             if (left <= TimeSpan.Zero) { break; }
             try { await Task.Delay(delay < left ? delay : left, time, stop.Token); }
             catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellation.IsCancellationRequested) { return last; }

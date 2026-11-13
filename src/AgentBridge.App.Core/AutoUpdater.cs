@@ -1027,17 +1027,21 @@ public sealed class AutoUpdater
     // anything else (a development copy, the host gone or its status unreadable) unavailable.
     async Task<(string? Why, string? Code)> VetAsync(bool asked = false, bool local = false)
     {
-        if (WhyNot(asked || local) is { } why) { return (why, ManageReason.Unavailable); }
-        HostStatus fresh;
-        try { fresh = await host.CallAsync<HostStatus>(HostOps.Status, timeout: TimeSpan.FromSeconds(10)); }
-        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        if (WhyNot(asked || local) is { } why && !(local && why == HostGone)) { return (why, ManageReason.Unavailable); }
+        HostStatus? fresh = host.Status;
+        if (host.State == LinkState.Connected)
         {
-            return ($"the host's status could not be read: {e.Message}", ManageReason.Unavailable);
+            try { fresh = await host.CallAsync<HostStatus>(HostOps.Status, timeout: TimeSpan.FromSeconds(10)); }
+            catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+            {
+                if (!local) { return ($"the host's status could not be read: {e.Message}", ManageReason.Unavailable); }
+                log($"local update recovery: the host's status could not be refreshed: {e.Message}");
+            }
         }
         // A press from another device is not carried out on a machine that has become read-only
         // for other devices since (an automatic update still is: the rule guards other devices).
-        if (asked && fresh.ReadOnly is { } readOnly) { return ($"this machine is read-only for other devices now: {readOnly}", ManageReason.ReadOnly); }
-        if (await Task.Run(() => othersInPackage(fresh.ProcessId)) is { } others) { return (others, UpdateCode.OtherProfile); }
+        if (asked && fresh?.ReadOnly is { } readOnly) { return ($"this machine is read-only for other devices now: {readOnly}", ManageReason.ReadOnly); }
+        if (await Task.Run(() => othersInPackage(fresh?.ProcessId)) is { } others) { return (others, UpdateCode.OtherProfile); }
         return (null, null);
     }
 
@@ -1389,7 +1393,7 @@ public sealed class AutoUpdater
     public const string NotNow = "not now";
     int claimed;
 
-    async Task WaitForFilesAsync()
+    async Task<InstallationFiles.Budget> WaitForFilesAsync()
     {
         var fileBudget = new InstallationFiles.Budget(time);
         try
@@ -1397,6 +1401,7 @@ public sealed class AutoUpdater
             await manager.WaitForInstallationFilesAsync(preflight,
                 why => { fileWait = $"{UpdateBlockedException.Prefix}{why}; waiting for Windows to release the files"; Changed(); }, time, fileBudget);
             await manager.CheckInstallationFilesAsync(preflight, fileBudget);
+            return fileBudget;
         }
         finally { fileWait = null; Changed(); }
     }
@@ -1428,7 +1433,8 @@ public sealed class AutoUpdater
         {
             if (departed is null)
             {
-                await WaitForFilesAsync();
+                var fileBudget = await WaitForFilesAsync();
+                var nonFileWork = time.GetTimestamp();
                 if (local && host.State == LinkState.Connected) { await manager.WaitForUsageProbesAsync(); }
                 if (!local && await ProbeBusyAsync() is { } probe) { lastProbe = probe; Changed(); return NotNow; }
                 lastProbe = null;
@@ -1442,6 +1448,8 @@ public sealed class AutoUpdater
                     vetted = await VetAsync(local: true);
                     if (vetted.Why is { } since) { throw new InstallRefusedException(since, vetted.Code); }
                 }
+                fileBudget.ExcludeSince(nonFileWork);
+                await manager.CheckInstallationFilesAsync(preflight, fileBudget);
             }
             Validate();
             updatingIn = open ? to : null;
@@ -1521,7 +1529,7 @@ public sealed class AutoUpdater
             if (departed is not null) { return; }
             if (!local && (Asked(UpdateAskKind.Install) != request || NowPress)) { throw new InstallRefusedException(NotNow); }
             if (othersInPackage(host.Status?.ProcessId) is { } other) { throw new InstallRefusedException(other, UpdateCode.OtherProfile); }
-            if (WhyNot(asked || local) is { } why) { throw new InstallRefusedException(why, ManageReason.Unavailable); }
+            if (WhyNot(asked || local) is { } why && !(local && why == HostGone)) { throw new InstallRefusedException(why, ManageReason.Unavailable); }
             if (asked && host.Status?.ReadOnly is { } readOnly) { throw new InstallRefusedException($"this machine is read-only for other devices now: {readOnly}", ManageReason.ReadOnly); }
             if (manager.UpdateUnderWay) { throw new UpdateUnderWayException(); }
             if (lastProbe is not null || (!local && GoAhead(asked, time.GetUtcNow()) is null)) { throw new InstallRefusedException(NotNow, hold: true); }
