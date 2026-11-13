@@ -1,0 +1,20 @@
+{
+  "about": "Synthetic operation vectors; expand markers with freshly generated, non-production material. No OS token or provider credential.",
+  "cases": [
+    {"name":"native-subscribe","op":"push.apns.subscribe","accept":true,"data":{"token":"$syntheticToken","target":"ios-sandbox","keyId":"$keyId","keys":{"p256dh":"$publicKey","auth":"$auth"}}},
+    {"name":"native-unsubscribe","op":"push.apns.unsubscribe","accept":true,"data":{"target":"ios-sandbox"}},
+    {"name":"native-list","op":"push.apns.list","accept":true,"data":{}},
+    {"name":"browser-destination","op":"push.apns.subscribe","accept":false,"data":{"endpoint":"https://example.invalid/push","app":"https://example.invalid/","keys":{"p256dh":"$publicKey","auth":"$auth"}}},
+    {"name":"browser-operation","op":"push.subscribe","accept":false,"data":{}},
+    {"name":"foreign-device","op":"push.apns.unsubscribe","accept":false,"data":{"target":"ios-sandbox","deviceId":"another-device"}},
+    {"name":"caller-account","op":"push.apns.list","accept":false,"data":{"accountId":"another-account"}},
+    {"name":"list-with-destination","op":"push.apns.list","accept":false,"data":{"target":"ios-sandbox"}},
+    {"name":"missing-target","op":"push.apns.unsubscribe","accept":false,"data":{}},
+    {"name":"null-target","op":"push.apns.unsubscribe","accept":false,"data":{"target":null}},
+    {"name":"wrong-type","op":"push.apns.unsubscribe","accept":false,"data":{"target":7}},
+    {"name":"target-is-url","op":"push.apns.unsubscribe","accept":false,"data":{"target":"https://example.invalid"}},
+    {"name":"duplicate-target","op":"push.apns.unsubscribe","accept":false,"data":{"target":"ios-sandbox","target":"ios-production"}},
+    {"name":"case-alias","op":"push.apns.unsubscribe","accept":false,"data":{"target":"ios-sandbox","Target":"ios-production"}},
+    {"name":"non-object","op":"push.apns.list","accept":false,"data":[]}
+  ]
+}
