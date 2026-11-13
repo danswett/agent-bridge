@@ -99,8 +99,8 @@ host also asks *which* process each request comes from, op by op:
 | The caller | How the host tells | May |
 |---|---|---|
 | **Inside an agent session** | The connecting process, or any process it descends from, is a live session's own process (by id and start time, so a reused id does not count), one a launch started, any agent CLI found running (Copilot, Claude, Codex, including under Node or Bun), or an executable named `copilot`, `claude`, `codex` or `agency` | Read: `hello` (offering only `sessions.read` and `usage`), `sessions.list`, `session.get`, `sessions.subscribe`, `usage.*`, `launch.options`, `host.status`, `host.subscribe`. Everything else is refused: `refused: this connection is from pid 4120, inside the copilot session 1a2b3c4d (pid 3112); …`. That includes `session.history` (`…; reading a session's history is for the person, from the app or a phone`, [v1-history.md](v1-history.md#security-and-authorization)) and `sessions.focus` (`…; telling the host the person is using the app is for the person, from the app or a phone`): a device in use holds back the person's pushes ([v1-sessions.md](v1-sessions.md#while-the-person-uses-a-device-1190)) |
-| **The app** | Not inside an agent session, its whole ancestry read, and its executable is `AgentBridge.exe` (the app) in the host's own folder, which is how the app ships | Everything, `host.manage` included |
-| **The host's command line** | Not inside an agent session, its whole ancestry read, and its executable is this host's own (`agent-bridge-host`, as `migrate` and `rollback` run it) | What anything else may, `session.rename`, `agent.adopt`, `agent.revoke`, and `host.restart`, which a migration and a rollback need to hand the hook spool over and back ([migration.md](../migration.md)). Nothing else the app may |
+| **The app** | Not inside an agent session, its whole ancestry read, and its executable is `AgentBridge.exe` (the app) in the host's own folder, which is how the app ships | Everything, `host.manage` included, except the host-CLI-only `scripts.add` and `scripts.revoke` |
+| **The host's command line** | Not inside an agent session, its whole ancestry read, and its executable is this host's own (`agent-bridge-host`, as `migrate` and `rollback` run it) | What anything else may, `session.rename`, `agent.adopt`, `agent.revoke`, `scripts.add`, `scripts.revoke`, and `host.restart`, which a migration and a rollback need to hand the hook spool over and back ([migration.md](../migration.md)). Nothing else the app may |
 | **Anything else of the user's** | Neither, a process that could not be traced, or one whose ancestry could be read only in part (an agent may be above what was read) | The sessions ops as before except `session.rename`, `host.status` and `host.subscribe`; not the other management ops (`only the Slipgates app beside this host may stop, restart, sign in, change settings or read the relay account`) |
 
 The ancestry is read when the connection is accepted (`GetNamedPipeClientProcessId`, then one
@@ -117,6 +117,7 @@ in, or migrate the machine or roll it back (not a dry run), refuse in the same c
 full (fail closed). Every session a launch starts has `AGENT_BRIDGE_SESSION` in its environment
 too, which survives a process started detached from its parent
 ([host-config.md](../host-config.md#approving-a-workspace-at-the-machine)).
+The same person-only CLI guard applies to `scripts add|revoke`.
 
 The app does not go round this. Asked to stop or restart a host that answers no, it reports the
 refusal and ends nothing (it ends a host only when the host does not answer at all). Its install,
@@ -139,7 +140,7 @@ host, and there is no app there to do it.
 and `rollback` must restart the host to hand agent-ha-bridge's hook spool over and back
 ([migration.md](../migration.md)), and they are run by a person, from a terminal of their own.
 So a caller that is this host's own executable, beside it, with its whole ancestry read and no
-agent in it, may call `host.restart`, `session.rename`, `agent.adopt` and `agent.revoke` (below),
+agent in it, may call `host.restart`, `session.rename`, `agent.adopt`, `agent.revoke`, `scripts.add` and `scripts.revoke` (below),
 but no other app-only op. It is the same rail as the
 app's: the same ancestry check refuses it inside an agent session, and the commands themselves
 refuse first, with exit 4, before reading anything. A copy of the program elsewhere, or one whose
@@ -177,14 +178,13 @@ setting a name here does not yet make it discoverable through `fleet.find`.
 
 ## Script credential management (`scripts.add`, `scripts.revoke`)
 
-Local pipe only, for the host CLI with fresh person/ancestry classification on every call.
-An agent or credentialed connection (including a revoked connection) is never person authority.
-Both operations take `{ "name": "<script name>" }`; see [host-config.md](../host-config.md#script-credentials-at-the-machine)
-for name validation, limits and exit codes. Add returns `{ "id", "principal", "scope",
-"expiresAt", "path" }`, never a token. Revoke returns `{ "name", "revoked": true }` after
-removing both rotations from the running and persisted store; an unknown name is an error.
-One `attempted` audit entry precedes each mutation; an audit failure refuses it.
-Neither operation is offered on relay channels or to the app.
+Host CLI only, with fresh ancestry checks; a same-user safety rail, not a security boundary.
+An agent or credentialed connection, including a revoked one, is never person authority.
+Both take `{ "name": "<script name>" }`; see [host-config.md](../host-config.md#script-credentials-at-the-machine)
+for names, limits and exit codes. Add returns `{ "id", "principal", "scope", "expiresAt", "path" }`,
+never a token. Revoke returns `{ "name", "revoked": true }` after removing both rotations from
+the running and persisted store; an unknown name is an error. An `attempted` audit entry
+precedes each mutation; an audit failure refuses it. Neither op is offered over relay or to the app.
 
 ## Agent principals: `agent.hello`
 

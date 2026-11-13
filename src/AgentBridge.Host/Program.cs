@@ -45,6 +45,7 @@ using AgentBridge.Transport;
 //                                               other devices, approved here at the machine
 //   agent-bridge-host config show|set|unset     the rest of the profile's config.json
 //                                               (docs/host-config.md, docs/host-launch.md)
+//   agent-bridge-host scripts add|revoke <name> person-only script credential management
 //   agent-bridge-host ha status|token set|token clear|shadow [--json] [--window <seconds>]
 //                                               the Home Assistant connector (docs/ha-connector.md):
 //                                               whether serve would run it, and its token, which is
