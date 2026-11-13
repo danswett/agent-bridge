@@ -11,6 +11,15 @@ Until the app has a settings screen, it is edited with the host's own commands, 
 machine (below), or by hand. The app will edit the same file; this page is the schema both
 follow.
 
+## Host enrollment descriptor (dormant)
+
+`agent-bridge-host devices descriptor` is reserved for a person at the machine.
+It currently exits 3 with only `no-switch` on stderr, before opening identity or
+hostSign custody. There is no config setting, environment override, automatic
+enrollment, scheduled task or deployment. #2367 and verified-reader host wiring
+are follow-ups; enabling the switch alone will not activate this verb.
+HostSign key provisioning is separate (#2369).
+
 ## Schema, version 1
 
 
