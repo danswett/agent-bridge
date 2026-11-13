@@ -74,6 +74,7 @@ public sealed class VerifierSupportTests
     [InlineData("agent-bridge roster entry v1")] [InlineData("agent-bridge person command v1")]
     [InlineData("agent-bridge agent command v1")] [InlineData("agent-bridge link-attest v1")]
     [InlineData("agent-bridge host key binding v1")] [InlineData("agent-bridge verifier key binding v1")]
+    [InlineData("agent-bridge fleet registry v1")]
     public void Other_domains_and_unsigned_tampering_refuse(string domain)
     {
         Assert.Null(Check(Wire()));

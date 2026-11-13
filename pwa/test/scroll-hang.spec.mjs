@@ -11,7 +11,7 @@
 // show as gaps of their own.
 import { test, expect } from '@playwright/test';
 import { go } from './nav.mjs';
-import { HISTORY } from '../js/history.js';
+import { loadEarlierTo } from './history-fixture.mjs';
 
 const TURNS = 500;
 const BUDGET_MS = 50;
@@ -34,7 +34,7 @@ async function openLong(page) {
   await go(page, 'sessions');
   await page.locator('.session[data-id="long-1"] .row-main').click();
   const pane = page.locator('.session-view[data-id="long-1"] .stream-scroll');
-  await expect.poll(() => pane.locator('.history-turn').count(), { timeout: 30000 }).toBeGreaterThanOrEqual(HISTORY.fillTurns);
+  await loadEarlierTo(pane, 104);
   return pane;
 }
 
@@ -114,8 +114,8 @@ test(`scrolling a ${TURNS}-turn session on an iPhone never runs a task over ${BU
   await go(page, 'sessions');
   await page.locator('.session[data-id="long-1"] .row-main').click();
   const pane = page.locator('.session-view[data-id="long-1"] .stream-scroll');
-  // Wait until the history has stopped filling in (it is drawn a few turns a frame), so the scroll
-  // is over as much of the 500 turns as the app draws.
+  await loadEarlierTo(pane, 104);
+  // Wait until manually loaded history has stopped drawing (a few turns a frame).
   let drawn = 0;
   let stableFor = 0;
   await expect.poll(async () => {
