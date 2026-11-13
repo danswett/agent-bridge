@@ -2,6 +2,7 @@
 <#
 .SYNOPSIS
   Read-only process baseline for #2294; schema and limitations: efficiency-baseline.md.
+  Writes only the requested JSON file, creating missing parent directories.
 .EXAMPLE
   pwsh quality/efficiency-baseline.ps1 -DurationSeconds 30 -SampleIntervalSeconds 2 -OutputPath out/baseline.json
 #>
@@ -164,15 +165,19 @@ function Resolve-EfficiencyProcess([int] $ProcessId, [string] $Name,
 
 if ($MyInvocation.InvocationName -ne '.') {
     if ([string]::IsNullOrWhiteSpace($OutputPath)) { throw '-OutputPath is required.' }
-    $targets = @{
-        host = Resolve-EfficiencyProcess $HostProcessId 'agent-bridge-host'
-        desktop = Resolve-EfficiencyProcess $DesktopProcessId 'AgentBridge'
-        pwa = @{ processId = $null; unavailable = 'Browser target requires a separate collector.' }
-    }
-    $result = Invoke-EfficiencyBaseline -DurationSeconds $DurationSeconds -SampleIntervalSeconds $SampleIntervalSeconds -Targets $targets
     $path = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputPath)
-    $null = New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path)
-    $json = $result | ConvertTo-Json -Depth 20
-    if (-not (Test-Json -Json $json -SchemaFile (Join-Path $PSScriptRoot 'efficiency-baseline.schema.json'))) { throw 'Baseline failed schema validation.' }
-    Set-Content -LiteralPath $path -Value $json -Encoding utf8
+    $null = [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($path))
+    $stream = [IO.File]::Open($path, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try {
+        $targets = @{
+            host = Resolve-EfficiencyProcess $HostProcessId 'agent-bridge-host'
+            desktop = Resolve-EfficiencyProcess $DesktopProcessId 'AgentBridge'
+            pwa = @{ processId = $null; unavailable = 'Browser target requires a separate collector.' }
+        }
+        $result = Invoke-EfficiencyBaseline -DurationSeconds $DurationSeconds -SampleIntervalSeconds $SampleIntervalSeconds -Targets $targets
+        $json = $result | ConvertTo-Json -Depth 20
+        if (-not (Test-Json -Json $json -SchemaFile (Join-Path $PSScriptRoot 'efficiency-baseline.schema.json'))) { throw 'Baseline failed schema validation.' }
+        $stream.SetLength(0)
+        $bytes = [Text.Encoding]::UTF8.GetBytes($json + [Environment]::NewLine); $stream.Write($bytes, 0, $bytes.Length)
+    } finally { $stream.Dispose() }
 }

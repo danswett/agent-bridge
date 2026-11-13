@@ -38,6 +38,6 @@ invoked, stops with that invocation, and writes only the requested JSON artifact
 Tests: `dotnet test tests/AgentBridge.Quality.Tests -c Release --filter FullyQualifiedName~EfficiencyBaselineTests`.
 The same dependency-free fixture assertions can run directly with
 `pwsh quality/efficiency-baseline.Tests.ps1 -Scenario elapsed` (also `exit`,
-`replacement`, `readonly`, `no-survivors`, `partial`, `ambiguous`, `metric-values`).
-Injected tests never sleep. The AST read-only check rejects named mutation commands,
+`replacement`, `readonly`, `no-survivors`, `partial`, `ambiguous`, `metric-values`, `entrypoint`).
+Only `entrypoint` uses a real 10 ms window; injected tests never sleep. The AST guard rejects named mutation commands,
 `Invoke-Expression` and dynamic call operators; it is a guard, not a proof.

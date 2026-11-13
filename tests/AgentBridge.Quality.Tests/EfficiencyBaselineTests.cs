@@ -14,7 +14,8 @@ public class EfficiencyBaselineTests
     [InlineData("partial")]
     [InlineData("ambiguous")]
     [InlineData("metric-values")]
-    public async Task The_baseline_contract_holds_without_real_clock_waits(string scenario)
+    [InlineData("entrypoint")]
+    public async Task The_baseline_contract_holds_for_each_fixture(string scenario)
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
         var start = new ProcessStartInfo("pwsh") { RedirectStandardOutput = true, RedirectStandardError = true };

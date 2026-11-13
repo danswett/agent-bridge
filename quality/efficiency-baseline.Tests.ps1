@@ -1,5 +1,5 @@
 #Requires -Version 7.4
-param([ValidateSet('elapsed', 'exit', 'replacement', 'readonly', 'no-survivors', 'partial', 'ambiguous', 'metric-values')][string] $Scenario)
+param([ValidateSet('elapsed', 'exit', 'replacement', 'readonly', 'no-survivors', 'partial', 'ambiguous', 'metric-values', 'entrypoint')][string] $Scenario)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'efficiency-baseline.ps1')
@@ -22,6 +22,25 @@ $options = @{
     UtcNow = { [datetime]::new(2026, 1, 1, 0, 0, 0, [DateTimeKind]::Utc).AddSeconds($state.seconds) }
 }
 switch ($Scenario) {
+    'entrypoint' {
+        $root = Join-Path ([IO.Path]::GetTempPath()) ("efficiency-" + [guid]::NewGuid().ToString('N')); $script = Join-Path $PSScriptRoot 'efficiency-baseline.ps1'
+        $cli = @{ DurationSeconds = 0.01; SampleIntervalSeconds = 0.01; HostProcessId = 2147483647; DesktopProcessId = 2147483647 }
+        try {
+            $path = Join-Path $root 'nested\baseline.json'
+            & $script @cli -OutputPath $path
+            Assert (@(Get-ChildItem -LiteralPath $root -Recurse -File -Force).Count -eq 1) 'The entry point did not write exactly one file.'
+            Assert (Test-Json -Json (Get-Content -LiteralPath $path -Raw) -SchemaFile (Join-Path $PSScriptRoot 'efficiency-baseline.schema.json')) 'The requested file is not baseline JSON.'
+            $lock = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None); $cli.DurationSeconds = 30
+            try {
+                function Start-Sleep { throw 'Sampling started before OutputPath validation.' }
+                foreach ($invalid in $root, $path) {
+                    $rejected = $false
+                    try { & $script @cli -OutputPath $invalid } catch { $failure = $_.Exception.GetBaseException(); $rejected = $failure -is [IO.IOException] -or $failure -is [UnauthorizedAccessException] }
+                    Assert $rejected 'Directory or unwritable OutputPath was not rejected before sampling.'
+                }
+            } finally { $lock.Dispose(); Remove-Item -LiteralPath Function:\Start-Sleep }
+        } finally { if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force } }
+    }
     'exit' { $options.ReadSnapshot = { param($processId) @{ unavailable = @{ process = 'Process exited during observation.' } } } }
     'replacement' { $fixture[-1].identity = '42/reused' }
     'no-survivors' { foreach ($thread in $fixture[-1].threads) { $thread.identity += '/new' } }
