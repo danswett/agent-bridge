@@ -543,6 +543,12 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      light, pwa-ui, pwa-e2e and app, including every static shard and runtime. Product is a
      dynamic family: at least one entry must exist and every present instance must pass; runners
      omitted by the plan are not required. Entirely absent families still hold.
+     Optional `main_green.leg_families` adds lists of exact alternative check names to
+     the universal `jobs`: exactly one complete family must be present and successful.
+     Missing, mixed, extra or skipped legs cannot substitute for that family. An absent
+     or empty families list preserves the existing `jobs` behavior. Pages' `pages-jobs.json`
+     likewise accepts either its existing flat list or lists of complete alternative
+     manifests; only an exact manifest whose jobs all succeeded is deployable.
      The aggregate quality-gate is excluded because it waits on installer. The plan job must
      succeed. Completed `skipped` siblings count as green, including GitHub's unexpanded
      matrix-family entry; a skipped product family is not product evidence. Every named job
