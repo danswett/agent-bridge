@@ -408,6 +408,16 @@ public sealed class SignInTests
     {
         await using var h = await Harness.CreateAsync();
         h.Factory.QueueStart = queued;
+        var sourceChanges = 0;
+        SessionChange? lastSourceChange = null;
+        if (queued)
+        {
+            h.Source.Changed += (_, change) =>
+            {
+                Volatile.Write(ref lastSourceChange, change);
+                Interlocked.Increment(ref sourceChanges);
+            };
+        }
         if (!queued)
         {
             h.States.After = state =>
@@ -419,10 +429,24 @@ public sealed class SignInTests
         await h.Start(phone).Then(phone);
         if (queued)
         {
-            await h.Factory.Started.Task.WaitAsync(Patience);
-            h.Authority.Denial = "revoked";
-            h.Factory.ReleaseLaunch.TrySetResult();
-            await h.Factory.Checked.Task.WaitAsync(Patience);
+            try
+            {
+                await h.Factory.Started.Task.WaitAsync(Patience);
+                h.Authority.Denial = "revoked";
+                h.Factory.ReleaseLaunch.TrySetResult();
+                await h.Factory.Checked.Task.WaitAsync(Patience);
+            }
+            catch (TimeoutException error)
+            {
+                var last = Volatile.Read(ref lastSourceChange);
+                throw new TimeoutException(
+                    $"Queued authority recheck timed out: started={h.Factory.Started.Task.Status}, " +
+                    $"release={h.Factory.ReleaseLaunch.Task.Status}, checked={h.Factory.Checked.Task.Status}, " +
+                    $"starts={h.Factory.Starts}, launches={h.Factory.Launches}, flowRunning={h.Service.FlowRunning}, " +
+                    $"denial={h.Authority.Denial}, sourceRevision={h.Source.Revision}, " +
+                    $"dispatched={Volatile.Read(ref sourceChanges)}, lastRevision={last?.Revision}, " +
+                    $"lastRecovery={last?.Session?.Attention?.Recovery}.", error);
+            }
         }
         else { Assert.Equal(0, h.Factory.Starts); }
         await h.Service.SweepAsync();
