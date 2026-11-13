@@ -42,6 +42,11 @@ makes it a new device, signed in and approved again, so keeping it is fine.
 
 ## Modules
 
+On opening a session, history asks for the newest five turns. Once drawn, at most
+one older page is fetched automatically, only if the visible pane does not yet
+scroll (#2480). Resizing or reopening does not renew that allowance. Load earlier
+messages, Try again and near-top scroll gestures still load earlier pages on demand.
+
 If a stale-cursor recovery walk runs out of its budget before finding held turns or the start,
 the history store keeps the held turns and reports a recoverable earlier-load error (#1437).
 
@@ -612,6 +617,11 @@ fence lines too. ui.md §6.4 and
 span in a sentence this way, and NEL and the separators in prose.
 
 ## Tests
+
+The open delegate detail (#2300) clears its polling timer while the document is hidden.
+On return it redraws ages and fetches once, keeping the last words while the fetch is
+pending or fails. Fake-clock cases are in `test/unit/delegates-view.test.mjs`;
+`test/delegates.spec.mjs` checks the retained content and catch-up in both browsers.
 
 The Fleet update block (#2187) shows a status glyph and word, a quiet "Checked" age and a
 44 px secondary Check now button. Update now is the only primary action when offered;
