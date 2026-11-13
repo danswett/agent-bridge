@@ -49,6 +49,14 @@ static partial class SelfTest
         // A conversation's block with a bare CR, its lines ending CRLF.
         var chat = new MarkdownView { Reading = true, Markdown = $"Run:\r\n\r\n```\r\n{BareReturn}\r\n```\r\n" };
         stack.Children.Add(chat);
+        var promoted = new MarkdownView { Reading = true, Block = MarkdownModel.Parse($"`{LongCommand}`").Single() };
+        var question = new MarkdownView { Markdown = $"`{Isolated} {RightToLeft}`" };
+        var inlineApproval = new MarkdownView { Approval = true, Markdown = "`git status`" };
+        var prose = new MarkdownView { Markdown = "Run `git status` now\n\n`git status` and `git log`\n\n`git status` ``git log``\n\npwsh -NoProfile" };
+        stack.Children.Add(promoted);
+        stack.Children.Add(question);
+        stack.Children.Add(inlineApproval);
+        stack.Children.Add(prose);
         var host = new Border { Width = 420, Padding = new Thickness(12), Background = Ui.Brush("AbCard"), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top, Child = stack };
         var root = (Panel)window.RootElement;
         root.Children.Add(host);
@@ -96,6 +104,33 @@ static partial class SelfTest
             }
             check(chatCode?.Text == BareReturnRevealed && copied.SequenceEqual([BareReturnRevealed]),
                 $"draws a bare carriage return in a conversation's block as an escape on its line, and copies it so ({chatCode?.Text})");
+            var promotedCode = ById<TextBlock>(promoted, "CodeText");
+            var promotedCopy = ById<Button>(promoted, "CopyCode");
+            check(promotedCode is { TextWrapping: TextWrapping.Wrap, ActualHeight: > 0 } && promotedCode.Text == LongCommand
+                && promotedCode.ActualHeight >= 2 * promotedCode.LineHeight && Find<RichTextBlock>(promoted).Count == 0
+                && promotedCopy is { IsTabStop: true } && AutomationProperties.GetName(promotedCopy) == CodeCopy.Name,
+                "a lone inline code span paragraph is drawn as a code block with Copy and a keyboard tab stop");
+            if (promotedCopy is not null)
+            {
+                copied.Clear();
+                ((IInvokeProvider)new ButtonAutomationPeer(promotedCopy).GetPattern(PatternInterface.Invoke)).Invoke();
+                await Until(() => copied.Count == 1, TimeSpan.FromSeconds(2));
+                check(copied.SequenceEqual([LongCommand]), "copies a promoted conversation command exactly, without its backticks or wrap breaks");
+            }
+            if (ById<Button>(question, "CopyCode") is { } questionCopy)
+            {
+                copied.Clear();
+                ((IInvokeProvider)new ButtonAutomationPeer(questionCopy).GetPattern(PatternInterface.Invoke)).Invoke();
+                await Until(() => copied.Count == 1, TimeSpan.FromSeconds(2));
+            }
+            var questionText = $"{IsolatedRevealed} {RightToLeftRevealed}";
+            check(ById<TextBlock>(question, "CodeText") is { FlowDirection: FlowDirection.LeftToRight, TextReadingOrder: TextReadingOrder.UseFlowDirection } questionCode
+                && questionCode.Text == questionText && copied.SequenceEqual([questionText])
+                && ById<TextBlock>(question, "CodeHidden") is not null && ById<TextBlock>(question, "CodeRightToLeft") is not null,
+                "a promoted question span draws and copies the shared hidden-character and right-to-left escapes with their notes");
+            check(ById<Button>(inlineApproval, "CopyCode") is null && ById<TextBlock>(inlineApproval, "CodeText")?.Text == "`git status`"
+                && ById<Button>(prose, "CopyCode") is null && Find<RichTextBlock>(prose).Count == 4,
+                "leaves approvals literal without Copy and leaves sentence-inline code, multiple spans and plain commands as prose");
             MarkdownView.PutText = put;
             await CheckRealClipboard(md, check);
             await Picture(host, Path.ChangeExtension(outFile, ".code.png"));

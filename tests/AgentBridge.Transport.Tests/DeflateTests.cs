@@ -40,14 +40,37 @@ public class DeflateTests
         Assert.Equal(plain, MessageDeflate.Unpack(packed, SecureChannel.MaxMessageBytes));
     }
 
-    [Fact]
-    public void A_small_message_or_one_that_does_not_shrink_goes_as_it_is()
+    [Theory]
+    [InlineData(150)]
+    [InlineData(240)]
+    [InlineData(511)]
+    public void A_patch_sized_message_of_150_to_511_bytes_deflates_when_it_shrinks_and_inflates_back(int bytes)
+    {
+        const string patch = """{"ev":"session.patch","seq":1,"data":{"append":{"activity":{"response":""}}}}""";
+        var plain = Encoding.UTF8.GetBytes(patch.Replace("\"\"", JsonSerializer.Serialize(new string('x', bytes - patch.Length))));
+
+        var packed = MessageDeflate.Pack(plain);
+
+        Assert.Equal(bytes, plain.Length);
+        Assert.Equal(MessageDeflate.Marker, packed[0]);
+        Assert.True(packed.Length < plain.Length, $"{plain.Length} bytes packed to {packed.Length}");
+        Assert.Equal(plain, MessageDeflate.Unpack(packed, SecureChannel.MaxMessageBytes));
+    }
+
+    [Theory]
+    [InlineData(150)]
+    [InlineData(511)]
+    [InlineData(4096)]
+    public void A_small_message_or_one_that_does_not_shrink_goes_as_it_is(int bytes)
     {
         var small = Encoding.UTF8.GetBytes("""{"id":1,"op":"hello","data":{}}""");
-        var noise = new byte[4096];
+        var belowFloor = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { text = new string('x', 138) }));
+        var noise = new byte[bytes];
         new Random(7).NextBytes(noise);
         noise[0] = (byte)'{';
 
+        Assert.Equal(149, belowFloor.Length);
+        Assert.Same(belowFloor, MessageDeflate.Pack(belowFloor));
         Assert.Same(small, MessageDeflate.Pack(small));
         Assert.Same(noise, MessageDeflate.Pack(noise));
         Assert.Same(small, MessageDeflate.Unpack(small, SecureChannel.MaxMessageBytes));

@@ -52,7 +52,7 @@ public sealed class PackageHandoffTests : IDisposable
         // it may until the installer opens it.
         File.WriteAllText(shared, "release from feed A");
         IReadOnlyList<string>? handed = null;
-        using var held = handoff.Launch(copy, 4242, Path.Combine(root, "install"), Packages, ["--background", "--profile", "work"], args => handed = args);
+        using var held = handoff.Launch(copy, Path.Combine(root, "install"), Packages, ["--background", "--profile", "work"], args => handed = args);
 
         Assert.NotNull(handed);
         var package = After(handed, "--package");
@@ -71,7 +71,7 @@ public sealed class PackageHandoffTests : IDisposable
         File.WriteAllText(copy.Package, "tampered");
         var started = false;
 
-        Assert.Throws<PackageMismatchException>(() => handoff.Launch(copy, 4242, Path.Combine(root, "install"), Packages, [], _ => started = true));
+        Assert.Throws<PackageMismatchException>(() => handoff.Launch(copy, Path.Combine(root, "install"), Packages, [], _ => started = true));
 
         Assert.False(started);
     }
@@ -82,7 +82,7 @@ public sealed class PackageHandoffTests : IDisposable
     {
         var handoff = new PackageHandoff(Mark, ProfileCopies);
         var copy = handoff.Prepare(Downloaded(), "0.2.0", Source);
-        using (var held = handoff.Launch(copy, 4242, Path.Combine(root, "install"), Packages, [], _ => { }))
+        using (var held = handoff.Launch(copy, Path.Combine(root, "install"), Packages, [], _ => { }))
         {
             // Windows keeps the file as held (the app runs only there); elsewhere sharing is advisory.
             if (OperatingSystem.IsWindows())
@@ -92,7 +92,7 @@ public sealed class PackageHandoffTests : IDisposable
             }
         }
         // A starter that fails lets it go, so the next attempt can make another.
-        Assert.Throws<InvalidOperationException>(() => handoff.Launch(copy, 4242, Path.Combine(root, "install"), Packages, [], _ => throw new InvalidOperationException("Update.exe did not start")));
+        Assert.Throws<InvalidOperationException>(() => handoff.Launch(copy, Path.Combine(root, "install"), Packages, [], _ => throw new InvalidOperationException("Update.exe did not start")));
         File.WriteAllText(copy.Package, "replaced once let go");
     }
 
@@ -110,7 +110,7 @@ public sealed class PackageHandoffTests : IDisposable
     }
 
     // Update.exe is started as Velopack's ApplyUpdatesAndRestart starts it (UpdateExe.Apply: apply,
-    // --package, --waitPid, --rootDir, --packageDir, then the app's arguments after --), silent
+    // --package, --rootDir, --packageDir, then the app's arguments after --), silent
     // (#1167), with --package naming the copy. --packageDir stays the installation's shared packages folder, where
     // Update.exe takes its install lock (packages\.velopack_lock), so one profile still can't install
     // over another's install.
@@ -122,9 +122,9 @@ public sealed class PackageHandoffTests : IDisposable
         var install = Path.Combine(root, "install");
         IReadOnlyList<string>? handed = null;
 
-        using var held = handoff.Launch(copy, 4242, install, Packages, ["--background", "--profile", "work"], args => handed = args);
+        using var held = handoff.Launch(copy, install, Packages, ["--background", "--profile", "work"], args => handed = args);
 
-        Assert.Equal(["--silent", "apply", "--package", copy.Package, "--waitPid", "4242", "--rootDir", install, "--packageDir", Packages, "--", "--background", "--profile", "work"], handed);
+        Assert.Equal(["--silent", "apply", "--package", copy.Package, "--wait", "--rootDir", install, "--packageDir", Packages, "--", "--background", "--profile", "work"], handed);
         Assert.NotEqual(Path.GetFullPath(Packages), Path.GetFullPath(Path.GetDirectoryName(copy.Package)!));
     }
 
@@ -136,11 +136,29 @@ public sealed class PackageHandoffTests : IDisposable
         var copy = handoff.Prepare(Downloaded(), "0.2.0", Source);
         IReadOnlyList<string>? handed = null;
 
-        using var held = handoff.Launch(copy, 4242, Path.Combine(root, "install"), Packages, ["--background"], args => handed = args);
+        using var held = handoff.Launch(copy, Path.Combine(root, "install"), Packages, ["--background"], args => handed = args);
 
         Assert.NotNull(handed);
         Assert.Equal("--silent", handed[0]);
         Assert.Equal("apply", handed[1]);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void The_installer_waits_for_its_parent_not_the_PID_path_that_lacks_exit_code_query_rights(bool restart)
+    {
+        var handoff = new PackageHandoff(Mark, ProfileCopies);
+        var copy = handoff.Prepare(Downloaded(), "0.2.0", Source);
+        string[] restartArgs = restart ? ["--background", "--profile", "two words"] : [];
+        IReadOnlyList<string>? handed = null;
+
+        using var held = handoff.Launch(copy, Path.Combine(root, "install"), Packages, restartArgs, args => handed = args);
+
+        Assert.NotNull(handed);
+        Assert.Contains("--wait", handed);
+        Assert.DoesNotContain("--waitPid", handed);
+        Assert.Equal(restartArgs, handed.SkipWhile(a => a != "--").Skip(1));
     }
 
     // Engineering's review of #1036 (6693104164, MEDIUM): the handle on the copy closes with the app,
