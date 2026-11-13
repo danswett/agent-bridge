@@ -100,7 +100,7 @@ public sealed partial class SessionView
         {
             if (!Under(FocusManager.GetFocusedElement(ConversationList.XamlRoot) as DependencyObject, e.TargetElement)) { return; }
             var top = e.TargetElement.TransformToVisual(scroll).TransformPoint(new Point(e.TargetRect.X, e.TargetRect.Y)).Y;
-            if (!ConversationKeyboard.WhollyInView(top, e.TargetRect.Height, scroll.ViewportHeight)) { ReleasePin(); }
+            if (!ConversationKeyboard.WhollyInView(top, e.TargetRect.Height, scroll.ViewportHeight)) { ReleaseFocusPin(); }
         }
         ConversationList.LayoutUpdated += OnConversationLaidOut;
         // Tunnelling, so the keys reach this before anything inside the list can take them: the list
@@ -319,7 +319,7 @@ public sealed partial class SessionView
                 return;
             }
             target = blocks[at];
-            if (!ReferenceEquals(brought, target)) { ReleasePin(); ConversationList.ScrollIntoView(target, ScrollIntoViewAlignment.Leading); brought = target; }
+            if (!ReferenceEquals(brought, target)) { ReleaseFocusPin(); ConversationList.ScrollIntoView(target, ScrollIntoViewAlignment.Leading); brought = target; }
             ConversationList.UpdateLayout();
             if (ConversationList.ContainerFromIndex(at) is not { } container)
             {

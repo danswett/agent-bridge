@@ -69,6 +69,12 @@ public sealed partial class SessionView
 
     void ResetLatest() => latestUsed = latestPinned = latestReturning = false;
 
+    void ReleaseFocusPin()
+    {
+        latestPinned = latestReturning = false;
+        ReleasePin();
+    }
+
     void LatestInput(bool up)
     {
         if (!latestUsed) { return; }
