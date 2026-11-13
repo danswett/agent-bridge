@@ -212,6 +212,21 @@ design's §12 table); until then a caller that does not persist them does not me
 Not here: the channel, the relay's `pending` list and its 8-pending and 20-attempts limits (R2),
 the QR paths (§4.3), signing the `add`, and any screen.
 
+### Host descriptor foundation (#2289)
+
+The dormant `HostEnrollment` library requires a private pinned `HostRosterReader`,
+matching account and generation, and its verified `AcceptHostSign` switch before
+opening existing hostSign custody. It neither provisions nor repairs keys, writes
+the roster, nor contacts a relay. Refusals are content-free codes (`no-switch`,
+`missing-key`, `account`, `generation`, `not-pinned`, `invalid-descriptor`,
+`attempt-already-open`); absent, unreadable and wrong-tier keys all use `missing-key`.
+The descriptor carries only public device fields and the hostSign binding proof.
+The existing person-approver exchange is the sole add path; descriptor equality
+also covers `hostSign`, `hostSignAlg` and `hostSignProof`. Status is `enrolled` only
+when the host's own pinned verifier holds the exact matching active v2 add and the
+joiner accepts its approver and matched exchange; otherwise `pending` or
+`not-enrolled`. The CLI remains dormant pending #2367 and host wiring.
+
 ## Acceptance and state
 
 A verifier (`RosterVerifier`) holds one generation's accepted entries as a DAG and decides each
