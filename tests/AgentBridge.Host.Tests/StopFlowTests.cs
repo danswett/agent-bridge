@@ -190,6 +190,14 @@ public sealed class StopFlowTests : IAsyncLifetime
         Assert.Empty(control.Terminated);
         Assert.Equal(SessionStatus.Idle, source.Get(Id)!.Status);
 
+        foreach (var invalid in new[] { "", new string('x', Stops.MaxConfirmLength + 1) })
+        {
+            var refused = await StopAsync(ch, invalid);
+            Assert.Equal(("refused", "the confirmation is not one this host issued"), Pair(refused));
+            Assert.Empty(injector.Plans);
+            Assert.Empty(control.Terminated);
+        }
+        Assert.Equal("confirm", (await StopAsync(ch, new string('x', Stops.MaxConfirmLength))).Outcome_);
         Assert.Equal("confirm", (await StopAsync(ch)).Outcome_);
         Assert.Empty(injector.Plans);
         Assert.Empty(control.Terminated);
