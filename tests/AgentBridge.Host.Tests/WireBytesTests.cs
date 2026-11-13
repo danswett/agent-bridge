@@ -36,6 +36,9 @@ public sealed class WireBytesTests : IAsyncLifetime
     readonly Fixture f = new();
     readonly FakeTimeProvider time = new(DateTimeOffset.UtcNow);
     readonly string[] quiet = new string[QuietSessions];
+    readonly TaskCompletionSource liveSend = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    readonly TaskCompletionSource releaseLive = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    int delayLive;
     TestRelay relay = null!;
     SessionSource source = null!;
     SessionService service = null!;
@@ -61,12 +64,19 @@ public sealed class WireBytesTests : IAsyncLifetime
         var token = relay.TokenFor(1, "octo");
         host = await relay.ConnectAsync(token, "Test host", "host");
         host.Hub.JsonOptions = ProtocolJson.Options;
-        host.Hub.Handler = service.HandleAsync;
+        host.Hub.Handler = async (channel, op, data) =>
+        {
+            var result = await service.HandleAsync(channel, op, data);
+            return result is ChannelReply reply
+                ? reply with { Then = feedChannel => reply.Then(new DelayedChannel(feedChannel, this)) }
+                : result;
+        };
         client = await relay.ConnectAsync(token, "Phone", "pwa");
     }
 
     public async Task DisposeAsync()
     {
+        releaseLive.TrySetResult();
         await relay.DisposeAsync();
         await source.DisposeAsync();
         f.Dispose();
@@ -76,6 +86,26 @@ public sealed class WireBytesTests : IAsyncLifetime
     {
         using var cts = new CancellationTokenSource(Patience);
         return await ch.Events.ReadAsync(cts.Token);
+    }
+
+    // Keep the first live send pending regardless of how quickly this runner schedules it.
+    sealed class DelayedChannel(IProtocolChannel inner, WireBytesTests test) : IProtocolChannel
+    {
+        public string PeerId => inner.PeerId;
+        public string PeerName => inner.PeerName;
+        public string PeerKind => inner.PeerKind;
+        public bool IsOpen => inner.IsOpen;
+        public Task Closed => inner.Closed;
+
+        public async Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default)
+        {
+            if (Volatile.Read(ref test.delayLive) != 0)
+            {
+                test.liveSend.TrySetResult();
+                await test.releaseLive.Task.WaitAsync(ct);
+            }
+            return await inner.SendEventAsync(name, data, ct);
+        }
     }
 
     // What the host's SecureChannel sent for one event: the envelope it serialises, deflated as
@@ -96,6 +126,7 @@ public sealed class WireBytesTests : IAsyncLifetime
         var snapshot = new List<ChannelEvent>();
         do { snapshot.Add(await NextAsync(ch)); } while (snapshot[^1].Name != Events.SessionsSynced);
         Assert.True((await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = Focused })).GetProperty("ok").GetBoolean());
+        Volatile.Write(ref delayLive, 1);
 
         var steps = Seconds * 4;
         for (var n = 0; n < steps; n++)
@@ -110,6 +141,8 @@ public sealed class WireBytesTests : IAsyncLifetime
         }
         // What the quiet interval was still holding at the 40 s mark is not counted: the next
         // release is after it.
+        await liveSend.Task.WaitAsync(Patience);
+        Console.WriteLine("The first live send is held while the original 200 ms measurement runs.");
         await Task.Delay(200);
 
         var wire = new SortedDictionary<string, (int Count, int Bytes)>();
