@@ -546,6 +546,7 @@ export class SignInBanners {
       // sheet goes, rather than saying "Starting…" for a start that never comes.
       if (!this.#views.get(b.key)?.entry?.canSignIn) {
         this.#flows.delete(b.key);
+        this.#dropHostHeld(b.hostId);
         this.#closeSheet(b.key);
         this.render();
         return;
@@ -785,6 +786,7 @@ export class SignInBanners {
     const now = this.#views.get(key);
     if (this.#sheet?.key !== key || !now?.entry?.canSignIn) {
       // Nothing will start: the sheet goes rather than saying "Starting…", focus to the banner.
+      this.#dropHostHeld(key.split('\n')[0]);
       if (this.#sheet?.key === key) { this.#closeSheet(key); }
       this.render();
       return;
