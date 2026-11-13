@@ -428,7 +428,7 @@ public sealed partial class HaConnector
         // same publish again rather than finding it used with nothing done.
         if (usable)
         {
-            p.ArmDriver(attributes && Str(a, "driver") == "agent" ? "agent" : "human", time.GetUtcNow(), principal: sender, words: text);
+            p.ArmDriver(attributes && Str(a, "driver") == "agent" ? "agent" : "human", time.GetUtcNow(), principal: Limits.KeepStart(sender, Limits.DriverPrincipal), words: text);
         }
         if (!usable || images.Count + files.Count != requested)
         {

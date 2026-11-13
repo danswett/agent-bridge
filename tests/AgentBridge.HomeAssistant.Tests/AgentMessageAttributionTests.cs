@@ -13,6 +13,10 @@ public sealed class AgentMessageAttributionTests
         AssertReply(false, "\u202eSG\u0001 Sender\r\n\t  " + new string('x', 80), "SG Sender " + new string('x', 54));
 
     [Fact]
+    public Task Host_armed_reply_card_bounds_a_multibyte_sender_to_the_principal_byte_limit() =>
+        AssertReply(false, new string('\u754c', 64), new string('\u754c', 42));
+
+    [Fact]
     public Task Host_armed_reply_card_does_not_claim_two_matching_prompts_read_together() => AssertReply(true);
 
     static async Task AssertReply(bool multiple, string sender = "SG Sender", string expectedPrincipal = "SG Sender")
