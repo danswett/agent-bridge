@@ -434,7 +434,7 @@ let seq = 0;
 export class SessionCard {
   #s = null;
   #last = {};
-  #replySize = null;
+  #columnSize = null;
   // Arrival identity survives machine-metadata redraws.
   #arrival = null;
   #history = { loaded: false, loading: false };
@@ -742,12 +742,22 @@ export class SessionCard {
     e.head = h('div', { class: 'session-head' }, e.bar, e.top);
     this.view = h('section', { class: 'session-view', 'aria-labelledby': this.ids.title, hidden: true, dataset: { tab: 'conversation' } },
       e.head, h('div', { class: 'view-body' }, e.conversation, e.inspector));
-    // Match the message scroller's usable width and gutters without moving the header.
+    // Classic scrollbars reduce the usable column, not the full-width header's hairline.
     if (typeof ResizeObserver === 'function') {
-      this.#replySize = new ResizeObserver(() => {
-        if (e.scroll.clientWidth > 0) {
+      this.#columnSize = new ResizeObserver(() => {
+        const messageWidth = e.scroll.clientWidth;
+        const width = messageWidth || e.inspector.clientWidth;
+        if (width > 0) {
+          const value = `${width}px`;
+          if (this.view.style.getPropertyValue('--conversation-width') !== value) {
+            this.view.style.setProperty('--conversation-width', value);
+          }
+        } else {
+          this.view.style.removeProperty('--conversation-width');
+        }
+        if (messageWidth > 0) {
           const style = getComputedStyle(e.scroll);
-          e.reply.style.width = `${e.scroll.clientWidth}px`;
+          e.reply.style.width = `${messageWidth}px`;
           e.reply.style.paddingLeft = style.paddingLeft;
           e.reply.style.paddingRight = style.paddingRight;
         } else {
@@ -756,7 +766,8 @@ export class SessionCard {
           }
         }
       });
-      this.#replySize.observe(e.scroll);
+      this.#columnSize.observe(e.scroll);
+      this.#columnSize.observe(e.inspector);
     }
     this.#follow = new ScrollFollow(e.scroll, {
       input: this.view,
@@ -1482,7 +1493,7 @@ export class SessionCard {
 
   // The session is going: it ended, or its machine is no longer shown.
   dispose() {
-    this.#replySize?.disconnect();
+    this.#columnSize?.disconnect();
     this.#unmove?.();
     this.#panel?.destroy();
     this.#panel = null;
