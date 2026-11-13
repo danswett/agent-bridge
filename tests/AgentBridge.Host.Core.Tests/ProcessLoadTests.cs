@@ -13,12 +13,13 @@ public class ProcessLoadTests
     sealed class Table : IProcessTable
     {
         public List<ProcessReading>? Readings { get; set; } = [];
-        public ManualResetEventSlim? ReadGate { get; set; }
-        public int Reads;
+        int reads;
+        public int Reads => Volatile.Read(ref reads);
+        public event Action? ReadCompleted;
         public IReadOnlyList<ProcessReading>? Read()
         {
-            ReadGate?.Wait();
-            Reads++;
+            Interlocked.Increment(ref reads);
+            ReadCompleted?.Invoke();
             return Readings;
         }
     }
@@ -323,27 +324,33 @@ public class ProcessLoadTests
     public async Task The_sampler_samples_every_five_seconds_by_default_and_stops_when_disposed()
     {
         var r = new Rig();
-        using var readGate = new ManualResetEventSlim();
+        using var read = new SemaphoreSlim(0);
+        using var sampled = new SemaphoreSlim(0);
         await using var sampler = r.Sampler;
         r.Bind("s1", 10);
         r.Table.Readings = [P(10, 1, 0, 10)];
-        r.Table.ReadGate = readGate;
+        r.Table.ReadCompleted += () => read.Release();
         var seen = new List<ProcessLoadReport>();
-        r.Sampler.Sampled += seen.Add;
+        r.Sampler.Sampled += report => { seen.Add(report); sampled.Release(); };
         Assert.Equal(TimeSpan.FromSeconds(5), ProcessLoadSampler.DefaultInterval);
 
         r.Sampler.Start();
-        // Hold the fake read past Until's budget; always release it before disposal.
-        try { await Until(() => r.Table.Reads >= 1); }
-        finally { readGate.Set(); }
+        await Until(read);
+        await Until(sampled);
+        Assert.Equal(1, r.Table.Reads);
         r.Time.Advance(TimeSpan.FromSeconds(5));
-        await Until(() => r.Table.Reads >= 2);
+        await Until(read);
+        await Until(sampled);
+        Assert.Equal(2, r.Table.Reads);
+        Assert.Equal(TimeSpan.FromSeconds(5), seen[1].SampledAt - seen[0].SampledAt);
+        // Disposal is the loop-stopped signal, not a real-time opportunity to stop.
         await r.Sampler.DisposeAsync();
         var reads = r.Table.Reads;
         r.Time.Advance(TimeSpan.FromSeconds(30));
-        await Task.Delay(50);
+        await Task.Yield();
 
         Assert.Equal(reads, r.Table.Reads);
+        Assert.Equal(2, seen.Count);
         Assert.NotNull(r.Sampler.Current);
     }
 
@@ -351,22 +358,26 @@ public class ProcessLoadTests
     public async Task A_subscriber_that_throws_does_not_stop_the_sampler()
     {
         var r = new Rig();
+        using var read = new SemaphoreSlim(0);
+        using var sampled = new SemaphoreSlim(0);
+        await using var sampler = r.Sampler;
         r.Bind("s1", 10);
         r.Table.Readings = [P(10, 1, 0, 10)];
-        r.Sampler.Sampled += _ => throw new InvalidCastException("subscriber bug");
+        r.Table.ReadCompleted += () => read.Release();
+        r.Sampler.Sampled += _ => { sampled.Release(); throw new InvalidCastException("subscriber bug"); };
 
         r.Sampler.Start();
-        await Until(() => r.Table.Reads >= 1);
+        await Until(read);
+        await Until(sampled);
         r.Time.Advance(TimeSpan.FromSeconds(5));
-        await Until(() => r.Table.Reads >= 2);
+        await Until(read);
+        await Until(sampled);
+        Assert.Equal(2, r.Table.Reads);
         await r.Sampler.DisposeAsync();
     }
 
-    static async Task Until(Func<bool> done)
-    {
-        for (var i = 0; i < 200 && !done(); i++) { await Task.Delay(10); }
-        Assert.True(done());
-    }
+    static async Task Until(SemaphoreSlim signal) =>
+        Assert.True(await signal.WaitAsync(TimeSpan.FromSeconds(30)), "The sampler did not signal within 30 seconds.");
 
     [Fact]
     public void The_log_line_says_unknown_for_what_is_not_known_and_carries_no_process_ids_or_paths()
