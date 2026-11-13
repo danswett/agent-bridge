@@ -10,10 +10,11 @@ public sealed class VerifierSupportTests
     const string Command = """{"v":1,"action":"accept-host-sign","request":"0f8fad5b-d9cb-469f-a165-70867728950e","by":"11111111111111111111111111111111","target":{"machine":"44444444444444444444444444444444"},"nonce":"ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY","issuedAt":"2026-11-12T18:00:00Z","expiresAt":"2026-11-12T18:10:00Z","heads":["ERERERERERERERERERERERERERERERERERERERERERE","IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI"]}""";
     const string Evidence = """{"v":1,"account":"test","generation":"00000000000000000000000000000000","genesis":"MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM","by":"11111111111111111111111111111111","add":"IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI","purpose":"capSign","key":"aYvqY9xEo0RmP_FCmuoQhC3ye2uZHvJYZrLGwCzcxb4","versions":[1,2],"frontier":"-vUDxokA3Tm9p5nxPJjy0JzSLrdy4zmILa0P5AKijTE","verifiers":"hUVK8Ya6OjMAZtHfwU9E_leoe26xAOmvIA5F8fgwWTw","target":"44444444444444444444444444444444","request":"0f8fad5b-d9cb-469f-a165-70867728950e","consent":"CBiML1bZBIcKoXQSwFr2UlFZy2VePhdY5x4ePmhOyAY","nonce":"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU","issuedAt":"2026-11-12T18:00:00Z","expiresAt":"2026-11-12T18:10:00Z"}""";
     static readonly TestKey Person = TestKey.Named("2366 throwaway capSign"), Host = TestKey.Named("2366 throwaway hostSign");
+    static readonly TestKey ConsentKey = TestKey.Named("2366 throwaway person sign");
     static byte[] Repeat(byte b) => Enumerable.Repeat(b, 32).ToArray();
     static string B(byte[] b) => Codec.Base64Url(b);
     static Instant At(string time) => Instant.Parse("2026-11-12T" + time + "Z");
-    static PersonCommand Consent(string body = Command) => PersonCommand.Parse(Framing.Utf8(PersonCommand.Canonical(Framing.Utf8(body), Person.Sign(PersonCommand.Signed(Framing.Utf8(body))), null)));
+    static PersonCommand Consent(string body = Command) => PersonCommand.Parse(Framing.Utf8(PersonCommand.Canonical(Framing.Utf8(body), ConsentKey.Sign(PersonCommand.Signed(Framing.Utf8(body))), null)));
     static VerifierSupportMember[] Members => [new(new('1', 32), Repeat(0x22), "phone", Person.Public), new(new('4', 32), Repeat(0x11), "host", Host.Public)];
     static View Roster => new("test", new('0', 32), Repeat(0x33), [Repeat(0x11), Repeat(0x22)], Members);
     static VerifierSupportContext Context => new(new('4', 32), Consent(), Repeat(0x55), At("18:00:00"), At("18:10:00"), At("18:05:00"));
@@ -141,7 +142,7 @@ public sealed class VerifierSupportTests
         Assert.Equal(Refusal.Unknown, Assert.Throws<RosterFormatException>(() => VerifierSupport.Parse(Framing.Utf8(extra.ToJsonString()))).Code);
         Assert.Equal(Unsupported, Check(Wire(b => b["supportsHostSign"] = true)));
         var command = JsonNode.Parse(Command)!.AsObject(); command["supportsHostSign"] = true;
-        Assert.Equal(Refusal.Unknown, Assert.Throws<RosterFormatException>(() => PersonCommand.Parse(Framing.Utf8(PersonCommand.Canonical(Framing.Utf8(command.ToJsonString()), Person.Sign([1]), null)))).Code);
+        Assert.Equal(Refusal.Unknown, Assert.Throws<RosterFormatException>(() => PersonCommand.Parse(Framing.Utf8(PersonCommand.Canonical(Framing.Utf8(command.ToJsonString()), ConsentKey.Sign([1]), null)))).Code);
         foreach (var bytes in new[] { Wire(suffix: new string(' ', 900)), Framing.Utf8(new string(' ', 132097) + System.Text.Encoding.UTF8.GetString(Wire())) })
             Assert.Equal(Unsupported, Check(bytes));
     }

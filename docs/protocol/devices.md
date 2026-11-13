@@ -533,11 +533,15 @@ signed support evidence remain separate reviewed slices.
 
 ### Signed verifier-support evidence (#2372 design; #2366 implementation)
 
-**Design contract, not implemented or permission to transition.** This section
+**Design contract; not permission to transition.** This section
 chooses the capability mechanism deferred by the transition note. No setting,
 environment variable, command flag, relay claim or authenticated channel enables
 support. `CheckAcceptHostSign` still ends in `unsupported-verifier`; the positive
 transition (#2288 slice 2b-2) is separate.
+
+#2366's host primitive parses and verifies against a trusted local view only.
+#2381 owns outstanding challenges, consumed replay and snapshot persistence.
+This supplies no statement signer, person-key enrollment or aggregate switch.
 
 **Signer and enrollment.** Each verifier signs its own statement, never for another
 device. A host uses only `hostSign` from its exact, active, person-approved v2 add,
