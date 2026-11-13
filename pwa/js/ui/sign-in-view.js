@@ -210,7 +210,7 @@ export class SignInBanners {
       hosts.onChange(() => this.schedule()),
     ];
     // A code runs out, and "signed in" goes, with nothing from the machine.
-    this.ticker = whileVisible(() => this.render(), 5000);
+    this.ticker = whileVisible(() => this.schedule(), 5000);
     this.render();
   }
 
