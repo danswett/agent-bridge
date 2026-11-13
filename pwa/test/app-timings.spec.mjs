@@ -1,40 +1,20 @@
 import { test, expect } from '@playwright/test';
 import { open, view } from './nav.mjs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { buildSite } from '../tools/build-site.mjs';
-import { startStaticServer } from './serve.mjs';
 
 const IDLE = '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35';
-const RELAY = 'https://timings.relay.invalid';
-let site, appUrl;
-
-test.beforeAll(async ({}, info) => {
-  const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-  const dir = buildSite({ out: path.join(root, '.site', `timings-${info.project.name}`), relay: RELAY });
-  site = await startStaticServer({ dir });
-  appUrl = `http://127.0.0.1:${site.address().port}/`;
-});
-
-test.afterAll(async () => { await new Promise((resolve) => site ? site.close(resolve) : resolve()); });
 
 test('timings pause while hidden, survive an offline return, and stop with the signed-in page', async ({ page }) => {
   const posts = [];
   await page.route('**/v1/stats/app-timings', async (route) => {
-    const headers = { 'access-control-allow-origin': new URL(appUrl).origin };
-    if (route.request().method() === 'OPTIONS') {
-      await route.fulfill({ status: 204, headers: { ...headers, 'access-control-allow-methods': 'POST', 'access-control-allow-headers': 'authorization,content-type' } });
-      return;
-    }
     posts.push({ body: route.request().postDataJSON(), token: route.request().headers().authorization });
-    await route.fulfill({ status: 202, headers, json: { accepted: 1, dropped: 0 } });
+    await route.fulfill({ status: 202, json: { accepted: 1, dropped: 0 } });
   });
   await page.clock.install();
-  await page.goto(`${appUrl}?demo=1&static=1&answerDelay=0`);
+  await page.goto('?demo=1&static=1&answerDelay=0');
   await page.waitForSelector('html[data-demo-ready]');
   await page.evaluate(async () => {
     const { BridgeConnection } = await import('/js/connection.js');
-    const connection = new BridgeConnection({ base: 'https://timings.relay.invalid', key: {}, account: { token: 'test-account-token' } });
+    const connection = new BridgeConnection({ base: location.origin, key: {}, account: { token: 'test-account-token' } });
     connection.relay = { open: true };
     window.__timingConnection = connection;
     window.__timingCalls = 0;
