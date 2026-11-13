@@ -1,11 +1,23 @@
 using AgentBridge.Local;
 using AgentBridge.Protocol;
+using AgentBridge.Transport;
 
 namespace AgentBridge.Host;
 
 public static class AgentCommands
 {
     public const string Usage = "agent-bridge-host agents adopt <session> [--scope read|read+reply] | agents revoke <session> | agents credential [--profile <name>]";
+
+    public static Task<int> RunWithProfileAsync(IReadOnlyList<string> args, string root, Func<bool> refused, TextWriter output, TextWriter error)
+    {
+        var rest = args.ToList();
+        var p = rest.IndexOf("--profile");
+        var profile = p < 0 ? "default" : rest.ElementAtOrDefault(p + 1);
+        if (profile is null || !Identity.IsValidProfile(profile) || (p >= 0 && rest.LastIndexOf("--profile") != p))
+        { error.WriteLine("agent-bridge-host: --profile requires one valid profile name"); return Task.FromResult(2); }
+        if (p >= 0) { rest.RemoveRange(p, 2); }
+        return RunAsync(rest, Path.Combine(root, profile), refused, output, error);
+    }
 
     public static async Task<int> RunAsync(IReadOnlyList<string> args, string folder, Func<bool> refused, TextWriter output, TextWriter error)
     {

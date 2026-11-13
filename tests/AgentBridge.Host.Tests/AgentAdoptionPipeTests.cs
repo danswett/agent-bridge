@@ -123,6 +123,35 @@ public sealed class AgentAdoptionPipeTests : IAsyncLifetime
         Assert.False(File.Exists(Path.Combine(root, AgentCredentials.FileName)));
     }
 
+    [Theory]
+    [InlineData("adopt")]
+    [InlineData("revoke")]
+    public async Task A_trailing_profile_is_rejected_before_the_person_guard_or_connection(string verb)
+    {
+        var guarded = false;
+        var error = new StringWriter();
+        var result = await AgentCommands.RunWithProfileAsync(["agents", verb, Session, "--profile"], root,
+            () => { guarded = true; return true; }, TextWriter.Null, error);
+        Assert.Equal(2, result);
+        Assert.False(guarded);
+        Assert.Contains("--profile requires one valid profile name", error.ToString());
+        Assert.Equal(0, store.Count);
+    }
+
+    [Fact]
+    public void Adoption_never_returns_a_new_process_that_appeared_after_the_guard_ran()
+    {
+        var original = source.ProcessOf(Session)!;
+        launcher.Checking = () =>
+        {
+            fixture.Processes.Run(AgentKind.Copilot, original.Id, startedAt: original.StartedAt!.Value.AddHours(1));
+            Task.Run(() => source.RefreshAsync()).GetAwaiter().GetResult();
+        };
+        var checkedProcess = sessions.ProcessForAdoption(Session);
+        Assert.NotEqual(original, source.ProcessOf(Session));
+        Assert.Equal(original, checkedProcess);
+    }
+
     [Fact]
     public async Task The_cli_prints_only_the_claimed_token_and_exits_nonzero_on_refusal()
     {
@@ -147,10 +176,10 @@ public sealed class AgentAdoptionPipeTests : IAsyncLifetime
         callers.Kind = CallerKind.HostCli;
         var output = new StringWriter();
         var error = new StringWriter();
-        Assert.Equal(0, await AgentCommands.RunAsync(["agents", "adopt", Session, "--scope", "read+reply"], root, () => false, output, error));
+        Assert.Equal(0, await AgentCommands.RunWithProfileAsync(["agents", "adopt", Session, "--scope", "read+reply", "--profile", Path.GetFileName(root)], Path.GetDirectoryName(root)!, () => false, output, error));
         Assert.Contains("as read+reply", output.ToString());
         Assert.Contains("--profile " + Path.GetFileName(root), output.ToString());
-        Assert.Equal(0, await AgentCommands.RunAsync(["agents", "revoke", Session], root, () => false, output, error));
+        Assert.Equal(0, await AgentCommands.RunWithProfileAsync(["agents", "revoke", Session, "--profile", Path.GetFileName(root)], Path.GetDirectoryName(root)!, () => false, output, error));
         Assert.Contains("no longer acts", output.ToString());
         Assert.Equal("", error.ToString());
     }
@@ -189,9 +218,14 @@ public sealed class AgentAdoptionPipeTests : IAsyncLifetime
     sealed class Launcher : ISessionLauncher
     {
         public IReadOnlyList<Started> Processes { get; set; } = [];
+        public Action? Checking { get; set; }
         public bool Available => false;
         public IReadOnlyList<Started> LaunchedProcesses() => Processes;
-        public bool LaunchedSession(string session) => session == Session && Processes.Count > 0;
+        public bool LaunchedSession(string session, SessionProcess? process)
+        {
+            Checking?.Invoke();
+            return session == Session && Processes.Count > 0;
+        }
         public Task<LaunchOptions> OptionsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }

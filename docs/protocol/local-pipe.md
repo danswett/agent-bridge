@@ -215,6 +215,14 @@ Adopt and revoke require the local app or this host's own CLI, with fresh caller
 Agents, untraced callers and partial ancestry cannot authorize either. Adopt requires the host's
 discovered process id and start time, never a caller-supplied process. Scope defaults to `read`;
 the person may pick `read+reply`, never `read+reply+launch`. Host-launched sessions cannot be adopted.
+The provenance check and adoption use the same captured process, even if discovery changes.
+The profile keeps their registered process ids and exact start times in `launch-provenance.json`,
+independently of credentials, so a surviving process remains ineligible after a host restart,
+including after revocation or a launcher handing the session to a child process. Reused process
+ids do not inherit that provenance. An intent is flushed before starting each agent and bound
+when it registers; unreadable or unfinished provenance refuses adoption rather than guessing.
+The file is local to this host profile, contains no credential, and is bounded to 4 MiB; an
+unreadable or unwritable file (including the size limit) refuses further launches.
 An adoption waits in memory for 10 minutes; a host restart lapses it.
 
 `agent.credential` issues once, only when complete pipe ancestry covers exactly one pending
@@ -229,6 +237,8 @@ In a person's terminal at the machine, use `agent-bridge-host agents adopt <sess
 session (exit 4). Inside the adopted session, `agent-bridge-host agents credential` prints
 only the token to stdout, with metadata on stderr. All accept `--profile <name>` and exit
 nonzero on refusal. The host must already be running; these commands create no identity.
+An explicit `--profile` requires one valid value; missing values or repeated flags are rejected before
+the person guard or pipe connection, never silently replaced with `default`.
 
 Adopting again, or revoking, ends the earlier credential and its open connections at once.
 Adoption alone never makes a manual session a reply target. Known gap: a session nested inside

@@ -33,7 +33,7 @@ public interface ISessionLauncher
     // is an agent's, and may not manage the host (§6.3 invariant 13).
     IReadOnlyList<Started> LaunchedProcesses() => [];
 
-    bool LaunchedSession(string session) => false;
+    bool LaunchedSession(string session, SessionProcess? process) => false;
 
     // launch.trust.answer, for a person whose signed command the caller has checked: answers a
     // folder-trust question a launched agent is waiting on (trust, or quit).
@@ -132,6 +132,9 @@ public sealed class LaunchServiceOptions
 
     // A private folder of this host's where a fetched bundle is unpacked before it is installed.
     public string? TransferStaging { get; init; }
+
+    // The profile's launch-provenance.json, independent of credential storage.
+    public string? ProvenanceFile { get; init; }
 }
 
 // Launches and resumes agent sessions as agent-ha-bridge's Launch button does
@@ -166,6 +169,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     readonly IAgentLocator locator;
     readonly AgencyCatalog agency;
     readonly ResumableStore resumable;
+    readonly LaunchProvenance provenance;
     readonly LaunchServiceOptions options;
     readonly Action<string> log;
     readonly AttachmentStore? attachments;
@@ -216,6 +220,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         this.agency = agency;
         this.options = options;
         this.log = log ?? (_ => { });
+        provenance = new LaunchProvenance(options.ProvenanceFile, this.log);
         this.attachments = attachments;
         resumable = new ResumableStore(options.CopilotHome, options.ClaudeHome, options.CodexHome, options.Time);
         var deliveryGate = gate ?? throw new ArgumentNullException(nameof(gate));
@@ -234,10 +239,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         lock (pendingGate) { return [.. launchedOn.Values.Concat(pending.Select(p => p.Started)).Distinct().Where(starter.Running)]; }
     }
 
-    public bool LaunchedSession(string session)
-    {
-        lock (pendingGate) { return launchedOn.ContainsKey(session) || pending.Any(p => p.SessionId == session || p.LiveId == session); }
-    }
+    public bool LaunchedSession(string session, SessionProcess? process) => provenance.Contains(session, process);
 
     // agent-ha-bridge's $script:BridgeResumeCacheLimit: how many of the newest sessions in
     // approved folders it caches, and so decides the resume labels over.
@@ -1240,6 +1242,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             // Where a prompt of the person's would show they got past its startup questions
             // (HeldForReply): what the transcript holds now is from before this agent.
             var transcriptFrom = TranscriptFrom(plan.Launcher, sessionId);
+            // A crash before registration must not turn an unbound launch into an adoptable process.
+            provenance.Preparing(key, sessionId);
             // A session whose id the agent chooses (Codex) has none to bind a credential to yet.
             var launchId = Guid.NewGuid().ToString("N");
             var credentialIssued = false;
@@ -1255,6 +1259,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             try { started = starter.Start(spec); }
             catch (Exception e)
             {
+                provenance.Abandon(key);
                 if (credentialIssued) { credentials!.Abandon(launchId); }
                 log($"launch {Short(key)}: {plan.Launcher.Label} could not be started: {e.Message}");
                 return new LaunchResult(LaunchOutcome.Failed, $"{plan.Launcher.Label} couldn't be started") { Launched = launched };
@@ -1611,6 +1616,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // was started with. Once per session id.
     void Noted(Pending p, string id)
     {
+        if (source.ProcessOf(id) is { StartedAt: not null } process) { provenance.Bound(p.Key, id, process); }
         if (p.NotedId == id || SessionStarted is not { } started) { return; }
         p.NotedId = id;
         try { started(id, p.Launched); }

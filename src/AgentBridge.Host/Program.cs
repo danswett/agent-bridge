@@ -198,11 +198,7 @@ switch (command)
         }
     case "agents":
         {
-            if (!Identity.IsValidProfile(profileName)) { Console.Error.WriteLine("agent-bridge-host: --profile is not a valid profile name"); return 2; }
-            var rest = new List<string>(arguments);
-            var p = rest.IndexOf("--profile");
-            if (p >= 0) { rest.RemoveRange(p, Math.Min(2, rest.Count - p)); }
-            return await AgentCommands.RunAsync(rest, Path.Combine(Identity.DefaultRoot, profileName),
+            return await AgentCommands.RunWithProfileAsync(arguments, Identity.DefaultRoot,
                 () => Refused("adopt a session or end its adoption"), Console.Out, Console.Error);
         }
     case "watch":
@@ -1084,6 +1080,7 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
         WorktreeUsage = new RestoreWorktreeUsage(restore, new AgentWorktreeUsage(new SystemProcessInspector(), options.CopilotHome, options.ClaudeRegistrationRoots, options.CodexRegistrationRoots)),
         Transfers = transfers,
         TransferStaging = transfers.Staging,
+        ProvenanceFile = Path.Combine(serveFolder!, "launch-provenance.json"),
         Journal = journal,
         AgentWorktreeCheck = AgentLaunchWorktreeCheck.Check,
         AgentWorktreeRefusalAudit = (request, principal, reason) => audit.Append(

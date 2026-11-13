@@ -59,11 +59,12 @@ public sealed class SessionService
 
     internal SessionProcess? ProcessForAdoption(string session)
     {
-        if (launcher?.LaunchedSession(session) == true)
+        var process = source.ProcessOf(session);
+        if (launcher?.LaunchedSession(session, process) == true)
         {
             throw new InvalidOperationException("refused: a session the host launched cannot be adopted");
         }
-        return source.ProcessOf(session);
+        return process;
     }
 
     internal Task<LaunchResult>? ReplayAgentLaunch(JsonElement data, string principal)
