@@ -100,20 +100,35 @@ or descend from every durable accepted head. A command naming another roster's
 heads cannot select that roster or create a pin. No trust on first use.
 
 Before offering or accepting the action, every active rostered verifier must
-advertise v2 support. Engineering requires a signed capability statement covering
-its supported versions, add hash, pinned generation, frontier hash and the
-requester's fresh nonce. Its purpose-separated signing key must be enrolled in
-the roster for that purpose. Check hosts and person clients, not just the machines
-selected for enrollment. A relay-provided list of names, self-declared kinds,
-remembered version strings or an authenticated channel alone is not that evidence.
+advertise v2 support. The [#2372 evidence contract](../protocol/devices.md#signed-verifier-support-evidence-2372-design-2366-implementation)
+defines the exact wrapper, signed fields, frontier/set encodings and design vectors.
+It covers the pinned account, generation and genesis, exact enrollment and key
+purpose, supported versions, complete active set, current frontier, receiving host,
+fresh collection nonce/request and bounded lifetime. Check hosts and person
+clients, including held/probationary active devices, not just online or serving
+machines or those selected for enrollment. A relay list, remembered version or
+authenticated channel alone is not evidence.
 
-**Blocked dependency, not a signing-mechanism decision:** roster `dh` is ECDH-only
-and must not sign. The separate capability code cut is blocked on a separately
-reviewed choice of signing mechanism and its roster binding (the `hostSign`
-direction in #1776). This note picks none: no DH signing, DH-derived MAC or
-`hostSign` substitute. Until that evidence can be produced and verified, return
-`unsupported-verifier` and do not proceed. Its wire shape, frontier-hash encoding,
-signature domain and positive/negative vectors belong to that separate review.
+**Signing-mechanism decision (#2372, design only):** hosts sign their own evidence
+with the `hostSign` enrolled in their exact active v2 add, never as a substitute
+for person consent. Person clients need a distinct, roster-enrolled capability
+key (`capSign`), not their generic `sign`, DH or WebAuthn key.
+The signature domain is `F("agent-bridge verifier support v1", bodyBytes)`;
+the protocol section registers the separate frontier, set and key-binding labels.
+Legacy DH-only hosts and clients lacking the purpose-enrolled key are unsupported.
+No DH signing, DH-derived MAC, AP5-lite key, self-supplied key or unsigned flag.
+
+The host-key prerequisites are #1776 slices #2369 (custody/public descriptor),
+#2370 (registry signing) and #2371 (reader verification), with #2289 enrollment
+and the person-capability-key schema/custody/enrollment slice still required.
+This note grants none of those implementations and invents no bootstrap: a v2
+add unavailable to the pinned reader cannot supply a trusted capability key.
+Any circular first-host enrollment/transition dependency needs the separate
+bootstrap ruling above, never temporary trust in an unenrolled descriptor.
+#2366 must implement evidence verification and reviewed snapshot/replay extension
+after this design and its key prerequisites; it still cannot enable v2.
+Until every required enrollment and evidence check is available, return
+`unsupported-verifier`. No positive transition (#2288 slice 2b-2) is authorized.
 
 Missing, offline, outdated, unverifiable or frontier-mismatched evidence is
 `unsupported-verifier`; do not infer support or automatically remove a device.
@@ -251,8 +266,10 @@ person action, not an automatic rollback or an agent repair.
 
 **Out of #1825 slice 2:** relay-verifier and PWA-reader transition recovery is a
 separate reviewed cut, not permission to change ChannelHub or how this slice reads
-the roster from the relay. The capability mechanism above is also a separate,
-blocked dependency. Slice 2 cannot silently absorb either prerequisite.
+the roster from the relay. The capability mechanism above is specified by #2372,
+not implemented by it.
+Its purpose-key enrollment and #2366 evidence code remain separate blocked
+dependencies. Slice 2 cannot silently absorb those prerequisites.
 
 The relay currently reconstructs a v1-only verifier. Host acceptance alone will
 not make `roster-append` store a v2 add; a successful host command must not be
@@ -272,7 +289,7 @@ sensitive, two families on the exact head, with full red/green output retained:
 | Cut | Predecessor | Failing-first proof before implementation |
 |---|---|---|
 | Command contract, C#/PWA parsers and shared vectors | This note reviewed and Engineering ruling | Valid person accepted; host/agent signer refused; cosig-only wrapper refused; probation and no presence refused; malformed/extra fields refused identically |
-| Signed support evidence (separate blocked dependency) | Separately reviewed signing mechanism, roster binding and capability shape | Missing/offline verifier, forged signature, wrong add/generation/frontier/nonce and changed active set refuse; applied person-approved revocation removes a lost verifier from the required set |
+| Signed support evidence (#2366, blocked dependency) | #2372 design reviewed; #2369-2371 host-key work, #2289 enrollment and person capability-purpose-key enrollment | devices.md's positive/negative vectors, including generic person key and legacy host refusal; missing/offline verifier, forged signature, wrong add/generation/frontier/nonce and changed active set refuse; applied person-approved revocation removes a lost verifier from the required set |
 | Durable host transition and verifier handoff | Both above, retained-reader integration and separate snapshot schema | Existing 4,096-byte pin unchanged; replay after restart; torn/failed snapshot write; wrong generation/genesis; clock rollback/floor; stale/regressed heads; v2 refused before and accepted only after commit; probation preserved |
 | Relay and PWA-reader transition recovery (out of slice 2; separate review) | Engineering decision on signed-command/frontier distribution | v2 append/rebuild and client replay require verified authorization; non-transitioned consumers hold without forking or silently dropping; omission or forged flag never enables it |
 | Enrollment descriptor and person's approved add | Transition consumers above and approved bootstrap sequence | Self-approved add refused; pin-only bootstrap stays pending; binding/transcript mismatch refused; pending until own verified pinned v2 add matches |

@@ -45,6 +45,10 @@ bytes.
 | `agent-bridge person command v1` | What a person command's `by` signs: `F(label, bodyBytes)` |
 | `agent-bridge reset veto v1` | What a veto's `by` signs: `F(label, bodyBytes)` |
 | `agent-bridge host key binding v1` | A host's `hostSignProof`: `hostSign` signs `F(label, account, generation, dh)` |
+| `agent-bridge verifier support v1` | A verifier capability signature over `F(label, bodyBytes)`; never consent |
+| `agent-bridge verifier frontier v1` | Capability frontier digest over `F(label, head1, ..., headN)` |
+| `agent-bridge verifier set v1` | Capability active-set digest over `F(label, member1, ..., memberN)` |
+| `agent-bridge verifier key binding v1` | A person's capability-key possession proof over `F(label, account, generation, dh)` |
 
 ## Encodings
 
@@ -511,6 +515,152 @@ an independent anti-rollback anchor.
 The host command check never writes and ends in `unsupported-verifier` after its
 existing checks. No flag or caller boolean enables v2: positive transition and
 signed support evidence remain separate reviewed slices.
+
+### Signed verifier-support evidence (#2372 design; #2366 implementation)
+
+**Design contract, not implemented or permission to transition.** This section
+chooses the capability mechanism deferred by the transition note. No setting,
+environment variable, command flag, relay claim or authenticated channel enables
+support. `CheckAcceptHostSign` still ends in `unsupported-verifier`; the positive
+transition (#2288 slice 2b-2) is separate.
+
+**Signer and enrollment.** Each verifier signs its own statement, never for another
+device. A host uses only `hostSign` from its exact, active, person-approved v2 add,
+with the existing `hostSignProof` verified. This is a host's own statement, not a
+substitute for a person's command. Legacy DH-only hosts are unsupported.
+A person's client needs a distinct capability-purpose P-256 key, named `capSign`,
+enrolled in its own person-approved descriptor; its generic `sign` never qualifies.
+The future versioned descriptor extension must bind `capSign`, algorithm
+`p256-sha256-der` and a low-S possession proof over
+`F("agent-bridge verifier key binding v1", account, generation, dh)`.
+Here account is UTF-8, generation its 32 ASCII hex characters, and `dh` raw bytes,
+as for `hostSignProof`; the enrolled public point verifies the possession proof.
+The capability key must differ from every enrolled `dh`, `sign`, WebAuthn,
+`hostSign` and other `capSign` key. The enrollment transcript must cover it.
+Current v1/v2 parsers do not accept this person-descriptor extension: its schema,
+custody, enrollment and cross-client checks need a separate reviewed slice.
+Until that exists and the client is enrolled with it, that client is unsupported.
+No self-supplied key, AP5-lite key, DH signature or DH-derived MAC is accepted.
+Key loss or rotation requires normal person-approved enrollment, not a local pin.
+
+**Wire shape.** A collection is a JSON array with exactly one statement for every
+required verifier, ordered by device id, at most 64 statements and 128 KiB UTF-8.
+Each statement is at most 2,048 UTF-8 bytes, with exactly `body` and `sig`, in that
+order when emitted. Both are canonical base64url; `body` holds exact UTF-8 JSON
+bytes and `sig` minimal low-S DER. Strict I-JSON, duplicate/unknown-member refusal
+and depth 16 apply to wrapper and body. There is no `uv` or cosignature.
+The body has exactly these members (sender order shown; receivers never reserialize):
+
+```text
+v, account, generation, genesis, by, add, purpose, key, versions,
+frontier, verifiers, target, request, nonce, issuedAt, expiresAt
+```
+
+| Member | Required binding |
+|---|---|
+| `v` | Integer `1`, the evidence format, not a roster entry version |
+| `account`, `generation`, `genesis` | Exact local pin: account, 32-lowercase-hex generation, full 32-byte genesis hash |
+| `by`, `add` | Device id and full hash of the exact enrollment currently active for it |
+| `purpose`, `key` | `hostSign` for a host, `capSign` for a person; `SHA-256` of that enrolled raw 65-byte public point |
+| `versions` | 1 to 8 distinct ascending plain integers in `[1,255]`; support requires `2` |
+| `frontier`, `verifiers` | The two 32-byte digests defined below, recomputed locally |
+| `target` | The requesting/receiving host's device id, never a caller-selected recipient |
+| `request`, `nonce` | Lowercase UUID and fresh 32-byte random challenge issued by that host for this collection |
+| `issuedAt`, `expiresAt` | The host-issued collection window, RFC 3339 UTC as above; positive lifetime at most 600 seconds |
+
+Hashes, key ids and the nonce use base64url of raw bytes, not hex text.
+`sig` is ECDSA P-256/SHA-256 over
+`F("agent-bridge verifier support v1", bodyBytes)`, under the enrolled purpose key.
+It proves only that key's self-declared implementation support. It is never a
+roster signature, registry signature, key-binding proof, presence proof or person
+command; signatures made under any other domain must fail here and vice versa.
+
+**Frontier and required set.** Take all current accepted heads, one to four in raw
+32-byte head order. `frontier = SHA-256(F("agent-bridge verifier frontier v1",
+head1, ..., headN))`: each head is a separate framed part, not JSON, base64url
+text, concatenation in one part, or a sorted list of encoded strings.
+The required set is every device in the pinned verifier's computed active state,
+hosts and person clients alike, including active devices whose grants are held or
+probationary. Never narrow it to online devices, serving devices, a relay list,
+or selected enrollment targets. A conflicted, removed or void enrollment cannot sign.
+Resolve each active member's key from that exact add; any missing purpose key
+makes the result unsupported before hashing, not an omitted member.
+For each member construct `member = F(id, add, kind, purpose, publicKey)`, with
+`id` decoded to 16 bytes, `add` raw 32 bytes, `kind` and `purpose` ASCII, and
+`publicKey` the raw 65-byte point. Sort members by raw device id, then compute
+`verifiers = SHA-256(F("agent-bridge verifier set v1", member1, ..., memberN))`.
+No count or JSON delimiter is inserted; every member is one framed part.
+Thus identity, enrollment, key purpose and the entire active set are bound.
+
+**Checking and persistence obligations for #2366.** The host creates and retains
+the outstanding challenge, target, pinned identity, frontier and set locally.
+Do not let caller-provided fields establish an outstanding challenge.
+All signers echo its issue/expiry times; it expires at most 600 seconds after
+creation, even if a response arrives late or a verifier supplies newer times.
+All statements must match that same collection and the host's current state;
+verify each enrolled key, low-S signature, identity, add, digests and supported
+versions. Use the later of wall clock and durable high-water mark, the reset
+floor, the command's 120-second future allowance, and no expiry grace.
+Missing, offline, negative, malformed, tampered, stale, wrong-purpose or
+unverifiable evidence yields `unsupported-verifier`, never inferred support.
+A normal applied, person-approved revocation changes the required set; collect
+fresh evidence for the new frontier and set, never delete an inconvenient member.
+
+Serialize the final recheck with roster updates and the private snapshot commit.
+Consume a collection's nonce/request once: duplicates, another target's challenge
+and a previously consumed challenge are unsupported, even after restart.
+The later snapshot extension must retain the exact signed collection, identity,
+frontier, set, expiry and consumed-challenge replay state atomically alongside
+the 2b-1 clock/replay state, within its existing 256 KiB limit; full or failed
+storage refuses, without evicting live replay records or changing the pin.
+This is a future reviewed schema, not permission to append fields to today's v1
+snapshot or overwrite it with an older schema. Keep capability-request replay
+distinct from person-command execution replay: collecting evidence consumes no
+person command and authorizes nothing. Keep `acceptHostSign: false`.
+Stored evidence survives restart as evidence, not an outstanding challenge or a
+freshness attestation. Restart/clock discontinuity requires a fresh collection
+and the independent freshness checks before any later transition.
+Evidence cannot carry to another account, generation, genesis, frontier or set.
+Whole-snapshot restoration has the 2b-1 anti-rollback residual; no repair by deletion.
+Unsigned support fields in commands are refused by strict parsing; settings and
+environment values never participate in this decision.
+
+**Normative design vectors.** These are requirements for the later executable
+C#/PWA vectors, not a claim that today's parsers implement the new schemas.
+Baseline: a trusted pinned roster has exactly active host `H` with enrolled
+`hostSign` and person `P` with enrolled `capSign`, distinct from all other keys.
+Both sign the same fresh, outstanding collection bindings, with `versions: [1,2]`
+and valid lifetimes. `valid` below means evidence only; every case still leaves
+the positive transition unreachable in this slice.
+
+| Vector (change only what is named from baseline) | Evidence result |
+|---|---|
+| Both correctly signed statements | valid; no consent or transition |
+| No statements; omit H; omit P; duplicate H instead of P | unsupported |
+| Re-sign one statement for another account, generation or genesis | unsupported |
+| Re-sign for a different active-set digest, enrollment add or target | unsupported |
+| Flip a body byte without re-signing; alter `sig`; wrong key; high-S signature | unsupported |
+| Sign under the roster-entry, person-command, registry or key-binding domain | unsupported |
+| P signs with generic `sign`; H signs with DH or AP5-lite; unenrolled key | unsupported |
+| H is v1/DH-only; P lacks enrolled `capSign` | unsupported; neither member omitted |
+| P signs `versions: [1]`; H alone advertises `[1,2]` | unsupported |
+| A fresh request reuses an old nonce; a consumed collection is submitted again | unsupported |
+| Re-sign with an old frontier; add/remove/displace a member before commit | unsupported |
+| Expired, overlong, future beyond allowance or at/below reset floor | unsupported |
+| Add unsigned support flag to command, setting or environment | no support; command extra member refused |
+| Restart reloads committed evidence; replay its old challenge | evidence retained; new collection required |
+| Copy the snapshot to another generation; corrupt it; replacement fails | refuse; no support or store repair |
+| Normally revoke a member, apply removal, collect fresh evidence from remaining members | valid for new set only; old pair unsupported |
+
+A byte-level frontier vector uses two heads: 32 bytes of `11` hex followed by
+32 bytes of `22` hex. The label is 33 ASCII bytes, so the framed input is
+`00000021 || hex(ASCII(label)) || 00000020 || 11*32 || 00000020 || 22*32`.
+The SHA-256 is
+`faf503c68900dd39bda799f13c98f2d09cd22eb772e339882dad0fe402a28d31`.
+Reversing the heads is invalid order, not a second accepted encoding.
+Executable vectors must additionally pin exact body bytes, signature inputs,
+low-S signatures and set digests under fixed public test keys, with each refusal
+mutation tested independently. Their artifacts and tests belong to #2366.
 
 ## Vectors
 
