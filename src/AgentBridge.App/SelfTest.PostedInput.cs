@@ -25,7 +25,7 @@ static partial class SelfTest
             return;
         }
         await CaptureFrame(window.RootElement);
-        var focused = FocusManager.GetFocusedElement(window.RootElement.XamlRoot);
+        var focused = FocusManager.GetFocusedElement(window.RootElement.XamlRoot) as DependencyObject;
         var focusState = focused is Control { FocusState: not FocusState.Unfocused } element ? element.FocusState : FocusState.Programmatic;
         var selected = window.Sessions.Rows.SelectedItem;
         var (target, inWindow, detail) = PostedInputTarget(window);
