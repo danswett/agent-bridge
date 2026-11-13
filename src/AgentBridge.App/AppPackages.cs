@@ -18,22 +18,37 @@ static class AppPackages
 }
 
 // Keep Velopack's downloader and handler settings; observe only its package file writes.
-class PackageDownloader(Func<HttpClientHandler>? handler = null) : HttpClientFileDownloader
+class PackageDownloader(Func<HttpClientHandler>? handler = null, TimeProvider? time = null) : HttpClientFileDownloader
 {
     public Action<long, long?>? Report { get; set; }
+    readonly AsyncLocal<Action<long, long?>?> reporting = new();
     readonly AsyncLocal<Observation?> observation = new();
-    sealed class Observation(Action<long, long?> report)
+    sealed class Observation(Action<long, long?> report, TimeProvider time)
     {
         public long? Total;
-        public void Written(long bytes) => report(bytes, Total);
+        long written, sent;
+        long? at;
+        public void Written(long bytes)
+        {
+            written = bytes;
+            // Before the UI callback: neither disk-backed source checks nor state sends run per chunk.
+            if (at is null || time.GetElapsedTime(at.Value) >= TimeSpan.FromMilliseconds(250)) { Flush(); }
+        }
+        public void Flush()
+        {
+            if (written == sent) { return; }
+            sent = written;
+            at = time.GetTimestamp();
+            report(written, Total);
+        }
     }
 
     public override async Task DownloadFile(string url, string targetFile, Action<int> progress,
         IDictionary<string, string>? headers, double timeout, CancellationToken cancelToken = default)
     {
-        observation.Value = Report is { } report ? new Observation(report) : null;
+        reporting.Value = Report;
         try { await base.DownloadFile(url, targetFile, progress, headers, timeout, cancelToken); }
-        finally { observation.Value = null; }
+        finally { reporting.Value = null; }
     }
 
     protected override HttpClientHandler CreateHttpClientHandler() =>
@@ -42,10 +57,18 @@ class PackageDownloader(Func<HttpClientHandler>? handler = null) : HttpClientFil
             if (observation.Value is { } current) { current.Total = total; }
         });
 
-    protected override Task DownloadToStreamInternal(HttpClient client, string url, Stream targetStream,
-        Action<int>? progress, CancellationToken cancelToken) =>
-        base.DownloadToStreamInternal(client, url,
-            observation.Value is { } current ? new WrittenStream(targetStream, current.Written) : targetStream, progress, cancelToken);
+    protected override async Task DownloadToStreamInternal(HttpClient client, string url, Stream targetStream,
+        Action<int>? progress, CancellationToken cancelToken)
+    {
+        var current = reporting.Value is { } report ? new Observation(report, time ?? TimeProvider.System) : null;
+        observation.Value = current;
+        try
+        {
+            await base.DownloadToStreamInternal(client, url,
+                current is not null ? new WrittenStream(targetStream, current.Written) : targetStream, progress, cancelToken);
+        }
+        finally { observation.Value = null; current?.Flush(); }
+    }
 
     sealed class ResponseHandler(HttpClientHandler inner, Action<long?> received) : HttpClientHandler
     {

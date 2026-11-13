@@ -112,6 +112,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
                 throw new DownloadHeldException($"downloading {release} failed {Words.Ago(f.At, now)}; trying again soon");
             }
             var reporting = true;
+            var reportsDownloadFacts = inner.ReportsDownloadFacts;
             try
             {
                 await inner.DownloadAsync(p =>
@@ -121,7 +122,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
                     progress(p);
                 }, (bytes, total) =>
                 {
-                    if (!Volatile.Read(ref reporting) || !inner.ReportsDownloadFacts || Source != from || Found != release) { return; }
+                    if (!Volatile.Read(ref reporting) || !reportsDownloadFacts || Source != from || Found != release) { return; }
                     (Bytes, Total) = (bytes, total);
                     Raise();
                 });

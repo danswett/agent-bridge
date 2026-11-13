@@ -5,6 +5,7 @@ using Velopack;
 using Velopack.Locators;
 using Velopack.Logging;
 using Velopack.Sources;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 // The app's updater against Velopack itself (AppPackages): a release published with a delta from
@@ -62,16 +63,19 @@ public sealed class AppPackagesTests : IDisposable
         $$"""{"PackageId":"AgentBridgeApp","Version":"{{version}}","Type":"{{type}}","FileName":"{{file}}","SHA1":"{{Convert.ToHexString(SHA1.HashData(bytes))}}","SHA256":"{{Convert.ToHexString(SHA256.HashData(bytes))}}","Size":{{bytes.Length}}}""";
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task Package_download_counts_are_written_bytes_and_only_the_responses_size_is_reported(bool hasSize)
+    [InlineData(true, 0)]
+    [InlineData(false, 0)]
+    [InlineData(false, 100)]
+    public async Task Package_download_counts_are_written_bytes_and_only_the_responses_size_is_reported(bool hasSize, int readMilliseconds)
     {
         Directory.CreateDirectory(root);
-        var counts = new List<(long Bytes, long? Total)>();
+        var time = new FakeTimeProvider();
+        var counts = new List<(long Bytes, long? Total, DateTimeOffset At)>();
         var requests = 0;
-        var downloader = new PackageDownloader(() => new Response(hasSize, () => requests++))
+        var downloader = new PackageDownloader(() => new Response(hasSize, () => requests++,
+            () => time.Advance(TimeSpan.FromMilliseconds(readMilliseconds))), time)
         {
-            Report = (bytes, total) => counts.Add((bytes, total)),
+            Report = (bytes, total) => counts.Add((bytes, total, time.GetUtcNow())),
         };
         var file = Path.Combine(root, "package.nupkg");
 
@@ -79,6 +83,12 @@ public sealed class AppPackagesTests : IDisposable
 
         Assert.Equal(1, requests);
         Assert.NotEmpty(counts);
+        Assert.InRange(counts.Count, 2, readMilliseconds == 0 ? 2 : 68);
+        if (readMilliseconds > 0) { Assert.True(counts.Count > 2); }
+        for (var i = 1; i < counts.Count - 1; i++)
+        {
+            Assert.True(counts[i].At - counts[i - 1].At >= TimeSpan.FromMilliseconds(250));
+        }
         Assert.Equal(200_000, counts[^1].Bytes);
         Assert.Equal(200_000, new FileInfo(file).Length);
         Assert.All(counts, count => Assert.Equal(hasSize ? 200_000L : (long?)null, count.Total));
@@ -88,20 +98,59 @@ public sealed class AppPackagesTests : IDisposable
         Assert.Empty(counts);
     }
 
-    sealed class Response(bool hasSize, Action requested) : HttpClientHandler
+    [Fact]
+    public async Task A_retry_response_cannot_relabel_the_previous_streams_buffered_bytes()
+    {
+        Directory.CreateDirectory(root);
+        var counts = new List<(long Bytes, long? Total)>();
+        var handler = new Retry();
+        var downloader = new PackageDownloader(() => handler, new FakeTimeProvider())
+        {
+            Report = (bytes, total) => counts.Add((bytes, total)),
+        };
+
+        await Assert.ThrowsAsync<IOException>(() => downloader.DownloadFile(
+            "https://packages.invalid/Package.nupkg", Path.Combine(root, "package.nupkg"), _ => { }, null!, 30));
+
+        Assert.Equal(2, handler.Requests);
+        Assert.Equal(new long[] { 1000, 3000 }, counts.Select(c => c.Bytes));
+        Assert.All(counts, count => Assert.Null(count.Total));
+    }
+
+    sealed class Retry : HttpClientHandler
+    {
+        public int Requests;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(++Requests == 1
+                ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new Content(false, () => { }, true) }
+                : new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new StringContent("failure") });
+    }
+
+    sealed class Response(bool hasSize, Action requested, Action read) : HttpClientHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             requested();
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new Content(hasSize) });
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new Content(hasSize, read) });
         }
     }
 
-    sealed class Content(bool hasSize) : HttpContent
+    sealed class Content(bool hasSize, Action read, bool fails = false) : HttpContent
     {
         protected override bool TryComputeLength(out long length) { length = 200_000; return hasSize; }
         protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
             stream.WriteAsync(new byte[200_000]).AsTask();
+        protected override Task<Stream> CreateContentReadStreamAsync() => Task.FromResult<Stream>(new Chunks(read, fails));
+    }
+
+    sealed class Chunks(Action read, bool fails) : MemoryStream(new byte[200_000])
+    {
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (fails && Position >= 3000) { throw new IOException("the package stream failed"); }
+            read();
+            return base.ReadAsync(buffer[..Math.Min(buffer.Length, 1000)], cancellationToken);
+        }
     }
 
     sealed class Recording(IUpdateSource inner) : IUpdateSource
