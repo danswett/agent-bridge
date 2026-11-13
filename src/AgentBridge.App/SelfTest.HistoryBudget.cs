@@ -183,10 +183,47 @@ static partial class SelfTest
             await CheckPostedInput(window, check, result);
             Away(window, main);
             await Choose(window, main, id, "Response");
-            var pinned = await Until(() => ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count == turns
-                && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(30));
+            var pinnedTrace = new HistoryPinnedTrace();
+            var pinnedWatch = Stopwatch.StartNew();
+            var pinnedRows = ById<ItemsRepeater>(away, "History");
+            void ObservePinned(string reason, double? target = null, bool? intermediate = null) =>
+                pinnedTrace.Record(CapturePinnedSample(pinnedWatch.Elapsed.TotalMilliseconds, reason, scroll, pinnedRows, target, intermediate));
+            void PinnedChanging(object? sender, ScrollViewerViewChangingEventArgs e) =>
+                ObservePinned("view changing", e.FinalView.VerticalOffset);
+            void PinnedChanged(object? sender, ScrollViewerViewChangedEventArgs e) =>
+                ObservePinned("view changed", intermediate: e.IsIntermediate);
+            long? offsetObserver = null, extentObserver = null;
+            bool pinned;
+            try
+            {
+                scroll.ViewChanging += PinnedChanging;
+                scroll.ViewChanged += PinnedChanged;
+                offsetObserver = scroll.RegisterPropertyChangedCallback(ScrollViewer.VerticalOffsetProperty, (_, _) => ObservePinned("offset"));
+                extentObserver = scroll.RegisterPropertyChangedCallback(ScrollViewer.ScrollableHeightProperty, (_, _) => ObservePinned("extent"));
+                ObservePinned("wait start");
+                pinned = await Until(() => ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count == turns
+                    && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(30));
+                ObservePinned("wait end");
+            }
+            finally
+            {
+                pinnedWatch.Stop();
+                scroll.ViewChanging -= PinnedChanging;
+                scroll.ViewChanged -= PinnedChanged;
+                if (offsetObserver is { } offsetToken) { scroll.UnregisterPropertyChangedCallback(ScrollViewer.VerticalOffsetProperty, offsetToken); }
+                if (extentObserver is { } extentToken) { scroll.UnregisterPropertyChangedCallback(ScrollViewer.ScrollableHeightProperty, extentToken); }
+            }
             var pinnedFill = new { drawn = ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count, offset = scroll.VerticalOffset, extent = scroll.ScrollableHeight, pinned };
-            result["historyPinnedFill"] = pinnedFill;
+            var pinnedDiagnostic = pinned ? null : new
+            {
+                elapsedMs = pinnedWatch.Elapsed.TotalMilliseconds,
+                correctionMeaning = "ViewChanging target within 1.5 px of the current end; observed effect, not method entry",
+                trace = pinnedTrace, focusAndForeground = PostedInputTarget(window).Detail,
+            };
+            result["historyPinnedFill"] = pinned ? pinnedFill : new
+            {
+                pinnedFill.drawn, pinnedFill.offset, pinnedFill.extent, pinnedFill.pinned, diagnostic = pinnedDiagnostic,
+            };
             const string pinnedMessage = "finishes older drawing at the end before focus moves away";
             if (!QuarantinePostedInput(result, check, pinnedMessage, new
             {
@@ -195,7 +232,7 @@ static partial class SelfTest
             }))
             {
                 check(pinned, pinned ? pinnedMessage
-                    : $"{pinnedMessage} (history: {pinnedFill.drawn}/{turns}; count500: {pinnedFill.drawn == turns}; at-end: {pinnedFill.offset >= pinnedFill.extent - 1.5}; offset: {pinnedFill.offset:0.###}; extent: {pinnedFill.extent:0.###}; {PostedInputTarget(window).Detail})");
+                    : $"{pinnedMessage} (history: {pinnedFill.drawn}/{turns}; count500: {pinnedFill.drawn == turns}; at-end: {pinnedFill.offset >= pinnedFill.extent - 1.5}; offset: {pinnedFill.offset:0.###}; extent: {pinnedFill.extent:0.###}; {PostedInputTarget(window).Detail}; trace: {System.Text.Json.JsonSerializer.Serialize(pinnedDiagnostic)})");
             }
             await Still(scroll);
             if (ById<ItemsRepeater>(away, "History") is { } historyList
@@ -326,6 +363,23 @@ static partial class SelfTest
             await demo.RemoveSessionAsync(id);
             await Until(() => main.AllCards.All(c => c.Id != id), TimeSpan.FromSeconds(10));
         }
+    }
+
+    static HistoryPinnedSample CapturePinnedSample(double ms, string reason, ScrollViewer scroll, ItemsRepeater? rows,
+        double? target, bool? intermediate)
+    {
+        var realised = 0;
+        int? firstVisible = null;
+        var count = rows?.ItemsSourceView?.Count;
+        for (var i = 0; rows is not null && i < (count ?? 0); i++)
+        {
+            if (rows.TryGetElement(i) is not FrameworkElement row) { continue; }
+            realised++;
+            if (firstVisible is not null) { continue; }
+            var top = row.TransformToVisual(scroll).TransformPoint(default).Y;
+            if (row.ActualHeight > 0 && top + row.ActualHeight > 0 && top < scroll.ViewportHeight) { firstVisible = i; }
+        }
+        return new(ms, reason, scroll.VerticalOffset, scroll.ScrollableHeight, count, realised, firstVisible, target, intermediate);
     }
 
     static async Task<(nint Target, int X, int Y, NativeWheelSnapshot Sent)> Wheel(MainWindow window, ListView list)

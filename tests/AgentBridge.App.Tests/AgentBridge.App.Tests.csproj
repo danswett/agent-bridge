@@ -16,6 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\..\src\AgentBridge.App\SelfTest.HistoryPinnedTrace.cs" Link="SelfTest.HistoryPinnedTrace.cs" />
     <Compile Include="..\..\src\AgentBridge.App\SelfTest.NativeInputPolicy.cs" Link="SelfTest.NativeInputPolicy.cs" />
     <Compile Include="..\TestTimeoutDiagnostics.cs" Link="TestTimeoutDiagnostics.cs" />
     <!-- The generated motion resources the app loads, read by MotionTests as the app reads them. -->
