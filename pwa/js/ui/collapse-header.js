@@ -10,6 +10,8 @@
 
 import { timing } from './motion.js';
 
+import { installedPhone } from '../phone-viewport.js';
+
 export const BAR = 48; // the pinned bar's least height
 export const DOWN = 32; // scrolled down this far in one direction, mid-conversation, it goes
 export const UP = 64; // scrolled up this far in one direction, it comes back
@@ -164,8 +166,9 @@ export class CollapsingHeader {
   }
 
   #onMedia = () => {
-    if (this.#phone.matches && !this.#on) { this.#enable(); }
-    if (!this.#phone.matches && this.#on) { this.#disable(); }
+    const phone = this.#phone.matches || installedPhone(this.#doc.documentElement);
+    if (phone && !this.#on) { this.#enable(); }
+    if (!phone && this.#on) { this.#disable(); }
   };
 
   get enabled() { return this.#on; }

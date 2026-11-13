@@ -512,7 +512,10 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
     public async Task An_unconfirmed_answer_keeps_its_words_while_its_session_is_unseen_or_its_agent_held_and_is_read_again_later(string how)
     {
         var heard = new Seen(source);
-        Assert.Equal(AnswerOutcome.Unconfirmed, (await Answerer(from: heard).AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone")).Outcome);
+        var first = Answerer(from: heard);
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await first.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone")).Outcome);
+        // The first host is not held: finish its sweep before advancing the question.
+        await first.Swept;
         var typed = injector.Plans.Count;
         if (how.EndsWith("question", StringComparison.Ordinal)) { await AskAnotherAsync(); }
         var seen = new Seen(source)

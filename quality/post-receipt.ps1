@@ -10,6 +10,9 @@
   the token. The key stays where it lives (%USERPROFILE%\.agent-bridge-receipts\ on the machine the
   owner chose); nothing here copies, prints or logs the key or a token.
 
+  Pin the App key with -KeyPath or AGENT_BRIDGE_RECEIPTS_KEY_PATH. The pin must name an existing
+  file; this script never discovers a key by directory order.
+
   The App can write commit statuses and read pull requests and metadata, nothing else, on
   danswett/agent-bridge only. It cannot merge, and it cannot post merge-rule or quality-gate:
   the main ruleset pins those to their own Apps.
@@ -25,6 +28,7 @@
 .EXAMPLE
   pwsh -NoProfile -File quality/post-receipt.ps1 -Pr 1444 -Head <40 hex> `
     -CommentUrl https://github.com/danswett/agent-bridge/pull/1444#issuecomment-6733141169 `
+    -KeyPath "$env:USERPROFILE\.agent-bridge-receipts\receipts.pem" `
     -Receipt independent-review=claude-sonnet-5.5, independent-review-2=gemini-3.8-flash
 
   -DryRun checks the arguments and the key, signs a JWT, prints what would be posted, and stops
@@ -68,19 +72,18 @@ $posts = foreach ($r in ($Receipt | ForEach-Object { $_ -split ',' })) {
 if (@($posts.context | Select-Object -Unique).Count -ne @($posts).Count) { throw 'Name each receipt context once.' }
 foreach ($p in $posts) { if ($p.description.Length -gt 140) { throw 'A receipt description is at most 140 characters.' } }
 
-if (-not $KeyPath) {
-    $keyDir = Join-Path $env:USERPROFILE '.agent-bridge-receipts'
-    $KeyPath = (Get-ChildItem $keyDir -File -Filter *.pem -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+if ([string]::IsNullOrWhiteSpace($KeyPath)) {
+    throw 'An App key must be pinned explicitly with -KeyPath or AGENT_BRIDGE_RECEIPTS_KEY_PATH.'
 }
-if (-not $KeyPath -or -not (Test-Path $KeyPath)) {
-    throw 'No App key found. Set AGENT_BRIDGE_RECEIPTS_KEY_PATH or put the .pem in %USERPROFILE%\.agent-bridge-receipts\ and run on that machine. Post receipts as danswett meanwhile.'
+if (-not (Test-Path -LiteralPath $KeyPath -PathType Leaf)) {
+    throw 'No App key found at the pinned path. -KeyPath or AGENT_BRIDGE_RECEIPTS_KEY_PATH must name an existing file.'
 }
 
 function ConvertTo-B64Url([byte[]]$Bytes) { [Convert]::ToBase64String($Bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_') }
 
 function New-AppJwt {
     $rsa = [Security.Cryptography.RSA]::Create()
-    $rsa.ImportFromPem((Get-Content $KeyPath -Raw))
+    $rsa.ImportFromPem((Get-Content -LiteralPath $KeyPath -Raw))
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     $header = ConvertTo-B64Url ([Text.Encoding]::UTF8.GetBytes('{"alg":"RS256","typ":"JWT"}'))
     $body = ConvertTo-B64Url ([Text.Encoding]::UTF8.GetBytes((@{ iat = $now - 60; exp = $now + 540; iss = $AppId } | ConvertTo-Json -Compress)))

@@ -21,7 +21,7 @@ for each alert.
 | [windows-release](windows-release.md) | A-RELEASE; a release breaking machines |
 | [pwa](pwa.md) | A-PAGES; a PWA deploy breaking phones |
 | [github-outage](github-outage.md) | A-GHA, A-GHA-SILENT; CI, merges or deploys stalled on GitHub |
-| [Epic dashboard](../../tools/epic-dashboard/README.md#checking-and-troubleshooting) | #755 not updating; check workflow results, not the last material-update timestamp. Owner-only credential setup/rotation |
+| [Epic dashboard (retired)](../../tools/epic-dashboard/README.md#checking-and-troubleshooting) | Historical only (#1971); #755 no longer refreshes. Use the [live roadmap and blockers](https://roadmap.slipgates.com/), not workflow or credential repair |
 
 ## Before any of them
 

@@ -26,10 +26,20 @@ public class PlanScriptTests
     [InlineData("push", "build/pack-app.ps1", true, true)]
     [InlineData("push", "Directory.Build.props", true, true)]
     [InlineData("push", ".github/actions/install-trivy/action.yml", true, true)]
+    [InlineData("push", "tests/Example.Tests/Test.cs", false, false)]
+    [InlineData("push", "tests/Example.Tests/Shared.cs", true, false)]
+    [InlineData("pull_request", "tests/Example.Tests/Test.cs", false, false)]
+    [InlineData("push", "tests/AgentBridge.Quality.Tests/Test.cs", false, true)]
+    [InlineData("push", "docs/protocol/examples/demo.json", true, false)]
+    [InlineData("push", "unknown/input.txt", false, true)]
     [InlineData("workflow_dispatch", ".github/workflows/merge-rule.yml", true, true)]
     public Task The_workflows_plan_selects_the_installer_only_with_its_app_input(
         string eventName, string changed, bool packages, bool wholeRing) =>
         CheckPlan(eventName, changed, packages, wholeRing);
+
+    [Fact]
+    public Task A_test_and_code_change_cannot_skip_main_product() =>
+        CheckPlan("push", "tests/Example.Tests/Test.cs", true, false, anotherFile: "src/AgentBridge.App/View.cs");
 
     [Theory]
     [InlineData("docs/guide.md", false)]
@@ -40,7 +50,7 @@ public class PlanScriptTests
         string changed, bool runsUnreadable) => CheckPlan("push", changed, true, true, runsUnreadable);
 
     static async Task CheckPlan(
-        string eventName, string changed, bool packages, bool wholeRing, bool? runsUnreadable = null)
+        string eventName, string changed, bool packages, bool wholeRing, bool? runsUnreadable = null, string? anotherFile = null)
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
         var folder = Fixture.ScratchFolder();
@@ -55,21 +65,25 @@ public class PlanScriptTests
             var whole = steps.Children.Cast<YamlMappingNode>().Single(step =>
                 step.Children.TryGetValue(new YamlScalarNode("id"), out var id) && id.ToString() == "whole-ring");
             Write("quality/plan.ps1", File.ReadAllText(Path.Combine(root, "quality", "plan.ps1")));
-            Write("src/AgentBridge.App/App.csproj", "<Project />");
+            Write("src/AgentBridge.App/App.csproj", """<Project><ItemGroup><EmbeddedResource Include="../../docs/protocol/examples/*.json" /><Compile Include="../../tests/Example.Tests/Shared.cs" /></ItemGroup></Project>""");
+            Write("tests/Example.Tests/Tests.csproj", """<Project><ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" /></ItemGroup></Project>""");
             Write("quality/catalog.yml", """
-                global_triggers: [.github/workflows/**, .github/actions/**, quality/**, '**/Directory.Build.*']
-                no_test_paths: [docs/**, .github/CODEOWNERS]
+                global_triggers: [.github/workflows/**, .github/actions/**, quality/**, tests/AgentBridge.Quality.Tests/**, '**/Directory.Build.*']
+                no_test_paths: [docs/*.md, .github/CODEOWNERS]
                 suites:
                   - id: checks
+                    validation_plan: ha-compatibility
                     kind: unit
                     ring: 1
                     select: always
+                    triggers: [docs/protocol/**]
                     platforms: [linux-x64, win-x64, win-arm64]
                     runner: hosted
                     command: see ci.yml
                     where: ci.yml product, ha-integration, spikes, spikes-linux, light, pwa-ui, pwa-e2e
                     status: exists
                   - id: docs
+                    validation_plan: native
                     kind: static
                     ring: 1
                     select: affected
@@ -80,26 +94,39 @@ public class PlanScriptTests
                     where: ci.yml light
                     status: exists
                   - id: app
+                    validation_plan: native
                     kind: packaging
                     ring: 1
                     select: affected
                     platforms: [win-x64]
                     runner: hosted
                     builds: src/AgentBridge.App
-                    triggers: [build/**]
+                    triggers: [build/**, docs/protocol/**]
                     command: see ci.yml app
                     where: ci.yml app
                     status: exists
                   - id: app-installer
+                    validation_plan: native
                     kind: packaging
                     ring: 1
                     select: affected
                     platforms: [win-x64]
                     runner: hosted
                     builds: src/AgentBridge.App
-                    triggers: [build/**]
+                    triggers: [build/**, docs/protocol/**]
                     command: see ci.yml app-installer
                     where: ci.yml app-installer
+                    status: exists
+                  - id: tests
+                    validation_plan: native
+                    kind: unit
+                    ring: 1
+                    select: affected
+                    platforms: [linux-x64]
+                    runner: hosted
+                    project: tests/Example.Tests
+                    command: see ci.yml product
+                    where: ci.yml product
                     status: exists
                 """);
             var tool = Path.Combine("tools", "AgentBridge.Quality", "bin", "Release", "net10.0");
@@ -109,7 +136,7 @@ public class PlanScriptTests
                 File.Copy(file, Path.Combine(target, Path.GetFileName(file)));
 
             ChangedFiles.Git(folder, "init", "-q", "-b", "main");
-            Commit("base", "quality/plan.ps1", "quality/catalog.yml", "src/AgentBridge.App/App.csproj");
+            Commit("base", "quality/plan.ps1", "quality/catalog.yml", "src/AgentBridge.App/App.csproj", "tests/Example.Tests/Tests.csproj");
             if (runsUnreadable.HasValue)
             {
                 Write("src/AgentBridge.App/Earlier.cs", "earlier untested app change");
@@ -117,6 +144,7 @@ public class PlanScriptTests
             }
             Write(changed, changed.EndsWith(".props", StringComparison.Ordinal) ? "<Project />" : "changed");
             Commit("change", changed);
+            if (anotherFile is not null) { Write(anotherFile, "code"); Commit("code", anotherFile); }
 
             var output = Path.Combine(folder, "outputs");
             var start = new ProcessStartInfo("pwsh")
@@ -132,7 +160,7 @@ public class PlanScriptTests
             start.Environment["EVENT"] = eventName;
             start.Environment["DRAFT"] = "false";
             start.Environment["WHOLE_RING"] = wholeRing ? "true" : "false";
-            start.Environment["BASE"] = "HEAD^1";
+            start.Environment["BASE"] = anotherFile is null ? "HEAD^1" : "HEAD~2";
             start.Environment["BASE_KNOWN"] = "true";
             start.Environment["GITHUB_OUTPUT"] = output;
             start.Environment["GITHUB_STEP_SUMMARY"] = Path.Combine(folder, "summary");
@@ -165,8 +193,13 @@ public class PlanScriptTests
             Assert.Equal($"app={expected}\napp-installer={expected}",
                 $"app={outputs["app"]}\napp-installer={outputs["app-installer"]}");
             foreach (var job in new[] { "product", "ha-integration", "spikes", "spikes-linux", "pwa-ui", "pwa-e2e" })
-                Assert.Equal(wholeRing || !changed.StartsWith("docs/", StringComparison.Ordinal) ? "true" : "false", outputs[job]);
+                Assert.Equal(job == "product" && eventName == "push" && changed.StartsWith("tests/", StringComparison.Ordinal)
+                    && !wholeRing && anotherFile is null && changed != "tests/Example.Tests/Shared.cs" ? "false"
+                    : wholeRing || changed != "docs/guide.md" ? "true" : "false", outputs[job]);
             Assert.Equal("true", outputs["light"]);
+            if (wholeRing)
+                Assert.Contains("Validation plans (reporting only): native=4, ha-compatibility=1.",
+                    File.ReadAllText(Path.Combine(folder, "summary")), StringComparison.Ordinal);
             if (outputs["product"] == "true")
                 Assert.Equal(eventName == "pull_request"
                         ? new[] { "ubuntu-latest", "windows-latest" }

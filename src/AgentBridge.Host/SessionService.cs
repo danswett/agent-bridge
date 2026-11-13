@@ -52,9 +52,22 @@ public sealed class SessionService
     public Fleet.FleetNames? FleetNames { get; init; }
     // Shared by hello and the relay load handlers; only the composition reads host settings.
     public Func<bool> LoadEnabled { get; init; } = () => true;
+    public LoadService? Load { get; init; }
 
     internal object RenameFleetSession(JsonElement data) =>
         (FleetNames ?? throw new InvalidOperationException("refused: fleet-name storage is not available on this host")).Rename(source, data);
+
+    internal Task<LaunchResult>? ReplayAgentLaunch(JsonElement data, string principal)
+    {
+        if (launcher is null || data.ValueKind != JsonValueKind.Object
+            || System.Text.Encoding.UTF8.GetByteCount(data.GetRawText()) > LaunchProtocol.MaxRequest) { return null; }
+        try
+        {
+            return data.Deserialize<LaunchRequest>(ProtocolJson.Options) is { } request
+                ? launcher.ReplayAsync(request, principal) : null;
+        }
+        catch (JsonException) { return null; } // An invalid request still meets the existing refusal path.
+    }
 
     // hello's machine.restore (#780): what went with the machine or the host when it last stopped, or
     // null. Set, it offers sessions.restore.
@@ -238,6 +251,8 @@ public sealed class SessionService
             // Never this machine's pipe: a LocalChannel falls through to an unknown op.
             case DiagnosticsProtocol.Get when Diagnostics is not null && channel is SecureChannel:
                 return await Diagnostics.HandleAsync(channel, data);
+            case "load.get" or "load.subscribe" or "load.unsubscribe" when LoadEnabled() && Load is not null && channel is SecureChannel:
+                return await Load.HandleAsync(channel, op);
             case Ops.SessionsList:
                 return source.List(String(data, "cursor"));
             case Ops.SessionGet:

@@ -42,6 +42,11 @@ makes it a new device, signed in and approved again, so keeping it is fine.
 
 ## Modules
 
+On opening a session, history asks for the newest five turns. Once drawn, at most
+one older page is fetched automatically, only if the visible pane does not yet
+scroll (#2480). Resizing or reopening does not renew that allowance. Load earlier
+messages, Try again and near-top scroll gestures still load earlier pages on demand.
+
 If a stale-cursor recovery walk runs out of its budget before finding held turns or the start,
 the history store keeps the held turns and reports a recoverable earlier-load error (#1437).
 
@@ -87,7 +92,7 @@ the history store keeps the held turns and reports a recoverable earlier-load er
 | `js/reading.js` | The session being read (#1190): tells each machine what the page shows (`sessions.focus`, through `HostSession.setFocus`) when it is in sight or hidden or the open session changes, and closes that session's shown notices when it opens, when the page comes back to it, and a second after each change to it while it is in sight, and again about 4 s and 10 s after the last (the host's question push comes 2 s after the question, a finished turn's 3 s after the turn; the passes stop when the page hides, the session shown changes, or it is stopped) (all of them but a question's other than the one its card shows: `openQuestion`, also said in `sessions.focus`). Signing out stops it, taking off every listener. It also times the person's input (passive listeners, a timestamp write each) for `sessions.focus`'s `idleMs`: said again on the first input after a spell without any and about each minute while input goes on, never while idle or hidden. The service worker is untouched: it still shows every push |
 | `js/usage.js` | Agent usage: the tolerant reader, merging every machine's reports into one row per allowance (a reading beats a failure, then the freshest wins), and the card's words: colours at 75% and 90%, pace, resets, ages |
 | `js/fleet.js` | Each machine's status line (`3 sessions · 0.1.0 (dev)`), usage, updates and who can sign Copilot in there (`signin.devices`, where offered): each machine shown on its own channel (`usage.subscribe`, `update.subscribe`), every other online machine by a short channel (`hello`, `usage.get`, `update.get`) every five minutes while the app is in front (#610; it was every minute), every ten seconds while an update there is under way; a machine shown asked for its hello again on its channel when it says it changed (`hello.changed`), else every minute; `call` sends a press to a machine on whichever |
-| `js/load-bars.js` | Pure `MachineLoad`-to-bars presentation seam for #1733: whole-machine CPU, memory used share from total/available bytes, and explicit missing figures. Uses only the record's freshness state, age and stale limit; stale, unavailable and offline expose no live figures. No health bands or production feed; tile wiring follows #1730, and the sparkline is separate (#1760). Tested in `test/unit/load-bars.test.mjs` |
+| `js/load-bars.js` | Pure `MachineLoad`-to-bars presentation seam for #1733: whole-machine CPU, memory used share from total/available bytes, and explicit missing figures. Uses only the record's freshness state, age and stale limit; stale, unavailable and offline expose no live figures. `SessionsPage` attaches `LoadFeed` to each existing open machine client after hello, redraws on records, and detaches on disconnect, capability removal or account cleanup (#2033). No capability or an unknown load operation leaves No figure; real host handlers are #2032. No health bands or client-derived ageing; the sparkline is separate (#1760). Tested in `test/unit/load-bars.test.mjs` and `test/machines.spec.mjs` |
 | `js/update.js` | A machine's updates ([v1-update.md](../docs/protocol/v1-update.md), #51): the tolerant reader, the row's words (what the machine's app is doing, how the last update ended), and `UpdateControl`, Check and Install with a request of their own each, a refusal shown on the row, and Check all; and Update now (#1159): whether it can be pressed or why not, what its confirmation lists (`nowSheet`), the signed press with what was shown (`accept`), a confirm outcome shown again, results worded from their `code` (never the machine's text), and "Restarting to update…" for 90 s once the machine has gone |
 | `js/ui/update-now-sheet.js` | Update now's confirmation (#1159): a modal dialog listing the busy sessions by name and state, with Cancel (focused first) and Update now; Escape cancels and nothing is sent |
 | `js/signin-devices.js` | Who can sign Copilot in on a machine (#972, ui.md §6.6): the tolerant reader of `signin.devices` (only a roster read lists anyone; a kind not a person's is dropped) and the row's words, in Creative's, with this device named and more than three folded. Read-only: nothing here adds or removes a device |
@@ -95,7 +100,7 @@ the history store keeps the held turns and reports a recoverable earlier-load er
 | `js/forget.js` | Forgetting an offline machine ([roster.md](../docs/protocol/roster.md)): two presses, the first arming for 5 seconds; an arm goes with a machine that comes back; the relay's refusals in words |
 | `sw.js` | The service worker: each release in a cache of its own, filled whole when its worker installs and served from there without asking the network, so a warm start waits on nothing and works offline (#609); anything else (the demo's chunk) stale-while-revalidate; and showing pushes (`push`) and opening the app at them (`notificationclick`). A release changes only as a whole: the browser checks `sw.js` on each start and the app on each return to the front, a new worker fills its own cache before it takes over, and the app then offers Reload, so old and new modules never mix (#26). The release before is kept for a page still open on it |
 | `js/release-watch.js` | New releases that keep failing to install (#650): a release installs whole or not at all, so one file missing from a deploy leaves the app on the release it has, and the browser tries again quietly at every start. After three failures in a row (counted in `localStorage` under the release in control, from the worker's record, so a release that installs with no page open clears them too), an app running a release it has says so, with Try again (a reload, the browser's next try); a release that installs clears it |
-| `js/app-release.js` | Release-state model (#1277, Settings wiring #1965): reads `version.json` with `no-store`, asks an attached service-worker registration to update, and reports idle, checking, current, behind, installing or ready. Failed checks preserve the prior release result and expose only a generic error; concurrent checks do nothing. Only an observed activation/takeover proves ready, never installation alone or attaching an already-active worker. Readiness lasts until reload and means an update from the running page, not that the separately published id identifies that worker. Settings > This app shows the newer-version line and manual Check for updates results, tested in Chromium and WebKit at phone and desktop widths. Automatic metadata checks and stalled-install handling remain on #1278. Nothing reloads automatically |
+| `js/app-release.js` | Release-state model (#1277, Settings wiring #1965, lifecycle #1278): reads `version.json` with `no-store`, asks an attached service-worker registration to update, and reports idle, checking, current, behind, installing, stalled, failed or ready. Manual check failures preserve the prior result and expose a generic error; concurrent checks do nothing. Automatic checks run on open and return to the front, at least 5 s after the last check, quietly unless a newer release is found. Only observed activation/takeover proves ready; an installed worker without takeover after 10 s says "The new version installed but hasn't started." with Reload. A replacement gets a fresh deadline; takeover and disposal cancel it. ReleaseWatch's repeated-install failure appears in This app with the banner's exact sentence and clears on successful installation. Readiness lasts until reload and means an update from the running page, not that the separately published id identifies that worker. Unit fake clocks and the phone/desktop Chromium/WebKit spec cover these states. Nothing reloads automatically |
 | `js/platform.js` | The platform layer (#168, [ui.md](../docs/design/ui.md) §7): `windows`, `macos`, `ios`, `ipados`, `android`, `chromeos`, `linux` or `unknown`, from Chromium's client hints or else the user agent (a Mac with a touch screen is an iPad), and whether the app is installed (`display-mode: standalone`, or iOS's `navigator.standalone`), set once on `<html data-platform data-standalone>`. The hints (⌘↩ and ⌘K on Apple's, Ctrl+Enter and Ctrl+K elsewhere; either modifier works everywhere), the safe areas (`viewport-fit=cover` kept only when installed on iOS or iPadOS, where the app bar, the bottom navigation or rail and the reply box keep clear of the notch and the home indicator; elsewhere the browser keeps the page out of them), no double-tap wait there, and its edge swipe back. `unknown` is Windows; nothing depends on detection being right |
 | `js/key-check.js`, `js/ui/key-check-view.js` | Settings > Keyboard check (#1209): while on, each keydown anywhere in the app is listed (key, code, Option, Control, Command, Shift, what had focus by what it is, never its words, and whether the app used the key), with how the page is open (installed or browser, and the raw `display-mode`). It only watches; a key that could be typing in a text box (a character, an input method's or a dead key, AltGr's or Option's) is listed without the key or its code; nothing is saved or sent, and Copy results puts the list on the clipboard. The words are tested in `test/unit/key-check.test.mjs` |
 | `js/markdown.js` | Markdown to DOM without HTML (see below) |
@@ -358,6 +363,12 @@ next outcomes), and asks a follow-up question a little after each answer.
 
 ### Replying
 
+Delivered image attachments can retain a sender-only preview on this device (#1802).
+The local account's store holds at most 32 raster images, 8 MiB total, for 24 hours;
+sign-out or forgetting a pairing clears it. Missing bytes or reply bindings (including
+Codex and older hosts) leave the named chip. Nothing fetches images from another device.
+Without Web Locks or BroadcastChannel, preview storage is disabled with a fixed console warning and chips remain.
+
 Each session has a reply box, at the foot of its conversation, when the machine's `hello` lists `sessions.reply`: a prompt for
 the session, typed into its input on the machine, whether it is idle or working. Enter is
 a new line and Ctrl+Enter (Cmd+Enter) or Send sends; the host types line breaks as spaces,
@@ -551,6 +562,14 @@ small secondary buttons, and Check for updates under the rows in the same column
 sends a new one; `?usage=0` plays a host without it; `?keep=1` keeps readings between visits,
 in the demo's own storage).
 
+A held release check says "Checked 20 minutes ago · checking again soon", without
+quota wording or a retry clock. Legacy hosts' hold reasons are recognised only by
+their fixed prefix; their machine-local times are never parsed or displayed.
+New app reasons retain that clock-free prefix so an already installed PWA still
+recognises the hold; the new PWA normalises it to the plain wording above.
+Successful checks clear that wording. The host's existing hold and retry schedule
+are unchanged (#2227); the structured UTC deadline belongs to protocol slice #2229.
+
 ### Markdown
 
 Agent text is rendered by `js/markdown.js`, written for this app rather than vendored.
@@ -599,10 +618,17 @@ span in a sentence this way, and NEL and the separators in prose.
 
 ## Tests
 
-Update discovery details (#927) are read and worded in `js/update.js`, separately from the
-Machines card's status and actions. Valid metadata adds the original update-list age and the
-historical direct GitHub quota with its own age; missing data adds nothing. Reader cases are
-in `test/unit/update.test.mjs`, and independent detail redraws in `test/machines.spec.mjs`.
+The open delegate detail (#2300) clears its polling timer while the document is hidden.
+On return it redraws ages and fetches once, keeping the last words while the fetch is
+pending or fails. Fake-clock cases are in `test/unit/delegates-view.test.mjs`;
+`test/delegates.spec.mjs` checks the retained content and catch-up in both browsers.
+
+The Fleet update block (#2187) shows a status glyph and word, a quiet "Checked" age and a
+44 px secondary Check now button. Update now is the only primary action when offered;
+Check now then drops out. Historical feed/quota metadata stays hidden. A limited check
+says "checking again soon" without a machine-local clock or locking Check now: only the
+host knows when that hold expires. Known update actions remain usable. Reader and age cases are in
+`test/unit/update.test.mjs`; phone/iPad states and geometry are in `test/machines.spec.mjs`.
 
 Settings > Reply box keeps Return key in replies on this device only (#1877): New line
 is the default; Send uses Return, with Shift+Return for a new line. Ctrl/Cmd+Return
@@ -644,6 +670,13 @@ stamped with a fixed release id and build time (`64a4019…`, 7 Nov 2026), which
 running another checkout's tests at the same time. CI splits the run over several jobs
 (quality/README.md §4.7): Chromium, three WebKit shards (`--shard`), and `test/e2e` alone in
 the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `test/e2e` out.
+
+The Fleet update-line ordering regression in `test/machines.spec.mjs` delivers a
+subscription response and a newer event in one task (#1959). `HostClient` applies
+the subscription snapshot synchronously through `subscribeUpdate(onState)`, before
+later wire events; a promise continuation must not restore the older state.
+The update fixture also waits for that initial snapshot before changing the demo
+host: the demo-ready marker covers sessions, not update subscriptions.
 
 On a ready PR, `pwa-ui` then repeats only added or modified specs since the PR's
 merge base five times, with zero retries, in the same Chromium and WebKit shards.

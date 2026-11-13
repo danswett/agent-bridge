@@ -55,12 +55,14 @@ public class SubagentTests
     static Subagent Entry(Session s, string id) => Assert.Single(s.Subagents!, a => a.Id == id);
 
     // What a client that predates sub-agents reads: everything but the fields #173 added, and
-    // #913's class, which came later still and which such a client ignores as well.
+    // #913's class and #1142's tuning fields, which came later and such a client ignores as well.
     static JsonNode Legacy(Session s)
     {
         var node = JsonNode.Parse(JsonSerializer.Serialize(s, ProtocolJson.Options))!.AsObject();
         node.Remove("class");
         node.Remove("classSince");
+        node.Remove("effort");
+        node.Remove("context");
         node.Remove("subagents");
         node.Remove("subagentsMore");
         node.Remove("waitingOn");
@@ -70,6 +72,8 @@ public class SubagentTests
         // clients ignore them.
         node["activity"]!.AsObject().Remove("turn");
         node["activity"]!.AsObject().Remove("responseTurn");
+        node["activity"]!.AsObject().Remove("kind");
+        node["activity"]!.AsObject().Remove("notice");
         node["question"]?.AsObject().Remove("agent");
         return node;
     }

@@ -24,6 +24,7 @@ import { replyReturnSends, replyReturnHint } from './reply-return.js';
 import { ReceiptClock, describeInFlight, drawReceipt, drawn, dropCheck, holdCheck, receiptLive } from './receipt.js';
 import { PHONE } from './collapse-header.js';
 import { UPDATING, holdOf } from './hold.js';
+import { installedPhone } from '../phone-viewport.js';
 
 let seq = 0;
 const kib = (n) => `${(n / 1024).toFixed(1)} KiB`;
@@ -168,6 +169,9 @@ export class ReplyBox {
       if (doc.visibilityState === 'hidden') { this.els.input.blur(); }
     }, { signal });
     doc.defaultView.addEventListener('pagehide', () => this.els.input.blur(), { signal });
+    if (installedPhone(doc.documentElement)) {
+      doc.defaultView.addEventListener('phone-viewport-change', () => this.fit(), { signal });
+    }
     this.#onReturn();
     doc.defaultView.addEventListener('reply-return-change', this.#onReturn, { signal });
     this.#place();
@@ -212,7 +216,7 @@ export class ReplyBox {
   // (ui.md §9); from 760 it is with Send again, after the text.
   #place() {
     const e = this.els;
-    const phone = !!this.#phone?.matches;
+    const phone = !!this.#phone?.matches || installedPhone(e.form.ownerDocument.documentElement);
     if ((e.attach.parentElement === e.box) === phone) { return; }
     const had = e.attach.ownerDocument?.activeElement === e.attach;
     if (phone) { e.box.insertBefore(e.attach, e.box.firstElementChild); } else { e.tools.prepend(e.attach); }
@@ -223,7 +227,8 @@ export class ReplyBox {
   // box is as the stylesheet draws it.
   fit() {
     const t = this.els.input;
-    if (!this.#phone?.matches) {
+    const iphone = installedPhone(t.ownerDocument.documentElement);
+    if (!this.#phone?.matches && !iphone) {
       t.style.removeProperty('height');
       t.style.removeProperty('overflow-y');
       return;
@@ -233,8 +238,12 @@ export class ReplyBox {
     // Its least height (the stylesheet's one line) first, so the words alone decide.
     t.style.height = '0px';
     const full = t.scrollHeight;
-    t.style.height = `${Math.min(full, GROW_MAX)}px`;
-    t.style.overflowY = full > GROW_MAX ? 'auto' : 'hidden';
+    const slot = t.closest('.reply-slot'), conversation = t.closest('.conversation');
+    const max = iphone && slot && conversation
+      ? Math.max(44, Math.min(GROW_MAX, conversation.clientHeight - (slot.offsetHeight - t.offsetHeight)))
+      : GROW_MAX;
+    t.style.height = `${Math.min(full, max)}px`;
+    t.style.overflowY = full > max ? 'auto' : 'hidden';
     t.scrollTop = top;
   }
 
@@ -333,6 +342,12 @@ export class ReplyBox {
       h('div', { class: 'answer-actions' }, e.resend, e.cancel),
       e.picker,
       e.status, e.live);
+    if (installedPhone(e.form.ownerDocument.documentElement)) {
+      // Move existing nodes before connection, never while a live region is announcing.
+      const notices = e.form.ownerDocument.createDocumentFragment();
+      for (const node of [e.hint, e.updating, e.error, e.form.querySelector('.answer-actions'), e.status, e.live]) { notices.append(node); }
+      e.form.insertBefore(notices, e.box);
+    }
     e.form.addEventListener('submit', (ev) => { ev.preventDefault(); this.#send(); });
     // Files dropped on the box, from a desktop.
     e.form.addEventListener('dragover', (ev) => { if (this.#attach && ev.dataTransfer?.types?.includes('Files')) { ev.preventDefault(); } });

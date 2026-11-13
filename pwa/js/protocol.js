@@ -333,6 +333,17 @@ export function readAnswerResult(raw) {
   };
 }
 
+export function readReplyAttachmentBinding(raw) {
+  const b = obj(raw);
+  return b && str(b.id) !== null && str(b.ref) !== null ? { id: b.id, ref: b.ref } : null;
+}
+
+export function readReplyResult(raw) {
+  const result = readAnswerResult(raw);
+  const bindings = Array.isArray(raw?.attachments) ? raw.attachments.map(readReplyAttachmentBinding) : null;
+  return { ...result, ...(bindings && bindings.every(Boolean) ? { attachments: bindings } : {}) };
+}
+
 // An interim frame's progress for a session.reply or session.answer that asked for it
 // (sessions.progress): { stage, working }, stage received (the host has it) or typed (the keys
 // have gone; working: the session was working, and takes it at its next step). Read as the C#

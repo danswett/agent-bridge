@@ -194,6 +194,7 @@ static class Program
             selection.Platform,
             Source = source,
             selection.Mode,
+            selection.NonProductOnly,
             // The dotnet test filter for the ring as a whole, so CI's product job (a draft's fast
             // ring) leaves out what ring 0 does without a second copy of the categories.
             TestFilter = selection.Ring == 0 ? string.Join('&', RingCommand.Ring0Exclusions) : null,
@@ -205,6 +206,7 @@ static class Program
             {
                 s.Suite.Id,
                 s.Suite.Kind,
+                s.Suite.ValidationPlan,
                 s.Suite.Ring,
                 s.Suite.Runner,
                 s.Suite.Status,
@@ -217,7 +219,7 @@ static class Program
                 s.Suite.SecuritySensitive,
                 Reasons = s.Reasons.Select(r => new { r.Rule, r.Files }),
             }),
-            Skipped = selection.Skipped.Select(s => new { s.Suite.Id, s.Why }),
+            Skipped = selection.Skipped.Select(s => new { s.Suite.Id, s.Suite.ValidationPlan, s.Why }),
         }, Json);
 
     /// <summary>

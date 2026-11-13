@@ -1826,7 +1826,16 @@ public sealed class UsageProbeTests : IDisposable
         var asked = time.GetUtcNow();
 
         await codex.CollectAsync();
-        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        // The reply runs on the wall clock; a fake-time limit can expire before it is scheduled.
+        // Small steps let the grace elapse without racing the reply to the probe's fake-time ceiling.
+        var waiting = System.Diagnostics.Stopwatch.StartNew();
+        while (!codex.Running.IsCompleted && waiting.Elapsed < TimeSpan.FromSeconds(30))
+        {
+            time.Advance(TimeSpan.FromMilliseconds(100));
+            await Task.Delay(10);
+        }
+        Assert.True(codex.Running.IsCompleted, "Timed out after 30 seconds waiting for the Codex rate-limit authentication-error probe to finish.");
+        await codex.Running;
         var usage = await codex.CollectAsync();
 
         // A failure of its own, timed when the probe found it, not at the transcripts' reading

@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import {
-  readActivity, readAnswerResult, readAttachmentState, readBackground, readDiscoveryHeld, readHello, readOwn, readProgress,
+  readActivity, readAnswerResult, readReplyResult, readReplyAttachmentBinding, readAttachmentState, readBackground, readDiscoveryHeld, readHello, readOwn, readProgress,
   readQuestion, readSession, readSource, readStopResult, readSubagent, readTool,
 } from '../../js/protocol.js';
 import { checkAnswer } from '../../js/answers.js';
@@ -22,6 +22,7 @@ import { acceptOf, nowArgs, readBusy, readUpdateCommandResult, readUpdateState }
 import { readSignInDevices } from '../../js/signin-devices.js';
 import { readUsage } from '../../js/usage.js';
 import { readDiagnostics } from '../../js/diagnostics.js';
+import * as loadReaders from '../../js/load-feed.js';
 import { HostClient } from '../../js/host-client.js';
 import { PatchError, applyPatch, readPatch } from '../../js/session-patch.js';
 import { SessionsStore } from '../../js/sessions-store.js';
@@ -46,13 +47,15 @@ const PATCHES = 'session-patches.json';
 const NOISE = 'noise-ik-p256.json';
 // The signed agent-command envelope's vectors (#722) are not records either; C# replays them.
 const ENVELOPE = 'agent-envelope.json';
+// Registry signature bytes are not records; C# replays them now, and the PWA follows in #2379.
+const FLEET_SIGNING = 'fleet-registry-signing.json';
 // The device roster's encoding, not records: test/unit/roster-vectors.test.mjs replays it.
 const ROSTER = 'roster.json';
 // The roster's acceptance-rule scenarios, not records: test/unit/roster-state.test.mjs replays them.
 const ROSTER_STATE = 'roster-state.json';
 // The roster's vetoes, person commands and attestations: test/unit/roster-commands.test.mjs replays them.
 const ROSTER_COMMANDS = 'roster-commands.json';
-const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED && f !== PATCHES && f !== NOISE && f !== ENVELOPE && f !== ROSTER && f !== ROSTER_STATE && f !== ROSTER_COMMANDS).sort().map((f) => [f, load(f)]);
+const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED && f !== PATCHES && f !== NOISE && f !== ENVELOPE && f !== FLEET_SIGNING && f !== ROSTER && f !== ROSTER_STATE && f !== ROSTER_COMMANDS).sort().map((f) => [f, load(f)]);
 const records = new Map(files.flatMap(([file, json]) => Object.entries(json.records).map(([name, r]) => [name, { ...r, file, contexts: json.contexts }])));
 const known = new Map(files.flatMap(([, json]) => json.knownDifferences).filter((d) => d.differs === 'pwa').map((d) => [`${d.vector}:${d.step}`, d]));
 
@@ -157,6 +160,11 @@ const inSnapshot = (key) => (j) => {
   return readDiagnostics({ ...s, [key]: j })?.[key] ?? null;
 };
 const READS = {
+  MachineLoad: { read: (j) => loadReaders.readMachineLoad(j), exact: true },
+  SessionLoad: { read: (j) => loadReaders.readSessionLoad(j), exact: true },
+  MachineLoadCpu: { read: (j) => loadReaders.readMachineLoadCpu(j), exact: true },
+  MachineLoadMemory: { read: (j) => loadReaders.readMachineLoadMemory(j), exact: true },
+  UnattributedLoad: { read: (j) => loadReaders.readUnattributedLoad(j), exact: true },
   MachineInfo: { read: (j) => readHello({ protocol: 1, machine: j, capabilities: [] }).machine },
   HelloResult: { read: readHello },
   ToolCall: { read: readTool },
@@ -228,7 +236,8 @@ const READS = {
   // for progress sends (#600): read as the service gets them.
   DeliveryProgress: { read: readProgress },
   DeliveryTimings: { read: (j) => readAnswerResult({ outcome: 'delivered', timings: j }).timings ?? {} },
-  ReplyResult: { read: readAnswerResult, unread: ['attachments'] },
+  ReplyResult: { read: readReplyResult },
+  ReplyAttachmentBinding: { read: readReplyAttachmentBinding },
   StopResult: { read: readStopResult },
   // session.history's page and the records in it, as the history store gets them (#292).
   HistoryResult: { read: readHistoryResult },
@@ -441,11 +450,6 @@ const BUILDS = {
 
 // Records the PWA neither reads nor builds through a function these tests can call, and why.
 const NOT_REPLAYED = {
-  MachineLoad: 'the relay load reader follows in #1872',
-  SessionLoad: 'read within MachineLoad, whose reader follows in #1872',
-  MachineLoadCpu: 'read within MachineLoad, whose reader follows in #1872',
-  MachineLoadMemory: 'read within MachineLoad, whose reader follows in #1872',
-  UnattributedLoad: 'read within MachineLoad, whose reader follows in #1872',
   SubscribeResult: 'the PWA waits for sessions.synced and uses nothing of this result',
   SubscribeSince: 'built only within SubscribeRequest, from what the store holds',
   PushSubscribeRequest: 'PushRegistrar sends the browser\'s own subscription, from a private method',
@@ -456,7 +460,6 @@ const NOT_REPLAYED = {
   PushListResult: 'the PWA does not call push.list',
   PushDevice: 'the PWA does not call push.list',
   AttachmentRef: 'written as ReplyRequest\'s attachments, replayed there',
-  ReplyAttachmentBinding: 'sender-thumbnail bindings are not read until #1802 S3',
   BlobRef: 'written by the blob-store path of uploadAttachment, which needs a relay',
   ResumableIncomplete: 'read only within LaunchOptions, and not yet by the PWA (#95 S3)',
   LaunchDefaults: 'read only within LaunchOptions, where it must name an agent and a workspace offered',
@@ -542,7 +545,9 @@ for (const [record, r] of records) {
   if (reads) {
     for (const v of r.valid) {
       test(`a ${record} "${v.name}" reads with every part the PWA uses intact`,       () => agrees(`${record}/${v.name}`, 'read', async () => {
-        holds(await reads.read(JSON.parse(JSON.stringify(v.json))), v.reads ?? v.json, reads.unread);
+        const read = await reads.read(JSON.parse(JSON.stringify(v.json)));
+        holds(read, v.reads ?? v.json, reads.unread);
+        if (reads.exact) { assert.deepEqual(read, v.reads ?? v.json); }
       }));
     }
     for (const v of r.refused.filter((x) => x.refusedBy === 'parse')) {

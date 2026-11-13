@@ -20,6 +20,31 @@ for a real scan, so the host validates every launch. Each call logs one line of 
 (launcher lookup, profiles, resumable) and each scan one line (count or timed out, milliseconds):
 counts and milliseconds only.
 
+## Agent launch readback and cap tuning (#2173, staged C1)
+
+An authenticated local agent repeats the same `session.launch` request, including its
+original settings, to read its own remembered outcome. This only reads: a new request,
+changed content or another principal's request still meets the existing refusal path.
+No new launch operation or agent launch authority is enabled here. Outcomes remain
+in memory for 25 minutes after settling; durable caps and results belong to C2.
+Readback removes working-directory, resume, transfer, profile and trust-question data.
+A reason outside the fixed safe list becomes a generic sentence; host paths stay private.
+A busy startup question is never answered, and its details are not disclosed.
+
+An agent's `launch.options` exposes only installed agents from `agents.inbound.local.launch`
+and isolated, approved workspace labels in that grant. It retains offered models,
+efforts and contexts, but no paths, resumable sessions, profiles or trust questions.
+The read scope is sufficient; missing or revoked credentials cannot read these choices.
+
+Only the person at the machine changes `agents.limits` in the host's config.
+The hourly defaults and ceilings are 3 launches per agent, 10 per machine and 20
+attempts per agent; they may be lowered, never made unlimited. The gate reads changes
+on its next check and records `rate-limited` refusals with the retry delay and caps in
+force. Watch refusal counts and retry delays in the launch audit before and after a
+change. Refusal audit records share the pipe's per-principal windowing: 60 per hour,
+then counted summaries at most once a minute. Live limits, idle ending, restart durability
+and temporary raises are C2 work, not guarantees of this staged readback.
+
 ## What agent-ha-bridge does
 
 From `hooks/daemon-launch.ps1` (`Use-DaemonLaunchRequest`, `Resolve-DaemonRequestedLaunch`,
@@ -80,14 +105,14 @@ differences, each deliberate:
 | The prompt | Any length through the payload; line breaks become spaces | At most 16 KiB in the request; every control character becomes a space; one starting with `/` or `!` is refused (the agent would run it as a command, as for a reply); one too long for the command line is refused, not cut |
 | A batch-file agent (npm's `copilot.cmd`, `codex.cmd`) | Quoted for `CommandLineToArgvW` only, so `cmd.exe` acts on `&`, `|`, `%VAR%` in the prompt | `cmd.exe /e:ON /v:OFF /d /c` with each argument quoted as Rust's standard library does since CVE-2024-24576: `%` cannot expand and nothing can leave its quotes. Tested end to end through `cmd.exe` |
 | Folder trust | Answered by the bridge on a person's second press | **Never answered on its own.** The outcome says the agent is asking, with the question (folder, repository root, the agent's words), and a person answers it at the machine or, with `launch.remoteFolderTrust` on, from their phone, browser or Windows app with a command that device signs (`launch.trust.answer`, below). Never on a press of Launch, from Home Assistant, the MCP server or an agent. Copilot's own "Confirm folder trust" is recognised too. Launches are `busy` while it shows, for up to two minutes |
-| Worker MCP servers | Copilot loads every server in the owner's `mcp-config.json` into every session it starts | A direct `copilot` launch that carries a `role` has every owner server not listed for that role in `launch.workerMcp` disabled by name, and the built-in servers off unless listed; a launch without a role is unchanged, and Agency is narrowed by `--profile-only` already. A restore does not carry the role yet, so a restored worker starts with the owner's list ([host-config.md](host-config.md)) |
+| Worker MCP servers | Copilot loads every server in the owner's `mcp-config.json` into every session it starts | A direct `copilot` launch that carries a `role` has every owner server not listed for that role in `launch.workerMcp` disabled by name, and the built-in servers off unless listed. The coordinator MCP tool now supplies `default` when the role is omitted: Copilot workers keep none unless `launch.workerMcp.default` lists them. Coordinators that relied on full MCP must request an explicit listed role. Null or blank roles are refused by the tool; caller-supplied origin fields are ignored. Person-started launches without a role stay unchanged. This is a cost/context control, not a security boundary or new launch authority: the host still narrows only on a role, direct Copilot only; Claude and Codex are not narrowed, and Agency still uses `--profile-only` when a profile is set. The local pipe's agent-launch refusal is unchanged. A restore does not carry the role yet, so a restored worker starts with the owner's list ([host-config.md](host-config.md)) |
 | Copilot account | The session uses whichever login Copilot has stored | A Copilot or Agency launch passes the user-level `COPILOT_GITHUB_TOKEN` to the child and first checks the account and quota with the host's own calls, before a worktree or process exists. No token, a bad one, a different login than `launch.copilotAccount`, zero premium interactions, or a check that cannot finish is refused with a plain reason; a stored login is never a fallback ([host-config.md](host-config.md)) |
 | Followed | One launch at a time; a newer press stops following the last | Each launch is followed on its own; starting (worktree, process) is one at a time |
 | Codex binding | The first Codex registration written after the launch | A new Codex session whose process is the one started or runs under it (a process-tree walk, start times checked so a recycled id does not count). Timing alone only when the process cannot be traced and no other Codex launch could claim the session; a session is bound to one launch at most |
 | Resuming twice | Prevented by following one launch at a time | A session a launch started an agent on is not resumable while that agent runs, checked again under the start lock, so two presses from two devices start one agent |
 | Agency as a batch file | Run through PowerShell | `agency.cmd` is asked for its profiles and sessions through `cmd.exe` with the same quoting as a launch |
 | The answer | Intermediate notes, then `started`, `failed` or `unconfirmed` | One result, after up to 60 s: `started` with the session id, else `unconfirmed` (still followed for 10 minutes, to release its worktree lock once it registers), `failed`, `busy` or `refused` |
-| Models | Discovered by starting each agent headless (Copilot's JSON-RPC, Claude's SDK, Codex's app-server) | Not discovered: the configured list, else the built-in one, plus the models live sessions of that kind are using. Starting an agent to ask is left for later. An effort a model does not take is not moved to one it does |
+| Models | Discovered by starting each agent headless (Copilot's JSON-RPC, Claude's SDK, Codex's app-server) | Not discovered: the configured list, else built-in plus live-session models; the configured default is also offered. The [account-scoped discovery design](design/launch-model-discovery.md) specifies event-driven asks, labeled fallback and missing capture evidence; it does not enable probes. An effort a model does not take is not moved to one it does |
 | `auto` | The installed agent used most recently, then signed in | The first installed, in order (Agency, Copilot, Claude, Codex) |
 | Codex without a prompt | Opened, then a first message offered from the card | Refused: Codex creates its session only on a first message, so a launch must carry one |
 | Attachments | No | Copilot and Agency: files sent first (as for a reply) are staged privately and the prompt mentions each as `@path` |
@@ -97,6 +122,16 @@ differences, each deliberate:
 | Reclaiming worktrees | Before each isolated launch, by its rules | The same rules, at the same point ([below](#reclaiming-finished-worktrees)), for this host's own marker only, and the same two exempt build outputs. Each tree kept is logged with its reason |
 | Incomplete discovery | Every launch refused while it lasts (`Launch held: waiting on …`) | Only what reads an absence waits: a resume of a held agent's session, or of one not on the list, and a new Codex session are `busy`, saying what holds it; nothing is reclaimed. Other new sessions start ([v1-launch.md](protocol/v1-launch.md#while-discovery-is-held)) |
 | macOS and Linux | tmux | Not offered yet |
+
+## Session discovery cadence (#2296)
+
+File watchers wake the source immediately, with a 50 ms debounce for bursts. A quiet
+source with no sessions or discovery hold reconciles every 15 seconds, including when
+watchers are unavailable or drop events. Sessions and holds retain the active poll
+interval (one second by default), as do the 30 seconds after a watcher wake or an
+observed session process exit. Transcript wakes cannot postpone reconciliation.
+These deadlines use monotonic time, not the wall clock. Session watchdogs and explicit
+launch-time refreshes keep their existing behavior; shutdown cancels every wait.
 
 ## In order, for every launch
 
@@ -178,6 +213,31 @@ For a workspace with `isolate: true`, each new session (never a resume):
 Worktrees are under `launch.worktrees.root`, by default `~/repos/wt`, the same root
 agent-ha-bridge uses: shared with other sessions and other repositories. This host never
 sweeps it, and never touches a worktree it did not create.
+
+### Agent-created worktree check (#2285, #1447 W2)
+
+For a host-supplied `agent:` principal, the launcher checks only the result of this
+launch's `Worktrees.Create`, immediately after creation and before reservation, credentials
+or process start. Existing trees, resumes and transfers cannot take this path. W1's check
+requires isolation, host provenance, the approved repository/subdirectory, detached HEAD
+and clean state, and refuses Claude project configuration or links. Only Claude's list is
+confirmed; other agents fail closed. A missing or thrown check also refuses.
+
+A refusal removes only the new tree, using an in-memory creation receipt bound to this
+request and the immutable creation commit, using protected, nonrecursive removal.
+Before adding it, the host binds the unused target to its physical parent and snapshots the
+repository's worktree administration. Before writing a marker or issuing a receipt, it requires
+that exact nonlinked target and a new administration folder pointing back to it. A relocated
+or substituted root is refused and retained without cleanup, never marked or adopted as owned.
+A pre-existing or copied result
+cannot authorize deletion. New commits (including checkout-hook commits), changed, linked,
+ignored or otherwise unsafe data are retained with a readable cleanup reason, never
+force-deleted. The refusal writes one agent audit
+record; an unavailable audit is reported explicitly. Repeating the request returns its
+remembered result without another tree or audit, and a removed tree spends no worktree slot.
+The start turn is released on refusal. Hourly caps and pipe activation remain separate work:
+the local pipe still refuses agent launches. Person launches and folder-trust handling are
+unchanged; user-profile agent settings still apply.
 
 ## Reclaiming finished worktrees
 

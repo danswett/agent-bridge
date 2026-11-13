@@ -11,7 +11,7 @@ using Xunit;
 // The host's Protocol v1 service end to end: fixture sessions read by the real
 // SessionSource, served through the in-process relay over a Noise channel, to a client.
 [Trait("Category", "Network")]
-public sealed class ServeTests : IAsyncLifetime
+public sealed partial class ServeTests : IAsyncLifetime
 {
     const string Id = "88888888-8888-4888-8888-888888888888";
     const string Other = "99999999-9999-4999-8999-999999999999";
@@ -641,6 +641,8 @@ public sealed class ServeTests : IAsyncLifetime
     [Fact]
     public async Task What_a_device_said_it_shows_stops_counting_when_its_channel_closes()
     {
+        // Channel-close cleanup is under test, not the grace for out-of-order presence.
+        host.Hub.PresenceGrace = TimeSpan.Zero;
         var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
         service = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0")) { Time = time };
         host.Hub.Handler = service.HandleAsync;

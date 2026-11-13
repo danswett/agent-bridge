@@ -22,6 +22,8 @@ internal sealed class TurnMarks
     }
 
     public static readonly TurnMarks Copilot = new(["\"user.message\""], []);
+    public static readonly TurnMarks CopilotHistory = new(
+        ["\"user.message\"", "\"assistant.turn_start\"", "\"assistant.turn_end\"", "\"abort\"", "\"session.resume\"", "\"session.shutdown\""], []);
     // The exclusion is structural, a block's type: a prompt that is just the words "tool_result"
     // is the bare token "tool_result" too (found in review of #292). A writer that put a space
     // after the colon is only parsed and then refused, never missed.

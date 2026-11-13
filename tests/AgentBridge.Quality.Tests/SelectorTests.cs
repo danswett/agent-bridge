@@ -69,6 +69,7 @@ public class SelectorTests
                 platforms: [win-x64]
                 runner: hosted
                 builds: src/Nothing
+                validation_plan: native
                 status: planned
             """);
 

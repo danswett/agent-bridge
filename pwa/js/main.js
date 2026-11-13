@@ -29,6 +29,7 @@ import { BRAND, NOTIFICATIONS_BLOCKED } from './brand.js';
 import { fakeMove, moves } from './move.js';
 import { loadIdentity, deviceName, kvGet, kvPut, kvDelete } from './identity.js';
 import { accountStore, startDeviceFlow } from './signin.js';
+import { sentImages } from './sent-images.js';
 import { BridgeConnection } from './connection.js';
 import { ALL, HostSession } from './host-session.js';
 import { ReturnGrace } from './return-grace.js';
@@ -56,6 +57,7 @@ import { whileVisible } from './ui/ticker.js';
 import { RelayBlobs } from './blobs.js';
 import { recentTimings } from './timing.js';
 import { edgeSwipeBack, installedOnApple, markPlatform } from './platform.js';
+import { watchPhoneViewport } from './phone-viewport.js';
 import { applyTextSize, readTextSize, saveTextSize } from './text-size.js';
 import { mountKeyCheck } from './ui/key-check-view.js';
 import { mountRelease } from './ui/release-view.js';
@@ -64,6 +66,9 @@ import { FeedbackDiagnostics, feedbackFailureMessage, isSensitiveFeedbackText, s
 
 // Installed on iOS or iPadOS, the edge swipe walks the same back stack as Android's Back.
 if (installedOnApple(markPlatform())) { edgeSwipeBack(document, () => history.back()); }
+let stopPhoneViewport = watchPhoneViewport();
+addEventListener('pagehide', () => stopPhoneViewport());
+addEventListener('pageshow', () => { stopPhoneViewport(); stopPhoneViewport = watchPhoneViewport(); });
 const $ = (id) => document.getElementById(id);
 
 // Text size (ui.md §4.4): this device's choice, already on the page from text-size-boot.js.
@@ -318,12 +323,16 @@ const replacedBanner = new LastingBanner({ show: () => reveal($('replaced-banner
 // An installed PWA keeps running the code it has until restarted (S5 limitation), so a
 // new version is announced with a reload button instead of waiting for a force-quit.
 function registerServiceWorker() {
-  if (!('serviceWorker' in navigator)) { return; }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') { appRelease.auto(); }
+  });
+  if (!('serviceWorker' in navigator)) { appRelease.auto(); return; }
   const hadController = !!navigator.serviceWorker.controller;
   // Only an app running a release it has can be stuck on it: without one, each load is the network's.
   const releases = new ReleaseWatch({
     onChange: (stuck) => {
       stuckBanner.set(stuck && hadController);
+      appRelease.installFailed(stuck && hadController ? $('stuck-banner').querySelector('span').textContent : '');
     },
   });
   // Which release is in control, read again after each takeover; only the latest read counts.
@@ -352,10 +361,7 @@ function registerServiceWorker() {
     reg.addEventListener('updatefound', () => releases.watch(reg.installing));
     // One the browser found on its own as this page loaded, before it could listen.
     releases.watch(reg.installing);
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') { reg.update().catch(() => {}); }
-    });
-  }).catch((e) => console.warn('service worker:', e.message));
+  }).catch((e) => console.warn('service worker:', e.message)).finally(() => appRelease.auto());
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     releases.tookOver();
     learn();
@@ -839,6 +845,7 @@ function begin(account) {
   // Each machine's Diagnose (#802): read here, copied only after review.
   const diagnose = new DiagnoseControl({ fleet });
   const dropMachine = (id) => {
+    void sentImages.clear();
     hosts.dropMachine(id);
     fleet.forget(id);
     updates.forget(id);
@@ -1038,6 +1045,7 @@ function begin(account) {
     }
   });
   connection.on('signed-out', () => {
+    void sentImages.clear();
     // The account's sessions and remembered machine go with it; a reconnect within the
     // same sign-in keeps them, but a new sign-in may be a different account.
     setLinked(null);
@@ -1070,6 +1078,7 @@ function begin(account) {
   });
 
   $('signout').onclick = async () => {
+    await sentImages.clear();
     setLinked(null);
     hosts.forget();
     fleet.clear();

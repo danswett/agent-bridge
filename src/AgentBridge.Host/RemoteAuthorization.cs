@@ -24,6 +24,7 @@ public sealed class RemoteAuthorization : IDisposable
         ManageProtocol.Get, ManageProtocol.Subscribe, ManageProtocol.Restart, ManageProtocol.HooksRepair,
         ManageProtocol.Stop, ManageProtocol.ConfigGet, ManageProtocol.ConfigSet, ManageProtocol.HaTokenSet,
         DiagnosticsProtocol.Get,
+        "load.get", "load.subscribe", "load.unsubscribe",
     ];
     static readonly HashSet<string> HostCapabilities =
         [UsageProtocol.Capability, UsageProtocol.SharedCapability, TransferProtocol.ServeCapability];

@@ -203,6 +203,20 @@ arguments). Expected: **Claude** (`.claude/`, `.mcp.json`) and **Copilot** (its 
 hook and MCP configuration, list to be confirmed). **Codex** waits until its list is confirmed. An
 agent without a confirmed list is refused for agent launches.
 
+**#1447 W1 implementation (not yet wired).** `AgentLaunchWorktreeCheck` is a read-only
+check of the created worktree: host marker, matching repository and approved subdirectory,
+detached HEAD, and clean state including ignored files. It refuses filesystem links rather
+than following them during configuration inspection. Claude's confirmed project locations
+are `.claude/` (shared and local settings, hooks and plugins) and `.mcp.json`; presence
+anywhere in the worktree refuses, regardless of contents. Main-checkout configuration is
+also refused because Claude can inherit its local settings. Sources:
+[settings files and worktree inheritance](https://code.claude.com/docs/en/settings),
+[MCP scopes](https://code.claude.com/docs/en/mcp), and Claude Code 2.1.322 `--help`
+(`--settings` and project/local settings controls). Copilot, Codex, Agency and unknown
+kinds remain refused until their lists are confirmed. User-profile settings are unchanged.
+W2 must call the check before process start and handle refusal audit, removal of only
+the newly created worktree, and slot release; W1 does none of those and enables no launches.
+
 **Prompt length: keep 16 KiB, refuse longer.** The protocol limit is 16 KiB of UTF-8 in a request
 of at most 20 KiB (`Launch.cs:17-18`; v1-launch.md:102, :105-115), the MCP server checks the
 same 16 KiB before calling the host (`mcp/src/server.mjs:70`, `:104`), and the host refuses a

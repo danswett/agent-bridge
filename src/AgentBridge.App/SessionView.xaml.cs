@@ -298,7 +298,7 @@ public sealed partial class SessionView : UserControl
         if (all || e.PropertyName is nameof(SessionCardViewModel.Response) or nameof(SessionCardViewModel.HasVoice)) { ShowResponse(reset: false); }
         if (all || e.PropertyName == nameof(SessionCardViewModel.PromptOpen)) { Disclose(); }
         if (all) { RetryHistory(); }
-        if (e.PropertyName == nameof(SessionCardViewModel.UserMessage)) { ShowHistory(); }
+        if (all || e.PropertyName == nameof(SessionCardViewModel.UserMessage)) { ShowHistory(); }
         if ((all || e.PropertyName == nameof(SessionCardViewModel.AsksText)) && questionView is not null && Card is { } c && questionView.Heading != c.AsksText)
         {
             // Who asks, drawn by the app in the question: not the person's typing laid out.

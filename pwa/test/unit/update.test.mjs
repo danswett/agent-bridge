@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   readUpdateState, readUpdateCommandResult, updateLine, updateDetails, lastLine, canInstall, canCheck, underWay, UpdateControl,
   canUpdateNow, updateNowReason, notUpdated, nowSheet, acceptOf, quiet, readBusy, nowAnnouncement, RESTARTING, BUSY_MOST,
@@ -14,21 +15,59 @@ import { fromBase64url } from '../../js/blobs.js';
 const NOW = Date.parse('2026-11-02T18:00:00.000Z');
 const found = readUpdateState({ current: '0.4.0', installer: true, available: '0.5.0', checkedAt: '2026-11-02T17:55:00.000Z', phase: 'idle' });
 
-test('discovery quota uses singular for one remaining check and preserves zero and plural wording', () => {
-  for (const [gitHubRemaining, words] of [[0, 'no more checks'], [1, '1 more check'], [2, '2 more checks']]) {
+test('a new-app held check still offers only Check now in an already installed PWA', () => {
+  const raw = JSON.parse(readFileSync(new URL('../../../tests/fixtures/updates/held-check.json', import.meta.url), 'utf8'));
+  for (const outcome of ['failed', 'refused']) {
+    const s = readUpdateState({ ...raw, last: { ...raw.last, outcome } });
+    const idle = s.installer && s.phase === 'idle' && !s.waiting;
+    // Frozen from e70f1b30's updateRow; do not replace this with the new checkHeld helper.
+    const heldCheck = idle && !s.last?.code && ['failed', 'refused'].includes(s.last?.outcome)
+      && s.last.reason?.startsWith("the release feed's rate limit refused the check");
+    const checkFailed = heldCheck && !(Date.parse(s.checkedAt) > Date.parse(s.last.at));
+    const compact = idle && (s.available ? checkFailed : s.current && s.checkedAt
+      && (!s.last || ['current', 'failed', 'refused'].includes(s.last.outcome)));
+    const offerNow = !compact && canUpdateNow(s);
+    const actions = [
+      (compact && !s.available) || offerNow || compact ? 'Check now' : 'Check',
+      s.available && !compact && !offerNow ? 'Install' : null,
+      offerNow ? 'Update now' : null,
+    ].filter(Boolean);
+    assert.deepEqual(actions, ['Check now']);
+    assert.ok(canCheck(s));
+    assert.equal(lastLine(s, NOW), 'Checking again soon.');
+    assert.deepEqual(updateDetails(s, NOW), ['Checked 20 minutes ago \u00b7 checking again soon']);
+  }
+});
+
+test('a legacy held check is plain retry wording, never a parsed machine clock or quota', () => {
+  for (const reason of [
+    "the release feed's rate limit refused the check (rate limit exceeded); checking again after 9:46 AM",
+    "the release feed's rate limit refused the check; checking again after not-a-clock",
+    'checking again soon',
+  ]) {
+    const state = readUpdateState({
+      installer: true, checkedAt: '2026-11-02T17:40:00Z', checkSource: 'github',
+      gitHubRemaining: 0, gitHubQuotaAt: '2026-11-02T17:59:00Z',
+      last: { outcome: 'failed', reason, at: '2026-11-02T17:59:00Z' },
+    });
+    assert.equal(lastLine(state, NOW), 'Checking again soon.');
+    assert.deepEqual(updateDetails(state, NOW), ['Checked 20 minutes ago \u00b7 checking again soon']);
+    assert.ok(canCheck(state));
+  }
+});
+
+test('historical discovery quota alone never adds a visible allowance', () => {
+  for (const gitHubRemaining of [0, 1, 2]) {
     const state = { gitHubRemaining, gitHubQuotaAt: '2026-11-02T17:55:00Z' };
-    assert.deepEqual(updateDetails(state, NOW), [`When last asked, GitHub allowed ${words} (5 min ago)`]);
+    assert.deepEqual(updateDetails(state, NOW), []);
   }
 });
 
 for (const [minutes, words] of [[0, 'under a minute'], [59, '59 min'], [60, '1 h'], [125, '2 h']]) {
-  test(`discovery list and quota ages read as ${words} after ${minutes} minutes`, () => {
+  test(`the quiet check age reads as ${words} after ${minutes} minutes`, () => {
     const at = new Date(NOW - minutes * 60000).toISOString();
     const state = { checkSource: 'cdn', checkedAt: at, gitHubRemaining: 2, gitHubQuotaAt: at };
-    assert.deepEqual(updateDetails(state, NOW), [
-      `Update list from the release feed, ${words} old`,
-      `When last asked, GitHub allowed 2 more checks (${words} ago)`,
-    ]);
+    assert.deepEqual(updateDetails(state, NOW), [`Checked ${words} ago`]);
   });
 }
 
@@ -104,7 +143,7 @@ test('a machine whose update waits for a question to be answered says so in the 
 
 test('the last outcome reads as what happened', () => {
   const at = '2026-11-02T17:00:00.000Z';
-  assert.equal(lastLine({ last: { outcome: 'updated', from: '0.4.0', to: '0.5.0', at } }, NOW), 'Updated from 0.4.0 to 0.5.0 1h 0m ago.');
+  assert.equal(lastLine({ last: { outcome: 'updated', from: '0.4.0', to: '0.5.0', at } }, NOW), 'Updated to 0.5.0.');
   assert.equal(lastLine({ last: { outcome: 'refused', reason: "another profile's host runs from this installation", at } }, NOW), "Not updated: another profile's host runs from this installation.");
   assert.equal(lastLine({ last: { outcome: 'failed', reason: 'the package is damaged', at } }, NOW), 'The update failed: the package is damaged.');
   assert.equal(lastLine(found, NOW), null);

@@ -105,8 +105,8 @@ test('the Machines page has no All machines row, says the fleet in one line, and
   await expect(page.locator('#machine-summary')).toHaveText('3 machines · 3 online');
   const laptop = page.locator(`#machine-list [data-device-id="${LAPTOP}"]`);
   await expect(laptop.getByRole('region', { name: 'Laptop' })).toBeVisible();
-  await expect(laptop.locator('.tile-health-word')).toHaveText('Not measured');
-  await expect(laptop.locator('.tile-running')).toHaveText('Running: 2 sessions');
+  await expect(laptop.locator('.tile-health-word')).toHaveText('Not measured yet');
+  await expect(laptop.getByRole('button', { name: 'Running, 2 sessions' })).toHaveAttribute('aria-expanded', 'false');
   await expect(laptop.getByText('Can run')).toHaveCount(0);
   await expect(laptop.getByRole('button', { name: 'Launch here' })).toBeVisible();
   // A machine that is view only says why there is nothing to launch, in text.
@@ -125,6 +125,141 @@ const launchHere = async (page) => {
   expect((await machine(page, LAPTOP, 'launchLog')).length).toBe(1);
   expect(await machine(page, 'demo', 'launchLog')).toEqual([]);
 };
+
+test.describe('live load wiring', () => {
+  const sample = { state: 'fresh', ageMs: 2000, staleAfterMs: 15000,
+    cpu: { percent: 37.5 }, memory: { totalBytes: 16000, availableBytes: 10000 } };
+  const tile = (page, id = LAPTOP) => page.locator(`#machine-list [data-device-id="${id}"]`);
+  const ops = (page) => page.evaluate(() => window.loadOps);
+  const attach = (page, refuse = null) => page.evaluate(async ({ sample, refuse, id }) => {
+    const { hosts, machines } = window.agentBridgeDemo, host = machines[id];
+    const receive = host.receive.bind(host);
+    window.loadOps = [];
+    window.loadRecord = sample;
+    host.receive = (t, m) => {
+      if (!m.op.startsWith('load.')) { return receive(t, m); }
+      window.loadOps.push(m.op);
+      if (m.op === refuse) { return t.deliver({ re: m.id, ok: false, error: 'unknown op' }); }
+      if (m.op === 'load.subscribe') { t.loadSubscribed = true; }
+      if (m.op === 'load.unsubscribe') { t.loadSubscribed = false; }
+      t.deliver({ re: m.id, ok: true, result: window.loadRecord });
+    };
+    host.capabilities.push('load');
+    await hosts.refresh(id);
+  }, { sample, refuse, id: LAPTOP });
+
+  test('hello attaches one feed and host-declared stale updates remove exact figures', async ({ page }) => {
+    await openDemo(page);
+    await go(page, 'machines');
+    await attach(page);
+    await expect.poll(() => ops(page)).toEqual(['load.get', 'load.subscribe']);
+    await expect(tile(page).getByRole('meter', { name: 'CPU' })).toHaveAttribute('aria-valuenow', '37.5');
+    await expect(tile(page).getByRole('meter', { name: 'Memory' })).toHaveAttribute('aria-valuenow', '37.5');
+    await expect(tile(page, SHADOW).locator('.machine-load-value')).toHaveText(['No figure', 'No figure']);
+    await page.evaluate(({ sample, id }) => {
+      for (const t of window.agentBridgeDemo.machines[id].transports) {
+        if (t.loadSubscribed) { t.deliver({ ev: 'load.update', seq: ++t.seq, data: { ...sample, ageMs: 15001 } }); }
+      }
+    }, { sample, id: LAPTOP });
+    await expect(tile(page).getByRole('meter')).toHaveCount(0);
+    await expect(tile(page).locator('.machine-load-value')).toHaveText(['No figure', 'No figure']);
+    await page.evaluate(() => window.agentBridgeDemo.page.refresh());
+    expect(await ops(page)).toEqual(['load.get', 'load.subscribe']);
+  });
+
+  test('disconnect clears figures, reconnect resubscribes and page cleanup unsubscribes', async ({ page }) => {
+    await openDemo(page);
+    await go(page, 'machines');
+    await attach(page);
+    await expect(tile(page).getByRole('meter')).toHaveCount(2);
+    await page.evaluate((id) => {
+      const { hosts, machines } = window.agentBridgeDemo;
+      hosts.reopenMs = 100;
+      hosts.retryMs = 100;
+      machines[id].failOpen = true;
+      machines[id].disconnect();
+    }, LAPTOP);
+    await expect(tile(page).getByRole('meter')).toHaveCount(0);
+    await page.evaluate((id) => { window.agentBridgeDemo.machines[id].failOpen = false; }, LAPTOP);
+    await expect.poll(() => ops(page)).toEqual(['load.get', 'load.subscribe', 'load.get', 'load.subscribe']);
+    await expect(tile(page).getByRole('meter')).toHaveCount(2);
+    await page.evaluate(async (id) => {
+      const { hosts, machines } = window.agentBridgeDemo;
+      machines[id].capabilities = machines[id].capabilities.filter((c) => c !== 'load');
+      await hosts.refresh(id);
+    }, LAPTOP);
+    await expect.poll(() => ops(page)).toEqual(['load.get', 'load.subscribe', 'load.get', 'load.subscribe', 'load.unsubscribe']);
+    await expect(tile(page).getByRole('meter')).toHaveCount(0);
+    await page.evaluate(async (id) => {
+      const { hosts, machines } = window.agentBridgeDemo;
+      machines[id].capabilities.push('load');
+      await hosts.refresh(id);
+    }, LAPTOP);
+    await expect(tile(page).getByRole('meter')).toHaveCount(2);
+    await page.evaluate(() => window.agentBridgeDemo.page.clear());
+    await expect.poll(async () => (await ops(page)).filter((op) => op === 'load.unsubscribe').length).toBe(2);
+    await page.evaluate(() => window.agentBridgeDemo.page.refresh());
+    expect((await ops(page)).filter((op) => op === 'load.subscribe')).toHaveLength(3);
+  });
+
+  test('a channel event gap recovers load figures with the confirmed session snapshot', async ({ page }) => {
+    await openDemo(page);
+    await go(page, 'machines');
+    await attach(page);
+    await expect(tile(page).getByRole('meter')).toHaveCount(2);
+    await expect.poll(() => ops(page)).toEqual(['load.get', 'load.subscribe']);
+    await page.evaluate((id) => {
+      window.loadRecord = { ...window.loadRecord, cpu: { percent: 81 } };
+      for (const t of window.agentBridgeDemo.machines[id].transports) {
+        if (t.loadSubscribed) { t.deliver({ ev: 'load.update', seq: t.seq += 2, data: window.loadRecord }); }
+      }
+    }, LAPTOP);
+    await expect.poll(() => ops(page)).toEqual(['load.get', 'load.subscribe', 'load.unsubscribe', 'load.get', 'load.subscribe']);
+    await expect(tile(page).getByRole('meter', { name: 'CPU' })).toHaveAttribute('aria-valuenow', '81');
+  });
+
+  for (const target of [LAPTOP, SHADOW]) {
+    test(`a press on ${target} survives another load reading before pointer release`, async ({ page }) => {
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      await openDemo(page);
+      await go(page, 'machines');
+      await attach(page);
+      await expect(tile(page).getByRole('meter', { includeHidden: true })).toHaveCount(2);
+      const action = tile(page, target).locator('.machine-view');
+      await action.scrollIntoViewIfNeeded();
+      const held = await action.elementHandle(), box = await action.boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.evaluate((id) => {
+        for (const t of window.agentBridgeDemo.machines[id].transports) {
+          if (t.loadSubscribed) { t.deliver({ ev: 'load.update', seq: ++t.seq, data: { ...window.loadRecord, cpu: { percent: 81 } } }); }
+        }
+      }, LAPTOP);
+      await expect(tile(page).getByRole('meter', { name: 'CPU', includeHidden: true })).toHaveAttribute('aria-valuenow', '81');
+      expect(await held.evaluate((el) => el.isConnected)).toBe(true);
+      await page.mouse.up();
+      await expect(page).toHaveURL(/#\/sessions$/);
+      expect(await page.evaluate(() => window.agentBridgeDemo.hosts.selection)).toBe(target);
+    });
+  }
+
+  for (const refuse of ['load.get', 'load.subscribe']) {
+    test(`a host answering unknown op to ${refuse} keeps No figure without retrying or breaking sessions`, async ({ page }) => {
+      const errors = [];
+      page.on('console', (m) => { if (m.type() === 'error') { errors.push(m.text()); } });
+      await openDemo(page);
+      await go(page, 'machines');
+      await attach(page, refuse);
+      await expect.poll(() => errors.some((e) => e.includes('unknown op'))).toBe(true);
+      await expect(tile(page).getByRole('meter')).toHaveCount(0);
+      await expect(tile(page).locator('.machine-load-value')).toHaveText(['No figure', 'No figure']);
+      await page.evaluate(() => window.agentBridgeDemo.page.refresh());
+      expect(await ops(page)).toEqual(refuse === 'load.get' ? ['load.get'] : ['load.get', 'load.subscribe']);
+      await go(page, 'sessions');
+      await expect(card(page, LAPTOP, 'laptop-ask-1')).toBeVisible();
+    });
+  }
+});
 
 test.describe('load bars', () => {
   const full = { state: 'fresh', ageMs: 2000, staleAfterMs: 15000, cpu: { percent: 37.543 }, memory: { totalBytes: 16000, availableBytes: 10000, committedPercent: 91 } };
@@ -156,13 +291,13 @@ test.describe('load bars', () => {
     ['Offline', full, false, '\u2298'],
     ['Not measured', null, true, '\u25cb'],
   ]) {
-    test(`the health line says ${word} with a neutral icon and no invented figures`, async ({ page }) => {
+    test(`a ${word} reading never invents a health band or figures`, async ({ page }) => {
       await openDemo(page);
       await go(page, 'machines');
       await draw(page, load, online);
       const health = page.locator('#load-fixture-list .tile-health');
-      await expect(health.locator('.tile-health-word')).toHaveText(word);
-      await expect(health.locator('.tile-health-icon')).toHaveText(glyph);
+      await expect(health.locator('.tile-health-word')).toHaveText(online ? 'Not measured yet' : 'Offline');
+      await expect(health.locator('.tile-health-icon')).toHaveText(online ? '\u25cb' : glyph);
       await expect(health.locator('.tile-health-icon')).toHaveAttribute('aria-hidden', 'true');
       expect(await health.locator('.tile-health-icon').evaluate((e) => getComputedStyle(e).color))
         .toBe(await health.evaluate((e) => getComputedStyle(e).color));
@@ -187,15 +322,16 @@ test.describe('load bars', () => {
       [null, 'Not measured'],
     ]) {
       await draw(page, load);
-      await expect(word).toHaveText(expected);
+      await expect(word).toHaveText('Not measured yet');
+      await expect(page.locator('#load-fixture-list .machine-load-state').first()).toContainText(expected === 'Not measured' ? 'Unavailable' : expected);
     }
     await draw(page, full);
     await word.evaluate((e) => { e.dataset.kept = 'true'; });
     await draw(page, { ...full, ageMs: 2001 });
     await expect(word).toHaveAttribute('data-kept', 'true');
     await draw(page, full, true, '0.1.2');
-    await expect(page.locator('#load-fixture-list .machine-update-line')).toContainText('0.1.2 is available');
-    await expect(word).toHaveText('Fresh');
+    await expect(page.locator('#load-fixture-list .machine-update-line')).toContainText('Update available · 0.1.2');
+    await expect(word).toHaveText('Not measured yet');
   });
 
   test('the live page has no invented load figures before a feed exists', async ({ page }) => {
@@ -216,13 +352,13 @@ test.describe('load bars', () => {
         await go(page, 'machines');
         await draw(page, full);
         const tile = page.locator('#load-fixture-list .machine-tile');
-        await expect(tile.locator('.tile-health-word')).toHaveText('Fresh');
+        await expect(tile.locator('.tile-health-word')).toHaveText('Not measured yet');
         await expect(tile.locator('.tile-health-icon')).toBeVisible();
-        const cpu = tile.getByRole('meter', { name: 'CPU (whole machine)' });
-        const memory = tile.getByRole('meter', { name: 'Memory used' });
+        const cpu = tile.getByRole('meter', { name: 'CPU', exact: true });
+        const memory = tile.getByRole('meter', { name: 'Memory', exact: true });
         await expect(cpu).toHaveAttribute('aria-valuenow', '37.543');
         await expect(memory).toHaveAttribute('aria-valuenow', '37.5');
-        await expect(tile.locator('.machine-load-value')).toHaveText(['37.543%', '37.5%']);
+        await expect(tile.locator('.machine-load-value')).toHaveText(['38%', '38%']);
         await cpu.evaluate((e) => { e.dataset.kept = 'true'; });
         await draw(page, { ...full, ageMs: 2001 });
         await expect(cpu).toHaveAttribute('data-kept', 'true');
@@ -237,14 +373,15 @@ test.describe('load bars', () => {
         await expect(memory).toHaveAttribute('aria-valuenow', '0');
         await expect(tile.locator('.machine-load-value')).toHaveText(['0%', '0%']);
         await draw(page, { ...full, state: 'partial', cpu: undefined });
-        await expect(tile.locator('.tile-health-word')).toHaveText('Partial');
+        await expect(tile.locator('.tile-health-word')).toHaveText('Not measured yet');
         await expect(cpu).toHaveCount(0);
         await expect(memory).toHaveAttribute('aria-valuenow', '37.5');
-        await expect(tile.locator('.machine-load-value')).toHaveText(['No figure', '37.5%']);
+        await expect(tile.locator('.machine-load-value')).toHaveText(['No figure', '38%']);
         await expect(tile.locator('.machine-load-track').first()).toHaveCSS('border-top-style', 'dashed');
         for (const [load, word] of [[null, 'Not measured'], [{ ...full, state: 'stale' }, 'Stale'], [{ ...full, ageMs: 15001 }, 'Stale'], [{ ...full, state: 'unavailable' }, 'Unavailable']]) {
           await draw(page, load);
-          await expect(tile.locator('.tile-health-word')).toHaveText(word);
+          await expect(tile.locator('.tile-health-word')).toHaveText('Not measured yet');
+          await expect(tile.locator('.machine-load-state').first()).toContainText(word === 'Not measured' ? 'Unavailable' : word);
           await expect(tile.getByRole('meter')).toHaveCount(0);
           await expect(tile.locator('.machine-load-value')).toHaveText(['No figure', 'No figure']);
         }
@@ -258,64 +395,394 @@ test.describe('load bars', () => {
   }
 });
 
+test.describe('held update clocks', () => {
+  test.use({ timezoneId: 'Asia/Tokyo' });
+  test('a legacy hold shows a quiet age and checking again soon in another time zone', async ({ page }) => {
+    await page.clock.setFixedTime(new Date('2026-11-10T17:40:00Z'));
+    await page.goto('?demo=1&static=1&updates=1&updateNow=1#/machines');
+    await page.waitForSelector('html[data-demo-ready]');
+    await expect.poll(() => page.evaluate(() => [...window.agentBridgeDemo.host.transports]
+      .some((t) => t.updateSubscribed))).toBe(true);
+    await page.evaluate(() => window.agentBridgeDemo.client.request('update.get'));
+    await page.evaluate(() => window.agentBridgeDemo.setUpdate({
+      ...window.agentBridgeDemo.host.update, current: '0.1.4415', available: null,
+      checkedAt: '2026-11-10T17:20:00Z', checkSource: 'github',
+      gitHubRemaining: 0, gitHubQuotaAt: '2026-11-10T17:39:00Z',
+      last: {
+        outcome: 'failed', at: '2026-11-10T17:39:00Z',
+        reason: "the release feed's rate limit refused the check; checking again after 9:46 AM",
+      },
+    }));
+    const block = page.locator('#machine-list [data-device-id="demo"] .machine-update');
+    await expect(block.locator('.machine-update-detail')).toHaveText(['Checked 20 minutes ago \u00b7 checking again soon']);
+    await expect(block).not.toContainText(/9:46|AM|PM|limit|quota|failed|refused/i);
+  });
+});
+
+test.describe('approved Fleet card structure', () => {
+  test.use({ isMobile: true });
+  for (const mode of ['dark', 'light', 'contrast']) {
+    test(`the current machine keeps its visible cue, hover and contrast in ${mode}`, async ({ page, browserName }) => {
+      test.skip(mode === 'contrast' && browserName === 'webkit', 'WebKit has no forced-colors emulation');
+      await page.emulateMedia({ colorScheme: mode === 'dark' ? 'dark' : 'light', forcedColors: mode === 'contrast' ? 'active' : 'none' });
+      await openDemo(page);
+      await page.evaluate((id) => window.agentBridgeDemo.hosts.select(id), LAPTOP);
+      await go(page, 'machines');
+      const current = page.locator(`#machine-list [data-device-id="${LAPTOP}"]`);
+      await expect(current.locator('.machine-button')).toHaveAttribute('aria-current', 'true');
+      await expect(current.locator('.machine-state')).toContainText('Viewing');
+      const cue = await current.evaluate((el) => {
+        const s = getComputedStyle(el, '::before'), probe = document.createElement('span');
+        probe.style.color = 'Highlight'; el.append(probe);
+        const highlight = getComputedStyle(probe).color; probe.remove();
+        return { content: s.content, width: parseFloat(s.width), height: parseFloat(s.height), color: s.backgroundColor, adjust: s.forcedColorAdjust, highlight };
+      });
+      expect(cue.content).not.toBe('none');
+      expect(cue.width).toBeGreaterThan(0);
+      expect(cue.height).toBeGreaterThan(cue.width);
+      if (mode === 'contrast') {
+        expect(cue.adjust).toBe('none');
+        expect(cue.color).toBe(cue.highlight);
+      }
+      if (mode === 'light') {
+        const text = await page.locator('body').evaluate((el) => getComputedStyle(el).color);
+        await expect(current.locator('.machine-state')).toHaveCSS('color', text);
+        await expect(current.locator('.machine-launch')).toHaveCSS('color', text);
+      }
+      const transparent = /^rgba\(\d+, \d+, \d+, 0\)$/;
+      await expect(current.locator('.machine-block')).toHaveCSS('background-color', transparent);
+      await current.locator('.machine-button').hover();
+      await expect(current.locator('.machine-button')).not.toHaveCSS('background-color', transparent);
+    });
+  }
+  for (const [width, scale] of [[390, 100], [390, 200], [768, 100], [1024, 100]]) {
+    test(`cards keep their hierarchy, disclosures and aligned bars at ${width}px and ${scale}% text`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.addInitScript(() => { Object.defineProperty(navigator, 'standalone', { value: true }); });
+      await openDemo(page);
+      await go(page, 'machines');
+      const baseNameSize = await page.locator('#machine-list .machine-name').first().evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+      await page.evaluate(async (scale) => {
+        document.documentElement.style.setProperty('--text-scale', scale / 100);
+        const { renderMachines } = await import('/js/ui/views.js');
+        document.getElementById('machine-list').hidden = true;
+        const list = document.createElement('ul');
+        list.id = 'structure-fixture'; list.className = 'machines';
+        document.getElementById('machines').append(list);
+        const hosts = ['Small', 'Large'].map((name, i) => ({ id: `structure-${i}`, name, kind: 'host' }));
+        window.structureCalls = [];
+        window.drawStructure = (version = '0.1.1', state = 'fresh') => renderMachines(list, {
+          presence: hosts, current: hosts[1].id, me: 'phone',
+          facts: () => ({ sessions: '2 sessions', version }),
+          load: (id) => ({ state, ageMs: state === 'fresh' ? 12000 : 240000, staleAfterMs: 15000,
+            cpu: { percent: id === hosts[0].id ? 7.2 : 97.6 },
+            memory: { totalBytes: 32e9, availableBytes: id === hosts[0].id ? 20e9 : 1e9 } }),
+          onSelect: (id) => window.structureCalls.push(id), onLaunch() {},
+        });
+        window.drawStructure();
+      }, scale);
+      const cards = page.locator('#structure-fixture > .machine');
+      const disclosures = page.locator('#structure-fixture .tile-running-toggle');
+      await expect(disclosures).toHaveCount(2);
+      await expect(disclosures.nth(0)).toHaveAccessibleName('Running, 2 sessions on Small');
+      await expect(disclosures.nth(1)).toHaveAccessibleName('Running, 2 sessions on Large');
+      expect(await cards.first().locator('.machine-name').evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeCloseTo(baseNameSize * scale / 100);
+      for (const card of await cards.all()) {
+        await expect(card.locator('.tile-health-word')).toHaveText('Not measured yet');
+        await expect(card.locator('.tile-health-icon')).toBeVisible();
+        await expect(card.getByText('Updated 12 s ago', { exact: true })).toBeVisible();
+        await expect(card.locator('.machine-load-label')).toHaveText(['CPU', 'Memory']);
+        await expect(card.locator('.machine-load-state')).toHaveText(['\u25cf Fresh', '\u25cf Fresh']);
+        const running = card.getByRole('button', { name: /^Running, 2/ });
+        await expect(running).toHaveAttribute('aria-expanded', 'false');
+        await expect(card.getByText('Running: 2 sessions', { exact: true })).toHaveCount(0);
+        await expect(card.locator('.machine-status')).toHaveText('2 sessions · 0.1.1');
+        await expect(card.locator('.machine-state')).toContainText(await card.locator('[aria-current="true"]').count() ? 'Viewing' : 'Online');
+        await expect(card.locator('.machine-state [aria-hidden="true"]')).toBeVisible();
+        const actions = [card.getByRole('button', { name: /^Launch here/ }), card.getByRole('button', { name: /^Show sessions/ })];
+        const boxes = await Promise.all(actions.map((a) => a.boundingBox()));
+        expect(Math.abs(boxes[0].y - boxes[1].y)).toBeLessThanOrEqual(0.5);
+        for (const a of actions) { expect((await a.boundingBox()).height).toBeGreaterThanOrEqual(44); }
+      }
+      await expect(cards.first().locator('.machine-load-value')).toHaveText(['7%', '38%']);
+      await expect(cards.last().locator('.machine-load-value')).toHaveText(['98%', '97%']);
+      await expect(cards.first().getByText('20 GB free', { exact: true })).toBeVisible();
+      await expect(cards.last().getByText('1 GB free', { exact: true })).toBeVisible();
+      const bars = await page.locator('#structure-fixture .machine-load-track').evaluateAll((els) => els.map((el) => {
+        const r = el.getBoundingClientRect(), card = el.closest('.machine').getBoundingClientRect();
+        return { left: r.left - card.left, right: card.right - r.right };
+      }));
+      for (const bar of bars) {
+        expect(Math.abs(bar.left - bars[0].left)).toBeLessThanOrEqual(0.5);
+        expect(Math.abs(bar.right - bars[0].right)).toBeLessThanOrEqual(0.5);
+      }
+      const presentation = await cards.evaluateAll((els) => els.map((card) => ({
+        bold: [...card.querySelectorAll('*')].filter((el) => el.childNodes.length && [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) && Number(getComputedStyle(el).fontWeight) >= 600).map((el) => el.className),
+        band: getComputedStyle(card.querySelector('.machine-block')).backgroundColor,
+        clipped: [...card.querySelectorAll('*')].some((el) => el.clientWidth && el.scrollWidth > el.clientWidth + 1),
+      })));
+      for (const p of presentation) {
+        expect(p.bold).toEqual(['machine-name']);
+        expect(p.band).toBe('rgba(0, 0, 0, 0)');
+        expect(p.clipped).toBe(false);
+      }
+      const running = cards.first().getByRole('button', { name: /^Running, 2/ });
+      await running.click();
+      await expect(running).toHaveAttribute('aria-expanded', 'true');
+      await cards.first().locator('.tile-running').getByRole('button', { name: 'View sessions on Small', exact: true }).tap();
+      await running.focus();
+      await page.evaluate(() => window.drawStructure('0.1.2'));
+      await expect(running).toHaveAttribute('aria-expanded', 'true');
+      await expect(running).toBeFocused();
+      const showRunning = cards.first().locator('.machine-running-view');
+      await showRunning.focus();
+      await page.evaluate(() => window.drawStructure('0.1.3'));
+      await expect(showRunning).toBeFocused();
+      await page.keyboard.press('Enter');
+      await expect(cards.first().getByRole('button', { name: /^Show sessions/ })).toHaveCount(1);
+      await cards.last().getByRole('button', { name: /^Show sessions/ }).tap();
+      expect(await page.evaluate(() => window.structureCalls)).toEqual(['structure-0', 'structure-0', 'structure-1']);
+      await page.evaluate(() => window.drawStructure('0.1.2', 'stale'));
+      for (const card of await cards.all()) {
+        await expect(card.getByText('Last measured 4 min ago', { exact: true })).toBeVisible();
+        await expect(card.getByRole('meter')).toHaveCount(0);
+        await expect(card.getByText(/GB free/)).toHaveCount(0);
+        await expect(card.locator('.machine-load-value')).toHaveText(['No figure', 'No figure']);
+        expect(await card.evaluate((el) => [...el.querySelectorAll('*')].some((e) => e.clientWidth && e.scrollWidth > e.clientWidth + 1))).toBe(false);
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    });
+  }
+});
+
 test.describe('one truthful update line', () => {
   test.use({ timezoneId: 'America/Los_Angeles' });
   const now = new Date('2026-11-10T17:40:00Z');
   const refused = "the release feed's rate limit refused the check (rate limit exceeded; check again after 9:46 AM); checking again after 9:46 AM";
+  const heldDetail = 'Checked 28 minutes ago \u00b7 checking again soon';
   const update = (page) => page.locator('#machine-list [data-device-id="demo"] .machine-update');
   async function show(page, change) {
     await page.clock.setFixedTime(now);
     await page.goto('?demo=1&static=1&updates=1&updateNow=1#/machines');
     await page.waitForSelector('html[data-demo-ready]');
+    await expect.poll(() => page.evaluate(() => [...window.agentBridgeDemo.host.transports]
+      .some((t) => t.updateSubscribed))).toBe(true);
+    // Drain the subscription's initial reply before seeding a newer event on the same channel.
+    await page.evaluate(() => window.agentBridgeDemo.client.request('update.get'));
     await page.evaluate((c) => window.agentBridgeDemo.setUpdate({
       ...window.agentBridgeDemo.host.update, current: '0.1.4415', available: null,
       checkedAt: '2026-11-10T17:12:00Z', last: null, ...c,
     }), change);
   }
 
-  for (const outcome of ['failed', 'refused']) {
-    test(`a current machine with a ${outcome} release check shows the retry time once and no failure`, async ({ page }) => {
-      await show(page, { last: { outcome, reason: refused, at: now.toISOString() } });
-      const block = update(page);
-      await expect(block.locator('.machine-update-line')).toHaveText('Up to date (0.1.4415). Next check 9:46 AM.');
-      await expect(block.locator('p')).toHaveCount(1);
-      await expect(block).not.toContainText(/failed|refused|checked/i);
-      expect((await block.innerText()).match(/9:46 AM/g)).toHaveLength(1);
-      await expect(block.locator('button')).toHaveCount(0);
-      await block.getByRole('link', { name: 'Check now' }).click();
-      await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.check']);
+  for (const [kind, waiting] of [
+    ['Needs you', 'Needs you: restart the app to finish its update.'],
+    ['Update ready', 'Update ready \u00b7 waiting for a question to be answered'],
+  ]) {
+    test(`checking preserves the ${kind} waiting line`, async ({ page }) => {
+      await show(page, { phase: 'checking', waiting });
+      await expect(update(page).locator('.machine-update-line')).toHaveText(waiting);
     });
   }
 
-  test('a behind machine with a failed release check offers only Check now', async ({ page }) => {
-    await show(page, { available: '0.1.4448', last: { outcome: 'failed', reason: refused, at: now.toISOString() } });
-    const block = update(page);
-    await expect(block.locator('.machine-update-line')).toHaveText('Update available, but the check failed. Next try 9:46 AM.');
-    await expect(block.locator('p')).toHaveCount(1);
-    await expect(block).not.toContainText('Up to date');
-    expect((await block.innerText()).match(/9:46 AM/g)).toHaveLength(1);
-    await expect(block.getByRole('button')).toHaveCount(1);
-    await expect(block.getByRole('button', { name: 'Check now' })).toHaveClass(/\bprimary\b/);
-    await block.getByRole('button', { name: 'Check now' }).click();
-    await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.check']);
-  });
-
-  test('a current machine is quiet until its successful check is over one hour old', async ({ page }) => {
+  test('a failed-check event delivered with the subscription snapshot keeps the truthful update line', async ({ page }) => {
     await show(page, {});
-    await expect(update(page).locator('p')).toHaveText(['Up to date (0.1.4415)']);
-    await show(page, { checkedAt: '2026-11-10T16:12:00Z' });
-    await expect(update(page).locator('p')).toHaveText(['Up to date (0.1.4415). Last checked 8:12 AM.']);
-  });
-
-  test('an available update has one primary Update now and a quiet check without changing health', async ({ page }) => {
-    await show(page, { available: '0.1.4462', last: null, busy: { working: 0, waiting: 0 } });
+    await page.evaluate(async ({ reason, at }) => {
+      const { host, hosts } = window.agentBridgeDemo;
+      host.capabilities = host.capabilities.filter((c) => c !== 'update');
+      await hosts.refresh('demo');
+      const receive = host.receive.bind(host);
+      host.receive = (transport, request) => {
+        if (request.op !== 'update.subscribe') { return receive(transport, request); }
+        host.receive = receive;
+        const deliver = transport.deliver;
+        // Keep wire order, but deliver both frames in one task before promise continuations.
+        transport.deliver = (message) => transport.onmessage(message);
+        try {
+          receive(transport, request);
+          host.setUpdate({ ...host.update, available: '0.1.4448',
+            last: { outcome: 'failed', reason, at } });
+        } finally { transport.deliver = deliver; }
+      };
+      host.capabilities.push('update');
+      await hosts.refresh('demo');
+    }, { reason: refused, at: now.toISOString() });
     const block = update(page);
-    await expect(block.locator('.machine-update-line')).toHaveText('Update available: 0.1.4462 (running 0.1.4415).');
-    await expect(block.locator('p')).toHaveCount(1);
+    await expect(block.locator('.machine-update-line')).toHaveText('Update available \u00b7 0.1.4448 (running 0.1.4415)');
+    await expect(block.locator('.machine-update-detail')).toHaveText([heldDetail]);
+    await expect(block.locator('p')).toHaveCount(2);
+    await expect(block).not.toContainText('Up to date');
     await expect(block.getByRole('button')).toHaveCount(1);
     await expect(block.locator('.machine-update-now')).toHaveClass(/\bprimary\b/);
-    await expect(block.getByRole('link', { name: 'Check now' })).toBeVisible();
-    await expect(page.locator('#machine-list [data-device-id="demo"] .tile-health-word')).toHaveText('Not measured');
+  });
+
+  test('a refusal note preserves the plain check hold description', async ({ page }) => {
+    await show(page, {});
+    const machine = page.locator('#machine-list > [data-device-id="demo"]');
+    const check = update(page).locator('.machine-update-check');
+    const note = 'This check was refused.';
+    await page.evaluate((note) => window.agentBridgeDemo.host.scriptUpdates([note]), note);
+    await check.click();
+    await expect(machine.locator('.machine-error')).toHaveText(note);
+    await page.evaluate((reason) => window.agentBridgeDemo.setUpdate({
+      ...window.agentBridgeDemo.host.update, last: { outcome: 'failed', reason, at: '2026-11-10T17:40:00Z' },
+    }), refused);
+    await expect(check).toBeEnabled();
+    await expect(check).toHaveAccessibleDescription(`${heldDetail} ${note}`);
+  });
+
+  for (const refusal of [null, 'The feed still refuses this check.']) {
+    test(refusal ? 'a retried check shows a host refusal and remains usable'
+      : 'a past limited check permits another manual request without an automatic state change', async ({ page }) => {
+      await show(page, { automatic: false, last: { outcome: 'failed', reason: refused, at: now.toISOString() } });
+      const check = update(page).locator('.machine-update-check');
+      await expect(update(page).locator('.machine-update-detail')).toHaveText([heldDetail]);
+      await page.clock.setFixedTime(new Date('2026-11-10T17:47:00Z'));
+      await page.evaluate(() => window.agentBridgeDemo.setUpdate({ ...window.agentBridgeDemo.host.update }));
+      await expect(check).toBeEnabled();
+      if (refusal) { await page.evaluate((note) => window.agentBridgeDemo.host.scriptUpdates([note]), refusal); }
+      await check.click();
+      const requests = () => page.evaluate(() => window.agentBridgeDemo.updateLog.map(({ op }) => op));
+      await expect.poll(requests).toEqual(['update.check']);
+      if (refusal) {
+        await expect(page.locator('#machine-list > [data-device-id="demo"] .machine-error')).toHaveText(refusal);
+        await expect(check).toBeEnabled();
+        await check.click();
+        await expect.poll(requests).toEqual(['update.check', 'update.check']);
+      }
+    });
+  }
+
+  for (const [phase, label] of [['idle', 'Check now'], ['checking', 'Checking\u2026'], ['asking', 'Asking\u2026']]) {
+    test(`the ${phase} check control names each machine`, async ({ page }) => {
+      await show(page, {});
+      await page.evaluate(async (phase) => {
+        const { renderMachines } = await import('/js/ui/views.js');
+        const list = document.createElement('ul');
+        list.id = 'update-names-fixture'; list.className = 'machines';
+        document.getElementById('machines').append(list);
+        renderMachines(list, {
+          presence: ['Workshop', 'Laptop'].map((name) => ({ id: name, name, kind: 'host' })),
+          me: 'phone', current: 'all', onSelect() {},
+          updates: {
+            state: () => ({ installer: true, phase: phase === 'checking' ? 'checking' : 'idle', current: '0.1.0' }),
+            stateOf: () => ({ busy: phase === 'asking' }), press() {}, checkAll() {},
+          },
+        });
+      }, phase);
+      const checks = page.locator('#update-names-fixture .machine-update-check');
+      await expect(checks).toHaveCount(2);
+      for (const [i, machine] of ['Workshop', 'Laptop'].entries()) {
+        await expect(checks.nth(i)).toHaveText(label);
+        await expect(checks.nth(i)).toHaveAccessibleName(`${label} on ${machine}`);
+      }
+    });
+  }
+
+  for (const outcome of ['failed', 'refused']) {
+    test(`a current machine with a ${outcome} limited check keeps Check now and plain retry wording`, async ({ page }) => {
+      await show(page, { last: { outcome, reason: refused, at: now.toISOString() } });
+      const block = update(page);
+      await expect(block.locator('.machine-update-line')).toHaveText('Up to date · 0.1.4415');
+      await expect(block.locator('.machine-update-detail')).toHaveText([heldDetail]);
+      await expect(block).not.toContainText(/9:46|limited|refused|failed|quota/i);
+      await expect(block.getByRole('button', { name: 'Check now on Demo machine', exact: true })).toBeEnabled();
+    });
+  }
+
+  for (const canUpdateNow of [true, false]) {
+    test(`a limited check keeps the known release usable through ${canUpdateNow ? 'Update now' : 'legacy Install'}`, async ({ page }) => {
+      await show(page, { available: '0.1.4448', canUpdateNow, busy: { working: 0, waiting: 0 },
+        last: { outcome: 'failed', reason: refused, at: now.toISOString() } });
+      const block = update(page);
+      await expect(block.locator('.machine-update-line')).toHaveText('Update available · 0.1.4448 (running 0.1.4415)');
+      await expect(block.locator('.machine-update-detail')).toHaveText([heldDetail]);
+      await expect(block).not.toContainText('Up to date');
+      const action = block.locator(canUpdateNow ? '.machine-update-now' : '.machine-update-install');
+      await expect(action).toBeEnabled();
+      if (canUpdateNow) {
+        await expect(action).toHaveClass(/\bprimary\b/);
+        await expect(block.locator('.machine-update-check')).toHaveCount(0);
+        await expect(block).not.toContainText(/9:46 AM|Can't check/);
+      } else {
+        await expect(block.locator('.machine-update-check')).toBeEnabled();
+        await expect(block).not.toContainText(/9:46|limited|refused|failed|quota/i);
+      }
+      await action.click();
+      await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.install']);
+    });
+  }
+
+  test('a current machine shows a quiet check age without exposing feed or quota plumbing', async ({ page }) => {
+    await show(page, {});
+    await expect(update(page).locator('p')).toHaveText(['Up to date · 0.1.4415', 'Checked 28 min ago']);
+    await show(page, { checkedAt: '2026-11-10T16:12:00Z' });
+    await expect(update(page).locator('p')).toHaveText(['Up to date · 0.1.4415', 'Checked 1 h ago']);
+  });
+
+  test('a current check keeps two text lines and Check now focus through redraws', async ({ page }) => {
+    await show(page, {});
+    const block = update(page), check = block.locator('.machine-update-check');
+    await expect(block.locator('.machine-update-line')).toHaveText('Up to date · 0.1.4415');
+    await check.focus();
+    const set = (change) => page.evaluate((c) => window.agentBridgeDemo.setUpdate({ ...window.agentBridgeDemo.host.update, ...c }), change);
+    await set({ phase: 'checking' });
+    await expect(block.locator('.machine-update-line')).toHaveText('Checking…');
+    await expect(check).toBeFocused();
+    await set({ phase: 'idle', checkedAt: now.toISOString(), last: { outcome: 'current', at: now.toISOString() } });
+    await expect(block.locator('p')).toHaveText(['Up to date · 0.1.4415', 'Checked under a minute ago']);
+    await expect(block.getByRole('button', { name: 'Check now on Demo machine', exact: true })).toBeFocused();
+    await expect(check).toBeEnabled();
+    await expect(block.getByRole('button')).toHaveCount(1);
+  });
+
+  test('a successful Check now moves keyboard focus to Update now', async ({ page }) => {
+    await page.clock.install({ time: now });
+    await show(page, { busy: { working: 0, waiting: 0 } });
+    const block = update(page), check = block.locator('.machine-update-check');
+    await expect(block.locator('.machine-update-line')).toHaveText('Up to date · 0.1.4415');
+    await page.clock.pauseAt(new Date(now.getTime() + 60_000));
+    await check.focus();
+    await page.keyboard.press('Enter');
+    await page.clock.runFor(50);
+    await expect(check).toHaveText('Checking…');
+    await expect(check).toBeFocused();
+    await page.evaluate(() => window.agentBridgeDemo.setUpdate({
+      ...window.agentBridgeDemo.host.update, available: '0.1.4462',
+    }));
+    await page.clock.runFor(400);
+    await expect(block.locator('.machine-update-line')).toHaveText('Update available · 0.1.4462 (running 0.1.4415)');
+    await expect(check).toHaveCount(0);
+    await expect(block.locator('.machine-update-now')).toBeFocused();
+    expect(await page.evaluate(() => window.agentBridgeDemo.updateLog.map(({ op }) => op))).toEqual(['update.check']);
+    await page.evaluate(() => window.agentBridgeDemo.setUpdate({
+      ...window.agentBridgeDemo.host.update, available: null,
+    }));
+    await page.clock.runFor(50);
+    await expect(check).toBeFocused();
+    await page.evaluate(() => window.agentBridgeDemo.setUpdate({
+      ...window.agentBridgeDemo.host.update, installer: false,
+    }));
+    await page.clock.runFor(50);
+    await expect(block.getByRole('button')).toHaveCount(0);
+    const machine = page.locator('#machine-list > [data-device-id="demo"]');
+    await expect(machine).toBeFocused();
+    await page.evaluate(() => window.agentBridgeDemo.setUpdate({
+      ...window.agentBridgeDemo.host.update, checkedAt: '2026-11-10T17:00:00Z',
+    }));
+    await page.clock.runFor(50);
+    await expect(machine).toBeFocused();
+  });
+
+  test('an available update has only primary Update now without changing health', async ({ page }) => {
+    await show(page, { available: '0.1.4462', last: null, busy: { working: 0, waiting: 0 } });
+    const block = update(page);
+    await expect(block.locator('.machine-update-line')).toHaveText('Update available · 0.1.4462 (running 0.1.4415)');
+    await expect(block.getByRole('button')).toHaveCount(1);
+    await expect(block.locator('.machine-update-now')).toHaveClass(/\bprimary\b/);
+    await expect(block.getByRole('link')).toHaveCount(0);
+    await expect(block.locator('.machine-update-check')).toHaveCount(0);
+    await expect(page.locator('#machine-list [data-device-id="demo"] .tile-health-word')).toHaveText('Not measured yet');
     await block.locator('.machine-update-now').click();
     await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map(({ op, now }) => ({ op, now }))))
       .toEqual([{ op: 'update.install', now: true }]);
@@ -326,60 +793,88 @@ test.describe('one truthful update line', () => {
       await show(page, { available, last: { outcome: 'failed', code: 'release-changed', at: now.toISOString() } });
       const block = update(page);
       await expect(block.locator('.machine-update-line')).toHaveText(available
-        ? 'Update available: 0.1.4462 (running 0.1.4415). Not updated: the update didn\'t take.'
-        : 'Up to date (0.1.4415)');
-      await expect(block.locator('p')).toHaveCount(1);
-      if (!available) {
-        await expect(block).not.toContainText(/failed|not updated/i);
-        await expect(block.getByRole('button')).toHaveCount(0);
-      }
+        ? 'Update available · 0.1.4462 (running 0.1.4415)'
+        : 'Up to date · 0.1.4415');
+      await expect(block.locator('.machine-update-last')).toHaveText("Not updated: the update didn't take.");
     });
   }
 
   test('a refused first check never claims the machine is current', async ({ page }) => {
     await show(page, { checkedAt: null, last: { outcome: 'failed', reason: refused, at: now.toISOString() } });
     await expect(update(page)).not.toContainText('Up to date');
-    await expect(update(page)).toContainText('not checked for updates yet');
+    await expect(update(page).locator('.machine-update-line')).toHaveText('Not checked yet');
   });
 
   test('a successful check after a refusal removes the old retry time', async ({ page }) => {
     await show(page, { last: { outcome: 'failed', reason: refused, at: '2026-11-10T17:00:00Z' } });
-    await expect(update(page).locator('p')).toHaveText(['Up to date (0.1.4415)']);
+    await expect(update(page).locator('p')).toHaveText(['Up to date · 0.1.4415', 'Checked 28 min ago']);
   });
 
-  test('discovery details preserve the status and actions while source, quota and their ages change independently', async ({ page }) => {
+  test('only the check age is shown while historical source and quota change independently', async ({ page }) => {
     await show(page, {
       checkSource: 'cdn', checkedAt: '2026-11-10T17:28:00Z',
       gitHubRemaining: 43, gitHubQuotaAt: '2026-11-10T17:35:00Z',
-      last: { outcome: 'failed', reason: refused, at: now.toISOString() },
+      last: null,
     });
     const block = update(page);
     const details = block.locator('.machine-update-detail');
     const set = (change) => page.evaluate((c) => window.agentBridgeDemo.setUpdate({ ...window.agentBridgeDemo.host.update, ...c }), change);
-    await expect(details).toHaveText([
-      'Update list from the release feed, 12 min old',
-      'When last asked, GitHub allowed 43 more checks (5 min ago)',
-    ]);
-    await expect(block.locator('.machine-update-line')).toHaveText('Up to date (0.1.4415). Next check 9:46 AM.');
-    await expect(block.getByRole('link', { name: 'Check now' })).toBeVisible();
-    await expect(block.locator('button')).toHaveCount(0);
+    await expect(details).toHaveText(['Checked 12 min ago']);
+    await expect(block.getByRole('button', { name: 'Check now' })).toBeEnabled();
     await set({ gitHubRemaining: 0 });
-    await expect(details.nth(1)).toHaveText('When last asked, GitHub allowed no more checks (5 min ago)');
+    await expect(block.getByRole('button', { name: 'Check now' })).toBeEnabled();
     await set({ checkSource: 'github', checkedAt: '2026-11-10T17:41:00Z' });
-    await expect(details.first()).toHaveText('Update list from GitHub, under a minute old');
-    await expect(details.nth(1)).toHaveText('When last asked, GitHub allowed no more checks (5 min ago)');
+    await expect(details).toHaveText(['Checked under a minute ago']);
     await set({ checkSource: 'unknown', gitHubQuotaAt: now.toISOString() });
-    await expect(details).toHaveText(['When last asked, GitHub allowed no more checks (under a minute ago)']);
+    await expect(details).toHaveText(['Checked under a minute ago']);
     await set({ checkSource: 'cdn', checkedAt: 'not a time' });
-    await expect(details).toHaveCount(1);
-    await set({ checkedAt: '2026-11-10T17:28:00Z', gitHubQuotaAt: 'not a time' });
-    await expect(details).toHaveText(['Update list from the release feed, 12 min old']);
-    await set({ checkSource: null, gitHubRemaining: null, gitHubQuotaAt: null });
     await expect(details).toHaveCount(0);
+    await set({ checkedAt: '2026-11-10T17:28:00Z', gitHubQuotaAt: 'not a time' });
+    await expect(details).toHaveText(['Checked 12 min ago']);
+    await set({ checkSource: null, gitHubRemaining: null, gitHubQuotaAt: null });
+    await expect(details).toHaveText(['Checked 12 min ago']);
+    await expect(block).not.toContainText(/release feed|GitHub|more checks/);
     await show(page, {});
-    await expect(update(page).locator('.machine-update-detail')).toHaveCount(0);
-    await expect(update(page).locator('p')).toHaveText(['Up to date (0.1.4415)']);
+    await expect(update(page).locator('p')).toHaveText(['Up to date · 0.1.4415', 'Checked 28 min ago']);
   });
+
+  for (const width of [390, 820, 1180]) {
+    test(`the update block has a 44px secondary Check now and wraps within its card at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.clock.install({ time: now });
+      await show(page, {});
+      const block = update(page), check = block.getByRole('button', { name: 'Check now on Demo machine', exact: true });
+      await expect(check).toHaveClass(/\bsecondary\b/);
+      expect((await check.boundingBox()).height).toBeGreaterThanOrEqual(44);
+      await expect(block.locator('.glyph')).toHaveCount(1);
+      await page.clock.pauseAt(new Date(now.getTime() + 60_000));
+      await check.click();
+      await page.clock.runFor(50);
+      await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.check']);
+      await expect(block.locator('.machine-update-line')).toHaveText('Checking…');
+      await expect(block.getByRole('button', { name: 'Checking… on Demo machine', exact: true })).toBeDisabled();
+      await expect(block.locator('.machine-update-actions .glyph')).toHaveCount(1);
+      await page.evaluate(() => window.agentBridgeDemo.setUpdate({
+        ...window.agentBridgeDemo.host.update, phase: 'idle', available: '0.1.4462', current: '0.1.4384',
+      }));
+      await page.clock.runFor(50);
+      await expect(block.locator('.machine-update-line')).toHaveText('Update available · 0.1.4462 (running 0.1.4384)');
+      const text = block.locator('.machine-update-line > span:last-child');
+      const normalSize = await text.evaluate((e) => parseFloat(getComputedStyle(e).fontSize));
+      for (const scale of [1, 2]) {
+        await page.evaluate((scale) => document.documentElement.style.setProperty('--text-scale', String(scale)), scale);
+        expect(await text.evaluate((e) => parseFloat(getComputedStyle(e).fontSize))).toBeCloseTo(normalSize * scale, 2);
+        const fit = await block.evaluate((e) => {
+          const card = e.getBoundingClientRect();
+          return [...e.querySelectorAll('p, button')].every((n) => {
+            const r = n.getBoundingClientRect();
+            return r.left >= card.left && r.right <= card.right && n.scrollWidth <= n.clientWidth;
+          });
+        });
+        expect(fit).toBe(true);
+      }
+    });
+  }
 });
 
 test('Launch here, with every machine shown, opens the panel on that machine and launches there, not on the one last used', async ({ page }) => {
@@ -402,23 +897,109 @@ test('Launch here, with another machine shown, opens the panel on the pressed ma
   await launchHere(page);
 });
 
-test.describe('from 900 px', () => {
-  test.use({ viewport: { width: 1000, height: 700 } });
+test.describe('expanded Fleet grid', () => {
+  test.use({ isMobile: true });
 
-  test('the list is on the left and the picked machine\'s tile on the right, without leaving the page', async ({ page }) => {
-    await openDemo(page);
-    await go(page, 'machines');
-    const tile = (id) => page.locator(`#machine-list [data-device-id="${id}"] .machine-tile`);
-    await expect(tile(LAPTOP)).toBeHidden();
-    await row(page, LAPTOP).click();
-    await expect(tile(LAPTOP)).toBeVisible();
-    await expect(page.locator('#machines')).toBeVisible();
-    const [list, detail] = await Promise.all([row(page, LAPTOP).boundingBox(), tile(LAPTOP).boundingBox()]);
-    expect(detail.x).toBeGreaterThan(list.x + list.width);
-    await row(page, SHADOW).click();
-    await expect(tile(SHADOW)).toBeVisible();
-    await expect(tile(LAPTOP)).toBeHidden();
-  });
+  for (const [width, height, columns] of [[390, 844, 1], [768, 1024, 2], [1024, 768, 2], [1600, 1000, 4]]) {
+    test(`all eight cards are expanded and their actions reachable at ${width}px`, async ({ page, browserName }) => {
+      await page.setViewportSize({ width, height });
+      await page.addInitScript((phone) => {
+        Object.defineProperty(navigator, 'standalone', { value: true });
+        Object.defineProperty(navigator, 'userAgentData', { value: undefined });
+        Object.defineProperty(navigator, 'maxTouchPoints', { value: 5 });
+        Object.defineProperty(navigator, 'userAgent', { value: phone
+          ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15'
+          : 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15' });
+      }, width < 760);
+      await openDemo(page);
+      await go(page, 'machines');
+      await expect(page.locator('html')).toHaveAttribute('data-platform', width < 760 ? 'ios' : 'ipados');
+      await expect(page.locator('html')).toHaveAttribute('data-standalone', 'true');
+      await page.evaluate(async () => {
+        const { renderMachines } = await import('/js/ui/views.js');
+        document.documentElement.style.setProperty('--env-safe-top', '24px');
+        document.documentElement.style.setProperty('--env-safe-bottom', '20px');
+        document.getElementById('machine-list').hidden = true;
+        const list = document.createElement('ul');
+        list.id = 'grid-fixture'; list.className = 'machines';
+        document.getElementById('machines').append(list);
+        const hosts = Array.from({ length: 8 }, (_, i) => ({ id: `grid-${i}`, name: `Machine ${i + 1}`, kind: 'host', lastSeen: '2026-11-11T18:00:00Z' }));
+        window.gridCalls = [];
+        const record = (action, id) => window.gridCalls.push(`${action}:${id}`);
+        renderMachines(list, {
+          presence: hosts.slice(0, 6), known: hosts, me: 'phone', current: 'all',
+          facts: () => ({ sessions: '2 sessions', version: '0.1.1' }),
+          onSelect: (id) => record('sessions', id), onLaunch: (id) => record('launch', id),
+          updates: {
+            state: () => ({ installer: true, phase: 'idle', current: '0.1.1', checkedAt: '2026-11-11T18:00:00Z' }),
+            stateOf: () => ({}), press: (id) => record('check', id), checkAll() {},
+          },
+          forget: { stateOf: () => ({}), press: (id) => record('forget', id) },
+        });
+      });
+      const cards = page.locator('#grid-fixture > .machine');
+      await expect(cards).toHaveCount(8);
+      for (let i = 0; i < 8; i++) {
+        const card = cards.nth(i);
+        await expect(card).toBeVisible();
+        await expect(card.locator('.machine-name')).toHaveText(`Machine ${i + 1}`);
+        if (i < 6) {
+          await expect(card.getByRole('region', { name: `Machine ${i + 1}`, exact: true })).toBeVisible();
+          await expect(card.locator('.machine-load-value')).toHaveText(['No figure', 'No figure']);
+          await expect(card.getByRole('button', { name: 'Running, 2 sessions' })).toHaveAttribute('aria-expanded', 'false');
+          await expect(card.locator('.machine-status')).toContainText('0.1.1');
+        } else {
+          await expect(card).toHaveClass(/\boffline\b/);
+          await expect(card.locator('.machine-seen')).toContainText('Last seen');
+          await expect(card.locator('.tile-health-word')).toHaveText('Offline');
+          await expect(card.locator('.machine-launch')).toHaveCount(0);
+        }
+      }
+      const geometry = await cards.evaluateAll((els) => {
+        const rect = (el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right }; };
+        return { cards: els.map(rect), list: rect(els[0].parentElement), page: rect(document.querySelector('[data-route="machines"]')), gap: parseFloat(getComputedStyle(els[0].parentElement).columnGap) };
+      });
+      const xs = [...new Set(geometry.cards.map((r) => Math.round(r.x)))];
+      expect(xs).toHaveLength(columns);
+      expect(Math.abs(geometry.list.width - geometry.page.width)).toBeLessThanOrEqual(1);
+      expect(Math.abs(geometry.cards[columns - 1].right - geometry.list.right)).toBeLessThanOrEqual(1);
+      for (const r of geometry.cards) {
+        expect(Math.abs(r.width - geometry.cards[0].width)).toBeLessThanOrEqual(1);
+        expect(r.height).toBeLessThan(height - 80);
+      }
+      for (let i = 1; i < columns; i++) {
+        expect(geometry.cards[i].x - geometry.cards[i - 1].right).toBeCloseTo(geometry.gap, 0);
+      }
+      await expect(page.locator('#grid-fixture .detail')).toHaveCount(0);
+      await expect(page.locator('#grid-fixture [aria-expanded="false"]')).toHaveCount(6);
+      // Tab follows DOM/card order; touch must reach even the last card above the bottom bar.
+      const actions = page.locator('#grid-fixture :is(button, a[href]):visible');
+      await actions.first().focus();
+      for (let i = 0; i < await actions.count(); i++) {
+        // Windows/macOS WebKit skips links with Tab (keyboard.spec's reachLink).
+        if (browserName === 'webkit' && await actions.nth(i).evaluate((el) => el.matches('a[href]') && el !== document.activeElement)) {
+          await actions.nth(i).focus();
+        }
+        await expect(actions.nth(i)).toBeFocused();
+        await page.keyboard.press('Tab');
+      }
+      for (let i = 0; i < 8; i++) {
+        for (const cls of i < 6 ? ['machine-launch', 'machine-view', 'machine-update-check'] : ['machine-forget']) {
+          const action = cards.nth(i).locator(`.${cls}`);
+          await action.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+          const box = await action.boundingBox();
+          expect(box.y).toBeGreaterThanOrEqual(width < 760 ? 0 : 80);
+          expect(box.y + box.height).toBeLessThanOrEqual(height - (width < 760 ? 76 : 20));
+          await action.tap();
+        }
+      }
+      expect(await page.evaluate(() => window.gridCalls)).toEqual([
+        ...Array.from({ length: 6 }, (_, i) => [`launch:grid-${i}`, `sessions:grid-${i}`, `check:grid-${i}`]).flat(),
+        'forget:grid-6', 'forget:grid-7',
+      ]);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    });
+  }
 });
 
 test('picking one machine shows only its sessions, unlabelled, and the choice is remembered, as All is', async ({ page }) => {
@@ -856,7 +1437,7 @@ test('on a phone the Machines page keeps every row to two aligned lines, with it
   await page.goto('?demo=1&static=1&machines=3&updates=1&offline=1#/machines');
   await page.waitForSelector('html[data-demo-ready]');
   const rowOf = (id) => page.locator(`#machine-list > li[data-device-id="${id}"]`);
-  await expect(rowOf('demo').locator('.machine-update-line')).toHaveText('0.2.0 is available (running 0.1.0).');
+  await expect(rowOf('demo').locator('.machine-update-line')).toHaveText('Update available · 0.2.0 (running 0.1.0)');
   await expect(page.locator('#machine-list .machine.offline')).toHaveCount(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
 
@@ -920,11 +1501,16 @@ test('a machine that lets devices sign Copilot in lists who can, read-only, insi
   await expect(rowOf(LAPTOP).locator('.machine-signin button')).toHaveCount(0);
   await expect(rowOf('demo').locator('.machine-signin')).toHaveCount(0);
 });
-for (const width of [390, 900, 1440]) {
+for (const width of [320, 390, 759]) {
   test(`at ${width}px the machine tabs fit the bar, the rest wait under an "N more" menu, and choosing one there shows it`, async ({ page }) => {
     await page.setViewportSize({ width, height: 800 });
     await openDemo(page);
     const bar = page.locator('#machine-tabs');
+    await bar.evaluate((el) => new Promise((resolve) => {
+      const resized = new ResizeObserver(() => { resized.disconnect(); resolve(); });
+      resized.observe(el);
+      el.style.maxWidth = '280px';
+    }));
     const more = bar.locator('.machine-more');
     const fits = () => bar.evaluate((el) => el.scrollWidth <= el.clientWidth);
     expect(await fits()).toBe(true);
