@@ -84,6 +84,14 @@ string? Option(string name)
 }
 bool Flag(string name) => arguments.Contains(name);
 
+SessionSourceOptions? readRoots = null;
+if (Flag("--read-root"))
+{
+    try { readRoots = ReadCommandRoots.Resolve(arguments, SessionSourceOptions.ForCurrentUser); }
+    catch (ArgumentException e) { Console.Error.WriteLine(e.Message); return 2; }
+}
+var isolatedRead = Flag("--read-root");
+
 if (command == "audit")
 {
     return AuditCommands.Run(arguments, Identity.DefaultRoot, Console.Out, Console.Error);
@@ -102,7 +110,7 @@ if (command == "ha" && HaCommands.TryInventoryCommand(arguments, Identity.Defaul
     return inventoryExit;
 }
 
-var defaults = SessionSourceOptions.ForCurrentUser();
+var defaults = readRoots ?? SessionSourceOptions.ForCurrentUser();
 // serve reads what it may do on this machine from the profile's config.json (HostSettings), and
 // so do ha shadow, which must see the sessions as serve would (permissions.remoteApproval), and
 // usage, which reads what serve would (usage.*). usage only reads the file: it never makes the
@@ -118,7 +126,7 @@ var (settings, settingsProblem) = serveFolder is not null
 // sessions, get, watch and usage read a migrated installation's registrations as serve does, from
 // the same profile; they look for its folder without creating one.
 var profileName = Option("--profile") ?? "default";
-var intakeFolder = serveFolder ?? (Identity.IsValidProfile(profileName) ? Path.Combine(Identity.DefaultRoot, profileName) : null);
+var intakeFolder = isolatedRead ? null : serveFolder ?? (Identity.IsValidProfile(profileName) ? Path.Combine(Identity.DefaultRoot, profileName) : null);
 var (intakeState, intakeProblem) = intakeFolder is not null && Directory.Exists(intakeFolder) ? IntakeState.Load(intakeFolder) : (null, null);
 // A migrated installation's registrations are read where its runtime is, wherever that is.
 string[] WithIntake(IReadOnlyList<string> roots, string folder) =>
@@ -143,7 +151,7 @@ var options = new SessionSourceOptions
     CodexHome = Option("--codex-home") ?? intakeState?.Homes?.Codex ?? defaults.CodexHome,
     ClaudeRegistrationRoots = WithIntake(defaults.ClaudeRegistrationRoots, SpoolContract.ClaudeFolder),
     CodexRegistrationRoots = WithIntake(defaults.CodexRegistrationRoots, SpoolContract.CodexFolder),
-    UsageProbeRoots = [.. new[] { Identity.DefaultRoot, serveFolder is null ? null : Path.GetDirectoryName(Path.GetFullPath(serveFolder)) }
+    UsageProbeRoots = isolatedRead ? defaults.UsageProbeRoots : [.. new[] { Identity.DefaultRoot, serveFolder is null ? null : Path.GetDirectoryName(Path.GetFullPath(serveFolder)) }
         .OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase)],
     CopilotRemoteApproval = settings.RemoteApproval,
     EscapedApproval = settings.EscapedApproval,

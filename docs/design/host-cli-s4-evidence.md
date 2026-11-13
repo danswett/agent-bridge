@@ -147,6 +147,12 @@ product host executable tests from the rehearsal parser's tests.
 Remaining: JSON `watch` startup/cancellation and unknown-verb exit proof in
 dependent process-evidence cuts, each within the same 250-line ceiling.
 
+The #2488 process fixture starts `agent-bridge-host.dll`, not the rehearsal parser.
+Its `sessions`/`get`-only `--read-root` derives agent, registration and probe roots;
+profile intake is skipped so migration state cannot redirect reads outside it.
+Invalid or conflicting roots are refused before discovery; defaults stay unchanged.
+Fixture fingerprints check directory entries, file content and write times.
+
 ### C1 - Reconcile the person CLI action transport and caller contract
 
 Scope: docs/contract vectors for person invocation, fresh complete ancestry,
