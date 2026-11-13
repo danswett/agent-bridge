@@ -434,7 +434,7 @@ let seq = 0;
 export class SessionCard {
   #s = null;
   #last = {};
-  #columnSize = null;
+  #replySize = null;
   // Arrival identity survives machine-metadata redraws.
   #arrival = null;
   #history = { loaded: false, loading: false };
@@ -742,19 +742,21 @@ export class SessionCard {
     e.head = h('div', { class: 'session-head' }, e.bar, e.top);
     this.view = h('section', { class: 'session-view', 'aria-labelledby': this.ids.title, hidden: true, dataset: { tab: 'conversation' } },
       e.head, h('div', { class: 'view-body' }, e.conversation, e.inspector));
-    // Classic scrollbars take room from the messages, not the header or reply slot.
+    // Match the message scroller's usable width and gutters without moving the header.
     if (typeof ResizeObserver === 'function') {
-      this.#columnSize = new ResizeObserver(() => {
+      this.#replySize = new ResizeObserver(() => {
         if (e.scroll.clientWidth > 0) {
-          const width = `${e.scroll.clientWidth}px`;
-          if (this.view.style.getPropertyValue('--conversation-width') !== width) {
-            this.view.style.setProperty('--conversation-width', width);
-          }
+          const style = getComputedStyle(e.scroll);
+          e.reply.style.width = `${e.scroll.clientWidth}px`;
+          e.reply.style.paddingLeft = style.paddingLeft;
+          e.reply.style.paddingRight = style.paddingRight;
         } else {
-          this.view.style.removeProperty('--conversation-width');
+          for (const property of ['width', 'padding-left', 'padding-right']) {
+            e.reply.style.removeProperty(property);
+          }
         }
       });
-      this.#columnSize.observe(e.scroll);
+      this.#replySize.observe(e.scroll);
     }
     this.#follow = new ScrollFollow(e.scroll, {
       input: this.view,
@@ -1480,7 +1482,7 @@ export class SessionCard {
 
   // The session is going: it ended, or its machine is no longer shown.
   dispose() {
-    this.#columnSize?.disconnect();
+    this.#replySize?.disconnect();
     this.#unmove?.();
     this.#panel?.destroy();
     this.#panel = null;
