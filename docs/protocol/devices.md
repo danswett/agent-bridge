@@ -45,6 +45,7 @@ bytes.
 | `agent-bridge person command v1` | What a person command's `by` signs: `F(label, bodyBytes)` |
 | `agent-bridge reset veto v1` | What a veto's `by` signs: `F(label, bodyBytes)` |
 | `agent-bridge host key binding v1` | A host's `hostSignProof`: `hostSign` signs `F(label, account, generation, dh)` |
+| `agent-bridge fleet registry v1` | A host's fleet registry record: `hostSign` signs `F(label, canonicalRecordBytes)` (#2370) |
 | `agent-bridge verifier support v1` | A verifier capability signature over `F(label, bodyBytes)`; never consent |
 | `agent-bridge verifier frontier v1` | Capability frontier digest over `F(label, head1, ..., headN)` |
 | `agent-bridge verifier set v1` | Capability active-set digest over `F(label, member1, ..., memberN)` |
@@ -456,6 +457,20 @@ a tier or key id. Each status reads `HostSignKey.OpenExisting`; it creates and r
 nothing, exposes no private material or raw exception, and does not cache availability
 across key loss. This metadata grants no enrollment or signing permission; the dormant
 descriptor's fields and the unsigned publication contract remain unchanged.
+
+### Fleet registry signatures (#2370)
+
+`FleetRecordSigning` signs compact UTF-8 JSON with object members recursively in ordinal
+key order and arrays in their original order. Integers are plain signed 64-bit decimal;
+strings retain their values (no time or Unicode normalization), using JSON escapes for
+quotes, backslashes and controls, not HTML escaping. Only the record's top-level `sig`
+is excluded; duplicate members are refused. Signatures are canonical base64url, minimal
+low-S P-256/SHA-256 DER over `F("agent-bridge fleet registry v1", canonicalRecordBytes)`.
+The shared oracle is [vectors/fleet-registry-signing.json](vectors/fleet-registry-signing.json).
+The optional publisher signer opens only existing hostSign custody; missing custody stays
+unsigned and creates nothing. Default publication remains unsigned; activation is #2386.
+`Verify` checks cryptography only: #2371 must check schema, enrolled key, machine, freshness
+and epoch/sequence ordering before yielding any routable node. No v2 switch changes here.
 
 ## The relay's copy
 
