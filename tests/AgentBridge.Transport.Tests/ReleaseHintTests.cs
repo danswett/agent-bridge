@@ -4,6 +4,8 @@ using System.Net.Http.Headers;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using AgentBridge.Relay;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
@@ -112,6 +114,33 @@ public class ReleaseHintTests
         feed.Stall.SetResult();
         await Wait.UntilAsync(() => first.Hints.Count == 2 && late.Hints.Count == 2, "hints after HTTP recovers");
         Assert.Equal(new[] { "v0.1.1", "v0.1.2" }, late.Hints.Select(Tag).ToArray());
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Failed_subscriber_sends_do_not_stop_later_polls_or_leak_initial_subscriptions(bool disposed, bool initial)
+    {
+        using var feed = new Feed { Body = List(("v0.1.1", "win")) };
+        var clock = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        await using var relay = await TestRelay.StartAsync(releaseFeed: feed, releaseTime: clock);
+        using var host = await Peer.Connect(relay, "true");
+        await Wait.UntilAsync(() => host.Hints.Count == 1, "initial hint");
+        var watcher = relay.App.Services.GetRequiredService<ReleaseHintWatcher>();
+        var attempts = 0;
+        Func<byte[], Task> send = _ => Interlocked.Increment(ref attempts) == 1 && !initial ? Task.CompletedTask
+            : Task.FromException(disposed ? new ObjectDisposedException("socket") : new InvalidOperationException("socket"));
+        using var faulty = initial ? null : await watcher.SubscribeAsync(send);
+        if (initial) { await Assert.ThrowsAsync(disposed ? typeof(ObjectDisposedException) : typeof(InvalidOperationException), () => watcher.SubscribeAsync(send)); }
+        for (var run = 2; run <= 3; run++)
+        {
+            feed.Body = List(($"v0.1.{run}", "win"));
+            clock.Advance(TimeSpan.FromMinutes(1));
+            await Wait.UntilAsync(() => host.Hints.Count == run, "healthy subscriber after a failed send");
+        }
+        Assert.Equal(initial ? 1 : 3, Volatile.Read(ref attempts));
     }
 
     static string Tag(byte[] frame) { using var doc = JsonDocument.Parse(frame); return doc.RootElement.GetProperty("tag").GetString()!; }
