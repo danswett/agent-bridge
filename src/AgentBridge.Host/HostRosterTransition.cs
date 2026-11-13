@@ -23,7 +23,7 @@ public sealed partial class HostRosterReader
     readonly string pinPath;
     byte[][] TransitionHeads => transition?.Heads.Select(h => Codec.FromBase64Url(h, 32, "head")).ToArray() ?? [];
 
-    string? ReloadTransition()
+    string? ReloadTransition(RosterVerifier verified)
     {
         var (next, issue) = ReadPrivate(TransitionPath, TransitionLimit, bytes =>
         {
@@ -61,6 +61,9 @@ public sealed partial class HostRosterReader
         {
             return "pin-mismatch";
         }
+        var frontier = next.Heads.Select(h => Codec.FromBase64Url(h, 32, "head")).ToArray();
+        if (frontier.Any(h => !Descends(verified, h)) ||
+            pin.Heads.Concat(TransitionHeads).Any(h => !Descends(verified, h, frontier))) { return "head-regress"; }
         if (transition is { } prior && (Regressed(prior.HighWater, next.HighWater) || Regressed(prior.Floor, next.Floor) ||
             Regressed(prior.HighestIssuedAt, next.HighestIssuedAt) || prior.Requests.Any(r =>
                 Instant.Parse(r.ExpiresAt).AddSeconds(120) >= Instant.Parse(next.HighWater) && !next.Requests.Contains(r))))
@@ -75,8 +78,7 @@ public sealed partial class HostRosterReader
         if (problem is not null) { return problem; }
         if (pin is null) { return "unpinned"; }
         if (Verified is not { } verified) { return "no-roster"; }
-        if (ReloadTransition() is { } issue) { return issue; }
-        if (TransitionHeads.Any(h => !Descends(verified, h))) { return "head-regress"; }
+        if (ReloadTransition(verified) is { } issue) { return issue; }
         var now = transition is null ? context.Now : Later(context.Now, Instant.Parse(transition.HighWater));
         var floor = transition?.Floor is { } at ? Instant.Parse(at) : context.Floor;
         if (context.Floor is { } supplied) { floor = floor is { } held ? Later(held, supplied) : supplied; }

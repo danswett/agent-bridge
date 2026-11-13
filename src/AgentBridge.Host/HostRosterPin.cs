@@ -40,7 +40,6 @@ public sealed partial class HostRosterReader
         if (pin is null) { return relay is null ? Failure("unpinned") : HostRoster.Verify(relay, account, clock); }
         if (relay is null || relay.Entries.Count == 0) { return Failure("no-roster"); }
         if (account != pin.Account || relay.Generation != pin.Generation) { return Failure("pin-mismatch"); }
-        if (ReloadTransition() is { } issue) { return Failure(issue); }
 
         // Validate independently before offering anything to the retained, probation-bearing reader.
         var (check, candidate) = HostRoster.Read(relay, account, clock, new RosterVerifier(account, pin.Generation, clock));
@@ -48,15 +47,16 @@ public sealed partial class HostRosterReader
         {
             return Failure("pin-mismatch");
         }
-        if (pin.Heads.Concat(TransitionHeads).Concat(Verified?.Heads ?? []).Any(h => !Descends(candidate, h))) { return Failure("head-regress"); }
+        if (pin.Heads.Concat(Verified?.Heads ?? []).Any(h => !Descends(candidate, h))) { return Failure("head-regress"); }
         if (Verified is not null) { return HostRoster.Read(relay, account, clock, Verified).Check; }
         Verified = candidate;
         return check;
     }
 
-    static bool Descends(RosterVerifier verifier, byte[] head) =>
+    static bool Descends(RosterVerifier verifier, byte[] head, IReadOnlyList<byte[]>? frontier = null) =>
         verifier.Holds(head) && verifier.Graph.Find(head) is { } before &&
-        verifier.Heads.Any(h => verifier.Graph.Find(h) is { } after && (before == after || verifier.Graph.IsAncestor(before, after)));
+        (frontier ?? verifier.Heads).Any(h => verifier.Holds(h) && verifier.Graph.Find(h) is { } after &&
+            (before == after || verifier.Graph.IsAncestor(before, after)));
 
     static (T? Value, string? Problem) ReadPrivate<T>(string path, int limit, Func<byte[], T> parse) where T : class
     {

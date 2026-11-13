@@ -487,8 +487,9 @@ this reader never advances a disk pin or claims rollback protection beyond it af
 `roster-transition.json` is a separate version-1, owner-only, non-link snapshot,
 bounded at 256 KiB. Its exact fields are `v`, `account`, `generation`, `genesis`,
 `heads`, `acceptHostSign`, `highWater`, `floor`, `highestIssuedAt` and `requests`.
-Identity matches the existing pin; one to four sorted heads must be covered by the
-verified frontier. Times are RFC 3339 UTC with nanosecond precision; `floor` and
+Identity matches the existing pin; one to four sorted heads must cover pinned and
+cached snapshot heads and be covered by the verified frontier; rollback is
+`head-regress`. Times are RFC 3339 UTC with nanosecond precision; `floor` and
 `highestIssuedAt` may be null. Each replay record has exactly `request`, `issuedAt`
 and `expiresAt`; at most 512 unique lowercase UUID requests are retained.
 
@@ -499,6 +500,14 @@ seconds. A private flushed temporary file is atomically renamed under a file loc
 failure is `transition-store`, not a successful command. The original pin is never
 written. Invalid or public state is `pin-unreadable`; another identity is
 `pin-mismatch`; neither is repaired. This binary accepts only `acceptHostSign: false`.
+Snapshot faults refuse only this mutation, never ordinary v1 roster verification.
+The stored accepted frontier is the retained verifier's heads; the signed command
+must cover that complete frontier. The internal caller must supply a trusted clock
+and reset floor: these marks only ratchet, so an untrusted future value can block use.
+`highestIssuedAt` is retained, not independently enforced against new commands here;
+positive-transition freshness belongs to the later reviewed cut. Whole-snapshot
+restore or deletion before the first load after restart remains undetectable without
+an independent anti-rollback anchor.
 The host command check never writes and ends in `unsupported-verifier` after its
 existing checks. No flag or caller boolean enables v2: positive transition and
 signed support evidence remain separate reviewed slices.
