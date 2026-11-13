@@ -2,6 +2,7 @@
 // oldest turn, what is read stays where it is, and the start of the history is said.
 import { test, expect } from '@playwright/test';
 import { open, view } from './nav.mjs';
+import { loadEarlierTo } from './history-fixture.mjs';
 
 const ID = 'signin-1';
 
@@ -19,7 +20,7 @@ async function start(page, count, width) {
     window.agentBridgeDemo.host.historyTurns.set(ID, turns);
   }, { ID, count });
   await open(page, ID);
-  await expect.poll(() => held(view(page, ID))).toBe(Math.min(count, 105));
+  await loadEarlierTo(view(page, ID), Math.min(count, 105));
 }
 
 const held = (v) => v.locator('.history-turn').count();
@@ -36,7 +37,7 @@ for (const width of [390, 1440]) test(`Load earlier messages brings the page bef
   const v = view(page, ID);
   const scroll = v.locator('.stream-scroll');
   const button = v.getByRole('button', { name: 'Load earlier messages' });
-  // The background fill stops at 100 turns held; the button is what asks for more.
+  // The fixture manually preloaded 105 turns; the button is what asks for more.
   await expect(button).toBeVisible({ timeout: 20000 });
   const before = await held(v);
   // Reading a little below the top, outside the near-top range.
