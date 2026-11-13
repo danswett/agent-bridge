@@ -527,6 +527,20 @@ suites:
     where: ci.yml light
     status: exists
 
+  - id: arm64-waiver-script
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    # quality-gate's time-boxed win-arm64 waiver (#2564): which failed jobs it waives, the expiry
+    # boundary, the switch, and every refusal, on fixed needs and jobs JSON. Nothing reaches GitHub.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/arm64-waiver.ps1, quality/test-arm64-waiver.ps1]
+    command: pwsh -NoProfile -File quality/test-arm64-waiver.ps1
+    where: ci.yml light
+    status: exists
+
   - id: rerun-known-flakes
     validation_plan: native
     kind: unit
