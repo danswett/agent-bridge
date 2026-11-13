@@ -135,6 +135,8 @@ public sealed class VerifierSupportTests
     public void Time_rules_are_conjunctive_at_exact_boundaries()
     {
         Assert.Null(Check(Wire()));
+        Assert.Null(Check(Wire(), Context with { HighWater = At("18:00:00") }));
+        Assert.Equal(Unsupported, Check(Wire(), Context with { Now = At("18:10:01"), HighWater = At("18:05:00") }));
         Assert.Null(Check(Wire(), Context with { Now = At("18:10:00") }));
         Assert.Null(Check(Wire(), Context with { Now = At("17:58:00") }));
         Assert.Equal(Unsupported, Check(Wire(), Context with { Now = At("18:10:01") }));
@@ -144,6 +146,22 @@ public sealed class VerifierSupportTests
         var proposed = JsonNode.Parse(Command)!.AsObject(); proposed["expiresAt"] = "2026-11-12T18:10:01Z";
         var command = Consent(proposed.ToJsonString());
         Assert.Equal(Unsupported, Check(Wire(b => { b["expiresAt"] = "2026-11-12T18:10:01Z"; b["consent"] = B(Framing.Sha256(PersonCommand.Signed(command.BodyBytes))); }), Context with { Command = command, ExpiresAt = At("18:10:01") }));
+        var zero = Context with { IssuedAt = At("18:05:00"), ExpiresAt = At("18:05:00") };
+        Assert.Equal(Unsupported, Check(Wire(b => { b["issuedAt"] = "2026-11-12T18:05:00Z"; b["expiresAt"] = "2026-11-12T18:05:00Z"; }), zero));
+    }
+
+    [Theory]
+    [InlineData("nonce")] [InlineData("target")] [InlineData("action")]
+    public void Reused_nonce_wrong_target_and_wrong_action_refuse_even_with_resigned_bindings(string field)
+    {
+        Assert.Null(Check(Wire()));
+        var proposed = JsonNode.Parse(Command)!.AsObject();
+        if (field == "action") { proposed["action"] = CommandAction.Attest; }
+        if (field == "target") { proposed["target"]!["machine"] = new string('1', 32); }
+        var command = Consent(proposed.ToJsonString());
+        var context = Context with { Command = command, Nonce = field == "nonce" ? command.Body.Nonce! : Context.Nonce };
+        var wire = Wire(b => { b["consent"] = B(Framing.Sha256(PersonCommand.Signed(command.BodyBytes))); b["nonce"] = B(context.Nonce); });
+        Assert.Equal(Unsupported, Check(wire, context));
     }
 
     [Fact]
@@ -171,6 +189,46 @@ public sealed class VerifierSupportTests
         world.Add("H", "P", "H", "G", kind: "host");
         Assert.Equal(Verdict.Accepted, Assert.Single(verifier.Offer(world.Entry("H"))).Verdict);
         Assert.Equal(2, real.Members.Count);
+        Assert.Null(Assert.Single(real.Members, m => m.Id == world.Id("H")).Key);
         Assert.Equal(Unsupported, Check(Wire(), roster: Roster with { Members = real.Members }));
+    }
+
+    [Fact]
+    public void Real_v2_host_uses_hostSign_until_a_later_sibling_key_collision()
+    {
+        var world = new World(); world.Genesis("P"); world.AddHostV2("H", "P", "H", "G");
+        var verifier = new RosterVerifier(world.AccountId, world.GenerationId, () => world.Now) { AcceptHostSign = true };
+        Assert.All(world.Feed(verifier, "G", "H"), r => Assert.Equal(Verdict.Accepted, r.Verdict));
+        var real = new RosterVerifierSupportView(verifier);
+        var host = Assert.Single(real.Members, m => m.Id == world.Id("H"));
+        Assert.Equal(World.Keys("H").Sign.Public, host.Key);
+        Assert.Equal(world.Entry("H").Hash, host.Add);
+        world.Add("C", "P", "C", "G", signWith: "H");
+        Assert.Equal(Verdict.Accepted, Assert.Single(world.Feed(verifier, "C")).Verdict);
+        Assert.Null(Assert.Single(real.Members, m => m.Id == world.Id("H")).Key);
+    }
+
+    [Fact]
+    public void Real_frontier_tracks_descendants_and_requires_all_held_heads()
+    {
+        var world = new World(); world.Genesis("P"); world.AddHostV2("H", "P", "H", "G");
+        var verifier = new RosterVerifier(world.AccountId, world.GenerationId, () => world.Now) { AcceptHostSign = true };
+        Assert.All(world.Feed(verifier, "G", "H"), r => Assert.Equal(Verdict.Accepted, r.Verdict));
+        var real = new RosterVerifierSupportView(verifier); var head = world.Entry("H").Hash;
+        Assert.Equal(world.Entry("G").Hash, real.Genesis);
+        Assert.Equal(head, Assert.Single(real.Heads));
+        Assert.True(real.Covers([head]));
+        world.Rename("next", "P", "H", "H", "Updated host");
+        Assert.Equal(Verdict.Accepted, Assert.Single(world.Feed(verifier, "next")).Verdict);
+        var next = world.Entry("next").Hash;
+        Assert.Equal(next, Assert.Single(real.Heads));
+        Assert.True(real.Covers([next]));
+        Assert.False(real.Covers([head]));
+        world.Rename("fork", "P", "H", "H", "Other name");
+        Assert.Equal(Verdict.Accepted, Assert.Single(world.Feed(verifier, "fork")).Verdict);
+        Assert.Equal(2, real.Heads.Count);
+        Assert.True(real.Covers(real.Heads));
+        Assert.False(real.Covers([next]));
+        Assert.False(real.Covers([.. real.Heads, Repeat(0x99)]));
     }
 }
