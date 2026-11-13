@@ -1195,6 +1195,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         var last = prefs.LastUpdate!;
         Assert.Equal(UpdateOutcome.Failed, last.Outcome);
+        Assert.Equal("host-start", last.Step);
         Assert.Contains("3 times", last.Reason);
         Assert.False(updater.Applied);
     }
@@ -2714,6 +2715,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Null(prefs.UpdatedFrom);
         // Said to the devices, though none of them asked for it: the old release still runs.
         Assert.Equal((UpdateOutcome.Failed, "Update.exe is missing", (string?)null), (prefs.LastUpdate!.Outcome, prefs.LastUpdate.Reason, prefs.LastUpdate.Request));
+        Assert.Equal("installing", prefs.LastUpdate.Step);
         await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Sessions.Complete, "the host back");
         var checks = updater.Checks;
         time.Advance(TimeSpan.FromMinutes(1));
@@ -2903,6 +2905,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         bar.Show(said);
         Assert.Equal((true, true, words, "Try again"), (bar.Shown, bar.Failed, bar.Message, bar.ActionLabel));
         Assert.Null(prefs.UpdatedFrom);
+        Assert.Equal("restarting", prefs.LastUpdate!.Step);
     }
 
     // Creative on #1181: "Couldn't install" only when an install was attempted. Recorded, then the
@@ -2920,6 +2923,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Null(said);
         Assert.Empty(toasts.Shown);
         Assert.Null(prefs.UpdatedFrom);
+        Assert.Equal("installing", prefs.LastUpdate!.Step);
         Assert.Contains(log, l => l.Contains("was not handed to the installer", StringComparison.Ordinal));
     }
 
@@ -2953,13 +2957,18 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         await StartAsync();
         string? updating = "not read";
         bool? handedOverBefore = null;
-        updater.OnApply = () => (updating, handedOverBefore) = (auto.Updating, prefs.UpdateHandedOver);
+        DateTimeOffset? installingAt = null;
+        updater.OnApply = () => (updating, handedOverBefore, installingAt) = (auto.Updating, prefs.UpdateHandedOver, auto.State.Installing);
         await auto.TickAsync();
 
         Assert.Null(auto.Updating);
+        Assert.Null(auto.State.Installing);
+        time.Advance(TimeSpan.FromMinutes(1));
+        var began = time.GetUtcNow();
         Assert.Null(await auto.RestartToUpdateAsync(_ => Task.FromResult(true)));
 
         Assert.True(updater.Applied);
+        Assert.Equal(began, installingAt);
         Assert.Equal(open ? "0.2.0" : null, updating);
         Assert.Equal(open, prefs.UpdateWindowOpen);
         // The attempt is marked only once the installer has started (Creative on #1181).
@@ -2969,6 +2978,33 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     // Asked from another device (#51): the press stands in for the switch, for that release, and
     // waits for the same idle as an automatic update.
     const string Press = "3f2a1b4c-5d6e-4f70-8192-a3b4c5d6e7f8";
+
+    [Theory]
+    [InlineData(null, "0.2.0", true)]
+    [InlineData(Press, "0.2.0", true)]
+    [InlineData(Press, "0.3.0", false)]
+    [Trait("Category", "Network")]
+    public async Task A_return_survives_preferences_only_for_the_recorded_target_and_preserves_a_press(string? request, string current, bool returned)
+    {
+        await StartAsync();
+        updater.Ready = "0.2.0";
+        AutoUpdater.Record(() => prefs, p => prefs = p, updater, request);
+        AutoUpdater.HandedOver(() => prefs, p => prefs = p)();
+        var path = Path.Combine(app, "preferences.json");
+        prefs.Save(path);
+        prefs = AppPreferences.Load(path);
+        updater.InstalledVersion = current;
+        time.Advance(TimeSpan.FromMinutes(1));
+        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, new Toasts(), log.Add, time);
+        prefs.Save(path);
+        prefs = AppPreferences.Load(path);
+
+        Assert.Equal(returned ? new UpdateBack("0.1.0", "0.2.0", request, time.GetUtcNow()) : null, auto.State.Back);
+        Assert.Equal(current, auto.State.Current);
+        File.WriteAllText(path, "{");
+        prefs = AppPreferences.Load(path);
+        Assert.Null(auto.State.Back);
+    }
 
     async Task AskedAsync(UpdateAskKind kind, string request = Press)
     {
@@ -4122,6 +4158,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         Assert.Equal("0.2.0", auto.State.Available);
         Assert.Equal((UpdateOutcome.Failed, "the connection was reset"), (auto.State.Last!.Outcome, auto.State.Last.Reason));
+        Assert.Equal("downloading", auto.State.Last.Step);
     }
 
     [Fact]
