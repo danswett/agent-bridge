@@ -137,17 +137,20 @@ exception, never Answer/Dismiss. The gate runs, in order, refusing at the first 
 2. the machine policy is readable and `agents.launch.enabled` is `true`;
 3. the request passes §3's content rules;
 4. the attempt limit (§5) has room;
-5. under one lock: the cap (§5) has room, a slot is reserved, and the audit line for the attempt
-   (§6, `outcome: reserved`) is written. Two launches at once can never both take the last slot;
-   an audit line that cannot be written releases the slot and refuses;
+5. under one lock: the hourly and live caps (§5) have room, an hourly charge and live
+   reservation are taken, and the attempt audit (§6, `outcome: reserved`) is written.
+   §13 also checks/reserves pending capacity. An unwritable audit undoes these reservations
+   before dispatch and refuses; concurrent launches cannot both take the last place;
 
 then the request goes to the launch service with the agent principal as its peer, which applies
 its own checks unchanged ([docs/host-launch.md](../host-launch.md), `LaunchProtocol.Check`), plus one new check
 **inside** the launch service: the worktree check of §3, which can only run once the worktree
 exists, after `Worktrees.Create` in `LaunchService.StartAsync` and before the agent's process starts.
-A failing worktree check removes the new worktree and refuses. **The reserved slot is released**
-when the launch service answers `busy` or `refused` (nothing started), and kept for `started`,
-`unconfirmed` and `failed`. A refusal at any step is written to the audit log too (§6).
+A failing worktree check removes the new worktree and refuses. **Hourly charge:** only
+verified pre-start `busy`/`refused` refunds it; `failed`/interrupted stays charged.
+**Pending/live reservations:** §13.5 releases them on proven no-start/closure, including
+pre-start failure; readiness converts live without double count. An outcome alone is
+not closure proof. Refusals at every step are audited (§6).
 
 **Fail closed.** An unreadable or malformed `agents` policy, an unreadable credential store
 (already enforced by `AgentCredentials`), caps not yet rebuilt from the audit (§5) or an audit log
@@ -180,13 +183,13 @@ Checked by `AgentLaunchGate` before the launch service sees it:
 
 | Field | Rule for an agent | Why |
 |---|---|---|
-| machine | **this machine only**: the gate serves agent launches on the local pipe alone, and `session.launch` has no machine field (v1-launch.md:76-103); an agent launch arriving any other way is refused | Cross-machine waits for #55 (§9) |
-| `permissions` | **must be present and `ask`**. Absent or `allowAll` is refused | Absent would take the machine default, which may be `allowAll` (v1-launch.md:101) |
+| machine | **this machine only**: local pipe only; neither `LaunchRequest` nor v1-launch.md's `session.launch` request table has a machine field. Other agent-launch channels are refused | Cross-machine waits for #55 (§9) |
+| `permissions` | **must be present and `ask`**. Absent or `allowAll` is refused | Absent takes `defaults.permissions`, possibly `allowAll` (v1-launch.md, `session.launch` field table) |
 | `transfer` | refused | Transfers need a person (agent-principals.md §5.2) |
 | `resume` | **refused in v1** | Resuming types an agent's prompt into an existing conversation, possibly a person's; new sessions only keeps it simple |
 | `attachments` | refused | `attachment.*` is already refused for agents (`LocalApi.Acts`, `Handler`) |
 | `workspace` | required, must be on the machine's `agents.launch.workspaces` list (labels a person ticked "agents may launch here", default empty), and must be an isolated workspace, so each launch gets a fresh worktree. **The new worktree must hold none of the chosen agent's project configuration** (the worktree check, §2): presence alone refuses, whatever the contents, so it is an allow-list of "clean", not a deny-list of bad settings | A folder a person approved at that machine for this purpose. Without the check an agent could plant settings (Claude's `.claude/` can set a bypass default mode, hooks, an API key helper or MCP servers) and then launch over them |
-| `agent` | required, from `launch.options`, on `agents.launch.agents`; `auto` and Agency refused; only an agent with a confirmed project-configuration list (below) | Agency adds profile config the host cannot show keeps ask (agent-principals.md:834-836) |
+| `agent` | required, from `launch.options`, on `agents.launch.agents`; `auto` and Agency refused; only an agent with a confirmed project-configuration list (below) | Agency adds profile config the host cannot show keeps ask (agent-principals.md §5.2, "Launch rules for agents") |
 | `profile` | refused | Agency only, which is refused |
 | `model`, `effort`, `context` | from `launch.options` (existing check, [docs/host-launch.md](../host-launch.md)) | |
 | extra arguments | a launcher with any `launch.agents.<id>.extraArgs` is refused for agents | An extra argument can grant Allow all ([docs/host-launch.md](../host-launch.md)). `LaunchService.LaunchVerificationAsync` already refuses them |
@@ -197,8 +200,8 @@ Checked by `AgentLaunchGate` before the launch service sees it:
 `--dangerously-skip-permissions` or `--ask-for-approval never` only for `allowAll`,
 `Launchers.cs:143`, `:156`, `:170`), no extra arguments, no Agency, and no agent project
 configuration in the new worktree. It is **not** agent-principals.md's provably forced-ask launch
-(agent-principals.md:828-833: a host-owned configuration home, a scrubbed environment, no managed
-policy), which comes with AP8. The user's own agent settings (in the user's profile, not the
+(agent-principals.md §5.2, "Launch rules for agents": host-owned configuration home, scrubbed
+environment, no managed policy), which comes with AP8. The user's own settings (in the user's profile, not the
 repository) still apply, as they do to every session the person launches. Shipping v1 on this
 narrower meaning is an owner decision (§12, question 8).
 
@@ -224,10 +227,10 @@ W2 must call the check before process start and handle refusal audit, removal of
 the newly created worktree, and slot release; W1 does none of those and enables no launches.
 
 **Prompt length: keep 16 KiB, refuse longer.** The protocol limit is 16 KiB of UTF-8 in a request
-of at most 20 KiB (`Launch.cs:17-18`; v1-launch.md:102, :105-115), the MCP server checks the
-same 16 KiB before calling the host (`mcp/src/server.mjs:70`, `:104`), and the host refuses a
+of at most 20 KiB (`LaunchProtocol.MaxPrompt`/`MaxRequest`; v1-launch.md, "The prompt goes whole"),
+the MCP server checks the same 16 KiB (`server.mjs`, `MAX_TEXT`/`validate`), and the host refuses a
 longer prompt with "send the rest as an attachment or a reply once it has started"
-(`Launch.cs:77`). We keep that number and do not raise it:
+(`LaunchProtocol.Check`). We keep that number and do not raise it:
 * the prompt rides the agent's command line; an npm-installed agent through `cmd.exe` takes
   only 8,191 characters, and the host already refuses what does not fit (v1-launch.md:113-115);
   a larger cap would need a second channel (a prompt file), which is a new way for content to
@@ -244,7 +247,7 @@ refused, a 300-character prompt arrives whole) for an agent run directly; for an
 through npm, which runs through `cmd.exe`, the 8,191-character command line is smaller and wins,
 and the test asserts the host's "too long for the command line" refusal instead. That settles #1404's and #1413's "up to the
 length #1403 decides". The MCP server needs no change to its cap; #1404 removes `Allow all`
-from `launch_agent_session`'s schema (`mcp/src/server.mjs:45`; `mcp/src/tools.mjs:6`) and its
+from `SCHEMAS.launch_agent_session` (`server.mjs`) and `PERMISSIONS` (`tools.mjs`), plus its
 `profile` and `resume` arguments, so an agent is not offered what the host will refuse.
 
 ## 4. The launched session's own scope
@@ -321,15 +324,16 @@ or per-machine number, whichever stopped it.
 memory only as [agent-principals.md](agent-principals.md) §5.5 allowed for messages. A launch is costly and the gate's
 evidence (on each machine, 5 started and a sixth refused during the acceptance run, §10) must
 survive a restart.
-* **What is read:** today's and yesterday's launch files, in full (tens of KB, §6), and nothing
-  of the rest of the log, so start-up stays quick. The caps use the last hour of them; the
-  request-id set (§2 step 0) uses all of them.
+* **Cap/request fold:** today's and yesterday's launch files, in full (tens of KB, §6).
+  Caps use their last hour; request ids use all of them. Separately, §6's bounded
+  compatibility preflight checks retained versions and every unresolved journal.
 * **Clock:** the window is judged on each line's wall-clock `at`. A line dated in the future (the
   clock stepped back) counts as if dated now, so a clock jump can neither open nor close the cap.
 * **Damage:** a torn last line (power loss mid-append) is ignored, and its complete `reserved`
   line still counts. A bad line or a broken chain **inside the last hour** refuses agent launches
   (`capRebuilding`, with the reason); an older defect is a warning in `host.status` only, so one
-  flipped byte from last month never disables launches.
+  flipped byte from last month never disables launches. Exception: unreadable unresolved
+  journals or unknown/unreadable major versions always block launches, regardless of age (§6).
 * **Recovery:** the host retries the rebuild every 30 s, with the reason in `host.status`; no
   restart is needed.
 * **After a reboot** the fleet relaunches its workers, and a second restart within the hour can
@@ -365,11 +369,14 @@ gate rest on.
   replacement starts only after `HostHandover` lets it take ownership. The host also
   holds an exclusive lock on the audit folder while it appends, so two writers can never fork
   the chain or both take the last slot.
-* **Format:** legacy lines have `v: 1`; known-major readers ignore unknown fields,
-  never unknown major versions. A rollback unable to read current-major cap evidence
-  fails closed with `capRebuilding`; use a compatible host, never strip new lines.
+* **Format/rollback:** legacy is `v: 1`; known-major readers ignore unknown fields, never
+  unknown majors. Before new-format writes, install a durable minimum-reader marker and
+  startup guard in every rollback-eligible host; unguarded older builds are not candidates.
+  Before cap rebuild, preflight all retained versions and unresolved journals. Any unreadable
+  marker/journal or new-major line refuses **all launches**, `capRebuilding`, regardless of
+  age or the one-hour cap window. Use a compatible host; never delete evidence to roll back.
 
-Fields: `v`, `at` (UTC), `principal` (`agent:<machine>/<session>`, `AgentPrincipals.cs:27`), `scope`,
+Fields: `v`, `at` (UTC), `principal` (`agent:<machine>/<session>`, `AgentProtocol.Principal`), `scope`,
 `depth`, `action: "session.launch"`, `request`, `machine`, `agent`, `workspace` (label),
 `model`, `permissions`, `promptBytes`, `requestSha256` (§2 step 0; a hash of the normalised
 launch fields, never the prompt's text), `outcome`, `code`, `reason`, `session` (the new one, when
@@ -414,7 +421,8 @@ not question text or answer authority. `unconfirmed` still means uncertainty, ne
 to retry; a positively observed startup question becomes `needsPerson`.
 
 **Reading a result back:** a repeat of the same `session.launch` with the same `request` returns
-the remembered outcome and starts nothing (v1-launch.md:94). That is the readback; no new op.
+the remembered outcome and starts nothing (v1-launch.md, `session.launch`'s `request` field).
+That is the readback; no new op.
 Today `LaunchService.LaunchAsync` remembers by request key, and the MCP server
 keeps its own ledger (`mcp/src/tools.mjs`). #1413 keys it by (principal, `request`) for
 agents, so another caller repeating an agent's request id gets `refused`, never that agent's
@@ -435,6 +443,7 @@ machine; try again in a few minutes", never the other session's agent, workspace
 | **A stolen session token** | `AgentCredentials.Check` binds the complete session process tree; `RevokeEnded` retires ended bindings; one credential per session, revocable | **Safety rail, not a boundary** (agent-principals.md §3.4): a same-user process can spoof its parent or join the Job. Such a process can already do anything the user can |
 | **Runaway fan-out** | One agent launch step at most (§4); per-agent and per-machine caps (§5) that survive restarts; refusals rate-limited | §13 adds a separate bounded pending-availability risk |
 | **Pending slots pinned / cancel-reassign churn** | Four proposed shared slots; also reserve the matching six-live bucket. Terminal proof releases pending/live slots, never evicts unresolved launches; each replacement is a fresh charged request | One/two authorized agents can pin all four, including fleet availability. No automatic kill. Product must settle reserved capacity and per-item replacement ceiling/backoff (§13.7) before enabling unattended reassignment |
+| **Unknown answer/storage fault deadlocks a pending slot** | Bounded automatic reconciliation, then explicit local person-gated `launch.pending.repair` (§13.4); fence unknown effects and require closure/readiness evidence, never force-clear | Person must restore storage/compatible host and may need to close the owned window or reboot; until proof, the slot stays held and launches can fail closed |
 | **The new session reads secrets in its folder** | Workspaces only from the "agents may launch here" list a person set at the machine; isolated workspaces start in a fresh worktree | The session runs as the user and can read what the user can, like any session. The list is what the owner controls |
 | **Ask-only is weaker than it looks** | Ask flag forced, extra arguments refused, Agency refused, fresh worktree, and a worktree with a tool-approving project settings file refused (§3) | User-level agent settings outside the repository, and settings formats the host does not yet know (it refuses agents it cannot check). The full "provably forced-ask" launch (host-owned config, agent-principals.md §5.2) is AP8 |
 | **The fleet grant is abused** (§11) | Only the dispatcher's script credential; the caller's ancestry must be read **in full** and contain no agent session, so a partial or untraceable ancestry, which today falls to `Other` (local-pipe.md:104), is refused. **This rule is not a barrier:** a detached process whose parent has exited has a complete, agent-free ancestry (local-pipe.md:106-110), so the credential file is the only real barrier; fleet-ticked isolated workspaces only; own cap; audit | Something that tricks the dispatcher (for example text in an issue it reads) can start an Allow-all worker in a fleet workspace, bounded by list and cap. The script credential sits in an owner-only file (#1402), which any same-user program can read: an agent that copies it and runs a parent-spoofed helper can reach the grant. That is the same-user limit (agent-principals.md §1.3), no worse than today's HA token, which every session's environment holds |
@@ -574,7 +583,7 @@ kinds and ask-only/person trust stay. No alerts/HA fallback/live/setup/credentia
 Each host owns truth under its [profile lock](client-protocol.md#placement-and-state);
 no fleet owner/transfer/relay proof. Lost host means unavailable, not closed.
 
-Flush private journal after reservation, before start. Key `(relayAccount, stable origin,
+Reserve the pending UUID in the audit; flush private journal before start. Key `(relayAccount, stable origin,
 request)` plus §2 hash; tenancy is roster, not provider login (`CheckAccount`).
 Separate host-derived binding pins private issuance generation and session/process or
 script identity. Rotation/resume keeps dedup key but refuses adoption/relaunch; changed
@@ -586,7 +595,7 @@ git/relay metadata/client caches aren't authority.
 | `v`, `pending`, `request`, `requestSha256` | Journal version, host-generated pending UUID, original launch UUID and normalized request hash |
 | `relayAccount`, `origin`, `originBinding`, `machine` | Stable principal kind/id; separate immutable private credential issuance generation, session UUID/root PID/start or script principal; local device, never display-name routing |
 | `agent`, `workspace`, `startedAt`, `expiresAt`, `clockFloorUtc` | Settled labels; UTC launch time, current answer deadline and durable clock high-water mark |
-| `state`, `revision`, `startClaim`, `processStarted`, `readyEvidence`, `closed` | Lifecycle/terminal state (§13.5); monotonic revision; durable start phase; sticky positive start; ready/never-ready/unknown evidence; verified closure |
+| `state`, `revision`, `startClaim`, `processStarted`, `readyEvidence`, `closed` | State enum (§13.2); monotonic revision; durable start phase; sticky positive start; `ready`/`neverReady`/`unknown` history; verified process closure, not terminality |
 | `question` | UUID, kind, observation time, full-screen digest, exact safe warning/choices and full trust folder/root scope; never approving truncated text |
 | `process`, `session` | Private PID/start, pre-bound complete owned-attempt set and boot identity, provisional/ready session; no process details to origins |
 | `action` | Action UUID, verified actor, question/revision/choice digest, durable claim and result; no secret, credential or raw answer |
@@ -632,22 +641,43 @@ never prune unresolved identity or current cap/replay evidence.
 Only positive blocking-question detection produces `needsPerson`, not timeout/`None`.
 Trust/HooksReview/Bypass map to folderTrust/hookReview/permission (bypass only).
 Sign-in, other permission and unknown need versioned positive-detector fixtures;
-without them use `unconfirmed`, never generic text-matching authority. Origin projection:
+without them use `unconfirmed`, never generic text-matching authority.
+**Origin schema:** request/pending UUIDs, authenticated machine id, optional validated
+machineName; integer revision, state/outcome, optional fixed code, boolean closed and
+readyEvidence (`ready|neverReady|unknown`). Optional
+observed question UUID/kind (`folderTrust|signIn|permission|hookReview|unknown`) and
+expiresAt carry no answer authority. No question is invented for `starting`.
+**Outcome enum:** `started|unconfirmed|needsPerson|busy|refused|failed`; state enum and
+legal pairs below. Slash separates outcome/code, not a new enum value.
 
-```text
-outcome: needsPerson
-code: startupQuestion
-request: <original launch UUID>
-machine: <authenticated target device id>
-machineName: <optional validated display name>
-pending: <pending UUID>
-questionKind: folderTrust | signIn | permission | hookReview | unknown
-question: <question UUID>
-revision: <integer>
-expiresAt: <current answer deadline>
-state: needsPerson | answering | expired | closing | reconciliationRequired
-closed: false
-```
+| State | Outcome / fixed code | Closed; terminal for pending lifecycle |
+|---|---|---|
+| `starting` (also waiting without a detected question) | `unconfirmed / launchStarting` | false; no |
+| `needsPerson`, `answering`, `expired` | `needsPerson / startupQuestion`; requires retained positive question | false; no |
+| `closing`, `reconciliationRequired` | `needsPerson` if a question is retained, else `unconfirmed`; code `closing`, `pendingReconciliation` or audit-gap `interrupted` | false; no |
+| `started` | `started`, no code; real session id required, readyEvidence=ready | false; yes, convert to live session |
+| `notStarted` | original `busy|refused|failed` and code; proven no-start crash is `failed / interrupted` | true; yes, neverReady |
+| `exited` | `failed / startupExited` | true; yes, neverReady |
+| `dismissed`, `withdrawn` | `failed / launchDismissed`, `failed / launchWithdrawn` respectively | true; yes, neverReady |
+| `closedUnconfirmed` | `unconfirmed / closedUnconfirmed` | true; yes, unknown history, no retry |
+
+`reserved`/`interrupted` are audit outcomes, not projection enums. Invalid pairs are
+protocol errors: no effects/reassignment, never an assumed terminal result.
+**Readback vectors:** independent fixtures use symbolic request R/pending P/machine M;
+revisions increase within each sequence. Repeat R reads current state, terminal repeats
+stay identical, never another start. Question Q includes kind/deadline; absent means omitted.
+
+| Evidence/readback | State; outcome/code; closed; history; question/session |
+|---|---|
+| Reserved/journaled, no question | starting; unconfirmed/launchStarting; false; unknown; neither |
+| Positive Q, then deadline passes | needsPerson then expired; needsPerson/startupQuestion; false; unknown; Q |
+| Reserved audit, journal absent after crash | reconciliationRequired; unconfirmed/interrupted; false; unknown; neither |
+| Proven pre-start busy/refused/failure | notStarted; original outcome/code; true; neverReady; neither |
+| Native exit with never-ready proof | exited; failed/startupExited; true; neverReady; neither |
+| Cancel with never-ready proof | dismissed; failed/launchDismissed; true; neverReady; neither |
+| Withdraw with never-ready proof | withdrawn; failed/launchWithdrawn; true; neverReady; neither |
+| All gone, history unknown | closedUnconfirmed; unconfirmed/closedUnconfirmed; true; unknown; neither |
+| Ready, including after expiry | started; started/no code; false; ready; real session S, no question |
 
 Validate [machine names](../protocol/agent-operations.md); no name-based routing/pins.
 Origins get only own IDs/kind/state/deadline, no question/scope/choices/process/other
@@ -754,12 +784,19 @@ Ready wins, never stopped by late close. §6 audits observation/action/refusal/r
 expiry/reconciliation with digests, no raw question/answer/secret/path; refused actions
 never change charges/slots without verified state transition.
 
-Storage/audit failure blocks starts/effects, retains evidence and reports fixed
+Storage/audit failure blocks starts/effects, retains evidence, reports fixed
 `auditUnwritable`/`pendingStorageUnavailable`. Reconcile 30 s/10 s passes; after 5 min
-mark reconciliationRequired, stop effect retries, offer person-initiated local repair.
-Read-only lifecycle observation continues. Resume only with writable stores and durable
-identity/state evidence; never resend unknown effects, force-clear/refund or guess empty.
-Status/readback expose the fault, no paging.
+mark reconciliationRequired and stop effect retries; read-only observation continues.
+**New local `launch.pending.repair`:** add to `LocalApi.Acts`; same fresh validated-App,
+protected person confirmation and pending/revision-bound person-envelope gateway as local
+Cancel. Refuse Agent/script/Other/service/remote before lookup; no CLI, unsigned flag or
+legacy-MAC fallback. This missing gate/signer is a prerequisite, not a current grant.
+Repair may bypass the quarantined-claim wait, never authority/storage checks: fence old
+start/injector claims, then a 10 s observation pass, no keys/start/replay/termination.
+With writable stores commit only §13.5 proof, including closedUnconfirmed for unknown
+history; otherwise repairBlocked retains the slot and directs the person to restore
+storage/use a compatible host and close the owned window or reboot, then retry.
+Never force-clear/refund or guess empty. Status/readback expose the fault, no paging.
 
 ### 13.5 Failure and race contract
 
@@ -769,11 +806,12 @@ boot, never clock guess. Unknown readiness is not never-ready.
 
 | Case | Positive evidence and terminal record |
 |---|---|
+| Crash after reserved audit, before journal flush | §5 interrupted/unconfirmed remains charged; pending UUID from audit, reconciliationRequired/closed false for pending peers. Missing journal alone is not no-start proof; repair applies the rows below |
 | Busy/refused/failed before start, after journal exists | Starter was never entered; `notStarted, closed: true`, original outcome/code. Release pending/live reservation; only busy/refused refunds hourly charge |
 | Crash between journal creation and start claim | Intact journal/audit show no claim; fenced old host cannot start: `notStarted, failed, closed: true` |
 | Crash after claim, before process identity saved | Recoverable owned-attempt proof shows none started: notStarted; if all gone but history uncertain: `closedUnconfirmed, unconfirmed, closed: true`. If proof missing, reconcile, no guessed release |
-| Person closes native window / unready process exits | Complete owned set gone: `exited, failed/startupExited, closed: true` with verified never-ready evidence; otherwise closedUnconfirmed. Host audit actor, never infer a person principal from disappearance |
-| Explicit Cancel / origin withdraw | Complete owned set gone and readiness interlocked: `dismissed` / `withdrawn, closed: true` |
+| Person closes native window / unready process exits | Complete owned set gone and never-ready proof: state exited, outcome failed, code startupExited, closed true; unknown history gives closedUnconfirmed. Host audit actor, never infer a person principal |
+| Explicit Cancel / origin withdraw | Complete owned set gone, never-ready history and readiness interlocked: dismissed/failed/launchDismissed or withdrawn/failed/launchWithdrawn, closed true. Unknown history gives closedUnconfirmed |
 | Positively ready | `started` with real session; release pending slot, convert live reservation; later session exit does not rewrite the launch or allow reassignment |
 
 Commit terminal result, archive bounded readback/dedup, remove card/active slot.
@@ -796,7 +834,9 @@ not a permanent normal-lifecycle hold.
 binding/observer/start-claim/detector/person-gateway/close helpers in reviewed <=400-line
 prerequisites, then wire delivery. Withdraw all-in ~300 estimate; partial isn't parity.
 
-Failing-first: all closure-table cases, surviving child/claim crash/unknown readiness;
+Failing-first: state/outcome/readback vectors, all closure-table cases, audit-before-journal crash,
+person-only repair/fencing/blocked proof, unreadable rollback evidence beyond an hour;
+surviving child/claim crash/unknown readiness;
 expiry observer and one-count live conversion; pipe Answer refusal and signed Cancel/
 missing-signer refusal; negotiated current vs legacy readback, generation/changed-byte
 refusal; Trust/Hooks/Bypass and fixtured other kinds, not None; renewal vs unchanged busy;
@@ -820,7 +860,7 @@ keyboard/screen-reader/narrow protected rendering on each client.
 
 Approve proposed shared capacity/reserves, byte/replay/repair budgets and renewal;
 resolve newest/first busy wording. Confirm origin withdrawal vs person-only cancel.
-Per-item ceiling/backoff is open: recommend one replacement then typed blocked, no
-cycling until approved. Pin events/person verbs/detectors/ownership proof and size helpers;
-rollback of unreadable majors requires a compatible host, not deleting evidence.
+Per-item ceiling/backoff is open: recommend one replacement then typed blocked; keep
+unattended reassignment off until both are approved. Pin verbs/detectors/proof and size helpers;
+rollback requires §6's guard and readable unresolved journals/major evidence, never deletion.
 Creative text isn't an unbuilt-UI receipt. No automatic kill/new sign-in/permission channel.
