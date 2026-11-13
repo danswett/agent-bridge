@@ -6,8 +6,8 @@ async function edges(locator, content = false) {
     const box = el.getBoundingClientRect();
     const style = getComputedStyle(el);
     return {
-      left: box.left + (content ? parseFloat(style.borderLeftWidth) + parseFloat(style.paddingLeft) : 0),
-      right: box.right - (content ? parseFloat(style.borderRightWidth) + parseFloat(style.paddingRight) : 0),
+      left: box.left + (content ? el.clientLeft + parseFloat(style.paddingLeft) : 0),
+      right: content ? box.left + el.clientLeft + el.clientWidth - parseFloat(style.paddingRight) : box.right,
     };
   }, content);
 }
@@ -16,6 +16,17 @@ async function sameEdges(locator, column, content = false) {
   const actual = await edges(locator, content);
   for (const edge of ['left', 'right']) {
     expect.soft(Math.abs(actual[edge] - column[edge]), `${await locator.getAttribute('class')} ${edge}`).toBeLessThanOrEqual(1);
+  }
+}
+
+async function overflowingScrollbar(scroller, browserName) {
+  await scroller.evaluate((el) => { el.style.scrollbarGutter = 'stable'; });
+  expect(await scroller.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThan(0);
+  const gutter = await scroller.evaluate((el) => el.getBoundingClientRect().width - el.clientWidth);
+  if (browserName === 'webkit' && gutter === 0) {
+    test.info().annotations.push({ type: 'note', description: 'Headless WebKit uses overlay scrollbars; overflow and all column edges remain checked.' });
+  } else {
+    expect(gutter, 'the classic scrollbar reserves horizontal space').toBeGreaterThan(0);
   }
 }
 
@@ -38,14 +49,7 @@ for (const { width, scrollbars } of cases) {
         }
         if (scrollbars === 'reserved') {
           await view.locator('.response').evaluate((el) => { el.textContent = 'A long conversation with a vertical scrollbar. '.repeat(400); });
-          await view.locator('.stream-scroll').evaluate((el) => { el.style.scrollbarGutter = 'stable'; });
-          expect(await view.locator('.stream-scroll').evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThan(0);
-          const gutter = await view.locator('.stream-scroll').evaluate((el) => el.getBoundingClientRect().width - el.clientWidth);
-          if (browserName === 'webkit' && gutter === 0) {
-            test.info().annotations.push({ type: 'note', description: 'Headless WebKit uses overlay scrollbars; overflow and all column edges remain checked.' });
-          } else {
-            expect(gutter, 'the classic scrollbar reserves horizontal space').toBeGreaterThan(0);
-          }
+          await overflowingScrollbar(view.locator('.stream-scroll'), browserName);
         }
         await motionsDone(page);
 
@@ -74,11 +78,16 @@ for (const { width, scrollbars } of cases) {
 }
 
 for (const width of [1440, 1920]) {
-  test(`Tools and Details keep the header's reading column at ${width}px (#2339)`, async ({ page }) => {
+  test(`Tools and Details keep the header's reading column at ${width}px (#2339)`, async ({ page, browserName }) => {
     await page.setViewportSize({ width, height: 900 });
     await page.goto('?demo=1&static=1');
     await page.waitForSelector('html[data-demo-ready]');
     const view = await open(page, '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35');
+    for (const selector of ['.tools-panel', '.details']) {
+      await view.locator(selector).evaluate((el) => { el.style.minHeight = '1800px'; });
+    }
+    await overflowingScrollbar(view.locator('.inspector'), browserName);
+    await motionsDone(page);
     const sideColumn = await edges(view.locator('.inspector'), true);
     await view.locator('.inspector-button').click();
     await expect(view.locator('.inspector')).toBeHidden();
@@ -87,15 +96,17 @@ for (const width of [1440, 1920]) {
     await view.getByRole('tab', { name: 'Tools', exact: true }).click();
     await expect(view.locator('.tools-panel')).toBeVisible();
     await motionsDone(page);
-    await sameEdges(view.locator('.tools-panel'), column);
-    await sameEdges(view.locator('.session-header'), column, true);
-    await sameEdges(view.locator('.view-tabs'), column, true);
+    const tools = await edges(view.locator('.tools-panel'));
+    expect(tools.right - tools.left).toBeCloseTo(column.right - column.left, 1);
+    await sameEdges(view.locator('.session-header'), tools, true);
+    await sameEdges(view.locator('.view-tabs'), tools, true);
     await view.locator('.details-button').click();
     await expect(view.locator('.details')).toBeVisible();
     await motionsDone(page);
-    await sameEdges(view.locator('.details'), column);
-    await sameEdges(view.locator('.session-header'), column, true);
-    await sameEdges(view.locator('.view-tabs'), column, true);
+    const details = await edges(view.locator('.details'));
+    expect(details.right - details.left).toBeCloseTo(column.right - column.left, 1);
+    await sameEdges(view.locator('.session-header'), details, true);
+    await sameEdges(view.locator('.view-tabs'), details, true);
     await view.locator('.inspector-button').click();
     await expect(view.locator('.conversation')).toBeVisible();
     await motionsDone(page);
@@ -114,8 +125,7 @@ test('resizing another tab does not retain the hidden conversation width (#2339)
   await view.getByRole('tab', { name: 'Tools', exact: true }).click();
   await page.setViewportSize({ width: 900, height: 900 });
   await motionsDone(page);
-  const pane = await edges(page.locator('#session-pane'));
-  await sameEdges(view.locator('.session-header'), { left: pane.left + 24, right: pane.right - 24 }, true);
+  await sameEdges(view.locator('.session-header'), await edges(view.locator('.tools-panel')), true);
   await view.getByRole('tab', { name: 'Conversation', exact: true }).click();
   await motionsDone(page);
   const column = await edges(view.locator('.stream'));
