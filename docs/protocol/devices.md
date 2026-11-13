@@ -435,7 +435,7 @@ dotnet test tests/AgentBridge.Transport.Tests -c Release --filter "FullyQualifie
 certutil -user -csp "Microsoft Platform Crypto Provider" -key | Select-String agent-bridge-roster-sign
 ```
 
-### Host key custody (unused primitive, #1776 PR 1a)
+### Host key custody (#1776, #2369)
 
 `HostSignKey` in `src/AgentBridge.Host` reuses the Windows TPM-first/DPAPI CurrentUser
 store in a separate owner-only `host-sign` profile folder. This is a new identity, not
@@ -444,9 +444,18 @@ and exposes only its public point and low-S signing operation, never private mat
 A flushed `host-sign.public` record commits that identity. Missing, damaged, mismatched
 or inaccessible state is refused with a fixed, content-free error, not replaced or
 auto-repaired. Concurrent first callers serialize through a profile-local file lock.
-Other platforms are not implemented by this primitive. Nothing calls it at startup:
-there is no enrollment, roster-v2 switch, registry signing or reader change. The #55
-trusted-state and person-authorized enrollment prerequisites still block those slices.
+Other platforms are not implemented by this primitive. Startup and status reads never
+create a host key. Registry publication stays unsigned; no roster-v2 acceptance switch
+or reader change is added here.
+
+The local pipe's `host.status.hostSigning` reports custody separately from the strict
+enrollment descriptor. `result` is `available` with `storage` (`tpm` or `dpapi`) and
+`keyId`: unpadded base64url of SHA-256 of the raw 65-byte SEC1 public point, not its text.
+Absent, unreadable or unsupported custody reports only `result: "missing-key"`, without
+a tier or key id. Each status reads `HostSignKey.OpenExisting`; it creates and repairs
+nothing, exposes no private material or raw exception, and does not cache availability
+across key loss. This metadata grants no enrollment or signing permission; the dormant
+descriptor's fields and the unsigned publication contract remain unchanged.
 
 ## The relay's copy
 
