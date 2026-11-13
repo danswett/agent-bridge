@@ -179,12 +179,23 @@ static partial class SelfTest
             check(filled && frames > 0 && readerDrift is <= 1.5 && longestFrameMs is < budgetMs,
                 $"draws all {turns} turns without moving the reader or blocking a frame ({readerDrift:0.0} px drift, {longestFrameMs:0.0} ms longest frame)");
             check(Selected(list) is null, "keeps conversation blocks unselected after scrolling while older history draws");
+            await CheckPostedInput(window, check, result);
             Away(window, main);
             await Choose(window, main, id, "Response");
             var pinned = await Until(() => ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count == turns
                 && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(30));
-            result["historyPinnedFill"] = new { drawn = ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count, offset = scroll.VerticalOffset, extent = scroll.ScrollableHeight };
-            check(pinned, "finishes older drawing at the end before focus moves away");
+            var pinnedFill = new { drawn = ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count, offset = scroll.VerticalOffset, extent = scroll.ScrollableHeight, pinned };
+            result["historyPinnedFill"] = pinnedFill;
+            const string pinnedMessage = "finishes older drawing at the end before focus moves away";
+            if (!QuarantinePostedInput(result, check, pinnedMessage, new
+            {
+                outcome = pinnedFill,
+                causeLimit = "posts no input: Chief runner-cohort exception, not a proven delivery cause",
+            }))
+            {
+                check(pinned, pinned ? pinnedMessage
+                    : $"{pinnedMessage} (history: {pinnedFill.drawn}/{turns}; count500: {pinnedFill.drawn == turns}; at-end: {pinnedFill.offset >= pinnedFill.extent - 1.5}; offset: {pinnedFill.offset:0.###}; extent: {pinnedFill.extent:0.###}; {PostedInputTarget(window).Detail})");
+            }
             await Still(scroll);
             if (ById<ItemsRepeater>(away, "History") is { } historyList
                 && historyList.TryGetElement((historyList.ItemsSourceView?.Count ?? 0) - 1) is { } last
@@ -227,23 +238,78 @@ static partial class SelfTest
             else { check(false, "focuses the header pin before Tab to Details"); }
             Away(window, main);
             await Choose(window, main, id, "Response");
-            var wheelReady = await Until(() => scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
+            int WheelHistoryCount() => ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count ?? 0;
+            int? wheelReceivedCount = null;
             var wheelMoving = false;
             void WheelChanged(object? sender, ScrollViewerViewChangedEventArgs e) => wheelMoving = e.IsIntermediate;
+            var heardWheel = new PointerEventHandler((_, _) => wheelReceivedCount ??= WheelHistoryCount());
             scroll.ViewChanged += WheelChanged;
+            scroll.AddHandler(UIElement.PointerWheelChangedEvent, heardWheel, true);
             try
             {
+                // Choose sees the card before its opening layout and queued end correction finish.
+                await CaptureFrame(window.RootElement);
+                var wheelReady = await Until(() =>
+                {
+                    window.RootElement.UpdateLayout();
+                    return WheelHistoryCount() > 0 && !wheelMoving && scroll.ScrollableHeight > 0
+                        && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5;
+                }, TimeSpan.FromSeconds(10));
+                var wheelTarget = PostedInputTarget(window).Detail;
                 Wheel(window, list);
-                var wheeled = await Until(() => scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
-                check(wheelReady && wheeled, "a native wheel takes the view away from the latest");
-                var drawn = await Until(() => ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count == turns, TimeSpan.FromSeconds(30));
-                await Still(scroll);
-                var kept = await Until(() => !wheelMoving && scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
-                result["historyWheelFill"] = new { wheelReady, wheeled, drawn, kept, offset = scroll.VerticalOffset, extent = scroll.ScrollableHeight };
-                check(wheelReady && wheeled && drawn && kept && scroll.VerticalOffset < scroll.ScrollableHeight - 1.5,
-                    "keeps the view taken by a native wheel while older turns draw");
+                var wheeled = await Until(() => wheelReceivedCount is not null
+                    && scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
+                const string tookMessage = "a native wheel takes the view away from the latest";
+                var drawn = await Until(() => WheelHistoryCount() == turns, TimeSpan.FromSeconds(30));
+                await CaptureFrame(window.RootElement);
+                (int Count, bool Intermediate, double Offset, double Extent, bool Stable) snapshot = default;
+                (double Offset, double Extent)? previous = null;
+                var kept = await Until(() =>
+                {
+                    window.RootElement.UpdateLayout();
+                    var offset = scroll.VerticalOffset;
+                    var extent = scroll.ScrollableHeight;
+                    var stable = previous is { } was && Math.Abs(offset - was.Offset) < 0.5
+                        && Math.Abs(extent - was.Extent) < 0.5;
+                    previous = (offset, extent);
+                    snapshot = (WheelHistoryCount(), wheelMoving, offset, extent, stable);
+                    return snapshot.Count == turns && !snapshot.Intermediate
+                        && snapshot.Offset < snapshot.Extent - 1.5 && snapshot.Stable;
+                }, TimeSpan.FromSeconds(10));
+                var count500 = snapshot.Count == turns;
+                var belowEnd = snapshot.Offset < snapshot.Extent - 1.5;
+                var receipt = wheelReceivedCount is { } count
+                    ? $"{(count < turns ? "before" : "after")} history reached {turns} (count: {count})"
+                    : "wheel not received (issues 2471, 2476; quarantine requires missing canary before 2026-11-20T08:00:00Z)";
+                var ok = wheelReady && wheeled && drawn && kept && count500 && !snapshot.Intermediate && belowEnd && snapshot.Stable;
+                const string keptMessage = "keeps the view taken by a native wheel while older turns draw";
+                var quarantined = wheelReceivedCount is null && QuarantinePostedInput(result, check, "native wheel (2471)", new
+                {
+                    wheelReady, wheeled, drawn, kept, count500, belowEnd, receipt,
+                    historyCount = snapshot.Count, intermediate = snapshot.Intermediate,
+                    offset = snapshot.Offset, extent = snapshot.Extent, stable = snapshot.Stable,
+                    target = wheelTarget,
+                });
+                result["historyWheelFill"] = new
+                {
+                    wheelReady, wheeled, drawn, kept, wheelReceivedCount, receipt, quarantined,
+                    historyCount = snapshot.Count, intermediate = snapshot.Intermediate,
+                    offset = snapshot.Offset, extent = snapshot.Extent, stable = snapshot.Stable,
+                    target = wheelTarget,
+                };
+                if (!quarantined)
+                {
+                    check(wheelReady && wheeled, wheelReady && wheeled ? tookMessage
+                        : $"{tookMessage} ({(wheelReceivedCount is null ? receipt : "wheel received")}; ready: {wheelReady}; moved: {wheeled}; {wheelTarget})");
+                    check(ok, ok ? keptMessage
+                        : $"{keptMessage} (history: {snapshot.Count}/{turns}; count500: {count500}; intermediate: {snapshot.Intermediate}; below-end: {belowEnd}; stable: {snapshot.Stable}; offset: {snapshot.Offset:0.###}; extent: {snapshot.Extent:0.###}; wheel receipt: {receipt}; ready: {wheelReady}; wheeled: {wheeled}; drawn: {drawn}; kept: {kept}; {wheelTarget})");
+                }
             }
-            finally { scroll.ViewChanged -= WheelChanged; }
+            finally
+            {
+                scroll.ViewChanged -= WheelChanged;
+                scroll.RemoveHandler(UIElement.PointerWheelChangedEvent, heardWheel);
+            }
         }
         finally
         {
@@ -312,7 +378,7 @@ static partial class SelfTest
         var scale = list.XamlRoot.RasterizationScale;
         var mouse = new WheelPoint { X = (int)(point.X * scale), Y = (int)(point.Y * scale) };
         if (ClientToScreen(window.Handle, ref mouse) == 0) { throw new InvalidOperationException("The wheel target could not be located."); }
-        var target = GetFocus() is var focus && focus != 0 ? focus : window.Handle;
+        var (target, _) = PostedTarget(window.Handle);
         if (!PostMessageW(target, 0x020A, (nint)(120 << 16), (mouse.Y << 16) | (mouse.X & 0xffff))) { throw new InvalidOperationException("The native wheel message could not be posted."); }
     }
 

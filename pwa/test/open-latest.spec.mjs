@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { go, open, motionsDone } from './nav.mjs';
+import { loadEarlierTo } from './history-fixture.mjs';
 
 const ID = 'open-latest-long';
 const TURNS = 80;
@@ -50,6 +51,7 @@ for (const arriving of [false, true]) {
     }, { id: ID, turns: TURNS, response: reply(TURNS), arriving });
     const v = await open(page, ID);
     const pane = v.locator('.stream-scroll');
+    await loadEarlierTo(pane, TURNS - 1);
     await expect.poll(() => pane.locator('.history-turn').count()).toBeGreaterThan(20);
     await expect.poll(() => gap(pane)).toBeLessThan(4);
     await expect(v.locator('.response p').last()).toBeInViewport();
