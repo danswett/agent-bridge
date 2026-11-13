@@ -60,7 +60,7 @@ public sealed class AgentLaunchReadbackTests : LaunchFlowFixture
 
         Assert.Equal(first.Outcome, repeat.Outcome);
         Assert.Equal(first.Session, repeat.Session);
-        Assert.Equal(first.Reason, repeat.Reason);
+        Assert.Equal(started ? first.Reason : "the launch could not be completed; check details at the machine", repeat.Reason);
         Assert.Null(repeat.Launched?.Cwd);
         Assert.Null(repeat.Trust);
         Assert.Equal(started ? 1 : 0, starter.Specs.Count);
@@ -73,6 +73,24 @@ public sealed class AgentLaunchReadbackTests : LaunchFlowFixture
         credentials.RevokeSession("parent", "fixture");
         await Assert.ThrowsAsync<InvalidOperationException>(() => handle(channel, LaunchProtocol.Launch, Body(request)));
         Assert.Equal(started ? 1 : 0, starter.Specs.Count);
+    }
+
+    [Theory]
+    [InlineData(@"The worktree root cannot be created: C:\private\worktrees is denied")]
+    [InlineData("The worktree root cannot be created: /private/worktrees is denied")]
+    public async Task A_replayed_refusal_does_not_disclose_a_host_path(string reason)
+    {
+        var launcher = Launcher(Config());
+        launcher.NamedLaunch = (_, _, _) => Task.FromResult(new LaunchResult(LaunchOutcome.Refused, reason));
+        var request = new LaunchRequest { Request = Guid.NewGuid().ToString("D"), FleetName = "fixture" };
+        Assert.Equal(reason, (await launcher.LaunchAsync(request, Principal)).Reason);
+        var (handle, _, channel) = Pipe(launcher);
+
+        var repeat = await Replay(handle, channel, request);
+
+        Assert.Equal(LaunchOutcome.Refused, repeat.Outcome);
+        Assert.Equal("the launch could not be completed; check details at the machine", repeat.Reason);
+        Assert.Empty(starter.Specs);
     }
 
     [Fact]

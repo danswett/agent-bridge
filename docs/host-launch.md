@@ -28,6 +28,7 @@ changed content or another principal's request still meets the existing refusal 
 No new launch operation or agent launch authority is enabled here. Outcomes remain
 in memory for 25 minutes after settling; durable caps and results belong to C2.
 Readback removes working-directory, resume, transfer, profile and trust-question data.
+A reason outside the fixed safe list becomes a generic sentence; host paths stay private.
 A busy startup question is never answered, and its details are not disclosed.
 
 An agent's `launch.options` exposes only installed agents from `agents.inbound.local.launch`
@@ -40,8 +41,9 @@ The hourly defaults and ceilings are 3 launches per agent, 10 per machine and 20
 attempts per agent; they may be lowered, never made unlimited. The gate reads changes
 on its next check and records `rate-limited` refusals with the retry delay and caps in
 force. Watch refusal counts and retry delays in the launch audit before and after a
-change. Live limits, idle ending, restart durability and temporary raises are C2 work,
-not guarantees of this staged readback.
+change. Refusal audit records share the pipe's per-principal windowing: 60 per hour,
+then counted summaries at most once a minute. Live limits, idle ending, restart durability
+and temporary raises are C2 work, not guarantees of this staged readback.
 
 ## What agent-ha-bridge does
 

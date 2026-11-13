@@ -147,15 +147,17 @@ public static class LocalApi
         });
     };
 
-    sealed class RefusalAudits(TimeProvider time)
+    internal sealed class RefusalAudits(TimeProvider time)
     {
         public TimeProvider Time { get; } = time;
         public Dictionary<string, (long At, int Written, int Suppressed, long Last)> Windows { get; } = new(StringComparer.Ordinal);
     }
 
     static void AuditRefusal(AgentCredentials credentials, AgentCredential caller, string op, JsonElement data, AgentAuditLog? audit, string why, RefusalAudits refusals)
+        => AuditRefusal(credentials.PrincipalOf(caller), caller.Chain, op, data, audit, why, refusals);
+
+    internal static void AuditRefusal(string principal, string[] chain, string op, JsonElement data, AgentAuditLog? audit, string why, RefusalAudits refusals)
     {
-        var principal = credentials.PrincipalOf(caller);
         lock (refusals.Windows)
         {
             var now = refusals.Time.GetTimestamp();
@@ -180,7 +182,7 @@ public static class LocalApi
             var request = Guid.TryParse(Field("request"), out var r) ? r.ToString("D") : Guid.NewGuid().ToString("D");
             var target = op == LaunchProtocol.Launch ? "local" : Guid.TryParse(Field("id"), out var id) ? id.ToString("D") : "unknown";
             var reason = summary ? $"{state.Suppressed} additional launch or stop attempts were refused" : why;
-            var entry = new AgentAuditEntry("local", request, principal, caller.Chain, op, target, "refused", reason);
+            var entry = new AgentAuditEntry("local", request, principal, chain, op, target, "refused", reason);
             bool written;
             try { written = audit?.Append(entry, !summary && op == LaunchProtocol.Launch ? Field("prompt") : null) == true; }
             catch (Exception) { throw AuditUnavailable(); }

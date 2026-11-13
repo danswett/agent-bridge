@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Host;
@@ -6,19 +7,27 @@ public sealed record AgentLaunchPolicyVerdict(bool Allowed, string? Reason, Agen
     int RetryAfterSeconds = 0, bool Duplicate = false);
 
 // The pipe stays closed until the caller/content checks and launch-service wiring land.
-public sealed class AgentLaunchGate(string folder, Func<DateTimeOffset>? clock = null)
+public sealed class AgentLaunchGate(string folder, Func<DateTimeOffset>? clock = null, TimeProvider? auditTime = null)
 {
     readonly AgentLimits limits = new(clock);
+    readonly AgentAuditLog audit = new(folder);
+    readonly LocalApi.RefusalAudits refusals = new(auditTime ?? TimeProvider.System);
 
     public AgentLaunchPolicyVerdict CheckLaunch(string origin, string request, string requestSha256)
     {
         var policy = CheckPolicy();
         if (!policy.Allowed || policy.Limits is null) { return policy; }
         var result = limits.CheckLaunch(origin, request, requestSha256, policy.Limits);
-        if (result.Reason == AgentLimitVerdict.RateLimited && !new AgentAuditLog(folder).Append(
-            new("local", request, origin, [], LaunchProtocol.Launch, "local", "refused",
-                $"rate-limited; retry after {result.RetryAfterSeconds}s; limits {policy.Limits.LaunchesPerOriginPerHour} per agent and {policy.Limits.LaunchesPerMachinePerHour} per machine per hour")))
-        { return policy with { Allowed = false, Reason = "auditUnwritable: the launch refusal could not be recorded" }; }
+        if (result.Reason == AgentLimitVerdict.RateLimited)
+        {
+            try
+            {
+                LocalApi.AuditRefusal(origin, [], LaunchProtocol.Launch, JsonSerializer.SerializeToElement(new { request }), audit,
+                    $"rate-limited; retry after {result.RetryAfterSeconds}s; hourly caps: launches {policy.Limits.LaunchesPerOriginPerHour} per agent and {policy.Limits.LaunchesPerMachinePerHour} per machine; attempts {policy.Limits.LaunchAttemptsPerOriginPerHour} per agent", refusals);
+            }
+            catch (InvalidOperationException)
+            { return policy with { Allowed = false, Reason = "auditUnwritable: the launch refusal could not be recorded" }; }
+        }
         return policy with { Allowed = result.Allowed, Reason = result.Reason,
             RetryAfterSeconds = result.RetryAfterSeconds, Duplicate = result.Duplicate };
     }

@@ -722,7 +722,14 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             Trust = null,
             Reason = result.Outcome == LaunchOutcome.Busy
                 ? "a launch on this machine is waiting for a person at the machine; try again in a few minutes"
-                : result.Trust is not null ? "the launched session is waiting for a person at the machine" : result.Reason,
+                : result.Trust is not null ? "the launched session is waiting for a person at the machine"
+                : result.Reason switch
+                {
+                    null => null,
+                    "request must be a UUID" or "fleetName is not supported by this host"
+                        or "launching is turned off on this machine (launch.enabled in the host's config)" => result.Reason,
+                    _ => "the launch could not be completed; check details at the machine",
+                },
             Launched = result.Launched is { } launched ? launched with
                 { Cwd = null, Resume = null, Transfer = null, Profile = null } : null,
         };
