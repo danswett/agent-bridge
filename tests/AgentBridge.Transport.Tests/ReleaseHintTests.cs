@@ -94,6 +94,26 @@ public class ReleaseHintTests
         Assert.Equal("v0.1.2", Tag(Assert.Single(host.Hints)));
     }
 
+    [Fact]
+    public async Task A_slow_release_relay_does_not_block_latest_hints_on_connect()
+    {
+        using var feed = new Feed { Body = List(("v0.1.1", "win")) };
+        var clock = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        await using var relay = await TestRelay.StartAsync(releaseFeed: feed, releaseTime: clock);
+        using var first = await Peer.Connect(relay, "true");
+        await Wait.UntilAsync(() => first.Hints.Count == 1, "initial hint");
+        feed.Stall = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        feed.Body = List(("v0.1.2", "win"));
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await Wait.UntilAsync(() => feed.Requests.Count == 2, "stalled HTTP request");
+        using var late = await Peer.Connect(relay, "true");
+        await Wait.UntilAsync(() => late.Hints.Count == 1, "cached hint while HTTP is stalled");
+        Assert.False(feed.Stall.Task.IsCompleted);
+        feed.Stall.SetResult();
+        await Wait.UntilAsync(() => first.Hints.Count == 2 && late.Hints.Count == 2, "hints after HTTP recovers");
+        Assert.Equal(new[] { "v0.1.1", "v0.1.2" }, late.Hints.Select(Tag).ToArray());
+    }
+
     static string Tag(byte[] frame) { using var doc = JsonDocument.Parse(frame); return doc.RootElement.GetProperty("tag").GetString()!; }
     static string List(params (string Tag, string Channel)[] entries) => JsonSerializer.Serialize(entries.Select(e =>
         new { tag_name = e.Tag, draft = false, assets = new[] { new { name = $"releases.{e.Channel}.json" } } }));
@@ -103,17 +123,19 @@ public class ReleaseHintTests
         public string Body = "[]";
         public HttpStatusCode Status = HttpStatusCode.OK;
         public bool Fail;
+        public TaskCompletionSource? Stall;
         public ConcurrentQueue<string> Requests { get; } = new();
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Assert.Equal("https://releases.slipgates.com/repos/danswett/agent-bridge/releases?per_page=10&page=1", request.RequestUri!.AbsoluteUri);
             Assert.Null(request.Headers.Authorization);
             var (body, status, fail) = (Body, Status, Fail);
             Requests.Enqueue(string.Join(",", request.Headers.IfNoneMatch));
             if (fail) { throw new HttpRequestException("offline"); }
+            if (Stall is { } stall) { await stall.Task.WaitAsync(cancellationToken); }
             var response = new HttpResponseMessage(status) { Content = new StringContent(body) };
             response.Headers.ETag = new EntityTagHeaderValue("\"list\"");
-            return Task.FromResult(response);
+            return response;
         }
     }
 
