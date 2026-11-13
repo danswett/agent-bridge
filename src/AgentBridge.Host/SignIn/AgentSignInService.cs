@@ -33,7 +33,7 @@ internal sealed class AgentSignInService : IAsyncDisposable
         public Dictionary<string, SignInGrant> Bindings { get; } = new(StringComparer.Ordinal);
         public PrivateSignInCode? Code;
         public DoneResult? Done;
-        public DateTimeOffset? EndedAt;
+        public long? EndedAt;
         public Task? Work;
         public TaskCompletionSource Completed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool Started;
@@ -41,7 +41,7 @@ internal sealed class AgentSignInService : IAsyncDisposable
         public bool Silent;
         public bool Automatic;
         public SignInResume? Resume;
-        public DateTimeOffset? AloneSince;
+        public long? AloneSince;
     }
 
     sealed record Request(SignInTarget Target, Flow Flow);
@@ -55,8 +55,9 @@ internal sealed class AgentSignInService : IAsyncDisposable
     readonly TimeProvider time;
     readonly Dictionary<string, Flow> active = new(StringComparer.Ordinal);
     readonly Dictionary<(SignInGrant Peer, Guid Request), Request> requests = [];
-    readonly ITimer timer;
-    int sweeping;
+    ITimer? timer;
+    TaskCompletionSource? sweep;
+    bool sweepRequested;
     bool disposed;
 
     public AgentSignInService(ISessionSource source, ISignInAuthority authority, ISignInContextResolver resolver,
@@ -65,13 +66,14 @@ internal sealed class AgentSignInService : IAsyncDisposable
         this.source = source; this.authority = authority; this.resolver = resolver;
         this.recovery = recovery; this.runner = runner; this.readOnly = readOnly;
         this.time = time ?? TimeProvider.System;
-        timer = this.time.CreateTimer(_ => _ = SweepAsync(), null, TimeSpan.FromMilliseconds(250), TimeSpan.FromMilliseconds(250));
         // A pin that went (a roster removal, heard from another host too) ends its flows now, not at
         // the next tick (Trust's condition 4 on #972).
         authority.Changed += OnAuthorityChanged;
+        source.Changed += OnSourceChanged;
     }
 
     void OnAuthorityChanged() => _ = SweepAsync();
+    void OnSourceChanged(object? sender, SessionChange change) => _ = SweepAsync();
 
     // Off unless PhoneSignInSetup turns it on from the machine's permissions.phoneSignIn (#972).
     public bool Enabled { get; init; }
@@ -124,6 +126,7 @@ internal sealed class AgentSignInService : IAsyncDisposable
             if (disposed || readOnly() || active.Count >= MaxFlows || active.ContainsKey(context.Target.Store)) { return false; }
             flow = new(context, time.GetUtcNow(), time, Limit) { Started = true, Silent = true, Automatic = true };
             active.Add(context.Target.Store, flow);
+            Schedule();
         }
         using var cancel = ct.Register(() => flow.Stop.Cancel());
         var work = PrepareAsync();
@@ -145,7 +148,7 @@ internal sealed class AgentSignInService : IAsyncDisposable
             catch (Exception) { await EndAsync(flow, SignInOutcome.Failed); return false; }
             finally
             {
-                lock (gate) { flow.Completed.TrySetResult(); if (flow.Done is not null) { Release(flow); } }
+                lock (gate) { flow.Completed.TrySetResult(); if (flow.Done is not null) { Release(flow); } Schedule(); }
             }
         }
     }
@@ -212,6 +215,7 @@ internal sealed class AgentSignInService : IAsyncDisposable
                 }
                 requests.Add((grant, request), new(target, flow));
             }
+            Schedule();
             // Nothing starts or emits a code before the response reaches this requester.
             return new ChannelReply(new StartResult(outcome, flow.Id), _ => AttachAsync(flow, channel, grant));
         }
@@ -240,6 +244,7 @@ internal sealed class AgentSignInService : IAsyncDisposable
             code = flow.Code;
             start = done is null && !flow.Started;
             if (start) { flow.Started = true; }
+            Schedule();
         }
         if (done is not null) { await SendAsync(channel, grant, AgentSignIn.Done, done, CancellationToken.None); return; }
         if (code is not null && code.ExpiresAt > time.GetUtcNow())
@@ -297,6 +302,7 @@ internal sealed class AgentSignInService : IAsyncDisposable
             {
                 flow.Completed.TrySetResult();
                 if (flow.Done is not null) { Release(flow); }
+                Schedule();
             }
         }
     }
@@ -308,6 +314,7 @@ internal sealed class AgentSignInService : IAsyncDisposable
         {
             if (flow.Ending || flow.Stop.IsCancellationRequested || !Compatible(flow.Context)) { return false; }
             flow.Code = code;
+            Schedule();
             recipients = flow.Participants.Where(p => Current(flow, p.Key, p.Value)).ToArray();
         }
         var sent = false;
@@ -379,11 +386,12 @@ internal sealed class AgentSignInService : IAsyncDisposable
             }, resume?.Resumed.Where(ids.Contains).Distinct().Take(50).ToArray() ?? [],
                 resume?.Continue.Where(ids.Contains).Distinct().Take(50).ToArray() ?? []);
             flow.Done = done;
-            flow.EndedAt = time.GetUtcNow();
+            flow.EndedAt = time.GetTimestamp();
             if (!flow.Started || flow.Completed.Task.IsCompleted) { Release(flow); }
             recipients = flow.Participants.ToArray();
             flow.Participants.Clear();
             flow.Bindings.Clear();
+            Schedule();
         }
         if (outcome != SignInOutcome.SignedIn)
         {
@@ -405,50 +413,109 @@ internal sealed class AgentSignInService : IAsyncDisposable
         }
     }
 
-    internal async Task SweepAsync()
+    internal Task SweepAsync()
     {
-        if (Interlocked.Exchange(ref sweeping, 1) != 0) { return; }
+        lock (gate)
+        {
+            if (disposed) { return Task.CompletedTask; }
+            sweepRequested = true;
+            if (sweep is not null) { return sweep.Task; }
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            sweep = completion;
+            _ = SweepCoreAsync(completion);
+            return completion.Task;
+        }
+    }
+
+    async Task SweepCoreAsync(TaskCompletionSource completion)
+    {
         try
         {
-            Flow[] flows;
-            List<Task> endings = [];
-            lock (gate) { flows = active.Values.ToArray(); Trim(); }
-            foreach (var flow in flows)
+            while (true)
             {
-                if (LifetimeExpired(flow) || flow.Code is { } code && code.ExpiresAt <= time.GetUtcNow())
+                lock (gate) { sweepRequested = false; }
+                Flow[] flows;
+                List<Task> endings = [];
+                lock (gate) { flows = active.Values.ToArray(); Trim(); }
+                foreach (var flow in flows)
                 {
-                    endings.Add(EndAsync(flow, SignInOutcome.Expired)); continue;
+                    if (LifetimeExpired(flow) || flow.Code is { } code && code.ExpiresAt <= time.GetUtcNow())
+                    {
+                        endings.Add(EndAsync(flow, SignInOutcome.Expired)); continue;
+                    }
+                    if (flow.Stop.IsCancellationRequested) { endings.Add(EndAsync(flow, SignInOutcome.Cancelled)); continue; }
+                    if (!Enabled || disposed || readOnly()) { endings.Add(EndAsync(flow, SignInOutcome.Cancelled)); continue; }
+                    bool revoked;
+                    bool alone;
+                    lock (gate)
+                    {
+                        revoked = flow.Bindings.Values.Any(g => !authority.StillCurrent(g))
+                            || flow.Participants.Any(p => p.Key.IsOpen && Grant(p.Key) != p.Value);
+                        foreach (var p in flow.Participants.Keys.Where(c => !c.IsOpen).ToArray()) { flow.Participants.Remove(p); }
+                        alone = !flow.Automatic && flow.Participants.Count == 0;
+                        flow.AloneSince = alone ? flow.AloneSince ?? time.GetTimestamp() : null;
+                    }
+                    if (revoked || alone && flow.AloneSince is { } since && time.GetElapsedTime(since) >= ReattachGrace)
+                    {
+                        endings.Add(EndAsync(flow, SignInOutcome.Cancelled)); continue;
+                    }
+                    if (flow.Silent && flow.Completed.Task.IsCompleted && flow.Context.Failures.All(f => source.Get(f.Id) is { Attention: null }))
+                    {
+                        endings.Add(EndAsync(flow, SignInOutcome.SignedIn, flow.Resume)); continue;
+                    }
+                    if (!Compatible(flow.Context)) { endings.Add(EndAsync(flow, SignInOutcome.Failed)); }
                 }
-                if (flow.Stop.IsCancellationRequested) { endings.Add(EndAsync(flow, SignInOutcome.Cancelled)); continue; }
-                if (!Enabled || disposed || readOnly()) { endings.Add(EndAsync(flow, SignInOutcome.Cancelled)); continue; }
-                bool revoked;
-                bool alone;
+                await Task.WhenAll(endings);
                 lock (gate)
                 {
-                    revoked = flow.Bindings.Values.Any(g => !authority.StillCurrent(g))
-                        || flow.Participants.Any(p => p.Key.IsOpen && Grant(p.Key) != p.Value);
-                    foreach (var p in flow.Participants.Keys.Where(c => !c.IsOpen).ToArray()) { flow.Participants.Remove(p); }
-                    alone = !flow.Automatic && flow.Participants.Count == 0;
-                    flow.AloneSince = alone ? flow.AloneSince ?? time.GetUtcNow() : null;
+                    Trim(); Schedule();
+                    if (sweepRequested) { continue; }
+                    sweep = null;
+                    completion.TrySetResult();
+                    return;
                 }
-                if (revoked || alone && flow.AloneSince is { } since && time.GetUtcNow() - since >= ReattachGrace)
-                {
-                    endings.Add(EndAsync(flow, SignInOutcome.Cancelled)); continue;
-                }
-                if (flow.Silent && flow.Completed.Task.IsCompleted && flow.Context.Failures.All(f => source.Get(f.Id) is { Attention: null }))
-                {
-                    endings.Add(EndAsync(flow, SignInOutcome.SignedIn, flow.Resume)); continue;
-                }
-                if (!Compatible(flow.Context)) { endings.Add(EndAsync(flow, SignInOutcome.Failed)); }
             }
-            await Task.WhenAll(endings);
         }
-        finally { Volatile.Write(ref sweeping, 0); }
+        catch (Exception error)
+        {
+            lock (gate)
+            {
+                sweep = null;
+                completion.TrySetException(error);
+                Schedule();
+            }
+        }
+    }
+
+    // Called under gate. G5 and person-role predicates have no change event, so their existing
+    // safety check remains bounded to live flows; retained receipts need only their real expiry.
+    void Schedule()
+    {
+        if (disposed) { return; }
+        TimeSpan? due = null;
+        void Earlier(TimeSpan remaining) => due = due is null || remaining < due.Value ? remaining : due;
+        foreach (var flow in active.Values.Where(f => !f.Ending && f.Done is null))
+        {
+            Earlier(flow.Lifetime - time.GetElapsedTime(flow.StartedAt));
+            if (flow.Code is { } code) { Earlier(code.ExpiresAt - time.GetUtcNow()); }
+            if (flow.AloneSince is { } alone) { Earlier(ReattachGrace - time.GetElapsedTime(alone)); }
+            Earlier(TimeSpan.FromMilliseconds(250));
+        }
+        foreach (var flow in requests.Values.Select(r => r.Flow).Distinct())
+        {
+            if (flow.EndedAt is { } end && (!flow.Started || flow.Completed.Task.IsCompleted))
+            {
+                Earlier(Kept - time.GetElapsedTime(end));
+            }
+        }
+        if (due is null) { timer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan); return; }
+        timer ??= time.CreateTimer(_ => _ = SweepAsync(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        timer.Change(due.Value > TimeSpan.Zero ? due.Value : TimeSpan.Zero, Timeout.InfiniteTimeSpan);
     }
 
     void Trim()
     {
-        foreach (var key in requests.Where(p => p.Value.Flow.EndedAt is { } end && time.GetUtcNow() - end > Kept
+        foreach (var key in requests.Where(p => p.Value.Flow.EndedAt is { } end && time.GetElapsedTime(end) >= Kept
             && (!p.Value.Flow.Started || p.Value.Flow.Completed.Task.IsCompleted)).Select(p => p.Key).ToArray())
         {
             var flow = requests[key].Flow;
@@ -474,11 +541,16 @@ internal sealed class AgentSignInService : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        disposed = true;
-        authority.Changed -= OnAuthorityChanged;
-        timer.Dispose();
         Flow[] flows;
-        lock (gate) { flows = active.Values.ToArray(); }
+        lock (gate)
+        {
+            if (disposed) { return; }
+            disposed = true;
+            timer?.Dispose();
+            flows = active.Values.ToArray();
+        }
+        authority.Changed -= OnAuthorityChanged;
+        source.Changed -= OnSourceChanged;
         foreach (var flow in flows) { await EndAsync(flow, SignInOutcome.Cancelled); }
         foreach (var flow in flows)
         {
