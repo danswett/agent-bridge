@@ -119,7 +119,7 @@ static partial class SelfTest
                 card.Update(unseeded with { Question = new Question
                 {
                     Id = "latest-question-reveal", Kind = QuestionKind.Form, Message = "Which step should run next?", AskedAt = DateTimeOffset.UtcNow,
-                    Fields = [new Field { Name = "answer", Type = FieldType.Choice, Options = [new Option("read", "Read"), new Option("test", "Test")] }],
+                    Fields = new Field[] { new Field { Name = "answer", Type = FieldType.Choice, Options = new Option[] { new Option("read", "Read"), new Option("test", "Test") } } },
                 } });
                 await CheckLatestQuestion(window, view, scroll, check);
             }

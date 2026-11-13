@@ -42,7 +42,7 @@ public sealed partial class SessionView
             }
             if (latestScroll is { } hooked && latestBar is null)
             {
-                var nodes = new Queue<DependencyObject>([hooked]);
+                var nodes = new Queue<DependencyObject>(new DependencyObject[] { hooked });
                 while (nodes.TryDequeue(out var node))
                 {
                     if (node is ScrollBar { Orientation: Orientation.Vertical } bar)
