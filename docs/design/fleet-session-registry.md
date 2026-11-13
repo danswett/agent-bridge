@@ -323,6 +323,7 @@ from, who can set one, and how it is marked.
   protection: a same-user process that can write that file can change it (the pipe's agent rail
   is a safety rail, not a boundary, local-pipe.md:161,196). A same-user process can tamper
   with the name store and make a newer process squat a live name after host reload.
+  The warning is a label-in-use oracle for App/HostCli callers, not a new security boundary.
   Newest-wins does not authenticate rightful ownership: this lies inside the explicitly
   untrusted same-user metadata boundary, never grants credentials or send authority.
 * **Across a resume.** A resumed session gets a new agent credential (local-pipe.md:196-199) and may
@@ -343,13 +344,16 @@ from, who can set one, and how it is marked.
   S-N1 shows disclosure before App/HostCli rename. After fresh caller and id/name validation,
   the host checks live `ISessionSource.Snapshot()` IDs via `FleetNames.Get` and its private
   `IScopedFleetRoster.ReadScopedAsync()` (`Program.cs:859-861`, `FleetList.cs:40-47`), excluding
-  only (own machine, target id), matching exactly. This is future work: today's handler
+  only (`MachineInfo.Id`, target id): the service's own published device ID
+  (`Program.cs:678-681`), never caller data. Match exactly. This is future work: today's handler
   only delegates save (`SessionService.cs:57-58`); no agent fleet op or new read authority.
+  Bound the scoped warning read to 2 s monotonic time; deadline expiry yields `unknown`,
+  cancels the read and ignores late results, with no retry. Caller cancellation during the check aborts without saving.
   The check completes **before the durable save**; an unknown check does not block that save.
   Then attempt the existing save once. Only success returns the saved result and warning;
   failed save returns its normal error, keeps the old name, and never claims it was saved.
-  Result adds `duplicateStatus`: present for an observed live match; absent for none in
-  complete views; otherwise unknown (unavailable/truncated/older-host missing status).
+  Complete views yield `duplicateStatus` present for a match, absent for none; unavailable,
+  truncated, timed-out or older-host missing-status replies yield unknown.
   No other names/nodes. App/CLI show present/unknown with the save result, never silently absent.
   Dynamic warning is after successful save; it is no uniqueness proof, ban, credential or retry.
   Present: "Another live session uses this label; lookup may refuse or select a newer session."
@@ -458,6 +462,8 @@ multiple live matches, S-N3 always returns `ambiguous`, including in mixed-host 
 A signed whole-second gap, even >122 s, is not same-host creation-order evidence. No source,
 format or verifier for that evidence is defined here; unlocking it needs a separately
 accepted contract, owner and tests, not an assumption from these timestamps.
+The approved single-host "newest verified live process wins" rule (comment 6838324533)
+is deferred because same-host duplicates remain ambiguous; the Product owner decides its successor contract.
 Snapshot freshness proves no historical accuracy. Cross-host activation also waits for its
 unowned clock evidence/bounds prerequisite. Start time is not exposed to agents.
 
@@ -629,8 +635,10 @@ proof need separate accepted issues/owners; unowned here. Legacy RC is not owner
    (today's id/name-only result fails); labels still publish, unsigned find stays unverified.
    Agent/script rename refuses before any warning-data read.
    Assert check-before-durable-write and warning-after-success; failed write has no saved result.
-   With no observed duplicate, unavailable registry, truncated snapshot and an older-host
-   reply missing `duplicateStatus` each visibly yield `unknown`, never silently `absent`.
+   Test complete local/account views with no match: `absent`. Separately, unavailable registry,
+   truncated snapshot and older-host missing `duplicateStatus` each visibly yield `unknown`.
+   Stall the read: at the 2 s deadline assert `unknown`, read cancellation and one save;
+   late completion cannot alter the result. Caller cancellation during the check prevents saving.
 2. **S-N2, three <=400-line PRs:** S-N2a host binding/publication/restart (null omitted);
    S-N2b allow-list, `total > published count` not `total > 64` (64/59 test); S-N2c shared C#/PWA/Apple vectors.
    Test flooring/null omission, resume renewal, legacy records and byte limits; signed vectors

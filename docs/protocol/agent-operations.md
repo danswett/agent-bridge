@@ -88,11 +88,14 @@ missing historical clock evidence remain ambiguous; fresh snapshot time is not t
 If any host contributes multiple live matches, S-N3 stays ambiguous, even in mixed-host
 lookups and with a signed whole-second gap >122 s. A gap alone is no same-host ordering
 proof; no evidence contract is defined here. A separate accepted contract/owner/tests must unlock it.
+The approved single-host newest-verified-live rule is deferred by this ambiguity hold; Product decides its successor contract.
 S-N1 uses the host's private local-name/scoped-relay data inside the existing App/HostCli
-rename path, never agent-only fleet ops. The check completes before durable save; unknown
-does not block saving. Only save success returns the status and dynamic warning; save failure
+rename path, never agent-only fleet ops. Its pre-save read has a 2 s monotonic deadline;
+expiry yields unknown, cancels the read and ignores late results without retry. Unknown does not
+block saving; caller cancellation during the check aborts. Only save success returns the warning; save failure
 returns the normal error, not a saved result. Static disclosure is before the call.
 Same-user tampering can still squat a name; the warning-result fixture must fail on today's id/name-only response.
+The warning/status is no uniqueness proof.
 
 `startedAt` stays identical when only the host restarts, and renews for a resumed/replaced
 session process. The four workstreams (six PRs, each <=400 lines) require a host-restart test
