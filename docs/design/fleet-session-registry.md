@@ -29,7 +29,7 @@ existing liveness rules. No placement pin, persistent lookup state or new compon
 Design update, November 12, 2026 (Pacific), #2360: Engineering approved
 [explicit enrollment and signed replacement ordering](https://github.com/danswett/agent-bridge/issues/2360#issuecomment-6838324533).
 This is documentation only, not an implementation or deployment claim. The four follow-on
-slices below do not enable routing; #1776 remains the independent verification gate.
+workstreams below do not enable routing; #1776 remains the independent verification gate.
 
 Source baseline for #2360: `d51108263f399fa1dc4bf81d38b30cf31ff2232e`.
 Runtime evidence follows; the PR #1422 plan is historical, not shipped reader/client behavior.
@@ -87,7 +87,7 @@ purpose, which marks it as having read untrusted content.
 
 **Decisions needed** (details in "Decisions", below):
 
-1. Owner and Trust: accept that session names and coarse states become relay-visible metadata.
+1. Owner and Trust: accept relay-visible names, coarse states and optional process `startedAt`.
 2. Owner: whether each machine can switch sharing off, and the default (proposed: on for
    own-account, with a per-machine off switch).
 3. #2360 confirms existing person-only `session.rename` through the Windows app backend or
@@ -160,7 +160,7 @@ All members are required unless noted.
 * **name** (optional). Present only when the session has a name that came from an allowed source
   and passes the filter in "Names". Absent otherwise. At most 64 characters.
 * **state.** One of `working`, `waiting`, `idle`, `ending`, the v1 session status. `since` is when
-  the session entered that state (v1 `statusSince`, v1-sessions.md:1731). "Time in state" is
+  the session entered that state (v1 `statusSince`, v1-sessions.md:1792). "Time in state" is
   `now - since`, computed by the reader, so the record does not change every second.
 * **epoch and seq.** `epoch` is 16 random hex digits chosen when the host process starts; `seq`
   starts at 1 in each epoch and rises by one per snapshot. Neither needs to be stored across a
@@ -210,9 +210,8 @@ socket (`RelayHub.cs:261-264`). So no frame may ever be built from "all machines
   Hitting the cap is logged on the host as a count, never a name.
 * **Planned byte truncation.** The arithmetic is a conservative estimate, not a serializer
   guarantee. S-N2a fits signed bytes, marks count/byte omissions `truncated`; S-N2b validates
-  `total > published count`, not today's `total > 64` (`RosterFields.cs:52`);
-  change that rule with the extension, with a 64-to-59 case
-  and encoding-boundary tests. Today the publisher rejects oversized records rather than
+  `total > published count`, not today's `total > 64` (`RosterFields.cs:52`).
+  Today the publisher rejects oversized records rather than
   byte-truncating (`FleetPublisher.cs:57-60`). The 16/24 KiB and 64-session caps do not rise.
 
 ## Relay frames
@@ -346,11 +345,14 @@ from, who can set one, and how it is marked.
   `IScopedFleetRoster.ReadScopedAsync()` (`Program.cs:859-861`, `FleetList.cs:40-47`), excluding
   only (own machine, target id), matching exactly. This is future work: today's handler
   only delegates save (`SessionService.cs:57-58`); no agent fleet op or new read authority.
+  The check completes **before the durable save**; an unknown check does not block that save.
+  Then attempt the existing save once. Only success returns the saved result and warning;
+  failed save returns its normal error, keeps the old name, and never claims it was saved.
   Result adds `duplicateStatus`: present for an observed live match; absent for none in
   complete views; otherwise unknown (unavailable/truncated/older-host missing status).
   No other names/nodes. App/CLI show present/unknown with the save result, never silently absent.
-  Dynamic warning is after save; it is no uniqueness proof, ban, credential or retry.
-  Present: "Another live session uses this label; lookup may select your newer session."
+  Dynamic warning is after successful save; it is no uniqueness proof, ban, credential or retry.
+  Present: "Another live session uses this label; lookup may refuse or select a newer session."
 * **Marked as untrusted.** Every client renders a name as plain text, never as markup or a
   template (HA's component must neutralise template markers as HA does today, `HaPayloads.cs:25-31`).
   In the agent surfaces (see "Who may read") the name is not part of the typed result; it is
@@ -428,7 +430,8 @@ process wins only when the reader can prove one strictly newest signed `startedA
 
 | Input case | Today in practice | Current selector with verified fixtures | After the dependent implementation |
 |---|---|---|---|
-| Two live names, provably separated starts | `unverified` | `ambiguous` | `found` for the strictly newest process |
+| Live names on distinct machines, provably separated starts with the trusted bounds/gap below | `unverified` | `ambiguous` | `found` for the strictly newest process |
+| Any host has multiple live matches, whatever their signed whole-second gap | `unverified` | `ambiguous` | `ambiguous` until a separate same-host evidence contract is accepted and implemented |
 | Multiple live names, equal/missing/unprovable order or insufficient cross-machine gap | `unverified` | `ambiguous` | Explicit `ambiguous` refusal, no selected session |
 | One live name, offline/stale predecessors | `unverified` | `found` | `found`; predecessors never compete |
 | Any live unverified match beside verified matches | `unverified` | `unverified` | Unchanged; one legacy unsigned same-name machine blocks rollout selection |
@@ -450,9 +453,13 @@ For different machines, require independently trusted start-time error bounds of
 60 seconds per host and gap >122 seconds from the newest to every live candidate
 (two 60-second errors plus two seconds for flooring).
 At/below the gap or without proof, return `ambiguous`. A reader cannot detect a historical
-same-host clock step from these timestamps; same-host duplicates also need trusted creation-order
-evidence or remain ambiguous. Snapshot freshness proves no historical accuracy; evidence is absent today.
-Cross-machine activation is held for that external prerequisite; start time is not exposed to agents.
+same-host clock step from these timestamps. **Same-host selection is held:** if any host has
+multiple live matches, S-N3 always returns `ambiguous`, including in mixed-host lookups.
+A signed whole-second gap, even >122 s, is not same-host creation-order evidence. No source,
+format or verifier for that evidence is defined here; unlocking it needs a separately
+accepted contract, owner and tests, not an assumption from these timestamps.
+Snapshot freshness proves no historical accuracy. Cross-host activation also waits for its
+unowned clock evidence/bounds prerequisite. Start time is not exposed to agents.
 
 This changes two distinct live sessions with the same name too: there is no inferred
 replacement lineage. A signed host time is still that host's assertion; same-user name-store
@@ -582,7 +589,7 @@ first draft of this note.
 | 4 | Existing agent-only `fleet.list` (`FleetList.cs:140-154,215-227`); RC cache remains future | L historical | RC, 3a, #1401 | No-hello/read-scope refusals; account isolation; names only as explicit content; audit before read |
 | 5 | Existing name-only `fleet.find` (`FleetList.cs:161-204`); #2360 changes only verified duplicate selection after external RC | M* historical | 4, RC | Production live names unverified; current verified fixtures ambiguous; future provably newest found, equal/close/unprovable ambiguous; scope and incomplete/unverified precedence unchanged |
 | 6 | PWA adoption, including the PWA reader (JS port of RC) | M | RC, 2b | Vector mirror passes; fleet view from one socket; offline machine shown stale; unverified label |
-| 7 | Windows app adoption, including the rename entry point | M | RC, 2b, 3b | Count matches the registry; fleet view works without per-host channels; rename from the app sets a name |
+| 7 | Windows app fleet-view adoption; consumes S-N1 enrollment, no second rename entry point | M | RC, 2b, S-N1 | Count matches the registry; fleet view works without per-host channels; enrollment behavior is tested by S-N1 |
 | 8 | Apple adoption, including the Swift reader (port of RC) | M | RC, 2b | Vector mirror passes; same view tests |
 | 9 | Fleet messenger and reply-session switch (fleet repo) | S | 5, R | Resolve every name without HA; ambiguity, `unverified` and `incomplete` refused loudly; sends pin machine and node |
 | 10 | Conformance cases for the registry in the shared suite (#1407) | S | 2b, RC, 5 | One suite, run against every client and the HA component |
@@ -597,7 +604,7 @@ cannot be returned, so slice 9 (the scripts) cannot switch off HA name lookup be
 roster v2 a real dependency of #1399's acceptance criterion "correct with HA blocked"; see
 Decision 4. #2151 removes the caller's machine requirement, not R's verification gate.
 
-Order: 1 first; 2a and 3a in parallel; then 2b, 3b; RC; 4; 5; clients 6 to 8 any order after RC (slice 7 also after 3b); 9
+Order: 1 first; 2a and 3a in parallel; then 2b, 3b; RC; 4; 5; clients 6 to 8 any order after RC (slice 7 also after S-N1); 9
 after 5 and R; 10 after 2b, RC and 5. Slices 2a, 2b, 3a, 3b (fleet-name caller policy),
 RC, 4 (fleet-read
 allow-list, local-pipe.md:101) and 5 touch sensitive paths: both independent receipts and a Trust
@@ -605,7 +612,8 @@ review. Android waits on its client; a Linux client follows the same vectors.
 
 ### #2360 follow-on slices (S-N1 to S-N4)
 
-Four workstreams, each PR <=400 lines; S-N2 is pre-split. S-N IDs are distinct from legacy rows.
+Four workstreams, **six PRs**, each <=400 lines: S-N1, S-N2a, S-N2b, S-N2c, S-N3 and S-N4.
+S-N2 is pre-split; S-N IDs are distinct from legacy rows.
 **No S-N slice enables routing or sets verified.** Names stay display-only pending #1776; selection needs all prerequisites below.
 
 **Prerequisites to S-N3:** #1776 owns signing, roster-key/signature, seq/epoch/at checks and
@@ -620,12 +628,17 @@ proof need separate accepted issues/owners; unowned here. Legacy RC is not owner
    label in saved host state and reload. Rename A: assert typed present and visible warning
    (today's id/name-only result fails); labels still publish, unsigned find stays unverified.
    Agent/script rename refuses before any warning-data read.
+   Assert check-before-durable-write and warning-after-success; failed write has no saved result.
+   With no observed duplicate, unavailable registry, truncated snapshot and an older-host
+   reply missing `duplicateStatus` each visibly yield `unknown`, never silently `absent`.
 2. **S-N2, three <=400-line PRs:** S-N2a host binding/publication/restart (null omitted);
    S-N2b allow-list, `total > published count` not `total > 64` (64/59 test); S-N2c shared C#/PWA/Apple vectors.
    Test flooring/null omission, resume renewal, legacy records and byte limits; signed vectors
    coordinate with #1776, without selection activation.
-3. **S-N3 signed-start decode/selection.** After accepted prerequisites, test old/new live on same/different
-   hosts, both frame orders; state-change recency cannot win, offline/stale does not compete.
+3. **S-N3 signed-start decode/selection.** Test same-host live pairs with small and >122 s
+   signed gaps, plus mixed-host same-host duplicates: always ambiguous under the hold above.
+   After cross-host prerequisites, test newest on distinct hosts in both frame orders;
+   state-change recency cannot win, offline/stale does not compete.
    Equal/missing/unprovable order, cross-host <=122 s gaps, absent bounds and reversed skew refuse ambiguous.
    Clock-step fixture lacks proof; tampered/replayed name/start fails verification; unsigned/incomplete/cross-account never route.
 4. **S-N4 guidance/conformance.** Public-safe enrollment and synthetic end-to-end host/relay
@@ -639,8 +652,8 @@ Hosted failing-first red proof/output; no live changes; wrapper #605 separate. Q
 
 ## Decisions
 
-1. **Relay-visible names and states** (Owner, Trust). Recommended: accept, for the account's
-   own devices only, limited to the allow-list above.
+1. **Relay-visible names, states and optional process `startedAt`** (Owner, Trust).
+   Recommended: accept, for the account's own devices only, limited to the allow-list above.
 2. **Per-machine off switch** (Owner). Recommended: on by default for own accounts, with a
    host setting (proposed `fleet.share`) that sends an empty list. A machine that is off shows
    as online with no sessions, not as missing.

@@ -75,8 +75,8 @@ This **intentionally changes the implemented ambiguous-on-verified-duplicates br
 Today in practice every live name match is `unverified` (unless `incomplete` wins):
 `RelayFleetRoster.Parse` never sets `Verified` (`src/AgentBridge.Host/Fleet/FleetList.cs:13,50-103`).
 Only verified fixtures reach today's `ambiguous`/`found` branches (`FleetList.cs:185-204`).
-After the dependent implementation, callers see `found` for one strictly newest process only when
-every live match verifies and carries a valid signed host-observed `startedAt`.
+For eligible duplicates on distinct machines, future callers see `found` for one strictly
+newest process only when every live match verifies and carries a valid signed host-observed `startedAt`.
 Equal, missing or unprovable ordering returns an explicit `ambiguous` refusal, never a
 chosen session. Offline/stale predecessors do not compete. Never order by state `since`,
 record `at`, `seq`, epoch, arrival or node text.
@@ -85,13 +85,17 @@ start uses UTC `YYYY-MM-DDTHH:mm:ssZ`, floored whole seconds; it is not exposed 
 Cross-machine selection needs independently trusted start-time error bounds <=60 seconds
 per host and a gap strictly >122 seconds to every competing live match. Closer pairs or
 missing historical clock evidence remain ambiguous; fresh snapshot time is not that evidence.
+If any host contributes multiple live matches, S-N3 stays ambiguous, even in mixed-host
+lookups and with a signed whole-second gap >122 s. A gap alone is no same-host ordering
+proof; no evidence contract is defined here. A separate accepted contract/owner/tests must unlock it.
 S-N1 uses the host's private local-name/scoped-relay data inside the existing App/HostCli
-rename path, never agent-only fleet ops. Its typed duplicate status is shown with the save
-result; static relay disclosure is before the call. Same-user tampering can still squat a
-name; the concrete warning-result fixture must fail on today's id/name-only response.
+rename path, never agent-only fleet ops. The check completes before durable save; unknown
+does not block saving. Only save success returns the status and dynamic warning; save failure
+returns the normal error, not a saved result. Static disclosure is before the call.
+Same-user tampering can still squat a name; the warning-result fixture must fail on today's id/name-only response.
 
 `startedAt` stays identical when only the host restarts, and renews for a resumed/replaced
-session process. The four bounded code slices require a host-restart acceptance test
+session process. The four workstreams (six PRs, each <=400 lines) require a host-restart test
 with a still-live session process, not an inferred filesystem or transcript time.
 S-N2a/S-N4 own restart; null observation omits the field. No S-N slice enables routing.
 S-N3 needs #1776's scoped signing/key/seq/epoch/at checks plus separately accepted owners
