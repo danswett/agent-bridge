@@ -113,7 +113,17 @@ static partial class SelfTest
             boundary("latest focus scrolling");
             await CheckLatestFocus(window, view, scroll, check);
             boundary("latest question reveal");
-            await CheckLatestQuestion(window, view, scroll, check);
+            var unseeded = card.Session;
+            try
+            {
+                card.Update(unseeded with { Question = new Question
+                {
+                    Id = "latest-question-reveal", Kind = QuestionKind.Form, Message = "Which step should run next?", AskedAt = DateTimeOffset.UtcNow,
+                    Fields = [new Field { Name = "answer", Type = FieldType.Choice, Options = [new Option("read", "Read"), new Option("test", "Test")] }],
+                } });
+                await CheckLatestQuestion(window, view, scroll, check);
+            }
+            finally { card.Update(unseeded); }
             foreach (var (modifier, down, up) in new[] {
                 (VirtualKey.Control, VirtualKey.PageDown, VirtualKey.Up),
                 (VirtualKey.Shift, VirtualKey.Down, VirtualKey.PageUp),
