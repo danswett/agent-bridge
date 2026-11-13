@@ -143,16 +143,18 @@ public sealed class HookIntake : IHookNotices, IAsyncDisposable
         get
         {
             if (Paused is { } paused) { return $"agent-ha-bridge has the hook spool ({paused}); answer at the machine"; }
-            if (_queued || Waiting()) { return "the host is still handling hook events that are waiting; try again shortly"; }
+            if (_queued || Waiting()) { Wake(); return "the host is still handling hook events that are waiting; try again shortly"; }
             // Since the last pass: hooks have stopped spooling (the heartbeat is past what they
             // allow), or a Codex hook ran without spooling (it may have been the PreToolUse that
             // answered this approval, and failed to remove its marker too). The next pass settles it.
             if (_time.GetUtcNow().UtcTicks - Interlocked.Read(ref _beatTicks) >= SpoolContract.HeartbeatMaxAge.Ticks || _codexLog.UnheardSince())
             {
+                Wake();
                 return "a Codex hook has run that the host has not yet checked approvals against; try again shortly";
             }
-            return _reconciled && !_handlers.WithdrawalsPending ? null
-                : "the host has not yet checked Codex approvals against the hooks that ran while nobody took them; answer at the machine or try again shortly";
+            if (_reconciled && !_handlers.WithdrawalsPending) { return null; }
+            Wake();
+            return "the host has not yet checked Codex approvals against the hooks that ran while nobody took them; answer at the machine or try again shortly";
         }
     }
 
@@ -257,7 +259,7 @@ public sealed class HookIntake : IHookNotices, IAsyncDisposable
             var interval = minimum;
             while (!token.IsCancellationRequested)
             {
-                try { if (Pass() > 0 || !_heartbeatRenewed) { interval = minimum; } }
+                try { if (Pass() > 0 || !_heartbeatRenewed || !_reconciled || _queued || _handlers.WithdrawalsPending) { interval = minimum; } }
                 catch (Exception e) when (e is not OperationCanceledException)
                 {
                     _log($"hook intake pass failed: {e.GetType().Name}: {e.Message}");

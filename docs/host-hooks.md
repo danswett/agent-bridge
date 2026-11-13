@@ -334,6 +334,8 @@ The safety sweep starts at 2 s, doubling after healthy empty passes to a 30 s id
 Any watcher signal or handled event resets the wait to 2 s. A failed heartbeat renewal or
 standing back also resets the retry wait to 2 s. A missed notification is therefore recovered
 within 30 s while idle, and each successful pass renews the heartbeat before its 60 s expiry.
+A refused approval that a pass can settle wakes it immediately; pending reconciliation,
+withdrawals or spool events keep retries at the active interval.
 `SweepInterval` changes the active interval but is capped at 30 s for the same reason.
 Waits use the injected clock and are cancelled on stop; an intake that has not started creates
 no timer.

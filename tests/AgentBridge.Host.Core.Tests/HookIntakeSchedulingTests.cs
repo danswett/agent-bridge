@@ -160,6 +160,43 @@ public sealed class HookIntakeSchedulingTests
     }
 
     [Fact]
+    public async Task An_unheard_Codex_log_at_the_idle_ceiling_settles_without_waiting_for_the_safety_sweep()
+    {
+        using var fixture = new Fixture();
+        var time = new CountingTime(fixture);
+        await using var intake = Intake(fixture, time);
+        intake.Start();
+        await ReachIdleCeiling(time);
+        Assert.Null(intake.ApprovalsUnsettled);
+        var before = time.GetUtcNow();
+        var marker = fixture.CodexApprovalMarker("unheard", "decision", created: before);
+        SpoolContract.Record(fixture.Runtime, "codex", "hook", "reply", "spool failed", before, 1);
+
+        Assert.NotNull(intake.ApprovalsUnsettled);
+
+        Assert.Equal(TimeSpan.FromSeconds(2), await time.NextWait());
+        Assert.Equal(before, time.GetUtcNow());
+        Assert.False(File.Exists(marker));
+        Assert.Null(intake.ApprovalsUnsettled);
+    }
+
+    [Fact]
+    public async Task An_unreadable_hook_log_keeps_reconciliation_retries_at_the_active_interval()
+    {
+        using var fixture = new Fixture();
+        var time = new CountingTime(fixture);
+        await using var intake = Intake(fixture, time);
+        Directory.CreateDirectory(SpoolContract.LogPath(fixture.Runtime));
+        intake.Start();
+
+        for (var pass = 0; pass < 3; pass++)
+        {
+            Assert.Equal(TimeSpan.FromSeconds(2), await time.NextWait());
+            time.Advance(TimeSpan.FromSeconds(2));
+        }
+    }
+
+    [Fact]
     public async Task Cancellation_during_a_pass_creates_no_safety_timer()
     {
         using var fixture = new Fixture();
