@@ -294,8 +294,16 @@ static partial class SelfTest
     static void CheckHistoryHeaderGrowth(bool followed, bool tabbed, bool arrived, double offset, double extent,
         Action<bool, string> check, Dictionary<string, object?> result)
     {
-        check(followed && tabbed && arrived && offset >= extent - 1.5,
-            "keeps following a growing reply after Tab outside the conversation has not scrolled it");
+        var atBottom = offset >= extent - 1.5;
+        result["historyHeaderGrowth"] = new { followed, tabbed, arrived, atBottom, offset, extent };
+        var failed = new List<string>();
+        if (!followed) { failed.Add("followed"); }
+        if (!tabbed) { failed.Add("tabbed"); }
+        if (!arrived) { failed.Add("arrived"); }
+        if (!atBottom) { failed.Add("scroll offset"); }
+        const string message = "keeps following a growing reply after Tab outside the conversation has not scrolled it";
+        check(followed && tabbed && arrived && atBottom,
+            failed.Count == 0 ? message : $"{message} (failed: {string.Join(", ", failed)})");
     }
 
     static void Wheel(MainWindow window, ListView list)
