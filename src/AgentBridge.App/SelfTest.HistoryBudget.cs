@@ -254,10 +254,17 @@ static partial class SelfTest
                     return WheelHistoryCount() > 0 && !wheelMoving && scroll.ScrollableHeight > 0
                         && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5;
                 }, TimeSpan.FromSeconds(10));
-                var wheelTarget = PostedInputTarget(window).Detail;
-                Wheel(window, list);
+                var wheelPost = Wheel(window, list);
                 var wheeled = await Until(() => wheelReceivedCount is not null
                     && scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
+                var wheelObserved = CaptureNativeWheel(window, wheelPost.Target, GetFocus(), GetForegroundWindow());
+                var wheelTarget = $"sent: {wheelPost.Sent.Detail}; after receipt wait: {wheelObserved.Detail}";
+                AppLog.Write($"self-test: native wheel {(wheelReceivedCount is null ? "not received" : "received")}; {wheelTarget}");
+                result["historyWheelInput"] = new
+                {
+                    x = wheelPost.X, y = wheelPost.Y, received = wheelReceivedCount is not null,
+                    sent = wheelPost.Sent, observed = wheelObserved,
+                };
                 const string tookMessage = "a native wheel takes the view away from the latest";
                 var drawn = await Until(() => WheelHistoryCount() == turns, TimeSpan.FromSeconds(30));
                 await CaptureFrame(window.RootElement);
@@ -318,14 +325,16 @@ static partial class SelfTest
         }
     }
 
-    static void Wheel(MainWindow window, ListView list)
+    static (nint Target, int X, int Y, NativeWheelSnapshot Sent) Wheel(MainWindow window, ListView list)
     {
         var point = list.TransformToVisual(window.RootElement).TransformPoint(new Windows.Foundation.Point(list.ActualWidth / 2, list.ActualHeight / 2));
         var scale = list.XamlRoot.RasterizationScale;
         var mouse = new WheelPoint { X = (int)(point.X * scale), Y = (int)(point.Y * scale) };
         if (ClientToScreen(window.Handle, ref mouse) == 0) { throw new InvalidOperationException("The wheel target could not be located."); }
-        var (target, _) = PostedTarget(window.Handle);
-        if (!PostMessageW(target, 0x020A, (nint)(120 << 16), (mouse.Y << 16) | (mouse.X & 0xffff))) { throw new InvalidOperationException("The native wheel message could not be posted."); }
+        var (target, focus) = PostedTarget(window.Handle);
+        var sent = CaptureNativeWheel(window, target, focus, GetForegroundWindow());
+        if (!PostMessageW(target, 0x020A, (nint)(120 << 16), (mouse.Y << 16) | (mouse.X & 0xffff))) { throw new InvalidOperationException($"The native wheel message could not be posted ({sent.Detail})."); }
+        return (target, mouse.X, mouse.Y, sent);
     }
 
     struct WheelPoint { public int X, Y; }
