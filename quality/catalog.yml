@@ -375,7 +375,7 @@ suites:
     platforms: [linux-x64]
     runner: hosted
     command: see merge-rule.yml (a dry run of the same verdict, posting nothing - dotnet run --project tools/AgentBridge.Quality -c Release -- merge-rule --pr N)
-    where: merge-rule.yml evaluate; merge-rule-review.yml relay
+    where: merge-rule.yml backstop, evaluate; merge-rule-review.yml relay
     status: exists
 
   - id: mac-host

@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { HostClient } from '../../js/host-client.js';
 import { LoadFeed } from '../../js/load-feed.js';
 import { loadBars } from '../../js/load-bars.js';
@@ -24,6 +25,21 @@ async function fake(t, { capabilities = ['load'], hold = [], result = sample() }
     update: (data) => transport.onmessage({ ev: 'load.update', seq: ++seq, data }) };
 }
 const flush = () => new Promise((resolve) => setImmediate(resolve));
+test('the shared capped MachineLoad vector feeds partial bars without exposing session rows', async (t) => {
+  const vectors = JSON.parse(readFileSync(new URL('../../../docs/protocol/vectors/machine-load.json', import.meta.url), 'utf8'));
+  const vector = vectors.records.MachineLoad.valid.find((v) => v.name === 'over-200-sessions');
+  assert.ok(vector, 'the shared 201-session vector exists');
+  assert.equal(vector.json.sessions.length, 201);
+  assert.equal(vector.reads.sessions.length, 200);
+  const raw = vector.reads, a = await fake(t, { result: raw }), feed = new LoadFeed();
+  await feed.attach('a', a.client);
+  assert.deepEqual(feed.load('a'), { state: 'partial', ageMs: raw.ageMs, staleAfterMs: raw.staleAfterMs,
+    cpu: { percent: raw.cpu.percent }, memory: { totalBytes: raw.memory.totalBytes, availableBytes: raw.memory.availableBytes } });
+  const bars = loadBars(feed.load('a'));
+  assert.equal(bars.state, 'partial');
+  assert.equal(bars.cpu.percent, raw.cpu.percent);
+  assert.equal(bars.memory.percent, 100 * (1 - raw.memory.availableBytes / raw.memory.totalBytes));
+});
 test('get then subscribe feeds exact machine figures and ignores all other fields', async (t) => {
   const a = await fake(t), b = await fake(t, { result: sample({ cpu: undefined }) });
   const changes = [];
@@ -123,4 +139,43 @@ test('a failed old unsubscribe cannot block a healthy replacement client', async
   const pending = feed.attach('a', b.client); await flush(); a.client.close();
   await pending;
   assert.deepEqual(b.ops(), ['load.get', 'load.subscribe']);
+});
+
+test('the bars-only feed preserves finite fractional and huge memory figures as before', async (t) => {
+  for (const memory of [{ totalBytes: 100.5, availableBytes: 25.5 }, { totalBytes: 2 ** 63, availableBytes: 2 ** 62 }]) {
+    const raw = sample({ memory }), a = await fake(t, { result: raw }), feed = new LoadFeed();
+    await feed.attach('a', a.client);
+    assert.deepEqual(feed.load('a'), raw);
+    a.update(sample({ memory, cpu: { percent: 12.5 } }));
+    assert.deepEqual(feed.load('a'), sample({ memory, cpu: { percent: 12.5 } }));
+  }
+});
+
+test('the bars-only feed ignores 201 sessions without changing the host freshness state', async (t) => {
+  const vectors = JSON.parse(readFileSync(new URL('../../../docs/protocol/vectors/machine-load.json', import.meta.url), 'utf8'));
+  const sessions = vectors.records.MachineLoad.valid.find((v) => v.name === 'over-200-sessions').json.sessions;
+  const raw = sample({ sessions });
+  const a = await fake(t, { result: raw }), feed = new LoadFeed();
+  await feed.attach('a', a.client);
+  assert.deepEqual(feed.load('a'), sample());
+  a.update({ ...raw, cpu: { percent: 12.5 } });
+  assert.deepEqual(feed.load('a'), sample({ cpu: { percent: 12.5 } }));
+});
+
+test('get, subscribe and updates all retain the malformed and oversized record guards', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  for (const raw of [null, [], sample({ state: 'future' }), sample({ ageMs: -1 }),
+    sample({ staleAfterMs: undefined }), sample({ future: 'x'.repeat(65536) })]) {
+    let now = 0;
+    const a = await fake(t, { result: raw }), feed = new LoadFeed({ now: () => now });
+    await feed.attach('a', a.client);
+    assert.equal(feed.load('a'), null);
+    a.update(sample());
+    assert.deepEqual(feed.load('a'), sample());
+    now += 1000;
+    const errors = console.error.mock.callCount();
+    a.update(raw);
+    assert.deepEqual(feed.load('a'), sample());
+    assert.equal(console.error.mock.callCount(), errors + 1);
+  }
 });

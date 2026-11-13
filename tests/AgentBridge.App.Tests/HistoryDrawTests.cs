@@ -35,6 +35,15 @@ public sealed class HistoryDrawTests
         Assert.Equal(["t1"], rows.Select(r => r.Id));
     }
 
+    [Fact]
+    public void Repeated_prompt_text_does_not_hide_a_different_turn_or_duplicate_the_live_turn()
+    {
+        var turn = Turn(1, "Earlier answer");
+        Assert.Single(HistoryDraw.Rows([turn], "prompt 1", liveTurn: "t2"));
+        Assert.Empty(HistoryDraw.Rows([turn], "a shortened live prompt", liveTurn: "t1"));
+        Assert.Equal(["t2"], HistoryDraw.Rows([turn, Turn(2, "Notification reply", from: UserMessageFrom.Notification)], "a shortened live prompt", liveTurn: "t1").Select(r => r.Id));
+    }
+
     static HistoryPart Asked(string id, QuestionOutcome? outcome = null) => new()
     {
         Id = id, Kind = HistoryPartKind.Question, At = T0,

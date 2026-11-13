@@ -2,7 +2,20 @@
   "about": "A machine's updates, seen and asked for from another device.",
   "spec": "v1-update.md",
   "generatedBy": "tests/AgentBridge.Protocol.Tests/ProtocolVectors.cs",
-  "contexts": {},
+  "contexts": {
+    "release-hints": {
+      "now": "2026-10-28T04:22:43.182Z",
+      "hello": {
+        "releaseHint": true
+      },
+      "frame": {
+        "t": "release.hint",
+        "tag": "v0.1.201",
+        "channel": "win",
+        "seenAt": "2026-10-28T04:22:43.182Z"
+      }
+    }
+  },
   "records": {
     "UpdateResult": {
       "direction": "host",

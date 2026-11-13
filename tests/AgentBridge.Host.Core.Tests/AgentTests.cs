@@ -7,6 +7,17 @@ public class ClaudeTests
 {
     const string Id = "55555555-5555-4555-8555-555555555555";
 
+    [Fact]
+    public async Task Claude_effort_and_context_stay_unknown()
+    {
+        await using var s = new Session_();
+
+        var session = await s.After(Claude.User("go", 1), Claude.Assistant(2, "end_turn", Claude.Text("Done.")));
+
+        Assert.Null(session.Effort);
+        Assert.Null(session.Context);
+    }
+
     sealed class Session_ : IAsyncDisposable
     {
         public readonly Fixture F = new();
@@ -242,6 +253,60 @@ public class ClaudeTests
 public class CodexTests
 {
     const string Id = "66666666-6666-4666-8666-666666666666";
+
+    [Fact]
+    public async Task Codex_effort_changes_emit_updates_but_missing_or_unchanged_effort_does_not()
+    {
+        using var f = new Fixture();
+        var rollout = f.CodexTranscript(Id);
+        f.CodexRegistration(Id, 950, rollout);
+        f.Processes.Run(AgentKind.Codex, 950);
+        await using var source = f.Source();
+        Fixture.Append(rollout, Codex.Line("turn_context", new { model = "gpt-fixture" }, 1));
+        await source.RefreshAsync();
+        Assert.Null(source.Get(Id)!.Effort);
+        var revision = source.Revision;
+
+        Fixture.Append(rollout, Codex.Line("turn_context", new { effort = "low" }, 2));
+        await source.RefreshAsync();
+        Assert.Equal("low", source.Get(Id)!.Effort);
+        Assert.True(source.Revision > revision);
+        revision = source.Revision;
+
+        Fixture.Append(rollout, Codex.Line("turn_context", new { effort = "low" }, 3),
+            Codex.Line("turn_context", new { model = "gpt-fixture" }, 4));
+        await source.RefreshAsync();
+        Assert.Equal("low", source.Get(Id)!.Effort);
+        Assert.Equal(revision, source.Revision);
+
+        Fixture.Append(rollout, Codex.Line("turn_context", new { effort = "Future-Effort" }, 5));
+        await source.RefreshAsync();
+        Assert.Equal("Future-Effort", source.Get(Id)!.Effort);
+        Assert.Null(source.Get(Id)!.Context);
+        Assert.True(source.Revision > revision);
+    }
+
+    [Theory]
+    [InlineData(4 * 1024 * 1024)]
+    [InlineData(4096)]
+    public async Task Codex_effort_is_read_from_the_latest_context_before_the_tail(long tailBytes)
+    {
+        using var f = new Fixture();
+        var rollout = f.CodexTranscript(Id);
+        f.CodexRegistration(Id, 950, rollout);
+        f.Processes.Run(AgentKind.Codex, 950);
+        Fixture.Append(rollout, Codex.Line("turn_context", new { effort = "high" }, 1),
+            Codex.Line("turn_context", new { effort = "low" }, 2),
+            Codex.Line("turn_context", new { model = "gpt-fixture" }, 3));
+        Fixture.Append(rollout, [.. Enumerable.Range(0, 40).Select(i =>
+            Codex.Event(new { type = "agent_message", message = new string('x', 300) }, 4 + i))]);
+        await using var source = f.Source(tailBytes);
+
+        await source.RefreshAsync();
+
+        Assert.Equal("low", source.Get(Id)!.Effort);
+        Assert.Null(source.Get(Id)!.Context);
+    }
 
     [Fact]
     public async Task Task_started_and_complete_drive_status_and_the_older_event_set_fills_the_activity()

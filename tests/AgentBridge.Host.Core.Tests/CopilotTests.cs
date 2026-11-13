@@ -9,6 +9,73 @@ public class CopilotTests
 {
     const string Id = "44444444-4444-4444-8444-444444444444";
 
+    [Theory]
+    [InlineData("session.start", 4 * 1024 * 1024)]
+    [InlineData("session.resume", 4 * 1024 * 1024)]
+    [InlineData("session.model_change", 4 * 1024 * 1024)]
+    [InlineData("session.start", 4096)]
+    [InlineData("session.resume", 4096)]
+    [InlineData("session.model_change", 4096)]
+    public async Task Copilot_effort_and_context_are_read_only_from_the_sessions_own_events(string type, long tailBytes)
+    {
+        using var f = new Fixture();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        var data = new System.Text.Json.Nodes.JsonObject { ["reasoningEffort"] = "Future-Effort" };
+        if (type == "session.model_change") { data["contextTier"] = "Future-Context"; }
+        Fixture.Append(events, Copilot.Event(type, data, 1),
+            Copilot.Event("session.model_change", new { reasoningEffort = "high", contextTier = "default" }, 2, agentId: "delegate"),
+            Copilot.Event("session.model_change", new { newModel = "model-b" }, 3));
+        Fixture.Append(events, [.. Enumerable.Range(0, 40).Select(i =>
+            Copilot.Assistant(new string('x', 300), 4 + i, agentId: "delegate"))]);
+        await using var source = f.Source(tailBytes);
+
+        await source.RefreshAsync();
+
+        Assert.Equal("Future-Effort", source.Get(Id)!.Effort);
+        Assert.Equal(type == "session.model_change" ? "Future-Context" : null, source.Get(Id)!.Context);
+    }
+
+    [Fact]
+    public async Task Copilot_setting_changes_are_reported_and_absent_or_delegate_values_never_replace_them()
+    {
+        await using var s = new Session_();
+        var unknown = await s.After(Copilot.Event("session.model_change",
+            new { reasoningEffort = "high", contextTier = "default" }, 1, agentId: "delegate"));
+        Assert.Null(unknown.Effort);
+        Assert.Null(unknown.Context);
+
+        var known = await s.After(Copilot.Event("session.start", new { reasoningEffort = "low" }, 2),
+            Copilot.Event("session.model_change", new { contextTier = "default" }, 3));
+        Assert.Equal(("low", "default"), (known.Effort, known.Context));
+        var revision = s.Source.Revision;
+
+        var changed = await s.After(Copilot.Event("session.model_change", new { reasoningEffort = "high" }, 4));
+        Assert.Equal(("high", "default"), (changed.Effort, changed.Context));
+        Assert.True(s.Source.Revision > revision);
+
+        var kept = await s.After(Copilot.Event("session.resume", new { }, 5),
+            Copilot.Event("session.start", new { reasoningEffort = "max" }, 6, agentId: "delegate"),
+            Copilot.Event("session.resume", new { reasoningEffort = "max" }, 7, agentId: "delegate"),
+            Copilot.Event("session.model_change", new { reasoningEffort = "max", contextTier = "extended" }, 8, agentId: "delegate"));
+        Assert.Equal(("high", "default"), (kept.Effort, kept.Context));
+    }
+
+    [Fact]
+    public void Copilot_settings_that_may_have_changed_in_unread_bytes_are_not_kept()
+    {
+        var state = new SessionState();
+        var parser = new CopilotParser(state, TimeProvider.System);
+        parser.Skim(Encoding.UTF8.GetBytes(Copilot.Event("session.model_change",
+            new { reasoningEffort = "high", contextTier = "default" }, 1)));
+        Assert.Equal(("high", "default"), (state.Effort, state.Context));
+
+        parser.Skipped();
+
+        Assert.Null(state.Effort);
+        Assert.Null(state.Context);
+    }
+
     sealed class Session_ : IAsyncDisposable
     {
         public readonly Fixture F = new();
@@ -67,9 +134,11 @@ public class CopilotTests
         var scheduled = await s.After(Copilot.User("watch CI", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3),
             Sourced("[Scheduled prompt #4] Check CI on #455 and report.", "schedule-4", 10, new { delivery = "idle", messageId = "m10", turnId = "t10" }), Copilot.TurnStart(11));
         Assert.Equal(("[Scheduled prompt #4] Check CI on #455 and report.", UserMessageFrom.Schedule, "4"), From(scheduled));
+        Assert.Equal(TurnKind.Scheduled, scheduled.Activity.Kind);
 
         var mine = await s.After(Copilot.TurnEnd(12), Copilot.User("thanks", 13), Copilot.TurnStart(14));
         Assert.Equal(("thanks", (UserMessageFrom?)null, (string?)null), From(mine));
+        Assert.Equal(TurnKind.User, mine.Activity.Kind);
     }
 
     [Theory]

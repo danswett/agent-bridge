@@ -4,6 +4,7 @@
 // (WebKit cannot be slowed, so it runs at full speed, which is the same bound, easier to meet).
 import { test, expect } from '@playwright/test';
 import { go } from './nav.mjs';
+import { loadEarlierTo } from './history-fixture.mjs';
 
 const BUDGET_MS = 200;
 const TURNS = 500;
@@ -23,9 +24,8 @@ async function longSession(page, browserName) {
 }
 
 // Clicks the row in the page itself and reads how long until the pane has turns to scroll (seen
-// as they are put in, not at the next frame), and the longest a frame was held up from then until
-// the older turns were all in, beyond the longest an idle frame took (a slow host's frame rate is not
-// the page's).
+// as they are put in, not at the next frame), and the longest a frame was held up while manually
+// loading older pages, beyond the longest an idle frame took (a slow host's frame rate is not the page's).
 async function openAndTime(page) {
   // Prepare only the raw newest page outside the timer: the demo's timer-based transport and
   // synthesis of 500 replies run on this same thread, unlike a real remote host. The actual
@@ -57,6 +57,8 @@ async function openAndTime(page) {
       let worstFrameMs = 0;
       let last = performance.now();
       while (turns() < 60) {
+        const earlier = pane().querySelector('.history-load');
+        if (earlier && earlier.getAttribute('aria-disabled') !== 'true') { earlier.click(); }
         await frame();
         const now = performance.now();
         worstFrameMs = Math.max(worstFrameMs, now - last);
@@ -66,7 +68,7 @@ async function openAndTime(page) {
     })();
   }));
 }
-test(`a ${TURNS}-turn session scrolls within ${BUDGET_MS} ms of opening, and older turns fill in without holding up a frame`, async ({ page, browserName }) => {
+test(`a ${TURNS}-turn session scrolls within ${BUDGET_MS} ms of opening, and manual older pages draw without holding up a frame`, async ({ page, browserName }) => {
   await longSession(page, browserName);
   await go(page, 'sessions');
   const m = await openAndTime(page);
@@ -108,7 +110,7 @@ test('a long session opens at the bottom, and stays there while older turns and 
   await page.locator('.session[data-id="long-1"] .row-main').click();
   const pane = page.locator('.session-view[data-id="long-1"] .stream-scroll');
   await expect(pane.locator('.history-turn')).not.toHaveCount(0);
-  await expect.poll(() => pane.locator('.history-turn').count()).toBeGreaterThan(30);
+  await loadEarlierTo(pane, 44);
   expect(await gap(page)).toBeLessThan(4);
   await page.evaluate(() => {
     const host = window.agentBridgeDemo.host;
@@ -124,9 +126,35 @@ test('a person who scrolled up is not taken back to the bottom as older turns ar
   await go(page, 'sessions');
   await page.locator('.session[data-id="long-1"] .row-main').click();
   const pane = page.locator('.session-view[data-id="long-1"] .stream-scroll');
-  await expect.poll(() => pane.locator('.history-turn').count()).toBeGreaterThan(12);
+  // Finish manual preloading before the gesture: input during a pending draw is a separate case.
+  await loadEarlierTo(pane, 104);
+  await page.evaluate(() => {
+    const client = window.agentBridgeDemo.client;
+    const history = client.history.bind(client);
+    const gate = new Promise((resolve) => { window.releaseEarlierPage = resolve; });
+    client.history = async (id, options) => {
+      const result = await history(id, options);
+      // The page before the 105 held turns (the latest is not a history row).
+      if (id === 'long-1' && options?.before === 'h1.395') {
+        window.earlierPageIds = result.turns.map((t) => t.id);
+        await gate;
+      }
+      return result;
+    };
+  });
+  const rows = () => pane.locator('.history-turn').evaluateAll((els) => els.map((el) => el.dataset.turn));
+  const before = await rows();
   await pane.evaluate((el) => { el.dispatchEvent(new Event('wheel')); el.scrollTop = 0; });
-  const before = await pane.locator('.history-turn').count();
-  await expect.poll(() => pane.locator('.history-turn').count()).toBeGreaterThan(before + 20);
+  await expect.poll(() => page.evaluate(() => window.earlierPageIds?.length)).toBe(20);
+  expect(await rows()).toEqual(before);
+  const marker = pane.locator(`.history-turn[data-turn="${before[0]}"]`);
+  const top = () => marker.evaluate((el) => el.getBoundingClientRect().top);
+  const was = await top();
+  const added = await page.evaluate(() => {
+    window.releaseEarlierPage();
+    return window.earlierPageIds;
+  });
+  await expect.poll(rows).toEqual([...added, ...before]);
+  await expect.poll(async () => Math.abs((await top()) - was)).toBeLessThan(3);
   expect(await gap(page)).toBeGreaterThan(200);
 });

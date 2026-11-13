@@ -137,11 +137,18 @@ names as written here; whether hosts should refuse the rest is #897.
 
 ### Turn
 
-A prompt and everything until the next prompt (H7).
+A prompt and the work it owns (H7). For Copilot, a prompt queued during an assistant
+cycle does not take that cycle's reply: it owns work from the next main-agent
+`assistant.turn_start`. Notification and scheduled prompts obey the same boundary,
+never borrowing an owner's answer. Cursor identity remains the prompt record; the
+cycle boundary is recovered independently of page size and after host restart.
+If the bounded read cannot recover ownership, the turn is marked `truncated` rather
+than guessing which reply it owns.
 
 | Field | Type | Notes |
 |---|---|---|
 | `id` | string | **Strict (identity).** Stable: the same turn has the same id on every page, in `activity.turn` while it is the latest, after the host restarts and as the transcript grows. Opaque, at most 64 bytes. Unique within the session |
+| `kind` | `"user"` \| `"notification"` \| `"scheduled"`? | Origin marker (#2145). A notification uses its own source-system record's id, never an owner's id. Older hosts omit this; unknown values are `unknown` |
 | `at` | time | When the prompt was sent: the transcript's own time on it |
 | `prompt` | Prompt? | What started the turn. Absent only on an `unreadable` turn |
 | `parts` | Part[] | Everything else in the turn, in the order the transcript has it. Empty when there is nothing (a turn just started, or a prompt the agent never answered) |
@@ -155,7 +162,7 @@ A prompt and everything until the next prompt (H7).
 |---|---|---|
 | `text` | string | The prompt as the agent received it, at most **8 KiB**, the **start** kept |
 | `truncated` | bool? | `text` was cut |
-| `from` | `"person"` \| `"schedule"` \| `"agent"` \| `"other"`? | **Strict (security).** Who wrote it when it was not the person typing, exactly as `activity.userMessageFrom` (#489): taken from what the agent's own record says, never parsed from the text, or `agent` for a prompt the host itself knew an agent sent through it (a reply or launch, which the transcript does not mark) and so showed as the agent's while it was the latest; the host keeps that for its newest 500 turns while it runs. Absent means the person. An unknown value reads as `other`, never as the person's |
+| `from` | `"person"` \| `"schedule"` \| `"agent"` \| `"other"` \| `"notification"`? | **Strict (security).** Who wrote it when it was not the person typing, exactly as `activity.userMessageFrom` (#489): taken from what the agent's own record says, never parsed from the text, or `agent` for a prompt the host itself knew an agent sent through it (a reply or launch, which the transcript does not mark) and so showed as the agent's while it was the latest; the host keeps that for its newest 500 turns while it runs. Absent means the person. An unknown value reads as `other`, never as the person's |
 | `label` | string? | As `activity.userMessageLabel`: a schedule's number, at most 64 bytes |
 
 A prompt that can't be read as its `from` says (a `from` of the wrong type) refuses the turn, as
@@ -163,11 +170,13 @@ A prompt that can't be read as its `from` says (a `from` of the wrong type) refu
 the person's own words. A refused turn is left out of `turns` (Malformed records rule 2), and the
 client reads the page without it.
 
-**What is a prompt.** Exactly what makes `activity.userMessage` change today, for each agent
+**What is a prompt.** What makes `activity.userMessage` change, for each agent
 ([Where a host gets each part](#where-a-host-gets-each-part)). Context an agent is given that no
 one sent (Copilot's memory, a skill's context, a shell's completion notice; Claude's task
-notifications; Codex's injected instructions and environment) is not a prompt, starts no turn,
-and is not shown: a turn a notice continues is the turn before it. A scheduled prompt or one
+notifications; Codex's injected instructions and environment) is not a prompt. Copilot
+`user.message` records with `source: system` are the exception (#2145): they start
+separate notification history turns, including steering delivery, and live in
+`activity.notice` without replacing the owner's prompt or response. A scheduled prompt or one
 another agent sent **is** a prompt, with its `from`.
 
 #### Part

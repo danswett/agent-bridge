@@ -294,7 +294,7 @@ public sealed class FleetPublisherTests
         var started = time.GetUtcNow();
         var token = credentials.Mint("caller", "launch", 100, started, AgentProtocol.ScopeRead);
         credentials.Accept(channel, credentials.Check(token, new ProcessAncestry([new PeerProcess(100, started, "agent.exe")], true)).Accepted!);
-        var list = new FleetList(credentials, new Roster(registry), time);
+        var list = new FleetList(credentials, new Roster(registry), time, new AgentAuditLog(fixture.Root));
         var result = JsonSerializer.SerializeToElement(await list.HandleAsync(channel, JsonSerializer.SerializeToElement(new { include = "content" })), ProtocolJson.Options);
         Assert.Equal(source.Sessions.Count, result.GetProperty("sessions").GetArrayLength());
         Assert.All(result.GetProperty("sessions").EnumerateArray(), s => Assert.False(s.TryGetProperty("name", out _)));

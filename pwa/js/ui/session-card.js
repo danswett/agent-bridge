@@ -1528,22 +1528,28 @@ export class SessionCard {
     this.#drawTurns();
   }
 
-  // Older pages come in the background (#1622), one at a time once the last one is drawn, when
-  // the browser is idle: never while it is busy with a scroll or a key.
+  // Fill an otherwise empty first view with at most one older page, when the browser is idle.
   #wantEarlier() {
-    // A view that is not shown does not fill in: it would grow every page's cost (and goes on
-    // when it is shown again).
-    const snapshot = this.historyStore.get(this.hostId, this.#s.id);
-    // A page let go at the newest end to stay within the limit would take the newest turns with it.
-    if (this.#earlierAsked || snapshot.phase !== 'ready' || !snapshot.more || snapshot.loading || snapshot.error?.on === 'earlier' || this.turns.pending || snapshot.turns.length >= HISTORY.fillTurns || snapshot.turns.length + HISTORY.maxTurns > HISTORY.kept) { return; }
+    if (this.#earlierAsked || !this.#canFillEarlier()) { return; }
     this.#earlierAsked = true;
     const go = () => {
       this.#earlierAsked = false;
-      if (this.#unwatch) { this.historyStore.loadEarlier(this.hostId, this.#s.id, { keepLatest: true }).catch(() => {}); }
+      if (!this.#canFillEarlier()) { return; }
+      this.#earlierFilled = true;
+      this.historyStore.loadEarlier(this.hostId, this.#s.id, { keepLatest: true }).catch(() => {});
     };
     if (globalThis.requestIdleCallback) { globalThis.requestIdleCallback(go, { timeout: 500 }); } else { setTimeout(go, 50); }
   }
   #earlierAsked = false;
+  #earlierFilled = false;
+
+  #canFillEarlier() {
+    if (!this.#unwatch || this.#earlierFilled || this.turns.pending) { return false; }
+    const snapshot = this.historyStore.get(this.hostId, this.#s.id);
+    if (snapshot.phase !== 'ready' || !snapshot.more || snapshot.loading || snapshot.error?.on === 'earlier' || this.#atCap(snapshot)) { return false; }
+    const sc = this.els.scroll;
+    return sc.getClientRects().length > 0 && sc.clientHeight > 0 && sc.scrollHeight <= sc.clientHeight + 1;
+  }
 
   // Another page would be let go at the newest end to stay within the limit, taking the newest turns
   // (and live merging) with it: no more is offered, and the top reads as the start of what is held.

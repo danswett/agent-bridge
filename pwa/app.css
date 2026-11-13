@@ -482,9 +482,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card);
 }
 .machine.offline { background: none; border-style: dashed; }
-/* The selected tint is on the block, not the row, so a refusal line under it stays on the row's surface (#858). */
 .machine-block { border-radius: inherit; }
-.machine.selected > .machine-block { background: var(--ab-selected); }
 .machine-block:has(~ .machine-error) { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .machine.selected::before {
   content: ""; position: absolute; left: -1px; top: var(--ab-space-4); width: 3px; height: 16px; border-radius: 2px; background: var(--ab-bridge);
@@ -502,10 +500,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .machine-button .icon, .machine-row .icon { grid-column: 1; grid-row: 1; align-self: start; width: 20px; height: 20px; --ab-icon-stroke: 1.5; color: var(--ab-text2); }
 .machine-name { grid-column: 2; grid-row: 1; font-weight: 600; font-size: var(--type-row); line-height: var(--type-row-line); overflow-wrap: anywhere; }
 .machine-state { grid-column: 3; grid-row: 1; color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-row-line); white-space: nowrap; }
-.machine.selected .machine-state { color: var(--ab-bridge); font-weight: 600; }
-/* Bridge words on light's selected tint are under 4.5:1 (4.46:1 over the layer, 4.09:1 over a
-   phone's shell; #366), so there they take the text colour (ui.md §9.1 A8). Dark keeps Bridge,
-   and forced colours their system pair. */
+.machine.selected .machine-state { color: var(--ab-bridge); }
 @media (prefers-color-scheme: light) and (forced-colors: none) {
   .machine.selected .machine-state, .machine.selected .button.secondary:not(.armed) { color: var(--ab-text); }
 }
@@ -517,11 +512,16 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .machine-flag.held { color: var(--ab-needs-text); }
 .machine-more {
   display: grid; gap: var(--ab-space-2);
+  min-width: 0; overflow-wrap: anywhere;
   padding: 0 var(--ab-space-3) var(--ab-space-3) calc(var(--ab-space-3) + 20px + var(--ab-space-3));
 }
 .machine-more:empty { display: none; }
 .machine-update, .machine-signin, .machine-diagnose-hint { font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
 .machine-update p, .machine-signin p { margin: 0; }
+.machine-update { min-width: 0; overflow-wrap: anywhere; }
+.machine-update-line { display: flex; align-items: baseline; gap: var(--ab-space-2); color: var(--ab-text); }
+.machine-update-line > span:last-child { min-width: 0; }
+.machine-update-line > .glyph { flex-shrink: 0; align-self: start; margin-top: 2px; }
 .machine-diagnose-hint { margin: 0; }
 .machine-actions { display: flex; flex-wrap: wrap; gap: var(--ab-space-2); margin-top: var(--ab-space-2); }
 .machine-update-actions { align-items: center; }
@@ -532,42 +532,49 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 /* Check for updates, for every machine at once: the same button, in the same column. */
 .machine-updates { list-style: none; padding: var(--ab-space-1) 0 0 calc(1px + var(--ab-space-3) + 20px + var(--ab-space-3)); }
 .button.small { min-height: 32px; padding: 0 var(--ab-space-3); border-radius: var(--ab-radius-control); font-size: var(--type-meta); }
+.machine-update-actions .button { min-height: var(--tap); max-width: 100%; white-space: normal; }
 @media (pointer: coarse) and (not (any-pointer: fine)) { .button.small { min-height: var(--tap); padding: 0 var(--ab-space-4); } }
 
 /* The tile (#1147): the same sections in the same order on every width. */
 .machine-summary { margin: 0 0 var(--ab-space-3); color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-meta-line); }
 .machine-tile { display: grid; gap: var(--ab-space-2); padding: 0 var(--ab-space-3) var(--ab-space-3) calc(var(--ab-space-3) + 20px + var(--ab-space-3)); }
 .machine-tile > p, .tile-actions-note, .tile-health { margin: 0; font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
+.tile-measured { min-height: var(--type-meta-line); }
 .tile-health-icon { margin-inline-end: var(--ab-space-2); }
-.tile-label { font-weight: 600; color: var(--ab-text); }
-.tile-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ab-space-2); }
-.tile-actions .button { min-height: var(--tap); }
+.tile-label { font-weight: 400; color: var(--ab-text2); }
+.tile-health-word { color: var(--ab-text); }
+.tile-running-toggle {
+  display: flex; align-items: center; gap: var(--ab-space-2); width: 100%; min-height: var(--tap);
+  padding: 0; border: 0; background: none; font: inherit; font-size: var(--type-meta); color: var(--ab-text); text-align: start; cursor: pointer;
+}
+.tile-running-toggle .icon { flex: none; margin-inline-start: auto; }
+.tile-running-toggle[aria-expanded="true"] .icon { transform: rotate(90deg); }
+.tile-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--ab-space-2); }
+.tile-actions-note { grid-column: 1 / -1; }
+.tile-actions .button { min-width: 0; min-height: var(--tap); padding: var(--ab-space-2); white-space: normal; }
+.machine .button { font-weight: 400; }
 .machine-tile .machine-more { padding: 0; }
-.machine-load { display: grid; grid-template-columns: minmax(5rem, 1fr) minmax(0, 2fr) auto; align-items: center; gap: var(--ab-space-2); font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
+.machine-load { display: grid; grid-template-columns: 7ch minmax(0, 1fr) 8ch; align-items: center; gap: var(--ab-space-2); font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
 .machine-load-track { height: 10px; border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-control); overflow: hidden; background: var(--ab-subtle); }
 .machine-load-fill { display: block; height: 100%; background: var(--ab-text2); }
-.machine-load-value { font-variant-numeric: tabular-nums; color: var(--ab-text); }
+.machine-load-value { font-variant-numeric: tabular-nums; color: var(--ab-text); text-align: end; }
+.machine-load-note { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: var(--ab-space-2); }
 .machine-load.missing .machine-load-track { border-style: dashed; background: none; }
 @media (forced-colors: active) {
   .machine-load-track { forced-color-adjust: none; border-color: CanvasText; background: Canvas; }
   .machine-load-fill { background: CanvasText; }
 }
-.machine-view { display: none; }
-@media (max-width: 899px) { .machines-page { max-width: 640px; margin-inline: auto; } }
-/* From 900 px: the machines on the left, the picked machine's tile on the right. Each row sits in
-   the list column; the tile spans every row of the second, and the last row, 1fr, takes its height. */
-@media (min-width: 900px) {
-  .machines { grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); grid-template-rows: auto 1fr; column-gap: var(--ab-space-4); row-gap: 0; align-items: start; }
-  .machine:not(.offline) { display: contents; }
-  .machine-block { grid-column: 1; background: var(--ab-card); border: 1px solid var(--ab-stroke2); }
-  .machine-block:not(:has(~ .machine-error)), .machine:not(.offline) > .machine-error { margin-bottom: var(--ab-space-2); }
-  .machine.detail > .machine-block { background: var(--ab-selected); }
-  .machine.offline, .machine-updates, .machine:not(.offline) > .machine-error { grid-column: 1; }
-  .machine.offline { margin-bottom: var(--ab-space-2); }
-  .machine-tile { display: none; padding-left: var(--ab-space-4); }
-  .machine.detail .machine-tile { display: grid; grid-column: 2; grid-row: 1 / -1; padding-top: var(--ab-space-4); background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card); }
-  .machine-view { display: inline-flex; }
-}
+/* Fleet uses the page's full width, not the general-purpose 760 px reading column. */
+.page[data-route="machines"] { max-width: none; }
+.machines { grid-template-columns: minmax(0, 1fr); align-items: start; gap: var(--ab-space-3); }
+.machine-updates { grid-column: 1 / -1; }
+.machine-view { display: inline-flex; }
+.machine-state { white-space: normal; max-width: 14ch; }
+.machine-sub { white-space: normal; }
+@media (max-width: 759px) { .machines-page { max-width: 640px; margin-inline: auto; } }
+@media (min-width: 760px) { .machines { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1100px) { .machines { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 1500px) { .machines { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 
 /* ---- agent usage: agent-ha-bridge's usage card ---- */
 /* Under the sessions: each agent's fullest window, in its own colour, and the way to Usage. */
@@ -685,6 +692,20 @@ body[data-conn="busy"] .sessions, body[data-conn="warn"] .sessions, body[data-co
 .machine-tab.away { font-style: italic; }
 @media (forced-colors: active) { .machine-tab[aria-selected="true"]::after { forced-color-adjust: none; background: Highlight; } }
 @media (min-width: 760px) { .machine-tab { min-height: 36px; min-width: 32px; } }
+/* #1894: wide machine tabs scroll whole; the edge fades are decorative. */
+@media (min-width: 760px) {
+  /* Keep the 5px focus ring inside the clip, plus 1px for scroll rounding, without moving text. */
+  .machine-tablist { flex: 1; padding: 6px; margin: -6px; overflow-x: auto; scrollbar-width: none; scroll-snap-type: x mandatory; scroll-padding-inline: 22px; }
+  .machine-tablist::-webkit-scrollbar { display: none; }
+  .machine-tablist .machine-tab { max-width: calc(100% - 32px); scroll-snap-align: start; }
+  .machine-tablist .machine-tab:focus-visible { z-index: 2; }
+  .machine-tabs::before, .machine-tabs::after {
+    content: ""; position: absolute; top: 0; bottom: 0; width: 16px; z-index: 1; pointer-events: none; opacity: 0;
+  }
+  .machine-tabs::before { left: 0; background: linear-gradient(to right, var(--ab-layer), transparent); }
+  .machine-tabs::after { right: 0; background: linear-gradient(to left, var(--ab-layer), transparent); }
+  .machine-tabs[data-scroll-start]::before, .machine-tabs[data-scroll-end]::after { opacity: 1; }
+}
 /* A desktop's width on a touch screen (a tablet): the compact controls grow back to 44 (§9). */
 @media (min-width: 760px) and (pointer: coarse) and (not (any-pointer: fine)) {
   .nav-item { width: var(--tap); height: var(--tap); min-height: var(--tap); }
@@ -827,20 +848,28 @@ body[data-conn="busy"] .sessions, body[data-conn="warn"] .sessions, body[data-co
   .sign-in-banner { border-color: Highlight; }
   .sign-in-session { color: LinkText; }
 }
-/* Moving rows: a Move button, shown while its row is hovered (a mouse) or has focus (the keyboard),
-   and a line where a dragged row will go. Only in Your order with no filter. */
+/* Keep the Move column inside the card, away from its status glyph. Filtered single
+   results need no column; filtering still disables moving. */
+.session-list[data-sort="yours"]:is(:not([data-filtered="true"]), :has(> .session ~ .session)) > .session > .row-main {
+  padding-left: calc(var(--ab-space-3) + 24px);
+}
 .drag-handle { display: none; }
 .session-list[data-sort="yours"]:not([data-filtered="true"]) .session:has(:focus-visible:not([data-focus-quiet])) .drag-handle,
-.session-list[data-sort="yours"]:not([data-filtered="true"]) .session .drag-handle:focus-visible { display: block; opacity: 1; }
+.session-list[data-sort="yours"]:not([data-filtered="true"]) .session .drag-handle:focus-visible {
+  display: block; color: var(--ab-grip-ink, var(--ab-text));
+}
 @media (hover: hover) and (pointer: fine) {
-  .session-list[data-sort="yours"]:not([data-filtered="true"]) .drag-handle { display: block; opacity: 0; }
-  .session-list[data-sort="yours"]:not([data-filtered="true"]) .session:hover .drag-handle { opacity: 1; }
+  .session-list[data-sort="yours"]:not([data-filtered="true"]) .drag-handle { display: block; }
+  .session-list[data-sort="yours"]:not([data-filtered="true"]) .session:hover .drag-handle { color: var(--ab-grip-ink, var(--ab-text)); }
 }
 .session-list[data-sort="yours"]:not([data-filtered="true"]) .drag-handle {
-  position: absolute; left: 0; top: 8px; width: 24px; min-width: 0; min-height: 0; height: 24px; padding: 0; z-index: 1;
-  border: 0; border-radius: 2px; cursor: grab; color: var(--ab-text2); background-color: transparent;
+  position: absolute; left: 0; top: 0; width: 24px; min-width: 0; min-height: 0; height: 100%; padding: 0; z-index: 1;
+  border: 0; border-radius: 2px; cursor: grab; color: var(--ab-grip-ink, var(--ab-text3)); background: none;
+}
+.session-list[data-sort="yours"]:not([data-filtered="true"]) .drag-handle::before {
+  content: ""; position: absolute; left: 50%; top: 50%; width: 12px; height: 18px; transform: translate(-50%, -50%);
   background-image: radial-gradient(circle, currentColor 1.5px, transparent 1.6px);
-  background-size: 6px 6px; background-position: center;
+  background-size: 6px 6px;
 }
 .session.dragging { opacity: .6; }
 .session.dragging .drag-handle { cursor: grabbing; }
@@ -852,7 +881,7 @@ body[data-conn="busy"] .sessions, body[data-conn="warn"] .sessions, body[data-co
 /* High contrast drops background images and colours: the grip and the drop line keep system
    colours so they can still be seen. */
 @media (forced-colors: active) {
-  .drag-handle { forced-color-adjust: none; color: CanvasText; }
+  .drag-handle { forced-color-adjust: none; --ab-grip-ink: CanvasText; }
   .session.drop-before::before, .session.drop-after::after { forced-color-adjust: none; background: Highlight; }
 }
 .row-menu {
@@ -1991,6 +2020,69 @@ summary {
   .reply-slot { background: Canvas; }
   .reply-bar::before { forced-color-adjust: none; background: Canvas; border-top-color: CanvasText; }
   .reply-copy { border-color: CanvasText; color: CanvasText; }
+}
+/* Installed iPhone: a single visible-viewport bound, never screen.height or a second keyboard
+   subtraction (#2037, #1682). Keep notes above the box so a multiline hint cannot lift it. */
+:root[data-platform="ios"][data-standalone="true"] { --phone-view-top: 0px; --phone-view-height: 100%; }
+:root[data-platform="ios"][data-standalone="true"][data-phone-keyboard] { --safe-bottom: 0px; }
+:root[data-platform="ios"][data-standalone="true"] .reply-slot { padding-bottom: 0; }
+:root[data-platform="ios"][data-standalone="true"] body[data-page="sessions"][data-session-open="true"] .session-pane {
+  position: fixed; top: var(--phone-view-top, 0px); bottom: auto; left: 0; right: 0;
+  height: var(--phone-view-height, 100%); z-index: 15; background: var(--ab-shell);
+  padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
+}
+:root[data-platform="ios"][data-standalone="true"] body[data-page="sessions"][data-session-open="true"]:is([data-conn="busy"], [data-conn="warn"], [data-conn="bad"]) .session-pane {
+  top: calc(var(--phone-view-top, 0px) + var(--appbar) + var(--safe-top));
+  height: calc(var(--phone-view-height, 100%) - var(--appbar) - var(--safe-top)); padding-top: 0;
+}
+@media (min-width: 760px) {
+  :root[data-platform="ios"][data-standalone="true"] body[data-page="sessions"] .sessions { grid-template-columns: minmax(0, 1fr); }
+  :root[data-platform="ios"][data-standalone="true"] .pane-divider { display: none; }
+  :root[data-platform="ios"][data-standalone="true"] body:not([data-session-open="true"]) .session-pane,
+  :root[data-platform="ios"][data-standalone="true"] body[data-session-open="true"] .list-pane { display: none; }
+  :root[data-platform="ios"][data-standalone="true"] body[data-session-open="true"] .appbar { display: none; }
+  :root[data-platform="ios"][data-standalone="true"] body[data-session-open="true"]:is([data-conn="busy"], [data-conn="warn"], [data-conn="bad"]) .appbar { display: flex; position: fixed; top: var(--phone-view-top, 0px);
+    left: 0; right: 0; height: calc(var(--appbar) + var(--safe-top)); }
+  :root[data-platform="ios"][data-standalone="true"] .session-view { position: relative; grid-template-rows: minmax(0, 1fr); }
+  :root[data-platform="ios"][data-standalone="true"] .session-view > .view-body { grid-row: 1; }
+  :root[data-platform="ios"][data-standalone="true"] .session-head { display: block; position: absolute; inset: 0 0 auto; z-index: 2; pointer-events: none; }
+  :root[data-platform="ios"][data-standalone="true"] .session-top { display: block; pointer-events: auto; background: var(--ab-shell); transform: translateY(var(--ty, 0px)); max-height: var(--stage-h, none); overflow-y: auto; }
+  :root[data-platform="ios"][data-standalone="true"] .conversation { position: relative; overflow: clip; }
+  :root[data-platform="ios"][data-standalone="true"] .reply-slot { position: absolute; inset: auto 0 0; z-index: 3; background: var(--ab-shell); transform: translateY(var(--fy, 0px)); will-change: transform; }
+  :root[data-platform="ios"][data-standalone="true"] .stream-scroll { padding-block: 0; scroll-padding-top: calc(var(--covered, 0px) + var(--ab-space-2)); scroll-padding-bottom: calc(var(--fcovered, 0px) + var(--ab-space-2)); }
+  :root[data-platform="ios"][data-standalone="true"] .stream-scroll > .history:not([hidden]),
+  :root[data-platform="ios"][data-standalone="true"] .stream-scroll > .history[hidden] + .stream { padding-top: calc(var(--head-h, 0px) + var(--ab-space-4)); }
+  :root[data-platform="ios"][data-standalone="true"] .stream-scroll > :last-child { padding-bottom: calc(var(--foot-h, 0px) + var(--ab-space-4)); }
+  :root[data-platform="ios"][data-standalone="true"] .session-bar { display: flex; position: absolute; inset: 0 0 auto; min-height: max(3rem, 48px); align-items: center; gap: var(--ab-space-1); padding: 0 var(--ab-space-1); justify-content: space-between; pointer-events: none; z-index: 1; isolation: isolate; }
+  :root[data-platform="ios"][data-standalone="true"] .session-bar > :is(.icon-button, .row-menu) { pointer-events: auto; }
+  :root[data-platform="ios"][data-standalone="true"] .session-bar::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--ab-shell); border-bottom: 1px solid var(--ab-stroke2);
+    opacity: 0; transition: opacity var(--ab-motion-cross-fade) linear; }
+  :root[data-platform="ios"][data-standalone="true"] .session-view[data-solid] .session-bar::before { opacity: 1; }
+  :root[data-platform="ios"][data-standalone="true"] .bar-title { flex: 1; min-width: 0; min-height: var(--tap); display: flex; align-items: center; gap: var(--ab-space-2);
+    font-size: 1.0625rem; line-height: 1.375rem; font-weight: 600; opacity: 0; visibility: hidden; pointer-events: none;
+    transition: opacity var(--ab-motion-cross-fade) linear, visibility 0s linear var(--ab-motion-cross-fade); }
+  :root[data-platform="ios"][data-standalone="true"] .session-view[data-titled] .bar-title { opacity: 1; visibility: visible; pointer-events: auto; transition-delay: 0s; }
+  :root[data-platform="ios"][data-standalone="true"] .bar-title .glyph { flex: none; scale: 1.125; margin: 0 1px; }
+  :root[data-platform="ios"][data-standalone="true"] .bar-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  :root[data-platform="ios"][data-standalone="true"] .inspector { padding-top: calc(var(--head-h, 0px) + var(--ab-space-4)); scroll-padding-top: calc(var(--head-h, 0px) + var(--ab-space-2)); }
+  :root[data-platform="ios"][data-standalone="true"] .session-header { padding-inline: calc(var(--tap) + var(--ab-space-2)); }
+  :root[data-platform="ios"][data-standalone="true"] .reply-box { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: end; padding: 2px var(--ab-space-1) 3px; }
+  :root[data-platform="ios"][data-standalone="true"] .reply .attachments { grid-column: 1 / -1; grid-row: 1; }
+  :root[data-platform="ios"][data-standalone="true"] .reply-box .attach { grid-column: 1; grid-row: 2; margin: 0; }
+  :root[data-platform="ios"][data-standalone="true"] .reply-tools { display: contents; }
+  :root[data-platform="ios"][data-standalone="true"] .reply .text-wrap { grid-column: 2; grid-row: 2; }
+  :root[data-platform="ios"][data-standalone="true"] .reply .send { grid-column: 3; grid-row: 2; }
+  :root[data-platform="ios"][data-standalone="true"] .reply-bar { display: flex; position: absolute; inset: auto 0 0; min-height: max(3rem, 48px); align-items: center; padding: var(--ab-space-1) var(--ab-space-4); pointer-events: none; z-index: 3; isolation: isolate; }
+  :root[data-platform="ios"][data-standalone="true"] .reply-slot:empty + .reply-bar { display: none; }
+  :root[data-platform="ios"][data-standalone="true"] .reply-bar::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--ab-shell); border-top: 1px solid var(--ab-stroke2);
+    opacity: 0; transition: opacity var(--ab-motion-cross-fade) linear; }
+  :root[data-platform="ios"][data-standalone="true"] .session-view[data-fsolid] .reply-bar::before { opacity: 1; }
+  :root[data-platform="ios"][data-standalone="true"] .reply-copy { flex: 1; min-width: 0; height: 40px; display: flex; align-items: center; padding: 0 var(--ab-space-3);
+    background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-bottom: 2px solid var(--ab-bridge); border-radius: var(--ab-radius-control); color: var(--ab-text3); font-size: 16px; line-height: 24px; cursor: text;
+    opacity: 0; visibility: hidden; transition: opacity var(--ab-motion-cross-fade) linear, visibility 0s linear var(--ab-motion-cross-fade); }
+  :root[data-platform="ios"][data-standalone="true"] .reply-copy > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  :root[data-platform="ios"][data-standalone="true"] .reply-copy.draft { color: var(--ab-text); }
+  :root[data-platform="ios"][data-standalone="true"] .session-view[data-fsolid] .reply-copy { opacity: 1; visibility: visible; pointer-events: auto; transition-delay: 0s; }
 }
 /* A button's pressed fill keeps its label at 4.5:1 (ui.md §9) rather than fading the whole
    control: a filled button's Bridge moves toward the text colour, darker on light and lighter on

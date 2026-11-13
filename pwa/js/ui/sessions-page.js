@@ -36,6 +36,9 @@ import { PaneDividers } from './pane-dividers.js';
 import { UPDATING } from './hold.js';
 import { HistoryStore } from '../history-store.js';
 import { RowMenu } from './row-menu.js';
+import { phoneMedia } from '../phone-viewport.js';
+import { LoadFeed } from '../load-feed.js';
+import { whileVisible } from './ticker.js';
 
 // Needs you's answers (Approve once, Deny, Resend) wait as a question's do (ui.md §5.3): any
 // change to the lane can put Approve once under a pointer aimed at something else (an entry
@@ -139,6 +142,7 @@ const TEXT_FIELD = 'textarea, select, input:not([type="button"], [type="checkbox
 const POPUP = '[role="menu"], [role="dialog"], [role="alertdialog"], dialog[open], [aria-modal="true"], [aria-haspopup][aria-expanded="true"]';
 
 export class SessionsPage {
+  #onResize = () => this.#resized();
   #shownCaps = new Map();
   #notWholeSince = null;
   #slotTimer = null;
@@ -171,8 +175,11 @@ export class SessionsPage {
   // From Escape's pop until its popstate lands: a second press then would pop past the list.
   #escaping = false;
   #timingTimer = null;
+  #unwatchTimings = null;
   #sortEvents = null;
   #sortPopup = new RowMenu();
+  #loads = null;
+  #loadClients = new Map();
 
   // $: getElementById. hosts: a HostSession. connection: presence, known and ready.
   // blobs(): the relay's blob store, or null; relayMax(): the largest blob it takes.
@@ -185,6 +192,7 @@ export class SessionsPage {
   // machines online and a waiting folder-trust question are said.
   constructor({ $, hosts, connection, me = null, shell = null, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, trust = () => null, confirm = () => null, status = () => '', facts = null, forget = null, updates = null, signInDevices = null, diagnose = null, storage = globalThis.localStorage, badge = new AppBadge(), onRendered = () => {}, opened = () => {} }) {
     Object.assign(this, { $, hosts, connection, me, shell, relayMax, transfers, trust, confirm, status, facts, forget, updates, signInDevices, diagnose, storage, onRendered, opened });
+    this.#loads = new LoadFeed({ onChange: () => this.drawMachines() });
     const current = (hostId) => hosts.route(hostId);
     const timing = retryMs ? { retryMs } : {};
     // One gate for every send (#269): nothing new is given for a machine with no route now (its
@@ -194,7 +202,23 @@ export class SessionsPage {
     const accepts = (hostId) => !!hosts.route(hostId);
     this.answers = new AnswerService({ current, accepts, ...timing, marks: 'answer' });
     this.turns = new TurnClock();
-    this.#timingTimer = setInterval(() => { void connection.reportTimings?.(() => this.turns.drain()); }, 60000);
+    const doc = globalThis.document;
+    let timingPending = false;
+    const flushTimings = () => {
+      timingPending = !connection.ready;
+      if (!timingPending) { void connection.reportTimings?.(() => this.turns.drain()); }
+    };
+    this.#timingTimer = whileVisible(flushTimings, 60000);
+    const hidden = () => { if (doc?.visibilityState === 'hidden') { timingPending = false; } };
+    doc?.addEventListener('visibilitychange', hidden);
+    const unready = connection.on?.('ready', () => {
+      if (timingPending && doc?.visibilityState !== 'hidden') { flushTimings(); }
+    });
+    this.#unwatchTimings = () => {
+      timingPending = false;
+      unready?.();
+      doc?.removeEventListener('visibilitychange', hidden);
+    };
     this.replies = new ReplyService({ current, accepts, ...timing, blobs, onTap: (e) => this.turns.sent(e.hostId, e.sessionId) });
     this.stops = new StopService({ current, accepts, ...timing });
     this.launches = new LaunchService({ current, accepts, ...timing });
@@ -216,7 +240,7 @@ export class SessionsPage {
     this.order = new SessionOrder({ storage });
     const media = (q) => globalThis.matchMedia?.(q) ?? { matches: false, addEventListener() {} };
     this.wide = media(WIDE);
-    this.phone = media(PHONE);
+    this.phone = globalThis.matchMedia ? phoneMedia(globalThis, PHONE) : media(PHONE);
     this.#inspectorHidden = this.#read(INSPECTOR) === 'hidden';
     this.view = new SessionListView($('session-list'), hosts.sessions, {
       views: $('session-views'),
@@ -248,7 +272,7 @@ export class SessionsPage {
     this.view.onSelect = (card) => card.openFromRow(() => this.#choose(card, true));
     this.view.onBack = () => this.#back();
     this.view.onInspector = () => this.#toggleInspector();
-    for (const m of [this.wide, this.phone]) { m.addEventListener('change', () => this.#resized()); }
+    for (const m of [this.wide, this.phone]) { m.addEventListener('change', this.#onResize); }
     this.#drawPanes();
     // The widths of the panes from 760 up (#1030): the dividers only draw on those widths.
     this.dividers = $('list-divider') && $('sessions')
@@ -773,11 +797,22 @@ export class SessionsPage {
 
   // Everything tied to the signed-in account goes with it.
   clear() {
+    for (const m of [this.wide, this.phone]) { m.removeEventListener?.('change', this.#onResize); }
+    this.phone.destroy?.();
+    const loads = this.#loads;
+    this.#loads = null;
+    if (loads) {
+      loads.onChange = () => {};
+      for (const id of this.#loadClients.keys()) { void loads.detach(id).catch((e) => console.error(e)); }
+      this.#loadClients.clear();
+    }
     this.#sortPopup.close(false);
     this.#sortEvents?.abort();
     this.view.stopRecent();
-    clearInterval(this.#timingTimer);
+    this.#timingTimer?.stop();
     this.#timingTimer = null;
+    this.#unwatchTimings?.();
+    this.#unwatchTimings = null;
     // The account's session is no longer shown: said before the page lets go of what says it.
     try { this.opened(null); } catch (e) { console.error(e); }
     this.#unroute?.();
@@ -845,6 +880,7 @@ export class SessionsPage {
   refresh() {
     const { hosts } = this;
     const links = hosts.links();
+    this.#syncLoads(links);
     for (const id of [...this.#shownCaps.keys()]) { if (!hosts.link(id)) { this.#shownCaps.delete(id); } }
     for (const link of links) {
       const caps = `${link.capabilities.join(' ')}:${link.machine?.readOnly ?? ''}:${hosts.staleOf(link.id)?.reason ?? ''}`;
@@ -1031,6 +1067,24 @@ export class SessionsPage {
     };
   }
 
+  #syncLoads(links) {
+    if (!this.#loads) { return; }
+    const current = new Map(links.filter((l) => l.phase === 'open' && !l.stale && l.client && !l.client.closed
+      && l.client.capabilities.includes('load')).map((l) => [l.id, l.client]));
+    for (const id of this.#loadClients.keys()) {
+      if (!current.has(id)) {
+        this.#loadClients.delete(id);
+        void this.#loads.detach(id).catch((e) => console.error(e));
+      }
+    }
+    for (const [id, client] of current) {
+      if (this.#loadClients.get(id) === client) { continue; }
+      // Remember failed attempts too: an older host may advertise load but answer unknown op.
+      this.#loadClients.set(id, client);
+      void this.#loads.attach(id, client).catch((e) => console.error(e));
+    }
+  }
+
   drawMachines() {
     const { hosts, connection, $ } = this;
     const presence = connection.presence;
@@ -1047,6 +1101,7 @@ export class SessionsPage {
       },
       status: (id) => this.status(id),
       facts: this.facts,
+      load: (id) => this.#loads?.load(id) ?? null,
       known: connection.known ?? null,
       forget: this.forget,
       updates: this.updates,

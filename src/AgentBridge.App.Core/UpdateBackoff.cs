@@ -49,18 +49,19 @@ public static class UpdateBackoff
 
 // Whether a process the Restart Manager lists as holding a file in the installation is something
 // outside it that blocks an update. One whose path can't be read (an elevated or other user's
-// process, whose image name MainModule can't see) is not counted: our own host or helpers could be
-// among them, and a false blocker fails every preflight until the backoff wedges updates for good.
+// process, whose image name MainModule can't see) is not classified by path alone: our own host
+// or helpers could be among them. A positive Windows service identity still counts (#2345).
 public static class InstallHolder
 {
-    public static bool Blocks(int pid, int ownPid, string? path, string installRoot) =>
-        pid != ownPid && path is { Length: > 0 } && !path.StartsWith(installRoot, StringComparison.OrdinalIgnoreCase);
+    public static bool Blocks(int pid, int ownPid, string? path, string installRoot, string? service = null) =>
+        pid != ownPid && (path is { Length: > 0 }
+            ? !path.StartsWith(installRoot, StringComparison.OrdinalIgnoreCase) : !string.IsNullOrWhiteSpace(service));
 }
 
 // An install that could not go ahead because something outside the app holds files in the
 // installation, found before the host was stopped (HostManager.StopAndApplyAsync's preflight).
 public sealed class UpdateBlockedException(string blockers)
-    : InvalidOperationException($"{Prefix}{blockers}; the update is tried again later")
+    : InvalidOperationException($"{Prefix}{blockers}; the old install is intact; try again after Windows releases these files")
 {
     public const string Prefix = "files in the installation are held by ";
 }

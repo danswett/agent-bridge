@@ -281,15 +281,15 @@ public sealed partial class AttachmentStore : IDisposable
             finally { fetchSlots.Release(); }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { DeleteFile(h); }
-        catch (InvalidDataException e)
+        catch (InvalidDataException)
         {
             forget = true;
-            Fail(h, $"the attachment in the blob store is not what was sent ({e.Message}), so it was dropped; send it again");
+            Fail(h, "the attachment in the blob store is not what was sent, so it was dropped; send it again");
         }
         catch (Exception e)
         {
-            log($"could not fetch an attachment from the blob store: {e.GetType().Name}: {e.Message}");
-            Fail(h, $"the host could not fetch the attachment from the blob store ({e.Message}); send it again");
+            log($"could not fetch an attachment from the blob store: {e.GetType().Name}");
+            Fail(h, "the host could not fetch the attachment from the blob store; send it again");
         }
         finally
         {
