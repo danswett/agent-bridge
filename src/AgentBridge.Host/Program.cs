@@ -89,6 +89,11 @@ if (command == "audit")
     return AuditCommands.Run(arguments, Identity.DefaultRoot, Console.Out, Console.Error);
 }
 
+if (command == "approve")
+{
+    return await ApproveCommands.RunAsync(args, Identity.DefaultRoot, () => Refused("approving a question"), Console.In, Console.Out, Console.Error);
+}
+
 // Inventory must return before even intake or device/account identity files are opened.
 if (command == "devices" && arguments.ElementAtOrDefault(1) == "descriptor")
 {
