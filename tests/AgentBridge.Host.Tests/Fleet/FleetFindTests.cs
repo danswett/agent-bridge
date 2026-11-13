@@ -6,6 +6,7 @@ using AgentBridge.Protocol;
 using AgentBridge.Relay;
 using AgentBridge.Transport;
 using AgentBridge.Transport.Tests;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 public sealed class FleetFindTests : IDisposable
@@ -120,6 +121,113 @@ public sealed class FleetFindTests : IDisposable
         Assert.Equal(expected, result.GetProperty("result").GetString());
         Assert.Equal("account-a", result.GetProperty("fleetScope").GetString());
         Assert.DoesNotContain("account-b", result.GetRawText());
+    }
+
+    [Fact, Trait("Category", "Network")]
+    public async Task Connected_machines_without_a_registry_record_are_online_including_the_callers_own_host()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        await using var relay = await TestRelay.StartAsync();
+        await using var own = await relay.ConnectAsync(relay.TokenFor(1, "own"), "own-host", "host");
+        await using var peer = await relay.ConnectAsync(relay.TokenFor(1, "own"), "peer-host", "host");
+        await using var app = await relay.ConnectAsync(relay.TokenFor(1, "own"), "own-app", "app");
+        await using var foreign = await relay.ConnectAsync(relay.TokenFor(2, "other"), "foreign-host", "host");
+        var roster = new RelayFleetRoster();
+        roster.Attach(own.Relay);
+        var op = new FleetList(store, roster, audit: new AgentAuditLog(root));
+        var reply = JsonSerializer.SerializeToElement(await op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { })), Web);
+        Assert.Empty(reply.GetProperty("sessions").EnumerateArray());
+        var machines = reply.GetProperty("machines").EnumerateArray().ToList();
+        Assert.Equal(new[] { own.Id, peer.Id }.Order(StringComparer.Ordinal),
+            machines.Select(m => m.GetProperty("machine").GetString()).Order(StringComparer.Ordinal));
+        Assert.All(machines, m => Assert.Equal("online", m.GetProperty("state").GetString()));
+    }
+
+    [Theory, Trait("Category", "Network")]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Listing_with_a_session_or_registered_script_credential_never_exposes_another_accounts_machine(bool script, bool foreignOffline)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var time = new FakeTimeProvider(Started);
+        await using var relay = await TestRelay.StartAsync(o => o.Roster.Time = time);
+        await using var own = await relay.ConnectAsync(relay.TokenFor(1, "own"), "own-host", "host");
+        await using var other = await relay.ConnectAsync(relay.TokenFor(2, "other"), "other-host", "host");
+        await using var otherViewer = await relay.ConnectAsync(relay.TokenFor(2, "viewer"), "other-viewer", "app");
+        foreach (var (connection, hex) in new[]
+        {
+            (own, new string('a', 16)),
+            (other, new string('b', 16)),
+        })
+        {
+            if (connection == other) { time.Advance(TimeSpan.FromSeconds(10)); }
+            await connection.Relay.RegistryPutAsync(Body(new
+            {
+                v = 1, machine = connection.Id, epoch = hex, seq = 1, at = DateTimeOffset.UtcNow, truncated = false,
+                sessions = new[] { new { id = hex, node = "agent_bridge_" + hex, state = "idle", since = Started } },
+            }));
+        }
+        if (foreignOffline)
+        {
+            await otherViewer.Relay.WaitForPeerAsync(p => p.Id == other.Id, TimeSpan.FromSeconds(10));
+            time.Advance(TimeSpan.FromSeconds(10));
+            await other.DisposeAsync();
+            await Wait.UntilAsync(() => otherViewer.Relay.Known?.Any(k => k.Id == other.Id) == true, "the foreign machine is offline");
+            var metadata = Assert.Single(otherViewer.Relay.Known!, k => k.Id == other.Id);
+            Assert.Equal("other-host", metadata.Name);
+            Assert.Equal(Started.AddSeconds(20), metadata.LastSeen);
+        }
+        var roster = new RelayFleetRoster();
+        roster.Attach(own.Relay);
+        var chan = script ? new Chan() : Hello(AgentProtocol.ScopeRead);
+        if (script) { store.Accept(chan, store.MintScript("roster-reader").Credential); }
+        var op = new FleetList(store, roster, audit: new AgentAuditLog(root));
+        var handler = LocalApi.Handler(null!, null!, null!, credentials: store, fleet: op);
+        var reply = JsonSerializer.SerializeToElement(await handler(chan, FleetList.Op,
+            Body(new { account = other.Relay.AccountId, fleetScope = other.Relay.AccountId })), Web);
+        var machine = Assert.Single(reply.GetProperty("machines").EnumerateArray());
+        Assert.Equal(own.Id, machine.GetProperty("machine").GetString());
+        Assert.Equal("own-host", machine.GetProperty("machineName").GetString());
+        Assert.Equal(Started, machine.GetProperty("lastSeen").GetDateTimeOffset());
+        Assert.Equal(own.Id, Assert.Single(reply.GetProperty("sessions").EnumerateArray()).GetProperty("machine").GetString());
+        Assert.DoesNotContain(other.Id, reply.GetRawText());
+        Assert.DoesNotContain("other-host", reply.GetRawText());
+        Assert.NotEqual(own.Relay.AccountId, other.Relay.AccountId);
+        Assert.Equal(["machines", "sessions"], reply.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal));
+        Assert.All(reply.GetProperty("machines").EnumerateArray(), m =>
+            Assert.Equal(["lastSeen", "machine", "machineName", "state"], m.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal)));
+        Assert.All(reply.GetProperty("sessions").EnumerateArray(), s =>
+            Assert.Equal(["machine", "machineName", "machineOnline", "node", "secondsInState", "since", "state"],
+                s.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal)));
+    }
+
+    [Fact, Trait("Category", "Network")]
+    public async Task A_real_roster_read_keeps_a_disconnected_machine_after_its_session_record_is_gone()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        await using var own = await relay.ConnectAsync(relay.TokenFor(1, "own"), "own-host", "host");
+        await using var leaving = await relay.ConnectAsync(relay.TokenFor(1, "leaving"), "offline-box", "host");
+        await own.Relay.WaitForPeerAsync(p => p.Id == leaving.Id, TimeSpan.FromSeconds(10));
+        var hex = new string('a', 16);
+        await leaving.Relay.RegistryPutAsync(Body(new
+        {
+            v = 1, machine = leaving.Id, epoch = hex, seq = 1, at = DateTimeOffset.UtcNow, truncated = false,
+            sessions = new[] { new { id = hex, node = "agent_bridge_" + hex, state = "idle", since = Started } },
+        }));
+        await leaving.DisposeAsync();
+        await Wait.UntilAsync(() => own.Relay.Known?.Any(k => k.Id == leaving.Id) == true, "the disconnected machine is known");
+        var metadata = Assert.Single(own.Relay.Known!, k => k.Id == leaving.Id);
+        var roster = new RelayFleetRoster();
+        roster.Attach(own.Relay);
+        var snapshot = await roster.ReadScopedAsync(default);
+        Assert.Equal(own.Relay.AccountId, snapshot.FleetScope);
+        var gone = Assert.Single(snapshot.Machines, m => m.Id == leaving.Id);
+        Assert.False(gone.Online);
+        Assert.Empty(gone.Sessions);
+        Assert.Equal(metadata.Name, gone.Name);
+        Assert.Equal(metadata.LastSeen, gone.LastSeen);
     }
 
     [Fact, Trait("Category", "Network")]

@@ -59,6 +59,18 @@ public sealed class SessionService
 
     internal SessionProcess? ProcessOf(string id) => source.Get(id) is not null ? source.ProcessOf(id) : null;
 
+    internal Task<LaunchResult>? ReplayAgentLaunch(JsonElement data, string principal)
+    {
+        if (launcher is null || data.ValueKind != JsonValueKind.Object
+            || System.Text.Encoding.UTF8.GetByteCount(data.GetRawText()) > LaunchProtocol.MaxRequest) { return null; }
+        try
+        {
+            return data.Deserialize<LaunchRequest>(ProtocolJson.Options) is { } request
+                ? launcher.ReplayAsync(request, principal) : null;
+        }
+        catch (JsonException) { return null; } // An invalid request still meets the existing refusal path.
+    }
+
     // hello's machine.restore (#780): what went with the machine or the host when it last stopped, or
     // null. Set, it offers sessions.restore.
     public Func<RestoreNotice?>? Restore { get; init; }

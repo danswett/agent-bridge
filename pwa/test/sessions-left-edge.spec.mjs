@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { selectSort } from './nav.mjs';
 
 const textLeft = (locator) => locator.evaluate((el) => {
   const range = document.createRange();
@@ -18,7 +19,7 @@ for (const hasTouch of [false, true]) {
           await page.waitForSelector('html[data-demo-ready]');
         });
 
-        test('list text shares the 20 px edge while row and card backgrounds stay at 8 px', async ({ page }) => {
+        test('list text and card edges stay aligned in both sort orders', async ({ page }) => {
           const pane = await page.locator('#list-pane').boundingBox();
           const row = page.locator('#session-list .session').first();
           for (const locator of [
@@ -28,8 +29,11 @@ for (const hasTouch of [false, true]) {
           ]) {
             expect.soft(await textLeft(locator)).toBeCloseTo(pane.x + 20, 1);
           }
-          expect((await row.locator('.row-glyph .glyph').boundingBox()).x).toBeCloseTo(pane.x + 20, 1);
-          expect((await row.locator('.row-main').boundingBox()).x).toBeCloseTo(pane.x + 8, 1);
+          for (const sort of ['recent', 'yours']) {
+            await selectSort(page, sort);
+            expect((await row.locator('.row-glyph .glyph').boundingBox()).x).toBeCloseTo(pane.x + 20 + (sort === 'yours' ? 24 : 0), 1);
+            expect((await row.locator('.row-main').boundingBox()).x).toBeCloseTo(pane.x + 8, 1);
+          }
           expect((await page.locator('#needs-you').boundingBox()).x).toBeCloseTo(pane.x + 8, 1);
         });
 
