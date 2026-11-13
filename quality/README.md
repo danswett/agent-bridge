@@ -382,6 +382,13 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      on only for a draft pull request, whatever the plan says).
 
    The jobs, and what each one's for (#459):
+   - `product` caps Windows x64 and Arm64 execution at 24 minutes, keeping Linux at
+     30 minutes (#2018). Installer execution is capped at 16 minutes on x64 and
+     17 minutes on Arm64. These job-level budgets are twice the slowest successful
+     execution in the 20 main push runs sampled on 2026-11-11, rounded up:
+     11m47s, 11m31s, 7m55s and 8m18s respectively. Waiting for dependencies or a
+     runner does not consume them. A timeout still fails the job; these caps do
+     not add retries or excuse any failure.
    - `app-installer` keeps its x64 and Arm64 check names and the full install, architecture,
      distribution-notice and installed-app self-test checks. It waits for `app`, downloads that
      run's existing architecture/version release artifact and a small notice/identity artifact,
