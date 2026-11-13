@@ -21,7 +21,8 @@ public sealed class HookIntakeOptions
     // deleted. The daemon owns them.
     public Func<string?> AgentHaBridgeActive { get; init; } = () => null;
 
-    // The daemon's sweep: a watcher only shortens the wait, since watchers drop events.
+    // The active sweep interval, capped at 30 s to keep the hook heartbeat fresh.
+    // Empty passes back off; a watcher only shortens the wait, since watchers drop events.
     public TimeSpan SweepInterval { get; init; } = TimeSpan.FromSeconds(2);
 
     // How often registrations whose session is over are deleted, as the daemon's reconcile
@@ -56,7 +57,7 @@ public sealed class HookIntakeOptions
 //
 // It keeps the heartbeat the hooks check, so they hand events to it in tens of milliseconds;
 // takes the spool's files in name order (the order they happened), a watcher noticing a new one
-// at once and a sweep every two seconds covering anything a watcher misses; records what each
+// at once and a bounded safety sweep covering anything a watcher misses; records what each
 // means locally (HookHandlers); deletes it; and tells subscribers. An event that fails is tried
 // once more on the next pass, then dropped and logged: a bad file must not be retried forever.
 //
@@ -87,6 +88,8 @@ public sealed class HookIntake : IHookNotices, IAsyncDisposable
     DateTimeOffset _prunedAt;
     string? _paused;
     bool _heartbeatOwned;
+    // Ownership survives a failed write; only successful renewal permits idle backoff.
+    bool _heartbeatRenewed;
     // Whether approvals have been checked against the hooks that ran while nobody took events,
     // since this intake last (re)took the spool. Read by the answer path on its own thread.
     volatile bool _reconciled;
@@ -109,8 +112,11 @@ public sealed class HookIntake : IHookNotices, IAsyncDisposable
 
     public const string ClaimFile = "agent-bridge-host-intake.lock";
 
+    static readonly TimeSpan IdleSweepCeiling = TimeSpan.FromSeconds(30);
+
     public HookIntake(HookIntakeOptions options, IProcessInspector processes, TimeProvider? time = null, Action<string>? log = null)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(options.SweepInterval, TimeSpan.Zero, nameof(options.SweepInterval));
         _options = options;
         _processes = processes;
         _time = time ?? TimeProvider.System;
@@ -137,16 +143,18 @@ public sealed class HookIntake : IHookNotices, IAsyncDisposable
         get
         {
             if (Paused is { } paused) { return $"agent-ha-bridge has the hook spool ({paused}); answer at the machine"; }
-            if (_queued || Waiting()) { return "the host is still handling hook events that are waiting; try again shortly"; }
+            if (_queued || Waiting()) { Wake(); return "the host is still handling hook events that are waiting; try again shortly"; }
             // Since the last pass: hooks have stopped spooling (the heartbeat is past what they
             // allow), or a Codex hook ran without spooling (it may have been the PreToolUse that
             // answered this approval, and failed to remove its marker too). The next pass settles it.
             if (_time.GetUtcNow().UtcTicks - Interlocked.Read(ref _beatTicks) >= SpoolContract.HeartbeatMaxAge.Ticks || _codexLog.UnheardSince())
             {
+                Wake();
                 return "a Codex hook has run that the host has not yet checked approvals against; try again shortly";
             }
-            return _reconciled && !_handlers.WithdrawalsPending ? null
-                : "the host has not yet checked Codex approvals against the hooks that ran while nobody took them; answer at the machine or try again shortly";
+            if (_reconciled && !_handlers.WithdrawalsPending) { return null; }
+            Wake();
+            return "the host has not yet checked Codex approvals against the hooks that ran while nobody took them; answer at the machine or try again shortly";
         }
     }
 
@@ -247,15 +255,29 @@ public sealed class HookIntake : IHookNotices, IAsyncDisposable
         var token = _stop.Token;
         _loop = Task.Run(async () =>
         {
+            var minimum = _options.SweepInterval < IdleSweepCeiling ? _options.SweepInterval : IdleSweepCeiling;
+            var interval = minimum;
             while (!token.IsCancellationRequested)
             {
-                try { Pass(); }
+                try { if (Pass() > 0 || !_heartbeatRenewed || !_reconciled || _queued || _handlers.WithdrawalsPending) { interval = minimum; } }
                 catch (Exception e) when (e is not OperationCanceledException)
                 {
                     _log($"hook intake pass failed: {e.GetType().Name}: {e.Message}");
                     _options.Journal?.Record(JournalEvents.Failure(JournalKind.HookPassFailed, e));
+                    interval = minimum;
                 }
-                try { await _wake.WaitAsync(_options.SweepInterval, token); }
+                if (token.IsCancellationRequested) { break; }
+                using var timeout = new CancellationTokenSource(interval, _time);
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, timeout.Token);
+                try
+                {
+                    await _wake.WaitAsync(linked.Token);
+                    interval = minimum;
+                }
+                catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                {
+                    interval = TimeSpan.FromTicks(Math.Min(interval.Ticks * 2, IdleSweepCeiling.Ticks));
+                }
                 catch (OperationCanceledException) { break; }
             }
         }, CancellationToken.None);
@@ -339,6 +361,7 @@ public sealed class HookIntake : IHookNotices, IAsyncDisposable
         }
         // The heartbeat is the daemon's now; the watcher would only wake passes that do nothing.
         _heartbeatOwned = false;
+        _heartbeatRenewed = false;
         _reconciled = false;
         _gap = true;
         _claim?.Dispose();
@@ -364,6 +387,7 @@ public sealed class HookIntake : IHookNotices, IAsyncDisposable
     // whose it is, and lets this host take back only its own when it stops.
     bool Beat()
     {
+        _heartbeatRenewed = false;
         var now = _time.GetUtcNow();
         // The wall clock moved back (a correction, a restored VM): times recorded since were read
         // from a clock ahead of this one, so a later event can look older than the registration
@@ -405,6 +429,7 @@ public sealed class HookIntake : IHookNotices, IAsyncDisposable
             Directory.CreateDirectory(_options.RuntimeRoot);
             File.WriteAllText(_heartbeat, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
             _heartbeatOwned = true;
+            _heartbeatRenewed = true;
             _beatAt = now;
             Interlocked.Exchange(ref _beatTicks, now.UtcTicks);
             return true;
@@ -561,12 +586,12 @@ public sealed class HookIntake : IHookNotices, IAsyncDisposable
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or PlatformNotSupportedException)
         {
-            // Without one the two-second sweep still delivers everything, just later.
+            // Without one the bounded safety sweep still delivers everything, just later.
             _log($"hook spool watcher unavailable: {e.Message}");
         }
     }
 
-    void Wake()
+    internal void Wake()
     {
         if (_wake.CurrentCount == 0) { _wake.Release(); }
     }
