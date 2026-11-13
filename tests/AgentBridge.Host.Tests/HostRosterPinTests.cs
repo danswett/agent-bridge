@@ -199,6 +199,32 @@ public sealed class HostRosterPinTests : IDisposable
         Assert.Equal(before, File.ReadAllBytes(PathName));
     }
 
+    [Theory]
+    [InlineData(" ", "", false)]
+    [InlineData("", " ", false)]
+    [InlineData("\t", "\r\n", false)]
+    [InlineData("", "", true)]
+    public void A_noncanonical_replay_uuid_is_refused_after_restart_without_recording_the_command_again(string prefix, string suffix, bool uppercase)
+    {
+        var reader = PinnedReader();
+        var command = Command();
+        Assert.Null(reader.RecordCommand(command, Context));
+        var snapshot = Snapshot();
+        snapshot["requests"]![0]!["request"] =
+            prefix + (uppercase ? command.Body.Request.ToUpperInvariant() : command.Body.Request) + suffix;
+        ReplaceSnapshot(snapshot);
+        var before = File.ReadAllBytes(TransitionPath);
+        var restarted = PinnedReader();
+        Assert.Equal("pin-unreadable", restarted.RecordCommand(command, Context));
+        Assert.Equal("pin-unreadable", restarted.CheckAcceptHostSign(command, Context));
+        Assert.Equal(before, File.ReadAllBytes(TransitionPath));
+        snapshot["requests"]![0]!["request"] = command.Body.Request;
+        ReplaceSnapshot(snapshot);
+        var canonical = File.ReadAllBytes(TransitionPath);
+        Assert.Equal("replay", restarted.RecordCommand(command, Context));
+        Assert.Equal(canonical, File.ReadAllBytes(TransitionPath));
+    }
+
     [Fact]
     public void Persisted_floor_and_high_water_apply_after_restart_and_clock_rollback()
     {
