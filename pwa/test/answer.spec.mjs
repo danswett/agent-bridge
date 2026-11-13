@@ -746,6 +746,8 @@ test.describe('outcomes', () => {
       { name: 'enabled', title: enabled, type: 'boolean', required: true },
       { name: 'notes', title: notes, type: 'text', required: true },
     ] }, COPILOT);
+    const reply = card(page, COPILOT).locator('.reply-input');
+    await expect(reply).toBeDisabled();
     await q.getByRole('radio', { name: 'Red', exact: true }).check();
     await q.getByRole('button', { name: 'Yes', exact: true }).click();
     await q.getByRole('textbox', { name: notes }).fill('Test');
@@ -754,6 +756,7 @@ test.describe('outcomes', () => {
     await send.click();
     await expect(q.locator('.answer-status')).toContainText('The machine refused this answer:');
     await expect(send).toBeEnabled();
+    await expect(reply).toBeDisabled();
     await expect(q.getByRole('textbox', { name: notes })).toHaveValue('Test');
     await send.click();
     await expect(q).toHaveCount(0);
@@ -761,7 +764,7 @@ test.describe('outcomes', () => {
     expect(second.fields).toEqual({ colour: 'Red', enabled: true, notes: 'Test' });
     expect(second.request).not.toBe(first.request);
     expect(await typed(page)).toHaveLength(1);
-    await expect(card(page, COPILOT).locator('.reply-input')).toBeEnabled();
+    await expect(reply).toBeEnabled();
   });
 
   test('a lost response is resent with the same request, and the answer is typed once', async ({ page }) => {
