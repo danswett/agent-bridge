@@ -51,6 +51,11 @@
   --safe-right: var(--env-safe-right);
   --safe-bottom: var(--env-safe-bottom);
   --safe-left: var(--env-safe-left);
+  --sheet-bottom: 0px;
+  --sheet-view-height: 100dvh;
+  --sheet-view-top: 0px;
+  --sheet-x: 16px;
+  --sheet-y: 16px;
 }
 :root[data-text-size="smaller"] { --text-scale: 0.9; }
 :root[data-text-size="larger"] { --text-scale: 1.15; }
