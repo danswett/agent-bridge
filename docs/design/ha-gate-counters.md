@@ -130,16 +130,19 @@ prune them into a passing suffix; if bounded retention cannot preserve them,
 invalidate the run visibly and start again only after evidence health is restored.
 The host's same-user filesystem trust limit remains: hashes cannot defeat a
 same-user program able to rewrite all evidence and its anchors.
-Until A6 can prove restart continuity, a restart makes the run incomplete and
-requires a new run; retained observations survive but cannot silently earn credit.
+A6 continuity (slice 9) is required before starting a qualifying run. Missing
+restart proof makes evidence incomplete; retained observations cannot earn credit.
 
 ## 5. Continuous run and reset
 
-A person starts a run through the host's owner-only control path. Agents and
-read-only audit clients cannot start, reset, repair or seal it.
+Run start, pause, reset and seal require a person-class authenticated channel and
+host-side person authorization, never the local pipe or shared OS-user identity.
+Agents and read-only audit clients cannot start, reset, repair, pause or seal it.
 Record a host-generated run ID, fixed participating four Windows host/profile
 identities, deployed instrumentation version and starting heads in audit markers.
 Include the existing message recorder identity and starting source cursor/digest.
+Pin membership from the fleet roster source the person approves at run start;
+any roster membership/identity change mid-run voids the run.
 All participants must attest coverage of relay, local and legacy HA action
 entries before admission opens. Old daemon/private script bypasses must either
 be covered or disabled by the person; unobserved routes make the gate unavailable.
@@ -149,6 +152,10 @@ Prepare every participant with action admission paused; install the same run
 membership and begin markers everywhere before releasing admission. This barrier,
 not client time or clock ordering, defines the beginning. All traffic, not only
 test-tagged actions, is observed. Hosts cannot be silently removed from membership.
+Only that person-class control may pause admission, for at most five minutes
+per prepare/seal barrier; repeated calls cannot extend the host-enforced deadline.
+On timeout, control loss or restart with an uncertain deadline, void the run and
+resume admission. Retain every queued request for normal revalidation; drop none.
 Restart is allowed only with verified complete replay and unchanged coverage;
 missing/unreachable hosts or incomplete replay block the report.
 
@@ -169,6 +176,8 @@ totals, cached roster counts or unsigned imported JSON may certify the gate.
 Bind each host response to the requested run, membership, fresh reader challenge,
 instrumentation version, durable heads and verified read-through sequence.
 Reject duplicates, mismatched identities, replays, partial pages or stale replies.
+An offline host or missing fresh-challenge response yields INCOMPLETE naming
+that host, exit 2; never pass using only the reachable participants.
 The host verifies under its existing audit writer; the CLI read path must not
 instantiate a writer, create locks/profiles or repair files to obtain a verdict.
 Read PairShadow inputs from the enrolled trusted fleet recorder, not a caller's
@@ -177,12 +186,13 @@ recompute its existing delivered counts once, rejecting duplicate source identit
 or missing ranges. This small gate adapter is not a replacement message counter.
 PairShadow currently marks fallback only for `transport=ha, route=relay-first`.
 The adapter must also reject/count HA-only rollback as fallback, including failed
-HA dispatch from recorder events. If route/dispatch evidence is absent, report
-INCOMPLETE, not zero. Do not copy raw records' message/error text into the audit.
+HA dispatch from recorder events. Missing route/dispatch evidence gives
+INCOMPLETE and exit 2, as with other missing evidence, never zero fallbacks.
+Do not copy raw records' message/error text into the audit.
 
 For a final verdict, quiesce admission on all participants, drain operations,
 and append seal markers with final heads before collecting fresh snapshots.
-Keep admission paused until all seals are collected or the seal is abandoned;
+Keep admission paused until all seals are collected or the bounded pause expires;
 any HA dispatch still observed during sealing invalidates the run.
 An incomplete seal is not a partial pass. Later traffic needs a new run;
 a sealed report states its historical boundary and never certifies future traffic.
@@ -196,7 +206,7 @@ audit timestamps stay UTC. Do not expose session contents.
 zero legacy HA dispatches, and relay successes >= 500/50/30/20 respectively.
 `FAIL` identifies fallback or a known invalidated run, with zero eligible credit.
 `INCOMPLETE` names missing evidence/hosts or unmet thresholds; it is not a pass.
-Exit zero only for PASS; distinguish FAIL and INCOMPLETE with nonzero codes.
+Exit codes: PASS = 0, FAIL = 1, INCOMPLETE = 2.
 This view proves item 2 only. Quality retains gates and retirement sign-off.
 
 ## 7. Later slices and rehearsal dependencies
@@ -204,25 +214,25 @@ This view proves item 2 only. Quality retains gates and retirement sign-off.
 Estimates include focused failing tests; each PR must measure at most 250 lines.
 Split further before implementation if an estimate does not fit. No code ships here.
 Required for measurement: schema/reader, launch, approval, stop, run lifecycle,
-and gate view (including the small existing-message-source adapter).
-Deferred hardening must not be presented as working today. Without A6 continuity,
-only an uninterrupted run can qualify; restart resumes remain blocked.
+gate view (including the existing-message-source adapter), and A6 continuity.
+Implementation order: 1-4, then 9, then 5-7; 8/10/11 are later hardening.
+No qualifying run starts before slice 9. Deferred work is not working today.
 In every row below, A3 = #2009, A4 = #2010, A5 = #2011;
 A6a = #2066, and A6-rest = the remaining #1401 work.
 
-| Order | Slice / timing | Rough lines | #1401 dependencies / proof |
+| Slice | Work / timing | Rough lines | #1401 dependencies / proof |
 |---|---|---:|---|
 | 1 | Schema/reader, required | 180 | A3 + A6a; consume A4/A5 outcomes; no A6-rest prerequisite for reading |
 | 2 | Launch wiring, required | 210 | 1 + A3/A4; A5 attribution compatible, A6a reader; A6-rest for restart continuity |
 | 3 | Approval wiring, required | 220 | 1 + A3/A5; A4 pattern, A6a reader; A6-rest for restart continuity |
 | 4 | Stop wiring, required | 200 | 1 + A3/A4; A5 attribution compatible, A6a reader; A6-rest for restart continuity |
-| 5 | Run prepare/reset, required | 220 | 2-4 + A3/A4/A5/A6a; A6-rest absence invalidates restarts |
-| 6 | Run seal/fresh snapshot, required lifecycle continuation | 230 | 5 + A3/A4/A5/A6a; no client-supplied counts; A6-rest absence blocks resume |
-| 7 | Gate reducer + existing message-source adapter, required | 240 | 6 + A3/A4/A5/A6a; A6-rest needed only to resume; stale claims fail |
+| 5 | Run prepare/reset, required | 220 | 2-4 + 9 + A3/A4/A5/A6a; person-class control, bounded pause |
+| 6 | Run seal/fresh snapshot, required lifecycle continuation | 230 | 5 + 9 + A3/A4/A5/A6a; no client-supplied counts; bounded pause |
+| 7 | Gate reducer + existing message-source adapter, required | 240 | 6 + 9 + A3/A4/A5/A6a; A6-rest required; stale claims fail |
 | 8 | Shared durable operation-map hardening, later | 220 | 2-4 + A3/A4/A5/A6a; A6-rest required; core wiring already dedupes or invalidates uncertainty |
-| 9 | A6 durable-head/archive continuity, later | 230 | A3/A4/A5 + A6a; completes A6-rest in separately measured cuts |
+| 9 | A6 durable-head/archive continuity, required before 5 | 230 | A3/A4/A5 + A6a; completes A6-rest in separately measured cuts |
 | 10 | Receiver/message provenance hardening, later | 160 | Reuse PairShadow; A3/A4/A5/A6a consumers unchanged; A6-rest for restart; no rebuilt counter |
-| 11 | Extended rehearsal fixtures/instructions, later | 160 | 7; exercises A3/A4/A5/A6a and optional A6-rest; required cases already in each core slice |
+| 11 | Extended rehearsal fixtures/instructions, later | 160 | 7; exercises A3/A4/A5/A6a and required A6-rest; required cases already in each core slice |
 
 Parity rows 1/25/26 (messages), 6/7/22/23 (launches), 5/17/28
 (decisions and phone path), 4 (stops), and 12/19 (audit attribution) depend on
