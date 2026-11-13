@@ -303,7 +303,7 @@ that refusal limit is kept in memory only and a restart resets it, which is inte
 an **attempt limit** of **20 per agent per hour, any outcome**
 (`limits.launchAttemptsPerOriginPerHour`, §2 step 4) stops an agent retrying `busy` or refused
 launches in a loop and crowding out people's launches; it is rebuilt from the audit like the
-caps.
+caps. The in-memory refusal throttle never discards the durable attempt evidence (§6).
 
 **How long sessions live.** The caps are per hour, not on how many run at once, so two more
 limits keep idle sessions from piling up: at most **6 live agent-launched sessions per machine**
@@ -378,11 +378,12 @@ gate rest on.
   startup guard in every rollback-eligible host. **Incompatible old hosts refuse to start**,
   before APIs/cap rebuild; unguarded builds are not rollback candidates. Keep the marker while
   any unresolved journal or retained new-format evidence (archives included) exists, regardless of age.
-  Only a compatible host under the profile lock may clear/lower it after a complete all-age
+  Only a compatible host under the profile lock may clear or lower it after a complete all-age
   scan proves neither remains; never clear by time, partial scan or deleting evidence.
   Acceptance: oldHostRefusesStart checks before APIs; rollbackPendingOlderThanTwoDays uses
   a 72-hour unresolved journal absent from today's/yesterday's audit: dedup finds it, marker stays.
-  Preflight all retained versions/journals. Unreadable marker/journal/new-major evidence
+  Check all retained audit versions and unresolved journals before startup or launches.
+  An unreadable marker, journal or new-major evidence
   blocks old-host startup. Once §13's gates are met, **all session.launch, person-app included**,
   is blocked as pendingStorageUnavailable; persist manualRecoveryRequired=true, no retryAfter.
   This sticky fault is not timed capRebuilding; even readable files do not auto-clear it.
@@ -391,12 +392,14 @@ gate rest on.
   in non-destructive quarantine; audit intent and old/new digest binding before restore, result after.
   No unaudited effects. Restore only complete validated authoritative evidence; finish all-age rebuild
   before clearing the manual block or marker (the latter also requires no retained evidence).
-  Source: a protected same-profile journal backup plus every newer intact journal/start/audit/
-  replay record. Audit alone cannot recreate private identity; gaps or lower clock/replay floors
-  refuse repair. Verified backup/restore support ships before pending writes, not as a later fix.
+  Source: a protected same-profile journal backup plus every newer intact journal entry,
+  start claim, audit entry and replay record. Audit alone cannot recreate private identity.
+  Refuse repair on gaps or lower clock or replay floors. Verified backup and restore support
+  ships before pending writes, not as a later fix.
   After validated restore/rebuild, the new copy is authoritative; the original is forensic-only,
   excluded from runtime readability checks but still pins the marker, never authorizing rollback.
-  Missing identity/no complete evidence stays blocked/sticky; nothing deleted/force-cleared (§13.7).
+  Missing identity or incomplete evidence keeps the manual block. Nothing is deleted or
+  force-cleared (§13.7).
   **Proposed quarantine bound, separate from pending storage:** four originals, 256 KiB/profile
   including metadata. At saturation/oversize retain the original in place, refuse allocations/
   repair, never copy beyond the budget or evict evidence. No automatic expiry; retained originals
@@ -406,7 +409,9 @@ Fields: `v`, `at` (UTC), `principal` (`agent:<machine>/<session>`, `AgentProtoco
 `depth`, `action: "session.launch"`, `request`, `machine`, `agent`, `workspace` (label),
 `model`, `permissions`, `promptBytes`, `requestSha256` (§2 step 0; a hash of the normalised
 launch fields, never the prompt's text), `outcome`, `code`, `reason`, `session` (the new one, when
-known), `grant` (`agent` or `fleet`), `limit` and `overridden` (§5). **Never** the prompt, the token or a file path beyond the
+known), `grant` (`agent` or `fleet`), `limit` and `overridden` (§5).
+New-major counted-launch records also carry the host-generated `attempt` UUID below.
+**Never** the prompt, the token or a file path beyond the
 workspace label (#1401's rule). Every attempt gets a line: a refusal at any gate step is one
 line with its `code`; a launch that passes writes `outcome: reserved` **before** it starts (§2
 step 5), and the outcome is a second line with the same `request`.
@@ -421,7 +426,19 @@ New readers fold legacy pairs; old readers reject new major, not unsafe last-lin
 Filter event/action/outcome; unknown fields confer no authority.
 pendingLimit is a launch-state refusal before reservation (no charge); repairBlocked is
 pending-refusal for the repair action, never a launch-state transition/refund.
-Refusals share §5's 60/actor/hour plus 60/host/hour, then one count-summary/minute.
+**Durable launch attempts:** before either refusal bucket, retain a launch-state record
+for every counted `session.launch` attempt by a verified principal until its rolling-hour
+count reaches §5's limit (20 for an agent). This includes `pendingLimit` and verified
+principals that overflow the actor cache. Flush the record with `principal`, `request`,
+`requestSha256` and `code` (when present) before replying or dispatching.
+The host's `attempt` UUID links the existing reserved/outcome pair, counted once on rebuild;
+separate counted calls have distinct IDs even if request/hash repeat. No third launch line
+is needed. These new-major semantics require the startup compatibility fence above.
+Only after the durable count reaches the limit may further refusals use summaries.
+Missing writable attempt evidence fails closed, never substitutes a summary for it.
+
+Other refusal evidence shares §5's 60 refusals per verified actor per hour and 60 per host
+per hour, then one count-only summary per minute.
 Proposed 256 verified actor entries expire hourly; overflow/uncredentialed uses host
 bucket, never attacker-keyed. Summaries contain counts/codes, no question/answer/request text.
 
@@ -522,7 +539,7 @@ rejected: they need an exactly-once claim, a GitHub token on every machine and m
 |---|---|---|---|
 | **#1401** audit log (first) | as filed, plus the launch file, hash chain across files, line version, folder lock, pruning rules (§6), and audit commands with `--outcome`/`audit archive`; compatibility prerequisite owns minimum-reader marker, startup guard and locked all-age clearing. Every new-major write is gated on its deployment to all rollback-eligible builds; pending writes/events/person-app block also wait on §13's complete design and repair gateway | M | an unwritable log refuses the action; a removed line shows "broken"; pruning/rotation keep the chain intact; torn last line ignored; newer major refused, unknown fields ignored; second writer refused; oldHostRefusesStart before APIs; rollbackPendingOlderThanTwoDays; unresolved/archive evidence prevents marker clearing; writes refused before guard or repair deployment; off/observe/presence-none keep existing launch rules; existing faults never downgrade |
 | **2b #1404** scope and enforcement | `agentScope` on person launches; the `agents.launch` and `agents.limits` config keys; `agent-bridge-host agents revoke`; `AgentLaunchGate` (§2, §3) with the worktree check and per-agent configuration lists; **in-memory caps and attempt limit with the §5 defaults, and step 0 remembering every (principal, `request`) with its hash for at least the hour**, so agents are never uncapped between 2b and 2c; refuse `session.launch` from `Other`; MCP schema trimmed; agent prompt wording | L (about 450; may split the worktree check off) | refused: no scope, scope revoked mid-session, switch off, policy unreadable, `permissions` absent, `allowAll`, `transfer`, `resume`, attachments, workspace not listed, workspace not isolated, worktree with a tool-approving settings file, Agency, `auto`, extra arguments, `agentScope` from an agent, launcher at depth 1, an adopted session, a script caller, two launches racing for the last slot; worktree holding `.claude/` or `.mcp.json` refused and the worktree removed, an agent kind without a confirmed list, a slot released after `busy` and after `refused`, the 21st attempt in an hour, the same request 16 minutes later starts nothing and counts once, a `requestReused` loop stopped by the attempt limit; accepted: ask-only launch in a listed workspace; 16 KiB prompt whole, 16 KiB + 1 refused, the npm agent's command-line refusal; child credential is `read` |
-| **2c #1413** cap, result, options | caps and attempt limit made durable (typed launch-state fold at start, `interrupted` lines, 30 s rebuild retry); request ids and `requestSha256` across restart (§2); agent live limit and idle end; stored, clamped, range-checked overrides, outside-CLI changes audited; fail-closed `host.status`/cap use; principal-keyed result/options/busy; runbook lines. C1 is the prerequisite for §13, not its implementation | M-L (about 380; may split live limit/idle end) | 4th launch by one agent refused; 11th on machine refused; 7th live agent-launched session refused; idle ended after 2 h, not after person input; cap survives restart; crash between reserved/outcome still counts; future line counts; defect inside hour refuses capRebuilding, older warns; locked policy retried then policyUnreadable; override lapses; different principal never gets readback; 20-hour request starts nothing; far-future/out-of-range override clamped/refused and audited; pre-start refused/busy does not count after restart; override survives restart and refusal records effective limit; options have no path/resumable/trust or pending text for agents; action/refusal lines never refund; old schema readers fail closed on new event semantics |
+| **2c #1413** cap, result, options | caps and attempt limit made durable (typed launch-state fold at start, `interrupted` lines, 30 s rebuild retry); request ids and `requestSha256` across restart (§2); agent live limit and idle end; stored, clamped, range-checked overrides, outside-CLI changes audited; fail-closed `host.status`/cap use; principal-keyed result/options/busy; runbook lines. C1 is the prerequisite for §13, not its implementation | M-L (about 380; may split live limit/idle end) | 4th launch by one agent refused; 11th on machine refused; 7th live agent-launched session refused; idle ended after 2 h, not after person input; cap survives restart; crash between reserved/outcome still counts; future line counts; defect inside hour refuses capRebuilding, older warns; locked policy retried then policyUnreadable; override lapses; different principal never gets readback; 20-hour request starts nothing; far-future/out-of-range override clamped/refused and audited; pre-start refused/busy does not count after restart; override survives restart and refusal records effective limit; options have no path/resumable/trust or pending text for agents; action/refusal lines never refund; old schema readers fail closed on new event semantics; exhaust host refusal bucket with other actors, record a fresh principal's 20 counted pendingLimit attempts, restart, then its 21st attempt is still refused by the attempt limit |
 | **2e (new)** fleet launch grant | §11 grant on the script credential: new branch in `LocalApi.Handler` (the agent gate handles only `CallerKind.Agent`); fleet cap/live limit, idle exemption, `diskLow` check/runbook | S (about 120), after #1414/#1404 | refuse agent ancestry, unticked workspace, cap 9th, under 1 GiB free, worker above read+reply; 7th live worker refused, separate agent bucket; no fleet 2 h idle end; shared pending ceiling is §13 |
 | **2f (new)** app controls | the app's Settings ticks ("agents may launch here", "fleet workers may run here", the machine switch), the "may start agents" tick on Launch, and "Stop this session starting agents"; until then the owner uses `agent-bridge-host config` and `agents revoke` | S-M, after #1404 | each tick writes only its key; refused inside agent sessions |
 | **2d fleet #106** dispatcher | central dispatcher plus per-machine launchers (§9) through `session.launch` with the fleet grant; result/options, kill switch, one machine first; §13 origin withdrawal only after its prerequisites | S-M (about 2 days) | retry starts nothing twice; sleeping/uncertain assignment is not reassigned without no-start/verified-close proof; authenticated origin withdrawal precedes target change; ready/unrelated launch never stopped; no grant means no launch/fallback |
