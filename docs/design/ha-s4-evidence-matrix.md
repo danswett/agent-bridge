@@ -7,7 +7,9 @@ Row numbers below are the retirement inventory's, not parity.md section numbers.
 
 ## Sources and reading depth
 
-Base: `e16dc3674e21f4974dabd51b8bdee3ebd6ad07b3`, freshly fetched main.
+Base: `9a0acf32e28fca6e03542c0b7b35a20498789581`, freshly fetched main.
+Earlier whole-source reads were at `e16dc3674e21f4974dabd51b8bdee3ebd6ad07b3`;
+those source files are unchanged at this base.
 Read **whole**: [P: parity.md](../parity.md), [A: apple-parity.md](../apple-parity.md),
 [W: app-windows.md](../app-windows.md), [H: optional HA design](ha-optional-client.md)
 and [S: host-stop.md](../host-stop.md). These are documentation claims, not a new code audit.
@@ -17,7 +19,9 @@ Read [C: #39 checklist](../parity-checklist.md) introduction, conventions and
 relevant E1-E5, E9-E10, E15, E18 and rollback steps, **not the whole checklist**.
 Engineering supplied the complete closed [#39](https://github.com/danswett/agent-bridge/issues/39)
 text (no comments), S4 row meanings and the retirement gate text by message.
-Also read the whole local fleet retirement inventory (file commit `839a09f6dd0eaaffb212354f8d53fc9d1869b44b`); its Section 1 owns the acceptance minima below.
+Also read the whole local fleet retirement inventory (file commit `839a09f6dd0eaaffb212354f8d53fc9d1869b44b`); its Section 1 supplies the acceptance minima below, except the superseded idle-only wording for row 4.
+Row 4 follows the Product ruling on [#2396](https://github.com/danswett/agent-bridge/issues/2396),
+relayed by Engineering on November 12, 2026; the fleet correction belongs to F-Chain.
 #39 delivered a harness for 53 untested-live rows, not proof those runs passed.
 P's "Live: Progress" citations are historical evidence pointers; the underlying
 Progress record was not available at its named repository path in this checkout.
@@ -46,23 +50,30 @@ not shipped runtime; its S8 implementation is not a new prerequisite for HA reti
 Legacy connector evidence is kept separate from that proposed component.
 The Mac/iOS work in #2391/#2392/#2398/#2399 remains required future parity but is parked last under [#1882](https://github.com/danswett/agent-bridge/issues/1882), per Engineering's supplied complete issue text on November 12, 2026, and does not block the HA-off gate until Product reopens #1882 or rules otherwise; fleet inventory row 13 says "Two Apple machines on HA; out for now (Mac and iOS clients are in scope under 1a)", a disagreement whose gate wording Product or the Chief must confirm.
 
-## Row 4: stop, with the host's idle-only rule
+## Row 4: stop, idle one press; non-idle confirmation
 
 | Client | Built evidence | Live evidence | Gap keys |
 |---|---|---|---|
-| PWA | Partial for current rule: P section 5/S allow confirmed non-idle stops | Historical P section 5, Progress > End session; not idle-only proof | STOP, L-PWA, L-ANDROID |
-| Windows | Partial: W Details uses the host's two-press rule | Untested live at Windows/current-rule scope; P section 5's generic historical claim identifies no client | STOP, L-WIN |
-| Apple | Partial: A two-step stop against a capable remote host; Mac local host stop unavailable | Mac fixture only; Mac/iOS real-host runs untested live | STOP, L-MAC, L-IOS |
+| PWA | Built: P section 5 stop UI uses S's host confirmation rule | Historical P section 5, Progress > End session; full current client contract untested live | STOP, L-PWA, L-ANDROID |
+| Windows | Built: W Details uses the host's two-press rule | Untested live at Windows/current-rule scope; P section 5's generic historical claim identifies no client | STOP, L-WIN |
+| Apple | Built: A two-step stop against a capable remote host; Mac local host stop unavailable | Mac fixture only; Mac/iOS real-host runs untested live | STOP, L-MAC, L-IOS |
 | MCP agent | Missing in P section 15's native MCP inventory; current exposure unknown | Untested live; an agent cannot borrow person authority | I-MCP, STOP, L-MCP |
 | Host CLI | Unknown client stop entry point; S proves host handling, not CLI exposure | Untested live | I-CLI, STOP, L-CLI |
 | Optional HA | Missing runtime: H proposes opening paired-person UI; legacy P section 18 differs | Disposable connector CI is not this component's live proof | HA, STOP |
 
-Pass on every required client: end an idle disposable session and confirm shutdown/
-removal; attempt working, waiting, background-work and stale/replayed stops and prove
-the approved idle-only rule at the **host**, with process identity preserved and no
-typing into a question. Keep transcript, host log and client outcome. Repeat three
-times per rehearsal stage; record 20 continuous-run stops across all four Windows machines, zero wrong targets and every working-session attempt refused. C E5-01 supplies
-idle evidence; E5-02/03/04's older non-idle semantics must be reconciled, not passed as-is.
+Pass on every required client, for person and system stops alike: idle ends on one
+press; working, waiting or idle-with-background-work only arms on the first press,
+then ends only on a second press carrying its confirmation token within 10 seconds.
+Expired or replayed first presses do not count as confirmation; preserve PID/start
+time and show shutdown/removal of the correct session. Where safe, type `/exit`,
+then force if still running after 12 seconds; for a question,
+launch-not-ready or unreadable transcript, confirm then terminate without typing
+`/exit`. Refuse elevated/other-user processes, unreadable start time, the host
+itself and no-live-PID targets. Keep transcript, host log, client outcome and
+confirmation/refusal receipts, including stale/reused-PID checks. Repeat three
+times per rehearsal stage; record 20 continuous-run stops across all four Windows
+machines, all with correct targets. C E5-01/02/03/04 and S supply the action/read
+locations; historical runs alone do not qualify every client.
 
 ## Row 5: approvals
 
@@ -144,7 +155,7 @@ Inventory Section 1 explicitly says f1-f12 are HA per-field dropdowns, **not fun
 | Host CLI | Unknown form client workflow | Untested live | I-CLI, KEYS, L-CLI |
 | Optional HA | Missing runtime: H proposes complete fields and person UI, no select workaround | Untested live | HA, KEYS |
 
-Pass: row 5 includes one native multi-field form per client, with no Other value;
+Pass: row 17 includes one native multi-field form per client, with no Other value;
 verify named choice, boolean, Unicode text, number and multi-select fields, without
 HA's twelve-dropdown workaround. C E2-03/05/08/09 supplies expected transcript
 fields, refusal and draft checks. Three runs per client/stage;
@@ -218,10 +229,10 @@ Live-run issues are **not ready** until their gap issues are fixed.
 | L-MCP / [#2394](https://github.com/danswett/agent-bridge/issues/2394) | S4 live run: MCP agent client row-by-row retirement evidence | Run all nine contracts through actual permitted client surface; record person-only refusals and missing paths as gaps. |
 | L-CLI / [#2395](https://github.com/danswett/agent-bridge/issues/2395) | S4 live run: host CLI row-by-row retirement evidence | Run all nine contracts from documented CLI entry points; host handlers alone are not client exposure proof. |
 | HA / [#2407](https://github.com/danswett/agent-bridge/issues/2407) | Optional Home Assistant client: B1-B9 and S8 live run | Open, not-ready tracker owns all nine build slices and component live proof; #1419 is closed historical design, not their tracker; no retirement prerequisite. |
-| STOP / [#2396](https://github.com/danswett/agent-bridge/issues/2396) | S4 stop: reconcile host enforcement with the idle-only rule | Resolve S/P non-idle semantics against approved rule; one bounded enforcement cut, then all-client three-run refusal/idle proof. Check #1146 first. |
+| STOP / [#2396](https://github.com/danswett/agent-bridge/issues/2396) | Stop parity reconciliation and all-client proof (retitled; exact title not supplied) | Reconcile the superseded inventory wording and design all-client proof: idle one press, non-idle confirmation, listed refusals; person/system parity. No enforcement cut: host code and S already agree. Three runs per client/stage and 20 correct-target stops; check #1146 first. |
 | PWA-PUSH / [#2397](https://github.com/danswett/agent-bridge/issues/2397) | S4 PWA push: close background question and turn delivery gaps | Reconcile historical Web Push with current missing-background report; one lifecycle cut, prove rows 16/28 background/locked delivery and exact-question open. |
 | IOS-PUSH / [#2398](https://github.com/danswett/agent-bridge/issues/2398) | S4 iOS push: add the first background delivery slice | Cut one missing APNs registration/provider/lifecycle mechanism, at most 250 changed lines; name remaining slices; full rows 16/28 proof follows only when complete. |
-| APPLE-UPDATE / [#2399](https://github.com/danswett/agent-bridge/issues/2399) | S4 Apple updates: verify remote-host update controls | Retitle requested from Engineering: parked under #1882; prove Mac/iOS person controls update all four capable Windows hosts, with progress/version/refusal receipts and three row runs per stage. Apple app distribution/self-update is outside row 8. |
+| APPLE-UPDATE / [#2399](https://github.com/danswett/agent-bridge/issues/2399) | S4 Apple updates: verify remote-host update controls | Retitled by Engineering: parked under #1882; prove Mac/iOS person controls update all four capable Windows hosts, with progress/version/refusal receipts and three row runs per stage. Apple app distribution/self-update is outside row 8. |
 | KEYS / [#2400](https://github.com/danswett/agent-bridge/issues/2400) | S4 row 17: native forms and dropped HA dropdowns | Engineering corrected the scope: f1-f12 are not function keys, HA dropdowns dropped, all-client multi-field forms retained; use the row 17 live contract. |
 | I-MCP / [#2401](https://github.com/danswett/agent-bridge/issues/2401) | S4 MCP evidence: reconcile current operations with the parity inventory | Check #45/current docs; record actual entry points for all nine rows and exact missing mechanisms, with at-most-250-line implementation follow-ups; no new agent approval rights. |
 | I-CLI / [#2402](https://github.com/danswett/agent-bridge/issues/2402) | S4 host CLI evidence: inventory missing client-row mechanisms | Record real CLI entry points/output for all nine rows, allowed-person boundaries and bounded missing-mechanism follow-ups; never infer parity from host-only handlers. |
