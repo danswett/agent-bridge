@@ -182,7 +182,7 @@ static partial class SelfTest
             await Choose(window, main, id, "Response");
             var pinned = await Until(() => ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count == turns
                 && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(30));
-            var pinnedFill = new { drawn = ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count, offset = scroll.VerticalOffset, extent = scroll.ScrollableHeight, pinned };
+            var pinnedFill = new { drawn = ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count, offset = scroll.VerticalOffset, extent = scroll.ScrollableHeight, pinned, latestState = away.LatestState };
             result["historyPinnedFill"] = pinnedFill;
             const string pinnedMessage = "finishes older drawing at the end before focus moves away";
             if (!QuarantinePostedInput(result, check, pinnedMessage, new
@@ -192,7 +192,7 @@ static partial class SelfTest
             }))
             {
                 check(pinned, pinned ? pinnedMessage
-                    : $"{pinnedMessage} (history: {pinnedFill.drawn}/{turns}; count500: {pinnedFill.drawn == turns}; at-end: {pinnedFill.offset >= pinnedFill.extent - 1.5}; offset: {pinnedFill.offset:0.###}; extent: {pinnedFill.extent:0.###}; {PostedInputTarget(window).Detail})");
+                    : $"{pinnedMessage} (history: {pinnedFill.drawn}/{turns}; count500: {pinnedFill.drawn == turns}; at-end: {pinnedFill.offset >= pinnedFill.extent - 1.5}; offset: {pinnedFill.offset:0.###}; extent: {pinnedFill.extent:0.###}; latest state: {pinnedFill.latestState}; {PostedInputTarget(window).Detail})");
             }
             await Still(scroll);
             if (ById<ItemsRepeater>(away, "History") is { } historyList
