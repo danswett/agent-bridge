@@ -19,6 +19,8 @@ public interface ISessionLauncher
 
     Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default);
 
+    Task<LaunchResult>? ReplayAsync(LaunchRequest request, string principal) => null;
+
     Task<LaunchResult> LaunchVerificationAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) =>
         Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "This launcher cannot guarantee standard permissions for verification."));
 
@@ -122,6 +124,8 @@ public sealed class LaunchServiceOptions
     // Which folders live sessions work in, asked before a finished worktree is removed. Null
     // is "cannot tell", which removes none.
     public IWorktreeUsage? WorktreeUsage { get; init; }
+    public Func<WorkspaceConfig, WorktreeResult, string, string?>? AgentWorktreeCheck { get; init; }
+    public Func<Guid, string, string, bool>? AgentWorktreeRefusalAudit { get; init; }
 
     // Brings sessions from the account's other machines (session.launch's transfer). Null: none.
     public ISessionFetcher? Transfers { get; init; }
@@ -705,13 +709,47 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     public Func<LaunchRequest, string, Func<Task<LaunchResult>>, Task<LaunchResult>>? NamedLaunch { get; set; }
 
+    sealed record LaunchOwner(string Principal, string Hash);
+
+    static LaunchOwner? Owner(LaunchRequest request, string peer) =>
+        peer.StartsWith("agent:", StringComparison.Ordinal)
+            ? new(peer, Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(
+                    request with { Request = Guid.Parse(request.Request).ToString("D") }, ProtocolJson.Options)))) : null;
+
+    public Task<LaunchResult>? ReplayAsync(LaunchRequest request, string principal) =>
+        Guid.TryParseExact(request.Request, "D", out var key) && Owner(request, principal) is { } owner
+            && requests.Read(key, owner) is { } remembered ? AgentResultAsync(remembered) : null;
+
+    static async Task<LaunchResult> AgentResultAsync(Task<LaunchResult> remembered)
+    {
+        var result = await remembered;
+        return result with
+        {
+            Trust = null,
+            Reason = result.Outcome == LaunchOutcome.Busy
+                ? "a launch on this machine is waiting for a person at the machine; try again in a few minutes"
+                : result.Trust is not null ? "the launched session is waiting for a person at the machine"
+                : result.Reason switch
+                {
+                    null => null,
+                    "request must be a UUID" or "fleetName is not supported by this host"
+                        or "launching is turned off on this machine (launch.enabled in the host's config)" => result.Reason,
+                    _ => "the launch could not be completed; check details at the machine",
+                },
+            Launched = result.Launched is { } launched ? launched with
+                { Cwd = null, Resume = null, Transfer = null, Profile = null } : null,
+        };
+    }
+
     public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key)) { return Task.FromResult(Refused("request must be a UUID")); }
         return requests.Once(key, () => request.FleetName is null ? RunAsync(request, key, peer)
             : NamedLaunch is { } policy ? policy(request, peer, () => RunAsync(request, key, peer))
             : Task.FromResult(Refused("fleetName is not supported by this host")), result =>
-            Settled(request, result, $"launch {Short(key)}"));
+            Settled(request, result, $"launch {Short(key)}"), owner: Owner(request, peer),
+            foreign: () => Task.FromResult(Refused("request is not a repeat owned by this caller")));
     }
 
     // Once per finished request, never for a repeat answered from the remembered outcome (that
@@ -843,7 +881,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                         return Refused($"'{fetched.About.Title}' is a {theirs} session, so it resumes in {theirs}, not {plan.Launcher.Label}");
                     }
                 }
-                return await StartAsync(plan, claim, key, handed, fetched, ct, restoring);
+                return await StartAsync(plan, claim, key, handed, fetched, ct, restoring,
+                    peer.StartsWith("agent:", StringComparison.Ordinal) ? peer : null);
             }
             finally
             {
@@ -1003,7 +1042,16 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         }
     }
 
-    async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false)
+    LaunchResult RefuseAgentWorktree(Guid key, string principal, string reason)
+    {
+        log($"launch {Short(key)}: agent worktree refused: {reason}");
+        bool recorded = false;
+        try { recorded = options.AgentWorktreeRefusalAudit?.Invoke(key, principal, reason) == true; }
+        catch (Exception e) { log($"launch {Short(key)}: refusal audit failed: {e.GetType().Name}"); }
+        return Refused(recorded ? reason : $"{reason} auditUnwritable: the agent worktree refusal could not be recorded.");
+    }
+
+    async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false, string? agentPrincipal = null)
     {
         Pending follow;
         LaunchedWith launched;
@@ -1024,6 +1072,10 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             // bound to its launch as the first new Codex session to appear: with Codex's
             // discovery held, one that was running unseen could appear first and be taken for it.
             if (HeldFor(plan) is { } held) { return new LaunchResult(LaunchOutcome.Busy, HeldReason(held)); }
+            if (agentPrincipal is not null && (plan.Isolated is null || plan.Resume is not null || plan.Transfer is not null))
+            {
+                return RefuseAgentWorktree(key, agentPrincipal, "Agent launches require a fresh isolated worktree; existing sessions and trees cannot be reused.");
+            }
             // Read once, so the arguments checked are the ones passed. A restore opens idle: extra
             // arguments carrying a prompt would submit one with nobody pressing Continue (Copilot on
             // #837), so it is refused before anything is made, and stays offered.
@@ -1066,7 +1118,33 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             string? worktree = null;
             if (plan.Isolated is { } isolated)
             {
-                var made = await Task.Run(() => Worktrees.Create(directory, Config, options.LocalNow, new HeldWorktreeUsage(source, options.WorktreeUsage), m => log($"launch {Short(key)}: worktree: {m}")));
+                var made = await Task.Run(() => Worktrees.Create(directory, Config, options.LocalNow, new HeldWorktreeUsage(source, options.WorktreeUsage), m => log($"launch {Short(key)}: worktree: {m}"), launchRequest: agentPrincipal is null ? null : key));
+                if (agentPrincipal is not null)
+                {
+                    string? worktreeRefusal;
+                    try
+                    {
+                        worktreeRefusal = options.AgentWorktreeCheck is { } check ? check(isolated, made, plan.Launcher.Id)
+                            : "This host has no agent worktree check; nothing was started.";
+                    }
+                    catch (Exception e)
+                    {
+                        log($"launch {Short(key)}: agent worktree check failed: {e.GetType().Name}");
+                        worktreeRefusal = "The agent worktree check could not be completed; nothing was started.";
+                    }
+                    if (worktreeRefusal is not null)
+                    {
+                        string? cleanup;
+                        try { cleanup = await Task.Run(() => Worktrees.DiscardCreated(made, key)); }
+                        catch (Exception e)
+                        {
+                            log($"launch {Short(key)}: refused worktree cleanup failed: {e.GetType().Name}");
+                            cleanup = "Its cleanup could not be completed safely.";
+                        }
+                        if (cleanup is not null) { worktreeRefusal += $" The new worktree was retained: {cleanup}"; }
+                        return RefuseAgentWorktree(key, agentPrincipal, worktreeRefusal);
+                    }
+                }
                 if (made.Detail.Length > 0) { log($"launch {Short(key)}: worktree: {made.Detail}"); }
                 if (made.Path is null) { return Refused($"Launch refused: requested isolation failed. {made.Problem}"); }
                 directory = made.Path;

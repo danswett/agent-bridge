@@ -23,12 +23,11 @@ public sealed class WireBytesTests : IAsyncLifetime
     static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
     const string Focused = "88888888-8888-4888-8888-888888888888";
 
-    // #597's goal, which this workload does not meet: it measures 13,140 bytes, of which the focused
-    // session's one patch a second is about 9.5 KB (each a ~240-byte message, ~42 of it overhead,
-    // too small for deflate to touch). The budget is the measured figure plus about 10%, so a change
-    // that re-inflates the stream fails; getting to the goal needs smaller or fewer focused patches.
+    // Lowering the deflate floor from 512 to 150 bytes (#2171) cuts this unchanged workload from
+    // 13,140 to 10,155 bytes: 2,985 of the 8,020-byte gap to #597's goal, still 5,035 over it.
+    // The budget adds 1,045 bytes (10.3%) of margin; reaching the goal needs further cuts.
     const int Goal = 5 * 1024;
-    const int Budget = 14_500;
+    const int Budget = 11_200;
 
     // What each event costs beyond its (deflated) JSON: the AEAD tag, the channel header and the
     // relay's data frame (type byte and the peer id).

@@ -40,6 +40,8 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         Marker("\"session.error\""),
         // A turn starting clears a turn's error (NewTurn), on a cold read too.
         Marker("\"assistant.turn_start\""),
+        Marker("\"assistant.turn_end\""),
+        Marker("\"abort\""),
         Marker("\"subagent.started\""),
         // What a delegate was given, by whom, and its model since: a cold read whose window
         // its start falls before still lists it with its task, nesting and current model.
@@ -53,6 +55,12 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
     ];
 
     bool _turnAskedForTools;
+    bool _inAssistantTurn;
+    bool _unknownReply;
+    HistoryTurn? _pendingNotice;
+    HistoryTurn? _activeNotice;
+    // A queued prompt does not own messages from the assistant cycle already running.
+    string? _replyTurn;
     // The host's sentence for the error that ended this turn, which the CLI's notice of it is
     // shown as (MainText); none once the next turn starts.
     string? _turnError;
@@ -64,6 +72,9 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
     protected override IReadOnlyList<byte[]> SkimMarkers => Markers;
 
     protected override Conversation.TurnMarks Turns => Conversation.TurnMarks.Copilot;
+
+    protected override bool MayStartTurn(ReadOnlySpan<byte> line) =>
+        base.MayStartTurn(line) || line.IndexOf("\"assistant.turn_start\""u8) >= 0;
 
     // The main agent's replies too, for activity.own: a session whose delegates filled the
     // parsed window had no reply of the main agent's in it. A delegate's carries an agentId,
@@ -79,6 +90,10 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
     {
         base.Reset();
         _turnAskedForTools = false;
+        _inAssistantTurn = false;
+        _unknownReply = false;
+        _pendingNotice = _activeNotice = null;
+        _replyTurn = null;
         _turnError = null;
         _permissionQuestion.Clear();
     }
@@ -104,16 +119,73 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
     // A shell's completion notice Copilot delivered while no turn ran: it starts a turn of its own.
     static bool Notice(JsonElement data) => Json.Str(data, "source") == "system" && Json.Str(data, "delivery") != "steering";
 
-    // Whether a record starts a turn (docs/protocol/v1-history.md), and its prompt: exactly the
-    // records that move activity.userMessage, here and in Count, so history's turn ids are
-    // activity.turn's.
+    // History also gives system notices their own turns; live carries those in activity.notice.
     internal static (string Text, UserMessageFrom? From, string? Label)? TurnStart(JsonElement e)
     {
         if (Json.Str(e, "type") != "user.message" || IsSubagent(e)) { return null; }
         var data = Json.Obj(e, "data") ?? default;
         if (Text.NonBlank(Json.Str(data, "content")) is not { } text) { return null; }
         var (from, label, injected) = Source(Json.Str(data, "source"));
+        if (Json.Str(data, "source") == "system") { return (text, UserMessageFrom.Notification, null); }
         return injected ? null : (text, from, label);
+    }
+
+    void NoticeBegins(string text, DateTimeOffset? at)
+    {
+        if (RecordId is not { } id) { return; }
+        S.Notice = _pendingNotice = new HistoryTurn
+        {
+            Id = id, At = Now(at), Kind = TurnKind.Notification,
+            Prompt = Conversation.HistoryDialect.Prompt(text, UserMessageFrom.Notification),
+        };
+        if (!_inAssistantTurn && !_unknownReply) { _replyTurn = id; _activeNotice = _pendingNotice; }
+    }
+
+    void AssistantBegins()
+    {
+        _inAssistantTurn = true;
+        _activeNotice = _pendingNotice;
+        _replyTurn = _activeNotice?.Id ?? S.TurnId;
+        if (_replyTurn is not null) { _unknownReply = false; }
+    }
+
+    void OwnerPrompted()
+    {
+        _pendingNotice = null;
+        if (!_inAssistantTurn) { _replyTurn = S.TurnId; _activeNotice = null; }
+    }
+
+    void ForgetTarget()
+    {
+        _inAssistantTurn = false;
+        _unknownReply = false;
+        _pendingNotice = _activeNotice = null;
+        _replyTurn = S.TurnId;
+    }
+
+    bool NoticeSaid(JsonElement data, DateTimeOffset? at)
+    {
+        if (_unknownReply && TurnErrorNotice(data)) { return false; }
+        var notice = _activeNotice;
+        if (notice is null && !_unknownReply) { return false; }
+        if (MainText(data) is { } content)
+        {
+            if (notice is null && RecordId is { } record)
+            {
+                notice = new HistoryTurn { Id = record, At = Now(at), Kind = TurnKind.Unknown, Truncated = true };
+            }
+            if (notice is null) { return true; }
+            var (text, cut) = Limits.KeepEnd(content, Limits.Response);
+            var partIndex = Text.NonBlank(Json.Str(data, "reasoningText")) is null ? 0 : 1;
+            S.Notice = notice with { Parts = [new HistoryPart
+            {
+                Id = Conversation.TurnIds.Part(RecordId ?? notice.Id, partIndex), At = Now(at),
+                Kind = HistoryPartKind.Response, Text = text, Truncated = cut ? true : null,
+            }] };
+            if (!_unknownReply) { _activeNotice = S.Notice; }
+            if (_pendingNotice?.Id == notice.Id) { _pendingNotice = S.Notice; }
+        }
+        return true;
     }
 
     // The schedule's number as its label, and only a number: the label is shown as it is.
@@ -136,7 +208,11 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                 }
                 break;
             case "assistant.turn_start" when !IsSubagent(e):
+                AssistantBegins();
                 NewTurn();
+                break;
+            case "assistant.turn_end" when !IsSubagent(e):
+                _inAssistantTurn = false;
                 break;
             case "user.message" when !IsSubagent(e):
                 if (Text.NonBlank(Json.Str(data, "content")) is { } text)
@@ -144,6 +220,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     var (from, label, injected) = Source(Json.Str(data, "source"));
                     if (injected)
                     {
+                        if (Json.Str(data, "source") == "system") { NoticeBegins(text, Json.Time(e, "timestamp")); }
                         // A notice delivered while no turn ran (not "steering") starts a turn no
                         // prompt's: kept past the skim, since the window may begin inside it, as
                         // Claude's notices are. A prompt after it starts a counted turn again.
@@ -153,6 +230,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     }
                     NewTurn();
                     Prompted(text, from, label, Json.Str(e, "id"));
+                    OwnerPrompted();
                     S.Prompt(Json.Time(e, "timestamp"));
                     S.UncountedTurn = false;
                     S.OwnReasoning = null;
@@ -163,10 +241,11 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             case "assistant.message" when !IsSubagent(e):
                 {
                     Answered(data, Json.Time(e, "timestamp"));
+                    if (NoticeSaid(data, Json.Time(e, "timestamp"))) { break; }
                     var reasoning = Text.NonBlank(Json.Str(data, "reasoningText"));
                     var content = MainText(data);
                     if (reasoning is not null) { S.OwnReasoning = Limits.KeepEnd(reasoning, Limits.Reasoning).Text; }
-                    if (content is not null) { (S.OwnResponse, S.OwnResponseCut) = Limits.KeepEnd(content, Limits.Response); S.ResponseTurn = S.TurnId; }
+                    if (content is not null) { (S.OwnResponse, S.OwnResponseCut) = Limits.KeepEnd(content, Limits.Response); S.ResponseTurn = S.TurnId is null ? null : _replyTurn ?? S.TurnId; }
                     if (reasoning is not null || content is not null) { S.OwnAt = Json.Time(e, "timestamp"); }
                     break;
                 }
@@ -175,16 +254,19 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                 break;
             case "session.start":
                 S.StartedAt ??= Json.Time(e, "timestamp");
-                if (!IsSubagent(e)) { S.Model ??= Json.Str(data, "selectedModel"); }
+                if (!IsSubagent(e)) { S.Model ??= Json.Str(data, "selectedModel"); Tuning(data); }
                 break;
             // The session's own model, from before the window: a session whose background
             // agents filled the window had no message of its own in it, and so showed no model
             // where agent-ha-bridge, which reads every line as it comes, showed one.
             case "session.resume" when !IsSubagent(e):
+                ForgetTarget();
                 S.Model = Json.Str(data, "selectedModel") ?? S.Model;
+                Tuning(data);
                 break;
             case "session.model_change" when !IsSubagent(e):
                 S.Model = Json.Str(data, "newModel") ?? S.Model;
+                Tuning(data, modelChange: true);
                 break;
             // A delegate's own, likewise: never the session's (#73).
             case "session.model_change":
@@ -235,9 +317,23 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                 S.Background.ShellEnded(Json.Str(kind, "shellId"));
                 break;
             case "session.shutdown" when !IsSubagent(e):
+                ForgetTarget();
                 S.Background.EndAll();
                 break;
+            case "abort" when !IsSubagent(e):
+                ForgetTarget();
+                break;
         }
+    }
+
+    protected override void UnreadableTurn()
+    {
+        base.UnreadableTurn();
+        _unknownReply = true;
+        _inAssistantTurn = false;
+        _pendingNotice = _activeNotice = null;
+        _replyTurn = null;
+        _turnError = null;
     }
 
     // A shell the skim saw start may have ended in the bytes the tail never read (a transcript
@@ -251,11 +347,18 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         S.Background.ForgetShells();
         S.Background.ForgetModels();
         S.Model = null;
+        S.Effort = null;
+        S.Context = null;
         S.OwnResponse = null;
         S.OwnResponseCut = false;
         S.ResponseTurn = null;
         S.OwnReasoning = null;
         S.OwnAt = null;
+        S.Notice = null;
+        _unknownReply = true;
+        _replyTurn = null;
+        _inAssistantTurn = false;
+        _pendingNotice = _activeNotice = null;
         // Turns may have started and failed unread: a notice in the tail names no error of the
         // skim's (#846), only the generic sentence unless its own error is read there.
         _turnError = null;
@@ -390,6 +493,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             case "session.start":
                 S.StartedAt ??= at;
                 S.Model ??= Json.Str(data, "selectedModel");
+                if (!sub) { Tuning(data); }
                 Context(Json.Obj(data, "context"));
                 break;
             case "session.resume":
@@ -397,13 +501,14 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                 Context(Json.Obj(data, "context"));
                 // A new process: whatever the last one was doing or asking died with it (killed
                 // mid-turn, nothing says so). A question it puts up again is written again.
-                if (!sub) { S.Abandon(at); }
+                if (!sub) { ForgetTarget(); S.Abandon(at); Tuning(data); }
                 break;
             case "session.context_changed":
                 Context(data);
                 break;
             case "session.model_change" when !sub:
                 S.Model = Json.Str(data, "newModel") ?? S.Model;
+                Tuning(data, modelChange: true);
                 break;
             case "session.compaction_complete" when Json.Bool(data, "success") == true:
                 // Only a compaction that finished: Copilot writes a start for every
@@ -424,15 +529,18 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                         // "steering" even when no turn is running, and those typed while idle
                         // or sent by the bridge are "idle" and carry parentAgentTaskId.
                         var (from, label, injected) = Source(Json.Str(data, "source"));
+                        if (Json.Str(data, "source") == "system") { NoticeBegins(text, at); }
                         // Memory, a skill's context or a notice is no prompt: a turn it starts
                         // writes its own turn_start.
                         if (!injected) { NewTurn(); }
                         UserPrompt(text, at, from: from, label: label, injected: injected, key: Json.Str(e, "id"), notice: injected && Notice(data));
+                        if (!injected) { OwnerPrompted(); }
                     }
                     _turnAskedForTools = false;
                     break;
                 }
             case "assistant.turn_start" when !sub:
+                AssistantBegins();
                 S.SetStatus(SessionStatus.Working);
                 NewTurn();
                 _turnAskedForTools = false;
@@ -441,7 +549,12 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                 {
                     Answered(data, at);
                     S.Model = Text.NonBlank(Json.Str(data, "model")) ?? S.Model;
-                    S.MainSaid(MainText(data), Text.NonBlank(Json.Str(data, "reasoningText")), at);
+                    if (!NoticeSaid(data, at))
+                    {
+                        var content = MainText(data);
+                        S.MainSaid(content, Text.NonBlank(Json.Str(data, "reasoningText")), at);
+                        if (content is not null) { S.ResponseTurn = S.TurnId is null ? null : _replyTurn ?? S.TurnId; }
+                    }
                     // The CLI's notice of the error that ended the turn is written after it, and
                     // starts nothing: read as a reply, it set the session working again for good.
                     if (TurnErrorNotice(data)) { break; }
@@ -455,6 +568,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     break;
                 }
             case "assistant.turn_end" when !sub:
+                _inAssistantTurn = false;
                 S.SetStatus(_turnAskedForTools ? SessionStatus.Working : SessionStatus.Idle);
                 _turnAskedForTools = false;
                 break;
@@ -474,6 +588,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             // abandoning on it set the session idle and failed the parent's running tools.
             // Whatever it, or a task agent it was waiting on, was asking goes with it.
             case "abort" when !sub:
+                ForgetTarget();
                 S.Abandon(at);
                 _turnAskedForTools = false;
                 break;
@@ -492,6 +607,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     break;
                 }
             case "session.shutdown" when !sub:
+                ForgetTarget();
                 S.Abandon(at);
                 break;
             // An error that ends the turn (AgentErrors.Copilot): the turn is over, so the session
@@ -501,6 +617,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     if (AgentErrors.Copilot(data, Now(at)) is not { } attention) { return false; }
                     _turnError = attention.Message;
                     S.FailTurn(at);
+                    _inAssistantTurn = false;
                     Failed(attention);
                     _turnAskedForTools = false;
                     break;
@@ -559,6 +676,12 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                 return false;
         }
         return true;
+    }
+
+    void Tuning(JsonElement data, bool modelChange = false)
+    {
+        S.Effort = Json.Str(data, "reasoningEffort") ?? S.Effort;
+        if (modelChange) { S.Context = Json.Str(data, "contextTier") ?? S.Context; }
     }
 
     // A turn starting leaves the last one's error behind it, as the CLI's own session list clears

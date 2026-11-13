@@ -10,6 +10,8 @@ import { open } from './nav.mjs';
 const LAPTOP = 'demo-laptop';
 const IDLE = 'laptop-copilot-1';
 const ASK = 'laptop-ask-1';
+const AWAY_RETURN = 'a machine that goes away just after a return reads as last seen for 3 s, then shows offline in place';
+const HELD_QUESTION_RETURN = 'a question held through a return keeps its row and Needs you\'s count until the grace ends';
 
 const card = (page, id) => page.locator(`.session[data-host-id="${LAPTOP}"][data-id="${id}"]`);
 const sv = (page, id) => page.locator(`.session-view[data-host-id="${LAPTOP}"][data-id="${id}"]`);
@@ -26,17 +28,112 @@ async function openDemo(page) {
 async function comeBack(page) {
   await page.clock.install();
   await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
-  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await page.evaluate(() => new Promise((resolve) => {
+    const grace = window.agentBridgeDemo.grace;
+    const stop = grace.onChange(() => {
+      if (grace.active) { stop(); resolve(); }
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+  }));
+}
+
+async function observeAwayReturn(page, rowId = IDLE) {
+  await page.clock.install();
+  await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
+  await page.evaluate((rowId) => {
+    const { grace, hosts } = window.agentBridgeDemo;
+    const trace = window.awayReturnTrace = { acceptedSince: null, events: [] };
+    const record = (event, details = {}) => {
+      const tab = document.querySelector('#machine-tabs .machine-tab[data-device-id="demo-laptop"]');
+      const row = document.querySelector(`.session[data-host-id="demo-laptop"][data-id="${rowId}"]`);
+      const strip = document.querySelector('#connection-strip');
+      const link = hosts.link('demo-laptop');
+      const state = {
+        event, ...details, now: Date.now(), visibility: document.visibilityState, focused: document.hasFocus(),
+        grace: { active: grace.active, since: grace.since, age: grace.age, drawn: grace.drawn },
+        machine: { online: hosts.isOnline('demo-laptop'), phase: link?.phase, synced: link?.client?.synced, stale: hosts.staleOf('demo-laptop') },
+        render: {
+          tab: { class: tab?.className, label: tab?.getAttribute('aria-label') },
+          row: { id: rowId, present: !!row, stale: row?.getAttribute('data-stale'), status: row?.querySelector('.row-status')?.textContent, glyph: row?.querySelector('.row-glyph .glyph')?.getAttribute('data-glyph') },
+          needsYou: {
+            count: document.querySelectorAll('#needs-you .needs-entry[data-host-id="demo-laptop"]').length,
+            heading: document.querySelector('#needs-you .needs-you-head')?.textContent,
+          },
+          strip: { hidden: strip?.hidden, text: strip?.textContent },
+          slot: document.querySelector('#return-slot')?.textContent,
+          hostStateHidden: document.querySelector('#host-state')?.hidden,
+        },
+      };
+      trace.events.push(state);
+      return state;
+    };
+    trace.record = record;
+    let accepting = true;
+    grace.onChange(() => {
+      if (accepting && grace.active && document.visibilityState === 'visible') { trace.acceptedSince = grace.since; }
+      record('grace.change');
+    });
+    document.addEventListener('visibilitychange', (event) => record(event.type, { trusted: event.isTrusted }), true);
+    for (const name of ['pageshow', 'pagehide', 'focus', 'blur', 'online', 'offline']) {
+      window.addEventListener(name, (event) => record(event.type, { persisted: event.persisted, trusted: event.isTrusted }), true);
+    }
+    record('setup.before');
+    document.dispatchEvent(new Event('visibilitychange'));
+    accepting = false;
+    record('setup.after');
+    if (trace.acceptedSince === null || trace.acceptedSince !== grace.since || document.visibilityState !== 'visible') {
+      throw new Error('Return setup: visibilitychange did not produce an observed visible grace start');
+    }
+  }, rowId);
+}
+
+async function advanceAwayClock(page, ms) {
+  const ready = await page.evaluate((ms) => {
+    const trace = window.awayReturnTrace;
+    const grace = window.agentBridgeDemo.grace;
+    trace?.record('clock.before', { ms });
+    return trace?.acceptedSince != null && grace.active && grace.since === trace.acceptedSince
+      && document.visibilityState === 'visible';
+  }, ms);
+  if (!ready) {
+    throw new Error('Return setup: refusing to advance fake time before a visible grace start is observed');
+  }
+  await page.clock.runFor(ms);
+  await page.evaluate((ms) => window.awayReturnTrace.record('clock.after', { ms }), ms);
 }
 
 test.use({ viewport: { width: 1440, height: 900 }, hasTouch: false });
 
-// Quarantined (#1493, #1474): turned the webkit job red on main; restore by 2026-11-12.
-test.skip('a machine that goes away just after a return reads as last seen for 3 s, then shows offline in place', async ({ page }) => {
+test.afterEach(async ({ page }, info) => {
+  const attachment = info.title === AWAY_RETURN ? 'away-return-state.json'
+    : info.title === HELD_QUESTION_RETURN ? 'held-question-return-state.json' : null;
+  if (!attachment || info.status === info.expectedStatus) { return; }
+  const report = await page.evaluate(() => {
+    const trace = window.awayReturnTrace;
+    if (!trace) { return { setup: 'not installed', visibility: document.visibilityState, demoReady: !!window.agentBridgeDemo }; }
+    const final = trace.record('failure');
+    return { acceptedSince: trace.acceptedSince, events: trace.events, final };
+  });
+  await info.attach(attachment, { body: JSON.stringify(report, null, 2), contentType: 'application/json' });
+});
+
+test('return_setup_refuses_to_advance_before_grace_starts', async ({ page }) => {
   await openDemo(page);
-  await comeBack(page);
+  await page.clock.install();
+  await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
+  expect(await page.evaluate(() => window.agentBridgeDemo.grace.active)).toBe(false);
+  const before = await page.evaluate(() => Date.now());
+  await expect(advanceAwayClock(page, 1)).rejects.toThrow(
+    'Return setup: refusing to advance fake time before a visible grace start is observed');
+  expect(await page.evaluate(() => Date.now())).toBe(before);
+});
+
+// Quarantined (#1493, #1474): the historical WebKit grace failure remains unreproduced.
+test.skip(AWAY_RETURN, async ({ page }) => {
+  await openDemo(page);
+  await observeAwayReturn(page);
   await setOnline(page, false);
-  await page.clock.runFor(1500);
+  await advanceAwayClock(page, 1500);
   await expect(card(page, IDLE).locator('.row-glyph .glyph')).not.toHaveAttribute('data-glyph', 'failed');
   await expect(card(page, IDLE).locator('.row-status')).not.toHaveText('Offline');
   await expect(card(page, IDLE)).not.toHaveAttribute('data-stale', /./);
@@ -44,7 +141,7 @@ test.skip('a machine that goes away just after a return reads as last seen for 3
   const tab = page.locator('#machine-tabs .machine-tab[data-device-id="demo-laptop"]');
   await expect(tab).not.toHaveClass(/away/);
   await expect(tab).not.toHaveAttribute('aria-label', /offline/);
-  await page.clock.runFor(1600);
+  await advanceAwayClock(page, 1600);
   await expect(tab).toHaveClass(/away/);
   await expect(tab).toHaveAttribute('aria-label', /offline/);
   await expect(card(page, IDLE)).toHaveAttribute('data-stale', 'offline');
@@ -150,10 +247,9 @@ test('End session held for a return is aria-disabled at once, a press says Updat
   expect(await page.evaluate(() => window.agentBridgeDemo.machines['demo-laptop'].stopLog.length)).toBe(0);
 });
 
-// Quarantined (#1493, #1474): turned the webkit job red on main; restore by 2026-11-12.
-test.skip('focus on the sort control when the strip takes the title row goes to the strip, never to the page', async ({ page }) => {
+test('focus on the sort control when the strip takes the title row goes to the strip, never to the page', async ({ page }) => {
   await openDemo(page);
-  await page.locator('.sessions-head select').first().focus();
+  await page.locator('#session-sort').focus();
   await comeBack(page);
   await page.evaluate(() => { window.agentBridgeDemo.connection.ready = false; window.agentBridgeDemo.page.refresh(); });
   await page.clock.runFor(3100);
@@ -242,19 +338,34 @@ test('an offline machine\'s line takes the place of the reply box\'s actions and
   await expect(page.locator('#host-state')).toBeHidden();
 });
 
-test('a question held through a return keeps its row and Needs you\'s count until the grace ends', async ({ page, browserName }) => {
+async function advanceHeldQuestionClock(page, ms) {
+  await advanceAwayClock(page, ms);
+}
+
+test('held_question_setup_refuses_to_advance_before_grace_starts', async ({ page }) => {
+  await openDemo(page);
+  await page.clock.install();
+  await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
+  expect(await page.evaluate(() => window.agentBridgeDemo.grace.active)).toBe(false);
+  const before = await page.evaluate(() => Date.now());
+  await expect(advanceHeldQuestionClock(page, 1)).rejects.toThrow(
+    'Return setup: refusing to advance fake time before a visible grace start is observed');
+  expect(await page.evaluate(() => Date.now())).toBe(before);
+});
+
+test(HELD_QUESTION_RETURN, async ({ page, browserName }) => {
   // Quarantined on webkit (#1693, #1692): failed on a PR with no pwa/ change; restore by 2026-11-13.
   test.skip(browserName === 'webkit', 'flaky on webkit, #1693');
   await openDemo(page);
   const entries = page.locator(`#needs-you .needs-entry[data-host-id="${LAPTOP}"]`);
   await expect(entries).toHaveCount(1);
   const head = await page.locator('#needs-you .needs-you-head').textContent();
-  await comeBack(page);
+  await observeAwayReturn(page, ASK);
   await setOnline(page, false);
-  await page.clock.runFor(1500);
+  await advanceHeldQuestionClock(page, 1500);
   await expect(entries).toHaveCount(1);
   await expect(page.locator('#needs-you .needs-you-head')).toHaveText(head);
   await expect(card(page, ASK)).not.toHaveAttribute('data-stale', /./);
-  await page.clock.runFor(1600);
+  await advanceHeldQuestionClock(page, 1600);
   await expect(entries).toHaveCount(0);
 });

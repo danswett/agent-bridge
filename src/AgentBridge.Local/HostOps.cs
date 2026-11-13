@@ -112,6 +112,8 @@ public sealed record RelayStatus(RelayState State, string? Url = null, string? D
 
 public sealed record FleetPublicationStatus(string Result, int SkippedInvalidIds = 0, int Failures = 0, DateTimeOffset? NextRetry = null, string? Failure = null);
 
+public sealed record HostSigningStatus(string Result, string? Storage = null, string? KeyId = null);
+
 // A device-flow sign-in the host is running: the code to enter, and where.
 public sealed record SignInStatus(SignInState State, string? UserCode = null, string? VerificationUri = null, DateTimeOffset? ExpiresAt = null, string? Error = null);
 
@@ -167,6 +169,7 @@ public sealed record HostStatus
     public HostAccount? Account { get; init; }
     public required RelayStatus Relay { get; init; }
     public FleetPublicationStatus? FleetPublication { get; init; }
+    public HostSigningStatus? HostSigning { get; init; }
     public required SignInStatus SignIn { get; init; }
     // Why delivery is off: agent-ha-bridge is running for this user (design G5). Null when it
     // is not, so answers, replies and stops are this host's to deliver.

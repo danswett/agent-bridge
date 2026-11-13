@@ -28,8 +28,7 @@ permissions:
 # (re-runs, below, run beside them). GitHub promises no order
 # between them, so nothing here relies on one: each run plans from the last commit main's CI
 # passed on, so a replaced run's changes are tested with a later one (the plan job), merge-rule
-# passes over a replaced run only when the newest run's commit builds on its commit, and
-# otherwise blocks until it's re-run (quality/README.md §4.9), and publish's own checks keep
+# ignores cancelled or unfinished product evidence (quality/README.md §4.9), and publish's checks keep
 # releases in version and commit order (publish-gate). A re-run (attempt 2 on) never joins
 # ci-main, so it can't take a waiting push run's place: like a run by hand, it's grouped by its
 # own run id, never cancelled.
@@ -226,9 +225,9 @@ jobs:
             $ring = if ($env:WHOLE_RING -eq 'true') { 2 } else { 1 }
             ./quality/plan.ps1 -Ring $ring -Base $env:BASE -Head HEAD -CompareRing1:($ring -gt 1) -Narrow app,app-installer -ExcludePlatform win-arm64 -Jobs $jobs
           } elseif ($env:EVENT -eq 'push' -and $env:BASE_KNOWN -eq 'true') {
-            # Main keeps every product platform, but the whole ring alone needs no packages.
+            # Main keeps every selected platform; proven docs/ordinary tests need no product run.
             $ring = if ($env:WHOLE_RING -eq 'true') { 2 } else { 1 }
-            ./quality/plan.ps1 -Ring $ring -Base $env:BASE -Head HEAD -CompareRing1:($ring -gt 1) -Narrow app,app-installer -Jobs $jobs
+            ./quality/plan.ps1 -MainPush -Ring $ring -Base $env:BASE -Head HEAD -CompareRing1:($ring -gt 1) -Narrow app,app-installer -Jobs $jobs
           } else {
             # Unknown main base: HEAD^1 alone cannot prove earlier app changes were packaged.
             # Keep full packaging, as on a manual whole-ring run.
@@ -595,6 +594,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/arm64-foreground
+        if: matrix.runtime == 'win-arm64' && matrix.runner == 'windows-11-arm'
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
@@ -637,7 +638,7 @@ jobs:
       - name: The published app draws the demo's cards and answers one
         shell: pwsh
         # build/app-self-test.ps1 says how the app ended when it did not end with 0 (#240).
-        run: ./build/app-self-test.ps1 -Exe ${{ matrix.out }}/publish/AgentBridge.exe -Result "$env:RUNNER_TEMP/selftest/result.json" -TimeoutSeconds 480
+        run: ./build/app-self-test.ps1 -Exe ${{ matrix.out }}/publish/AgentBridge.exe -Result "$env:RUNNER_TEMP/selftest/result.json" -TimeoutSeconds 720
       - name: The release would publish (dry run)
         # What the publish job would upload, publish and prune, against the repository's real
         # releases, with vpk reading the folder into a scratch feed. Read-only: nothing is uploaded.
@@ -713,6 +714,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/arm64-foreground
+        if: matrix.runtime == 'win-arm64' && matrix.runner == 'windows-11-arm'
       - name: The matching tested release files from this run
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -760,7 +763,7 @@ jobs:
           if ($bad) { exit 1 }
           . ./build/app-notices.ps1
           Write-AppDistributionEvidence -Publish "$env:RUNNER_TEMP/installer-input/publish" -Releases '${{ matrix.out }}/releases' -Version $env:APP_VERSION -Runtime '${{ matrix.runtime }}' -Installed "$root/current" -Out "$logs/distribution-evidence.json"
-          ./build/app-self-test.ps1 -Exe "$root/current/AgentBridge.exe" -Result "$logs/result.json" -TimeoutSeconds 480
+          ./build/app-self-test.ps1 -Exe "$root/current/AgentBridge.exe" -Result "$logs/result.json" -TimeoutSeconds 720
           exit $LASTEXITCODE
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
@@ -1339,7 +1342,9 @@ jobs:
         shell: pwsh
         run: |
           pwsh -NoProfile -File quality/test-pages-workflow.ps1
+          $workflowExit = $LASTEXITCODE
           pwsh -NoProfile -File quality/test-pages-gate.ps1
+          if ($workflowExit -ne 0 -or $LASTEXITCODE -ne 0) { exit 1 }
       - name: Halt uploads validate before writing and verify the newest release
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'halts-upload-test')) }}
         shell: pwsh

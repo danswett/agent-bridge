@@ -104,7 +104,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
             var now = time.GetUtcNow();
             if (failed is { } f && f.Release == release && now - f.At < HoldAfter(f.Times))
             {
-                throw new DownloadHeldException($"downloading {release} failed {Words.Ago(f.At, now)}; it is tried again after {(f.At + HoldAfter(f.Times)).ToLocalTime():t}");
+                throw new DownloadHeldException($"downloading {release} failed {Words.Ago(f.At, now)}; trying again soon");
             }
             try
             {

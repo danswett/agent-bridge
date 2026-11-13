@@ -429,6 +429,36 @@ public class CiPlanTests
         Assert.Empty(problems.Select(p => p.Message));
     }
 
+    [Theory]
+    [InlineData("app")]
+    [InlineData("app-installer")]
+    public void Arm64_native_jobs_prepare_foreground_immediately_after_checkout(string job)
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var stream = new YamlDotNet.RepresentationModel.YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(root, ".github", "workflows", "ci.yml"))));
+        var jobs = (YamlDotNet.RepresentationModel.YamlMappingNode)((YamlDotNet.RepresentationModel.YamlMappingNode)stream.Documents[0].RootNode)["jobs"];
+        var steps = (YamlDotNet.RepresentationModel.YamlSequenceNode)((YamlDotNet.RepresentationModel.YamlMappingNode)jobs[job])["steps"];
+        var prep = (YamlDotNet.RepresentationModel.YamlMappingNode)steps.Children[1];
+        Assert.Equal("./.github/actions/arm64-foreground", prep["uses"].ToString());
+        Assert.Equal("matrix.runtime == 'win-arm64' && matrix.runner == 'windows-11-arm'", prep["if"].ToString());
+        Assert.False(prep.Children.ContainsKey("continue-on-error"));
+    }
+
+    [Fact, Trait("Category", "Process")]
+    public async Task Popup_preparation_parses_and_obeys_the_popup_and_probe_failure_rule_offline()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var start = new System.Diagnostics.ProcessStartInfo("pwsh") { RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-File", Path.Combine(root, ".github", "actions", "arm64-foreground", "test-dismiss.ps1") })
+            start.ArgumentList.Add(arg);
+        using var process = System.Diagnostics.Process.Start(start) ?? throw new InvalidOperationException("pwsh did not start.");
+        var output = process.StandardOutput.ReadToEndAsync();
+        var error = process.StandardError.ReadToEndAsync();
+        Assert.True(process.WaitForExit(30000), "Offline popup checks timed out.");
+        Assert.True(process.ExitCode == 0, (await output) + (await error));
+    }
+
     [Fact]
     public void Installer_reuse_keeps_every_check_and_consumes_the_app_artifact_on_both_architectures()
     {
@@ -455,7 +485,7 @@ public class CiPlanTests
         Assert.DoesNotContain("pack-app.ps1", steps, StringComparison.Ordinal);
         Assert.Contains("Assert-AppInstallerInput", steps, StringComparison.Ordinal);
         Assert.Contains("Write-AppDistributionEvidence", steps, StringComparison.Ordinal);
-        Assert.Contains("-TimeoutSeconds 480", steps, StringComparison.Ordinal);
+        Assert.Contains("-TimeoutSeconds 720", steps, StringComparison.Ordinal);
         Assert.Contains("${{ matrix.artifact }}-${{ env.APP_VERSION }}", steps, StringComparison.Ordinal);
     }
 }

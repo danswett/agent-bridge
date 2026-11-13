@@ -37,6 +37,7 @@ import { UPDATING } from './hold.js';
 import { HistoryStore } from '../history-store.js';
 import { RowMenu } from './row-menu.js';
 import { phoneMedia } from '../phone-viewport.js';
+import { LoadFeed } from '../load-feed.js';
 
 // Needs you's answers (Approve once, Deny, Resend) wait as a question's do (ui.md §5.3): any
 // change to the lane can put Approve once under a pointer aimed at something else (an entry
@@ -175,6 +176,8 @@ export class SessionsPage {
   #timingTimer = null;
   #sortEvents = null;
   #sortPopup = new RowMenu();
+  #loads = null;
+  #loadClients = new Map();
 
   // $: getElementById. hosts: a HostSession. connection: presence, known and ready.
   // blobs(): the relay's blob store, or null; relayMax(): the largest blob it takes.
@@ -187,6 +190,7 @@ export class SessionsPage {
   // machines online and a waiting folder-trust question are said.
   constructor({ $, hosts, connection, me = null, shell = null, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, trust = () => null, confirm = () => null, status = () => '', facts = null, forget = null, updates = null, signInDevices = null, diagnose = null, storage = globalThis.localStorage, badge = new AppBadge(), onRendered = () => {}, opened = () => {} }) {
     Object.assign(this, { $, hosts, connection, me, shell, relayMax, transfers, trust, confirm, status, facts, forget, updates, signInDevices, diagnose, storage, onRendered, opened });
+    this.#loads = new LoadFeed({ onChange: () => this.drawMachines() });
     const current = (hostId) => hosts.route(hostId);
     const timing = retryMs ? { retryMs } : {};
     // One gate for every send (#269): nothing new is given for a machine with no route now (its
@@ -777,6 +781,13 @@ export class SessionsPage {
   clear() {
     for (const m of [this.wide, this.phone]) { m.removeEventListener?.('change', this.#onResize); }
     this.phone.destroy?.();
+    const loads = this.#loads;
+    this.#loads = null;
+    if (loads) {
+      loads.onChange = () => {};
+      for (const id of this.#loadClients.keys()) { void loads.detach(id).catch((e) => console.error(e)); }
+      this.#loadClients.clear();
+    }
     this.#sortPopup.close(false);
     this.#sortEvents?.abort();
     this.view.stopRecent();
@@ -849,6 +860,7 @@ export class SessionsPage {
   refresh() {
     const { hosts } = this;
     const links = hosts.links();
+    this.#syncLoads(links);
     for (const id of [...this.#shownCaps.keys()]) { if (!hosts.link(id)) { this.#shownCaps.delete(id); } }
     for (const link of links) {
       const caps = `${link.capabilities.join(' ')}:${link.machine?.readOnly ?? ''}:${hosts.staleOf(link.id)?.reason ?? ''}`;
@@ -1035,6 +1047,24 @@ export class SessionsPage {
     };
   }
 
+  #syncLoads(links) {
+    if (!this.#loads) { return; }
+    const current = new Map(links.filter((l) => l.phase === 'open' && !l.stale && l.client && !l.client.closed
+      && l.client.capabilities.includes('load')).map((l) => [l.id, l.client]));
+    for (const id of this.#loadClients.keys()) {
+      if (!current.has(id)) {
+        this.#loadClients.delete(id);
+        void this.#loads.detach(id).catch((e) => console.error(e));
+      }
+    }
+    for (const [id, client] of current) {
+      if (this.#loadClients.get(id) === client) { continue; }
+      // Remember failed attempts too: an older host may advertise load but answer unknown op.
+      this.#loadClients.set(id, client);
+      void this.#loads.attach(id, client).catch((e) => console.error(e));
+    }
+  }
+
   drawMachines() {
     const { hosts, connection, $ } = this;
     const presence = connection.presence;
@@ -1051,6 +1081,7 @@ export class SessionsPage {
       },
       status: (id) => this.status(id),
       facts: this.facts,
+      load: (id) => this.#loads?.load(id) ?? null,
       known: connection.known ?? null,
       forget: this.forget,
       updates: this.updates,

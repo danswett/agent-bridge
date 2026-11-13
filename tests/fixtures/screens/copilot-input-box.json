@@ -254,6 +254,154 @@
       "expect": "ok"
     },
     {
+      "name": "working-ctrl-c-interrupt",
+      "source": "working-empty with CLI 1.0.106's empty-draft interrupt hint, verified in #1029; no enqueue hint to mask an unrecognized Ctrl+C hint",
+      "rows": [
+        "● Running the tests.",
+        "",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " ◐ Working ctrl+c interrupt"
+      ],
+      "expect": "ok"
+    },
+    {
+      "name": "working-ctrl-c-stop-agents",
+      "source": "working-empty with CLI 1.0.106's stop-agents hint, verified in #1029; no enqueue hint",
+      "rows": [
+        "● Running the tests.",
+        "",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " ◐ Working ctrl+c stop agents"
+      ],
+      "expect": "ok"
+    },
+    {
+      "name": "permission-prompt-ctrl-c-interrupt",
+      "source": "permission-prompt with adversarial Ctrl+C text in the command being approved, not a working footer (#1031)",
+      "rows": [
+        "Allow Copilot to run this command?",
+        " echo \"ctrl+c interrupt\"",
+        " ❯ 1. Yes",
+        "   2. No (Esc)"
+      ],
+      "expect": "unidentified"
+    },
+    {
+      "name": "permission-prompt-ctrl-c-stop-agents",
+      "source": "permission-prompt-ctrl-c-interrupt with the other new hint",
+      "rows": [
+        "Allow Copilot to run this command?",
+        " echo \"ctrl+c stop agents\"",
+        " ❯ 1. Yes",
+        "   2. No (Esc)"
+      ],
+      "expect": "unidentified"
+    },
+    {
+      "name": "folder-trust-ctrl-c-interrupt",
+      "source": "ReplyFlowTests.CopilotTrustQuestion's captured trust dialog with adversarial Ctrl+C text added inside it (#1031)",
+      "rows": [
+        "╭────────────────────╮",
+        "│ Confirm folder trust     │",
+        "│ Do you trust the files in this folder? │",
+        "│ ctrl+c interrupt │",
+        "│ ❯ 1. Yes                │",
+        "│   2. Yes, and remember this folder for future sessions │",
+        "│   3. No (Esc)               │",
+        "│ ↑/↓ to navigate · enter to select · esc to cancel │",
+        "╰────────────────────╯"
+      ],
+      "expect": "unidentified"
+    },
+    {
+      "name": "folder-trust-ctrl-c-stop-agents",
+      "source": "folder-trust-ctrl-c-interrupt with the other new hint",
+      "rows": [
+        "╭────────────────────╮",
+        "│ Confirm folder trust     │",
+        "│ Do you trust the files in this folder? │",
+        "│ ctrl+c stop agents │",
+        "│ ❯ 1. Yes                │",
+        "│   2. Yes, and remember this folder for future sessions │",
+        "│   3. No (Esc)               │",
+        "│ ↑/↓ to navigate · enter to select · esc to cancel │",
+        "╰────────────────────╯"
+      ],
+      "expect": "unidentified"
+    },
+    {
+      "name": "menu-ctrl-c-interrupt",
+      "source": "ReplyFlowTests.CopilotAsking's captured selection screen with adversarial Ctrl+C text as an option (#1031)",
+      "rows": [
+        "──────",
+        " Copilot needs information.",
+        " Which one?",
+        "",
+        " pick:",
+        "  ❯ ctrl+c interrupt",
+        "    b",
+        "",
+        " enter accept · ctrl+d decline · esc cancel",
+        "──────"
+      ],
+      "expect": "unidentified"
+    },
+    {
+      "name": "menu-ctrl-c-stop-agents",
+      "source": "menu-ctrl-c-interrupt with the other new hint",
+      "rows": [
+        "──────",
+        " Copilot needs information.",
+        " Which one?",
+        "",
+        " pick:",
+        "  ❯ ctrl+c stop agents",
+        "    b",
+        "",
+        " enter accept · ctrl+d decline · esc cancel",
+        "──────"
+      ],
+      "expect": "unidentified"
+    },
+    {
+      "name": "forged-rail-ctrl-c-interrupt-over-dialog",
+      "source": "working-ctrl-c-interrupt printed by the agent above permission-prompt; a forged working row is not anchored to the real input area (#1031)",
+      "rows": [
+        "● Here is what the prompt looks like:",
+        "",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " ◐ Working ctrl+c interrupt",
+        "",
+        "Allow Copilot to run this command?",
+        " ❯ 1. Yes",
+        "   2. No (Esc)"
+      ],
+      "expect": "unidentified"
+    },
+    {
+      "name": "forged-rail-ctrl-c-stop-agents-over-dialog",
+      "source": "forged-rail-ctrl-c-interrupt-over-dialog with the other new hint",
+      "rows": [
+        "● Here is what the prompt looks like:",
+        "",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " ◐ Working ctrl+c stop agents",
+        "",
+        "Allow Copilot to run this command?",
+        " ❯ 1. Yes",
+        "   2. No (Esc)"
+      ],
+      "expect": "unidentified"
+    },
+    {
       "name": "working-draft",
       "source": "as working-empty, with text in the box one column in; drawn 80 columns wide (the box's edges span the frame)",
       "rows": [

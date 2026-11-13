@@ -25,6 +25,7 @@ internal sealed class SessionState
     // prompt leaves the last turn's reply showing until the new turn has one, and a client
     // drawing the latest turn must not put that reply under the new prompt.
     public string? ResponseTurn;
+    public HistoryTurn? Notice;
     public string? Reasoning;
     // The sub-agent that wrote Response or Reasoning, null for the main agent's own.
     public string? ResponseBy;
@@ -36,7 +37,7 @@ internal sealed class SessionState
     public string? OwnReasoning;
     public DateTimeOffset? OwnAt;
     public string? Model;
-    // The agent's own effort and context option ids. No parser sets them yet (#1142 R2): null is unknown.
+    // The agent's own reported effort and context option ids; null is unknown.
     public string? Effort;
     public string? Context;
     public string? Cwd;
@@ -132,6 +133,7 @@ internal sealed class SessionState
         FirstUserMessage = null;
         AgentTitle = null; UserMessage = null; UserMessageFrom = null; UserMessageLabel = null; UserMessageKey = null; TurnId = null; ResponseTurn = null; Response = null; Reasoning = null; Model = null; Effort = null; Context = null;
         ResponseBy = null; ReasoningBy = null; OwnResponse = null; OwnResponseCut = false; OwnReasoning = null; OwnAt = null;
+        Notice = null;
         Cwd = null; Branch = null; Repository = null; StartedAt = null; UpdatedAt = null; LastActivityAt = null; LastEventAt = null;
         Prompts = 0; LastPromptAt = null; Compactions = 0; Seen = false; UncountedTurn = false;
         Status = SessionStatus.Idle; StatusSince = null; EffectiveSince = null;

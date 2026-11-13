@@ -1,4 +1,57 @@
-import { hostJsonBytes } from './answers.js';
+import { hostJsonBytes, wellFormed } from './answers.js';
+import { isProtocolTime } from './protocol-time.js';
+
+const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+const int32 = (v) => Number.isInteger(v) && v >= -2147483648 && v <= 2147483647;
+const int64 = (v) => Number.isInteger(v) && v >= -(2 ** 63) && v < 2 ** 63;
+const asciiKey = (name) => name.replace(/[A-Z]/g, (c) => c.toLowerCase());
+const members = (raw) => object(raw)
+  ? new Map(Object.entries(raw).map(([name, value]) => [asciiKey(name), value])) : null;
+const field = (raw, name) => raw.get(asciiKey(name));
+const fields = (raw, shape) => raw
+  ? Object.fromEntries(Object.entries(shape).filter(([k, fits]) => fits(field(raw, k))).map(([k]) => [k, field(raw, k)])) : null;
+const enumOf = (v, known, fallback) => known.includes(v) ? v : fallback;
+const stateOf = (v, session = false) => enumOf(v, session ? ['fresh', 'partial'] : ['fresh', 'partial', 'stale'], 'unavailable');
+
+export const readMachineLoadCpu = (raw) => fields(members(raw), { percent: Number.isFinite, cores: int32 });
+export const readMachineLoadMemory = (raw) => fields(members(raw), { totalBytes: int64, availableBytes: int64, committedPercent: Number.isFinite });
+export const readUnattributedLoad = (raw) => fields(members(raw), { processes: int32, workingSetBytes: int64 });
+
+export function readSessionLoad(raw) {
+  const data = members(raw), session = data && field(data, 'session');
+  if (typeof session !== 'string' || wellFormed(session) !== session) { return null; }
+  const read = { session, agent: enumOf(field(data, 'agent'), ['agency', 'direct', 'copilot', 'claude', 'codex'], 'other'),
+    state: stateOf(field(data, 'state'), true), ...fields(data, { processes: int32, cpuPercent: Number.isFinite, workingSetBytes: int64, handles: int32 }) };
+  const handleKind = field(data, 'handleKind');
+  if (typeof handleKind === 'string' && wellFormed(handleKind) === handleKind) {
+    read.handleKind = enumOf(handleKind, ['handles', 'fds'], 'other');
+  }
+  return read;
+}
+
+// Complete record reading is separate from the feed's guarded bars-only projection.
+export function readMachineLoad(raw) {
+  const data = members(raw);
+  if (!data) { return null; }
+  const givenSessions = field(data, 'sessions');
+  let sessions = Array.isArray(givenSessions) ? givenSessions.map(readSessionLoad).filter(Boolean) : [];
+  let state = stateOf(field(data, 'state'));
+  if (sessions.length > 200) {
+    sessions = [...sessions].sort((a, b) => (b.workingSetBytes ?? -Infinity) - (a.workingSetBytes ?? -Infinity)).slice(0, 200);
+    if (state === 'fresh') { state = 'partial'; }
+  }
+  const read = { state, sessions, ...fields(data, { ageMs: int64, staleAfterMs: int64 }) };
+  const sampledAt = field(data, 'sampledAt');
+  if (isProtocolTime(sampledAt)) {
+    const time = new Date(sampledAt), year = time.getUTCFullYear();
+    if (year >= 1 && year <= 9999) { read.sampledAt = time.toISOString(); }
+  }
+  for (const [key, decode] of [['cpu', readMachineLoadCpu], ['memory', readMachineLoadMemory], ['unattributed', readUnattributedLoad]]) {
+    const value = decode(field(data, key));
+    if (value !== null) { read[key] = value; }
+  }
+  return read;
+}
 
 const nonnegative = (n) => Number.isFinite(n) && n >= 0;
 const numbers = (raw, keys) => Object.fromEntries(keys.filter((k) => nonnegative(raw?.[k])).map((k) => [k, raw[k]]));

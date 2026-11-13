@@ -89,7 +89,8 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
         return change is null ? config : change(config);
     }
 
-    private protected LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null, IntakeState.AgentHomes? homes = null, ILaunchCredentials? credentials = null, ILaunchAccount? account = null, IDiagnosticsJournal? journal = null)
+    private protected LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null, IntakeState.AgentHomes? homes = null, ILaunchCredentials? credentials = null, ILaunchAccount? account = null, IDiagnosticsJournal? journal = null,
+        Func<WorkspaceConfig, WorktreeResult, string, string?>? agentWorktreeCheck = null, Func<Guid, string, string, bool>? agentWorktreeRefusalAudit = null)
     {
         // A test that names a budget is about it running out.
         if (wait is not null || readyWait is not null || trustConfirm is not null || follow is not null) { clock.Run(); }
@@ -119,6 +120,8 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
             Transfers = fetcher ?? transfers,
             TransferStaging = transfers?.Staging ?? Path.Combine(f.Root, "profile", "transfers"),
             Journal = journal,
+            AgentWorktreeCheck = agentWorktreeCheck,
+            AgentWorktreeRefusalAudit = agentWorktreeRefusalAudit,
         }, log: logged.Enqueue, attachments: attachments, credentials: credentials, account: account);
     }
 
@@ -303,15 +306,20 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Equal(["alpha", "githubiq"], Denied(args));
     }
 
-    [Fact]
-    public async Task A_role_not_in_the_map_gets_no_servers_and_a_similar_role_name_is_not_matched()
+    [Theory]
+    [InlineData("review-2")]
+    [InlineData("default")]
+    public async Task A_role_not_in_the_map_gets_no_servers_and_a_similar_role_name_is_not_matched(string role)
     {
         OwnerMcp("alpha");
-        var request = new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App", Role = "review-2" };
+        var request = new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App", Role = role };
 
+        Assert.Null(LaunchProtocol.Check(request));
         await Launcher(Config(c => c with { WorkerMcp = new Dictionary<string, IReadOnlyList<string>> { ["review"] = ["alpha"] } })).LaunchAsync(request, "phone");
 
-        Assert.Equal(["alpha"], Denied(Assert.Single(starter.Specs).Arguments));
+        var args = Assert.Single(starter.Specs).Arguments;
+        Assert.Equal(["alpha"], Denied(args));
+        Assert.Contains("--disable-builtin-mcps", args);
     }
 
     [Fact]

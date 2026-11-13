@@ -21,6 +21,35 @@ internal sealed class HostSignKey : IDisposable
     public byte[] Sign(byte[] message) => key.Sign(message);
     public void Dispose() => key.Dispose();
 
+    public static HostSignKey OpenExisting(string profile)
+    {
+        RosterSigningKey? opened = null;
+        try
+        {
+            var folder = Path.Combine(profile, "host-sign");
+            var expected = HostRosterReader.ReadPrivate(Path.Combine(folder, "host-sign.public"), 65, b => b).Value;
+            if (expected is not { Length: 65 } || !AgentBridge.Roster.P256.IsPoint(expected)) { throw new InvalidDataException(); }
+            foreach (var name in new[] { "host-sign.lock", "signing-key.json" })
+            {
+                if (HostRosterReader.ReadPrivate(Path.Combine(folder, name), 4096, b => b).Value is null) { throw new InvalidDataException(); }
+            }
+            using var guard = new FileStream(Path.Combine(folder, "host-sign.lock"), FileMode.Open, FileAccess.Read, FileShare.Read);
+            var software = Present(Path.Combine(folder, "signing-key.dpapi"));
+            if (software && HostRosterReader.ReadPrivate(Path.Combine(folder, "signing-key.dpapi"), 4096, b => b).Value is null)
+            { throw new InvalidDataException(); }
+            opened = RosterSigningKeys.OpenExisting(folder);
+            if (!expected.AsSpan().SequenceEqual(opened.Public) || (opened.Storage == KeyStorage.Dpapi) != software)
+            { throw new InvalidDataException(); }
+            var result = new HostSignKey(opened);
+            opened = null;
+            return result;
+        }
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException
+            or CryptographicException or JsonException or ArgumentException or PlatformNotSupportedException)
+        { throw new InvalidDataException("missing-key"); }
+        finally { opened?.Dispose(); }
+    }
+
     public static HostSignKey LoadOrCreate(string profile, KeyStorage? prefer = null)
     {
         if (!OperatingSystem.IsWindows()) { throw new PlatformNotSupportedException("hostSign custody is implemented only on Windows"); }

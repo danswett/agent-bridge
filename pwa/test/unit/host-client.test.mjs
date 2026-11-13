@@ -42,6 +42,24 @@ test('a response settles the request it answers, by id', async () => {
   await assert.rejects(a, (e) => /one: nope/.test(e.message) && e.fromHost === true);
 });
 
+test('a failed update snapshot observer is logged without losing following responses', async () => {
+  const t = fakeTransport();
+  const client = new HostClient(t);
+  const error = new Error('update snapshot observer failed');
+  const logged = [], log = console.error;
+  console.error = (value) => logged.push(value);
+  try {
+    const snapshot = client.subscribeUpdate(() => { throw error; });
+    const next = client.request('next');
+    await flush();
+    t.host({ re: t.lastRequest('update.subscribe').id, ok: true, result: { current: '0.1.0' } });
+    t.host({ re: t.lastRequest('next').id, ok: true, result: 'received' });
+    assert.equal((await snapshot).current, '0.1.0');
+    assert.equal(await next, 'received');
+    assert.deepEqual(logged, [error]);
+  } finally { console.error = log; client.close(); }
+});
+
 test('a timeout is not an answer from the host', async () => {
   const client = new HostClient(fakeTransport(), { timeoutMs: 10 });
   await assert.rejects(client.request('hello'), (e) => /timed out/.test(e.message) && e.fromHost === false);
