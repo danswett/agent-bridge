@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using AgentBridge.Host;
@@ -38,6 +39,8 @@ public sealed class WireBytesTests : IAsyncLifetime
     readonly string[] quiet = new string[QuietSessions];
     readonly TaskCompletionSource liveSend = new(TaskCreationOptions.RunContinuationsAsynchronously);
     readonly TaskCompletionSource releaseLive = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    readonly TaskCompletionSource<SessionService.Feed> feedCreated = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    readonly ConcurrentDictionary<object, TaskCompletionSource<long>> drains = new(ReferenceEqualityComparer.Instance);
     int delayLive;
     TestRelay relay = null!;
     SessionSource source = null!;
@@ -60,6 +63,7 @@ public sealed class WireBytesTests : IAsyncLifetime
         source = new SessionSource(f.Options(), f.Processes, time);
         await source.RefreshAsync();
         service = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0")) { Time = time };
+        service.FeedCreated += created => feedCreated.TrySetResult((SessionService.Feed)created);
         relay = await TestRelay.StartAsync();
         var token = relay.TokenFor(1, "octo");
         host = await relay.ConnectAsync(token, "Test host", "host");
@@ -91,6 +95,8 @@ public sealed class WireBytesTests : IAsyncLifetime
     // Keep the first live send pending regardless of how quickly this runner schedules it.
     sealed class DelayedChannel(IProtocolChannel inner, WireBytesTests test) : IProtocolChannel
     {
+        long lastSent;
+
         public string PeerId => inner.PeerId;
         public string PeerName => inner.PeerName;
         public string PeerKind => inner.PeerKind;
@@ -99,12 +105,19 @@ public sealed class WireBytesTests : IAsyncLifetime
 
         public async Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
+            if (data is not null && test.drains.TryRemove(data, out var drained))
+            {
+                drained.TrySetResult(lastSent);
+                return lastSent;
+            }
             if (Volatile.Read(ref test.delayLive) != 0)
             {
                 test.liveSend.TrySetResult();
                 await test.releaseLive.Task.WaitAsync(ct);
             }
-            return await inner.SendEventAsync(name, data, ct);
+            lastSent = await inner.SendEventAsync(name, data, ct);
+            return lastSent;
         }
     }
 
@@ -128,6 +141,32 @@ public sealed class WireBytesTests : IAsyncLifetime
         Assert.True((await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = Focused })).GetProperty("ok").GetBoolean());
         Volatile.Write(ref delayLive, 1);
 
+        var measured = new List<ChannelEvent>();
+        var received = snapshot[^1].Seq;
+        async Task DrainAsync(bool releaseFirst)
+        {
+            using var cts = new CancellationTokenSource(Patience);
+            if (releaseFirst)
+            {
+                await liveSend.Task.WaitAsync(cts.Token);
+                releaseLive.TrySetResult();
+            }
+            var marker = new object();
+            var sent = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+            drains[marker] = sent;
+            var feed = await feedCreated.Task.WaitAsync(cts.Token);
+            Assert.True(feed.Subscription.Channel.Writer.TryWrite(new SessionEvent("test.drain", marker)),
+                "the session feed closed before the drain probe");
+            var through = await sent.Task.WaitAsync(cts.Token);
+            while (received < through)
+            {
+                var next = await ch.Events.ReadAsync(cts.Token);
+                measured.Add(next);
+                received = next.Seq;
+            }
+            Assert.Equal(through, received);
+        }
+
         var steps = Seconds * 4;
         for (var n = 0; n < steps; n++)
         {
@@ -138,16 +177,13 @@ public sealed class WireBytesTests : IAsyncLifetime
             if (n % 4 == 0) { Fixture.Append(focused, Copilot.Assistant($"focused change {n / 4}", 4 + n)); }
             await source.RefreshAsync();
             time.Advance(Step);
+            await DrainAsync(releaseFirst: n == 0);
         }
         // What the quiet interval was still holding at the 40 s mark is not counted: the next
         // release is after it.
-        await liveSend.Task.WaitAsync(Patience);
-        Console.WriteLine("The first live send is held while the original 200 ms measurement runs.");
-        await Task.Delay(200);
-
         var wire = new SortedDictionary<string, (int Count, int Bytes)>();
         var total = 0;
-        while (ch.Events.TryRead(out var e))
+        foreach (var e in measured)
         {
             var bytes = WireBytes(e);
             total += bytes;
