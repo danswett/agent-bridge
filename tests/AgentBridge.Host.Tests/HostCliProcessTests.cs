@@ -1,10 +1,13 @@
 using System.Diagnostics;
 using System.Text.Json;
 using AgentBridge.Host;
+using AgentBridge.Host.Core.Processes;
+using AgentBridge.Protocol;
 using Xunit;
+using Xunit.Abstractions;
 
 [Trait("Category", "Process")]
-public sealed class HostCliProcessTests
+public sealed class HostCliProcessTests(ITestOutputHelper output)
 {
     const string Id = "88888888-8888-4888-8888-888888888888";
 
@@ -17,6 +20,12 @@ public sealed class HostCliProcessTests
         {
             Fixture.Append(fixture.CopilotSession(Id, agent.Id, "Fixture CLI session", DateTimeOffset.UtcNow),
                 Copilot.User("Fixture request", 1), Copilot.Assistant("Fixture response", 2), Copilot.TurnEnd(3));
+            var observation = new SystemProcessInspector().Observe(AgentKind.Copilot);
+            var seen = observation.Processes.SingleOrDefault(p => p.Id == agent.Id);
+            var lockWrite = File.GetLastWriteTimeUtc(Path.Combine(fixture.CopilotHome, "session-state", Id, $"inuse.{agent.Id}.lock"));
+            var generationMatches = seen?.StartedAt is not { } started || lockWrite >= started.UtcDateTime - TimeSpan.FromSeconds(1);
+            output.WriteLine($"Parent inspector: fixturePid={agent.Id}; listed={observation.Listed}; known={observation.Known}; matched={seen is not null}; unidentified={observation.Unidentified.Any(p => p.Id == agent.Id)}");
+            output.WriteLine($"lockUtc={lockWrite:O}; processStartUtc={agent.StartTime.ToUniversalTime():O}; observedStartUtc={seen?.StartedAt:O}; generationMatches={generationMatches}");
             var result = await RunCli(fixture, "sessions", "--compact");
             Assert.Equal(0, result.ExitCode);
             Assert.Empty(result.Error);
