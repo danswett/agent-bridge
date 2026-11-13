@@ -12,6 +12,7 @@
 // never logged, announced, stored or put in a notification.
 import { h } from './dom.js';
 import { glyph } from './glyph.js';
+import { whileVisible } from './ticker.js';
 import { copyText } from '../markdown.js';
 import { AGENT_NAME, RESOLVED_SHOWN_MS, SIGN_IN, clockTime, confirming, flowExpired, needsSignIn, plainText, readCode, readDone, readStartResult, spelled } from '../auth-state.js';
 
@@ -196,6 +197,7 @@ export class SignInBanners {
   // Where a person here signed in (signin.done signedIn), by banner: once the host clears its
   // sessions, that reads "Signed in · N sessions recovered" rather than "Recovered by itself".
   #signedHere = new Map();
+  #expiryTimer = null;
 
   // container: where the banners go. hosts: a HostSession. live: a polite live region on the page
   // (role=status), empty until something is said. open(hostId, id): shows a session. fallback():
@@ -208,7 +210,7 @@ export class SignInBanners {
       hosts.onChange(() => this.schedule()),
     ];
     // A code runs out, and "signed in" goes, with nothing from the machine.
-    this.ticker = setInterval(() => this.render(), 5000);
+    this.ticker = whileVisible(() => this.render(), 5000);
     this.render();
   }
 
@@ -263,6 +265,11 @@ export class SignInBanners {
       else if (f.code && !f.code.refused && flowExpired(f.code, now)) { this.#flows.set(k, { ...f, code: null, outcome: 'expired' }); }
     }
     this.#early = this.#early.map((e) => this.#lapsed(e, now)).filter((e) => current.has(e.hostId) && this.#stillHeld(e, now));
+    // Code lifetime still ends out of sight, without an idle periodic sweep.
+    clearTimeout(this.#expiryTimer);
+    const expires = [...this.#flows.values()].map((f) => f.code?.expiresAt)
+      .concat(this.#early.map((e) => e.read.expiresAt)).map((at) => Date.parse(at ?? '')).filter((at) => at > now);
+    if (expires.length) { this.#expiryTimer = setTimeout(() => this.render(), Math.min(2147483647, Math.min(...expires) - now)); }
     const banners = signInBanners(links, { flows: this.#flows, resolved: this.#resolved, now });
     // A banner that went without a press here: its sessions no longer need sign-in, so it
     // recovered by itself (or another device signed it in). One whose sessions went too says nothing.
@@ -814,7 +821,8 @@ export class SignInBanners {
 
   // With the account: nothing of its machines stays on the page.
   stop() {
-    clearInterval(this.ticker);
+    this.ticker.stop();
+    clearTimeout(this.#expiryTimer);
     this.#toSay = [];
     this.live?.replaceChildren();
     for (const u of this.unwatch) { u?.(); }

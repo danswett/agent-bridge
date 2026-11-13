@@ -39,6 +39,69 @@ const sheet = (page) => page.locator('dialog.sign-in-sheet');
 const row = (page, id) => page.locator(`#session-list > .session[data-id="${id}"]`);
 const signIn = (page) => banner(page).getByRole('button', { name: 'Sign in to Copilot on DEV-VM1' });
 
+const visibility = (page, visible) => page.evaluate((visible) => {
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: visible ? 'visible' : 'hidden' });
+  document.dispatchEvent(new Event('visibilitychange'));
+}, visible);
+
+test('hidden banners stop ticking, catch up once, and still receive sign-in completion', async ({ page }) => {
+  await page.clock.install();
+  await openDemo(page);
+  await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);
+  await page.evaluate(() => {
+    const banners = window.agentBridgeDemo.page.signIns, render = banners.render;
+    window.__bannerRenders = 0;
+    banners.render = function () { window.__bannerRenders++; return render.call(this); };
+  });
+  await visibility(page, false);
+  await page.clock.runFor(15000);
+  expect(await page.evaluate(() => window.__bannerRenders)).toBe(0);
+  await visibility(page, true);
+  expect(await page.evaluate(() => window.__bannerRenders)).toBe(1);
+  await signIn(page).click();
+  await page.clock.runFor(100);
+  await expect(sheet(page).locator('.sign-in-code')).toHaveText('WDJB-MJHT');
+  await visibility(page, false);
+  expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(1);
+  await page.evaluate(() => window.agentBridgeDemo.finishSignIn('signedIn'));
+  await expect(sheet(page)).toBeHidden();
+  expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(0);
+  await visibility(page, true);
+  await page.evaluate(() => window.agentBridgeDemo.page.signIns.stop());
+  const renders = await page.evaluate(() => window.__bannerRenders);
+  await visibility(page, false);
+  await visibility(page, true);
+  await page.clock.runFor(15000);
+  expect(await page.evaluate(() => window.__bannerRenders)).toBe(renders);
+});
+
+test('an active code expires while hidden without a periodic banner sweep', async ({ page }) => {
+  await page.clock.install();
+  await openDemo(page);
+  await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);
+  await page.evaluate(() => {
+    window.agentBridgeDemo.nextCode = { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: new Date(Date.now() + 12000).toISOString() };
+  });
+  await signIn(page).click();
+  await page.clock.runFor(100);
+  await expect(sheet(page).locator('.sign-in-code')).toHaveText('WDJB-MJHT');
+  await visibility(page, false);
+  await page.evaluate(() => {
+    const banners = window.agentBridgeDemo.page.signIns, render = banners.render;
+    window.__bannerRenders = 0;
+    banners.render = function () { window.__bannerRenders++; return render.call(this); };
+  });
+  await page.clock.runFor(10000);
+  expect(await page.evaluate(() => window.__bannerRenders)).toBe(0);
+  expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(1);
+  await page.clock.runFor(2000);
+  await expect(sheet(page).locator('.sign-in-expired')).toHaveText('Code expired');
+  expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(0);
+  expect(await page.evaluate(() => window.__bannerRenders)).toBe(1);
+  await visibility(page, true);
+  expect(await page.evaluate(() => window.__bannerRenders)).toBe(2);
+});
+
 test('Agent error Details shows the cause, type and last activity, then removes them on recovery', async ({ page }) => {
   await page.clock.install();
   await openDemo(page);
