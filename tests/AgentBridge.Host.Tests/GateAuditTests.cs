@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Xunit;
 
 namespace AgentBridge.Host.Tests;
@@ -31,15 +32,18 @@ public sealed class GateAuditTests : IDisposable
     [Fact]
     public void Gate_metadata_round_trips_through_the_writer_and_existing_owner_reader_without_text()
     {
-        Append(Guid.NewGuid());
-        Append(Guid.NewGuid(), action: "session.stop");
-        Append(Guid.NewGuid());
+        var operations = new[] { Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid() };
+        for (var i = 0; i < operations.Length; i++) { Append(operations[i], action: i == 1 ? "session.stop" : "session.launch"); }
         var output = new StringWriter();
         Assert.Equal(0, AuditCommands.Run(["audit"], root, output, new StringWriter()));
         var rows = output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(s => JsonDocument.Parse(s)).ToArray();
         try
         {
-            Assert.Equal(new long[] { 1, 2, 3 }, rows.Select(d => d.RootElement.GetProperty("gate").GetProperty("sequence").GetInt64()).Order());
+            for (var i = 0; i < operations.Length; i++)
+            {
+                var gate = rows.Single(d => d.RootElement.GetProperty("gate").GetProperty("operation").GetGuid() == operations[i]).RootElement.GetProperty("gate");
+                Assert.Equal(i + 1, gate.GetProperty("sequence").GetInt64());
+            }
             foreach (var row in rows)
             {
                 var gate = row.RootElement.GetProperty("gate");
@@ -83,22 +87,35 @@ public sealed class GateAuditTests : IDisposable
     [InlineData("version"), InlineData("tail"), InlineData("outcome")]
     public void Unknown_versions_outcomes_and_a_torn_tail_are_incomplete_without_changing_files(string fault)
     {
-        Append(Guid.NewGuid());
+        var operation = Guid.NewGuid();
+        Append(operation);
+        Append(operation, "terminal", "started");
+        Assert.Empty(Read().IncompleteReasons);
         var file = Assert.Single(Directory.GetFiles(Audit, "launches-*.jsonl"));
         if (fault == "tail") { File.AppendAllText(file, "{\"gate\":"); }
-        else { File.WriteAllText(file, File.ReadAllText(file).Replace(fault == "version" ? "\"v\":1" : "\"reserved\"", fault == "version" ? "\"v\":9" : "\"unknown\"")); }
+        else
+        {
+            var lines = File.ReadAllLines(file);
+            var row = JsonNode.Parse(lines[^1])!;
+            if (fault == "version") { row["gate"]!["v"] = 9; } else { row["outcome"] = "unknown"; }
+            lines[^1] = row.ToJsonString();
+            File.WriteAllText(file, string.Join("\n", lines) + "\n");
+        }
         var before = Directory.GetFiles(Profile, "*", SearchOption.AllDirectories).ToDictionary(f => f, File.ReadAllBytes);
         Assert.NotEmpty(Read().IncompleteReasons);
         Assert.Equal(before.Keys.Order(), Directory.GetFiles(Profile, "*", SearchOption.AllDirectories).Order());
         foreach (var (path, bytes) in before) { Assert.Equal(bytes, File.ReadAllBytes(path)); }
     }
 
-    [Fact]
-    public void Missing_evidence_is_incomplete_and_the_reader_creates_no_profile_lock_or_writer()
+    [Theory]
+    [InlineData(false), InlineData(true)]
+    public void Missing_evidence_is_incomplete_and_the_reader_creates_no_profile_lock_or_writer(bool empty)
     {
+        if (empty) { Directory.CreateDirectory(Audit); }
         var report = Read();
         Assert.NotEmpty(report.IncompleteReasons);
         Assert.Empty(report.Totals);
-        Assert.False(Directory.Exists(root));
+        if (empty) { Assert.Empty(Directory.GetFiles(Profile, "*", SearchOption.AllDirectories)); }
+        else { Assert.False(Directory.Exists(root)); }
     }
 }
