@@ -492,6 +492,7 @@ public class MergeRuleTests
 
     [Theory]
     [InlineData("sensitive_path: [a]", "Property 'sensitive_path' not found")]
+    [InlineData("arm64_waiver: { job: [] }", "Property 'job' not found")]
     [InlineData("base: main", "has no status_poster, copilot_reviewer")]
     public void A_misspelled_or_missing_key_fails_rather_than_loosening_the_rule(string yaml, string message)
     {
@@ -1775,7 +1776,150 @@ public class MergeRuleTests
         }
     }
 
-    static string WriteConfig()
+    const string WaiverYaml = """
+        arm64_waiver:
+          switch: ARM64_WAIVER
+          until: 2026-11-20T08:00:00Z
+          jobs: [app (win-arm64), app-installer (win-arm64), product (windows-11-arm)]
+        """;
+    static readonly DateTimeOffset WaiverExpiry = new(2026, 11, 20, 8, 0, 0, TimeSpan.Zero);
+
+    [Theory]
+    [InlineData("ARM64_WAIVER", "ARM64_WAIVER_TYPO")]
+    [InlineData("2026-11-20T08:00:00Z", "0001-01-01T00:00:00Z")]
+    [InlineData("app-installer (win-arm64)", "app-installer (win-x64)")]
+    public void An_incomplete_or_broadened_waiver_config_is_rejected(string before, string after)
+    {
+        var yaml = File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
+        Assert.Throws<FormatException>(() => MergeRuleConfig.Parse(yaml.Replace(before, after, StringComparison.Ordinal)));
+    }
+
+    static string WaiverPullRequest(string name = "app (win-arm64)", string result = "FAILURE",
+        string workflow = "CI", string gate = "SUCCESS", string receipt = "CLEAN claude-opus-5.5 500",
+        string runResult = "FAILURE", string slug = "github-actions", params object[] extraJobs) =>
+        GraphQLPullRequest(Head, extraSuites: [Suite(slug, Workflow(500, workflow), "COMPLETED", runResult,
+            [Job(5000, name, "COMPLETED", result), Job(5001, "quality-gate", "COMPLETED", gate), .. extraJobs])],
+            extraStatuses: [new { context = "independent-review", state = "SUCCESS", description = receipt,
+                createdAt = "2026-11-03T20:01:00Z", creator = new { login = "danswett" } }]);
+
+    [Theory]
+    [InlineData("on", -1, "success")]
+    [InlineData("on", 0, "failure")]
+    [InlineData("on", 1, "failure")]
+    [InlineData(null, -1, "failure")]
+    [InlineData("off", -1, "failure")]
+    [InlineData("ON", -1, "failure")]
+    public void The_arm64_waiver_reads_clock_and_switch_once_and_expires_at_the_exact_boundary(string? value, int seconds, string state)
+    {
+        var config = WriteConfig(arm64Waiver: true);
+        var github = new FakeGitHub(WaiverPullRequest());
+        var clocks = 0;
+        var switches = 0;
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain,
+                () => { clocks++; return WaiverExpiry.AddSeconds(seconds); },
+                name => { switches++; Assert.Equal("ARM64_WAIVER", name); return value; });
+            Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
+            Assert.Equal((1, 1), (clocks, switches));
+        }
+        finally { File.Delete(config); }
+    }
+
+    [Theory]
+    [InlineData("app (win-arm64)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "success")]
+    [InlineData("app-installer (win-arm64)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "success")]
+    [InlineData("product (windows-11-arm)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "success")]
+    [InlineData("app (win-x64)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
+    [InlineData("app-installer (win-x64)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
+    [InlineData("product (ubuntu-latest)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
+    [InlineData("lint", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
+    [InlineData("app (win-arm64 )", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
+    [InlineData("APP (win-arm64)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
+    [InlineData("app (win-arm64)", "CANCELLED", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
+    [InlineData("app (win-arm64)", "TIMED_OUT", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
+    [InlineData("app (win-arm64)", "SKIPPED", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
+    [InlineData("app (win-arm64)", "FAILURE", "Other", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
+    [InlineData("app (win-arm64)", "FAILURE", "CI", "SKIPPED", "500", "FAILURE", "github-actions", "failure")]
+    [InlineData("app (win-arm64)", "FAILURE", "CI", "FAILURE", "500", "FAILURE", "github-actions", "failure")]
+    [InlineData("app (win-arm64)", "FAILURE", "CI", "SUCCESS", "CLEAN", "FAILURE", "github-actions", "failure")]
+    [InlineData("app (win-arm64)", "FAILURE", "CI", "SUCCESS", "15000", "FAILURE", "github-actions", "failure")]
+    [InlineData("app (win-arm64)", "FAILURE", "CI", "SUCCESS", "500", "CANCELLED", "github-actions", "failure")]
+    [InlineData("app (win-arm64)", "FAILURE", "CI", "SUCCESS", "500", "TIMED_OUT", "github-actions", "failure")]
+    [InlineData("app (win-arm64)", "FAILURE", "CI", "SUCCESS", "500", "STARTUP_FAILURE", "github-actions", "failure")]
+    [InlineData("app (win-arm64)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "another-app", "failure")]
+    public void Only_exact_arm64_CI_failures_with_a_green_gate_and_a_receipt_naming_the_run_are_waived(
+        string name, string result, string workflow, string gate, string receipt, string runResult, string slug, string state)
+    {
+        var config = MergeRuleConfig.Load(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
+        using var doc = JsonDocument.Parse(WaiverPullRequest(name, result, workflow, gate, receipt, runResult, slug));
+        var facts = MergeRuleCommand.ParseFacts(doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest"), config, arm64Waiver: true);
+        Assert.Equal(state, MergeRule.Evaluate(config, MainGreen, facts)!.State);
+    }
+
+    [Fact]
+    public void The_latest_authorized_first_receipt_must_name_this_run_not_a_previous_run_or_the_second_receipt()
+    {
+        var config = MergeRuleConfig.Load(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
+        using var doc = JsonDocument.Parse(WaiverPullRequest());
+        var facts = MergeRuleCommand.ParseFacts(doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest"), config, arm64Waiver: true);
+        var named = First() with { Description = "CLEAN claude-opus-5.5 500" };
+        StatusFact[][] invalid = [[], [named with { Creator = "github-actions" }], [named with { State = "failure" }],
+            [First(), Second() with { Description = "CLEAN gpt-6.1-sol 500" }],
+            [named, First() with { CreatedAt = named.CreatedAt.AddMinutes(1) }]];
+        Assert.All(invalid, statuses => Assert.Equal("failure", MergeRule.Evaluate(config, MainGreen, facts with { Statuses = statuses })!.State));
+        Assert.Equal("failure", MergeRule.Evaluate(config, MainGreen,
+            facts with { Checks = facts.Checks.Select(c => c.WaivedRunId is null ? c : c with { WaivedRunId = 501 }).ToArray() })!.State);
+    }
+
+    [Fact]
+    public void Missing_waiver_config_or_adding_x64_to_the_job_list_never_waives_a_failure()
+    {
+        var config = MergeRuleConfig.Load(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
+        config.Arm64Waiver!.Jobs.Add("app (win-x64)");
+        using var x64 = JsonDocument.Parse(WaiverPullRequest(name: "app (win-x64)"));
+        var facts = MergeRuleCommand.ParseFacts(x64.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest"), config, arm64Waiver: true);
+        Assert.Equal("failure", MergeRule.Evaluate(config, MainGreen, facts)!.State);
+        config.Arm64Waiver = null;
+        using var arm = JsonDocument.Parse(WaiverPullRequest());
+        facts = MergeRuleCommand.ParseFacts(arm.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest"), config, arm64Waiver: true);
+        Assert.Equal("failure", MergeRule.Evaluate(config, MainGreen, facts)!.State);
+    }
+
+    [Theory]
+    [InlineData("app (win-x64)")]
+    [InlineData("")]
+    public void A_waived_arm64_job_never_hides_another_failed_or_unnamed_job(string name)
+    {
+        var config = MergeRuleConfig.Load(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
+        using var doc = JsonDocument.Parse(WaiverPullRequest(extraJobs: [Job(5002, name, "COMPLETED", "FAILURE")]));
+        var facts = MergeRuleCommand.ParseFacts(doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest"), config, arm64Waiver: true);
+        Assert.Equal("failure", MergeRule.Evaluate(config, MainGreen, facts)!.State);
+        Assert.Contains(facts.Checks, c => c.Name == "CI" && c.State == "failure");
+    }
+
+    [Theory]
+    [InlineData("app (win-arm64)", -1, "success")]
+    [InlineData("product (windows-11-arm)", -1, "success")]
+    [InlineData("app (win-x64)", -1, "failure")]
+    [InlineData("product (windows-latest)", -1, "failure")]
+    [InlineData("app (win-arm64)", 0, "failure")]
+    public void Main_green_waives_only_the_exact_failed_arm64_instances_while_active(string failed, int seconds, string state)
+    {
+        var jobs = new[] { "plan", "light", "app (win-x64)", "app (win-arm64)", "product (ubuntu-latest)", failed }
+            .Distinct().Select((name, id) => new { id, name, status = "completed", conclusion = name == failed ? "failure" : "success", run_attempt = 1 }).ToArray();
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainJobs: JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }));
+        var config = WriteConfig(arm64Waiver: true);
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain,
+                () => WaiverExpiry.AddSeconds(seconds), _ => "on");
+            Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
+        }
+        finally { File.Delete(config); }
+    }
+
+    static string WriteConfig(bool arm64Waiver = false)
     {
         var path = Path.Combine(AppContext.BaseDirectory, $"merge-rule-{Guid.NewGuid():N}.yml");
         File.WriteAllText(path, """
@@ -1788,7 +1932,7 @@ public class MergeRuleTests
             main_green: { workflow: ci.yml, exempt_labels: [fixes-main], jobs: [light, app (win-x64), app (win-arm64), product] }
             copilot_waiver: { second_review: independent-review-2 }
             sensitive_paths: [docs/old.md]
-            """);
+            """ + (arm64Waiver ? "\n" + WaiverYaml : ""));
         return path;
     }
 
