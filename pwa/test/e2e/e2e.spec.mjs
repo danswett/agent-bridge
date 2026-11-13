@@ -550,6 +550,93 @@ test.describe('notifications', () => {
     await expectNoRing(card(page, 'linked-2'));
   });
 
+  test.describe('startup push handoff', () => {
+    const ids = ['early-push-1', 'early-push-2'];
+    const tap = (page, id = ids[0], question = 'q-early') => page.evaluate((url) =>
+      navigator.serviceWorker.dispatchEvent(new MessageEvent('message', { data: { type: 'agent-bridge.open', url } })),
+    `${appUrl}?host=${host.deviceId}&session=${id}&question=${question}`);
+    const release = (page) => page.evaluate(() => window.releaseDevice());
+    const head = (page, id = ids[0]) => card(page, id).locator('.question-slot .question-head');
+    const sent = () => host.answers.filter((a) => ids.includes(a.id));
+
+    test.beforeEach(async ({ page }) => {
+      for (const id of ids) { await host.upsert(asking(id, 'q-early', 'Approve the startup change?')); }
+      await signIn(page);
+      await page.addInitScript(() => {
+        const get = IDBObjectStore.prototype.get;
+        IDBObjectStore.prototype.get = function (key) {
+          const request = get.call(this, key);
+          if (this.name === 'kv' && key === 'device') {
+            request.addEventListener('success', (event) => {
+              event.stopImmediatePropagation();
+              window.releaseDevice = () => request.onsuccess?.call(request, event);
+            }, { once: true });
+          }
+          return request;
+        };
+      });
+      await page.goto(appUrl);
+      await page.waitForFunction(() => typeof window.releaseDevice === 'function');
+      expect(await page.evaluate(() => !!window.agentBridge)).toBe(false);
+    });
+
+    test.afterEach(async () => {
+      for (const id of ids) { await host.remove(id); }
+    });
+
+    test('the latest early tap opens its exact machine, session and question once identity is ready', async ({ page }) => {
+      await tap(page);
+      await tap(page, ids[1]);
+      await release(page);
+      await expect(head(page, ids[1])).toBeFocused({ timeout: 30000 });
+      await expect(card(page, ids[1])).toHaveAttribute('data-host-id', host.deviceId);
+      await expect(card(page, ids[0])).toBeHidden();
+      expect(sent()).toEqual([]);
+    });
+
+    test('an early tap for a stale question opens the session but never focuses its replacement', async ({ page }) => {
+      await tap(page);
+      await host.upsert(asking(ids[0], 'q-replacement', 'Approve a different change?'));
+      await release(page);
+      await expect(card(page, ids[0])).toBeVisible({ timeout: 30000 });
+      await expect(card(page, ids[0]).locator('.question:not(.resolved)')).toHaveAttribute('data-question', 'q-replacement');
+      await expect(head(page)).not.toBeFocused();
+      expect(sent()).toEqual([]);
+    });
+
+    for (const boundary of ['cleared', 'replaced']) {
+      test(`credential-transition boundary: an account ${boundary} before ready never replays the old tap after sign-in`, async ({ page }) => {
+        await tap(page);
+        await page.evaluate((change) => {
+          const key = 'agent-bridge.app.account';
+          const account = JSON.parse(localStorage.getItem(key));
+          if (change === 'cleared') { localStorage.removeItem(key); }
+          else { localStorage.setItem(key, JSON.stringify({ ...account, token: `${account.token}-changed` })); }
+        }, boundary);
+        await release(page);
+        if (boundary === 'replaced') {
+          await expect(page.locator('#signin-error')).toContainText('no longer accepts', { timeout: 30000 });
+        }
+        await page.locator('#signin-button').click();
+        await expect(page.locator('#conn')).toHaveText('Connected', { timeout: 30000 });
+        await expect(page.locator(`.session[data-id="${ids[0]}"]`)).toBeVisible({ timeout: 30000 });
+        await expect(card(page, ids[0])).toBeHidden();
+        expect(sent()).toEqual([]);
+      });
+    }
+
+    test('opening an early question and pressing Enter or Space submits nothing', async ({ page }) => {
+      await tap(page);
+      await release(page);
+      await expect(head(page)).toBeFocused({ timeout: 30000 });
+      await page.keyboard.press('Enter');
+      await page.keyboard.press('Space');
+      await expect(head(page)).toBeFocused();
+      await expect(card(page, ids[0]).locator('.question:not(.resolved)')).toHaveAttribute('data-question', 'q-early');
+      expect(sent()).toEqual([]);
+    });
+  });
+
   // A sign-in push links to ?host=&signin=<agent> and nothing more (v1-sessions.md Push signIn, #969).
   test('a sign-in notification\'s link opens its machine\'s banner for that agent with Sign in focused, and a stale one or an unknown agent only shows the machine', async ({ page, browserName }, testInfo) => {
     const t = new Date().toISOString();
