@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.Host;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 public sealed class AgentLaunchGateTests : IDisposable
@@ -15,6 +16,68 @@ public sealed class AgentLaunchGateTests : IDisposable
     void Write(string text) => File.WriteAllText(Path.Combine(folder, HostSettings.FileName), text);
     static string Config(string limits, string launch = """{"enabled":true}""") =>
         """{"agents":{"enabled":true,"launch":""" + launch + ""","limits":""" + limits + "}}";
+
+    [Fact]
+    public void A_launch_over_the_hourly_cap_returns_the_named_refusal_and_an_audit_line()
+    {
+        Write(Config(DefaultLimits));
+        Directory.CreateDirectory(Path.Combine(folder, AgentAuditLog.FolderName));
+        var gate = new AgentLaunchGate(folder);
+        const string principal = "agent:machine/parent";
+        for (var i = 0; i < 3; i++) { Assert.True(gate.CheckLaunch(principal, Guid.NewGuid().ToString("D"), "hash").Allowed); }
+        var request = Guid.NewGuid().ToString("D");
+
+        var refusal = gate.CheckLaunch(principal, request, "hash");
+
+        Assert.False(refusal.Allowed);
+        Assert.Equal("rate-limited", refusal.Reason);
+        Assert.InRange(refusal.RetryAfterSeconds, 1, 3600);
+        var row = JsonSerializer.Deserialize<JsonElement>(Assert.Single(File.ReadAllLines(
+            Assert.Single(Directory.GetFiles(Path.Combine(folder, AgentAuditLog.FolderName), "launches-*.jsonl"))).Skip(1)));
+        Assert.Equal(principal, row.GetProperty("principal").GetString());
+        Assert.Equal(request, row.GetProperty("request").GetString());
+        Assert.Equal("refused", row.GetProperty("outcome").GetString());
+        Assert.Contains("rate-limited", row.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void Rate_limited_launch_floods_have_bounded_audits_and_counted_minute_summaries()
+    {
+        Write(Config(DefaultLimits));
+        var clock = new FakeTimeProvider();
+        var gate = new AgentLaunchGate(folder, () => clock.GetUtcNow(), clock);
+        for (var i = 0; i < 3; i++) { Assert.True(gate.CheckLaunch("agent:machine/parent", Guid.NewGuid().ToString("D"), "hash").Allowed); }
+        void Refused() => Assert.Equal("rate-limited", gate.CheckLaunch("agent:machine/parent", Guid.NewGuid().ToString("D"), "hash").Reason);
+        string[] Rows() => File.ReadAllLines(Assert.Single(Directory.GetFiles(Path.Combine(folder, AgentAuditLog.FolderName), "launches-*.jsonl"))).Skip(1).ToArray();
+
+        for (var i = 0; i < 100; i++) { Refused(); }
+
+        Assert.Equal(60, Rows().Length);
+        clock.Advance(TimeSpan.FromSeconds(59));
+        Refused();
+        Assert.Equal(60, Rows().Length);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        Refused();
+        Assert.Equal(61, Rows().Length);
+        Assert.Equal("42 additional launch or stop attempts were refused",
+            JsonSerializer.Deserialize<JsonElement>(Rows()[^1]).GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void Attempt_cap_audits_include_the_attempt_limit_and_never_copy_an_invalid_request()
+    {
+        Write(Config(DefaultLimits.Replace("}", ""","launchAttemptsPerOriginPerHour":1}""")));
+        var gate = new AgentLaunchGate(folder);
+        Assert.True(gate.CheckLaunch("agent:machine/parent", Guid.NewGuid().ToString("D"), "hash").Allowed);
+
+        Assert.Equal("rate-limited", gate.CheckLaunch("agent:machine/parent", @"C:\private\request", "hash").Reason);
+
+        var row = JsonSerializer.Deserialize<JsonElement>(File.ReadAllLines(
+            Assert.Single(Directory.GetFiles(Path.Combine(folder, AgentAuditLog.FolderName), "launches-*.jsonl")))[^1]);
+        Assert.Contains("attempts 1 per agent", row.GetProperty("reason").GetString());
+        Assert.True(Guid.TryParse(row.GetProperty("request").GetString(), out _));
+        Assert.DoesNotContain("private", row.GetRawText());
+    }
 
     [Fact]
     public void A_fourth_launch_by_one_agent_in_an_hour_and_the_eleventh_on_the_machine_are_refused_rate_limited_with_retry_seconds()

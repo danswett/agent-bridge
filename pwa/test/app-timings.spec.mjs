@@ -1,42 +1,25 @@
 import { test, expect } from '@playwright/test';
 import { open, view } from './nav.mjs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { buildSite } from '../tools/build-site.mjs';
-import { startStaticServer } from './serve.mjs';
 
 const IDLE = '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35';
-const RELAY = 'https://timings.relay.invalid';
-let site, appUrl;
 
-test.beforeAll(async ({}, info) => {
-  const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-  const dir = buildSite({ out: path.join(root, '.site', `timings-${info.project.name}`), relay: RELAY });
-  site = await startStaticServer({ dir });
-  appUrl = `http://127.0.0.1:${site.address().port}/`;
-});
-
-test.afterAll(async () => { await new Promise((resolve) => site ? site.close(resolve) : resolve()); });
-
-test('a settled reply is uploaded on the page timer, which stops with the signed-in page', async ({ page }) => {
+test('timings pause while hidden, survive an offline return, and stop with the signed-in page', async ({ page }) => {
   const posts = [];
   await page.route('**/v1/stats/app-timings', async (route) => {
-    const headers = { 'access-control-allow-origin': new URL(appUrl).origin };
-    if (route.request().method() === 'OPTIONS') {
-      await route.fulfill({ status: 204, headers: { ...headers, 'access-control-allow-methods': 'POST', 'access-control-allow-headers': 'authorization,content-type' } });
-      return;
-    }
     posts.push({ body: route.request().postDataJSON(), token: route.request().headers().authorization });
-    await route.fulfill({ status: 202, headers, json: { accepted: 1, dropped: 0 } });
+    await route.fulfill({ status: 202, json: { accepted: 1, dropped: 0 } });
   });
   await page.clock.install();
-  await page.goto(`${appUrl}?demo=1&static=1&answerDelay=0`);
+  await page.goto('?demo=1&static=1&answerDelay=0');
   await page.waitForSelector('html[data-demo-ready]');
   await page.evaluate(async () => {
     const { BridgeConnection } = await import('/js/connection.js');
-    const connection = new BridgeConnection({ base: 'https://timings.relay.invalid', key: {}, account: { token: 'test-account-token' } });
+    const connection = new BridgeConnection({ base: location.origin, key: {}, account: { token: 'test-account-token' } });
     connection.relay = { open: true };
-    window.agentBridgeDemo.connection.reportTimings = (drain) => connection.reportTimings(drain);
+    window.__timingConnection = connection;
+    window.__timingCalls = 0;
+    Object.defineProperty(window.agentBridgeDemo.connection, 'ready', { get: () => connection.ready });
+    window.agentBridgeDemo.connection.reportTimings = (drain) => { window.__timingCalls++; return connection.reportTimings(drain); };
   });
   await open(page, IDLE);
   const reply = view(page, IDLE).locator('form.reply');
@@ -52,14 +35,68 @@ test('a settled reply is uploaded on the page timer, which stops with the signed
   await page.clock.runFor(50);
   await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.page.turns.recent().length)).toBe(1);
   const [sample] = await page.evaluate(() => window.agentBridgeDemo.page.turns.recent());
+  const visibility = (visible) => page.evaluate((visible) => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: visible ? 'visible' : 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, visible);
+  await visibility(false);
+  await page.evaluate(() => { window.__timingConnection.relay.open = false; });
+  await page.clock.runFor(120000);
+  expect(await page.evaluate(() => window.__timingCalls)).toBe(0);
+  expect(await page.evaluate(() => window.agentBridgeDemo.page.turns.recent())).toEqual([sample]);
+  await visibility(true);
   await page.clock.runFor(60000);
+  expect(await page.evaluate(() => window.__timingCalls)).toBe(0);
+  expect(await page.evaluate(() => window.agentBridgeDemo.page.turns.recent())).toEqual([sample]);
+  await page.evaluate(() => {
+    setTimeout(() => {
+      window.__timingConnection.relay.open = true;
+      window.agentBridgeDemo.connection.emit('ready');
+    }, 100);
+  });
+  await page.clock.runFor(100);
   await expect.poll(() => posts.length).toBe(1);
+  expect(await page.evaluate(() => window.__timingCalls)).toBe(1);
+  await page.evaluate(() => window.agentBridgeDemo.connection.emit('ready'));
+  expect(await page.evaluate(() => window.__timingCalls)).toBe(1);
   expect(posts[0]).toEqual({
     body: { samples: [{ app: 'PWA', route: 'send-to-settled', ms: sample.ms, at: sample.at }] },
     token: 'Bearer test-account-token',
   });
   expect(await page.evaluate(() => window.agentBridgeDemo.page.turns.drain())).toEqual([]);
-  await page.evaluate(() => window.agentBridgeDemo.page.clear());
-  await page.clock.runFor(120000);
+  await page.evaluate(() => { window.__timingConnection.relay.open = false; });
+  await visibility(false);
+  await visibility(true);
+  await visibility(false);
+  const hiddenCalls = await page.evaluate(() => window.__timingCalls);
+  await page.evaluate(() => {
+    window.__timingConnection.relay.open = true;
+    window.agentBridgeDemo.connection.emit('ready');
+  });
+  expect(await page.evaluate(() => window.__timingCalls)).toBe(hiddenCalls);
+  await visibility(true);
+  await page.evaluate(() => {
+    const turns = window.agentBridgeDemo.page.turns;
+    turns.sent('test', 'next'); turns.seen('test', 'next', 'working'); turns.seen('test', 'next', 'idle');
+  });
+  await visibility(false);
+  await visibility(true);
   expect(posts).toHaveLength(1);
+  expect(await page.evaluate(() => window.agentBridgeDemo.page.turns.recent().length)).toBe(1);
+  await page.clock.runFor(60000);
+  await expect.poll(() => posts.length).toBe(2);
+  await page.evaluate(() => { window.__timingConnection.relay.open = false; });
+  await visibility(false);
+  await visibility(true);
+  await page.evaluate(() => window.agentBridgeDemo.page.clear());
+  const calls = await page.evaluate(() => window.__timingCalls);
+  await page.evaluate(() => {
+    window.__timingConnection.relay.open = true;
+    window.agentBridgeDemo.connection.emit('ready');
+  });
+  await visibility(false);
+  await visibility(true);
+  await page.clock.runFor(120000);
+  expect(posts).toHaveLength(2);
+  expect(await page.evaluate(() => window.__timingCalls)).toBe(calls);
 });

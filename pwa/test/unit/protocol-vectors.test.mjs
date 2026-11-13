@@ -47,13 +47,15 @@ const PATCHES = 'session-patches.json';
 const NOISE = 'noise-ik-p256.json';
 // The signed agent-command envelope's vectors (#722) are not records either; C# replays them.
 const ENVELOPE = 'agent-envelope.json';
+// Registry signature bytes are not records; C# replays them now, and the PWA follows in #2379.
+const FLEET_SIGNING = 'fleet-registry-signing.json';
 // The device roster's encoding, not records: test/unit/roster-vectors.test.mjs replays it.
 const ROSTER = 'roster.json';
 // The roster's acceptance-rule scenarios, not records: test/unit/roster-state.test.mjs replays them.
 const ROSTER_STATE = 'roster-state.json';
 // The roster's vetoes, person commands and attestations: test/unit/roster-commands.test.mjs replays them.
 const ROSTER_COMMANDS = 'roster-commands.json';
-const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED && f !== PATCHES && f !== NOISE && f !== ENVELOPE && f !== ROSTER && f !== ROSTER_STATE && f !== ROSTER_COMMANDS).sort().map((f) => [f, load(f)]);
+const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED && f !== PATCHES && f !== NOISE && f !== ENVELOPE && f !== FLEET_SIGNING && f !== ROSTER && f !== ROSTER_STATE && f !== ROSTER_COMMANDS).sort().map((f) => [f, load(f)]);
 const records = new Map(files.flatMap(([file, json]) => Object.entries(json.records).map(([name, r]) => [name, { ...r, file, contexts: json.contexts }])));
 const known = new Map(files.flatMap(([, json]) => json.knownDifferences).filter((d) => d.differs === 'pwa').map((d) => [`${d.vector}:${d.step}`, d]));
 
