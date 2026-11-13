@@ -7,7 +7,7 @@ using AgentBridge.Roster;
 using AgentBridge.Transport;
 using Xunit;
 
-public sealed class HostRosterPinTests : IDisposable
+public sealed partial class HostRosterPinTests : IDisposable
 {
     readonly string folder = Path.Combine(Path.GetTempPath(), "roster-pin-" + Guid.NewGuid().ToString("N"));
     string PathName => Path.Combine(folder, "roster-pin.json");
@@ -148,10 +148,10 @@ public sealed class HostRosterPinTests : IDisposable
     string TransitionPath => Path.Combine(folder, "roster-transition.json");
     static readonly byte[] Nonce = new byte[32];
     CommandContext Context => new(w.Id("H"), CommandAction.AcceptHostSign, Instant.Parse("2026-11-04T12:00:00.123456789Z"), Nonce: Nonce);
-    HostRosterReader PinnedReader()
+    HostRosterReader PinnedReader(Func<Instant>? wallUtc = null)
     {
         if (!w.Labels.Contains("H")) { w.Add("H", "G", "H", "B", kind: "host"); Pin(); }
-        var reader = new HostRosterReader(PathName, () => w.Now);
+        var reader = new HostRosterReader(PathName, () => w.Now, wallUtc);
         Assert.Equal("verified", reader.Update(Relay("G", "B", "H"), RosterFixture.Account).Outcome);
         return reader;
     }
@@ -255,7 +255,7 @@ public sealed class HostRosterPinTests : IDisposable
         snapshot[field == "null-head" ? "heads" : field] = field switch
         {
             "account" => JsonValue.Create("another-account"), "generation" => JsonValue.Create(new string('f', 32)),
-            "genesis" => JsonValue.Create(Codec.Base64Url(new byte[32])), "v" => JsonValue.Create(2),
+            "genesis" => JsonValue.Create(Codec.Base64Url(new byte[32])), "v" => JsonValue.Create(3),
             "acceptHostSign" => JsonValue.Create(true), "requests" => new JsonArray(snapshot["requests"]![0]!.DeepClone(), snapshot["requests"]![0]!.DeepClone()),
             "heads" => new JsonArray(), "null-head" => new JsonArray((JsonNode?)null), _ => JsonValue.Create("secret-marker"),
         };
