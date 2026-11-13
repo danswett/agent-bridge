@@ -1259,8 +1259,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             try { started = starter.Start(spec); }
             catch (Exception e)
             {
-                provenance.Abandon(key);
                 if (credentialIssued) { credentials!.Abandon(launchId); }
+                provenance.Abandon(key);
                 log($"launch {Short(key)}: {plan.Launcher.Label} could not be started: {e.Message}");
                 return new LaunchResult(LaunchOutcome.Failed, $"{plan.Launcher.Label} couldn't be started") { Launched = launched };
             }
@@ -1616,7 +1616,12 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // was started with. Once per session id.
     void Noted(Pending p, string id)
     {
-        if (source.ProcessOf(id) is { StartedAt: not null } process) { provenance.Bound(p.Key, id, process); }
+        if (source.ProcessOf(id) is { StartedAt: not null } process)
+        {
+            try { provenance.Bound(p.Key, id, process); }
+            catch (Exception e) when (e is InvalidOperationException or IOException or UnauthorizedAccessException)
+            { log($"launch {Short(p.Key)}: process provenance could not be bound: {e.Message}"); }
+        }
         if (p.NotedId == id || SessionStarted is not { } started) { return; }
         p.NotedId = id;
         try { started(id, p.Launched); }

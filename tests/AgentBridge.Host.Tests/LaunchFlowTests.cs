@@ -1303,16 +1303,44 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public void Corrupt_or_unfinished_launch_provenance_never_allows_adoption(bool corrupt)
+    [InlineData("not-json", true)]
+    [InlineData("null", true)]
+    [InlineData("{\"11111111-1111-4111-8111-111111111111\":{\"session\":null,\"process\":null}}", true)]
+    [InlineData("oversized", true)]
+    [InlineData("{\"11111111-1111-4111-8111-111111111111\":{\"session\":\"\",\"process\":null}}", false)]
+    public void Corrupt_or_unfinished_launch_provenance_never_allows_adoption(string json, bool corrupt)
     {
         var folder = Directory.CreateDirectory(Path.Combine(f.Root, "profile")).FullName;
-        File.WriteAllText(Path.Combine(folder, "launch-provenance.json"),
-            corrupt ? "not-json" : "{\"11111111-1111-4111-8111-111111111111\":{\"session\":\"\",\"process\":null}}");
+        File.WriteAllText(Path.Combine(folder, "launch-provenance.json"), json == "oversized" ? new string(' ', 4 * 1024 * 1024 + 1) : json);
         var restarted = Launcher(Config());
         Assert.Throws<InvalidOperationException>(() => restarted.LaunchedSession(starter.CodexId, null));
         if (corrupt) { Assert.Contains(logged, line => line.Contains("launch provenance could not be read")); }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_provenance_write_failure_preserves_credential_cleanup_or_the_registered_session(bool cannotStart)
+    {
+        var file = Path.Combine(f.Root, "profile", "launch-provenance.json");
+        var saved = file + ".saved";
+        starter.BeforeStart = () => { File.Move(file, saved); Directory.CreateDirectory(file); };
+        starter.Throws = cannotStart ? new IOException("start failed") : null;
+        var credentials = new RecordedCredentials();
+        var launcher = Launcher(Config(), credentials: credentials);
+        var noted = false;
+        launcher.SessionStarted += (_, _) => noted = true;
+
+        var result = await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "phone");
+
+        if (cannotStart) { Assert.Contains(credentials.Calls, call => call.StartsWith("abandon ", StringComparison.Ordinal)); }
+        else { Assert.Equal(LaunchOutcome.Started, result.Outcome); Assert.True(noted); }
+        Assert.Contains(logged, line => line.Contains("launch provenance could not be saved"));
+        Assert.Throws<InvalidOperationException>(() => launcher.LaunchedSession(starter.CodexId, null));
+        Directory.Delete(file);
+        File.Move(saved, file);
+        var restarted = new LaunchProvenance(file, logged.Enqueue);
+        Assert.Throws<InvalidOperationException>(() => restarted.Contains(credentials.Calls[0].Split(' ')[1], null));
     }
 
     [Fact]
@@ -1653,6 +1681,7 @@ public abstract partial class LaunchFlowFixture
         public bool ExitsAtOnce;
         // Starting the agent fails with this.
         public Exception? Throws;
+        public Action? BeforeStart;
         // The launcher hands its session to a process of its own (its pid + 3000) and exits.
         public bool HandsOn;
         public readonly string CodexId = "66666666-6666-4666-8666-666666666666";
@@ -1667,6 +1696,7 @@ public abstract partial class LaunchFlowFixture
 
         public Started Start(StartSpec spec)
         {
+            BeforeStart?.Invoke();
             if (Throws is { } broken) { throw broken; }
             int pid;
             lock (Specs) { Specs.Add(spec); pid = ++next; Pids.Add(pid); if (!ExitsAtOnce) { running.Add(pid); } if (HandsOn) { running.Add(pid + 3000); } }

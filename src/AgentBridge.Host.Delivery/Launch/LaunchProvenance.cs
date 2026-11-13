@@ -34,7 +34,7 @@ internal sealed class LaunchProvenance
         }
         catch (FileNotFoundException) { }
         catch (DirectoryNotFoundException) { }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
         {
             unavailable = true;
             log("launch provenance could not be read; adoption and further launches are refused");
