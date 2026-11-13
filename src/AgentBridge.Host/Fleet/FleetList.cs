@@ -11,7 +11,8 @@ namespace AgentBridge.Host.Fleet;
 // One machine of the caller's own account, as the relay's session registry reports it.
 // Verified stays false until hostSign exists (design "Signing"); Truncated is the record's own cap flag.
 public sealed record FleetMachine(string Id, bool Online, IReadOnlyList<FleetSession> Sessions, bool Truncated = false, bool Verified = false, string? Name = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? LastSeen = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? LastSeen = null,
+    [property: JsonIgnore] bool HasRegistryRecord = false);
 
 public sealed record FleetSession(string Node, string? Name, string State, DateTimeOffset Since, string? Id = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Model = null);
@@ -67,8 +68,10 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
             var name = MachineName(f);
             var sessions = new List<FleetSession>();
             var truncated = false;
+            var hasRegistryRecord = false;
             if (f.TryGetProperty("record", out var rec) && rec.ValueKind == JsonValueKind.Object && rec.TryGetProperty("sessions", out var list) && list.ValueKind == JsonValueKind.Array)
             {
+                hasRegistryRecord = true;
                 truncated = rec.TryGetProperty("truncated", out var tr) && tr.ValueKind == JsonValueKind.True;
                 foreach (var s in list.EnumerateArray())
                 {
@@ -77,7 +80,7 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
                         s.TryGetProperty("model", out var model) && model.ValueKind == JsonValueKind.String ? model.GetString() : null));
                 }
             }
-            machines.Add(new FleetMachine(id, f.TryGetProperty("online", out var on) && on.ValueKind == JsonValueKind.True, sessions, truncated, Name: name, LastSeen: LastSeen(f)));
+            machines.Add(new FleetMachine(id, f.TryGetProperty("online", out var on) && on.ValueKind == JsonValueKind.True, sessions, truncated, Name: name, LastSeen: LastSeen(f), HasRegistryRecord: hasRegistryRecord));
         }
         foreach (var entry in known)
         {
@@ -236,7 +239,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
             sessions = machines.SelectMany(m => m.Sessions.Select(s => new FleetListSession(
                 m.Id, s.Node, s.State, s.Since, Math.Max(0, (long)(now - s.Since).TotalSeconds), m.Online, withNames ? s.Name : null, m.Name))).ToList(),
             machines = machines.OrderBy(m => m.Id, StringComparer.Ordinal).Select(m => new FleetListMachine(
-                m.Id, m.Online ? "online" : "offline", m.Name, m.LastSeen, m.Online && !m.Truncated)).ToList(),
+                m.Id, m.Online ? "online" : "offline", m.Name, m.LastSeen, m.Online && m.HasRegistryRecord && !m.Truncated)).ToList(),
         };
     }
 }
