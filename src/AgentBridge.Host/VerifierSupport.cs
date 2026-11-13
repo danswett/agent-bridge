@@ -17,28 +17,20 @@ internal interface IVerifierSupportRoster
 internal sealed record VerifierSupportContext(string Host, PersonCommand Command, byte[] Nonce,
     Instant IssuedAt, Instant ExpiresAt, Instant Now, Instant? HighWater = null, Instant? Floor = null);
 
-internal sealed class RosterVerifierSupportView : IVerifierSupportRoster
+internal sealed class RosterVerifierSupportView(RosterVerifier roster) : IVerifierSupportRoster
 {
-    readonly RosterVerifier _roster;
-    public string Account { get; }
-    public string Generation { get; }
-    public byte[] Genesis { get; }
-    public IReadOnlyList<byte[]> Heads { get; }
-    public IReadOnlyList<VerifierSupportMember> Members { get; }
-    public RosterVerifierSupportView(RosterVerifier roster)
+    public string Account => roster.Account;
+    public string Generation => roster.Generation;
+    public byte[] Genesis => roster.Graph.Count == 0 ? [] : roster.Graph[0].Hash.ToArray();
+    public IReadOnlyList<byte[]> Heads => roster.Heads.Select(h => h.ToArray()).ToArray();
+    public IReadOnlyList<VerifierSupportMember> Members => roster.State.Active.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p =>
     {
-        _roster = roster; Account = roster.Account; Generation = roster.Generation;
-        Genesis = roster.Graph.Count == 0 ? [] : roster.Graph[0].Hash.ToArray();
-        Heads = roster.Heads.Select(h => h.ToArray()).ToArray();
-        Members = roster.State.Active.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p =>
-        {
-            var node = roster.Graph[p.Value]; var device = node.Body.Device!;
-            return new VerifierSupportMember(p.Key, node.Hash.ToArray(), device.Kind,
-                device.IsPerson || roster.SignerKeyCollides(p.Value) ? null : device.HostSign?.ToArray());
-        }).ToArray();
-    }
-    public bool Covers(IReadOnlyList<byte[]> heads) => heads.All(_roster.Holds) && Heads.All(h =>
-        _roster.Graph.Find(h) is { } parent && heads.Any(n => _roster.Graph.Find(n) is { } child && (parent == child || _roster.Graph.IsAncestor(parent, child))));
+        var node = roster.Graph[p.Value]; var device = node.Body.Device!;
+        return new VerifierSupportMember(p.Key, node.Hash.ToArray(), device.Kind,
+            device.IsPerson || roster.SignerKeyCollides(p.Value) ? null : device.HostSign?.ToArray());
+    }).ToArray();
+    public bool Covers(IReadOnlyList<byte[]> heads) => heads.All(roster.Holds) && Heads.All(h =>
+        roster.Graph.Find(h) is { } parent && heads.Any(n => roster.Graph.Find(n) is { } child && (parent == child || roster.Graph.IsAncestor(parent, child))));
 }
 
 // The view and retained challenge are local trust inputs, never claims reconstructed from wire.

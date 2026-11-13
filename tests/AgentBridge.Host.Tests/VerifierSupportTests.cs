@@ -168,6 +168,9 @@ public sealed class VerifierSupportTests
         Assert.Equal(Verdict.Accepted, Assert.Single(verifier.Offer(world.Entry("G"))).Verdict);
         var real = new RosterVerifierSupportView(verifier);
         Assert.Null(Assert.Single(real.Members).Key);
+        world.Add("H", "P", "H", "G", kind: "host");
+        Assert.Equal(Verdict.Accepted, Assert.Single(verifier.Offer(world.Entry("H"))).Verdict);
+        Assert.Equal(2, real.Members.Count);
         Assert.Equal(Unsupported, Check(Wire(), roster: Roster with { Members = real.Members }));
     }
 }
