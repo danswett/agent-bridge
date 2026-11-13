@@ -90,20 +90,20 @@ public static class LocalApi
         if (op is LaunchProtocol.Launch or LaunchProtocol.Options
             && callers.Classify(channel).Kind == CallerKind.Agent)
         {
-            if (credentials is { } store && store.Of(channel) is { Kind: "session" } reader
-                && reader.Scope != AgentPolicy.ScopeNone)
+            if (credentials is { } store && store.Of(channel) is { Kind: "session" } launchReader
+                && launchReader.Scope != AgentPolicy.ScopeNone)
             {
                 if (op == LaunchProtocol.Launch
-                    && sessions.ReplayAgentLaunch(data, store.PrincipalOf(reader)) is { } replay)
+                    && sessions.ReplayAgentLaunch(data, store.PrincipalOf(launchReader)) is { } replay)
                 {
                     var result = await replay;
-                    if (store.IsLive(reader)) { return result; }
+                    if (store.IsLive(launchReader)) { return result; }
                     throw Refuse(op, callers.Classify(channel), "the credential is no longer live", log);
                 }
                 if (op == LaunchProtocol.Options)
                 {
                     var offered = await sessions.HandleAsync(channel, op, data);
-                    if (!store.IsLive(reader)) { throw Refuse(op, callers.Classify(channel), "the credential is no longer live", log); }
+                    if (!store.IsLive(launchReader)) { throw Refuse(op, callers.Classify(channel), "the credential is no longer live", log); }
                     if (offered is not LaunchOptions choices) { throw Refuse(op, callers.Classify(channel), "launch options are unavailable", log); }
                     return store.LaunchGate.ProjectOptions(choices);
                 }
