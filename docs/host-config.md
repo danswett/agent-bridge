@@ -455,6 +455,15 @@ Optional `gate` metadata is versioned and allow-listed by the same reader. Its h
 ids, sequence, route, actor kind and bounded reason code contain no action text or hashes.
 The internal per-run projection reports observed totals and incomplete evidence, never
 a qualifying run or retirement verdict; it creates no profile, writer or lock.
+An unterminated final record also warns on stderr. A malformed record stops the read:
+later evidence is not projected, and control rows do not yet apply run lifecycle state.
+Any append that supplies a missing LF retains `previousTailIncomplete` in the audit metadata.
+Missing or pruned history stays INCOMPLETE; tail-derived sequence allocation still permits
+new audit writes, without repairing or certifying the old run. This does not start a new run.
+Retrying a terminal refusal uses a fresh host operation; successful logical identities
+receive credit once. Conflicting terminals on the same operation still invalidate the run.
+Durable high-water anchors/cache and the broader cross-run, missing-approval-question and
+writer-refusal regression matrix are deferred to #1401 A6; no qualifying run before that work.
 
 What agents did on this machine is written one JSON line per event to
 `<profile>\audit\agents-YYYY-MM-DD.jsonl` (#1296, design/agent-principals.md §5.6). The folder

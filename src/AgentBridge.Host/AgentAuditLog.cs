@@ -42,7 +42,8 @@ public sealed class AgentAuditLog
 
     sealed record Line(DateTimeOffset At, string Direction, string Request, string Principal, string[] Chain, string Action,
         string Target, string Outcome, string Reason, string? DataSha256, int? TextLength, int V = 1, string PreviousSha256 = "",
-        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] GateAuditMetadata? Gate = null);
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] GateAuditMetadata? Gate = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool PreviousTailIncomplete = false);
 
     static readonly string Genesis = new('0', 64);
     readonly object gate = new();
@@ -78,10 +79,7 @@ public sealed class AgentAuditLog
                 using var folderLock = Lock(folder);
                 if (entry.Gate is { } metadata)
                 {
-                    var (rows, complete) = GateAuditProjection.Load(profile);
-                    var sequences = rows.Where(r => r.Gate is not null).Select(r => r.Gate!.Sequence).Order().ToArray();
-                    if (!complete || sequences.Where((s, i) => s != i + 1L).Any()) { throw new IOException("gate audit evidence is incomplete"); }
-                    metadata = metadata with { Sequence = checked(sequences.LongLength + 1) };
+                    metadata = metadata with { Sequence = checked(Math.Max(LastGateSequence(folder, false), LastGateSequence(folder, true)) + 1) };
                     if (!metadata.Valid(entry.Action, entry.Target, entry.Outcome)) { throw new IOException("invalid gate audit metadata"); }
                     line = line with { Gate = metadata, Reason = metadata.ReasonCode, DataSha256 = null, TextLength = null };
                 }
@@ -95,11 +93,12 @@ public sealed class AgentAuditLog
                 var predecessor = TailHash(previousFile);
                 if (previousFile is not null && !predecessor.HasLine) { throw new IOException("the previous agent audit day has no complete line"); }
                 var previous = tail.HasLine ? tail.Hash : predecessor.Hash;
+                var torn = length > 0 && EndsWithoutNewline(file);
+                line = line with { PreviousTailIncomplete = torn };
                 var header = tail.HasLine ? "" : JsonSerializer.Serialize(new { v = 1, previousSha256 = previous }, Json) + "\n";
                 line = line with { PreviousSha256 = header.Length == 0 ? previous : Hash(Encoding.UTF8.GetBytes(header[..^1])) };
                 var data = Encoding.UTF8.GetBytes(header + JsonSerializer.Serialize(line, Json) + "\n");
                 // Include a separator after a torn line, and refuse before creating or changing any file.
-                var torn = length > 0 && EndsWithoutNewline(file);
                 var used = launch ? new DirectoryInfo(folder).EnumerateFiles("launches-*.jsonl").Sum(f => f.Length) : length;
                 var limit = launch ? MaxLaunchBytes : maxBytes;
                 if (used > limit - data.Length - (torn ? 1 : 0)) { throw new IOException("the agent audit quota is full"); }
@@ -195,6 +194,36 @@ public sealed class AgentAuditLog
         Directory.EnumerateFiles(folder, $"{(launch ? "launches" : "agents")}-*.jsonl")
             .Select(f => TryDay(Path.GetFileName(f).Replace("launches-", "agents-", StringComparison.Ordinal), out _)
                 ? f : throw new IOException("the agent audit folder contains an invalid day name")).Order(StringComparer.Ordinal);
+
+    long LastGateSequence(string folder, bool launch)
+    {
+        var warned = false;
+        foreach (var file in Files(folder, launch).Reverse())
+        {
+            using var stream = File.OpenRead(file);
+            var end = stream.Length;
+            while (end > 0)
+            {
+                var start = PreviousNewline(stream, end - 1) + 1;
+                var bytes = new byte[checked((int)(end - start))];
+                stream.Position = start;
+                stream.ReadExactly(bytes);
+                end = start;
+                try
+                {
+                    using var doc = JsonDocument.Parse(bytes);
+                    if (doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("gate", out var gate)
+                        && gate.ValueKind == JsonValueKind.Object && gate.TryGetProperty("sequence", out var sequence)
+                        && sequence.ValueKind == JsonValueKind.Number && sequence.TryGetInt64(out var value) && value > 0) { return value; }
+                }
+                catch (JsonException)
+                {
+                    if (!warned) { warned = true; log("gate audit sequence scan skipped a malformed record; evidence remains incomplete"); }
+                }
+            }
+        }
+        return 0;
+    }
     static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
     static bool CompleteObject(byte[] bytes)
     {

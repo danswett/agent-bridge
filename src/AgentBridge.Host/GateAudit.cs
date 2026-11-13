@@ -13,7 +13,7 @@ public sealed record GateAuditMetadata(int V, Guid Operation, Guid Run, long Seq
             : Incarnation != Guid.Empty && Guid.TryParse(target, out var id) && id != Guid.Empty && target == id.ToString()
             && GateAuditProjection.SuccessFor(action) is { } success
             && (outcome == success || outcome is "attempted" or "reserved" or "refused" or "failed" or "unconfirmed")
-            && (action != "session.answer" || Question is { } question && question != Guid.Empty));
+            && (action == "session.answer" ? Question is { } question && question != Guid.Empty : Question is null));
 }
 
 internal sealed record GateAuditTotal(string Action, string Path, string ActorKind, int Successes);
@@ -54,7 +54,6 @@ internal static class GateAuditProjection
             var gate = first.Gate!;
             var key = (first.Action, gate.Path, gate.ActorKind);
             totals.TryAdd(key, 0);
-            if (!identities.Add((first.Action, first.Target, gate.Incarnation, gate.Question))) { invalidated = true; continue; }
             var terminals = operation.Where(r => r.Gate!.Phase == "terminal").ToArray();
             if (operation.Any(r => r.Action != first.Action || r.Target != first.Target || r.Gate is not { } other || other.Path != gate.Path
                 || other.ActorKind != gate.ActorKind || other.Incarnation != gate.Incarnation || other.Question != gate.Question)
@@ -63,7 +62,8 @@ internal static class GateAuditProjection
             { invalidated = true; continue; }
             if (gate.Phase != "intent" || terminals.Length == 0 || terminals[0].Outcome is "attempted" or "reserved" or "unconfirmed")
             { reasons.Add("unresolved-intent"); continue; }
-            if (terminals[0].Outcome == SuccessFor(first.Action)) { totals[key]++; }
+            if (terminals[0].Outcome == SuccessFor(first.Action)
+                && identities.Add((first.Action, first.Target, gate.Incarnation, gate.Question))) { totals[key]++; }
         }
         return new(totals.Select(p => new GateAuditTotal(p.Key.Action, p.Key.Path, p.Key.ActorKind, p.Value)).ToArray(),
             reasons.Order(StringComparer.Ordinal).ToArray(), invalidated);

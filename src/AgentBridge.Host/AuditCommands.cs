@@ -14,7 +14,8 @@ public static class AuditCommands
         [property: JsonRequired] string Action, [property: JsonRequired] string Outcome, string? Direction = null,
         string? Request = null, string[]? Chain = null, string? Target = null, string? Reason = null,
         string? DataSha256 = null, int? TextLength = null,
-        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] GateAuditMetadata? Gate = null);
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] GateAuditMetadata? Gate = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool PreviousTailIncomplete = false);
 
     public static int Run(IReadOnlyList<string> args, string profileRoot, TextWriter output, TextWriter error) =>
         Read(args, profileRoot, output, error, null);
@@ -70,6 +71,7 @@ public static class AuditCommands
                         if (jsonReader.Read() || jsonReader.BytesConsumed != bytes.Length) { throw new JsonException(); }
                         var row = Read(doc.RootElement);
                         if (row is null) { continue; }
+                        if (row.PreviousTailIncomplete) { error.WriteLine("audit: recovered incomplete final record; report incomplete."); }
                         if (since is { } start && row.At < start
                             || options.TryGetValue("--action", out var action) && row.Action != action
                             || options.TryGetValue("--outcome", out var outcome) && row.Outcome != outcome) { continue; }

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 namespace AgentBridge.Host.Tests;
@@ -9,22 +10,24 @@ public sealed class GateAuditTests : IDisposable
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     readonly string root = Path.Combine(Path.GetTempPath(), "gate-audit-" + Guid.NewGuid().ToString("N"));
     readonly Guid run = Guid.NewGuid(), target = Guid.NewGuid(), incarnation = Guid.NewGuid();
+    readonly FakeTimeProvider clock = new(DateTimeOffset.Parse("2026-11-13T00:00:00Z"));
     string Profile => Path.Combine(root, "default");
     string Audit => Path.Combine(Profile, "audit");
     public void Dispose() { if (Directory.Exists(root)) { Directory.Delete(root, true); } }
 
-    void Append(Guid operation, string phase = "intent", string outcome = "reserved", string action = "session.launch", Guid? session = null)
+    void Append(Guid operation, string phase = "intent", string outcome = "reserved", string action = "session.launch",
+        Guid? session = null, Guid? question = null, bool accepted = true, bool gated = true)
     {
         var entry = JsonSerializer.Deserialize<AgentAuditEntry>(JsonSerializer.Serialize(new
         {
             direction = "local", request = operation, principal = "agent:machine/session", chain = Array.Empty<string>(),
-            action, target = (session ?? target).ToString(), outcome, gate = new
+            action, target = (session ?? target).ToString(), outcome, gate = gated ? new
             {
                 v = 1, operation, run, sequence = 900, phase, path = "relay", actorKind = "agent",
-                incarnation = session ?? incarnation, question = (Guid?)null, reasonCode = "none", prompt = "private gate prompt"
-            }
+                incarnation = session ?? incarnation, question, reasonCode = "none", prompt = "private gate prompt"
+            } : null
         }), Json)!;
-        Assert.True(new AgentAuditLog(Profile).Append(entry, "private answer"));
+        Assert.Equal(accepted, new AgentAuditLog(Profile, clock).Append(entry, "private answer"));
     }
 
     GateAuditReport Read() => Assert.IsType<GateAuditReport>(GateAuditProjection.Read(Profile, run));
@@ -76,15 +79,47 @@ public sealed class GateAuditTests : IDisposable
     }
 
     [Theory]
-    [InlineData(null), InlineData("started"), InlineData("failed")]
-    public void Conflicting_terminals_or_reused_logical_identity_invalidate_the_run(string? reusedOutcome)
+    [InlineData(null), InlineData("started"), InlineData("failed"), InlineData("refused")]
+    public void Conflicting_terminals_invalidate_but_retries_only_credit_a_logical_identity_once(string? previousOutcome)
     {
         var operation = Guid.NewGuid();
         Append(operation);
-        Append(operation, "terminal", "started");
-        if (reusedOutcome is not null) { operation = Guid.NewGuid(); Append(operation); }
-        Append(operation, "terminal", reusedOutcome ?? "failed");
-        Assert.True(Read().Invalidated);
+        Append(operation, "terminal", previousOutcome ?? "started");
+        if (previousOutcome is not null) { operation = Guid.NewGuid(); Append(operation); }
+        Append(operation, "terminal", previousOutcome is null ? "failed" : "started");
+        var report = Read();
+        Assert.Equal(previousOutcome is null, report.Invalidated);
+        Assert.Equal(previousOutcome is null ? 0 : 1, Assert.Single(report.Totals).Successes);
+    }
+
+    [Theory]
+    [InlineData(false), InlineData(true)]
+    public void Writer_recovers_after_a_pruned_prefix_or_a_mid_file_torn_fragment(bool prune)
+    {
+        Append(Guid.NewGuid(), action: "session.stop");
+        clock.Advance(TimeSpan.FromDays(31));
+        Append(Guid.NewGuid());
+        Append(Guid.NewGuid());
+        var file = Assert.Single(Directory.GetFiles(Audit, "agents-*.jsonl"));
+        if (prune) { File.Delete(file); }
+        else
+        {
+            var lines = File.ReadAllLines(file);
+            File.WriteAllText(file, lines[0] + "\n{\"gate\":\n" + string.Join("\n", lines.Skip(1)) + "\n");
+        }
+        Append(Guid.NewGuid(), action: "session.stop");
+        using var last = JsonDocument.Parse(File.ReadAllLines(Directory.GetFiles(Audit, "agents-*.jsonl").Order().Last())[^1]);
+        Assert.Equal(4, last.RootElement.GetProperty("gate").GetProperty("sequence").GetInt64());
+        Assert.Contains(prune ? "sequence-break" : "audit-incomplete", Read().IncompleteReasons);
+    }
+
+    [Theory]
+    [InlineData("session.launch"), InlineData("session.stop")]
+    public void Non_answer_question_ids_cannot_split_a_logical_identity(string action)
+    {
+        Append(Guid.NewGuid(), action: action, question: Guid.NewGuid(), accepted: false);
+        Append(Guid.NewGuid(), action: action, question: Guid.NewGuid(), accepted: false);
+        Assert.Empty(Directory.GetFiles(Audit, "*.jsonl"));
     }
 
     [Theory]
@@ -110,6 +145,7 @@ public sealed class GateAuditTests : IDisposable
         Assert.NotEmpty(Read().IncompleteReasons);
         Assert.Equal(before.Keys.Order(), Directory.GetFiles(Profile, "*", SearchOption.AllDirectories).Order());
         foreach (var (path, bytes) in before) { Assert.Equal(bytes, File.ReadAllBytes(path)); }
+        if (fault == "complete-tail") { Append(Guid.NewGuid(), gated: false); Assert.Contains("audit-incomplete", Read().IncompleteReasons); }
     }
 
     [Theory]
