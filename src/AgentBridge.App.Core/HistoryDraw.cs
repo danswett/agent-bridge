@@ -51,16 +51,17 @@ public static class HistoryDraw
     public const string Unreadable = "A turn here couldn't be read";
     public const string CutShort = "Cut short · see the machine";
 
-    // The turns to draw. The newest held turn is the live exchange when its prompt is the card's
-    // (the card draws it, so it is not drawn twice); no live prompt, as for a session just begun, drops nothing.
+    // The live turn is drawn by the card, not twice. Prompt matching is only for older hosts
+    // without turn ids: repeated or budget-shortened prompts cannot identify a turn (#2144).
     public static IReadOnlyList<HistoryRow> Rows(IReadOnlyList<HistoryTurn> turns, string? livePrompt, IDictionary<string, HistoryDisclosure>? kept = null, MessageClock? clock = null,
-        IDictionary<string, ClosedQuestion>? closed = null, string? activeQuestion = null)
+        IDictionary<string, ClosedQuestion>? closed = null, string? activeQuestion = null, string? liveTurn = null)
     {
         clock ??= MessageClock.Local;
+        if (!string.IsNullOrEmpty(liveTurn)) { turns = [.. turns.Where(t => t.Id != liveTurn || closed is not null && t.Parts.Any(IsClosed))]; }
         var count = turns.Count;
         bool IsClosed(HistoryPart part) => part.Kind == HistoryPartKind.Question && part.Question is { } q && q.Id != activeQuestion;
         // The current view still draws Blocks. A mixed-items view opts in with its disclosure cache.
-        if (count > 0 && !string.IsNullOrWhiteSpace(livePrompt) && turns[^1].Prompt is { } last && last.Text.Trim() == livePrompt.Trim()
+        if (count > 0 && string.IsNullOrEmpty(liveTurn) && !string.IsNullOrWhiteSpace(livePrompt) && turns[^1].Prompt is { } last && last.Text.Trim() == livePrompt.Trim()
             && (closed is null || !turns[^1].Parts.Any(IsClosed))) { count--; }
         var from = Math.Max(0, count - HistoryLimits.Kept);
         var retained = closed is null ? new HashSet<string>() : turns.Skip(from).Take(count - from).Where(t => t.Unreadable != true)
@@ -96,7 +97,7 @@ public static class HistoryDraw
             }
             if (part.Kind != HistoryPartKind.Response || string.IsNullOrEmpty(part.Text)) { continue; }
             cut |= part.Truncated == true;
-            replyAt ??= part.At;
+            if (part.At != default) { replyAt ??= part.At; }
             foreach (var block in MarkdownModel.Parse(part.Text).Select(b => new ConversationBlock(b)))
             {
                 blocks.Add(block);
@@ -104,7 +105,7 @@ public static class HistoryDraw
             }
         }
         // A prompt has no time of its own and takes its turn's; a reply takes its first part's.
-        var times = new HistoryTimes(turn.Prompt is null ? null : clock.Stamp(turn.At), replyAt is { } at ? clock.Stamp(at) : null);
+        var times = new HistoryTimes(turn.Prompt is null || turn.At == default ? null : clock.Stamp(turn.At), replyAt is { } at ? clock.Stamp(at) : null);
         if (PromptOrigin.OfHistory(turn.Prompt) is not { } origin) { return new(turn.Id, null, turn.Prompt?.Text, blocks, cut ? CutShort : null, times) { Items = items }; }
         if (kept is null || !kept.TryGetValue(turn.Id, out var disclosure) || disclosure.Origin.Text != origin.Text || disclosure.Origin.Label != origin.Label)
         {

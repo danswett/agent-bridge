@@ -11,6 +11,15 @@ Until the app has a settings screen, it is edited with the host's own commands, 
 machine (below), or by hand. The app will edit the same file; this page is the schema both
 follow.
 
+## Host enrollment descriptor (dormant)
+
+`agent-bridge-host devices descriptor` is reserved for a person at the machine.
+It currently exits 3 with only `no-switch` on stderr, before opening identity or
+hostSign custody. There is no config setting, environment override, automatic
+enrollment, scheduled task or deployment. #2367 and verified-reader host wiring
+are follow-ups; enabling the switch alone will not activate this verb.
+HostSign key provisioning is separate (#2369).
+
 ## Schema, version 1
 
 
@@ -150,13 +159,14 @@ and `fleetNames` or `fleetNames.launchRule` set to `null` disables named launche
 | `agents.enabled` | `false` | The agents policy (#720, [design](design/agent-principals.md), "The per-machine policy"): master switch for agent-to-agent commands on this machine, both directions. **Changed only at the machine**, in this file or with `agent-bridge-host config` (refused inside agent sessions); no request from another device or an agent reads or changes it. Absent section: agents are off, every grant below is off, and the limits are the defaults. This slice only parses and validates it; nothing consumes it yet |
 | `agents.credentialDays` | `7` | How long an agent's credential lives, from 1 to 7 |
 | `agents.issue.launched`, `agents.issue.adopted` | `none` | The scope a credential gets at issue: `none`, `read`, `read+reply` or `read+reply+launch` |
-| `agents.launch.enabled` | `false` | Default-off agent launch policy switch, read afresh with `agents.enabled` on every policy check. B1 (#2062) adds policy validation only; the pipe still refuses agent launches until the later enforcement slices land |
+| `agents.launch.enabled` | `false` | Default-off agent launch policy switch, read afresh with `agents.enabled` on every gate check. B2 (#2172) adds in-process hourly caps and request memory; the pipe still refuses agent launches until the later enforcement slices land |
 | `agents.outbound.remote` | `false` | Whether this machine's agents may reach other machines |
 | `agents.outbound.allowAgentLaunchedToLaunch` | `false` | Whether a session an agent launched may itself launch |
 | `agents.inbound.local.*`, `agents.inbound.remote.*` | all off | Agents on this machine, and on the account's other machines. `read`: `any`, `agent-launched` or `none` (`none`). `reply`: `forced-ask`, `agent-launched` or `none` (`none`). `gate`: `off`, `quiet` or `push` (`off`). `allowAllTargets`: `false` or `{ "workspaces": "same" or "any" }` (`false`). `coordinationGroups`: `false` or `{ "maxHours": 4 to 24, "perMemberPerDay", "perGroupPerMinute" }` (`false`). `launch`: `false` or `{ "workspaces": "approved" or [labels], "permissions": "ask", "agents": [ids], "profiles": [names] }`, with `permissions` stated (`false`). `inbound.remote.fromMachines`: `"any"` or a list; none by default |
 | `agents.inbound.exclude` | `{ "sessions": [], "workspaces": [] }` | Session ids and workspace labels no agent may reach |
 | `agents.limits.*` | `maxDepth` 3, `conversationMessages` 20, `conversationMinutes` 60, `perPairPerMinute` 6, `perTargetPerMinute` 12 | Each can only be lowered: the default is also the ceiling, and zero, a negative, or a larger number is read as the default and said |
-| `agents.limits.launchesPerOriginPerHour`, `launchesPerMachinePerHour`, `liveAgentLaunched`, `agentLaunchedIdleHours` | `3`, `10`, `6`, `2` | Whole numbers from 1 to their respective default ceilings. All four must be stated when `agents.launch.enabled` is true. Invalid, null or missing required values are reported at load and refuse launch; never unlimited. The policy gate returns no usable limits on refusal. Changes apply on the next policy check without restarting the agent. Caps and idle enforcement are later slices; time-boxed overrides are not implemented here |
+| `agents.limits.launchesPerOriginPerHour`, `launchesPerMachinePerHour`, `liveAgentLaunched`, `agentLaunchedIdleHours` | `3`, `10`, `6`, `2` | Whole numbers from 1 to their respective default ceilings. All four must be stated when `agents.launch.enabled` is true. Invalid, null or missing required values are reported at load and refuse launch; never unlimited. Changes apply on the next gate check without restarting the agent or clearing existing hits. B2 enforces the hourly launch caps in memory, with `rate-limited` and retry seconds; refusals spend no launch slot. Live/idle enforcement, durable caps and time-boxed overrides are later slices |
+| `agents.limits.launchAttemptsPerOriginPerHour` | `20` | Optional: absent means 20, never unlimited. Whole numbers from 1 to 20; malformed, null, non-integer or out-of-range values fail closed at load. Read afresh each gate check. Distinct requests and mismatched hashes for a remembered request spend this separate hourly attempt budget; mismatches return `requestReused` and never spend launch caps. For one hour, the same principal, request id and hash returns `Duplicate` without launch permission or either counter hit. Request memory and counters are in process only and reset on restart |
 | `agents.label` | `prefix` | `prefix` or `none` |
 | `agents.links` | `[]` | Must be empty in this version |
 
@@ -430,6 +440,18 @@ whole id.
 
 ## The agent audit log
 
+Read the retained audit metadata locally with `agent-bridge-host audit [--profile <name>]`
+and optional `--action <action>`, `--outcome <outcome>` and
+`--since <ISO timestamp with explicit offset or Z>`, for example
+`audit --action session.launch --outcome started --since 2026-11-10T16:00:00-08:00`.
+Filters combine and include both streams across UTC day boundaries. Output is JSON lines
+with Pacific timestamps and only known audit fields; unknown fields are never echoed.
+The command does not create profiles or load identity, configuration or session data.
+It is a metadata read, **not a chain-integrity verdict**. A malformed complete record,
+unsupported major version or read failure returns nonzero with a content-free error;
+earlier output may be partial. An incomplete final JSON prefix is ignored with a warning.
+Archive, durable chain heads and pruning changes remain separate #1401 A6 slices.
+
 What agents did on this machine is written one JSON line per event to
 `<profile>\audit\agents-YYYY-MM-DD.jsonl` (#1296, design/agent-principals.md §5.6). The folder
 and files are readable by this user alone, like `agent-credentials.json`. Each line has `at`,
@@ -542,7 +564,11 @@ instead of as a task of its own:
   have a stop already pending), then every `devBox.intervalMinutes`. The occurrence exists only from
   the last session leaving until one grace period later, and the grace is never under 60 minutes,
   so a pass every 15 minutes sees it four times; 30 is the most that still sees it twice. Turned on
-  from the app, a pass runs at once.
+  from the app, a pass runs at once. No scheduler or timer runs while keep-awake is off or on a
+  machine without the Dev Box agent. Turning it off releases the pending wait; turning it back
+  on starts a pass immediately. Unusable settings on an installed Dev Box still get scheduled
+  retries. The scheduler awaits its timer, re-checks the due time after it fires, and cancels
+  promptly at host shutdown; normal clock movement never recreates timers.
 * **One at a time.** A pass takes `%LOCALAPPDATA%\AgentBridge\devbox-keepawake.lock` without
   waiting, so two profiles' hosts never move the schedule together, and holds the mutex each of
   agent-ha-bridge's keep-awake passes takes (`Local\<its task name>`) for every such task registered

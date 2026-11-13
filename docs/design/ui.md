@@ -465,6 +465,11 @@ through.*
 > [proposals/659-no-pop-motion.md](proposals/659-no-pop-motion.md); the clients follow in #684
 > (Windows) and #685 (PWA).
 
+PWA session rows and delegate-strip chips now ease their neighbours with frame-coalesced,
+retargetable `shift` motion (#2105). This covers key and row-menu moves, drag/drop placement,
+Most recent batches and #950 return-grace order changes; the dragged row still follows the
+pointer directly. The other #685 slices follow.
+
 Motion shows where something came from and where it went. It answers the person or a
 change, and never runs for its own sake. The values are in `tokens.json` under `motion`,
 generated as `--ab-motion-*` for the PWA and `AbMotion*` resources for the app
@@ -569,7 +574,7 @@ easing in, its duration out, and how far it travels.
 | Sheet | The delegate sheet on iOS (§6.3), and any phone sheet | Opening a delegate; dragging between detents; dismissing | The sheet rises from the bottom edge and the scrim fades in. While dragged it follows the finger with no easing, and on release it settles at the nearest detent | `sheet`: emphasis, decelerate; standard out | iOS: `.sheet` with `.presentationDetents([.medium, .large])` and the system's spring. Android: `ModalBottomSheet`. PWA: the tokens on transform | Cross-fade at the detent. A drag still follows the finger |
 | Menu and flyout | The row menu, Sort, the overflow menu, flyouts | A click, a long press, Shift+F10 or the menu key | It fades in and settles 4 from its anchor. Choosing an item acts at once, and the menu fades out | `menu`: fast, decelerate; fast out; nudge | Windows: `MenuFlyout`'s own. PWA: the tokens, on a popover where supported. Apple and Android: the system menus | Instant |
 | Scroll to a question | The open session's conversation, and the list when a notification opens a session | A question arrives while the person is at the end of the conversation; a toast, the tray, the menu bar, a waiting row or (in the PWA, until #253 reaches it) a Needs you entry opens a session; Jump to latest is chosen (§6.4), which scrolls to the end as the person asked, scrolled back or not | The view scrolls smoothly to the question or the row. It never scrolls a conversation the person has scrolled back through (a response growing below on its own doesn't count: the reader is still at its end), is touching, or has the pointer over, nor one in a page or app in the background. For 500 ms after a question appears in a conversation on screen (arriving, shown as its session opens, shown again as its tab, the Sessions page or the app comes back (the window taking the focus back included, visible all along or not), moved as the inspector is shown or hidden or the window crosses a layout width, moved where it is by anything above it changing height (the title wrapping, a tool line, the response, the reasoning or your message, a kept draft dismissed or an answer's receipt going, the delegate strip or a banner appearing or going), by the conversation being pulled back as it gets shorter, or sideways as the window or a pane is narrowed or widened, or becoming answerable as its machine's hold lifts or its machine starts taking answers), or is scrolled into view (a notification's answer focused included), a click or tap on its choices, Approve once, Deny or Send is ignored, so a click already on its way to what was there can't answer it. Needs you's Approve once, Deny and Resend wait the same way after the lane changes (an entry arriving, going or moving, and its answers moved by an entry above growing as its answer goes, by anything above the lane changing height, a banner or the app bar appearing included, or by the list being pulled back as rows below get shorter or go while it is scrolled to its end; an answer's status appearing below the last answers, or the list scrolling, moves nothing and doesn't restart it) or comes back on screen, and while a session opened from it scrolls the list to its row. A smooth scroll to it counts from where it comes to rest; a scroll the person makes after that doesn't restart the wait, unless something above the answers changes height in the same moment, which counts as a move (the scroll and the move can't be told apart). A scroll pulled back to its end (what it scrolls got shorter, or it got taller) is never set aside as the person's: it counts as a move. A click or tap on an answer first reads where the answers are: moved since they were last read (an update drawn in the moment before the click), or unreadable, the click is ignored and the wait starts. A key acts at once | `scroll`: emphasis, standard | Windows: `StartBringIntoView` with `AnimationDesired`; the answers' places read after each layout pass and scroll (`AnswerWatch`) and as a pointer presses one, setting aside only a scroll the person makes (a wheel, a finger, a key or the scroll bar). PWA: `scrollIntoView` with smooth behaviour, at the browser's pace; the places read on `ResizeObserver` and scroll events (`watchMoves`) and as a click comes. Apple: `ScrollViewReader`. Android: `animateScrollToItem` | Instant: a jump |
-| Reorder | The session list (#164) | Alt+↑/↓; Move up or Move down; a drag by the handle; an order change arriving during a return's grace (§6.1, #950) | By key or menu, the moved row slides to its new place, and the row it passed takes its own new place at once. In a drag, the row follows the pointer, a line shows where it will land, and on drop it settles into place. No other row moves | `reorder`: standard, standard | Windows: no `ReorderThemeTransition`, which slides the neighbours. Apple and Android, later: the system list's drag, whose gap follows the finger | Instant |
+| Reorder | The session list (#164) | Alt+↑/↓; Move up or Move down; a drag by the handle; an order change arriving during a return's grace (§6.1, #950) | By key or menu, the moved row slides to its new place, and the rows it passes ease aside. In a drag, the row follows the pointer, a line shows where it will land, and on drop it settles into place as its neighbours ease aside. Return-grace order changes retarget changed rows from their drawn places. Only rows whose places changed move | `reorder`: standard, standard; neighbours: `shift` | Windows: catalogue-timed translations, not `ReorderThemeTransition` with independent timing. PWA: frame-coalesced FLIP. Apple and Android, later: the system list's drag, whose gap follows the finger | Instant |
 | Collapse | A phone's session header (§6.2, #620) | Scrolling the conversation up 64 or down 32 in one direction, mid-conversation; a tap on the bar's title; focus moving into the header | The header slides down over the conversation, or back up under the bar. The conversation never moves. Near the top there is no motion of its own: the header rides with the scroll | `collapse`: standard, standard | PWA: the tokens on transform. Apple: the large title's own collapse. Android: the top app bar's scroll behaviours | Cross-fade |
 
 Most recent's automatic batches (§6.1, #628) use `reorder` for the moved rows and `shift`
@@ -755,7 +760,8 @@ launch lineage may come later, on top of this, once hosts report it.
   Expanded, the trailing edge is empty, since its rows show their own state. A header has no
   status glyph, age or second line: a group isn't a session.
 - **Toggling:** a click or tap on the header, Enter or Space, → and ← (§9.2). It changes at
-  once, as §5.3's Disclosure: its rows' space opens or closes and nothing below slides.
+  once, as §5.3's Disclosure: its rows' space opens or closes and neighbours ease aside over
+  `shift`, without laying out again on every frame.
   Collapsing a group holding the open session keeps it open; keyboard focus on a row inside
   goes to the header (§9.1 A4).
 - **Its menu** (the ⋯ button that shows on hover or focus, a right-click, a long press on
@@ -1601,6 +1607,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   fill in two at a time between input turns, paused during a scroll or pan, without moving what
   the reader is looking at (#1767). This does not change host page sizes or transcript reads.
   Turns stay virtualized; a realized turn measures all its response blocks together.
+  Windows replies, including `activity.notice`, stay under their owning turn (#2144), never a
+  queued owner's. Live/history deduplication uses ids; delayed pages cannot erase newer live
+  replies. Trimmed prompts keep their text and origin; loaded replies refresh the live pane.
+  Provisional live messages show no sent time until matching history supplies it.
   It opens at the end, on the latest reply, and stays there as replies arrive until the person
   scrolls; once they scroll, a new reply never moves the view (#1635, #1646). Reasoning, tool lines,
   delegate events and questions are still to come. The Windows app loads earlier turns a page
@@ -1665,7 +1675,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 - **Code blocks** (#296): in the Code role (§4.3), wrapped to the block's width rather than
   scrolled sideways, with Copy in the top-right corner above the code (with the copy icon in the app):
   "Copy", then "Copied" (or "Copy failed") for 1.5 s, named "Copy code" whatever it shows, the
-  outcome said to a screen reader. Every code block reads strictly left to right, and a
+  outcome said to a screen reader. A paragraph holding only one bare inline code span uses this same block and Copy
+  in the Windows app and PWA (#1433, #1432). Inline code within a sentence, multiple
+  spans, headings and table cells keep their existing inline rendering; plain text is
+  never detected as a command. Approvals remain literal and have no Copy.
+  Every code block reads strictly left to right, and a
   character that is not on screen as it runs (bidi controls, zero-width and other format or
   invisible characters, and a bare carriage return, which a shell does not take as a line break)
   is drawn as a visible escape such as `\u2067` (#220, the owner's
@@ -2073,12 +2087,18 @@ machine, online ones first, then the account's offline machines (#213):
          (the host's working-set sum, labelled "memory in use", not unique RAM). Fewer than three: show
          those; none: "No session to pause." and no Relieve (rule 7).
        - A change of the Health word is announced once, politely; refreshed figures are not announced.
+       - **PWA card structure (#2188):** the existing load feed reports freshness, not a health band,
+         so Health says "Not measured yet". CPU and Memory use fixed label/bar/value columns and
+         whole percentages; memory also shows free GB. Each bar has its freshness mark and word.
+         Age is "Updated 12 s ago" or "Last measured 4 min ago", from the record, never a new timer.
     4. **Can run.** Collapsed line "2 agents · 6 models". Open: each agent with its models, efforts and
        contexts exactly as the host lists them. Not reported: the section is hidden.
     5. **Running.** Collapsed line with counts by state, "3 working · 5 idle · 1 needs you", zero
        counts left out. Open: one session row per session (the §5.1 row: title, state; line 2 "model ·
        effort · context"), the first five, then "Show all N" in place. Not reported: the count from
        line 2 only. "Needs you" rows open the session as in the lane (§6.1).
+       The bounded PWA #2188 disclosure opens **Show sessions** through the existing machine
+       callback; the inline session list is a follow-up. Can run stays absent when unreported.
     6. **Launch here.** In Actions when the machine is Online and not View only. Opens the New
        session flow with this machine chosen. Offline, View only and "Discovery held" hide it, and a
        line says why in text, not only a tooltip.

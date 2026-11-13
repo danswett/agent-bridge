@@ -1,7 +1,9 @@
-using System.Globalization;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using AgentBridge.Host.Core.Updates;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.Host;
 
@@ -14,6 +16,7 @@ public interface IHaltListSource
     // Bytes must come from the single verified release-policy asset, never a package's
     // cached copy or a missing-file-as-empty fallback.
     Task<byte[]> ReadAsync(CancellationToken cancellationToken);
+    IReadOnlyCollection<string> KnownHalts => [];
 }
 
 public sealed class ReleaseEligibility(IHaltListSource source)
@@ -23,29 +26,36 @@ public sealed class ReleaseEligibility(IHaltListSource source)
         if (!TryRun(version, out _)) { return new(null, ReleaseBlockedReason.InvalidVersion); }
         try
         {
-            var bytes = await source.ReadAsync(cancellationToken).ConfigureAwait(false);
-            if (bytes.Length is 0 or > 65_536) { return Unavailable(); }
-            using var doc = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 4 });
-            var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object) { return Unavailable(); }
-            var names = root.EnumerateObject().Select(p => p.Name).ToArray();
-            if (names.Length != 2 || names.Distinct(StringComparer.Ordinal).Count() != 2
-                || !root.TryGetProperty("v", out var v) || !v.TryGetInt32(out var schema) || schema != 1
-                || !root.TryGetProperty("halted", out var halted) || halted.ValueKind != JsonValueKind.Array
-                || halted.GetArrayLength() > 1024) { return Unavailable(); }
-            var found = false;
-            foreach (var item in halted.EnumerateArray())
-            {
-                if (item.ValueKind != JsonValueKind.String || item.GetString() is not { } entry || !TryRun(entry, out _)) { return Unavailable(); }
-                found |= entry == version;
-            }
-            return new(found);
+            var halted = ReadHalted(await source.ReadAsync(cancellationToken).ConfigureAwait(false));
+            return halted is null ? KnownOrUnavailable(version) : new(halted.Contains(version, StringComparer.Ordinal));
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return Unavailable(); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or HttpRequestException or JsonException or InvalidOperationException or KeyNotFoundException or FormatException or CryptographicException)
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return KnownOrUnavailable(version); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or HttpRequestException or JsonException or InvalidOperationException or KeyNotFoundException or FormatException or CryptographicException or ReleaseDiscoveryException)
         {
-            return Unavailable();
+            return KnownOrUnavailable(version);
         }
+    }
+
+    HaltCheck KnownOrUnavailable(string version) => source.KnownHalts.Contains(version, StringComparer.Ordinal) ? new(true) : Unavailable();
+
+    internal static string[]? ReadHalted(byte[] bytes)
+    {
+        if (bytes.Length is 0 or > 65_536) { return null; }
+        using var doc = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 4 });
+        var root = doc.RootElement;
+        if (root.ValueKind != JsonValueKind.Object) { return null; }
+        var names = root.EnumerateObject().Select(p => p.Name).ToArray();
+        if (names.Length != 2 || names.Distinct(StringComparer.Ordinal).Count() != 2
+            || !root.TryGetProperty("v", out var v) || !v.TryGetInt32(out var schema) || schema != 1
+            || !root.TryGetProperty("halted", out var halted) || halted.ValueKind != JsonValueKind.Array
+            || halted.GetArrayLength() > 1024) { return null; }
+        List<string> found = [];
+        foreach (var item in halted.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String || item.GetString() is not { } entry || !TryRun(entry, out _)) { return null; }
+            found.Add(entry);
+        }
+        return [.. found];
     }
 
     public async Task<ReleaseEligibilityResult> Evaluate(string target, string installed, CancellationToken cancellationToken = default)
@@ -60,30 +70,32 @@ public sealed class ReleaseEligibility(IHaltListSource source)
     public static bool IsNewer(string target, string installed) =>
         TryRun(target, out var next) && TryRun(installed, out var current) && next > current;
 
-    internal static bool TryRun(string? version, out long run)
-    {
-        run = 0;
-        if (version is null || !version.StartsWith("0.1.", StringComparison.Ordinal)) { return false; }
-        var number = version.AsSpan(4);
-        return number.Length is > 0 and <= 19 && long.TryParse(number, NumberStyles.None, CultureInfo.InvariantCulture, out run)
-            && number.SequenceEqual(run.ToString(CultureInfo.InvariantCulture));
-    }
+    internal static bool TryRun(string? version, out long run) => ReleaseVersions.TryRun(version, out run);
 
     static HaltCheck Unavailable() => new(null, ReleaseBlockedReason.HaltListUnavailable);
 }
 
 // Verification uses GitHub's HTTPS repository metadata and SHA-256 asset digest, not a new
 // signing key or trust in a caller-supplied feed/URL. No log or exception body is exported.
-public sealed class GitHubHaltListSource(HttpClient http) : IHaltListSource
+public sealed class GitHubHaltListSource(HttpClient http, ReleaseDiscovery discovery) : IHaltListSource
 {
     const string Repository = "danswett/agent-bridge";
-    public const string Releases = "https://api.github.com/repos/" + Repository + "/releases?per_page=100";
+    public const string Releases = ReleaseDiscovery.HaltPolicyList;
+    public HaltPolicySnapshot Snapshot => discovery.HaltPolicy;
+    public IReadOnlyCollection<string> KnownHalts => Snapshot.Policy?.Halted ?? [];
 
     public async Task<byte[]> ReadAsync(CancellationToken cancellationToken)
     {
+        var snapshot = await discovery.ReadHaltPolicyAsync(Verify, cancellationToken).ConfigureAwait(false);
+        if (!snapshot.Fresh || snapshot.Policy is null) { throw new IOException("halt policy stale or unavailable"); }
+        return Encoding.UTF8.GetBytes(snapshot.Policy.Body);
+    }
+
+    async Task<VerifiedHaltPolicy> Verify(string metadata, CancellationToken cancellationToken)
+    {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(10));
-        using var doc = JsonDocument.Parse(await ReadBounded(new Uri(Releases), 1_048_576, timeout.Token).ConfigureAwait(false));
+        using var doc = JsonDocument.Parse(metadata);
         if (doc.RootElement.ValueKind != JsonValueKind.Array) { throw new IOException("halt metadata unavailable"); }
         JsonElement? latest = null;
         long highest = -1;
@@ -111,7 +123,8 @@ public sealed class GitHubHaltListSource(HttpClient http) : IHaltListSource
         var body = await ReadBounded(new Uri(expectedUrl), 65_536, timeout.Token).ConfigureAwait(false);
         if (body.Length != size || !CryptographicOperations.FixedTimeEquals(SHA256.HashData(body), expectedHash))
         { throw new IOException("halt asset verification failed"); }
-        return body;
+        var halted = ReleaseEligibility.ReadHalted(body) ?? throw new IOException("halt policy malformed");
+        return new(highest, Encoding.UTF8.GetString(body), halted);
     }
 
     async Task<byte[]> ReadBounded(Uri uri, int maximum, CancellationToken ct)

@@ -33,7 +33,7 @@ public sealed class LiteAgentSendTests : IDisposable
     const string Body = """{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":"hi"}""";
 
     JsonElement[] AuditLines() => Directory.GetFiles(Path.Combine(root, AgentAuditLog.FolderName), "agents-*.jsonl")
-        .SelectMany(File.ReadAllLines).Select(line => JsonSerializer.Deserialize<JsonElement>(line)).ToArray();
+        .SelectMany(File.ReadAllLines).Select(line => JsonSerializer.Deserialize<JsonElement>(line)).Where(line => line.TryGetProperty("action", out _)).ToArray();
 
     [Fact]
     public async Task A_send_writes_one_credential_attributed_attempt_before_delivery_without_the_message_text()
