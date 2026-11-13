@@ -786,9 +786,9 @@ public sealed record DeliveryProgress(string Stage, bool? Working = null)
 {
     // The host has the request, before any check.
     public const string Received = "received";
-    // Every key has gone: the outcome will be delivered or unconfirmed. Working: the session was
-    // working, so the agent takes it at its next step (queued).
+    // Every key has gone: Working alone is not proof of queueing.
     public const string Typed = "typed";
+    public const string Queued = "queued";
 }
 
 // How far an unconfirmed answer is known to have got (#467), named as DeliveryTimings names the
@@ -810,6 +810,9 @@ public sealed record ReplyRequest
     public required string Request { get; init; }
     public string? Text { get; init; }
     public IReadOnlyList<AttachmentRef>? Attachments { get; init; }
+    // Absent means Steer, preserving older clients' behaviour.
+    [JsonConverter(typeof(ReplyRequestModeConverter))]
+    public ReplyMode? Mode { get; init; }
     // As on AnswerRequest.
     public bool? Progress { get; init; }
     // Host-only condition for Lite's Copilot delivery, never accepted from session.reply.
@@ -820,14 +823,17 @@ public sealed record ReplyRequest
 // The same outcomes as an answer, read the same way.
 public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null)
 {
+    // The mode actually used; absent from an older host means Steer.
+    public ReplyMode? Mode { get; init; }
+    public ReplyStage? Stage { get; init; }
     // Only for a request that asked for progress.
     public DeliveryTimings? Timings { get; init; }
     public IReadOnlyList<ReplyAttachmentBinding>? Attachments { get; init; }
     [JsonIgnore]
     public ReplyRefusal Refusal { get; init; }
     // Refusal is advice to callers, not part of the result's identity.
-    public bool Equals(ReplyResult? other) => other is not null && Outcome == other.Outcome && Reason == other.Reason && Equals(Timings, other.Timings) && Equals(Attachments, other.Attachments);
-    public override int GetHashCode() => HashCode.Combine(Outcome, Reason, Timings, Attachments);
+    public bool Equals(ReplyResult? other) => other is not null && Outcome == other.Outcome && Reason == other.Reason && Mode == other.Mode && Stage == other.Stage && Equals(Timings, other.Timings) && Equals(Attachments, other.Attachments);
+    public override int GetHashCode() => HashCode.Combine(Outcome, Reason, Mode, Stage, Timings, Attachments);
 }
 
 public enum ReplyRefusal { Other, Asking, ComposerUnverified, Busy }
@@ -908,6 +914,7 @@ public static class Capabilities
     public const string SessionsFocus = "sessions.focus";
     public const string SessionsAnswer = "sessions.answer";
     public const string SessionsReply = "sessions.reply";
+    public const string SessionsReplyQueue = "sessions.reply.queue";
     public const string SessionsStop = "sessions.stop";
     public const string Push = "push";
     public const string SessionsAttach = "sessions.attach";

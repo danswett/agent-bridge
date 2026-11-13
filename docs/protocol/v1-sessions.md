@@ -309,7 +309,7 @@ once whenever `machine.readOnly`, `machine.restore` or `capabilities` would diff
 | `hello.changed` | `hello` takes `{ "changes": true }`, and the host then sends `hello.changed` on that channel when its `readOnly` or capabilities change ([Changes](#hello)). Without it, a client asks hello again to see a change |
 | `sessions.focus` | `sessions.focus`: the client says whether it is on screen and which session it shows. Live changes to the others then come together at most every 12 s, and a device on screen is not notified of finished turns ([sessions.focus](#sessionsfocus)). With `openQuestion` and `idleMs` it also says which question's card it shows and how long since the person's last input, and while the person uses a device the host holds back some pushes ([While the person uses a device](#while-the-person-uses-a-device-1190)). Without it, or until a client says, every change goes at once |
 | `sessions.answer` | `session.answer`. A host leaves it out when it cannot answer at all, for example while agent-ha-bridge's daemon runs for the same user, or on a platform without delivery yet. A client then shows questions read-only and says to answer at the machine |
-| `sessions.reply` | `session.reply`. Left out on the same terms as `sessions.answer`. A client then offers no reply box |
+| `sessions.reply` | `session.reply`. Left out on the same terms as `sessions.answer`. A client then offers no reply box. With `sessions.reply.queue`, the host honours reply `mode` and reports the mode actually used; offered only with `sessions.reply`, once queue delivery is implemented (#2468 slice 2) |
 | `sessions.progress` | `session.reply` and `session.answer` take `"progress": true`, and then report `received` and `typed` before their result, which carries `timings` ([Progress](#progress)). Offered with `sessions.reply` or `sessions.answer` |
 | `sessions.attach` | `attachment.start`, `attachment.chunk`, `attachment.discard`, and `attachments` on `session.reply` ([Attachments](#attachments)). Offered only with `sessions.reply`, by a host that can stage files for the agent. Without it a client offers no way to attach |
 | `sessions.attach.blob` | `attachment.start` takes a `blob`: files over 256 KiB, up to 100 MiB, through the relay's blob store ([Large files](#large-files-through-the-blob-store)). Offered with `sessions.attach` on a channel through a relay, while the host is connected to one that has a blob store. Without it a client keeps to 256 KiB |
@@ -969,7 +969,18 @@ the session is idle or still working. Request `data`:
 | `request` | A fresh UUID per reply the person sends, with exactly `session.answer`'s semantics: every outcome is remembered for at least 10 minutes and returned for a repeat, which types nothing; a repeat of a reply still being delivered waits for it |
 | `text` | The prompt: at most 16 KiB of UTF-8. Not blank, unless the reply has attachments |
 | `attachments` | Optional. Files and images for the agent, in order: `[{ "id": "<attachment>" }]`, at most 10, each sent whole by **this device** with `attachment.start` and `attachment.chunk` first ([Attachments](#attachments)). Absent, `null` and `[]` mean none. A host without `sessions.attach` refuses a reply that has any |
+| `mode` | Optional: `queue` (a new turn after the running one) or `steer` (join the running turn). Absent or `null` means `steer`, today's behaviour; an unknown value or wrong type is refused, never defaulted. Agent senders explicitly send `queue` unless marked urgent, then `steer`. A person's app or PWA reply stays `steer` by leaving it absent |
 | `progress` | Optional, as for `session.answer` ([Progress](#progress)) |
+
+**Compatibility (#2468).** These fields are additive within v1. A sender asks `hello`
+first. Without `sessions.reply.queue` it still sends `mode: "queue"` rather than lose
+the prompt, but reports "sent, not queued: this host steers" and records
+`honoured: false` locally; that record is not a wire field. It never claims `queued`
+from a working session alone. Older hosts ignore `mode`; older clients omit it.
+The result's `mode` is the mode actually used, not an echo: absent reads as `steer`,
+even if hello was stale. A host implementing queue delivery supplies it on every result.
+Slice 1 defines the contract and models only; hosts must not advertise queue support
+until the delivery path implements it.
 
 **Line breaks become spaces.** Every control character, line breaks and tabs included,
 and the Unicode line and paragraph separators are typed as spaces, so a reply always
@@ -990,8 +1001,11 @@ and Claude Code strips the zero-width, filler, variation-selector and tag charac
 sends ([#448](https://github.com/danswett/agent-bridge/issues/448)). A reply of nothing but
 those characters, with no attachments, is `refused` as empty.
 
-Result: `{ "outcome", "reason" }`, the outcomes of `session.answer`, with `timings` for a
-request that asked for progress, and optional `attachments`:
+Result: `{ "outcome", "reason", "mode", "stage"? }`, the outcomes of `session.answer`,
+with `timings` for a request that asked for progress, and optional `attachments`.
+`mode` is `queue` or `steer` (absent or unknown reads as `steer`).
+`stage` is present only on `unconfirmed`: `typed`, `recorded`, or `queued` below;
+unknown reads as `typed`, never as delivery:
 
 `attachments: [{ "id": "<client attachment UUID>", "ref": "@<staged absolute path>" }]`
 binds each attachment to exactly the reference token in the recorded prompt, in the
@@ -1011,7 +1025,7 @@ appear in the transcript; this field carries no file bytes or fetch authority.
 | `outcome` | Meaning | Typed? |
 |---|---|---|
 | `delivered` | The host typed the reply, and the agent's transcript then recorded a prompt from the person (not a subagent's, a scheduled one or any with another source) whose text is the reply as typed, whitespace runs aside, **with every attachment attached**. Each recorded prompt confirms one reply only | Yes |
-| `unconfirmed` | The host typed it but saw no such prompt: the agent recorded something else, or the reply without all its files, the session ended, or nothing came within the host's wait. A session that is working takes a prompt typed now at its next step (Copilot records it then, as `delivery: "steering"`), so a host waits for up to a minute. Never retried | Yes |
+| `unconfirmed` | The host typed it but saw no such prompt: the agent recorded something else, or the reply without all its files, the session ended, or nothing came within the wait below. Never automatically retried | Yes |
 | `stale` | The session has ended, or its process has | No |
 | `busy` | An answer or another reply to this session is being typed | No |
 | `refused` | The host will not type it: an invalid reply (above), **a question or permission prompt pending in the session** (the words would answer it, and Enter accept it; answer it first, at the machine for one marked `answerAtMachine`), a transcript the host cannot read to rule that out, an attachment the host does not hold (expired, removed, sent by another device, still arriving, or gone with an earlier reply) or cannot hand over, an elevated or otherwise unreachable session, an agent or platform without delivery yet, or agent-ha-bridge active for this user | No |
@@ -1022,6 +1036,31 @@ agent-ha-bridge's hooks a host cannot otherwise see their permission prompts and
 it is `refused` when that box is not on screen, or for Codex already has words in it. Codex takes only
 images as attachments; a Codex reply with any other file is `refused`.
 
+**Queue confirmation (Copilot).** On a working session, `queue` types the text then
+Ctrl+Q under every existing input-box check, including the 80-column rule; `steer`
+keeps Enter. An idle session gets Enter and result `mode: "steer"`, with transcript
+`delivery: "idle"`. A working Claude Code session already queues on Enter and reports
+`mode: "queue"`; its delivery path is unchanged. Codex keeps Enter and reports
+`mode: "steer"` even when `queue` was requested; a sender says it was not queued.
+
+For Copilot, the host must see the queued prompt in the turn row within 5 s of
+Ctrl+Q (`CopilotInputBox.TurnSigns`), then sends interim `queued` progress. If it
+does not, the result is `unconfirmed` with the existing stage rules, and **no Enter
+fallback**: the host never submits the prompt twice. Screen evidence is not final
+delivery: `delivered` requires that exact prompt recorded with `delivery: "queued"`,
+and its attachments as above.
+
+The confirmation wait is 60 s from typing, extended while **the same turn that was
+running at typing** still runs, with a hard cap of 15 minutes from typing. A later
+turn does not extend it. A prompt recorded after 60 s within that wait is `delivered`,
+not `unconfirmed` just because the original turn ran long. At the cap, if the host saw
+it queued but never saw it start, the result is `unconfirmed`, `stage: "queued"`.
+`queued` is never a final outcome. A repeat of that unconfirmed request reads the
+transcript again, typing nothing, and becomes `delivered` when recorded, as for an
+unconfirmed answer, within the request-memory window. A final outcome or stage a
+client does not know is handled conservatively: unknown outcome is `unconfirmed`,
+unknown stage is `typed`; neither proves delivery.
+
 A reply is never typed while the session is asking anything, which a host checks both in
 what it reports and, immediately before typing, in the transcript itself. The per-session
 serialization is shared with answers, but it ends once the reply's keys have gone: a
@@ -1030,7 +1069,7 @@ at once.
 
 ### Progress
 
-A reply to a working session can take a minute to settle, and a client that hears nothing
+A reply to a working session can take time to settle, and a client that hears nothing
 until then can only say "sending" ([#598](https://github.com/danswett/agent-bridge/issues/598)).
 So a host that offers `sessions.progress` reports how far a `session.reply` or
 `session.answer` has got, to a client that adds `"progress": true` to its `data`. Without
@@ -1048,14 +1087,15 @@ with the request's `re`, a `progress` object and **no `ok`**:
 | `stage` | When | A client shows |
 |---|---|---|
 | `received` | As soon as the host has the request, before any check (so a request refused at once still hears it) | Sent |
-| `typed` | Every key has gone, so the outcome will be `delivered` or `unconfirmed`. `working` is `true` when the session was working: the agent takes the prompt at its next step, as Copilot's `steering` | Typed, or Queued when `working` |
+| `typed` | Every key has gone, so the outcome will be `delivered` or `unconfirmed`. `working` is `true` when the session was working; this alone proves no queueing | Typed |
+| `queued` | The host saw Copilot's turn row show the prompt queued after Ctrl+Q. Interim progress only, never the final outcome | Queued |
 
 A client ignores a `stage` it doesn't know, and a progress frame never completes its
 request, whatever else it holds. A request refused before any key went hears only
 `received`. A repeat of a request still being delivered (the same `request` UUID) hears its
 own `received`, then the stages the first one has reached, at once, and the rest as they come;
-one sent after the outcome hears `received` and, if the keys went, `typed`. Nothing follows the
-response.
+one sent after the outcome hears `received` and, if the keys went, `typed`, then
+`queued` if that evidence was reached. Nothing follows the response.
 
 `timings` in the result: milliseconds after the host received the request, by the host's
 clock. Absent fields were not reached, or are not known. For a repeat, they count from the
@@ -1082,7 +1122,7 @@ blob store where the host offers `sessions.attach.blob`
 
 **What the agent is given (Copilot).** The host writes each file into a private folder
 (below) and types the reply as agent-ha-bridge does: `@<path>` for each file, in order,
-then the text, one line, then Enter: `@C:\…\attachments\9f2c…-screenshot.png What do you
+then the text, one line, then the submit key chosen by `mode`: `@C:\…\attachments\9f2c…-screenshot.png What do you
 see?`. Copilot CLI attaches a file a prompt mentions that way. A path can't hold
 whitespace (nothing quotes it), so a host whose folder has a space in its path refuses
 replies with attachments. The text rules above apply to the text alone, so a reply of

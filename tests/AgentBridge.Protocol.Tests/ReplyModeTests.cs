@@ -41,6 +41,7 @@ public class ReplyModeTests
         var request = Request(fields);
 
         Assert.Null(Replies.Check(request));
+        Assert.Equal(ReplyMode.Steer, request.Mode ?? ReplyMode.Steer);
         var json = Wire(request);
         Assert.Equal("steer", json.TryGetProperty("mode", out var mode) ? mode.GetString() : "steer");
     }
@@ -59,25 +60,31 @@ public class ReplyModeTests
         Assert.Equal("queued", json.GetProperty("stage").GetString());
     }
 
-    [Fact]
-    public void An_older_hosts_result_is_steer_and_does_not_claim_the_request_was_queued()
+    [Theory]
+    [InlineData("")]
+    [InlineData(",\"mode\":null")]
+    [InlineData(",\"mode\":\"future\"")]
+    [InlineData(",\"mode\":42")]
+    public void An_older_or_unrecognised_result_mode_does_not_claim_the_request_was_queued(string fields)
     {
-        var result = Received.Read<ReplyResult>(JsonSerializer.Deserialize<JsonElement>("""{"outcome":"delivered"}"""));
+        var result = Received.Read<ReplyResult>(JsonSerializer.Deserialize<JsonElement>($$"""{"outcome":"delivered"{{fields}}}"""));
         var json = Wire(result);
 
+        Assert.Equal(ReplyMode.Steer, result.Mode ?? ReplyMode.Steer);
         Assert.Equal("steer", json.TryGetProperty("mode", out var mode) ? mode.GetString() : "steer");
         Assert.False(json.TryGetProperty("stage", out _));
     }
 
     [Theory]
-    [InlineData("""{"outcome":"queued","stage":"future"}""")]
-    [InlineData("""{"outcome":"future","stage":"queued"}""")]
-    [InlineData("""{"outcome":"unconfirmed","stage":"future"}""")]
-    public void An_unrecognised_final_state_or_stage_never_becomes_a_delivered_reply(string json)
+    [InlineData("""{"outcome":"queued","stage":"future"}""", ReplyStage.Typed)]
+    [InlineData("""{"outcome":"future","stage":"queued"}""", ReplyStage.Queued)]
+    [InlineData("""{"outcome":"unconfirmed","stage":"future"}""", ReplyStage.Typed)]
+    public void An_unrecognised_final_state_or_stage_never_becomes_a_delivered_reply(string json, ReplyStage stage)
     {
         var result = Received.Read<ReplyResult>(JsonSerializer.Deserialize<JsonElement>(json));
 
         Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
+        Assert.Equal(stage, result.Stage);
     }
 
     [Fact]
