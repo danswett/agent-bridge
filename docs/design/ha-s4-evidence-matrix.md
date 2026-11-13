@@ -20,7 +20,7 @@ relevant E1-E5, E9-E10, E15, E18 and rollback steps, **not the whole checklist**
 Engineering supplied the complete closed [#39](https://github.com/danswett/agent-bridge/issues/39)
 text (no comments), S4 row meanings and the retirement gate text by message.
 Also read the whole local fleet retirement inventory (file commit `839a09f6dd0eaaffb212354f8d53fc9d1869b44b`); its Section 1 supplies the acceptance minima below, except the superseded idle-only wording for row 4.
-Row 4 follows the Product ruling on [#2396](https://github.com/danswett/agent-bridge/issues/2396),
+Row 4 follows the [Product approval on #2396](https://github.com/danswett/agent-bridge/issues/2396#issuecomment-6843557043),
 relayed by Engineering on November 12, 2026; the fleet correction belongs to F-Chain.
 #39 delivered a harness for 53 untested-live rows, not proof those runs passed.
 P's "Live: Progress" citations are historical evidence pointers; the underlying
@@ -54,15 +54,19 @@ The Mac/iOS work in #2391/#2392/#2398/#2399 remains required future parity but i
 
 | Client | Built evidence | Live evidence | Gap keys |
 |---|---|---|---|
-| PWA | Built: P section 5 stop UI uses S's host confirmation rule | Historical P section 5, Progress > End session; full current client contract untested live | STOP, L-PWA, L-ANDROID |
-| Windows | Built: W Details uses the host's two-press rule | Untested live at Windows/current-rule scope; P section 5's generic historical claim identifies no client | STOP, L-WIN |
-| Apple | Built: A two-step stop against a capable remote host; Mac local host stop unavailable | Mac fixture only; Mac/iOS real-host runs untested live | STOP, L-MAC, L-IOS |
+| PWA | Built normal stop: P section 5/S; guarded-idle host discrepancy under #2396 | Historical P section 5, Progress > End session; full current client contract untested live | STOP, L-PWA, L-ANDROID |
+| Windows | Built normal stop: W Details/S; guarded-idle host discrepancy under #2396 | Untested live at Windows/current-rule scope; P section 5's generic historical claim identifies no client | STOP, L-WIN |
+| Apple | Built remote stop: A/S; guarded-idle host discrepancy under #2396; Mac local host stop unavailable | Mac fixture only; Mac/iOS real-host runs untested live | STOP, L-MAC, L-IOS |
 | MCP agent | Missing in P section 15's native MCP inventory; current exposure unknown | Untested live; an agent cannot borrow person authority | I-MCP, STOP, L-MCP |
 | Host CLI | Unknown client stop entry point; S proves host handling, not CLI exposure | Untested live | I-CLI, STOP, L-CLI |
 | Optional HA | Missing runtime: H proposes opening paired-person UI; legacy P section 18 differs | Disposable connector CI is not this component's live proof | HA, STOP |
 
-Pass on every required client, for person and system stops alike: idle ends on one
-press; working, waiting or idle-with-background-work only arms on the first press,
+Engineering relays Builder #2396's observation: `StopService.cs` lines 251-253/280
+terminate idle-reported launch-not-ready, unreadable-transcript or transcript-only
+question targets without arming: **code observation under #2396, open question to Product**.
+
+Pass (Product wording, not live proof) per required client, for person and system stops:
+idle ends on one press; working, waiting or idle-with-background-work first arms,
 then ends only on a second press carrying its confirmation token within 10 seconds.
 Expired or replayed first presses do not count as confirmation; preserve PID/start
 time and show shutdown/removal of the correct session. Where safe, type `/exit`,
@@ -229,7 +233,7 @@ Live-run issues are **not ready** until their gap issues are fixed.
 | L-MCP / [#2394](https://github.com/danswett/agent-bridge/issues/2394) | S4 live run: MCP agent client row-by-row retirement evidence | Run all nine contracts through actual permitted client surface; record person-only refusals and missing paths as gaps. |
 | L-CLI / [#2395](https://github.com/danswett/agent-bridge/issues/2395) | S4 live run: host CLI row-by-row retirement evidence | Run all nine contracts from documented CLI entry points; host handlers alone are not client exposure proof. |
 | HA / [#2407](https://github.com/danswett/agent-bridge/issues/2407) | Optional Home Assistant client: B1-B9 and S8 live run | Open, not-ready tracker owns all nine build slices and component live proof; #1419 is closed historical design, not their tracker; no retirement prerequisite. |
-| STOP / [#2396](https://github.com/danswett/agent-bridge/issues/2396) | Stop parity reconciliation and all-client proof (retitled; exact title not supplied) | Reconcile the superseded inventory wording and design all-client proof: idle one press, non-idle confirmation, listed refusals; person/system parity. No enforcement cut: host code and S already agree. Three runs per client/stage and 20 correct-target stops; check #1146 first. |
+| STOP / [#2396](https://github.com/danswett/agent-bridge/issues/2396) | S4 stop: reconcile inventory wording with the parity stop rule and prove all clients | Reconcile inventory wording and design all-client proof: idle one press, non-idle confirmation, listed refusals; person/system parity. Guarded-idle code observation awaits Product; no enforcement cut authorized. Three runs per client/stage and 20 correct-target stops; check #1146 first. |
 | PWA-PUSH / [#2397](https://github.com/danswett/agent-bridge/issues/2397) | S4 PWA push: close background question and turn delivery gaps | Reconcile historical Web Push with current missing-background report; one lifecycle cut, prove rows 16/28 background/locked delivery and exact-question open. |
 | IOS-PUSH / [#2398](https://github.com/danswett/agent-bridge/issues/2398) | S4 iOS push: add the first background delivery slice | Cut one missing APNs registration/provider/lifecycle mechanism, at most 250 changed lines; name remaining slices; full rows 16/28 proof follows only when complete. |
 | APPLE-UPDATE / [#2399](https://github.com/danswett/agent-bridge/issues/2399) | S4 Apple updates: verify remote-host update controls | Retitled by Engineering: parked under #1882; prove Mac/iOS person controls update all four capable Windows hosts, with progress/version/refusal receipts and three row runs per stage. Apple app distribution/self-update is outside row 8. |
