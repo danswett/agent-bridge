@@ -680,8 +680,11 @@ unverifiable evidence yields `unsupported-verifier`, never inferred support.
 The standalone strict parser retains existing format codes (`json`,
 `duplicate-member`, `unknown-member`, `id`, `base64`, `length`, `der`, `high-s`,
 `type`, `count`, `order`, `value`, `size`); descriptor/add/merge checks keep `device`,
-`host-key` and `host-proof`. The shared code list reserves `cap-proof` (#2385) for
-v3 descriptor parsing only, not a new wire error. The aggregate transition precondition maps unusable evidence to
+`host-key` and `host-proof`. The shared code list reserves `cap-proof` (#2385) as
+a parser-only refusal verdict: the first failing descriptor check returned by
+local parser APIs and pinned by shared vectors. It is not a wire/RPC error code;
+do not emit `cap-proof` as an enrollment or command wire error. Existing wire
+failure formats stay unchanged. The aggregate transition precondition maps unusable evidence to
 `unsupported-verifier`, not those APIs' parse verdicts. Pin/snapshot/storage
 failures retain the 2b-1 codes; this does not remap person-command failures.
 A normal applied, person-approved revocation changes the required set; collect
@@ -863,16 +866,22 @@ Then check `id`, `dh`, id-from-DH, `sign`, `signAlg`, `webauthn`, `capSign`,
 `capSignAlg`, `capSignProof`, own-key separation, `platform`, `name`, then proof.
 The unchanged field checks keep their existing codes. For the new fields:
 
-| Defect | First code |
+| Descriptor defect | First parser verdict |
 |---|---|
 | Duplicate/unrecognized/missing member | `duplicate-member` / `unknown-member` / `missing-member` |
 | Wrong JSON type; wrong algorithm string | `type`; `value` |
 | Noncanonical base64url; point not 65 bytes; invalid point | `base64`; `length`; `point` |
 | Malformed/nonminimal DER; high-S | `der`; `high-s` |
 | capSign equals own DH, sign or WebAuthn key | `device`, before platform/name/proof verification |
-| Well-formed proof fails under capSign or its binding | new `cap-proof`, after platform/name |
+| Well-formed proof fails under capSign or its binding | `cap-proof` (parser-only), after platform/name |
 | Any capSign field on a v1 descriptor or a v2 host | `unknown-member` (v2 person remains `version`) |
 | Oversize entry | existing `size`; no increased 8 KiB bound |
+
+At `approval`, after `device`, a v3 add requires method `code` or `qr` and its
+32-byte transcript; `grandfather` or `genesis` refuses `approval`, even with a
+valid capSign proof. Bad transcript/member shapes also refuse `approval`.
+V3 genesis requires only method `genesis`, without a transcript. V1/v2 approval
+rules are unchanged; no legacy migration method can enroll a v3 capability key.
 
 Use the signed-evidence section's symmetric collision predicate in every reader:
 either descriptor's `hostSign` or `capSign` matching any key of the other is
@@ -908,7 +917,7 @@ format, commit-before-offer, limits and mutual typing. For v3 QR paths, both
 existing QR HMAC labels consume T3 instead of h; both sides check them after
 commit/offer/reveal. Invite hint, q expiry and N's displayed sign-key hash stay.
 The ordinary sign-key channel possession proof remains required.
-A signs a v3 add with `approval.transcript = T3`, embedding D verbatim.
+A signs a v3 add with method `code` or `qr`, `approval.transcript = T3` and D verbatim.
 N verifies the full returned roster, approver, account/generation and T3, and
 requires exact equality of its frozen D and the signed device bytes, including
 all three capSign fields. Any edit or re-encoding after freeze restarts the
@@ -991,6 +1000,7 @@ and both QR MACs, with independent one-defect mutations and first refusal codes:
 | Family | Tests required before implementation |
 |---|---|
 | Schema | Parser-valid person genesis/add for every presence; acceptance still requires normal sign/presence; legacy bytes/verdicts unchanged; v3 host/other op; v2 person; partial/extra/duplicate members |
+| Approval | V3 grandfather/genesis add: `approval`, even with valid capSign proof; missing/bad code/QR transcript: `approval`; bad proof before bad approval: `cap-proof`; v3 genesis requires `genesis`; legacy verdicts unchanged |
 | Proof | Wrong type/algorithm/base64/length/point/DER/high-S; other key/account/generation/DH/domain; own-key collisions; platform/name failures before cap-proof |
 | History | Readded before collision; every cross-key pair in both orders; merge and sibling-branch signer/cosigner/command/veto; no retroactive authority |
 | Exchange | Golden framing/code/QR values; altered/stripped capSign; re-encoded D; wrong approver/identity; descriptor edit restarts; v1 T unchanged |
@@ -999,7 +1009,7 @@ and both QR MACs, with independent one-defect mutations and first refusal codes:
 
 ### Proposed code cuts (Engineering must authorize each)
 
-Every estimate includes tests and fixtures; each entire PR is at most 250 changed
+Every estimate includes tests and fixtures; each entire PR is at most 400 changed
 lines. Write its listed failing tests first. Split again rather than exceed the
 cap; no executable code is authorized by this design.
 
