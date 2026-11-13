@@ -363,6 +363,8 @@ next outcomes), and asks a follow-up question a little after each answer.
 
 ### Replying
 
+Without working local storage or Web Locks, Send shows an error and sends nothing.
+
 Delivered image attachments can retain a sender-only preview on this device (#1802).
 The local account's store holds at most 32 raster images, 8 MiB total, for 24 hours;
 sign-out or forgetting a pairing clears it. Missing bytes or reply bindings (including

@@ -7,6 +7,7 @@ const PATH = '/repos/danswett/agent-bridge/releases';
 const FRESH_SECONDS = 300;
 const STALE_SECONDS = 86400;
 const FETCHED_AT = 'x-fetched-at';
+const FRESH_FOR = 'x-fresh-for';
 const UPSTREAM_ETAG = 'x-upstream-etag';
 
 function failure(status, message) {
@@ -50,11 +51,14 @@ async function refresh(perPage, page, token, cachedBody, upstreamEtag) {
     if (token) headers.authorization = `Bearer ${token}`;
     if (upstreamEtag) headers['if-none-match'] = upstreamEtag;
     const upstream = await fetch(`${UPSTREAM}?per_page=${perPage}&page=${page}`, { headers });
+    // A rejected credential must not carry its validator into the one anonymous retry.
+    if (upstream.status === 401 && token) return refresh(perPage, page, null, null, null);
+    const freshSeconds = token ? 60 : FRESH_SECONDS;
     if (upstream.status === 304 && cachedBody !== null && upstreamEtag)
-      return { body: cachedBody, upstreamEtag: upstream.headers.get('etag') ?? upstreamEtag };
+      return { body: cachedBody, upstreamEtag: upstream.headers.get('etag') ?? upstreamEtag, freshSeconds };
     if (upstream.status !== 200) return null;
     const body = await upstream.text();
-    return Array.isArray(JSON.parse(body)) ? { body, upstreamEtag: upstream.headers.get('etag') } : null;
+    return Array.isArray(JSON.parse(body)) ? { body, upstreamEtag: upstream.headers.get('etag'), freshSeconds } : null;
   } catch {
     return null;
   }
@@ -78,7 +82,7 @@ export default {
     let cachedBody = null;
     let cachedAge = Infinity;
     let cachedEtag = null;
-    const freshSeconds = env.GITHUB_TOKEN ? 60 : FRESH_SECONDS;
+    const freshSeconds = env.GITHUB_TOKEN && cached?.headers.get(FRESH_FOR) !== String(FRESH_SECONDS) ? 60 : FRESH_SECONDS;
     if (cached) {
       cachedBody = await cached.text();
       cachedAge = (now - Number(cached.headers.get(FETCHED_AT))) / 1000;
@@ -94,6 +98,7 @@ export default {
           'content-type': 'application/json',
           'cache-control': `public, max-age=${STALE_SECONDS}`,
           [FETCHED_AT]: String(now),
+          [FRESH_FOR]: String(fresh.freshSeconds),
           etag,
         },
       });

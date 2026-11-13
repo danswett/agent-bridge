@@ -21,6 +21,7 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     public const string Repository = "https://github.com/danswett/agent-bridge";
     // Shared with every profile's app and host through the app's folder (#530).
     readonly ReleaseDiscovery discovery = new(Paths.AppData, log: log);
+    readonly PackageDownloader downloader = new();
     UpdateManager? manager;
     UpdateInfo? pending;
     string? source;
@@ -64,9 +65,9 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         var key = $"{feed}|{prereleases()}";
         if (manager is not null && source == key) { return manager; }
         IUpdateSource from = feed.Length == 0
-            ? new DiscoveredGithubSource(Repository, prereleases(), discovery, installed: Installed)
+            ? new DiscoveredGithubSource(Repository, prereleases(), discovery, downloader, installed: Installed)
             : Uri.TryCreate(feed, UriKind.Absolute, out var u) && u.Scheme is "http" or "https"
-                ? new SimpleWebSource(feed)
+                ? new SimpleWebSource(feed, downloader)
                 : new SimpleFileSource(new DirectoryInfo(feed));
         source = key;
         pending = null;
@@ -157,7 +158,9 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         }
     }
 
-    public async Task DownloadAsync(Action<int> progress)
+    public bool ReportsDownloadFacts => true;
+    public Task DownloadAsync(Action<int> progress) => DownloadAsync(progress, (_, _) => { });
+    public async Task DownloadAsync(Action<int> progress, Action<long, long?> bytes)
     {
         var from = Manager();
         if (pending is not { } release) { return; }
@@ -170,7 +173,9 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
             ?? throw new PackageMismatchException($"the release feed gives no checksum for {target.Version}, so its package cannot be verified");
         var file = PackageFile(target) ?? throw new PackageMismatchException("the folder Velopack keeps packages in can't be told, so the package can't be verified");
         DownloadMark.DropMismatch(file, expected);
-        await from.DownloadUpdatesAsync(release, p => ui.Post(() => progress(p)));
+        downloader.Report = (count, total) => ui.Post(() => bytes(count, total));
+        try { await from.DownloadUpdatesAsync(release, p => ui.Post(() => progress(p))); }
+        finally { downloader.Report = null; }
         if (ReferenceEquals(from, Manager()) && ReferenceEquals(pending, release))
         {
             mark.Accept(file, target.Version.ToString(), source!, expected);
