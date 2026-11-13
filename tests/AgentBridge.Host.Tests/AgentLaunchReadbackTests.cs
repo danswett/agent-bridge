@@ -24,6 +24,15 @@ public sealed class AgentLaunchReadbackTests : LaunchFlowFixture
 
     static JsonElement Body(LaunchRequest request) => JsonSerializer.SerializeToElement(request, ProtocolJson.Options);
 
+    static async Task<LaunchResult> Replay(Func<IProtocolChannel, string, JsonElement, Task<object?>> handle,
+        IProtocolChannel channel, LaunchRequest request)
+    {
+        object? result = null;
+        var error = await Record.ExceptionAsync(async () => { result = await handle(channel, LaunchProtocol.Launch, Body(request)); });
+        Assert.Null(error);
+        return Assert.IsType<LaunchResult>(result);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -47,7 +56,7 @@ public sealed class AgentLaunchReadbackTests : LaunchFlowFixture
         Assert.Equal(started ? LaunchOutcome.Started : LaunchOutcome.Refused, first.Outcome);
         var (handle, credentials, channel) = Pipe(launcher);
 
-        var repeat = Assert.IsType<LaunchResult>(await handle(channel, LaunchProtocol.Launch, Body(request)));
+        var repeat = await Replay(handle, channel, request);
 
         Assert.Equal(first.Outcome, repeat.Outcome);
         Assert.Equal(first.Session, repeat.Session);
@@ -101,7 +110,7 @@ public sealed class AgentLaunchReadbackTests : LaunchFlowFixture
         Assert.Equal(LaunchOutcome.Busy, (await launcher.LaunchAsync(request, Principal)).Outcome);
         var (handle, _, channel) = Pipe(launcher);
 
-        var repeat = Assert.IsType<LaunchResult>(await handle(channel, LaunchProtocol.Launch, Body(request)));
+        var repeat = await Replay(handle, channel, request);
 
         Assert.Equal(LaunchOutcome.Busy, repeat.Outcome);
         Assert.Null(repeat.Trust);

@@ -20,6 +20,7 @@ public sealed class AgentLaunchGateTests : IDisposable
     public void A_launch_over_the_hourly_cap_returns_the_named_refusal_and_an_audit_line()
     {
         Write(Config(DefaultLimits));
+        Directory.CreateDirectory(Path.Combine(folder, AgentAuditLog.FolderName));
         var gate = new AgentLaunchGate(folder);
         const string principal = "agent:machine/parent";
         for (var i = 0; i < 3; i++) { Assert.True(gate.CheckLaunch(principal, Guid.NewGuid().ToString("D"), "hash").Allowed); }
