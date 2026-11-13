@@ -429,6 +429,46 @@ public class CiPlanTests
         Assert.Empty(problems.Select(p => p.Message));
     }
 
+    [Fact]
+    public void Pwa_shards_cover_both_browsers_and_every_leg_is_required_by_the_deployment_gates()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var stream = new YamlDotNet.RepresentationModel.YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(root, ".github", "workflows", "ci.yml"))));
+        var jobs = (YamlDotNet.RepresentationModel.YamlMappingNode)((YamlDotNet.RepresentationModel.YamlMappingNode)stream.Documents[0].RootNode)["jobs"];
+        var pwa = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["pwa-ui"];
+        var strategy = (YamlDotNet.RepresentationModel.YamlMappingNode)pwa["strategy"];
+        var matrix = (YamlDotNet.RepresentationModel.YamlMappingNode)strategy["matrix"];
+        var legs = ((YamlDotNet.RepresentationModel.YamlSequenceNode)matrix["include"])
+            .Children.Cast<YamlDotNet.RepresentationModel.YamlMappingNode>().ToArray();
+        var expected = new[] { (Project: "chromium", Count: 3), (Project: "webkit", Count: 4) }
+            .SelectMany(browser => Enumerable.Range(1, browser.Count).Select(i =>
+                (browser.Project, Shard: $"{i}/{browser.Count}"))).ToArray();
+        Assert.Equal(expected, legs.Select(leg => (leg["project"].ToString(), leg["shard"].ToString())));
+        Assert.Equal(expected.Select(leg => $"{leg.Project} {leg.Shard}"),
+            legs.Select(leg => leg["name"].ToString()));
+        var env = (YamlDotNet.RepresentationModel.YamlMappingNode)pwa["env"];
+        Assert.Equal("${{ matrix.project }}", env["PROJECT"].ToString());
+        Assert.Equal("${{ matrix.shard }}", env["SHARD"].ToString());
+        Assert.Equal("1", env["PWA_SKIP_E2E"].ToString());
+        var steps = (YamlDotNet.RepresentationModel.YamlSequenceNode)pwa["steps"];
+        Assert.Contains(steps.Children.Cast<YamlDotNet.RepresentationModel.YamlMappingNode>(), step =>
+            step.Children.TryGetValue("run", out var run) &&
+            run.ToString() == "npx playwright test --project=\"$PROJECT\" --shard=\"$SHARD\" --fully-parallel");
+        var gate = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["quality-gate"];
+        Assert.Contains("pwa-ui", ((YamlDotNet.RepresentationModel.YamlSequenceNode)gate["needs"])
+            .Children.Select(n => n.ToString()));
+
+        var names = legs.Select(leg => $"pwa-ui ({leg["name"]})").Order(StringComparer.Ordinal).ToArray();
+        var config = MergeRuleConfig.Load(Path.Combine(root, "quality", "merge-rule.yml"));
+        Assert.Equal(names, config.MainGreen.Jobs.Where(n => n.StartsWith("pwa-ui (", StringComparison.Ordinal))
+            .Order(StringComparer.Ordinal));
+        var pages = System.Text.Json.JsonSerializer.Deserialize<string[]>(
+            File.ReadAllText(Path.Combine(root, "quality", "pages-jobs.json")))!;
+        Assert.Equal(names, pages.Where(n => n.StartsWith("pwa-ui (", StringComparison.Ordinal))
+            .Order(StringComparer.Ordinal));
+    }
+
     [Theory]
     [InlineData("app")]
     [InlineData("app-installer")]
