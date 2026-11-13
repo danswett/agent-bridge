@@ -41,7 +41,7 @@ public sealed class LocalApiLaunchStopAuditTests : IDisposable
     });
 
     JsonElement Line(string op) => JsonSerializer.Deserialize<JsonElement>(Assert.Single(File.ReadAllLines(
-        Assert.Single(Directory.GetFiles(Path.Combine(root, AgentAuditLog.FolderName), op == LaunchProtocol.Launch ? "launches-*.jsonl" : "agents-*.jsonl")))));
+        Assert.Single(Directory.GetFiles(Path.Combine(root, AgentAuditLog.FolderName), op == LaunchProtocol.Launch ? "launches-*.jsonl" : "agents-*.jsonl"))).Skip(1)));
 
     [Theory]
     [InlineData(LaunchProtocol.Launch)]
@@ -152,7 +152,7 @@ public sealed class LocalApiLaunchStopAuditTests : IDisposable
             Assert.Contains(Reason, error.Message);
         }
         JsonElement[] Rows() => Directory.GetFiles(Path.Combine(root, AgentAuditLog.FolderName), "*.jsonl")
-            .SelectMany(File.ReadAllLines).Select(s => JsonSerializer.Deserialize<JsonElement>(s)).ToArray();
+            .SelectMany(f => File.ReadAllLines(f).Skip(1)).Select(s => JsonSerializer.Deserialize<JsonElement>(s)).ToArray();
         await Task.WhenAll(Enumerable.Range(0, 60).Select(_ => Task.Run(() => Refused(channel, op))));
         Assert.Equal(60, Rows().Length);
         await Refused(channel, op);
@@ -204,7 +204,7 @@ public sealed class LocalApiLaunchStopAuditTests : IDisposable
         File.Delete(folder);
         Directory.Move(held, folder);
         await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, op, Body()));
-        var lines = File.ReadAllLines(Assert.Single(Directory.GetFiles(folder, "*.jsonl")));
+        var lines = File.ReadAllLines(Assert.Single(Directory.GetFiles(folder, "*.jsonl"))).Skip(1).ToArray();
         Assert.Equal(61, lines.Length);
         Assert.Equal("2 additional launch or stop attempts were refused", JsonSerializer.Deserialize<JsonElement>(lines[^1]).GetProperty("reason").GetString());
         Assert.Equal(0, actions.Calls);

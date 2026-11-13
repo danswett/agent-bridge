@@ -212,6 +212,58 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task A_manual_restart_waits_for_a_busy_usage_probe_instead_of_silently_cancelling()
+    {
+        await StartAsync();
+        await auto.TickAsync();
+        var finishing = true;
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(finishing, "a usage probe is finishing"));
+        var press = auto.RestartToUpdateAsync();
+        await Wait.UntilAsync(() => host.Sent(HostOps.ProbeHold).Count > 0, "the manual usage hold");
+        Assert.False(press.IsCompleted);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        finishing = false;
+
+        Assert.Null(await press);
+        Assert.True(updater.Applied);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_device_install_that_becomes_busy_at_begin_stays_queued_until_a_quiet_moment()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.IdleFor);
+        var changed = false;
+        othersProbe = () =>
+        {
+            if (!changed && auto.State.Phase == UpdatePhase.Installing)
+            {
+                changed = true;
+                connection.Sessions.Upsert(Make.Session("s1", SessionStatus.Working));
+                Assert.False(auto.Idle);
+            }
+            return null;
+        };
+        await auto.Ask(UpdateAskKind.Install, Press, time.GetUtcNow());
+        Assert.True(changed);
+        Assert.Equal(Press, auto.State.Request);
+        Assert.Null(prefs.LastUpdate);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        await GoIdleAsync("s1");
+        await auto.TickAsync();
+        Assert.False(updater.Applied);
+        time.Advance(AutoUpdater.IdleFor);
+
+        await auto.TickAsync();
+
+        Assert.True(updater.Applied);
+        Assert.Single(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task Set_to_install_between_turns_a_gap_while_a_Codex_probe_finishes_on_the_host_waits_until_the_host_says_it_is_done()
     {
         InstallBetweenTurns();
@@ -1363,7 +1415,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
         await auto.TickAsync();
         time.Advance(AutoUpdater.SettleFor);
-        await Wait.UntilAsync(() => prefs.UpdateFailures == 1, "the first failure", TimeSpan.FromSeconds(10));
+        await FailedAttemptAsync(1);
 
         Assert.Empty(host.Sent(HostOps.Stop));
         Assert.False(updater.Applied);
@@ -1375,9 +1427,10 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         for (var failures = 2; failures <= 5; failures++)
         {
             time.Advance(wait);
-            await auto.TickAsync();
+            var retry = auto.TickAsync();
             time.Advance(AutoUpdater.SettleFor);
-            await Wait.UntilAsync(() => prefs.UpdateFailures == failures, $"failure {failures}", TimeSpan.FromSeconds(10));
+            await FailedAttemptAsync(failures);
+            await retry;
             wait = prefs.UpdateRetryAt!.Value - time.GetUtcNow();
             // The failure may be stamped before or after the settle advance above, so the time left is
             // the backoff less at most that settle.
@@ -1392,6 +1445,13 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         time.Advance(AutoUpdater.SettleFor);
         await Wait.UntilAsync(() => updater.Applied, "the install once nothing holds a file", TimeSpan.FromSeconds(10));
         Assert.Single(host.Sent(HostOps.Stop));
+
+        async Task FailedAttemptAsync(int count)
+        {
+            await Wait.UntilAsync(() => auto.State.Waiting?.Contains("DiagTrack", StringComparison.Ordinal) == true, "the Windows file wait");
+            time.Advance(InstallationFiles.ReleaseWait + AutoUpdater.SettleFor);
+            await Wait.UntilAsync(() => prefs.UpdateFailures == count, $"failure {count}", TimeSpan.FromSeconds(10));
+        }
     }
 
     // Update.exe failing ends this process and starts the old app again: the next try is kept in the
@@ -1413,6 +1473,186 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.False(updater.Applied);
         Assert.Empty(host.Sent(HostOps.Stop));
         Assert.Equal("update failed; trying again soon, or at Restart to update", auto.State.Waiting);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Waiting_for_Windows_to_release_installation_files_is_not_reported_as_installing()
+    {
+        await StartAsync();
+        await auto.TickAsync();
+        var probes = 0;
+        var premature = 0;
+        preflight = () => Interlocked.Increment(ref probes) == 1 ? "a fixture holding runtime.dll" : null;
+        auto.StateChanged += () =>
+        {
+            if (Volatile.Read(ref probes) < 2 && auto.State.Phase == UpdatePhase.Installing)
+            {
+                Interlocked.Exchange(ref premature, 1);
+            }
+        };
+
+        var update = auto.RestartToUpdateAsync();
+        await InstallReleaseWaitTests.FinishAsync(update, () => Volatile.Read(ref probes) < 2, held, time);
+
+        Assert.Equal(0, premature);
+        Assert.Null(await update);
+        Assert.True(updater.Applied);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Network")]
+    public async Task A_turn_starting_during_the_file_wait_is_rechecked_before_manual_or_automatic_install(bool automatic)
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
+        await auto.TickAsync();
+        if (automatic) { InstallBetweenTurns(); time.Advance(AutoUpdater.SettleFor); }
+        var released = false;
+        var warned = 0;
+        preflight = () => released ? null : "a fixture holding runtime.dll";
+        Task update = automatic ? auto.TickAsync()
+            : auto.RestartToUpdateAsync(_ => { warned++; return Task.FromResult(false); });
+        await Wait.UntilAsync(() => auto.State.Waiting?.Contains("fixture", StringComparison.Ordinal) == true, "the file wait");
+        await host.SendAsync(Events.SessionUpsert, Make.Session("s1", SessionStatus.Working));
+        await Wait.UntilAsync(() => !auto.Idle, "the turn that started while files were held");
+        released = true;
+
+        await InstallReleaseWaitTests.FinishAsync(update, () => !updater.Applied, held, time);
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Equal(automatic ? 0 : 1, warned);
+    }
+
+    [Theory]
+    [InlineData("final-scan")]
+    [InlineData("usage-probe")]
+    [InlineData("confirm")]
+    [Trait("Category", "Network")]
+    public async Task A_turn_arriving_during_a_clear_scan_usage_probe_or_confirmation_is_not_stopped(string phase)
+    {
+        await StartAsync(null, Make.Session("s1", phase == "confirm" ? SessionStatus.Working : SessionStatus.Idle));
+        await auto.TickAsync();
+        var changed = false;
+        void Turn()
+        {
+            if (changed) { return; }
+            changed = true;
+            TestUi.ForTest.Invoke(() => connection.Sessions.Upsert(Make.Session("s2", SessionStatus.Working)));
+            Assert.True(TestUi.Read(() => connection.Sessions.All.Any(s => s.Id == "s2")));
+        }
+        var scans = 0;
+        preflight = () => { if (phase == "final-scan" && ++scans == 2) { Turn(); } return null; };
+        host.On(HostOps.ProbeHold, _ => { if (phase == "usage-probe") { Turn(); } return new ProbeHoldResult(false); });
+
+        await auto.RestartToUpdateAsync(_ => { if (phase == "confirm") { Turn(); return Task.FromResult(true); } return Task.FromResult(false); });
+
+        Assert.True(changed);
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    [Trait("Category", "Network")]
+    public async Task A_remote_install_rechecks_read_only_and_other_profiles_after_the_file_wait(bool readOnly)
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.IdleFor);
+        var scans = 0;
+        preflight = () =>
+        {
+            if (++scans == 1) { return "a fixture holding runtime.dll"; }
+            if (readOnly) { host.Status = host.Status with { ReadOnly = "became read-only during the file wait" }; }
+            else { others = "another profile started during the file wait"; }
+            return null;
+        };
+        var press = auto.Ask(UpdateAskKind.Install, Press, time.GetUtcNow());
+
+        await InstallReleaseWaitTests.FinishAsync(press, () => !updater.Applied, held, time);
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Equal(UpdateOutcome.Refused, prefs.LastUpdate!.Outcome);
+        Assert.Contains(readOnly ? "read-only" : "another profile", prefs.LastUpdate.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Time_in_a_local_confirmation_does_not_exhaust_the_completed_file_check_budget()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        await auto.TickAsync();
+        var scans = 0;
+        preflight = () => ++scans == 1 ? "a fixture holding runtime.dll" : null;
+        var update = auto.RestartToUpdateAsync(_ => { time.Advance(TimeSpan.FromMinutes(3)); return Task.FromResult(true); });
+
+        await InstallReleaseWaitTests.FinishAsync(update, () => scans < 2, held, time);
+
+        Assert.Null(await update);
+        Assert.True(updater.Applied);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_file_held_during_the_local_confirmation_is_checked_again_before_the_host_stops()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        await auto.TickAsync();
+        var path = Path.Combine(app, "held-during-dialog.dll");
+        File.WriteAllText(path, "old install");
+        FileStream? holder = null;
+        var scans = 0;
+        preflight = () =>
+        {
+            Interlocked.Increment(ref scans);
+            try { using var check = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None); return null; }
+            catch (IOException) { return "a fixture holding held-during-dialog.dll"; }
+        };
+        try
+        {
+            var why = await auto.RestartToUpdateAsync(_ =>
+            {
+                holder = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                time.Advance(TimeSpan.FromMinutes(3));
+                return Task.FromResult(true);
+            });
+            Assert.Contains("held-during-dialog.dll", why, StringComparison.Ordinal);
+            Assert.True(scans >= 3);
+            Assert.False(updater.Applied);
+            Assert.Null(prefs.UpdatedFrom);
+            Assert.Empty(host.Sent(HostOps.Stop));
+        }
+        finally { holder?.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Network")]
+    public async Task A_local_restart_can_recover_a_stopped_or_reconnecting_host_after_its_warning(bool reconnecting)
+    {
+        var disconnected = false;
+        linkConnect = ct => !disconnected ? LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct)
+            : reconnecting ? new TaskCompletionSource<LocalChannel>().Task.WaitAsync(ct)
+            : Task.FromException<LocalChannel>(new HostNotRunningException("stopped"));
+        await StartAsync();
+        await auto.TickAsync();
+        await host.StopAsync();
+        disconnected = true;
+        connection.Reconnect();
+        await Wait.UntilAsync(() => connection.State == (reconnecting ? LinkState.Connecting : LinkState.NotRunning), "the disconnected host");
+        var warnings = 0;
+
+        var why = await auto.RestartToUpdateAsync(_ => { warnings++; return Task.FromResult(true); });
+
+        Assert.Null(why);
+        Assert.True(updater.Applied);
+        Assert.Equal(reconnecting ? 1 : 0, warnings);
     }
 
     [Fact]
@@ -1463,6 +1703,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.False(InstallHolder.Blocks(99, 99, @"C:\Windows\System32\svchost.exe", root));
         Assert.False(InstallHolder.Blocks(10, 99, root + @"current\agent-bridge-host.exe", root));
         Assert.True(InstallHolder.Blocks(10, 99, @"C:\Windows\System32\svchost.exe", root));
+        Assert.True(InstallHolder.Blocks(10, 99, null, root, "DiagTrack"));
+        Assert.False(InstallHolder.Blocks(10, 99, root + @"current\host.exe", root, "service"));
     }
 
     [Fact]
@@ -3200,6 +3442,40 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task A_file_held_during_committed_departure_is_checked_before_stop_or_handoff()
+    {
+        await StartAsync();
+        var path = Path.Combine(app, "held-during-depart.dll");
+        File.WriteAllText(path, "old install");
+        FileStream? holder = null;
+        var scans = 0;
+        preflight = () =>
+        {
+            Interlocked.Increment(ref scans);
+            try { using var check = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None); return null; }
+            catch (IOException) { return "a fixture holding held-during-depart.dll"; }
+        };
+        host.On(HostOps.UpdateDepart, _ =>
+        {
+            holder = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            time.Advance(UpdateProtocol.NowLife);
+            return Committed;
+        });
+        try
+        {
+            await NowAsync();
+            Assert.True(scans >= 3);
+            Assert.False(updater.Applied);
+            Assert.False(prefs.UpdateHandedOver);
+            Assert.Null(prefs.UpdatedFrom);
+            Assert.Empty(host.Sent(HostOps.Stop));
+            Assert.Contains("held-during-depart.dll", prefs.LastUpdate!.Reason, StringComparison.Ordinal);
+        }
+        finally { holder?.Dispose(); }
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task An_Update_now_whose_15_minutes_end_while_the_host_tries_its_lease_ends_expired_whatever_the_host_refuses_it_with()
     {
         await StartAsync();
@@ -3293,11 +3569,12 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         preflight = () => "the Windows Search indexer (pid 9)";
         Departs(Committed);
 
-        await NowAsync();
+        var press = NowAsync();
+        await InstallReleaseWaitTests.FinishAsync(press, () => true, time);
 
         var last = auto.State.Last!;
         Assert.Equal((UpdateOutcome.Refused, ManageReason.Unavailable), (last.Outcome, last.Code));
-        Assert.Equal($"{UpdateBlockedException.Prefix}the Windows Search indexer (pid 9)", last.Reason);
+        Assert.Equal(new UpdateBlockedException("the Windows Search indexer (pid 9)").Message, last.Reason);
         Assert.Empty(Departed());
         Assert.Empty(host.Sent(HostOps.Stop));
     }

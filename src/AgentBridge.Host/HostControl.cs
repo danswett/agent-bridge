@@ -165,6 +165,7 @@ public sealed class HostControl
             Account = options.Account(),
             Relay = relay,
             FleetPublication = options.FleetPublication(),
+            HostSigning = HostSignCustody.Read(options.Folder),
             SignIn = signIn,
             AgentHaBridge = options.AgentHaBridge(),
             HomeAssistant = options.HomeAssistant(),

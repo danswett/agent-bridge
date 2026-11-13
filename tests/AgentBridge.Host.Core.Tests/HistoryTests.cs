@@ -1307,27 +1307,38 @@ public class HistoryTests
 
     // Found in review of #686: an abort, or a delegate's end, looked at every part of the turn, so
     // many parts and many aborts were quadratic. Only the parts still open are looked at now.
-    [Fact]
-    public void Many_aborts_and_delegate_ends_after_many_parts_settle_what_is_open_in_linear_time()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void The_abort_work_probe_accepts_bounded_work_and_rejects_quadratic_work(bool quadratic)
     {
-        var turn = new TurnBuilder("t", Fixture.T0, null);
-        const int N = 50_000;
-        turn.ToolStarted("c1", "view", null, Fixture.T0);
-        turn.Asked(new Question { Id = "q1", Kind = QuestionKind.Approval, Message = "Push?", AskedAt = Fixture.T0, Agent = "agent-1" }, Fixture.T0);
-        for (var i = 0; i < N; i++) { turn.Response($"r{i}", Fixture.T0); }
-
-        var clock = System.Diagnostics.Stopwatch.StartNew();
-        for (var i = 0; i < N; i++)
+        if (quadratic)
         {
-            turn.Withdrawn("agent-1", Fixture.T0.AddSeconds(1));
-            turn.Abandoned(Fixture.T0.AddSeconds(2));
+            var failure = Assert.Throws<Xunit.Sdk.TrueException>(() => TurnBuilderGrowthTests.AssertLinearWork(Settle, subject: "aborts"));
+            Assert.Contains("doubling the aborts visited parts", failure.Message, StringComparison.Ordinal);
         }
-        clock.Stop();
+        else { TurnBuilderGrowthTests.AssertLinearWork(Settle, subject: "aborts"); }
 
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(1), $"took {clock.Elapsed}");
-        var parts = turn.Build(latest: true).Parts!;
-        Assert.Equal((ToolStatus.Failed, Fixture.T0.AddSeconds(2)), (parts.Single(p => p.Tool is not null).Tool!.Status, parts.Single(p => p.Tool is not null).Tool!.EndedAt!.Value));
-        Assert.Equal((QuestionOutcome.Cancelled, Fixture.T0.AddSeconds(1)), (parts.Single(p => p.Question is not null).Outcome!.Value, parts.Single(p => p.Question is not null).AnsweredAt!.Value));
+        long Settle(int n)
+        {
+            var parts = new TurnBuilderGrowthTests.CountingParts();
+            var turn = new TurnBuilder("t", Fixture.T0, null, parts);
+            turn.ToolStarted("c1", "view", null, Fixture.T0);
+            turn.Asked(new Question { Id = "q1", Kind = QuestionKind.Approval, Message = "Push?", AskedAt = Fixture.T0, Agent = "agent-1" }, Fixture.T0);
+            for (var i = 0; i < n; i++) { turn.Response($"r{i}", Fixture.T0); }
+            for (var i = 0; i < n; i++)
+            {
+                if (quadratic) { parts.Rescan(); }
+                turn.Withdrawn("agent-1", Fixture.T0.AddSeconds(1));
+                turn.Abandoned(Fixture.T0.AddSeconds(2));
+            }
+
+            var work = parts.Accesses;
+            var built = turn.Build(latest: true).Parts;
+            Assert.Equal((ToolStatus.Failed, Fixture.T0.AddSeconds(2)), (built.Single(p => p.Tool is not null).Tool!.Status, built.Single(p => p.Tool is not null).Tool!.EndedAt!.Value));
+            Assert.Equal((QuestionOutcome.Cancelled, Fixture.T0.AddSeconds(1)), (built.Single(p => p.Question is not null).Outcome!.Value, built.Single(p => p.Question is not null).AnsweredAt!.Value));
+            return work;
+        }
     }
 
     // Found disposing Copilot's review of #686: past 4,096 delegate calls in one read, whose a new
@@ -1911,12 +1922,12 @@ public class HistoryTests
 
     // A transcript read by the real reader, dialect and builder alone: what live makes of the same
     // records is not what these tests are about, and it would spend their time first.
-    static HistoryResult ReadAlone(Fixture f, IEnumerable<string> lines, CancellationToken cancellationToken = default)
+    static HistoryResult ReadAlone(Fixture f, IEnumerable<string> lines, CancellationToken cancellationToken = default, HistoryBudgets? budgets = null)
     {
         var path = Path.Combine(f.Root, "alone.jsonl");
         File.WriteAllLines(path, lines);
         var seed = new HistorySeed(new Dictionary<string, string?>(), new Dictionary<string, string>());
-        return new HistoryReader(new HistoryBudgets(), new byte[32]).Read(Id, AgentKind.Copilot, path, null, HistoryLimits.DefaultTurns, seed, remoteApproval: false, cancellationToken);
+        return new HistoryReader(budgets ?? new HistoryBudgets(), new byte[32]).Read(Id, AgentKind.Copilot, path, null, HistoryLimits.DefaultTurns, seed, remoteApproval: false, cancellationToken);
     }
 
     // Found in Engineering's second-family review of #686: a record is parsed up to 256 levels deep
@@ -1952,37 +1963,81 @@ public class HistoryTests
         Assert.True(ProtocolJson.ByteCount(page) > 0);
     }
 
-    // Found in Engineering's second-family review of #686: each historical ask_user had its own
-    // 250 ms for its patterns, so 12 records of ^(a+)+$ against a×40! took 3.18 s and a thousand could
-    // hold a history worker for minutes within the byte budget. One budget is the whole request's.
+    // One slow match exhausts the nonzero request budget. Later cheap valid patterns must
+    // remain uncheckable, even across turns; fresh per-question budgets would accept them.
     [Fact]
-    public void Many_questions_with_slow_patterns_share_one_budget_for_the_whole_read()
+    public void Many_questions_share_a_nonzero_pattern_budget_for_the_whole_read()
     {
         using var f = new Fixture();
+        var page = ReadAlone(f, QuestionsWithPatterns(), budgets: new HistoryBudgets { PatternTime = PatternBudget.Total });
+        AssertRequestPatternBudget(page);
+    }
+
+    static List<string> QuestionsWithPatterns()
+    {
         const int N = 40;
         var lines = new List<string> { Copilot.User("slow", 1) };
         for (var i = 0; i < N; i++)
         {
+            if (i == N / 2) { lines.Add(Copilot.User("more", 2)); }
             lines.Add(Copilot.ToolStart($"q{i}", "ask_user", new
             {
                 message = "Pick",
-                requestedSchema = new { properties = new { x = new { type = "string", pattern = "^(a+)+$", @default = new string('a', 40) + "!" } } },
+                requestedSchema = new { properties = new { x = new
+                {
+                    type = "string",
+                    pattern = i == 0 ? "^(a+)+$" : "^a+$",
+                    // Exponentially many failing partitions exhaust the budget on any runner.
+                    @default = i == 0 ? new string('a', 256) + "!" : "aaaa",
+                } } },
             }, 2));
         }
         lines.Add(Copilot.User("after", 3));
         lines.Add(Copilot.Assistant("done", 4));
+        return lines;
+    }
 
-        var clock = System.Diagnostics.Stopwatch.StartNew();
-        var page = ReadAlone(f, lines);
-        clock.Stop();
-
-        // A fresh 250 ms each is 10 s here; one budget for the read is 250 ms and the parsing.
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(5), $"took {clock.Elapsed}");
-        Assert.Equal(["slow", "after"], page.Turns!.Select(Prompt));
+    static void AssertRequestPatternBudget(HistoryResult page)
+    {
+        var turns = page.Turns;
+        Assert.NotNull(turns);
+        Assert.Equal(["slow", "more", "after"], turns.Select(Prompt));
         // Every pattern past the budget is one that can't be checked, answered at the machine, as
         // an over-budget pattern is in a live ask_user.
-        Assert.All(page.Turns![0].Parts.Where(p => p.Question is not null), p => Assert.True(p.Question!.AnswerAtMachine));
-        Assert.Equal(HistoryLimits.QuestionsPerTurn, page.Turns![0].Parts.Count(p => p.Question is not null));
+        foreach (var turn in turns.Take(2))
+        {
+            Assert.All(turn.Parts.Where(p => p.Question is not null), p =>
+                Assert.True(p.Question!.AnswerAtMachine, "the shared request budget must stay spent for later questions"));
+            Assert.Equal(HistoryLimits.QuestionsPerTurn, turn.Parts.Count(p => p.Question is not null));
+        }
+        Assert.Equal("done", turns[2].Parts.Single().Text);
+    }
+
+    [Fact]
+    public void The_request_pattern_budget_assertion_rejects_fresh_per_question_budgets()
+    {
+        var dialect = new CopilotHistory();
+        var turns = new List<TurnBuilder>();
+        foreach (var line in QuestionsWithPatterns())
+        {
+            using var record = JsonDocument.Parse(line);
+            if (dialect.Start(record.RootElement) is { } prompt)
+            {
+                turns.Add(new TurnBuilder("t" + turns.Count, Fixture.T0, prompt));
+            }
+            else
+            {
+                // The real dialect/builder with the regression: each record gets a fresh budget.
+                var context = new HistoryContext(new Dictionary<string, string?>(), new Dictionary<string, string>(), false);
+                dialect.Apply(record.RootElement, Fixture.T0, turns[^1], context);
+            }
+        }
+        var page = new HistoryResult { Turns = turns.Select(t => t.Build(latest: true)).ToList() };
+        var questions = page.Turns!.SelectMany(t => t.Parts).Where(p => p.Question is not null).ToList();
+        Assert.True(questions[0].Question!.AnswerAtMachine);
+        Assert.All(questions.Skip(1), p => Assert.False(p.Question!.AnswerAtMachine == true));
+        var failure = Assert.Throws<Xunit.Sdk.AllException>(() => AssertRequestPatternBudget(page));
+        Assert.Contains("the shared request budget must stay spent for later questions", failure.Message, StringComparison.Ordinal);
     }
 
     // Found in Engineering's second-family review of #686: the token went only to Task.Run, so a read
@@ -2001,10 +2056,9 @@ public class HistoryTests
 // Found in review of #686: a main-agent error visited every delegate question still pending, so a
 // turn of many of each was quadratic within its 8 MiB, and the per-turn question cap is applied
 // only when the turn is built. Count part accesses rather than shared-runner time (#2244).
-[Collection(nameof(TurnBuilderGrowthTests))]
 public class TurnBuilderGrowthTests
 {
-    static long Settle(int n)
+    static long Settle(int n, bool quadratic = false)
     {
         var parts = new CountingParts();
         var turn = new TurnBuilder("t", Fixture.T0, null, parts);
@@ -2015,16 +2069,19 @@ public class TurnBuilderGrowthTests
         for (var i = 0; i < n; i++)
         {
             turn.Asked(new Question { Id = "m" + i, Kind = QuestionKind.Approval, Message = "Push?", AskedAt = Fixture.T0 }, Fixture.T0);
+            if (quadratic) { parts.Rescan(); }
             turn.Failed(Fixture.T0);
         }
         var work = parts.Accesses;
         // The delegate's questions are still the person's; each of the main agent's was cancelled.
         Assert.True(turn.Pending("d0") && turn.Pending("d" + (n - 1)));
         Assert.False(turn.Pending("m0") || turn.Pending("m" + (n - 1)));
+        Assert.All(parts.Where(p => p.Question!.Agent is not null), p => Assert.Equal(QuestionOutcome.Unknown, p.Outcome));
+        Assert.All(parts.Where(p => p.Question!.Agent is null), p => Assert.Equal(QuestionOutcome.Cancelled, p.Outcome));
         return work;
     }
 
-    sealed class CountingParts : IList<HistoryPart>
+    internal sealed class CountingParts : IList<HistoryPart>
     {
         readonly List<HistoryPart> _items = [];
         public long Accesses { get; private set; }
@@ -2061,48 +2118,23 @@ public class TurnBuilderGrowthTests
             return true;
         }
         public void RemoveAt(int index) { Accesses++; _items.RemoveAt(index); }
-    }
-
-    static void AssertLinearWork(Func<int, long> settle)
-    {
-        var small = settle(128);
-        var large = settle(256);
-        Assert.True(small > 0, "the probe must observe the builder's work");
-        Assert.True(large <= small * 2.2, $"doubling the questions visited parts {small} -> {large} times");
-    }
-
-    // Test double for the old failure mode: every error rescans all delegate questions too.
-    static long QuadraticSettlement(int n)
-    {
-        var parts = new CountingParts();
-        for (var i = 0; i < n; i++) { Ask("d" + i, "agent-d"); }
-        for (var i = 0; i < n; i++)
+        public void Rescan()
         {
-            Ask("m" + i, null);
-            for (var j = 0; j < parts.Count; j++)
-            {
-                if (parts[j] is { Question.Agent: null, Outcome: QuestionOutcome.Unknown } part)
-                {
-                    parts[j] = part with { Outcome = QuestionOutcome.Cancelled };
-                }
-            }
+            foreach (var part in this) { _ = part; }
         }
-        var work = parts.Accesses;
-        Assert.All(parts.Where(p => p.Question!.Agent is not null), p => Assert.Equal(QuestionOutcome.Unknown, p.Outcome));
-        Assert.All(parts.Where(p => p.Question!.Agent is null), p => Assert.Equal(QuestionOutcome.Cancelled, p.Outcome));
-        return work;
-
-        void Ask(string id, string? agent) => parts.Add(new HistoryPart
-        {
-            Id = id, Kind = HistoryPartKind.Question, At = Fixture.T0, Outcome = QuestionOutcome.Unknown,
-            Question = new Question { Id = id, Kind = QuestionKind.Approval, Message = "Push?", AskedAt = Fixture.T0, Agent = agent },
-        });
     }
 
-    // Found in the same review: a delegate's end walks the synchronous delegates below it, and the
-    // same delegate ended again and again walked them again. n below it and n ends, 64 against
-    // 4,096 (Keep holds no more): walking them all each time reads about 4,096, bounded about 64.
-    static double EndAgain(int n)
+    internal static void AssertLinearWork(Func<int, long> settle, int smallSize = 128, int largeSize = 256, string subject = "questions")
+    {
+        var small = settle(smallSize);
+        var large = settle(largeSize);
+        Assert.True(small > 0, "the probe must observe the builder's work");
+        Assert.True(large <= small * 2.2, $"doubling the {subject} visited parts {small} -> {large} times");
+    }
+
+    // Read the existing walk counter because HistoryContext copies its seed collections.
+    // Resetting it between ends is the old unbounded-work double, using the real context/builder.
+    static long EndAgain(int n, bool quadratic = false)
     {
         var parents = Enumerable.Range(0, n).ToDictionary(i => "c" + i, _ => "R");
         var sync = Enumerable.Range(0, n).Select(i => "c" + i).ToHashSet();
@@ -2110,42 +2142,46 @@ public class TurnBuilderGrowthTests
         var turn = new TurnBuilder("t", Fixture.T0, null);
         turn.Asked(new Question { Id = "q", Kind = QuestionKind.Approval, Message = "Push?", AskedAt = Fixture.T0, Agent = "c" + (n - 1) }, Fixture.T0);
         context.TurnBegins();
-        var clock = System.Diagnostics.Stopwatch.StartNew();
-        for (var i = 0; i < n; i++) { context.EndTurnOf(turn, "R", Fixture.T0); }
-        var elapsed = clock.Elapsed.TotalMilliseconds;
+        var counter = typeof(HistoryContext).GetField("_walked", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(counter);
+        Assert.Equal(typeof(int), counter.FieldType);
+        long work = 0;
+        for (var i = 0; i < n; i++)
+        {
+            if (quadratic) { context.TurnBegins(); }
+            var before = (int)counter.GetValue(context)!;
+            context.EndTurnOf(turn, "R", Fixture.T0);
+            work += (int)counter.GetValue(context)! - before;
+        }
         // The first end still withdrew what was asked below it.
         Assert.False(turn.Pending("q"));
-        return elapsed;
+        return work;
     }
 
     [Fact]
     public void A_delegate_ended_again_and_again_walks_those_below_it_a_bounded_number_of_times()
     {
-        EndAgain(32);
-        var (fewest, most) = (double.MaxValue, double.MaxValue);
-        for (var run = 0; run < 3; run++)
-        {
-            fewest = Math.Min(fewest, EndAgain(64));
-            most = Math.Min(most, EndAgain(4_096));
-        }
-        var ratio = most / Math.Max(fewest, 1);
-
-        Assert.True(ratio < 500, $"ending 64x the delegates 64x as often took {ratio:F1}x as long");
+        // WalkBudget is 64 * Keep (4,096), below 1,024 squared; both sizes must exhaust it.
+        AssertLinearWork(n => EndAgain(n), 1_024, 2_048, subject: "delegates");
     }
 
     [Fact]
     public void Repeated_errors_beside_many_delegate_questions_settle_with_linear_work()
     {
-        AssertLinearWork(Settle);
+        AssertLinearWork(n => Settle(n));
     }
 
     [Fact]
     public void The_linear_work_assertion_rejects_a_quadratic_settlement()
     {
-        var failure = Assert.Throws<Xunit.Sdk.TrueException>(() => AssertLinearWork(QuadraticSettlement));
+        var failure = Assert.Throws<Xunit.Sdk.TrueException>(() => AssertLinearWork(n => Settle(n, quadratic: true)));
         Assert.Contains("doubling the questions visited parts", failure.Message, StringComparison.Ordinal);
     }
-}
 
-[CollectionDefinition(nameof(TurnBuilderGrowthTests), DisableParallelization = true)]
-public sealed class TurnBuilderGrowthCollection;
+    [Fact]
+    public void The_linear_work_assertion_rejects_a_delegate_walk_budget_reset_between_ends()
+    {
+        var failure = Assert.Throws<Xunit.Sdk.TrueException>(() => AssertLinearWork(n => EndAgain(n, quadratic: true), 1_024, 2_048, subject: "delegates"));
+        Assert.Contains("doubling the delegates visited parts", failure.Message, StringComparison.Ordinal);
+    }
+}
