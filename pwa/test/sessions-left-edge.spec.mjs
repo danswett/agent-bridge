@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { selectSort } from './nav.mjs';
+import { selectSort, motionsDone } from './nav.mjs';
 
 const textLeft = (locator) => locator.evaluate((el) => {
   const range = document.createRange();
@@ -41,6 +41,7 @@ for (const hasTouch of [false, true]) {
           await page.locator('#session-list .row-main').first().click();
           const view = page.locator('.session-view:not([hidden])');
           if (width >= 1280) { await view.locator('.inspector-button').click(); }
+          await motionsDone(page);
           const column = await view.locator('.stream').boundingBox();
           expect.soft(await textLeft(view.locator('.session-title'))).toBeCloseTo(column.x, 1);
           expect.soft(await textLeft(view.locator('.view-tab').first())).toBeCloseTo(column.x, 1);
