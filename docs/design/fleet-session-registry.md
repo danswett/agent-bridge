@@ -439,6 +439,7 @@ content that taints a coordinator that reads them, and gives agents typed projec
 * `fleet.list` for an agent returns the same typed fields **without** `name`. Passing
   `include: "content"` adds `name`, is an explicit request, and taints the caller like the other
   content reads. The MCP tool states in its description that names are untrusted text.
+  Each machine's `complete` flag is true only when online with an untruncated list; a reader may treat a name as absent only when every machine reports `complete: true`.
 * The character filter above does not change this: it removes markup, not instructions.
 
 ## Signing

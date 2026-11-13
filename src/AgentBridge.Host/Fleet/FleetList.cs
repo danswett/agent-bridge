@@ -127,7 +127,7 @@ public sealed record FleetListSession(string Machine, string Node, string State,
 
 public sealed record FleetListMachine(string Machine, string State,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MachineName,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? LastSeen);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? LastSeen, bool Complete);
 
 // The fleet.list pipe op (#1412, design/fleet-session-registry.md slice 4): an agent that passed
 // agent.hello lists its own account's sessions. The reply is built field by field from
@@ -236,7 +236,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
             sessions = machines.SelectMany(m => m.Sessions.Select(s => new FleetListSession(
                 m.Id, s.Node, s.State, s.Since, Math.Max(0, (long)(now - s.Since).TotalSeconds), m.Online, withNames ? s.Name : null, m.Name))).ToList(),
             machines = machines.OrderBy(m => m.Id, StringComparer.Ordinal).Select(m => new FleetListMachine(
-                m.Id, m.Online ? "online" : "offline", m.Name, m.LastSeen)).ToList(),
+                m.Id, m.Online ? "online" : "offline", m.Name, m.LastSeen, m.Online && !m.Truncated)).ToList(),
         };
     }
 }
