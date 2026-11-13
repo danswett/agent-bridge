@@ -197,7 +197,7 @@ public sealed class FleetFindTests : IDisposable
         Assert.NotEqual(own.Relay.AccountId, other.Relay.AccountId);
         Assert.Equal(["machines", "sessions"], reply.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal));
         Assert.All(reply.GetProperty("machines").EnumerateArray(), m =>
-            Assert.Equal(["lastSeen", "machine", "machineName", "state"], m.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal)));
+            Assert.Equal(["complete", "lastSeen", "machine", "machineName", "state"], m.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal)));
         Assert.All(reply.GetProperty("sessions").EnumerateArray(), s =>
             Assert.Equal(["machine", "machineName", "machineOnline", "node", "secondsInState", "since", "state"],
                 s.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal)));
