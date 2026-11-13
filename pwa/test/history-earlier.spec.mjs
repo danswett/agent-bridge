@@ -114,11 +114,7 @@ test('live turns held below the reader count toward the earlier-history limit', 
   const v = view(page, ID);
   const scroll = v.locator('.stream-scroll');
   const button = v.getByRole('button', { name: 'Load earlier messages' });
-  while (await held(v) < 445) {
-    const before = await held(v);
-    await button.evaluate((b) => b.click());
-    await expect.poll(() => held(v)).toBeGreaterThan(before);
-  }
+  await loadEarlierTo(v, 445);
   expect(await held(v)).toBe(445);
   await scroll.evaluate((el) => { el.scrollTop = el.clientHeight * 2; });
   for (let n = 1; n <= 6; n += 1) {
