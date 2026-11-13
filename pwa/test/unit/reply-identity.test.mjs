@@ -85,7 +85,7 @@ test('expired identity becomes an unconfirmed draft, and an explicit edited send
   f.elapse();
   f.reconnect();
   const reloaded = f.make();
-  reloaded.ready();
+  await reloaded.ready();
   assert.equal(f.calls.length, 1);
   assert.equal(reloaded.get('h1', 's1').outcome, 'unconfirmed');
   assert.equal(reloaded.get('h1', 's1').answer.text, 'original');
@@ -97,11 +97,11 @@ test('expired identity becomes an unconfirmed draft, and an explicit edited send
   assert.notEqual(f.calls.at(-1).request, 'request-1');
 });
 
-test('an unavailable attachment after reload stops without resending a changed payload', () => {
+test('an unavailable attachment after reload stops without resending a changed payload', async () => {
   const f = fixture();
   f.storage.setItem(key, JSON.stringify({ ...slot, questionId: '', request: 'old', text: 'look', attachments: ['missing'], firstSentAt: 1000 }));
   const reloaded = f.make();
-  reloaded.ready();
+  await reloaded.ready();
   assert.equal(f.calls.length, 0);
   assert.equal(reloaded.get('h1', 's1').answer.text, 'look');
   assert.equal(reloaded.get('h1', 's1').outcome, 'unconfirmed');
