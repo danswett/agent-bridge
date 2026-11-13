@@ -2035,7 +2035,7 @@ public class HistoryTests
         var page = new HistoryResult { Turns = turns.Select(t => t.Build(latest: true)).ToList() };
         var questions = page.Turns!.SelectMany(t => t.Parts).Where(p => p.Question is not null).ToList();
         Assert.True(questions[0].Question!.AnswerAtMachine);
-        Assert.All(questions.Skip(1), p => Assert.False(p.Question!.AnswerAtMachine));
+        Assert.All(questions.Skip(1), p => Assert.False(p.Question!.AnswerAtMachine == true));
         var failure = Assert.Throws<Xunit.Sdk.AllException>(() => AssertRequestPatternBudget(page));
         Assert.Contains("the shared request budget must stay spent for later questions", failure.Message, StringComparison.Ordinal);
     }
