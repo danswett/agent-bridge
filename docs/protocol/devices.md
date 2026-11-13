@@ -45,6 +45,7 @@ bytes.
 | `agent-bridge person command v1` | What a person command's `by` signs: `F(label, bodyBytes)` |
 | `agent-bridge reset veto v1` | What a veto's `by` signs: `F(label, bodyBytes)` |
 | `agent-bridge host key binding v1` | A host's `hostSignProof`: `hostSign` signs `F(label, account, generation, dh)` |
+| `agent-bridge fleet registry v1` | A host's fleet registry record: `hostSign` signs `F(label, canonicalRecordBytes)` (#2370) |
 | `agent-bridge verifier support v1` | A verifier capability signature over `F(label, bodyBytes)`; never consent |
 | `agent-bridge verifier frontier v1` | Capability frontier digest over `F(label, head1, ..., headN)` |
 | `agent-bridge verifier set v1` | Capability active-set digest over `F(label, member1, ..., memberN)` |
@@ -436,7 +437,7 @@ dotnet test tests/AgentBridge.Transport.Tests -c Release --filter "FullyQualifie
 certutil -user -csp "Microsoft Platform Crypto Provider" -key | Select-String agent-bridge-roster-sign
 ```
 
-### Host key custody (unused primitive, #1776 PR 1a)
+### Host key custody (#1776, #2369)
 
 `HostSignKey` in `src/AgentBridge.Host` reuses the Windows TPM-first/DPAPI CurrentUser
 store in a separate owner-only `host-sign` profile folder. This is a new identity, not
@@ -445,9 +446,32 @@ and exposes only its public point and low-S signing operation, never private mat
 A flushed `host-sign.public` record commits that identity. Missing, damaged, mismatched
 or inaccessible state is refused with a fixed, content-free error, not replaced or
 auto-repaired. Concurrent first callers serialize through a profile-local file lock.
-Other platforms are not implemented by this primitive. Nothing calls it at startup:
-there is no enrollment, roster-v2 switch, registry signing or reader change. The #55
-trusted-state and person-authorized enrollment prerequisites still block those slices.
+Other platforms are not implemented by this primitive. Startup and status reads never
+create a host key. Registry publication stays unsigned; no roster-v2 acceptance switch
+or reader change is added here.
+
+The local pipe's `host.status.hostSigning` reports custody separately from the strict
+enrollment descriptor. `result` is `available` with `storage` (`tpm` or `dpapi`) and
+`keyId`: unpadded base64url of SHA-256 of the raw 65-byte SEC1 public point, not its text.
+Absent, unreadable or unsupported custody reports only `result: "missing-key"`, without
+a tier or key id. Each status reads `HostSignKey.OpenExisting`; it creates and repairs
+nothing, exposes no private material or raw exception, and does not cache availability
+across key loss. This metadata grants no enrollment or signing permission; the dormant
+descriptor's fields and the unsigned publication contract remain unchanged.
+
+### Fleet registry signatures (#2370)
+
+`FleetRecordSigning` signs compact UTF-8 JSON with object members recursively in ordinal
+key order and arrays in their original order. Integers are plain signed 64-bit decimal;
+strings retain their values (no time or Unicode normalization), using JSON escapes for
+quotes, backslashes and controls, not HTML escaping. Only the record's top-level `sig`
+is excluded; duplicate members are refused. Signatures are canonical base64url, minimal
+low-S P-256/SHA-256 DER over `F("agent-bridge fleet registry v1", canonicalRecordBytes)`.
+The shared oracle is [vectors/fleet-registry-signing.json](vectors/fleet-registry-signing.json).
+The optional publisher signer opens only existing hostSign custody; missing custody stays
+unsigned and creates nothing. Default publication remains unsigned; activation is #2386.
+`Verify` checks cryptography only: #2371 must check schema, enrolled key, machine, freshness
+and epoch/sequence ordering before yielding any routable node. No v2 switch changes here.
 
 ## The relay's copy
 
@@ -938,7 +962,7 @@ neither peer may choose new inputs after authentication. No MAC becomes a code.
 every existing label below, so framed inputs cannot be confused by concatenation.
 Signatures, MACs and hashes remain purpose-checked; no output is accepted in a
 different domain. V1 `T`, codes, QR inputs and vectors are not redefined.
-Line references here are to the encoding baseline above, not moving HEAD:
+Sources use the encoding baseline above unless an explicit merged-main commit is shown:
 
 | Existing labels (each starts with `agent-bridge `) | Baseline source lines |
 |---|---|
@@ -947,11 +971,12 @@ Line references here are to the encoding baseline above, not moving HEAD:
 | `invite hint v1`, `enroll qr joiner v1`, `enroll qr approver v1` | devices.md 42-43 |
 | `roster head v1`, `person command v1`, `reset veto v1`, `host key binding v1` | devices.md 44-47 |
 | `verifier support v1`, `verifier frontier v1`, `verifier set v1`, `verifier key binding v1` | devices.md 48-51 |
+| `fleet registry v1` | devices.md 48 at merged main `e0ae344dd2494410cbb69dd05451544c83a29a0f` (#2370) |
 | `agent command v1`, `session instance v1`, `link v1`, `link-attest v1`, `link tombstone v1`, `command v1` (MAC salt) | design/agent-principals.md 3143-3149 |
 
 This slice's only edit to agent-principals is the T3 row in section 8.5
 (baseline 3130-3153); the four evidence-label mirrors remain owned by #2366.
-Unpinned registry/connector domains need cross-domain vectors when pinned.
+The merged registry domain needs cross-domain vectors too; add connector domains when pinned.
 
 ### Custody, migration and executable vectors
 
