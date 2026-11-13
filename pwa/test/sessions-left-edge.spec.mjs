@@ -37,14 +37,14 @@ for (const hasTouch of [false, true]) {
           expect((await page.locator('#needs-you').boundingBox()).x).toBeCloseTo(pane.x + 8, 1);
         });
 
-        test('the session title, first view tab text and reply box share the 24 px edge', async ({ page }) => {
+        test('the session title, first view tab text and reply box share the reading column edge', async ({ page }) => {
           await page.locator('#session-list .row-main').first().click();
           const view = page.locator('.session-view:not([hidden])');
           if (width >= 1280) { await view.locator('.inspector-button').click(); }
-          const pane = await page.locator('#session-pane').boundingBox();
-          expect.soft(await textLeft(view.locator('.session-title'))).toBeCloseTo(pane.x + 24, 1);
-          expect.soft(await textLeft(view.locator('.view-tab').first())).toBeCloseTo(pane.x + 24, 1);
-          expect((await view.locator('.reply-box').boundingBox()).x).toBeCloseTo(pane.x + 24, 1);
+          const column = await view.locator('.stream').boundingBox();
+          expect.soft(await textLeft(view.locator('.session-title'))).toBeCloseTo(column.x, 1);
+          expect.soft(await textLeft(view.locator('.view-tab').first())).toBeCloseTo(column.x, 1);
+          expect((await view.locator('.reply-box').boundingBox()).x).toBeCloseTo(column.x, 1);
         });
       });
     }
