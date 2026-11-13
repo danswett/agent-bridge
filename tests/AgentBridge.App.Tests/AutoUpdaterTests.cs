@@ -71,6 +71,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         public Action? OnDownload;
         public bool ReportsDownloadFacts { get; set; }
         public Action<Action<int>, Action<long, long?>>? DownloadWithBytes;
+        public TaskCompletionSource? DownloadGate;
         public string? InstalledVersion { get; set; } = "0.1.0";
         public DateTimeOffset? DiscoveredAt { get; set; }
         public string? CheckSource { get; set; }
@@ -87,15 +88,15 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             return Found;
         }
         public Task DownloadAsync(Action<int> progress) => DownloadAsync(progress, (_, _) => { });
-        public Task DownloadAsync(Action<int> progress, Action<long, long?> bytes)
+        public async Task DownloadAsync(Action<int> progress, Action<long, long?> bytes)
         {
             Downloads++;
             OnDownload?.Invoke();
             DownloadWithBytes?.Invoke(progress, bytes);
+            if (DownloadGate is { } gate) { await gate.Task; }
             if (DownloadFails is { } e) { throw e; }
             progress(100);
             Ready = Found;
-            return Task.CompletedTask;
         }
         public string? AppliedVersion;
         // As VelopackUpdater: only the release named, while it is the one ready.
@@ -3912,6 +3913,44 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Null(moved.Bytes);
         Assert.Null(moved.Total);
         Assert.Null(moved.Downloaded);
+    }
+
+    [Fact]
+    public async Task Byte_callbacks_queued_by_a_finished_download_cannot_repopulate_its_counts()
+    {
+        updater.ReportsDownloadFacts = true;
+        var observed = new ObservedUpdater(updater, time);
+        Action<long, long?>? queued = null;
+        updater.DownloadWithBytes = (_, bytes) => queued = bytes;
+        await observed.CheckAsync();
+        await observed.DownloadAsync(_ => { });
+
+        Assert.NotNull(queued);
+        queued(10, 10);
+
+        Assert.Null(observed.Bytes);
+        Assert.Null(observed.Total);
+    }
+
+    [Fact]
+    public async Task A_new_release_found_during_a_download_has_none_of_the_old_releases_counts()
+    {
+        updater.ReportsDownloadFacts = true;
+        updater.DownloadGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        updater.DownloadWithBytes = (_, bytes) => bytes(3, 10);
+        var observed = new ObservedUpdater(updater, time);
+        await observed.CheckAsync();
+        var downloading = observed.DownloadAsync(_ => { });
+        Assert.Equal(3, observed.Bytes);
+
+        updater.Found = "0.3.0";
+        await observed.CheckAsync();
+        var counts = (observed.Bytes, observed.Total);
+        updater.DownloadGate.SetResult();
+        await downloading;
+
+        Assert.Equal("0.3.0", observed.Found);
+        Assert.Equal(((long?)null, (long?)null), counts);
     }
 
     // Copilot's review of 8898ae93: a check on the old source, then Include pre-releases changed

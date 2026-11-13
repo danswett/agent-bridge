@@ -1,3 +1,4 @@
+using System.Net;
 using System.Security.Cryptography;
 using AgentBridge.App;
 using Velopack;
@@ -59,6 +60,49 @@ public sealed class AppPackagesTests : IDisposable
 
     static string Asset(string version, string type, string file, byte[] bytes) =>
         $$"""{"PackageId":"AgentBridgeApp","Version":"{{version}}","Type":"{{type}}","FileName":"{{file}}","SHA1":"{{Convert.ToHexString(SHA1.HashData(bytes))}}","SHA256":"{{Convert.ToHexString(SHA256.HashData(bytes))}}","Size":{{bytes.Length}}}""";
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Package_download_counts_are_written_bytes_and_only_the_responses_size_is_reported(bool hasSize)
+    {
+        Directory.CreateDirectory(root);
+        var counts = new List<(long Bytes, long? Total)>();
+        var requests = 0;
+        var downloader = new PackageDownloader(() => new Response(hasSize, () => requests++))
+        {
+            Report = (bytes, total) => counts.Add((bytes, total)),
+        };
+        var file = Path.Combine(root, "package.nupkg");
+
+        await downloader.DownloadFile("https://packages.invalid/package.nupkg", file, _ => { }, null!, 30);
+
+        Assert.Equal(1, requests);
+        Assert.NotEmpty(counts);
+        Assert.Equal(200_000, counts[^1].Bytes);
+        Assert.Equal(200_000, new FileInfo(file).Length);
+        Assert.All(counts, count => Assert.Equal(hasSize ? 200_000L : (long?)null, count.Total));
+        Assert.True(counts.Select(c => c.Bytes).SequenceEqual(counts.Select(c => c.Bytes).Distinct().Order()));
+        counts.Clear();
+        await downloader.DownloadString("https://packages.invalid/feed.json", null!, 30);
+        Assert.Empty(counts);
+    }
+
+    sealed class Response(bool hasSize, Action requested) : HttpClientHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            requested();
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new Content(hasSize) });
+        }
+    }
+
+    sealed class Content(bool hasSize) : HttpContent
+    {
+        protected override bool TryComputeLength(out long length) { length = 200_000; return hasSize; }
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            stream.WriteAsync(new byte[200_000]).AsTask();
+    }
 
     sealed class Recording(IUpdateSource inner) : IUpdateSource
     {
