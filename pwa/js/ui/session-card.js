@@ -434,6 +434,7 @@ let seq = 0;
 export class SessionCard {
   #s = null;
   #last = {};
+  #columnSize = null;
   // Arrival identity survives machine-metadata redraws.
   #arrival = null;
   #history = { loaded: false, loading: false };
@@ -741,6 +742,20 @@ export class SessionCard {
     e.head = h('div', { class: 'session-head' }, e.bar, e.top);
     this.view = h('section', { class: 'session-view', 'aria-labelledby': this.ids.title, hidden: true, dataset: { tab: 'conversation' } },
       e.head, h('div', { class: 'view-body' }, e.conversation, e.inspector));
+    // Classic scrollbars take room from the messages, not the header or reply slot.
+    if (typeof ResizeObserver === 'function') {
+      this.#columnSize = new ResizeObserver(() => {
+        if (e.scroll.clientWidth > 0) {
+          const width = `${e.scroll.clientWidth}px`;
+          if (this.view.style.getPropertyValue('--conversation-width') !== width) {
+            this.view.style.setProperty('--conversation-width', width);
+          }
+        } else {
+          this.view.style.removeProperty('--conversation-width');
+        }
+      });
+      this.#columnSize.observe(e.scroll);
+    }
     this.#follow = new ScrollFollow(e.scroll, {
       input: this.view,
       content: () => e.scroll.querySelectorAll('.response, .history-reply, .history-prompt, .history-tool, .user-message .bubble, .prompt-preview, .tool-line'),
@@ -1465,6 +1480,7 @@ export class SessionCard {
 
   // The session is going: it ended, or its machine is no longer shown.
   dispose() {
+    this.#columnSize?.disconnect();
     this.#unmove?.();
     this.#panel?.destroy();
     this.#panel = null;

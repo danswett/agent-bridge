@@ -1004,7 +1004,23 @@ svg.ab-icon-20:not([width]) { width: 20px; height: 20px; }
 svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 
 /* ---- the session pane: header (ui.md §6.2) ---- */
-.session-view { min-width: 0; }
+.session-view {
+  --conversation-measure: 770px;
+  --conversation-gutter: var(--ab-space-6);
+  --conversation-aside: 0px;
+  /* Measured when visible; otherwise each consumer uses its responsive fallback. */
+  --conversation-width: initial;
+  min-width: 0;
+}
+.session-header, .view-tabs, .session-view .delegate-strip:not([hidden]) {
+  width: var(--conversation-width, calc(100% - var(--conversation-aside)));
+}
+@media (max-width: 759px) {
+  .session-view { --conversation-gutter: var(--ab-space-4); }
+}
+@media (min-width: 1280px) {
+  body[data-inspector="shown"] .session-view { --conversation-aside: var(--inspector-w); }
+}
 .session-header {
   position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; column-gap: var(--ab-space-2);
   padding: var(--ab-space-4) var(--ab-space-6) var(--ab-space-3); border-bottom: 1px solid var(--ab-stroke2);
@@ -1057,7 +1073,7 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 .meta-facts .repo { display: inline-block; max-width: 100%; }
 
 /* Conversation and Tools, where the inspector isn't a pane of its own. */
-.view-tabs { display: flex; gap: var(--ab-space-5); padding: 0 var(--ab-space-6); border-bottom: 1px solid var(--ab-stroke2); }
+.view-tabs { display: flex; gap: var(--ab-space-5); padding: 0 var(--conversation-gutter); border-bottom: 1px solid var(--ab-stroke2); }
 .view-tab {
   position: relative; flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   min-height: var(--tap); min-width: var(--tap); padding: 0 2px;
@@ -1087,7 +1103,10 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
   .session-header .header-main { grid-column: 1; }
   .session-header .header-actions { grid-column: 2; }
   .view-tabs > .view-tab:first-child { padding-left: 0; }
-  .session-view .reply { margin-left: 0; }
+  /* The header rows follow the conversation, excluding the inspector's separate column. */
+  .session-header, .view-tabs, .session-view .delegate-strip:not([hidden]) {
+    padding-inline: max(var(--conversation-gutter), calc((var(--conversation-width, calc(100% - var(--conversation-aside))) - var(--conversation-measure)) / 2));
+  }
 }
 .view-body { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; }
 .session-view[data-tab="conversation"] .inspector { display: none; }
@@ -1211,16 +1230,16 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 
 /* ---- the conversation (ui.md §6.4) ---- */
 .conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.stream-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--ab-space-6); }
+.stream-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--ab-space-6) var(--conversation-gutter); }
 /* The reading measure: about 68 characters, a step larger than the UI around it. */
 .stream {
-  max-width: 770px; margin: 0 auto; display: grid; gap: var(--ab-space-6);
+  max-width: var(--conversation-measure); margin: 0 auto; display: grid; gap: var(--ab-space-6);
   font-size: var(--type-reading); line-height: var(--type-reading-line);
 }
 .stream > [hidden] { display: none; }
 /* The conversation before the latest exchange (#1285), in the same column as it, read-only. */
 .history {
-  max-width: 770px; margin: 0 auto var(--ab-space-6); display: grid; gap: var(--ab-space-6);
+  max-width: var(--conversation-measure); margin: 0 auto var(--ab-space-6); display: grid; gap: var(--ab-space-6);
   font-size: var(--type-reading); line-height: var(--type-reading-line);
 }
 .history[hidden] { display: none; }
@@ -1605,9 +1624,9 @@ summary {
 /* ---- replying (ui.md §6.5) ---- */
 /* Under the conversation, at the reading measure: a card with a 2 px Bridge bottom edge, the box,
    then Attach and an icon-only Send. */
-.reply-slot { flex: none; padding: var(--ab-space-3) var(--ab-space-6) var(--ab-space-4); border-top: 1px solid var(--ab-stroke2); }
+.reply-slot { flex: none; width: var(--conversation-width, 100%); padding: var(--ab-space-3) var(--conversation-gutter) var(--ab-space-4); border-top: 1px solid var(--ab-stroke2); }
 .reply-slot:empty { display: none; }
-.reply { max-width: 770px; margin: 0 auto; }
+.reply { max-width: var(--conversation-measure); margin: 0 auto; }
 .reply .note { margin: var(--ab-space-1) 0; }
 .reply-box {
   background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-bottom: 2px solid var(--ab-bridge);
