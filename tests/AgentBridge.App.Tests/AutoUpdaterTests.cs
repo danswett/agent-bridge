@@ -3440,6 +3440,40 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task A_file_held_during_committed_departure_is_checked_before_stop_or_handoff()
+    {
+        await StartAsync();
+        var path = Path.Combine(app, "held-during-depart.dll");
+        File.WriteAllText(path, "old install");
+        FileStream? holder = null;
+        var scans = 0;
+        preflight = () =>
+        {
+            Interlocked.Increment(ref scans);
+            try { using var check = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None); return null; }
+            catch (IOException) { return "a fixture holding held-during-depart.dll"; }
+        };
+        host.On(HostOps.UpdateDepart, _ =>
+        {
+            holder = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            time.Advance(UpdateProtocol.NowLife);
+            return Committed;
+        });
+        try
+        {
+            await NowAsync();
+            Assert.True(scans >= 3);
+            Assert.False(updater.Applied);
+            Assert.False(prefs.UpdateHandedOver);
+            Assert.Null(prefs.UpdatedFrom);
+            Assert.Empty(host.Sent(HostOps.Stop));
+            Assert.Contains("held-during-depart.dll", prefs.LastUpdate!.Reason, StringComparison.Ordinal);
+        }
+        finally { holder?.Dispose(); }
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task An_Update_now_whose_15_minutes_end_while_the_host_tries_its_lease_ends_expired_whatever_the_host_refuses_it_with()
     {
         await StartAsync();

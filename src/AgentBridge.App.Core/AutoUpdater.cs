@@ -1451,6 +1451,7 @@ public sealed class AutoUpdater
                 fileBudget.ExcludeSince(nonFileWork);
                 await manager.CheckInstallationFilesAsync(preflight, fileBudget);
             }
+            else { await manager.CheckInstallationFilesAsync(preflight, new InstallationFiles.Budget(time)); }
             Validate();
             updatingIn = open ? to : null;
             installing = true;
