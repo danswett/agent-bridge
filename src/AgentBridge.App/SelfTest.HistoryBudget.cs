@@ -1,4 +1,5 @@
 using Stopwatch = System.Diagnostics.Stopwatch;
+using System.Text.Json;
 using AgentBridge.App.Core;
 using AgentBridge.Protocol;
 using Microsoft.UI.Xaml;
@@ -30,6 +31,7 @@ static partial class SelfTest
     static async Task CheckHistoryScrollBudget(MainWindow window, MainViewModel main, DemoHost demo,
         Action<bool, string> check, Dictionary<string, object?> result)
     {
+        CheckHistoryHeaderGrowthDiagnostics(check);
         const string id = "demo-scroll-budget";
         const int turns = 500;
         const double budgetMs = 200;
@@ -271,8 +273,7 @@ static partial class SelfTest
                 await demo.PutAsync(fixture with { Activity = fixture.Activity with { Response = response } });
                 var arrived = await Until(() => card.Response == response, TimeSpan.FromSeconds(3));
                 await Task.Delay(350);
-                check(followed && tabbed && arrived && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5,
-                    "keeps following a growing reply after Tab outside the conversation has not scrolled it");
+                CheckHistoryHeaderGrowth(followed, tabbed, arrived, scroll.VerticalOffset, scroll.ScrollableHeight, check, result);
             }
             else { check(false, "focuses the header pin before Tab to Details"); }
             Away(window, main);
@@ -363,6 +364,59 @@ static partial class SelfTest
             await demo.RemoveSessionAsync(id);
             await Until(() => main.AllCards.All(c => c.Id != id), TimeSpan.FromSeconds(10));
         }
+    }
+
+    static void CheckHistoryHeaderGrowthDiagnostics(Action<bool, string> check)
+    {
+        foreach (var (followed, tabbed, arrived, offset, part) in new[]
+        {
+            (false, true, true, 100.0, "followed"),
+            (true, false, true, 100.0, "tabbed"),
+            (true, true, false, 100.0, "arrived"),
+            (true, true, true, 98.0, "scroll offset"),
+            (false, false, false, 98.0, "followed, tabbed, arrived, scroll offset"),
+        })
+        {
+            bool? passed = null;
+            string? message = null;
+            CheckHistoryHeaderGrowth(followed, tabbed, arrived, offset, 100,
+                (ok, what) => { passed = ok; message = what; }, new Dictionary<string, object?>());
+            check(passed == false && message?.EndsWith($"(failed: {part})", StringComparison.Ordinal) == true,
+                $"names {part} when the growing-reply check fails ({message})");
+        }
+        foreach (var offset in new[] { 98.5, 98.4 })
+        {
+            var result = new Dictionary<string, object?>();
+            bool? passed = null;
+            var atBottom = offset >= 98.5;
+            CheckHistoryHeaderGrowth(true, true, true, offset, 100,
+                (ok, _) => passed = ok, result);
+            var evidence = JsonSerializer.SerializeToElement(result);
+            check(passed == atBottom
+                && evidence.TryGetProperty("historyHeaderGrowth", out var growth)
+                && growth.GetProperty("followed").GetBoolean()
+                && growth.GetProperty("tabbed").GetBoolean()
+                && growth.GetProperty("arrived").GetBoolean()
+                && growth.GetProperty("atBottom").GetBoolean() == atBottom
+                && growth.GetProperty("offset").GetDouble() == offset
+                && growth.GetProperty("extent").GetDouble() == 100,
+                $"records all growing-reply values on {(atBottom ? "pass at the scroll tolerance" : "failure outside the scroll tolerance")}");
+        }
+    }
+
+    static void CheckHistoryHeaderGrowth(bool followed, bool tabbed, bool arrived, double offset, double extent,
+        Action<bool, string> check, Dictionary<string, object?> result)
+    {
+        var atBottom = offset >= extent - 1.5;
+        result["historyHeaderGrowth"] = new { followed, tabbed, arrived, atBottom, offset, extent };
+        var failed = new List<string>();
+        if (!followed) { failed.Add("followed"); }
+        if (!tabbed) { failed.Add("tabbed"); }
+        if (!arrived) { failed.Add("arrived"); }
+        if (!atBottom) { failed.Add("scroll offset"); }
+        const string message = "keeps following a growing reply after Tab outside the conversation has not scrolled it";
+        check(followed && tabbed && arrived && atBottom,
+            failed.Count == 0 ? message : $"{message} (failed: {string.Join(", ", failed)})");
     }
 
     static HistoryPinnedSample CapturePinnedSample(double ms, string reason, ScrollViewer scroll, ItemsRepeater? rows,
