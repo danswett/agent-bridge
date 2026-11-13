@@ -233,7 +233,8 @@ public sealed class FleetListTests : IDisposable
         })]);
         var reply = JsonSerializer.SerializeToElement(await Op().HandleAsync(Hello(AgentProtocol.ScopeRead), Body("{}")), Web);
         var machine = Assert.Single(reply.GetProperty("machines").EnumerateArray());
-        Assert.Equal(complete, machine.GetProperty("complete").GetBoolean());
+        Assert.True(machine.TryGetProperty("complete", out var value), "fleet.list machines must report complete");
+        Assert.Equal(complete, value.GetBoolean());
         Assert.Equal(["complete", "machine", "state"], machine.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal));
     }
 
