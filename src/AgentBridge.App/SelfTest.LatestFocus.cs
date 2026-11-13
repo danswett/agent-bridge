@@ -70,4 +70,62 @@ static partial class SelfTest
         }
         finally { panel.CacheLength = cache; }
     }
+
+    static async Task CheckLatestQuestion(MainWindow window, SessionView view, ScrollViewer scroll, Action<bool, string> check)
+    {
+        if (view.Card is not { Question: not null } card || ById<Button>(view, "JumpToLatest") is not { } jump || ById<Button>(view, "QuestionBar") is not { } waiting
+            || ById<ItemsControl>(view, "DelegateEvents") is not { } events)
+        { check(false, "latest question: has an open question and both navigation buttons"); return; }
+        var original = card.Session;
+        var open = card.Delegates.EventsOpen;
+        var now = DateTimeOffset.UtcNow;
+        var agents = Enumerable.Range(0, 60).Select(n => new Subagent { Id = $"latest-question-{n}", Name = $"Question reveal delegate {n}",
+            Kind = SubagentKind.Task, Status = SubagentStatus.Ended, Outcome = SubagentOutcome.Done, EndedAt = now.AddMinutes(-n - 1) }).ToArray();
+        try
+        {
+            card.Update(original with { Subagents = agents.Take(40).ToArray() });
+            card.Delegates.EventsOpen = true;
+            if (view.QuestionShown is not FrameworkElement question) { check(false, "latest question: draws the question"); return; }
+            bool Visible() => ConversationKeyboard.WhollyInView(question.TransformToVisual(scroll).TransformPoint(new Point()).Y, question.ActualHeight, scroll.ViewportHeight);
+            await LatestForeground(window);
+            foreach (var button in new[] { jump, waiting })
+            {
+                var activated = false;
+                var released = false;
+                RoutedEventHandler clicked = (_, _) => activated = true;
+                var up = new KeyEventHandler((_, e) => { if (e.Key == VirtualKey.Enter) { released = true; } });
+                button.Click += clicked;
+                view.AddHandler(UIElement.KeyUpEvent, up, true);
+                try
+                {
+                    check(button.Focus(FocusState.Keyboard), $"latest question: focuses {button.Content}");
+                    Press(window.Handle, VirtualKey.Enter, foreground: true, extended: false, nativeOnly: true);
+                    check(await LatestUntil(() => activated && released, TimeSpan.FromSeconds(3)), $"latest question: native Enter activates and releases {button.Content}");
+                }
+                finally { button.Click -= clicked; view.RemoveHandler(UIElement.KeyUpEvent, up); }
+                if (button == jump)
+                {
+                    check(await LatestUntil(() => events.ActualHeight > scroll.ViewportHeight, TimeSpan.FromSeconds(3)), "latest question: expanded delegate events exceed a viewport below the question");
+                    check(await LatestUntil(() => scroll.ScrollableHeight - scroll.VerticalOffset <= 1.5 && waiting.Visibility == Visibility.Visible
+                        && question.TransformToVisual(scroll).TransformPoint(new Point()).Y + question.ActualHeight < 0, TimeSpan.FromSeconds(3)),
+                        "latest question: Jump pins below the off-screen question and offers Question waiting");
+                }
+            }
+            check(await LatestUntil(Visible, TimeSpan.FromSeconds(3)), "latest question: Question waiting reveals the question after Jump");
+            view.UpdateLayout();
+            await Still(scroll);
+            check(Visible(), "latest question: the explicit reveal survives settled layout");
+            var offset = scroll.VerticalOffset;
+            var extent = scroll.ScrollableHeight;
+            var stable = true;
+            for (var n = 1; n <= 20; n++)
+            {
+                card.Update(original with { Subagents = agents.Take(40 + n).ToArray() });
+                await Task.Delay(100);
+                stable &= Visible() && Math.Abs(scroll.VerticalOffset - offset) <= 1.5;
+            }
+            check(scroll.ScrollableHeight > extent + 1.5 && stable, "latest question: twenty delegate-growth updates retain the revealed question without repinning");
+        }
+        finally { card.Update(original); card.Delegates.EventsOpen = open; }
+    }
 }

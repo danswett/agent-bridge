@@ -112,6 +112,8 @@ static partial class SelfTest
             check(Bottom() && departures == 0, $"latest: stays at the bottom for three seconds ({departures} layout departures)");
             boundary("latest focus scrolling");
             await CheckLatestFocus(window, view, scroll, check);
+            boundary("latest question reveal");
+            await CheckLatestQuestion(window, view, scroll, check);
             foreach (var (modifier, down, up) in new[] {
                 (VirtualKey.Control, VirtualKey.PageDown, VirtualKey.Up),
                 (VirtualKey.Shift, VirtualKey.Down, VirtualKey.PageUp),
