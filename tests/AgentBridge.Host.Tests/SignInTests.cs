@@ -37,11 +37,16 @@ public sealed class SignInTests
     {
         await using var h = await Harness.CreateAsync();
         h.Recovery.ModelEvidence = true;
+        h.Recovery.HoldResume = true;
         var phone = h.Phone();
         var start = h.Start(phone);
         await start.Then(phone);
+        await h.Recovery.ResumeEntered.Task.WaitAsync(Patience);
         var flow = Json(start.Result).GetProperty("flow").GetString();
+        var retained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.Clock.Changed = due => { if (due == h.Service.Kept) { retained.TrySetResult(); } };
         await h.Service.CancelAsync(phone, Json(new { flow }));
+        await retained.Task.WaitAsync(Patience);
         Assert.Equal(1, h.Clock.Armed);
         h.Clock.UtcOffset = TimeSpan.FromSeconds(jump);
         h.Time.Advance(h.Service.Kept + TimeSpan.FromTicks(1));
@@ -1137,7 +1142,7 @@ public sealed class SignInTests
         public override long GetTimestamp() => inner.GetTimestamp();
         public override long TimestampFrequency => inner.TimestampFrequency;
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) =>
-            period == Timeout.InfiniteTimeSpan ? inner.CreateTimer(callback, state, dueTime, period) : new DisabledTimer();
+            state is null || period != Timeout.InfiniteTimeSpan ? new DisabledTimer() : inner.CreateTimer(callback, state, dueTime, period);
         sealed class DisabledTimer : ITimer
         {
             public bool Change(TimeSpan dueTime, TimeSpan period) => true;
@@ -1151,6 +1156,7 @@ public sealed class SignInTests
         public int Fired;
         public int Repeating;
         public TimeSpan UtcOffset;
+        public Action<TimeSpan>? Changed;
         public override DateTimeOffset GetUtcNow() => inner.GetUtcNow() + UtcOffset;
         public override long GetTimestamp() => inner.GetTimestamp();
         public override long TimestampFrequency => inner.TimestampFrequency;
@@ -1181,7 +1187,9 @@ public sealed class SignInTests
                 if (period != Timeout.InfiniteTimeSpan) { Interlocked.Increment(ref clock.Repeating); }
                 Period = period;
                 SetArmed(dueTime != Timeout.InfiniteTimeSpan);
-                return Inner.Change(dueTime, period);
+                var changed = Inner.Change(dueTime, period);
+                if (changed) { clock.Changed?.Invoke(dueTime); }
+                return changed;
             }
             public void Dispose() { SetArmed(false); Inner.Dispose(); }
             public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }

@@ -418,10 +418,12 @@ internal sealed class AgentSignInService : IAsyncDisposable
         lock (gate)
         {
             if (disposed) { return Task.CompletedTask; }
+            if (sweep is null && active.Count == 0 && requests.Count == 0) { return Task.CompletedTask; }
             sweepRequested = true;
             if (sweep is not null) { return sweep.Task; }
             var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             sweep = completion;
+            // The first pass runs under gate until its first incomplete await.
             _ = SweepCoreAsync(completion);
             return completion.Task;
         }
