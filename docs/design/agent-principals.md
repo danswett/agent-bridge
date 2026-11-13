@@ -3147,6 +3147,7 @@ exactly one purpose, and each verifier checks it.
 | `SHA-256(F("agent-bridge verifier frontier v1", head1, ..., headN))` | Digest of the held collection frontier | A signature, consent or transition authority |
 | `SHA-256(F("agent-bridge verifier set v1", member1, ..., memberN))` | Digest of the complete active verifier set | A signature, consent or transition authority |
 | `F("agent-bridge verifier key binding v1", account, generation, dh)`, by `capSign` | A person's enrolled capability-key possession proof | Possession of generic `sign`, `dh` or `hostSign`, capability evidence or consent |
+| `F("agent-bridge enroll capSign v1", account, generation, h, nA, nN, D)` | Proposed v3 person-enrollment transcript hash T3; exact frozen descriptor D ([design](../protocol/devices.md#enrollment-transcript-and-domains), #2385) | Never v1 T, a signature or evidence; all existing purpose labels stay distinct |
 | `F("agent-bridge session instance v1", …)` | A hash, not a signature (§3.1) | — |
 | `F("agent-bridge link v1", …)`, per-link key | Link codes and peer host statements (§7.3) | Anything in the peer's own roster |
 | `F("agent-bridge link-attest v1", statement)`, by an attester: a host's `hostSign` off the custodian's machine, or a revoker device's key | An attester's co-signature of its side's peer host statement (§7.3) | An entry, cosign or person command, adding a host, or rotating `linkKey`. It only keeps an already-confirmed statement fresh |
