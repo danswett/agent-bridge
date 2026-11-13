@@ -351,22 +351,6 @@
           }
         },
         {
-          "name": "batch",
-          "json": {
-            "now": true,
-            "release": "0.1.201",
-            "batch": true
-          }
-        },
-        {
-          "name": "unchecked",
-          "json": {
-            "now": true,
-            "release": "0.1.201",
-            "unchecked": true
-          }
-        },
-        {
           "name": "confirmed",
           "json": {
             "now": true,
