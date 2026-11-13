@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { open, motionsDone } from './nav.mjs';
+import { loadEarlierTo } from './history-fixture.mjs';
 
 const ID = '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35';
 const paragraphs = (turn, lines) => Array.from({ length: lines }, (_, i) => `Turn ${turn}, paragraph ${i + 1} of the streaming reply.`).join('\n\n');
@@ -48,6 +49,7 @@ async function start(page) {
   await say(page, 12, 30);
   const v = await open(page, ID);
   const pane = v.locator('.stream-scroll');
+  await loadEarlierTo(pane, 11);
   await expect(pane.locator('.history-turn')).toHaveCount(11);
   await expect.poll(() => pane.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThan(400);
   // Opening at the bottom belongs to #1646; this slice starts with the person's wheel input.

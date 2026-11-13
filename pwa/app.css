@@ -848,9 +848,9 @@ body[data-conn="busy"] .sessions, body[data-conn="warn"] .sessions, body[data-co
   .sign-in-banner { border-color: Highlight; }
   .sign-in-session { color: LinkText; }
 }
-/* Keep the Move column inside the card, away from its status glyph. Filtered single
-   results need no column; filtering still disables moving. */
-.session-list[data-sort="yours"]:is(:not([data-filtered="true"]), :has(> .session ~ .session)) > .session > .row-main {
+/* Keep the Move column inside the card, away from its status glyph. Filtering
+   disables moving, so filtered lists need no column. */
+.session-list[data-sort="yours"]:not([data-filtered="true"]) > .session > .row-main {
   padding-left: calc(var(--ab-space-3) + 24px);
 }
 .drag-handle { display: none; }
@@ -1004,14 +1004,33 @@ svg.ab-icon-20:not([width]) { width: 20px; height: 20px; }
 svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 
 /* ---- the session pane: header (ui.md §6.2) ---- */
-.session-view { min-width: 0; }
+.session-view {
+  --conversation-measure: 770px;
+  --conversation-gutter: var(--ab-space-6);
+  --conversation-aside: 0px;
+  --conversation-width: initial;
+  --column-width: var(--conversation-width, calc(100% - var(--conversation-aside)));
+  --column-inset: max(var(--conversation-gutter), calc((var(--column-width) - var(--conversation-measure)) / 2));
+  min-width: 0;
+}
+.view-tabs, .move-strip, .session-view .delegate-strip:not([hidden]) { width: var(--column-width); }
+@media (max-width: 759px) {
+  .session-view { --conversation-gutter: var(--ab-space-4); }
+}
+@media (min-width: 1280px) {
+  body[data-inspector="shown"] .session-view { --conversation-aside: var(--inspector-w); }
+  body[data-inspector="hidden"] .session-view:not([data-tab="conversation"]) .inspector { padding-inline: var(--column-inset); }
+}
+@media (min-width: 760px) and (max-width: 1279px) {
+  .session-view:not([data-tab="conversation"]) .inspector { padding-inline: var(--column-inset); }
+}
 .session-header {
   position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; column-gap: var(--ab-space-2);
   padding: var(--ab-space-4) var(--ab-space-6) var(--ab-space-3); border-bottom: 1px solid var(--ab-stroke2);
 }
 .header-main { grid-column: 2; min-width: 0; }
 /* The move strip (#1715): fixed rows, so no step changes its height; state is a word and an icon, colour only adds. */
-.move-strip { display: grid; gap: var(--ab-space-1); padding: var(--ab-space-2) var(--ab-space-6); border-bottom: 1px solid var(--ab-stroke2); font-size: var(--type-meta); line-height: var(--type-meta-line); }
+.move-strip { display: grid; gap: var(--ab-space-1); padding: var(--ab-space-2) var(--conversation-gutter); border-bottom: 1px solid var(--ab-stroke2); font-size: var(--type-meta); line-height: var(--type-meta-line); }
 .move-strip[hidden] { display: none; }
 .move-head, .move-note { margin: 0; color: var(--ab-text2); }
 .move-head, .move-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1057,7 +1076,7 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 .meta-facts .repo { display: inline-block; max-width: 100%; }
 
 /* Conversation and Tools, where the inspector isn't a pane of its own. */
-.view-tabs { display: flex; gap: var(--ab-space-5); padding: 0 var(--ab-space-6); border-bottom: 1px solid var(--ab-stroke2); }
+.view-tabs { display: flex; gap: var(--ab-space-5); padding: 0 var(--conversation-gutter); border-bottom: 1px solid var(--ab-stroke2); }
 .view-tab {
   position: relative; flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   min-height: var(--tap); min-width: var(--tap); padding: 0 2px;
@@ -1080,14 +1099,20 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
   .session-header .icon-button { width: var(--tap); height: var(--tap); }
   .view-tab { min-height: var(--tap); min-width: var(--tap); }
 }
-/* Shared text edges (#1893): retain the list's 20px inset and the session pane's 24px inset. */
+/* Shared text edges (#1893, #2339): the list keeps 20px; the session follows its reading column. */
 @media (min-width: 760px) {
   .machine-tablist > .machine-tab:first-child { justify-content: flex-start; padding-left: 0; }
-  .session-header { grid-template-columns: minmax(0, 1fr) auto; }
+  .session-header {
+    --header-inset: var(--column-inset);
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding-inline-start: var(--header-inset);
+    /* Keep the header border across the inspector while its content follows the messages. */
+    padding-inline-end: calc(100% - var(--column-width) + var(--header-inset));
+  }
   .session-header .header-main { grid-column: 1; }
   .session-header .header-actions { grid-column: 2; }
   .view-tabs > .view-tab:first-child { padding-left: 0; }
-  .session-view .reply { margin-left: 0; }
+  .view-tabs, .move-strip, .session-view .delegate-strip:not([hidden]) { padding-inline: var(--column-inset); }
 }
 .view-body { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; }
 .session-view[data-tab="conversation"] .inspector { display: none; }
@@ -1211,16 +1236,16 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 
 /* ---- the conversation (ui.md §6.4) ---- */
 .conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.stream-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--ab-space-6); }
+.stream-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--ab-space-6) var(--conversation-gutter); }
 /* The reading measure: about 68 characters, a step larger than the UI around it. */
 .stream {
-  max-width: 770px; margin: 0 auto; display: grid; gap: var(--ab-space-6);
+  max-width: var(--conversation-measure); margin: 0 auto; display: grid; gap: var(--ab-space-6);
   font-size: var(--type-reading); line-height: var(--type-reading-line);
 }
 .stream > [hidden] { display: none; }
 /* The conversation before the latest exchange (#1285), in the same column as it, read-only. */
 .history {
-  max-width: 770px; margin: 0 auto var(--ab-space-6); display: grid; gap: var(--ab-space-6);
+  max-width: var(--conversation-measure); margin: 0 auto var(--ab-space-6); display: grid; gap: var(--ab-space-6);
   font-size: var(--type-reading); line-height: var(--type-reading-line);
 }
 .history[hidden] { display: none; }
@@ -1607,7 +1632,7 @@ summary {
    then Attach and an icon-only Send. */
 .reply-slot { flex: none; padding: var(--ab-space-3) var(--ab-space-6) var(--ab-space-4); border-top: 1px solid var(--ab-stroke2); }
 .reply-slot:empty { display: none; }
-.reply { max-width: 770px; margin: 0 auto; }
+.reply { max-width: var(--conversation-measure); margin: 0 auto; }
 .reply .note { margin: var(--ab-space-1) 0; }
 .reply-box {
   background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-bottom: 2px solid var(--ab-bridge);
@@ -2065,7 +2090,7 @@ summary {
   :root[data-platform="ios"][data-standalone="true"] .bar-title .glyph { flex: none; scale: 1.125; margin: 0 1px; }
   :root[data-platform="ios"][data-standalone="true"] .bar-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   :root[data-platform="ios"][data-standalone="true"] .inspector { padding-top: calc(var(--head-h, 0px) + var(--ab-space-4)); scroll-padding-top: calc(var(--head-h, 0px) + var(--ab-space-2)); }
-  :root[data-platform="ios"][data-standalone="true"] .session-header { padding-inline: calc(var(--tap) + var(--ab-space-2)); }
+  :root[data-platform="ios"][data-standalone="true"] .session-header { --header-inset: max(calc(var(--tap) + var(--ab-space-2)), var(--column-inset)); }
   :root[data-platform="ios"][data-standalone="true"] .reply-box { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: end; padding: 2px var(--ab-space-1) 3px; }
   :root[data-platform="ios"][data-standalone="true"] .reply .attachments { grid-column: 1 / -1; grid-row: 1; }
   :root[data-platform="ios"][data-standalone="true"] .reply-box .attach { grid-column: 1; grid-row: 2; margin: 0; }
