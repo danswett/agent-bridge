@@ -78,7 +78,7 @@ Actor identity alone must never be treated as proof of route.
 Replies and agent messages share the message unit; answers are approvals, not
 messages as well. A multi-field form is one approval. Count a negative decision
 when its answer is delivered: approval means a completed decision, not "Allow".
-Confirmed forced termination may count as one stop; it does not waive the
+Confirmed forced termination counts as one stop; it does not waive the
 separate working-session/idle-only rehearsal requirement. Local-path successes
 are shown separately but do not earn relay replacement credit for item 2.
 HA successes are shown for diagnosis and never earn gate credit.
@@ -117,14 +117,15 @@ effect. Replaying intent plus terminal yields at most one credit. Duplicate
 identical terminals do not add credit; conflicting terminals invalidate the run.
 An intent without a provable terminal after crash stays unresolved, not success.
 Recovery may append a reconciled terminal only from authoritative action state;
-otherwise invalidate the run, never retry a side effect to repair the count.
+otherwise report INCOMPLETE, never retry a side effect to repair the count.
 An append/flush failure before dispatch refuses the action. Failure after an
 effect leaves uncertain evidence and blocks the gate, even if a client saw success.
 
 At restart rebuild operation mappings, active run and totals from both streams,
 checking supported versions, sequence/link continuity and the #1401 durable head.
-A torn last line, missing tail, unclassified in-run command, unknown outcome,
+A torn last line, missing tail, unknown outcome,
 unresolved intent or audit failure is incomplete evidence, never zero fallbacks.
+An established coverage break, unlike evidence not yet verifiable, voids the run.
 Preserve all active-run records and anchors through rotation/archive. Do not
 prune them into a passing suffix; if bounded retention cannot preserve them,
 invalidate the run visibly and start again only after evidence health is restored.
@@ -135,14 +136,15 @@ restart proof makes evidence incomplete; retained observations cannot earn credi
 
 ## 5. Continuous run and reset
 
-Run start, pause, reset and seal require a person-class authenticated channel and
-host-side person authorization, never the local pipe or shared OS-user identity.
+The person-class control entry points are `start`, `pause`, `reset` and `seal`.
+Each requires an authenticated person-class channel and host-side person
+authorization, never the local pipe or shared OS-user identity.
 Agents and read-only audit clients cannot start, reset, repair, pause or seal it.
 Record a host-generated run ID, fixed participating four Windows host/profile
 identities, deployed instrumentation version and starting heads in audit markers.
 Include the existing message recorder identity and starting source cursor/digest.
-Pin membership from the fleet roster source the person approves at run start;
-any roster membership/identity change mid-run voids the run.
+The four participating hosts come from the fleet roster source the person approves
+and pins at run start; any roster membership/identity change mid-run voids the run.
 All participants must attest coverage of relay, local and legacy HA action
 entries before admission opens. Old daemon/private script bypasses must either
 be covered or disabled by the person; unobserved routes make the gate unavailable.
@@ -154,6 +156,9 @@ not client time or clock ordering, defines the beginning. All traffic, not only
 test-tagged actions, is observed. Hosts cannot be silently removed from membership.
 Only that person-class control may pause admission, for at most five minutes
 per prepare/seal barrier; repeated calls cannot extend the host-enforced deadline.
+Persist the UTC pause deadline and control timestamp in the audit control marker;
+use a monotonic timer while live. An unreadable clock or one earlier than the
+last recorded control timestamp makes the deadline uncertain and voids the run.
 On timeout, control loss or restart with an uncertain deadline, void the run and
 resume admission. Retain every queued request for normal revalidation; drop none.
 Restart is allowed only with verified complete replay and unchanged coverage;
@@ -164,6 +169,8 @@ message/launch/approval/stop credit to zero, not just that action's counter.
 Keep the failed run's observed totals and fallback event for diagnosis.
 No automatically chosen clean suffix can pass. A new run needs fresh all-host
 begin markers after the fallback or coverage fault has been addressed.
+`reset` voids the current run, issues a new run ID and requires fresh all-host
+begin markers. It never zeroes an existing run in place or erases its evidence.
 Refusals and failures remain visible; they earn no success credit.
 
 ## 6. One operator view and verdict
@@ -203,10 +210,22 @@ action, path and actor kind, unresolved/failed/refused counts, fallbacks and
 reason codes, evidence heads, boundaries and verdict. Display dates in Pacific;
 audit timestamps stay UTC. Do not expose session contents.
 `PASS` requires all sealed evidence complete and A3-verified, no unresolved action,
-zero legacy HA dispatches, and relay successes >= 500/50/30/20 respectively.
+zero legacy HA dispatches, and fleet-wide relay sums >= 500/50/30/20 respectively.
+Per-host totals are displayed only; no host must individually meet those thresholds.
 `FAIL` identifies fallback or a known invalidated run, with zero eligible credit.
 `INCOMPLETE` names missing evidence/hosts or unmet thresholds; it is not a pass.
 Exit codes: PASS = 0, FAIL = 1, INCOMPLETE = 2.
+Faults take precedence over thresholds; where both fault classes occur, FAIL wins.
+
+| Fault | Verdict / exit |
+|---|---|
+| HA fallback; conflicting terminal | FAIL / 1 |
+| Roster membership/identity or established coverage break | FAIL / 1 |
+| Pause timeout or another pause/deadline-uncertain void | FAIL / 1 |
+| Crash-unresolved intent; missing or offline host | INCOMPLETE / 2 |
+| Torn tail; stale or partial reply | INCOMPLETE / 2 |
+| Missing route evidence; unmet thresholds | INCOMPLETE / 2 |
+
 This view proves item 2 only. Quality retains gates and retirement sign-off.
 
 ## 7. Later slices and rehearsal dependencies
@@ -223,10 +242,10 @@ A6a = #2066, and A6-rest = the remaining #1401 work.
 | Slice | Work / timing | Rough lines | #1401 dependencies / proof |
 |---|---|---:|---|
 | 1 | Schema/reader, required | 180 | A3 + A6a; consume A4/A5 outcomes; no A6-rest prerequisite for reading |
-| 2 | Launch wiring, required | 210 | 1 + A3/A4; A5 attribution compatible, A6a reader; A6-rest for restart continuity |
-| 3 | Approval wiring, required | 220 | 1 + A3/A5; A4 pattern, A6a reader; A6-rest for restart continuity |
-| 4 | Stop wiring, required | 200 | 1 + A3/A4; A5 attribution compatible, A6a reader; A6-rest for restart continuity |
-| 5 | Run prepare/reset, required | 220 | 2-4 + 9 + A3/A4/A5/A6a; person-class control, bounded pause |
+| 2 | Launch wiring, required | 210 | 1 + A3/A4; A5 attribution compatible, A6a reader; A6-rest is a proof dependency, not merge prerequisite |
+| 3 | Approval wiring, required | 220 | 1 + A3/A5; A4 pattern, A6a reader; A6-rest is a proof dependency, not merge prerequisite |
+| 4 | Stop wiring, required | 200 | 1 + A3/A4; A5 attribution compatible, A6a reader; A6-rest is a proof dependency, not merge prerequisite |
+| 5 | Run prepare/reset, required | 220 | 2-4 + 9 + A3/A4/A5/A6a; reset voids old ID, issues new ID, requires fresh all-host begin markers; never zero in place |
 | 6 | Run seal/fresh snapshot, required lifecycle continuation | 230 | 5 + 9 + A3/A4/A5/A6a; no client-supplied counts; bounded pause |
 | 7 | Gate reducer + existing message-source adapter, required | 240 | 6 + 9 + A3/A4/A5/A6a; A6-rest required; stale claims fail |
 | 8 | Shared durable operation-map hardening, later | 220 | 2-4 + A3/A4/A5/A6a; A6-rest required; core wiring already dedupes or invalidates uncertainty |
