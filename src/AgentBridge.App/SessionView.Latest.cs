@@ -16,7 +16,6 @@ public sealed partial class SessionView
 
     void InitializeLatest()
     {
-        RegisterPropertyChangedCallback(CardProperty, (_, _) => ResetLatest());
         Unloaded += (_, _) => ResetLatest();
         ConversationList.LayoutUpdated += (_, _) =>
         {
