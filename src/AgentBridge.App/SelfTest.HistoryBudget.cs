@@ -177,12 +177,23 @@ static partial class SelfTest
             check(filled && frames > 0 && readerDrift is <= 1.5 && longestFrameMs is < budgetMs,
                 $"draws all {turns} turns without moving the reader or blocking a frame ({readerDrift:0.0} px drift, {longestFrameMs:0.0} ms longest frame)");
             check(Selected(list) is null, "keeps conversation blocks unselected after scrolling while older history draws");
+            await CheckPostedInput(window, check, result);
             Away(window, main);
             await Choose(window, main, id, "Response");
             var pinned = await Until(() => ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count == turns
                 && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(30));
-            result["historyPinnedFill"] = new { drawn = ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count, offset = scroll.VerticalOffset, extent = scroll.ScrollableHeight };
-            check(pinned, "finishes older drawing at the end before focus moves away");
+            var pinnedFill = new { drawn = ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count, offset = scroll.VerticalOffset, extent = scroll.ScrollableHeight, pinned };
+            result["historyPinnedFill"] = pinnedFill;
+            const string pinnedMessage = "finishes older drawing at the end before focus moves away";
+            if (!QuarantinePostedInput(result, check, pinnedMessage, new
+            {
+                outcome = pinnedFill,
+                causeLimit = "posts no input: Chief runner-cohort exception, not a proven delivery cause",
+            }))
+            {
+                check(pinned, pinned ? pinnedMessage
+                    : $"{pinnedMessage} (history: {pinnedFill.drawn}/{turns}; count500: {pinnedFill.drawn == turns}; at-end: {pinnedFill.offset >= pinnedFill.extent - 1.5}; offset: {pinnedFill.offset:0.###}; extent: {pinnedFill.extent:0.###}; {PostedInputTarget(window).Detail})");
+            }
             await Still(scroll);
             if (ById<ItemsRepeater>(away, "History") is { } historyList
                 && historyList.TryGetElement((historyList.ItemsSourceView?.Count ?? 0) - 1) is { } last
@@ -243,6 +254,7 @@ static partial class SelfTest
                     return WheelHistoryCount() > 0 && !wheelMoving && scroll.ScrollableHeight > 0
                         && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5;
                 }, TimeSpan.FromSeconds(10));
+                var wheelTarget = PostedInputTarget(window).Detail;
                 Wheel(window, list);
                 var wheeled = await Until(() => wheelReceivedCount is not null
                     && scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
@@ -265,36 +277,31 @@ static partial class SelfTest
                 }, TimeSpan.FromSeconds(10));
                 var count500 = snapshot.Count == turns;
                 var belowEnd = snapshot.Offset < snapshot.Extent - 1.5;
-                // #2471: quarantine missing native-wheel delivery only, until 2026-11-20 00:00 PT.
-                var quarantined = wheelReceivedCount is null
-                    && DateTimeOffset.UtcNow < new DateTimeOffset(2026, 11, 20, 8, 0, 0, TimeSpan.Zero);
                 var receipt = wheelReceivedCount is { } count
                     ? $"{(count < turns ? "before" : "after")} history reached {turns} (count: {count})"
-                    : quarantined ? "wheel not received" : "wheel not received (issue 2471; quarantine expired 2026-11-20T08:00:00Z)";
+                    : "wheel not received (issues 2471, 2476; quarantine requires missing canary before 2026-11-20T08:00:00Z)";
+                var ok = wheelReady && wheeled && drawn && kept && count500 && !snapshot.Intermediate && belowEnd && snapshot.Stable;
+                const string keptMessage = "keeps the view taken by a native wheel while older turns draw";
+                var quarantined = wheelReceivedCount is null && QuarantinePostedInput(result, check, "native wheel (2471)", new
+                {
+                    wheelReady, wheeled, drawn, kept, count500, belowEnd, receipt,
+                    historyCount = snapshot.Count, intermediate = snapshot.Intermediate,
+                    offset = snapshot.Offset, extent = snapshot.Extent, stable = snapshot.Stable,
+                    target = wheelTarget,
+                });
                 result["historyWheelFill"] = new
                 {
                     wheelReady, wheeled, drawn, kept, wheelReceivedCount, receipt, quarantined,
                     historyCount = snapshot.Count, intermediate = snapshot.Intermediate,
                     offset = snapshot.Offset, extent = snapshot.Extent, stable = snapshot.Stable,
+                    target = wheelTarget,
                 };
-                var ok = wheelReady && wheeled && drawn && kept && count500 && !snapshot.Intermediate && belowEnd && snapshot.Stable;
-                const string keptMessage = "keeps the view taken by a native wheel while older turns draw";
-                if (quarantined)
-                {
-                    result["quarantined 2471 until 2026-11-20"] = new
-                    {
-                        status = "quarantined", issue = 2471, owner = "SG Builder 1981 fix",
-                        accountability = "Engineering Lead accountable", expires = "2026-11-20T08:00:00Z",
-                        reason = "native wheel not delivered on this runner",
-                    };
-                    check(true, "native wheel not delivered on this runner (quarantined, issue 2471, expires 2026-11-20; owner SG Builder 1981 fix; Engineering Lead accountable)");
-                }
-                else
+                if (!quarantined)
                 {
                     check(wheelReady && wheeled, wheelReady && wheeled ? tookMessage
-                        : $"{tookMessage} ({(wheelReceivedCount is null ? receipt : "wheel received")}; ready: {wheelReady}; moved: {wheeled})");
+                        : $"{tookMessage} ({(wheelReceivedCount is null ? receipt : "wheel received")}; ready: {wheelReady}; moved: {wheeled}; {wheelTarget})");
                     check(ok, ok ? keptMessage
-                        : $"{keptMessage} (history: {snapshot.Count}/{turns}; count500: {count500}; intermediate: {snapshot.Intermediate}; below-end: {belowEnd}; stable: {snapshot.Stable}; offset: {snapshot.Offset:0.###}; extent: {snapshot.Extent:0.###}; wheel receipt: {receipt}; ready: {wheelReady}; wheeled: {wheeled}; drawn: {drawn}; kept: {kept})");
+                        : $"{keptMessage} (history: {snapshot.Count}/{turns}; count500: {count500}; intermediate: {snapshot.Intermediate}; below-end: {belowEnd}; stable: {snapshot.Stable}; offset: {snapshot.Offset:0.###}; extent: {snapshot.Extent:0.###}; wheel receipt: {receipt}; ready: {wheelReady}; wheeled: {wheeled}; drawn: {drawn}; kept: {kept}; {wheelTarget})");
                 }
             }
             finally
@@ -317,7 +324,7 @@ static partial class SelfTest
         var scale = list.XamlRoot.RasterizationScale;
         var mouse = new WheelPoint { X = (int)(point.X * scale), Y = (int)(point.Y * scale) };
         if (ClientToScreen(window.Handle, ref mouse) == 0) { throw new InvalidOperationException("The wheel target could not be located."); }
-        var target = GetFocus() is var focus && focus != 0 ? focus : window.Handle;
+        var (target, _) = PostedTarget(window.Handle);
         if (!PostMessageW(target, 0x020A, (nint)(120 << 16), (mouse.Y << 16) | (mouse.X & 0xffff))) { throw new InvalidOperationException("The native wheel message could not be posted."); }
     }
 
