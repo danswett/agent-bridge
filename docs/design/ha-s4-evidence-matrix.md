@@ -54,16 +54,17 @@ The Mac/iOS work in #2391/#2392/#2398/#2399 remains required future parity but i
 
 | Client | Built evidence | Live evidence | Gap keys |
 |---|---|---|---|
-| PWA | Built normal stop: P section 5/S; guarded-idle host discrepancy under #2396 | Historical P section 5, Progress > End session; full current client contract untested live | STOP, L-PWA, L-ANDROID |
-| Windows | Built normal stop: W Details/S; guarded-idle host discrepancy under #2396 | Untested live at Windows/current-rule scope; P section 5's generic historical claim identifies no client | STOP, L-WIN |
-| Apple | Built remote stop: A/S; guarded-idle host discrepancy under #2396; Mac local host stop unavailable | Mac fixture only; Mac/iOS real-host runs untested live | STOP, L-MAC, L-IOS |
+| PWA | Built normal stop: P section 5/S; guarded-idle host gap tracked in #2411 | Historical P section 5, Progress > End session; full current client contract untested live | STOP, L-PWA, L-ANDROID |
+| Windows | Built normal stop: W Details/S; guarded-idle host gap tracked in #2411 | Untested live at Windows/current-rule scope; P section 5's generic historical claim identifies no client | STOP, L-WIN |
+| Apple | Built remote stop: A/S; guarded-idle host gap tracked in #2411; Mac local host stop unavailable | Mac fixture only; Mac/iOS real-host runs untested live | STOP, L-MAC, L-IOS |
 | MCP agent | Missing in P section 15's native MCP inventory; current exposure unknown | Untested live; an agent cannot borrow person authority | I-MCP, STOP, L-MCP |
 | Host CLI | Unknown client stop entry point; S proves host handling, not CLI exposure | Untested live | I-CLI, STOP, L-CLI |
 | Optional HA | Missing runtime: H proposes opening paired-person UI; legacy P section 18 differs | Disposable connector CI is not this component's live proof | HA, STOP |
 
-Engineering relays Builder #2396's observation: `StopService.cs` lines 251-253/280
-terminate idle-reported launch-not-ready, unreadable-transcript or transcript-only
-question targets without arming: **code observation under #2396, open question to Product**.
+Product [ruling 2 on #2396](https://github.com/danswett/agent-bridge/issues/2396#issuecomment-6843606276)
+requires two presses, then no `/exit`, for idle-reported unreadable-transcript,
+launch-not-ready or transcript-only question states. Engineering's reported
+`StopService.cs` lines 251-253/280 one-press path is a **known gap against the Product ruling, fix tracked in [#2411](https://github.com/danswett/agent-bridge/issues/2411)**.
 
 Pass (Product wording, not live proof) per required client, for person and system stops:
 idle ends on one press; working, waiting or idle-with-background-work first arms,
@@ -233,7 +234,7 @@ Live-run issues are **not ready** until their gap issues are fixed.
 | L-MCP / [#2394](https://github.com/danswett/agent-bridge/issues/2394) | S4 live run: MCP agent client row-by-row retirement evidence | Run all nine contracts through actual permitted client surface; record person-only refusals and missing paths as gaps. |
 | L-CLI / [#2395](https://github.com/danswett/agent-bridge/issues/2395) | S4 live run: host CLI row-by-row retirement evidence | Run all nine contracts from documented CLI entry points; host handlers alone are not client exposure proof. |
 | HA / [#2407](https://github.com/danswett/agent-bridge/issues/2407) | Optional Home Assistant client: B1-B9 and S8 live run | Open, not-ready tracker owns all nine build slices and component live proof; #1419 is closed historical design, not their tracker; no retirement prerequisite. |
-| STOP / [#2396](https://github.com/danswett/agent-bridge/issues/2396) | S4 stop: reconcile inventory wording with the parity stop rule and prove all clients | Reconcile inventory wording and design all-client proof: idle one press, non-idle confirmation, listed refusals; person/system parity. Guarded-idle code observation awaits Product; no enforcement cut authorized. Three runs per client/stage and 20 correct-target stops; check #1146 first. |
+| STOP / [#2396](https://github.com/danswett/agent-bridge/issues/2396), [#2411](https://github.com/danswett/agent-bridge/issues/2411) | S4 stop: reconcile inventory wording with the parity stop rule and prove all clients | #2396 reconciles inventory wording and designs all-client proof: idle one press, non-idle confirmation, listed refusals; person/system parity. #2411 owns the guarded-idle code fix required by Product ruling 2. Three runs per client/stage and 20 correct-target stops; check #1146 first. |
 | PWA-PUSH / [#2397](https://github.com/danswett/agent-bridge/issues/2397) | S4 PWA push: close background question and turn delivery gaps | Reconcile historical Web Push with current missing-background report; one lifecycle cut, prove rows 16/28 background/locked delivery and exact-question open. |
 | IOS-PUSH / [#2398](https://github.com/danswett/agent-bridge/issues/2398) | S4 iOS push: add the first background delivery slice | Cut one missing APNs registration/provider/lifecycle mechanism, at most 250 changed lines; name remaining slices; full rows 16/28 proof follows only when complete. |
 | APPLE-UPDATE / [#2399](https://github.com/danswett/agent-bridge/issues/2399) | S4 Apple updates: verify remote-host update controls | Retitled by Engineering: parked under #1882; prove Mac/iOS person controls update all four capable Windows hosts, with progress/version/refusal receipts and three row runs per stage. Apple app distribution/self-update is outside row 8. |
