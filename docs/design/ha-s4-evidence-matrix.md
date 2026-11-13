@@ -7,12 +7,15 @@ Row numbers below are the retirement inventory's, not parity.md section numbers.
 
 ## Sources and reading depth
 
-Base: `9a0acf32e28fca6e03542c0b7b35a20498789581`, freshly fetched main.
-Earlier whole-source reads were at `e16dc3674e21f4974dabd51b8bdee3ebd6ad07b3`;
-those source files are unchanged at this base.
-Read **whole**: [P: parity.md](../parity.md), [A: apple-parity.md](../apple-parity.md),
+Base: `0d2fb25201aa285fe750ff64caab683e133c2e06`, main merged per Quality's order.
+Read **whole at the earlier `e16dc3674e21f4974dabd51b8bdee3ebd6ad07b3` snapshot**:
+[P: parity.md](../parity.md), [A: apple-parity.md](../apple-parity.md),
 [W: app-windows.md](../app-windows.md), [H: optional HA design](ha-optional-client.md)
 and [S: host-stop.md](../host-stop.md). These are documentation claims, not a new code audit.
+A/W/H/S are unchanged at this base; P section 15 was refreshed, not the whole of P.
+Read **whole at this base**: [M: current MCP inventory](mcp-s4-evidence.md),
+[stop reconciliation](stop-policy-reconciliation.md), [native forms](ha-row17-native-forms.md)
+and [counter design](ha-gate-counters.md). M's completed static inventory governs MCP cells, not older missing-server claims.
 P's audit is at `2a25120`; A's comparison is dated November 2, 2026.
 Later W detail can narrow P's historical claims; neither creates a live receipt.
 Read [C: #39 checklist](../parity-checklist.md) introduction, conventions and
@@ -60,7 +63,7 @@ The Mac/iOS work in #2391/#2392/#2398/#2399 remains required future parity but i
 | PWA | Built normal stop: P section 5/S; guarded-idle host gap tracked in #2411 | Historical P section 5, Progress > End session; full current client contract untested live | STOP, L-PWA, L-ANDROID |
 | Windows | Built normal stop: W Details/S; guarded-idle host gap tracked in #2411 | Untested live at Windows/current-rule scope; P section 5's generic historical claim identifies no client | STOP, L-WIN |
 | Apple | Built remote stop: A/S; guarded-idle host gap tracked in #2411; Mac local host stop unavailable | Mac fixture only; Mac/iOS real-host runs untested live | STOP, L-MAC, L-IOS |
-| MCP agent | Missing in P section 15's native MCP inventory; current exposure unknown | Untested live; an agent cannot borrow person authority | I-MCP, STOP, L-MCP |
+| MCP agent | Absent stop tool (M row 4); P section 15 now rates the stdio surface Partial; host currently refuses agent stops | Untested live; refusal is not Product's still-undecided agent-stop authority ruling | I-MCP, STOP, L-MCP |
 | Host CLI | Unknown client stop entry point; S proves host handling, not CLI exposure | Untested live | I-CLI, STOP, L-CLI |
 | Optional HA | Missing runtime: H proposes opening paired-person UI; legacy P section 18 differs | Disposable connector CI is not this component's live proof | HA, STOP |
 
@@ -90,7 +93,7 @@ locations; historical runs alone do not qualify every client.
 | PWA | Built: P section 3 permission UI and host checks | Historical P Progress > Copilot permission prompts; no 30-approval client ledger | L-PWA, L-ANDROID |
 | Windows | Built: W card/Needs you approval; approval toast is **Open only**, not Approve | Untested live at Windows scope; P section 3's generic historical claim identifies no client; toast buttons are not approval proof | L-WIN |
 | Apple | Built: A structured permissions on capable remote hosts; local Mac actions unavailable | Mac/iOS untested live; fixture receipts excluded | L-MAC, L-IOS |
-| MCP agent | Native server missing in P section 15; current authorized surface unknown | Untested live; agents never answer trust/permission confirmations | I-MCP, L-MCP |
+| MCP agent | Absent, refusal-only (M row 5): no answer/trust tool; host refuses agent answers | Untested live; person-only approvals are not granted by readable questions | I-MCP, L-MCP |
 | Host CLI | Unknown client approval workflow; host management guards are not a person UI | Untested live | I-CLI, L-CLI |
 | Optional HA | Missing runtime: H read grant cannot approve; separate person path proposed | Legacy connector CI is not component acceptance | HA |
 
@@ -108,7 +111,7 @@ shown, each reaching its session within 10 seconds, away from the home network; 
 | PWA | Built for capable remote Windows app/host packages: P section 9, W updates | Historical P section 9: November 1, 2026, 11:06 PT, 0.1.690 -> 0.1.700 | L-PWA, L-ANDROID |
 | Windows | Built: W local Velopack plus remote Check/Install/Check all | P's remote app controls tested; no complete current client live receipt found | L-WIN |
 | Apple | Built: A controls capable remote Windows host updates; Apple app self-updates are outside row 8 | Mac/iOS remote-host update controls untested live | APPLE-UPDATE, L-MAC, L-IOS |
-| MCP agent | Owner-only update surface not established; no agent install authority | Untested live | I-MCP, L-MCP |
+| MCP agent | Absent, refusal-only (M row 8): no update tool; Check/Install remains person-only | Untested live; no agent update grant | I-MCP, L-MCP |
 | Host CLI | Unknown owner update client; W app-only management is not CLI evidence | Untested live | I-CLI, L-CLI |
 | Optional HA | Missing runtime: H person update path proposed; legacy Install exists separately | P section 9 legacy HA button still untested live (#161) | HA |
 
@@ -116,7 +119,9 @@ Pass: owner presses Check/Install through Slipgates for one full update of all f
 Windows machines, sees progress, reconnect and exact installed versions; agent/
 unapproved requests change nothing. Record client-to-machine coverage and three
 row exercises per required client/stage; keep before/after versions, host logs
-and visible receipts (C E9-02/E18-06). Apple client self-update is not a prerequisite.
+and visible receipts. C E9-02 covers local app update; E18-06 is legacy HA update,
+not the Slipgates four-host step, which still needs client-specific action/receipt evidence.
+Apple client self-update is not a prerequisite.
 
 ## Row 15: forget machine
 
@@ -125,7 +130,7 @@ and visible receipts (C E9-02/E18-06). Apple client self-update is not a prerequ
 | PWA | Built: P section 9 offline roster, two-press Forget | Untested live (#50); tests are not a live run | L-PWA, L-ANDROID |
 | Windows | Built: W offline list and five-second two-press confirmation | Untested live | L-WIN |
 | Apple | Built: A confirmed offline Forget | Mac/iOS untested live | L-MAC, L-IOS |
-| MCP agent | Unknown authorized roster/forget client; P section 15 missing native server | Untested live | I-MCP, L-MCP |
+| MCP agent | Absent, refusal-only (M row 15): no forget/roster-mutation tool; reads are not management authority | Untested live; confirmed forget remains person-only | I-MCP, L-MCP |
 | Host CLI | Unknown client; relay permits a person's device, never a host (P section 9) | Untested live | I-CLI, L-CLI |
 | Optional HA | Missing runtime: H status card opens person UI; legacy dashboard cleanup differs | Untested live | HA |
 
@@ -141,7 +146,7 @@ Three runs per client/stage; keep relay/client roster before/after and refusal r
 | PWA | P section 10 documents Web Push; current background parity unresolved by supplied brief | Historical phone question/finished/withdrawal claims in P; not every browser/OS | PWA-PUSH, L-PWA, L-ANDROID |
 | Windows | Built: W tray question/finished toasts, dedupe, withdrawal and quiet behavior | Historical question toast in P; full current lifecycle untested live | L-WIN |
 | Apple | Partial: A open-app notices; iOS/iPadOS APNs background transport missing | Mac/iOS OS delivery/authorization untested live | IOS-PUSH, L-MAC, L-IOS |
-| MCP agent | Unknown notification/subscription client contract in read sources | Untested live | I-MCP, L-MCP |
+| MCP agent | Partial (M row 16): read snapshots/polling exist; pipe drops events, no push subscription | Untested live; snapshots do not prove delivery, withdrawal or reconnect/dedup | I-MCP, L-MCP |
 | Host CLI | Unknown question/turn notification client | Untested live | I-CLI, L-CLI |
 | Optional HA | Missing runtime: H uses paired-person notification path, not HA action events | Legacy disposable-HA notification test is not component proof | HA |
 
@@ -159,7 +164,7 @@ Inventory Section 1 explicitly says f1-f12 are HA per-field dropdowns, **not fun
 | PWA | Built forms (P section 2); HA dropdown workaround dropped | Historical five-field PWA form; full current form run untested live | KEYS, L-PWA, L-ANDROID |
 | Windows | Built forms (W session view); larger forms open from toasts | No client-specific full-form live receipt found | KEYS, L-WIN |
 | Apple | Built structured questions (A); native limits/open-session actions explicit | Mac/iOS real-host form runs untested live | KEYS, L-MAC, L-IOS |
-| MCP agent | Current structured-form exposure unknown | Untested live | I-MCP, KEYS, L-MCP |
+| MCP agent | Partial (M row 17): question data on reads; no ask/elicitation or named-form submission | Untested live; question data or text reply is not native form interaction | I-MCP, KEYS, L-MCP |
 | Host CLI | Unknown form client workflow | Untested live | I-CLI, KEYS, L-CLI |
 | Optional HA | Missing runtime: H proposes complete fields and person UI, no select workaround | Untested live | HA, KEYS |
 
@@ -176,7 +181,7 @@ retain client screens and transcript values; a design decision alone is not DONE
 | PWA | Built: P sections 1/9 all-machine cards, activity and machine selection | Historical P cards/machine rows; complete current view set untested live | L-PWA, L-ANDROID |
 | Windows | Built: W Sessions/Machines/Launch/Usage/Settings and responsive panes | Historical P Windows cards/second host; demo screenshots excluded | L-WIN |
 | Apple | Built: A workbench, detail, history, usage and machine views | Mac fixture traversal only; Mac/iOS real fleet views untested live | L-MAC, L-IOS |
-| MCP agent | Current equivalent list/detail/status view coverage unknown | Untested live | I-MCP, L-MCP |
+| MCP agent | Partial (M row 27): local list/detail/status; no MCP fleet/usage/machine views or remote routing | Untested live; reply/launch schemas are capability-blocked, not working views | I-MCP, L-MCP |
 | Host CLI | Unknown client view coverage: P section 14's status/logs row describes app Settings, not CLI dashboard exposure | Untested live | I-CLI, L-CLI |
 | Optional HA | Missing runtime: H specifies seven card roles, not a working dashboard | P section 18 generated legacy dashboard is not this component | HA |
 
@@ -192,7 +197,7 @@ screens or equivalent inspectable client output plus host snapshot; no CLI/MCP e
 | PWA | Documented tap-to-card; iOS Web Push has no action buttons (P section 10) | Historical verified phone tap, not current all-platform background proof | PWA-PUSH, L-PWA, L-ANDROID |
 | Windows | Built: W toast opens correct session/question heading, never approval focus | Historical question buttons; current approval Open-only navigation untested live | L-WIN |
 | Apple | Partial: A guarded foreground navigation/actions; iOS background missing | Mac/iOS physical-device opens untested live | IOS-PUSH, L-MAC, L-IOS |
-| MCP agent | Unknown equivalent question-target navigation/notification contract | Untested live | I-MCP, L-MCP |
+| MCP agent | Absent (M row 28): no notice/deep-link tool; pipe drops events | Untested live; manually read question data is not notice-target opening | I-MCP, L-MCP |
 | Host CLI | Unknown exact-question open/inspect path from a notice | Untested live | I-CLI, L-CLI |
 | Optional HA | Missing runtime: H proposes exact host/session/question person links | Legacy notification action is not the proposed link | HA |
 
@@ -208,7 +213,7 @@ outcome record, including ten question-open taps per shipped client away from ho
 | PWA | Built: P section 4 paste/attach and encrypted large-file blobs | Historical small image attachment; large-photo path untested live | L-PWA, L-ANDROID |
 | Windows | Built: W paste/attach, local chunks/remote blobs and sent-image preview | Historical P section 9 remote reply with image; full limits/lifecycle untested live | L-WIN |
 | Apple | Built: A file/PhotosPicker/Mac paste, upload and staged removal | Mac/iOS real-host attachments untested live | L-MAC, L-IOS |
-| MCP agent | Current attachment/reply client exposure unknown | Untested live | I-MCP, L-MCP |
+| MCP agent | Absent (M row 29): reply schema is text-only; agent attachment requests are refused | Untested live; no image-reply grant or attachment transport | I-MCP, L-MCP |
 | Host CLI | Unknown image staging/reply client workflow | Untested live | I-CLI, L-CLI |
 | Optional HA | Missing runtime: H read-only grant cannot attach; person path proposed | Legacy image store is not this component's encrypted reply proof | HA |
 
@@ -226,6 +231,8 @@ Known existing work: #1396 epic, #55 pairing blocker, #736 release gate, #1146 c
 do not duplicate or claim them closed. Also check P's #45/#50/#161 and H's #1419.
 These older issues remain **unmapped** to individual cells; #1419 is closed historical design, not an open B1-B9 tracker.
 Live-run issues are **not ready** until their gap issues are fixed.
+The [#2384 counter design](ha-gate-counters.md) is a proposal, not shipped proof;
+its older fixed-count gate wording is superseded by the #1396 decision above.
 
 | Key / issue | Title | Acceptance / boundary |
 |---|---|---|
@@ -237,12 +244,12 @@ Live-run issues are **not ready** until their gap issues are fixed.
 | L-MCP / [#2394](https://github.com/danswett/agent-bridge/issues/2394) | S4 live run: MCP agent client row-by-row retirement evidence | Run all nine contracts through actual permitted client surface; record person-only refusals and missing paths as gaps. |
 | L-CLI / [#2395](https://github.com/danswett/agent-bridge/issues/2395) | S4 live run: host CLI row-by-row retirement evidence | Run all nine contracts from documented CLI entry points; host handlers alone are not client exposure proof. |
 | HA / [#2407](https://github.com/danswett/agent-bridge/issues/2407) | Optional Home Assistant client: B1-B9 and S8 live run | Open, not-ready tracker owns all nine build slices and component live proof; #1419 is closed historical design, not their tracker; no retirement prerequisite. |
-| STOP / [#2396](https://github.com/danswett/agent-bridge/issues/2396), [#2411](https://github.com/danswett/agent-bridge/issues/2411) | S4 stop: reconcile inventory wording with the parity stop rule and prove all clients | #2396 reconciles inventory wording and designs all-client proof: idle one press, non-idle confirmation, listed refusals; person/system parity. #2411 owns the guarded-idle code fix required by Product ruling 2. Three runs per client/stage and 20 correct-target stops; check #1146 first. |
+| STOP / [#2396](https://github.com/danswett/agent-bridge/issues/2396), [#2411](https://github.com/danswett/agent-bridge/issues/2411) | S4 stop: reconcile inventory wording with the parity stop rule and prove all clients | [Stop reconciliation](stop-policy-reconciliation.md) records #2396's state rule and proof design; #2411 owns the guarded-idle fix. Three runs per client/stage and 20 correct-target stops; agent-stop authority remains undecided (M C1), never granted by person/system parity. Check #1146 first. |
 | PWA-PUSH / [#2397](https://github.com/danswett/agent-bridge/issues/2397) | S4 PWA push: close background question and turn delivery gaps | Reconcile historical Web Push with current missing-background report; one lifecycle cut, prove rows 16/28 background/locked delivery and exact-question open. |
 | IOS-PUSH / [#2398](https://github.com/danswett/agent-bridge/issues/2398) | S4 iOS push: add the first background delivery slice | Cut one missing APNs registration/provider/lifecycle mechanism, at most 400 changed lines including tests; name remaining slices; full rows 16/28 proof follows only when complete. |
 | APPLE-UPDATE / [#2399](https://github.com/danswett/agent-bridge/issues/2399) | S4 Apple updates: verify remote-host update controls | Retitled by Engineering: parked under #1882; prove Mac/iOS person controls update all four capable Windows hosts, with progress/version/refusal receipts and three row runs per stage. Apple app distribution/self-update is outside row 8. |
-| KEYS / [#2400](https://github.com/danswett/agent-bridge/issues/2400) | S4 row 17: native forms and dropped HA dropdowns | Engineering corrected the scope: f1-f12 are not function keys, HA dropdowns dropped, all-client multi-field forms retained; use the row 17 live contract. |
-| I-MCP / [#2401](https://github.com/danswett/agent-bridge/issues/2401) | S4 MCP evidence: reconcile current operations with the parity inventory | Check #45/current docs; record actual entry points for all nine rows and exact missing mechanisms, with at-most-400-line implementation follow-ups including tests; no new agent approval rights. |
+| KEYS / [#2400](https://github.com/danswett/agent-bridge/issues/2400) | S4 row 17: native forms and dropped HA dropdowns | [Native-form contract](ha-row17-native-forms.md): f1-f12 are not function keys; drop HA dropdowns, retain all-client named-field forms and the row 17 live contract. M supersedes this note's incomplete MCP inventory, not its form requirements. |
+| I-MCP / [#2401](https://github.com/danswett/agent-bridge/issues/2401) | S4 MCP evidence: reconcile current operations with the parity inventory | [Completed static inventory M](mcp-s4-evidence.md): six stdio schemas, current agents get list/read only; not live parity. C1 settles agent-stop authority first; C2 is refusal-only approvals/updates/forget; C3-C10 cover events, forms, fleet/usage, notice inspection and images. Confirm ownership under #45/#2401 before bounded follow-ups (400 lines including tests); no agent approval grant. |
 | I-CLI / [#2402](https://github.com/danswett/agent-bridge/issues/2402) | S4 host CLI evidence: inventory missing client-row mechanisms | Record real CLI entry points/output for all nine rows, allowed-person boundaries and bounded missing-mechanism follow-ups; never infer parity from host-only handlers. |
 
 All seven live-run issues inherit #39's exact action/expected/read-location format,
