@@ -138,9 +138,9 @@ exception, never Answer/Dismiss. The gate runs, in order, refusing at the first 
 2. the machine policy is readable and `agents.launch.enabled` is `true`;
 3. the request passes §3's content rules;
 4. the attempt limit (§5) has room;
-5. under one lock: the hourly and live caps (§5) have room, an hourly charge and live
-   reservation are taken, and the attempt audit (§6, `outcome: reserved`) is written.
-   §13 also checks/reserves pending capacity. An unwritable audit undoes these reservations
+5. under one lock: check hourly/live caps (§5) and §13 pending capacity **before charging**.
+   Full pending returns pendingLimit without a reservation. Otherwise reserve all three
+   together and write the attempt audit (§6, `outcome: reserved`). An unwritable audit undoes them
    before dispatch and refuses; concurrent launches cannot both take the last place;
 
 then the request goes to the launch service with the agent principal as its peer, which applies
@@ -335,8 +335,8 @@ survive a restart.
   (`capRebuilding`, with the reason); an older defect is a warning in `host.status` only, so one
   flipped byte from last month never disables launches. Exception: unreadable unresolved
   journals or unknown/unreadable major versions always block launches, regardless of age (§6).
-* **Recovery:** the host retries the rebuild every 30 s, with the reason in `host.status`; no
-  restart is needed.
+* **Recovery:** ordinary cap rebuild retries every 30 s, no restart; §6's sticky manual
+  evidence fault is different and never clears through these retries.
 * **After a reboot** the fleet relaunches its workers, and a second restart within the hour can
   reach the fleet cap and leave a machine short for up to an hour. That is intended; `retryAfter`
   and the cap's use are in `host.status`, and the runbook gives the owner's time-boxed override
@@ -374,11 +374,21 @@ gate rest on.
   unknown majors. Before new-format writes, install a durable minimum-reader marker and
   startup guard in every rollback-eligible host. **Incompatible old hosts refuse to start**,
   before APIs/cap rebuild; unguarded builds are not rollback candidates. Keep the marker while
-  any unresolved journal or retained new-format evidence exists, regardless of age.
+  any unresolved journal or retained new-format evidence (archives included) exists, regardless of age.
   Only a compatible host under the profile lock may clear/lower it after a complete all-age
   scan proves neither remains; never clear by time, partial scan or deleting evidence.
   Preflight all retained versions/journals. Unreadable marker/journal/new-major evidence
-  blocks startup of an old host and **all launches**, `capRebuilding`, on a compatible host.
+  blocks old-host startup. On a compatible host **all session.launch, person-app included**,
+  is blocked as pendingStorageUnavailable; persist manualRecoveryRequired=true, no retryAfter.
+  This sticky fault is not timed capRebuilding; even readable files do not auto-clear it.
+  **Owner recovery:** local App `launch.pending.repair` journal-restore mode (§13.4 gate),
+  bound to profile/journal digest when record IDs are unreadable. Keep original bytes/hash
+  in non-destructive quarantine; audit intent and old/new digest binding before restore, result after.
+  No unaudited effects. Restore only complete validated authoritative evidence; finish all-age rebuild
+  before clearing the manual block or marker (the latter also requires no retained evidence).
+  After validated restore/rebuild, the new copy is authoritative; the original is forensic-only,
+  excluded from runtime readability checks but still pins the marker, never authorizing rollback.
+  Missing identity/no complete evidence stays blocked/sticky; nothing deleted/force-cleared (§13.7).
 
 Fields: `v`, `at` (UTC), `principal` (`agent:<machine>/<session>`, `AgentProtocol.Principal`), `scope`,
 `depth`, `action: "session.launch"`, `request`, `machine`, `agent`, `workspace` (label),
@@ -397,6 +407,8 @@ pendingStorageUnavailable, auditUnwritable and repairBlocked (§13.2); no pre-se
 Closed proves absence, not known-ready history; expiry without closure stays false.
 New readers fold legacy pairs; old readers reject new major, not unsafe last-line counts.
 Filter event/action/outcome; unknown fields confer no authority.
+pendingLimit is a launch-state refusal before reservation (no charge); repairBlocked is
+pending-refusal for the repair action, never a launch-state transition/refund.
 Refusals share §5's 60/actor/hour plus 60/host/hour, then one count-summary/minute.
 Proposed 256 verified actor entries expire hourly; overflow/uncredentialed uses host
 bucket, never attacker-keyed. Summaries contain counts/codes, no question/answer/request text.
@@ -496,7 +508,7 @@ rejected: they need an exactly-once claim, a GitHub token on every machine and m
 
 | Slice | Contents | Size | Tests (fail-closed cases named) |
 |---|---|---|---|
-| **#1401** audit log (first) | as filed, plus the launch file, hash chain across files, line version, folder lock, pruning rules (§6), and the `audit` command with `--outcome` and `audit archive` | M | an unwritable log refuses the action; a removed line shows "broken"; pruning and rotation keep the chain intact; a torn last line is ignored; a newer major version is refused, unknown fields ignored; a second writer is refused |
+| **#1401** audit log (first) | as filed, plus the launch file, hash chain across files, line version, folder lock, pruning rules (§6), and audit commands with `--outcome`/`audit archive`; compatibility prerequisite owns minimum-reader marker, startup guard and locked all-age clearing. Every new-major write is gated on its deployment to all rollback-eligible builds; split prerequisite if needed | M | an unwritable log refuses the action; a removed line shows "broken"; pruning/rotation keep the chain intact; torn last line ignored; newer major refused, unknown fields ignored; second writer refused; oldHostRefusesStart before APIs; rollbackPendingOlderThanTwoDays; unresolved/archive evidence prevents marker clearing; new-major writes refused before guard deployment |
 | **2b #1404** scope and enforcement | `agentScope` on person launches; the `agents.launch` and `agents.limits` config keys; `agent-bridge-host agents revoke`; `AgentLaunchGate` (§2, §3) with the worktree check and per-agent configuration lists; **in-memory caps and attempt limit with the §5 defaults, and step 0 remembering every (principal, `request`) with its hash for at least the hour**, so agents are never uncapped between 2b and 2c; refuse `session.launch` from `Other`; MCP schema trimmed; agent prompt wording | L (about 450; may split the worktree check off) | refused: no scope, scope revoked mid-session, switch off, policy unreadable, `permissions` absent, `allowAll`, `transfer`, `resume`, attachments, workspace not listed, workspace not isolated, worktree with a tool-approving settings file, Agency, `auto`, extra arguments, `agentScope` from an agent, launcher at depth 1, an adopted session, a script caller, two launches racing for the last slot; worktree holding `.claude/` or `.mcp.json` refused and the worktree removed, an agent kind without a confirmed list, a slot released after `busy` and after `refused`, the 21st attempt in an hour, the same request 16 minutes later starts nothing and counts once, a `requestReused` loop stopped by the attempt limit; accepted: ask-only launch in a listed workspace; 16 KiB prompt whole, 16 KiB + 1 refused, the npm agent's command-line refusal; child credential is `read` |
 | **2c #1413** cap, result, options | caps and attempt limit made durable (typed launch-state fold at start, `interrupted` lines, 30 s rebuild retry); request ids and `requestSha256` across restart (§2); agent live limit and idle end; stored, clamped, range-checked overrides, outside-CLI changes audited; fail-closed `host.status`/cap use; principal-keyed result/options/busy; runbook lines. C1 is the prerequisite for §13, not its implementation | M-L (about 380; may split live limit/idle end) | 4th launch by one agent refused; 11th on machine refused; 7th live agent-launched session refused; idle ended after 2 h, not after person input; cap survives restart; crash between reserved/outcome still counts; future line counts; defect inside hour refuses capRebuilding, older warns; locked policy retried then policyUnreadable; override lapses; different principal never gets readback; 20-hour request starts nothing; far-future/out-of-range override clamped/refused and audited; pre-start refused/busy does not count after restart; override survives restart and refusal records effective limit; options have no path/resumable/trust or pending text for agents; action/refusal lines never refund; old schema readers fail closed on new event semantics |
 | **2e (new)** fleet launch grant | §11 grant on the script credential: new branch in `LocalApi.Handler` (the agent gate handles only `CallerKind.Agent`); fleet cap/live limit, idle exemption, `diskLow` check/runbook | S (about 120), after #1414/#1404 | refuse agent ancestry, unticked workspace, cap 9th, under 1 GiB free, worker above read+reply; 7th live worker refused, separate agent bucket; no fleet 2 h idle end; shared pending ceiling is §13 |
@@ -807,14 +819,14 @@ Ready wins, never stopped by late close. §6 audits observation/action/refusal/r
 expiry/reconciliation with digests, no raw question/answer/secret/path; refused actions
 never change charges/slots without verified state transition.
 
-Storage/audit failure blocks starts/effects, retains evidence, reports fixed
+Storage/audit failure blocks starts/runtime effects, retains evidence, reports fixed
 `auditUnwritable`/`pendingStorageUnavailable`. Reconcile 30 s/10 s passes; after 5 min
 mark reconciliationRequired and stop effect retries; read-only observation continues.
 **New local `launch.pending.repair`:** add to `LocalApi.Acts`; same fresh validated-App,
-protected person confirmation and pending/revision-bound person-envelope gateway as local
-Cancel. Refuse Agent/script/Other/service/remote before lookup; no CLI, unsigned flag or
+protected person confirmation and person-envelope gateway as local Cancel; bind pending/revision,
+or profile/journal digest for §6's restore mode. Refuse Agent/script/Other/service/remote before lookup; no CLI, unsigned flag or
 legacy-MAC fallback. This missing gate/signer is a prerequisite, not a current grant.
-Repair may bypass the quarantined-claim wait, never authority/storage checks: fence old
+Record repair may bypass the quarantined-claim wait, never authority/storage checks: fence old
 start/injector claims, then a 10 s observation pass, no keys/start/replay/termination.
 With writable stores commit only §13.5 proof, including closedUnconfirmed for unknown
 history; otherwise an action refusal with code repairBlocked keeps reconciliationRequired
@@ -870,7 +882,7 @@ expiry observer and one-count live conversion; pipe Answer refusal and signed Ca
 missing-signer refusal; negotiated current vs legacy readback, generation/changed-byte
 refusal; Trust/Hooks/Bypass and fixtured other kinds, not None; renewal vs unchanged busy;
 byte/record/replay/refusal bounds; tenancy/grant/allow-list and App-only, zero protected
-agent/script fields; refused actions keep charges; journal/audit/expiry failure/repair;
+agent/script fields; refused actions keep charges; journal/audit/expiry failure, sticky all-launch block/verified restore;
 duplicate/two-person/screen/late/lost-ack/close-ready races never replay, expiry never
 kills, no unproven replacement or unrelated/ready stop. Never omit support for line budget.
 
@@ -892,4 +904,6 @@ resolve newest/first busy wording. Confirm origin withdrawal vs person-only canc
 Per-item ceiling/backoff is open: recommend one replacement then typed blocked; keep
 unattended reassignment off until both are approved. Pin verbs/detectors/proof and size helpers;
 rollback requires §6's guard and readable unresolved journals/major evidence, never deletion.
+**Product** must file a linked tracking issue under #2357 for the open irrecoverable
+data-loss override decision before any override code; this note authorizes none.
 Creative text isn't an unbuilt-UI receipt. No automatic kill/new sign-in/permission channel.
