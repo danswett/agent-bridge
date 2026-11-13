@@ -537,14 +537,44 @@ Here account is UTF-8, generation its 32 ASCII hex characters, and `dh` raw byte
 as for `hostSignProof`; the enrolled public point verifies the possession proof.
 The capability key must differ from every enrolled `dh`, `sign`, WebAuthn,
 `hostSign` and other `capSign` key. The enrollment transcript must cover it.
+The future descriptor parser refuses a `capSign` equal to another key in its own
+descriptor with `device`, before its possession-proof check. At add, check
+`readded` first, then refuse any collision with an ancestor add as `host-key`.
+At merge, any such pair in the joined history is `host-key`. Extend the existing
+host-key predicate symmetrically: if either descriptor's `hostSign` or `capSign`
+equals any key of the other, both collide, including `hostSign == capSign`.
+Use that one predicate in C# and PWA. A colliding add held in any branch confers
+no authority in either delivery order: entries/cosignatures, person commands and
+vetoes refuse `host-key` after signature/presence, before operation-specific checks;
+capability evidence from either colliding enrollment is unsupported. Previously
+accepted entries stay; later arrival cannot retroactively authorize anything.
 Current v1/v2 parsers do not accept this person-descriptor extension: its schema,
 custody, enrollment and cross-client checks need a separate reviewed slice.
 Until that exists and the client is enrolled with it, that client is unsupported.
 No self-supplied key, AP5-lite key, DH signature or DH-derived MAC is accepted.
 Key loss or rotation requires normal person-approved enrollment, not a local pin.
 
+**Custody and disclosure requirements, not implemented platform claims.**
+Both `hostSign` and `capSign` are device-local, unattended statement keys,
+separate from presence-gated `sign`. Native clients use non-exportable hardware
+P-256 storage where available (Windows TPM, Apple Secure Enclave, Linux TPM);
+otherwise user-protected DPAPI CurrentUser, Keychain or Secret Service respectively,
+with an owner-only `0600` private-profile file only as Linux's final tier.
+The PWA's `capSign` is non-extractable WebCrypto in its origin's IndexedDB.
+Report the tier; expose only the public half/key id, never a private-key export API.
+Private keys must never appear in logs, telemetry, frames, relay storage, chat,
+command lines or portable exports. Loss, unreadability or a failed hardware open
+is a fixed failure/unsupported state, never fallback to another key or silent
+regeneration. Capability refusals in replies and logs contain only fixed codes,
+never key, nonce, name, path, body or raw-exception text. These requirements bind
+the future custody/enrollment implementation even while that work is blocked.
+
 **Wire shape.** A collection is a JSON array with exactly one statement for every
-required verifier, ordered by device id, at most 64 statements and 128 KiB UTF-8.
+required verifier, ordered by device id, at most 64 statements and 129 KiB UTF-8,
+including brackets, commas and whitespace. At 64 statements of 2,048 bytes each,
+the compact array is 131,137 bytes, below the 132,096-byte collection cap.
+If the active set exceeds 64, refuse the whole collection as unsupported; never
+truncate, select a subset or infer support. This is an intentional availability limit.
 Each statement is at most 2,048 UTF-8 bytes, with exactly `body` and `sig`, in that
 order when emitted. Both are canonical base64url; `body` holds exact UTF-8 JSON
 bytes and `sig` minimal low-S DER. Strict I-JSON, duplicate/unknown-member refusal
@@ -553,19 +583,20 @@ The body has exactly these members (sender order shown; receivers never reserial
 
 ```text
 v, account, generation, genesis, by, add, purpose, key, versions,
-frontier, verifiers, target, request, nonce, issuedAt, expiresAt
+frontier, verifiers, target, request, consent, nonce, issuedAt, expiresAt
 ```
 
 | Member | Required binding |
 |---|---|
 | `v` | Integer `1`, the evidence format, not a roster entry version |
 | `account`, `generation`, `genesis` | Exact local pin: account, 32-lowercase-hex generation, full 32-byte genesis hash |
-| `by`, `add` | Device id and full hash of the exact enrollment currently active for it |
+| `by`, `add` | 32-lowercase-hex device id and full hash of the exact enrollment currently active for it |
 | `purpose`, `key` | `hostSign` for a host, `capSign` for a person; `SHA-256` of that enrolled raw 65-byte public point |
 | `versions` | 1 to 8 distinct ascending plain integers in `[1,255]`; support requires `2` |
 | `frontier`, `verifiers` | The two 32-byte digests defined below, recomputed locally |
-| `target` | The requesting/receiving host's device id, never a caller-selected recipient |
-| `request`, `nonce` | Lowercase UUID and fresh 32-byte random challenge issued by that host for this collection |
+| `target` | The requesting/receiving host's 32-lowercase-hex device id, never a caller-selected recipient |
+| `request`, `consent` | Proposed `accept-host-sign` command's lowercase UUID; 32-byte digest of its exact signed input, defined below |
+| `nonce` | Fresh 32-byte random capability-collection challenge issued by that host, distinct from its command hello nonce |
 | `issuedAt`, `expiresAt` | The host-issued collection window, RFC 3339 UTC as above; positive lifetime at most 600 seconds |
 
 Hashes, key ids and the nonce use base64url of raw bytes, not hex text.
@@ -574,6 +605,28 @@ Hashes, key ids and the nonce use base64url of raw bytes, not hex text.
 It proves only that key's self-declared implementation support. It is never a
 roster signature, registry signature, key-binding proof, presence proof or person
 command; signatures made under any other domain must fail here and vice versa.
+The four new labels in the framing table must be mirrored verbatim in
+agent-principals.md section 8.5 by the prerequisite label-registry slice before
+capability code ships. #2370 must also pin the registry-record signature label;
+until then its cross-domain vector is pending, not a guessed label or passing test.
+
+**Consent binding and signing, never a generic signing oracle.** The host presents
+the exact proposed person-command body to each signer.
+`consent = SHA-256(F("agent-bridge person command v1", commandBodyBytes))`.
+Require action `accept-host-sign`, matching `request`/`target`, heads covering the
+collection frontier, and a collection window within that command's lifetime.
+This binds evidence to the exact body, including command hello nonce and times,
+without putting evidence into the command or creating a circular digest.
+No person signature is implied; the later transition must independently verify
+that exact command's signature, presence and every other authorization gate.
+The capability signer derives account/generation/genesis, frontier, active set,
+own add, purpose and key id from its own trusted roster, not the supplied body.
+It binds target to the authenticated requesting host's active add/DH, validates
+the proposed command and window against its own trusted clock, and signs the
+exact bytes only if every value agrees; otherwise it emits only a fixed refusal.
+An active `presence: none`, held or probationary person client may sign with its
+enrolled `capSign`: presence/probation gate consent, not this non-authority statement.
+An old key whose add is revoked, void, conflicted or replaced never qualifies.
 
 **Frontier and required set.** Take all current accepted heads, one to four in raw
 32-byte head order. `frontier = SHA-256(F("agent-bridge verifier frontier v1",
@@ -599,12 +652,24 @@ All signers echo its issue/expiry times; it expires at most 600 seconds after
 creation, even if a response arrives late or a verifier supplies newer times.
 All statements must match that same collection and the host's current state;
 verify each enrolled key, low-S signature, identity, add, digests and supported
-versions. Use the later of wall clock and durable high-water mark, the reset
-floor, the command's 120-second future allowance, and no expiry grace.
+versions, including the exact consent digest and command request. On signer and
+receiver independently, `now = max(local wall clock, durable highWater)`;
+the floor is a separate lower bound on issue time, not an alternative `now`.
+Require `0 < expiresAt - issuedAt <= 600 s`, `issuedAt <= now + 120 s`,
+`expiresAt >= now`, and `issuedAt > floor` when a floor exists. All conditions
+are conjunctive, and the locally held challenge must also be unexpired.
+Exactly 600 seconds is allowed; 601 is not. No expiry grace or freshness inference.
 Missing, offline, negative, malformed, tampered, stale, wrong-purpose or
 unverifiable evidence yields `unsupported-verifier`, never inferred support.
+The standalone strict parser retains existing format codes (`json`,
+`duplicate-member`, `unknown-member`, `id`, `base64`, `length`, `der`, `high-s`,
+`type`, `count`, `order`, `value`, `size`); descriptor/add/merge checks keep `device` and
+`host-key`. The aggregate transition precondition maps unusable evidence to
+`unsupported-verifier`, not those APIs' parse verdicts. Pin/snapshot/storage
+failures retain the 2b-1 codes; this does not remap person-command failures.
 A normal applied, person-approved revocation changes the required set; collect
 fresh evidence for the new frontier and set, never delete an inconvenient member.
+A lost/offline held device therefore blocks support until normal revocation applies.
 
 Serialize the final recheck with roster updates and the private snapshot commit.
 Consume a collection's nonce/request once: duplicates, another target's challenge
@@ -617,6 +682,14 @@ This is a future reviewed schema, not permission to append fields to today's v1
 snapshot or overwrite it with an older schema. Keep capability-request replay
 distinct from person-command execution replay: collecting evidence consumes no
 person command and authorizes nothing. Keep `acceptHostSign: false`.
+Retain consumed `(request, nonce, consent, expiresAt)` records until durable
+high-water is strictly later than `expiresAt + 120 s`; equality does not prune.
+Persist the highest consumed `issuedAt` and clock marks with each record.
+A clock reset sets the floor to at least that highest issue time and reset time,
+never clears replay state. Prune under the same lock/atomic write, retain the
+marks/floor, and reject a full store rather than evict a live record.
+Expired replays remain expired against high-water; after a clock reset they are
+at/below the floor, even if pruned. Restart never resurrects an outstanding nonce.
 Stored evidence survives restart as evidence, not an outstanding challenge or a
 freshness attestation. Restart/clock discontinuity requires a fresh collection
 and the independent freshness checks before any later transition.
@@ -640,7 +713,7 @@ the positive transition unreachable in this slice.
 | Re-sign one statement for another account, generation or genesis | unsupported |
 | Re-sign for a different active-set digest, enrollment add or target | unsupported |
 | Flip a body byte without re-signing; alter `sig`; wrong key; high-S signature | unsupported |
-| Sign under the roster-entry, person-command, registry or key-binding domain | unsupported |
+| Sign under roster-entry, person-command, `agent-bridge agent command v1`, `agent-bridge link-attest v1`, host/capability key-binding, or #2370's pending registry domain | unsupported; pending label must be pinned first |
 | P signs with generic `sign`; H signs with DH or AP5-lite; unenrolled key | unsupported |
 | H is v1/DH-only; P lacks enrolled `capSign` | unsupported; neither member omitted |
 | P signs `versions: [1]`; H alone advertises `[1,2]` | unsupported |
@@ -650,7 +723,21 @@ the positive transition unreachable in this slice.
 | Add unsigned support flag to command, setting or environment | no support; command extra member refused |
 | Restart reloads committed evidence; replay its old challenge | evidence retained; new collection required |
 | Copy the snapshot to another generation; corrupt it; replacement fails | refuse; no support or store repair |
-| Normally revoke a member, apply removal, collect fresh evidence from remaining members | valid for new set only; old pair unsupported |
+| Normally revoke a non-target member, apply removal, collect fresh evidence from remaining members | valid for new set only; old pair unsupported |
+| capSign collides with own DH/sign/WebAuthn; add collides with an ancestor; merge joins colliding adds | `device` at parse; otherwise `host-key` |
+| Independent branches collide capSign with sign/DH/hostSign/capSign, delivered in each order | no authority for either colliding enrollment once both held; existing accepted entries stay |
+| Later hostSign equals earlier capSign, and reverse arrival | same `host-key` predicate; neither evidence key qualifies |
+| Signer is asked to sign a frontier/set/account/window it does not hold or accept | fixed refusal; no signature |
+| Active held/probationary/`presence: none` P has enrolled capSign | evidence valid; no person-command authority implied |
+| Old key signs after revocation, conflict, displacement or rotation | unsupported |
+| Statement purpose/key id differs from enrolled key; host uses capSign; person uses hostSign | unsupported |
+| More than 64 active devices; 65 statements; statement/whole collection exceeds byte limit | unsupported aggregate; no truncation (`count`/`size` internally) |
+| Wrong head/member/statement order; duplicate statement; versions unsorted/duplicate/out of range | `order`/`value` internally; unsupported aggregate |
+| Unknown/duplicate field; depth 17; noncanonical base64url; bad DER/high-S; short nonce; malformed by/target | existing strict format code internally; unsupported aggregate |
+| Validly re-signed body with different JSON member order/whitespace | same semantics; verify exact received bytes, never reserialize |
+| Lifetime 600 s versus 601 s; expiry equal to now versus before now | valid boundaries versus unsupported |
+| Command body/request/hello nonce changes after collection | unsupported even if the capability challenge is unchanged |
+| Prune at expiry+120 s versus strictly later; then roll clock back/restart/reset | equality retains; later prunes, but old evidence never becomes usable |
 
 A byte-level frontier vector uses two heads: 32 bytes of `11` hex followed by
 32 bytes of `22` hex. The label is 33 ASCII bytes, so the framed input is
@@ -658,9 +745,39 @@ A byte-level frontier vector uses two heads: 32 bytes of `11` hex followed by
 The SHA-256 is
 `faf503c68900dd39bda799f13c98f2d09cd22eb772e339882dad0fe402a28d31`.
 Reversing the heads is invalid order, not a second accepted encoding.
-Executable vectors must additionally pin exact body bytes, signature inputs,
-low-S signatures and set digests under fixed public test keys, with each refusal
-mutation tested independently. Their artifacts and tests belong to #2366.
+The following is an encoding oracle, not an enrolled roster or bootstrap proof.
+Its public P-256 point is the standard generator (hex):
+
+```text
+046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5
+```
+
+For `id = 11*16`, `add = 22*32`, kind `phone`, purpose `capSign` and that point,
+the framed member is 145 bytes with SHA-256
+`91708887ec347c6bc0e99e6769fb844308532fd4d5b5c58c11f8e8069073a2a7`;
+the one-member set digest is
+`85454af186ba3a330066d1dfc14f44fe57a87b6eb100e9af200e45f1f830593c`.
+The key id is SHA-256 of the raw point:
+`698bea63dc44a344663ff1429aea10842df27b6b991ef25866b2c6c02cdcc5be`.
+The exact proposed command body (no trailing newline) is:
+
+```json
+{"v":1,"action":"accept-host-sign","request":"0f8fad5b-d9cb-469f-a165-70867728950e","by":"11111111111111111111111111111111","target":{"machine":"44444444444444444444444444444444"},"nonce":"ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY","issuedAt":"2026-11-12T18:00:00Z","expiresAt":"2026-11-12T18:10:00Z","heads":["ERERERERERERERERERERERERERERERERERERERERERE","IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI"]}
+```
+
+Its consent digest is `08188c2f56d904870aa17412c05af6525159cb655e3e1758e71e1e3e684ec806`.
+The exact 696-byte evidence body (no trailing newline) is:
+
+```json
+{"v":1,"account":"test","generation":"00000000000000000000000000000000","genesis":"MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM","by":"11111111111111111111111111111111","add":"IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI","purpose":"capSign","key":"aYvqY9xEo0RmP_FCmuoQhC3ye2uZHvJYZrLGwCzcxb4","versions":[1,2],"frontier":"-vUDxokA3Tm9p5nxPJjy0JzSLrdy4zmILa0P5AKijTE","verifiers":"hUVK8Ya6OjMAZtHfwU9E_leoe26xAOmvIA5F8fgwWTw","target":"44444444444444444444444444444444","request":"0f8fad5b-d9cb-469f-a165-70867728950e","consent":"CBiML1bZBIcKoXQSwFr2UlFZy2VePhdY5x4ePmhOyAY","nonce":"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU","issuedAt":"2026-11-12T18:00:00Z","expiresAt":"2026-11-12T18:10:00Z"}
+```
+
+Its signature input is exactly `00000020 || ASCII("agent-bridge verifier support v1")
+|| 000002b8 || UTF8(body)`, 736 bytes with SHA-256
+`06018e6b6add7818124a97139227953463d53bd051e4d56d82a15c8238d2ab9b`.
+Later executable vectors must pin low-S signatures and each independent refusal
+mutation. Their artifacts/tests belong to #2366; end-to-end positive baselines
+cannot be built before the required host/person purpose-key enrollment exists.
 
 ## Vectors
 

@@ -125,6 +125,9 @@ This note grants none of those implementations and invents no bootstrap: a v2
 add unavailable to the pinned reader cannot supply a trusted capability key.
 Any circular first-host enrollment/transition dependency needs the separate
 bootstrap ruling above, never temporary trust in an unenrolled descriptor.
+Bootstrap/dependency ordering is deferred to that ruling; the cut table is not
+a runnable enrollment sequence. Positive baseline vectors cannot be built until
+the prerequisite purpose-key enrollment ships.
 #2366 must implement evidence verification and reviewed snapshot/replay extension
 after this design and its key prerequisites; it still cannot enable v2.
 Until every required enrollment and evidence check is available, return
