@@ -398,7 +398,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             parts.Add(new() { ["t"] = "registry", ["id"] = id, ["machine"] = machine, ["name"] = host?.Name, ["online"] = online, ["lastSeen"] = lastSeen, ["record"] = online ? JsonDocument.Parse(json).RootElement : null });
         }
         var known = (roster.Known(account, _ => false) ?? [])
-            .Select(k => new { machine = k.Id, name = k.Name, lastSeen = k.LastSeen });
+            .Select(k => new { machine = k.Id, name = k.Name, lastSeen = k.LastSeen, online = devices.ContainsKey(k.Id) });
         for (var p = 0; p < parts.Count; p++)
         {
             parts[p]["part"] = p + 1;

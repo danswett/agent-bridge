@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { PipeError } from './pipe.mjs';
 
 export const LAUNCH_SETTINGS = ['agent', 'workspace', 'profile', 'resume', 'model', 'effort', 'context', 'permissions', 'role'];
+const DEFAULT_WORKER_ROLE = 'default';
 const PERMISSIONS = { 'Ask permission': 'ask', 'Allow all': 'allowAll' };
 const REMEMBERED = 200;
 
@@ -118,6 +119,7 @@ export async function launchSession(host, ledger, options = {}) {
   const data = { request: typeof options.request === 'string' && options.request ? options.request : randomUUID() };
   for (const key of LAUNCH_SETTINGS) {
     let value = options[key];
+    if (key === 'role' && value === undefined) value = DEFAULT_WORKER_ROLE;
     if (value === undefined || value === null) continue;
     if (key === 'permissions') value = PERMISSIONS[value] ?? value;
     data[key] = value;

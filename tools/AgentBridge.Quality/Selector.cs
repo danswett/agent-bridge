@@ -17,6 +17,8 @@ sealed record Selection(
     IReadOnlyList<SelectedSuite> Suites,
     IReadOnlyList<SkippedSuite> Skipped)
 {
+    public bool NonProductOnly { get; init; }
+
     /// <summary>
     /// Each platform, with the selected suites that run on it: the OS matrix. With a platform
     /// filter it's this machine's run, and what was left out is in <see cref="Skipped"/>; CI
@@ -137,7 +139,15 @@ sealed class Selector(Catalog catalog, ProjectGraph graph)
             else
                 selected.Add(new SelectedSuite(suite, grouped));
         }
-        return new Selection(ring, platform, mode, files, unclaimed, selected, skipped);
+        // A test source can also be linked into, or referenced by, a shipped project.
+        bool NonProduct(string file) => noTestPaths.Any(g => g.IsMatch(file))
+            || (file.StartsWith("tests/", StringComparison.Ordinal) && file.EndsWith(".cs", StringComparison.Ordinal)
+                && graph.OwnersOf(file) is { Count: > 0 } owners
+                && owners.All(p => p.IsTestProject && graph.ReachersOf(p.Folder).All(f => graph[f]?.IsTestProject == true)));
+        return new Selection(ring, platform, mode, files, unclaimed, selected, skipped)
+        {
+            NonProductOnly = files.Count > 0 && mode is ("affected" or "docs-only") && files.All(NonProduct),
+        };
     }
 
     /// <summary>

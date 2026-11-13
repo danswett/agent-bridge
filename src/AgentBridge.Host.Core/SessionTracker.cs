@@ -350,6 +350,8 @@ internal sealed class SessionTracker
                 : Stalled(effective, lastEvent, background, subagents, more, now),
             Activity = new Activity
             {
+                Kind = _state.UserMessageFrom == UserMessageFrom.Schedule ? TurnKind.Scheduled : TurnKind.User,
+                Notice = _state.Notice,
                 Response = response,
                 ResponseTruncated = responseCut ? true : null,
                 Reasoning = Limits.KeepEnd(_state.Reasoning, Limits.Reasoning).Text,
@@ -359,7 +361,7 @@ internal sealed class SessionTracker
                 UserMessageFrom = _state.UserMessage is null ? null : _state.UserMessageFrom,
                 UserMessageLabel = _state.UserMessage is null ? null : Limits.KeepStart(_state.UserMessageLabel, Limits.UserMessageLabel),
                 Turn = _state.TurnId,
-            ResponseTurn = (ownResponse ?? (source?.Response is null ? response : null)) is null ? null : _state.ResponseTurn,
+                ResponseTurn = (ownResponse ?? (source?.Response is null ? response : null)) is null ? null : _state.ResponseTurn,
                 TurnCount = _state.Seen ? Math.Max(0, _state.Prompts - (effective == SessionStatus.Idle || _state.UncountedTurn ? 0 : 1)) : null,
                 Compactions = _state.Seen ? _state.Compactions : null,
                 Background = Protocol.Background.Of(agents, shells),

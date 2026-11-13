@@ -181,6 +181,11 @@ public static class SessionBudget
     {
         bool Fits(Session x) => ProtocolJson.ByteCount(x) <= maxBytes;
         if (Fits(s)) { return s; }
+        if (s.Activity.Notice is { } notice)
+        {
+            s = s with { Activity = s.Activity with { Notice = new HistoryTurn { Id = notice.Id, At = notice.At, Kind = notice.Kind, Truncated = true } } };
+            if (Fits(s)) { return s; }
+        }
 
         s = Subagents(s, a => a.Where(e => !e.Finished));
         if (!Fits(s)) { s = Subagents(s, a => a.Select(e => e with { Line = null })); }
@@ -301,7 +306,7 @@ public enum DriverKind { Person, Agent }
 // Who wrote activity.userMessage (#489). A value a client does not know is Other, never the
 // person's: a prompt is shown as the person's own only when nothing says it was not.
 [UnknownAs(Other)]
-public enum UserMessageFrom { Person, Schedule, Agent, Other }
+public enum UserMessageFrom { Person, Schedule, Agent, Other, Notification }
 
 [UnknownAs(Done)]
 public enum ToolStatus { Running, Done, Failed }
@@ -454,6 +459,8 @@ public sealed record Attention
 
 public sealed record Activity
 {
+    public TurnKind? Kind { get; init; }
+    public HistoryTurn? Notice { get; init; }
     public string? Response { get; init; }
     public bool? ResponseTruncated { get; init; }
     public string? Reasoning { get; init; }

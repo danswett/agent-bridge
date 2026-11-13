@@ -4,7 +4,7 @@ namespace AgentBridge.App.Core;
 
 // How the package checked against its release reaches Velopack's installer (#984). Update.exe opens
 // the package it installs by its path, once the app has exited (Velopack 1.2.161: UpdateExe.Apply
-// names PackagesDir\<file name>, and apply.rs opens it after --waitPid). The packages folder is the
+// names PackagesDir\<file name>, and apply.rs opens it after its process wait). The packages folder is the
 // installation's, shared by every profile's app and host, so another profile could write a valid
 // package of the same version there, from its own feed, after this app checked it and before the
 // installer opened it (#719, 6677353697). So the installer is handed a copy in this profile's own
@@ -43,14 +43,15 @@ public sealed class PackageHandoff(DownloadMark mark, string folder)
 
     // Just before the installer starts: the copy checked again, from the handle that keeps it
     // unchanged until this process ends (the caller keeps it), then start(Update.exe's arguments).
-    // Nothing starts when the copy is not those bytes.
-    public FileStream Launch(Copy copy, uint waitPid, string rootDir, string packagesDir, IReadOnlyList<string> restartArgs, Action<IReadOnlyList<string>> start)
+    // Nothing starts when the copy is not those bytes. The starter must launch Update.exe directly
+    // from this app: --wait waits for its parent, not an intermediate shell or helper.
+    public FileStream Launch(Copy copy, string rootDir, string packagesDir, IReadOnlyList<string> restartArgs, Action<IReadOnlyList<string>> start)
     {
         var held = DownloadMark.Hold(copy.Package, copy.Digest)
             ?? throw new PackageMismatchException("the copy of the update made for the installer is no longer the bytes verified for it; nothing was installed, so check for updates again");
         try
         {
-            start(Arguments(copy.Package, waitPid, rootDir, packagesDir, restartArgs));
+            start(Arguments(copy.Package, rootDir, packagesDir, restartArgs));
             return held;
         }
         catch
@@ -66,10 +67,12 @@ public sealed class PackageHandoff(DownloadMark mark, string folder)
     // window never shows; the app's Updating screen says it instead, and only where the window was
     // open. Velopack 1.2.161 restarts the old version when a silent apply fails (apply.rs), and
     // the app's next start says so (AutoUpdater.Announce). --silent is a global flag, first, as
-    // UpdateExe.Apply puts it.
-    public static IReadOnlyList<string> Arguments(string package, uint waitPid, string rootDir, string packagesDir, IReadOnlyList<string> restartArgs)
+    // UpdateExe.Apply puts it. Parent wait (#1173): 1.2.161's --waitPid opens SYNCHRONIZE only,
+    // then queries the exit code after waiting, which fails with access denied. --wait also requests
+    // QUERY_LIMITED_INFORMATION and checks creation times against parent PID reuse (process_win.rs).
+    public static IReadOnlyList<string> Arguments(string package, string rootDir, string packagesDir, IReadOnlyList<string> restartArgs)
     {
-        List<string> args = ["--silent", "apply", "--package", package, "--waitPid", waitPid.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        List<string> args = ["--silent", "apply", "--package", package, "--wait",
             "--rootDir", rootDir, "--packageDir", packagesDir];
         if (restartArgs.Count > 0) { args.Add("--"); args.AddRange(restartArgs); }
         return args;
