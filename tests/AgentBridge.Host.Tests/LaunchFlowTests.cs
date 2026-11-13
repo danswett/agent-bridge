@@ -1075,6 +1075,10 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         var o = await LaunchAsync(ch, new { workspace = "App" });
 
         Assert.Equal("unconfirmed", o.Outcome_);
+        await WaitWhileClockRunsAsync(() =>
+        {
+            lock (told) { return Task.FromResult(told.Count > 0); }
+        });
         lock (told) { Assert.Equal([o.Session!], told); }
     }
     [Fact]
