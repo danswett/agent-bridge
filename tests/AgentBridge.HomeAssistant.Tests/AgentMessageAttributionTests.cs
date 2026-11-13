@@ -9,9 +9,13 @@ public sealed class AgentMessageAttributionTests
     public Task Host_armed_reply_card_keeps_the_sending_session_principal() => AssertReply(false);
 
     [Fact]
+    public Task Host_armed_reply_card_cleans_and_bounds_the_sending_session_principal() =>
+        AssertReply(false, "\u202eSG\u0001 Sender\r\n\t  " + new string('x', 80), "SG Sender " + new string('x', 54));
+
+    [Fact]
     public Task Host_armed_reply_card_does_not_claim_two_matching_prompts_read_together() => AssertReply(true);
 
-    static async Task AssertReply(bool multiple)
+    static async Task AssertReply(bool multiple, string sender = "SG Sender", string expectedPrincipal = "SG Sender")
     {
         using var f = new Fixture();
         var id = Guid.NewGuid().ToString();
@@ -39,7 +43,7 @@ public sealed class AgentMessageAttributionTests
                 return Task.FromResult(new ReplyResult(AnswerOutcome.Delivered));
             });
         await connector.TickAsync();
-        connector.Observe(ha.SendFromCard(HaContract.NodeId(id), "Agent message", driver: "agent", rid: "fixture-reply", sender: "SG Sender"));
+        connector.Observe(ha.SendFromCard(HaContract.NodeId(id), "Agent message", driver: "agent", rid: "fixture-reply", sender: sender));
         f.Time.Advance(TimeSpan.FromSeconds(1));
         await connector.TickAsync();
         await connector.DeliveredAsync();
@@ -59,7 +63,7 @@ public sealed class AgentMessageAttributionTests
             var live = source.Get(id)!;
             Assert.Equal(UserMessageFrom.Agent, live.Activity.UserMessageFrom);
             Assert.Equal(DriverKind.Agent, live.Driver);
-            Assert.Equal("SG Sender", live.DriverPrincipal);
+            Assert.Equal(expectedPrincipal, live.DriverPrincipal);
         }
     }
 }
