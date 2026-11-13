@@ -10,12 +10,16 @@ public static class AuditCommands
 {
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     static readonly TimeZoneInfo Pacific = TimeZoneInfo.FindSystemTimeZoneById("America/Los_Angeles");
-    sealed record Row([property: JsonRequired] DateTimeOffset At, [property: JsonRequired] string Principal,
+    internal sealed record Row([property: JsonRequired] DateTimeOffset At, [property: JsonRequired] string Principal,
         [property: JsonRequired] string Action, [property: JsonRequired] string Outcome, string? Direction = null,
         string? Request = null, string[]? Chain = null, string? Target = null, string? Reason = null,
-        string? DataSha256 = null, int? TextLength = null);
+        string? DataSha256 = null, int? TextLength = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] GateAuditMetadata? Gate = null);
 
-    public static int Run(IReadOnlyList<string> args, string profileRoot, TextWriter output, TextWriter error)
+    public static int Run(IReadOnlyList<string> args, string profileRoot, TextWriter output, TextWriter error) =>
+        Read(args, profileRoot, output, error, null);
+
+    internal static int Read(IReadOnlyList<string> args, string profileRoot, TextWriter output, TextWriter error, Action<Row>? receive)
     {
         var options = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var i = 1; i < args.Count; i += 2)
@@ -52,6 +56,7 @@ public static class AuditCommands
                 while (reader.ReadLine() is { } raw)
                 {
                     number++;
+                    if (reader.EndOfStream && !terminated) { error.WriteLine("audit: unterminated final record; report incomplete."); }
                     try
                     {
                         var bytes = Encoding.UTF8.GetBytes(raw);
@@ -68,7 +73,8 @@ public static class AuditCommands
                         if (since is { } start && row.At < start
                             || options.TryGetValue("--action", out var action) && row.Action != action
                             || options.TryGetValue("--outcome", out var outcome) && row.Outcome != outcome) { continue; }
-                        output.WriteLine(JsonSerializer.Serialize(row with { At = TimeZoneInfo.ConvertTime(row.At, Pacific) }, Json));
+                        if (receive is not null) { receive(row); }
+                        else { output.WriteLine(JsonSerializer.Serialize(row with { At = TimeZoneInfo.ConvertTime(row.At, Pacific) }, Json)); }
                     }
                     catch (JsonException)
                     {
@@ -105,6 +111,7 @@ public static class AuditCommands
             }
             var row = root.Deserialize<Row>(Json) ?? throw new JsonException();
             if (string.IsNullOrEmpty(row.Principal) || string.IsNullOrEmpty(row.Action) || string.IsNullOrEmpty(row.Outcome)) { throw new JsonException(); }
+            if (row.Gate is { } gate && !gate.Valid(row.Action, row.Target, row.Outcome)) { throw new JsonException(); }
             return row;
         }
         // JsonDocument defers decoding escaped Unicode until a property name or string is read.

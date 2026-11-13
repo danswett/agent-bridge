@@ -67,24 +67,27 @@ public sealed class GateAuditTests : IDisposable
         Append(operation, "terminal", "started");
         var unresolved = Guid.NewGuid();
         Append(unresolved, outcome: pending);
+        Append(unresolved, "terminal", pending);
         var report = Read();
         Assert.Equal(1, Assert.Single(report.Totals).Successes);
         Assert.Contains("unresolved-intent", report.IncompleteReasons);
         Assert.False(report.Invalidated);
     }
 
-    [Fact]
-    public void Conflicting_terminals_invalidate_the_run()
+    [Theory]
+    [InlineData(null), InlineData("started"), InlineData("failed")]
+    public void Conflicting_terminals_or_reused_logical_identity_invalidate_the_run(string? reusedOutcome)
     {
         var operation = Guid.NewGuid();
         Append(operation);
         Append(operation, "terminal", "started");
-        Append(operation, "terminal", "failed");
+        if (reusedOutcome is not null) { operation = Guid.NewGuid(); Append(operation); }
+        Append(operation, "terminal", reusedOutcome ?? "failed");
         Assert.True(Read().Invalidated);
     }
 
     [Theory]
-    [InlineData("version"), InlineData("tail"), InlineData("outcome")]
+    [InlineData("version"), InlineData("tail"), InlineData("complete-tail"), InlineData("outcome")]
     public void Unknown_versions_outcomes_and_a_torn_tail_are_incomplete_without_changing_files(string fault)
     {
         var operation = Guid.NewGuid();
@@ -93,6 +96,7 @@ public sealed class GateAuditTests : IDisposable
         Assert.Empty(Read().IncompleteReasons);
         var file = Assert.Single(Directory.GetFiles(Audit, "launches-*.jsonl"));
         if (fault == "tail") { File.AppendAllText(file, "{\"gate\":"); }
+        else if (fault == "complete-tail") { File.WriteAllText(file, File.ReadAllText(file).TrimEnd('\n')); }
         else
         {
             var lines = File.ReadAllLines(file);

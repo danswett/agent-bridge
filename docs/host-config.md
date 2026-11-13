@@ -451,6 +451,10 @@ It is a metadata read, **not a chain-integrity verdict**. A malformed complete r
 unsupported major version or read failure returns nonzero with a content-free error;
 earlier output may be partial. An incomplete final JSON prefix is ignored with a warning.
 Archive, durable chain heads and pruning changes remain separate #1401 A6 slices.
+Optional `gate` metadata is versioned and allow-listed by the same reader. Its host-only
+ids, sequence, route, actor kind and bounded reason code contain no action text or hashes.
+The internal per-run projection reports observed totals and incomplete evidence, never
+a qualifying run or retirement verdict; it creates no profile, writer or lock.
 
 What agents did on this machine is written one JSON line per event to
 `<profile>\audit\agents-YYYY-MM-DD.jsonl` (#1296, design/agent-principals.md §5.6). The folder

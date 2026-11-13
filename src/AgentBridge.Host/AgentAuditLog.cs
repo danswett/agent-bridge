@@ -16,7 +16,7 @@ namespace AgentBridge.Host;
 // holds no prompt text, path or token: callers pass a short reason, and the log cuts it at
 // MaxReason as well.
 public sealed record AgentAuditEntry(string Direction, string Request, string Principal, string[] Chain, string Action,
-    string Target, string Outcome, string Reason = "");
+    string Target, string Outcome, string Reason = "", GateAuditMetadata? Gate = null);
 
 // The trail of what agents did, one JSON line per event in <profile>\audit\agents-YYYY-MM-DD.jsonl
 // or launches-YYYY-MM-DD.jsonl for session.launch, with a separate 16 MiB launch-history quota,
@@ -41,7 +41,8 @@ public sealed class AgentAuditLog
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { DefaultIgnoreCondition = JsonIgnoreCondition.Never };
 
     sealed record Line(DateTimeOffset At, string Direction, string Request, string Principal, string[] Chain, string Action,
-        string Target, string Outcome, string Reason, string? DataSha256, int? TextLength, int V = 1, string PreviousSha256 = "");
+        string Target, string Outcome, string Reason, string? DataSha256, int? TextLength, int V = 1, string PreviousSha256 = "",
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] GateAuditMetadata? Gate = null);
 
     static readonly string Genesis = new('0', 64);
     readonly object gate = new();
@@ -66,7 +67,7 @@ public sealed class AgentAuditLog
         var now = time.GetUtcNow();
         try
         {
-            var bytes = text is null ? null : Encoding.UTF8.GetBytes(text);
+            var bytes = text is null || entry.Gate is not null ? null : Encoding.UTF8.GetBytes(text);
             var chain = (entry.Chain ?? []).Take(MaxChain).Select(c => Cap(c, MaxField)).ToArray();
             var line = new Line(now, Cap(entry.Direction, MaxField), Cap(entry.Request, MaxField), Cap(entry.Principal, MaxField), chain,
                 Cap(entry.Action, MaxField), Cap(entry.Target, MaxField), Cap(entry.Outcome, MaxField), Cap(entry.Reason, MaxReason),
@@ -75,6 +76,15 @@ public sealed class AgentAuditLog
             {
                 var folder = PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded");
                 using var folderLock = Lock(folder);
+                if (entry.Gate is { } metadata)
+                {
+                    var (rows, complete) = GateAuditProjection.Load(profile);
+                    var sequences = rows.Where(r => r.Gate is not null).Select(r => r.Gate!.Sequence).Order().ToArray();
+                    if (!complete || sequences.Where((s, i) => s != i + 1L).Any()) { throw new IOException("gate audit evidence is incomplete"); }
+                    metadata = metadata with { Sequence = checked(sequences.LongLength + 1) };
+                    if (!metadata.Valid(entry.Action, entry.Target, entry.Outcome)) { throw new IOException("invalid gate audit metadata"); }
+                    line = line with { Gate = metadata, Reason = metadata.ReasonCode, DataSha256 = null, TextLength = null };
+                }
                 var launch = entry.Action == "session.launch";
                 var file = Path.Combine(folder, FileFor(now, launch));
                 if (Files(folder, launch).Any(f => StringComparer.Ordinal.Compare(f, file) > 0)) { throw new IOException("the agent audit clock moved backwards"); }
