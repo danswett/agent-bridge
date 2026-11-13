@@ -26,7 +26,7 @@ public sealed class ReleaseEligibilityTests : IDisposable
     }
 
     [Fact]
-    public async Task Repeated_policy_checks_share_the_publishers_100_release_window_and_one_GitHub_read()
+    public async Task Repeated_policy_checks_share_a_realistic_100_release_window_and_one_GitHub_read()
     {
         var body = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2349"]}""");
         var empty = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
@@ -34,7 +34,7 @@ public sealed class ReleaseEligibilityTests : IDisposable
         {
             if (uri.Host != "api.github.com") { return uri.AbsolutePath.Contains("/v0.1.2349/") ? body : empty; }
             var releases = Enumerable.Repeat(Metadata("1", empty), 99).Append(Metadata("2349", body))
-                .Select(json => Encoding.UTF8.GetString(json)[1..^1]);
+                .Select(json => Encoding.UTF8.GetString(json)[1..^1].PadRight(28_350));
             return Encoding.UTF8.GetBytes("[" + string.Join(",", uri.Query.Contains("per_page=100", StringComparison.Ordinal) ? releases : releases.Take(10)) + "]");
         });
         for (var i = 0; i < 3; i++) { Assert.Equal(new HaltCheck(true), await new ReleaseEligibility(Policy(handler)).IsHalted("0.1.2349")); }
@@ -46,10 +46,10 @@ public sealed class ReleaseEligibilityTests : IDisposable
     [InlineData(1, true)]
     [InlineData(0, false)]
     [InlineData(1, false)]
-    public async Task Policy_metadata_is_bounded_to_one_MiB_with_or_without_ContentLength(int excess, bool lengthKnown)
+    public async Task Policy_metadata_is_bounded_to_four_MiB_with_or_without_ContentLength(int excess, bool lengthKnown)
     {
         var body = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
-        var metadata = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(Metadata("2349", body)).PadRight(1024 * 1024 + excess));
+        var metadata = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(Metadata("2349", body)).PadRight(4 * 1024 * 1024 + excess));
         var handler = new ReplyHandler(request => new(HttpStatusCode.OK)
         {
             Content = request.RequestUri!.AbsoluteUri == GitHubHaltListSource.Releases

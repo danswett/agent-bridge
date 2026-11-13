@@ -11,7 +11,7 @@ public sealed partial class ReleaseDiscovery
 {
     public static readonly TimeSpan PolicyInterval = TimeSpan.FromHours(1);
     public const string HaltPolicyList = "https://api.github.com/repos/danswett/agent-bridge/releases?per_page=100";
-    const int PolicyLargest = 1024 * 1024;
+    const int PolicyLargest = 4 * 1024 * 1024;
     internal sealed record HaltPolicyCache(VerifiedHaltPolicy? Policy, DateTimeOffset? At, DateTimeOffset NotBefore, string? ETag,
         DateTimeOffset? AttemptedAt = null, long Attempt = 0, long Verified = 0);
 
