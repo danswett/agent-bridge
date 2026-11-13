@@ -55,6 +55,7 @@ public sealed class UpdateNowTests : IAsyncLifetime
     string token = "";
     string folder = "";
     HaltPolicySnapshot? policy;
+    Exception? policyFailure;
 
     public async Task InitializeAsync()
     {
@@ -89,7 +90,8 @@ public sealed class UpdateNowTests : IAsyncLifetime
         updates = new UpdateService("0.4.0", Log, time)
         {
             ReadOnly = () => readOnly,
-            ReadHaltPolicy = _ => Task.FromResult(policy ?? new(new(1, """{"v":1,"halted":[]}""", []), time.GetUtcNow(), true)),
+            ReadHaltPolicy = _ => policyFailure is { } error ? Task.FromException<HaltPolicySnapshot>(error)
+                : Task.FromResult(policy ?? new(new(1, """{"v":1,"halted":[]}""", []), time.GetUtcNow(), true)),
             Now = composed.UpdateNow(sessions, folder),
             DepartWait = TimeSpan.Zero,
         };
@@ -208,6 +210,7 @@ public sealed class UpdateNowTests : IAsyncLifetime
     public async Task Unreadable_policy_refuses_batch_and_unacknowledged_single_presses(bool batch, bool uncheckedPolicy)
     {
         policy = new(null, null, false);
+        updates.Report(app, new UpdateReport(Reported with { Policy = new(UpdatePolicyState.Ok, Now) }, null, true));
         var (phone, ch) = await OpenAsync();
         var args = Args();
         args["batch"] = batch;
@@ -255,6 +258,19 @@ public sealed class UpdateNowTests : IAsyncLifetime
     {
         policy = new(new(1, """{"v":1,"halted":["0.5.0"]}""", [Release]), fresh ? Now : Now.AddHours(-7), fresh);
         var (phone, ch) = await OpenAsync();
+        var args = Args();
+        args["unchecked"] = true;
+        Assert.Equal("halted", (await PressAsync(ch, Sign(phone.Key, args))).Code);
+        Assert.Empty(updates.Asks);
+    }
+
+    [Fact]
+    public async Task A_policy_read_failure_cannot_erase_a_known_halt()
+    {
+        policy = new(new(1, """{"v":1,"halted":["0.5.0"]}""", [Release]), Now, true);
+        var (phone, ch) = await OpenAsync();
+        Assert.Equal("halted", (await PressAsync(ch, Press(phone))).Code);
+        policyFailure = new IOException("unreadable policy storage");
         var args = Args();
         args["unchecked"] = true;
         Assert.Equal("halted", (await PressAsync(ch, Sign(phone.Key, args))).Code);
