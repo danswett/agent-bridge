@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using AgentBridge.Host.Core.Processes;
@@ -79,8 +80,10 @@ public static class Worktrees
     // agent-bridge-created; this host's is its own.
     public const string Marker = "agent-bridge-host-created";
     public const string ReservationPrefix = "agent-bridge-host-launch:";
+    sealed record Creation(Guid Request, string Worktree, string Admin, string Commit);
+    static readonly ConditionalWeakTable<WorktreeResult, Creation> creations = new();
 
-    public static WorktreeResult Create(string workspaceDirectory, LaunchConfig config, Func<DateTime>? now = null, IWorktreeUsage? usage = null, Action<string>? log = null)
+    public static WorktreeResult Create(string workspaceDirectory, LaunchConfig config, Func<DateTime>? now = null, IWorktreeUsage? usage = null, Action<string>? log = null, Guid? launchRequest = null)
     {
         now ??= () => DateTime.Now;
         log ??= _ => { };
@@ -133,11 +136,65 @@ public static class Worktrees
 
         try { Directory.CreateDirectory(root); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Refused($"The worktree root cannot be created: {e.Message}"); }
-        var add = Git.Run(repository, ["worktree", "add", "--detach", target, baseRef], TimeSpan.FromMinutes(5));
-        if (!add.Ok || !Directory.Exists(target)) { return Refused($"Could not create an isolated worktree: {add.Said}"); }
+        string? createdBase = null, expectedTarget = null, adminRoot = null;
+        string[]? priorAdmins = null;
+        Creation? creation = null;
+        if (launchRequest is not null)
+        {
+            var commit = Git.Run(repository, ["rev-parse", "--verify", baseRef + "^{commit}"]);
+            if (!commit.Ok) { return Refused("The isolated base commit cannot be verified before creation."); }
+            createdBase = commit.Output.Trim();
+            try
+            {
+                if (Folders.Physical(root) is not { } parent || CommonDir(repository) is not { } common
+                    || !NoLinks(common, ["worktrees"]))
+                {
+                    return Refused("The intended worktree parent or repository administration cannot be verified before creation.");
+                }
+                target = expectedTarget = Path.Combine(parent, Path.GetFileName(target));
+                if (Directory.EnumerateFileSystemEntries(parent).Any(p => Folders.Same(p, target)))
+                {
+                    return Refused("The intended worktree target is no longer unused; existing paths were preserved.");
+                }
+                adminRoot = Path.Combine(common, "worktrees");
+                priorAdmins = Directory.Exists(adminRoot) ? Directory.GetFileSystemEntries(adminRoot) : [];
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                return Refused($"Creation ownership cannot be established before adding the worktree ({e.GetType().Name}).");
+            }
+        }
+        var add = Git.Run(repository, ["worktree", "add", "--detach", target, createdBase ?? baseRef], TimeSpan.FromMinutes(5));
+        if (!add.Ok || !Directory.Exists(target))
+        {
+            return launchRequest is null ? Refused($"Could not create an isolated worktree: {add.Said}")
+                : Result(null, $"Could not establish the new worktree after creation; it was retained without cleanup. {add.Said}");
+        }
         detail.Add($"created {target} at {baseRef}");
 
-        if (AdminFolder(target) is not { } admin) { detail.Add("its git administration folder cannot be found, so it carries no marker"); }
+        if (launchRequest is { } request)
+        {
+            try
+            {
+                if (expectedTarget is null || adminRoot is null || priorAdmins is null || createdBase is null
+                    || Folders.Physical(target) is not { } physicalCreated || !Folders.Same(physicalCreated, expectedTarget)
+                    || !NoLinks(target, [".git"]) || AdminFolder(target) is not { } createdAdmin
+                    || Path.GetDirectoryName(createdAdmin) is not { } adminParent || !Folders.Same(adminParent, adminRoot)
+                    || !NoLinks(adminRoot, [Path.GetFileName(createdAdmin)]) || priorAdmins.Any(p => Folders.Same(p, createdAdmin))
+                    || File.Exists(Path.Combine(createdAdmin, Marker)) || File.Exists(Path.Combine(createdAdmin, AgentHaBridgeMarker))
+                    || !Folders.Same(Path.GetFullPath(File.ReadAllText(Path.Combine(createdAdmin, "gitdir")).Trim(), createdAdmin), Path.Combine(expectedTarget, ".git")))
+                {
+                    return Result(null, "Creation changed the intended worktree path or did not establish new administration; it was retained without cleanup.");
+                }
+                creation = new Creation(request, expectedTarget, createdAdmin, createdBase);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                return Result(null, $"Creation ownership cannot be verified; the new path was retained without cleanup ({e.GetType().Name}).");
+            }
+        }
+
+        if ((creation?.Admin ?? AdminFolder(target)) is not { } admin) { detail.Add("its git administration folder cannot be found, so it carries no marker"); }
         else
         {
             try { File.WriteAllText(Path.Combine(admin, Marker), DateTimeOffset.Now.ToString("o", CultureInfo.InvariantCulture)); }
@@ -145,15 +202,44 @@ public static class Worktrees
         }
 
         var launchIn = relative.Length == 0 ? target : Path.GetFullPath(Path.Combine(target, relative));
-        if (!Folders.IsAtOrUnder(launchIn, target)) { return new WorktreeResult(null, target, "The approved subdirectory escapes the isolated worktree; launch was refused.", string.Join("; ", detail)); }
-        if (!Directory.Exists(launchIn)) { return new WorktreeResult(null, target, "The approved subdirectory is absent from the isolated base; the new worktree was retained without launching.", string.Join("; ", detail)); }
+        if (!Folders.IsAtOrUnder(launchIn, target)) { return Result(null, "The approved subdirectory escapes the isolated worktree; launch was refused."); }
+        if (!Directory.Exists(launchIn)) { return Result(null, "The approved subdirectory is absent from the isolated base; the new worktree was retained without launching."); }
         // Where it really is: the base may hold a link at that path, which Directory.Exists
         // follows, out of the worktree into the checkout or anywhere else.
         if (Folders.Physical(launchIn) is not { } physical || Folders.Physical(target) is not { } physicalTarget || !Folders.IsAtOrUnder(physical, physicalTarget))
         {
-            return new WorktreeResult(null, target, "The approved subdirectory is a link out of the isolated worktree in its base; launch was refused.", string.Join("; ", detail));
+            return Result(null, "The approved subdirectory is a link out of the isolated worktree in its base; launch was refused.");
         }
-        return new WorktreeResult(launchIn, target, null, string.Join("; ", detail));
+        return Result(launchIn, null);
+
+        WorktreeResult Result(string? path, string? problem)
+        {
+            var result = new WorktreeResult(path, target, problem, string.Join("; ", detail));
+            if (creation is not null) { creations.Add(result, creation); }
+            return result;
+        }
+    }
+
+    // A marker alone cannot authorize cleanup: only this exact Create result, for this launch.
+    public static string? DiscardCreated(WorktreeResult created, Guid request)
+    {
+        if (created.Worktree is null) { return null; }
+        if (!creations.TryGetValue(created, out var receipt) || receipt.Request != request)
+        {
+            return "The worktree was not created by this launch; it was retained.";
+        }
+        creations.Remove(created);
+        if (Folders.Physical(created.Worktree) is not { } tree || !Folders.Same(tree, receipt.Worktree)
+            || AdminFolder(tree) is not { } admin || !Folders.Same(admin, receipt.Admin))
+        {
+            return "The new worktree's ownership cannot be verified; it was retained.";
+        }
+        return Remove(tree, receipt.Commit, 0, new UnstartedWorktree(), () => DateTimeOffset.Now, fresh: true);
+    }
+
+    sealed class UnstartedWorktree : IWorktreeUsage
+    {
+        public WorktreeUsage Read() => new(true, [], "this launch has not started a session");
     }
 
     // Whether a folder lies in a worktree made for one of the isolated workspaces, by this host
@@ -287,7 +373,7 @@ public static class Worktrees
     // the repository and is old enough: agent-ha-bridge's Test-BridgeWorktreeFinished. A
     // session that has only just started is clean and detached too, hence the age, read from
     // the marker this host wrote, which nothing that only reads the tree can disturb.
-    static string? Unfinished(string worktree, string baseRef, double idleHours, Func<DateTimeOffset> now)
+    static string? Unfinished(string worktree, string baseRef, double idleHours, Func<DateTimeOffset> now, bool fresh = false)
     {
         if (!Directory.Exists(worktree)) { return "its folder is missing"; }
 
@@ -314,12 +400,21 @@ public static class Worktrees
         if (branch.Ok) { return "a branch is checked out in it"; }
         if (!branch.Ran || branch.ExitCode != 1) { return "its git state cannot be read"; }
 
+        if (fresh)
+        {
+            var head = Git.Run(worktree, ["rev-parse", "--verify", "HEAD^{commit}"]);
+            if (!head.Ok) { return "its git state cannot be read"; }
+            if (head.Output.Trim() != baseRef) { return "its HEAD changed after creation"; }
+        }
         var ahead = Git.Run(worktree, ["rev-list", "--count", $"{baseRef}..HEAD"]);
         if (!ahead.Ok) { return "its git state cannot be read"; }
         if (ahead.Output.Trim() != "0") { return "it has commits that are not in the base"; }
 
-        if (CreatedAt(worktree) is not { } created) { return "its ownership marker has no readable time"; }
-        if ((now() - created).TotalHours < idleHours) { return "it is younger than launch.worktrees.idleHours"; }
+        if (!fresh)
+        {
+            if (CreatedAt(worktree) is not { } created) { return "its ownership marker has no readable time"; }
+            if ((now() - created).TotalHours < idleHours) { return "it is younger than launch.worktrees.idleHours"; }
+        }
         return null;
     }
 
@@ -333,7 +428,7 @@ public static class Worktrees
     // restores only the tracked files that are missing, never overwriting one. The worktree's
     // administration folder is left to git's own maintenance: a repository-wide prune would
     // also retire other owners' missing trees. Returns why it stayed, or null once it is gone.
-    static string? Remove(string worktree, string baseRef, double idleHours, IWorktreeUsage usage, Func<DateTimeOffset> now)
+    static string? Remove(string worktree, string baseRef, double idleHours, IWorktreeUsage usage, Func<DateTimeOffset> now, bool fresh = false)
     {
         if (AdminFolder(worktree) is not { } admin) { return "its git administration folder cannot be found"; }
         if (File.Exists(Path.Combine(admin, "locked"))) { return "it is locked (a launch still starting, or someone's lock)"; }
@@ -393,7 +488,7 @@ public static class Worktrees
 
         string? Attempt()
         {
-            if (Unfinished(worktree, baseRef, idleHours, now) is { } unfinished) { return unfinished; }
+            if (Unfinished(worktree, baseRef, idleHours, now, fresh) is { } unfinished) { return unfinished; }
             var again = usage.Read();
             if (!again.Known) { return "whether a session is using it cannot be established"; }
             if (again.InUse(worktree)) { return "a live session is working in it"; }
