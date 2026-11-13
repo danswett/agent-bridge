@@ -217,7 +217,7 @@ holds every name; it is tested against files the Go hook writes and the daemon r
 
 | Path | Who writes it | What |
 |---|---|---|
-| `agent-bridge-daemon.heartbeat` | The consumer: the daemon each pass, the host's intake every 2 s | A hook spools only while this is younger than 60 s (`Test-BridgeDaemonAlive`). The daemon writes its pid; the host writes its own, so it can remove only its own when it stops |
+| `agent-bridge-daemon.heartbeat` | The consumer: the daemon each pass, the host's intake at most every 30 s when idle | A hook spools only while this is younger than 60 s (`Test-BridgeDaemonAlive`). The daemon writes its pid; the host writes its own, so it can remove only its own when it stops |
 | `agent-bridge-spool\<name>.json` | Either hook | `{ "v": 1, "agent", "hook", "ancestors": [pids, nearest first], "receivedAt", "event": <stdin verbatim> }`, written as `<name>.json.tmp` and renamed so no reader sees half of one |
 | `agent-bridge-hook.log` (+ `.1`) | Either hook | One JSON line per run: `{ at, agent, hook, path, reason?, ms }`. `path` is `spool`, `fallback` (the Go hook ran its PowerShell) or `reply` (the fixed reply alone). Rotated at 1 MB, keeping one previous file. This product's hooks rotate one at a time, under `agent-bridge-hook.log.lock`, and only a log still full once they hold it: two that both saw it full would otherwise move the first's fresh log over the megabyte just rotated (the Go hook rotates unlocked, as it always has). This product's hook appends each line in one write through an append-only handle (`FILE_APPEND_DATA`, as the Go hook's `O_APPEND`), so two hooks finishing together never overwrite each other's line on Windows |
 
@@ -330,9 +330,10 @@ refuses a second profile for an installation that one already has.
    withdrawing approvals (below), check for agent-ha-bridge again before each delete.
 
 A `FileSystemWatcher` on the spool wakes a pass the moment a hook renames a file into place.
-The safety sweep starts at 2 s, doubling after empty passes to a 30 s idle ceiling. Any watcher
-signal or handled event resets the wait to 2 s. A missed notification is therefore recovered
-within 30 s while idle, and each pass still renews the heartbeat before its 60 s expiry.
+The safety sweep starts at 2 s, doubling after healthy empty passes to a 30 s idle ceiling.
+Any watcher signal or handled event resets the wait to 2 s. A failed heartbeat renewal or
+standing back also resets the retry wait to 2 s. A missed notification is therefore recovered
+within 30 s while idle, and each successful pass renews the heartbeat before its 60 s expiry.
 `SweepInterval` changes the active interval but is capped at 30 s for the same reason.
 Waits use the injected clock and are cancelled on stop; an intake that has not started creates
 no timer.

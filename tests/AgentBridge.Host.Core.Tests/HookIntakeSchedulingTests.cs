@@ -60,6 +60,45 @@ public sealed class HookIntakeSchedulingTests
         Assert.Equal(Ceiling, await time.NextWait());
     }
 
+    [Theory]
+    [InlineData("space")]
+    [InlineData("write")]
+    [InlineData("stand-back")]
+    public async Task A_failed_heartbeat_or_stand_back_resets_the_retry_interval(string failure)
+    {
+        using var fixture = new Fixture();
+        var time = new CountingTime(fixture);
+        var blocked = false;
+        var heartbeat = SpoolContract.HeartbeatPath(fixture.Runtime);
+        await using var intake = new HookIntake(new HookIntakeOptions
+        {
+            RuntimeRoot = fixture.Runtime,
+            ClaudeHome = fixture.ClaudeHome,
+            UseFileSystemWatcher = false,
+            AgentHaBridgeActive = () => Volatile.Read(ref blocked) && failure == "stand-back" ? "the daemon is running" : null,
+            SpaceProbe = _ => Volatile.Read(ref blocked) && failure == "space" ? "the disk is full" : null,
+        }, fixture.Processes, time);
+        intake.Start();
+        await ReachIdleCeiling(time);
+
+        if (failure == "write")
+        {
+            File.Delete(heartbeat);
+            Directory.CreateDirectory(heartbeat);
+        }
+        Volatile.Write(ref blocked, true);
+        time.Advance(Ceiling);
+        Assert.Equal(TimeSpan.FromSeconds(2), await time.NextWait());
+        time.Advance(TimeSpan.FromSeconds(2));
+        Assert.Equal(TimeSpan.FromSeconds(2), await time.NextWait());
+
+        if (failure == "write") { Directory.Delete(heartbeat); }
+        Volatile.Write(ref blocked, false);
+        time.Advance(TimeSpan.FromSeconds(2));
+        Assert.Equal(TimeSpan.FromSeconds(4), await time.NextWait());
+        Assert.True(File.Exists(heartbeat));
+    }
+
     [Fact]
     public async Task A_missed_watcher_event_is_found_within_the_idle_ceiling_and_resets_backoff()
     {

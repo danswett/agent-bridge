@@ -88,6 +88,8 @@ public sealed class HookIntake : IHookNotices, IAsyncDisposable
     DateTimeOffset _prunedAt;
     string? _paused;
     bool _heartbeatOwned;
+    // Ownership survives a failed write; only successful renewal permits idle backoff.
+    bool _heartbeatRenewed;
     // Whether approvals have been checked against the hooks that ran while nobody took events,
     // since this intake last (re)took the spool. Read by the answer path on its own thread.
     volatile bool _reconciled;
@@ -255,7 +257,7 @@ public sealed class HookIntake : IHookNotices, IAsyncDisposable
             var interval = minimum;
             while (!token.IsCancellationRequested)
             {
-                try { if (Pass() > 0) { interval = minimum; } }
+                try { if (Pass() > 0 || !_heartbeatRenewed) { interval = minimum; } }
                 catch (Exception e) when (e is not OperationCanceledException)
                 {
                     _log($"hook intake pass failed: {e.GetType().Name}: {e.Message}");
@@ -357,6 +359,7 @@ public sealed class HookIntake : IHookNotices, IAsyncDisposable
         }
         // The heartbeat is the daemon's now; the watcher would only wake passes that do nothing.
         _heartbeatOwned = false;
+        _heartbeatRenewed = false;
         _reconciled = false;
         _gap = true;
         _claim?.Dispose();
@@ -382,6 +385,7 @@ public sealed class HookIntake : IHookNotices, IAsyncDisposable
     // whose it is, and lets this host take back only its own when it stops.
     bool Beat()
     {
+        _heartbeatRenewed = false;
         var now = _time.GetUtcNow();
         // The wall clock moved back (a correction, a restored VM): times recorded since were read
         // from a clock ahead of this one, so a later event can look older than the registration
@@ -423,6 +427,7 @@ public sealed class HookIntake : IHookNotices, IAsyncDisposable
             Directory.CreateDirectory(_options.RuntimeRoot);
             File.WriteAllText(_heartbeat, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
             _heartbeatOwned = true;
+            _heartbeatRenewed = true;
             _beatAt = now;
             Interlocked.Exchange(ref _beatTicks, now.UtcTicks);
             return true;
