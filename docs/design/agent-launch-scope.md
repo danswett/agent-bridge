@@ -123,8 +123,9 @@ exception, never Answer/Dismiss. The gate runs, in order, refusing at the first 
 
 0. a `request` this principal has used before never starts a second launch. The gate checks the
    launch service's memory (`LaunchServiceOptions.RememberFor`, 25 minutes) **and** the set of
-   requests rebuilt from the audit, which reads today's and yesterday's launch files **in
-   full** (§5), so at least 24 hours. Identical or not is judged by `requestSha256` (§6), the
+   requests rebuilt from today's/yesterday's audit **and every unresolved journal of any
+   age**, including its origin binding/hash. An unresolved request never ages out of dedup.
+   Missing/unreadable evidence refuses launches (§6). Identity uses `requestSha256` (§6), the
    SHA-256 of the request's normalised launch fields, prompt included, recorded on each line;
    the prompt itself is never recorded. A repeat with the same hash gets the recorded outcome
    (`unconfirmed` when only `reserved` or `interrupted` is recorded; §13's typed
@@ -324,9 +325,9 @@ or per-machine number, whichever stopped it.
 memory only as [agent-principals.md](agent-principals.md) §5.5 allowed for messages. A launch is costly and the gate's
 evidence (on each machine, 5 started and a sixth refused during the acceptance run, §10) must
 survive a restart.
-* **Cap/request fold:** today's and yesterday's launch files, in full (tens of KB, §6).
-  Caps use their last hour; request ids use all of them. Separately, §6's bounded
-  compatibility preflight checks retained versions and every unresolved journal.
+* **Cap/request fold:** today's/yesterday's audit in full; caps use its last hour.
+  Request ids also fold every unresolved journal, regardless of age (§2 step 0).
+  Separately, §6 preflights all retained versions and unresolved journals.
 * **Clock:** the window is judged on each line's wall-clock `at`. A line dated in the future (the
   clock stepped back) counts as if dated now, so a clock jump can neither open nor close the cap.
 * **Damage:** a torn last line (power loss mid-append) is ignored, and its complete `reserved`
@@ -371,10 +372,13 @@ gate rest on.
   the chain or both take the last slot.
 * **Format/rollback:** legacy is `v: 1`; known-major readers ignore unknown fields, never
   unknown majors. Before new-format writes, install a durable minimum-reader marker and
-  startup guard in every rollback-eligible host; unguarded older builds are not candidates.
-  Before cap rebuild, preflight all retained versions and unresolved journals. Any unreadable
-  marker/journal or new-major line refuses **all launches**, `capRebuilding`, regardless of
-  age or the one-hour cap window. Use a compatible host; never delete evidence to roll back.
+  startup guard in every rollback-eligible host. **Incompatible old hosts refuse to start**,
+  before APIs/cap rebuild; unguarded builds are not rollback candidates. Keep the marker while
+  any unresolved journal or retained new-format evidence exists, regardless of age.
+  Only a compatible host under the profile lock may clear/lower it after a complete all-age
+  scan proves neither remains; never clear by time, partial scan or deleting evidence.
+  Preflight all retained versions/journals. Unreadable marker/journal/new-major evidence
+  blocks startup of an old host and **all launches**, `capRebuilding`, on a compatible host.
 
 Fields: `v`, `at` (UTC), `principal` (`agent:<machine>/<session>`, `AgentProtocol.Principal`), `scope`,
 `depth`, `action: "session.launch"`, `request`, `machine`, `agent`, `workspace` (label),
@@ -388,7 +392,8 @@ step 5), and the outcome is a second line with the same `request`.
 **Pending (§13):** new-major `event` is launch-state/pending-action/pending-refusal;
 only launch-state changes charges. Fields: pending/question UUID, questionKind,
 revision, verified actor/actionRequest, launchState/startClaim/readyEvidence,
-sticky processStarted, verified closed and fixed code; no required pre-session id.
+sticky processStarted, verified closed and fixed code, including pendingLimit,
+pendingStorageUnavailable, auditUnwritable and repairBlocked (§13.2); no pre-session id.
 Closed proves absence, not known-ready history; expiry without closure stays false.
 New readers fold legacy pairs; old readers reject new major, not unsafe last-line counts.
 Filter event/action/outcome; unknown fields confer no authority.
@@ -661,8 +666,19 @@ legal pairs below. Slash separates outcome/code, not a new enum value.
 | `dismissed`, `withdrawn` | `failed / launchDismissed`, `failed / launchWithdrawn` respectively | true; yes, neverReady |
 | `closedUnconfirmed` | `unconfirmed / closedUnconfirmed` | true; yes, unknown history, no retry |
 
-`reserved`/`interrupted` are audit outcomes, not projection enums. Invalid pairs are
+`reserved`/`interrupted` are audit outcomes, not projection enums. Invalid projection pairs are
 protocol errors: no effects/reassignment, never an assumed terminal result.
+**Fault shapes/codes, not states:** proven-fresh refusal before allocation is `refused/code`,
+without a pending record. Unreadable existing/uncertain readback is `unconfirmed/code`,
+omitting unavailable lifecycle fields, not inventing a projection. Action refusal is
+`refused/code` plus safely known pending/revision; it never rewrites the launch or charge.
+
+| Fixed code | Result meaning; never closes an existing pending launch |
+|---|---|
+| `pendingLimit` | Proven-fresh launch refused before allocation; existing records/slots unchanged |
+| `pendingStorageUnavailable`, `auditUnwritable` | Journal/audit unavailable: before allocation, proven-fresh launch refused; otherwise unconfirmed fault when committed state is unavailable. Actions refused; no inferred closure/refund |
+| `repairBlocked` | Local repair refused without sufficient evidence; reconciliationRequired/slot remain. This is an action code, never a state or terminal launch outcome |
+
 **Readback vectors:** independent fixtures use symbolic request R/pending P/machine M;
 revisions increase within each sequence. Repeat R reads current state, terminal repeats
 stay identical, never another start. Question Q includes kind/deadline; absent means omitted.
@@ -678,6 +694,9 @@ stay identical, never another start. Question Q includes kind/deadline; absent m
 | Withdraw with never-ready proof | withdrawn; failed/launchWithdrawn; true; neverReady; neither |
 | All gone, history unknown | closedUnconfirmed; unconfirmed/closedUnconfirmed; true; unknown; neither |
 | Ready, including after expiry | started; started/no code; false; ready; real session S, no question |
+| Repair lacks proof, Q retained | Action refused/repairBlocked; readback remains reconciliationRequired, needsPerson/pendingReconciliation, closed false, unknown, Q |
+| Fresh R at pending ceiling | Launch refused/pendingLimit, no pending/state; all existing reservations unchanged |
+| Journal/audit unreadable on repeat R | unconfirmed/pendingStorageUnavailable or auditUnwritable; no fabricated state/closed; action refusal uses the same code |
 
 Validate [machine names](../protocol/agent-operations.md); no name-based routing/pins.
 Origins get only own IDs/kind/state/deadline, no question/scope/choices/process/other
@@ -699,11 +718,15 @@ no-start/never-ready proof allows a linked fresh target/request; unknown-ready c
 frees slots, not retry authority. No migration/automatic cycling or hourly refund.
 Unknown delivery/offline/expiry/file deletion is no proof. Without close/grant support
 wait; cross-machine agents still wait on §9/#55.
+**Proposed ops:** origin readback repeats `session.launch`; bound origin withdrawal is
+`launch.pending.withdraw`. Person Answer/Cancel follow §13.4; `launch.pending.repair`
+is **local validated-App only**, never an origin, script or relay operation.
 
 ### 13.3 Common client card
 
 Proposed `launch.pending` capability: common bounded person snapshot via
-`launch.options.pending` and `launch.pending.subscribe`/snapshot-and-change events.
+`launch.options.pending` and `launch.pending.subscribe`/snapshot-and-change events;
+`launch.pending.repair` is local validated-App only (§13.4), never offered on the relay.
 Authorize **before** building any projection; reconnect/gaps require a fresh snapshot.
 Pin vectors before use. Never insert a fake session into `sessions.list`.
 One card per pending UUID in **Needs you**, before registration.
@@ -794,7 +817,8 @@ legacy-MAC fallback. This missing gate/signer is a prerequisite, not a current g
 Repair may bypass the quarantined-claim wait, never authority/storage checks: fence old
 start/injector claims, then a 10 s observation pass, no keys/start/replay/termination.
 With writable stores commit only §13.5 proof, including closedUnconfirmed for unknown
-history; otherwise repairBlocked retains the slot and directs the person to restore
+history; otherwise an action refusal with code repairBlocked keeps reconciliationRequired
+and its slot, and directs the person to restore
 storage/use a compatible host and close the owned window or reboot, then retry.
 Never force-clear/refund or guess empty. Status/readback expose the fault, no paging.
 
@@ -835,7 +859,12 @@ binding/observer/start-claim/detector/person-gateway/close helpers in reviewed <
 prerequisites, then wire delivery. Withdraw all-in ~300 estimate; partial isn't parity.
 
 Failing-first: state/outcome/readback vectors, all closure-table cases, audit-before-journal crash,
-person-only repair/fencing/blocked proof, unreadable rollback evidence beyond an hour;
+person-only repair/fencing/blocked proof and fault-code vectors;
+**rollbackPendingOlderThanTwoDays:** expired folder-trust record at 72 h, absent
+from today's/yesterday's audit: same bound origin/request returns its pending UUID,
+no start; incompatible old host refuses startup. Clearing is refused while either
+unresolved journals or retained new-format evidence remains; only a compatible locked
+all-age scan proving neither remains permits clearing, never age alone;
 surviving child/claim crash/unknown readiness;
 expiry observer and one-count live conversion; pipe Answer refusal and signed Cancel/
 missing-signer refusal; negotiated current vs legacy readback, generation/changed-byte
