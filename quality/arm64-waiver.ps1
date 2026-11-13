@@ -50,6 +50,13 @@ try {
                 $prefix = "$($need.Name) ("
                 $hits = @($jobs | Where-Object { $_.conclusion -ceq 'failure' -and $_.name -cin $waivable -and $_.name.StartsWith($prefix, [StringComparison]::Ordinal) })
                 if ($hits.Count -eq 0) { continue }
+                # Every other leg of the job must have passed: a skipped, neutral or unfinished
+                # sibling (an x64 leg that never ran) is not a pass.
+                $unpassed = @($jobs | Where-Object { $_.name.StartsWith($prefix, [StringComparison]::Ordinal) -and -not ($_.conclusion -ceq 'success' -or ($_.conclusion -ceq 'failure' -and $_.name -cin $waivable)) })
+                if ($unpassed.Count -gt 0) {
+                    $lines += "Not waived, $($need.Name) has legs that did not succeed: " + (($unpassed | ForEach-Object { "$($_.name) ($($_.conclusion))" }) -join ', ')
+                    continue
+                }
                 $ids += $need.Name
                 foreach ($hit in $hits) { $lines += "Waived: $($hit.name) $($hit.html_url)" }
             }

@@ -8,7 +8,7 @@ $fail = 0
 function Check([string]$name, [bool]$ok) {
     if ($ok) { "ok   $name" } else { "FAIL $name"; $script:fail++ }
 }
-function Leg([string]$name, [string]$conclusion) { @{ name = $name; conclusion = $conclusion; html_url = "https://example.test/$name" } }
+function Leg([string]$name, $conclusion) { @{ name = $name; conclusion = $conclusion; html_url = "https://example.test/$name" } }
 function Pages($legs, $total = $legs.Count) { ConvertTo-Json -InputObject @(@{ total_count = $total; jobs = @($legs) }) -Depth 5 }
 function Waived($needs, [string]$jobsJson, [string]$setting = 'on', [string]$now = '2026-11-13T22:00:00Z') {
     $n = Join-Path $tmp 'needs.json'; $j = Join-Path $tmp 'jobs.json'; $o = Join-Path $tmp 'out.json'
@@ -44,6 +44,12 @@ try {
         Check "a waived leg that is $conclusion is not waived" ((Waived $appFailed (Pages @((Leg 'app (win-x64)' 'success'), (Leg 'app (win-arm64)' $conclusion)))) -eq '')
     }
     Check 'a renamed leg is not waived' ((Waived $appFailed (Pages @((Leg 'app (win-arm64 )' 'failure')))) -eq '')
+    foreach ($sibling in 'skipped', 'neutral', $null, 'cancelled', 'timed_out') {
+        Check "arm64 failed beside an app (win-x64) leg that is '$sibling' waives nothing" ((Waived $appFailed (Pages @((Leg 'app (win-x64)' $sibling), (Leg 'app (win-arm64)' 'failure')))) -eq '')
+    }
+    Check 'app-installer (win-arm64) failed beside a skipped x64 leg waives nothing' ((Waived @{ 'app-installer' = @{ result = 'failure' } } (Pages @((Leg 'app-installer (win-x64)' 'skipped'), (Leg 'app-installer (win-arm64)' 'failure')))) -eq '')
+    Check 'product (windows-11-arm) failed beside a skipped or unfinished leg waives nothing' ((Waived @{ product = @{ result = 'failure' } } (Pages @((Leg 'product (ubuntu-latest)' 'skipped'), (Leg 'product (windows-latest)' $null), (Leg 'product (windows-11-arm)' 'failure')))) -eq '')
+    Check 'only the job whose other legs all succeeded is waived' ((Waived ([ordered]@{ app = @{ result = 'failure' }; 'app-installer' = @{ result = 'failure' } }) (Pages @((Leg 'app (win-x64)' 'success'), (Leg 'app (win-arm64)' 'failure'), (Leg 'app-installer (win-x64)' 'skipped'), (Leg 'app-installer (win-arm64)' 'failure')))) -eq 'app')
     Check 'a cancelled app is not downgraded' ((Waived @{ app = @{ result = 'cancelled' } } $arm64Red) -eq '')
 
     Check 'a missing jobs file waives nothing' ((Waived $appFailed '') -eq '')

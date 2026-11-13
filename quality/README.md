@@ -843,7 +843,8 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
 - **The win-arm64 waiver** (#2564, owner decision 2026-11-13, until **2026-11-20 00:00 PT**, 08:00 UTC):
   while the repository variable `ARM64_WAIVER` is exactly `on` (off or unset waives nothing; the owner
   sets it), `quality-gate` counts a failed needed job as success when its only failures are
-  `app (win-arm64)`, `app-installer (win-arm64)` or `product (windows-11-arm)`, matched exactly.
+  `app (win-arm64)`, `app-installer (win-arm64)` or `product (windows-11-arm)`, matched exactly,
+  and every other leg of that job succeeded.
   [arm64-waiver.ps1](arm64-waiver.ps1) reads the run's jobs from the API, because a matrix is one
   result in `needs`, and compares the clock with the expiry itself, so the waiver ends with no edit.
   Any API error, any other job that did not succeed (x64 included), and a cancelled, timed-out or
