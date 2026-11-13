@@ -28,10 +28,13 @@ Progress record was not available at its named repository path in this checkout.
 
 Gate item 1: "Every row in Section 1 has its acceptance evidence recorded for every
 client that Section 1a requires, and no row is DONE on a design alone or on one client alone."
-The same continuous run needs 500 messages, 50 launches, **30 real approvals and
-20 stops**, zero HA fallbacks; counters belong to #2384, not this document.
+Retirement requires those passing row/client records plus [#1949 load-parity proof](https://github.com/danswett/agent-bridge/issues/1949),
+per the owner decision on [#1396](https://github.com/danswett/agent-bridge/issues/1396)
+(November 11, 2026, 00:07 PT), relayed by Engineering; the former fixed-count
+continuous-run quota is not a separate gate. Counters belong to [#2384](https://github.com/danswett/agent-bridge/issues/2384)
+and serve #1949 and the per-row runs, not additional retirement quotas.
 The HA-off rehearsal runs first on one machine, then all four, each required row
-at least **three times**, zero failures, with owner confirmation of phone approvals.
+at least **three times**, zero failures or HA fallbacks, with owner confirmation of phone approvals.
 
 ## Reading the grid
 
@@ -76,7 +79,7 @@ launch-not-ready or unreadable transcript, confirm then terminate without typing
 `/exit`. Refuse elevated/other-user processes, unreadable start time, the host
 itself and no-live-PID targets. Keep transcript, host log, client outcome and
 confirmation/refusal receipts, including stale/reused-PID checks. Repeat three
-times per rehearsal stage; record 20 continuous-run stops across all four Windows
+times per rehearsal stage; record 20 row-4 stops across all four Windows
 machines, all with correct targets. C E5-01/02/03/04 and S supply the action/read
 locations; historical runs alone do not qualify every client.
 
@@ -95,7 +98,7 @@ Pass: person approves once and denies real prompts from each required client;
 record matching transcript/host outcomes and stale/revoked/agent refusals without
 executing the denied action. Use C E3-01/02/03/04/05, recording Codex unconfirmed
 honestly and Claude's terminal-only gap. Three repetitions per client/stage, and
-30 real approvals across shipped clients in the continuous-run ledger with distribution
+30 real approvals across shipped clients in the row-5 ledger with distribution
 shown, each reaching its session within 10 seconds, away from the home network; retain tap-to-transcript timings. Unsupported authorized-person paths remain gaps, not permission bypasses.
 
 ## Row 8: owner-only updates
@@ -246,6 +249,7 @@ All seven live-run issues inherit #39's exact action/expected/read-location form
 after-mark transcripts/logs, screenshots and step verdicts, including explicit failed/
 manual/not-run results. Record migration and rollback side separately, restore and
 repeat, and update parity evidence with date, client/OS/build and immutable run links.
-Attach the three-per-row rehearsal records and continuous-run approval/stop ledger;
+Attach the three-per-row rehearsal records, per-row approval/stop ledger and
+the #1949 load-parity proof link;
 untested or missing cells stay open. Any implementation follow-up is recut before
 exceeding 400 changed lines including tests. HA implementation/live proof maps to open #2407/S8, not closed #1419 or a retirement prerequisite.
