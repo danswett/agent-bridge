@@ -241,8 +241,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             if (!changed && auto.State.Phase == UpdatePhase.Installing)
             {
                 changed = true;
-                host.SendAsync(Events.SessionUpsert, Make.Session("s1", SessionStatus.Working)).GetAwaiter().GetResult();
-                Wait.UntilAsync(() => !auto.Idle, "the turn at begin").GetAwaiter().GetResult();
+                connection.Sessions.Upsert(Make.Session("s1", SessionStatus.Working));
+                Assert.False(auto.Idle);
             }
             return null;
         };
@@ -252,6 +252,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Null(prefs.LastUpdate);
         Assert.Empty(host.Sent(HostOps.Stop));
         await GoIdleAsync("s1");
+        await auto.TickAsync();
+        Assert.False(updater.Applied);
         time.Advance(AutoUpdater.IdleFor);
 
         await auto.TickAsync();
@@ -1538,8 +1540,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         {
             if (changed) { return; }
             changed = true;
-            host.SendAsync(Events.SessionUpsert, Make.Session("s2", SessionStatus.Working)).GetAwaiter().GetResult();
-            Wait.UntilAsync(() => connection.Sessions.All.Any(s => s.Id == "s2"), "the new turn").GetAwaiter().GetResult();
+            TestUi.ForTest.Invoke(() => connection.Sessions.Upsert(Make.Session("s2", SessionStatus.Working)));
+            Assert.True(TestUi.Read(() => connection.Sessions.All.Any(s => s.Id == "s2")));
         }
         var scans = 0;
         preflight = () => { if (phase == "final-scan" && ++scans == 2) { Turn(); } return null; };
