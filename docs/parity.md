@@ -22,6 +22,7 @@ reason.
 | Status | Meaning |
 |---|---|
 | `Verified` | A test **and** a recorded live run |
+| `Verified (historical)` | An earlier observation, not current all-platform or foreground, background and locked-screen proof |
 | `Implemented, untested live` | Code and tests, no live run yet. Live runs are tracked by #39 ([parity-checklist.md](parity-checklist.md)) |
 | `Partial` | Some of it; the gap column says what is missing |
 | `Missing` | Not built; an issue is linked |
@@ -35,10 +36,11 @@ Agents: **Cp** Copilot CLI, **Cl** Claude Code, **Cx** Codex, **All**.
 
 | Status | Rows |
 |---|---|
-| `Verified` | 48 |
-| `Implemented, untested live` | 53 |
+| `Verified` | 43 |
+| `Verified (historical)` | 5 |
+| `Implemented, untested live` | 54 |
 | `Partial` | 1 |
-| `Missing` | 10 |
+| `Missing` | 9 |
 | `Intentionally different` | 20 |
 | `N/A` | 12 |
 | `In flight (…)` | 6: Claude/Codex live 6 |
