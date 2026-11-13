@@ -17,6 +17,28 @@ public sealed class AgentLaunchGateTests : IDisposable
         """{"agents":{"enabled":true,"launch":""" + launch + ""","limits":""" + limits + "}}";
 
     [Fact]
+    public void A_launch_over_the_hourly_cap_returns_the_named_refusal_and_an_audit_line()
+    {
+        Write(Config(DefaultLimits));
+        var gate = new AgentLaunchGate(folder);
+        const string principal = "agent:machine/parent";
+        for (var i = 0; i < 3; i++) { Assert.True(gate.CheckLaunch(principal, Guid.NewGuid().ToString("D"), "hash").Allowed); }
+        var request = Guid.NewGuid().ToString("D");
+
+        var refusal = gate.CheckLaunch(principal, request, "hash");
+
+        Assert.False(refusal.Allowed);
+        Assert.Equal("rate-limited", refusal.Reason);
+        Assert.InRange(refusal.RetryAfterSeconds, 1, 3600);
+        var row = JsonSerializer.Deserialize<JsonElement>(Assert.Single(File.ReadAllLines(
+            Assert.Single(Directory.GetFiles(Path.Combine(folder, AgentAuditLog.FolderName), "launches-*.jsonl"))).Skip(1)));
+        Assert.Equal(principal, row.GetProperty("principal").GetString());
+        Assert.Equal(request, row.GetProperty("request").GetString());
+        Assert.Equal("refused", row.GetProperty("outcome").GetString());
+        Assert.Contains("rate-limited", row.GetProperty("reason").GetString());
+    }
+
+    [Fact]
     public void A_fourth_launch_by_one_agent_in_an_hour_and_the_eleventh_on_the_machine_are_refused_rate_limited_with_retry_seconds()
     {
         var now = DateTimeOffset.UtcNow;
