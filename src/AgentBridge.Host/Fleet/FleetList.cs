@@ -182,7 +182,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         return result;
     }
 
-    static object Find(FleetRosterSnapshot snapshot, string name, string? machine)
+    internal static object Find(FleetRosterSnapshot snapshot, string name, string? machine)
     {
         var fleetScope = snapshot.FleetScope;
         var scope = snapshot.Machines.Where(x => machine is null || x.Id == machine).ToList();
