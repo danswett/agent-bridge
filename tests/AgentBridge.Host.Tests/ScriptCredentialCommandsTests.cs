@@ -25,7 +25,8 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
 
     static JsonElement Name(string name = "pump-wake") => JsonSerializer.SerializeToElement(new { name });
     JsonElement[] Audit() => Directory.GetFiles(Path.Combine(fixture.Root, AgentAuditLog.FolderName), "*.jsonl")
-        .SelectMany(File.ReadAllLines).Select(s => JsonSerializer.Deserialize<JsonElement>(s)).ToArray();
+        .SelectMany(File.ReadAllLines).Select(s => JsonSerializer.Deserialize<JsonElement>(s))
+        .Where(r => r.TryGetProperty("action", out _)).ToArray();
 
     [Fact]
     public void Revoking_a_script_name_removes_both_rotations_durably_without_revoking_other_grants()
@@ -119,15 +120,43 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
         Assert.Equal(0, credentials.Count);
     }
 
-    [Theory]
-    [InlineData("scripts.add")]
-    [InlineData("scripts.revoke")]
-    public async Task A_script_credential_cannot_mint_or_revoke_even_with_host_cli_classification(string op)
+    [Fact]
+    public async Task Management_rechecks_ancestry_instead_of_reusing_a_cached_person_classification()
     {
-        credentials.Accept(channel, credentials.MintScript("pump-wake").Credential);
+        var image = Path.Combine(fixture.Root, "host.exe");
+        var started = DateTimeOffset.UtcNow;
+        var known = new List<KnownProcess>();
+        var guard = new CallerGuard(() => known, null, agentNames: [],
+            ancestryOf: _ => new ProcessAncestry([new PeerProcess(100, started, image)], true), hostImage: image);
+        Assert.Equal(CallerKind.HostCli, guard.Classify(channel).Kind);
+        known.Add(new KnownProcess(100, started, "an agent session"));
+        var handler = LocalApi.Handler(new SessionService(null!, new MachineInfo("machine1", "Test", "windows", "0.1.0")),
+            null!, guard, credentials: credentials, audit: new AgentAuditLog(fixture.Root));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, "scripts.add", Name()));
+        Assert.Equal(0, credentials.Count);
+    }
+
+    [Theory]
+    [InlineData("scripts.add", false)]
+    [InlineData("scripts.revoke", false)]
+    [InlineData("scripts.add", true)]
+    [InlineData("scripts.revoke", true)]
+    public async Task A_credential_cannot_mint_or_revoke_even_with_host_cli_classification(string op, bool session)
+    {
+        var grant = session ? credentials.Check(credentials.Mint("session1", "launch1", 100, DateTimeOffset.UtcNow, AgentProtocol.ScopeRead),
+            new ProcessAncestry([new PeerProcess(100, DateTimeOffset.UtcNow, "agent.exe")], true)).Accepted!
+            : credentials.MintScript("pump-wake").Credential;
+        credentials.Accept(channel, grant);
+        var count = credentials.Count;
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Handler()(channel, op, Name()));
-        Assert.Contains("person", error.Message);
-        Assert.Equal(1, credentials.Count);
+        Assert.Contains("refused", error.Message);
+        Assert.Equal(count, credentials.Count);
+        if (session)
+        {
+            credentials.RevokeSession("session1", "fixture");
+            await Assert.ThrowsAsync<InvalidOperationException>(() => Handler()(channel, op, Name()));
+            Assert.Equal(0, credentials.Count);
+        }
     }
 
     [Theory]
@@ -164,6 +193,41 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
     {
         var bytes = File.ReadAllBytes(path);
         return OperatingSystem.IsWindows() ? ProtectedData.Unprotect(bytes, null, DataProtectionScope.CurrentUser) : bytes;
+    }
+
+    [Theory]
+    [InlineData("../private-input", "default")]
+    [InlineData("pump-wake", "..")]
+    public async Task Invalid_cli_names_and_profiles_do_not_open_or_create_a_store(string name, string profile)
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+        Assert.Equal(2, await Cli.ScriptCredentialCommands.RunAsync(["scripts", "add", name, "--profile", profile], fixture.Root, output, error));
+        Assert.Empty(output.ToString());
+        Assert.Contains("usage:", error.ToString());
+        Assert.DoesNotContain("private-input", error.ToString());
+        Assert.Empty(Directory.GetFileSystemEntries(fixture.Root));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task The_cli_changes_the_serving_hosts_store_and_prints_only_safe_results()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        await using var source = new AgentBridge.Host.Core.SessionSource(fixture.Options(), fixture.Processes);
+        await source.RefreshAsync();
+        var service = new SessionService(source, new MachineInfo("machine1", "Test", "windows", "0.1.0"));
+        await using var server = LocalServer.Start(LocalEndpoint.For(fixture.Root), LocalApi.Handler(service, null!,
+            new FixedCallerGuard(new Caller(CallerKind.HostCli, "fixture")), credentials: credentials, audit: new AgentAuditLog(fixture.Root)));
+        var output = new StringWriter();
+        var error = new StringWriter();
+        foreach (var verb in new[] { "add", "revoke" })
+        { Assert.Equal(0, await Cli.ScriptCredentialCommands.RunAsync(["scripts", verb, "pump-wake", "--profile", Path.GetFileName(fixture.Root)],
+            Path.GetDirectoryName(fixture.Root)!, output, error)); }
+        Assert.Equal(0, credentials.Count);
+        Assert.DoesNotContain(AgentProtocol.TokenPrefix, output.ToString() + error);
+        Assert.Empty(error.ToString());
+        Assert.Equal(2, Audit().Length);
     }
 
     [Theory]

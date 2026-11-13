@@ -201,6 +201,26 @@ An unreadable, invalid or newer-schema file also turns relay load sharing off. A
 is not an object, or `load.enabled` that is neither boolean nor null, reports a configuration
 problem and turns sharing off, never defaulting it on.
 
+## Script credentials at the machine
+
+On Windows, a person in their own terminal can run `agent-bridge-host scripts add <name>`
+or `agent-bridge-host scripts revoke <name>`, with optional `--profile <name>`.
+The host must already be serving that profile, at the same elevation. Agent sessions,
+credentialed connections, the relay and other local programs cannot manage script credentials.
+Names are 1 to 64 ASCII letters, digits, `.`, `_` or `-`, excluding `.` and `..`.
+
+Add uses the existing store: `read+reply` only, 30 days, at most two live rotations per name.
+The token is placed in its owner-only, DPAPI-protected file, never printed or returned.
+Standard output is JSON containing only the credential id, principal, scope, expiry and file path.
+There is no command to display a token later. Revoke removes both rotations from the running
+store and persisted hash records; the next use fails without a restart. The protected token
+file may remain, but no longer authenticates.
+An unknown name returns a readable error. Each admitted add/revoke writes one `attempted`
+audit entry before mutation, without token text; an unwritable audit refuses the change.
+Exit codes: 0 success, 1 host/store refusal or connection failure, 2 invalid arguments or
+unsupported platform, 4 agent-session refusal. Runtime script operations remain governed
+by their existing allow-list; these commands grant no additional operations.
+
 ## Trusted peers: disposable-host foundation
 
 `permissions.trustedPeers` is **off by default** and read only at startup. This

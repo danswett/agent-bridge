@@ -96,6 +96,8 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
 
     public int Count { get { lock (gate) { return records.Count; } } }
 
+    internal bool IsCredentialed(IProtocolChannel channel) => connections.TryGetValue(channel, out _);
+
     // The launch id an adopted session's credential carries: it was not launched by the host.
     public const string AdoptedLaunch = "adopted";
     public const int MaxPending = 64;
@@ -537,7 +539,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             && c.ExpiresAt - c.IssuedAt <= TimeSpan.FromDays(DefaultScriptDays);
     }
 
-    static bool ValidScriptPart(string? value) => value is { Length: > 0 and <= 64 } && value is not "." and not ".."
+    internal static bool ValidScriptPart(string? value) => value is { Length: > 0 and <= 64 } && value is not "." and not ".."
         && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-');
 
     // A session id is at most 36 characters (a UUID).

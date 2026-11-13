@@ -174,6 +174,17 @@ the app Rename entry remains follow-on work on #1777. The local app backend may 
 Registry publication, launch-time `fleetName` and host-linked resume carry-over are also follow-ons;
 setting a name here does not yet make it discoverable through `fleet.find`.
 
+## Script credential management (`scripts.add`, `scripts.revoke`)
+
+Local pipe only, for the host CLI with fresh person/ancestry classification on every call.
+An agent or credentialed connection (including a revoked connection) is never person authority.
+Both operations take `{ "name": "<script name>" }`; see [host-config.md](../host-config.md#script-credentials-at-the-machine)
+for name validation, limits and exit codes. Add returns `{ "id", "principal", "scope",
+"expiresAt", "path" }`, never a token. Revoke returns `{ "name", "revoked": true }` after
+removing both rotations from the running and persisted store; an unknown name is an error.
+One `attempted` audit entry precedes each mutation; an audit failure refuses it.
+Neither operation is offered on relay channels or to the app.
+
 ## Agent principals: `agent.hello`
 
 Windows only, pipe only; other hosts refuse it. An agent session holds a credential the host
