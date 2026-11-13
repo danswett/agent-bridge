@@ -32,14 +32,31 @@ These are observed couplings, not claims that this design is implemented.
 `src/AgentBridge.Host/AgentBridge.Host.csproj`,
 `src/AgentBridge.HomeAssistant/AgentBridge.HomeAssistant.csproj`,
 `tools/AgentBridge.Rehearsal/AgentBridge.Rehearsal.csproj`, and
-`docs/design/ha-optional-client.md`.
+`tools/AgentBridge.Rehearsal/Cli.cs`, `docs/design/ha-optional-client.md`.
 
-**Read bounded sections, not whole:** `quality/README.md:1-220`;
-`docs/ha-connector.md:1-220`; `docs/host-shadow.md:1-220`;
-`tools/AgentBridge.Rehearsal/Cli.cs:1-150`, `Program.cs:125-240`,
-`SoakDriver.cs:1-100`; `build/pack-app.ps1:1-170`,
-`publish-prerelease.ps1:70-180`, `shadow-week.ps1:1-35`,
-`shadow-soak-vm.ps1:1-48`, and `rehearsal-azure-vmw.ps1:1-60`.
+**Section reads, not whole-file reviews:** exact omitted sections are below;
+isolated search hits do not count as reading an omitted section.
+`Rehearsal/` below abbreviates `tools/AgentBridge.Rehearsal/`; bare build script
+names retain the `build/` root. `ci.yml` and `ha-contract-drift.yml` are under
+`.github/workflows/`; `catalog.yml` is under `quality/`.
+
+| File | Sections read | Sections not read |
+|---|---|---|
+| `quality/README.md` | 1-220 | 221-1044 |
+| `docs/ha-connector.md` | 1-220 | 221-1589 |
+| `docs/host-shadow.md` | 1-220 | 221-875 |
+| `Rehearsal/Program.cs` | 125-240 | 1-124, 241-331 |
+| `Rehearsal/SoakDriver.cs` | 1-100 | 101-607 |
+| `build/pack-app.ps1` | 1-170 | 171-172 |
+| `build/publish-prerelease.ps1` | 70-180 | 1-69, 181-450 |
+| `build/shadow-week.ps1` | 1-35 | 36-585 |
+| `build/shadow-soak-vm.ps1` | 1-48 | 49-386 |
+| `build/rehearsal-azure-vmw.ps1` | 1-60 | 61-1731 |
+
+Every line-number citation was checked offline against the audited base before
+freezing this note, including range endpoints. None lies outside the declared
+reads. Exporter bodies were not read: their table row is explicitly marked
+**unread implementation**, supported only by the workflow's references.
 Engineering supplied the complete issue text for #2382, #527, #389, #319 and #387.
 Neither hosted runs/logs nor live installations were inspected or exercised.
 
@@ -80,6 +97,8 @@ Target publication consumes the native validation verdict and the same run's
 tested app packages. It must not depend on HA shadow reports, a writer election,
 legacy credentials or retirement progress. Today `publish-gate` still depends on
 the combined `quality-gate`; nothing in this note decouples it.
+The first approved follow-on slice must be Quality's, not a builder's, because it
+changes gate wiring.
 If both plans are affected, HA failures still block the supported HA change
 under its approved acceptance policy; this design is not a waiver of red checks.
 
@@ -119,24 +138,34 @@ Rows describe target ownership; all listed files stay unchanged in this slice.
 
 | Current coupling at the audited SHA | Moves / stays | Failing-closed proof required before implementation lands |
 |---|---|---|
-| `ci.yml:44-49,80,217,466-519`: release rationale, plan output/JOBS and disposable HA job | HA execution belongs to compatibility; genuine release identity stays native. Change plan outputs/JOBS/job wiring together only in an approved slice | A native-only fixture selects native suites without HA; an adapter/shared fixture still selects HA; removing a selected job or output makes catalog/gate checks fail |
+| `ci.yml:44-49,80,217,466-511`: release rationale, plan output/JOBS and disposable HA job | HA execution belongs to compatibility; genuine release identity stays native. Change plan outputs/JOBS/job wiring together only in an approved slice | A native-only fixture selects native suites without HA; an adapter/shared fixture still selects HA; removing a selected job or output makes catalog/gate checks fail |
 | `ci.yml:771-800`: `publish-gate` needs `quality-gate` at 794, indirectly including HA | Target native publication verdict stays tied to selected native checks and tested app artifacts; HA shadow/retirement evidence stays outside it | Selected native failure/cancellation/skip/missing result, failed plan, or absent app artifacts prevents publish; deliberately unselected HA does not prevent an otherwise eligible native publish |
-| `ci.yml:1610-1675`: aggregate `quality-gate`, HA in `needs` at 1624 | Native/compatibility aggregation must retain explicit selection and results; no drop from `needs` alone | HA selected but skipped/failed/unknown cannot pass; native selected but absent cannot pass; draft fast-ring success cannot stand in for the required gate |
-| `quality/merge-rule.yml:59-90`: every head check and `main_green` includes HA | Existing merge policy stays unchanged; any later native-main/compatibility policy change needs separate Quality approval | Native gate green cannot override failed required head evidence; failed/unknown selected main checks still hold; no claimed split while the old main-green coupling remains |
+| `ci.yml:1610-1674`: aggregate `quality-gate`, HA in `needs` at 1624 | Native/compatibility aggregation must retain explicit selection and results; no drop from `needs` alone | HA selected but skipped/failed/unknown cannot pass; native selected but absent cannot pass; draft fast-ring success cannot stand in for the required gate |
+| `quality/merge-rule.yml:54-89`: every head check and `main_green` includes HA | Existing merge policy stays unchanged; any later native-main/compatibility policy change needs separate Quality approval | Native gate green cannot override failed required head evidence; failed/unknown selected main checks still hold; no claimed split while the old main-green coupling remains |
 | `catalog.yml:257-271,648-686`: `homeassistant`, integration, drift and fixtures | Supported regression coverage stays; later approved placement may move HA-only suites after retirement/disposition, preserving IDs/provenance or explicit mappings | Adapter/fixture changes retain their required suites; unclaimed paths, missing projects/workflow jobs and invalid plan values fail completeness checks |
-| `catalog.yml:1054-1076`; `quality/README.md:91`: ring-4 migrate/rollback and shadow `select: always` in a general release row | Scope their evidence to compatibility/cutover, not native release prerequisites; native ring-4 production/client/accessibility evidence stays | Native release fixture does not demand legacy shadow `PASS`; a compatibility/cutover fixture cannot report success without its required evidence. Never simply change `always` to hide missing coverage |
+| `catalog.yml:1054-1074`; `quality/README.md:91` (**section-only**): ring-4 migrate/rollback and shadow `select: always` in a general release row | Scope their evidence to compatibility/cutover, not native release prerequisites; native ring-4 production/client/accessibility evidence stays | Native release fixture does not demand legacy shadow `PASS`; a compatibility/cutover fixture cannot report success without its required evidence. Never simply change `always` to hide missing coverage |
 | `RingCommand.cs:12-30`: `HomeAssistantIntegration` fast-ring exclusion | Keep the current in-process filter while HA remains; any later category retirement is atomic with suite/runner changes | Ring 0 still excludes process/network/disposable-HA tests; existing compound filters retain their meaning; later rings retain required integration coverage |
-| `AgentBridge.slnx:7,24,32,42`; host project:35; rehearsal project:20 | References stay until callers/tests are dispositioned; generic native build and rehearsal checks survive any future split | Build all supported targets and graph closures; removal with an undispositioned caller fails; native startup without configured HA/MQTT succeeds and selects meaningful native tests |
-| `Rehearsal/Cli.cs:45-92`, `Program.cs:166-239`, `SoakDriver.cs:10-24` (under `tools/AgentBridge.Rehearsal/`) | Later separate `HaCheck`/`SoakHa`, token-file/entity and legacy-comparison drivers; keep host/session/transcript/baseline/evidence/conformance checks | Generic runs need no HA token, entity or broker; HA checks still refuse non-disposable targets and bad credentials; absent required evidence never reports pass |
-| `ha-contract-drift.yml:13-16,19-34,60-80,104-133`; `tools/ha-contract/` exporter/report paths | Keep current pinned fixtures and credential-free recording; move HA-only work only after authorized disposition | Changed contract or missing exporter artifact fails; PRs cannot write drift issues; upstream recording cannot inherit reporter credentials; moved fixtures reproduce the pinned source |
-| `build/shadow-week.ps1:1-34`, `shadow-soak-vm.ps1:3-35`, `rehearsal-azure-vmw.ps1:3-31` | Retain current rollback/choreography and provenance; later extract generic lab work, never execute/remove live infrastructure for this audit | Disposable-only guards and interrupted install/rollback refusals survive; generic lab proof needs no legacy writer; a failed/partial rehearsal cannot become native or cutover success |
-| `build/host-identity.ps1:1-5`; `pack-app.ps1:79-114`; `publish-prerelease.ps1:143-173` | Dev/release identity, package integrity, both architectures, channel/signature checks stay native; HA rationale may become historical only after approved retirement | Wrong identity, architecture/channel, missing artifact or required signature refuses packaging/publication; removing HA rationale never removes these assertions |
+| `AgentBridge.slnx:7,24,32,42`; host project:35; rehearsal project:20; `ci.yml:306` builds the whole solution | References stay until callers/tests are dispositioned; generic native build and rehearsal checks survive any future split | Build all supported targets and graph closures; removal with an undispositioned caller fails; native startup without configured HA/MQTT succeeds and selects meaningful native tests |
+| `Rehearsal/Cli.cs:45-98`, `Program.cs:166-239`, `SoakDriver.cs:10-24` (under `tools/AgentBridge.Rehearsal/`; latter two **section-only**) | Later separate `HaCheck`/`SoakHa`, token-file/entity and legacy-comparison drivers; keep host/session/transcript/baseline/evidence/conformance checks | Generic runs need no HA token, entity or broker; HA checks still refuse non-disposable targets and bad credentials; absent required evidence never reports pass |
+| `ha-contract-drift.yml:13-16,19-34,60-80,104-128`; `tools/ha-contract/` exporter/report paths (**unread implementation**) | Keep current pinned fixtures and credential-free recording; move HA-only work only after authorized disposition | Changed contract or missing exporter artifact fails; PRs cannot write drift issues; upstream recording cannot inherit reporter credentials; moved fixtures reproduce the pinned source |
+| `build/shadow-week.ps1:1-34`, `shadow-soak-vm.ps1:3-35`, `rehearsal-azure-vmw.ps1:3-31` (**section-only**) | Retain current rollback/choreography and provenance; later extract generic lab work, never execute/remove live infrastructure for this audit | Disposable-only guards and interrupted install/rollback refusals survive; generic lab proof needs no legacy writer; a failed/partial rehearsal cannot become native or cutover success |
+| `build/host-identity.ps1:1-5`; `pack-app.ps1:79-115`; `publish-prerelease.ps1:143-176` (latter two **section-only**) | Dev/release identity, package integrity, both architectures, channel/signature checks stay native; HA rationale may become historical only after approved retirement | Wrong identity, architecture/channel, missing artifact or required signature refuses packaging/publication; removing HA rationale never removes these assertions |
 | `catalog.yml:288-301,449-460,1032-1042`: rehearsal-tool, build-scripts, real-agent lab reuse | Generic evidence stays native even where a driver/test originated with HA; later split only the HA-specific portions | Generic baseline/host/session/evidence regressions still fail; HA-driven soak cannot masquerade as HA-free end-to-end coverage or turn a partial lab suite into a full pass |
 
 The later atomic changes must also disposition permissions, dependency/cache
 inputs, project/build closures, workflow job/needs/output lists, suite IDs/triggers,
 ring commands and packaging expectations. Check the wiring as a whole; a green
 isolated selector test is insufficient. Preserve G5/G6/G7 and owner-only guards.
+
+## Expected follow-on slices
+
+These are proposed boundaries, not grants, estimates or a new dependency order:
+
+- Selector plan boundary, owned by Quality under #357/#487: **needs separate approval; blocked by #389/#387 disposition where it deletes anything**.
+- Publish-gate decoupling, owned by Quality: **needs separate approval; blocked by #389/#387 disposition where it deletes anything**.
+- Catalog ring-4 scoping, coordinated by Quality: **needs separate approval; blocked by #389/#387 disposition where it deletes anything**.
+- Generic/HA rehearsal split: **needs separate approval; blocked by #389/#387 disposition where it deletes anything**.
+- Exporter/fixture move to the HA project: **needs separate approval; blocked by #389/#387 disposition where it deletes anything**; the retirement gate also applies.
 
 ## Exclusions, ownership and acceptance
 
