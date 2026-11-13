@@ -29,8 +29,8 @@ function fixture() {
       return { outcome: 'delivered' };
     },
   };
-  const make = () => new ReplyService({
-    current: () => online ? { hostId: 'h1', client } : null,
+  const make = (available = () => online) => new ReplyService({
+    current: () => available() ? { hostId: 'h1', client } : null,
     uuid: () => `request-${++serial}`, now: () => time,
     persistence: { storage, account: 'a', locks },
   });
@@ -116,6 +116,26 @@ test('two tabs claiming one uncertain slot share one UUID and unchanged payload'
   assert.equal(f.copies.size, 1);
   assert.ok(f.calls.every((call) => call.request === 'request-1' && call.text === 'first'));
   assert.equal(f.pending().text, 'first');
+  one.clear();
+  two.clear();
+});
+
+test('a tab whose shared identity was settled cannot retry with a new UUID', async () => {
+  let connected = false;
+  const f = fixture(), one = f.make(), two = f.make(() => connected);
+  f.reconnect();
+  await Promise.all([one.submit({ ...slot, text: 'once' }), two.submit({ ...slot, text: 'once' })]);
+  await flush();
+  assert.equal(one.get('h1', 's1').outcome, 'delivered');
+  assert.equal(f.pending(), null);
+  two.uuid = () => assert.fail('a settled reply must not acquire another UUID');
+  connected = true;
+  two.ready();
+  await flush();
+  assert.equal(two.get('h1', 's1').state, 'done');
+  assert.equal(two.get('h1', 's1').outcome, 'unconfirmed');
+  await two.resend('h1', 's1');
+  assert.equal(f.calls.length, 1);
   one.clear();
   two.clear();
 });

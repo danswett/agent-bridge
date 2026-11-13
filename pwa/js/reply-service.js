@@ -49,7 +49,10 @@ export class ReplyService extends AnswerService {
         if (!entry.restored) { options.onTap?.(entry); }
       },
       send: async (client, data, entry, progress, stage) => {
-        if (state) { await state.check(entry); }
+        if (state) {
+          try { await state.check(entry); }
+          catch (error) { return { outcome: 'unconfirmed', reason: `The first reply may have arrived. ${error.message}` }; }
+        }
         const files = entry?.answer?.attachments ?? [];
         const { account, generation, stamp } = retention.get(entry.answer);
         const retainedStamp = files.length && account ? await stamp : null;
@@ -69,7 +72,10 @@ export class ReplyService extends AnswerService {
           this.#sending.delete(entry.key);
           if (files.length) { progress({ sent: total, total, phase: 'reply' }); }
           // Its files' time is the tap's to sent, not the machine's.
-          if (state) { await state.check(entry); }
+          if (state) {
+            try { await state.check(entry); }
+            catch (error) { return { outcome: 'unconfirmed', reason: `The first reply may have arrived. ${error.message}` }; }
+          }
           const result = await client.reply(data, { onProgress: stage, onSent: sent(entry) });
           if (result.outcome === 'delivered' && result.attachments?.length && images.account === account && images.generation === generation) { await images.remember(result.attachments, files, account, retainedStamp); }
           return result;
