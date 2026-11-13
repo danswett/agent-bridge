@@ -119,6 +119,18 @@ public sealed class VerifierSupportTests
         Assert.Equal(Unsupported, Check(Wire(b => b[field] = time)));
     }
 
+    [Theory]
+    [InlineData("18:01:00", "18:09:00", true)]
+    [InlineData("17:59:00", "18:09:00", false)]
+    [InlineData("18:01:00", "18:11:00", false)]
+    public void Retained_window_may_be_narrower_but_must_stay_inside_command(string issued, string expires, bool valid)
+    {
+        var context = Context with { IssuedAt = At(issued), ExpiresAt = At(expires) };
+        var wire = Wire(b => { b["issuedAt"] = "2026-11-12T" + issued + "Z"; b["expiresAt"] = "2026-11-12T" + expires + "Z"; });
+        if (valid) { Assert.Null(Check(wire, context)); }
+        else { Assert.Equal(Unsupported, Check(wire, context)); }
+    }
+
     [Fact]
     public void Time_rules_are_conjunctive_at_exact_boundaries()
     {
