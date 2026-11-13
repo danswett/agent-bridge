@@ -38,6 +38,7 @@ import { HistoryStore } from '../history-store.js';
 import { RowMenu } from './row-menu.js';
 import { phoneMedia } from '../phone-viewport.js';
 import { LoadFeed } from '../load-feed.js';
+import { whileVisible } from './ticker.js';
 
 // Needs you's answers (Approve once, Deny, Resend) wait as a question's do (ui.md §5.3): any
 // change to the lane can put Approve once under a pointer aimed at something else (an entry
@@ -200,7 +201,9 @@ export class SessionsPage {
     const accepts = (hostId) => !!hosts.route(hostId);
     this.answers = new AnswerService({ current, accepts, ...timing, marks: 'answer' });
     this.turns = new TurnClock();
-    this.#timingTimer = setInterval(() => { void connection.reportTimings?.(() => this.turns.drain()); }, 60000);
+    this.#timingTimer = whileVisible(() => {
+      if (connection.ready) { void connection.reportTimings?.(() => this.turns.drain()); }
+    }, 60000);
     this.replies = new ReplyService({ current, accepts, ...timing, blobs, onTap: (e) => this.turns.sent(e.hostId, e.sessionId) });
     this.stops = new StopService({ current, accepts, ...timing });
     this.launches = new LaunchService({ current, accepts, ...timing });
@@ -791,7 +794,7 @@ export class SessionsPage {
     this.#sortPopup.close(false);
     this.#sortEvents?.abort();
     this.view.stopRecent();
-    clearInterval(this.#timingTimer);
+    this.#timingTimer?.stop();
     this.#timingTimer = null;
     // The account's session is no longer shown: said before the page lets go of what says it.
     try { this.opened(null); } catch (e) { console.error(e); }
