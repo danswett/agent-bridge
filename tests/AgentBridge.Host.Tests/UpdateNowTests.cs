@@ -419,7 +419,14 @@ public sealed class UpdateNowTests : IAsyncLifetime
         Compose();
         await RemoteRestartAsync(phone, ch);
 
-        if (busy) { sessions.Set(S(Id(1), SessionStatus.Working)); }
+        if (busy)
+        {
+            sessions.Set(S(Id(1), SessionStatus.Working));
+            updates.Report(app, new UpdateReport(Reported with
+            {
+                Phase = UpdatePhase.Waiting, Request = Id(2), RequestNow = true, WaitingCode = UpdateWaitingCode.TurnRunning,
+            }, null, true));
+        }
         var state = await StateAsync(ch);
         var counters = File.ReadAllText(Path.Combine(folder, ManageService.FileName));
         var press = Press(phone);
@@ -430,6 +437,7 @@ public sealed class UpdateNowTests : IAsyncLifetime
         Assert.Equal(Now + ManageService.UpdateNowWindow, state.UpdateNowAt);
         Assert.Equal(UpdateAck.Accepted, result.Outcome);
         Assert.Null(result.Code);
+        Assert.Equal(busy ? Id(2) : null, result.State!.Request);
         var ask = Assert.Single(updates.Asks);
         Assert.Equal((request, UpdateAskKind.Install), (ask.Request, ask.Kind));
         Assert.Null(ask.Now);

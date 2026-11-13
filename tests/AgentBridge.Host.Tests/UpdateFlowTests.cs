@@ -205,6 +205,8 @@ public sealed class UpdateFlowTests : IAsyncLifetime
 
         var refused = Read<UpdateCommandResult>(Result(await AskAsync(ch, UpdateProtocol.Install)));
         Assert.Equal((UpdateAck.Refused, "too many presses of Install from this device just now; try again in 10 minutes"), (refused.Outcome, refused.Reason));
+        Assert.Equal(ManageReason.RateLimited, refused.Code);
+        Assert.Equal(Now + TimeSpan.FromMinutes(10), refused.RetryAt);
         // Each kind has its own count.
         Assert.Equal(UpdateAck.Accepted, Read<UpdateCommandResult>(Result(await AskAsync(ch, UpdateProtocol.Check))).Outcome);
         Assert.Equal(UpdateService.RateLimit + 1, control.Status().UpdateAsks!.Count);
@@ -236,6 +238,10 @@ public sealed class UpdateFlowTests : IAsyncLifetime
         var refused = Read<UpdateCommandResult>(Result(await AskAsync(browser, UpdateProtocol.Install)));
 
         Assert.Equal((UpdateAck.Refused, UpdateService.Full), (refused.Outcome, refused.Reason));
+        Assert.Equal(accepted, control.Status().UpdateAsks!.Select(a => a.Request));
+        var cached = Read<UpdateCommandResult>(Result(await AskAsync(phone, UpdateProtocol.Check)));
+        Assert.Equal(UpdateAck.Accepted, cached.Outcome);
+        Assert.Equal(Reported, cached.State);
         Assert.Equal(accepted, control.Status().UpdateAsks!.Select(a => a.Request));
     }
 
