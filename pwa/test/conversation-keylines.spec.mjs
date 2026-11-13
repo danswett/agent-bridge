@@ -61,29 +61,6 @@ for (const { width, scrollbars } of cases) {
           if (await element.isVisible()) { await sameEdges(element, column, true); }
         }
 
-        for (const width of [1440, 1920]) {
-          test(`Tools and Details keep the header's reading column at ${width}px (#2339)`, async ({ page }) => {
-            await page.setViewportSize({ width, height: 900 });
-            await page.goto('?demo=1&static=1');
-            await page.waitForSelector('html[data-demo-ready]');
-            const view = await open(page, '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35');
-            await view.locator('.inspector-button').click();
-            await expect(view.locator('.inspector')).toBeHidden();
-            const column = await edges(view.locator('.stream'));
-            await view.getByRole('tab', { name: 'Tools', exact: true }).click();
-            await expect(view.locator('.tools-panel')).toBeVisible();
-            await motionsDone(page);
-            await sameEdges(view.locator('.tools-panel'), column);
-            await sameEdges(view.locator('.session-header'), column, true);
-            await sameEdges(view.locator('.view-tabs'), column, true);
-            await view.locator('.details-button').click();
-            await expect(view.locator('.details')).toBeVisible();
-            await motionsDone(page);
-            await sameEdges(view.locator('.details'), column);
-            await sameEdges(view.locator('.session-header'), column, true);
-            await sameEdges(view.locator('.view-tabs'), column, true);
-          });
-        }
         const box = await view.locator('.reply-box').boundingBox();
         const send = await view.locator('.send').boundingBox();
         expect(send.x).toBeGreaterThanOrEqual(box.x);
@@ -94,6 +71,39 @@ for (const { width, scrollbars } of cases) {
       });
     });
   }
+}
+
+for (const width of [1440, 1920]) {
+  test(`Tools and Details keep the header's reading column at ${width}px (#2339)`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('?demo=1&static=1');
+    await page.waitForSelector('html[data-demo-ready]');
+    const view = await open(page, '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35');
+    const sideColumn = await edges(view.locator('.inspector'), true);
+    await view.locator('.inspector-button').click();
+    await expect(view.locator('.inspector')).toBeHidden();
+    await motionsDone(page);
+    const column = await edges(view.locator('.stream'));
+    await view.getByRole('tab', { name: 'Tools', exact: true }).click();
+    await expect(view.locator('.tools-panel')).toBeVisible();
+    await motionsDone(page);
+    await sameEdges(view.locator('.tools-panel'), column);
+    await sameEdges(view.locator('.session-header'), column, true);
+    await sameEdges(view.locator('.view-tabs'), column, true);
+    await view.locator('.details-button').click();
+    await expect(view.locator('.details')).toBeVisible();
+    await motionsDone(page);
+    await sameEdges(view.locator('.details'), column);
+    await sameEdges(view.locator('.session-header'), column, true);
+    await sameEdges(view.locator('.view-tabs'), column, true);
+    await view.locator('.inspector-button').click();
+    await expect(view.locator('.conversation')).toBeVisible();
+    await motionsDone(page);
+    await sameEdges(view.locator('.details'), sideColumn);
+    await sameEdges(view.locator('.tools-panel'), sideColumn);
+    await sameEdges(view.locator('.session-header'), await edges(page.locator('#session-pane')));
+    await sameEdges(view.locator('.session-header'), await edges(view.locator('.stream')), true);
+  });
 }
 
 test('resizing another tab does not retain the hidden conversation width (#2339)', async ({ page }) => {
