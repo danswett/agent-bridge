@@ -127,6 +127,9 @@ whole subject contracts before implementation; this inventory authorizes none.
 
 Engineering will file/reconcile these proposed issues; **C numbers are local
 proposal labels, not filed issue numbers**. Each size includes its tests/docs.
+The [adopted matrix][matrix] requires every follow-up to be recut before exceeding
+250 changed lines, including tests and docs. This packet grants no override.
+Do not waive guards or acceptance to fit; retain remaining work as dependent cuts.
 Dependencies between proposals mean the resulting filed issues.
 These are first bounded cuts, not promises that an entire matrix row fits one PR.
 Do not extend existing person privileges to agents or turn on host settings.
@@ -135,12 +138,14 @@ implementation; an inability to notify is a gap, not an automatic row exemption.
 
 ### C0 - Establish process-level evidence for the existing host CLI reads
 
-Scope: fixture-isolated product executable checks for `sessions`, `get` missing,
-JSON `watch` startup/cancellation and unknown-verb exit behavior. Reuse an existing
-process fixture if available; do not run provider collectors or live roots.
-Size: at most 300 changed lines. Sensitive: no. Depends-on: #2402.
+Scope: fixture-isolated product executable checks for `sessions` and missing
+`get` first. Reuse an existing process fixture if available; do not run provider
+collectors or live roots.
+Size: at most 250 changed lines. Sensitive: no. Depends-on: #2402.
 Acceptance: capture stdout/stderr/exit and unchanged fixture roots; distinguish
 product host executable tests from the rehearsal parser's tests.
+Remaining: JSON `watch` startup/cancellation and unknown-verb exit proof in
+dependent process-evidence cuts, each within the same 250-line ceiling.
 
 ### C1 - Reconcile the person CLI action transport and caller contract
 
@@ -155,18 +160,22 @@ separate pipe-capable actions from relay-only person-device operations.
 
 Scope: one target on this machine through the existing guarded service; render
 arming/refusal/result, preserve confirmation expiry and process identity.
-Size: at most 400 lines. Sensitive: yes. Depends-on: C0, C1, stop reconciliation.
+Size: at most 250 lines. Sensitive: yes. Depends-on: C0, C1, stop reconciliation.
 Acceptance: tests first for idle, busy confirmation and stale confirmation; agent
 invocation refused. Retain the #2411 dependency for affected safety/live cases.
+Remaining: #2411-affected qualification and multi-machine CLI stop rehearsal.
+Additional adapter/renderer work must be recut before exceeding 250 lines.
 
 ### C3 - Expose ordinary single-choice person approval, with refusal fences
 
 Scope: one supported ordinary, non-escaped approval; display its actual text and
 bind session/question/request on submission. No trust, escaped approval or forms.
-Size: at most 400 lines. Sensitive: yes. Depends-on: C0, C1.
+Size: at most 250 lines. Sensitive: yes. Depends-on: C0, C1.
 Acceptance: a real command parser/transport test plus current-question success,
 stale/at-machine/truncated/escaped refusal and agent-child no-send assertions.
 This does not qualify every agent's approval adapter or the full row.
+Remaining: other agents' adapter qualification, escaped/trust (C4), forms (C5)
+and live approvals, in separately bounded cuts.
 
 ### C4 - Decide the CLI boundary for escaped approval and folder trust
 
@@ -215,9 +224,11 @@ and an explicit Engineering/Product disposition for remaining notification gaps.
 Scope: after a target contract is accepted, inspect the pinned session/question,
 refuse a stale/replaced target and report already-answered/missing explicitly.
 No answer, focus suppression, OS notification registration or delivery.
-Size: at most 300 lines. Sensitive: yes. Depends-on: C0, C8.
+Size: at most 250 lines. Sensitive: yes. Depends-on: C0, C8.
 Acceptance: exact identity success and changed/answered/missing refusal fixtures;
 plain `get <session-id>` is not accepted as that evidence.
+Remaining: notice ingress/navigation implementation, withdrawal lifecycle and live
+opening proof after C8's contract; identity validation alone delivers none of them.
 
 ### C10 - Map CLI dashboard views to local versus account-scoped reads
 
@@ -232,17 +243,21 @@ metadata are not presented as full person dashboard/action parity.
 
 Scope: local text reply through the existing service and its delivery receipt;
 keep composer/question fences and do not implement a second injector.
-Size: at most 400 lines. Sensitive: yes. Depends-on: C0, C1.
+Size: at most 250 lines. Sensitive: yes. Depends-on: C0, C1.
 Acceptance: delivered/refused/unconfirmed outputs; agent-child no-send,
 question-open no-send and no automatic retry after ambiguous typing.
+Remaining: each agent's real CLI-to-transcript qualification and image support
+(C12); any further CLI/adapter work must be recut within 250 lines.
 
 ### C12 - Add a bounded image-reply path using the person reply contract
 
 Scope: one image up to 256 KiB through existing attachment start/chunk and reply;
 preserve device ownership, SHA-256, limits and failure cleanup. No blob expansion.
-Size: at most 400 lines. Sensitive: yes. Depends-on: C11.
+Size: at most 250 lines. Sensitive: yes. Depends-on: C11.
 Acceptance: command-to-request fixture, hash/foreign-ID refusal, image transcript
-receipt and unconfirmed handling. Larger files need a separately sized cut.
+receipt and unconfirmed handling.
+Remaining: files over 256 KiB, relay blob transport and broader agent/format
+qualification, each in separately sized cuts within the 250-line ceiling.
 
 ## What remains before S4 acceptance
 
