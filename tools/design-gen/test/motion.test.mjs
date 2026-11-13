@@ -5,6 +5,7 @@ import path from 'node:path';
 import { generate, repoRoot } from '../generate.mjs';
 import { MOTION_PLATFORMS, MOTION_DURATIONS, MOTION_EASINGS, motion } from '../lib/tokens.mjs';
 import { parseXml } from '../lib/svg.mjs';
+import { tokensCss } from '../lib/emit-pwa.mjs';
 
 // Motion: docs/design/ui.md §5.3, design/tokens.json motion, and what the generator makes of it.
 
@@ -68,7 +69,7 @@ test('ui.md\'s motion catalogue and tokens.json\'s list the same motions', () =>
   assert.deepEqual(named, entries);
 });
 
-test('nothing but the glyphs runs longer than 300 ms, in the tokens or in either client', () => {
+test('nothing but the glyphs and in-flight progress ring runs longer than 300 ms, in the tokens or in either client', () => {
   const limit = tokens.motion.limitMs;
   assert.equal(limit, 300);
   for (const p of MOTION_PLATFORMS) {
@@ -77,7 +78,7 @@ test('nothing but the glyphs runs longer than 300 ms, in the tokens or in either
     for (const s of m.springs) { assert.ok(s.response * 1000 <= limit, `${p} spring ${s.name}`); }
   }
   for (const [k, v] of declarations(rootBlock)) {
-    if (!/^\d+ms$/.test(v) || /-glyph-\w+-period$/.test(k)) { continue; }
+    if (!/^\d+ms$/.test(v) || /-glyph-\w+-period$/.test(k) || k === '--ab-motion-progress-period') { continue; }
     assert.ok(msOf(v) <= limit, `${k}: ${v}`);
   }
   const spans = [...read(XAML).matchAll(/<x:String x:Key="(AbMotion\w+)">(\d\d):(\d\d):(\d\d)\.(\d{3})<\/x:String>/g)];
@@ -111,7 +112,7 @@ test('the PWA\'s reduced-motion block redefines every motion duration and distan
   const reduced = declarations(reducedBlock);
   const crossFade = root.get('--ab-motion-cross-fade');
   assert.equal(crossFade, '83ms');
-  const timed = [...root.keys()].filter((k) => /^\d+(ms|px)$/.test(root.get(k)) && !/-glyph-\w+-period$/.test(k));
+  const timed = [...root.keys()].filter((k) => /^\d+(ms|px)$/.test(root.get(k)) && !/-glyph-\w+-period$/.test(k) && k !== '--ab-motion-progress-period');
   assert.ok(timed.length > 30);
   assert.deepEqual(timed.filter((k) => !reduced.has(k)), [], 'every duration and distance is in the reduced block');
   for (const [k, v] of reduced) {
@@ -126,6 +127,23 @@ test('the PWA\'s reduced-motion block redefines every motion duration and distan
   assert.equal(reduced.get('--ab-motion-reorder-duration'), '0ms');
   assert.equal(root.get('--ab-motion-travel'), '1');
   assert.equal(reduced.get('--ab-motion-sheet-duration'), crossFade, 'the sheet cross-fades, and travel is what keeps it from rising');
+});
+
+test('PWA-only CSS timings follow their source, collapse under reduced motion and leave Windows unchanged', () => {
+  const changed = structuredClone(tokens);
+  changed.motion.platform.pwa.css.durationMs.feedbackDisclosure = 121;
+  const output = tokensCss(changed);
+  assert.match(output, /--ab-motion-feedback-disclosure-duration: 121ms;/);
+  assert.match(output.split('@media (prefers-reduced-motion: reduce)')[1], /--ab-motion-feedback-disclosure-duration: 0ms;/);
+  assert.deepEqual(motion(changed, 'windows'), motion(tokens, 'windows'));
+  changed.motion.platform.pwa.css.durationMs.imageViewer = 301;
+  assert.throws(() => tokensCss(changed), /durationMs\.imageViewer.*motion.limitMs/);
+  changed.motion.platform.pwa.css.durationMs.imageViewer = 200;
+  changed.motion.platform.pwa.css.easing.imageViewer = 'arbitrary-function()';
+  assert.throws(() => tokensCss(changed), /easing\.imageViewer.*CSS easing keyword/);
+  changed.motion.platform.pwa.css.easing.imageViewer = 'ease-out';
+  changed.motion.platform.pwa.css.periodMs.progress = 0;
+  assert.throws(() => tokensCss(changed), /periodMs\.progress.*positive whole ms/);
 });
 
 test('the app\'s motion resources parse, sit outside the theme dictionaries, and read as WinUI\'s TimeSpans and KeySplines', () => {
