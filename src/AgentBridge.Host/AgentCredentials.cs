@@ -84,6 +84,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
 
     public AgentCredentials(string folder, string machine, TimeProvider? time = null, Action<string>? log = null, Func<int, DateTimeOffset, bool>? rootAlive = null)
     {
+        LaunchGate = new AgentLaunchGate(folder);
         this.rootAlive = rootAlive ?? ((_, _) => true);
         path = Path.Combine(folder, FileName);
         this.machine = machine;
@@ -93,6 +94,8 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     }
 
     public string? Problem { get { lock (gate) { return problem; } } }
+
+    internal AgentLaunchGate LaunchGate { get; }
 
     public int Count { get { lock (gate) { return records.Count; } } }
 
