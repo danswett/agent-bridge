@@ -36,6 +36,18 @@ test('the service worker changes whenever anything the site serves changes', () 
   writeFileSync(path.join(root, 'js', 'demo.js'), `${readFileSync(path.join(root, 'js', 'demo.js'), 'utf8')}\n// changed\n`);
   const js = buildSite({ root, out: out('js'), relay: 'https://relay.example' });
   assert.notEqual(sw(js), sw(css), 'a script change is a new version');
+
+  const worker = path.join(root, 'sw.js');
+  const template = readFileSync(worker, 'utf8');
+  const changed = template.replace("'./icons/maskable-512.png', ", '');
+  assert.notEqual(changed, template, 'the fixture changes only the worker SHELL list');
+  writeFileSync(worker, changed);
+  const shell = buildSite({ root, out: out('shell'), relay: 'https://relay.example' });
+  const sameShell = buildSite({ root, out: out('same-shell'), relay: 'https://relay.example' });
+  const version = (dir) => /const VERSION = '([^']+)';/.exec(sw(dir))[1];
+  assert.notEqual(version(shell), version(js), 'a worker-only SHELL edit must get a fresh cache, not retain removed entries');
+  assert.equal(version(shell), version(sameShell), 'the hash uses the pre-stamp template, not its own substituted output');
+  assert.equal(sw(shell), sw(sameShell), 'identical worker inputs produce identical releases');
   rmSync(scratch, { recursive: true, force: true });
 });
 

@@ -29,8 +29,8 @@ test('the offline shell excludes unused medium faces and bundled or demo-only fi
   const after = shell();
   const before = [...new Set([...after, ...removed])];
   const bytes = (files) => files.reduce((total, file) => total + statSync(sourceFile(file)).size, 0);
-  // #2454, audit head 7b31a6b7: 2,462,578 raw built-shell bytes, of which 1,601,076
-  // were fonts. This is a same-checkout SOURCE file-size sum, not that built inventory
+  // #2454 VM5/assets.json, plan r2, audit head 7b31a6b7: 2,462,578 raw built-shell
+  // bytes, of which 1,601,076 were fonts. This is a SOURCE file-size sum, not that inventory
   // or HTTP bytes: BUNDLE is empty before the publishing build supplies its chunks.
   t.diagnostic(JSON.stringify({
     measurement: 'source file-size sum; unique static shell entries; no generated bundle or HTTP measurement',
