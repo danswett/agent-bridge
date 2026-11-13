@@ -87,6 +87,30 @@ public static class LocalApi
             throw Refuse(op, new Caller(CallerKind.Agent, credentials.PrincipalOf(answering)),
                 "answering, replying, ending and launching sessions are for the person, from the app or a phone", log);
         }
+        if (op is LaunchProtocol.Launch or LaunchProtocol.Options
+            && callers.Classify(channel).Kind == CallerKind.Agent)
+        {
+            if (credentials is { } store && store.Of(channel) is { Kind: "session" } reader
+                && reader.Scope != AgentPolicy.ScopeNone)
+            {
+                if (op == LaunchProtocol.Launch
+                    && sessions.ReplayAgentLaunch(data, store.PrincipalOf(reader)) is { } replay)
+                {
+                    var result = await replay;
+                    if (store.IsLive(reader)) { return result; }
+                    throw Refuse(op, callers.Classify(channel), "the credential is no longer live", log);
+                }
+                if (op == LaunchProtocol.Options)
+                {
+                    var offered = await sessions.HandleAsync(channel, op, data);
+                    if (!store.IsLive(reader)) { throw Refuse(op, callers.Classify(channel), "the credential is no longer live", log); }
+                    if (offered is not LaunchOptions choices) { throw Refuse(op, callers.Classify(channel), "launch options are unavailable", log); }
+                    return store.LaunchGate.ProjectOptions(choices);
+                }
+            }
+            if (op == LaunchProtocol.Options)
+            { throw Refuse(op, callers.Classify(channel), "a live session read credential is required", log); }
+        }
         if (Acts.Contains(op) && callers.Classify(channel) is { Kind: CallerKind.Agent } agent)
         {
             const string why = "answering, replying, ending and launching sessions are for the person, from the app or a phone";

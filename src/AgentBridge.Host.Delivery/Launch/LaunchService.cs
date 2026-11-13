@@ -19,6 +19,8 @@ public interface ISessionLauncher
 
     Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default);
 
+    Task<LaunchResult>? ReplayAsync(LaunchRequest request, string principal) => null;
+
     Task<LaunchResult> LaunchVerificationAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) =>
         Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "This launcher cannot guarantee standard permissions for verification."));
 
@@ -700,13 +702,40 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     public Func<LaunchRequest, string, Func<Task<LaunchResult>>, Task<LaunchResult>>? NamedLaunch { get; set; }
 
+    sealed record LaunchOwner(string Principal, string Hash);
+
+    static LaunchOwner? Owner(LaunchRequest request, string peer) =>
+        peer.StartsWith("agent:", StringComparison.Ordinal)
+            ? new(peer, Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(
+                    request with { Request = Guid.Parse(request.Request).ToString("D") }, ProtocolJson.Options)))) : null;
+
+    public Task<LaunchResult>? ReplayAsync(LaunchRequest request, string principal) =>
+        Guid.TryParseExact(request.Request, "D", out var key) && Owner(request, principal) is { } owner
+            && requests.Read(key, owner) is { } remembered ? AgentResultAsync(remembered) : null;
+
+    static async Task<LaunchResult> AgentResultAsync(Task<LaunchResult> remembered)
+    {
+        var result = await remembered;
+        return result with
+        {
+            Trust = null,
+            Reason = result.Outcome == LaunchOutcome.Busy
+                ? "a launch on this machine is waiting for a person at the machine; try again in a few minutes"
+                : result.Trust is not null ? "the launched session is waiting for a person at the machine" : result.Reason,
+            Launched = result.Launched is { } launched ? launched with
+                { Cwd = null, Resume = null, Transfer = null, Profile = null } : null,
+        };
+    }
+
     public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key)) { return Task.FromResult(Refused("request must be a UUID")); }
         return requests.Once(key, () => request.FleetName is null ? RunAsync(request, key, peer)
             : NamedLaunch is { } policy ? policy(request, peer, () => RunAsync(request, key, peer))
             : Task.FromResult(Refused("fleetName is not supported by this host")), result =>
-            Settled(request, result, $"launch {Short(key)}"));
+            Settled(request, result, $"launch {Short(key)}"), owner: Owner(request, peer),
+            foreign: () => Task.FromResult(Refused("request is not a repeat owned by this caller")));
     }
 
     // Once per finished request, never for a repeat answered from the remembered outcome (that

@@ -20,6 +20,29 @@ for a real scan, so the host validates every launch. Each call logs one line of 
 (launcher lookup, profiles, resumable) and each scan one line (count or timed out, milliseconds):
 counts and milliseconds only.
 
+## Agent launch readback and cap tuning (#2173, staged C1)
+
+An authenticated local agent repeats the same `session.launch` request, including its
+original settings, to read its own remembered outcome. This only reads: a new request,
+changed content or another principal's request still meets the existing refusal path.
+No new launch operation or agent launch authority is enabled here. Outcomes remain
+in memory for 25 minutes after settling; durable caps and results belong to C2.
+Readback removes working-directory, resume, transfer, profile and trust-question data.
+A busy startup question is never answered, and its details are not disclosed.
+
+An agent's `launch.options` exposes only installed agents from `agents.inbound.local.launch`
+and isolated, approved workspace labels in that grant. It retains offered models,
+efforts and contexts, but no paths, resumable sessions, profiles or trust questions.
+The read scope is sufficient; missing or revoked credentials cannot read these choices.
+
+Only the person at the machine changes `agents.limits` in the host's config.
+The hourly defaults and ceilings are 3 launches per agent, 10 per machine and 20
+attempts per agent; they may be lowered, never made unlimited. The gate reads changes
+on its next check and records `rate-limited` refusals with the retry delay and caps in
+force. Watch refusal counts and retry delays in the launch audit before and after a
+change. Live limits, idle ending, restart durability and temporary raises are C2 work,
+not guarantees of this staged readback.
+
 ## What agent-ha-bridge does
 
 From `hooks/daemon-launch.ps1` (`Use-DaemonLaunchRequest`, `Resolve-DaemonRequestedLaunch`,
