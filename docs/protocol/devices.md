@@ -812,8 +812,8 @@ The host descriptor has exactly `id dh hostSign hostSignAlg hostSignProof kind
 platform name` in v2; v1 hosts have `id dh kind platform name`.
 Person v1 has `id dh sign signAlg presence kind platform name`, with `webauthn`
 exactly for that presence. Neither has a `tier` or `keyId` member.
-To-be-merged #2376's `HostEnrollment.Describe` is the host descriptor producer,
-not a person-key producer or evidence that host enrollment is already on main.
+#2376's `HostEnrollment.Describe`, now on rebased main, produces host descriptors,
+not person keys or a live host-wiring grant.
 
 ### Version and descriptor
 
