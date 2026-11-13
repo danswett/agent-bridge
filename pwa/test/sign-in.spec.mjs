@@ -64,7 +64,9 @@ test('hidden banners stop ticking, catch up once, and still receive sign-in comp
   await visibility(page, false);
   expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(1);
   await page.evaluate(() => window.agentBridgeDemo.finishSignIn('signedIn'));
+  await page.clock.runFor(100); // The demo delivers signin.done on a timer.
   await expect(sheet(page)).toBeHidden();
+  await expect(banner(page).locator('.sign-in-line')).toHaveText('Signed in \u00b7 waiting for 4 sessions to confirm');
   expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(0);
   await visibility(page, true);
   await page.evaluate(() => window.agentBridgeDemo.page.signIns.stop());
