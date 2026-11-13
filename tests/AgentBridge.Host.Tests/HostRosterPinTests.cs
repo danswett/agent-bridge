@@ -236,9 +236,49 @@ public sealed class HostRosterPinTests : IDisposable
         ReplaceSnapshot(snapshot);
         var bytes = File.ReadAllBytes(TransitionPath);
         var restarted = new HostRosterReader(PathName, () => w.Now);
-        Assert.Equal(reason, restarted.Update(Relay("G", "B", "H"), RosterFixture.Account).Outcome);
-        Assert.Null(restarted.Verified);
+        Assert.Equal("verified", restarted.Update(Relay("G", "B", "H"), RosterFixture.Account).Outcome);
+        Assert.Equal(reason, restarted.CheckAcceptHostSign(Command(), Context));
+        Assert.Equal(reason, restarted.RecordCommand(Command(), Context));
         Assert.Equal(bytes, File.ReadAllBytes(TransitionPath));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_bad_or_deleted_transition_store_blocks_mutation_but_not_v1_sync(bool deleted)
+    {
+        var reader = PinnedReader();
+        Assert.Null(reader.RecordCommand(Command(), Context));
+        var verified = reader.Verified;
+        var pin = File.ReadAllBytes(PathName);
+        if (deleted) { File.Delete(TransitionPath); }
+        else { File.WriteAllText(TransitionPath, "{broken: secret-marker}"); }
+        w.Add("C", "G", "C", "H");
+        Assert.Equal("verified", reader.Update(Relay("G", "B", "H", "C"), RosterFixture.Account).Outcome);
+        Assert.Same(verified, reader.Verified);
+        Assert.True(reader.Verified!.Serving.ContainsKey(w.Id("C")));
+        Assert.Equal("pin-unreadable", reader.CheckAcceptHostSign(Command(), Context));
+        Assert.Equal("pin-unreadable", reader.RecordCommand(Command(), Context));
+        if (deleted) { Assert.False(File.Exists(TransitionPath)); }
+        else { Assert.Equal("{broken: secret-marker}", File.ReadAllText(TransitionPath)); }
+        Assert.Equal(pin, File.ReadAllBytes(PathName));
+    }
+
+    [Fact]
+    public void Cached_transition_heads_cannot_roll_back_to_an_older_verified_frontier()
+    {
+        var reader = PinnedReader();
+        Assert.Null(reader.RecordCommand(Command(), Context));
+        var accepted = Snapshot();
+        var older = accepted.DeepClone().AsObject();
+        older["heads"] = new JsonArray(Codec.Base64Url(w.Entry("B").Hash));
+        ReplaceSnapshot(older);
+        var bytes = File.ReadAllBytes(TransitionPath);
+        Assert.Equal("head-regress", reader.CheckAcceptHostSign(Command(), Context));
+        Assert.Equal("head-regress", reader.RecordCommand(Command(), Context));
+        Assert.Equal(bytes, File.ReadAllBytes(TransitionPath));
+        ReplaceSnapshot(accepted);
+        Assert.Equal("unsupported-verifier", reader.CheckAcceptHostSign(Command(), Context));
     }
 
     [Fact]
@@ -282,7 +322,9 @@ public sealed class HostRosterPinTests : IDisposable
         };
         File.Delete(TransitionPath);
         Write(text, TransitionPath);
-        Assert.Equal("pin-unreadable", new HostRosterReader(PathName, () => w.Now).Update(Relay("G", "B", "H"), RosterFixture.Account).Outcome);
+        var restarted = PinnedReader();
+        Assert.Equal("pin-unreadable", restarted.CheckAcceptHostSign(Command(), Context));
+        Assert.Equal("pin-unreadable", restarted.RecordCommand(Command(), Context));
         Assert.Equal(text, File.ReadAllText(TransitionPath));
     }
 
@@ -294,9 +336,20 @@ public sealed class HostRosterPinTests : IDisposable
     {
         var reader = PinnedReader();
         Assert.Null(reader.RecordCommand(Command(), Context with { Floor = Instant.Parse("2026-11-04T11:58:00Z") }));
-        var snapshot = Snapshot(); snapshot[field] = "2026-11-04T11:57:00Z";
+        var snapshot = Snapshot();
+        var command = Command();
+        if (field == "highestIssuedAt")
+        {
+            // Prune the old record so schema/replay checks cannot mask the cached-mark regression.
+            snapshot["highWater"] = "2026-11-04T12:06:00.000000001Z";
+            snapshot["requests"] = new JsonArray();
+            command = Command(issued: "2026-11-04T12:05:00Z", expires: "2026-11-04T12:10:00Z");
+            ReplaceSnapshot(snapshot);
+            Assert.Equal("unsupported-verifier", reader.CheckAcceptHostSign(command, Context));
+        }
+        snapshot[field] = "2026-11-04T11:57:00Z";
         ReplaceSnapshot(snapshot);
-        Assert.Equal("pin-unreadable", reader.CheckAcceptHostSign(Command(), Context));
+        Assert.Equal("pin-unreadable", reader.CheckAcceptHostSign(command, Context));
     }
 
     [Fact]
@@ -309,6 +362,7 @@ public sealed class HostRosterPinTests : IDisposable
         reader.BeforeTransitionCommit = () => throw new IOException("secret-marker");
         Assert.Equal("transition-store", reader.RecordCommand(next, Context));
         Assert.Equal(before, File.ReadAllBytes(TransitionPath));
+        Assert.Empty(Directory.GetFiles(folder, "roster-transition.json.*.tmp"));
         reader.BeforeTransitionCommit = null;
         Assert.Null(reader.RecordCommand(next, Context));
     }
