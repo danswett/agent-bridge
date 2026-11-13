@@ -82,6 +82,27 @@ public sealed class HostSignKeyTests : IDisposable
         { Assert.True(bytes.AsSpan().SequenceEqual(File.ReadAllBytes(Path.Combine(Store, name!))), "refused state was rewritten"); }
     }
 
+    [WindowsHostSignTheory]
+    [InlineData("missing")]
+    [InlineData("unreadable")]
+    [InlineData("wrong-tier")]
+    public void OpenExisting_never_creates_or_repairs_and_uses_one_content_free_refusal(string damage)
+    {
+        if (damage != "missing") { using var made = HostSignKey.LoadOrCreate(profile, KeyStorage.Dpapi); }
+        if (damage == "wrong-tier") { File.WriteAllText(Path.Combine(Store, "signing-key.json"), "{\"Storage\":\"untrusted-tier\",\"Name\":null}"); }
+        var contents = Directory.GetFiles(profile, "*", SearchOption.AllDirectories)
+            .ToDictionary(path => path, path => SHA256.HashData(File.ReadAllBytes(path)));
+        using var locked = damage == "unreadable"
+            ? new FileStream(Path.Combine(Store, "host-sign.public"), FileMode.Open, FileAccess.Read, FileShare.None) : null;
+        var before = Directory.GetFileSystemEntries(profile, "*", SearchOption.AllDirectories).Order().ToArray();
+        var failure = Assert.Throws<InvalidDataException>(() => HostSignKey.OpenExisting(profile));
+        Assert.Equal("missing-key", failure.Message);
+        Assert.Null(failure.InnerException);
+        Assert.Equal(before, Directory.GetFileSystemEntries(profile, "*", SearchOption.AllDirectories).Order().ToArray());
+        locked?.Dispose();
+        Assert.True(contents.All(p => p.Value.AsSpan().SequenceEqual(SHA256.HashData(File.ReadAllBytes(p.Key)))), "refused custody was modified");
+    }
+
     public sealed class WindowsHostSignTheoryAttribute : TheoryAttribute
     {
         public WindowsHostSignTheoryAttribute()
