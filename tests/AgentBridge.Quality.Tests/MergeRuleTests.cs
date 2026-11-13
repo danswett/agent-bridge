@@ -1775,6 +1775,80 @@ public class MergeRuleTests
         }
     }
 
+    [Theory]
+    [InlineData("old", "success", "")]
+    [InlineData("new", "success", "")]
+    [InlineData("missing-old", "failure", "pwa-ui (webkit 3/3)")]
+    [InlineData("missing-new", "failure", "pwa-ui (webkit 5/5)")]
+    [InlineData("missing-common", "failure", "pwa-ui (chromium 1/3)")]
+    [InlineData("mixed", "failure", "mixed")]
+    [InlineData("both", "failure", "mixed")]
+    [InlineData("neither", "failure", "no leg family")]
+    [InlineData("failed-old", "failure", "pwa-ui (webkit 3/3)")]
+    [InlineData("failed-new", "failure", "pwa-ui (webkit 5/5)")]
+    [InlineData("skipped-old", "failure", "pwa-ui (webkit 3/3)")]
+    [InlineData("skipped-new", "failure", "pwa-ui (webkit 5/5)")]
+    [InlineData("unexpected", "failure", "pwa-ui (webkit 6/6)")]
+    [InlineData("universal-red", "failure", "light")]
+    [InlineData("pending-new", "failure", "no completed")]
+    [InlineData("unset", "success", "")]
+    [InlineData("empty", "success", "")]
+    public void Leg_families_require_one_complete_exact_set(string scenario, string state, string reason)
+    {
+        var old = Enumerable.Range(1, 3).Select(i => $"pwa-ui (chromium {i}/3)")
+            .Concat(Enumerable.Range(1, 3).Select(i => $"pwa-ui (webkit {i}/3)")).ToArray();
+        var newer = old.Take(3).Concat(Enumerable.Range(1, 5).Select(i => $"pwa-ui (webkit {i}/5)")).ToArray();
+        var selected = (scenario.EndsWith("new", StringComparison.Ordinal) ? newer : old).ToList();
+        var missing = scenario == "missing-common" ? old[0]
+            : scenario.EndsWith("new", StringComparison.Ordinal) ? newer[^1] : old[^1];
+        if (scenario.StartsWith("missing", StringComparison.Ordinal)) selected.Remove(missing);
+        if (scenario == "mixed") selected.Add(newer[^1]);
+        if (scenario == "both") selected.AddRange(newer.Skip(3));
+        if (scenario == "unexpected") selected.Add("pwa-ui (webkit 6/6)");
+        if (scenario is "neither" or "unset" or "empty") selected.Clear();
+        var config = WriteConfig();
+        try
+        {
+            if (scenario != "unset")
+            {
+                var families = scenario == "empty" ? "[]" : JsonSerializer.Serialize(new[] { old, newer });
+                File.WriteAllText(config, File.ReadAllText(config).Replace(
+                    "jobs: [light, app (win-x64), app (win-arm64), product]",
+                    $"jobs: [light, app (win-x64), app (win-arm64), product], leg_families: {families}"));
+            }
+            var jobs = new[] { "plan", "product (ubuntu-latest)", "light", "app (win-x64)", "app (win-arm64)" }
+                .Concat(selected).Select((name, id) => new { id, name,
+                    status = scenario == "pending-new" && name == missing ? "in_progress" : "completed", run_attempt = 1,
+                    conclusion = (scenario.StartsWith("failed", StringComparison.Ordinal) && name == missing)
+                        || (scenario == "universal-red" && name == "light") ? "failure"
+                        : scenario == "pending-new" && name == missing ? null
+                        : scenario.StartsWith("skipped", StringComparison.Ordinal) && name == missing ? "skipped" : "success" }).ToArray();
+            var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: MainRuns((5,
+                scenario == "pending-new" ? "in_progress" : "completed", scenario == "pending-new" ? null : "success", 1)),
+                mainJobs: JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }));
+            var output = new StringWriter();
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain);
+            Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
+            if (reason.Length > 0) Assert.Contains(reason, output.ToString(), StringComparison.Ordinal);
+            if (state == "success")
+                foreach (var name in selected)
+                    Assert.Contains($"Main job [required]: {name}:", output.ToString(), StringComparison.Ordinal);
+        }
+        finally { File.Delete(config); }
+    }
+
+    [Fact]
+    public void Leg_families_do_not_allow_unknown_policy_keys()
+    {
+        var config = WriteConfig();
+        try
+        {
+            Assert.Throws<YamlDotNet.Core.YamlException>(() => MergeRuleConfig.Parse(
+                File.ReadAllText(config).Replace("jobs: [light", "leg_familiez: [], jobs: [light")));
+        }
+        finally { File.Delete(config); }
+    }
+
     static string WriteConfig()
     {
         var path = Path.Combine(AppContext.BaseDirectory, $"merge-rule-{Guid.NewGuid():N}.yml");
