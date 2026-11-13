@@ -19,14 +19,14 @@ async function sameEdges(locator, column, content = false) {
   }
 }
 
-const cases = [390, 900, 1100, 1440, 1920].flatMap((width) =>
+const cases = [390, 900, 1100, 1280, 1440, 1920].flatMap((width) =>
   ['default', 'reserved'].map((scrollbars) => ({ width, scrollbars })));
 for (const { width, scrollbars } of cases) {
   for (const inspector of ['shown', 'hidden']) {
     test.describe(`${width}px, details ${inspector}, ${scrollbars} scrollbars`, () => {
       test.use({ viewport: { width, height: 900 }, hasTouch: width < 760 });
 
-      test('the reply follows the message column without moving header keylines (#2339)', async ({ page, browserName }) => {
+      test('header, tabs, delegates and reply follow the message column (#2339)', async ({ page, browserName }) => {
         await page.goto('?demo=1&static=1&delegates=1');
         await page.waitForSelector('html[data-demo-ready]');
         const view = await open(page, 'demo-delegates');
@@ -53,14 +53,36 @@ for (const { width, scrollbars } of cases) {
         await sameEdges(view.locator('.agent-block'), column);
         await sameEdges(view.locator('.reply-box'), column);
         const pane = await edges(page.locator('#session-pane'));
-        const inset = width < 760 ? 52 : 24;
-        const header = { left: pane.left + inset, right: pane.right - inset };
+        const header = width < 760 ? { left: pane.left + 52, right: pane.right - 52 } : column;
+        await sameEdges(view.locator('.session-header'), pane);
         await sameEdges(view.locator('.session-header'), header, true);
         for (const selector of ['.view-tabs', '.delegate-strip']) {
           const element = view.locator(selector);
-          if (width >= 760 && await element.isVisible()) {
-            await sameEdges(element, { left: pane.left + 24, right: pane.right - 24 }, true);
-          }
+          if (await element.isVisible()) { await sameEdges(element, column, true); }
+        }
+
+        for (const width of [1440, 1920]) {
+          test(`Tools and Details keep the header's reading column at ${width}px (#2339)`, async ({ page }) => {
+            await page.setViewportSize({ width, height: 900 });
+            await page.goto('?demo=1&static=1');
+            await page.waitForSelector('html[data-demo-ready]');
+            const view = await open(page, '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35');
+            await view.locator('.inspector-button').click();
+            await expect(view.locator('.inspector')).toBeHidden();
+            const column = await edges(view.locator('.stream'));
+            await view.getByRole('tab', { name: 'Tools', exact: true }).click();
+            await expect(view.locator('.tools-panel')).toBeVisible();
+            await motionsDone(page);
+            await sameEdges(view.locator('.tools-panel'), column);
+            await sameEdges(view.locator('.session-header'), column, true);
+            await sameEdges(view.locator('.view-tabs'), column, true);
+            await view.locator('.details-button').click();
+            await expect(view.locator('.details')).toBeVisible();
+            await motionsDone(page);
+            await sameEdges(view.locator('.details'), column);
+            await sameEdges(view.locator('.session-header'), column, true);
+            await sameEdges(view.locator('.view-tabs'), column, true);
+          });
         }
         const box = await view.locator('.reply-box').boundingBox();
         const send = await view.locator('.send').boundingBox();
@@ -88,8 +110,8 @@ test('resizing another tab does not retain the hidden conversation width (#2339)
   await motionsDone(page);
   const column = await edges(view.locator('.stream'));
   await sameEdges(view.locator('.reply-box'), column);
-  await sameEdges(view.locator('.session-header'), { left: pane.left + 24, right: pane.right - 24 }, true);
-  await sameEdges(view.locator('.view-tabs'), { left: pane.left + 24, right: pane.right - 24 }, true);
+  await sameEdges(view.locator('.session-header'), column, true);
+  await sameEdges(view.locator('.view-tabs'), column, true);
 });
 
 for (const standalone of [false, true]) {
@@ -100,8 +122,8 @@ for (const standalone of [false, true]) {
         userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',
       });
     }
-    for (const width of [760, 1440]) {
-      test(`at ${width}px the composer follows messages and the move strip keeps its header keyline (#2339)`, async ({ page }) => {
+    for (const width of [390, 760, 1440]) {
+      test(`at ${width}px the move strip and composer follow messages with navigation clearance (#2339)`, async ({ page }) => {
         await page.setViewportSize({ width, height: 900 });
         if (standalone) {
           await page.addInitScript(() => { Object.defineProperty(navigator, 'standalone', { value: true }); });
@@ -124,10 +146,12 @@ for (const standalone of [false, true]) {
         await expect(view.locator('.move-strip')).toContainText('Moving from Laptop to Studio PC');
         await motionsDone(page);
         const pane = await edges(page.locator('#session-pane'));
-        const inset = standalone ? 52 : 24;
-        await sameEdges(view.locator('.session-header'), { left: pane.left + inset, right: pane.right - inset }, true);
-        await sameEdges(view.locator('.move-strip'), { left: pane.left + 24, right: pane.right - 24 }, true);
-        await sameEdges(view.locator('.reply-box'), await edges(view.locator('.stream')));
+        const column = await edges(view.locator('.stream'));
+        const compactNavigation = width < 760 || (standalone && width === 760);
+        const header = compactNavigation ? { left: pane.left + 52, right: pane.right - 52 } : column;
+        await sameEdges(view.locator('.session-header'), header, true);
+        await sameEdges(view.locator('.move-strip'), column, true);
+        await sameEdges(view.locator('.reply-box'), column);
       });
     }
   });
