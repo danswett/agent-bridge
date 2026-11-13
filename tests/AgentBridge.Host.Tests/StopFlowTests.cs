@@ -1,6 +1,7 @@
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
+using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
 using AgentBridge.Transport.Tests;
@@ -116,6 +117,121 @@ public sealed class StopFlowTests : IAsyncLifetime
     }
 
     static (string, string?) Pair(Outcome o) => (o.Outcome_, o.Reason);
+
+    LocalServer CliServer(CallerKind caller = CallerKind.HostCli) => LocalServer.Start(LocalEndpoint.For(f.Root),
+        LocalApi.Handler(new SessionService(source, new MachineInfo("fixture", "Fixture", "windows", "0.1.0"), stops: Stopper()),
+            null!, new FixedCallerGuard(new Caller(caller, "fixture"))));
+
+    async Task<(int Exit, string Output, string Error)> CliAsync(string? confirm = null, bool refused = false, string[]? args = null)
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var exit = await StopCommands.RunWithProfileAsync(args ?? ["stop", Id,
+            .. confirm is null ? Array.Empty<string>() : ["--confirm", confirm],
+            "--profile", Path.GetFileName(f.Root)], Path.GetDirectoryName(f.Root)!, () => refused, output, error);
+        return (exit, output.ToString(), error.ToString());
+    }
+
+    static StopResult CliResult(string output) =>
+        System.Text.Json.JsonSerializer.Deserialize<StopResult>(output, ProtocolJson.Options)!;
+
+    [Fact]
+    public async Task Cli_stop_idle_session_ends_on_one_press()
+    {
+        await using var local = CliServer();
+        var result = await CliAsync();
+        Assert.Equal(0, result.Exit);
+        Assert.Equal(StopOutcome.Ended, CliResult(result.Output).Outcome);
+        Assert.Equal("", result.Error);
+        Assert.Single(injector.Plans);
+        Assert.Null(source.Get(Id));
+    }
+
+    [Fact]
+    public async Task Cli_stop_busy_session_arms_then_ends_only_on_a_second_press_with_its_token()
+    {
+        await WorkingAsync();
+        await using var local = CliServer();
+        var first = await CliAsync();
+        Assert.Equal(3, first.Exit);
+        var armed = CliResult(first.Output);
+        Assert.Equal(StopOutcome.Confirm, armed.Outcome);
+        Assert.Equal(10, armed.ConfirmSeconds);
+        Assert.NotEmpty(armed.Confirm!);
+        Assert.Equal(3, (await CliAsync()).Exit);
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
+        var secondPress = await CliAsync(armed.Confirm);
+        Assert.Equal(0, secondPress.Exit);
+        Assert.Equal(StopOutcome.Ended, CliResult(secondPress.Output).Outcome);
+        Assert.Single(injector.Plans);
+    }
+
+    [Fact]
+    public async Task Cli_stop_with_a_stale_confirmation_does_not_end_the_session()
+    {
+        await WorkingAsync();
+        await using var local = CliServer();
+        var first = await CliAsync();
+        Assert.Equal(3, first.Exit);
+        var token = CliResult(first.Output).Confirm;
+        clock.Advance(TimeSpan.FromSeconds(11));
+        var late = await CliAsync(token);
+        Assert.Equal(3, late.Exit);
+        Assert.Equal(StopOutcome.Confirm, CliResult(late.Output).Outcome);
+        Assert.NotEqual(token, CliResult(late.Output).Confirm);
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
+    }
+
+    [Fact]
+    public async Task Cli_stop_from_an_agent_child_is_refused()
+    {
+        await using var local = CliServer(CallerKind.Agent);
+        var early = await CliAsync(refused: true);
+        Assert.Equal(4, early.Exit);
+        Assert.Equal("", early.Output);
+        Assert.Contains("refused", early.Error);
+        Assert.Equal(0, local.Connections);
+        var hostRefusal = await CliAsync();
+        Assert.Equal(4, hostRefusal.Exit);
+        Assert.Equal("", hostRefusal.Output);
+        Assert.Contains("refused", hostRefusal.Error);
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
+    }
+
+    [Theory]
+    [InlineData("stop")]
+    [InlineData("stop", Id, "--profile")]
+    [InlineData("stop", Id, "--profile", "../outside")]
+    [InlineData("stop", Id, "--confirm")]
+    [InlineData("stop", Id, "--confirm", "<invalid>")]
+    [InlineData("stop", Id, "--confirm", "a", "--confirm", "b")]
+    [InlineData("stop", Id, "--unknown", "value")]
+    public async Task Cli_stop_invalid_arguments_never_connect(params string[] args)
+    {
+        await using var local = CliServer();
+        var result = await CliAsync(args: args);
+        Assert.Equal(2, result.Exit);
+        Assert.Equal("", result.Output);
+        Assert.NotEmpty(result.Error);
+        Assert.Equal(0, local.Connections);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task Cli_stop_refusal_does_not_echo_host_details()
+    {
+        probe.Reason = "private-network-account-and-machine";
+        await using var local = CliServer();
+        var result = await CliAsync();
+        Assert.Equal(4, result.Exit);
+        Assert.Equal(StopOutcome.Refused, CliResult(result.Output).Outcome);
+        Assert.Null(CliResult(result.Output).Reason);
+        Assert.DoesNotContain(probe.Reason, result.Output + result.Error);
+        Assert.Empty(injector.Plans);
+    }
 
     static async Task<string[]> CapabilitiesAsync(SecureChannel ch)
     {
