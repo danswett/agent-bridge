@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AgentBridge.Host.Fleet;
 using Xunit;
 
@@ -29,19 +30,27 @@ public sealed class FleetRecordReaderTests
     }
 
     [Fact]
+    public void A_received_empty_list_is_complete_enough_to_report_no_match()
+    {
+        var machines = RelayFleetRoster.Parse([JsonSerializer.Deserialize<JsonElement>(
+            """{"machine":"fixture","online":true,"record":{"sessions":[]}}""")]);
+        Assert.Equal("notFound", Find(machines).GetProperty("result").GetString());
+    }
+
+    [Fact]
+    public void An_offline_machine_without_a_list_does_not_hide_a_live_verified_match()
+    {
+        var offline = Assert.Single(RelayFleetRoster.Parse([JsonSerializer.Deserialize<JsonElement>(
+            """{"known":[{"machine":"offline","online":false}]}""")]));
+        var verified = new FleetMachine("verified", true,
+            [new(Node, "SG Fixture", "idle", At)], Verified: true);
+        Assert.Equal("found", Find([verified, offline]).GetProperty("result").GetString());
+    }
+
+    [Fact]
     public void An_unsigned_record_never_supplies_a_lookup_node_with_or_without_a_machine_filter()
     {
-        var frame = JsonSerializer.SerializeToElement(new
-        {
-            machine = "fixture", online = true,
-            record = new
-            {
-                v = 1, machine = "fixture", epoch = new string('b', 16), seq = 1, at = At,
-                truncated = false,
-                sessions = new[] { new { id = new string('a', 16), node = Node, name = "SG Fixture", state = "idle", since = At } },
-            },
-        });
-        var machines = RelayFleetRoster.Parse([frame]);
+        var machines = RelayFleetRoster.Parse([Frame()]);
         Assert.False(Assert.Single(machines).Verified);
         foreach (var filter in new string?[] { null, "fixture" })
         {
@@ -51,4 +60,35 @@ public sealed class FleetRecordReaderTests
             Assert.DoesNotContain("SG Fixture", reply.GetRawText());
         }
     }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("AQ")]
+    [InlineData("AA==")]
+    public void The_default_reader_never_takes_verification_from_a_relay_claim_or_a_signature_field(string sig)
+    {
+        var frame = JsonNode.Parse(Frame().GetRawText())!.AsObject();
+        frame["verified"] = true;
+        frame["record"]!["verified"] = true;
+        frame["record"]!["sig"] = sig;
+        var machines = RelayFleetRoster.Parse([JsonSerializer.SerializeToElement(frame)]);
+        Assert.False(Assert.Single(machines).Verified);
+        foreach (var filter in new string?[] { null, "fixture" })
+        {
+            var reply = Find(machines, filter);
+            Assert.Equal("unverified", reply.GetProperty("result").GetString());
+            Assert.DoesNotContain("node", reply.GetRawText());
+        }
+    }
+
+    static JsonElement Frame() => JsonSerializer.SerializeToElement(new
+    {
+        machine = "fixture", online = true,
+        record = new
+        {
+            v = 1, machine = "fixture", epoch = new string('b', 16), seq = 1, at = At,
+            truncated = false,
+            sessions = new[] { new { id = new string('a', 16), node = Node, name = "SG Fixture", state = "idle", since = At } },
+        },
+    });
 }
