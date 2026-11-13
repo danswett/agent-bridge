@@ -13,15 +13,15 @@ public sealed class GateAuditTests : IDisposable
     string Audit => Path.Combine(Profile, "audit");
     public void Dispose() { if (Directory.Exists(root)) { Directory.Delete(root, true); } }
 
-    void Append(Guid operation, string phase = "intent", string outcome = "reserved", string action = "session.launch")
+    void Append(Guid operation, string phase = "intent", string outcome = "reserved", string action = "session.launch", Guid? session = null)
     {
         var entry = JsonSerializer.Deserialize<AgentAuditEntry>(JsonSerializer.Serialize(new
         {
             direction = "local", request = operation, principal = "agent:machine/session", chain = Array.Empty<string>(),
-            action, target = target.ToString(), outcome, gate = new
+            action, target = (session ?? target).ToString(), outcome, gate = new
             {
                 v = 1, operation, run, sequence = 900, phase, path = "relay", actorKind = "agent",
-                incarnation, question = (Guid?)null, reasonCode = "none", prompt = "private gate prompt"
+                incarnation = session ?? incarnation, question = (Guid?)null, reasonCode = "none", prompt = "private gate prompt"
             }
         }), Json)!;
         Assert.True(new AgentAuditLog(Profile).Append(entry, "private answer"));
@@ -66,8 +66,9 @@ public sealed class GateAuditTests : IDisposable
         Append(operation, "terminal", "started");
         Append(operation, "terminal", "started");
         var unresolved = Guid.NewGuid();
-        Append(unresolved, outcome: pending);
-        Append(unresolved, "terminal", pending);
+        var session = Guid.NewGuid();
+        Append(unresolved, outcome: pending, session: session);
+        Append(unresolved, "terminal", pending, session: session);
         var report = Read();
         Assert.Equal(1, Assert.Single(report.Totals).Successes);
         Assert.Contains("unresolved-intent", report.IncompleteReasons);
