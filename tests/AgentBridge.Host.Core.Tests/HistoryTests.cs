@@ -1310,14 +1310,14 @@ public class HistoryTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void Many_aborts_and_delegate_ends_after_many_parts_settle_what_is_open_in_linear_work(bool quadratic)
+    public void The_abort_work_probe_accepts_bounded_work_and_rejects_quadratic_work(bool quadratic)
     {
         if (quadratic)
         {
-            var failure = Assert.Throws<Xunit.Sdk.TrueException>(() => TurnBuilderGrowthTests.AssertLinearWork(Settle));
-            Assert.Contains("doubling the questions visited parts", failure.Message, StringComparison.Ordinal);
+            var failure = Assert.Throws<Xunit.Sdk.TrueException>(() => TurnBuilderGrowthTests.AssertLinearWork(Settle, subject: "aborts"));
+            Assert.Contains("doubling the aborts visited parts", failure.Message, StringComparison.Ordinal);
         }
-        else { TurnBuilderGrowthTests.AssertLinearWork(Settle); }
+        else { TurnBuilderGrowthTests.AssertLinearWork(Settle, subject: "aborts"); }
 
         long Settle(int n)
         {
@@ -1963,13 +1963,13 @@ public class HistoryTests
         Assert.True(ProtocolJson.ByteCount(page) > 0);
     }
 
-    // An exhausted request budget must reach every question, not be replaced by a fresh
-    // per-question budget. Cheap valid patterns make that distinction without regex delays.
+    // One slow match exhausts the nonzero request budget. Later cheap valid patterns must
+    // remain uncheckable, even across turns; fresh per-question budgets would accept them.
     [Fact]
-    public void Many_questions_with_slow_patterns_share_one_budget_for_the_whole_read()
+    public void Many_questions_share_a_nonzero_pattern_budget_for_the_whole_read()
     {
         using var f = new Fixture();
-        var page = ReadAlone(f, QuestionsWithPatterns(), budgets: new HistoryBudgets { PatternTime = TimeSpan.Zero });
+        var page = ReadAlone(f, QuestionsWithPatterns(), budgets: new HistoryBudgets { PatternTime = PatternBudget.Total });
         AssertRequestPatternBudget(page);
     }
 
@@ -1983,7 +1983,13 @@ public class HistoryTests
             lines.Add(Copilot.ToolStart($"q{i}", "ask_user", new
             {
                 message = "Pick",
-                requestedSchema = new { properties = new { x = new { type = "string", pattern = "^a+$", @default = "aaaa" } } },
+                requestedSchema = new { properties = new { x = new
+                {
+                    type = "string",
+                    pattern = i == 0 ? "^(a+)+$" : "^a+$",
+                    // Exponentially many failing partitions exhaust the budget on any runner.
+                    @default = i == 0 ? new string('a', 256) + "!" : "aaaa",
+                } } },
             }, 2));
         }
         lines.Add(Copilot.User("after", 3));
@@ -2001,7 +2007,7 @@ public class HistoryTests
         foreach (var turn in turns.Take(2))
         {
             Assert.All(turn.Parts.Where(p => p.Question is not null), p =>
-                Assert.True(p.Question!.AnswerAtMachine, "the exhausted request budget must reach every question"));
+                Assert.True(p.Question!.AnswerAtMachine, "the shared request budget must stay spent for later questions"));
             Assert.Equal(HistoryLimits.QuestionsPerTurn, turn.Parts.Count(p => p.Question is not null));
         }
         Assert.Equal("done", turns[2].Parts.Single().Text);
@@ -2027,8 +2033,11 @@ public class HistoryTests
             }
         }
         var page = new HistoryResult { Turns = turns.Select(t => t.Build(latest: true)).ToList() };
+        var questions = page.Turns!.SelectMany(t => t.Parts).Where(p => p.Question is not null).ToList();
+        Assert.True(questions[0].Question!.AnswerAtMachine);
+        Assert.All(questions.Skip(1), p => Assert.False(p.Question!.AnswerAtMachine));
         var failure = Assert.Throws<Xunit.Sdk.AllException>(() => AssertRequestPatternBudget(page));
-        Assert.Contains("the exhausted request budget must reach every question", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("the shared request budget must stay spent for later questions", failure.Message, StringComparison.Ordinal);
     }
 
     // Found in Engineering's second-family review of #686: the token went only to Task.Run, so a read
@@ -2115,12 +2124,12 @@ public class TurnBuilderGrowthTests
         }
     }
 
-    internal static void AssertLinearWork(Func<int, long> settle, int smallSize = 128, int largeSize = 256)
+    internal static void AssertLinearWork(Func<int, long> settle, int smallSize = 128, int largeSize = 256, string subject = "questions")
     {
         var small = settle(smallSize);
         var large = settle(largeSize);
         Assert.True(small > 0, "the probe must observe the builder's work");
-        Assert.True(large <= small * 2.2, $"doubling the questions visited parts {small} -> {large} times");
+        Assert.True(large <= small * 2.2, $"doubling the {subject} visited parts {small} -> {large} times");
     }
 
     // Read the existing walk counter because HistoryContext copies its seed collections.
@@ -2152,7 +2161,8 @@ public class TurnBuilderGrowthTests
     [Fact]
     public void A_delegate_ended_again_and_again_walks_those_below_it_a_bounded_number_of_times()
     {
-        AssertLinearWork(n => EndAgain(n), 1_024, 2_048);
+        // WalkBudget is 64 * Keep (4,096), below 1,024 squared; both sizes must exhaust it.
+        AssertLinearWork(n => EndAgain(n), 1_024, 2_048, subject: "delegates");
     }
 
     [Fact]
@@ -2171,7 +2181,7 @@ public class TurnBuilderGrowthTests
     [Fact]
     public void The_linear_work_assertion_rejects_a_delegate_walk_budget_reset_between_ends()
     {
-        var failure = Assert.Throws<Xunit.Sdk.TrueException>(() => AssertLinearWork(n => EndAgain(n, quadratic: true), 1_024, 2_048));
-        Assert.Contains("doubling the questions visited parts", failure.Message, StringComparison.Ordinal);
+        var failure = Assert.Throws<Xunit.Sdk.TrueException>(() => AssertLinearWork(n => EndAgain(n, quadratic: true), 1_024, 2_048, subject: "delegates"));
+        Assert.Contains("doubling the delegates visited parts", failure.Message, StringComparison.Ordinal);
     }
 }
