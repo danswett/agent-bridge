@@ -226,23 +226,66 @@ static partial class SelfTest
             else { check(false, "focuses the header pin before Tab to Details"); }
             Away(window, main);
             await Choose(window, main, id, "Response");
-            var wheelReady = await Until(() => scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
+            int WheelHistoryCount() => ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count ?? 0;
+            int? wheelReceivedCount = null;
             var wheelMoving = false;
             void WheelChanged(object? sender, ScrollViewerViewChangedEventArgs e) => wheelMoving = e.IsIntermediate;
+            var heardWheel = new PointerEventHandler((_, _) => wheelReceivedCount ??= WheelHistoryCount());
             scroll.ViewChanged += WheelChanged;
+            scroll.AddHandler(UIElement.PointerWheelChangedEvent, heardWheel, true);
             try
             {
+                // Choose sees the card before its opening layout and queued end correction finish.
+                await CaptureFrame(window.RootElement);
+                var wheelReady = await Until(() =>
+                {
+                    window.RootElement.UpdateLayout();
+                    return WheelHistoryCount() > 0 && !wheelMoving && scroll.ScrollableHeight > 0
+                        && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5;
+                }, TimeSpan.FromSeconds(10));
                 Wheel(window, list);
-                var wheeled = await Until(() => scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
-                check(wheelReady && wheeled, "a native wheel takes the view away from the latest");
-                var drawn = await Until(() => ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count == turns, TimeSpan.FromSeconds(30));
-                await Still(scroll);
-                var kept = await Until(() => !wheelMoving && scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
-                result["historyWheelFill"] = new { wheelReady, wheeled, drawn, kept, offset = scroll.VerticalOffset, extent = scroll.ScrollableHeight };
-                check(wheelReady && wheeled && drawn && kept && scroll.VerticalOffset < scroll.ScrollableHeight - 1.5,
-                    "keeps the view taken by a native wheel while older turns draw");
+                var wheeled = await Until(() => wheelReceivedCount is not null
+                    && scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
+                const string tookMessage = "a native wheel takes the view away from the latest";
+                check(wheelReady && wheeled, wheelReady && wheeled ? tookMessage
+                    : $"{tookMessage} ({(wheelReceivedCount is null ? "wheel not received" : "wheel received")}; ready: {wheelReady}; moved: {wheeled})");
+                var drawn = await Until(() => WheelHistoryCount() == turns, TimeSpan.FromSeconds(30));
+                await CaptureFrame(window.RootElement);
+                (int Count, bool Intermediate, double Offset, double Extent, bool Stable) snapshot = default;
+                (double Offset, double Extent)? previous = null;
+                var kept = await Until(() =>
+                {
+                    window.RootElement.UpdateLayout();
+                    var offset = scroll.VerticalOffset;
+                    var extent = scroll.ScrollableHeight;
+                    var stable = previous is { } was && Math.Abs(offset - was.Offset) < 0.5
+                        && Math.Abs(extent - was.Extent) < 0.5;
+                    previous = (offset, extent);
+                    snapshot = (WheelHistoryCount(), wheelMoving, offset, extent, stable);
+                    return snapshot.Count == turns && !snapshot.Intermediate
+                        && snapshot.Offset < snapshot.Extent - 1.5 && snapshot.Stable;
+                }, TimeSpan.FromSeconds(10));
+                var count500 = snapshot.Count == turns;
+                var belowEnd = snapshot.Offset < snapshot.Extent - 1.5;
+                var receipt = wheelReceivedCount is { } count
+                    ? $"{(count < turns ? "before" : "after")} history reached {turns} (count: {count})"
+                    : "wheel not received";
+                result["historyWheelFill"] = new
+                {
+                    wheelReady, wheeled, drawn, kept, wheelReceivedCount, receipt,
+                    historyCount = snapshot.Count, intermediate = snapshot.Intermediate,
+                    offset = snapshot.Offset, extent = snapshot.Extent, stable = snapshot.Stable,
+                };
+                var ok = wheelReady && wheeled && drawn && kept && count500 && !snapshot.Intermediate && belowEnd && snapshot.Stable;
+                const string keptMessage = "keeps the view taken by a native wheel while older turns draw";
+                check(ok, ok ? keptMessage
+                    : $"{keptMessage} (history: {snapshot.Count}/{turns}; count500: {count500}; intermediate: {snapshot.Intermediate}; below-end: {belowEnd}; stable: {snapshot.Stable}; offset: {snapshot.Offset:0.###}; extent: {snapshot.Extent:0.###}; wheel receipt: {receipt}; ready: {wheelReady}; wheeled: {wheeled}; drawn: {drawn}; kept: {kept})");
             }
-            finally { scroll.ViewChanged -= WheelChanged; }
+            finally
+            {
+                scroll.ViewChanged -= WheelChanged;
+                scroll.RemoveHandler(UIElement.PointerWheelChangedEvent, heardWheel);
+            }
         }
         finally
         {
