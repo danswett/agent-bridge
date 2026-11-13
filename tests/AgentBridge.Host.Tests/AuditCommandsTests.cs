@@ -50,12 +50,15 @@ public sealed class AuditCommandsTests : IDisposable
         foreach (var (file, bytes) in files) { Assert.Equal(bytes, File.ReadAllBytes(file)); }
     }
 
-    [Fact]
-    public void Known_metadata_only_is_printed_and_v1_daily_headers_are_not_actions()
+    [Theory]
+    [InlineData("agent.send", "agents-*.jsonl")]
+    [InlineData("session.launch", "launches-*.jsonl")]
+    public void Known_metadata_only_is_printed_and_v1_daily_headers_are_not_actions(string action, string pattern)
     {
-        Append(DateTimeOffset.Parse("2026-11-11T00:01:00Z"), "session.launch", "started", "one");
-        var file = Assert.Single(Directory.GetFiles(Audit, "launches-*.jsonl"));
-        var row = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(File.ReadAllText(file))!;
+        Append(DateTimeOffset.Parse("2026-11-11T00:01:00Z"), action, "started", "one");
+        var file = Assert.Single(Directory.GetFiles(Audit, pattern));
+        var row = File.ReadLines(file).Select(line => JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(line)!)
+            .Single(entry => entry.ContainsKey("action"));
         row["v"] = JsonSerializer.SerializeToElement(1);
         row["prompt"] = JsonSerializer.SerializeToElement("private unknown prompt");
         row["token"] = JsonSerializer.SerializeToElement("private unknown credential");
@@ -69,8 +72,12 @@ public sealed class AuditCommandsTests : IDisposable
         Assert.Empty(result.Error);
         using var printed = JsonDocument.Parse(result.Output);
         Assert.Equal("agent:test-machine/test-session", printed.RootElement.GetProperty("principal").GetString());
+        Assert.Equal(action, printed.RootElement.GetProperty("action").GetString());
+        Assert.Equal("one", printed.RootElement.GetProperty("request").GetString());
         Assert.Equal("started", printed.RootElement.GetProperty("outcome").GetString());
         Assert.False(printed.RootElement.TryGetProperty("prompt", out _));
+        Assert.False(printed.RootElement.TryGetProperty("token", out _));
+        Assert.False(printed.RootElement.TryGetProperty("previousSha256", out _));
         Assert.DoesNotContain("private", result.Output + result.Error);
         Assert.DoesNotContain("intact", result.Output + result.Error);
     }

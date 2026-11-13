@@ -42,6 +42,11 @@ makes it a new device, signed in and approved again, so keeping it is fine.
 
 ## Modules
 
+On opening a session, history asks for the newest five turns. Once drawn, at most
+one older page is fetched automatically, only if the visible pane does not yet
+scroll (#2480). Resizing or reopening does not renew that allowance. Load earlier
+messages, Try again and near-top scroll gestures still load earlier pages on demand.
+
 If a stale-cursor recovery walk runs out of its budget before finding held turns or the start,
 the history store keeps the held turns and reports a recoverable earlier-load error (#1437).
 

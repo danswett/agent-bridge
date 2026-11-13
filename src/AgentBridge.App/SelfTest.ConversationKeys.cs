@@ -18,28 +18,28 @@ static partial class SelfTest
     // What the keys get wrong, null when nothing; and how they were pressed: SendInput when the
     // window is in the foreground, else posted to the window that has the keyboard focus, as the
     // keyboard would send them; either way seen arriving at the conversation's scroller.
-    static async Task<(string? Problem, string Method)> Keyed(MainWindow window, ListView list)
+    static async Task<(string? Problem, string Method, bool PostedInputMissing)> Keyed(MainWindow window, ListView list)
     {
-        if (SessionView.Shallowest<ScrollViewer>(list) is not { } scroll || list.ItemsPanelRoot is not ItemsStackPanel { FirstVisibleIndex: >= 0 }) { return ("a scroller with blocks in view", "none"); }
+        if (SessionView.Shallowest<ScrollViewer>(list) is not { } scroll || list.ItemsPanelRoot is not ItemsStackPanel { FirstVisibleIndex: >= 0 }) { return ("a scroller with blocks in view", "none", false); }
         // Room above and below for a page each way, from a block in the middle of the response
         // before its tall block and run of linked paragraphs (DemoHost.HeavyMiddle): the block it
         // always was, where the view is put back once done, so the checks after this one start where they did.
         var middle = DemoHost.HeavyMiddle;
-        if (middle >= list.Items.Count) { return ($"setup: block {middle + 1} in the response", "none"); }
+        if (middle >= list.Items.Count) { return ($"setup: block {middle + 1} in the response", "none", false); }
         list.ScrollIntoView(list.Items[middle], ScrollIntoViewAlignment.Leading);
         await Task.Delay(500);
         var start = scroll.VerticalOffset;
         // A link, not a Copy button: a paragraph in the middle of the run of linked paragraphs at
         // the top of the view, with more than a page of the run above and below it.
         var linked = list.Items.Count - 1 - DemoHost.HeavyLinkedRun / 2;
-        if (list.Items[linked] is not ConversationBlock { Block: MdParagraph p } || !p.Inlines.Any(i => i is MdLink)) { return ($"setup: a linked paragraph at block {linked + 1}", "none"); }
+        if (list.Items[linked] is not ConversationBlock { Block: MdParagraph p } || !p.Inlines.Any(i => i is MdLink)) { return ($"setup: a linked paragraph at block {linked + 1}", "none", false); }
         list.ScrollIntoView(list.Items[linked], ScrollIntoViewAlignment.Leading);
         await Still(scroll);
-        if (scroll.VerticalOffset < scroll.ViewportHeight || scroll.ScrollableHeight - scroll.VerticalOffset < scroll.ViewportHeight + ConversationKeyboard.Line * 2) { return ($"setup: a page above and below block {linked + 1}: {scroll.VerticalOffset:0} px above, {scroll.ScrollableHeight - scroll.VerticalOffset:0} px below, of {scroll.ViewportHeight:0}", "none"); }
+        if (scroll.VerticalOffset < scroll.ViewportHeight || scroll.ScrollableHeight - scroll.VerticalOffset < scroll.ViewportHeight + ConversationKeyboard.Line * 2) { return ($"setup: a page above and below block {linked + 1}: {scroll.VerticalOffset:0} px above, {scroll.ScrollableHeight - scroll.VerticalOffset:0} px below, of {scroll.ViewportHeight:0}", "none", false); }
         // Its link focused as the keyboard puts it.
         var stop = list.ContainerFromIndex(linked) is { } c ? FocusManager.FindFirstFocusableElement(c) : null;
-        if (stop is not Hyperlink) { return ($"setup: a link in block {linked + 1} to focus, not {stop?.GetType().Name ?? "nothing"}", "none"); }
-        if (!(await FocusManager.TryFocusAsync(stop, FocusState.Keyboard)).Succeeded || FocusManager.GetFocusedElement(list.XamlRoot) is not Hyperlink) { return ($"setup: focus on the link in block {linked + 1}", "none"); }
+        if (stop is not Hyperlink) { return ($"setup: a link in block {linked + 1} to focus, not {stop?.GetType().Name ?? "nothing"}", "none", false); }
+        if (!(await FocusManager.TryFocusAsync(stop, FocusState.Keyboard)).Succeeded || FocusManager.GetFocusedElement(list.XamlRoot) is not Hyperlink) { return ($"setup: focus on the link in block {linked + 1}", "none", false); }
         await Task.Delay(300);
         var seen = new List<VirtualKey>();
         var heard = new KeyEventHandler((_, e) => seen.Add(e.Key));
@@ -52,21 +52,23 @@ static partial class SelfTest
                 await Still(scroll);
                 var focused = FocusManager.GetFocusedElement(list.XamlRoot);
                 var from = scroll.VerticalOffset;
+                var target = PostedInputTarget(window).Detail;
                 var method = Press(window.Handle, key, foreground: true);
                 if (!await Until(() => seen.Contains(key), TimeSpan.FromSeconds(2)) && method == "SendInput")
                 {
+                    target = PostedInputTarget(window).Detail;
                     method = Press(window.Handle, key, foreground: false);
                     await Until(() => seen.Contains(key), TimeSpan.FromSeconds(2));
                 }
                 methods.Add($"{key} by {method}");
-                if (!seen.Contains(key)) { return ($"{key} reaching the conversation", string.Join(", ", methods)); }
-                if (!await Until(() => Math.Abs(scroll.VerticalOffset - from) >= 0.5, TimeSpan.FromSeconds(2))) { return ($"{key} scrolling the text: still at {from:0.#} px", string.Join(", ", methods)); }
+                if (!seen.Contains(key)) { return ($"{key} reaching the conversation (sent: {target}; now: {PostedInputTarget(window).Detail})", string.Join(", ", methods), method == "PostMessage"); }
+                if (!await Until(() => Math.Abs(scroll.VerticalOffset - from) >= 0.5, TimeSpan.FromSeconds(2))) { return ($"{key} scrolling the text: still at {from:0.#} px", string.Join(", ", methods), false); }
                 await Still(scroll);
                 var now = FocusManager.GetFocusedElement(list.XamlRoot);
-                if (!Equals(now, focused)) { return ($"{key} leaving focus where it was: it moved to {now?.GetType().Name ?? "nothing"}", string.Join(", ", methods)); }
-                if (Selected(list) is { } selected) { return ($"{key} selecting nothing: {selected}", string.Join(", ", methods)); }
+                if (!Equals(now, focused)) { return ($"{key} leaving focus where it was: it moved to {now?.GetType().Name ?? "nothing"}", string.Join(", ", methods), false); }
+                if (Selected(list) is { } selected) { return ($"{key} selecting nothing: {selected}", string.Join(", ", methods), false); }
             }
-            return (null, string.Join(", ", methods));
+            return (null, string.Join(", ", methods), false);
         }
         finally
         {
@@ -139,11 +141,8 @@ static partial class SelfTest
             if (SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<KeyInput>()) == inputs.Length) { return "SendInput"; }
         }
         if (shift) { Shifted(true); }
-        var to = GetFocus() is var focus && focus != 0 ? focus : window;
-        var extendedBit = extended ? (nint)(1 << 24) : 0;
-        var lParam = 1 | ((nint)scan << 16) | extendedBit;
-        PostMessageW(to, 0x0100, (nint)vk, lParam);
-        PostMessageW(to, 0x0101, (nint)vk, lParam | (1 << 30) | unchecked((nint)(1u << 31)));
+        var (to, _) = PostedTarget(window);
+        PostKey(to, key, extended);
         return "PostMessage";
     }
 
