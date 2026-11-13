@@ -544,7 +544,9 @@ public sealed partial class LaunchViewModel : Observable
             {
                 Resumes = Agents = Workspaces = Profiles = Models = Efforts = Contexts = [];
                 ShowResume = ShowWorkspace = ShowProfile = ShowModel = ShowEffort = ShowContext = false;
-                Note = $"Sessions can't be started on {Name} now{(machine is { } m && ReadOnly(m) is { } why ? $": {Sentence(why)}" : ".")}";
+                Note = machine is { } m && ReadOnly(m) is { } why
+                    ? $"Sessions can't be started on {Name} now: {Words.Sentence(Words.ReadOnlyReason(why))} {Words.ReadOnlyApprovals}"
+                    : $"Sessions can't be started on {Name} now.";
                 NoteWarns = true;
             }
             else if (o is null)

@@ -6,6 +6,13 @@ namespace AgentBridge.App.Core;
 // pwa/js/usage.js), so the app and the phone read the same.
 public static class Words
 {
+    internal const string ReadOnlyApprovals = "Approve at the machine, or through the Home Assistant card or phone notification if available, not in this app. Sessions started another way on this machine may need approval there too.";
+
+    internal static string ReadOnlyReason(string reason) =>
+        reason.Contains("delivery.readOnly", StringComparison.OrdinalIgnoreCase) ? "view-only mode is turned on in this bridge's settings"
+        : reason.Contains("agent-ha-bridge", StringComparison.OrdinalIgnoreCase) ? "the older bridge is running for this user"
+        : reason;
+
     public static string Ago(DateTimeOffset at, DateTimeOffset now)
     {
         var s = (long)Math.Floor((now - at).TotalSeconds);
