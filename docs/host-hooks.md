@@ -330,7 +330,12 @@ refuses a second profile for an installation that one already has.
    withdrawing approvals (below), check for agent-ha-bridge again before each delete.
 
 A `FileSystemWatcher` on the spool wakes a pass the moment a hook renames a file into place.
-A sweep every 2 s covers anything the watcher misses.
+The safety sweep starts at 2 s, doubling after empty passes to a 30 s idle ceiling. Any watcher
+signal or handled event resets the wait to 2 s. A missed notification is therefore recovered
+within 30 s while idle, and each pass still renews the heartbeat before its 60 s expiry.
+`SweepInterval` changes the active interval but is capped at 30 s for the same reason.
+Waits use the injected clock and are cancelled on stop; an intake that has not started creates
+no timer.
 
 **Pruning.** Every 60 s, as the daemon's reconcile did, the intake deletes registrations whose
 session is over. Nothing else would ever delete them, and discovery reads every one each

@@ -12,7 +12,8 @@ public sealed class HookIntakeSchedulingTests
     {
         using var fixture = new Fixture();
         var time = new CountingTime(fixture);
-        await using var intake = Intake(fixture, time);
+        var passes = 0;
+        await using var intake = Intake(fixture, time, beat: () => Interlocked.Increment(ref passes));
         intake.Start();
 
         var elapsed = TimeSpan.Zero;
@@ -21,7 +22,8 @@ public sealed class HookIntakeSchedulingTests
         {
             var wait = await time.NextWait();
             Assert.InRange(wait, TimeSpan.FromSeconds(2), Ceiling);
-            Assert.True(SpoolContract.ConsumerState(fixture.Runtime, time.GetUtcNow()).Alive);
+            Assert.Equal(sweeps, Volatile.Read(ref passes));
+            Assert.True(File.Exists(SpoolContract.HeartbeatPath(fixture.Runtime)));
             if (elapsed + wait > TimeSpan.FromMinutes(5)) { break; }
             elapsed += wait;
             time.Advance(wait);
@@ -30,6 +32,32 @@ public sealed class HookIntakeSchedulingTests
         }
         Assert.InRange(sweeps, 10, 14);
         Assert.Equal(1, time.Active);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void A_nonpositive_sweep_interval_is_rejected_instead_of_spinning(int seconds)
+    {
+        using var fixture = new Fixture();
+        Assert.Throws<ArgumentOutOfRangeException>(() => new HookIntake(new HookIntakeOptions
+        {
+            RuntimeRoot = fixture.Runtime,
+            ClaudeHome = fixture.ClaudeHome,
+            SweepInterval = TimeSpan.FromSeconds(seconds),
+        }, fixture.Processes, fixture.Time));
+    }
+
+    [Fact]
+    public async Task A_long_configured_sweep_still_renews_the_heartbeat_within_the_idle_ceiling()
+    {
+        using var fixture = new Fixture();
+        var time = new CountingTime(fixture);
+        await using var intake = Intake(fixture, time, interval: TimeSpan.FromMinutes(5));
+        intake.Start();
+        Assert.Equal(Ceiling, await time.NextWait());
+        time.Advance(Ceiling);
+        Assert.Equal(Ceiling, await time.NextWait());
     }
 
     [Fact]
@@ -69,9 +97,42 @@ public sealed class HookIntakeSchedulingTests
         Assert.Equal(before, time.GetUtcNow());
         Assert.True(heard.TryRead(out var notice));
         Assert.Equal("watched", notice.SessionId);
+    }
+
+    [Fact]
+    public async Task A_watcher_signal_without_an_event_still_resets_the_idle_backoff()
+    {
+        using var fixture = new Fixture();
+        var time = new CountingTime(fixture);
+        var passes = 0;
+        await using var intake = Intake(fixture, time, beat: () => Interlocked.Increment(ref passes));
+        intake.Start();
+        await ReachIdleCeiling(time);
+        var before = time.GetUtcNow();
+        var previousPasses = Volatile.Read(ref passes);
+
+        intake.Wake();
+
+        Assert.Equal(TimeSpan.FromSeconds(2), await time.NextWait());
+        Assert.Equal(previousPasses + 1, Volatile.Read(ref passes));
+        Assert.Equal(0, intake.Handled);
+        Assert.Equal(before, time.GetUtcNow());
         Assert.Equal(1, time.Active);
-        time.Advance(TimeSpan.FromSeconds(2));
-        Assert.Equal(TimeSpan.FromSeconds(4), await time.NextWait());
+    }
+
+    [Fact]
+    public async Task Cancellation_during_a_pass_creates_no_safety_timer()
+    {
+        using var fixture = new Fixture();
+        var time = new CountingTime(fixture);
+        using var stop = new CancellationTokenSource();
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var intake = Intake(fixture, time, beat: () => { stop.Cancel(); reached.TrySetResult(); });
+        intake.Start(stop.Token);
+        try { await reached.Task.WaitAsync(TimeSpan.FromSeconds(5)); }
+        finally { await intake.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5)); }
+
+        Assert.Equal(0, time.Created);
     }
 
     [Theory]
@@ -106,12 +167,13 @@ public sealed class HookIntakeSchedulingTests
         finally { if (!disposed) { await intake.DisposeAsync(); } }
     }
 
-    static HookIntake Intake(Fixture fixture, TimeProvider time, bool watch = false) => new(new HookIntakeOptions
+    static HookIntake Intake(Fixture fixture, TimeProvider time, bool watch = false, Action? beat = null, TimeSpan? interval = null) => new(new HookIntakeOptions
     {
         RuntimeRoot = fixture.Runtime,
         ClaudeHome = fixture.ClaudeHome,
         UseFileSystemWatcher = watch,
-        SpaceProbe = _ => null,
+        SweepInterval = interval ?? TimeSpan.FromSeconds(2),
+        SpaceProbe = _ => { beat?.Invoke(); return null; },
     }, fixture.Processes, time);
 
     static async Task ReachIdleCeiling(CountingTime time)
@@ -133,8 +195,11 @@ public sealed class HookIntakeSchedulingTests
         public int Fired => Volatile.Read(ref fired);
         public override DateTimeOffset GetUtcNow() => fixture.Time.GetUtcNow();
         public void Advance(TimeSpan by) => fixture.Time.Advance(by);
-        public async Task<TimeSpan> NextWait() =>
-            await waits.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        public async Task<TimeSpan> NextWait()
+        {
+            try { return await waits.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch (TimeoutException) { throw new Xunit.Sdk.XunitException("The intake did not schedule its safety wait through the injected clock."); }
+        }
 
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
