@@ -214,7 +214,12 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     So is a form with two fields of the same heading the tab hints cannot tell apart (both
     between the first and the last): the tab bar marks the field being answered by colour
     alone, which the screen read does not carry, so a repaint while the CLI still showed the
-    first could pass for the second. Headings are compared exactly as drawn, their ends
+    first could pass for the second. Wrapped headings also need unique identity: before a
+    middle field's keys, the same observed heading rows must not match another middle field
+    under `Drawn`, including its row-break space tolerance. For example, a space after a
+    hyphen may disappear at a wrap, making otherwise different titles indistinguishable.
+    Such a screen is refused; hints still distinguish first and last fields. Distinct
+    drawings in a wider window remain answerable. Headings are compared exactly as drawn, their ends
     trimmed, a list's colon taken with its title as the CLI draws them together, so with no
     tab bar "Pick  one:" or "Pick one:" with a no-break space is not "Pick one:" (#1137
     review). A title whose spaces the host cannot be sure how the CLI draws (white space at

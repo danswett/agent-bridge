@@ -377,8 +377,9 @@ public static partial class CopilotFormScreen
             for (var i = 0; i < form.Fields.Count; i++)
             {
                 var field = form.Fields[i];
-                if (field.Label is null || frame[r].Trim(' ') != Headed(field)) { continue; }
-                if (Hints(frame, r + 1, i, form.Fields.Count, field.Kind is CopilotFieldKind.Text or CopilotFieldKind.Number) is not null) { return r; }
+                var at = r;
+                if (field.Label is null || !Drawn(frame, ref at, Headed(field), rule.Trim(' ').Length - 2)) { continue; }
+                if (Hints(frame, at, i, form.Fields.Count, field.Kind is CopilotFieldKind.Text or CopilotFieldKind.Number) is not null) { return r; }
             }
         }
         return -1;
@@ -436,16 +437,16 @@ public static partial class CopilotFormScreen
         var heading = Headed(form.Fields[index]);
         if (form.Fields.Count > 1)
         {
-            // One row, read exactly as `Da` draws it at this field (Bars): each label as it is,
+            // Read exactly as `Da` draws it at this field (Bars): each label as it is,
             // brackets in a title included, its spaces and the gaps between labels too, so two
             // titles are never read as one ("Now here" is not "Nowhere"), nor one as two. The
             // bar fits itself to the console's width less four columns (`$fn`), within the
-            // frame, so it is drawn on one row; one read across rows is not taken as the bar.
+            // frame, so a bar that fits is drawn on one row.
             // Too wide for the console, it shows only the labels around the field being
-            //             answered, between arrows. Copilot CLI 1.0.106's bar (`_l`, window `kHi`) shows the
-                        // field's label alone where not even two fit, however long it is, and a title wider
-                        // than the row wraps onto as many rows as it takes, the arrows beside its middle row
-                        // (Wrapped); read as one row, it was no form at all (#1123).
+            // answered, between arrows. Copilot CLI 1.0.106's bar (`_l`, window `kHi`) shows the
+            // field's label alone where not even two fit, however long it is, and a title wider
+            // than the row wraps onto as many rows as it takes, the arrows beside its middle row
+            // (Wrapped); read as one row, it was no form at all (#1123).
             at = Next(rows, at);
             string[] labels = [.. form.Fields.Select(f => f.Label!)];
             // A wide form's bar is drawn windowed (the labels around the field between arrows, or
@@ -467,7 +468,21 @@ public static partial class CopilotFormScreen
         // review). Long headings wrap just as the message does (#2190); accepting the bar
         // alone left these forms refused at their heading. Keep the input below its last row.
         at = Next(rows, at);
-        if (!Drawn(rows, ref at, heading, top.Trim(' ').Length - 2)) { return found.Fail(FormCheck.FieldHeading, at, off); }
+        var (headingFrom, width) = (at, top.Trim(' ').Length - 2);
+        if (!Drawn(rows, ref at, heading, width)) { return found.Fail(FormCheck.FieldHeading, at, off); }
+        // A space hidden at a wrap can make different middle titles read alike in both the
+        // bar and heading. Their hints are identical too; a repaint is not proof of moving on.
+        if (index > 0 && index < form.Fields.Count - 1)
+        {
+            for (var other = 1; other < form.Fields.Count - 1; other++)
+            {
+                var again = headingFrom;
+                if (other != index && Drawn(rows, ref again, Headed(form.Fields[other]), width) && again == at)
+                {
+                    return found.Fail(FormCheck.FieldHeading, headingFrom, "the field heading on the session's screen could name more than one field; answer it at the machine");
+                }
+            }
+        }
         if (Hints(rows, at, index, form.Fields.Count, form.Fields[index].Kind is CopilotFieldKind.Text or CopilotFieldKind.Number) is not var (start, end, cancels))
         {
             return found.Fail(FormCheck.Hints, at, off);

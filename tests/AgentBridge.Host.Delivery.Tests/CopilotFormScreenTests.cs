@@ -81,7 +81,50 @@ public class CopilotFormScreenTests
         var rows = Screen(80, 1, marked: true);
         if (change == "heading") { rows[rows.FindIndex(r => r.EndsWith("session:", StringComparison.Ordinal))] += " changed"; }
         if (change == "hints") { rows = [.. rows.Select(r => r.Replace("shift+tab prev", "shift+tab next", StringComparison.Ordinal))]; }
-        if (change == "permission") { rows.AddRange(["Allow this command?", " \u276F 1. Yes", " 2. No"]); }
+        if (change == "permission") { rows.InsertRange(rows.Count - 1, [" \u276F 1. Yes", " 2. No"]); }
         Assert.NotNull(CopilotFormScreen.Showing(rows, Form, 1));
+        if (change == "permission") { Assert.Equal(FormCheck.Prompted, CopilotFormScreen.Diagnose(rows, Form, 1).Check); }
+    }
+
+    [Theory]
+    [InlineData(1, false, true)]
+    [InlineData(2, false, true)]
+    [InlineData(1, true, true)]
+    [InlineData(2, true, true)]
+    [InlineData(1, false, false)]
+    [InlineData(2, false, false)]
+    [InlineData(1, true, false)]
+    [InlineData(2, true, false)]
+    public void A_middle_heading_must_identify_one_field_under_the_actual_wrap_matching(int index, bool marked, bool wrapped)
+    {
+        var prefix = new string('A', 69) + "-";
+        var suffix = new string('B', 20);
+        string[] labels = ["First", prefix + suffix, prefix + " " + suffix, "Last"];
+        var form = new CopilotForm([.. labels.Select((label, i) =>
+            new CopilotField($"f{i}", CopilotFieldKind.Boolean, [], [], false, Label: label))], "Four decisions.");
+        var selected = labels[index];
+        var window = marked ? $"[{selected}]" : $" {selected} ";
+        string[] bar = wrapped ? [marked ? "[" + prefix : prefix, $"\u2190 {suffix}{(marked ? "]" : "")} \u2192"] : [$"\u2190 {window} \u2192"];
+        string[] heading = wrapped ? [prefix, suffix + ":"] : [selected + ":"];
+        var rule = new string('\u2500', (wrapped ? 80 : 120) - 2);
+        List<string> rows =
+        [
+            rule, " Copilot needs information.", " Four decisions.", "",
+            .. bar.Select(r => " " + r), "", .. heading.Select(r => " " + r),
+            " \u276F Yes", "   No", "",
+            " enter accept \u00B7 tab next \u00B7 shift+tab prev \u00B7 ctrl+d decline \u00B7 esc cancel", rule,
+        ];
+
+        if (wrapped) { Assert.NotNull(CopilotFormScreen.Showing(rows, form, index)); }
+        else { Assert.Null(CopilotFormScreen.Showing(rows, form, index)); }
+    }
+
+    [Fact]
+    public void A_clipped_form_with_a_wrapped_heading_is_still_named_as_tall()
+    {
+        var rows = Screen(80, 1, marked: true);
+        rows = [.. rows.Skip(rows.FindIndex(r => r.StartsWith(" Would you", StringComparison.Ordinal)))];
+
+        Assert.Equal(FormCheck.Tall, CopilotFormScreen.Diagnose(rows, Form, 1).Check);
     }
 }
