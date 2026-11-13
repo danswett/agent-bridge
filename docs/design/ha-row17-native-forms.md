@@ -10,16 +10,22 @@ It changes no runtime, wire contract, signing rule, approval, stop or push deliv
 The old HA `f1` through `f12` helpers are positional per-field dropdowns, not
 function keys. Dropping that workaround from the native experience does not drop
 multi-field questions. Retain one native named-field form on every required client:
-PWA, Windows, Apple (Mac and iOS separately), MCP agent and host CLI.
+PWA, Android via PWA (browser and installed), Windows, Apple (Mac and iOS
+separately), MCP agent and host CLI.
 Optional HA remains a separate compatibility lane under
 [#2407](https://github.com/danswett/agent-bridge/issues/2407).
 Apple is parked under [#1882](https://github.com/danswett/agent-bridge/issues/1882)
 and remains last in the implementation/rehearsal order.
 
-The pass text below comes from Engineering's supplied summary of the S4 matrix,
-[PR #2409](https://github.com/danswett/agent-bridge/pull/2409), head `75001259`,
-from #2383. That matrix was not on the inspected main and was not read directly.
+The pass text below comes from Engineering's supplied summary of the S4 matrix
+for [#2383](https://github.com/danswett/agent-bridge/issues/2383).
+That matrix was not on the inspected source snapshot and was not read directly.
 Do not treat its summary as a merged document or a completed rehearsal.
+Quality's supplied review finding on
+[PR #2413](https://github.com/danswett/agent-bridge/pull/2413#issuecomment-6843745554)
+additionally identifies the matrix's separate Android-via-PWA lane and
+[#2393](https://github.com/danswett/agent-bridge/issues/2393), covering browser and
+installed PWA. That lane is explicit below, not folded into generic PWA evidence.
 
 ## Evidence boundary
 
@@ -41,8 +47,10 @@ Incomplete reads are deliberately not promoted to Built:
   commands; did not finish its remaining dispatch/help, service or delivery trace.
 - Did not directly read the pending matrix or the linked issue bodies #55, #736,
   #1146, #1401, #1949, #45, #50, #161 or #1419; only Engineering's context supplied
-  their relationship to #2400. Did not read the agent CLI compatibility test plan
-  or complete existing form test suites. No cross-repository runtime trace was done.
+  their relationship to #2400. The full #2393 body and linked review comment were
+  not read directly; Android scope comes from Quality's supplied finding.
+  Did not read the agent CLI compatibility test plan or complete existing form
+  test suites. No cross-repository runtime trace was done.
 
 ## Reconciling the documents
 
@@ -66,6 +74,7 @@ is not established by this read, even where partial source is present.
 | Client | Inspected implementation / partial observation | Row-17 status and retained gap |
 | --- | --- | --- |
 | PWA | [Question UI](../../pwa/js/ui/question-view.js) and [answer model](../../pwa/js/answers.js): named choice, boolean, text, number and multi controls; typed named `fields` values. | Built; fresh five-field live proof, refusal and draft lifecycle evidence still required. Historical parity leaves multi-select untested live. |
+| Android via PWA | Same named PWA editor/model; no Android runtime or install trace was exercised. Browser and installed-PWA use are separate evidence scopes under #2393. | Shared editor built; Android runtime acceptance Unknown. Require distinct browser and installed-PWA five-field, refusal and draft evidence; generic PWA runs do not cover this lane. |
 | Windows | [Question UI](../../src/AgentBridge.App/QuestionView.cs) and [model](../../src/AgentBridge.App.Core/QuestionViewModel.cs): native controls for all five kinds, dictionary keyed by field name, validation before submit. | Built; fresh five-field live proof and draft/refusal evidence required. Existing Other descriptions are not a pass. |
 | Mac | Shared [question model](../../apple/Sources/AgentBridgeAppleCore/BridgeQuestion.swift) and [SwiftUI actions](../../apple/Apps/SessionActions.swift): named bindings and all five editors. | Built shared editor; separate Mac real-host acceptance and question-draft lifecycle unproven. Parked, last, #1882. |
 | iOS | Same shared model and SwiftUI actions; a shared implementation is not an iOS run. | Built shared editor; separate iOS real-host acceptance and question-draft lifecycle unproven. Parked, last, #1882. |
@@ -123,26 +132,31 @@ Carry over the checklist boundaries without expanding their historical evidence:
 Run the five-field contract three times per client per rehearsal stage, as required
 by the supplied matrix pass text. Preserve stage and run identity; do not combine
 three runs across stages or reuse one client's run for another.
+Android via PWA is a separate client lane: keep three browser runs and three
+installed-PWA runs per rehearsal stage, with their mode recorded. Do not pool the
+two modes, count a generic PWA run as Android evidence, or infer installed behavior
+from an Android browser run.
 Mac and iOS need separate records even when their UI/model source is shared.
 If a client cannot expose or deliver the form, record that lane as blocked/unknown,
 not skipped-to-pass and not covered by another client.
 
-For each run keep client/host builds, agent and version, stage, run number,
-session/question identity, named field screen(s), submitted values, actual
-transcript values and outcome. Keep refusal and draft checks with their own
+For each run keep client/host builds, OS/browser and installed mode, agent and
+version, stage, run number, session/question identity, named field screen(s),
+submitted values, actual transcript values and outcome. Keep refusal and draft checks with their own
 screens/transcript observations, including any no-send result.
 Store evidence through the existing rehearsal process with secrets removed;
 this note supplies no evidence bundle and no new acceptance waiver.
 
 ## Bounded follow-ups
 
-Each proposed code/document cut remains at most 250 changed lines. These are
+Each proposed code/document cut remains at most 400 changed lines. These are
 follow-ups, not implementation authorization or claims that tests already exist.
 Engineering must reconcile the completed traces before choosing code cuts.
 
 | Cut | Bounded outcome / prerequisite |
 | --- | --- |
 | PWA contract evidence | Reuse the native named editor; add only missing focused contract assertions, then collect the required live runs and refusal/draft evidence. |
+| Android via PWA, #2393 | Retain a separate lane using the shared editor; collect the browser and installed-PWA five-field runs, refusal and draft checks separately at every rehearsal stage. Shared source or generic PWA evidence is insufficient. |
 | Windows contract evidence | Separate exact-head cut for the same five-field, refusal and draft contract; do not mix approval rendering or delivery changes into it. |
 | MCP inventory first | Finish server registration, authority and named-answer exposure trace; reconcile the stale parity claim. List the smallest retained surface gap before a tests-first implementation cut. |
 | Host CLI inventory first | Finish command/help and delivery trace; distinguish JSON read exposure from a usable native named-field form. Resolve the retained gap before implementation. |
