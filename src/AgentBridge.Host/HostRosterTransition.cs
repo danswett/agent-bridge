@@ -42,7 +42,7 @@ public sealed partial class HostRosterReader
             var highest = value.HighestIssuedAt is { } at ? Instant.Parse(at) : (Instant?)null;
             foreach (var replay in value.Requests)
             {
-                if (replay is null || !Guid.TryParseExact(replay.Request, "D", out _) || replay.Request != replay.Request.ToLowerInvariant())
+                if (replay is null || !Guid.TryParseExact(replay.Request, "D", out var request) || replay.Request != request.ToString("D"))
                 {
                     throw new InvalidDataException();
                 }
@@ -113,9 +113,10 @@ public sealed partial class HostRosterReader
                 if (CheckTransition(command, context, out var effective) is { } changed) { return changed; }
                 var records = transition?.Requests.Where(r => Instant.Parse(r.ExpiresAt).AddSeconds(120) >= effective.Now).ToList() ?? [];
                 var body = command.Body;
-                if (records.Any(r => r.Request == body.Request)) { return "replay"; }
+                var request = Guid.ParseExact(body.Request, "D").ToString("D");
+                if (records.Any(r => r.Request == request)) { return "replay"; }
                 if (records.Count >= ReplayLimit) { return "replay-full"; }
-                records.Add(new Replay(body.Request, body.IssuedAt, body.ExpiresAt));
+                records.Add(new Replay(request, body.IssuedAt, body.ExpiresAt));
                 var highest = transition?.HighestIssuedAt is { } previous && Instant.Parse(previous) > Instant.Parse(body.IssuedAt)
                     ? previous : body.IssuedAt;
                 var next = new Transition(1, identity.Account, identity.Generation, Codec.Base64Url(identity.Genesis),
