@@ -28,6 +28,7 @@ public sealed class StopFlowTests : IAsyncLifetime
     readonly FakeInjector injector = new();
     readonly FakeControl control;
     readonly System.Collections.Concurrent.ConcurrentQueue<string> logged = new();
+    readonly System.Collections.Concurrent.ConcurrentDictionary<(ulong Channel, string Request), string> stopStages = new();
     readonly DeliveryGate gate = new();
     readonly FakeTimeProvider clock = new(Fixture.T0.AddHours(2));
     TestRelay relay = null!;
@@ -93,8 +94,19 @@ public sealed class StopFlowTests : IAsyncLifetime
         PollInterval = TimeSpan.FromMilliseconds(25),
     }, gate: gate);
 
-    void Serve(ISessionStopper? stops, ISessionReplier? replies = null) =>
-        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), replies: replies, stops: stops).HandleAsync;
+    void Serve(ISessionStopper? stops, ISessionReplier? replies = null)
+    {
+        var service = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), replies: replies, stops: stops);
+        host.Hub.Handler = async (channel, op, data) =>
+        {
+            if (op != Ops.SessionStop) { return await service.HandleAsync(channel, op, data); }
+            var key = (channel.Id, data.GetProperty("request").GetString()!);
+            stopStages[key] = "handler entered";
+            var result = await service.HandleAsync(channel, op, data);
+            stopStages[key] = "handler returned";
+            return result;
+        };
+    }
 
     async Task<SecureChannel> OpenAsync()
     {
@@ -104,17 +116,40 @@ public sealed class StopFlowTests : IAsyncLifetime
 
     sealed record Outcome(string Outcome_, string? Reason, string? Confirm, int? Seconds, bool? Forced);
 
-    static async Task<Outcome> StopAsync(SecureChannel ch, string? confirm = null, string? request = null, string id = Id)
+    async Task<Outcome> StopAsync(SecureChannel ch, string? confirm = null, string? request = null, string id = Id)
     {
-        var data = new Dictionary<string, object?> { ["id"] = id, ["request"] = request ?? Guid.NewGuid().ToString() };
+        request ??= Guid.NewGuid().ToString();
+        var data = new Dictionary<string, object?> { ["id"] = id, ["request"] = request };
         if (confirm is not null) { data["confirm"] = confirm; }
-        var response = await ch.RequestAsync(Ops.SessionStop, data);
+        var response = await ObserveStopAsync(() => ch.RequestAsync(Ops.SessionStop, data), () => DescribeStop(ch, request, id));
         Assert.True(response.GetProperty("ok").GetBoolean(), response.GetRawText());
         var r = response.GetProperty("result");
         string? S(string name) => r.TryGetProperty(name, out var v) ? v.GetString() : null;
         return new Outcome(S("outcome")!, S("reason"), S("confirm"),
             r.TryGetProperty("confirmSeconds", out var n) ? n.GetInt32() : null,
             r.TryGetProperty("forced", out var b) ? b.GetBoolean() : null);
+    }
+
+    internal static async Task<T> ObserveStopAsync<T>(Func<Task<T>> press, Func<string> describe)
+    {
+        try { return await press(); }
+        catch (TimeoutException error)
+        {
+            throw new TimeoutException($"Stop fixture timed out awaiting response: {describe()}", error);
+        }
+    }
+
+    string DescribeStop(SecureChannel ch, string request, string id)
+    {
+        var stage = stopStages.TryGetValue((ch.Id, request), out var seen) ? seen : "handler not observed";
+        int plans;
+        lock (injector.Plans) { plans = injector.Plans.Count; }
+        return $"{stage}; channel open {ch.IsOpen}, close {ch.CloseReason?.GetType().Name ?? "none"}; "
+            + $"client sees host {client.Relay.Presence.Any(p => p.Id == host.Id)}, "
+            + $"host sees client {host.Relay.Presence.Any(p => p.Id == client.Id)}; "
+            + $"process opens {Volatile.Read(ref control.Opens)}, injections {plans}, "
+            + $"session {source.Get(id)?.Status.ToString() ?? "removed"}; "
+            + TestTimeoutDiagnostics.Describe();
     }
 
     static (string, string?) Pair(Outcome o) => (o.Outcome_, o.Reason);
@@ -480,6 +515,37 @@ public sealed class StopFlowTests : IAsyncLifetime
             seen.Add(ev.Data switch { Session s => $"upsert {s.Status}", SessionRemoved => "remove", _ => ev.Name });
         }
         Assert.Equal(["upsert Idle", Events.SessionsSynced, "upsert Ending", "remove"], seen);
+    }
+
+    [Fact]
+    public async Task An_empty_transcript_stop_shows_ending_but_does_not_report_ended_before_its_injection_finishes()
+    {
+        File.WriteAllText(events, "");
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        injector.Gate = release.Task;
+        var ch = await OpenAsync();
+
+        var stopping = StopAsync(ch);
+        Outcome result;
+        try
+        {
+            var progressed = await Task.WhenAny(injector.Entered.Task, stopping);
+            await progressed;
+            Assert.Same(injector.Entered.Task, progressed);
+            Assert.Equal(SessionStatus.Ending, source.Get(Id)!.Status);
+            Assert.Equal([$"{Pid}:/exit⏎"], Typed);
+            Assert.False(stopping.IsCompleted);
+            Assert.Empty(control.Terminated);
+        }
+        finally
+        {
+            release.TrySetResult();
+            result = await stopping;
+        }
+
+        Assert.Equal(new Outcome("ended", null, null, null, null), result);
+        Assert.Null(source.Get(Id));
+        Assert.Empty(control.Terminated);
     }
 
     [Fact]
@@ -857,12 +923,14 @@ public sealed class StopFlowTests : IAsyncLifetime
     sealed class FakeInjector : IConsoleInjector
     {
         public readonly List<(int Pid, KeyPlan Plan)> Plans = [];
+        public readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Action<int, KeyPlan>? OnInject;
         public Task Gate = Task.CompletedTask;
 
         public async Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
         {
             lock (Plans) { Plans.Add((processId, plan)); }
+            Entered.TrySetResult();
             await Gate;
             OnInject?.Invoke(processId, plan);
             return new InjectionResult(InjectionStatus.Typed, "ok");
