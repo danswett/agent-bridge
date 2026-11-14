@@ -119,11 +119,12 @@ static partial class SelfTest
         nint focus = 0, root = 0, foreground = 0;
         uint thread = 0, process = 0;
         var ready = false;
+        nint minimizedTerminal = 0;
         try
         {
             NativeInputSetup.RequireForeground(() =>
             {
-                if (window != 0 && GetForegroundWindow() != window) { TrayIcon.SetForegroundWindow(window); }
+                if (window != 0 && GetForegroundWindow() != window) { AcquireNativeForeground(window); }
                 focus = GetFocus();
                 thread = GetWindowThreadProcessId(focus, out process);
                 root = GetAncestor(focus, 2);
@@ -131,7 +132,8 @@ static partial class SelfTest
                 ready = NativeInputSetup.TargetReady(window, focus, root, foreground,
                     GetCurrentThreadId(), (uint)Environment.ProcessId, thread, process);
                 return window != 0 && foreground == window;
-            }, ForegroundOwner);
+            }, () => $"{ForegroundOwner()}; terminal fallback: {ForegroundWindowState(minimizedTerminal)}",
+                () => minimizedTerminal = MinimizeForegroundTerminal());
         }
         catch (InvalidOperationException e) { AppLog.Write(e.Message); throw; }
         if (!ready)
