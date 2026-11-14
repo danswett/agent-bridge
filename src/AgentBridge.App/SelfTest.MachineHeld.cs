@@ -31,7 +31,7 @@ static partial class SelfTest
             .Select(g => ById<TextBlock>(g, "MachineFacts")).FirstOrDefault();
         try
         {
-            machine.Host.Sessions.SetHeld(new DiscoveryHeld(reason, [AgentKind.Copilot]));
+            machine.Host.Sessions.SetHeld(new DiscoveryHeld(reason, new[] { AgentKind.Copilot }));
             // The window's one-second timer is not started in a self-test, and the row is drawn on its fifth tick
             // once the hold is due; so the ticks are driven here, as the sign-in captures drive theirs.
             var said = await Until(() => { main.Tick(); return Facts()?.Text.EndsWith(" · Discovery held", StringComparison.Ordinal) == true; }, TimeSpan.FromSeconds(10));

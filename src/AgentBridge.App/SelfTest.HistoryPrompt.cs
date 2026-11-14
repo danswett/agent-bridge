@@ -26,7 +26,7 @@ static partial class SelfTest
             Id = id,
             At = at.AddMinutes(minute),
             Prompt = prompt,
-            Parts = [new HistoryPart { Id = $"{id}p", Kind = HistoryPartKind.Response, At = at.AddMinutes(minute), Text = "A reply." }],
+            Parts = new[] { new HistoryPart { Id = $"{id}p", Kind = HistoryPartKind.Response, At = at.AddMinutes(minute), Text = "A reply." } },
         };
         stored.AddLive(Turn("yours-short", 1, new HistoryPrompt { Text = "Yes" }));
         stored.AddLive(Turn("yours-long", 2, new HistoryPrompt { Text = longText }));

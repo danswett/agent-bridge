@@ -212,7 +212,7 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         handedOver = null;
         var copy = handoff.Prepare(file, version, source!);
         // DefaultProcessImpl uses Process.Start directly, so this app is Update.exe's parent.
-        handedOver = handoff.Launch(copy, root, packages, ["--background", "--profile", profile],
+        handedOver = handoff.Launch(copy, root, packages, new[] { "--background", "--profile", profile },
             args => locator.Process.StartProcess(updateExe, args, Path.GetDirectoryName(updateExe)!, false));
         // Update.exe has started: the next start may say the install didn't take (#1167). Best
         // effort; it must not keep this process from exiting.
