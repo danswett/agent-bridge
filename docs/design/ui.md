@@ -654,6 +654,10 @@ works while it moves, and a second change replaces the first motion. The session
 scroll to) are App.Core's, tested on every platform; the durations, curves and distances are
 read from the generated `AbMotion*` resources.
 
+The accent button's background transition uses `press`; the reply Send/check opacity
+transitions use `acknowledge`. These native implicit transitions change only the brush
+or opacity, not the control's layout.
+
 The clients implement this after U5 and U6 (#232, phase 2). Each tests that reduced motion
 makes every change instant or a cross-fade, that no motion runs longer than its token, and
 that a control can be used while it moves.
