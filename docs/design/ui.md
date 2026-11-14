@@ -840,7 +840,7 @@ launch lineage may come later, on top of this, once hosts report it.
   holding a row that matches shows open, and its header reports expanded, as drawn; it can't
   be collapsed until the filter or search is off. Then it is collapsed again: the stored state
   is unchanged.
-- **The header** is a §5.3 Disclosure, 36 px tall on a desktop and 44 on a phone, with the
+- **The header** is a §5.3 Disclosure, 36 px tall on a desktop and 52 on a phone (#2072), with the
   list's leading inset: a chevron (→ collapsed, ↓ expanded), the name in the body face,
   semibold, then "· N", the rows shown in it on the machine chosen, in `text2`. A pinned row
   keeps its group (Pins, above) but shows, and is counted, only in Pinned: no group's count,
@@ -866,6 +866,29 @@ launch lineage may come later, on top of this, once hosts report it.
   on the header on a desktop, the sheet's field on a phone), makes the group at the foot of
   your groups, expanded, and moves the row into it. A name is 1–40 characters after trimming,
   shown as plain text, and unique among your groups ignoring case; at most 32 groups.
+- **The Move to group picker** (#2072; owner-approved board, studio PR 27). One row
+  template: a 20 px icon, the name, the count right-aligned, then a 22 px check column, with the
+  title's 16 px side padding; rows are 52 px and fill with the press token while pressed. The
+  current group is checked, tinted and bold; Remove from group shows only for a row that is in a
+  group. The row being moved is named in a card at the top, and the scrim is light (32% in dark,
+  22% in light). On a phone it is a bottom sheet: Cancel sits in the sheet bar, top right, nothing
+  sits under the list, the bottom padding is the safe-area inset plus 16 px, and the height is
+  at most min(70dvh, 100dvh minus the top inset minus 96 px); the list scrolls inside while
+  New group and Remove stay pinned. On an iPad it is a 340 px popover beside the list. It is a
+  radio group, the current group `aria-checked`.
+- **Naming a group:** from Move to group the button says "Create and move" and the moving
+  session stays named; from the Sessions header it says "Create". Save and Create stay off until
+  the name is valid, and the reason is written out beside a warning mark (empty, longer than 40,
+  or already used), announced politely. Never colour alone.
+- **The group header's look** (#2072): on a phone a 44 px chevron button, the name
+  (16 px, 600), a count pill, and a 44 px more button; a folded group with a row waiting on you
+  shows an amber fill, an outlined count and "N need you" with the `needs` mark; members hang off
+  a 2 px rail. An empty group opens to a dashed note: "Nothing here yet. Open a session's menu
+  and choose Move to group." with no count word.
+- **Deleting a group asks once.** The dialog names the group and says the sessions are not
+  deleted and go back to Sessions; an empty group says no sessions are affected. The safe button,
+  Keep group, is the default and ringed; Delete group is the danger colour with the trash mark and
+  the word. The danger colour is used only here and for name errors.
 - **Where a moved row lands:** Move to group, a drop on a header, or New group… put the row
   at the top of the group. A row moved into a collapsed group leaves its place as §5.3's
   Arriving and leaving says, and keyboard focus goes to that group's header, whose name says
@@ -876,8 +899,8 @@ launch lineage may come later, on top of this, once hosts report it.
   step, never entered, so the moved row stays on screen. Alt+↑ on the first row of Sessions or
   of a group moves it to the foot of the expanded group above, passing collapsed ones the same
   way. At the top of the first group, or the foot of Sessions, nothing moves.
-- **Renaming or deleting** never ends, hides or reorders a session. Delete group asks nothing:
-  its rows go to the top of Sessions in their order, a pinned member stays pinned and leaves
+- **Renaming or deleting** never ends, hides or reorders a session. Delete group asks once
+  (below); then its rows go to the top of Sessions in their order, a pinned member stays pinned and leaves
   the group, focus goes to the first of the moved rows (or, with none, the next header or row,
   else the one before it, else New), and it is announced politely ("*name* deleted. 3 sessions
   moved to Sessions"). An empty group stays until it is deleted.
