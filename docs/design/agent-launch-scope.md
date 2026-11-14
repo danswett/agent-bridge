@@ -124,8 +124,10 @@ exception, never Answer/Dismiss. The gate runs, in order, refusing at the first 
 
 0. a `request` this principal has used before never starts a second launch. The gate checks the
    launch service's memory (`LaunchServiceOptions.RememberFor`, 25 minutes) **and** the set of
-   requests rebuilt from today's/yesterday's audit **and every unresolved journal of any
-   age**, including its origin binding/hash. An unresolved request never ages out of dedup.
+   requests rebuilt from today's/yesterday's audit **and every unresolved journal and
+   pending audit reservation of any age**, even without a journal (§13.1), with known
+   origin/hash evidence. Missing private binding never authorizes a start.
+   An unresolved request never ages out of dedup.
    Missing/unreadable evidence refuses launches (§6). Identity uses `requestSha256` (§6), the
    SHA-256 of the request's normalised launch fields, prompt included, recorded on each line;
    the prompt itself is never recorded. A repeat with the same hash gets the recorded outcome
@@ -330,7 +332,8 @@ memory only as [agent-principals.md](agent-principals.md) §5.5 allowed for mess
 evidence (on each machine, 5 started and a sixth refused during the acceptance run, §10) must
 survive a restart.
 * **Cap/request fold:** today's/yesterday's audit in full; caps use its last hour.
-  Request ids also fold every unresolved journal, regardless of age (§2 step 0).
+  Request ids also fold every unresolved journal and pending audit reservation at any age,
+  even without a journal (§2 step 0).
   Separately, §6 preflights all retained versions and unresolved journals.
 * **Clock:** the window is judged on each line's wall-clock `at`. A line dated in the future (the
   clock stepped back) counts as if dated now, so a clock jump can neither open nor close the cap.
@@ -364,7 +367,12 @@ gate rest on.
   of KB an hour, well under its own **16 MiB** quota for 30 days; refusals are already limited
   (§5).
 * **Pruning:** whole daily files, oldest first, at host start and once a day, never per append;
-  never a file that holds a line from the last two hours; a prune that fails warns in
+  never a file that holds a line from the last two hours or unresolved pending reservation,
+  even without a journal. Prune/archive cannot remove its required fold evidence until
+  §13.5 proof resolves it; quota pressure never evicts it. Keep resolution proof while
+  any reservation copy remains retained, including in files pinned by another launch.
+  Prune proof only after, or atomically with, the last reservation copy,
+  also respecting §13.1 readback retention. A prune that fails warns in
   `host.status` and never blocks a launch. A day over the quota on its own keeps that day and
   warns.
 * **A person may archive** the log (`agent-bridge-host audit archive`, at the machine); the
@@ -387,6 +395,7 @@ gate rest on.
   blocks old-host startup. Once §13's gates are met, **all session.launch, person-app included**,
   is blocked as pendingStorageUnavailable; persist manualRecoveryRequired=true, no retryAfter.
   This sticky fault is not timed capRebuilding; even readable files do not auto-clear it.
+  An unresolved audit reservation with a missing journal also latches this fault (§13.1).
   **Owner recovery:** local App `launch.pending.repair` journal-restore mode (§13.4 gate),
   bound to profile/journal digest when record IDs are unreadable. Keep original bytes/hash
   in non-destructive quarantine; audit intent and old/new digest binding before restore, result after.
@@ -398,8 +407,8 @@ gate rest on.
   ships before pending writes, not as a later fix.
   After validated restore/rebuild, the new copy is authoritative; the original is forensic-only,
   excluded from runtime readability checks but still pins the marker, never authorizing rollback.
-  Missing identity or incomplete evidence keeps the manual block. Nothing is deleted or
-  force-cleared (§13.7).
+  Unresolved missing identity or incomplete evidence keeps the manual block; §13.1 defines
+  audit-only repair. Nothing is deleted or force-cleared (§13.7).
   **Proposed quarantine bound, separate from pending storage:** four originals, 256 KiB/profile
   including metadata. At saturation/oversize retain the original in place, refuse allocations/
   repair, never copy beyond the budget or evict evidence. No automatic expiry; retained originals
@@ -652,6 +661,16 @@ script identity. Rotation/resume keeps dedup key but refuses adoption/relaunch; 
 bytes are requestReused. Protect like credentials; encrypt snapshots. Workspace/fleet
 git/relay metadata/client caches aren't authority.
 
+**Audit-only recovery:** fold unresolved pending reservations from all retained audit
+files/archives at any age, not just today/yesterday. Until durable §13.5 readiness or
+no-start/closure proof, each holds its pending slot and any applicable live reservation.
+Missing journal means internal reconciliationRequired and sticky pendingStorageUnavailable,
+manualRecoveryRequired=true, no retryAfter; repeat R is unconfirmed/fault, never a new start.
+Never recreate the private binding from audit fields. Only §13.4 person repair bound to
+the reservation/audit digest may record §13.5 positive proof and a durable terminal
+resolution; then a complete all-age rebuild must pass before manual fault clearing.
+Insufficient proof stays blocked. Ordinary rebuild, age and journal absence clear nothing.
+
 | Stored field | Meaning |
 |---|---|
 | `v`, `pending`, `request`, `requestSha256` | Journal version, host-generated pending UUID, original launch UUID and normalized request hash |
@@ -744,7 +763,7 @@ stay identical, never another start. Question Q includes kind/deadline; absent m
 |---|---|
 | Reserved/journaled, no question | starting; unconfirmed/launchStarting; false; unknown; neither |
 | Positive Q, then deadline passes | needsPerson then expired; needsPerson/startupQuestion; false; unknown; Q |
-| Reserved audit, journal absent after crash | reconciliationRequired; unconfirmed/interrupted; false; unknown; neither |
+| Reserved audit, journal absent after crash | Internal reconciliationRequired; readback unconfirmed/pendingStorageUnavailable, manualRecoveryRequired true, no retryAfter; omit unavailable lifecycle fields; no question/session; audit identity/slot remain pinned (§13.1) |
 | Proven pre-start busy/refused/failure | notStarted; original outcome/code; true; neverReady; neither |
 | Native exit with never-ready proof | exited; failed/startupExited; true; neverReady; neither |
 | Cancel with never-ready proof | dismissed; failed/launchDismissed; true; neverReady; neither |
@@ -869,7 +888,8 @@ Storage/audit failure blocks starts/runtime effects, retains evidence, reports f
 mark reconciliationRequired and stop effect retries; read-only observation continues.
 **New local `launch.pending.repair`:** add to `LocalApi.Acts`; same fresh validated-App,
 protected person confirmation and person-envelope gateway as local Cancel; bind pending/revision,
-or profile/journal digest for §6's restore mode. Refuse Agent/script/Other/service/remote before lookup; no CLI, unsigned flag or
+the reservation/audit digest for §13.1's audit-only repair, or profile/journal digest for §6's
+restore mode. Refuse Agent/script/Other/service/remote before lookup; no CLI, unsigned flag or
 legacy-MAC fallback. This missing gate/signer and verified restore must ship no later than
 pending writes/events or the person-app launch block, under §13's enablement gate;
 they are prerequisites, not a current grant.
@@ -889,7 +909,7 @@ boot, never clock guess. Unknown readiness is not never-ready.
 
 | Case | Positive evidence and terminal record |
 |---|---|
-| Crash after reserved audit, before journal flush | §5 interrupted/unconfirmed remains charged; pending UUID from audit, reconciliationRequired/closed false for pending peers. Missing journal alone is not no-start proof; repair applies the rows below |
+| Crash after reserved audit, before journal flush | §5 charge stays; §13.1 pins the audit-only identity and pending/live reservation at every age. Internal reconciliationRequired; sticky pendingStorageUnavailable/manualRecoveryRequired, no retryAfter; readback omits unavailable lifecycle fields. Missing journal is not no-start proof; only person repair with §13.5 proof resolves it |
 | Busy/refused/failed before start, after journal exists | Starter was never entered; `notStarted, closed: true`, original outcome/code. Release pending/live reservation; only busy/refused refunds hourly charge |
 | Crash between journal creation and start claim | Intact journal/audit show no claim; fenced old host cannot start: `notStarted, failed, closed: true` |
 | Crash after claim, before process identity saved | Recoverable owned-attempt proof shows none started: notStarted; if all gone but history uncertain: `closedUnconfirmed, unconfirmed, closed: true`. If proof missing, reconcile, no guessed release |
@@ -927,6 +947,15 @@ from today's/yesterday's audit: same bound origin/request returns its pending UU
 no start; incompatible old host refuses startup. Clearing is refused while either
 unresolved journals or retained new-format evidence remains; only a compatible locked
 all-age scan proving neither remains permits clearing, never age alone;
+**auditOnlyPendingOlderThanTwoDays:** reserved R/P at 72 h, no journal and outside
+today's/yesterday's audit: restart still dedups R, holds its pending/applicable live slot
+and retains the audit/fold evidence against prune/archive/quota. Repeat R cannot start;
+missing journal latches the same sticky fault and typed readback as §13.1.
+Only person repair with positive terminal proof plus full rebuild may clear it;
+**auditProofPinnedAcrossDays:** R/U share day 0; U remains unresolved and pins the file,
+R resolves on day 1. Past readback/pruning windows, retain R's resolution proof while
+any R reservation copy remains. Restart keeps R terminal with no new storage fault
+or slot; U still holds its slot;
 surviving child/claim crash/unknown readiness;
 expiry observer and one-count live conversion; pipe Answer refusal and signed Cancel/
 missing-signer refusal; negotiated current vs legacy readback, generation/changed-byte
@@ -949,8 +978,9 @@ keyboard/screen-reader/narrow protected rendering on each client.
 
 ### 13.7 Open choices before code
 
-Approve proposed shared capacity/reserves, byte/replay/repair budgets and renewal;
-resolve newest/first busy wording. Confirm origin withdrawal vs person-only cancel.
+Approve proposed shared capacity/reserves, byte/replay/repair budgets and renewal.
+Whether person-app launches share the four pending slots remains an explicit capacity decision.
+Resolve newest/first busy wording. Confirm origin withdrawal vs person-only cancel.
 Per-item ceiling/backoff is open: recommend one replacement then typed blocked; keep
 unattended reassignment off until both are approved. Pin verbs/detectors/proof and size helpers;
 rollback requires §6's guard and readable unresolved journals/major evidence, never deletion.
