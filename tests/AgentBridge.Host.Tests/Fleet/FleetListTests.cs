@@ -214,6 +214,57 @@ public sealed class FleetListTests : IDisposable
         Assert.Equal([AgentProtocol.Principal("machine1", "sess-1")], audited);
     }
 
+    [Theory]
+    [InlineData(true, false, true, true)]
+    [InlineData(true, true, true, false)]
+    [InlineData(false, false, true, false)]
+    [InlineData(true, false, false, true)]
+    public async Task A_machine_list_is_complete_only_when_online_and_untruncated(bool online, bool truncated, bool hasSessions, bool complete)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        roster.Machines = RelayFleetRoster.Parse([JsonSerializer.SerializeToElement(new
+        {
+            machine = "m2", online,
+            record = new
+            {
+                truncated,
+                sessions = hasSessions ? new[] { new { node = "n1", state = "idle", since = Started } } : [],
+            },
+        })]);
+        var reply = JsonSerializer.SerializeToElement(await Op().HandleAsync(Hello(AgentProtocol.ScopeRead), Body("{}")), Web);
+        var machine = Assert.Single(reply.GetProperty("machines").EnumerateArray());
+        Assert.True(machine.TryGetProperty("complete", out var value), "fleet.list machines must report complete");
+        Assert.Equal(complete, value.GetBoolean());
+        Assert.Equal(["complete", "machine", "state"], machine.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_online_machine_is_incomplete_until_a_registry_snapshot_arrives(bool knownFirst)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var known = Body("""{"known":[{"machine":"m2","name":"build-box","online":true}]}""");
+        var pending = Body("""{"machine":"m2","online":true,"record":null}""");
+        var chan = Hello(AgentProtocol.ScopeRead);
+        var op = Op();
+        async Task<JsonElement> List() => JsonSerializer.SerializeToElement(await op.HandleAsync(chan, Body("{}")), Web);
+        foreach (var frames in new[] { new[] { known }, new[] { pending, known } })
+        {
+            roster.Machines = RelayFleetRoster.Parse(frames);
+            var reply = await List();
+            var machine = Assert.Single(reply.GetProperty("machines").EnumerateArray());
+            Assert.Equal("online", machine.GetProperty("state").GetString());
+            Assert.False(machine.GetProperty("complete").GetBoolean());
+            Assert.Empty(reply.GetProperty("sessions").EnumerateArray());
+        }
+        var snapshot = Body("""{"machine":"m2","online":true,"record":{"truncated":false,"sessions":[]}}""");
+        roster.Machines = RelayFleetRoster.Parse(knownFirst ? [known, snapshot] : [snapshot, known]);
+        var received = await List();
+        Assert.True(Assert.Single(received.GetProperty("machines").EnumerateArray()).GetProperty("complete").GetBoolean());
+        Assert.Empty(received.GetProperty("sessions").EnumerateArray());
+    }
+
     [Fact]
     public async Task A_read_reply_credential_is_accepted_and_the_local_api_routes_fleet_list()
     {
@@ -324,7 +375,7 @@ public sealed class FleetListTests : IDisposable
         {
             var machine = machines[id];
             Assert.Equal("offline", machine.GetProperty("state").GetString());
-            Assert.Equal(["lastSeen", "machine", "machineName", "state"], machine.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal));
+            Assert.Equal(["complete", "lastSeen", "machine", "machineName", "state"], machine.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal));
             Assert.False(machine.TryGetProperty("node", out _));
         }
         Assert.Equal(Started.AddMinutes(-1), machines["expired"].GetProperty("lastSeen").GetDateTimeOffset());

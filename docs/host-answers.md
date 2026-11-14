@@ -42,10 +42,27 @@ an already admitted delivery. Unconfirmed/refused/failed delivery ends the episo
 Safe snapshots/logs expose attempt number, time, owner/auto reason and outcome;
 neither raw error text nor the replier's reason is copied.
 
-**Required before runtime enablement:** the #1846 final-effect freshness fence
-must recheck this episode/activity/process after the typing queue and before keys.
-Admission alone is not that fence. Production ownership, timers, owner Retry wiring,
-protocol visibility and staged healing remain follow-up work; #1846 stays open.
+**Final-effect fence (#2126):** each admitted retry carries a host-only
+`ReplyRequest.StillCurrent` callback, ignored by JSON readers and writers. The
+Copilot replier checks it after its typing queue and last awaited screen read,
+then via `KeyPlan.Proceed` after the injector's own queue, before any keys.
+The fence checks the episode, activity, process incarnation, cancellation and
+eligibility again. The replier also rechecks its source, process inspector, G5,
+launch hold, target guard and transcript. A retry must not answer a question,
+trust prompt or permission confirmation; existing screen checks remain in force.
+Ordinary replies carry no fence and keep their existing behavior.
+An invalidated fence reports `stale`, retained as `RetryStop.Changed`, not a generic
+delivery failure. An already cancelled or expired episode keeps that terminal reason.
+
+Observation and availability callbacks run outside the episode lock. They must
+be cheap, fresh and non-reentrant, and tolerate the constructor's two observations.
+Cancellation prevents keys not yet admitted by the fence; it cannot undo keys
+already admitted. The replier must await actual typing completion (including the
+injector's worker handling), not return early on cancellation: the episode keeps
+its in-flight exclusion until that delivery settles.
+
+Nothing enables retries at runtime here. Production ownership, timers, owner Retry
+wiring, protocol visibility and staged healing remain #2127/#1846 follow-up work.
 Existing G5, #67 and replier guards are unchanged.
 
 ## What can be answered
@@ -182,10 +199,14 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     bar naming exactly this form's fields in order, on one row read exactly as `Da` draws it
     (titles as written, brackets included, each ` <title> ` with a column between; the field
     being answered may be in the bar's own brackets; the bar fits the console's width less
-    four columns, within the frame, so it is not taken across rows), the field's own heading on a row
-    of its own (`<title ?? name>:` for a list, a Yes/No or a multi-select; the title alone,
+    four columns, within the frame; a windowed bar is read as described below), the field's own
+    heading (`<title ?? name>:` for a list, a Yes/No or a multi-select; the title alone,
     with no colon, for a text or number box, `Fxn` and `Lxn`; only the field being answered
-    is drawn), and under it the hints
+    is drawn), wrapped across rows with the same exact `Drawn` comparison as the question.
+    Only row-wrap spaces and Unicode line breaks are tolerated, never changed characters or
+    spaces within a row. The heading ends at its last wrapped row: none of its continuation
+    text is treated as input, used to prove an answer typed, or counted against an empty box.
+    Under it the hints
     row (the last row ending "esc cancel" or "esc clear", with the rows it wrapped from, every part one of
     the form's hints, its spaces read as drawn but a space allowed missing where a row breaks,
     so a narrow window that breaks a hint, or a word of one, across rows still reads, #910,
@@ -210,7 +231,12 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     So is a form with two fields of the same heading the tab hints cannot tell apart (both
     between the first and the last): the tab bar marks the field being answered by colour
     alone, which the screen read does not carry, so a repaint while the CLI still showed the
-    first could pass for the second. Headings are compared exactly as drawn, their ends
+    first could pass for the second. Wrapped headings also need unique identity: before a
+    middle field's keys, the same observed heading rows must not match another middle field
+    under `Drawn`, including its row-break space tolerance. For example, a space after a
+    hyphen may disappear at a wrap, making otherwise different titles indistinguishable.
+    Such a screen is refused; hints still distinguish first and last fields. Distinct
+    drawings in a wider window remain answerable. Headings are compared exactly as drawn, their ends
     trimmed, a list's colon taken with its title as the CLI draws them together, so with no
     tab bar "Pick  one:" or "Pick one:" with a no-break space is not "Pick one:" (#1137
     review). A title whose spaces the host cannot be sure how the CLI draws (white space at
@@ -220,12 +246,11 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     control character, which splits its heading across rows while the tab bar's first row
     still reads as the labels. All, like a `requestedSchema`
     encoded as JSON twice (read once, it is text, not a form), are listed `answerAtMachine`,
-    so no client offers what would be refused; a field heading the
-    console wraps mid-word is refused rather than typed into (#848). With more than one
-    field, the tab bar read at the first field, before any key, vouches for every later
-    field's width and characters: one that fits holds every label, so no later heading can
-    wrap, and a character the console draws other than as written is drawn so in the bar
-    too, and refused there. A bar too wide for the console shows only the labels around the
+    so no client offers what would be refused. A heading may wrap inside a word only where
+    the renderer allows it, including a word longer than the frame's content width; the
+    width is the top rule less the frame's two padding columns, not a fixed console size.
+    Every field's own heading and hints are checked before its keys. A bar too wide for the
+    console shows only the labels around the
     field being answered, between arrows ("←" when labels are hidden before them, "→" when
     after, `Da`'s `Hfn` window). Read as exactly such a window at that field (#1554), it is accepted as the bar: the host
     checks the labels it shows, the question's message, the field's heading and its hints, and
@@ -235,7 +260,7 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     width is the window's (host-launch.md, Width); the screen read takes each row at the
     console buffer's full width. Copilot CLI 1.0.106's bar (`_l`, window `kHi`) shows the most
     labels that fit around the field, and where not even one fits, the field's label alone,
-    wrapped over as many rows as it takes, with the arrows beside its first row: read across
+    wrapped over as many rows as it takes, with the arrows beside its middle row: read across
     those rows, it is the bar's window too, and accepted the same way. Before #1554 a 9-field
     card with long titles was refused as `bar-window` with "titles are too long": the check
     that found the open field was refusing every windowed bar. Three titles of full sentences at 120 columns were
@@ -243,6 +268,14 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     nor a window at this field is refused (`bar`) as "this window is too narrow, or the
     question's titles too long, to check which field is open", not as the form gone: with
     the question's heading and message above it, it seldom is.
+    #2190 exposed the remaining one-row heading check: the long-title Red choice, Yes/No and
+    free-text card passed its windowed bar but was refused as "not at the field". The
+    regression covers that shape at 80, 120 and 200 columns, all three fields, with wrapped
+    headings and marked or colour-only bars. A refusal before any key leaves the question
+    answerable; retry uses a fresh request and must pass all the screen checks again. The
+    phone-size PWA regression retains Red, Yes and Test after a refusal, enables retry, and
+    unlocks the reply box after delivery. Its WebKit demo checks the UI retry path, not a
+    live iPhone-to-host delivery; that remains a separate acceptance check.
     A form taller than the session's window shows only its bottom: the CLI draws the question
     whole, so a long one pushes the heading ("Copilot needs information.") and the top rule
     above the window, and the screen read takes the visible rows alone. With no heading, the

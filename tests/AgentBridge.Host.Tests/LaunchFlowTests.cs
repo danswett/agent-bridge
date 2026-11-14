@@ -23,6 +23,7 @@ using Xunit;
 public abstract partial class LaunchFlowFixture : IAsyncLifetime
 {
     private protected static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
+    private protected virtual bool UsesRelay => true;
 
     private protected readonly Fixture f = new();
     // Time stands still for a launch unless a test gives it a short budget to run out (see PollClock).
@@ -61,6 +62,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
             CoalesceInterval = TimeSpan.Zero,
         }, f.Processes, TimeProvider.System);
         await source.RefreshAsync();
+        if (!UsesRelay) { return; }
         // With the in-process blob store, which a session transfer goes through.
         relay = await TestRelay.StartAsync(o => o.Blobs.Backend = "local");
         var token = relay.TokenFor(1, "octo");
@@ -72,7 +74,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        await relay.DisposeAsync();
+        if (relay is not null) { await relay.DisposeAsync(); }
         await source.DisposeAsync();
         await clock.DisposeAsync();
         foreach (var file in Directory.EnumerateFiles(f.Root, "*", SearchOption.AllDirectories)) { File.SetAttributes(file, FileAttributes.Normal); }
@@ -1217,7 +1219,14 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Serve(Config(c => c with { Workspaces = [new("App", app, true)], WorktreeLimit = 1 }), usage: new NoSessions());
         var ch = await OpenAsync();
 
-        Assert.Equal("started", (await LaunchAsync(ch, new { prompt = "go" })).Outcome_);
+        var firstLaunch = await LaunchAsync(ch, new { prompt = "go" });
+        try { Assert.Equal("started", firstLaunch.Outcome_); }
+        catch (Xunit.Sdk.EqualException failure)
+        {
+            throw new Xunit.Sdk.XunitException(
+                $"{failure.Message}{Environment.NewLine}First launch reason: {firstLaunch.Reason}{Environment.NewLine}"
+                + $"Fixture log:{Environment.NewLine}{string.Join(Environment.NewLine, logged)}");
+        }
         var first = starter.Specs[0].WorkingDirectory;
         await WaitAsync(() => Task.FromResult(!File.Exists(Path.Combine(Worktrees.AdminFolder(first)!, "locked"))));
         // Its session has ended and it has sat idle past launch.worktrees.idleHours.

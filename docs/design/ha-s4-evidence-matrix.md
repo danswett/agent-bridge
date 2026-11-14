@@ -86,6 +86,10 @@ times per rehearsal stage; record 20 row-4 stops across all four Windows
 machines, all with correct targets. C E5-01/02/03/04 and S supply the action/read
 locations; historical runs alone do not qualify every client.
 
+Use the [stop proof checklist](../stop-proof-checklist.md) for per-client/stage
+execution, explicit unrun gaps, repetition records and the distinct-stop ledger.
+The checklist is not itself live evidence.
+
 ## Row 5: approvals
 
 | Client | Built evidence | Live evidence | Gap keys |
@@ -244,7 +248,7 @@ its older fixed-count gate wording is superseded by the #1396 decision above.
 | L-MCP / [#2394](https://github.com/danswett/agent-bridge/issues/2394) | S4 live run: MCP agent client row-by-row retirement evidence | Run all nine contracts through actual permitted client surface; record person-only refusals and missing paths as gaps. |
 | L-CLI / [#2395](https://github.com/danswett/agent-bridge/issues/2395) | S4 live run: host CLI row-by-row retirement evidence | Run all nine contracts from documented CLI entry points; host handlers alone are not client exposure proof. |
 | HA / [#2407](https://github.com/danswett/agent-bridge/issues/2407) | Optional Home Assistant client: B1-B9 and S8 live run | Open, not-ready tracker owns all nine build slices and component live proof; #1419 is closed historical design, not their tracker; no retirement prerequisite. |
-| STOP / [#2396](https://github.com/danswett/agent-bridge/issues/2396), [#2411](https://github.com/danswett/agent-bridge/issues/2411) | S4 stop: reconcile inventory wording with the parity stop rule and prove all clients | [Stop reconciliation](stop-policy-reconciliation.md) records #2396's state rule and proof design; #2411 owns the guarded-idle fix. Three runs per client/stage and 20 correct-target stops; agent-stop authority remains undecided (M C1), never granted by person/system parity. Check #1146 first. |
+| STOP / [#2396](https://github.com/danswett/agent-bridge/issues/2396), [#2411](https://github.com/danswett/agent-bridge/issues/2411) | S4 stop: reconcile inventory wording with the parity stop rule and prove all clients | [Stop reconciliation](stop-policy-reconciliation.md) records #2396's state rule and proof design; #2411 owns the guarded-idle fix. Three runs per client/stage and 20 correct-target stops; agent-stop authority remains undecided (M C1), never granted by person/system parity. |
 | PWA-PUSH / [#2397](https://github.com/danswett/agent-bridge/issues/2397) | S4 PWA push: close background question and turn delivery gaps | Reconcile historical Web Push with current missing-background report; one lifecycle cut, prove rows 16/28 background/locked delivery and exact-question open. |
 | IOS-PUSH / [#2398](https://github.com/danswett/agent-bridge/issues/2398) | S4 iOS push: add the first background delivery slice | Cut one missing APNs registration/provider/lifecycle mechanism, at most 400 changed lines including tests; name remaining slices; full rows 16/28 proof follows only when complete. |
 | APPLE-UPDATE / [#2399](https://github.com/danswett/agent-bridge/issues/2399) | S4 Apple updates: verify remote-host update controls | Retitled by Engineering: parked under #1882; prove Mac/iOS person controls update all four capable Windows hosts, with progress/version/refusal receipts and three row runs per stage. Apple app distribution/self-update is outside row 8. |

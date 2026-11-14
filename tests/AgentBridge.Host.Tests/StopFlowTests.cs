@@ -1,6 +1,7 @@
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
+using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
 using AgentBridge.Transport.Tests;
@@ -35,6 +36,7 @@ public sealed class StopFlowTests : IAsyncLifetime
     Device client = null!;
     string events = "";
     int second = 10;
+    int cliConnections;
 
     public StopFlowTests() => control = new FakeControl(f);
 
@@ -117,6 +119,244 @@ public sealed class StopFlowTests : IAsyncLifetime
 
     static (string, string?) Pair(Outcome o) => (o.Outcome_, o.Reason);
 
+    LocalServer CliServer(CallerKind caller = CallerKind.HostCli, string? response = null)
+    {
+        var handler = LocalApi.Handler(new SessionService(source, new MachineInfo("fixture", "Fixture", "windows", "0.1.0"), stops: Stopper()),
+            null!, new FixedCallerGuard(new Caller(caller, "fixture")));
+        return LocalServer.Start(LocalEndpoint.For(f.Root), (channel, op, data) =>
+            op == Ops.SessionStop && response is not null
+                ? Task.FromResult<object?>(System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(response))
+                : handler(channel, op, data));
+    }
+
+    async Task<(int Exit, string Output, string Error)> CliAsync(string? confirm = null, bool refused = false, string[]? args = null,
+        IClientChannel? channel = null)
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var exit = await StopCommands.RunWithProfileAsync(args ?? ["stop", Id,
+            .. confirm is null ? Array.Empty<string>() : ["--confirm", confirm],
+            "--profile", Path.GetFileName(f.Root)], Path.GetDirectoryName(f.Root)!, () => refused, output, error, async endpoint =>
+            {
+                Interlocked.Increment(ref cliConnections);
+                return channel ?? await LocalClient.ConnectAsync(endpoint);
+            });
+        return (exit, output.ToString(), error.ToString());
+    }
+
+    static StopResult CliResult(string output) =>
+        System.Text.Json.JsonSerializer.Deserialize<StopResult>(output, ProtocolJson.Options)!;
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Cli_stop_idle_session_ends_on_one_press(bool forced)
+    {
+        if (forced) { injector.OnInject = null; }
+        await using var local = CliServer();
+        var result = await CliAsync();
+        Assert.Equal(0, result.Exit);
+        Assert.Equal(StopOutcome.Ended, CliResult(result.Output).Outcome);
+        Assert.Equal(forced, CliResult(result.Output).Forced == true);
+        Assert.Equal("", result.Error);
+        Assert.Single(injector.Plans);
+        Assert.Null(source.Get(Id));
+    }
+
+    [Fact]
+    public async Task Cli_stop_busy_session_arms_then_ends_only_on_a_second_press_with_its_token()
+    {
+        await WorkingAsync();
+        await using var local = CliServer();
+        var first = await CliAsync();
+        Assert.Equal(3, first.Exit);
+        var armed = CliResult(first.Output);
+        Assert.Equal(StopOutcome.Confirm, armed.Outcome);
+        Assert.Equal(10, armed.ConfirmSeconds);
+        Assert.NotEmpty(armed.Confirm!);
+        Assert.Equal(3, (await CliAsync()).Exit);
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
+        var secondPress = await CliAsync(armed.Confirm);
+        Assert.Equal(0, secondPress.Exit);
+        Assert.Equal(StopOutcome.Ended, CliResult(secondPress.Output).Outcome);
+        Assert.Single(injector.Plans);
+    }
+
+    [Fact]
+    public async Task Cli_stop_with_a_stale_confirmation_does_not_end_the_session()
+    {
+        await WorkingAsync();
+        await using var local = CliServer();
+        var first = await CliAsync();
+        Assert.Equal(3, first.Exit);
+        var token = CliResult(first.Output).Confirm;
+        clock.Advance(TimeSpan.FromSeconds(11));
+        var late = await CliAsync(token);
+        Assert.Equal(3, late.Exit);
+        Assert.Equal(StopOutcome.Confirm, CliResult(late.Output).Outcome);
+        Assert.NotEqual(token, CliResult(late.Output).Confirm);
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
+    }
+
+    [Fact]
+    public async Task Cli_stop_from_an_agent_child_is_refused()
+    {
+        await using var local = CliServer(CallerKind.Agent);
+        var early = await CliAsync(refused: true);
+        Assert.Equal(4, early.Exit);
+        Assert.Equal("", early.Output);
+        Assert.Contains("refused", early.Error);
+        Assert.Equal(0, Volatile.Read(ref cliConnections));
+        var hostRefusal = await CliAsync();
+        Assert.Equal(4, hostRefusal.Exit);
+        Assert.Equal("", hostRefusal.Output);
+        Assert.Contains("refused", hostRefusal.Error);
+        Assert.Equal(1, Volatile.Read(ref cliConnections));
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
+    }
+
+    [Theory]
+    [InlineData("stop")]
+    [InlineData("stop", Id, "--profile")]
+    [InlineData("stop", Id, "--profile", "../outside")]
+    [InlineData("stop", Id, "--confirm")]
+    [InlineData("stop", Id, "--confirm", "<invalid>")]
+    [InlineData("stop", Id, "--confirm", "a", "--confirm", "b")]
+    [InlineData("stop", Id, "--unknown", "value")]
+    public async Task Cli_stop_invalid_arguments_never_connect(params string[] args)
+    {
+        await using var local = CliServer();
+        var result = await CliAsync(args: args);
+        Assert.Equal(2, result.Exit);
+        Assert.Equal("", result.Output);
+        Assert.NotEmpty(result.Error);
+        Assert.Equal(0, Volatile.Read(ref cliConnections));
+        Assert.Empty(injector.Plans);
+        Assert.Equal(0, (await CliAsync()).Exit);
+        Assert.Equal(1, Volatile.Read(ref cliConnections));
+    }
+
+    [Fact]
+    public async Task Cli_stop_pipe_admission_refusal_is_redacted_and_exits_four()
+    {
+        const string privateReason = "private-admission-account-and-machine";
+        var stops = 0;
+        await using var local = LocalServer.Start(LocalEndpoint.For(f.Root), async (channel, op, _) =>
+        {
+            if (op == Ops.Hello)
+            {
+                await channel.SendEventAsync(LocalServer.RefusedEvent, new { reason = privateReason });
+                throw new InvalidOperationException(privateReason);
+            }
+            Interlocked.Increment(ref stops);
+            return new StopResult(StopOutcome.Ended);
+        });
+        var result = await CliAsync();
+        Assert.Equal(4, result.Exit);
+        Assert.Equal("", result.Output);
+        Assert.Contains("refused", result.Error);
+        Assert.DoesNotContain(privateReason, result.Error);
+        Assert.Equal(0, Volatile.Read(ref stops));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Cli_stop_waits_past_thirty_seconds_for_a_result_or_connection_failure(bool disconnected)
+    {
+        var pending = new PendingStopChannel(clock);
+        var stopping = CliAsync(channel: pending);
+        clock.Advance(TimeSpan.FromSeconds(31));
+        Assert.False(stopping.IsCompleted);
+        if (disconnected) { pending.Response.SetException(new IOException("private-connection-detail")); }
+        else
+        {
+            pending.Response.SetResult(System.Text.Json.JsonSerializer.SerializeToElement(
+                new { ok = true, result = new StopResult(StopOutcome.Ended) }, ProtocolJson.Options));
+        }
+        var result = await stopping;
+        Assert.Equal(disconnected ? 1 : 0, result.Exit);
+        if (disconnected)
+        {
+            Assert.Equal("", result.Output);
+            Assert.Contains("stop result unavailable", result.Error);
+            Assert.DoesNotContain("private-connection-detail", result.Error);
+        }
+        else { Assert.Equal(StopOutcome.Ended, CliResult(result.Output).Outcome); }
+    }
+
+    sealed class PendingStopChannel(FakeTimeProvider time) : IClientChannel
+    {
+        public readonly TaskCompletionSource<System.Text.Json.JsonElement> Response = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public string PeerId => "fixture";
+        public string PeerName => "Fixture";
+        public string PeerKind => "host";
+        public bool IsOpen => true;
+        public Task Closed => throw new NotSupportedException();
+        public Exception? CloseReason => null;
+        public System.Threading.Channels.ChannelReader<ChannelEvent> Events => throw new NotSupportedException();
+        public Task<System.Text.Json.JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default, Action<System.Text.Json.JsonElement>? progress = null)
+        {
+            if (op == Ops.Hello)
+            {
+                return Task.FromResult(System.Text.Json.JsonSerializer.SerializeToElement(
+                    new { ok = true, result = new HelloResult(1, new MachineInfo("fixture", "Fixture", "windows", "0.1.0"), []) }, ProtocolJson.Options));
+            }
+            Assert.Equal(Ops.SessionStop, op);
+            return Response.Task.WaitAsync(timeout ?? TimeSpan.FromSeconds(15), time, ct);
+        }
+        public Task<(System.Text.Json.JsonElement Response, long EventsBefore)> RequestOrderedAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default, Action<System.Text.Json.JsonElement>? progress = null) => throw new NotSupportedException();
+        public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => throw new NotSupportedException();
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    [Fact]
+    public async Task Cli_stop_refusal_does_not_echo_host_details()
+    {
+        probe.Reason = "private-network-account-and-machine";
+        await using var local = CliServer();
+        var result = await CliAsync();
+        Assert.Equal(4, result.Exit);
+        Assert.Equal(StopOutcome.Refused, CliResult(result.Output).Outcome);
+        Assert.Null(CliResult(result.Output).Reason);
+        Assert.DoesNotContain(probe.Reason, result.Output + result.Error);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("""{"outcome":0}""")]
+    [InlineData("""{"outcome":"unknown"}""")]
+    [InlineData("""{"outcome":"confirm"}""")]
+    [InlineData("""{"outcome":"confirm","confirm":"bad!","confirmSeconds":10}""")]
+    public async Task Cli_stop_unreadable_result_is_never_reported_as_ended(string response)
+    {
+        await using var local = CliServer(response: response);
+        var result = await CliAsync();
+        Assert.Equal(1, result.Exit);
+        Assert.DoesNotContain("ended", result.Output);
+        Assert.NotEmpty(result.Output + result.Error);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task Cli_stop_does_not_end_a_replacement_process()
+    {
+        await WorkingAsync();
+        await using var local = CliServer();
+        var first = await CliAsync();
+        Assert.Equal(3, first.Exit);
+        control.Run(AgentKind.Copilot, Pid, Started.AddMinutes(5));
+        await source.RefreshAsync();
+        var replaced = await CliAsync(CliResult(first.Output).Confirm);
+        Assert.Equal(3, replaced.Exit);
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
+    }
+
     static async Task<string[]> CapabilitiesAsync(SecureChannel ch)
     {
         var hello = await ch.RequestAsync(Ops.Hello, new { });
@@ -136,17 +376,17 @@ public sealed class StopFlowTests : IAsyncLifetime
     public async Task Hello_offers_ending_sessions_only_while_agent_ha_bridge_is_not_running_and_only_where_a_stopper_can_act()
     {
         var ch = await OpenAsync();
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.SessionsStop, Capabilities.Load], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.SessionsHandles, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.SessionsStop, Capabilities.Load], await CapabilitiesAsync(ch));
 
         probe.Reason = "agent-ha-bridge is running for this user";
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.SessionsHandles, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
         probe.Reason = null;
 
         Serve(new UnsupportedPlatformStopper());
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.SessionsHandles, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
         Assert.Equal(("refused", "ending sessions is not supported on this platform yet; end it at the machine"), Pair(await StopAsync(ch)));
         Serve(Stopper(platform: false));
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.SessionsHandles, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
         Assert.Equal("refused", (await StopAsync(ch)).Outcome_);
         Serve(null);
         Assert.Equal("this host does not end sessions; end it at the machine", (await StopAsync(ch)).Reason);
@@ -154,26 +394,77 @@ public sealed class StopFlowTests : IAsyncLifetime
         Assert.Empty(control.Terminated);
     }
 
-    // A session whose launch here has not seen its window ready may be asking whether to trust its
-    // folder, where /exit's Enter would answer "Yes": it is terminated, nothing typed.
-    [Fact]
-    public async Task A_session_whose_launch_has_not_seen_its_window_ready_is_terminated_without_typing_exit()
+    [Theory]
+    [InlineData("")]
+    [InlineData("Copilot was started here and its window has not been seen ready")]
+    public async Task An_idle_session_whose_launch_is_not_ready_needs_confirmation_and_is_ended_without_typing_exit(string held)
     {
         var stopper = Stopper();
-        stopper.LaunchHeld = id => id == Id ? "Copilot was started here and its window has not been seen ready" : null;
+        stopper.LaunchHeld = id => id == Id ? held : null;
         Serve(stopper);
-        var ch = await OpenAsync();
 
-        var result = await StopAsync(ch);
-
-        Assert.Equal(("ended", (bool?)true), (result.Outcome_, result.Forced));
-        Assert.Empty(injector.Plans);
-        Assert.Single(control.Terminated);
+        await AssertIdleNeedsConfirmationWithoutTypingAsync();
     }
 
-    [Fact]
-    public async Task An_idle_session_ends_on_one_press_with_exit_typed_into_its_console_shows_as_ending_and_is_then_removed()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task An_idle_session_whose_transcript_cannot_be_read_needs_confirmation_and_is_ended_without_typing_exit(bool missing)
     {
+        if (missing) { File.Delete(events); }
+        using var locked = missing ? null : new FileStream(events, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        await AssertIdleNeedsConfirmationWithoutTypingAsync();
+    }
+
+    async Task AssertIdleNeedsConfirmationWithoutTypingAsync()
+    {
+        Assert.Equal(SessionStatus.Idle, source.Get(Id)!.Status);
+        Assert.Null(source.Get(Id)!.Question);
+        var ch = await OpenAsync();
+
+        var first = await StopAsync(ch);
+        Assert.Equal(("confirm", 10), (first.Outcome_, first.Seconds));
+        Assert.NotEmpty(first.Confirm!);
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
+        Assert.Equal(SessionStatus.Idle, source.Get(Id)!.Status);
+
+        foreach (var invalid in new[] { "", new string('x', Stops.MaxConfirmLength + 1) })
+        {
+            var refused = await StopAsync(ch, invalid);
+            Assert.Equal(("refused", "the confirmation is not one this host issued"), Pair(refused));
+            Assert.Empty(injector.Plans);
+            Assert.Empty(control.Terminated);
+        }
+        Assert.Equal("confirm", (await StopAsync(ch, new string('x', Stops.MaxConfirmLength))).Outcome_);
+        Assert.Equal("confirm", (await StopAsync(ch)).Outcome_);
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
+
+        clock.Advance(TimeSpan.FromSeconds(11));
+        var late = await StopAsync(ch, first.Confirm);
+        Assert.Equal("confirm", late.Outcome_);
+        Assert.NotEmpty(late.Confirm!);
+        Assert.NotEqual(first.Confirm, late.Confirm);
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
+        Assert.Equal(SessionStatus.Idle, source.Get(Id)!.Status);
+
+        clock.Advance(TimeSpan.FromSeconds(9));
+        var result = await StopAsync(ch, late.Confirm);
+        Assert.Equal(("ended", (bool?)true), (result.Outcome_, result.Forced));
+        Assert.Empty(injector.Plans);
+        Assert.Equal([Pid], control.Terminated);
+        Assert.Null(source.Get(Id));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_idle_session_ends_on_one_press_with_exit_typed_into_its_console_shows_as_ending_and_is_then_removed(bool emptyTranscript)
+    {
+        if (emptyTranscript) { File.WriteAllText(events, ""); }
         using var feed = source.Subscribe();
         var ch = await OpenAsync();
 
@@ -293,6 +584,42 @@ public sealed class StopFlowTests : IAsyncLifetime
         Assert.Equal("ended", (await StopAsync(ch, result.Confirm)).Outcome_);
     }
 
+    [Theory]
+    [InlineData("unreadable")]
+    [InlineData("launch")]
+    [InlineData("question")]
+    public async Task An_idle_session_that_becomes_unsafe_to_type_into_while_waiting_needs_confirmation(string state)
+    {
+        var stopper = Stopper();
+        Serve(stopper);
+        var ch = await OpenAsync();
+        await gate.WaitToTypeAsync();
+        Task<Outcome> stopping;
+        try
+        {
+            stopping = StopAsync(ch);
+            await HostWait.UntilAsync(() => Volatile.Read(ref control.Opens) == 2, "the stop to wait for the typing turn", Patience);
+            switch (state)
+            {
+                case "unreadable": File.Delete(events); break;
+                case "launch": stopper.LaunchHeld = _ => "not ready"; break;
+                case "question": Fixture.Append(events, Copilot.ToolStart("q9", "ask_user", new { message = "Which?" }, 5, agentId: "a1")); break;
+            }
+        }
+        finally { gate.DoneTyping(); }
+
+        var first = await stopping;
+        Assert.Equal("confirm", first.Outcome_);
+        Assert.NotEmpty(first.Confirm!);
+        Assert.Equal(SessionStatus.Idle, source.Get(Id)!.Status);
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
+        var result = await StopAsync(ch, first.Confirm);
+        Assert.Equal(("ended", (bool?)true), (result.Outcome_, result.Forced));
+        Assert.Empty(injector.Plans);
+        Assert.Equal([Pid], control.Terminated);
+    }
+
     [Fact]
     public async Task A_token_confirms_only_the_session_it_was_given_for()
     {
@@ -347,18 +674,12 @@ public sealed class StopFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_subagents_question_seen_only_in_the_transcript_also_keeps_exit_from_being_typed()
+    public async Task An_idle_session_with_a_transcript_only_question_needs_confirmation_and_is_ended_without_typing_exit()
     {
         // Written after the session source's last pass, so only the transcript has it. (Since
         // #173 the source reports a subagent's question too, once it reads it.)
         Fixture.Append(events, Copilot.ToolStart("q9", "ask_user", new { message = "Which?" }, 5, agentId: "a1"));
-        Assert.Null(source.Get(Id)!.Question);
-        var ch = await OpenAsync();
-
-        var result = await StopAsync(ch);
-
-        Assert.Equal(("ended", true), (result.Outcome_, result.Forced));
-        Assert.Empty(injector.Plans);
+        await AssertIdleNeedsConfirmationWithoutTypingAsync();
     }
 
     [Fact]

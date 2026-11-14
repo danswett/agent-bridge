@@ -447,7 +447,7 @@ public sealed partial class SessionView
     // The list's own scroller: the first found going down, above anything its items hold.
     internal static T? Shallowest<T>(DependencyObject root) where T : DependencyObject
     {
-        var queue = new Queue<DependencyObject>([root]);
+        var queue = new Queue<DependencyObject>(new[] { root });
         while (queue.TryDequeue(out var node))
         {
             if (node is T t && node != root) { return t; }
