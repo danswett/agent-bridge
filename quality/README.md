@@ -415,7 +415,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      and skips the network download, then requires `apt-get install --no-download`;
      offline install failure is fatal, without a network fallback. After failed updates only,
      the hit restores its matching signed indexes with sudo before installing; successful
-     updates keep their fresh indexes. Debs without indexes count as a miss. The versioned
+     updates keep their fresh indexes and run a bounded `--download-only` fetch for any
+     newly selected versions absent from the cached debs, then install offline. A hit does
+     not re-save its immutable pair. Debs without indexes count as a miss. The versioned
      paired key includes the runner image, Playwright lockfile and browsers. Only successful
      cold runs save indexes and debs, on any ref; PR entries are scoped to that PR, and main
      must seed its own entry. Cold seeding needs one successful Ubuntu update. Failed-update
