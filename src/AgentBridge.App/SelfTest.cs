@@ -74,6 +74,7 @@ static partial class SelfTest
             // All of an approval's message is drawn escaped and in order (#220); any other question's as written.
             static MarkdownView? Message(SessionView? v) => v is not null && ById<FrameworkElement>(v, "Question") is { } q ? Find<MarkdownView>(q).FirstOrDefault() : null;
             Check(Message(approval) is { Approval: true }, "draws all of an approval's message on its card in its escaped, left-to-right mode");
+            await CheckHistoryPaint(window, main, demo, Check);
             var form = await Choose(window, main, "02d9e5d5-6b35-49bd-b083-39572fbff648", "SendAnswer");
             Check(form is not null && ById<Button>(form, "SendAnswer") is not null && ById<TextBox>(form, "Field:notes") is not null,
                 "draws a form question with its fields and Send");
