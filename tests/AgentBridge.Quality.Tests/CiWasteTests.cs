@@ -30,7 +30,12 @@ public class CiWasteTests
                 if (run["id"]!.GetValue<long>() == 43586721146)
                     run["plan"] = JsonNode.Parse("""{"changed_files":["app/example.cs"],"long_jobs":["app"]}""");
                 if (run["id"]!.GetValue<long>() == 43553451372)
-                    run["jobs"] = new JsonArray(Job(run, "pwa-ui (chromium)"), Job(run, "pwa-ui (firefox)"),
+                    run["jobs"] = new JsonArray(
+                        Job(run, "pwa-ui (chromium 1/3)"), Job(run, "pwa-ui (chromium 2/3)"),
+                        Job(run, "pwa-ui (chromium 3/3)"), Job(run, "pwa-ui (firefox)"),
+                        Job(run, "pwa-ui (webkit 1/3)"),
+                        Job(run, "pwa-ui (chromium 1/3)", "completed", "skipped"),
+                        Job(run, "pwa-ui (chromium 2/3)", "queued"),
                         Job(run, "app (win-x64)", "completed", "skipped"), Job(run, "app-installer (win-x64)", "queued"));
                 if (run["id"]!.GetValue<long>() == 43547869768)
                     run["jobs"] = new JsonArray(Job(run, "app (win-arm64)"), Job(run, "app-installer (win-x64)"));
@@ -47,7 +52,8 @@ public class CiWasteTests
         Assert.Equal("PARTIAL", waste["status"]!.GetValue<string>());
         Assert.Equal(enrich ? "KNOWN" : "UNKNOWN", result["longJobs"]!["status"]!.GetValue<string>());
         Assert.Equal(enrich ? 0 : 60, result["longJobs"]!["unknownRuns"]!.GetValue<int>());
-        Assert.Equal(enrich ? new[] { "app (win-arm64)", "app-installer (win-x64)", "pwa-ui (chromium)" } : Array.Empty<string>(),
+        Assert.Equal(enrich ? new[] { "app (win-arm64)", "app-installer (win-x64)",
+                "pwa-ui (chromium 1/3)", "pwa-ui (chromium 2/3)", "pwa-ui (chromium 3/3)" } : Array.Empty<string>(),
             result["longJobs"]!["burnedInObservedWaste"]!.AsArray().Select(j => j!["name"]!.GetValue<string>())
                 .OrderBy(n => n, StringComparer.Ordinal).ToArray());
         Assert.Equal(enrich ? "KNOWN" : "UNKNOWN", result["noLongJobPushes"]!["status"]!.GetValue<string>());
@@ -56,9 +62,10 @@ public class CiWasteTests
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task Reruns_and_pushes_at_the_finish_boundary_are_not_pre_finish_supersession(bool sameHead)
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    public async Task Reruns_and_finish_timing_distinguish_supersession_from_replacement(bool sameHead, bool beforeFinish)
     {
         var runs = Snapshot()["workflow_runs"]!.AsArray();
         var older = runs.Single(r => r!["id"]!.GetValue<long>() == 43547869768)!.DeepClone();
@@ -66,11 +73,11 @@ public class CiWasteTests
         older["conclusion"] = "failure";
         if (sameHead)
             newer["head_sha"] = older["head_sha"]!.DeepClone();
-        else
+        else if (!beforeFinish)
             older["updated_at"] = newer["created_at"]!.DeepClone();
         var result = await Report(new JsonObject { ["workflow_runs"] = new JsonArray(older, newer) });
-        Assert.Equal(0, result["waste"]!["supersededObserved"]!.GetValue<int>());
-        Assert.Equal(sameHead ? 0 : 1, result["waste"]!["failedThenReplacedObserved"]!.GetValue<int>());
+        Assert.Equal(beforeFinish ? 1 : 0, result["waste"]!["supersededObserved"]!.GetValue<int>());
+        Assert.Equal(sameHead || beforeFinish ? 0 : 1, result["waste"]!["failedThenReplacedObserved"]!.GetValue<int>());
     }
 
     [Fact]

@@ -6,7 +6,8 @@ Usage: pwsh tools/measure-ci-waste.ps1 -RunsFile snapshot.json
 Optional jobs must be a complete job list (name,status,conclusion,started_at).
 Optional plan must contain changed_files and long_jobs arrays from the existing plan.
 Missing evidence is UNKNOWN, not zero. Supersession uses updated_at as a finish
-proxy, within this snapshot only; failed-then-replaced is a separate signal.
+proxy, within this snapshot only; failed-then-replaced requires a replacement
+at or after that finish proxy and is a separate signal.
 #>
 [CmdletBinding()]
 param([Parameter(Mandatory)][string]$RunsFile, [ValidateRange(1, 60)][int]$Limit = 60)
@@ -39,6 +40,7 @@ $rows = @(foreach ($run in $runs) {
         @($_['_prs'] | Where-Object { $prs -contains $_ }).Count -gt 0
     })
     $superseded = @($later | Where-Object { $_['_created'] -lt $run['_finish'] }).Count -gt 0
+    $replacedAfterFinish = @($later | Where-Object { $_['_created'] -ge $run['_finish'] }).Count -gt 0
     $cancelled = $run['conclusion'] -eq 'cancelled'
     $jobsKnown = $null -ne $run['jobs']
     if ($jobsKnown -and $run['jobs'] -isnot [array]) { throw 'jobs must be a complete array or null.' }
@@ -46,7 +48,7 @@ $rows = @(foreach ($run in $runs) {
         foreach ($field in 'name', 'status', 'conclusion', 'started_at') {
             if (-not $job.Contains($field)) { throw "Job evidence is missing $field." }
         }
-        if ($job['name'] -match '^(pwa-ui \(chromium\)|app(?:-installer)?(?: \([^)]+\))?)$' -and
+        if ($job['name'] -match '^(pwa-ui \(chromium(?: [1-9]\d*/[1-9]\d*)?\)|app(?:-installer)?(?: \([^)]+\))?)$' -and
             $job['status'] -in @('in_progress', 'completed') -and $job['conclusion'] -ne 'skipped' -and
             -not [string]::IsNullOrWhiteSpace([string]$job['started_at'])) {
             [void][DateTimeOffset]::Parse($job['started_at'])
@@ -61,7 +63,7 @@ $rows = @(foreach ($run in $runs) {
     [pscustomobject]@{
         id = $run['id']; attempt = $run['run_attempt']; headSha = $run['head_sha']; prs = $prs
         cancelled = $cancelled; supersededObserved = $superseded
-        failedThenReplacedObserved = $run['conclusion'] -eq 'failure' -and $later.Count -gt 0
+        failedThenReplacedObserved = $run['conclusion'] -eq 'failure' -and $replacedAfterFinish
         wastedObserved = $cancelled -or $superseded
         jobsKnown = $jobsKnown; longJobs = $longJobs
         planKnown = $planKnown; noLongJob = $planKnown -and $plan['long_jobs'].Count -eq 0
