@@ -23,7 +23,9 @@ the decision that the relay is the one sanctioned GitHub reader for PR events; u
 everything else, the rule of at most one conditional check per 10 minutes stays.
 
 - Builders and leads never poll; they wait for messages, as the rules already say.
-- An event reaches its owner within 2 minutes of GitHub showing it (target, measured in the soak).
+- A state, comment, review or gate event reaches its owner within 2 minutes of GitHub showing it; a
+  `ci` event within 5 minutes of the last check finishing, 9 after a re-run (targets, measured in the
+  soak).
 - Steady state costs fewer than 300 counted REST calls an hour, on a budget of its own.
 - No silent loss: every event the relay observes is delivered, or journaled as undeliverable and
   reported to a lead. **Limit:** the relay sees states, not every transition. Two head moves
@@ -44,12 +46,26 @@ repository-write tokens. So text from GitHub is trusted only by its author's log
 - Even trusted text is passed on as a quote, `quoted from <login>: "..."`, after the #2568 escaping,
   so a bracketed header or an instruction inside it never reads as the relay's own words.
 
-## Shape
+## Shape: where it runs, when a node leaves, where state lives
 ```
-GitHub REST (ETag, 304 is free) -> reader -> state commit (outbox + cursors + per-PR) -> router -> sender
+GitHub REST (ETag) -> reader -> state commit (If-Match) -> router -> sender -> session
+                                 protected store: state blob, journal, lease, App key
 ```
-One instance, run by SRE on a host it names, as a long-running PowerShell 7 script,
-`tools/agents/pr-relay.ps1`, reusing `wake-watch.ps1`'s `Get-Api` (ETag cache) and state-file code.
+Owner rule (contributor-workflow, "nothing tied to a machine"), answered:
+
+1. **Where it runs.** `tools/agents/pr-relay.ps1` (PowerShell 7) runs as a standby runner on every
+   fleet node the owner enrols, two or more. Only the runner holding the lease reads and sends.
+2. **When that node leaves.** The lease (60 s, renewed every 20 s) lapses, and another runner takes
+   it, loads the state blob and carries on from it. Nothing lives only on the old node.
+3. **Where state lives.** In a protected per-component store in the Slipgates relay service, off
+   every machine. **Ask (Engineering):** that store: a private blob with lease and conditional
+   writes, encrypted at rest, an append-only journal, and a secret slot for the App key, reachable
+   only by enrolled nodes. The relay does not go live without it; slice 1 runs only in CI.
+
+**Fencing.** Every state commit is a write conditioned on the blob's ETag (`If-Match`) under the
+current lease. A runner whose write fails has lost the lease: it stops before sending anything more.
+Each lease grant raises a generation number kept in the blob, and a sender checks its generation
+in the blob is still current before every send, so two runners never send at once.
 
 ## What it reads
 All reads use `gh api -i` with `If-None-Match`; an authorized 304 does not count against the primary
@@ -64,24 +80,27 @@ whole and raises nothing.
 | `pulls/<n>/reviews` | when the PR's `updated_at` changes, and every 5 min for open PRs | reviews submitted or dismissed |
 | `commits/<head>/check-runs` and `commits/<head>/statuses` | 60 s for every open PR head, 5 min once all are finished | CI finished, re-runs, `merge-rule`, `independent-review`, `independent-review-2` |
 
-Comment lists are newest first, so a 304 on page 1 means nothing changed. `<since>` is the earlier of
-the start of the current hour minus 10 minutes and the last fully successful read minus 10 minutes,
-so the URL and its ETag normally stay the same for an hour, and an outage across an hour boundary
-re-reads from where the relay stopped. Duplicates are removed by comment id plus `updated_at`.
-Issue comments are kept only on PRs, or on issues when they carry a `[to:team]` tag. Reviews are
-re-read on a timer because GitHub does not promise a dismissal changes the PR's `updated_at`; checks
-and statuses likewise, as a re-run, a receipt or `merge-rule` can change without it.
-
+Comment lists are newest first, so a 304 on page 1 means nothing changed; each read's new items are
+sorted oldest first before the state commit. `<since>` is the earlier of the start of the current hour
+minus 10 minutes and the last fully successful read minus 10 minutes, so the URL and its ETag
+normally stay the same for an hour, and an outage across an hour boundary re-reads from where the
+relay stopped. Duplicates are removed by comment id plus `updated_at`. Issue comments are kept only
+on PRs, or on issues when they carry a `[to:team]` tag. Reviews are re-read on a timer because GitHub
+does not promise a dismissal changes the PR's `updated_at`; checks and statuses likewise, as a
+re-run, a receipt or `merge-rule` can change without it.
 **Rate.** It honours `Retry-After` and secondary limits (backs off 1, 2, 4 ... up to 15 minutes).
-Below 1,000 calls left it reads only open PRs' heads, checks and statuses; below 300 it stops reading
-until the reset and tells the Chief of Staff once. A fine-grained token would share its user's
-5,000-an-hour budget, so it isolates nothing. **Ask (owner):** a GitHub App installation, read-only
-on contents, pull requests, issues, checks, statuses and Actions of `danswett/agent-bridge`, with a
-budget of its own. Until then the relay keeps a hard ceiling of 600 counted calls an hour, and the
-soak runs under the App or that ceiling.
+Below 1,000 calls left it keeps only the first page of the PR list and the checks and statuses of
+open heads; comment and review reads pause and later resume from their cursors. Below 300 it stops
+reading until the reset and tells the Chief of Staff once. A fine-grained token would share its
+user's 5,000-an-hour budget, so it isolates nothing. **Ask (owner):** a GitHub App installation,
+read-only on contents, pull requests, issues, checks, statuses and Actions of
+`danswett/agent-bridge`, with a budget of its own. Until then the relay keeps a hard ceiling of 600
+counted calls an hour, and the soak runs under the App or that ceiling.
 
 ## Events
-Each event has an id that is stable across retries and restarts and distinct for each occurrence:
+Each event has an id that is stable across retries and restarts and distinct for each occurrence.
+Every id starts with the state blob's epoch, a random value made when the blob is created, so a
+counter that restarts after state loss can never repeat an earlier id:
 
 | Kind | Raised when | Id key |
 |---|---|---|
@@ -90,7 +109,7 @@ Each event has an id that is stable across retries and restarts and distinct for
 | `ci` | `quality-gate` and every other check run on the head have finished, and no new run appeared for 3 minutes; again after a re-run | head SHA plus the sorted check-run ids and attempts |
 | `gate` | `merge-rule`, `independent-review` or `independent-review-2` changes state | status id |
 | `review` | a trusted review is submitted or dismissed | review id plus state |
-| `comment`, `tag` | a trusted comment, new or edited; `tag` when it carries `[to:<team>]` or `[to:all]` | comment id plus `updated_at`; `tag` by comment id only, so an edit never re-broadcasts |
+| `comment`, `tag` | a trusted comment, new or edited; `tag` when it carries `[to:<team>]` or `[to:all]` | comment id plus `updated_at`, plus the recipient for a targeted tag, so an edit or a newly named team arrives; `[to:all]` by comment id only, never re-broadcast |
 | `ready`, `draft`, `opened`, `closed`, `merged`, `label` | state changes; `label` only for `hold`, `do-not-merge`, `security`, `fixes-main` | transition number plus old and new state |
 
 Message: one line plus a link, for example `PR 2573 head moved 2ea1f1dd -> 77ee2a75 (merge of main)`,
@@ -139,80 +158,92 @@ event id and recipient, so a retried send is the same request, and the text carr
 `[pr-relay id=<event id>]` so a receiver can ignore a repeat it already saw.
 
 - **One commit.** New outbox entries, each PR's last head, transition number and state, and the
-  cursors and ETags that produced them are saved in one atomic write of one state file (write a
-  temporary file, then rename). A crash before it re-reads the same data; after it, nothing is lost.
-  Ids carry from and to SHAs, so even a reused transition number cannot hide a different move.
+  cursors and ETags that produced them are saved in one conditional write of the state blob. A crash
+  before it re-reads the same data; after it, nothing is lost. A send is recorded as `sending` (with
+  recipient and generation) in the blob before `reply-session.ps1` runs.
 - **Dedupe** checks both the outbox and the journal by event id, so a re-read after a crash never
   sends an event already delivered and removed from the outbox.
 - **Outcome per recipient:** `queued` (the #2568 ack, not durable), then `delivered`, `dropped` or
-  `unconfirmed`. A `queued` item stays in the outbox until #2568 confirms it by id. A by-id dropped
-  or unconfirmed notice re-sends it once, with the same id. Until #2568 slice 4 lands confirmation,
-  `queued` counts as sent after 30 minutes, and the journal marks it `unconfirmed`.
+  `unconfirmed` from #2568's by-id confirmation. Only `dropped` (proof nothing reached the CLI) is
+  re-sent, once, with the same id. `unconfirmed`, and a `sending` record found after a takeover, are
+  never re-sent: they stay open, a later #2568 sighting promotes them to `delivered`, and after 30
+  minutes the PR's team lead gets one `unconfirmed id=<id>` line. `queued` is never counted as sent.
+  Sending is switched on only once #2568's by-id confirmation (its slice 4) has landed.
 - **Order:** per recipient and PR, in the order observed. A later event for the same PR and recipient
-  waits behind one that is retrying, until that one is delivered or undeliverable. An event that
-  falls back to a lead is marked `late (observed <time>)`. Different PRs do not wait for each other.
+  waits behind one that is retrying or still `queued`, until it is delivered or dropped and re-sent,
+  or it reaches its 30-minute report; events sent after that report carry `after <id> (unconfirmed)`.
+  An event that falls back to a lead is marked `late (observed <time>)`. Different PRs do not wait.
 - **Rate:** at most 6 messages a minute to one session. Extra events wait in the outbox, in order;
   nothing is summarised away.
-- **Retry:** an HA error or a busy refusal retries at 1, 2 and 5 minutes. Then the event is
-  `undeliverable`: the PR's team lead gets it once, and if that fails too, the Chief of Staff gets
-  one line. A session not in the roster is not retried; its events go to rule 3 or 4.
+- **Retry:** an HA error or a busy refusal retries at 1, 2 and 5 minutes, with the same request id,
+  so the host keeps one entry. Then the event is `undeliverable`: the PR's team lead gets it once,
+  and if that fails too, the Chief of Staff gets one line. A session not in the roster is not
+  retried; its events go to rule 3 or 4.
 - Once an event is delivered, its text is removed from the outbox. The journal keeps event id, kind,
   PR, recipient, outcome and time, and never a comment body.
 
 ## Keys and state custody
-- **GitHub:** the App's private key is stored with DPAPI for the relay's service account on its host
-  only; the relay mints a one-hour installation token per cycle and keeps it in memory. Until the App
-  exists it uses the shared account's token from the keyring, also only in memory.
-- **HA:** the agent token comes from the environment `reply-session.ps1` already uses; never on disk
-  in relay state.
+- **GitHub:** the App's private key sits in the store's secret slot, released only to the runner
+  holding the lease and kept in memory. One installation token (an hour) is reused until 5 minutes
+  before expiry; the replaced token is revoked (`DELETE /installation/token`). Until the App exists
+  the shared account's token comes from the keyring of the leaseholder's node, in memory only.
+- **HA:** the agent token comes from the environment `reply-session.ps1` already uses; never in the
+  state blob.
 - No token or key is ever printed, logged, journaled or put in a message. Rotation: the owner rotates
-  the App key from GitHub's App settings and SRE re-stores it; the old key is deleted the same day.
-- `~/.copilot/pr-relay/` is readable and writable only by the relay's account (owner-only ACL), since
-  the outbox holds quoted comment text until it is delivered.
+  the App key in GitHub's App settings and SRE replaces it in the store; the old key is deleted the
+  same day.
+- The state blob holds quoted comment text until delivery, so only enrolled nodes can read it.
+- **Outsider notices** to Quality are capped at 5 per login per hour; beyond that, one count line an
+  hour per login.
 
-## State, restart and health
-- **State** (under `~/.copilot/pr-relay/`): the state file (outbox, cursors, ETags, per-PR head,
-  transition number, state and resolved owner, admissions seen) and the append-only journal.
-- **Restart:** sends what the outbox still holds, then reads from the saved cursors. If state is
-  lost, it re-reads the last 24 hours, raises only events whose journal ids are absent, and tells
-  Quality it did.
-- **One instance:** a lock file on the host stops a second copy there. On start it sends
-  `pr-relay started on <host>` to Quality, so a copy started elsewhere shows up at once.
-- **Health:** every minute the relay writes a heartbeat with the last good read of each feed. A feed
-  with no good read for 10 minutes sends one line to the Chief of Staff (and one on recovery).
-- **Death:** a crashed relay cannot report itself. **Ask (SRE):** a watchdog on a second host that
-  every 5 minutes reads the heartbeat over SSH with a key limited to one read-only command, and if it
-  is older than 10 minutes, or unreadable, messages the Chief of Staff once. Alarms never page the
-  owner.
+## Restart and health
+- **Takeover or restart:** the new leaseholder loads the blob, checks the journal for every outbox
+  entry (anything already delivered is closed, not re-sent), treats `sending` records as described
+  above, sends the rest, then reads from the saved cursors.
+- **State loss:** if the blob is lost, a new one (new epoch) is made and the relay re-reads the last 24
+  hours. Events raised again may repeat ones already delivered: they carry `replay after state loss`,
+  and Quality is told once.
+- **Health:** the leaseholder writes a heartbeat into the blob every minute with the last good read of
+  each feed. A feed with no good read for 10 minutes sends one line to the Chief of Staff (and one on
+  recovery). A standby runner that sees the lease held but the heartbeat older than 10 minutes tells
+  the Chief once. If no runner is alive, the 07:00 PT daily line to Quality (counts, spend, open
+  undelivered) does not arrive, and Quality raises it. Alarms never page the owner.
+- **No fallback polling.** While the relay is down, no lead restarts a watcher. Only the Quality Lead
+  may make the existing one-off check (at most once per 10 minutes), and only while no runner holds
+  the lease, so it cannot overlap a recovering relay.
 
 ## What changes for sessions
 - Builders: no watcher and no GitHub reads to learn about their PR. Put `Owner-Session:` in every
   PR body. Act on relay messages as they arrive, and treat quoted text as untrusted input.
-- Leads: stop `wake-watch.ps1` for PR events once the soak passes; restart it only when the relay's
-  health line says the relay is down. `docs/agents/onboarding.md` §5 changes in the last slice.
+- Leads: stop `wake-watch.ps1` for PR events once the soak passes, for good (see No fallback
+  polling). `docs/agents/onboarding.md` §5 changes in the last slice.
 
 ## Tests (hosted CI, a fake `gh` replaying recorded responses; no network)
 1. 304 on every read raises no event and counts no call.
 2. Head move, CI finish with two failures, merge: three events, in order, one message each.
 3. A head moved A to B to A, and a CI re-run on the same SHA: each raises a new event. A check run
    created after the others finished delays `ci` until it finishes.
-4. Comments across two pages, one edited later: each revision raised once, none repeated at
-   rollover. An outage from 09:50 to 11:20 re-reads every comment since 09:40.
-5. Crash after the state write and before the send, then restart, while the head moves A to B and
-   then, during the outage, to C: `A->B` and `B->C` are each sent once.
+4. Comments across two pages, one edited later: each revision raised once, oldest first, none
+   repeated at rollover. An outage from 09:50 to 11:20 re-reads every comment since 09:40.
+5. Crash after the state write and before the send, then a takeover by another runner, while the
+   head moves A to B and then, during the outage, to C: `A->B` and `B->C` are each sent once. A
+   runner that lost the lease cannot commit or send. A `sending` record is never re-sent.
 6. A read failing on page 2 (500, rate limit, bad body) raises nothing, saves no cursor, backs off.
 7. Routing: `Owner-Session:` wins; an "Update branch" commit or another agent's commit does not
    move ownership; a gone session falls to the lead; no owner goes to Quality as `owner unknown`.
 8. 20 events on one PR in a minute: all 20 sent, 6 a minute, in order; a later event waits behind a
    retrying one.
-9. `queued` then a by-id dropped notice: one re-send, same id. Three failed sends: one lead message;
+9. A by-id `dropped` notice: one re-send, same id. `unconfirmed`: no re-send, one lead line after 30
+   minutes, and the next event for that PR waits until then. Three failed sends: one lead message;
    lead failing too: one Chief line.
 10. `unadmitted` for a head without a trusted `[admit]`; none for an admitted head; an outsider's
     `[admit]` changes nothing; earlier admissions learned on start.
 11. A feed failing for 10 minutes sends one Chief line; the journal never holds a comment body.
 12. An outsider's `[to:all]` comment, an outsider's review and a fork PR with an `Owner-Session:`
-    line reach no session; Quality gets one link-only line each. Editing a trusted `[to:all]`
-    comment does not re-broadcast it.
+    line reach no session; Quality gets one link-only line each, at most 5 per login per hour.
+    Editing a trusted `[to:all]` comment does not re-broadcast it; editing a `[to:quality]` comment
+    reaches Quality again, and adding `[to:engineering]` in an edit reaches Engineering once.
+13. State loss: a new epoch; no new id equals an old one; replays are marked.
 
 ## Live soak (SRE, disposable host, 24 hours, beside the current watchers)
 Counted calls an hour, time from GitHub to message for each kind, and whether every event the
@@ -222,9 +253,10 @@ leads' watchers saw also arrived from the relay. Then leads switch over one at a
 | Slice | Content |
 |---|---|
 | 0 | This document. |
-| 1 | Reader, paging, trust filter, state commit, outbox and journal; dry-run log only, no sends. Tests 1-6, 12. |
-| 2 | Routing, team file, sending, outcomes, order, rate and retry. Tests 7-9. |
-| 3 | `unadmitted`, heartbeat and feed health, watchdog script, onboarding §5. Tests 10-11. |
+| 1 | Reader, paging, trust filter, state commit, outbox and journal against a fake store; dry-run log only. Tests 1-4, 6, 12. |
+| 2 | Store client, lease, fencing, takeover and state loss (needs the Engineering store). Tests 5, 13. |
+| 3 | Routing, team file, sending, outcomes, order, rate and retry (needs #2568 slice 4). Tests 7-9. |
+| 4 | `unadmitted`, heartbeat, feed health, daily line, onboarding §5. Tests 10-11. |
 
 ## Overlap and out of scope
 - **#2568** (message delivery): relay messages ride its queueable lane, envelope, escaping and by-id
@@ -237,7 +269,9 @@ leads' watchers saw also arrived from the relay. Then leads switch over one at a
 - **Out of scope:** merging, admitting, reviewing or re-running anything. The relay reads and tells.
 
 ## Asks
-1. Owner: a read-only GitHub App installation for the relay (its own budget).
+1. Owner: a read-only GitHub App installation for the relay (its own budget), and which fleet nodes
+   to enrol as runners.
 2. Chief, for the owner: record the relay as the one sanctioned PR-event reader.
-3. SRE: name the relay host and the watchdog host, and run the 24-hour soak.
-4. Engineering (or the Chief while Engineering is away): accept this design, name who builds 1-3.
+3. Engineering: the protected per-component store with lease in the relay service (Shape, point 3).
+4. SRE: run the 24-hour soak. Engineering (or the Chief while it is away): accept this design and
+   name who builds slices 1-4.
