@@ -310,6 +310,7 @@ suites:
     platforms: [win-x64, linux-x64]
     runner: local
     project: tests/AgentBridge.Quality.Tests
+    triggers: [tools/measure-ci-waste.ps1, tests/fixtures/ci-waste/runs.json]
     command: dotnet test tests/AgentBridge.Quality.Tests -c Release
     where: ci.yml product
     status: exists
@@ -345,6 +346,19 @@ suites:
     runner: hosted
     command: see flake-hunt.yml (nightly; by hand, gh workflow run flake-hunt.yml -f runs=N -f projects=<test project folders> -f filter=<dotnet test filter>)
     where: flake-hunt.yml hunt, classify, report
+    status: exists
+
+  - id: arm64-self-test-loop
+    validation_plan: native
+    kind: ui
+    ring: 3
+    select: affected
+    # Manual diagnostic only (#2535): accounted for, never selected by PR/main rings 0-2.
+    platforms: [win-arm64]
+    runner: hosted
+    triggers: [.github/workflows/arm64-self-test-loop.yml]
+    command: see arm64-self-test-loop.yml (manual dispatch only; exact head-sha and loops inputs)
+    where: arm64-self-test-loop.yml loop
     status: exists
 
   - id: weekly-report
@@ -524,6 +538,20 @@ suites:
     runner: local
     triggers: [quality/red-minutes.ps1, quality/test-red-minutes.ps1]
     command: pwsh -NoProfile -File quality/test-red-minutes.ps1
+    where: ci.yml light
+    status: exists
+
+  - id: arm64-waiver-script
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    # quality-gate's time-boxed win-arm64 waiver (#2564): which failed jobs it waives, the expiry
+    # boundary, the switch, and every refusal, on fixed needs and jobs JSON. Nothing reaches GitHub.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/arm64-waiver.ps1, quality/test-arm64-waiver.ps1]
+    command: pwsh -NoProfile -File quality/test-arm64-waiver.ps1
     where: ci.yml light
     status: exists
 

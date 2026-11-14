@@ -840,6 +840,19 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   nothing new costs no rate limit. The Quality Lead puts its one-line result in the 08:00 digest and
   in the weekly report. A failure that went green on a re-run is invisible to it, so it undercounts.
   Offline test: `quality/test-red-minutes.ps1` (catalog suite `red-minutes-script`).
+- **The win-arm64 waiver** (#2564, owner decision 2026-11-13, until **2026-11-20 00:00 PT**, 08:00 UTC):
+  while the repository variable `ARM64_WAIVER` is exactly `on` (off or unset waives nothing; the owner
+  sets it), `quality-gate` counts a failed needed job as success when its only failures are
+  `app (win-arm64)`, `app-installer (win-arm64)` or `product (windows-11-arm)`, matched exactly,
+  and every other leg of that job succeeded.
+  [arm64-waiver.ps1](arm64-waiver.ps1) reads the run's jobs from the API, because a matrix is one
+  result in `needs`, and compares the clock with the expiry itself, so the waiver ends with no edit.
+  Any API error, any other job that did not succeed (x64 included), and a cancelled, timed-out or
+  skipped leg waive nothing. The Arm64 jobs still run and stay red, and `publish-gate` still reads
+  `app`'s raw result, so main doesn't publish while they fail. Remove it (script, test, catalog suite,
+  the gate's two steps) once #2563 and the self-test fix are on main and three main push runs in a
+  row show the three jobs green; extending it needs a new owner decision.
+  Offline test: `quality/test-arm64-waiver.ps1` (catalog suite `arm64-waiver-script`).
 - **The weekly report** (`weekly-report`, [weekly-report.yml](../.github/workflows/weekly-report.yml))
   is how the flake record gets read, so flakes are fixed rather than re-run. Every Monday at 08:00
   PT, `agent-bridge-quality report` reads the past 7 days from GitHub and the workflow comments it

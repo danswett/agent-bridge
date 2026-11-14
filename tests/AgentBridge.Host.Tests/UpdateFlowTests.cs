@@ -225,6 +225,8 @@ public sealed class UpdateFlowTests : IAsyncLifetime
 
         var refused = Read<UpdateCommandResult>(Result(await AskAsync(ch, UpdateProtocol.Install)));
         Assert.Equal((UpdateAck.Refused, "too many presses of Install from this device just now; try again in 10 minutes"), (refused.Outcome, refused.Reason));
+        Assert.Equal(ManageReason.RateLimited, refused.Code);
+        Assert.Equal(Now + TimeSpan.FromMinutes(10), refused.RetryAt);
         // Each kind has its own count.
         Assert.Equal(UpdateAck.Accepted, Read<UpdateCommandResult>(Result(await AskAsync(ch, UpdateProtocol.Check))).Outcome);
         Assert.Equal(UpdateService.RateLimit + 1, control.Status().UpdateAsks!.Count);
@@ -257,6 +259,44 @@ public sealed class UpdateFlowTests : IAsyncLifetime
 
         Assert.Equal((UpdateAck.Refused, UpdateService.Full), (refused.Outcome, refused.Reason));
         Assert.Equal(accepted, control.Status().UpdateAsks!.Select(a => a.Request));
+        var cached = Read<UpdateCommandResult>(Result(await AskAsync(phone, UpdateProtocol.Check)));
+        Assert.Equal(UpdateAck.Accepted, cached.Outcome);
+        Assert.Equal(Reported, cached.State);
+        Assert.Equal(accepted, control.Status().UpdateAsks!.Select(a => a.Request));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_Check_past_three_presses_returns_the_last_check_without_asking_again_or_extending_the_guard(bool failed)
+    {
+        var lastCheck = Reported with
+        {
+            Last = failed ? new UpdateResult { Outcome = UpdateOutcome.Failed, Reason = "the feed did not answer", At = Now } : null,
+        };
+        await ReportAsync(lastCheck);
+        var ch = await OpenAsync();
+        for (var i = 0; i < 3; i++)
+        {
+            var request = Guid.NewGuid().ToString();
+            Assert.Equal(UpdateAck.Accepted, Read<UpdateCommandResult>(Result(await AskAsync(ch, UpdateProtocol.Check, request))).Outcome);
+            await ReportAsync(lastCheck, request);
+            time.Advance(TimeSpan.FromMinutes(2));
+        }
+        var changes = Volatile.Read(ref asksChanged);
+
+        for (var i = 0; i < 2; i++)
+        {
+            var cached = Read<UpdateCommandResult>(Result(await AskAsync(ch, UpdateProtocol.Check)));
+            Assert.Equal(UpdateAck.Accepted, cached.Outcome);
+            Assert.Equal(lastCheck, cached.State);
+            Assert.Null(cached.Reason);
+            Assert.Empty(updates.Asks);
+        }
+        Assert.Equal(changes, Volatile.Read(ref asksChanged));
+        time.Advance(TimeSpan.FromMinutes(4));
+        Assert.Equal(UpdateAck.Accepted, Read<UpdateCommandResult>(Result(await AskAsync(ch, UpdateProtocol.Check))).Outcome);
+        Assert.Equal(UpdateAskKind.Check, Assert.Single(updates.Asks).Kind);
     }
 
     [Fact]

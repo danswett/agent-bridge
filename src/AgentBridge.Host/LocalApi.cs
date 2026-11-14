@@ -5,14 +5,7 @@ using AgentBridge.Transport;
 
 namespace AgentBridge.Host;
 
-// What the local pipe serves: the sessions ops exactly as the relay's channels get them, and
-// the host's management ops, which only the pipe reaches. Who may do what (CallerGuard):
-//   * the Agent Bridge app: everything, the management ops included;
-//   * anything inside an agent session: reading sessions and usage, nothing else. Not managing
-//     the host, and not answering, replying, ending or launching sessions as if it were the
-//     person, until agents have a principal of their own (design §5.5);
-//   * anything else of the user's: the sessions ops as before, and the host's status, but not
-//     managing it.
+// CallerGuard and scoped credentials govern pipe ops; script management is host-CLI-only (docs/protocol/local-pipe.md).
 public static class LocalApi
 {
     // Management ops that only read.
@@ -31,6 +24,8 @@ public static class LocalApi
     static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log, RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet, AgentAuditLog? audit, RefusalAudits refusals) => async (channel, op, data) =>
     {
         credentials?.CheckScriptOperation(channel, op, log);
+        if (op is "scripts.add" or "scripts.revoke")
+        { return Cli.ScriptCredentialCommands.Handle(channel, op, data, callers, credentials, audit); }
         if (op is AgentProtocol.Adopt or AgentProtocol.Revoke or AgentProtocol.Credential)
         {
             if (credentials is null || !OperatingSystem.IsWindows() || channel is not LocalChannel local)
@@ -76,7 +71,7 @@ public static class LocalApi
             {
                 throw Refuse(op, caller, "only the app or host command line may set a fleet name", log);
             }
-            return sessions.RenameFleetSession(data);
+            return await sessions.RenameFleetSessionAsync(data, fleet?.WarningRoster, channel.Closed);
         }
             if (op == AgentBridge.Host.Lite.LiteAgentSend.Op) { return await AgentBridge.Host.Lite.LiteAgentSend.HandleAsync(credentials, lite, channel, data, appendAttempt: audit is null ? null : audit.Append); }
             if (op == AgentBridge.Host.Fleet.FleetList.Op) { return await (fleet ?? new AgentBridge.Host.Fleet.FleetList(credentials, null)).HandleAsync(channel, data, auditLog: audit); }
@@ -183,7 +178,7 @@ public static class LocalApi
                 .. control.HasAgentSignIn ? new[] { HostOps.AgentSignInCapability } : []] },
             CallerKind.Agent => hello with { Capabilities = [.. hello.Capabilities.Where(AgentCapabilities.Contains)] },
             _ => hello,
-        });
+        }, launchAudit: op == LaunchProtocol.Launch && callers.Classify(channel).Kind is (CallerKind.App or CallerKind.HostCli) ? audit : null);
     };
 
     internal sealed class RefusalAudits(TimeProvider time)

@@ -41,8 +41,8 @@ public sealed class UpdateService
     const string NowKind = "now";
     public static readonly TimeSpan AskKept = UpdateProtocol.Lapses;
     public const int MaxAsks = 8;
-    // Each device may have this many presses of each kind taken in RateWindow; the rest are
-    // refused, saying when to try again. Every new press makes the app ask the feed (or answer
+    // Each device may have this many presses of each kind taken in RateWindow; extra Checks use
+    // the last report, and extra Installs say when to try again. A new ask makes the app ask the feed (or answer
     // from a check a minute old) and an Install look at the machine's processes again.
     public const int RateLimit = 3;
     public static readonly TimeSpan RateWindow = TimeSpan.FromMinutes(10);
@@ -318,6 +318,7 @@ public sealed class UpdateService
         bool added;
         UpdateState state;
         string? tooMany = null;
+        DateTimeOffset? retryAt = null;
         lock (gate)
         {
             Prune();
@@ -325,15 +326,21 @@ public sealed class UpdateService
             if (!reported.Installer) { return Refused(peer, name, reported.Unavailable ?? "this copy of the app was not installed by its updater, so it cannot update"); }
             // A resend of the same press is the same ask, whether or not the app has taken it.
             added = asks.All(a => a.Request != request) && !taken.ContainsKey(request);
+            // A Check past the guard uses the app's last report, even with a full queue.
+            if (added && kind == UpdateAskKind.Check && Limited(peer, kind.ToString()) is not null)
+            {
+                added = false;
+            }
             // Full: refused, rather than letting go of a press already answered "accepted".
-            if (added && asks.Count >= MaxAsks)
+            else if (added && asks.Count >= MaxAsks)
             {
                 tooMany = Full;
                 added = false;
             }
             else if (added && Limited(peer, kind.ToString()) is { } again)
             {
-                tooMany = $"too many presses of {(kind == UpdateAskKind.Install ? "Install" : "Check")} from this device just now; try again {again}";
+                retryAt = again;
+                tooMany = $"too many presses of {(kind == UpdateAskKind.Install ? "Install" : "Check")} from this device just now; try again {AgainIn(again)}";
                 added = false;
             }
             else if (added)
@@ -344,7 +351,10 @@ public sealed class UpdateService
             }
             state = StateLocked();
         }
-        if (tooMany is not null) { return Refused(peer, name, tooMany); }
+        if (tooMany is not null)
+        {
+            return Refused(peer, name, tooMany) with { Code = retryAt is null ? null : ManageReason.RateLimited, RetryAt = retryAt };
+        }
         if (added)
         {
             log($"update {(kind == UpdateAskKind.Install ? "install" : "check")} asked for by {by}");
@@ -400,7 +410,7 @@ public sealed class UpdateService
             return RefusedNow(peer, ManageReason.Changed, "this machine could not read its record of presses, so one signed before now is not acted on; press again");
         }
         if (SignedPress.Lifetime(press.Body, at, NowWords) is { } lapsed) { return RefusedNow(peer, lapsed.Code, lapsed.Detail); }
-        string? again;
+        DateTimeOffset? again;
         lock (gate)
         {
             known = record.Find(press.Request, at);
@@ -414,7 +424,10 @@ public sealed class UpdateService
             }
         }
         if (known is not null) { return Again(peer, known); }
-        if (again is not null) { return RefusedNow(peer, ManageReason.RateLimited, $"too many presses of Update now from this device just now; try again {again}"); }
+        if (again is { } retryAt)
+        {
+            return RefusedNow(peer, ManageReason.RateLimited, $"too many presses of Update now from this device just now; try again {AgainIn(retryAt)}") with { RetryAt = retryAt };
+        }
         if (!knows) { return RefusedNow(peer, ManageReason.Unavailable, "this machine could not record the press, so it was not acted on"); }
         var result = DecideNow(peer, parts, press, signed);
         lock (gate) { record.Answer(press.Request, result.Outcome.ToString().ToLowerInvariant(), result.Code, result.Reason); }
@@ -443,7 +456,8 @@ public sealed class UpdateService
         lock (gate) { state = StateLocked(); }
         // Each the same word as updateNowWhy, read afresh: read-only by the acting answer.
         var (why, next) = WhyNot(state, parts, ReadOnly);
-        if (why is not null)
+        var whenIdle = why == UpdateNowWhy.RestartCap;
+        if (why is not null && !whenIdle)
         {
             return RefusedNow(peer, why, why switch
             {
@@ -462,7 +476,7 @@ public sealed class UpdateService
         }
         // The early answer, from the snapshot now: the same comparison is made again when the
         // host acts, with the lease held (DepartAsync).
-        if (Busy(parts).CoveredBy(args.Accept) != UpdateBusyView.Cover.Covered)
+        if (!whenIdle && Busy(parts).CoveredBy(args.Accept) != UpdateBusyView.Cover.Covered)
         {
             log($"update now from {press.By}: more is busy than the person confirmed; asked to confirm again");
             return new UpdateCommandResult(UpdateAck.Confirm, "more is busy here than the confirmation covered") { State = State() };
@@ -478,14 +492,15 @@ public sealed class UpdateService
             else if (Volatile.Read(ref departing) == 1 || asks.Any(a => a.Now is not null) || Carrying(StateLocked())) { refused = "another Update now is already under way on this machine"; }
             else
             {
-                // Its signed command recorded before the app can have it, so its departure can be
-                // verified again, by this host or one that restarts meanwhile.
-                record!.Answer(press.Request, "accepted", null, null, signed);
-                asks.Add(new UpdateAsk(press.Request, UpdateAskKind.Install, press.By, time.GetUtcNow(), new UpdateNowAsk(args.Release!, args.Accept, until)));
+                // A capped press becomes ordinary Install: no signed departure authority or slot.
+                // Otherwise keep the command so its departure can be verified again after a restart.
+                record!.Answer(press.Request, "accepted", null, null, whenIdle ? null : signed);
+                asks.Add(new UpdateAsk(press.Request, UpdateAskKind.Install, press.By, time.GetUtcNow(),
+                    whenIdle ? null : new UpdateNowAsk(args.Release!, args.Accept, until)));
             }
         }
         if (refused is not null) { return RefusedNow(peer, ManageReason.Busy, refused); }
-        log($"update now asked for by {press.By}{(press.Name.Length > 0 ? $" \"{press.Name}\"" : "")} for {args.Release}");
+        log($"update {(whenIdle ? "when idle" : "now")} asked for by {press.By}{(press.Name.Length > 0 ? $" \"{press.Name}\"" : "")} for {args.Release}");
         AsksChanged?.Invoke();
         return new UpdateCommandResult(UpdateAck.Accepted) { State = State() };
     }
@@ -654,8 +669,8 @@ public sealed class UpdateService
         : parts.Manage.SignInPending ? UpdateCode.SignIn
         : null;
 
-    // Under the gate: when this device may press this kind again, in words, or null if it may now.
-    string? Limited(string peer, string kind)
+    // Under the gate: the exact instant the oldest counted press ages out, or null if allowed.
+    DateTimeOffset? Limited(string peer, string kind)
     {
         var now = time.GetUtcNow();
         if (!pressed.TryGetValue((peer, kind), out var times))
@@ -667,7 +682,12 @@ public sealed class UpdateService
         }
         while (times.Count > 0 && now - times.Peek() >= RateWindow) { times.Dequeue(); }
         if (times.Count < RateLimit) { return null; }
-        var minutes = Math.Max(1, (int)Math.Ceiling((times.Peek() + RateWindow - now).TotalMinutes));
+        return times.Peek() + RateWindow;
+    }
+
+    string AgainIn(DateTimeOffset retryAt)
+    {
+        var minutes = Math.Max(1, (int)Math.Ceiling((retryAt - time.GetUtcNow()).TotalMinutes));
         return $"in {minutes} minute{(minutes == 1 ? "" : "s")}";
     }
 
