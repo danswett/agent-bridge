@@ -28,7 +28,8 @@ everything else, the rule of at most one conditional check per 10 minutes stays.
   finished head; a review dismissal within 4 minutes; `ci` within 5 minutes of the last check
   finishing, 9 after a re-run on a finished head. On a draft PR, state, comment and submitted review
   targets are the same; a dismissal and a `gate` arrive within 16 minutes and `ci` within 18 (a
-  draft's reviews and head are read every 15 minutes, then 60 s while its checks run).
+  draft's reviews and head checks and statuses are read every 15 minutes, then every 60 s while its
+  checks run; `ci` is raised at once when the last `completed_at` is already 3 minutes old).
 - Fewer than 300 counted REST calls an hour when quiet, about 500 with 8 PRs in CI (see Rate), on a
   budget of its own.
 - No silent loss: every event the relay observes is delivered, or journaled as undeliverable and
@@ -96,23 +97,30 @@ key. A list that fails part way follows the rules below.
 | `commits/<head>/check-runs` and `commits/<head>/statuses` | 60 s while CI runs on the head (drafts too), 3 min for other open non-draft heads, 15 min for other drafts | CI finished, re-runs, `merge-rule`, `independent-review`, `independent-review-2` |
 
 **Comment feeds page by key, not by page number.** Each request is page 1 of the list, oldest
-first, with `since` as the key: the first request of a scan uses the committed cursor `C` minus 10
-minutes (late-indexed comments), each next request the last `updated_at` it read. A deleted comment
-cannot shift a later one past the reader, and a comment edited mid-scan moves to the end, where it
-is read. Should 100 comments share one `updated_at`, the scan takes page 2 of that key, then moves
-on. Each page is one state commit: its events (oldest first, so order holds across pages), the next
-key, and `C` = that key once the last page is short; a crash or failure resumes from the committed
-key. In steady state the URL changes only when something changed, so a 304 means nothing new, and
-an outage of any length resumes where the relay stopped. Duplicates are removed by comment id plus
-`updated_at`. Issue comments are kept only on PRs, or on issues when they carry a `[to:team]` tag.
+first, with `since` as the key. The design does not rely on whether GitHub's `since` includes its
+own timestamp (the soak checks it): every request uses `since` = key minus 1 second, so every
+comment at the key's timestamp is read again, and repeats are removed by comment id plus
+`updated_at`. A scan's first key is the committed cursor `C` minus 10 minutes (late-indexed
+comments); each next key is the newest `updated_at` on the page just read. A deleted comment cannot
+shift a later one past the reader, and a comment edited mid-scan moves to the end, where it is read.
+If a full page brings nothing new (more than 100 comments within that second), the scan takes pages
+2, 3 ... of that key until a page is short, then repeats that key's pass until a whole pass finds
+nothing new and nothing missing; a deletion or edit during a pass shows as a missing comment and
+forces another pass. The scan ends at a short page. Each page is one state commit: its events
+(oldest first, so order holds across pages), its ETag, its newest `updated_at` and count, and the
+next key; `C` moves to the last key once a page is short. A crash or failure resumes from the
+committed key. A 304 page is not the end of a scan: the scan follows that page's saved next key, so
+a comment beyond a full first page is still read, and only a short page ends it. Issue comments are
+kept only on PRs, or on issues when they carry a `[to:team]` tag.
 Reviews are re-read on a timer because GitHub does not promise a dismissal changes the PR's
 `updated_at`; checks and statuses likewise, as a re-run, a receipt or `merge-rule` can change
 without it.
 
 **PR-list scans and the watermark.** The PR list has no `since`, so it is read newest first until
 an `updated_at` older than its committed cursor `C`. A scan notes page 1's newest `updated_at` as
-its pending top `T`; each page is one state commit of its events and ETag. `C` becomes `T` only when
-one scan, from page 1, reaches `C` or the last page. A partial scan (throttled, failed, cut short or
+its pending top `T`; each page is one state commit of its events, its ETag, its oldest `updated_at`
+and `T`, so a 304 page can still be judged against `C`. `C` becomes `T` only when one scan, from
+page 1, reaches `C` or the last page. A partial scan (throttled, failed, cut short or
 a restart) keeps `C`, and the next scan starts again from page 1: staged events are already in the
 outbox and repeats are removed by event id, so a later page 1 304 cannot hide them and nothing on a
 later page is skipped. Each event is about one PR, so order across pages does not matter (per-PR
@@ -216,8 +224,11 @@ event id and recipient, so a retried send is the same request, and the text carr
   An event that falls back to a lead is marked `late (observed <time>)`. Different PRs do not wait.
 - **Rate:** at most 6 messages a minute to one session. Extra events wait in the outbox, in order;
   nothing is summarised away.
-- **Retry:** an HA error or a busy refusal retries at 1, 2 and 5 minutes, with the same request id,
-  so the host keeps one entry. Then the event is `undeliverable`: the PR's team lead gets it once,
+- **Retry:** a definite failure retries at 1, 2 and 5 minutes, with the same request id, so the host
+  keeps one entry: HA refusing the request (an HTTP error status or a refused connection, so nothing
+  was accepted) or the host's busy refusal. A timeout or a reply with no outcome is unknown, not a
+  failure: it follows the `unconfirmed` path and is never retried. After the retries the event is
+  `undeliverable`: the PR's team lead gets it once,
   and if that fails too, the Chief of Staff gets one line. A session not in the roster is not
   retried; its events go to rule 3 or 4.
 - Once an event is delivered, its text is removed from the outbox. The journal keeps event id, kind,
@@ -270,8 +281,9 @@ event id and recipient, so a retried send is the same request, and the text carr
 3. A head moved A to B to A, and a CI re-run on the same SHA: each raises a new event. A check run
    created after the others finished delays `ci` until it finishes.
 4. Comments across two pages, one edited later: each revision raised once, oldest first across the
-   pages, none repeated at rollover. An outage from 09:50 to 11:20 re-reads every comment since
-   09:40.
+   pages, none repeated at the page boundary. Two comments share the boundary timestamp, one on
+   each page: both are raised, also when one is deleted or edited before the next page is read. An
+   outage from 09:50 to 11:20 re-reads every comment since 09:40.
 5. Crash after the state write and before the send, then a takeover by another runner, while the
    head moves A to B and then, during the outage, to C: `A->B` and `B->C` are each sent once. A
    runner that lost the lease cannot commit or send. A `sending` record is never re-sent.
@@ -299,12 +311,14 @@ event id and recipient, so a retried send is the same request, and the text carr
     runner paused before its commit sends nothing.
 15. While throttled, 130 PRs change and one on page 2 closes: after recovery the `closed` event is
     raised once, though page 1 returns 304.
-16. Page 1 of the PR list holds 100 changed PRs, page 2 fails, and the runner restarts (and, in a
-    second run, another takes over): page 1 then returns 304, yet each page 1 and page 2 event is
-    sent exactly once and the cursor moves only after one scan reaches it. The same with 150 new
-    changes before the resume. For both comment feeds: pages 1 and 2 are committed, the read of
-    page 3 fails, then a page-2 comment is deleted (and in a second run a page-1 comment is edited);
-    on resume every surviving comment is raised exactly once, oldest first, and none is skipped.
+16. Page 1 of the PR list holds 100 changed PRs, page 2 fails, and the runner restarts: page 1 then
+    returns 304, yet each page 1 and page 2 event is sent exactly once and the cursor moves only
+    after one scan reaches it. The same with 150 new changes before the resume. For both comment
+    feeds: pages 1 and 2 are committed, the read of page 3 fails, then a page-2 comment is deleted
+    (in a second run a page-1 comment is edited, in a third a comment tied with the page-2 boundary
+    is deleted); on resume each revision of every surviving comment is raised exactly once, oldest
+    first. With 130 comments in the 10-minute lookback, a new comment on the second key page is
+    read although the first page returns 304. (The same with a takeover is slice 2's test 5.)
 
 ## Live soak (SRE, 24 hours, enrolled disposable nodes)
 The relay sends live only to two disposable sessions and logs every other event dry-run; no watcher
@@ -312,13 +326,14 @@ runs beside it. Baseline: once, after the window ends, a read of the soak window
 approved part of the soak (**Ask (Chief):** approve it), compared with the relay's journal: no
 event missing, none twice. Evidence per kind: state, head, PR comments and reviews from each PR's
 `issues/<n>/timeline`; review-thread comments from `pulls/comments` for the window; `ci` and `gate`
-from the check runs and statuses of each head SHA in those timelines (their completion times);
-hub `[to:team]` tags from the hub issues' comments for the window. Cost: one call per PR per 100
-timeline entries, two per head SHA (check runs and statuses), one per 100 review-thread comments
-and one per hub issue; for 40 PRs with about 4 heads each, about 400 counted calls, paid from the
-App's budget, or without the App from the 600-an-hour ceiling in hours after the soak while the
-relay is stopped. Measured: counted calls an hour, and time from GitHub to message for each kind
-against the targets in Goal.
+from `check-runs?filter=all` and statuses of each head SHA in those timelines (their completion
+times); hub `[to:team]` tags from the hub issues' comments for the window. Cost: one call per 100
+timeline entries per PR, per 100 check runs and per 100 statuses per head SHA, per 100
+review-thread comments and per 100 comments per hub issue; for 40 PRs with about 4 heads each,
+about 400 counted calls, paid from the App's budget, or without the App from the 600-an-hour
+ceiling in hours after the soak while the relay is stopped. The soak also confirms whether `since`
+includes its own timestamp. Measured: counted calls an hour, and time from GitHub to message for
+each kind against the targets in Goal.
 
 ## Slices (docs first; each at most 250 changed lines)
 | Slice | Content |
