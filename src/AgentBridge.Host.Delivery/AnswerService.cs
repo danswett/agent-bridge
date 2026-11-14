@@ -27,6 +27,11 @@ public interface ISessionAnswerer
     // sender: who asked (the channel's peer, or the connector). Only the one who sent a prompt's
     // first answer is given its outcome again for the same answer under a new request (#1093).
     Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default, DeliveryWatch? watch = null, IEscapedConfirmation? confirmed = null, string? sender = null);
+
+    // prepare sees the admitted flow UUID and validated host question before keys; null refuses.
+    // Its terminal callback stays with the flow for retries and late confirmation.
+    Task<AnswerResult> AnswerAuditedAsync(AnswerRequest request, Func<Guid, Session, Question, Action<AnswerOutcome>?> prepare, CancellationToken cancellationToken = default, DeliveryWatch? watch = null, IEscapedConfirmation? confirmed = null, string? sender = null) =>
+        Task.FromResult(new AnswerResult(AnswerOutcome.Refused, "this answerer cannot record a durable audit intent"));
 }
 
 // A person's confirmation of an approval the host escaped anything in (#803), as the host that took
@@ -199,7 +204,16 @@ public sealed class AnswerService : ISessionAnswerer
     // admitted to the request cache, to hold it there while another identical call arrives (#1100).
     internal Action? AfterRegistered { get; set; }
 
-    public Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default, DeliveryWatch? watch = null, IEscapedConfirmation? confirmed = null, string? sender = null)
+    public Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default, DeliveryWatch? watch = null, IEscapedConfirmation? confirmed = null, string? sender = null) =>
+        AnswerOnceAsync(request, cancellationToken, watch, confirmed, sender, null);
+
+    public Task<AnswerResult> AnswerAuditedAsync(AnswerRequest request, Func<Guid, Session, Question, Action<AnswerOutcome>?> prepare, CancellationToken cancellationToken = default, DeliveryWatch? watch = null, IEscapedConfirmation? confirmed = null, string? sender = null)
+    {
+        ArgumentNullException.ThrowIfNull(prepare);
+        return AnswerOnceAsync(request, cancellationToken, watch, confirmed, sender, prepare);
+    }
+
+    Task<AnswerResult> AnswerOnceAsync(AnswerRequest request, CancellationToken cancellationToken, DeliveryWatch? watch, IEscapedConfirmation? confirmed, string? sender, Func<Guid, Session, Question, Action<AnswerOutcome>?>? prepare)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key))
         {
@@ -214,7 +228,7 @@ public sealed class AnswerService : ISessionAnswerer
         // its own under a new UUID, so that no outcome, stage or progress is given to it.
         var prompt = (request.Id, request.Question);
         var by = new AttemptLedger.Owner(sender, request.Id, request.Question);
-        Task<AnswerResult> AsAnother() => AnswerAsync(request with { Request = Guid.NewGuid().ToString("D") }, cancellationToken, watch, confirmed, sender);
+        Task<AnswerResult> AsAnother() => AnswerOnceAsync(request with { Request = Guid.NewGuid().ToString("D") }, cancellationToken, watch, confirmed, sender, prepare);
         // Finding the prompt's first answer, registering this one as it, and admitting it to the
         // request cache are one step: a second identical call cannot land between them and start
         // a delivery of its own beside the registered one, so there is one delivery per prompt, a
@@ -231,7 +245,7 @@ public sealed class AnswerService : ISessionAnswerer
             }
             var flow = first?.Request ?? key;
             var outcome = requests.Once(flow, watch, () => new DeliveryTimeline(options.Time, "answer", flow, log),
-                t => first is null ? Typing(key, () => DeliverAsync(request, key, t, confirmed, by)) : Task.FromResult(AsRetried(first.Last ?? Unconfirmed(DeliveryReasons.AnswerNotConfirmed), true)),
+                t => first is null ? Typing(key, () => DeliverAsync(request, key, t, confirmed, by, prepare)) : Task.FromResult(AsRetried(first.Last ?? Unconfirmed(DeliveryReasons.AnswerNotConfirmed), true)),
                 result =>
                 {
                     log($"answer {flow.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}");
@@ -349,6 +363,11 @@ public sealed class AnswerService : ISessionAnswerer
     // delivery built it. Copilot forms and Claude only; nothing else is read again.
     Func<Task<AnswerResult?>>? Reader(AttemptLedger.Owner by, AttemptLedger.Reread at, AnswerWords.Words words, Guid request)
     {
+        // A sweep must confirm on the admitted timeline, not an unaudited replacement.
+        lock (firstGate)
+        {
+            if (firstAnswers.Values.FirstOrDefault(f => f.Request == request)?.Read is { } read) { return read; }
+        }
         var asked = new AnswerRequest { Id = by.Session, Question = by.Question, Request = request.ToString("D"), Text = words.Text, Fields = words.Fields };
         var timeline = new DeliveryTimeline(options.Time, "answer", request, log);
         switch (at.Agent)
@@ -531,7 +550,7 @@ public sealed class AnswerService : ISessionAnswerer
         }
     }
 
-    async Task<AnswerResult> DeliverAsync(AnswerRequest request, Guid key, DeliveryTimeline timeline, IEscapedConfirmation? confirmed, AttemptLedger.Owner by)
+    async Task<AnswerResult> DeliverAsync(AnswerRequest request, Guid key, DeliveryTimeline timeline, IEscapedConfirmation? confirmed, AttemptLedger.Owner by, Func<Guid, Session, Question, Action<AnswerOutcome>?>? prepare)
     {
         try
         {
@@ -556,13 +575,16 @@ public sealed class AnswerService : ISessionAnswerer
             if (!gate.TryClaim(session.Id, key)) { return Busy(); }
             try
             {
-                return session.Agent switch
+                timeline.AuditPrepare = prepare is null ? null : () => prepare(key, session, question);
+                var result = session.Agent switch
                 {
                     AgentKind.Claude => await ClaudeAsync(session, question, request, timeline, by),
                     AgentKind.Codex => await CodexAsync(session, question, request, timeline, confirmed, by),
                     _ when permission => await CopilotPermissionAsync(session, question, request, timeline, confirmed, by),
                     _ => await CopilotAsync(session, question, request, timeline, by),
                 };
+                if (result.Outcome is AnswerOutcome.Refused or AnswerOutcome.Stale or AnswerOutcome.Busy) { timeline.CompleteAudit(AnswerOutcome.Refused); }
+                return result;
             }
             finally { gate.Release(session.Id, key); }
         }
@@ -570,6 +592,7 @@ public sealed class AnswerService : ISessionAnswerer
         {
             // Only reached before anything was typed: each agent's path owns its own
             // failures once a key may have gone.
+            timeline.CompleteAudit(AnswerOutcome.Refused);
             return Failed(AnswerOutcome.Refused, $"answer {key.ToString()[..8]} to {Short(request.Id)} failed before typing", e);
         }
     }
@@ -772,7 +795,7 @@ public sealed class AnswerService : ISessionAnswerer
             }
             (plan, from) = (planned, call.ScannedTo);
 
-            if (Claim(attempt, request, by, new("copilot", transcript, question.Id, from)) is { } claimed) { return Refused(claimed); }
+            if (Claim(attempt, request, by, new("copilot", transcript, question.Id, from), timeline) is { } claimed) { return Refused(claimed); }
             (typed, held, partial) = await TypeWordsApartAsync(session.Id, pid, form, plan.Keys, StillAsked, timeline, progress);
             trace.Stage("typed");
         }
@@ -1692,7 +1715,7 @@ public sealed class AnswerService : ISessionAnswerer
             keys = new KeyPlan([new KeySend(choice.Key, false, 0, 0, choice.Hold)]);
             from = after.ScannedTo;
 
-            if (Claim(attempt, request, by, null) is { } claimed) { return Refused(claimed); }
+            if (Claim(attempt, request, by, null, timeline) is { } claimed) { return Refused(claimed); }
             typed = await TypeAsync(pid, keys, timeline);
         }
         finally { gate.DoneTyping(); }
@@ -1789,7 +1812,7 @@ public sealed class AnswerService : ISessionAnswerer
             if (planned is null) { return Refused(problem!); }
             (plan, from) = (planned, call.ScannedTo);
 
-            if (Claim(attempt, request, by, new("claude", transcript, question.Id, from)) is { } claimed) { return Refused(claimed); }
+            if (Claim(attempt, request, by, new("claude", transcript, question.Id, from), timeline) is { } claimed) { return Refused(claimed); }
             typed = await TypeAsync(pid, plan.Keys, timeline);
         }
         finally { gate.DoneTyping(); }
@@ -1912,7 +1935,7 @@ public sealed class AnswerService : ISessionAnswerer
             if (EscapedRefusal(question, request, confirmed) is { } unconfirmed) { return Refused(unconfirmed); }
             if (marker.Attempted) { return Refused("agent-ha-bridge has already typed an answer into this approval, and it is never typed again"); }
 
-            if (Claim(attempt, request, by, null) is { } claimed) { return Refused(claimed); }
+            if (Claim(attempt, request, by, null, timeline) is { } claimed) { return Refused(claimed); }
             typed = await TypeAsync(pid, keys, timeline);
         }
         finally { gate.DoneTyping(); }
@@ -1955,9 +1978,19 @@ public sealed class AnswerService : ISessionAnswerer
     // The prompt claimed before the first key, for the sender, session and question the request
     // was admitted for, with a hash of the answer; and, where its record can be read again
     // (reread), the answer's words, kept apart (AnswerWords), or it is refused before any key.
-    string? Claim(string attempt, AnswerRequest request, AttemptLedger.Owner by, AttemptLedger.Reread? reread) =>
-        ledger.Claim(attempt, Guid.Parse(request.Request), new AttemptLedger.Admission(by, AnswerDigest.Of(request), reread,
+    string? Claim(string attempt, AnswerRequest request, AttemptLedger.Owner by, AttemptLedger.Reread? reread, DeliveryTimeline timeline)
+    {
+        var problem = ledger.Claim(attempt, Guid.Parse(request.Request), new AttemptLedger.Admission(by, AnswerDigest.Of(request), reread,
             reread is null ? null : new AnswerWords.Words(request.Text, request.Fields)));
+        if (problem is not null) { return problem; }
+        var prepared = false;
+        try
+        {
+            prepared = timeline.PrepareAudit();
+            return prepared ? null : "auditUnwritable: the approval audit could not be written; nothing was typed";
+        }
+        finally { if (!prepared) { ledger.Release(attempt); } }
+    }
 
     // What typing came to, when that is already the outcome: nothing typed (refused, and the
     // prompt may be answered again) or keys that may have landed (unconfirmed).

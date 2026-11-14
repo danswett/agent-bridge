@@ -9,7 +9,7 @@ using Xunit;
 // the channel: a fixture session read by the real SessionSource, answered by the real
 // AnswerService into a fake injector that shows a prompt on its "screen" and plays the CLI by
 // writing the request's completion. Real keys into a real console are InjectorIntegrationTests.
-public sealed class CopilotPermissionFlowTests : IAsyncLifetime
+public sealed partial class CopilotPermissionFlowTests : IAsyncLifetime
 {
     const string Id = "c0b11070-0000-4000-8000-0000000000aa";
 

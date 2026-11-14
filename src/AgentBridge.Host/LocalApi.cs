@@ -116,7 +116,8 @@ public static class LocalApi
         if (op == Ops.SessionAnswer && credentials?.Of(channel) is { } answering)
         {
             // Refusals must not copy arbitrary answer fields into the audit trail.
-            AuditAgentAction(credentials, answering, op, AnswerAuditTarget(data), "refused", audit);
+            var target = AnswerAuditTarget(data);
+            AuditAgentAction(credentials, answering, op, target, "refused", audit, sessions?.RefusedAnswerGate(target, data));
             throw Refuse(op, new Caller(CallerKind.Agent, credentials.PrincipalOf(answering)),
                 "answering, replying, ending and launching sessions are for the person, from the app or a phone", log);
         }
@@ -178,7 +179,8 @@ public static class LocalApi
                 .. control.HasAgentSignIn ? new[] { HostOps.AgentSignInCapability } : []] },
             CallerKind.Agent => hello with { Capabilities = [.. hello.Capabilities.Where(AgentCapabilities.Contains)] },
             _ => hello,
-        }, launchAudit: op == LaunchProtocol.Launch && callers.Classify(channel).Kind is (CallerKind.App or CallerKind.HostCli) ? audit : null);
+        }, actionAudit: op is (LaunchProtocol.Launch or Ops.SessionAnswer)
+            && callers.Classify(channel).Kind is (CallerKind.App or CallerKind.HostCli) ? audit : null);
     };
 
     internal sealed class RefusalAudits(TimeProvider time)
@@ -238,9 +240,9 @@ public static class LocalApi
         catch (InvalidOperationException) { return "unknown"; }
     }
 
-    internal static void AuditAgentAction(AgentCredentials credentials, AgentCredential caller, string op, string target, string outcome, AgentAuditLog? audit)
+    internal static void AuditAgentAction(AgentCredentials credentials, AgentCredential caller, string op, string target, string outcome, AgentAuditLog? audit, GateAuditMetadata? gate = null)
     {
-        var entry = new AgentAuditEntry("local", Guid.NewGuid().ToString("D"), credentials.PrincipalOf(caller), caller.Chain, op, target, outcome);
+        var entry = new AgentAuditEntry("local", Guid.NewGuid().ToString("D"), credentials.PrincipalOf(caller), caller.Chain, op, target, outcome, Gate: gate);
         bool written;
         try { written = audit?.Append(entry) == true; }
         catch (Exception) { throw AgentActionAuditUnavailable(); }

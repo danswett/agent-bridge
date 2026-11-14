@@ -4,7 +4,7 @@ public sealed record GateAuditMetadata(int V, Guid Operation, Guid Run, long Seq
     string ActorKind, Guid Incarnation, string ReasonCode, Guid? Question = null)
 {
     internal bool Valid(string action, string? target, string outcome) =>
-        V == 1 && Operation != Guid.Empty && (Run != Guid.Empty || action == "session.launch" && Phase != "control") && Sequence > 0
+        V == 1 && Operation != Guid.Empty && (Run != Guid.Empty || action is ("session.launch" or "session.answer") && Phase != "control") && Sequence > 0
         && Phase is "intent" or "terminal" or "control" && Path is "relay" or "local" or "legacy-ha"
         && ActorKind is "person-client" or "agent" or "ha-component"
         && ReasonCode is "none" or "refused" or "failed" or "unconfirmed" or "busy" or "cancelled"
@@ -65,6 +65,8 @@ internal static class GateAuditProjection
                 || rows.Any(r => r.Gate is { } other && other.Operation == gate.Operation && other.Run != run)
                 || terminals.Select(r => (r.Outcome, r.Gate!.ReasonCode, r.Target)).Distinct().Count() > 1)
             { invalidated = true; continue; }
+            if (first.Action == "session.answer" && gate.Phase == "terminal"
+                && operation.All(r => r.Gate is { Phase: "terminal", ReasonCode: "refused" } && r.Outcome == "refused")) { continue; }
             if (gate.Phase != "intent" || terminals.Length == 0 || terminals[0].Outcome is "attempted" or "reserved" or "unconfirmed")
             { reasons.Add("unresolved-intent"); continue; }
             if (terminals[0].Outcome == SuccessFor(first.Action) && run != Guid.Empty)
