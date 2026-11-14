@@ -1,0 +1,214 @@
+using System.Diagnostics;
+using System.Text.Json;
+
+namespace AgentBridge.Quality.Tests;
+
+[Trait("Category", "Process")]
+public class CiWasteScriptTests
+{
+    [Fact]
+    public async Task Cancelled_and_overlapping_old_heads_count_once_but_completed_and_same_head_runs_are_not_superseded()
+    {
+        var runs = new[]
+        {
+            Run(1, "first", "a", 0, 10, "cancelled", null,
+                Job("pwa-ui (chromium 1/3)", 1, 7), Job("app (win-x64)", 1, 6),
+                Job("app-installer (win-x64)", 7, 9), Job("pwa-ui (webkit 1/3)", 1, 10),
+                Job("app (win-arm64)", 1, 10, "skipped")),
+            Run(2, "first", "b", 5, 15, "success", ["docs/guide.md"], Job("pwa-ui (chromium 2/3)", 6, 7)),
+            Run(3, "second", "c", 0, 4, "success", null, Job("app (win-x64)", 0, 4)),
+            Run(4, "second", "d", 20, 24, "success", ["src/AgentBridge.App/View.cs"], Job("app (win-x64)", 20, 22)),
+            Run(5, "third", "e", 0, 10, "cancelled", null, Job("app (win-arm64)", 1, 6)),
+            Run(6, "third", "e", 5, 12, "success", null, Job("app (win-x64)", 5, 7)),
+        };
+        using var report = await Measure(runs.Reverse().ToArray());
+        var result = report.RootElement;
+        Assert.Equal(6, result.GetProperty("runs").GetInt32());
+        Assert.Equal(2, result.GetProperty("cancelled").GetInt32());
+        Assert.Equal(1, result.GetProperty("superseded").GetInt32());
+        Assert.Equal(2, result.GetProperty("cancelled_or_superseded").GetInt32());
+        Assert.Equal(18, result.GetProperty("wasted_long_job_minutes").GetDouble());
+        Assert.Equal(1, result.GetProperty("cancelled_runs_over_five_minutes").GetInt32());
+        Assert.Equal(1, result.GetProperty("no_long_job_pushes").GetInt32());
+        Assert.Equal(1, result.GetProperty("no_long_job_pushes_that_started_long_jobs").GetInt32());
+        Assert.Equal(4, result.GetProperty("unknown_pushes").GetInt32());
+        var wasted = result.GetProperty("long_jobs").EnumerateArray().ToDictionary(
+            row => row.GetProperty("job").GetString()!, row => row.GetProperty("wasted_minutes").GetDouble());
+        Assert.Equal(6, wasted["pwa-ui chromium"]);
+        Assert.Equal(10, wasted["app"]);
+        Assert.Equal(2, wasted["app-installer"]);
+        Assert.Equal(new[] { "docs/guide.md" }, result.GetProperty("no_long_job_push_list")[0]
+            .GetProperty("files").EnumerateArray().Select(file => file.GetString()));
+    }
+
+    [Fact]
+    public async Task Missing_deltas_stay_unknown_and_running_job_time_is_clipped_to_the_snapshot()
+    {
+        var active = Run(7, "active", "f", 27, 30, null, null,
+            Job("pwa-ui (chromium)", 28, null, null), Job("app (win-x64)", null, null, null),
+            Job("pwa-ui (chromium 2/3)", 31, null, null), Job("app-installer (win-x64)", 28.25, 29.75));
+        using var report = await Measure([active]);
+        var result = report.RootElement;
+        Assert.Equal(1, result.GetProperty("unknown_pushes").GetInt32());
+        Assert.Equal(0, result.GetProperty("no_long_job_pushes").GetInt32());
+        Assert.Equal(0, result.GetProperty("wasted_long_job_minutes").GetDouble());
+        var chromium = result.GetProperty("long_jobs").EnumerateArray()
+            .Single(row => row.GetProperty("job").GetString() == "pwa-ui chromium");
+        Assert.Equal(2, chromium.GetProperty("minutes").GetDouble());
+        Assert.Equal(1, chromium.GetProperty("started").GetInt32());
+        Assert.Equal(1.5, result.GetProperty("long_jobs").EnumerateArray()
+            .Single(row => row.GetProperty("job").GetString() == "app-installer").GetProperty("minutes").GetDouble());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_later_attempt_is_unknown_push_evidence_in_collection_and_replay(bool collect)
+    {
+        var rerun = Run(9, "fix/x", "b", 5, 28, "success", ["docs/guide.md"], Job("pwa-ui (chromium)", 21, 27));
+        rerun["run_attempt"] = 2;
+        rerun["run_started_at"] = At(20);
+        using var report = await Measure([Run(8, "fix/x", "a", 0, 10, "success", null), rerun], collect);
+        Assert.Equal(0, report.RootElement.GetProperty("no_long_job_pushes").GetInt32());
+        Assert.Equal(0, report.RootElement.GetProperty("no_long_job_pushes_that_started_long_jobs").GetInt32());
+        Assert.Equal(2, report.RootElement.GetProperty("unknown_pushes").GetInt32());
+    }
+
+    [Theory]
+    [InlineData(99, 1, false)]
+    [InlineData(100, 0, false)]
+    [InlineData(99, 1, true)]
+    [InlineData(100, 0, true)]
+    public async Task A_full_comparison_page_is_unknown_push_evidence(int count, int known, bool collect)
+    {
+        using var report = await Measure([
+            Run(12, "page", "a", 0, 10, "success", null),
+            Run(13, "page", "b", 20, 25, "success",
+                Enumerable.Range(0, count).Select(i => $"docs/{i}.md").ToArray()),
+        ], collect);
+        Assert.Equal(known, report.RootElement.GetProperty("no_long_job_pushes").GetInt32());
+        Assert.Equal(2 - known, report.RootElement.GetProperty("unknown_pushes").GetInt32());
+    }
+
+    [Theory]
+    [InlineData(1, 10, 0)]
+    [InlineData(2, 10, 0)]
+    [InlineData(1, 0, 1)]
+    public async Task Supersession_requires_a_newer_first_attempt_not_an_older_heads_late_start(int attempt, int start, int expected)
+    {
+        var old = Run(14, "late", "a", 0, 18, "success", null, Job("app (win-x64)", start + 1, start + 7));
+        old["run_attempt"] = attempt;
+        old["run_started_at"] = At(start);
+        using var report = await Measure([old,
+            Run(15, "late", "b", 5, 15, "success", ["docs/guide.md"], Job("app (win-x64)", 6, 12))]);
+        Assert.Equal(expected, report.RootElement.GetProperty("superseded").GetInt32());
+        Assert.Equal(expected * 6, report.RootElement.GetProperty("wasted_long_job_minutes").GetDouble());
+    }
+
+    [Theory]
+    [InlineData(false, null)]
+    [InlineData(false, "b")]
+    [InlineData(false, "a")]
+    [InlineData(true, null)]
+    public async Task Case_only_ref_differences_never_create_supersession_waste_or_cross_ref_deltas(bool collect, string? cachedBase)
+    {
+        var valid = collect || cachedBase == "a";
+        var last = Run(16, "fix/x", "c", 20, 25, "success",
+            valid ? ["src/AgentBridge.App/View.cs", "docs/guide.md"] : ["docs/guide.md"]);
+        last["expected_base"] = "a";
+        if (cachedBase is not null) last["delta_base_sha"] = cachedBase;
+        using var report = await Measure([
+            Run(10, "fix/x", "a", 0, 10, "success", null, Job("app (win-x64)", 1, 7)),
+            Run(11, "Fix/x", "b", 5, 15, "success", ["docs/guide.md"],
+                Job("pwa-ui (chromium)", 6, 12)),
+            last,
+        ], collect);
+        Assert.Equal(0, report.RootElement.GetProperty("superseded").GetInt32());
+        Assert.Equal(0, report.RootElement.GetProperty("wasted_long_job_minutes").GetDouble());
+        Assert.Equal(0, report.RootElement.GetProperty("no_long_job_pushes").GetInt32());
+        Assert.Equal(valid ? 2 : 3, report.RootElement.GetProperty("unknown_pushes").GetInt32());
+    }
+
+    static string At(double minute) => new DateTimeOffset(2026, 11, 10, 8, 0, 0, TimeSpan.Zero)
+        .AddMinutes(minute).ToString("O");
+
+    static object Job(string name, double? start, double? end, string? conclusion = "success") => new
+    {
+        name,
+        started_at = start.HasValue ? At(start.Value) : null,
+        completed_at = end.HasValue ? At(end.Value) : null,
+        conclusion,
+        status = conclusion is null ? start.HasValue ? "in_progress" : "queued" : "completed",
+    };
+
+    static Dictionary<string, object?> Run(int id, string branch, string sha, int start, int end, string? conclusion,
+        string[]? files, params object[] jobs) => new()
+        {
+            ["id"] = id,
+            ["head_branch"] = branch,
+            ["head_sha"] = sha,
+            ["created_at"] = At(start),
+            ["run_started_at"] = At(start),
+            ["run_attempt"] = 1,
+            ["updated_at"] = At(end),
+            ["status"] = conclusion is null ? "in_progress" : "completed",
+            ["conclusion"] = conclusion,
+            ["jobs"] = jobs,
+            ["files"] = files,
+            ["html_url"] = $"https://example.test/runs/{id}",
+            ["head_repository"] = new { full_name = "example/repo" },
+        };
+
+    static async Task<JsonDocument> Measure(object[] runs, bool collect = false)
+    {
+        var folder = Fixture.ScratchFolder();
+        try
+        {
+            var input = Path.Combine(folder, "runs.json");
+            File.WriteAllText(input, JsonSerializer.Serialize(new { captured_at = At(30), runs }));
+            var start = new ProcessStartInfo("pwsh")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WorkingDirectory = ChangedFiles.RepoRoot(AppContext.BaseDirectory),
+            };
+            start.Environment["CI_WASTE_FIXTURE"] = input;
+            start.Environment["CI_WASTE_SCRIPT"] = Path.Combine(start.WorkingDirectory, "quality", "ci-waste.ps1");
+            string[] args = collect ? ["-NoProfile", "-NonInteractive", "-Command", """
+                function global:gh {
+                    param($command, $path)
+                    if ($command -ne 'api') { throw "Unexpected gh command: $command" }
+                    $fixture = Get-Content $env:CI_WASTE_FIXTURE -Raw | ConvertFrom-Json
+                    $global:LASTEXITCODE = 0
+                    if ($path -match '/actions/workflows/ci.yml/runs\?') {
+                        $value = @{ workflow_runs = $fixture.runs }
+                    } elseif ($path -match '/actions/runs/(\d+)/jobs\?') {
+                        $run = $fixture.runs | Where-Object id -eq $Matches[1]
+                        if (-not $run) { throw "Unexpected jobs read: $path" }
+                        $value = @{ jobs = @($run.jobs) }
+                    } elseif ($path -match '/compare/([^/]+)\.\.\.([^?]+)') {
+                        $run = $fixture.runs | Where-Object head_sha -eq $Matches[2]
+                        if ($run.PSObject.Properties['expected_base'] -and $run.expected_base -cne $Matches[1]) { throw "Unexpected comparison base: $path" }
+                        if ($null -eq $run.files) { throw "Unexpected comparison: $path" }
+                        $value = @{ status = 'ahead'; files = @($run.files | ForEach-Object { @{ filename = $_ } }) }
+                    } else { throw "Unexpected GitHub read: $path" }
+                    $value | ConvertTo-Json -Depth 30
+                }
+                & $env:CI_WASTE_SCRIPT
+                """]
+                : ["-NoProfile", "-NonInteractive", "-File", start.Environment["CI_WASTE_SCRIPT"]!, "-RunsFile", input];
+            foreach (var arg in args)
+                start.ArgumentList.Add(arg);
+            using var process = Process.Start(start) ?? throw new InvalidOperationException("pwsh did not start.");
+            var stdout = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            Assert.True(process.ExitCode == 0, (await stderr) + (await stdout));
+            return JsonDocument.Parse(await stdout);
+        }
+        finally
+        {
+            Fixture.Delete(folder);
+        }
+    }
+}
