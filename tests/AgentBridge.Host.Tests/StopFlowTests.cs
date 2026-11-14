@@ -118,9 +118,15 @@ public sealed class StopFlowTests : IAsyncLifetime
 
     static (string, string?) Pair(Outcome o) => (o.Outcome_, o.Reason);
 
-    LocalServer CliServer(CallerKind caller = CallerKind.HostCli) => LocalServer.Start(LocalEndpoint.For(f.Root),
-        LocalApi.Handler(new SessionService(source, new MachineInfo("fixture", "Fixture", "windows", "0.1.0"), stops: Stopper()),
-            null!, new FixedCallerGuard(new Caller(caller, "fixture"))));
+    LocalServer CliServer(CallerKind caller = CallerKind.HostCli, string? response = null)
+    {
+        var handler = LocalApi.Handler(new SessionService(source, new MachineInfo("fixture", "Fixture", "windows", "0.1.0"), stops: Stopper()),
+            null!, new FixedCallerGuard(new Caller(caller, "fixture")));
+        return LocalServer.Start(LocalEndpoint.For(f.Root), (channel, op, data) =>
+            op == Ops.SessionStop && response is not null
+                ? Task.FromResult<object?>(System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(response))
+                : handler(channel, op, data));
+    }
 
     async Task<(int Exit, string Output, string Error)> CliAsync(string? confirm = null, bool refused = false, string[]? args = null)
     {
@@ -135,13 +141,17 @@ public sealed class StopFlowTests : IAsyncLifetime
     static StopResult CliResult(string output) =>
         System.Text.Json.JsonSerializer.Deserialize<StopResult>(output, ProtocolJson.Options)!;
 
-    [Fact]
-    public async Task Cli_stop_idle_session_ends_on_one_press()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Cli_stop_idle_session_ends_on_one_press(bool forced)
     {
+        if (forced) { injector.OnInject = null; }
         await using var local = CliServer();
         var result = await CliAsync();
         Assert.Equal(0, result.Exit);
         Assert.Equal(StopOutcome.Ended, CliResult(result.Output).Outcome);
+        Assert.Equal(forced, CliResult(result.Output).Forced == true);
         Assert.Equal("", result.Error);
         Assert.Single(injector.Plans);
         Assert.Null(source.Get(Id));
@@ -231,6 +241,37 @@ public sealed class StopFlowTests : IAsyncLifetime
         Assert.Null(CliResult(result.Output).Reason);
         Assert.DoesNotContain(probe.Reason, result.Output + result.Error);
         Assert.Empty(injector.Plans);
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("""{"outcome":0}""")]
+    [InlineData("""{"outcome":"unknown"}""")]
+    [InlineData("""{"outcome":"confirm"}""")]
+    [InlineData("""{"outcome":"confirm","confirm":"bad!","confirmSeconds":10}""")]
+    public async Task Cli_stop_unreadable_result_is_never_reported_as_ended(string response)
+    {
+        await using var local = CliServer(response: response);
+        var result = await CliAsync();
+        Assert.Equal(1, result.Exit);
+        Assert.DoesNotContain("ended", result.Output);
+        Assert.NotEmpty(result.Output + result.Error);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task Cli_stop_does_not_end_a_replacement_process()
+    {
+        await WorkingAsync();
+        await using var local = CliServer();
+        var first = await CliAsync();
+        Assert.Equal(3, first.Exit);
+        control.Run(AgentKind.Copilot, Pid, Started.AddMinutes(5));
+        await source.RefreshAsync();
+        var replaced = await CliAsync(CliResult(first.Output).Confirm);
+        Assert.Equal(3, replaced.Exit);
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
     }
 
     static async Task<string[]> CapabilitiesAsync(SecureChannel ch)
