@@ -35,6 +35,11 @@ Operations an agent calls on the local pipe after `agent.hello`, on its own cred
 
 ## `fleet.find`
 
+The table lists implemented selector branches; production matches stay `unverified`
+(or `incomplete`). Engineering approved the
+[#2360 replacement contract](../design/fleet-session-registry.md#approved-replacement-contract-2360-not-implemented)
+as a future change; this documentation PR does not implement it or enable routing.
+
 ```json
 { "id": 4, "op": "fleet.find", "data": { "name": "SG Quality" } }
 ```
@@ -44,7 +49,7 @@ Optional `"machine"` (1 to 64 of letters, digits, `.`, `_`, `-`) limits the matc
 | `result` | Meaning | Body |
 | --- | --- | --- |
 | `incomplete` | A live machine in scope published a truncated list, so a duplicate could be hidden | `machines`: ids |
-| `unverified` | A live match exists and records are unsigned (no `hostSign` yet) | `machines`: `{ machine, online }`, no node |
+| `unverified` | A live unverified match exists, even beside a verified match; #1776 verification is not integrated today | `machines`: `{ machine, online }`, no node |
 | `ambiguous` | Two or more verified live matches, including on one machine | `candidates`: `{ id, node, machine, state, since, online, model? }` |
 | `offline` | Matches only on offline machines | `machines`: `{ machine }` |
 | `found` | One verified live match, with or without a `machine` filter | `session`: `{ id, node, machine, state, since, online, model? }` |
@@ -53,6 +58,15 @@ Optional `"machine"` (1 to 64 of letters, digits, `.`, `_`, `-`) limits the matc
 - Every machine object, session and candidate above also carries optional `machineName` under the same rules as `fleet.list`; `incomplete` remains an array of IDs. A display name is never a machine pin.
 - Every result carries `fleetScope`, the authenticated relay account ID captured with the roster. Request `account`/`fleetScope` fields are ignored; missing authenticated scope refuses explicitly. Reconnect during the read refuses rather than mixing scopes.
 - Name-only lookup is canonical (#2151); offline matches do not create a live duplicate. `model` is carried only when the authenticated roster supplies a string, never inferred from caller data or names. Missing model is omitted, so model-dependent callers fail closed. No publisher or relay allow-list change supplies model today.
-- Until `hostSign` exists no record is verified, so today a live match answers `unverified` and `found` is not returned: a name alone, or an impostor machine of the same account beside an offline original, never yields a routable node. **Deviation from issue #1399**, which asked for a plain found/ambiguous/not-found; the design governs.
+- Until #1776's signing and trusted reader integration lands no record is verified, so today a live match answers `unverified` and `found` is not returned: a name alone, or an impostor machine of the same account beside an offline original, never yields a routable node. Protected key custody (#1782) alone is insufficient. **Deviation from issue #1399**, which asked for a plain found/ambiguous/not-found; the design governs.
 - The name is trimmed, then matched exactly and case-sensitively; it is refused if empty or over 64 characters (before any audit entry). It is never echoed back, so the call does not taint the caller with session text.
 - Same account, scope and refusal rules as `fleet.list`. Each accepted call invokes the same `AuditFleetList` hook.
+
+### Approved future name enrollment and replacement behavior (#2360)
+
+The [canonical #2360 design](../design/fleet-session-registry.md) owns the complete
+enrollment, disclosure, warning, ordering, dependency and failing-first test contracts.
+Only explicit host-owned names publish; no inferred fallback or agent rename.
+After incomplete/unverified checks, same-host live duplicates stay ambiguous; cross-host proof is specified there.
+This is not implemented. #1776 and the design's unowned reader/clock prerequisites
+still gate verification and routing: no interim key and no unsigned `found`.
