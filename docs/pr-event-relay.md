@@ -122,9 +122,14 @@ plus 1 second if `since` is known to be inclusive, otherwise `since` = `K` with 
 The exit read is itself the probe: if a `since` = `K` read returns any comment at `K`, `since` is
 inclusive; the relay records that and repeats the read at `K` plus 1 second. It never assumes
 `K` plus 1 second without that evidence; the soak confirms the recorded result. A verified bucket
-(`K` and its membership) is kept while `K` is inside the 10-minute lookback: a later full page at
-`K` whose ids all belong to it does not reopen the bucket, and the read moves past `K` as above; a
-new or missing id at `K` reopens it. A crash or takeover restarts the open pass at page
+(`K` and its membership) is kept while `K` is inside the 10-minute lookback. When a lookback scan
+meets it, a page alone cannot show a late-indexed comment at `K`, which sorts after the known ones:
+the relay reads the whole bucket once, paging under the fixed `K` until a page is short, and
+compares it with the kept membership. Equal means the read moves past `K` as above; a new id is
+raised and, like a missing id, reopens the bucket. That recheck runs at most every 2 minutes per
+kept bucket and once more as `K` leaves the lookback (between rechecks the scan moves past `K`), and
+it counts as a pass against the cap below.
+A crash or takeover restarts the open pass at page
 1 and compares it with the checkpoint's last complete pass. After 5 unstable passes the feed keeps
 the checkpoint, sends one feed-health line to the Chief of Staff, and tries again next cycle; that
 line goes once per bucket until it verifies, plus one line when it does, not every cycle. Otherwise
@@ -157,11 +162,13 @@ ends); a finished head's 3-minute reads mostly 304. With 8 PRs in CI that is abo
 the hour's projection passes the ceiling it cuts, in this order: finished heads to 15 minutes,
 review-thread comments to 5 minutes, statuses of running heads read only when their check runs
 change, running heads to 2 minutes. It honours `Retry-After` and secondary limits (backs off 1, 2,
-4 ... up to 15 minutes). Bucket pages always count: a bucket of n comments costs about n/100 + 1
-calls a pass, at least two passes and at most five a cycle; bucket passes are capped at 20 an hour
-per feed (about 40 calls for a 101-comment bucket) inside the ceiling, and a capped bucket waits,
-keeping `C`, under its one Chief line. Below 1,000 calls left it keeps only the first page of the
-PR list (the
+4 ... up to 15 minutes). Bucket pages always count: a pass costs about n/100 + 1 calls, where n is
+every comment from `K` minus 1 second to the newest (a pass reads to a short page), with at least
+two passes and at most five a cycle; bucket passes and rechecks are capped at 20 per feed in any
+rolling 60 minutes (about 40 calls for a 101-comment bucket) inside the ceiling, and a capped bucket
+waits, keeping `C`, under its one Chief line. **Limit:** while the cap holds, every newer comment on
+that feed waits with it, up to about an hour against the 2-minute target. Below 1,000 calls left it
+keeps only the first page of the PR list (the
 watermark rule above applies) and the checks and statuses of open heads; comment and review reads
 pause and later resume from their cursors. Below 300 it stops reading until the reset and tells the
 Chief of Staff once. A fine-grained token would share its
@@ -362,8 +369,10 @@ event id and recipient, so a retried send is the same request, and the text carr
     checkpoint; later cycles send no more lines until the bucket verifies, then one recovery line.
     With no recorded probe and an inclusive `since`, a verified bucket of 101 at T exits: the
     `since` = T read returns comments at T, records `since` as inclusive and moves to T plus 1
-    second; the next scan, whose lookback covers T, does not reopen the bucket and moves past T.
-    The 21st bucket pass in an hour waits for the next hour, keeping `C`.
+    second; the next scan, whose lookback covers T, rechecks the whole bucket, finds it unchanged and
+    moves past T. A 102nd comment at T, indexed late, then appears inside the lookback, sorting
+    after the others: the next recheck raises it once, and the scan moves past T only after that.
+    The 21st bucket pass or recheck in 60 minutes waits, keeping `C`.
     (The same with a takeover is slice 2's test 5.)
 
 ## Live soak (SRE, 24 hours, enrolled disposable nodes)
