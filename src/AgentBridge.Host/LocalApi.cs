@@ -5,14 +5,7 @@ using AgentBridge.Transport;
 
 namespace AgentBridge.Host;
 
-// What the local pipe serves: the sessions ops exactly as the relay's channels get them, and
-// the host's management ops, which only the pipe reaches. Who may do what (CallerGuard):
-//   * the Agent Bridge app: everything, the management ops included;
-//   * anything inside an agent session: reading sessions and usage, nothing else. Not managing
-//     the host, and not answering, replying, ending or launching sessions as if it were the
-//     person, until agents have a principal of their own (design §5.5);
-//   * anything else of the user's: the sessions ops as before, and the host's status, but not
-//     managing it.
+// CallerGuard and scoped credentials govern pipe ops; script management is host-CLI-only (docs/protocol/local-pipe.md).
 public static class LocalApi
 {
     // Management ops that only read.
@@ -31,6 +24,46 @@ public static class LocalApi
     static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log, RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet, AgentAuditLog? audit, RefusalAudits refusals) => async (channel, op, data) =>
     {
         credentials?.CheckScriptOperation(channel, op, log);
+        if (op is "scripts.add" or "scripts.revoke")
+        { return Cli.ScriptCredentialCommands.Handle(channel, op, data, callers, credentials, audit); }
+        if (op is AgentProtocol.Adopt or AgentProtocol.Revoke or AgentProtocol.Credential)
+        {
+            if (credentials is null || !OperatingSystem.IsWindows() || channel is not LocalChannel local)
+            {
+                throw new InvalidOperationException($"refused: {op} isn't available on this host");
+            }
+            if (op == AgentProtocol.Credential)
+            {
+                if (credentials.Of(channel) is not null) { throw new InvalidOperationException("refused: this connection already has an agent credential"); }
+                var claim = credentials.Claim(local.Peer?.Ancestry ?? ProcessAncestry.Unknown);
+                if (claim is not { Token: { } token, Credential: { } issued }) { throw new InvalidOperationException($"refused: {claim.Refusal}"); }
+                return new AgentCredentialResult(token, credentials.PrincipalOf(issued), issued.Scope, issued.ExpiresAt);
+            }
+            var person = callers.Classify(channel, fresh: true);
+            if (person.Kind is not (CallerKind.App or CallerKind.HostCli))
+            {
+                throw Refuse(op, person, "adopting a session, or ending its adoption, is for the person at this machine, from the app or the host's own command line", log);
+            }
+            try
+            {
+                if (op == AgentProtocol.Revoke)
+                {
+                    var revoke = data.Deserialize<AgentRevokeRequest>(ProtocolJson.Options);
+                    if (string.IsNullOrEmpty(revoke?.Session)) { throw new ArgumentException("agent.revoke needs a session"); }
+                    return new AgentRevokeResult(revoke.Session, credentials.Revoke(revoke.Session, $"revoked by a person ({person.Description})"));
+                }
+                var adopt = data.Deserialize<AgentAdoptRequest>(ProtocolJson.Options);
+                if (string.IsNullOrEmpty(adopt?.Session)) { throw new ArgumentException("agent.adopt needs a session"); }
+                if (sessions.ProcessForAdoption(adopt.Session) is not { Id: > 0, StartedAt: { } started } process)
+                {
+                    throw new InvalidOperationException("refused: the host has no running process for that session to adopt");
+                }
+                var adoption = credentials.Adopt(adopt.Session, process.Id, started, adopt.Scope ?? AgentProtocol.ScopeRead);
+                return new AgentAdoptResult(adoption.Session, adoption.Scope, adoption.ExpiresAt);
+            }
+            catch (JsonException) { throw new ArgumentException($"{op} needs a session"); }
+            catch (ArgumentException e) { throw new InvalidOperationException($"refused: {e.Message}"); }
+        }
         if (op == Fleet.FleetNames.Op)
         {
             var caller = callers.Classify(channel, fresh: true);
@@ -38,7 +71,7 @@ public static class LocalApi
             {
                 throw Refuse(op, caller, "only the app or host command line may set a fleet name", log);
             }
-            return sessions.RenameFleetSession(data);
+            return await sessions.RenameFleetSessionAsync(data, fleet?.WarningRoster, channel.Closed);
         }
             if (op == AgentBridge.Host.Lite.LiteAgentSend.Op) { return await AgentBridge.Host.Lite.LiteAgentSend.HandleAsync(credentials, lite, channel, data, appendAttempt: audit is null ? null : audit.Append); }
             if (op == AgentBridge.Host.Fleet.FleetList.Op) { return await (fleet ?? new AgentBridge.Host.Fleet.FleetList(credentials, null)).HandleAsync(channel, data, auditLog: audit); }
@@ -83,7 +116,8 @@ public static class LocalApi
         if (op == Ops.SessionAnswer && credentials?.Of(channel) is { } answering)
         {
             // Refusals must not copy arbitrary answer fields into the audit trail.
-            AuditAgentAction(credentials, answering, op, AnswerAuditTarget(data), "refused", audit);
+            var target = AnswerAuditTarget(data);
+            AuditAgentAction(credentials, answering, op, target, "refused", audit, sessions?.RefusedAnswerGate(target, data));
             throw Refuse(op, new Caller(CallerKind.Agent, credentials.PrincipalOf(answering)),
                 "answering, replying, ending and launching sessions are for the person, from the app or a phone", log);
         }
@@ -137,6 +171,7 @@ public static class LocalApi
         return await sessions.HandleAsync(channel, op, data, hello => callers.Classify(channel).Kind switch
         {
             CallerKind.App => hello with { Capabilities = [.. hello.Capabilities, HostOps.Capability,
+                .. credentials is not null && OperatingSystem.IsWindows() ? new[] { AgentProtocol.AdoptCapability } : [],
                 .. control.HasAgentReadiness ? new[] { HostOps.AgentReadinessCapability } : [],
                 .. control.HasAgentSetup ? new[] { HostOps.AgentSetupCapability } : [],
                 .. control.HasAgentInstall ? new[] { HostOps.AgentInstallCapability } : [],
@@ -144,7 +179,8 @@ public static class LocalApi
                 .. control.HasAgentSignIn ? new[] { HostOps.AgentSignInCapability } : []] },
             CallerKind.Agent => hello with { Capabilities = [.. hello.Capabilities.Where(AgentCapabilities.Contains)] },
             _ => hello,
-        });
+        }, actionAudit: op is (LaunchProtocol.Launch or Ops.SessionAnswer)
+            && callers.Classify(channel).Kind is (CallerKind.App or CallerKind.HostCli) ? audit : null);
     };
 
     internal sealed class RefusalAudits(TimeProvider time)
@@ -204,9 +240,9 @@ public static class LocalApi
         catch (InvalidOperationException) { return "unknown"; }
     }
 
-    internal static void AuditAgentAction(AgentCredentials credentials, AgentCredential caller, string op, string target, string outcome, AgentAuditLog? audit)
+    internal static void AuditAgentAction(AgentCredentials credentials, AgentCredential caller, string op, string target, string outcome, AgentAuditLog? audit, GateAuditMetadata? gate = null)
     {
-        var entry = new AgentAuditEntry("local", Guid.NewGuid().ToString("D"), credentials.PrincipalOf(caller), caller.Chain, op, target, outcome);
+        var entry = new AgentAuditEntry("local", Guid.NewGuid().ToString("D"), credentials.PrincipalOf(caller), caller.Chain, op, target, outcome, Gate: gate);
         bool written;
         try { written = audit?.Append(entry) == true; }
         catch (Exception) { throw AgentActionAuditUnavailable(); }

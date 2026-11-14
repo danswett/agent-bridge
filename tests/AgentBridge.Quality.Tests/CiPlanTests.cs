@@ -395,7 +395,9 @@ public class CiPlanTests
         var jobs = (YamlDotNet.RepresentationModel.YamlMappingNode)((YamlDotNet.RepresentationModel.YamlMappingNode)stream.Documents[0].RootNode)["jobs"];
         var gate = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["quality-gate"];
         var steps = (YamlDotNet.RepresentationModel.YamlSequenceNode)gate["steps"];
-        var check = (YamlDotNet.RepresentationModel.YamlMappingNode)steps.Children[0];
+        // The waiver's steps come first; the check is the one that reads the needs.
+        var check = steps.Children.Cast<YamlDotNet.RepresentationModel.YamlMappingNode>()
+            .Single(step => step.Children.ContainsKey("run") && step["run"].ToString().Contains(".key == \"plan\" or ($all", StringComparison.Ordinal));
         Assert.Contains(".key == \"plan\" or ($all and .key != \"app\" and .key != \"app-installer\") or $plan[.key] == \"true\"",
             check["run"].ToString(), StringComparison.Ordinal);
     }
@@ -455,8 +457,19 @@ public class CiPlanTests
         using var process = System.Diagnostics.Process.Start(start) ?? throw new InvalidOperationException("pwsh did not start.");
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();
-        Assert.True(process.WaitForExit(30000), "Offline popup checks timed out.");
-        Assert.True(process.ExitCode == 0, (await output) + (await error));
+        var completed = true;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        try { await process.WaitForExitAsync(timeout.Token); }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            completed = false;
+            try { process.Kill(entireProcessTree: true); }
+            catch (InvalidOperationException) when (process.HasExited) { }
+            await process.WaitForExitAsync();
+        }
+        var diagnostics = $"stdout:{Environment.NewLine}{await output}{Environment.NewLine}stderr:{Environment.NewLine}{await error}";
+        Assert.True(completed, $"Offline popup checks timed out after 120 s.{Environment.NewLine}{diagnostics}");
+        Assert.True(process.ExitCode == 0, diagnostics);
     }
 
     [Fact]

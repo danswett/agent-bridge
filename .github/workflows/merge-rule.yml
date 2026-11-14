@@ -45,7 +45,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited, labeled, unlabeled]
   status:
   workflow_run: # zizmor: ignore[dangerous-triggers]
-    workflows: [Apple clients, Beta acceptance, CI, CodeQL, Dependencies, Flake hunt, HA contract drift, IaC scan, Lab nightly (held), Lab release verification (held), Merge rule review relay, Ops probe, Pages, Perf, Re-run known flakes, Relay deploy, Update gap, Upload release halt policy, Weekly quality report, Workflow lint]
+    workflows: [ARM64 self-test loop (non-gating), Apple clients, Beta acceptance, CI, CodeQL, Dependencies, Flake hunt, HA contract drift, IaC scan, Lab nightly (held), Lab release verification (held), Merge rule review relay, Ops probe, Pages, Perf, Re-run known flakes, Relay deploy, Update gap, Upload release halt policy, Weekly quality report, Workflow lint]
     types: [in_progress, completed]
   check_suite:
     types: [completed] # the only type Actions accepts here

@@ -457,10 +457,34 @@ static class MergeRuleCommand
                     && j.Value.GetProperty("status").GetString() == "completed" && j.Value.GetProperty("conclusion").GetString() == "skipped");
             }
             var held = planGreen ? config.MainGreen.Jobs.Where(name => !Passed(name)).ToList() : ["plan"];
+            var families = config.MainGreen.LegFamilies;
+            var legs = families.SelectMany(f => f).ToHashSet(StringComparer.Ordinal);
+            var stems = legs.Select(n => n.Split(" (", StringSplitOptions.None)[0]).ToHashSet(StringComparer.Ordinal);
+            var present = latest.Keys.Where(n => stems.Contains(n.Split(" (", StringSplitOptions.None)[0]))
+                .ToHashSet(StringComparer.Ordinal);
+            if (families.Count > 0)
+            {
+                var exact = families.Where(f => present.SetEquals(f)).ToList();
+                var possible = families.Where(f => present.IsSubsetOf(f)).ToList();
+                var unexpected = present.Except(legs, StringComparer.Ordinal).ToList();
+                if (present.Count == 0)
+                    held.Add("no leg family");
+                else if (unexpected.Count > 0)
+                    held.Add($"unexpected leg {string.Join(", ", unexpected)}");
+                else if (exact.Count == 1)
+                    held.AddRange(exact[0].Where(n => latest[n].GetProperty("status").GetString() != "completed"
+                        || latest[n].GetProperty("conclusion").GetString() != "success"));
+                else if (exact.Count > 1)
+                    held.Add("mixed or ambiguous leg families");
+                else if (possible.Count > 0)
+                    held.AddRange(possible.SelectMany(f => f).Except(present, StringComparer.Ordinal));
+                else
+                    held.Add("mixed leg families");
+            }
             log = $"Main: {config.MainGreen.Workflow} run {id} (attempt {attempt}) on {MergeRule.Short(sha!)}; "
                 + (held.Count == 0 ? "named jobs passed." : $"named jobs not green: {string.Join(", ", held)}.")
                 + "\n" + string.Join("\n", latest.OrderBy(j => j.Key, StringComparer.Ordinal).Select(j =>
-                    $"Main job [{(j.Key == "plan" || config.MainGreen.Jobs.Any(n => n == j.Key || (!n.Contains(" (", StringComparison.Ordinal) && j.Key.StartsWith($"{n} (", StringComparison.Ordinal))) ? "required" : "non-gating")}]: {j.Key}: {j.Value.GetProperty("status").GetString()}/{j.Value.GetProperty("conclusion").GetString() ?? "pending"} (attempt {RunAttempt(j.Value)})."));
+                    $"Main job [{(j.Key == "plan" || present.Contains(j.Key) || config.MainGreen.Jobs.Any(n => n == j.Key || (!n.Contains(" (", StringComparison.Ordinal) && j.Key.StartsWith($"{n} (", StringComparison.Ordinal))) ? "required" : "non-gating")}]: {j.Key}: {j.Value.GetProperty("status").GetString()}/{j.Value.GetProperty("conclusion").GetString() ?? "pending"} (attempt {RunAttempt(j.Value)})."));
             return held.Count == 0
                 ? new("success", $"{config.Base}'s CI {MergeRule.Short(sha!)} named jobs passed")
                 : new("failure", $"{config.Base} is red (CI {MergeRule.Short(sha!)}): named job {held[0]} is not green");
@@ -521,7 +545,8 @@ static class MergeRuleCommand
                 if (product.Any(j => Incomplete(j.Value)
                     || j.Value.GetProperty("conclusion").GetString() is "cancelled" or "skipped"))
                     continue;
-                if (latest.Any(j => config.MainGreen.Jobs.Any(n => n.Split(" (", StringSplitOptions.None)[0] == j.Key.Split(" (", StringSplitOptions.None)[0])
+                if (latest.Any(j => (config.MainGreen.Jobs.Any(n => n.Split(" (", StringSplitOptions.None)[0] == j.Key.Split(" (", StringSplitOptions.None)[0])
+                    || config.MainGreen.LegFamilies.Any(f => f.Contains(j.Key, StringComparer.Ordinal)))
                     && (Incomplete(j.Value) || j.Value.GetProperty("conclusion").GetString() == "cancelled")))
                     continue;
                 return (run.Clone(), latest);

@@ -4,8 +4,9 @@
 This page supplies project context, dated snapshots and links to current role holders.
 The [contributor workflow](contributor-workflow.md) owns durable coordination procedures;
 canonical issues and PRs hold current assignments and exact-head evidence.
-Keep this page current when a change moves the project along, and retain explicit
-dates on historical snapshots rather than treating them as current assignments.
+This page is a weekly snapshot by Product; updates are not required in each PR.
+Retain explicit dates on historical snapshots rather than treating them as current
+assignments.
 
 *Last updated: 2026-11-11, Pacific (HA retirement decision, #387/#1396).
 Older implementation and machine snapshots below retain their stated dates.*

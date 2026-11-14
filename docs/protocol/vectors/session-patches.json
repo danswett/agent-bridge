@@ -6119,6 +6119,43 @@
           }
         }
       ]
+    },
+    {
+      "name": "negotiated-handle",
+      "recording": "synthetic",
+      "events": [
+        {
+          "seq": 1,
+          "upsert": {
+            "id": "s1",
+            "title": "Before"
+          }
+        },
+        {
+          "seq": 2,
+          "synced": {
+            "revision": 1,
+            "handles": {
+              "s1": 1
+            }
+          }
+        },
+        {
+          "seq": 3,
+          "patch": {
+            "handle": 1,
+            "revision": 2,
+            "set": {
+              "id": "s1",
+              "title": "After"
+            }
+          },
+          "session": {
+            "id": "s1",
+            "title": "After"
+          }
+        }
+      ]
     }
   ]
 }

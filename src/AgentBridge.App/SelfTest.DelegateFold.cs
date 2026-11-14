@@ -130,7 +130,7 @@ static partial class SelfTest
                 Agent = "demo-agent-witness",
                 Message = "Which timer should the witness follow?",
                 AskedAt = DateTimeOffset.UtcNow.AddSeconds(-20),
-                Fields = [new Field { Name = "answer", Type = FieldType.Choice, Options = [new Option("first", "The first reply of a turn"), new Option("latest", "The latest reply (Recommended)")] }],
+                Fields = new[] { new Field { Name = "answer", Type = FieldType.Choice, Options = new[] { new Option("first", "The first reply of a turn"), new Option("latest", "The latest reply (Recommended)") } } },
             };
             await demo.Upsert(original with
             {
@@ -138,7 +138,7 @@ static partial class SelfTest
                 Question = question,
                 WaitingOn = "demo-agent-witness",
                 UpdatedAt = DateTimeOffset.UtcNow,
-                Subagents = [.. original.Subagents!.Select(a => a.Id == "demo-agent-witness" ? a with { Status = SubagentStatus.Waiting } : a)],
+                Subagents = original.Subagents!.Select(a => a.Id == "demo-agent-witness" ? a with { Status = SubagentStatus.Waiting } : a).ToArray(),
             });
             var asked = await Until(() => ById<FrameworkElement>(view, "Question") is { } q && Drawn(q), TimeSpan.FromSeconds(10));
             var card2 = ById<FrameworkElement>(view, "Question");
@@ -178,11 +178,11 @@ static partial class SelfTest
             working.Focus(FocusState.Keyboard);
             await Task.Delay(200);
             var focusedLink = ReferenceEquals(FocusManager.GetFocusedElement(window.RootElement.XamlRoot), working);
-            await demo.Upsert(original with { UpdatedAt = DateTimeOffset.UtcNow, Subagents = [.. original.Subagents!.Select(a => a.Status == SubagentStatus.Working ? a with { Status = SubagentStatus.Ended, Outcome = SubagentOutcome.Done, EndedAt = DateTimeOffset.UtcNow } : a)] });
+            await demo.Upsert(original with { UpdatedAt = DateTimeOffset.UtcNow, Subagents = original.Subagents!.Select(a => a.Status == SubagentStatus.Working ? a with { Status = SubagentStatus.Ended, Outcome = SubagentOutcome.Done, EndedAt = DateTimeOffset.UtcNow } : a).ToArray() });
             var toButton = await Until(() => !card.Delegates.HasFoldLink && ReferenceEquals(FocusManager.GetFocusedElement(window.RootElement.XamlRoot), toggle), TimeSpan.FromSeconds(5));
             check(focusedLink && toButton, $"moves focus from the \"still working\" link to the fold's button when that link goes, the fold staying ({FocusManager.GetFocusedElement(window.RootElement.XamlRoot)?.GetType().Name})");
             toggle.Focus(FocusState.Keyboard);
-            await demo.Upsert(original with { UpdatedAt = DateTimeOffset.UtcNow, Subagents = [original.Subagents!.First(a => a.Id == "demo-agent-witness")] });
+            await demo.Upsert(original with { UpdatedAt = DateTimeOffset.UtcNow, Subagents = new[] { original.Subagents!.First(a => a.Id == "demo-agent-witness") } });
             var toName = await Until(() => !card.Delegates.HasFold && FocusManager.GetFocusedElement(window.RootElement.XamlRoot) is HyperlinkButton { Tag: "demo-agent-witness" }, TimeSpan.FromSeconds(5));
             check(toName, $"moves focus to the first delegate's name when the fold goes with it ({FocusManager.GetFocusedElement(window.RootElement.XamlRoot)?.GetType().Name}; fold {card.Delegates.HasFold}, {Find<HyperlinkButton>(list).Count} links, {card.Delegates.Events.Count} lines, rule drawn {Drawn(rule)})");
             await demo.Upsert(original with { UpdatedAt = DateTimeOffset.UtcNow });
@@ -191,7 +191,7 @@ static partial class SelfTest
             // Two started within a minute are one "Started 2 delegates" line with no name to go to: focus goes to where the delegates are listed.
             toggle.Focus(FocusState.Keyboard);
             await Task.Delay(200);
-            await demo.Upsert(original with { UpdatedAt = DateTimeOffset.UtcNow, Subagents = [.. original.Subagents!.Where(a => a.Id is "demo-agent-witness" or "demo-agent-suite")] });
+            await demo.Upsert(original with { UpdatedAt = DateTimeOffset.UtcNow, Subagents = original.Subagents!.Where(a => a.Id is "demo-agent-witness" or "demo-agent-suite").ToArray() });
             var strip = ById<ListView>(view, "DelegateStrip");
             var toStrip = await Until(() => !card.Delegates.HasFold && FocusManager.GetFocusedElement(window.RootElement.XamlRoot) is ListViewItem item && strip is not null && Under(item, strip), TimeSpan.FromSeconds(5));
             check(toStrip, $"moves focus to the delegate strip when the fold goes and its one line, \"Started 2 delegates\", has no name to go to ({FocusManager.GetFocusedElement(window.RootElement.XamlRoot)?.GetType().Name}; {card.Delegates.Events.Count} lines)");

@@ -705,6 +705,52 @@ test('opening reasoning at the bottom stays put, but subsequent response growth 
   await expect.poll(() => scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThanOrEqual(4);
 });
 
+test('a question stays in sight when late history lands during its reveal with native scroll events', async ({ page }) => {
+  await openDemo(page, { height: 600 });
+  await page.evaluate((id) => {
+    const client = window.agentBridgeDemo.client;
+    const history = client.history.bind(client);
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    client.history = async (sessionId, options) => {
+      const result = await history(sessionId, options);
+      if (sessionId === id) { window.__historyPrepared = true; await gate; }
+      return result;
+    };
+    const scrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (options) {
+      const first = !window.__historyReveal && this.matches('.question-slot .question') && this.closest(`[data-id="${id}"]`);
+      if (first) {
+        const sc = this.closest('.stream-scroll');
+        window.__historyReveal = {
+          behavior: options.behavior,
+          turns: sc.querySelectorAll('.history-turn').length,
+          outside: this.getBoundingClientRect().top >= sc.getBoundingClientRect().bottom,
+        };
+      }
+      scrollIntoView.call(this, options);
+      // Let the app finish installing its reveal listeners before the prepared history lands.
+      if (first) { queueMicrotask(release); }
+    };
+  }, CODEX);
+  const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
+  await upsert(page, CODEX, { activity: { response: long, reasoning: null, userMessage: null, currentTool: null }, question: null, updatedAt: later() });
+  const v = await open(page, CODEX);
+  const scroller = v.locator('.stream-scroll');
+  await expect.poll(() => page.evaluate(() => window.__historyPrepared)).toBe(true);
+  await scroller.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  await atRest(page, scroller);
+  await page.evaluate((id) => {
+    const d = window.agentBridgeDemo;
+    const question = { id: 'q-late-history', kind: 'form', message: 'Carry on?', askedAt: new Date().toISOString(), fields: [] };
+    d.upsert({ ...d.host.get(id), question, status: 'waiting', updatedAt: new Date(Date.now() + 3000).toISOString() });
+  }, CODEX);
+  await expect.poll(() => page.evaluate(() => window.__historyReveal)).toEqual({ behavior: 'smooth', turns: 0, outside: true });
+  await expect(v.locator('.history-turn')).toHaveCount(2);
+  await atRest(page, scroller);
+  await expect(v.locator('.question-slot .question:not(.resolved)')).toBeInViewport();
+});
+
 test('where the reader is is read when a question comes, though the scroll that took them there has yet to send its event', async ({ page }) => {
   await openDemo(page, { height: 600 });
   const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
@@ -1738,6 +1784,53 @@ test('where the browser sends no scrollend, as Safari doesn\'t, a question scrol
   await page.clock.runFor(50);
   expect({ held, after, mine: await question() }).toEqual({ held: true, after: false, mine: false });
 });
+for (const takeover of ['wheel', 'touchstart', 'keydown']) {
+  test(`without scrollend, ${takeover} after the quiet fallback cancels a retained question reveal before a no-extent update`, async ({ page }) => {
+    await page.addInitScript(() => {
+      const add = EventTarget.prototype.addEventListener;
+      EventTarget.prototype.addEventListener = function (type, ...rest) { return type === 'scrollend' ? undefined : add.call(this, type, ...rest); };
+    });
+    await openDemo(page, { height: 600 });
+    const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
+    await upsert(page, CODEX, { activity: { response: long, reasoning: null, userMessage: null, currentTool: null }, question: null, updatedAt: later() });
+    const v = await open(page, CODEX);
+    await conversationReady(v);
+    await askCodex(page, choices('q-retained-reveal'));
+    const scroller = v.locator('.stream-scroll');
+    await atRest(page, scroller);
+    await scroller.evaluate((el) => { el.scrollTop = 0; });
+    await atRest(page, scroller);
+    await expect(v.locator('.question-slot .question')).not.toBeInViewport();
+    const snapshot = await page.evaluate(async ({ id, takeover }) => {
+      const sc = document.querySelector(`.session-view[data-id="${id}"] .stream-scroll`);
+      const started = performance.now();
+      await new Promise((resolve) => {
+        let quiet;
+        const step = () => {
+          clearTimeout(quiet);
+          quiet = setTimeout(() => { sc.removeEventListener('scroll', step); resolve(); }, 150);
+        };
+        sc.addEventListener('scroll', step);
+        document.querySelector(`#needs-you .needs-entry[data-id="${id}"] .needs-title`).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+      });
+      // Past the 100 ms fallback, but still inside the retained reveal's 1.5 s lifetime.
+      const elapsed = performance.now() - started;
+      sc.dispatchEvent(takeover === 'keydown'
+        ? new KeyboardEvent(takeover, { key: 'PageUp', bubbles: true })
+        : new Event(takeover, { bubbles: true }));
+      sc.scrollTop = 0;
+      const extent = sc.scrollHeight;
+      const d = window.agentBridgeDemo;
+      d.upsert({ ...d.host.get(id), updatedAt: new Date(Date.now() + 61_000).toISOString() });
+      return { elapsed, extent, after: sc.scrollHeight };
+    }, { id: CODEX, takeover });
+    expect(snapshot.elapsed).toBeLessThan(1500);
+    expect(snapshot.after).toBe(snapshot.extent);
+    await atRest(page, scroller);
+    expect(await scroller.evaluate((el) => el.scrollTop)).toBe(0);
+  });
+}
+
 test('a question that arrives while another page is shown takes no click for a moment when Sessions is shown again', async ({ page }) => {
   await openDemo(page);
   await open(page, CODEX);

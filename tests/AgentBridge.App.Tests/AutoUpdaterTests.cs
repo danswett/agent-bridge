@@ -69,6 +69,9 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         // The feed and pre-release choice, as VelopackUpdater names them; a download's start.
         public string Source { get; set; } = "";
         public Action? OnDownload;
+        public bool ReportsDownloadFacts { get; set; }
+        public Action<Action<int>, Action<long, long?>>? DownloadWithBytes;
+        public TaskCompletionSource? DownloadGate;
         public string? InstalledVersion { get; set; } = "0.1.0";
         public DateTimeOffset? DiscoveredAt { get; set; }
         public string? CheckSource { get; set; }
@@ -84,14 +87,16 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             if (CheckDropsReady) { Ready = null; }
             return Found;
         }
-        public Task DownloadAsync(Action<int> progress)
+        public Task DownloadAsync(Action<int> progress) => DownloadAsync(progress, (_, _) => { });
+        public async Task DownloadAsync(Action<int> progress, Action<long, long?> bytes)
         {
             Downloads++;
             OnDownload?.Invoke();
+            DownloadWithBytes?.Invoke(progress, bytes);
+            if (DownloadGate is { } gate) { await gate.Task; }
             if (DownloadFails is { } e) { throw e; }
             progress(100);
             Ready = Found;
-            return Task.CompletedTask;
         }
         public string? AppliedVersion;
         // As VelopackUpdater: only the release named, while it is the one ready.
@@ -1184,12 +1189,19 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     public async Task A_host_that_failed_after_the_update_is_recorded_as_failed_with_its_reason_and_nothing_is_downgraded()
     {
         await StartAsync();
+        updater.Ready = "0.2.0";
+        AutoUpdater.Record(() => prefs, p => prefs = p, updater, Press);
+        AutoUpdater.HandedOver(() => prefs, p => prefs = p)();
+        updater.InstalledVersion = "0.2.0";
+        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, new Toasts(), log.Add, time);
         auto = Watching(HostWatchEnd.Failed);
 
         await auto.WatchHostAsync();
 
         var last = prefs.LastUpdate!;
         Assert.Equal(UpdateOutcome.Failed, last.Outcome);
+        Assert.Equal("host-start", last.Step);
+        Assert.Equal(("0.1.0", "0.2.0", Press), (last.From, last.To, last.Request));
         Assert.Contains("3 times", last.Reason);
         Assert.False(updater.Applied);
     }
@@ -2709,6 +2721,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Null(prefs.UpdatedFrom);
         // Said to the devices, though none of them asked for it: the old release still runs.
         Assert.Equal((UpdateOutcome.Failed, "Update.exe is missing", (string?)null), (prefs.LastUpdate!.Outcome, prefs.LastUpdate.Reason, prefs.LastUpdate.Request));
+        Assert.Equal("installing", prefs.LastUpdate.Step);
         await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Sessions.Complete, "the host back");
         var checks = updater.Checks;
         time.Advance(TimeSpan.FromMinutes(1));
@@ -2898,6 +2911,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         bar.Show(said);
         Assert.Equal((true, true, words, "Try again"), (bar.Shown, bar.Failed, bar.Message, bar.ActionLabel));
         Assert.Null(prefs.UpdatedFrom);
+        Assert.Equal("restarting", prefs.LastUpdate!.Step);
     }
 
     // Creative on #1181: "Couldn't install" only when an install was attempted. Recorded, then the
@@ -2915,6 +2929,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Null(said);
         Assert.Empty(toasts.Shown);
         Assert.Null(prefs.UpdatedFrom);
+        Assert.Equal("installing", prefs.LastUpdate!.Step);
         Assert.Contains(log, l => l.Contains("was not handed to the installer", StringComparison.Ordinal));
     }
 
@@ -2948,13 +2963,18 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         await StartAsync();
         string? updating = "not read";
         bool? handedOverBefore = null;
-        updater.OnApply = () => (updating, handedOverBefore) = (auto.Updating, prefs.UpdateHandedOver);
+        DateTimeOffset? installingAt = null;
+        updater.OnApply = () => (updating, handedOverBefore, installingAt) = (auto.Updating, prefs.UpdateHandedOver, auto.State.Installing);
         await auto.TickAsync();
 
         Assert.Null(auto.Updating);
+        Assert.Null(auto.State.Installing);
+        time.Advance(TimeSpan.FromMinutes(1));
+        var began = time.GetUtcNow();
         Assert.Null(await auto.RestartToUpdateAsync(_ => Task.FromResult(true)));
 
         Assert.True(updater.Applied);
+        Assert.Equal(began, installingAt);
         Assert.Equal(open ? "0.2.0" : null, updating);
         Assert.Equal(open, prefs.UpdateWindowOpen);
         // The attempt is marked only once the installer has started (Creative on #1181).
@@ -2964,6 +2984,66 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     // Asked from another device (#51): the press stands in for the switch, for that release, and
     // waits for the same idle as an automatic update.
     const string Press = "3f2a1b4c-5d6e-4f70-8192-a3b4c5d6e7f8";
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_install_refused_before_the_manager_admits_it_has_no_start_instant()
+    {
+        await StartAsync();
+        await auto.TickAsync();
+        var states = new List<UpdateState>();
+        var quitting = false;
+        auto.StateChanged += () =>
+        {
+            var state = auto.State;
+            states.Add(state);
+            if (state.Phase != UpdatePhase.Installing || quitting) { return; }
+            quitting = true;
+            manager.Quit(TimeSpan.FromSeconds(10), log.Add);
+        };
+
+        Assert.NotNull(await auto.RestartToUpdateAsync());
+
+        Assert.True(quitting);
+        Assert.False(updater.Applied);
+        Assert.All(states, state => Assert.Null(state.Installing));
+    }
+
+    [Theory]
+    [InlineData(null, "0.2.0", true, true)]
+    [InlineData(Press, "0.2.0", true, true)]
+    [InlineData(Press, "0.3.0", true, false)]
+    [InlineData(Press, "0.1.0", true, false)]
+    [InlineData(Press, "0.2.0", false, false)]
+    [Trait("Category", "Network")]
+    public async Task A_return_survives_preferences_only_for_the_recorded_target_and_preserves_a_press(string? request, string current, bool handedOver, bool returned)
+    {
+        await StartAsync();
+        updater.Ready = "0.2.0";
+        AutoUpdater.Record(() => prefs, p => prefs = p, updater, request);
+        if (handedOver) { AutoUpdater.HandedOver(() => prefs, p => prefs = p)(); }
+        var path = Path.Combine(app, "preferences.json");
+        prefs.Save(path);
+        prefs = AppPreferences.Load(path);
+        updater.InstalledVersion = current;
+        time.Advance(TimeSpan.FromMinutes(1));
+        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, new Toasts(), log.Add, time);
+        prefs.Save(path);
+        prefs = AppPreferences.Load(path);
+
+        Assert.Equal(returned ? new UpdateBack("0.1.0", "0.2.0", request, time.GetUtcNow()) : null, auto.State.Back);
+        Assert.Equal(current, auto.State.Current);
+        var back = auto.State.Back;
+        time.Advance(TimeSpan.FromMinutes(1));
+        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, new Toasts(), log.Add, time);
+        Assert.Equal(back, auto.State.Back);
+        updater.InstalledVersion = "0.4.0";
+        Assert.Null(auto.State.Back);
+        updater.InstalledVersion = current;
+        File.WriteAllText(path, "{");
+        prefs = AppPreferences.Load(path);
+        Assert.Null(auto.State.Back);
+    }
 
     async Task AskedAsync(UpdateAskKind kind, string request = Press)
     {
@@ -3837,6 +3917,117 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal(("0.2.0", UpdatePhase.Idle), (auto.State.Available, auto.State.Phase));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Network")]
+    public async Task Real_download_bytes_are_reported_but_only_a_checked_package_is_downloaded(bool badHash)
+    {
+        updater.ReportsDownloadFacts = true;
+        await StartAsync();
+        var during = new List<UpdateState>();
+        updater.DownloadWithBytes = (progress, bytes) =>
+        {
+            bytes(3, 10);
+            during.Add(auto.State);
+            bytes(10, 10);
+            progress(100);
+            during.Add(auto.State);
+        };
+        if (badHash) { updater.DownloadFails = new PackageMismatchException("the package checksum did not match"); }
+
+        await auto.TickAsync();
+
+        Assert.Equal(new long?[] { 3, 10 }, during.Select(s => s.Bytes));
+        Assert.All(during, s =>
+        {
+            Assert.Equal(10, s.Total);
+            Assert.Equal(false, s.Downloaded);
+        });
+        Assert.Equal(!badHash, auto.State.Downloaded);
+        Assert.Null(auto.State.Bytes);
+        Assert.Null(auto.State.Total);
+        Assert.Equal(badHash ? null : "0.2.0", auto.Ready);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_updater_without_download_facts_keeps_them_unknown_even_when_ready()
+    {
+        await StartAsync();
+        await auto.TickAsync();
+
+        Assert.Equal("0.2.0", auto.Ready);
+        Assert.Null(auto.State.Bytes);
+        Assert.Null(auto.State.Total);
+        Assert.Null(auto.State.Downloaded);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Download_counts_from_a_replaced_feed_do_not_belong_to_the_new_feed()
+    {
+        updater.ReportsDownloadFacts = true;
+        shared = new ObservedUpdater(updater, time);
+        await StartAsync();
+        UpdateState? moved = null;
+        updater.DownloadWithBytes = (_, bytes) =>
+        {
+            bytes(3, 10);
+            updater.Source = "another-feed";
+            updater.Ready = null;
+            shared.SourceChanged();
+            bytes(10, 10);
+            moved = auto.State;
+        };
+        updater.DownloadFails = new PackageMismatchException("the old feed did not finish");
+
+        await auto.TickAsync();
+
+        Assert.NotNull(moved);
+        Assert.Null(moved.Bytes);
+        Assert.Null(moved.Total);
+        Assert.Null(moved.Downloaded);
+    }
+
+    [Fact]
+    public async Task Byte_callbacks_queued_by_a_finished_download_cannot_repopulate_its_counts()
+    {
+        updater.ReportsDownloadFacts = true;
+        var observed = new ObservedUpdater(updater, time);
+        Action<long, long?>? queued = null;
+        updater.DownloadWithBytes = (_, bytes) => queued = bytes;
+        await observed.CheckAsync();
+        await observed.DownloadAsync(_ => { });
+
+        Assert.NotNull(queued);
+        queued(10, 10);
+
+        Assert.Null(observed.Bytes);
+        Assert.Null(observed.Total);
+    }
+
+    [Fact]
+    public async Task A_new_release_found_during_a_download_has_none_of_the_old_releases_counts()
+    {
+        updater.ReportsDownloadFacts = true;
+        updater.DownloadGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        updater.DownloadWithBytes = (_, bytes) => bytes(3, 10);
+        var observed = new ObservedUpdater(updater, time);
+        await observed.CheckAsync();
+        var downloading = observed.DownloadAsync(_ => { });
+        Assert.Equal(3, observed.Bytes);
+
+        updater.Found = "0.3.0";
+        await observed.CheckAsync();
+        var counts = (observed.Bytes, observed.Total);
+        updater.DownloadGate.SetResult();
+        await downloading;
+
+        Assert.Equal("0.3.0", observed.Found);
+        Assert.Equal(((long?)null, (long?)null), counts);
+    }
+
     // Copilot's review of 8898ae93: a check on the old source, then Include pre-releases changed
     // (Settings, through the updater they share). Velopack drops what it found and downloaded on
     // the old source; the new one has a pre-release.
@@ -3959,9 +4150,11 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal("0.3.0-pre.1", auto.Pending);
     }
 
-    [Fact]
+    [Theory]
+    [InlineData(true, "installing")]
+    [InlineData(false, "downloading")]
     [Trait("Category", "Network")]
-    public async Task An_update_from_Settings_that_fails_is_what_the_devices_are_told_at_once()
+    public async Task An_update_from_Settings_that_fails_is_what_the_devices_are_told_at_once(bool recorded, string step)
     {
         prefs = prefs with { AutoUpdate = false };
         shared = new ObservedUpdater(updater, time);
@@ -3969,10 +4162,11 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         var told = new List<UpdateState>();
         auto.StateChanged += () => told.Add(auto.State);
 
-        AutoUpdater.Failed(() => prefs, p => prefs = p, shared, "0.2.0", "the host did not stop", time: time);
+        AutoUpdater.Failed(() => prefs, p => prefs = p, shared, "0.2.0", "the host did not stop", recorded, time);
 
         var last = Assert.Single(told).Last!;
         Assert.Equal((UpdateOutcome.Failed, "0.2.0", "the host did not stop"), (last.Outcome, last.To, last.Reason));
+        Assert.Equal(step, last.Step);
     }
 
     [Fact]
@@ -4006,6 +4200,43 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         Assert.Equal("0.2.0", auto.State.Available);
         Assert.Equal((UpdateOutcome.Failed, "the connection was reset"), (auto.State.Last!.Outcome, auto.State.Last.Reason));
+        Assert.Equal("downloading", auto.State.Last.Step);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_feed_check_that_fails_did_not_reach_the_download_step()
+    {
+        updater.CheckFails = new IOException("the feed is offline");
+        await StartAsync();
+
+        await AskedAsync(UpdateAskKind.Check);
+
+        Assert.Equal(UpdateOutcome.Failed, auto.State.Last!.Outcome);
+        Assert.Null(auto.State.Last.Step);
+        Assert.Equal(0, updater.Downloads);
+    }
+
+    [Theory]
+    [InlineData(UpdateOutcome.Updated, null)]
+    [InlineData(UpdateOutcome.Failed, Press)]
+    [Trait("Category", "Network")]
+    public async Task A_background_download_failure_and_its_retry_preserve_the_unseen_update_or_press_outcome(UpdateOutcome outcome, string? request)
+    {
+        var last = new UpdateResult { Outcome = outcome, From = "0.0.9", To = "0.1.0", Request = request, At = time.GetUtcNow() };
+        prefs = prefs with { LastUpdate = last };
+        updater.DownloadFails = new IOException("the connection was reset");
+        await StartAsync();
+
+        await auto.TickAsync();
+
+        Assert.Equal(1, updater.Downloads);
+        Assert.Equal(last, auto.State.Last);
+        time.Advance(ObservedUpdater.DownloadAgainAfter);
+        await auto.TickAsync();
+        Assert.Equal(2, updater.Downloads);
+        Assert.Equal(last, auto.State.Last);
+        Assert.Contains(log, line => line.Contains("the connection was reset", StringComparison.Ordinal));
     }
 
     [Fact]

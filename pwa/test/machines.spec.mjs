@@ -115,6 +115,123 @@ test('the Machines page has no All machines row, says the fleet in one line, and
   await expect(shadow.locator('.tile-actions-note')).toContainText('view only');
 });
 
+test.describe('Fleet running sessions', () => {
+  test.use({ isMobile: true });
+  test('activity reordering between pointerdown and pointerup preserves the Fleet action', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await openDemo(page);
+    await go(page, 'machines');
+    const laptop = page.locator(`#machine-list [data-device-id="${LAPTOP}"]`);
+    await laptop.locator('.tile-running-toggle').click();
+    const rows = laptop.locator('.tile-running-list > li');
+    await expect(rows).toHaveCount(2);
+    const names = await rows.allTextContents();
+    const action = laptop.locator('.machine-view');
+    await action.scrollIntoViewIfNeeded();
+    const held = await action.elementHandle(), box = await action.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    const newest = await page.evaluate((id) => {
+      const { hosts, machines } = window.agentBridgeDemo, sessions = hosts.link(id).store.list();
+      const session = machines[id].get(sessions.at(-1).id);
+      machines[id].upsert({ ...session,
+        updatedAt: new Date(Date.parse(sessions[0].activityAt ?? sessions[0].updatedAt) + 1000).toISOString(),
+        activity: { ...session.activity, turnCount: (session.activity.turnCount ?? 0) + 1 },
+      });
+      return session.id;
+    }, LAPTOP);
+    await expect.poll(() => page.evaluate((id) => window.agentBridgeDemo.hosts.link(id).store.list()[0].id, LAPTOP)).toBe(newest);
+    await page.evaluate(() => window.agentBridgeDemo.page.drawMachines());
+    expect(await held.evaluate((el) => el.isConnected)).toBe(true);
+    await expect(rows).toHaveText(names);
+    await page.mouse.up();
+    await expect(page).toHaveURL(/#\/sessions$/);
+    await expect(tab(page, LAPTOP)).toHaveAttribute('aria-selected', 'true');
+  });
+
+  test('an unchosen Fleet card has no invented names and gains its list when chosen', async ({ page }) => {
+    await openDemo(page);
+    await go(page, 'machines');
+    await page.locator('#machine-list [data-device-id="demo"] .machine-view').click();
+    await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.hosts.selection)).toBe('demo');
+    await go(page, 'machines');
+    const laptop = page.locator(`#machine-list [data-device-id="${LAPTOP}"]`);
+    await laptop.locator('.tile-running-toggle').click();
+    await expect(laptop.locator('.tile-running-list')).toHaveCount(0);
+    expect(await page.evaluate((id) => window.agentBridgeDemo.hosts.link(id), LAPTOP)).toBeNull();
+    await laptop.locator('.machine-view').click();
+    await expect(tab(page, LAPTOP)).toHaveAttribute('aria-selected', 'true');
+    await go(page, 'machines');
+    if (await laptop.locator('.tile-running-toggle').getAttribute('aria-expanded') === 'false') {
+      await laptop.locator('.tile-running-toggle').click();
+    }
+    await expect(laptop.locator('.tile-running-list > li')).toHaveCount(2);
+    await expect(laptop.locator('.tile-running-list')).toBeVisible();
+  });
+
+  for (const [width, scale] of [[390, 100], [390, 200], [768, 100], [1024, 200]]) {
+    test(`a Fleet card Running disclosure lists three running sessions at ${width}px and ${scale}% text`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.addInitScript(() => { Object.defineProperty(navigator, 'standalone', { value: true }); });
+      await openDemo(page);
+      const titles = ['Build service', 'Check <ready> & tests', 'LongSession'.repeat(12)];
+      await page.evaluate(({ titles, scale, id }) => {
+        document.documentElement.style.setProperty('--text-scale', scale / 100);
+        const host = window.agentBridgeDemo.machines[id];
+        for (const key of [...host.sessions.keys()]) { host.remove(key); }
+        titles.forEach((title, i) => host.upsert({
+          id: `running-${i}`, title, agent: 'copilot', status: i ? 'idle' : 'working',
+          updatedAt: '2026-11-12T20:00:00Z', activity: {},
+        }));
+      }, { titles, scale, id: LAPTOP });
+      await go(page, 'machines');
+      const laptop = page.locator(`#machine-list [data-device-id="${LAPTOP}"]`);
+      const running = laptop.getByRole('button', { name: /^Running,/ });
+      const rows = laptop.locator('.tile-running-list > li');
+      await expect(running).toHaveAttribute('aria-expanded', 'false');
+      await running.click();
+      await expect(rows).toHaveCount(3);
+      await expect(rows).toHaveText(titles);
+      await expect(laptop.getByRole('list', { name: 'Running sessions on Laptop' })).toBeVisible();
+      for (const row of await rows.all()) {
+        await expect(row).toBeVisible();
+        expect(await row.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+      }
+      expect(await laptop.evaluate((el) => [...el.querySelectorAll('*')].every((e) => !e.clientWidth || e.scrollWidth <= e.clientWidth + 1))).toBe(true);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await running.focus();
+      await page.evaluate((id) => {
+        const host = window.agentBridgeDemo.machines[id];
+        host.upsert({ ...host.get('running-0'), title: 'Renamed build' });
+      }, LAPTOP);
+      await expect(rows).toHaveText(['Renamed build', ...titles.slice(1)]);
+      await expect(running).toHaveAttribute('aria-expanded', 'true');
+      await expect(running).toBeFocused();
+      await page.evaluate((id) => window.agentBridgeDemo.machines[id].remove('running-1'), LAPTOP);
+      await expect(rows).toHaveCount(2);
+      await expect(rows).toHaveText(['Renamed build', titles[2]]);
+      await laptop.getByRole('button', { name: 'Show sessions on Laptop', exact: true }).click();
+      await expect(page).toHaveURL(/#\/sessions$/);
+      await expect(tab(page, LAPTOP)).toHaveAttribute('aria-selected', 'true');
+    });
+  }
+
+  test('a Fleet card with no sessions renders no invented running list', async ({ page }) => {
+    await openDemo(page);
+    await page.evaluate((id) => {
+      const host = window.agentBridgeDemo.machines[id];
+      for (const key of [...host.sessions.keys()]) { host.remove(key); }
+    }, LAPTOP);
+    await go(page, 'machines');
+    const laptop = page.locator(`#machine-list [data-device-id="${LAPTOP}"]`);
+    await expect(laptop.getByRole('button', { name: /^Running, No sessions running/ })).toBeVisible();
+    await laptop.locator('.tile-running-toggle').click();
+    await expect(laptop.locator('.tile-running-list')).toHaveCount(0);
+    await expect(laptop.locator('.tile-running li')).toHaveCount(0);
+    await expect(laptop.getByRole('button', { name: 'Show sessions on Laptop', exact: true })).toBeVisible();
+  });
+});
+
 const launchHere = async (page) => {
   const panel = page.locator('#launch');
   await expect(panel.locator('.launch-title')).toHaveText('Start a session on Laptop');

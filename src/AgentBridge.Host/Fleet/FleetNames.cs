@@ -34,6 +34,21 @@ public sealed class FleetNames
 
     public object Rename(ISessionSource source, JsonElement data)
     {
+        var (id, value) = Validate(source, data);
+        lock (gate)
+        {
+            var next = new Dictionary<string, string>(names, StringComparer.Ordinal);
+            if (value.Length == 0) { next.Remove(id); }
+            else { next[id] = value; }
+            // Publish the in-memory change only after the durable replacement succeeds.
+            DurableFile.Write(path, JsonSerializer.SerializeToUtf8Bytes(next, ProtocolJson.Options));
+            names = next;
+        }
+        return new { id, name = value };
+    }
+
+    internal static (string Id, string Name) Validate(ISessionSource source, JsonElement data)
+    {
         if (data.ValueKind != JsonValueKind.Object
             || !data.TryGetProperty("id", out var id) || id.ValueKind != JsonValueKind.String || string.IsNullOrEmpty(id.GetString())
             || !data.TryGetProperty("name", out var name) || name.ValueKind != JsonValueKind.String)
@@ -41,17 +56,7 @@ public sealed class FleetNames
             throw new ArgumentException("session.rename needs an id and name");
         }
         var session = source.Get(id.GetString()!) ?? throw new ArgumentException("session.rename: session is not listed");
-        var value = Normalize(name.GetString()!);
-        lock (gate)
-        {
-            var next = new Dictionary<string, string>(names, StringComparer.Ordinal);
-            if (value.Length == 0) { next.Remove(session.Id); }
-            else { next[session.Id] = value; }
-            // Publish the in-memory change only after the durable replacement succeeds.
-            DurableFile.Write(path, JsonSerializer.SerializeToUtf8Bytes(next, ProtocolJson.Options));
-            names = next;
-        }
-        return new { id = session.Id, name = value };
+        return (session.Id, Normalize(name.GetString()!));
     }
 
     static string Normalize(string name)

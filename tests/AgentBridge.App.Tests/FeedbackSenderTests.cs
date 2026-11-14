@@ -7,6 +7,9 @@ using AgentBridge.FeedbackInbox;
 using AgentBridge.Relay;
 using AgentBridge.Transport;
 using AgentBridge.Transport.Tests;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
 using NSec.Cryptography;
@@ -26,6 +29,7 @@ public class FeedbackSenderTests
     {
         public long MaxBytes => max;
         public Exception? SlotError, UploadError;
+        public Func<byte[], CancellationToken, Task>? Upload;
         public List<byte[]> Uploaded = [];
         public int Slots;
         public Task<string> RequestSlotAsync(long storedSize, CancellationToken ct)
@@ -36,6 +40,7 @@ public class FeedbackSenderTests
         public Task UploadAsync(string slotUrl, byte[] stored, CancellationToken ct)
         {
             if (UploadError is not null) { return Task.FromException(UploadError); }
+            if (Upload is not null) { return Upload(stored, ct); }
             Uploaded.Add(stored);
             return Task.CompletedTask;
         }
@@ -612,6 +617,36 @@ public class FeedbackSenderTests
         Assert.Null(FeedbackRecipient.TryParse(KeyId, BlobFormat.Base64Url(new byte[31])));
         Assert.Null(FeedbackRecipient.TryParse("bad id", key));
         Assert.Null(FeedbackRecipient.TryParse(KeyId, null));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_feedback_upload_redirect_never_reaches_its_target_or_reports_Sent()
+    {
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        await using var app = builder.Build();
+        var redirectRequests = 0;
+        var targetRequests = 0;
+        string? target = null;
+        app.MapPut("/upload", () => { Interlocked.Increment(ref redirectRequests); return Results.Redirect(target!, preserveMethod: true); });
+        app.MapPut("/escaped", () => { Interlocked.Increment(ref targetRequests); return Results.Ok(); });
+        await app.StartAsync();
+        var relay = new Uri(app.Urls.Single());
+        var upload = BlobHttp.Resolve(relay, "/upload")!;
+        target = new UriBuilder(relay) { Host = "localhost", Path = "/escaped" }.Uri.AbsoluteUri;
+        Assert.Null(BlobHttp.Resolve(relay, target));
+        using var http = BlobHttp.CreateClient();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var fake = new Fake { Upload = async (stored, ct) =>
+        {
+            using var stream = new MemoryStream(stored);
+            await BlobHttp.UploadAsync(http, upload, stream, stored.Length, ct);
+        } };
+        var (recipient, _) = NewRecipient();
+        Assert.Equal(FeedbackFailureReason.UploadRejected, Assert.IsType<FeedbackSendResult.Failed>(await Send(fake, recipient, ct: timeout.Token)).Reason);
+        Assert.Equal(1, redirectRequests);
+        Assert.Equal(0, targetRequests);
     }
 
     [Fact]

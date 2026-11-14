@@ -19,6 +19,10 @@ public interface ISessionLauncher
 
     Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default);
 
+    Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?> prepare,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "This launcher cannot write durable launch evidence."));
+
     Task<LaunchResult>? ReplayAsync(LaunchRequest request, string principal) => null;
 
     Task<LaunchResult> LaunchVerificationAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) =>
@@ -32,6 +36,8 @@ public interface ISessionLauncher
     // The agents launches started that still run, registered or not: whatever runs inside one
     // is an agent's, and may not manage the host (§6.3 invariant 13).
     IReadOnlyList<Started> LaunchedProcesses() => [];
+
+    bool LaunchedSession(string session, SessionProcess? process) => false;
 
     // launch.trust.answer, for a person whose signed command the caller has checked: answers a
     // folder-trust question a launched agent is waiting on (trust, or quit).
@@ -130,6 +136,9 @@ public sealed class LaunchServiceOptions
 
     // A private folder of this host's where a fetched bundle is unpacked before it is installed.
     public string? TransferStaging { get; init; }
+
+    // The profile's launch-provenance.json, independent of credential storage.
+    public string? ProvenanceFile { get; init; }
 }
 
 // Launches and resumes agent sessions as agent-ha-bridge's Launch button does
@@ -164,6 +173,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     readonly IAgentLocator locator;
     readonly AgencyCatalog agency;
     readonly ResumableStore resumable;
+    readonly LaunchProvenance provenance;
     readonly LaunchServiceOptions options;
     readonly Action<string> log;
     readonly AttachmentStore? attachments;
@@ -214,6 +224,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         this.agency = agency;
         this.options = options;
         this.log = log ?? (_ => { });
+        provenance = new LaunchProvenance(options.ProvenanceFile, this.log);
         this.attachments = attachments;
         resumable = new ResumableStore(options.CopilotHome, options.ClaudeHome, options.CodexHome, options.Time);
         var deliveryGate = gate ?? throw new ArgumentNullException(nameof(gate));
@@ -231,6 +242,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     {
         lock (pendingGate) { return [.. launchedOn.Values.Concat(pending.Select(p => p.Started)).Distinct().Where(starter.Running)]; }
     }
+
+    public bool LaunchedSession(string session, SessionProcess? process) => provenance.Contains(session, process);
 
     // agent-ha-bridge's $script:BridgeResumeCacheLimit: how many of the newest sessions in
     // approved folders it caches, and so decides the resume labels over.
@@ -735,11 +748,21 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         };
     }
 
-    public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default)
+    public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) =>
+        LaunchOnceAsync(request, peer, null);
+
+    public Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?> prepare,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(prepare);
+        return LaunchOnceAsync(request, peer, prepare);
+    }
+
+    Task<LaunchResult> LaunchOnceAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?>? prepare)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key)) { return Task.FromResult(Refused("request must be a UUID")); }
-        return requests.Once(key, () => request.FleetName is null ? RunAsync(request, key, peer)
-            : NamedLaunch is { } policy ? policy(request, peer, () => RunAsync(request, key, peer))
+        return requests.Once(key, () => request.FleetName is null ? RunAsync(request, key, peer, prepare: prepare)
+            : NamedLaunch is { } policy ? policy(request, peer, () => RunAsync(request, key, peer, prepare: prepare))
             : Task.FromResult(Refused("fleetName is not supported by this host")), result =>
             Settled(request, result, $"launch {Short(key)}"), owner: Owner(request, peer),
             foreign: () => Task.FromResult(Refused("request is not a repeat owned by this caller")));
@@ -809,7 +832,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     // ct: a restore's, cancelled as the host stops or its caller withdraws it. Honoured until the
     // agent is started, never after: a started session is followed whatever happens.
-    async Task<LaunchResult> RunAsync(LaunchRequest request, Guid key, string peer, bool restoring = false, CancellationToken ct = default)
+    async Task<LaunchResult> RunAsync(LaunchRequest request, Guid key, string peer, bool restoring = false, CancellationToken ct = default,
+        Func<Guid, Action<string>?>? prepare = null)
     {
         try
         {
@@ -875,7 +899,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                     }
                 }
                 return await StartAsync(plan, claim, key, handed, fetched, ct, restoring,
-                    peer.StartsWith("agent:", StringComparison.Ordinal) ? peer : null);
+                    peer.StartsWith("agent:", StringComparison.Ordinal) ? peer : null, prepare: prepare);
             }
             finally
             {
@@ -1044,7 +1068,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         return Refused(recorded ? reason : $"{reason} auditUnwritable: the agent worktree refusal could not be recorded.");
     }
 
-    async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false, string? agentPrincipal = null)
+    async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false, string? agentPrincipal = null,
+        Func<Guid, Action<string>?>? prepare = null)
     {
         Pending follow;
         LaunchedWith launched;
@@ -1233,8 +1258,16 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             // Where a prompt of the person's would show they got past its startup questions
             // (HeldForReply): what the transcript holds now is from before this agent.
             var transcriptFrom = TranscriptFrom(plan.Launcher, sessionId);
-            // A session whose id the agent chooses (Codex) has none to bind a credential to yet.
             var launchId = Guid.NewGuid().ToString("N");
+            Action<string>? auditRegistered = null;
+            if (prepare is not null && plan.Resume is null && plan.Transfer is null)
+            {
+                auditRegistered = prepare(Guid.Parse(launchId));
+                if (auditRegistered is null) { return Refused("the launch audit could not be written durably"); }
+            }
+            // A crash before registration must not turn an unbound launch into an adoptable process.
+            provenance.Preparing(key, sessionId);
+            // A session whose id the agent chooses (Codex) has none to bind a credential to yet.
             var credentialIssued = false;
             if (credentials is not null && sessionId.Length > 0)
             {
@@ -1249,6 +1282,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             catch (Exception e)
             {
                 if (credentialIssued) { credentials!.Abandon(launchId); }
+                provenance.Abandon(key);
                 log($"launch {Short(key)}: {plan.Launcher.Label} could not be started: {e.Message}");
                 return new LaunchResult(LaunchOutcome.Failed, $"{plan.Launcher.Label} couldn't be started") { Launched = launched };
             }
@@ -1257,7 +1291,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             if (sessionId.Length > 0) { Launched(sessionId, started); }
             log($"launch {Short(key)}: {(plan.Resume is null ? "started" : "resumed")} pid {started.ProcessId} in {directory} via {plan.Launcher.Label} (session {(sessionId.Length > 0 ? sessionId : "id chosen by the agent")})");
             // The reservation is the follow's now, released when the session registers.
-            follow = new Pending(key, plan.Launcher, sessionId, started, plan.Where, options.Time.GetUtcNow(), codexBefore, reserved, reservation, launched) { Transcript = transcriptFrom };
+            follow = new Pending(key, plan.Launcher, sessionId, started, plan.Where, options.Time.GetUtcNow(), codexBefore, reserved, reservation, launched)
+                { Transcript = transcriptFrom, AuditRegistered = auditRegistered };
             reservation = null;
             lock (pendingGate) { pending.Add(follow); }
             resumable.Forget();
@@ -1574,9 +1609,10 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     void Launched(string sessionId, Started started)
     {
+        var live = source.Snapshot().Select(s => s.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
         lock (pendingGate)
         {
-            foreach (var gone in launchedOn.Where(x => !starter.Running(x.Value)).Select(x => x.Key).ToList()) { launchedOn.Remove(gone); }
+            foreach (var gone in launchedOn.Where(x => !live.Contains(x.Key) && !starter.Running(x.Value)).Select(x => x.Key).ToList()) { launchedOn.Remove(gone); }
             launchedOn[sessionId] = started;
         }
     }
@@ -1584,7 +1620,12 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     void Decide(Pending p, LaunchResult result)
     {
         // Before the outcome is told, so the record has it by the time anyone hears of the session.
-        if (result is { Outcome: LaunchOutcome.Started, Session: { } id }) { Noted(p, id); RequestRegistered?.Invoke(p.Key, id); }
+        if (result is { Outcome: LaunchOutcome.Started, Session: { } id })
+        {
+            Noted(p, id);
+            Interlocked.Exchange(ref p.AuditRegistered, null)?.Invoke(id);
+            RequestRegistered?.Invoke(p.Key, id);
+        }
         if (result.Outcome == LaunchOutcome.Failed) { RequestFailed?.Invoke(p.Key); }
         if (!p.Decided.TrySetResult(result) && result.Outcome == LaunchOutcome.Started)
         {
@@ -1603,6 +1644,12 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // was started with. Once per session id.
     void Noted(Pending p, string id)
     {
+        if (source.ProcessOf(id) is { StartedAt: not null } process)
+        {
+            try { provenance.Bound(p.Key, id, process); }
+            catch (Exception e) when (e is InvalidOperationException or IOException or UnauthorizedAccessException)
+            { log($"launch {Short(p.Key)}: process provenance could not be bound: {e.Message}"); }
+        }
         if (p.NotedId == id || SessionStarted is not { } started) { return; }
         p.NotedId = id;
         try { started(id, p.Launched); }
@@ -1923,6 +1970,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         public string? Worktree { get; } = worktree;
         public string? Reservation { get; } = reservation;
         public LaunchedWith Launched { get; } = launched;
+        public Action<string>? AuditRegistered;
         public TaskCompletionSource<LaunchResult> Decided { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public volatile StartupQuestion Question;
         // Seen to close after a person's Quit: it asks nothing from then on, whatever Question
