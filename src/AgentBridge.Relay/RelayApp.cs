@@ -87,7 +87,7 @@ public static class RelayApp
         {
             c.Timeout = TimeSpan.FromSeconds(10);
             c.MaxResponseContentBufferSize = 4 * 1024 * 1024;
-        }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false }).RemoveAllLoggers();
+        }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false }).RemoveAllLoggers();
         builder.Services.AddHttpClient("github", c =>
         {
             c.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("agent-bridge-relay", "0.1"));

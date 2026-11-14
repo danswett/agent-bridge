@@ -33,10 +33,17 @@ public class ReleaseHintTests
         await Wait.UntilAsync(() => a.Hints.Count == 2 && b.Hints.Count == 2, "one hint per channel on each capable host");
         using var late = await Peer.Connect(relay, "true");
         await Wait.UntilAsync(() => late.Hints.Count == 2, "latest hints on connect");
+        var announcements = 0;
+        using var observer = await relay.App.Services.GetRequiredService<ReleaseHintWatcher>().SubscribeAsync(_ =>
+        {
+            Interlocked.Increment(ref announcements);
+            return Task.CompletedTask;
+        });
         clock.Advance(TimeSpan.FromMinutes(1));
         await Wait.UntilAsync(() => feed.Requests.Count == 3, "unchanged-list poll");
-        using var barrier = await Peer.Connect(relay, "true");
-        await Wait.UntilAsync(() => barrier.Hints.Count == 2, "unchanged-list delivery barrier");
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await Wait.UntilAsync(() => feed.Requests.Count == 4, "next poll after unchanged delivery completes");
+        Assert.Equal(2, Volatile.Read(ref announcements));
         foreach (var peer in new[] { a, b, late })
         {
             Assert.Equal(new[] { "v0.1.11", "v0.1.12" }, peer.Hints.Select(Tag).Order().ToArray());
@@ -138,9 +145,28 @@ public class ReleaseHintTests
         {
             feed.Body = List(($"v0.1.{run}", "win"));
             clock.Advance(TimeSpan.FromMinutes(1));
-            await Wait.UntilAsync(() => host.Hints.Count == run, "healthy subscriber after a failed send");
+            await Wait.UntilAsync(() => host.Hints.Count == run && (initial || Volatile.Read(ref attempts) >= run), "healthy subscriber after a failed send");
         }
         Assert.Equal(initial ? 1 : 3, Volatile.Read(ref attempts));
+    }
+
+    [Theory]
+    [InlineData(0, 200)]
+    [InlineData(1, 200)]
+    [InlineData(2, 502)]
+    [InlineData(3, 302)]
+    public async Task Bad_feed_replies_send_no_hint_and_the_next_poll_recovers(int scenario, int status)
+    {
+        using var feed = new Feed { Body = scenario == 1 ? new string('x', 4 * 1024 * 1024 + 1) : "{", Status = (HttpStatusCode)status };
+        var clock = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        await using var relay = await TestRelay.StartAsync(releaseFeed: feed, releaseTime: clock);
+        using var host = await Peer.Connect(relay, "true");
+        await Wait.UntilAsync(() => feed.Requests.Count == 1, "failed feed response");
+        feed.Body = List(("v0.1.2", "win"));
+        feed.Status = HttpStatusCode.OK;
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await Wait.UntilAsync(() => host.Hints.Count != 0, "valid list after feed failure");
+        Assert.Equal("v0.1.2", Tag(Assert.Single(host.Hints)));
     }
 
     static string Tag(byte[] frame) { using var doc = JsonDocument.Parse(frame); return doc.RootElement.GetProperty("tag").GetString()!; }

@@ -27,8 +27,14 @@ public sealed class ReleaseHintWatcher(IHttpClientFactory clients, TimeProvider 
             hosts[id] = subscription;
             snapshot = latest.Values.ToArray();
         }
-        await Task.WhenAll(snapshot.Select(subscription.SendAsync));
-        return subscription;
+        var accepted = false;
+        try
+        {
+            await Task.WhenAll(snapshot.Select(subscription.SendAsync));
+            accepted = true;
+            return subscription;
+        }
+        finally { if (!accepted) { subscription.Dispose(); } }
     }
 
     sealed class Subscription(Func<byte[], Task> send, Action remove) : IDisposable
@@ -41,8 +47,8 @@ public sealed class ReleaseHintWatcher(IHttpClientFactory clients, TimeProvider 
             try
             {
                 if (sent.GetValueOrDefault(hint.Channel) >= hint.Version) { return; }
-                sent[hint.Channel] = hint.Version;
                 await send(hint.Frame);
+                sent[hint.Channel] = hint.Version;
             }
             finally { turn.Release(); }
         }
@@ -96,6 +102,7 @@ public sealed class ReleaseHintWatcher(IHttpClientFactory clients, TimeProvider 
             {
                 foreach (var (channel, hint) in selected)
                 {
+                    // Withdrawals and prereleases are hints too; clients decide release eligibility.
                     if (latest.TryGetValue(channel, out var before) && before.Tag == hint.Tag) { continue; }
                     var update = new Hint(channel, hint.Tag, hint.Frame, ++version);
                     latest[channel] = update;
@@ -106,9 +113,10 @@ public sealed class ReleaseHintWatcher(IHttpClientFactory clients, TimeProvider 
             }
             await Task.WhenAll(targets.SelectMany(host => changed.Select(host.SendAsync)));
         }
-        catch (Exception e) when (e is HttpRequestException or IOException or JsonException || e is OperationCanceledException && !ct.IsCancellationRequested)
+        catch (Exception e) when (!ct.IsCancellationRequested
+            && e is HttpRequestException or IOException or JsonException or InvalidOperationException or OperationCanceledException)
         {
-            log.LogDebug("Release hint list could not be read");
+            log.LogWarning("Release hint read or delivery failed: {Kind}", e.GetType().Name);
         }
     }
 }
