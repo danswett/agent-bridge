@@ -54,8 +54,10 @@ public sealed class SessionService
     public Func<bool> LoadEnabled { get; init; } = () => true;
     public LoadService? Load { get; init; }
 
-    internal object RenameFleetSession(JsonElement data) =>
-        (FleetNames ?? throw new InvalidOperationException("refused: fleet-name storage is not available on this host")).Rename(source, data);
+    internal Task<object> RenameFleetSessionAsync(JsonElement data, Fleet.IScopedFleetRoster? roster, Task closed) =>
+        new Fleet.FleetNameEnrollment(source,
+            FleetNames ?? throw new InvalidOperationException("refused: fleet-name storage is not available on this host"),
+            machine.Id, roster, Time, log).RenameAsync(data, closed);
 
     internal SessionProcess? ProcessForAdoption(string session)
     {
