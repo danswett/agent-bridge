@@ -899,7 +899,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                     }
                 }
                 return await StartAsync(plan, claim, key, handed, fetched, ct, restoring,
-                    peer.StartsWith("agent:", StringComparison.Ordinal) ? peer : null);
+                    peer.StartsWith("agent:", StringComparison.Ordinal) ? peer : null, prepare: prepare);
             }
             finally
             {
@@ -1068,7 +1068,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         return Refused(recorded ? reason : $"{reason} auditUnwritable: the agent worktree refusal could not be recorded.");
     }
 
-    async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false, string? agentPrincipal = null)
+    async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false, string? agentPrincipal = null,
+        Func<Guid, Action<string>?>? prepare = null)
     {
         Pending follow;
         LaunchedWith launched;
