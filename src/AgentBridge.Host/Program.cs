@@ -24,6 +24,8 @@ using AgentBridge.Transport;
 //
 //   agent-bridge-host sessions [--compact]      one scan, the SessionList as JSON
 //   agent-bridge-host get <id>                  one session with its tool history
+//   agent-bridge-host stop <id> [--confirm <token>] [--profile <name>]
+//                                               one local person stop press, with host-owned confirmation
 //   agent-bridge-host watch [--json]            a line per upsert and removal, until Ctrl+C
 //   agent-bridge-host sign-in --relay <url>     GitHub sign-in through the relay
 //   agent-bridge-host serve [--relay <url>] [--name <name>] [--local-only]
