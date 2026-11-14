@@ -26,7 +26,8 @@ everything else, the rule of at most one conditional check per 10 minutes stays.
 - Targets, measured per kind in the soak: a PR state, comment or submitted review reaches its owner
   within 2 minutes of GitHub showing it; a `gate` within 2 minutes while CI runs and 4 minutes on a
   finished head; a review dismissal within 4 minutes; `ci` within 5 minutes of the last check
-  finishing, 9 after a re-run on a finished head.
+  finishing, 9 after a re-run on a finished head. On a draft PR, state, comment and review targets
+  are the same; `gate` and `ci` arrive within 16 minutes (its head is read every 15).
 - Fewer than 300 counted REST calls an hour when quiet, about 500 with 8 PRs in CI (see Rate), on a
   budget of its own.
 - No silent loss: every event the relay observes is delivered, or journaled as undeliverable and
@@ -67,18 +68,23 @@ Owner rule (contributor-workflow, "nothing tied to a machine"), answered:
 **Fencing and where a send is admitted.** Every state commit is a write conditioned on the blob's
 ETag (`If-Match`) under the current lease; a runner whose write fails has lost the lease and stops.
 The admission point for a send is its own `sending` commit: a send runs only after that commit
-succeeds, and nobody ever sends a `sending` record again. Neither the host nor HA checks lease
+succeeds. Every attempt, including a retry and the one re-send after `dropped`, is a new `sending`
+commit with its attempt number and the same request id; an attempt whose outcome is unknown is never
+sent again. Neither the host nor HA checks lease
 generations, so runners can overlap in time: one that pauses after its commit may resume after a
 takeover and finish that one send. The guarantees are: a stale runner completes only sends it had
 already committed, at most one per recipient and PR (the order barrier below), and its next commit fails;
 no event goes out twice, since the new runner never re-sends a `sending` record and the host keeps
 one entry per request id; per-PR order holds, since later events wait behind the open record. As a
-local guard, a runner also abandons a send whose `sending` commit is more than 30 s old.
+local guard, a runner also abandons a send whose `sending` commit is more than 30 s old, before
+calling `reply-session.ps1`. If it still holds the lease it commits that attempt as `not sent`
+(proof nothing went out) and makes a new attempt; if it cannot commit, the open record is an
+unknown outcome to the next runner and follows the `unconfirmed` path (Sending and the outbox).
 
 ## What it reads
 All reads use `gh api -i` with `If-None-Match`; an authorized 304 does not count against the primary
-rate limit. Lists use `per_page=100` and follow `Link: next`; a list that fails part way is retried
-whole and raises nothing.
+rate limit. Lists use `per_page=100` and follow `Link: next`; a list that fails part way follows
+the partial-scan rule below.
 
 | Read | Every | Gives |
 |---|---|---|
@@ -97,10 +103,16 @@ on PRs, or on issues when they carry a `[to:team]` tag. Reviews are re-read on a
 does not promise a dismissal changes the PR's `updated_at`; checks and statuses likewise, as a
 re-run, a receipt or `merge-rule` can change without it.
 
-**PR-list watermark.** The PR-list cursor advances only when a scan reaches the old cursor or the
-last page. A partial scan (throttled, failed or cut short) keeps the old cursor and records the
-page it reached; the next cycle with quota pages on from there to the cursor, even when page 1 is a
-304, so a PR pushed to page 2 by more than 100 changes is still seen once.
+**Partial scans and the watermark** (the PR list and both comment feeds). A scan of a feed starts
+with its committed cursor `C` (for comments, the last fully successful read behind `<since>`) and
+notes the newest `updated_at` on page 1 as its pending top `T`. Each page is staged atomically: one
+state commit holds the page's events (in the outbox), its ETag, and the continuation (`T` and the
+next page). `C` becomes `T` only when the scan reaches `C` or the last page. A partial scan
+(throttled, failed, cut short or a restart) keeps `C` and its committed pages, so a later page 1
+304 changes nothing: page 1's events are already in the outbox. The next cycle reads page 1; if its
+oldest item is newer than `T` (over 100 changes since), it starts a new scan from page 1 under the
+same `C`, otherwise it pages on from the continuation. Items only move up a list when they change,
+so a resumed page can repeat an item (removed by event id) but never skip one.
 
 **Rate.** Only 200 responses count, so cost follows changes, not cadence. Estimate: the comment and
 PR feeds about 150 an hour; a CI run about 45 (a check-run list changes when a check starts or
@@ -164,7 +176,8 @@ account, so the relay cannot tell which session wrote a comment and delivers eve
 the writer's own included. Each recipient gets an event at most once, even when two rules name it.
 
 ## Admission
-Quality admits exact SHAs by message, and from PR 2584 on also as a PR comment `[admit] <full sha>`.
+Quality admits exact SHAs by message and, as its adopted practice, records each admission as a PR
+comment `[admit] <full sha>`.
 The relay raises `unadmitted` when a head has no trusted admission, which would have caught PR 2573
 at 18:25 PT, not 23:04. On start it reads the open PRs' comments once to learn earlier admissions.
 **Limit:** sessions share one account, so a trusted `[admit]` line shows which account wrote it, not
@@ -255,7 +268,8 @@ event id and recipient, so a retried send is the same request, and the text carr
 5. Crash after the state write and before the send, then a takeover by another runner, while the
    head moves A to B and then, during the outage, to C: `A->B` and `B->C` are each sent once. A
    runner that lost the lease cannot commit or send. A `sending` record is never re-sent.
-6. A read failing on page 2 (500, rate limit, bad body) raises nothing, saves no cursor, backs off.
+6. A read failing on page 2 (500, rate limit, bad body) of any paged feed commits page 1's events,
+   ETag and continuation, keeps the cursor and backs off.
 7. Routing: `Owner-Session:` wins; an "Update branch" commit or another agent's commit does not
    move ownership; a gone session falls to the lead; no owner goes to Quality as `owner unknown`.
 8. 20 events on one PR in a minute: all 20 sent, 6 a minute, in order; a later event waits behind a
@@ -278,19 +292,29 @@ event id and recipient, so a retried send is the same request, and the text carr
     runner paused before its commit sends nothing.
 15. While throttled, 130 PRs change and one on page 2 closes: after recovery the `closed` event is
     raised once, though page 1 returns 304.
+16. Page 1 of the PR list holds 100 changed PRs, page 2 fails, and the runner restarts (and, in a
+    second run, another takes over): page 1 then returns 304, yet each page 1 and page 2 event is
+    sent exactly once and the cursor moves only after page 2 is read. The same with 150 new changes
+    before the resume: the scan restarts from page 1 and nothing is skipped or sent twice. The same
+    for both comment feeds.
 
 ## Live soak (SRE, 24 hours, enrolled disposable nodes)
 The relay sends live only to two disposable sessions and logs every other event dry-run; no watcher
-runs beside it. Baseline: at the end, one read of each PR's timeline for the soak window, under the
-App's budget, as an approved part of the soak (**Ask (Chief):** approve it), compared with the
-relay's journal: no event missing, none twice. Measured: counted calls an hour, and time from
-GitHub to message for each kind against the targets in Goal.
+runs beside it. Baseline: once, after the window ends, a read of the soak window's evidence, as an
+approved part of the soak (**Ask (Chief):** approve it), compared with the relay's journal: no
+event missing, none twice. Evidence per kind: state, head, PR comments and reviews from each PR's
+`issues/<n>/timeline`; review-thread comments from `pulls/comments` for the window; `ci` and `gate`
+from the check runs and statuses of each head SHA in those timelines (their completion times);
+hub `[to:team]` tags from the hub issues' comments for the window. About 150 counted calls for 40
+PRs, paid from the App's budget, or without the App from the relay's 600-an-hour ceiling in an hour
+the relay is not reading. Measured: counted calls an hour, and time from GitHub to message for each
+kind against the targets in Goal.
 
 ## Slices (docs first; each at most 250 changed lines)
 | Slice | Content |
 |---|---|
 | 0 | This document. |
-| 1 | Reader, paging, trust filter, state commit, outbox and journal against a fake store; dry-run log only. Tests 1-4, 6, 12, 15. |
+| 1 | Reader, paging, trust filter, state commit, outbox and journal against a fake store; dry-run log only. Tests 1-4, 6, 12, 15, 16. |
 | 2 | Store client, lease, fencing, takeover and state loss (needs the Engineering store). Tests 5, 13, 14. |
 | 3 | Routing, team file, sending, outcomes, order, rate and retry (needs #2568 slice 4). Tests 7-9. |
 | 4 | `unadmitted`, heartbeat, feed health, daily line, onboarding §5. Tests 10-11. |
@@ -309,7 +333,7 @@ GitHub to message for each kind against the targets in Goal.
 1. Owner: a read-only GitHub App installation for the relay (its own budget), and which fleet nodes
    to enrol as runners.
 2. Chief, for the owner: record the relay as the one sanctioned PR-event reader, and approve the
-   soak's one end-of-window timeline read.
+   soak's one end-of-window evidence read (Live soak).
 3. Engineering: the protected per-component store with lease in the relay service (Shape, point 3).
 4. SRE: run the 24-hour soak. Engineering (or the Chief while it is away): accept this design and
    name who builds slices 1-4.
