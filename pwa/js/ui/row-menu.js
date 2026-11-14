@@ -73,7 +73,7 @@ export class RowMenu {
     // a tap on Pin lands on the bar instead: it opens upward where there is room above.
     const r = el.getBoundingClientRect();
     const bar = document.getElementById('nav');
-    const fixed = bar && !bar.hidden && getComputedStyle(bar).position === 'fixed';
+    const fixed = bar && !bar.hidden && bar.offsetWidth > 0 && bar.offsetHeight > 0 && getComputedStyle(bar).position === 'fixed';
     const floor = fixed ? bar.getBoundingClientRect().top : window.innerHeight;
     const up = !sheet && r.bottom > floor && anchor.getBoundingClientRect().top - r.height > 0;
     if (up) { el.classList.add('up'); }
