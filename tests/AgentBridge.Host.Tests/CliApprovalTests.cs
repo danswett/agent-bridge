@@ -137,7 +137,7 @@ public sealed class CliApprovalTests : IAsyncLifetime
         Assert.Null(sent);
         Assert.DoesNotContain(Ops.SessionAnswer, operations);
         Assert.NotEqual("", error.ToString());
-        Assert.DoesNotContain("\u001b", output.ToString());
+        Assert.DoesNotContain("\u001b", output.ToString(), StringComparison.Ordinal);
     }
 
     [Theory]
