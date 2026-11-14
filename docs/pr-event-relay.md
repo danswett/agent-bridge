@@ -105,18 +105,24 @@ comment at the key's timestamp is read again, and repeats are removed by comment
 comments); each next key is the newest `updated_at` on the page just read. A deleted comment cannot
 shift a later one past the reader, and a comment edited mid-scan moves to the end, where it is read.
 If a full page brings nothing new (more than 100 comments within that second), the key `K` becomes
-a tied bucket: a durable checkpoint (`K`, the pass number and the ids seen at `K`) is committed, and
-the resume key stays `K` and `C` stays unchanged until the bucket is verified. A pass reads pages 2,
-3 ... of `K` until a page is short; items newer than `K` on those pages are raised but do not move
-the key. Passes repeat until a whole pass finds nothing new and nothing missing at `K` (a deletion
-or edit during a pass shows as a missing comment). Only then does the key move past `K`: the next
+a tied bucket: a durable checkpoint (`K`, the pass number and the ids at `K` in the last complete
+pass) is committed, and the resume key stays `K` and `C` stays unchanged until the bucket is
+verified. Every pass starts at page 1 under the fixed `K` and reads pages 1, 2, 3 ... until a page
+is short, rebuilding the bucket's whole membership (a deletion can move an unseen comment onto page
+1); items newer than `K` are raised but do not move the key, and a new id is raised when first seen.
+Passes repeat until one pass's membership equals the previous complete pass's: nothing new and
+nothing missing compared with that pass, not with every id ever seen, so a comment deleted for good
+stops blocking once two passes agree. Only then does the key move past `K`: the next
 request starts just after `K` (`since` = `K` plus 1 second if `since` is inclusive, `K` if not; the
 relay records which from a probe, and the soak confirms it), since every comment at `K` is known. A
-crash resumes the bucket from its checkpoint. After 5 unstable passes the feed keeps the checkpoint,
-sends one feed-health line to the Chief of Staff, and tries again next cycle. Otherwise the scan
-ends at a short page. Each page is one state commit: its events (oldest first, so order holds
-across pages), its ETag, its newest `updated_at` and count, and the next key; `C` moves to the last
-key once a page is short and no bucket is open. A crash or failure resumes from the committed key.
+crash or takeover restarts the open pass at page 1 and compares it with the checkpoint's last
+complete pass. After 5 unstable passes the feed keeps the checkpoint, sends one feed-health line to
+the Chief of Staff, and tries again next cycle; that line goes once per bucket until it verifies,
+plus one line when it does, not every cycle. Otherwise the scan ends at a short page. Each page is
+one state commit: its events (oldest first, so order holds across pages, except that a tied comment
+first found in a later bucket pass is raised after newer ones; order per PR follows what was
+observed), its ETag, its newest `updated_at` and count, and the next key; `C` moves to the last key
+once a page is short and no bucket is open. A crash or failure resumes from the committed key.
 A 304 page is not the end of a scan: the scan follows that page's saved next key, so
 a comment beyond a full first page is still read, and only a short page ends it. Issue comments are
 kept only on PRs, or on issues when they carry a `[to:team]` tag.
@@ -331,11 +337,13 @@ event id and recipient, so a retried send is the same request, and the text carr
     is deleted); on resume each revision of every surviving comment is raised exactly once, oldest
     first. With 130 comments in the 10-minute lookback, a new comment on the second key page is
     read although the first page returns 304. A tied bucket of 101 comments at T and one at T+20
-    min: one tied comment is deleted before page 2, and the runner crashes after committing the
-    short page 2: on resume the bucket is verified from its checkpoint, the surviving 101st comment
-    is raised once, and `C` moves past T only then. Under constant churn in a bucket, the fifth
-    unstable pass sends one Chief line and keeps the checkpoint. (The same with a takeover is
-    slice 2's test 5.)
+    min: one of the first 100 is deleted before page 2, moving the 101st onto page 1, and the runner
+    crashes after committing the short page 2: on resume the pass restarts at page 1, the surviving
+    101st comment is raised once, and `C` moves past T only after two complete passes agree. A
+    tied comment deleted for good is missing from one pass and the bucket verifies on the next.
+    Under constant churn in a bucket, the fifth unstable pass sends one Chief line and keeps the
+    checkpoint; later cycles send no more lines until the bucket verifies, then one recovery line.
+    (The same with a takeover is slice 2's test 5.)
 
 ## Live soak (SRE, 24 hours, enrolled disposable nodes)
 The relay sends live only to two disposable sessions and logs every other event dry-run; no watcher
