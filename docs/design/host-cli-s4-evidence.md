@@ -141,7 +141,7 @@ implementation; an inability to notify is a gap, not an automatic row exemption.
 Scope: fixture-isolated product executable checks for `sessions` and missing
 `get` first. Reuse an existing process fixture if available; do not run provider
 collectors or live roots.
-Size: at most 250 changed lines. Sensitive: no. Depends-on: #2402.
+Size: at most 250 changed lines. Sensitive: yes (read-root seam). Depends-on: #2402.
 Acceptance: capture stdout/stderr/exit and unchanged fixture roots; distinguish
 product host executable tests from the rehearsal parser's tests.
 Remaining: JSON `watch` startup/cancellation and unknown-verb exit proof in

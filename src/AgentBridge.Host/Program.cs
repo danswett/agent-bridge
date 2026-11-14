@@ -180,6 +180,7 @@ switch (command)
             await source.RefreshAsync();
             var session = source.Get(arguments[1]);
             Console.WriteLine(session is null ? "{\"missing\":true}" : JsonSerializer.Serialize(session, pretty));
+            if (session is null) { Console.Error.WriteLine("agent-bridge-host get: session not found."); }
             return session is null ? 1 : 0;
         }
     case "rename":
