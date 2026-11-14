@@ -1,9 +1,10 @@
 # Script credentials: one credential for fleet scripts that run outside any session (#1402)
 
-Design only. Part of #1396 (HA parity, slice S5), and of epic #1248. The code slice is
-#1414, sized in §9. Nothing here is built; §2 says what exists today. This is a credential
-design, so it is sensitive: it needs two independent reviews from different model families,
-and Engineering and the owner's security review must agree before #1414 is cut (§10).
+Part of #1396 (HA parity, slice S5), and of epic #1248. #2346 implements the Windows caller
+slice: registered scripts authenticate as `script:<machine>/<name>` for **`fleet.list` and
+`fleet.find` only**. Stored scope remains `read+reply`, but the hello advertises `read` and a
+connection allowlist refuses every other op, even after expiry or revocation. The wider send
+proposal below is not enabled. Sensitive changes need two different-family whole-file reviews.
 
 Companion notes: [agent-principals.md](agent-principals.md) (§3.3 and §3.4 define the
 session credential this builds on), [agent-launch-scope.md](agent-launch-scope.md) (§11
@@ -33,12 +34,15 @@ Slipgates mints a credential per session at launch. A script has no session, so 
 | The credential store fails closed when its file is unreadable | Built | `AgentCredentials.cs` (`problem`) |
 | Revoke by session, or when the bound process ends | Built | `RevokeSession`, `RevokeEnded` |
 | Pipe ops an agent connection may call: `agent.send`, `fleet.list`, `fleet.find` | Built (Windows for `agent.send`) | `LiteAgentSend.cs`, `FleetList.cs` |
-| A credential **not tied to a session or a process** | **Does not exist.** `Mint` requires a session id, and `Check` refuses any credential whose process is not started (`RootPid <= 0`) | `AgentCredentials.cs` |
+| A credential **not tied to a session or a process** | Built: named script record, hashed store and protected file; default and maximum life 30 days | `AgentCredentials.cs` |
 | A host command to list, mint or revoke credentials by hand (`agents revoke`) | **Not found in the code.** agent-principals.md §3.4 describes it; no command implements it | design only |
-| Any credential that lets a script act as a script, with its own name in the audit | **Does not exist** | none |
+| A script principal in the audit | Built for fleet reads; complete, traceable, agent-free ancestry required | `AgentCredentials.Check`, `FleetList.cs` |
 
-So Slipgates has no credential today that a script can hold. Everything below that is not in
-the table above is a proposal.
+The remaining sections retain the broader proposal. #2346 does not implement script send,
+launch, mint/revoke commands (#2286), signed registry records or a fleet-script rollout.
+Rotation retires the older hash only after the newer token completes an audited fleet read;
+a handshake, failed audit, invalid lookup or failed roster read leaves both hashes intact.
+An expired, revoked or faulted-store connection is refused and logged, never treated as a person.
 
 ## 3. Decision: a limit on the existing credential, with a new binding
 

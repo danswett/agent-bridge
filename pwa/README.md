@@ -42,6 +42,11 @@ makes it a new device, signed in and approved again, so keeping it is fine.
 
 ## Modules
 
+On opening a session, history asks for the newest five turns. Once drawn, at most
+one older page is fetched automatically, only if the visible pane does not yet
+scroll (#2480). Resizing or reopening does not renew that allowance. Load earlier
+messages, Try again and near-top scroll gestures still load earlier pages on demand.
+
 If a stale-cursor recovery walk runs out of its budget before finding held turns or the start,
 the history store keeps the held turns and reports a recoverable earlier-load error (#1437).
 
@@ -358,6 +363,8 @@ next outcomes), and asks a follow-up question a little after each answer.
 
 ### Replying
 
+Without working local storage or Web Locks, Send shows an error and sends nothing.
+
 Delivered image attachments can retain a sender-only preview on this device (#1802).
 The local account's store holds at most 32 raster images, 8 MiB total, for 24 hours;
 sign-out or forgetting a pairing clears it. Missing bytes or reply bindings (including
@@ -613,6 +620,20 @@ span in a sentence this way, and NEL and the separators in prose.
 
 ## Tests
 
+Groups overlays (#2074) use `openSheet` in `js/ui/sheet.js`: `title`, DOM `content`
+and optional pinned `footer`, `kind` (`sheet`, `menu`, `form`, `alert`) and `anchor`.
+It returns `{ dialog, close }`; Cancel and Escape also close it and restore focus.
+For an alert, pass `cancelLabel: null` and `initialFocus` as its safe footer action.
+`onClose` runs once. Native modality keeps the background inert; the body alone scrolls.
+Phone sheets respect safe areas and the visual viewport; iPad sheets/menus anchor beside
+the list, forms centre at 440px, and alerts centre at 300px. `test/sheet.spec.mjs`
+covers the primitive in both engines; existing group and approval UI is not migrated.
+
+The open delegate detail (#2300) clears its polling timer while the document is hidden.
+On return it redraws ages and fetches once, keeping the last words while the fetch is
+pending or fails. Fake-clock cases are in `test/unit/delegates-view.test.mjs`;
+`test/delegates.spec.mjs` checks the retained content and catch-up in both browsers.
+
 The Fleet update block (#2187) shows a status glyph and word, a quiet "Checked" age and a
 44 px secondary Check now button. Update now is the only primary action when offered;
 Check now then drops out. Historical feed/quota metadata stays hidden. A limited check
@@ -660,6 +681,13 @@ stamped with a fixed release id and build time (`64a4019…`, 7 Nov 2026), which
 running another checkout's tests at the same time. CI splits the run over several jobs
 (quality/README.md §4.7): Chromium, three WebKit shards (`--shard`), and `test/e2e` alone in
 the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `test/e2e` out.
+
+The Fleet update-line ordering regression in `test/machines.spec.mjs` delivers a
+subscription response and a newer event in one task (#1959). `HostClient` applies
+the subscription snapshot synchronously through `subscribeUpdate(onState)`, before
+later wire events; a promise continuation must not restore the older state.
+The update fixture also waits for that initial snapshot before changing the demo
+host: the demo-ready marker covers sessions, not update subscriptions.
 
 On a ready PR, `pwa-ui` then repeats only added or modified specs since the PR's
 merge base five times, with zero retries, in the same Chromium and WebKit shards.

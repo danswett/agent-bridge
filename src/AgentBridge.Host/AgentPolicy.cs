@@ -294,7 +294,8 @@ public sealed record AgentPolicyLimits
                 case "conversationMinutes": result = result with { ConversationMinutes = AgentPolicy.Int(p.Value, path, 1, d.ConversationMinutes, d.ConversationMinutes, problems) }; break;
                 case "perPairPerMinute": result = result with { PerPairPerMinute = AgentPolicy.Int(p.Value, path, 1, d.PerPairPerMinute, d.PerPairPerMinute, problems) }; break;
                 case "perTargetPerMinute": result = result with { PerTargetPerMinute = AgentPolicy.Int(p.Value, path, 1, d.PerTargetPerMinute, d.PerTargetPerMinute, problems) }; break;
-                case "launchesPerOriginPerHour" or "launchesPerMachinePerHour" or "liveAgentLaunched" or "agentLaunchedIdleHours": break;
+                case "launchesPerOriginPerHour" or "launchesPerMachinePerHour" or "launchAttemptsPerOriginPerHour"
+                    or "liveAgentLaunched" or "agentLaunchedIdleHours": break;
                 default: problems.Add($"{path} is not a setting; ignored"); break;
             }
         }

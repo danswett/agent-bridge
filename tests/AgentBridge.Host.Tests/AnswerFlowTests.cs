@@ -3549,21 +3549,31 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Contains("resume=left resumes=3", await AttemptLineAsync());
     }
 
-    [Fact]
-    public async Task A_form_answered_afresh_that_stops_again_is_never_reset_a_second_time()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_form_answered_afresh_that_stops_again_is_never_reset_a_second_time(bool observeAfterResult)
     {
-        Serve(Answerer(resume: true));
+        await using var clock = new PollClock();
+        Serve(Answerer(time: clock, resume: true));
         await AskFieldsAsync(TwoLists, 2, TwoPicked);
         // Asked again, the form is stuck at its first field once more.
         var asked = false;
         injector.Screen = () => !Escaped() || asked ? Framed("Tell me", TwoNames, 0, ["Field: first", .. Input("")]) : new List<string> { "> " };
+        // Record the CLI's response before Esc completes, independently of the test observer.
+        injector.OnInjectAsync = async () =>
+        {
+            if (!IsEscape(injector.Plans[^1].Plan)) { return; }
+            Fixture.Append(events, Copilot.ToolDone("q2", second++), Copilot.ToolStart("q3", "ask_user", new { message = "Tell me", requestedSchema = new { properties = TwoLists } }, second++));
+            asked = true;
+            await source.RefreshAsync();
+        };
         var ch = await OpenAsync();
 
         var answering = AnswerResultAsync(ch, TwoPicked, Guid.NewGuid().ToString());
+        // A loaded runner may not schedule the observer until the reset budget has elapsed.
+        if (observeAfterResult) { await answering; }
         await Wait.UntilAsync(() => Escaped(), "the Esc that resets the form", Patience);
-        Fixture.Append(events, Copilot.ToolDone("q2", second++), Copilot.ToolStart("q3", "ask_user", new { message = "Tell me", requestedSchema = new { properties = TwoLists } }, second++));
-        asked = true;
-        await source.RefreshAsync();
         var result = await answering;
 
         // One Esc; the question asked again gets its first field's keys and Enter, and then is

@@ -51,6 +51,11 @@
   --safe-right: var(--env-safe-right);
   --safe-bottom: var(--env-safe-bottom);
   --safe-left: var(--env-safe-left);
+  --sheet-bottom: 0px;
+  --sheet-view-height: 100dvh;
+  --sheet-view-top: 0px;
+  --sheet-x: 16px;
+  --sheet-y: 16px;
 }
 :root[data-text-size="smaller"] { --text-scale: 0.9; }
 :root[data-text-size="larger"] { --text-scale: 1.15; }
@@ -482,9 +487,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card);
 }
 .machine.offline { background: none; border-style: dashed; }
-/* The selected tint is on the block, not the row, so a refusal line under it stays on the row's surface (#858). */
 .machine-block { border-radius: inherit; }
-.machine.selected > .machine-block { background: var(--ab-selected); }
 .machine-block:has(~ .machine-error) { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .machine.selected::before {
   content: ""; position: absolute; left: -1px; top: var(--ab-space-4); width: 3px; height: 16px; border-radius: 2px; background: var(--ab-bridge);
@@ -502,10 +505,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .machine-button .icon, .machine-row .icon { grid-column: 1; grid-row: 1; align-self: start; width: 20px; height: 20px; --ab-icon-stroke: 1.5; color: var(--ab-text2); }
 .machine-name { grid-column: 2; grid-row: 1; font-weight: 600; font-size: var(--type-row); line-height: var(--type-row-line); overflow-wrap: anywhere; }
 .machine-state { grid-column: 3; grid-row: 1; color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-row-line); white-space: nowrap; }
-.machine.selected .machine-state { color: var(--ab-bridge); font-weight: 600; }
-/* Bridge words on light's selected tint are under 4.5:1 (4.46:1 over the layer, 4.09:1 over a
-   phone's shell; #366), so there they take the text colour (ui.md §9.1 A8). Dark keeps Bridge,
-   and forced colours their system pair. */
+.machine.selected .machine-state { color: var(--ab-bridge); }
 @media (prefers-color-scheme: light) and (forced-colors: none) {
   .machine.selected .machine-state, .machine.selected .button.secondary:not(.armed) { color: var(--ab-text); }
 }
@@ -544,15 +544,26 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .machine-summary { margin: 0 0 var(--ab-space-3); color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-meta-line); }
 .machine-tile { display: grid; gap: var(--ab-space-2); padding: 0 var(--ab-space-3) var(--ab-space-3) calc(var(--ab-space-3) + 20px + var(--ab-space-3)); }
 .machine-tile > p, .tile-actions-note, .tile-health { margin: 0; font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
+.tile-measured { min-height: var(--type-meta-line); }
 .tile-health-icon { margin-inline-end: var(--ab-space-2); }
-.tile-label { font-weight: 600; color: var(--ab-text); }
-.tile-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ab-space-2); }
-.tile-actions .button { min-height: var(--tap); }
+.tile-label { font-weight: 400; color: var(--ab-text2); }
+.tile-health-word { color: var(--ab-text); }
+.tile-running-toggle {
+  display: flex; align-items: center; gap: var(--ab-space-2); width: 100%; min-height: var(--tap);
+  padding: 0; border: 0; background: none; font: inherit; font-size: var(--type-meta); color: var(--ab-text); text-align: start; cursor: pointer;
+}
+.tile-running-toggle .icon { flex: none; margin-inline-start: auto; }
+.tile-running-toggle[aria-expanded="true"] .icon { transform: rotate(90deg); }
+.tile-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--ab-space-2); }
+.tile-actions-note { grid-column: 1 / -1; }
+.tile-actions .button { min-width: 0; min-height: var(--tap); padding: var(--ab-space-2); white-space: normal; }
+.machine .button { font-weight: 400; }
 .machine-tile .machine-more { padding: 0; }
-.machine-load { display: grid; grid-template-columns: minmax(5rem, 1fr) minmax(0, 2fr) auto; align-items: center; gap: var(--ab-space-2); font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
+.machine-load { display: grid; grid-template-columns: 7ch minmax(0, 1fr) 8ch; align-items: center; gap: var(--ab-space-2); font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
 .machine-load-track { height: 10px; border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-control); overflow: hidden; background: var(--ab-subtle); }
 .machine-load-fill { display: block; height: 100%; background: var(--ab-text2); }
-.machine-load-value { font-variant-numeric: tabular-nums; color: var(--ab-text); }
+.machine-load-value { font-variant-numeric: tabular-nums; color: var(--ab-text); text-align: end; }
+.machine-load-note { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: var(--ab-space-2); }
 .machine-load.missing .machine-load-track { border-style: dashed; background: none; }
 @media (forced-colors: active) {
   .machine-load-track { forced-color-adjust: none; border-color: CanvasText; background: Canvas; }
@@ -842,20 +853,28 @@ body[data-conn="busy"] .sessions, body[data-conn="warn"] .sessions, body[data-co
   .sign-in-banner { border-color: Highlight; }
   .sign-in-session { color: LinkText; }
 }
-/* Moving rows: a Move button, shown while its row is hovered (a mouse) or has focus (the keyboard),
-   and a line where a dragged row will go. Only in Your order with no filter. */
+/* Keep the Move column inside the card, away from its status glyph. Filtering
+   disables moving, so filtered lists need no column. */
+.session-list[data-sort="yours"]:not([data-filtered="true"]) > .session > .row-main {
+  padding-left: calc(var(--ab-space-3) + 24px);
+}
 .drag-handle { display: none; }
 .session-list[data-sort="yours"]:not([data-filtered="true"]) .session:has(:focus-visible:not([data-focus-quiet])) .drag-handle,
-.session-list[data-sort="yours"]:not([data-filtered="true"]) .session .drag-handle:focus-visible { display: block; opacity: 1; }
+.session-list[data-sort="yours"]:not([data-filtered="true"]) .session .drag-handle:focus-visible {
+  display: block; color: var(--ab-grip-ink, var(--ab-text));
+}
 @media (hover: hover) and (pointer: fine) {
-  .session-list[data-sort="yours"]:not([data-filtered="true"]) .drag-handle { display: block; opacity: 0; }
-  .session-list[data-sort="yours"]:not([data-filtered="true"]) .session:hover .drag-handle { opacity: 1; }
+  .session-list[data-sort="yours"]:not([data-filtered="true"]) .drag-handle { display: block; }
+  .session-list[data-sort="yours"]:not([data-filtered="true"]) .session:hover .drag-handle { color: var(--ab-grip-ink, var(--ab-text)); }
 }
 .session-list[data-sort="yours"]:not([data-filtered="true"]) .drag-handle {
-  position: absolute; left: 0; top: 8px; width: 24px; min-width: 0; min-height: 0; height: 24px; padding: 0; z-index: 1;
-  border: 0; border-radius: 2px; cursor: grab; color: var(--ab-text2); background-color: transparent;
+  position: absolute; left: 0; top: 0; width: 24px; min-width: 0; min-height: 0; height: 100%; padding: 0; z-index: 1;
+  border: 0; border-radius: 2px; cursor: grab; color: var(--ab-grip-ink, var(--ab-text3)); background: none;
+}
+.session-list[data-sort="yours"]:not([data-filtered="true"]) .drag-handle::before {
+  content: ""; position: absolute; left: 50%; top: 50%; width: 12px; height: 18px; transform: translate(-50%, -50%);
   background-image: radial-gradient(circle, currentColor 1.5px, transparent 1.6px);
-  background-size: 6px 6px; background-position: center;
+  background-size: 6px 6px;
 }
 .session.dragging { opacity: .6; }
 .session.dragging .drag-handle { cursor: grabbing; }
@@ -867,7 +886,7 @@ body[data-conn="busy"] .sessions, body[data-conn="warn"] .sessions, body[data-co
 /* High contrast drops background images and colours: the grip and the drop line keep system
    colours so they can still be seen. */
 @media (forced-colors: active) {
-  .drag-handle { forced-color-adjust: none; color: CanvasText; }
+  .drag-handle { forced-color-adjust: none; --ab-grip-ink: CanvasText; }
   .session.drop-before::before, .session.drop-after::after { forced-color-adjust: none; background: Highlight; }
 }
 .row-menu {
@@ -908,6 +927,51 @@ html[data-touch-only-keys]:not([data-keyboard-seen]) .row-menu-key { display: no
 .group-editor label, .group-editor .answer-error { width: 100%; }
 .group-editor .text-input { width: 100%; }
 @media (forced-colors: active) { .row-menu-sheet { border-color: CanvasText; } }
+
+/* Groups overlays (#2074): native modal focus/inertness, with only the body scrolling. */
+.sg-sheet {
+  position: fixed; inset: auto 0 var(--sheet-bottom, 0px); margin: 0; width: 100%; max-width: none;
+  max-height: min(70dvh, calc(var(--sheet-view-height, 100dvh) - var(--safe-top) - 96px));
+  padding: 0 var(--ab-space-4) calc(var(--safe-bottom) + var(--ab-space-4));
+  color: var(--ab-text); background: var(--ab-layer); border: 1px solid var(--ab-stroke2);
+  border-radius: var(--ab-radius-card) var(--ab-radius-card) 0 0;
+  box-shadow: 0 -8px 28px var(--ab-shadow); overflow: hidden;
+}
+.sg-sheet[open] { display: flex; flex-direction: column; }
+.sg-sheet::backdrop { background: var(--ab-viewer); opacity: .22; }
+@media (prefers-color-scheme: dark) { .sg-sheet::backdrop { opacity: .32; } }
+@media (prefers-contrast: more), (forced-colors: active) { .sg-sheet::backdrop { opacity: .6; } }
+.sg-sheet-head { display: flex; align-items: center; gap: var(--ab-space-2); min-height: 52px; flex: none; }
+.sg-sheet-head h2 { margin: 0; flex: 1; min-width: 0; font-size: 1.125rem; font-weight: 600; overflow-wrap: anywhere; }
+.sg-sheet-cancel {
+  min-width: 64px; min-height: 44px; padding: 0 var(--ab-space-3); font: inherit; font-weight: 600;
+  color: var(--ab-bridge); background: transparent; border: 0; border-radius: var(--ab-radius-control); cursor: pointer;
+}
+.sg-sheet-cancel:active { background: var(--ab-selected); }
+.sg-sheet-body { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.sg-sheet-foot { flex: none; padding-top: var(--ab-space-3); }
+.sg-sheet :is(button, input, select, textarea) { min-width: 44px; min-height: 44px; }
+.sg-sheet :focus-visible { outline-offset: -3px; }
+.sg-sheet[data-kind="alert"] {
+  inset: calc(var(--sheet-view-top, 0px) + var(--sheet-view-height, 100dvh) / 2) auto auto 50%;
+  transform: translate(-50%, -50%); width: min(300px, calc(100vw - 32px)); border-radius: var(--ab-radius-card);
+}
+@media (min-width: 760px) {
+  .sg-sheet {
+    inset: calc(var(--sheet-view-top, 0px) + var(--sheet-view-height, 100dvh) / 2) auto auto 50%;
+    transform: translate(-50%, -50%); width: 340px; border-radius: var(--ab-radius-card);
+    box-shadow: 0 12px 40px var(--ab-shadow);
+  }
+  .sg-sheet[data-kind="menu"] { width: 240px; }
+  .sg-sheet[data-kind="form"] { width: 440px; }
+  .sg-sheet[data-anchored="true"]:is([data-kind="sheet"], [data-kind="menu"]) {
+    left: var(--sheet-x, 16px); top: var(--sheet-y, 16px); transform: none;
+  }
+}
+@media (forced-colors: active) {
+  .sg-sheet { border-color: CanvasText; }
+  .sg-sheet::backdrop { forced-color-adjust: none; }
+}
 
 /* ---- a session's row (ui.md §6.1) ----
    Two lines: the glyph on line 1, the title, at most two facts under it, and the age or the new
@@ -990,14 +1054,33 @@ svg.ab-icon-20:not([width]) { width: 20px; height: 20px; }
 svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 
 /* ---- the session pane: header (ui.md §6.2) ---- */
-.session-view { min-width: 0; }
+.session-view {
+  --conversation-measure: 770px;
+  --conversation-gutter: var(--ab-space-6);
+  --conversation-aside: 0px;
+  --conversation-width: initial;
+  --column-width: var(--conversation-width, calc(100% - var(--conversation-aside)));
+  --column-inset: max(var(--conversation-gutter), calc((var(--column-width) - var(--conversation-measure)) / 2));
+  min-width: 0;
+}
+.view-tabs, .move-strip, .session-view .delegate-strip:not([hidden]) { width: var(--column-width); }
+@media (max-width: 759px) {
+  .session-view { --conversation-gutter: var(--ab-space-4); }
+}
+@media (min-width: 1280px) {
+  body[data-inspector="shown"] .session-view { --conversation-aside: var(--inspector-w); }
+  body[data-inspector="hidden"] .session-view:not([data-tab="conversation"]) .inspector { padding-inline: var(--column-inset); }
+}
+@media (min-width: 760px) and (max-width: 1279px) {
+  .session-view:not([data-tab="conversation"]) .inspector { padding-inline: var(--column-inset); }
+}
 .session-header {
   position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; column-gap: var(--ab-space-2);
   padding: var(--ab-space-4) var(--ab-space-6) var(--ab-space-3); border-bottom: 1px solid var(--ab-stroke2);
 }
 .header-main { grid-column: 2; min-width: 0; }
 /* The move strip (#1715): fixed rows, so no step changes its height; state is a word and an icon, colour only adds. */
-.move-strip { display: grid; gap: var(--ab-space-1); padding: var(--ab-space-2) var(--ab-space-6); border-bottom: 1px solid var(--ab-stroke2); font-size: var(--type-meta); line-height: var(--type-meta-line); }
+.move-strip { display: grid; gap: var(--ab-space-1); padding: var(--ab-space-2) var(--conversation-gutter); border-bottom: 1px solid var(--ab-stroke2); font-size: var(--type-meta); line-height: var(--type-meta-line); }
 .move-strip[hidden] { display: none; }
 .move-head, .move-note { margin: 0; color: var(--ab-text2); }
 .move-head, .move-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1043,7 +1126,7 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 .meta-facts .repo { display: inline-block; max-width: 100%; }
 
 /* Conversation and Tools, where the inspector isn't a pane of its own. */
-.view-tabs { display: flex; gap: var(--ab-space-5); padding: 0 var(--ab-space-6); border-bottom: 1px solid var(--ab-stroke2); }
+.view-tabs { display: flex; gap: var(--ab-space-5); padding: 0 var(--conversation-gutter); border-bottom: 1px solid var(--ab-stroke2); }
 .view-tab {
   position: relative; flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   min-height: var(--tap); min-width: var(--tap); padding: 0 2px;
@@ -1066,14 +1149,20 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
   .session-header .icon-button { width: var(--tap); height: var(--tap); }
   .view-tab { min-height: var(--tap); min-width: var(--tap); }
 }
-/* Shared text edges (#1893): retain the list's 20px inset and the session pane's 24px inset. */
+/* Shared text edges (#1893, #2339): the list keeps 20px; the session follows its reading column. */
 @media (min-width: 760px) {
   .machine-tablist > .machine-tab:first-child { justify-content: flex-start; padding-left: 0; }
-  .session-header { grid-template-columns: minmax(0, 1fr) auto; }
+  .session-header {
+    --header-inset: var(--column-inset);
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding-inline-start: var(--header-inset);
+    /* Keep the header border across the inspector while its content follows the messages. */
+    padding-inline-end: calc(100% - var(--column-width) + var(--header-inset));
+  }
   .session-header .header-main { grid-column: 1; }
   .session-header .header-actions { grid-column: 2; }
   .view-tabs > .view-tab:first-child { padding-left: 0; }
-  .session-view .reply { margin-left: 0; }
+  .view-tabs, .move-strip, .session-view .delegate-strip:not([hidden]) { padding-inline: var(--column-inset); }
 }
 .view-body { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; }
 .session-view[data-tab="conversation"] .inspector { display: none; }
@@ -1197,16 +1286,16 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 
 /* ---- the conversation (ui.md §6.4) ---- */
 .conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.stream-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--ab-space-6); }
+.stream-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--ab-space-6) var(--conversation-gutter); }
 /* The reading measure: about 68 characters, a step larger than the UI around it. */
 .stream {
-  max-width: 770px; margin: 0 auto; display: grid; gap: var(--ab-space-6);
+  max-width: var(--conversation-measure); margin: 0 auto; display: grid; gap: var(--ab-space-6);
   font-size: var(--type-reading); line-height: var(--type-reading-line);
 }
 .stream > [hidden] { display: none; }
 /* The conversation before the latest exchange (#1285), in the same column as it, read-only. */
 .history {
-  max-width: 770px; margin: 0 auto var(--ab-space-6); display: grid; gap: var(--ab-space-6);
+  max-width: var(--conversation-measure); margin: 0 auto var(--ab-space-6); display: grid; gap: var(--ab-space-6);
   font-size: var(--type-reading); line-height: var(--type-reading-line);
 }
 .history[hidden] { display: none; }
@@ -1593,7 +1682,7 @@ summary {
    then Attach and an icon-only Send. */
 .reply-slot { flex: none; padding: var(--ab-space-3) var(--ab-space-6) var(--ab-space-4); border-top: 1px solid var(--ab-stroke2); }
 .reply-slot:empty { display: none; }
-.reply { max-width: 770px; margin: 0 auto; }
+.reply { max-width: var(--conversation-measure); margin: 0 auto; }
 .reply .note { margin: var(--ab-space-1) 0; }
 .reply-box {
   background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-bottom: 2px solid var(--ab-bridge);
@@ -2051,7 +2140,7 @@ summary {
   :root[data-platform="ios"][data-standalone="true"] .bar-title .glyph { flex: none; scale: 1.125; margin: 0 1px; }
   :root[data-platform="ios"][data-standalone="true"] .bar-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   :root[data-platform="ios"][data-standalone="true"] .inspector { padding-top: calc(var(--head-h, 0px) + var(--ab-space-4)); scroll-padding-top: calc(var(--head-h, 0px) + var(--ab-space-2)); }
-  :root[data-platform="ios"][data-standalone="true"] .session-header { padding-inline: calc(var(--tap) + var(--ab-space-2)); }
+  :root[data-platform="ios"][data-standalone="true"] .session-header { --header-inset: max(calc(var(--tap) + var(--ab-space-2)), var(--column-inset)); }
   :root[data-platform="ios"][data-standalone="true"] .reply-box { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: end; padding: 2px var(--ab-space-1) 3px; }
   :root[data-platform="ios"][data-standalone="true"] .reply .attachments { grid-column: 1 / -1; grid-row: 1; }
   :root[data-platform="ios"][data-standalone="true"] .reply-box .attach { grid-column: 1; grid-row: 2; margin: 0; }

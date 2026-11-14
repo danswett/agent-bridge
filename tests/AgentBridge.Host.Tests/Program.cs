@@ -9,6 +9,11 @@ public static class Program
 {
     public static int Main(string[] args)
     {
+        if (args is ["enrollment-command-child"])
+        {
+            var result = typeof(HostSettings).Assembly.EntryPoint!.Invoke(null, [new[] { "devices", "descriptor", "--profile", "private-sentinel:invalid" }]);
+            return result is Task<int> pending ? pending.GetAwaiter().GetResult() : (int)result!;
+        }
         if (args is ["hook-readiness-contention"] && OperatingSystem.IsWindows())
         {
             return HookReadinessWithBusyThreadPool();

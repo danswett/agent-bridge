@@ -104,7 +104,7 @@ public sealed class RelayClient : IAsyncDisposable
     long nextPush;
     readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement>> blobRequests = new();
     readonly ConcurrentDictionary<long, TaskCompletionSource<string?>> forgets = new();
-    readonly ConcurrentDictionary<long, (List<JsonElement> Machines, TaskCompletionSource<IReadOnlyList<JsonElement>> Done)> registries = new();
+    readonly ConcurrentDictionary<long, (List<JsonElement> Machines, TaskCompletionSource<IReadOnlyList<JsonElement>> Done, bool IncludeKnown)> registries = new();
     readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement>> registryPuts = new();
     // Match the publisher's record sizing; escaping valid '+' names can double the record.
     static readonly JsonSerializerOptions RegistryJson = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
@@ -212,10 +212,12 @@ public sealed class RelayClient : IAsyncDisposable
 
     // Asks the relay for the account's session registry (docs/protocol/roster.md): one frame per
     // machine, as the relay sent it. Throws with the relay's reason when it refuses (slow-down).
-    public async Task<IReadOnlyList<JsonElement>> RegistryGetAsync(CancellationToken ct = default)
+    public Task<IReadOnlyList<JsonElement>> RegistryGetAsync(CancellationToken ct = default) => RegistryGetAsync(includeKnown: false, ct: ct);
+
+    public async Task<IReadOnlyList<JsonElement>> RegistryGetAsync(bool includeKnown, CancellationToken ct = default)
     {
         var id = Interlocked.Increment(ref nextPush);
-        var entry = (Machines: new List<JsonElement>(), Done: new TaskCompletionSource<IReadOnlyList<JsonElement>>(TaskCreationOptions.RunContinuationsAsynchronously));
+        var entry = (Machines: new List<JsonElement>(), Done: new TaskCompletionSource<IReadOnlyList<JsonElement>>(TaskCreationOptions.RunContinuationsAsynchronously), IncludeKnown: includeKnown);
         registries[id] = entry;
         try
         {
@@ -466,7 +468,11 @@ public sealed class RelayClient : IAsyncDisposable
                             if (j.TryGetProperty("id", out var rid) && rid.TryGetInt64(out var rkey) && registries.TryGetValue(rkey, out var r))
                             {
                                 if (j.TryGetProperty("error", out var rerr)) { r.Done.TrySetException(new InvalidOperationException(rerr.GetString() == "slow-down" ? "refused: the relay allows one registry read every 2 seconds; try again in a few seconds" : "refused: " + rerr.GetString())); }
-                                else if (j.TryGetProperty("known", out _)) { r.Done.TrySetResult(r.Machines); }
+                                else if (j.TryGetProperty("known", out _))
+                                {
+                                    if (r.IncludeKnown) { r.Machines.Add(j.Clone()); }
+                                    r.Done.TrySetResult(r.Machines);
+                                }
                                 else { r.Machines.Add(j.Clone()); }
                             }
                             else { Unhandled?.Invoke(j.Clone()); }

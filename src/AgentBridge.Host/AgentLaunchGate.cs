@@ -1,10 +1,61 @@
+using System.Text.Json;
+using AgentBridge.Protocol;
+
 namespace AgentBridge.Host;
 
-public sealed record AgentLaunchPolicyVerdict(bool Allowed, string? Reason, AgentLaunchLimits? Limits);
+public sealed record AgentLaunchPolicyVerdict(bool Allowed, string? Reason, AgentLaunchLimits? Limits,
+    int RetryAfterSeconds = 0, bool Duplicate = false);
 
-// B1 checks policy only. The pipe stays closed until scope, content and caps are enforced in B2.
-public sealed class AgentLaunchGate(string folder)
+// The pipe stays closed until the caller/content checks and launch-service wiring land.
+public sealed class AgentLaunchGate(string folder, Func<DateTimeOffset>? clock = null, TimeProvider? auditTime = null)
 {
+    readonly AgentLimits limits = new(clock);
+    readonly AgentAuditLog audit = new(folder);
+    readonly LocalApi.RefusalAudits refusals = new(auditTime ?? TimeProvider.System);
+
+    public AgentLaunchPolicyVerdict CheckLaunch(string origin, string request, string requestSha256)
+    {
+        var policy = CheckPolicy();
+        if (!policy.Allowed || policy.Limits is null) { return policy; }
+        var result = limits.CheckLaunch(origin, request, requestSha256, policy.Limits);
+        if (result.Reason == AgentLimitVerdict.RateLimited)
+        {
+            try
+            {
+                LocalApi.AuditRefusal(origin, [], LaunchProtocol.Launch, JsonSerializer.SerializeToElement(new { request }), audit,
+                    $"rate-limited; retry after {result.RetryAfterSeconds}s; hourly caps: launches {policy.Limits.LaunchesPerOriginPerHour} per agent and {policy.Limits.LaunchesPerMachinePerHour} per machine; attempts {policy.Limits.LaunchAttemptsPerOriginPerHour} per agent", refusals);
+            }
+            catch (InvalidOperationException)
+            { return policy with { Allowed = false, Reason = "auditUnwritable: the launch refusal could not be recorded" }; }
+        }
+        return policy with { Allowed = result.Allowed, Reason = result.Reason,
+            RetryAfterSeconds = result.RetryAfterSeconds, Duplicate = result.Duplicate };
+    }
+
+    internal object ProjectOptions(LaunchOptions offered)
+    {
+        var (policy, problem) = HostSettings.CurrentAgents(folder);
+        if (problem is not null) { throw new InvalidOperationException("refused: agent launch options policy is unreadable"); }
+        var grant = policy.Enabled ? policy.InboundLocal.Launch : null;
+        var agents = offered.Agents.Where(a => grant?.Agents.Contains(a.Id, StringComparer.Ordinal) == true)
+                .Select(a => a with { Profiles = null, Attachments = null,
+                    Defaults = a.Defaults is { } defaults ? defaults with { Profile = null } : null }).ToArray();
+        var workspaces = offered.Workspaces.Where(w => w.Isolate == true && grant is not null
+                && (grant.Workspaces.Contains("approved", StringComparer.Ordinal) || grant.Workspaces.Contains(w.Label, StringComparer.Ordinal)))
+                .Select(w => new { w.Label }).ToArray();
+        return new
+        {
+            agents, workspaces,
+            defaults = new LaunchDefaults
+            {
+                Agent = agents.FirstOrDefault(a => a.Id == offered.Defaults.Agent)?.Id ?? agents.FirstOrDefault()?.Id,
+                Workspace = workspaces.FirstOrDefault(w => w.Label == offered.Defaults.Workspace)?.Label ?? workspaces.FirstOrDefault()?.Label,
+                Permissions = LaunchProtocol.Ask,
+            },
+            busy = offered.Busy is null ? null : "a launch on this machine is waiting for a person at the machine; try again in a few minutes",
+        };
+    }
+
     public AgentLaunchPolicyVerdict CheckPolicy()
     {
         var (policy, problem) = HostSettings.CurrentAgents(folder);
