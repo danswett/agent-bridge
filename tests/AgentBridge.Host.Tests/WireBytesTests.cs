@@ -23,12 +23,10 @@ public sealed class WireBytesTests : IAsyncLifetime
     static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
     const string Focused = "88888888-8888-4888-8888-888888888888";
 
-    // #597's goal, which this workload does not meet: it measures 13,140 bytes, of which the focused
-    // session's one patch a second is about 9.5 KB (each a ~240-byte message, ~42 of it overhead,
-    // too small for deflate to touch). The budget is the measured figure plus about 10%, so a change
-    // that re-inflates the stream fails; getting to the goal needs smaller or fewer focused patches.
+    // Handles (#2323) cut the unchanged #2171 workload from 10,155 to 9,606 bytes.
+    // The 10,600-byte budget adds 994 bytes (10.3%); the 5 KB goal remains unmet.
     const int Goal = 5 * 1024;
-    const int Budget = 14_500;
+    const int Budget = 10_600;
 
     // What each event costs beyond its (deflated) JSON: the AEAD tag, the channel header and the
     // relay's data frame (type byte and the peer id).
@@ -57,7 +55,7 @@ public sealed class WireBytesTests : IAsyncLifetime
         }
         source = new SessionSource(f.Options(), f.Processes, time);
         await source.RefreshAsync();
-        service = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0")) { Time = time };
+        service = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0") { Instance = "wire-test-run" }) { Time = time };
         relay = await TestRelay.StartAsync();
         var token = relay.TokenFor(1, "octo");
         host = await relay.ConnectAsync(token, "Test host", "host");
@@ -88,14 +86,42 @@ public sealed class WireBytesTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_subscriber_that_did_not_ask_for_handles_is_sent_session_ids_as_before()
+    {
+        await client.Relay.WaitForPeerAsync(p => p.Id == host.Id, Patience);
+        var ch = await client.Hub.OpenAsync(host.Id);
+        var hello = await ch.RequestAsync(Ops.Hello, new { });
+        Assert.Contains("sessions.handles", hello.GetProperty("result").GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
+        await ch.RequestAsync(Ops.SessionsSubscribe, new { patch = true });
+        ChannelEvent e;
+        do { e = await NextAsync(ch); } while (e.Name != Events.SessionsSynced);
+        Assert.False(e.Data.TryGetProperty("handles", out _));
+        Fixture.Append(focused, Copilot.Assistant("changed", 4));
+        await source.RefreshAsync();
+        time.Advance(Step);
+        e = await NextAsync(ch);
+        Assert.Equal(Events.SessionPatch, e.Name);
+        Assert.Equal(Focused, e.Data.GetProperty("id").GetString());
+        Assert.False(e.Data.TryGetProperty("handle", out _));
+        var resumed = await ch.RequestAsync(Ops.SessionsSubscribe, new { patch = true, handles = true, since = new { instance = "wire-test-run", revision = source.Revision } });
+        Assert.True(resumed.GetProperty("result").GetProperty("resumed").GetBoolean());
+        Assert.Equal(0, resumed.GetProperty("result").GetProperty("count").GetInt32());
+        e = await NextAsync(ch);
+        Assert.Equal(Events.SessionsSynced, e.Name);
+        Assert.Equal(QuietSessions + 1, e.Data.GetProperty("handles").EnumerateObject().Count());
+    }
+
+    [Fact]
     public async Task A_subscriber_with_patch_focus_and_deflate_stays_within_its_wire_budget_over_40_seconds_of_changes()
     {
         await client.Relay.WaitForPeerAsync(p => p.Id == host.Id, Patience);
         var ch = await client.Hub.OpenAsync(host.Id);
         Assert.True(ch.PeerInflates, "the host must have said it inflates, or nothing is deflated");
-        Assert.True((await ch.RequestAsync(Ops.SessionsSubscribe, new { patch = true })).GetProperty("ok").GetBoolean());
+        Assert.True((await ch.RequestAsync(Ops.SessionsSubscribe, new { patch = true, handles = true })).GetProperty("ok").GetBoolean());
         var snapshot = new List<ChannelEvent>();
         do { snapshot.Add(await NextAsync(ch)); } while (snapshot[^1].Name != Events.SessionsSynced);
+        var handles = snapshot[^1].Data.GetProperty("handles").Deserialize<Dictionary<string, int>>()!;
+        Assert.Equal(QuietSessions + 1, handles.Count);
         Assert.True((await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = Focused })).GetProperty("ok").GetBoolean());
 
         var steps = Seconds * 4;
@@ -117,6 +143,8 @@ public sealed class WireBytesTests : IAsyncLifetime
         var total = 0;
         while (ch.Events.TryRead(out var e))
         {
+            Assert.False(e.Data.TryGetProperty("id", out _));
+            Assert.Contains(e.Data.GetProperty("handle").GetInt32(), handles.Values);
             var bytes = WireBytes(e);
             total += bytes;
             wire.TryGetValue(e.Name, out var so);

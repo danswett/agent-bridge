@@ -8,6 +8,8 @@ using AgentBridge.Protocol;
 using AgentBridge.Transport;
 using AgentBridge.Transport.Tests;
 using Microsoft.Extensions.Time.Testing;
+using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using Xunit;
 
@@ -21,12 +23,14 @@ public sealed class ReplyFlowTests : IAsyncLifetime
 {
     const string Id = "99999999-9999-4999-8999-999999999999";
     static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan ReplyConfirmation = TimeSpan.FromSeconds(2);
 
     readonly Fixture f = new();
     readonly FakeProbe probe = new();
     readonly FakeInjector injector = new();
     readonly DeliveryGate gate = new();
     readonly SessionDrivers drivers = new();
+    readonly ConcurrentQueue<string> channelRejections = new();
     TestRelay relay = null!;
     SessionSource source = null!;
     Device host = null!;
@@ -47,6 +51,8 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         host = await relay.ConnectAsync(token, "Test host", "host");
         host.Hub.JsonOptions = ProtocolJson.Options;
         client = await relay.ConnectAsync(token, "Phone", "pwa");
+        host.Hub.Rejected += (_, error) => channelRejections.Enqueue($"host {error.GetType().Name}: {Brief(error.Message)}");
+        client.Hub.Rejected += (_, error) => channelRejections.Enqueue($"client {error.GetType().Name}: {Brief(error.Message)}");
         Serve(Answerer(), Replier());
         // By default the session takes whatever is typed as a prompt of the person's.
         injector.OnInject = plan => Fixture.Append(events, Prompt(plan.Sends[0].Text));
@@ -59,12 +65,14 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         f.Dispose();
     }
 
-    ReplyService Replier(bool platform = true, IAgentHaBridgeProbe? g5 = null) => new(source, f.Processes, g5 ?? probe, new NoGuard(), injector, new ReplyOptions
+    ReplyService Replier(bool platform = true, IAgentHaBridgeProbe? g5 = null, TimeProvider? time = null, TranscriptWrites? writes = null) => new(source, f.Processes, g5 ?? probe, new NoGuard(), injector, new ReplyOptions
     {
         CopilotHome = f.CopilotHome,
         PlatformSupported = platform,
-        ConfirmTimeout = TimeSpan.FromSeconds(2),
+        ConfirmTimeout = ReplyConfirmation,
         PollInterval = TimeSpan.FromMilliseconds(25),
+        Time = time ?? TimeProvider.System,
+        Writes = writes,
     }, gate: gate);
 
     AnswerService Answerer(IAgentHaBridgeProbe? g5 = null) => new(source, f.Processes, g5 ?? probe, new NoGuard(), injector, new AnswerOptions
@@ -93,11 +101,32 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         requestedSchema = new { properties = new { pick = new { type = "string", @enum = new[] { "a", "b" } } }, required = new[] { "pick" } },
     }, s);
 
-    async Task<SecureChannel> OpenAsync()
+    Task<SecureChannel> OpenAsync() => ReplyChannel.OpenAsync(
+        () => client.Relay.WaitForPeerAsync(p => p.Id == host.Id, Patience),
+        () => host.Relay.WaitForPeerAsync(p => p.Id == client.Id, Patience),
+        () => client.Hub.OpenAsync(host.Id),
+        DescribeHandshake);
+
+    string DescribeHandshake()
     {
-        await client.Relay.WaitForPeerAsync(p => p.Id == host.Id, Patience);
-        return await client.Hub.OpenAsync(host.Id);
+        var frames = relay.Taps.ToArray();
+        return $"client [{DescribePeer(client, host)}]; host [{DescribePeer(host, client)}]; "
+            + $"forwarded frames {frames.Length} [{string.Join(", ", frames.TakeLast(8).Select(DescribeFrame))}]; "
+            + $"rejections [{string.Join("; ", channelRejections.TakeLast(8))}]; "
+            + $"relay log [{string.Join("; ", relay.Logs.TakeLast(8).Select(Brief))}]; "
+            + TestTimeoutDiagnostics.Describe();
     }
+
+    static string DescribePeer(Device local, Device peer) =>
+        $"sees peer {local.Relay.Presence.Any(p => p.Id == peer.Id)}, relay {local.Relay.Completion.Status}, "
+        + $"close {local.Relay.CloseStatus}, channels {local.Hub.ChannelCount}";
+
+    // Only the public channel header is observed, never the encrypted body or keys.
+    static string DescribeFrame(byte[] frame) => frame.Length < Wire.ChannelHeader
+        ? $"short frame ({frame.Length})"
+        : $"{(ChannelKind)frame[0]}@{BinaryPrimitives.ReadUInt64BigEndian(frame.AsSpan(1, 8)):x16} ({frame.Length})";
+
+    static string Brief(string text) => text.Length <= 240 ? text : text[..240] + "...";
 
     static async Task<(string Outcome, string? Reason)> ReplyAsync(SecureChannel ch, string text, string? request = null, string id = Id, object? attachments = null)
     {
@@ -217,14 +246,14 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Contains(Capabilities.SessionsReply, await CapabilitiesAsync(ch));
 
         probe.Reason = "agent-ha-bridge is running for this user";
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.SessionsHandles, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
         probe.Reason = null;
 
         Serve(null, new UnsupportedPlatformReplier());
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.SessionsHandles, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
         Assert.Equal(("refused", "replying is not supported on this platform yet; reply at the machine"), await ReplyAsync(ch, "hello"));
         Serve(null, Replier(platform: false));
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.SessionsHandles, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
         Assert.Equal("refused", (await ReplyAsync(ch, "hello")).Outcome);
         Serve(null, null);
         Assert.Equal(("refused", "this host does not take replies; reply at the machine"), await ReplyAsync(ch, "hello"));
@@ -765,21 +794,78 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Two_replies_of_the_same_words_need_two_prompts_one_each()
+    public Task Two_replies_of_the_same_words_need_two_prompts_one_each() => TwoRepliesAsync();
+
+    [Fact]
+    public Task A_prompt_written_before_the_second_confirmation_wait_still_confirms_only_one_identical_reply() =>
+        TwoRepliesAsync(recordDuringInjection: true);
+
+    [Fact]
+    public async Task Fifty_pairs_of_identical_replies_each_need_their_own_prompt()
     {
+        var ch = await OpenAsync();
+        for (var pair = 0; pair < 50; pair++) { await TwoRepliesAsync(ch); }
+    }
+
+    async Task TwoRepliesAsync(SecureChannel? channel = null, bool recordDuringInjection = false)
+    {
+        // PollClock still needed 80 wall-clock-paced continuations after Run() (#2232).
+        // Writes wake confirmation; only the final explicit tick spends its unchanged budget.
+        var clock = new ReplyClock();
+        var writes = new TranscriptWrites();
+        Serve(Answerer(), Replier(time: clock, writes: writes));
+        var confirming = clock.NextTimer();
+
         // Both are typed into a working session before it takes either, and it records one.
         injector.OnInject = null;
-        var ch = await OpenAsync();
+        var ch = channel ?? await OpenAsync();
         var first = ReplyAsync(ch, "yes");
-        await HostWait.UntilAsync(() => injector.Plans.Count == 1, "the first reply to be typed", Patience);
-        await Task.Delay(300);
+        // Confirmation starts only after the first reply releases its session's typing claim.
+        await confirming.WaitAsync(Patience);
+        var next = clock.NextTimer();
+        if (recordDuringInjection) { injector.OnInject = _ => RecordPrompt(); }
         var second = ReplyAsync(ch, "yes");
-        await HostWait.UntilAsync(() => injector.Plans.Count == 2, "the second reply to be typed", Patience);
-        await Task.Delay(300);
-        Fixture.Append(events, Prompt("yes", "steering"));
+        await next.WaitAsync(Patience);
+        if (!recordDuringInjection)
+        {
+            next = clock.NextTimer();
+            RecordPrompt();
+            await next.WaitAsync(Patience);
+        }
+
+        // The survivor has rearmed after seeing the claimed prompt, before its deadline moves.
+        var recorded = await Task.WhenAny(first, second).WaitAsync(Patience);
+        Assert.Equal("delivered", (await recorded).Outcome);
+        clock.Advance(ReplyConfirmation);
 
         // That prompt is the record of one of them, never of both.
         Assert.Equal(["delivered", "unconfirmed"], new[] { (await first).Outcome, (await second).Outcome }.Order());
+
+        void RecordPrompt()
+        {
+            Fixture.Append(events, Prompt("yes", "steering"));
+            writes.Written(events);
+        }
+    }
+
+    // As ManageFlowTests.WatchedTime does, observe timer registration before advancing fake time.
+    sealed class ReplyClock : FakeTimeProvider
+    {
+        TaskCompletionSource? next;
+
+        public Task NextTimer()
+        {
+            var armed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Volatile.Write(ref next, armed);
+            return armed.Task;
+        }
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = base.CreateTimer(callback, state, dueTime, period);
+            Interlocked.Exchange(ref next, null)?.TrySetResult();
+            return timer;
+        }
     }
 
     [Fact]
@@ -1128,7 +1214,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Contains(Capabilities.SessionsAttach, offered);
 
         probe.Reason = "agent-ha-bridge is running for this user";
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.SessionsHandles, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
         probe.Reason = null;
 
         // Without a store the ops are unknown, as on a host that predates them.
@@ -1831,7 +1917,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_blob_the_host_cannot_open_is_refused_with_the_reason_and_nothing_is_typed()
+    public async Task A_blob_the_host_cannot_open_is_refused_with_a_safe_reason_and_nothing_is_typed()
     {
         using var blobs = HostBlobs();
         using var store = ServeAttachments(blobs);
@@ -1839,7 +1925,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
 
         var e = await Assert.ThrowsAsync<InvalidOperationException>(() => SendLargeAsync(ch, Png(300_000), "shot.png", key: new byte[32]));
 
-        Assert.StartsWith("the attachment in the blob store is not what was sent (a part of the blob was changed", e.Message);
+        Assert.Equal("the attachment in the blob store is not what was sent, so it was dropped; send it again", e.Message);
         Assert.Empty(injector.Plans);
         await HostWait.UntilAsync(() => RelayStore.Stored.Count == 0, "the unusable blob to be deleted");
     }

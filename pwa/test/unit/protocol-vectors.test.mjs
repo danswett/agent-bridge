@@ -22,8 +22,9 @@ import { acceptOf, nowArgs, readBusy, readUpdateCommandResult, readUpdateState }
 import { readSignInDevices } from '../../js/signin-devices.js';
 import { readUsage } from '../../js/usage.js';
 import { readDiagnostics } from '../../js/diagnostics.js';
+import * as loadReaders from '../../js/load-feed.js';
 import { HostClient } from '../../js/host-client.js';
-import { PatchError, applyPatch, readPatch } from '../../js/session-patch.js';
+import { PatchError, applyPatch, readPatch, readHandles } from '../../js/session-patch.js';
 import { SessionsStore } from '../../js/sessions-store.js';
 import { AnswerService } from '../../js/answer-service.js';
 import { ReplyService } from '../../js/reply-service.js';
@@ -46,13 +47,15 @@ const PATCHES = 'session-patches.json';
 const NOISE = 'noise-ik-p256.json';
 // The signed agent-command envelope's vectors (#722) are not records either; C# replays them.
 const ENVELOPE = 'agent-envelope.json';
+// Registry signature bytes are not records; C# replays them now, and the PWA follows in #2379.
+const FLEET_SIGNING = 'fleet-registry-signing.json';
 // The device roster's encoding, not records: test/unit/roster-vectors.test.mjs replays it.
 const ROSTER = 'roster.json';
 // The roster's acceptance-rule scenarios, not records: test/unit/roster-state.test.mjs replays them.
 const ROSTER_STATE = 'roster-state.json';
 // The roster's vetoes, person commands and attestations: test/unit/roster-commands.test.mjs replays them.
 const ROSTER_COMMANDS = 'roster-commands.json';
-const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED && f !== PATCHES && f !== NOISE && f !== ENVELOPE && f !== ROSTER && f !== ROSTER_STATE && f !== ROSTER_COMMANDS).sort().map((f) => [f, load(f)]);
+const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED && f !== PATCHES && f !== NOISE && f !== ENVELOPE && f !== FLEET_SIGNING && f !== ROSTER && f !== ROSTER_STATE && f !== ROSTER_COMMANDS).sort().map((f) => [f, load(f)]);
 const records = new Map(files.flatMap(([file, json]) => Object.entries(json.records).map(([name, r]) => [name, { ...r, file, contexts: json.contexts }])));
 const known = new Map(files.flatMap(([, json]) => json.knownDifferences).filter((d) => d.differs === 'pwa').map((d) => [`${d.vector}:${d.step}`, d]));
 
@@ -157,7 +160,12 @@ const inSnapshot = (key) => (j) => {
   return readDiagnostics({ ...s, [key]: j })?.[key] ?? null;
 };
 const READS = {
-  MachineInfo: { read: (j) => readHello({ protocol: 1, machine: j, capabilities: [] }).machine },
+  MachineLoad: { read: (j) => loadReaders.readMachineLoad(j), exact: true },
+  SessionLoad: { read: (j) => loadReaders.readSessionLoad(j), exact: true },
+  MachineLoadCpu: { read: (j) => loadReaders.readMachineLoadCpu(j), exact: true },
+  MachineLoadMemory: { read: (j) => loadReaders.readMachineLoadMemory(j), exact: true },
+  UnattributedLoad: { read: (j) => loadReaders.readUnattributedLoad(j), exact: true },
+  MachineInfo: { read: (j) => readHello({ protocol: 1, machine: j, capabilities: [] }).machine, unread: ['role'] },
   HelloResult: { read: readHello },
   ToolCall: { read: readTool },
   Option: { read: (j) => readQuestion({ fields: [{ name: 'f', type: 'choice', options: [j] }] }).fields[0].options[0] ?? null },
@@ -260,9 +268,9 @@ const READS = {
   TrustQuestion: { read: readTrustQuestion },
   TrustAnswerResult: { read: readTrustResult },
   // Update now's fields (#1159) are read from its client slice (3) on.
-  UpdateState: { read: readUpdateState },
-  UpdateResult: { read: (j) => readUpdateState({ last: j }).last },
-  UpdateCommandResult: { read: readUpdateCommandResult },
+  UpdateState: { read: readUpdateState, unread: ['bytes', 'total', 'downloaded', 'installing', 'leaving', 'back', 'mode', 'checksHeldUntil', 'policy', 'last.step'] },
+  UpdateResult: { read: (j) => readUpdateState({ last: j }).last, unread: ['step'] },
+  UpdateCommandResult: { read: readUpdateCommandResult, unread: ['retryAt', 'state.bytes', 'state.total', 'state.downloaded', 'state.installing', 'state.leaving', 'state.back', 'state.mode', 'state.checksHeldUntil', 'state.policy', 'state.last.step'] },
   // What Update now would go over, and one session of it (#1159), as a confirmation shows them.
   UpdateBusy: { read: readBusy },
   UpdateBusySession: { read: (j) => readBusy({ working: 1, waiting: 0, sessions: [j] }).sessions[0] ?? null },
@@ -302,7 +310,7 @@ const CHECKS = {
   LaunchRequest: (j) => checkLaunch(j),
   // A patch the host sends, applied as host-client.js applies it to the session its context holds
   // (from the event at seq), which must then be its context's result exactly.
-  SessionPatch: (j, context) => {
+  SessionPatch: (j, context = {}) => {
     const patch = readPatch(j);
     assert.ok(patch, 'a patch the PWA cannot read at all');
     let applied;
@@ -442,11 +450,6 @@ const BUILDS = {
 
 // Records the PWA neither reads nor builds through a function these tests can call, and why.
 const NOT_REPLAYED = {
-  MachineLoad: 'the relay load reader follows in #1872',
-  SessionLoad: 'read within MachineLoad, whose reader follows in #1872',
-  MachineLoadCpu: 'read within MachineLoad, whose reader follows in #1872',
-  MachineLoadMemory: 'read within MachineLoad, whose reader follows in #1872',
-  UnattributedLoad: 'read within MachineLoad, whose reader follows in #1872',
   SubscribeResult: 'the PWA waits for sessions.synced and uses nothing of this result',
   SubscribeSince: 'built only within SubscribeRequest, from what the store holds',
   PushSubscribeRequest: 'PushRegistrar sends the browser\'s own subscription, from a private method',
@@ -469,6 +472,9 @@ const NOT_REPLAYED = {
   TransferRequest: 'host to host: no client sends it',
   TransferResult: 'host to host: no client reads it',
   UpdateCommand: 'built inside UpdateControl from a fresh request, or an Update now\'s signed press (its args replayed as UpdateNowArgs, its signing in update.test.mjs)',
+  UpdateLeaving: 'optional update fact; the PWA progress slice of #2225 will read it',
+  UpdateBack: 'optional update fact; the PWA progress slice of #2225 will read it',
+  UpdatePolicy: 'optional update fact; the PWA batch slice of #2225 will read it',
   // #801 slice A is the host's half; the PWA's controls wait for ui.md's spec.
   ManageCommand: 'the PWA does not manage machines yet (#801)',
   ManageRepairArgs: 'the PWA does not manage machines yet (#801)',
@@ -542,7 +548,9 @@ for (const [record, r] of records) {
   if (reads) {
     for (const v of r.valid) {
       test(`a ${record} "${v.name}" reads with every part the PWA uses intact`,       () => agrees(`${record}/${v.name}`, 'read', async () => {
-        holds(await reads.read(JSON.parse(JSON.stringify(v.json))), v.reads ?? v.json, reads.unread);
+        const read = await reads.read(JSON.parse(JSON.stringify(v.json)));
+        holds(read, v.reads ?? v.json, reads.unread);
+        if (reads.exact) { assert.deepEqual(read, v.reads ?? v.json); }
       }));
     }
     for (const v of r.refused.filter((x) => x.refusedBy === 'parse')) {
@@ -613,11 +621,13 @@ for (const sequence of recordings) {
   test(`the recorded "${sequence.name}" patched step by step is exactly the session each upsert would be`, () => {
     let held = null;
     let heldSeq = null;
+    let handles = new Map();
     for (const e of sequence.events) {
+      if (e.synced) { handles = readHandles(e.synced.handles); continue; }
       if (e.upsert) { [held, heldSeq] = [e.upsert, e.seq]; continue; }
       const patch = readPatch(JSON.parse(JSON.stringify(e.patch)));
       assert.ok(patch, `seq ${e.seq} cannot be read`);
-      const applied = applyPatch(held, heldSeq, patch);
+      const applied = applyPatch(held, heldSeq, patch, handles);
       assert.deepEqual(applied, e.session, `seq ${e.seq}`);
       assert.deepEqual(readSession(applied), readSession(e.session), `seq ${e.seq}`);
       [held, heldSeq] = [applied, e.seq];
@@ -627,6 +637,7 @@ for (const sequence of recordings) {
   test(`the recorded "${sequence.name}" shown through a subscription for patches is each session as upserted`, async () => {
     const { t, client, store } = await subscribed({ patch: true });
     for (const e of sequence.events) {
+      if (e.synced) { t.host({ ev: 'sessions.synced', seq: e.seq, data: e.synced }); continue; }
       t.host({ ev: e.upsert ? 'session.upsert' : 'session.patch', seq: e.seq, data: e.upsert ?? e.patch });
       const expected = readSession(e.upsert ?? e.session);
       assert.deepEqual(store.get(expected.id), expected, `seq ${e.seq}`);

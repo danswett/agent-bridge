@@ -1,0 +1,16 @@
+{"type":"user.message","id":"owner-a","timestamp":"2026-10-28T04:22:01.000Z","data":{"content":"Owner A","delivery":"idle"}}
+{"type":"assistant.turn_start","id":"start-a","timestamp":"2026-10-28T04:22:02.000Z","data":{"turnId":"0"}}
+{"type":"user.message","id":"owner-b","timestamp":"2026-10-28T04:22:03.000Z","data":{"content":"Queued owner B","delivery":"steering"}}
+{"type":"assistant.message","id":"answer-a","timestamp":"2026-10-28T04:22:04.000Z","data":{"content":"Answer A","toolRequests":[]}}
+{"type":"assistant.turn_end","id":"end-a","timestamp":"2026-10-28T04:22:05.000Z","data":{"turnId":"0"}}
+{"type":"assistant.turn_start","id":"start-b","timestamp":"2026-10-28T04:22:06.000Z","data":{"turnId":"0"}}
+{"type":"user.message","id":"notice","timestamp":"2026-10-28T04:22:06.500Z","data":{"content":"Background completion","source":"system","delivery":"steering"}}
+{"type":"assistant.message","id":"answer-b","timestamp":"2026-10-28T04:22:07.000Z","data":{"content":"Answer B","toolRequests":[]}}
+{"type":"assistant.turn_end","id":"end-b","timestamp":"2026-10-28T04:22:08.000Z","data":{"turnId":"0"}}
+{"type":"assistant.turn_start","id":"start-notice","timestamp":"2026-10-28T04:22:10.000Z","data":{"turnId":"0"}}
+{"type":"assistant.message","id":"answer-notice","timestamp":"2026-10-28T04:22:11.000Z","data":{"content":"Notice reply","toolRequests":[]}}
+{"type":"assistant.turn_end","id":"end-notice","timestamp":"2026-10-28T04:22:12.000Z","data":{"turnId":"0"}}
+{"type":"user.message","id":"schedule","timestamp":"2026-10-28T04:22:13.000Z","data":{"content":"Scheduled work","source":"schedule-1","delivery":"idle"}}
+{"type":"assistant.turn_start","id":"start-schedule","timestamp":"2026-10-28T04:22:14.000Z","data":{"turnId":"0"}}
+{"type":"assistant.message","id":"answer-schedule","timestamp":"2026-10-28T04:22:15.000Z","data":{"content":"Scheduled reply","toolRequests":[]}}
+{"type":"assistant.turn_end","id":"end-schedule","timestamp":"2026-10-28T04:22:16.000Z","data":{"turnId":"0"}}

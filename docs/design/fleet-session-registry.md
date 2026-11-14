@@ -14,7 +14,25 @@ preserve the put path's relaxed escaping and are byte-budget tested. Records are
 unsigned; signing, name-lookup authority and the 24-hour dual run (slice 11) remain open.
 This is not deployment or live-parity evidence. HA remains the explicit rollback.
 
-All line references are to `main` at 796fbcce1.
+Implementation update, November 11, 2026 (Pacific), #2151: name-only lookup replaces
+the first-machine-pin requirement, following fleet #171/#433. A unique verified live
+match returns `found`; every result carries `fleetScope`, the authenticated relay
+account ID captured with that roster read. Caller-supplied scope/account fields cannot
+select another fleet. Missing scope refuses explicitly. Reconnect during a read refuses.
+Verification is unchanged: real unsigned records remain `unverified` until `hostSign`.
+The typed result carries optional `model` only when supplied by the authenticated
+roster, never inferred from the request or name. The publisher and relay allow-list
+still exclude model; this does not enable live model-checked broadcasts (#416).
+The operation runs on any connected host; nodes leaving are handled by the relay's
+existing liveness rules. No placement pin, persistent lookup state or new component is added.
+
+Design update, November 12, 2026 (Pacific), #2360: Engineering approved
+[explicit enrollment and signed replacement ordering](https://github.com/danswett/agent-bridge/issues/2360#issuecomment-6838324533).
+This is documentation only, not an implementation or deployment claim. The four follow-on
+workstreams below do not enable routing; #1776 remains the independent verification gate.
+
+Source baseline for #2360: `d51108263f399fa1dc4bf81d38b30cf31ff2232e`.
+Runtime evidence follows; the PR #1422 plan is historical, not shipped reader/client behavior.
 
 ## Summary in plain English
 
@@ -32,7 +50,8 @@ any of them.
 **What the relay will see (new).** For each session: a stable session handle, an optional name
 (at most 64 plain characters, see "Names"), a coarse state (`working`, `waiting`, `idle`,
 `ending`), the time it entered that state, which machine it is on, and whether that machine is
-online. Nothing else. A session with no name that a person set on the host is listed without
+online. The approved #2360 extension adds an optional process-start time for replacement
+ordering, not transcript metadata. A session with no name that a person set on the host is listed without
 one; prompt text, model-written titles and folder names are never used as a name.
 
 **What it did not see before.** Today the relay sees machine names and last-seen times, never a
@@ -47,75 +66,49 @@ own hosts). An agent never connects to the relay: it asks its own host, on a cre
 component, a third party) must be paired as a normal client first and gets the same read-only
 view; its pairing is a separate design (S6). Another account's sessions never appear.
 
-**What is true today, and what is not promised.** No host signing key exists yet. Device keys can
-only agree on a secret; they cannot sign (agent-principals.md:122). The host signing key
-(`hostSign`) arrives with roster version 2 (agent-principals.md:371-385, section 8.10). Until it
-does, **the relay can invent, change, hide or replay any record, and no client can tell.** So
-until `hostSign` exists a record is only a display hint, like presence is today: clients may show
+**What is true today, and what is not promised.** Protected `hostSign` custody landed in #1782;
+registry signing and trusted reader integration remain held under #1776. Device agreement keys
+cannot sign (agent-principals.md section 2); custody alone does not establish enrolled authority.
+Until the signing and verification dependencies land,
+**the relay can invent, change, hide or replay any record, and no client can tell.** So
+an unsigned record is only a display hint, like presence is today: clients may show
 it labelled "unverified", but name lookup never returns "found" from it and no message is ever
-routed by it. When `hostSign` exists, hosts sign their records, clients verify them, and a forged
+routed by it. When #1776's signing and trusted readers land, a forged
 or altered record is rejected. Even then the relay can still read the list, hold it back, or show
 a copy up to 60 seconds old. The list is kept in relay memory only: never in the stored roster,
 never in logs, never in metrics.
 
-**Names are not trusted text.** A session name can be set by the session itself, or by anything
-running as the same user on that machine, so it is display text from an untrusted source. It never
+**Names are not trusted text.** Enrollment is person-only, but a same-user process can tamper
+with host state; caller classification is a safety rail, not proof of identity. A name is
+display text from an untrusted source. It never
 carries an instruction to an agent: an agent that looks up a name gets back only typed fields
 (session handle, machine, state, time), and sees a name itself only when it asks for names on
 purpose, which marks it as having read untrusted content.
 
 **Decisions needed** (details in "Decisions", below):
 
-1. Owner and Trust: accept that session names and coarse states become relay-visible metadata.
+1. Owner and Trust: accept relay-visible names, coarse states and optional process `startedAt`.
 2. Owner: whether each machine can switch sharing off, and the default (proposed: on for
    own-account, with a per-machine off switch).
-3. Engineering and Trust: names are set only by a person on the host (a `session.rename` op,
-   app only), are untrusted display text, and agents get them only as marked content
-   (proposed), or not at all.
-4. Engineering: records stay unverified until `hostSign` (roster v2) exists; nothing may rely on
+3. #2360 confirms existing person-only `session.rename` through the Windows app backend or
+   host CLI; the new app enrollment entry point and CLI disclosure belong to S-N1 below.
+4. Engineering: records stay unverified until #1776's signing and trusted readers land; nothing may rely on
    them for routing before then. Confirm, and decide whether roster v2 must land before slice 2.
 5. Engineering: confirm the build order, the resized slices and the numeric limits.
 6. Owner: non-person client pairing (Decision 6 below).
-7. Engineering and Trust: a name alone never finds a session; the caller must give the machine,
-   and a person confirms it once (otherwise an impostor on another machine could win while the
-   real one is offline).
+7. Superseded by #2151: name-only lookup is canonical; verification remains required.
 
-## What exists today
+## What exists today (#2360 source check)
 
-* The relay roster lists hosts only: device id, name, last seen ([roster](../protocol/roster.md):4, 11,
-  41, 50). It says "Nothing about a session is in it" (roster.md:11). The relay admits a device on
-  token, public key, kind and name only (`RelayHub.AdmitAsync`, `RelayHub.cs:211-236`; kinds `host`,
-  `app`, `pwa`, `phone`, `test`, `RelayHub.cs:14`; person kinds `app`, `pwa`, `phone`,
-  `RelayHub.cs:17`), and caps a machine name at 64 characters (`RelayHub.cs:455`).
-* An account holds at most 32 devices (`MaxDevicesPerAccount`, `RelayOptions.cs:16`).
-* One WebSocket frame, text or binary, may be at most `Wire.MaxFrame` = 1 + 16 + 9 + 65,535 =
-  65,561 bytes (`Wire.cs:13-17`, `Noise.cs:34`). A larger frame is not buffered (`Wire.cs:63-73`);
-  the relay closes the socket with `frame-too-large` (`RelayHub.cs:245-250`) and the client side
-  does the same (`RelayClient.cs:381`). Inbound text frames are also rate limited, 200 a second
-  (`RelayOptions.cs:15`, `RelayHub.cs:253-261, 405`).
-* Session facts travel only inside the Noise channel between a client and each host
-  (`sessions.list`, `session.get`, `sessions.subscribe` in
-  [v1-sessions](../protocol/v1-sessions.md)). A client needs a channel to every host.
-* A session's `title` today is the Copilot `workspace.yaml` `name`, else the first user message
-  (`SessionTracker.cs:304-309`; v1-sessions.md:1725); Claude's is its agent title, else the first
-  user message; Codex's is the first user message. HA builds the visible name from the title for
-  Copilot and from the working-folder leaf for Claude and Codex (`HaPayloads.cs:45-57`), and
-  already neutralises template markup in it because a name once reached a push title that way
-  (`HaPayloads.cs:25-31`). Copilot's name is a line in a file under the user's profile
-  (`Workspace.cs:34`, `ShadowWitness.cs:155`): the session or any same-user process can change it.
-* Agents reach their own host over the local pipe (`agent.hello`, reply scope `read`,
-  [local-pipe](../protocol/local-pipe.md):149-166). From inside an agent session the pipe allows
-  only a fixed list of read ops (local-pipe.md:101). The MCP `list_agent_sessions` tool covers this
-  machine only. Agent-to-agent messages use a roster node id of the form `agent_bridge_` plus 16
-  lowercase hex digits (local-pipe.md:185-194) and are accepted only from pinned own machines
-  (agent-lite.md:11-12, 76).
-* Keys that exist: device keys are P-256 ECDH-only, so the only signed command is a
-  designated-verifier MAC (agent-principals.md:122, 376-382). The one signing key in the product
-  is the AP5-lite agent signing key, held in a host's own pinned-peer list (`own-peers.json`) and
-  used only between pinned hosts, on the machines where `agentMessaging.remote` is on
-  (agent-lite.md:11-12, 45-51). A PWA, phone or app has no such list. Host signing (`hostSign`)
-  needs roster version 2 and is not built (agent-principals.md:378-385).
-* The fleet scripts get names, states and node ids by reading HA sensors.
+| Runtime evidence at the baseline | Checked source |
+|---|---|
+| Host-owned names, durable save, normalized load | `src/AgentBridge.Host/Fleet/FleetNames.cs:8-23,35-54,67-84` |
+| Name delegate wired; no title import | `src/AgentBridge.Host/Program.cs:678-679`; `src/AgentBridge.Host/Fleet/FleetPublisher.cs:40-45` |
+| App/HostCli-only rename; existing CLI; app control still pending | `src/AgentBridge.Host/LocalApi.cs:34-42`; `src/AgentBridge.Host/Program.cs:162-181`; [local-pipe](../protocol/local-pipe.md#person-set-fleet-names-sessionrename-1777) |
+| Workspace parser ignores `user_named`; Claude titles are content | `src/AgentBridge.Host.Core/Parsing/Workspace.cs:6,33-34`; `src/AgentBridge.Host.Core/Parsing/ClaudeParser.cs:138-142` |
+| Relay limits and strict current allow-list | `src/AgentBridge.Relay/RelayHub.cs:224-252,510-513`; `src/AgentBridge.Relay/RelayOptions.cs:15-16`; `src/AgentBridge.Relay/RosterFields.cs:18-27,63-80` |
+| Parser reads no at/seq/epoch/sig, never sets Verified; live names unverified unless incomplete wins | `src/AgentBridge.Host/Fleet/FleetList.cs:13,50-103,185-204` |
+| Both fleet ops need agent.hello/read; signing custody and roster key APIs are not enrollment | `src/AgentBridge.Host/Fleet/FleetList.cs:215-227`; `src/AgentBridge.Host/HostSignKey.cs:10-25`; `src/AgentBridge.Roster/RosterState.cs:35-42`; `src/AgentBridge.Roster/EntryBody.cs:42-45` |
 
 ## Options
 
@@ -123,20 +116,22 @@ purpose, which marks it as having read untrusted content.
 by the relay in memory, delivered to the account's other devices. Gives one cheap read (a client
 needs one socket, not a channel to every host), works while a machine's own channel is down, and
 meets the 5 s and 60 s targets. Costs: the relay learns names and coarse states, and until
-`hostSign` exists the records are unverified.
+#1776's signing and trusted readers land the records are unverified.
 
 **B. End to end only.** Every reader opens a channel to every host and calls `sessions.list`.
 Nothing new leaks and everything is already authenticated by the channel. Costs: every reader,
 including a script or HA component, must hold a Noise identity and reach every host; an offline
 machine gives no answer at all; N machines means N channels. That is the path #1396 is moving
 away from. Keep it as the fallback for full detail (`session.get`) and as the only way to get a
-verified answer before `hostSign` exists.
+verified answer before #1776's signing and trusted readers land.
 
 Recommendation: A for the registry, B unchanged for anything richer than the allow-list.
 
 ## The registry record
 
-The host publishes one snapshot of its own sessions. All members are required unless noted.
+Target signed record after #1776 and the #2360 extension, not today's wire output.
+The current publisher omits `startedAt` and `sig` (`FleetPublisher.cs:45,53-56`).
+All members are required unless noted.
 
 ```json
 {
@@ -148,7 +143,8 @@ The host publishes one snapshot of its own sessions. All members are required un
   "truncated": false,
   "sessions": [
     { "id": "<16 hex>", "node": "agent_bridge_<16 hex>", "name": "SG Quality Lead",
-      "state": "waiting", "since": "2026-11-09T08:32:10Z" }
+      "state": "waiting", "since": "2026-11-09T08:32:10Z",
+      "startedAt": "2026-11-09T08:00:00Z" }
   ],
   "sig": "<base64url>"
 }
@@ -156,13 +152,15 @@ The host publishes one snapshot of its own sessions. All members are required un
 
 * **Allow-list.** Exactly `v`, `machine`, `epoch`, `seq`, `at`, `truncated`, `total` (only when
   truncated), `sessions` and `sig`, and per session `id`, `node`, `name` (optional), `state`,
-  `since`. An unknown member is dropped by the host and refused by the relay. No `cwd`,
+  `since` today; the planned contract adds optional `startedAt`, omitted when unobservable.
+  Today's relay refuses that field (`RosterFields.cs:26,68`); deploy the reviewed new
+  allow-list before its publisher. No other field becomes allowed. No `cwd`,
   `repository`, `branch`, `model`, `question`, `title`, summaries, counts of tokens, or anything
   from a prompt or a folder.
 * **name** (optional). Present only when the session has a name that came from an allowed source
   and passes the filter in "Names". Absent otherwise. At most 64 characters.
 * **state.** One of `working`, `waiting`, `idle`, `ending`, the v1 session status. `since` is when
-  the session entered that state (v1 `statusSince`, v1-sessions.md:1731). "Time in state" is
+  the session entered that state (v1 `statusSince`, v1-sessions.md:1792). "Time in state" is
   `now - since`, computed by the reader, so the record does not change every second.
 * **epoch and seq.** `epoch` is 16 random hex digits chosen when the host process starts; `seq`
   starts at 1 in each epoch and rises by one per snapshot. Neither needs to be stored across a
@@ -170,7 +168,7 @@ The host publishes one snapshot of its own sessions. All members are required un
 * **truncated and total.** `truncated: true` when the host has more usable live session IDs than it may
   publish; `total` is then the usable count. Invalid IDs are skipped and counted in host status.
   See "Size and paging".
-* **sig.** Optional in `v: 1`. Absent until `hostSign` exists; see "Signing".
+* **sig.** Optional in `v: 1`. Absent until #1776 implements registry signing; see "Signing".
 * **machine online.** Not in the host's record: the relay adds it from its own socket knowledge
   (see "Freshness and replay").
 * **machine display name.** The relay already sends the machine's `name` beside `record`.
@@ -180,21 +178,21 @@ The host publishes one snapshot of its own sessions. All members are required un
   line/paragraph separator characters (Cc, Cf, Cs, Zl, Zp) are rejected before trimming;
   ordinary Unicode and valid emoji pairs stay. Missing, non-string, empty, overlong or
   excluded-character values are omitted, never guessed.
-  This adds no relay disclosure; `machine` remains the ID and lookup pin, not the display name.
+  This adds no relay disclosure; `machine` remains the ID and optional lookup filter, not the display name.
 
 ## Size and paging
 
 The hard limit is 65,561 bytes per WebSocket frame (`Wire.cs:17`); a bigger frame kills the
-socket (`RelayHub.cs:245-250`). So no frame may ever be built from "all machines". The limits:
+socket (`RelayHub.cs:261-264`). So no frame may ever be built from "all machines". The limits:
 
 | Limit | Value | Why |
 |---|---|---|
-| Sessions per machine snapshot | 64 | Worst case below |
-| One session entry | at most 230 bytes of JSON (16 + 29 + 64 + 7 + 20 characters plus keys) | 64 x 230 = 14,720 bytes |
-| One snapshot (`record`) | 16,384 bytes (16 KiB) | Entries plus about 500 bytes of header and signature fit |
+| Sessions per machine snapshot | At most 64, also byte-budgeted in the planned publisher | Count ceiling, not a promise that 64 named entries fit |
+| One session entry (planned) | Previous 230-byte estimate + 35 bytes for `,"startedAt":"YYYY-MM-DDTHH:mm:ssZ"` = 265 | 64 x 265 = 16,960 bytes, already over 16 KiB before headers |
+| One snapshot (`record`) | 16,384 bytes (16 KiB) | Budget actual UTF-8 including header/signature; with a 500-byte header estimate, 59 x 265 + 500 = 16,135 |
 | One relay frame | 24,576 bytes (24 KiB), always one machine | Under 40% of 65,561 |
 | Machines per account | 32 (`RelayOptions.cs:16`) | At most 32 machine frames plus one `known` frame |
-| `known` frame | 32 entries of about 150 bytes, under 8 KiB | Offline machines, no sessions |
+| `known` frame | 32 entries of about 150 bytes, under 8 KiB | Known-machine metadata with socket liveness, no sessions |
 | `registry-get` | one in 2 s per socket; sooner is refused `slow-down` | A get returns up to 33 frames |
 
 * **One machine per frame.** A `registry-get` is answered with one `registry` frame per machine,
@@ -206,9 +204,15 @@ socket (`RelayHub.cs:245-250`). So no frame may ever be built from "all machines
   open and the old record stays in place. (A frame above 65,561 bytes still closes the socket,
   as today, but a conforming host never builds one.)
 * **More than 64 usable sessions.** The host publishes the 64 with the most recent state change, sets
-  `truncated: true` and `total` to the usable count (both signed once signing exists). Nothing is
+  `truncated: true` and `total` to the usable count; planned byte fitting may publish fewer
+  (59 in the estimate above), also marked truncated. Both fields are signed once signing exists. Nothing is
   silently dropped: see "Names and lookup" for how `fleet.find` reports an incomplete list.
   Hitting the cap is logged on the host as a count, never a name.
+* **Planned byte truncation.** The arithmetic is a conservative estimate, not a serializer
+  guarantee. S-N2a fits signed bytes, marks count/byte omissions `truncated`; S-N2b validates
+  `total > published count`, not today's `total > 64` (`RosterFields.cs:52`).
+  Today the publisher rejects oversized records rather than
+  byte-truncating (`FleetPublisher.cs:57-60`). The 16/24 KiB and 64-session caps do not rise.
 
 ## Relay frames
 
@@ -223,7 +227,7 @@ any   -> {"t":"registry-get","id":3}                    reply: one "registry" fr
 any   -> {"t":"registry-subscribe"}                     start receiving registry-changed (until the socket closes)
 relay -> {"t":"registry","id":3,"part":1,"of":3,"machine":"…","name":"…","online":true,
           "lastSeen":"…","record":{…}}
-relay -> {"t":"registry","id":3,"part":3,"of":3,"known":[{"machine":"…","name":"…","lastSeen":"…"}]}
+relay -> {"t":"registry","id":3,"part":3,"of":3,"known":[{"machine":"…","name":"…","lastSeen":"…","online":false}]}
 relay -> {"t":"registry-changed","machine":"…","online":true,"record":{…}}   one machine, on change
 relay -> {"t":"registry-changed","machine":"…","removed":true}   machine forgotten or revoked
 ```
@@ -235,17 +239,24 @@ relay -> {"t":"registry-changed","machine":"…","removed":true}   machine forgo
   that does not exist.)
 * The relay validates shape, allow-list and size, keeps the newest accepted record per machine in
   memory, and forwards. It does not interpret names or states.
-* `known` carries offline machines with last-seen time and **no sessions** (see "Offline").
+* `known` carries same-account machine metadata, last-seen time and socket `online` state,
+  with **no sessions**. A machine's registry frame takes precedence over this metadata.
 
 ## Freshness and replay (5 s and 60 s)
+
+The reader checks/cache below are target RC behavior, not implemented by `FleetList.Parse`.
+The relay's own received-time/sequence checks are not independent reader verification
+(`RosterFields.cs:110-141`).
 
 * A host sends a new snapshot when any listed field changes, debounced to at most one per 2 s,
   plus a heartbeat every 20 s even if nothing changed. A heartbeat is a new snapshot: `seq` rises
   and `at` is the current time. The relay pushes each accepted change at once. Expected lag:
   under 3 s, with a hard target of 5 s.
-* The relay marks a machine offline the moment its host socket closes, and sets `online: false`
+* The relay marks a machine's held session record offline when its host socket closes, and sets `online: false`
   after at most 60 s without a heartbeat for half-open sockets. The row then shows offline within
   1 minute.
+* A connected host without a registry record is online from its `known` socket state, with no
+  sessions. This never overrides an expired registry frame's offline state.
 * **One staleness rule, used everywhere.** A reader treats a record as live only when its `at` is
   within 60 s of the reader's own clock (earlier or later) **and** the relay says the machine is
   online. Anything else is stale: its sessions are shown as "last seen at …" and never returned as
@@ -271,9 +282,12 @@ relay -> {"t":"registry-changed","machine":"…","removed":true}   machine forgo
 
 ## Offline machines and the cache
 
+This cache is planned RC work; today's fleet op reads the connected relay, not a disk cache.
+
 An offline machine appears in the list (name, `online: false`, last seen) so a reader can say
 "machine is off". Its sessions are not served as live: the relay drops them from memory when the
-host goes offline. A host that reconnects sends a full snapshot first.
+host goes offline. A reconnecting host can appear online before its full snapshot arrives;
+no sessions are invented in that interval.
 
 A reader may keep its last copy of a machine's record as a **cache**, with a maximum age of 24 h
 (then deleted). Cached records are always marked `stale: true` and `online: false` in `fleet.list`
@@ -285,23 +299,19 @@ and are never returned as live by `fleet.find`. The cache exists for two reasons
 A session name is **display text from an untrusted source**. This section says where one comes
 from, who can set one, and how it is marked.
 
-* **Where a name comes from.** Nothing an agent writes about itself is published. Claude's title
-  is the transcript's `aiTitle`, written by the model from the conversation, with a `summary`
-  entry as fallback (`ClaudeParser.cs:134, 137`), so it can carry prompt text. Copilot writes its
-  title as `name:` in `workspace.yaml` (`ShadowWitness.cs:155-156`) and can fill it from the first
-  prompt, which this note cannot rule out; the first user message is the other fallback
-  (`SessionTracker.cs:304-309`, v1-sessions.md:1725), and the HA folder-leaf name is no better
-  (`HaPayloads.cs:50-54`). So the host publishes only a **fleet name that a person set on
-  purpose** (or the fixed launch rule below): a host setting in the host's own state, keyed
-  by session id, never read from a transcript, `workspace.yaml` or a folder. A session with no
-  fleet name is listed without one. Slice 3b builds the setting; until it exists no name is
-  published and lookup by name returns `notFound`.
-* **Who can set it.** The person, through a new pipe op `session.rename` (`{ "id", "name" }`,
+* **Where a name comes from.** Only an explicit host-owned **fleet name that a person set**
+  (or the fixed launch rule), for Copilot, Claude and Codex alike. Without enrollment a
+  session is listed unnamed. #2359 found missing enrollment, not a duplicate/scope failure.
+  Transcript/title/summary, first prompt, workspace and HA/folder labels are never sources.
+  `user_named` is ignored and has no traceable person setter in the host; never infer consent.
+  `FleetNames.Get` supplies publication; see the source table above.
+* **Who can set it.** The person, through the existing pipe op `session.rename` (`{ "id", "name" }`,
   empty name clears it). By the pipe's caller table it is allowed only to the app
-  (local-pipe.md:102, "Everything") and to the host's own command line, which slice 3b extends
-  for this op (local-pipe.md:103); an agent session or any untraced process is refused like other
-  acting ops (local-pipe.md:101, 104). The Windows app (slice 7) carries the rename entry point and
-  the host CLI a `rename` command; the Mac and iOS apps and the PWA are not app callers
+  (local-pipe.md:102, "Everything") and to the host's own command line
+  (local-pipe.md:103); an agent session or any untraced process is refused like other
+  acting ops (local-pipe.md:101, 104). S-N1 owns the Windows app enrollment entry
+  point and disclosure/warning on the existing CLI `rename` path; legacy slice 7 consumes it,
+  not a second rename implementation. The Mac and iOS apps and the PWA are not app callers
   (local-pipe.md:102) and cannot rename sessions. The owner-approved launch exception accepts
   explicit `fleetName` only for a new host-created session: `SG ` plus one of `Chief of Staff`,
   `Engineering Lead`, `Quality Lead`, `Product Lead`, `Creative Lead`, `Migration Lead`, `SRE Lead`,
@@ -311,9 +321,12 @@ from, who can set one, and how it is marked.
   in config defaults on when absent; off/invalid/unreadable refuses (App setter: #1832). Names are stored
   beside its other settings, keyed by session id, so it is as strong as the host's state-file
   protection: a same-user process that can write that file can change it (the pipe's agent rail
-  is a safety rail, not a boundary, local-pipe.md:168). It is not an agent-writable path, but it
-  is not tamper-proof either. A name is still display text, not proof of anything.
-* **Across a resume.** A resumed session gets a new agent credential (local-pipe.md:169) and may
+  is a safety rail, not a boundary, local-pipe.md:161,196). A same-user process can tamper
+  with the name store and make a newer process squat a live name after host reload.
+  The warning is a label-in-use oracle for App/HostCli callers, not a new security boundary.
+  Newest-wins does not authenticate rightful ownership: this lies inside the explicitly
+  untrusted same-user metadata boundary, never grants credentials or send authority.
+* **Across a resume.** A resumed session gets a new agent credential (local-pipe.md:196-199) and may
   get a new session id. The host carries a fleet name over only when it can link the resumed
   session to the old one by the id it already tracks; otherwise the resumed session has no name
   until a person sets one. The registry never guesses a name.
@@ -322,82 +335,147 @@ from, who can set one, and how it is marked.
   is listed without a name. This keeps markup and control characters out of every client. It is
   not a defence against a sentence of plain words: **a name that passes the filter can still say
   anything in 64 plain characters.**
+* **Enrollment disclosure.** Before saving, tell the person: "The relay sees this label.
+  Choose a public-safe label, such as a role name. Do not include private task details,
+  account names, email addresses, repository names or paths." Recommend fixed public role
+  labels; never infer them. The filter excludes path separators, colon and at-sign, but
+  cannot prove ordinary words are public-safe. Blank clears the host-owned setting; a
+  rejected or failed durable save must not change the published name.
+  S-N1 shows disclosure before App/HostCli rename. After fresh caller and id/name validation,
+  the host checks live `ISessionSource.Snapshot()` IDs via `FleetNames.Get` and its private
+  `IScopedFleetRoster.ReadScopedAsync()` (`Program.cs:859-861`, `FleetList.cs:40-47`), excluding
+  only (`MachineInfo.Id`, target id): the service's own published device ID
+  (`Program.cs:678-681`), never caller data. Match exactly. This is future work: today's handler
+  only delegates save (`SessionService.cs:57-58`); no agent fleet op or new read authority.
+  Bound the scoped warning read to 2 s monotonic time; deadline expiry yields `unknown`,
+  cancels the read and ignores late results, with no retry. Caller cancellation during the check aborts without saving.
+  The check completes **before the durable save**; an unknown check does not block that save.
+  Then attempt the existing save once. Only success returns the saved result and warning;
+  failed save returns its normal error, keeps the old name, and never claims it was saved.
+  Complete views yield `duplicateStatus` present for a match, absent for none; unavailable,
+  truncated, timed-out or older-host missing-status replies yield unknown.
+  No other names/nodes. App/CLI show present/unknown with the save result, never silently absent.
+  Dynamic warning is after successful save; it is no uniqueness proof, ban, credential or retry.
+  Present: "Another live session uses this label; lookup may refuse or select a newer session."
 * **Marked as untrusted.** Every client renders a name as plain text, never as markup or a
   template (HA's component must neutralise template markers as HA does today, `HaPayloads.cs:25-31`).
   In the agent surfaces (see "Who may read") the name is not part of the typed result; it is
   returned only on an explicit content request, which taints the reading session under
-  agent-principals.md §5.8 (agent-principals.md:258-263, 333-335). So reading a name is
+  agent-principals.md §5.8. So reading a name is
   never "non-tainting".
 * **Not an identity.** A name is never a key. Routing uses `node` and `machine` only.
 
 ## Names and lookup
 
-The stable key is `node` (`agent_bridge_<16 hex>`, local-pipe.md:194), the id used by `agent.send`.
+The stable key is `node` (`agent_bridge_<16 hex>`, [local-pipe](../protocol/local-pipe.md#agentsend-ap5-lite)),
+the id used by `agent.send`.
 `id` (16 hex) is the session id. Lookup is a filter over the same list, not a second source of
-truth.
+truth. The host-owned fleet name is the canonical lookup key; routing still uses the
+resolved machine/node, never a node ID typed by a person.
 
 ```
 { "op": "fleet.find", "data": { "name": "SG Quality Lead", "machine": "<optional device id>" } }
--> { "result": "found",      "session": { "id", "node", "machine", "state", "since" } }
--> { "result": "unpinned",   "machines": [ { "machine", "online", "verified" } … ] }
--> { "result": "ambiguous",  "candidates": [ { "id", "node", "machine", "state", "since",
+-> { "result": "found",      "fleetScope": "<account id>", "session": { "id", "node", "machine", "state", "since", "model"? } }
+-> { "result": "ambiguous",  "fleetScope": "<account id>", "candidates": [ { "id", "node", "machine", "state", "since",
                                                "online" } … ] }
--> { "result": "offline",    "machines": [ { "machine", "lastSeen" } … ] }
--> { "result": "unverified", "machines": [ { "machine", "online" } … ] }
--> { "result": "incomplete", "machines": [ "<device id>" … ] }
--> { "result": "notFound" }
+-> { "result": "offline",    "fleetScope": "<account id>", "machines": [ { "machine" } … ] }
+-> { "result": "unverified", "fleetScope": "<account id>", "machines": [ { "machine", "online" } … ] }
+-> { "result": "incomplete", "fleetScope": "<account id>", "machines": [ "<device id>" … ] }
+-> { "result": "notFound",   "fleetScope": "<account id>" }
 ```
 
 Every `session` and candidate holds typed fields only; **the session name is never echoed back**.
 Where a reply includes a machine object, session or candidate, it may also carry `machineName`
 as described above. `incomplete` still lists only machine IDs. Display names do not verify a
 record or alter any lookup result. Only
-verified, live records ever contribute a `node`: `unverified`, `unpinned` and `incomplete` answers
-list machines and flags, never a node to route to. `unpinned` lists, for each machine holding a
-match, `machine`, `online`, `verified`, and the matching session's `state` and `since`, so a person
-can confirm the first pin.
+verified, live records ever contribute a `node`: `unverified` and `incomplete` answers
+list machines and flags, never a node to route to. `model` is omitted when unavailable;
+callers requiring model binding must refuse missing/mismatched values, never guess.
 
 **Scope.** With `machine` given, only that machine's records are matched: a same-name session on
-another machine does not make a pinned lookup `ambiguous`, `offline` or `unverified`. Without
-`machine`, all machines in the reader's records (live and cached) are matched, so an impostor
-elsewhere is seen and the answer is `unpinned`, `ambiguous` or another non-`found` result.
+another machine does not affect that filtered lookup. Without `machine`, all live machines
+in the caller account are matched. The optional machine filter is compatibility, not a
+first-pin requirement. Scope comes from the authenticated connection, never request fields.
 
-**Result precedence.** The reader computes matches within that scope, then returns the first
-rule that applies:
+**Implemented selector precedence.** The following branches exist (`FleetList.cs:185-204`),
+but production `Verified` remains false. Verified cases are fixtures/future reader inputs,
+not today's live behavior. #2360 changes those branches only after the external reader lands:
 
 1. `incomplete`: any machine that could hold a match (every live machine, or only the one given
    as `machine`) has `truncated: true`. This applies even when a verified match was seen, because a
    duplicate could be hidden.
 2. `unverified`: at least one live unverified match, whether or not a verified live match also
    exists.
-3. `ambiguous`: two or more verified live matches, or one verified live match plus any match on an
-   offline or stale machine in the reader's cache (flagged `online: false`).
+3. `ambiguous`: two or more verified live matches, including duplicates on the same machine.
 4. `offline`: matches exist only on offline or stale machines.
-5. `unpinned`: exactly one verified live match and no other live match, verified or not, but the
-   caller gave no `machine`.
-6. `found`: exactly one verified live match and no other live match, verified or not, in scope,
-   the caller gave that `machine`, and rules 1 to 5 do not apply.
-7. `notFound`: otherwise.
+5. `found`: exactly one verified live match in scope, with or without `machine`.
+   Offline/stale matches do not create a live duplicate.
+6. `notFound`: otherwise.
 
-* **`found` needs `machine`.** A name alone never yields `found`. The relay serves an offline
-  machine with no sessions (`known`), and a reader with no cache (a new PWA, a restarted host, any
-  reader after 24 h) cannot see an offline original, so an impostor named like it, published by
-  another real machine of the same account, would be the only match. Requiring the caller to name
-  the machine closes this: the caller got that machine from a person's choice or an earlier pin,
-  not from the name. **Stated limit:** the first time a name is turned into a machine, a person
-  must confirm it from the `unpinned` answer (machine, state, time shown). Nothing in this note
-  stops a same-account machine from publishing a name that another machine also uses; only the
-  person's first pin and, later, signed per-machine name claims (not in scope, needs roster v2)
-  can. Do not defer the `machine` requirement: signing does not fix this.
+* **Name-only is not identity proof.** A verified same-account machine can claim another
+  session's name while the original is offline. Removing the first pin does not solve
+  that limitation. Signature verification remains mandatory; unsigned records never
+  yield `found`. Signed name ownership remains separate roster-v2 work.
 * **Exact match**, case-sensitive, trimmed. Never fuzzy. A caller that wants a fragment search
   filters `fleet.list` itself.
 * **Callers pin.** A caller that is about to act, `agent.send` above all, passes the `machine` and
   `node` it resolved and keeps them; `agent.send` takes the machine and session explicitly
-  (local-pipe.md:185-194) and does not take a name.
+  (local-pipe.md:218-229) and does not take a name.
 * Own account only. An unsigned request or another account's is refused with a readable reason.
-* Who runs it: the same op on every client. On the local pipe it is served by the host from its
-  registry snapshot, so an agent gets an answer when the relay is unreachable (stale-marked, so
-  `offline` or `unverified`, never `found`).
+* Current pipe ops require a connected relay; unavailable or changed connection refuses
+  (`FleetList.cs:41-47`). Cached/offline lookup is future RC work, not an offline success today.
+
+### Approved replacement contract (#2360; not implemented)
+
+**This intentionally changes the implemented ambiguous-on-verified-live-duplicates branch,
+not today's unsigned live results.** Within the
+same authenticated scope and exact, trimmed, case-sensitive name, the newest verified live
+process wins only when the reader can prove one strictly newest signed `startedAt`.
+
+| Input case | Today in practice | Current selector with verified fixtures | After the dependent implementation |
+|---|---|---|---|
+| Live names on distinct machines, provably separated starts with the trusted bounds/gap below | `unverified` | `ambiguous` | `found` for the strictly newest process |
+| Any host has multiple live matches, whatever their signed whole-second gap | `unverified` | `ambiguous` | `ambiguous` until a separate same-host evidence contract is accepted and implemented |
+| Multiple live names, equal/missing/unprovable order or insufficient cross-machine gap | `unverified` | `ambiguous` | Explicit `ambiguous` refusal, no selected session |
+| One live name, offline/stale predecessors | `unverified` | `found` | `found`; predecessors never compete |
+| Any live unverified match beside verified matches | `unverified` | `unverified` | Unchanged; one legacy unsigned same-name machine blocks rollout selection |
+| Live truncated machine in scope | `incomplete` | `incomplete` | Unchanged, before verification/order |
+| Offline/stale only, or no match | `offline`, or `notFound` | Same | Same |
+
+`startedAt` is a proposed optional session-entry extension, not in today's relay allow-list.
+It is a host-observed process-start instant, bound positively to that session's process,
+stable when only the host restarts, and renewed when the session process resumes/replaces.
+Unprovable observations are omitted, never invented from transcript/filesystem times.
+Never order by state `since`, snapshot `at`, `seq`, epoch, relay arrival or node text.
+Valid ordering metadata must pass the shared timestamp contract and signature verification;
+every competing live match must have it. A single verified live match needs no tie-break.
+Wire form: `YYYY-MM-DDTHH:mm:ssZ`, UTC whole seconds, floored; offsets/fractions/non-calendar
+values refuse. Native precision differs
+(`src/AgentBridge.Host.Core/Processes/ProcessInspector.cs:11-13,122,190`;
+`src/AgentBridge.Local/ProcessChain.cs:162-173`); normalization does not invent missing time.
+For different machines, require independently trusted start-time error bounds of at most
+60 seconds per host and gap >122 seconds from the newest to every live candidate
+(two 60-second errors plus two seconds for flooring).
+At/below the gap or without proof, return `ambiguous`. A reader cannot detect a historical
+same-host clock step from these timestamps. **Same-host selection is held:** if any host has
+multiple live matches, S-N3 always returns `ambiguous`, including in mixed-host lookups.
+A signed whole-second gap, even >122 s, is not same-host creation-order evidence. No source,
+format or verifier for that evidence is defined here; unlocking it needs a separately
+accepted contract, owner and tests, not an assumption from these timestamps.
+The approved single-host "newest verified live process wins" rule (comment 6838324533)
+is deferred because same-host duplicates remain ambiguous; the Product owner decides its successor contract.
+Snapshot freshness proves no historical accuracy. Cross-host activation also waits for its
+unowned clock evidence/bounds prerequisite. Start time is not exposed to agents.
+
+This changes two distinct live sessions with the same name too: there is no inferred
+replacement lineage. A signed host time is still that host's assertion; same-user name-store
+tampering or malicious own-host claims are not solved by signing. Names are not exclusive identity.
+Equal/missing/unprovable order remains ambiguous, never an arrival-order or lexical pick.
+Callers continue pinning the selected machine/node; no retries, rate-limit bypass or paging.
+
+Deploy the strict relay contract and shared vectors before emitting `startedAt`; older
+relays refuse unknown members. Legacy records remain readable, but cannot rank duplicates.
+The byte-budget/truncation contract above preserves all caps; no silent rollout fallback.
 
 ## Who may read, and how a client authenticates
 
@@ -405,20 +483,16 @@ rule that applies:
 |---|---|---|
 | Person device (`app`, `pwa`, `phone`) | `registry-get`, `registry-subscribe` and `registry-changed` over its relay socket | Being admitted to the account (today's pairing) |
 | A person's host | Same, so a host can resolve names for `agent.send` | Same, as a `host` device |
-| Agent | Pipe ops `fleet.list` and `fleet.find` on its own host | An `abat1_` agent credential whose scope is `read` (local-pipe.md:166); refused with a readable reason otherwise |
+| Agent | Pipe ops `fleet.list` and `fleet.find` on its own host | Completed `agent.hello` and read scope (`FleetList.cs:215-227`); otherwise explicit refusal |
 | MCP client | Wraps the pipe ops as tools (`list_agent_sessions` gains a fleet mode) | Same as agent |
 | HA component or third party | Same frames as a person's device, as a paired non-person client | Pairing from S6 (own design note); read-only; no private path |
 
-An agent never holds a relay socket. Its host answers from the registry it already holds. The two
-ops are **added to the in-session allow-list** in local-pipe.md:101 (today that list is `hello`,
-`sessions.list`, `session.get`, `sessions.subscribe`, `usage.*`, `launch.options`, `host.status`,
-`host.subscribe`), under the `sessions.read` capability that `hello` already offers there; any
-other caller on the pipe is refused them as it is refused other acting ops. That row also covers
-processes that never sent `agent.hello` (local-pipe.md:101, 104), which have no attributed
-principal. For them only the typed forms are served: `fleet.find` (no name returned) and
-`fleet.list` without `include`. `include: "content"` is refused unless the connection completed
-`agent.hello`, so an unattributed caller can never read a name untainted. The host's rename op is
-not in that row at all.
+An agent never holds a relay socket. Its host performs the connected registry read.
+Both pipe fleet ops refuse callers without a completed `agent.hello`, even typed/no-name
+requests (`FleetList.cs:215-227`; [local-pipe](../protocol/local-pipe.md#agent-principals-agenthello)).
+`include: "content"` is not an exception to that gate. Person devices read relay frames
+directly, not by using an unauthenticated fleet pipe op. Rename is a separate App/HostCli
+caller-classification path (`LocalApi.cs:34-42`), not agent fleet-read authority.
 
 The HA component is "just a client": it pairs as a non-person read-only client, opts in with
 `registry-get` and `registry-subscribe`, the same frames the PWA uses. It gets no extra field and
@@ -428,7 +502,7 @@ for S8.
 
 **Agent reads and taint.** [agent-principals](agent-principals.md) treats free-text titles as
 content that taints a coordinator that reads them, and gives agents typed projections instead
-(agent-principals.md:258-263, 333-335). A session name is free text, so:
+(agent-principals.md §5.8). A session name is free text, so:
 
 * `fleet.find` returns only typed fields (`id`, `node`, `machine`, `state`, `since`, flags). The
   caller supplied the name; it is not read back. This is a typed, non-tainting projection.
@@ -439,25 +513,30 @@ content that taints a coordinator that reads them, and gives agents typed projec
 
 ## Signing
 
-**What is true today.** There is no host signing key. Without one a record cannot be verified by
-anyone, and **the relay can forge, alter, hide or replay records, and map any name to any `node`,
+**What is true today.** #1782 supplies protected key custody, not verified registry records.
+Until #1776's enrollment, signing and trusted reader dependencies land,
+**the relay can forge, alter, hide or replay records, and map any name to any `node`,
 without any client noticing.** The only checks that exist apply to messages, not to the registry:
 a receiving host accepts `agent.send` only from a pinned own machine whose key matches its device
 id (agent-lite.md:11-12, 76), so a forged record can at worst misdirect a message to one of the
 sender's own pinned machines. It cannot make a message reach another account or an unpinned
 machine. That is the only protection, and it is not enough to rely on a name.
 
-**What a record is worth before `hostSign`.** A display hint, equal to a machine's presence today.
+**What a record is worth before #1776 verification.** A display hint, equal to a machine's presence today.
 Clients may show it, labelled "unverified". `fleet.find` returns `unverified`, never `found`, and
 scripts do not act on it. A person who needs a verified answer uses the end-to-end path (`sessions.list`
 over the Noise channel, Option B), which does authenticate the host.
 
-**What changes when `hostSign` exists** (roster v2, agent-principals.md:378-385; tracked in #391):
+**What changes after #1776** (roster v2, agent-principals.md section 8.10):
 
 * The host signs the canonical bytes of `record` (without `sig`), with its `hostSign` key, under a
-  fixed context string; `epoch`, `seq` and `at` are in the signed bytes.
-* A reader checks: the key is the one in the roster `add` entry for that machine id, `seq`/`epoch`
-  order, and `at` within 60 s. A record that fails is dropped and never shown as live.
+  domain-separated registry context; name, id/node, machine, `epoch`, `seq`, `at` and any
+  `startedAt` are in the signed bytes.
+* The reader uses independently verified, account/generation-pinned roster state:
+  `verifier.State.ActiveAdd(machine)` identifies the active host add, whose
+  `verifier.Graph[add].Body.Device.HostSign` supplies the key. A key lookup alone is not
+  authorization. Check active-add identity/state, key/signature, `seq`/`epoch` order and
+  `at` within 60 s before `verified`; altered name/node/start, wrong key and replay must fail.
 * Then, and only then, a reader may set `verified: true`, and `fleet.find` may return `found`.
 * The signature gives: detection of a forged or altered record, and refusal of a replay older than
   the last `seq` or older than 60 s. It does not stop the relay withholding or delaying a record,
@@ -466,8 +545,9 @@ over the Noise channel, Option B), which does authenticate the host.
 **Is there an interim?** The AP5-lite agent signing key (agent-lite.md:11-12) exists only on hosts
 that pinned each other and is not available to the PWA, phones or the apps, so it cannot give those
 clients a verified answer; using it for records would also be a new use of that key. This note
-does not propose it. If Engineering wants a host-only verified answer sooner, that is a separate
-decision (Decision 4); the default here is to wait for roster v2.
+does not propose it. #2360 permits no interim key. #1776 remains held behind the person-authorized
+v2 transition, enrollment interface #1825 and retained, pinned reader state #1358; custody
+alone, observe mode or roster library support is not evidence those gates are deployed.
 
 ## What leaks, and the limits
 
@@ -476,6 +556,7 @@ decision (Decision 4); the default here is to wait for roster v2.
 | Machine names, last seen | Relay sees | Same | Unchanged |
 | Session name | Never | Relay sees (cap 64, optional) | Only person-set names; filter; per-machine off switch (Decision 2); not stored, not logged |
 | Session state and since | Never | Relay sees | Coarse enum only |
+| Process startedAt (#2360, planned) | Never | Relay sees | Optional process time only; signed before ranking |
 | Count of sessions per machine | Never | Relay sees | Capped at 64, `total` when more |
 | Prompts, questions, paths, repo, branch, model, first message, folder | Never | Never | Allow-list test on host and relay |
 | Storage | Machine blob, 30 s writes | Registry is **not** in the blob | Memory only; lost on relay restart, rebuilt from host heartbeats within 20 s |
@@ -486,7 +567,7 @@ decision (Decision 4); the default here is to wait for roster v2.
 | Client | Change |
 |---|---|
 | Relay (`AgentBridge.Relay`) | `RosterFields.cs` allow-list and in-memory registry; frames above, paged one machine per frame; same-account fan-out only; host-only put (#1400) |
-| Host (`AgentBridge.Host`) | Publishes snapshots (name sources and filter, epoch, seq, truncation); signs once `hostSign` exists; serves `fleet.list` and `fleet.find` on the pipe (#1412, #1399); adds both to the in-session allow-list (local-pipe.md:101) |
+| Host (`AgentBridge.Host`) | Publishes snapshots (name sources and filter, epoch, seq, truncation); signs through #1776; serves `fleet.list` and `fleet.find` on the pipe (#1412, #1399); adds both to the in-session allow-list (local-pipe.md:101) |
 | Windows app | Replace per-host `sessions.list` fan-out for the fleet view with `registry-get`; keep channels for detail. Counts must match the registry. Shows unverified records labelled |
 | PWA | `relay.js` handles `registry`/`registry-changed`; `connection.js` unchanged for detail. Mirrors the vectors |
 | Apple (Mac, iOS) | Same as PWA in Swift; mirrors the vectors |
@@ -509,12 +590,12 @@ first draft of this note.
 | 2a | #1400 part one, relay: allow-list, host-only put, in-memory registry, `registry-get` paged one machine per frame, size and rate refusals | L* | 1 | Allow-list pin (seeded prompt, path and token never appear); other account never sees it; not in blob, log or metrics; unknown member refused; over 16 KiB refused with the socket open; a 64-machine-equivalent get never builds a frame over 24 KiB; stale `seq` and old epoch refused |
 | 2b | #1400 part two, relay: `registry-subscribe` and `registry-changed`, same-account fan-out, offline within 60 s, forgotten machines dropped | M* | 2a | Offline within 60 s with the clock faked; fan-out stays in the account; count equals the host's; forgotten machine's record gone |
 | 3a | Host publisher: debounce, heartbeat, epoch and seq, truncation with `total`, per-machine off switch | L* | 1 | Debounce and heartbeat timing with a fake clock; restart gives a new epoch that readers accept; 65 sessions give 64 and `truncated`; off switch sends an empty list |
-| 3b | Host fleet-name setting: `session.rename` pipe op (app, and host CLI; never agents), launch-time `fleetName` (fixed SG list, new host-created sessions only; agent self-launch refused), host-state storage, resume carry-over, host CLI `rename` command, ASCII filter, signing hook that stays off until `hostSign` | L* | 3a | Name filter table; a seeded prompt, a seeded Claude `aiTitle`, a seeded `workspace.yaml` name and a seeded folder name never appear; no setting means no name; agents and untraced callers refused the rename; fixed-list `fleetName` accepted on new host-created channel launches; outside-list names, resume/transfer naming and agent self-launch refused; name kept across a linked resume and dropped otherwise; records carry no `sig` until `hostSign`, and verify against the vectors once it exists |
+| 3b | Existing host-owned setting/CLI and fixed SG launch rule (`FleetNames.cs:11-54`, `Program.cs:162-181`, `FleetLaunchNames.cs:36-76`); new enrollment UX is S-N1, not another rename op | L* historical | 3a | Retain source/filter/caller refusals; S-N1 adds disclosure, warning and squat cases; signing remains #1776 |
 | RC | **Reader core** in the host (C#) and the shared test vectors: host as a registry client (`registry-get`, `registry-subscribe`, `removed` handling), 60 s liveness, epoch/seq/at order, 24 h cache and revocation purge, signature and roster-key check once `hostSign` exists | M* | 1, 2b | Fake clock for liveness; old epoch and replayed `seq` refused; restart accepted; a forgotten machine that reconnects with its old epoch and a higher `seq` accepted after `removed`; cache purged on `removed` and on a get that omits the machine; unsigned record never `verified`; shared vectors replay the same in every client; PWA and Apple readers are in slices 6 and 8 |
-| 4 | #1412 agent op `fleet.list` on the pipe, scope check, in-session allow-list entry (typed forms only for callers without `agent.hello`; `include: "content"` needs `agent.hello`), MCP tool (after the #1401 audit log) | L | RC, 3a, #1401 | No read scope refused with a readable reason; only own account; allow-list pinned; an unattributed pipe caller is refused `include: "content"`; no `name` unless `include: "content"`, which taints; audited with the agent principal; works from the cached snapshot (marked stale) |
-| 5 | #1399 `fleet.find`: all seven results in the stated precedence, `found` only with the caller's `machine`, `unpinned` answer, 24 h cache, shadow check | M* | 4 | Found only from one verified live match on the given `machine`; a name alone gives `unpinned`; an impostor beside an offline original, and with no cache of the original, never gives `found`; precedence table cases (two unverified live matches give `unverified`; one verified plus one unverified live match gives `unverified`, with and without `machine`; truncated plus a verified match gives `incomplete`); no `node` in `unverified`, `unpinned` or `incomplete`; unsigned and other-account refused; the name is never echoed; a script checks names a person set with `session.rename` on all four machines with HA blocked (current `SG <role>` sessions get no name until a person sets one) |
+| 4 | Existing agent-only `fleet.list` (`FleetList.cs:140-154,215-227`); RC cache remains future | L historical | RC, 3a, #1401 | No-hello/read-scope refusals; account isolation; names only as explicit content; audit before read |
+| 5 | Existing name-only `fleet.find` (`FleetList.cs:161-204`); #2360 changes only verified duplicate selection after external RC | M* historical | 4, RC | Production live names unverified; current verified fixtures ambiguous; future provably newest found, equal/close/unprovable ambiguous; scope and incomplete/unverified precedence unchanged |
 | 6 | PWA adoption, including the PWA reader (JS port of RC) | M | RC, 2b | Vector mirror passes; fleet view from one socket; offline machine shown stale; unverified label |
-| 7 | Windows app adoption, including the rename entry point | M | RC, 2b, 3b | Count matches the registry; fleet view works without per-host channels; rename from the app sets a name |
+| 7 | Windows app fleet-view adoption; consumes S-N1 enrollment, no second rename entry point | M | RC, 2b, S-N1 | Count matches the registry; fleet view works without per-host channels; enrollment behavior is tested by S-N1 |
 | 8 | Apple adoption, including the Swift reader (port of RC) | M | RC, 2b | Vector mirror passes; same view tests |
 | 9 | Fleet messenger and reply-session switch (fleet repo) | S | 5, R | Resolve every name without HA; ambiguity, `unverified` and `incomplete` refused loudly; sends pin machine and node |
 | 10 | Conformance cases for the registry in the shared suite (#1407) | S | 2b, RC, 5 | One suite, run against every client and the HA component |
@@ -527,40 +608,81 @@ estimate for the host side is unchanged only if `hostSign` (R) is built elsewher
 Until R lands, slices 1 to 8 still ship and the fleet view works, labelled "unverified"; `found`
 cannot be returned, so slice 9 (the scripts) cannot switch off HA name lookup before R. That makes
 roster v2 a real dependency of #1399's acceptance criterion "correct with HA blocked"; see
-Decision 4. Separately, `found` needs the caller's `machine` even after R (see "Names and
-lookup"); R does not remove that.
+Decision 4. #2151 removes the caller's machine requirement, not R's verification gate.
 
-Order: 1 first; 2a and 3a in parallel; then 2b, 3b; RC; 4; 5; clients 6 to 8 any order after RC (slice 7 also after 3b); 9
-after 5 and R; 10 after 2b, RC and 5. Slices 2a, 2b, 3a, 3b (it adds the `session.rename` pipe op
-and its caller check), RC, 4 (it changes the pipe
+Order: 1 first; 2a and 3a in parallel; then 2b, 3b; RC; 4; 5; clients 6 to 8 any order after RC (slice 7 also after S-N1); 9
+after 5 and R; 10 after 2b, RC and 5. Slices 2a, 2b, 3a, 3b (fleet-name caller policy),
+RC, 4 (fleet-read
 allow-list, local-pipe.md:101) and 5 touch sensitive paths: both independent receipts and a Trust
 review. Android waits on its client; a Linux client follows the same vectors.
 
+### #2360 follow-on slices (S-N1 to S-N4)
+
+Four workstreams, **six PRs**, each <=400 lines: S-N1, S-N2a, S-N2b, S-N2c, S-N3 and S-N4.
+S-N2 is pre-split; S-N IDs are distinct from legacy rows.
+**No S-N slice enables routing or sets verified.** Names stay display-only pending #1776; selection needs all prerequisites below.
+
+**Prerequisites to S-N3:** #1776 owns signing, roster-key/signature, seq/epoch/at checks and
+vectors ([accepted split](https://github.com/danswett/agent-bridge/issues/1776#issuecomment-6778908679)).
+Retained-roster integration (#1358 state), cache/revocation and trusted creation-order/clock-error
+proof need separate accepted issues/owners; unowned here. Legacy RC is not ownership.
+#1776's machine-pin text is stale against #2151; this PR neither amends nor enlarges it.
+
+1. **S-N1 person enrollment UX.** Existing App/HostCli rename for all three agents; disclosure
+   and warning above. Test save/clear publication, invalid/failed save unchanged, all forbidden
+   title/workspace/HA/folder sources excluded. Squat: A live/named, B live/newer; inject B's same
+   label in saved host state and reload. Rename A: assert typed present and visible warning
+   (today's id/name-only result fails); labels still publish, unsigned find stays unverified.
+   Agent/script rename refuses before any warning-data read.
+   Assert check-before-durable-write and warning-after-success; failed write has no saved result.
+   Test complete local/account views with no match: `absent`. Separately, unavailable registry,
+   truncated snapshot and older-host missing `duplicateStatus` each visibly yield `unknown`.
+   Stall the read: at the 2 s deadline assert `unknown`, read cancellation and one save;
+   late completion cannot alter the result. Caller cancellation during the check prevents saving.
+2. **S-N2, three <=400-line PRs:** S-N2a host binding/publication/restart (null omitted);
+   S-N2b allow-list, `total > published count` not `total > 64` (64/59 test); S-N2c shared C#/PWA/Apple vectors.
+   Test flooring/null omission, resume renewal, legacy records and byte limits; signed vectors
+   coordinate with #1776, without selection activation.
+3. **S-N3 signed-start decode/selection.** Test same-host live pairs with small and >122 s
+   signed gaps, plus mixed-host same-host duplicates: always ambiguous under the hold above.
+   After cross-host prerequisites, test newest on distinct hosts in both frame orders;
+   state-change recency cannot win, offline/stale does not compete.
+   Equal/missing/unprovable order, cross-host <=122 s gaps, absent bounds and reversed skew refuse ambiguous.
+   Clock-step fixture lacks proof; tampered/replayed name/start fails verification; unsigned/incomplete/cross-account never route.
+4. **S-N4 guidance/conformance.** Public-safe enrollment and synthetic end-to-end host/relay
+   restart with still-live session. Preserve #2354 machine projection, exact lookup, content
+   opt-in, authenticated scope and refusals.
+
+**Restart acceptance:** S-N2a restarts only a disposable host, retains its live session process,
+asserts identical `startedAt` despite new epoch/seq/at; replacement renews it. S-N4 additionally
+checks unchanged verified-fixture selection after S-N3. Exercise restart, not a constant vector.
+Hosted failing-first red proof/output; no live changes; wrapper #605 separate. Quality owns gates/merge/receipts.
+
 ## Decisions
 
-1. **Relay-visible names and states** (Owner, Trust). Recommended: accept, for the account's
-   own devices only, limited to the allow-list above.
+1. **Relay-visible names, states and optional process `startedAt`** (Owner, Trust).
+   Recommended: accept, for the account's own devices only, limited to the allow-list above.
 2. **Per-machine off switch** (Owner). Recommended: on by default for own accounts, with a
    host setting (proposed `fleet.share`) that sends an empty list. A machine that is off shows
    as online with no sessions, not as missing.
-3. **Names are untrusted display text** (Engineering, Trust). Recommended: a name is published only
+3. **Names are untrusted display text** (Engineering, Trust). #2360 confirms: a name is published only
    if a person set it on the host on purpose (`session.rename`, app and host CLI only), or a launch-time
    `fleetName` matches the fixed SG list for a new host-created session (agents still cannot self-launch).
    Stored in host state, never read from a transcript (Claude `aiTitle` is
    model-written), `workspace.yaml` (Copilot may fill it from the first prompt), prompt or folder;
    ASCII filter; agents get typed fields from `fleet.find` and `fleet.list`, and names only on
-   `include: "content"` after `agent.hello`, which taints. Alternative: never give agents names.
-4. **Signing and routing** (Engineering). Recommended: records are unverified until `hostSign`
-   (roster v2, #391) exists; `fleet.find` returns `found` only for verified live records; no
-   routing from unverified records; no interim key. Decide whether roster v2 is scheduled before
-   slice 2 ships or in parallel, and whether Engineering wants a host-only interim.
+   `include: "content"` after `agent.hello`, which taints. Existing App/HostCli backend permits
+   rename; S-N1 owns app enrollment and CLI disclosure/warning, not a new authority.
+4. **Signing and routing** (Engineering). #2360 confirms: records are unverified until #1776's
+   roster-v2 enrollment, signing and trusted reader dependencies land; `fleet.find` returns
+   `found` only for verified live records. No routing from unverified records and no interim
+   key; protected custody alone is insufficient.
 5. **Transport shape and limits** (Engineering). Recommended: dedicated `registry-*` frames, opt-in
    by `registry-get` or `registry-subscribe`, one machine per frame, 64 sessions, 16 KiB per
    record, 24 KiB per frame, one get per 2 s. Confirm the numbers.
 6. **Non-person client pairing** (Owner, tracked in S6). Needed before S8, not before slices 1 to 9.
-7. **`found` needs the caller's `machine`** (Engineering, Trust). Recommended: yes; a name alone
-   gives `unpinned` and a person confirms the machine once. Alternative: signed per-machine name
-   claims, which need roster v2 and more design.
+7. **Name-only lookup** (#2151, fleet #171/#433). Supersedes the first-machine-pin
+   recommendation; a unique verified live name may be found within authenticated account scope.
 
 ## What Trust should review
 
@@ -570,7 +692,9 @@ review. Android waits on its client; a Linux client follows the same vectors.
 * Same-account fan-out, host-only put, and refusal of cross-account requests.
 * The name rules, the "untrusted display text" marking, that `fleet.find` never echoes a name, and
   that no agent-written title (Claude `aiTitle`, Copilot `name:`) reaches the relay.
-* That `found` needs the caller's `machine`, and the stated first-pin limit.
+* That current name-only `found` requires one verified live match; #2360's future duplicate
+  selection requires all matches verified and one provably newest signed start. Scope,
+  incomplete/unverified precedence, no inferred model and name-ownership limits remain.
 * That the relay's power is stated honestly: today it can forge, alter, hide and replay records and
   no client can tell; after `hostSign` it can read, withhold and replay within 60 s, not forge.
 * That `found` and `agent.send` are never produced or driven by an unverified, stale or offline

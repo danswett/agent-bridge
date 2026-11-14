@@ -336,12 +336,13 @@ export class FleetStatus {
     if (this.#updateFollowed.get(id) === client) { return; }
     this.#updateFollowed.set(id, client);
     const mine = () => this.#updateFollowed.get(id) === client;
+    const apply = (s) => { if (mine()) { this.#setUpdate(id, s); } };
     if (!this.#updateHeard.has(client)) {
       this.#updateHeard.add(client);
-      client.on('update', (s) => { if (mine()) { this.#setUpdate(id, s); } });
+      client.on('update', apply);
     }
     // One that failed (timed out, say) is tried again at the machine's next minute's look.
-    client.subscribeUpdate().then((s) => { if (mine()) { this.#setUpdate(id, s); } }, () => { if (mine()) { this.#updateFollowed.delete(id); } });
+    client.subscribeUpdate(apply).catch(() => { if (mine()) { this.#updateFollowed.delete(id); } });
   }
 
   #note(id, machine, capabilities) {

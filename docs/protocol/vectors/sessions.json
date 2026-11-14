@@ -1315,6 +1315,20 @@
           }
         },
         {
+          "name": "role",
+          "json": {
+            "id": "53d1997f0a1b2c3d4e5f60718293a4b5",
+            "name": "DEV-VM1",
+            "os": "windows",
+            "hostVersion": "0.1.200",
+            "dev": true,
+            "sessions": 3,
+            "readOnly": "agent-ha-bridge is running for this user",
+            "instance": "9a8b7c6d5e4f30211203f4e5d6c7b8a9",
+            "role": "builder"
+          }
+        },
+        {
           "name": "minimal",
           "json": {
             "id": "53d1997f0a1b2c3d4e5f60718293a4b5",
@@ -2869,6 +2883,7 @@
         {
           "name": "a-scheduled-prompt",
           "json": {
+            "kind": "scheduled",
             "userMessage": "[Scheduled prompt #4] Check CI and report.",
             "userMessageFrom": "schedule",
             "userMessageLabel": "4",
@@ -7577,7 +7592,8 @@
               }
             }
           },
-          "refusedBy": "parse"
+          "refusedBy": "SessionPatches.Apply",
+          "reason": "the patch is not on the session as held"
         },
         {
           "name": "wrong-type-id",
@@ -9629,6 +9645,14 @@
     }
   },
   "knownDifferences": [
+    {
+      "vector": "Activity/a-scheduled-prompt",
+      "issue": 2146,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "keeps kind=scheduled alongside the scheduled sender",
+      "pwa": "drops activity.kind until the client attribution slice"
+    },
     {
       "vector": "ActivitySource/wrong-type-response",
       "issue": 446,

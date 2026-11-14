@@ -1,20 +1,24 @@
 # The Home Assistant connector
 
-**Current compatibility, not the target architecture.** The owner redirected HA
-delivery on 2026-11-02 in [#387](https://github.com/danswett/agent-bridge/issues/387):
-the separate [integration and companion card](https://github.com/danswett/agent-bridge-home-assistant/issues/1)
-own HA entities/actions/presentation. Bridge retains generic protocol/core logic
-and host-enforced authorization. The stages, settings and operator procedures
-below describe the existing compatibility connector unless explicitly labeled
-target or historical; they are not installation instructions for its successor.
+**Current compatibility, not the target architecture.** The owner partially
+reversed [#387](https://github.com/danswett/agent-bridge/issues/387) on 2026-11-11:
+HA is an optional client someone may add later, not a required replacement.
+HA functionality no longer has to be retained; S0 has no owner-built HA function
+to preserve. Bridge keeps generic protocol/core logic and host-enforced
+authorization. The stages, settings and operator procedures below describe the
+existing compatibility connector, not installation instructions for a successor
+or permission to change a live installation.
 
-**HA retirement target (#1396/#1406, 2026-11-10 PT).** Nothing in Slipgates is to
+**HA retirement target (#1396/#1406, 2026-11-11 PT).** Nothing in Slipgates is to
 depend on HA. HA becomes an optional client, not a special bus, trust authority or
 command path. [One client protocol](design/client-protocol.md) maps the parity
 inventory, caller authority, capability negotiation and shared conformance gate
 for PWA, Windows, Mac, iOS, Android and Linux when shipped, the optional HA client
 and future third parties. This is a proposed design, not live parity or permission
-to remove the compatibility connector described below.
+to remove the compatibility connector described below. The
+[master decision record](design.md#02-ha-retirement-decision-3871396) owns the
+reversal and retirement boundary; [#1419's design](design/ha-optional-client.md)
+is optional, later work, not a retirement prerequisite.
 
 ### Optional-client target and retained rollback
 
@@ -24,7 +28,8 @@ card must act through a separately paired person-client channel with the same
 host-verified signatures/confirmations, limits and operations as another client.
 An HA login, service event or `driver` claim cannot make a service into a person
 or authorize an approval. Non-person enrollment and the person UI path remain
-design/build work in #1418/#1419; until implemented, the component is read-only.
+design/build work in #1418/#1419; until implemented, only read-only fixtures and
+disposable-host evaluation exist, not an installed component.
 
 The target consumes the **planned registry change feed** and existing
 host-session subscriptions, plus ordinary ops
@@ -39,12 +44,15 @@ do not pass.
 **Registry publication is not yet live:** publisher core #1791 is merged,
 but host wiring is later work and
 [fleet #238](https://github.com/danswett/slipgates-fleet/issues/238) stays open.
-HA remains the explicit rollback until the 24-hour dual run in
-[fleet-session-registry.md](design/fleet-session-registry.md), slice 11, passes.
-That does not replace #1396's per-client evidence, counted zero-fallback run,
-HA-off rehearsal and owner sign-off. Keep current credentials, contract fixtures,
-reversible migration and G5/G6/G7 until their replacement/cutover gates pass;
-retirement and removal are not completed by this design.
+HA remains available for rollback until #1396's required parity-row evidence,
+load parity proof (#1949), HA-off rehearsal and owner sign-off pass. The Nov 11
+decision supersedes older dual-run durations and count-run gates, including the
+older registry design's slice 11. The rehearsal is one machine, then the other
+three with zero HA fallbacks and every row exercised at least 3 times; rollback
+is turning HA back on. #319 is closed as superseded, not a requirement to ship an
+HA integration. Keep current credentials,
+contract fixtures, reversible migration and G5/G6/G7 until reviewed retirement
+slices disposition them; this design neither passes the gate nor changes them.
 
 Everything below remains the **current compatibility contract**, not an
 alternative authorization path for the optional client.
@@ -69,12 +77,12 @@ The plan, with every stage done, is below.
 
 ### Retaining HA without a legacy daemon (#317)
 
-The owner requires HA functionality without a legacy daemon. The later redirect
-in #387 supersedes the permanent native shared dashboard/card publisher direction
-of #318, **not the functionality and not completion of #318**. #317 remains the
-parent goal; #319 remains the explicit writer cutover, rollback and disposable-HA
-rehearsal gate. G7 still refuses writer migration. A target diagram or fixture
-pass does not authorize cutover.
+**Historical goal, superseded in part on 2026-11-11.** #317's requirement to retain
+HA without a legacy daemon is no longer required; #317 is closed, superseded by
+optional #1419. The permanent native shared dashboard/card publisher (#318)
+remains superseded, not completed. #319's HA-side migration gate is superseded
+by #1396's HA-off rehearsal. G7 still refuses writer migration in current code.
+A target diagram, fixture pass or this decision record does not authorize cutover.
 
 **Merged compatibility evidence (#322).** The first implementation slice ports protocol 1's policy validation, ordinal canonical
 policy JSON/digest/resource URL, receipt-progress checks and writer/artifact authorization
@@ -99,15 +107,17 @@ rejects duplicate JSON members instead of letting a parser silently select one.
 
 ### Publisher work disposition (#387)
 
-Verified against main `95983d6031dfc690b5c6a122b2e8f4ac8cac955e` and actual PR
-metadata/file inventories on 2026-11-05 PT. These are preservation/extraction
-boundaries, not permission to close PRs, remove trees or merge the held stack.
+The retained-source inventory below was verified against main
+`95983d6031dfc690b5c6a122b2e8f4ac8cac955e` on 2026-11-05 PT; the three unmerged
+PR heads/statuses were rechecked on 2026-11-11 PT. **Extraction is optional** for
+later HA work, not a retirement prerequisite. Preserve existing source/provenance;
+this docs-only record does not close PRs, remove trees or merge the old stack.
 
 | Work | Retain / extract / supersede |
 |---|---|
-| [#322](https://github.com/danswett/agent-bridge/pull/322), merged as `d2c40f62e07467a897947a0568a37154e96df194` | **Retain** `HaPublicationPolicy`, `PublicationTests`, `Fixtures/ha-publication.json` and `Export-HaPublication.ps1` as current compatibility/rollback evidence. This internal contract is not a running shared publisher. Final lifetime/placement belongs to #387/#389 |
+| [#322](https://github.com/danswett/agent-bridge/pull/322), merged as `d2c40f62e07467a897947a0568a37154e96df194` | **Retain** `HaPublicationPolicy`, `PublicationTests`, `Fixtures/ha-publication.json` and `Export-HaPublication.ps1` while needed for current compatibility/rollback evidence. This internal contract is not a running shared publisher. Final lifetime/placement belongs to reviewed #389 removal after #1396's gate, not mandatory HA-side delivery |
 | [#331](https://github.com/danswett/agent-bridge/pull/331), closed unmerged 2026-11-05 at 12:45 PT; branch kept, retained head `b58fcd42f7b936ef1316ccab42ee88a29908b4ff` | **Preserve** authority observation, protected high-water receipts and recorded malformed/missing/regression cases. **Extract** relevant migration failure evidence through reviewed replacement slices; no claim its receipt runtime is on main |
-| [#337](https://github.com/danswett/agent-bridge/pull/337), closed unmerged 2026-11-05 at 12:45 PT; branch kept, retained head `ac1fd159cecff4231ae09e5f5e660e7a52f79898` | Permanent host renderer/writer is **superseded**. **Preserve/extract** card behavior, templates, whole-view recordings, exact-pin/upgrade/conflict tests for HA-side delivery. Keep source commit, exporter recipe, card-byte provenance and `Publication/LICENSE` with any approved extraction; do not copy bundled third-party content without license review |
+| [#337](https://github.com/danswett/agent-bridge/pull/337), closed unmerged 2026-11-05 at 12:45 PT; branch kept, retained head `ac1fd159cecff4231ae09e5f5e660e7a52f79898` | Permanent host renderer/writer is **superseded**. **Preserve** card behavior, templates, whole-view recordings and exact-pin/upgrade/conflict tests; extract only if later HA work needs them. Keep source commit, exporter recipe, card-byte provenance and `Publication/LICENSE` with any approved extraction; do not copy bundled third-party content without license review |
 | [#345](https://github.com/danswett/agent-bridge/pull/345), closed unmerged 2026-11-05 at 00:59:49 PT; retained head `0f81009b434414ccd9209ac103108e6c7db9fa73` | Permanent opt-in host fleet publisher is **superseded**. **Preserve/extract** mixed-fleet reconciliation, selector repair, retirement and restart/rollback failure cases; do not adopt host publication configuration or drift jobs by inertia. Closure is withdrawal, not authorization for cleanup or cutover |
 
 Preserve all commits/worktrees while ownership and extraction are resolved.
@@ -123,8 +133,9 @@ The merged [connector read profile](protocol/connector-read.md) (#534) describes
 existing application reads and host-backed reference fixtures, **not** released
 enrollment, encrypted transport certification or an installable integration.
 [The agent-principals design](design/agent-principals.md) (#522) is design, not a
-service-identity implementation. #388/#519 and #55/#391 retain identity, grants,
-attribution and roster ownership; this redirect does not design a competing path.
+service-identity implementation. #388 is closed as superseded by #1406/#1418/#1419;
+identity, grants, attribution and roster work stay with their existing owners,
+including #519 and #55/#391. This record does not design a competing path.
 Initial connector reads do not imply any action grant, and agents must never
 answer approvals or folder trust.
 
@@ -132,16 +143,18 @@ answer approvals or folder trust.
 enrollment proposal at `d9382fd31dc9fad9d34919317bf7a3265de43c18` is preserved
 historical, **unadopted** evidence. That proposal is withdrawn from the corrected
 documentation-only #394; preserving its source does not adopt its enrollment
-design or protocol audit. Enrollment interface work remains Trust-owned under #388.
+design or protocol audit. Enrollment work stays with the current protocol/pairing
+owners; #388's closure does not certify that implementation.
 
 #258 (Settings/health) and #175 (sub-agents/shadow) remain existing compatibility
 work with their existing owners. Closed #78 is historical token-propagation
 scope, not a request to restore that path. No issue is closed or reassigned here.
-The supported legacy configuration window, final fixture placement, notification/
-action parity and credential revocation/rollback retention still need decisions
-on #387 with those owners. Keep current connector credentials/settings and G5/G6/G7
-and owner-only management guards until verified #319 replacement/rollback; only
-then may #389 remove obsolete dependencies.
+Legacy configuration diagnostics, final fixture placement and credential
+revocation/rollback retention belong to reviewed #389 slices with those owners.
+HA-specific notification/action retention is no longer required; required
+Slipgates capabilities still need #1396's passing evidence. Keep current connector
+credentials/settings, G5/G6/G7 and owner-only management guards until the gate and
+the corresponding reviewed removal, not until an optional HA replacement ships.
 
 ## What it never does
 
@@ -499,9 +512,9 @@ whoever's it is (the daemon does not attribute answers at all; below). Replies a
 the next turn: it is agent-driven if it starts within 600 s (`DriverArmSeconds`), otherwise it
 reads `human`. The host keeps it in
 one record (`SessionDrivers`) for the cards and its own clients alike, so the phone and the app
-show the same edge (`Session.driver`, with `driverPrincipal` `homeassistant:<user id>` for the
-account that pressed), and a person's answer or reply from either takes it back as one on the
-card does.
+show the same edge (`Session.driver`; `driverPrincipal` is `homeassistant:<user id>` for an HA
+account, or a card reply's cleaned, unverified display label), and a person's answer or reply
+from either takes it back as one on the card does.
 
 `HaContract.HomeAssistantPrincipal` in the HA assembly formats that principal from the
 trimmed user id, capped at `Limits.DriverPrincipal` UTF-8 bytes; the stored and wire value is unchanged.

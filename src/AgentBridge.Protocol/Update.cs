@@ -56,6 +56,15 @@ public static class UpdateProtocol
         Unavailable = Limits.KeepStart(s.Unavailable, Reason),
         Request = IsRequest(s.Request) ? s.Request : null,
         Progress = s.Progress is { } p ? Math.Clamp(p, 0, 100) : null,
+        Bytes = s.Bytes is >= 0 ? s.Bytes : null,
+        Total = s.Total is >= 0 ? s.Total : null,
+        Leaving = s.Leaving is { } leaving ? leaving with { To = Limits.KeepStart(leaving.To, Version)! } : null,
+        Back = s.Back is { } back ? back with
+        {
+            From = Limits.KeepStart(back.From, Version)!,
+            To = Limits.KeepStart(back.To, Version)!,
+            Request = IsRequest(back.Request) ? back.Request : null,
+        } : null,
         CheckSource = s.CheckSource is "cdn" or "github" ? s.CheckSource : null,
         GitHubRemaining = s.GitHubRemaining is >= 0 && s.GitHubQuotaAt is not null ? s.GitHubRemaining : null,
         GitHubQuotaAt = s.GitHubRemaining is >= 0 ? s.GitHubQuotaAt : null,
@@ -71,6 +80,7 @@ public static class UpdateProtocol
             Reason = Limits.KeepStart(l.Reason, Reason),
             Request = IsRequest(l.Request) ? l.Request : null,
             Code = IsCode(l.Code) ? l.Code : null,
+            Step = IsCode(l.Step) ? l.Step : null,
         } : null,
     };
 }
@@ -145,6 +155,8 @@ public sealed record UpdateNowArgs
     public bool Now { get; init; }
     public string? Release { get; init; }
     public UpdateBusy? Accept { get; init; }
+    public bool? Batch { get; init; }
+    public bool? Unchecked { get; init; }
 }
 
 // What the machine's updater is doing. An unknown phase reads as Idle: nothing a client would
@@ -158,6 +170,16 @@ public enum UpdatePhase { Idle, Checking, Downloading, Waiting, Installing }
 [UnknownAs(Failed)]
 public enum UpdateOutcome { Updated, Current, Refused, Failed }
 
+[UnknownAs(RestartToUpdate)]
+public enum UpdateMode { RestartToUpdate, InstallBetweenTurns, AsSoonAsReady }
+
+[UnknownAs(Unreadable)]
+public enum UpdatePolicyState { Unreadable, Stale, Ok }
+
+public sealed record UpdatePolicy(UpdatePolicyState State, DateTimeOffset? At = null);
+public sealed record UpdateLeaving(string To, DateTimeOffset At, DateTimeOffset BackBy);
+public sealed record UpdateBack(string From, string To, string? Request, DateTimeOffset At);
+
 public sealed record UpdateResult
 {
     public required UpdateOutcome Outcome { get; init; }
@@ -169,6 +191,7 @@ public sealed record UpdateResult
     // For an Update now: why it ended so, as UpdateCommandResult.Code. A client words it itself.
     public string? Code { get; init; }
     public required DateTimeOffset At { get; init; }
+    public string? Step { get; init; }
 }
 
 // update.get's result, update.subscribe's result and every update.state.
@@ -208,6 +231,16 @@ public sealed record UpdateState
     // (UpdateWaitingCode).
     public bool RequestNow { get; init; }
     public string? WaitingCode { get; init; }
+    // Optional facts for the fleet-update flow (#2225); absence is an older reporter, not false.
+    public long? Bytes { get; init; }
+    public long? Total { get; init; }
+    public bool? Downloaded { get; init; }
+    public DateTimeOffset? Installing { get; init; }
+    public UpdateLeaving? Leaving { get; init; }
+    public UpdateBack? Back { get; init; }
+    public UpdateMode? Mode { get; init; }
+    public DateTimeOffset? ChecksHeldUntil { get; init; }
+    public UpdatePolicy? Policy { get; init; }
 }
 
 // update.check and update.install: Request is the device's UUID for this press. For Update now,
@@ -230,4 +263,5 @@ public sealed record UpdateCommandResult(UpdateAck Outcome, string? Reason = nul
     public UpdateState? State { get; init; }
     // Only for a press with Now: why it was refused, as a code (ManageReason's and UpdateCode's).
     public string? Code { get; init; }
+    public DateTimeOffset? RetryAt { get; init; }
 }

@@ -465,6 +465,18 @@ through.*
 > [proposals/659-no-pop-motion.md](proposals/659-no-pop-motion.md); the clients follow in #684
 > (Windows) and #685 (PWA).
 
+> **Reorder decided by the owner on 2026-11-04, D1–D7 (#592).** Lift and make room,
+> including Creative's later #593/#594 rulings, replaces the insertion-line design below.
+> This is the normative contract, not shipped motion: #605 and #637 closed unmerged;
+> #593 and #594 implement it. Group-header hover-open (#1860, #2072) and touch hold-first
+> are part of the same contract. The rest of the catalogue retains its own delivery state
+> (the [#232 audit](https://github.com/danswett/agent-bridge/issues/232#issuecomment-6804671700)).
+
+PWA session rows and delegate-strip chips now ease their neighbours with frame-coalesced,
+retargetable `shift` motion (#2105). This covers key and row-menu moves, drag/drop placement,
+Most recent batches and #950 return-grace order changes; the dragged row still follows the
+pointer directly. The other #685 slices follow.
+
 Motion shows where something came from and where it went. It answers the person or a
 change, and never runs for its own sake. The values are in `tokens.json` under `motion`,
 generated as `--ab-motion-*` for the PWA and `AbMotion*` resources for the app
@@ -498,7 +510,8 @@ not the PWA.
    itself. What arrives in a burst arrives as one change, and a list the person has scrolled
    away from doesn't move under them (Easing aside, below).
 5. **Short and calm.** About 100–300 ms (83–250 on Windows and in the PWA), and nothing
-   but the glyphs longer than 300 ms. Entering decelerates. Leaving accelerates and is
+   but the glyphs longer than 300 ms. A touch reorder hold's sink follows the platform's
+   hold, not a separate transition. Entering decelerates. Leaving accelerates and is
    quicker. A move on screen eases at both ends. Nothing overshoots or bounces.
 6. **Native where it exists.** Each platform's own vocabulary:
    - Windows: Fluent's theme transitions, connected animation, and the WinUI controls'
@@ -563,14 +576,34 @@ easing in, its duration out, and how far it travels.
 | Activity dot | A row's trailing edge (§6.1) | The session updates while its row isn't open; the row is opened | The 6 px dot fades in, and later fades out. It never pulses, grows or repeats. The title's weight cross-fades (Value change) | `activityDot`: standard, decelerate; fast out | The same on every platform | Instant |
 | Value change | Details' values (Status, Model, Background, Turns, Compactions, Process, Updated), the status words on a row, in the header and in the strip; counts (Needs you · N, N finished, N new, Showing N of M); a title's weight; usage figures and bars | The value changes | The old value fades out as the new one fades in, in the same place, so nothing beside it jumps: numbers are tabular, and the value's cell keeps the wider of the two until the fade ends. A usage bar's fill eases to its reading (a horizontal scale). Changed at once: a value that changed less than 1 s before (it never strobes), an age or an elapsed time ticking, and a value drawn for the first time | `value`: fast, standard | Windows: the old text as a second `TextBlock` in the same cell, faded by composition. PWA: an absolutely placed copy of the old text faded out over the new. Apple: `.contentTransition(.opacity)`. Android: `Crossfade` | Cross-fade |
 | Selection | The list's 3×16 Bridge pill; the rail's pill | Choosing a row or a destination | The pill slides from the old row to the new one when both are on screen, and fades in when the old one isn't. The row's fill changes at once | `selection`: standard, standard | Windows: `NavigationView`'s own pill on the rail, and the same motion on the list. Apple: the system's selection | Instant |
-| Press | Every button, and every row | Pointer or touch down, and release | The pressed fill shows at once on press, and eases back on release. Nothing scales | `press`: fast, standard | Windows: the controls' own visual states. PWA: a transition on the background. Apple: the system button styles. Android: the ripple | Instant |
+| Press | Every button, and every row | Pointer or touch down, and release | The pressed fill shows at once on press, and eases back on release. Nothing scales except a touch reorder hold's sink (§6.1) | `press`: fast, standard | Windows: the controls' own visual states. PWA: a transition on the background. Apple: the system button styles. Android: the ripple | Instant |
 | Send and Answer | The reply box; a question card | Send, Send answer, Approve once, Deny | Your message shows at once as your bubble, rising 12 as it fades in. An answer's outcome fades in on the card. While the request is in flight, the button that sent it (Send or Send answer, never an option, #773) shows the platform's progress ring, which stops with the request. Decided, not yet built (#600; builds in #616, #625): the ring is the only in-flight signal (§6.5), turning while the request is open and still while this device waits for a machine that isn't connected. Delivered, the ring cross-fades to the `check` icon, which holds about 1 s and cross-fades back to the button's rest glyph; the button never changes size or fill. An exception's line (§6.5) fades in place in the room reserved for it under the box, or on the question card, and fades out in place when it goes; nothing pops and nothing below it moves. Today both clients show Sending…, Sending again… and "Delivered. The session has your reply." for a reply, and "Delivered. The session has your answer." for a question card's answer. Nothing waits for the motion to finish | `acknowledge`: standard, decelerate; small | Windows: `ProgressRing`. PWA: the answer's ring. Apple: `ProgressView`. Android: `CircularProgressIndicator` | Cross-fade; the ring is still |
 | Toast and banner | In-app toasts; banners such as a new version being ready (a machine going offline is never a banner, §6.1, #950) | The event it reports | It slides 12 in from its edge and fades in, and what is below eases down to make room (Easing aside). It leaves the same way, quicker, and what was below eases back | `toast`: standard, decelerate; fast out; small | Windows: `InfoBar` with the tokens, on leaving too. PWA: the tokens on the banner coming in; a leaving one's copy, which nothing can find or tap, goes back the way it came, and the space eases closed over `shift`. System notifications are each OS's own | Cross-fade |
 | Sheet | The delegate sheet on iOS (§6.3), and any phone sheet | Opening a delegate; dragging between detents; dismissing | The sheet rises from the bottom edge and the scrim fades in. While dragged it follows the finger with no easing, and on release it settles at the nearest detent | `sheet`: emphasis, decelerate; standard out | iOS: `.sheet` with `.presentationDetents([.medium, .large])` and the system's spring. Android: `ModalBottomSheet`. PWA: the tokens on transform | Cross-fade at the detent. A drag still follows the finger |
 | Menu and flyout | The row menu, Sort, the overflow menu, flyouts | A click, a long press, Shift+F10 or the menu key | It fades in and settles 4 from its anchor. Choosing an item acts at once, and the menu fades out | `menu`: fast, decelerate; fast out; nudge | Windows: `MenuFlyout`'s own. PWA: the tokens, on a popover where supported. Apple and Android: the system menus | Instant |
 | Scroll to a question | The open session's conversation, and the list when a notification opens a session | A question arrives while the person is at the end of the conversation; a toast, the tray, the menu bar, a waiting row or (in the PWA, until #253 reaches it) a Needs you entry opens a session; Jump to latest is chosen (§6.4), which scrolls to the end as the person asked, scrolled back or not | The view scrolls smoothly to the question or the row. It never scrolls a conversation the person has scrolled back through (a response growing below on its own doesn't count: the reader is still at its end), is touching, or has the pointer over, nor one in a page or app in the background. For 500 ms after a question appears in a conversation on screen (arriving, shown as its session opens, shown again as its tab, the Sessions page or the app comes back (the window taking the focus back included, visible all along or not), moved as the inspector is shown or hidden or the window crosses a layout width, moved where it is by anything above it changing height (the title wrapping, a tool line, the response, the reasoning or your message, a kept draft dismissed or an answer's receipt going, the delegate strip or a banner appearing or going), by the conversation being pulled back as it gets shorter, or sideways as the window or a pane is narrowed or widened, or becoming answerable as its machine's hold lifts or its machine starts taking answers), or is scrolled into view (a notification's answer focused included), a click or tap on its choices, Approve once, Deny or Send is ignored, so a click already on its way to what was there can't answer it. Needs you's Approve once, Deny and Resend wait the same way after the lane changes (an entry arriving, going or moving, and its answers moved by an entry above growing as its answer goes, by anything above the lane changing height, a banner or the app bar appearing included, or by the list being pulled back as rows below get shorter or go while it is scrolled to its end; an answer's status appearing below the last answers, or the list scrolling, moves nothing and doesn't restart it) or comes back on screen, and while a session opened from it scrolls the list to its row. A smooth scroll to it counts from where it comes to rest; a scroll the person makes after that doesn't restart the wait, unless something above the answers changes height in the same moment, which counts as a move (the scroll and the move can't be told apart). A scroll pulled back to its end (what it scrolls got shorter, or it got taller) is never set aside as the person's: it counts as a move. A click or tap on an answer first reads where the answers are: moved since they were last read (an update drawn in the moment before the click), or unreadable, the click is ignored and the wait starts. A key acts at once | `scroll`: emphasis, standard | Windows: `StartBringIntoView` with `AnimationDesired`; the answers' places read after each layout pass and scroll (`AnswerWatch`) and as a pointer presses one, setting aside only a scroll the person makes (a wheel, a finger, a key or the scroll bar). PWA: `scrollIntoView` with smooth behaviour, at the browser's pace; the places read on `ResizeObserver` and scroll events (`watchMoves`) and as a click comes. Apple: `ScrollViewReader`. Android: `animateScrollToItem` | Instant: a jump |
-| Reorder | The session list (#164) | Alt+↑/↓; Move up or Move down; a drag by the handle; an order change arriving during a return's grace (§6.1, #950) | By key or menu, the moved row slides to its new place, and the row it passed takes its own new place at once. In a drag, the row follows the pointer, a line shows where it will land, and on drop it settles into place. No other row moves | `reorder`: standard, standard | Windows: no `ReorderThemeTransition`, which slides the neighbours. Apple and Android, later: the system list's drag, whose gap follows the finger | Instant |
+| Reorder | The session list (#164, #592) | A touch hold then drag; a mouse or pen drag; Alt+↑/↓; Move up or Move down; a screen reader's move action; an order change during a return's grace (§6.1, #950) | The whole card lifts, then follows the pointer 1:1 with no easing. Its neighbours ease one slot aside, leaving a card-sized gap where it will land: no insertion line. The order commits at release; the card settles into the gap and lowers. A key, menu or screen-reader move trades the moved card and its neighbours together, without a lift. Automatic return updates use the move, never the lift; return-grace order changes retarget changed rows from their drawn places. Only rows whose places changed move | `reorder`: standard, standard | Windows: pointer-driven in-list drag, Composition `Translation`, not OLE drag, its ghost or caption, nor `ReorderThemeTransition`. PWA: Pointer Events and transforms with frame-coalesced FLIP, not HTML5 drag-and-drop. Apple and Android: system list drag mapped to this contract | Instant gap, neighbours, drop and cancel. Only the held card follows the pointer |
 | Collapse | A phone's session header (§6.2, #620) | Scrolling the conversation up 64 or down 32 in one direction, mid-conversation; a tap on the bar's title; focus moving into the header | The header slides down over the conversation, or back up under the bar. The conversation never moves. Near the top there is no motion of its own: the header rides with the scroll | `collapse`: standard, standard | PWA: the tokens on transform. Apple: the large title's own collapse. Android: the top app bar's scroll behaviours | Cross-fade |
+
+**Lift and make room (#592).** The lift uses `fast` and `decelerate`: scale 1.02 about
+the card's centre, a 5% Bridge tint on `card` (4% in light), the drag shadow, a `stroke2`
+edge and `radius.card`. A selected card keeps its selection pill and selected overlay;
+the grip changes from `text3` to `text`. It sits above rows and headers, below chrome,
+menus and toasts. The approved shared shadow is `surface.dragShadow` (0 8 16; black at
+0.28 dark, 0.14 light) plus `surface.dragShadowEdge` (0 0 2; 0.24 dark, 0.12 light).
+The `lift` catalogue entry and these shadow resources from closed #605 are not generated
+on main yet: P6 (#593) and A4 (#594) must add them through design-gen, not client literals.
+Do not add a catalogue row without its matching token. Windows uses a Composition
+`DropShadow` on the card, not a `ThemeShadow` on its header too.
+
+Neighbours, drop and cancel use `reorder` (167 ms on Windows and the PWA), interrupted
+moves retarget from their current drawn position, never queue. The layout changes once,
+not on every frame: only composited transforms move; list height and row sizes stay fixed
+during a drag. Headers never lift or exchange places with a card; crossing a section
+boundary may ease its header one slot as that section grows or shrinks.
+In forced colours a 2 px `Highlight` outline replaces shadow and tint, and the gap has a
+dashed `GrayText` outline. Reduced motion has no sink, scale, shadow or tint: an outline
+marks the held card, and the gap, neighbours, drop and cancel change at once.
 
 Most recent's automatic batches (§6.1, #628) use `reorder` for the moved rows and `shift`
 for neighbours. The PWA retargets from the current on-screen positions with FLIP, anchors
@@ -600,7 +633,8 @@ makes no screen-reader announcement. The 500 ms approval wait still counts from 
 - Android: "Remove animations" (an animator duration scale of 0).
 
 Under it:
-- Nothing travels: every distance is 0.
+- Nothing travels: every animated distance is 0. A held card or sheet still follows the
+  pointer directly; that is the person's movement, not an animation.
 - An entry marked cross-fade fades over `crossFade`, so a screen or a toast doesn't
   just blink in. Everything else changes at once.
 - The glyphs and the progress ring are still (§2.1, §9).
@@ -691,13 +725,77 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
 - **New sessions** go to the top of Sessions once, then stay put, in no group unless they
   continue a grouped session ("Groups", below). A machine's first list is
   placed together, newest first, once the machine has sent all of it.
-- **Moving** is the person's only: Alt+↑/↓ on a row; a drag by the handle that shows on hover
-  (mouse or pen); or the row menu, opened by a long press on touch, a right-click, or
-  Shift+F10 / the menu key.   Its items are Move up, Move down, Pin (or Unpin), Move to group, and for a row in a
-    group, Remove from group (#767). Alt+↑/↓ and Move up and Move down cross the edges between your groups and Sessions
-  ("Groups", below), but never into or out of Pinned: Pin and Unpin do that. A row dragged
-  into or out of Pinned is pinned or unpinned; a row dragged into a group, or onto a group's
-  header, open or collapsed, joins that group.
+- **Moving** is the person's only (#592; §5.3's lift and make room):
+  - **Touch holds first:** a long press anywhere on the card, 500 ms on iOS and 400 ms on Android
+    (the platform's timing; the PWA matches its device, 500 ms elsewhere). A 150 ms hold on the
+    grip lifts sooner, but touch movement never bypasses the hold. A move of more than 10 px before the hold completes
+    scrolls instead; a sideways move cancels the hold. A quick swipe never reorders.
+    During the hold the press fill appears at once and the card sinks to 0.985 linearly;
+    reduced motion has no sink. Hold then release without moving opens the row menu.
+    Suppress the system callout, loupe, link preview and text selection, not native scrolling.
+    Cards allow vertical panning until lift; the grip does not scroll.
+  - **Haptic:** one light tick at lift, where supported, never per slot. Windows supports
+    pen haptics only; no sound or extra-motion substitute for unavailable touch haptics.
+  - **Mouse or pen:** pressing the hover grip lifts at once; dragging the card body more
+    than 4 px lifts. A click still opens the session and a right-click opens its menu.
+    Capture the pointer at lift, not at press. Windows touch holds 500 ms with 10 px slop.
+  - **Grip and hint:** in Your order reserve a 24 px grip column, the card's full height,
+    on touch and hover alike, so hover never shifts content. Touchscreen-and-mouse laptops
+    may show every grip there. Show no grip and no reserved column in Most recent or Machine.
+    The hint shows once, unprompted, when a touch user first sees Your order with at least 2
+    movable sessions after filtering; persist that flag on the device. Tapping the grip also
+    shows it every time those conditions hold: "Press and hold a session to move it. Or use
+    Move up and Move down in its menu." It uses `toast`, fading only under reduced motion.
+  - **Keys and menu:** Alt+↑/↓ and Move up and Move down use the same make-room motion;
+    focus stays on the moved card, scrolled into view if needed. The menu opens by
+    hold-and-release, right-click, Shift+F10 or the menu key. It keeps Move up, Move down,
+    Pin (or Unpin), Move to group, and Remove from group for a grouped row (#767).
+    Keys and Move up/down cross your groups and Sessions as "Groups" below says,
+    never into or out of Pinned: Pin and Unpin do that. Touch screen readers retain
+    Move up, Move down and Pin/Unpin actions or the equivalent accessible row menu.
+  - **Gap and groups:** follow from the pickup offset, vertically in one column. The nearest
+    slot centre selects the landing gap, with 1 px hysteresis. Neighbours move one card
+    height plus its row gap. No other rows reorder themselves. A drag into or out of Pinned
+    pins or unpins, preserving group membership. The boundary stays visible; the target
+    header says "drop to pin" or "drop to unpin". A Pin/Unpin chip replaces the age:
+    solid Bridge fill, on-Bridge text, at least 4.5:1 in light, dark and high contrast.
+    A drop onto a user group's header, open or collapsed, joins at its top (#1860).
+    Hovering the held card over a collapsed group header for a short hold opens it to
+    expose its slots (#2072); merely passing over must not toggle it.
+    With no pinned rows, Pin in the menu remains the only route into Pinned.
+    While dragging the last pinned card, keep "Drop here to keep it pinned" in Pinned;
+    while a pinned card is held and Sessions is empty, show "Drop here to unpin" in Sessions.
+    These temporary targets disappear on completion; dropping there announces Pin/Unpin.
+  - **Edges and columns:** auto-scroll only after moving 4 px from lift, in the top or
+    bottom 10% of the visible list, clamped to 40–80 px. Speed is
+    `1000 px/s * (depth / zone)^2`, integrated per frame, stopping on leaving the zone.
+    Re-evaluate the landing slot each frame. Direct auto-scroll still works under reduced
+    motion. No new PWA two-column layout is required; where a grid exists, slots are
+    row-major within each group, headers span columns, and the gap is one card.
+  - **Release:** the order is committed at release and kept per device, never after the
+    settle. Settling is visual only; a key or menu move during it stays committed, and a
+    press during the settle resolves against the committed layout, not sliding visuals.
+    Host list updates reach the model at once but their structural rendering waits until
+    completion; status glyphs may still cross-fade. Flush queued changes before measuring
+    the final settle target.
+  - **Cancel:** Escape, a release more than 32 px outside the list, pointercancel without
+    a continuing touch stream, lost focus, hidden page, second touch, leaving Your order,
+    or recycling the held view restores the card and order with the same settle.
+    Outside by more than 32 px, show "Cancel" in place of its age and the origin gap;
+    returning inside resumes the drag. The PWA may hand a cancelled pointer to that same
+    continuing touch's events; touchcancel ends it. If the held session ends, cancel the
+    move and fade the card where it is; neighbours close the gap over `reorder`, instantly
+    under reduced motion. Announce "*title* ended. Move cancelled.", never a return position.
+  - **Announcements:** politely on lift, "Picked up *title*, position *N* of *M* in *group*.";
+    on a changed slot, at most every 500 ms, "Position *N* of *M*." (with pinned state when
+    crossing); on drop, "Moved to position *N* of *M* in *group*.", or "Pinned. Position *N*
+    of *M* in Pinned." / "Unpinned. Position *N* of *M* in Sessions."; on ordinary cancel,
+    "Cancelled. Back at position *N* of *M*." The ended-session cancellation has the same
+    priority. Selection and keyboard focus stay with the surviving moved card.
+  - **Answer safety:** lift arms the existing answer guard (§5.3, Scroll to a question),
+    held throughout dragging and for 1 s after drop, cancel, abandoned hold or key/menu move.
+    This adds no permission to answer; all existing eligibility and synchronous target
+    checks still apply. No motion blocks ordinary input or changes an approval's target.
 - **Pins:** a pinned row goes to the foot of Pinned, and an unpinned one to the top of
   its group, or of Sessions when it is in none. Pinning keeps a row's group: it shows in
   Pinned only, and comes back to its group when unpinned.
@@ -755,7 +853,8 @@ launch lineage may come later, on top of this, once hosts report it.
   Expanded, the trailing edge is empty, since its rows show their own state. A header has no
   status glyph, age or second line: a group isn't a session.
 - **Toggling:** a click or tap on the header, Enter or Space, → and ← (§9.2). It changes at
-  once, as §5.3's Disclosure: its rows' space opens or closes and nothing below slides.
+  once, as §5.3's Disclosure: its rows' space opens or closes and neighbours ease aside over
+  `shift`, without laying out again on every frame.
   Collapsing a group holding the open session keeps it open; keyboard focus on a row inside
   goes to the header (§9.1 A4).
 - **Its menu** (the ⋯ button that shows on hover or focus, a right-click, a long press on
@@ -1601,6 +1700,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   fill in two at a time between input turns, paused during a scroll or pan, without moving what
   the reader is looking at (#1767). This does not change host page sizes or transcript reads.
   Turns stay virtualized; a realized turn measures all its response blocks together.
+  Windows replies, including `activity.notice`, stay under their owning turn (#2144), never a
+  queued owner's. Live/history deduplication uses ids; delayed pages cannot erase newer live
+  replies. Trimmed prompts keep their text and origin; loaded replies refresh the live pane.
+  Provisional live messages show no sent time until matching history supplies it.
   It opens at the end, on the latest reply, and stays there as replies arrive until the person
   scrolls; once they scroll, a new reply never moves the view (#1635, #1646). Reasoning, tool lines,
   delegate events and questions are still to come. The Windows app loads earlier turns a page
@@ -1665,7 +1768,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 - **Code blocks** (#296): in the Code role (§4.3), wrapped to the block's width rather than
   scrolled sideways, with Copy in the top-right corner above the code (with the copy icon in the app):
   "Copy", then "Copied" (or "Copy failed") for 1.5 s, named "Copy code" whatever it shows, the
-  outcome said to a screen reader. Every code block reads strictly left to right, and a
+  outcome said to a screen reader. A paragraph holding only one bare inline code span uses this same block and Copy
+  in the Windows app and PWA (#1433, #1432). Inline code within a sentence, multiple
+  spans, headings and table cells keep their existing inline rendering; plain text is
+  never detected as a command. Approvals remain literal and have no Copy.
+  Every code block reads strictly left to right, and a
   character that is not on screen as it runs (bidi controls, zero-width and other format or
   invisible characters, and a bare carriage return, which a shell does not take as a line break)
   is drawn as a visible escape such as `\u2067` (#220, the owner's
@@ -1947,8 +2054,17 @@ machine, online ones first, then the account's offline machines (#213):
   Its update line shows a "Needs you" line from the host (#800) in any phase, in the host's words.
   While the six-hour backstop skips for a question waiting (below), it reads exactly
   "Update ready · waiting for a question to be answered", never "answer at the machine".
-  Every action is the same small secondary button. Check for updates, for every machine at once,
-  sits under the rows in the same column.
+  Actions use small secondary buttons, except the primary Update now. Check for updates, for
+  every machine at once, sits under the rows in the same column.
+- **PWA update block (#2187):** one glyph and status line, one text2 "Checked 36 min ago"
+  line when known, then a 44 px secondary **Check now** button, never a link. Status reads
+  "Up to date · *version*", "Update available · *version* (running *version*)", "Checking…",
+  or "Not checked yet". When **Update now** is offered it is the only primary action and
+  Check now is absent. Feed/quota sentences are hidden; a limited check alone adds
+  "Last check was limited. The machine said to try again after *time*." as Check now's description.
+  That legacy clock has no date or timezone: Check now stays usable and the host enforces its
+  real hold. A busy or checking machine still disables the action.
+  A check limit never hides Update now or the legacy Install action for a known update.
 - **Update now** (#1159; built in the PWA, slice 3; the Windows app's is slice 4; Creative's rules, 6711605555, are spelled out in
   [v1-update.md](../protocol/v1-update.md#what-the-person-sees)): beside Install, only when an
   update is ready and this device can carry it out; otherwise the row says why in text2. A quiet
@@ -2064,12 +2180,18 @@ machine, online ones first, then the account's offline machines (#213):
          (the host's working-set sum, labelled "memory in use", not unique RAM). Fewer than three: show
          those; none: "No session to pause." and no Relieve (rule 7).
        - A change of the Health word is announced once, politely; refreshed figures are not announced.
+       - **PWA card structure (#2188):** the existing load feed reports freshness, not a health band,
+         so Health says "Not measured yet". CPU and Memory use fixed label/bar/value columns and
+         whole percentages; memory also shows free GB. Each bar has its freshness mark and word.
+         Age is "Updated 12 s ago" or "Last measured 4 min ago", from the record, never a new timer.
     4. **Can run.** Collapsed line "2 agents · 6 models". Open: each agent with its models, efforts and
        contexts exactly as the host lists them. Not reported: the section is hidden.
     5. **Running.** Collapsed line with counts by state, "3 working · 5 idle · 1 needs you", zero
        counts left out. Open: one session row per session (the §5.1 row: title, state; line 2 "model ·
        effort · context"), the first five, then "Show all N" in place. Not reported: the count from
        line 2 only. "Needs you" rows open the session as in the lane (§6.1).
+       The bounded PWA #2188 disclosure opens **Show sessions** through the existing machine
+       callback; the inline session list is a follow-up. Can run stays absent when unreported.
     6. **Launch here.** In Actions when the machine is Online and not View only. Opens the New
        session flow with this machine chosen. Offline, View only and "Discovery held" hide it, and a
        line says why in text, not only a tooltip.
@@ -2087,14 +2209,15 @@ machine, online ones first, then the account's offline machines (#213):
     9. **The page.** One line heads the list: "5 machines · 4 online · 1 tight", text only. The
        "All machines" row does not exist: it is a filter on the Sessions page, not a machine. The
        machine rows stay online first, then offline (§6.6).
-    10. **Phone, and any width under 900 px.** One column. Header, Health and Actions always show. Can
+    10. **Phone, and any width under 760 px.** One column. Header, Health and Actions always show. Can
         run and Running are disclosure rows: real buttons, `aria-expanded`, closed by default; a
-        machine's open state is kept while the page is shown, and is not saved. A tablet in portrait
-        uses this layout, centred, at most 640 px wide.
-    11. **900 px and wider (iPad landscape, the Windows app, a browser):** the machine list on the left,
-        its rows as above plus the Health word on line 2; the selected machine's tile on the right with
-        Can run and Running open, in two columns. With none selected, the first machine is. The right
-        pane takes the width the rows do not use.
+        machine's open state is kept while the page is shown, and is not saved. At most 640 px wide.
+    11. **Wide Fleet page (#2068, owner decision 2026-11-11):** every machine is an expanded card
+        in an equal-width, wrapping grid, with no machine selector or detail pane. The PWA uses two
+        columns from 760 px (including iPad portrait), three from 1100 px and four from 1500 px,
+        filling the page's available width. The Windows Fleet page follows the same grid rule
+        (#1868); this PWA slice does not implement Windows. Launch here and Show sessions are
+        available without selecting a card; offline cards remain quieter, after online cards.
     12. **Offline.** Header and Forget only; Health reads "Offline · last seen *time*". No earlier
         figures are shown as current. A machine whose bridge isn't running keeps §6.14's words, with
         Health hidden.
@@ -2112,7 +2235,8 @@ machine, online ones first, then the account's offline machines (#213):
     all three colour modes; a missing figure is omitted, not "0"; Tight with 0, 1 and 3 or more
     sessions; Relieve hidden when Healthy, Not measured, View only and Offline; Relieve confirmation
     names only the title and focuses Cancel; Cancel and Escape change nothing; "All machines" absent;
-    900 px layout switch at 899 and 900; disclosure state per machine; no height change on refresh;
+    eight expanded cards at phone and iPad portrait/landscape widths, no selector or unused gutter,
+    touch and keyboard access through the last offline card; disclosure state per machine; no height change on refresh;
     UIA names and tab order in the Windows app; the same host record gives the same words on the PWA
     and the Windows app.
 
@@ -2485,16 +2609,21 @@ characters of the commit the build was made from, `dev` for a local build) and t
 built, in the person's locale, with a Copy button; the build writes both to `config.js` and to a
 `version.json` the worker always fetches from the network, so Quality and the owner can say which
 build was tested.
-**Check for updates** (#1965) asks the existing release controller on a press only.
+**Check for updates** (#1965) asks the release controller on a press.
 It reads **Checking…**, aria-disabled and busy but still focusable (repeat presses do
 nothing), then says **Up to date**, **Installing the
 new version…**, **A new version of the app is ready.** with **Reload**, or **Couldn't
 check for updates.** in a polite live region. A differing published id appears as
 **Newer version** with its build date. Installation hides Check; only an observed
-activation/takeover offers Reload, which never runs on its own. If Check owns focus
+activation/takeover offers the ready result. An installed worker that has not taken
+over after 10 seconds says **The new version installed but hasn't started.** with
+**Reload** (#1278). Reload never runs on its own. If Check owns focus
 when hidden, focus goes to the installation result or, when ready, Reload; focus
 moved elsewhere stays there. Copy feedback is
-separate from the update result. Automatic checks and stalled installs stay on #1278.
+separate from the update result. A check also runs on open and each return to the
+front, at least five seconds after the last check; it says nothing unless a newer
+release is found. Failed installs reported by the banner also show its exact sentence
+in This app; a successful install clears that failure. No reinstall advice is shown.
 
 **An agent's row today** (the creative director's #784 words; #705's per-row names and
 verbs). Every state is words on the row, with at most one verb:
@@ -3459,7 +3588,7 @@ against that platform's own guidelines before it is built.
 **Lines that outlive their cause, on every client (#1193):** a line says something about a
 cause: a question waiting, a press counting down, a machine busy. When the cause is gone, an
 amber or red line becomes a neutral closed line, or goes. It never sits. The rule, and what each
-line does:
+line does (the Windows card's failed/refused answer receipt is an exception, #2212, below):
 - **A closed line stays at least 5 s** (`LINGER_READ_MS`, as an entry in the Needs you lane,
   §6.1), so it can be read, and then goes unless it is part of the conversation (below).
 - **A question that has left the session's list** is shown as the question as it was asked, kept
@@ -3498,12 +3627,19 @@ they are un-parked.
 
 **Windows (WinUI 3):**
 - **Lines that outlive their cause (#1193, #1195):** an error or warning line lasts only
-  while its cause stands. When the question it was about closes, a refused, stale or failed
+  while its cause stands, except for a failed or refused answer delivery on the session card
+  (#2212): its existing red "Your answer: Couldn't send it: …" or
+  "Your answer: The machine refused this answer: …" receipt stays after the question closes,
+  even when the outcome arrives later, but only while no question is live. A new question or the
+  same question returning clears that card receipt. Keeping a typed draft when the question closes no longer
+  suppresses its receipt.
+  When the question it was about closes, a stale
   answer line becomes the neutral "No longer waiting" (no tone, never prefixed "Your answer:"),
   is kept 5 s so it can be read, then goes; a busy line goes with its 2 s pause. A held
   answer ("offline", the machine was not connected so nothing was sent) says why it could not
-  go, so it is treated like a refused one. Only delivered and unconfirmed ("Sent, but not
-  confirmed") lines stay. A toast that says an
+  go, so it becomes the same neutral closed line. Delivered and unconfirmed ("Sent, but not
+  confirmed") lines stay as before. Toast and closed-question history rules are unchanged:
+  a toast that says an
   answer did not go is withdrawn when its question closes, and one that would arrive after is
   not shown.
 - **Window:** Mica, with a custom 48 px title bar carrying the mark, the app name (12/16)

@@ -286,9 +286,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    re-run (attempt 2 on) never joins `ci-main` but gets its own run-id group, like a run by hand,
    so it runs beside them and can't take a waiting push run's place and leave that push's commit
    untested (#938's review). GitHub promises no
-   order between push runs: the merge rule reads the current main commit's push run and its
-   named test jobs, not an older finished run. Missing or cancelled jobs and read errors hold;
-   there is no green-ancestor fallback for merging (item 9).
+   order between push runs: the merge rule ignores cancelled runs and unfinished product
+   evidence, judging the newest usable named-job result (item 9).
    So a main run's change is everything since the last commit main's CI
    passed on: the plan reads `ci.yml`'s passed push runs on `main` (the newest 100, through the
    `actions: read` token), takes the newest whose commit is an ancestor of this one, fetches
@@ -297,6 +296,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    or the runs unreadable, runs the whole ring, never "no change". A docs-only push to `main`
    runs what docs select (`light`'s link check, say), not the app or the product's builds.
    Pull requests keep cancelling a superseded run, and a run by hand its own group.
+   Known docs/ordinary-test-only main changes also skip `product` through its plan output.
+   The selector proves test-source ownership through the project graph: files linked into or
+   referenced by shipped projects, embedded protocol examples, whole-ring inputs (including the
+   selector's tests), and unclassifiable paths still run product. PRs still test changed tests;
+   unknown-base main runs keep the whole ring. There are no push-trigger path filters.
 
    **Packaging needs an app reason over a known range (#1910).** Pull requests and main pushes
    with a proven base pass
@@ -513,8 +517,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    green.
    - `merge-rule` is a commit status that main's copy of `.github/workflows/merge-rule.yml` posts
      on each open pull request's head, from `agent-bridge-quality merge-rule` (`MergeRule.cs`) and
-     the rules in [`merge-rule.yml`](merge-rule.yml): main green, that is every named test job
-     in main's latest push run of `ci.yml` passed at its own latest attempt, unless the pull request has the
+     the rules in [`merge-rule.yml`](merge-rule.yml): main green, that is its newest completed
+     product evidence in `ci.yml` passed the named jobs at their own latest attempts, unless the pull request has the
      `fixes-main` label; not a draft; no `hold` or `do-not-merge`
      label; an independent-review receipt on the head (see the standing rule below; a Copilot review is optional and an errored one is ignored, #706); CodeQL's latest run on the head green and
      code scanning's `CodeQL` check not failed; every other check run and status on the head
@@ -530,22 +534,26 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      share a head get the worst of their verdicts, since a status belongs to the commit.
    - Main must be green, since auto-merge doesn't pause while main's CI is red and would keep
      landing pull requests on a broken main, which makes the breakage hard to untangle. Each run
-     reads main's current ref once and selects that commit's latest `ci.yml` push run, not the
-     run that finished last or an older commit whose run id is newer. The single
+     walks main's `ci.yml` push runs newest first, across up to 100 runs. A cancelled run never
+     counts. A candidate needs a successful completed plan and completed product instances;
+     queued, in-progress or cancelled named jobs pass the run over. A failed plan or a
+     classification-skipped product family also passes it over. A newer main head still running
+     does not block; the pull request's own running checks still do. The single
      `main_green.jobs` list pins exact display names for ha-integration, spikes, spikes-linux,
      light, pwa-ui, pwa-e2e and app, including every static shard and runtime. Product is a
      dynamic family: at least one entry must exist and every present instance must pass; runners
      omitted by the plan are not required. Entirely absent families still hold.
      The aggregate quality-gate is excluded because it waits on installer. The plan job must
-     succeed. Only then may completed `skipped` entries count as green, including GitHub's
-     unexpanded matrix-family skipped entry: the selector chose not to run that family.
-     Otherwise every named instance must succeed: missing, renamed, running, red or cancelled holds.
+     succeed. Completed `skipped` siblings count as green, including GitHub's unexpanded
+     matrix-family entry; a skipped product family is not product evidence. Every named job
+     that ran must succeed: a failed product or sibling holds main red, even beside skipped
+     siblings. Missing, renamed or neutral named jobs never grant green.
      Jobs are paged across all attempts, then judged by their own latest attempt (and job id
      within an attempt), so rerunning only failed jobs can free main without discarding earlier
      successful jobs. Installer, signing and publishing results do not hold, even if red or
      pending; the evaluator prints them as non-gating jobs for Quality's main-red log.
-     There is no green-ancestor fallback for missing or cancelled named jobs. Main unread, or
-     with no push run for its current commit, fails closed. The fix itself gets the `fixes-main`
+     Unreadable history, plan or product data fails closed without fallback. No usable run in
+     the bounded history also holds with an explicit reason. The fix itself gets the `fixes-main`
      label (`main_green.exempt_labels`) from the merge coordinator, since labels take triage
      rights: it skips this check and nothing else, the independent review included. CI finishing
      on main starts a run, so verdicts follow main to red and back.
@@ -565,14 +573,15 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      requirement, are resolved with `quality/resolve-bot-threads.ps1`.
    - A pull request can't loosen its own gate (#487, Finding 1): every trigger
      (`pull_request_target`, `status`, `workflow_run` of every other workflow, `check_suite`, a
-     10-minute `schedule`, `workflow_dispatch`) runs main's copy of the workflow, which checks out
+     30-minute `schedule`, `workflow_dispatch`) runs main's copy of the workflow, which checks out
      and builds main and reads the pull request only through the API. Each run judges every open
      pull request, one run at a time, so a run starting turns a head pending, a late red flips the
      verdict, and no stale read lands last.
      Changing the rule means changing `quality/`, `.github/` or the tool,
      all sensitive, so it takes an independent review and only applies once merged. Reviews reach
      it through a relay workflow (`merge-rule-review.yml`), since `pull_request_review` runs the
-     pull request's copy. The schedule is the backstop, Dependabot's pull requests included.
+     pull request's copy. The schedule is a backstop only, Dependabot's pull requests included.
+     This slows the same timer; it adds no new timer and does not replace event-driven evaluation.
    - CodeQL is judged here, not by a `code_scanning` rule: since #464 a pull request whose
      languages CodeQL skips uploads no results, and that rule would wait for them forever.
      A CodeQL run that ended `skipped` (a pull request opened seconds before `ready_for_review`,
@@ -599,7 +608,23 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      (`--pr N` for `pull_request_target`, `--sha` for `status`, `check_suite` and `workflow_run`),
      with no 45 second wait and no build: the evaluator is restored from a cache keyed by a hash of
      its source, and built (then saved) only when main changed it. Admission coalesces events per
-     head, separately from global sweeps (#1922); skipped events have unique admission keys.
+     head, separately from main sweeps, cron and dispatch (#1922, #2130); skipped events have unique admission keys.
+     Before joining the writer queue, cron checks for other queued, pending or waiting scoped
+     evaluations. It yields only to a positively identified fresh scoped job; a queue at least
+     30 minutes old, unreadable/incomplete API data, or an unknown queued job name lets it run
+     with a warning. Versioned job display names classify scoped evaluations versus sweeps;
+     this is a weak API classifier, so unknown names never suppress evaluation. Main sweeps,
+     dispatch and event runs bypass this check. Cron admission cannot displace a main sweep.
+     Fresh replacements cannot keep deferring cron: yielding also requires a completed cron
+     writer within the last 30 minutes, established from completed schedule runs and their
+     actual writer jobs. Writer success or failure counts; skipped/cancelled jobs do not.
+     No such writer, or unreadable history, warns and proceeds. The age is measured at writer
+     completion, not the creation time of whichever scoped job is queued now.
+     This adds one short read-only job per cron, four paginated active-run lists plus job lists;
+     a proposed deferral also reads one page of ten completed cron runs and at most ten job lists,
+     stopping when recent writer evidence is found, otherwise warning and proceeding.
+     It is not a resolver job per event. Event cancellation and all triggers stay
+     unchanged; event-admission coalescing remains a follow-up.
      Every admitted writer then waits in the shared `merge-rule` job group with `queue: max`,
      reading main only after taking that lock. A scoped event cannot displace a sweep or another
      head; a newer sweep replaces only a pending sweep, and still judges every open PR. A scoped run that finds main not
@@ -815,6 +840,19 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   nothing new costs no rate limit. The Quality Lead puts its one-line result in the 08:00 digest and
   in the weekly report. A failure that went green on a re-run is invisible to it, so it undercounts.
   Offline test: `quality/test-red-minutes.ps1` (catalog suite `red-minutes-script`).
+- **The win-arm64 waiver** (#2564, owner decision 2026-11-13, until **2026-11-20 00:00 PT**, 08:00 UTC):
+  while the repository variable `ARM64_WAIVER` is exactly `on` (off or unset waives nothing; the owner
+  sets it), `quality-gate` counts a failed needed job as success when its only failures are
+  `app (win-arm64)`, `app-installer (win-arm64)` or `product (windows-11-arm)`, matched exactly,
+  and every other leg of that job succeeded.
+  [arm64-waiver.ps1](arm64-waiver.ps1) reads the run's jobs from the API, because a matrix is one
+  result in `needs`, and compares the clock with the expiry itself, so the waiver ends with no edit.
+  Any API error, any other job that did not succeed (x64 included), and a cancelled, timed-out or
+  skipped leg waive nothing. The Arm64 jobs still run and stay red, and `publish-gate` still reads
+  `app`'s raw result, so main doesn't publish while they fail. Remove it (script, test, catalog suite,
+  the gate's two steps) once #2563 and the self-test fix are on main and three main push runs in a
+  row show the three jobs green; extending it needs a new owner decision.
+  Offline test: `quality/test-arm64-waiver.ps1` (catalog suite `arm64-waiver-script`).
 - **The weekly report** (`weekly-report`, [weekly-report.yml](../.github/workflows/weekly-report.yml))
   is how the flake record gets read, so flakes are fixed rather than re-run. Every Monday at 08:00
   PT, `agent-bridge-quality report` reads the past 7 days from GitHub and the workflow comments it

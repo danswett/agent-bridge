@@ -28,8 +28,7 @@ permissions:
 # (re-runs, below, run beside them). GitHub promises no order
 # between them, so nothing here relies on one: each run plans from the last commit main's CI
 # passed on, so a replaced run's changes are tested with a later one (the plan job), merge-rule
-# passes over a replaced run only when the newest run's commit builds on its commit, and
-# otherwise blocks until it's re-run (quality/README.md §4.9), and publish's own checks keep
+# ignores cancelled or unfinished product evidence (quality/README.md §4.9), and publish's checks keep
 # releases in version and commit order (publish-gate). A re-run (attempt 2 on) never joins
 # ci-main, so it can't take a waiting push run's place: like a run by hand, it's grouped by its
 # own run id, never cancelled.
@@ -226,9 +225,9 @@ jobs:
             $ring = if ($env:WHOLE_RING -eq 'true') { 2 } else { 1 }
             ./quality/plan.ps1 -Ring $ring -Base $env:BASE -Head HEAD -CompareRing1:($ring -gt 1) -Narrow app,app-installer -ExcludePlatform win-arm64 -Jobs $jobs
           } elseif ($env:EVENT -eq 'push' -and $env:BASE_KNOWN -eq 'true') {
-            # Main keeps every product platform, but the whole ring alone needs no packages.
+            # Main keeps every selected platform; proven docs/ordinary tests need no product run.
             $ring = if ($env:WHOLE_RING -eq 'true') { 2 } else { 1 }
-            ./quality/plan.ps1 -Ring $ring -Base $env:BASE -Head HEAD -CompareRing1:($ring -gt 1) -Narrow app,app-installer -Jobs $jobs
+            ./quality/plan.ps1 -MainPush -Ring $ring -Base $env:BASE -Head HEAD -CompareRing1:($ring -gt 1) -Narrow app,app-installer -Jobs $jobs
           } else {
             # Unknown main base: HEAD^1 alone cannot prove earlier app changes were packaged.
             # Keep full packaging, as on a manual whole-ring run.
@@ -595,6 +594,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/arm64-foreground
+        if: matrix.runtime == 'win-arm64' && matrix.runner == 'windows-11-arm'
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
@@ -713,6 +714,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/arm64-foreground
+        if: matrix.runtime == 'win-arm64' && matrix.runner == 'windows-11-arm'
       - name: The matching tested release files from this run
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -1166,6 +1169,7 @@ jobs:
     #  - lab-scripts: the clean-VM lab's provisioning and runner-interface drafts, offline;
     #  - post-receipt-script: the receipts App's posting script, refusals and a dry run, offline;
     #  - red-minutes-script: the red-minutes figure's spell counting, offline (quality/red-minutes.ps1);
+    #  - arm64-waiver-script: quality-gate's time-boxed win-arm64 waiver, offline (quality/arm64-waiver.ps1);
     #  - rerun-known-flakes: the automatic re-run of a known flake on main, refusals included, offline;
     #  - forms-soak-scripts: the forms soak rig's redaction checks and a syntax check of its stub
     #    server, offline (tools/lab/forms-soak);
@@ -1217,6 +1221,11 @@ jobs:
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'red-minutes-script')) }}
         shell: pwsh
         run: pwsh -NoProfile -File quality/test-red-minutes.ps1
+      - name: The win-arm64 waiver waives only the three named legs, only before it expires
+        # Fixed needs and jobs JSON: nothing reaches GitHub.
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'arm64-waiver-script')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File quality/test-arm64-waiver.ps1
       - name: Known-flake re-runs refuse real failures
         # Against a stand-in for gh: nothing reaches GitHub.
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'rerun-known-flakes')) }}
@@ -1339,7 +1348,9 @@ jobs:
         shell: pwsh
         run: |
           pwsh -NoProfile -File quality/test-pages-workflow.ps1
+          $workflowExit = $LASTEXITCODE
           pwsh -NoProfile -File quality/test-pages-gate.ps1
+          if ($workflowExit -ne 0 -or $LASTEXITCODE -ne 0) { exit 1 }
       - name: Halt uploads validate before writing and verify the newest release
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'halts-upload-test')) }}
         shell: pwsh
@@ -1624,13 +1635,58 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      # Only the waiver step reads this run's jobs, which needs can't show: a matrix is one result.
+      actions: read
+      contents: read
     outputs:
       # Whether this run built and checked the app's packages: publish-gate publishes only then.
+      # The raw result, never the waiver's: main doesn't publish while an Arm64 leg is red.
       app: ${{ needs.app.result }}
     steps:
+      # Time-boxed win-arm64 waiver (#2564, owner decision 2026-11-13; quality/README.md §4.7):
+      # while the repository variable ARM64_WAIVER is exactly "on" and before 2026-11-20 00:00 PT
+      # (08:00 UTC, checked in the script), a needed job whose only failures are app (win-arm64),
+      # app-installer (win-arm64) or product (windows-11-arm) counts as success below. Those jobs
+      # still run and stay red; any API error or other failed job waives nothing.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ vars.ARM64_WAIVER == 'on' && contains(needs.*.result, 'failure') }}
+        with:
+          persist-credentials: false
+          sparse-checkout: quality
+      - name: Waive the failed win-arm64 legs, until 2026-11-20 00:00 PT
+        id: waiver
+        if: ${{ vars.ARM64_WAIVER == 'on' && contains(needs.*.result, 'failure') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SETTING: ${{ vars.ARM64_WAIVER }}
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          printf '%s' "$NEEDS" > "$RUNNER_TEMP/needs.json"
+          fetched=
+          for attempt in 1 2 3; do
+            if gh api --paginate --slurp "repos/$REPO/actions/runs/$RUN_ID/jobs?filter=latest&per_page=100" > "$RUNNER_TEMP/jobs.json"; then
+              fetched=yes
+              break
+            fi
+            sleep $((attempt * 5))
+          done
+          if [ -z "$fetched" ]; then
+            echo "::warning title=quality-gate::the jobs API failed 3 times, so no win-arm64 failure is waived"
+            exit 0
+          fi
+          pwsh -NoProfile -File quality/arm64-waiver.ps1 -NeedsFile "$RUNNER_TEMP/needs.json" -JobsFile "$RUNNER_TEMP/jobs.json" -OutFile "$RUNNER_TEMP/waived.json" -Setting "$SETTING" -SummaryFile "$GITHUB_STEP_SUMMARY"
+          waived=$(cat "$RUNNER_TEMP/waived.json")
+          if [ "$waived" != "[]" ]; then
+            effective=$(echo "$NEEDS" | jq -c --argjson w "$waived" 'with_entries(.key as $k | if ($w | any(. == $k)) then .value.result = "success" else . end)')
+            echo "needs=$effective" >> "$GITHUB_OUTPUT"
+          fi
       - name: Every job the plan selected passed, and none failed
         env:
-          NEEDS: ${{ toJSON(needs) }}
+          # The waiver's needs when it waived something, otherwise the real ones.
+          NEEDS: ${{ steps.waiver.outputs.needs || toJSON(needs) }}
         run: |
           echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
           bad=$(echo "$NEEDS" | jq -r '[to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key] | join(", ")')

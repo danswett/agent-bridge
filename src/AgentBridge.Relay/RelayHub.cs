@@ -3,13 +3,14 @@ using System.Diagnostics;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Text.Json;
+using AgentBridge.Protocol;
 using AgentBridge.Transport;
 
 namespace AgentBridge.Relay;
 
 // Routes opaque frames between the devices of one account. It sees routing ids, sizes and
 // timing, and nothing a session says: payloads are Noise ciphertext end to end.
-public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway push, BlobService blobs, FeedbackService feedback, MachineRoster roster, DeviceRoster deviceRoster, RelayMetrics metrics, ILogger<RelayHub> log)
+public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway push, BlobService blobs, FeedbackService feedback, MachineRoster roster, DeviceRoster deviceRoster, ReleaseHintWatcher releaseHints, RelayMetrics metrics, ILogger<RelayHub> log)
 {
     static readonly HashSet<string> Kinds = ["host", "app", "pwa", "phone", "test"];
     // The kinds a person uses. Only these may forget a machine: never a host, which is where an
@@ -72,9 +73,10 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
     // Container Apps) while new devices land on the new one, and neither half sees the other.
     public Task CloseAllAsync() => Task.WhenAll(accounts.Values.SelectMany(a => a.Values).Select(c => c.CloseAsync(CloseCodes.Restarting, "restarting")));
 
-    sealed class Connection(WebSocket ws, Account account, string deviceId, string name, string kind, string site, string? start = null)
+    sealed class Connection(WebSocket ws, Account account, string deviceId, string name, string kind, string site, string? start = null, bool releaseHint = false)
     {
         public string? Start => start;
+        public bool ReleaseHint => releaseHint;
         // Correlates one socket's log lines. Random and meaningless outside this process, so
         // logs carry no account, device or name (design §5.10).
         public string Tag { get; } = Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant();
@@ -193,7 +195,11 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
 
         string end = "closed";
         Exception? endedBy = null;
-        try { end = await ForwardAsync(conn, devices, aborted); }
+        try
+        {
+            using var hints = conn.ReleaseHint ? await releaseHints.SubscribeAsync(data => conn.SendAsync(data, WebSocketMessageType.Text)) : null;
+            end = await ForwardAsync(conn, devices, aborted);
+        }
         catch (Exception e) when (e is WebSocketException or OperationCanceledException) { end = "dropped"; endedBy = e; }
         finally
         {
@@ -249,7 +255,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             await RefuseAsync(ws, CloseCodes.ProofFailed, "proof-failed");
             return null;
         }
-        return new Connection(ws, account, Wire.DeviceId(pub), name, kind, site, start);
+        return new Connection(ws, account, Wire.DeviceId(pub), name, kind, site, start, kind == "host" && ReleaseHints.IsCapable(hello));
     }
 
     async Task<string> ForwardAsync(Connection conn, ConcurrentDictionary<string, Connection> devices, CancellationToken aborted)
@@ -398,7 +404,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             parts.Add(new() { ["t"] = "registry", ["id"] = id, ["machine"] = machine, ["name"] = host?.Name, ["online"] = online, ["lastSeen"] = lastSeen, ["record"] = online ? JsonDocument.Parse(json).RootElement : null });
         }
         var known = (roster.Known(account, _ => false) ?? [])
-            .Select(k => new { machine = k.Id, name = k.Name, lastSeen = k.LastSeen });
+            .Select(k => new { machine = k.Id, name = k.Name, lastSeen = k.LastSeen, online = devices.ContainsKey(k.Id) });
         for (var p = 0; p < parts.Count; p++)
         {
             parts[p]["part"] = p + 1;

@@ -79,6 +79,8 @@ public sealed class DeliveryGate
     // Test hook: runs right after a delivery's admission is released, so a test can assert
     // the outcome had already completed (a quiet grant could otherwise overtake it).
     internal Action? AdmissionReleased;
+    // Tests distinguish an actual queued wait from an earlier screen read.
+    internal TaskCompletionSource? TypingQueued;
 
     internal void Complete<T>(IDisposable admission, TaskCompletionSource<T> outcome, T result, Exception? error = null) =>
         ((Delivery)admission).Complete(outcome, result, error);
@@ -257,7 +259,9 @@ public sealed class DeliveryGate
     // The one typing slot. Whoever holds it makes its last checks, types, and lets go.
     public async Task WaitToTypeAsync()
     {
-        await typing.WaitAsync();
+        var wait = typing.WaitAsync();
+        if (!wait.IsCompleted) { TypingQueued?.TrySetResult(); }
+        await wait;
         lock (state)
         {
             Expire();
@@ -310,7 +314,18 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
     }
 
     // For a request with no stages to report (a stop, a launch).
-    public Task<T> Once(Guid key, Func<Task<T>> deliver, Action<T> settled) => Run(key, null, null, _ => deliver(), settled);
+    public Task<T> Once(Guid key, Func<Task<T>> deliver, Action<T> settled, object? owner = null, Func<Task<T>>? foreign = null) =>
+        Run(key, null, null, _ => deliver(), settled, owner: owner, foreign: foreign);
+
+    public Task<T>? Read(Guid key, object owner)
+    {
+        lock (gate)
+        {
+            Forget();
+            return requests.TryGetValue(key, out var entry) && Equals(entry.Owner, owner)
+                ? entry.Rechecked ?? entry.Outcome.Task : null;
+        }
+    }
 
     // The known outcome for a repeat; otherwise runs deliver once, off the caller's channel:
     // a channel that closes mid-delivery must not cut it short, and a resend on the next

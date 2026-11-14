@@ -45,18 +45,20 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited, labeled, unlabeled]
   status:
   workflow_run: # zizmor: ignore[dangerous-triggers]
-    workflows: [Apple clients, Beta acceptance, CI, CodeQL, Dependencies, Flake hunt, HA contract drift, IaC scan, Lab nightly (held), Lab release verification (held), Merge rule review relay, Ops probe, Pages, Perf, Re-run known flakes, Relay deploy, Update gap, Upload release halt policy, Weekly quality report, Workflow lint]
+    workflows: [ARM64 self-test loop (non-gating), Apple clients, Beta acceptance, CI, CodeQL, Dependencies, Flake hunt, HA contract drift, IaC scan, Lab nightly (held), Lab release verification (held), Merge rule review relay, Ops probe, Pages, Perf, Re-run known flakes, Relay deploy, Update gap, Upload release halt policy, Weekly quality report, Workflow lint]
     types: [in_progress, completed]
   check_suite:
     types: [completed] # the only type Actions accepts here
   schedule:
-    # Every 10 minutes. GitHub may run it later under load; the events above do the prompt work.
-    - cron: '*/10 * * * *'
+    # Backstop only, every 30 minutes; the events above do the prompt work.
+    # Same timer slowed, not a new timer. GitHub may run it later under load.
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 permissions: {}
 
-# Coalesce sweeps separately from each head. Skipped events must never displace either;
+# Coalesce cron, dispatch and main sweeps separately: a cron that yields must not displace main.
+# Skipped events must never displace either;
 # the event-table test keeps this eligibility condition identical to evaluate's if below.
 concurrency:
   group: >-
@@ -65,7 +67,9 @@ concurrency:
       || (github.event.workflow_run.name == 'CI' && github.event.workflow_run.event == 'push'))
       && (github.event_name != 'check_suite' || github.event.check_suite.head_branch != 'main')
       && (github.event_name != 'status' || github.event.context != 'merge-rule'))
-      && (vars.FLEET_MERGERULE == 'off' && 'sweep'
+      && (github.event_name == 'schedule' && 'backstop'
+      || github.event_name == 'workflow_dispatch' && 'dispatch'
+      || vars.FLEET_MERGERULE == 'off' && 'sweep'
       || github.event.pull_request.head.sha || github.event.sha
       || github.event.check_suite.head_branch != 'main' && github.event.check_suite.head_sha
       || github.event.workflow_run.head_branch != 'main' && github.event.workflow_run.head_sha
@@ -73,9 +77,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  backstop:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      proceed: ${{ steps.queue.outputs.proceed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - id: queue
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          . ./quality/merge-rule-backstop.ps1
+          $proceed = Test-MergeRuleBackstop -Repo $env:GITHUB_REPOSITORY -RunId $env:GITHUB_RUN_ID
+          "proceed=$($proceed.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
   # Named evaluate, not merge-rule: GitHub requires every check and status of a required name to
   # pass, so a job of that name would be one more thing for each pull request to wait on.
   evaluate:
+    needs: backstop
+    # Fixed versioned API names, pinned by the backstop fixtures; unknown names let cron run.
+    name: >-
+      ${{ vars.FLEET_MERGERULE != 'off'
+      && (github.event.pull_request.head.sha || github.event.sha
+      || github.event.check_suite.head_branch != 'main' && github.event.check_suite.head_sha
+      || github.event.workflow_run.head_branch != 'main' && github.event.workflow_run.head_sha)
+      && 'merge-rule-scoped-v1' || 'merge-rule-sweep-v1' }}
     # Main's own runs and check suites (pushes, the weekly CodeQL, a dispatch on main) start no
     # evaluation: no pull request's head is on main. But a push run of CI finishing on main does:
     # main going red fails every pull request (but a fixes-main one), and going green again frees
@@ -83,7 +117,8 @@ jobs:
     # Every other start or completion does too, whatever its
     # event: Perf dispatched on a pull request's branch counts toward the verdict too.
     if: >-
-      (github.event_name != 'workflow_run' || github.event.workflow_run.head_branch != 'main' || github.event.workflow_run.head_repository.full_name != github.repository
+      !cancelled() && (github.event_name != 'schedule' || needs.backstop.outputs.proceed != 'false')
+      && (github.event_name != 'workflow_run' || github.event.workflow_run.head_branch != 'main' || github.event.workflow_run.head_repository.full_name != github.repository
       || (github.event.workflow_run.name == 'CI' && github.event.workflow_run.event == 'push'))
       && (github.event_name != 'check_suite' || github.event.check_suite.head_branch != 'main')
       && (github.event_name != 'status' || github.event.context != 'merge-rule')

@@ -75,13 +75,25 @@ test('an ask made fresh after an event is not answered by one sent before it, wh
 
 test('a machine marked stale is not answered from an ask already on its way, and is asked again', async () => {
   const cache = new LaunchOptionsCache();
+  const started = Promise.withResolvers();
+  const firstReply = Promise.withResolvers();
+  const refreshed = Promise.withResolvers();
   let calls = 0;
-  const load = () => { calls += 1; return new Promise((r) => setTimeout(() => r({ calls }), 5)); };
+  cache.watch(() => { if (calls === 2) { refreshed.resolve(); } });
+  const load = () => {
+    calls += 1;
+    if (calls === 1) {
+      started.resolve();
+      return firstReply.promise;
+    }
+    return { calls };
+  };
   cache.sync([{ hostId: 'a', load }]);
-  await settle();
+  await started.promise;
   cache.stale('a');
   cache.sync([{ hostId: 'a', load }]);
-  await new Promise((r) => setTimeout(r, 40));
+  firstReply.resolve({ calls: 1 });
+  await refreshed.promise;
   assert.equal(calls, 2);
   assert.equal(cache.get('a').options.calls, 2);
 });

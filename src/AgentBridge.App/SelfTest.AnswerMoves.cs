@@ -110,7 +110,7 @@ static partial class SelfTest
                     Kind = QuestionKind.Form,
                     Message = "Which store should the sessions use?",
                     AskedAt = DateTimeOffset.UtcNow,
-                    Fields = [new Field { Name = "answer", Type = FieldType.Choice, AllowOther = true, Options = [new Option("pg", "PostgreSQL"), new Option("sqlite", "SQLite")] }],
+                    Fields = new[] { new Field { Name = "answer", Type = FieldType.Choice, AllowOther = true, Options = new[] { new Option("pg", "PostgreSQL"), new Option("sqlite", "SQLite") } } },
                 },
             });
             var offered = await Until(() => ById<ToggleButton>(view, "Other") is { ActualWidth: > 0 } && view.QuestionShown is { IsHitTestVisible: true }, TimeSpan.FromSeconds(5));
@@ -135,13 +135,19 @@ static partial class SelfTest
                 // without wrapping for the check: the text first, then focus, which shows it.
                 Button? Clear() => box is null ? null : Find<Button>(box).FirstOrDefault(b => b.Name == "DeleteButton");
                 if (box is not null) { box.TextWrapping = TextWrapping.NoWrap; box.Text = "x"; }
-                await Task.Delay(400);
+                // NoWrap and text can move answers and arm the guard. Settle that setup before
+                // focus, so only the clear button's appearance is under test.
+                var setupSettled = await Until(() =>
+                {
+                    window.RootElement.UpdateLayout();
+                    return view.QuestionShown is { IsHitTestVisible: true };
+                }, TimeSpan.FromSeconds(10));
                 var focused = box?.Focus(FocusState.Programmatic) == true;
                 var clearShown = await Until(() => Clear() is { Visibility: Visibility.Visible, ActualWidth: > 0 }, TimeSpan.FromSeconds(3));
                 await Task.Delay(100);
                 held = view.QuestionShown is { IsHitTestVisible: false };
                 if (box is not null) { box.TextWrapping = TextWrapping.Wrap; }
-                check(settled && focused && clearShown && !held, $"holds nothing as the clear button in a text box of the question appears (focused: {focused}; shown: {clearShown}; held: {held})");
+                check(settled && setupSettled && focused && clearShown && !held, $"holds nothing as the clear button in a text box of the question appears (setupSettled: {setupSettled}; focused: {focused}; shown: {clearShown}; held: {held})");
 
                 // A press while the person's own act still holds, with their question grown since
                 // the last layout pass: the pass that press brings is read with nothing exempt, so
@@ -173,7 +179,7 @@ static partial class SelfTest
                     Kind = QuestionKind.Form,
                     Message = "Which store should the sessions use?",
                     AskedAt = DateTimeOffset.UtcNow,
-                    Fields = [new Field { Name = "answer", Type = FieldType.Choice, OtherUnavailable = AnswerReasons.OtherNotSendable, Options = [new Option("pg", "PostgreSQL"), new Option("sqlite", "SQLite")] }],
+                    Fields = new[] { new Field { Name = "answer", Type = FieldType.Choice, OtherUnavailable = AnswerReasons.OtherNotSendable, Options = new[] { new Option("pg", "PostgreSQL"), new Option("sqlite", "SQLite") } } },
                 },
             });
             var why = AnswerReasons.Text(AnswerReasons.OtherNotSendable);
@@ -209,7 +215,7 @@ static partial class SelfTest
                     Kind = QuestionKind.Form,
                     Message = "Name the store and its host.",
                     AskedAt = DateTimeOffset.UtcNow,
-                    Fields = [new Field { Name = "store", Title = "Store", Type = FieldType.Text, Required = true }, new Field { Name = "host", Title = "Host", Type = FieldType.Text, Required = true }],
+                    Fields = new[] { new Field { Name = "store", Title = "Store", Type = FieldType.Text, Required = true }, new Field { Name = "host", Title = "Host", Type = FieldType.Text, Required = true } },
                 },
             });
             var formed = await Until(() => ById<Button>(view, "SendAnswer") is { ActualWidth: > 0 } && view.QuestionShown is { IsHitTestVisible: true }, TimeSpan.FromSeconds(5));

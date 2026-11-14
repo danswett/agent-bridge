@@ -6,7 +6,7 @@
 // app that is an end-to-end Noise channel (channels.js); in demo mode and the unit tests
 // it is an in-process fake. Nothing here knows which.
 import { Capabilities, Events, Ops, readAnswerResult, readReplyResult, readAttachmentState, readDiscoveryHeld, readHello, readProgress, readSession, readStopResult, readSubagent } from './protocol.js';
-import { PatchError, applyPatch, readPatch } from './session-patch.js';
+import { PatchError, applyPatch, readPatch, readHandles, resolveId } from './session-patch.js';
 import { USAGE, readUsage } from './usage.js';
 import { UPDATE, readUpdateState } from './update.js';
 import { LAUNCH, TRUST, readLaunchOptions, readLaunchResult, readTrustResult } from './launch.js';
@@ -58,6 +58,7 @@ export class HostClient {
   // a session.patch applies to. A new subscription starts afresh, since its patches are on its own
   // events.
   #raw = new Map();
+  #handles = new Map();
   // Whether anything was dropped since the latest subscribe was answered: a snapshot with a session
   // it could not read is not the whole list, and nothing resumes from it.
   #dropped = false;
@@ -123,14 +124,14 @@ export class HostClient {
   // has taken the request, and never for one it refused: the transport sends a microtask after the
   // call, so a mark taken as the call returns counted a failed send, and the queue's time, as the
   // host's.
-  #request(op, data = {}, { timeoutMs = this.#timeoutMs, onProgress = null, onSent = null } = {}) {
+  #request(op, data = {}, { timeoutMs = this.#timeoutMs, onProgress = null, onSent = null, onResponse = null } = {}) {
     if (this.closed) { return { id: null, done: Promise.reject(new HostError(op, 'the channel is closed')) }; }
     const id = ++this.#next;
     const done = new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (this.#pending.delete(id)) { reject(new HostError(op, 'timed out')); }
       }, timeoutMs);
-      this.#pending.set(id, { op, resolve, reject, timer, onProgress });
+      this.#pending.set(id, { op, resolve, reject, timer, onProgress, onResponse });
       // A send that fails (the relay went away under the channel) fails this request at
       // once, rather than leaving it to time out: S5's sleeping-iPhone lesson.
       Promise.resolve().then(() => this.#transport.send({ id, op, data })).then(() => {
@@ -282,6 +283,7 @@ export class HostClient {
     const since = this.#patch ? this.store?.resumeFrom?.(this.#instance) ?? null : null;
     this.#askedSince = since !== null;
     const data = this.#patch ? { patch: true, ...(since ? { since } : {}) } : {};
+    if (this.#patch && this.capabilities.includes(Capabilities.sessionsHandles)) { data.handles = true; }
     const { id, done } = this.#request(Ops.sessionsSubscribe, data);
     this.#subscribing = id;
     try {
@@ -356,10 +358,12 @@ export class HostClient {
   // update.get: what the machine's updater is doing (docs/protocol/v1-update.md).
   async updateState() { return readUpdateState(await this.request(UPDATE.get)); }
 
-  // update.subscribe: the state now, then an 'update' event with each change.
-  async subscribeUpdate() {
+  // onState applies the snapshot in wire order, before a later event in the same task.
+  async subscribeUpdate(onState = null) {
     this.#updateSubscribed = true;
-    return readUpdateState(await this.request(UPDATE.subscribe));
+    return readUpdateState(await this.request(UPDATE.subscribe, {}, {
+      onResponse: onState ? (state) => onState(readUpdateState(state)) : null,
+    }));
   }
 
   close() {
@@ -404,10 +408,14 @@ export class HostClient {
           this.#snapshot = new Set();
           this.#resumed = m.result?.resumed === true;
           this.#raw.clear();
+          this.#handles.clear();
           this.#dropped = false;
         }
       }
-      if (m.ok === true) { p.resolve(m.result); }
+      if (m.ok === true) {
+        if (p.onResponse) { try { p.onResponse(m.result); } catch (e) { console.error(e); } }
+        p.resolve(m.result);
+      }
       else { p.reject(new HostError(p.op, typeof m.error === 'string' ? m.error : 'failed', { fromHost: true })); }
       return;
     }
@@ -463,7 +471,15 @@ export class HostClient {
         this.#raw.delete(data.id);
         this.#advance(data.revision);
         break;
-      case Events.sessionsSynced:
+      case Events.sessionsSynced: {
+        try { this.#handles = readHandles(data.handles); }
+        catch (e) {
+          if (!(e instanceof PatchError)) { throw e; }
+          this.#tracking = false;
+          this.#lost();
+          this.#resubscribe(m.seq);
+          break;
+        }
         if (this.#snapshot) {
           const snapshot = this.#snapshot;
           const keep = this.#kept(snapshot, data.live);
@@ -491,6 +507,7 @@ export class HostClient {
           this.#emit('synced', data);
         }
         break;
+      }
       case Events.discoveryChanged:
         this.store?.setHeld(readDiscoveryHeld(data.discoveryHeld));
         break;
@@ -519,8 +536,10 @@ export class HostClient {
     const patch = readPatch(data);
     let applied = null;
     if (patch) {
-      const held = this.#raw.get(patch.id);
-      try { applied = applyPatch(held?.json ?? null, held?.seq ?? null, patch); }
+      try {
+        const held = this.#raw.get(resolveId(patch, this.#handles));
+        applied = applyPatch(held?.json ?? null, held?.seq ?? null, patch, this.#handles);
+      }
       catch (e) { if (!(e instanceof PatchError)) { throw e; } }
     }
     const s = applied ? (this.store ? this.store.upsert(applied, { snapshot: this.#snapshot !== null }) : readSession(applied)) : null;
@@ -530,6 +549,7 @@ export class HostClient {
       this.#resubscribe(seq);
       return;
     }
+    if (patch.handle !== undefined) { this.#handles.set(patch.handle, s.id); }
     this.#raw.set(s.id, { json: applied, seq });
     this.#snapshot?.add(s.id);
     this.#advance(patch.revision);
@@ -566,7 +586,7 @@ export class HostClient {
     if (this.#subscribing !== null || this.closed) { return; }
     // An update lost in the gap is replaced by the current report.
     if (this.#usageSubscribed) { this.subscribeUsage({ shared: this.#usageShared }).then((r) => this.#emit('usage', r), (e) => this.#emit('error', e)); }
-    if (this.#updateSubscribed) { this.subscribeUpdate().then((r) => this.#emit('update', r), (e) => this.#emit('error', e)); }
+    if (this.#updateSubscribed) { this.subscribeUpdate((r) => this.#emit('update', r)).catch((e) => this.#emit('error', e)); }
     const resync = this.subscribe().then(() => true, (e) => { this.#emit('error', e); return false; });
     this.#emit('gap', { seq, resync });
   }

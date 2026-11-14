@@ -2,7 +2,20 @@
   "about": "A machine's updates, seen and asked for from another device.",
   "spec": "v1-update.md",
   "generatedBy": "tests/AgentBridge.Protocol.Tests/ProtocolVectors.cs",
-  "contexts": {},
+  "contexts": {
+    "release-hints": {
+      "now": "2026-10-28T04:22:43.182Z",
+      "hello": {
+        "releaseHint": true
+      },
+      "frame": {
+        "t": "release.hint",
+        "tag": "v0.1.201",
+        "channel": "win",
+        "seenAt": "2026-10-28T04:22:43.182Z"
+      }
+    }
+  },
   "records": {
     "UpdateResult": {
       "direction": "host",
@@ -15,6 +28,17 @@
             "to": "0.1.200",
             "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
             "at": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        {
+          "name": "last-step",
+          "json": {
+            "outcome": "updated",
+            "from": "0.1.199",
+            "to": "0.1.200",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "at": "2026-10-28T04:22:43.182Z",
+            "step": "installing"
           }
         },
         {
@@ -359,6 +383,76 @@
         }
       ]
     },
+    "UpdateLeaving": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "leaving",
+          "json": {
+            "to": "0.1.201",
+            "at": "2026-10-28T04:22:43.182Z",
+            "backBy": "2026-10-28T04:25:43.182Z"
+          }
+        },
+        {
+          "name": "wrong-type-to",
+          "json": {
+            "to": 42,
+            "at": "2026-10-28T04:22:43.182Z",
+            "backBy": "2026-10-28T04:25:43.182Z"
+          },
+          "reads": {
+            "to": "",
+            "at": "2026-10-28T04:22:43.182Z",
+            "backBy": "2026-10-28T04:25:43.182Z"
+          }
+        }
+      ],
+      "refused": []
+    },
+    "UpdateBack": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "back",
+          "json": {
+            "from": "0.1.200",
+            "to": "0.1.201",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "at": "2026-10-28T04:23:43.182Z"
+          }
+        },
+        {
+          "name": "wrong-type-from",
+          "json": {
+            "from": 42,
+            "to": "0.1.201",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "at": "2026-10-28T04:23:43.182Z"
+          },
+          "reads": {
+            "from": "",
+            "to": "0.1.201",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "at": "2026-10-28T04:23:43.182Z"
+          }
+        }
+      ],
+      "refused": []
+    },
+    "UpdatePolicy": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "checked",
+          "json": {
+            "state": "ok",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
+        }
+      ],
+      "refused": []
+    },
     "UpdateState": {
       "direction": "host",
       "valid": [
@@ -383,6 +477,37 @@
             },
             "canUpdateNow": false,
             "requestNow": false
+          }
+        },
+        {
+          "name": "fleet-facts",
+          "json": {
+            "installer": false,
+            "phase": "idle",
+            "automatic": false,
+            "canUpdateNow": false,
+            "requestNow": false,
+            "bytes": 12,
+            "total": 100,
+            "downloaded": false,
+            "installing": "2026-10-28T04:22:43.182Z",
+            "leaving": {
+              "to": "0.1.201",
+              "at": "2026-10-28T04:22:43.182Z",
+              "backBy": "2026-10-28T04:25:43.182Z"
+            },
+            "back": {
+              "from": "0.1.200",
+              "to": "0.1.201",
+              "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+              "at": "2026-10-28T04:23:43.182Z"
+            },
+            "mode": "restartToUpdate",
+            "checksHeldUntil": "2026-10-28T05:22:43.182Z",
+            "policy": {
+              "state": "ok",
+              "at": "2026-10-28T04:22:43.182Z"
+            }
           }
         },
         {
@@ -618,6 +743,14 @@
               "canUpdateNow": false,
               "requestNow": false
             }
+          }
+        },
+        {
+          "name": "retry-at",
+          "json": {
+            "outcome": "refused",
+            "code": "rate-limited",
+            "retryAt": "2026-10-28T04:32:43.182Z"
           }
         },
         {

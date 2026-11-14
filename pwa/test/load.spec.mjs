@@ -78,6 +78,7 @@ test('a warm start shows the first session from the release\'s cache, asking the
   if (process.env.GITHUB_STEP_SUMMARY) { appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join('\n')}\n`); }
 
   // The demo's chunk is no file of the release's (only the demo asks for it); it was kept the
-  // first time, and is refreshed behind the page.
-  expect(fromNetwork.filter((p) => !/\/bundle\/demo-\w+\.js$/.test(p))).toEqual([]);
+  // first time, and is refreshed behind the page. Release metadata is intentionally network-only
+  // on every open (#1278); neither exception permits a cached release asset to hit the network.
+  expect(fromNetwork.filter((p) => p !== '/version.json' && !/\/bundle\/demo-\w+\.js$/.test(p))).toEqual([]);
 });

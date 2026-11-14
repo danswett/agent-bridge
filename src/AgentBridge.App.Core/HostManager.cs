@@ -546,9 +546,19 @@ public sealed class HostManager
     // preflight: names what already keeps the update from replacing the installation, or null; asked
     // before anything is recorded or stopped, so an update that cannot finish costs no host stop
     // (#1092: a service holding a file made a retry loop that dropped the relay every 3 minutes).
-    public async Task StopAndApplyAsync(Action begin, Action apply, Func<string?>? preflight = null)
+    public async Task WaitForInstallationFilesAsync(Func<string?>? preflight, Action<string>? waiting = null, TimeProvider? time = null, InstallationFiles.Budget? fileBudget = null)
     {
-        if (preflight is not null && await Task.Run(preflight) is { } blockers) { throw new UpdateBlockedException(blockers); }
+        if (await InstallationFiles.AwaitReleaseAsync(preflight, time ?? Time, quit.Token, waiting, Log, fileBudget) is { } blockers)
+        {
+            throw new UpdateBlockedException(blockers);
+        }
+    }
+
+    public async Task StopAndApplyAsync(Action begin, Action apply, Func<string?>? preflight = null, bool waitForFiles = true, InstallationFiles.Budget? fileBudget = null)
+    {
+        fileBudget ??= new InstallationFiles.Budget(Time);
+        if (waitForFiles) { await WaitForInstallationFilesAsync(preflight, fileBudget: fileBudget); }
+        await CheckInstallationFilesAsync(preflight, fileBudget);
         Task stop;
         lock (updating)
         {
@@ -599,6 +609,11 @@ public sealed class HostManager
             throw;
         }
         finally { lock (updating) { installing = false; } }
+    }
+
+    public async Task CheckInstallationFilesAsync(Func<string?>? preflight, InstallationFiles.Budget budget)
+    {
+        if (await budget.ProbeOnceAsync(preflight, quit.Token) is { } blockers) { throw new UpdateBlockedException(blockers); }
     }
 
     // The app quitting: an update that had stopped the host, or was stopping it, and not applied,
@@ -1039,6 +1054,12 @@ public sealed class HostManager
             if (Time.GetUtcNow() >= deadline) { throw new HostBusyException($"nothing was stopped: {who}: {why}, after {FormatWait(wait)}; try again later"); }
             await Task.Delay(ProbePoll, ct);
         }
+    }
+
+    public async Task WaitForUsageProbesAsync()
+    {
+        await using var ch = await connect(quit.Token);
+        await ProbesDoneAsync(ch, ProbeWait, "the host", quit.Token);
     }
 
     static string FormatWait(TimeSpan wait) => wait >= TimeSpan.FromMinutes(1) ? $"{wait.TotalMinutes:0} minutes" : $"{wait.TotalSeconds:0} s";

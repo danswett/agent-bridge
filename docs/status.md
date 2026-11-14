@@ -4,12 +4,12 @@
 This page supplies project context, dated snapshots and links to current role holders.
 The [contributor workflow](contributor-workflow.md) owns durable coordination procedures;
 canonical issues and PRs hold current assignments and exact-head evidence.
-Keep this page current when a change moves the project along, and retain explicit
-dates on historical snapshots rather than treating them as current assignments.
+This page is a weekly snapshot by Product; updates are not required in each PR.
+Retain explicit dates on historical snapshots rather than treating them as current
+assignments.
 
-*Last updated: 2026-11-06, Pacific (contributor entry path, #1045; product decisions of
-11-04 and 11-05, including the no-RDP tenet). Older implementation and machine snapshots
-below retain their stated dates.*
+*Last updated: 2026-11-11, Pacific (HA retirement decision, #387/#1396).
+Older implementation and machine snapshots below retain their stated dates.*
 
 **Product tenet (owner, 2026-11-04): you never have to RDP into a machine.** Anything that can
 only be fixed or diagnosed at the machine is a product gap: it is labelled `needs-rdp` and
@@ -27,7 +27,7 @@ prioritised by [#696](https://github.com/danswett/agent-bridge/issues/696) rule 
 | [migration.md](migration.md) | `migrate` and `rollback`: what moves and what doesn't |
 | [/quality](../quality/) | The test plan: rings from inner loop to release, and the catalog of every suite |
 | [/ops](../ops/README.md) | Running the live service: the SRE plan, SLOs, alerts, runbooks and incident process (#568) |
-| [Epic dashboard](../tools/epic-dashboard/README.md) | Hourly #755 body refresh (#756 part 1); main-only environment and owner credential setup required |
+| [Epic dashboard (retired)](../tools/epic-dashboard/README.md) | Historical #755 automation (#1971); see the [live roadmap and blockers](https://roadmap.slipgates.com/) instead. No dashboard credential setup required |
 | [/AGENTS.md](../AGENTS.md) | How to work in this repository: rules, merge procedure, releases, relay deploys, guards |
 
 ## 1. Goal
@@ -43,29 +43,35 @@ standalone product. The product has:
 All current features carry over: cards, hooks, answers, replies, attachments, launch,
 resume, stop, usage, updates and transfers.
 
-**Hard rule:** the live HA bridge keeps working throughout. Machines move one at a time,
-with rollback, and the publication writer (DSWETT-HOME) moves last.
+**Hard rule:** development does not break the live HA bridge. Current compatibility,
+G5/G6/G7 and owner-only management stay until reviewed, evidence-backed retirement;
+this documentation change authorizes no live operation.
 
 **Current goal (decided 2026-10-29):** parity with agent-ha-bridge first, then migrate
 real machines. New features wait, except the few marked "beyond parity" in parity.md.
 
-**HA redirect (owner, 2026-11-02; reconciled 2026-11-05):** HA functionality must
-remain without any legacy daemon. #387 redirects delivery to the separate
-[HA integration and companion card](https://github.com/danswett/agent-bridge-home-assistant/issues/1);
-HA owns entities/actions/presentation and Bridge remains generic at protocol/core.
-The current host connector is compatibility, not that target implemented.
-#318's permanent native publisher direction is superseded, not completed.
-#317 remains the parent goal, #319 the verified reversible production cutover,
-and #389 cleanup only after replacement. G7 still refuses writer migration.
-[Disposition and dependencies](ha-connector.md#retaining-ha-without-a-legacy-daemon-317)
-retain #322 and existing owners. #331/#337 closed unmerged on 2026-11-05 at
-12:45 PT, with branches and heads kept. #345 closed
-unmerged on 2026-11-05 at 00:59:49 PT, with sources retained. #394's original
-architecture/enrollment proposal at `d9382fd31dc9fad9d34919317bf7a3265de43c18`
-is preserved historical, unadopted evidence, withdrawn from its corrected
-documentation-only scope. #522 is merged design and #534 a draft read profile
-with reference fixtures, not proof of installable HA delivery.
-Copilot CLI session `d5ac689c-a9f6-4618-8e8f-9220793487f4` retains coordination.
+**HA retirement (owner, 2026-11-11; #387/#1396):** the Nov 2 retention requirement
+is reversed in part. HA is an optional client later (#1419), not required, and S0
+is done: nothing the owner built in HA must keep working. The
+[master decision record](design.md#02-ha-retirement-decision-3871396) records the
+authority and boundaries. The connector is current compatibility; the optional
+client design is not an installed replacement or a retirement prerequisite.
+
+Removal waits on #1396's required row evidence, #1949's load parity proof,
+the approved HA-off rehearsal (one machine, then the other three, zero HA
+fallbacks, every row exercised at least 3 times) and owner sign-off. No 24-hour dual
+run or calendar wait; rollback is
+turning HA back on. #317 is closed as superseded by #1419; #319 is closed as
+superseded by the rehearsal, not completed migration. #388 is superseded by
+#1406/#1418/#1419. #389 tracks separately reviewed removal, not immediate cleanup.
+
+[Publisher disposition](ha-connector.md#publisher-work-disposition-387) preserves
+#322's current compatibility evidence and the closed-unmerged #331/#337/#345
+sources and heads. #318's permanent native publisher remains superseded, not
+completed. Extraction for optional HA delivery is not required; no source or tree
+is removed here. #394's corrected docs are merged; its original enrollment
+proposal remains unadopted. #522 and merged #534 are design/read-contract
+groundwork, not enrollment or installability proof. Existing area owners remain.
 
 ## 2. Where things are (2026-11-02)
 
@@ -86,7 +92,8 @@ principals, and binds standing push access to the current grant. See
 [host config](host-config.md#trusted-peers-disposable-host-foundation). Evaluation is
 disposable-host only: no relay enrollment, production enablement or live migration
 is authorized by this slice. Independent implementation review and final-head CI
-remain gates; the wider HA architecture redirect is tracked separately in #388.
+remain gates. The former headless-client issue #388 is closed as superseded by
+#1406/#1418/#1419; the HA retirement decision and gate belong to #1396.
 
 ### Test timeout diagnostics (#660)
 
@@ -104,7 +111,8 @@ Other raw App/Host task waits are outside this bounded diagnostic slice.
 Fleet #238 host registry publication is wired with explicit `fleet.share`, bounded failed-put
 backoff, content-free `host.status` and skipped-invalid-ID counts; relay read-side byte
 coverage preserves the 24 KiB budget for maximum plus names. No deployment or live-parity
-claim: records remain unsigned and HA remains the rollback pending the registry dual run.
+claim: records remain unsigned in this snapshot. HA remains the rollback pending
+#1396's current gate, not the older registry dual-run duration.
 
 ### Built and merged
 
@@ -229,20 +237,25 @@ legacy daemon or HA changes. Scope is coordinated on #170.
 - **Next on track A:** S2 (#174), using the sub-agent transcripts the soak recorded (in `~/repos/wt/agent-bridge-soak-transcripts`, not committed). #175 still needs its live check.
 - **Queued backend:** #231 (agents installed later), #257 (provider-neutral account ID), #239, #206, #207, #241.
 
-Historical native publication work under #317, superseded by #387's redirect:
+Historical native publication work under closed #317; #387 records the Nov 11
+partial reversal and #1419 is optional later work:
 - #322's merged protocol-1 policy/fence contract and recordings are retained
   compatibility evidence, not publication enablement. #331/#337 closed unmerged on
   2026-11-05 at 12:45 PT, with branches and heads kept; #345 closed unmerged on
   2026-11-05 at 00:59:49 PT, with sources retained. The
   [retain/extract/supersede boundaries](ha-connector.md#publisher-work-disposition-387)
   replace the former instruction to continue that stack.
-- #319 still gates writer cutover on the replacement integration/card and
-  disposable-HA handover/rollback verification. No live HA or legacy-install
-  changes during development; no cleanup under #389 before that gate.
+- #319's former HA-side writer-cutover gate is closed as superseded by #1396's
+  HA-off rehearsal. No replacement integration is required. No live HA or
+  legacy-install changes during development; #389 removal follows #1396's gate.
 
 </details>
 
 ## 3. Shadow gate (#40)
+
+**Historical compatibility gate.** The dated results and operator procedures below
+remain evidence, not the current HA retirement gate. The Nov 11 decision in §1
+replaces time-based retirement waits with #1949, the HA-off rehearsal and sign-off.
 
 **Scope (owner, 2026-11-03).** The shadow gate is a checkpoint for comparing against HA and
 retiring the legacy bridge. It is **not** a prerequisite for native Agent Bridge delivery. Host,
@@ -252,11 +265,12 @@ app, PWA, relay and native MCP work ships on its own gates:
 - a qualified main under the serial merge rule;
 - explicit production approval where that is required.
 
-Nothing native waits for Home Assistant, for a shadow PASS, for the dashboard writer cutover
-(#317/#319/#389) or for retiring the legacy bridge. Those are an optional compatibility and
-retirement lane with their own acceptance criteria. #238 needs its own security review and
-product live checks, not a shadow PASS. #45 uses the product's native agent identity, not HA
-credentials. The VM safety and finish rules below apply to this lane only.
+Nothing native waits for Home Assistant, a shadow PASS or retiring the legacy
+bridge. HA retirement follows #1396's current gate, then reviewed #389 removal;
+optional-client delivery (#1419) is a separate later lane, not its prerequisite.
+#238 needs its own security review and product live checks, not a shadow PASS.
+#45 uses the product's native agent identity, not HA credentials. The VM safety
+and finish rules below apply to this historical compatibility lane only.
 
 This scoping does **not** authorize stopping another session's VM, interfering with the soak,
 starting paid resources without authority, skipping a required product test, removing installed
@@ -304,11 +318,11 @@ closed. The steps below are the machine and migration steps within it.
 3. **Migrate machines while the soak runs** (owner, 2026-11-01): ~~ARM8~~ done. ~~DEV-VM1~~ done 11-02 14:16 PT. Its keep-awake has landed (#224), and the commands are with the owner. Then DASDESK when it's online, and the Mac after P5. Repeat rehearsal step E6-07 (worktree reclaim) on one of them.
 4. **The VM soak's gate** (§3; the legacy and HA-comparison lane): report it when it passes,
    then run `-Finish` to deallocate. No native delivery waits for it.
-5. **Writer migration** (P7, #317; the optional HA compatibility lane): verify the separate
-   HA integration/card replacement (#387), then reversible handover/rollback (#319). Do not
-   resume superseded #318 publication work, bypass G7, or retire HA functionality as a
-   migration prerequisite. Cleanup remains gated under #389. None of it gates host, app, PWA,
-   relay or native MCP work.
+5. **HA retirement** (P7, #1396): required parity evidence, #1949 load proof, HA-off
+   rehearsal and owner sign-off, then #389's bounded removal slices. #1419 is
+   optional and later; no HA replacement is required. Do not resume superseded
+   #318 publication work or bypass G7. This record does not pass the gate or
+   authorize a live cutover, credential change or cleanup.
 6. **UI design track** (§5).
 7. **Later:** turning on code signing (Azure Artifact Signing, #734: built and off; the owner provisions the account, identity validation and the `signing` environment, app-windows.md "Signing"; until then releases are unsigned legacy builds, not dogfood-ready), macOS (P5), native phone apps (P8), relay scale (S9), observability (§5.10), and decommissioning the old relay stamp in the trial subscription (awaiting the owner's approval).
 

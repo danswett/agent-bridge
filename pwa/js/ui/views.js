@@ -9,8 +9,8 @@ import { RecentOrder } from '../recent-order.js';
 import { ReadDwell } from '../read-dwell.js';
 import { ago } from './time.js';
 import { whileVisible } from './ticker.js';
-import { enter, leave, seen, select as showSelection, slide } from './motion.js';
-import { updateLine, updateDetails, lastLine, canCheck, canInstall, canUpdateNow, updateNowReason, RESTARTING } from '../update.js';
+import { enter, flip, leave, seen, select as showSelection, slide } from './motion.js';
+import { updateLine, updateDetails, lastLine, checkHeld, canCheck, canInstall, canUpdateNow, updateNowReason, RESTARTING } from '../update.js';
 import { openUpdateNowSheet } from './update-now-sheet.js';
 import { signInDevicesLines } from '../signin-devices.js';
 import { BRAND } from '../brand.js';
@@ -50,12 +50,14 @@ export class SessionListView {
   #held = false;
   // Drawn once: what comes after is news, and may move.
   #drawn = false;
+  #motionRow = null;
   #recent = new RecentOrder();
   #recentTimer = null;
   #scrollTimer = null;
   #recentHolds = new Set();
   #recentFocus = null;
   #recentListeners = new AbortController();
+  #needsSeen = new Set();
 
   get drawn() { return this.#drawn; }
 
@@ -121,7 +123,11 @@ export class SessionListView {
   filter = '';
   needsOnly = false;
 
-  setNeedsOnly(on) { this.needsOnly = !!on; this.render(); }
+  setNeedsOnly(on) {
+    this.needsOnly = !!on;
+    if (!this.needsOnly) { this.#needsSeen.clear(); }
+    this.render();
+  }
 
   #matches(hostId, s) {
     if (!this.filter) { return true; }
@@ -144,14 +150,25 @@ export class SessionListView {
   }
 
   #draw() {
+    if (!this.#drawn) { this.#layout(); return; }
+    const settled = !this.sessions.list().some(({ hostId }) => !this.settled(hostId));
+    const ownMove = this.#motionRow;
+    let anchored = false;
+    flip(this.container, () => { anchored = this.#layout(); }, {
+      entry: (el) => !settled || el === ownMove ? null : this.#recent.moved.has(el.dataset.key) ? 'reorder' : 'shift',
+      viewport: () => anchored,
+    });
+  }
+
+  #layout() {
     const entries = this.sessions.list();
     const sort = this.order.sort;
-    const held = this.#recentHolds.size > 0 || !!this.#recentFocus?.isConnected;
+    const held = this.needsOnly || this.#recentHolds.size > 0 || !!this.#recentFocus?.isConnected;
     const arranged = this.#recent.arrange(this.order.arrange(entries, { nameOf: (id) => this.machine(id).name, shows: this.shows, settled: this.settled }), { sort, held });
     clearTimeout(this.#recentTimer);
     if (this.#recent.wait !== null) { this.#recentTimer = setTimeout(() => this.schedule(), this.#recent.wait); }
     const before = new Map();
-    if (this.#recent.moved.size || this.#groupLeaving) {
+    if (this.#drawn) {
       for (const el of this.container.querySelectorAll('.session')) {
         if (!el.getClientRects().length) { continue; }
         before.set(el, el.getBoundingClientRect());
@@ -160,13 +177,21 @@ export class SessionListView {
     if (this.#groupLeaving) { leave(this.#groupLeaving, 'listItem'); this.#groupLeaving = null; }
     const pane = this.container.closest('#list-pane');
     const scroller = !before.size ? null : pane && /auto|scroll/.test(getComputedStyle(pane).overflowY) ? pane : this.container.ownerDocument.scrollingElement;
+    const scrollTop = scroller?.scrollTop;
     const anchor = scroller?.scrollTop > 0 ? [...before.keys()].find((el) => seen(el)) : null;
-    for (const el of before.keys()) {
-      for (const a of el.getAnimations?.() ?? []) { if (/^ab-motion-(reorder|shift)$/.test(a.id)) { a.cancel(); } }
-    }
     const matches = (e) => this.#matches(e.hostId, e.session);
-    const keep = (e) => matches(e) && (!this.needsOnly || sessionStatus(e.session).glyph === 'needs');
-    const grouped = this.order.groupRows(arranged.sessions, { matches, filtered: !!this.filter, needsOnly: this.needsOnly, showEmpty: this.showEmptyGroups() });
+    const current = (e) => { const stale = this.stale(e.hostId); return !stale || stale.grace === true; };
+    const waiting = entries.filter((e) => e.session.question && current(e));
+    this.needsCount = waiting.length;
+    this.needsShown = waiting.filter(matches).length;
+    // Answered rows stay until the filter is released; offline questions never linger.
+    if (this.needsOnly) {
+      for (const e of waiting) { this.#needsSeen.add(SessionListView.key(e.hostId, e.session.id)); }
+    }
+    const keep = (e) => matches(e) && (!this.needsOnly || (current(e) && this.#needsSeen.has(SessionListView.key(e.hostId, e.session.id))));
+    const grouped = this.order.groupRows(arranged.sessions, {
+      matches: keep, filtered: !!this.filter || this.needsOnly, showEmpty: this.showEmptyGroups() && !this.needsOnly,
+    });
     const ended = this.needsOnly ? [] : arranged.ended.filter(keep);
     this.container.dataset.sort = this.order.sort;
     this.container.dataset.filtered = this.filter || this.needsOnly ? 'true' : 'false';
@@ -186,7 +211,7 @@ export class SessionListView {
     // attached or a question half answered, kept current for when search lets it back in.
     let shown = 0;
     // Arriving and leaving (ui.md §5.3): a session that came or went after its machine's list was
-    // placed fades, where it is; its neighbours take their places at once. A machine's first list,
+    // placed fades, where it is; its neighbours ease aside. A machine's first list,
     // a machine still sending its list, a machine no longer shown, and search (which only hides a
     // card) are none of that.
     const arrived = [];
@@ -301,11 +326,6 @@ export class SessionListView {
       const delta = anchor.getBoundingClientRect().top - before.get(anchor).top;
       if (delta) { this.onAnchor?.(); scroller.scrollTop += delta; }
     }
-    for (const [el, was] of before) {
-      if (!el.isConnected) { continue; }
-      const at = el.getBoundingClientRect();
-      slide(el, this.#recent.moved.has(el.dataset.key) ? 'reorder' : 'shift', was.left - at.left, was.top - at.top);
-    }
     for (const key of arrived) {
       const el = this.#cards.get(key)?.element;
       if (el?.isConnected) { enter(el, 'listItem'); }
@@ -316,6 +336,7 @@ export class SessionListView {
     this.onRender?.(entries.length);
     // A save that failed while drawing (storage full) turned the list to Most recent: draw it so.
     if (this.order.sort !== sort) { this.schedule(); }
+    return scroller?.scrollTop !== scrollTop;
   }
 
   // A focused session ended, or its group now hides its row, leaving focus on the page
@@ -413,14 +434,14 @@ export class SessionListView {
     return true;
   }
 
-  // Reorder (ui.md §5.3): the row moved slides to its new place; the rows it passed take theirs
-  // at once, so nothing but the person's row moves.
+  // The held row keeps its synchronous move and scroll; FLIP draws its neighbours.
   #moved(el, draw) {
     const before = el.isConnected ? el.getBoundingClientRect() : null;
     // A move made while the last one still slides goes on from where the row is seen now: the
     // last slide goes, so the new place is measured without its translation.
-    for (const a of el.getAnimations?.() ?? []) { if (a.id === 'ab-motion-reorder') { a.cancel(); } }
-    draw();
+    for (const a of el.getAnimations?.() ?? []) { if (/^ab-motion-(reorder|shift)$/.test(a.id)) { a.cancel(); } }
+    this.#motionRow = el;
+    try { draw(); } finally { this.#motionRow = null; }
     if (!before || !el.isConnected) { return; }
     const after = el.getBoundingClientRect();
     slide(el, 'reorder', before.left - after.left, before.top - after.top);
@@ -460,7 +481,7 @@ export class SessionListView {
       hold('touch', true);
     }, { passive: true, signal });
     const focus = (target) => {
-      this.#recentFocus = target && (c.contains(target) || target.closest?.('#needs-you, .reply, .question')) ? target : null;
+      this.#recentFocus = target && (c.contains(target) || target.closest?.('#needs-you, .needs-filter, .reply, .question')) ? target : null;
       if (this.order.sort === 'recent') { this.schedule(); }
     };
     focus(doc.activeElement);
@@ -824,6 +845,7 @@ export class SessionListView {
   // A machine went offline, came back, or sent a whole new list since (#269): its rows say so.
   refreshStale() {
     for (const c of this.#cards.values()) { c.setStale(this.stale(c.hostId)); }
+    this.schedule();
   }
 
   // Whether search is hiding a session's row: it exists, and is not in the list.
@@ -1070,41 +1092,31 @@ function updateRow(updates, id, name, now) {
   updates.restarting?.(id, true);
   const updateNow = updates.isUpdateNow?.(s.last?.request) ?? false;
   const idle = s.installer && s.phase === 'idle' && !s.waiting;
-  // Legacy hosts send the held check's retry clock only in this reason, in host-local time.
-  const heldCheck = idle && !updateNow && !s.last?.code && ['failed', 'refused'].includes(s.last?.outcome)
-    && s.last.reason?.startsWith("the release feed's rate limit refused the check");
-  const checkFailed = heldCheck && !(Date.parse(s.checkedAt) > Date.parse(s.last.at));
-  const compact = idle && (s.available ? checkFailed : s.current && s.checkedAt
-    && (!s.last || ['current', 'failed', 'refused'].includes(s.last.outcome)));
-  const retry = checkFailed ? s.last.reason.match(/checking again after (\d{1,2}:\d{2}(?:\s*[AP]M)?)\.?$/i)?.[1] : null;
+  const checkFailed = idle && !updateNow && checkHeld(s);
   let said = updateLine(s, now);
-  if (compact) {
-    said = s.available ? 'Update available, but the check failed.' : `Up to date (${s.current})`;
-    if (retry) { said += `${s.available ? '' : '.'} Next ${s.available ? 'try' : 'check'} ${retry}.`; }
-    else if (!s.available && !checkFailed && now - Date.parse(s.checkedAt) > 3600000) {
-      const checked = new Date(s.checkedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' });
-      said += `. Last checked ${checked}.`;
-    }
+  if (idle) {
+    said = s.available ? `Update available \u00b7 ${s.available} (running ${s.current ?? 'an older release'})`
+      : Number.isFinite(Date.parse(s.checkedAt)) ? `Up to date \u00b7 ${s.current ?? 'unknown'}` : 'Not checked yet';
   }
-  let last = compact || (heldCheck && !checkFailed) ? null : lastLine(s, now, { updateNow });
+  const checking = s.phase === 'checking';
+  if (checking && !s.waiting) { said = 'Checking\u2026'; }
+  const last = checkFailed || (idle && s.last?.outcome === 'current') ? null : lastLine(s, now, { updateNow });
   const check = canCheck(s) && !busy && !asking;
   const install = canInstall(s) && !busy && !asking;
-  const offerNow = !compact && updates.signs === true && canUpdateNow(s);
+  const offerNow = updates.signs === true && canUpdateNow(s);
   const pressNow = offerNow && !busy && !asking;
-  if (idle && offerNow) {
-    said = `Update available: ${s.available} (running ${s.current ?? 'an older release'}).`;
-    if (last && ['failed', 'refused'].includes(s.last?.outcome)) { said += ` ${last}`; last = null; }
-  }
-  const why = !compact && updates.signs === true ? updateNowReason(s) : null;
+  const why = updates.signs === true ? updateNowReason(s) : null;
   const details = updateDetails(s, now);
   const key = [said, last, note, busy, asking, check, install, offerNow, pressNow, why, ...details];
+  const checkLabel = checking ? 'Checking\u2026' : busy ? 'Asking\u2026' : 'Check now';
   // Not disabled when it cannot be pressed: a disabled button loses focus, and the next draw
   // could not give it back. A press then does nothing (UpdateControl, and the host's own rules).
   const button = (cls, label, aria, can, onPress) => h('button', {
-    type: 'button', class: `button ${checkFailed || cls === 'machine-update-now' ? 'primary' : 'secondary'} small ${cls}`, 'aria-label': aria,
+    type: 'button', class: `button ${cls === 'machine-update-now' ? 'primary' : 'secondary'} small ${cls}`, 'aria-label': aria,
     'aria-disabled': can ? null : 'true',
+    'aria-describedby': cls === 'machine-update-check' && checkFailed ? `update-check-${id}` : null,
     onclick: (e) => { if (can) { onPress(e); } },
-  }, label);
+  }, cls === 'machine-update-check' && checking ? glyph('working') : null, label);
   // Back to Update now once its confirmation closes, or to the row's first action: the row has
   // been drawn again meanwhile.
   const refocus = (doc) => () => {
@@ -1114,17 +1126,16 @@ function updateRow(updates, id, name, now) {
   return {
     key,
     el: h('div', { class: 'machine-update' },
-      h('p', { class: 'machine-update-line' }, said),
+      h('p', { class: 'machine-update-line' },
+        glyph(['checking', 'downloading', 'installing', 'waiting'].includes(s.phase) ? 'working'
+          : s.available ? 'needs' : idle && s.checkedAt ? 'done' : 'idle'), h('span', null, said)),
       last ? h('p', { class: 'machine-update-last' }, last) : null,
       why ? h('p', { class: 'machine-update-why' }, why) : null,
-      ...details.map((text) => h('p', { class: 'machine-update-detail' }, text)),
+      ...details.map((text) => h('p', { class: 'machine-update-detail', id: checkFailed ? `update-check-${id}` : null }, text)),
       note ? h('p', { class: 'machine-error', role: 'alert' }, note) : null,
       s.installer ? h('div', { class: 'machine-actions machine-update-actions' },
-        (compact && !s.available) || offerNow ? h('a', {
-          href: '#/machines', class: 'machine-update-check', 'aria-disabled': check ? null : 'true',
-          onclick: (e) => { e.preventDefault(); if (check) { updates.press(id, 'check'); } },
-        }, 'Check now') : button('machine-update-check', busy ? 'Asking…' : compact ? 'Check now' : 'Check', compact ? 'Check now' : `Check ${name} for updates`, check, () => updates.press(id, 'check')),
-        s.available && !compact && !offerNow ? button('machine-update-install', 'Install', `Install ${s.available} on ${name} when no session there is busy`, install, () => updates.press(id, 'install')) : null,
+        !offerNow ? button('machine-update-check', checkLabel, `${checkLabel} on ${name}`, check, () => updates.press(id, 'check')) : null,
+        s.available && !offerNow ? button('machine-update-install', 'Install', `Install ${s.available} on ${name} when no session there is busy`, install, () => updates.press(id, 'install')) : null,
         offerNow ? button('machine-update-now', 'Update now', `Update now: ${s.available} on ${name}, without waiting`, pressNow, (e) => {
           const doc = e.currentTarget.ownerDocument;
           updates.pressNow(id, { machine: name, confirm: (sheet, { signal } = {}) => openUpdateNowSheet(sheet, { doc, returnFocus: refocus(doc), signal }) });
@@ -1231,43 +1242,56 @@ function announceUpdates(list, updates, hosts) {
   region.textContent = said.join('. ');
 }
 
-const MASTER_DETAIL = '(min-width: 900px)';
-// The machine whose tile shows beside the list from 900 px, where a person picked one.
-const picked = new WeakMap();
 const drawnMachineLoads = new WeakMap();
 
-function machineLoadBar(bar, label) {
+function measurementAge(bars) {
+  if (bars?.ageMs == null || bars.state === 'offline') { return ''; }
+  const seconds = Math.floor(bars.ageMs / 1000);
+  const age = seconds < 60 ? `${seconds} s` : seconds < 3600 ? `${Math.floor(seconds / 60)} min` : `${Math.floor(seconds / 3600)} h`;
+  return `${['fresh', 'partial'].includes(bars.state) ? 'Updated' : 'Last measured'} ${age} ago`;
+}
+
+function machineLoadBar(bar, label, bars) {
   const missing = bar?.percent == null;
+  const text = missing ? 'No figure' : `${Math.round(bar.percent)}%`;
   const fill = missing ? null : h('span', { class: 'machine-load-fill' });
   if (fill) { fill.style.width = `${bar.percent}%`; }
   return h('div', { class: `machine-load${missing ? ' missing' : ''}` },
-    h('span', null, label),
+    h('span', { class: 'machine-load-label' }, label),
     h('div', {
       class: 'machine-load-track', role: missing ? null : 'meter', 'aria-hidden': missing ? 'true' : null,
       'aria-label': missing ? null : label, 'aria-valuemin': missing ? null : 0,
-      'aria-valuemax': missing ? null : 100, 'aria-valuenow': bar?.percent, 'aria-valuetext': missing ? null : bar.text,
+      'aria-valuemax': missing ? null : 100, 'aria-valuenow': bar?.percent, 'aria-valuetext': missing ? null : text,
     }, fill),
-    h('span', { class: 'machine-load-value' }, missing ? 'No figure' : bar.text));
+    h('span', { class: 'machine-load-value' }, text),
+    h('span', { class: 'machine-load-note' },
+      h('span', { class: 'machine-load-state' }, h('span', { 'aria-hidden': 'true' }, bars?.icon ?? '\u25cb'), ` ${bars?.word ?? 'Unavailable'}`),
+      bar?.free ? h('span', null, bar.free) : null));
 }
 
 function machineHealth(bars) {
   return h('p', { class: 'tile-health' },
     h('span', { class: 'tile-label' }, 'Health: '),
-    h('span', { class: 'tile-health-icon', 'aria-hidden': 'true' }, bars?.icon ?? '\u25cb'),
-    h('span', { class: 'tile-health-word' }, bars?.word ?? 'Not measured'));
+    h('span', { class: 'tile-health-icon', 'aria-hidden': 'true' }, bars?.state === 'offline' ? '\u2298' : '\u25cb'),
+    h('span', { class: 'tile-health-word' }, bars?.state === 'offline' ? 'Offline' : 'Not measured yet'));
 }
 
 // A machine's tile (#1147 S1), its sections in one order: Health, Can run, Running, Actions. Only
-// what a host reports is shown; no load record means Not measured, not a diagnosis.
-// Running is the session count. Updates, sign-in and Diagnose follow in `more`.
-function machineTile({ name, raw, bars, onSelect, onLaunch, more }) {
+// what a host reports is shown; freshness is not a health diagnosis.
+function machineTile({ name, raw, bars, onSelect, onLaunch, more, expanded = false }) {
   const why = raw?.held ? `Discovery is held: ${raw.held}` : raw?.readOnly ? `This machine is view only: ${raw.readOnly}` : null;
   const running = !raw?.sessions ? 'Not reported yet' : raw.sessions.startsWith('0 ') ? 'No sessions running' : raw.sessions;
-  const line = (cls, label, text) => h('p', { class: cls }, h('span', { class: 'tile-label' }, `${label}: `), text);
+  const contents = h('div', { hidden: !expanded },
+    h('button', { type: 'button', class: 'button secondary small machine-running-view', 'aria-label': `View sessions on ${name}`, onclick: onSelect }, 'View sessions'));
+  const toggle = h('button', { type: 'button', class: 'tile-running-toggle', 'aria-label': `Running, ${running} on ${name}`, 'aria-expanded': String(expanded), onclick: () => {
+    contents.hidden = !contents.hidden;
+    toggle.setAttribute('aria-expanded', String(!contents.hidden));
+  } }, h('span', { class: 'tile-label' }, 'Running, '), h('span', null, running), icon('chevron'));
   return h('section', { class: 'machine-tile', 'aria-label': name },
     machineHealth(bars),
-    machineLoadBar(bars?.cpu, 'CPU (whole machine)'), machineLoadBar(bars?.memory, 'Memory used'),
-    line('tile-running', 'Running', running),
+    h('p', { class: 'tile-measured' }, measurementAge(bars)),
+    machineLoadBar(bars?.cpu, 'CPU', bars), machineLoadBar(bars?.memory, 'Memory', bars),
+    h('div', { class: 'tile-running' }, toggle, contents),
     h('div', { class: 'tile-actions' },
       why ? h('p', { class: 'tile-actions-note' }, why)
         : h('button', { type: 'button', class: 'button secondary small machine-launch', 'aria-label': `Launch here on ${name}`, onclick: onLaunch }, 'Launch here'),
@@ -1277,11 +1301,11 @@ function machineTile({ name, raw, bars, onSelect, onLaunch, more }) {
 
 // One row: the icon and the trailing state on line 1 with the name, the facts on line 2, and
 // anything more (updates, Forget, an error) under them in the same text column.
-function machineRow({ id, name, select = null, selected = false, detail = false, facts, state, offline = false, more = [], tile = null }) {
+function machineRow({ id, name, select = null, selected = false, facts, state, offline = false, more = [], tile = null }) {
   const parts = [
     icon('machine'),
     h('span', { class: 'machine-name' }, name),
-    h('span', { class: 'machine-state' }, state),
+    h('span', { class: 'machine-state' }, ['Online', 'Viewing'].includes(state) ? [h('span', { 'aria-hidden': 'true' }, state === 'Viewing' ? '\u25c9' : '\u25cf'), ' '] : null, state),
     h('span', { class: 'machine-sub' }, facts),
   ];
   const head = select
@@ -1296,9 +1320,11 @@ function machineRow({ id, name, select = null, selected = false, detail = false,
   errors.forEach((p, i) => { p.id = `machine-error-${id}-${i}`; });
   if (errors.length) {
     const ids = errors.map((p) => p.id).join(' ');
-    for (const b of within.flatMap((el) => [...el.querySelectorAll('.machine-more button')])) { b.setAttribute('aria-describedby', ids); }
+    for (const b of within.flatMap((el) => [...el.querySelectorAll('.machine-more button')])) {
+      b.setAttribute('aria-describedby', [b.getAttribute('aria-describedby'), ids].filter(Boolean).join(' '));
+    }
   }
-  return h('li', { class: `machine${offline ? ' offline' : ''}${selected ? ' selected' : ''}${detail ? ' detail' : ''}`, dataset: { deviceId: id, deviceName: name } }, block, tile, errors);
+  return h('li', { class: `machine${offline ? ' offline' : ''}${selected ? ' selected' : ''}`, dataset: { deviceId: id, deviceName: name } }, block, errors, tile);
 }
 
 export function renderMachines(list, { presence, me, current, onSelect, onLaunch = () => {}, status = () => '', facts = null, load = () => null, known = null, forget = null, updates = null, signInDevices = null, diagnose = null, now = Date.now() }) {
@@ -1308,7 +1334,9 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
   // The accessor may retain a record after its machine leaves; presence, not the record, is online truth.
   const loads = new Map([...hosts, ...offline].map((d) => {
     const online = hosts.some((host) => host.id === d.id), record = load(d.id);
-    return [d.id, online && record == null ? null : loadBars(record, { online })];
+    const bars = online && record == null ? null : loadBars(record, { online });
+    const free = bars?.memory.percent == null ? null : `${(record.memory.availableBytes / 1e9).toLocaleString(undefined, { maximumFractionDigits: 1 })} GB free`;
+    return [d.id, bars ? { ...bars, memory: { ...bars.memory, free } } : null];
   }));
   const rows = new Map(hosts.map((d) => [d.id, updateRow(updates, d.id, d.name, now)]));
   // A machine that left for an Update now reads "Restarting to update…" for a while (#1159, until
@@ -1334,29 +1362,23 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
     summary.textContent = total ? `${total} machine${total === 1 ? '' : 's'} \u00b7 ${hosts.length} online` : '';
     summary.hidden = total === 0;
   }
-  // From 900 px the tile beside the list is the one picked there, else the machine viewed, else the first.
-  const detailId = hosts.some((d) => d.id === picked.get(list)) ? picked.get(list) : (hosts.find((d) => d.id === current) ?? hosts[0])?.id;
-  const pick = (id) => {
-    if (!list.ownerDocument?.defaultView?.matchMedia?.(MASTER_DETAIL).matches) { return onSelect(id); }
-    picked.set(list, id);
-    for (const li of list.children) { li.classList.toggle('detail', li.dataset.deviceId === id); }
-  };
   // Drawn again only when something in it changes. It is asked to redraw on every session
   // update of every machine shown, and a button replaced between a tap's touch and its release
   // takes no click: a tap at startup, with every machine sending its sessions, was lost.
   const key = JSON.stringify([current, hosts.map((d) => [d.id, d.name, lines.get(d.id).key, rows.get(d.id).key, signInRows.get(d.id).key, diagnoses.get(d.id).key]),
     // lastSeen itself, not only how it reads: Forget sends it, to tell a machine that came back.
     offline.map((k) => [k.id, k.name, k.lastSeen, k.start ?? null, ago(k.lastSeen, now), forget?.stateOf(k.id) ?? null]), !!forget, [...restarting]]);
-  const loadKey = JSON.stringify([...loads].map(([id, bars]) => [id, bars?.state, bars?.cpu, bars?.memory]));
+  const loadKey = JSON.stringify([...loads].map(([id, bars]) => [id, bars?.state, bars?.cpu, bars?.memory, measurementAge(bars)]));
   if (drawnAs.get(list) === key) {
     if (drawnMachineLoads.get(list) !== loadKey) {
       // Load-only changes must not remove a button between pointer down and release.
       for (const row of list.children) {
         const bars = loads.get(row.dataset.deviceId);
-        row.querySelector('.tile-health')?.replaceWith(machineHealth(bars));
+        const age = row.querySelector('.tile-measured');
+        if (age) { age.textContent = measurementAge(bars); }
         const tracks = row.querySelectorAll('.machine-load');
-        tracks[0]?.replaceWith(machineLoadBar(bars?.cpu, 'CPU (whole machine)'));
-        tracks[1]?.replaceWith(machineLoadBar(bars?.memory, 'Memory used'));
+        tracks[0]?.replaceWith(machineLoadBar(bars?.cpu, 'CPU', bars));
+        tracks[1]?.replaceWith(machineLoadBar(bars?.memory, 'Memory', bars));
       }
       drawnMachineLoads.set(list, loadKey);
     }
@@ -1367,15 +1389,16 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
   // Every change redraws the list, so the button that had focus is replaced: Forget's first
   // press redraws it armed, and a keyboard's second press must land on the new one.
   const active = list.ownerDocument?.activeElement;
-  const had = active && list.contains(active) ? { id: active.closest('li')?.dataset.deviceId, cls: ['machine-forget', 'machine-button', 'machine-update-check', 'machine-update-install', 'machine-update-now', 'machine-check-all', 'machine-diagnose', 'machine-diagnose-close', 'machine-diagnose-review', 'machine-diagnose-copy', 'machine-diagnostics', 'machine-launch', 'machine-view'].find((c) => active.classList.contains(c)) } : null;
+  const had = active && list.contains(active) ? { id: active.closest('li')?.dataset.deviceId, cls: ['machine-forget', 'machine-button', 'machine-update-check', 'machine-update-install', 'machine-update-now', 'machine-check-all', 'machine-diagnose', 'machine-diagnose-close', 'machine-diagnose-review', 'machine-diagnose-copy', 'machine-diagnostics', 'machine-launch', 'machine-view', 'tile-running-toggle', 'machine-running-view', 'machine'].find((c) => active.classList.contains(c)) } : null;
+  const expanded = new Set([...list.querySelectorAll('.tile-running-toggle[aria-expanded="true"]')].map((el) => el.closest('li').dataset.deviceId));
   list.replaceChildren(...hosts.map((d) => {
     const selected = d.id === current || (all && hosts.length === 1);
     return machineRow({
-      id: d.id, name: d.name, select: () => pick(d.id), selected, detail: d.id === detailId,
+      id: d.id, name: d.name, select: () => onSelect(d.id), selected,
       facts: lines.get(d.id).el, state: selected ? 'Viewing' : 'Online',
       tile: machineTile({
         name: d.name, raw: facts?.(d.id) ?? null, bars: loads.get(d.id), onSelect: () => onSelect(d.id), onLaunch: () => onLaunch(d.id),
-        more: [rows.get(d.id).el, signInRows.get(d.id).el, diagnoses.get(d.id).el],
+        more: [rows.get(d.id).el, signInRows.get(d.id).el, diagnoses.get(d.id).el], expanded: expanded.has(d.id),
       }),
     });
   }), ...leftNow.map((id) => machineRow({
@@ -1410,7 +1433,10 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
       onclick: () => updates.checkAll(updating.map((d) => d.id)),
     }, updating.length > 1 ? 'Check all machines for updates' : 'Check for updates'))] : []));
   if (had?.id && had.cls) {
-    const again = [...list.children].find((li) => li.dataset.deviceId === had.id)?.querySelector(`.${had.cls}`);
+    const row = [...list.children].find((li) => li.dataset.deviceId === had.id);
+    const again = (had.cls === 'machine' ? row : row?.querySelector(`.${had.cls}`)) ?? row?.querySelector('.machine-update-now')
+      ?? row?.querySelector('.machine-update-check') ?? row;
+    if (again === row && row) { row.tabIndex = -1; }
     again?.focus();
   }
   return hosts.length;

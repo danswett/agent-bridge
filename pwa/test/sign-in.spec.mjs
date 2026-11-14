@@ -39,6 +39,71 @@ const sheet = (page) => page.locator('dialog.sign-in-sheet');
 const row = (page, id) => page.locator(`#session-list > .session[data-id="${id}"]`);
 const signIn = (page) => banner(page).getByRole('button', { name: 'Sign in to Copilot on DEV-VM1' });
 
+const visibility = (page, visible) => page.evaluate((visible) => {
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: visible ? 'visible' : 'hidden' });
+  document.dispatchEvent(new Event('visibilitychange'));
+}, visible);
+
+test('hidden banners stop ticking, catch up once, and still receive sign-in completion', async ({ page }) => {
+  await page.clock.install();
+  await openDemo(page);
+  await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);
+  await page.evaluate(() => {
+    const banners = window.agentBridgeDemo.page.signIns, render = banners.render;
+    window.__bannerRenders = 0;
+    banners.render = function () { window.__bannerRenders++; return render.call(this); };
+  });
+  await visibility(page, false);
+  await page.clock.runFor(15000);
+  expect(await page.evaluate(() => window.__bannerRenders)).toBe(0);
+  await visibility(page, true);
+  expect(await page.evaluate(() => window.__bannerRenders)).toBe(1);
+  await signIn(page).click();
+  await page.clock.runFor(100);
+  await expect(sheet(page).locator('.sign-in-code')).toHaveText('WDJB-MJHT');
+  await visibility(page, false);
+  expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(1);
+  await page.evaluate(() => window.agentBridgeDemo.finishSignIn('signedIn'));
+  await page.clock.runFor(100); // The demo delivers signin.done on a timer.
+  await expect(sheet(page)).toBeHidden();
+  await expect(banner(page).locator('.sign-in-line')).toHaveText('Signed in \u00b7 waiting for 4 sessions to confirm');
+  expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(0);
+  await visibility(page, true);
+  await page.evaluate(() => window.agentBridgeDemo.page.signIns.stop());
+  const renders = await page.evaluate(() => window.__bannerRenders);
+  await visibility(page, false);
+  await visibility(page, true);
+  await page.clock.runFor(15000);
+  expect(await page.evaluate(() => window.__bannerRenders)).toBe(renders);
+});
+
+test('an active code expires while hidden without a periodic banner sweep', async ({ page }) => {
+  await page.clock.install();
+  await openDemo(page);
+  await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);
+  await page.evaluate(() => {
+    window.agentBridgeDemo.nextCode = { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: new Date(Date.now() + 12000).toISOString() };
+  });
+  await signIn(page).click();
+  await page.clock.runFor(100);
+  await expect(sheet(page).locator('.sign-in-code')).toHaveText('WDJB-MJHT');
+  await visibility(page, false);
+  await page.evaluate(() => {
+    const banners = window.agentBridgeDemo.page.signIns, render = banners.render;
+    window.__bannerRenders = 0;
+    banners.render = function () { window.__bannerRenders++; return render.call(this); };
+  });
+  await page.clock.runFor(10000);
+  expect(await page.evaluate(() => window.__bannerRenders)).toBe(0);
+  expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(1);
+  await page.clock.runFor(2000);
+  await expect(sheet(page).locator('.sign-in-expired')).toHaveText('Code expired');
+  expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(0);
+  expect(await page.evaluate(() => window.__bannerRenders)).toBe(1);
+  await visibility(page, true);
+  expect(await page.evaluate(() => window.__bannerRenders)).toBe(2);
+});
+
 test('Agent error Details shows the cause, type and last activity, then removes them on recovery', async ({ page }) => {
   await page.clock.install();
   await openDemo(page);
@@ -354,24 +419,40 @@ test('a press whose wait was cancelled leaves the next press still waiting for t
   expect((await page.evaluate(() => window.agentBridgeDemo.signInLog)).map((l) => l.op)).toEqual(['signin.start', 'signin.cancel', 'cancelled', 'signin.start']);
 });
 
-test('Try again given up while its cancel finishes closes the sheet and sends nothing', async ({ page }) => {
-  await openDemo(page);
-  await page.evaluate(() => { window.agentBridgeDemo.nextCode = { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com.evil.example/login/device', expiresAt: new Date(Date.now() + 600000).toISOString() }; });
-  await signIn(page).click();
-  const retry = sheet(page).getByRole('button', { name: 'Try again to sign in to Copilot on DEV-VM1' });
-  await expect(retry).toBeVisible();
-  await page.evaluate(() => window.agentBridgeDemo.delayCancels(1500));
-  await retry.click();
-  // The host stops offering this device sign-in while the cancel finishes.
-  await page.evaluate(() => {
-    const d = window.agentBridgeDemo;
-    const s = d.host.get('signin-1');
-    d.upsert({ ...s, attention: { ...s.attention, signIn: 'unknown', since: new Date().toISOString() } });
+for (const attempt of ['retry', 'start']) {
+  test(`${attempt} given up while its cancel finishes drops early codes while hidden and sends nothing`, async ({ page }) => {
+    await page.clock.install();
+    await openDemo(page);
+    await page.evaluate(() => { window.agentBridgeDemo.nextCode = { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com.evil.example/login/device', expiresAt: new Date(Date.now() + 600000).toISOString() }; });
+    await signIn(page).click();
+    const retry = sheet(page).getByRole('button', { name: 'Try again to sign in to Copilot on DEV-VM1' });
+    await expect(retry).toBeVisible();
+    await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);
+    await page.evaluate(() => window.agentBridgeDemo.delayCancels(1500));
+    if (attempt === 'retry') { await retry.click(); }
+    else { await page.keyboard.press('Escape'); await signIn(page).click(); }
+    await expect(sheet(page).locator('.sign-in-starting')).toBeVisible();
+    await page.evaluate(() => {
+      const h = window.agentBridgeDemo.host;
+      h.frame({ ev: 'signin.code', seq: h.seq + 1, data: { flow: 'late-flow', agent: 'copilot', userCode: 'LATE-CODE', verificationUri: 'https://github.com/login/device', expiresAt: new Date(Date.now() + 600000).toISOString() } });
+    });
+    await page.clock.runFor(50);
+    expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(1);
+    await visibility(page, false);
+    // The host stops offering this device sign-in while the cancel finishes.
+    await page.evaluate(() => {
+      const d = window.agentBridgeDemo;
+      const s = d.host.get('signin-1');
+      d.upsert({ ...s, attention: { ...s.attention, signIn: 'unknown', since: new Date().toISOString() } });
+    });
+    await page.clock.runFor(1600);
+    await expect(sheet(page)).toBeHidden({ timeout: 5000 });
+    expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(0);
+    await page.clock.runFor(10000);
+    expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(0);
+    expect((await page.evaluate(() => window.agentBridgeDemo.signInLog)).map((l) => l.op)).toEqual(['signin.start', 'signin.cancel', 'cancelled']);
   });
-  await expect(sheet(page)).toBeHidden({ timeout: 5000 });
-  await page.waitForTimeout(300);
-  expect((await page.evaluate(() => window.agentBridgeDemo.signInLog)).map((l) => l.op)).toEqual(['signin.start', 'signin.cancel', 'cancelled']);
-});
+}
 
 test('every way an attempt ends is said aloud, never in the machine\'s words', async ({ page }) => {
   await openDemo(page);

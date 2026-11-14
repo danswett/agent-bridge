@@ -72,6 +72,8 @@ public class SubagentTests
         // clients ignore them.
         node["activity"]!.AsObject().Remove("turn");
         node["activity"]!.AsObject().Remove("responseTurn");
+        node["activity"]!.AsObject().Remove("kind");
+        node["activity"]!.AsObject().Remove("notice");
         node["question"]?.AsObject().Remove("agent");
         return node;
     }

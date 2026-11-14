@@ -347,6 +347,19 @@ suites:
     where: flake-hunt.yml hunt, classify, report
     status: exists
 
+  - id: arm64-self-test-loop
+    validation_plan: native
+    kind: ui
+    ring: 3
+    select: affected
+    # Manual diagnostic only (#2535): accounted for, never selected by PR/main rings 0-2.
+    platforms: [win-arm64]
+    runner: hosted
+    triggers: [.github/workflows/arm64-self-test-loop.yml]
+    command: see arm64-self-test-loop.yml (manual dispatch only; exact head-sha and loops inputs)
+    where: arm64-self-test-loop.yml loop
+    status: exists
+
   - id: weekly-report
     validation_plan: native
     kind: static
@@ -375,7 +388,7 @@ suites:
     platforms: [linux-x64]
     runner: hosted
     command: see merge-rule.yml (a dry run of the same verdict, posting nothing - dotnet run --project tools/AgentBridge.Quality -c Release -- merge-rule --pr N)
-    where: merge-rule.yml evaluate; merge-rule-review.yml relay
+    where: merge-rule.yml backstop, evaluate; merge-rule-review.yml relay
     status: exists
 
   - id: mac-host
@@ -524,6 +537,20 @@ suites:
     runner: local
     triggers: [quality/red-minutes.ps1, quality/test-red-minutes.ps1]
     command: pwsh -NoProfile -File quality/test-red-minutes.ps1
+    where: ci.yml light
+    status: exists
+
+  - id: arm64-waiver-script
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    # quality-gate's time-boxed win-arm64 waiver (#2564): which failed jobs it waives, the expiry
+    # boundary, the switch, and every refusal, on fixed needs and jobs JSON. Nothing reaches GitHub.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/arm64-waiver.ps1, quality/test-arm64-waiver.ps1]
+    command: pwsh -NoProfile -File quality/test-arm64-waiver.ps1
     where: ci.yml light
     status: exists
 

@@ -160,6 +160,17 @@ public static class ProtocolVectors
             .Valid("stale", full with { State = MachineLoadState.Stale, AgeMs = 16000 })
             .Valid("first-sample-no-cpu", full with { Cpu = null, Sessions = [session with { CpuPercent = null }] })
             .Valid("unavailable", new MachineLoad())
+            .Reads("over-200-sessions", Broken(full, j => j["sessions"] = JsonSerializer.SerializeToNode(
+                Enumerable.Range(0, 201).Select(i => new SessionLoad { Session = $"s-{i}", WorkingSetBytes = i }),
+                ProtocolJson.Options)))
+            .Reads("mixed-case-names", """
+                {"STATE":"stale","sTaTe":"fresh","sampledAT":"2025-01-02T03:04:05.000Z","AGEMs":100,"sTaleAfterMS":15000,
+                 "CPU":{"PERCENT":1,"pErCeNt":25,"CORES":8},
+                 "MEMORY":{"TOTALBYTES":17179869184,"availableBYTES":8589934592,"COMMITTEDPERCENT":50},
+                 "SESSIONS":[{"SESSION":"s-1","AGENT":"AGENCY","PROCESSES":3,"CPUPERCENT":12.5,"WORKINGSETBYTES":104857600,"wor\u212AingSetBytes":7,"HANDLES":42,"HANDLEKIND":"FDS","stAte":"partial"}],
+                 "UNATTRIBUTED":{"PROCESSES":1,"WORKINGSETBYTES":1048576}}
+                """)
+            .Reads("offset-submillisecond-sampled-at", """{"state":"fresh","sampledAt":"2025-01-02T03:04:05.1234567+02:30","sessions":[]}""")
             .Reads("unknown-state", """{"state":"future","sessions":[]}""")
             .Reads("no-figure", """{"state":"partial","cpu":{},"memory":{},"sessions":[]}""");
     }
@@ -292,7 +303,8 @@ public static class ProtocolVectors
             .Refused("a-delegate-ordered-twice", turn with { Subagents = turn.Subagents! with { Order = ["agent-3", "agent-3"] } }, "held-at-41")
             .Refused("a-delegate-without-an-id", turn with { Subagents = turn.Subagents! with { Set = [JsonSerializer.SerializeToElement(new { status = "ended" })] } }, "held-at-41")
             // Read with its base left out, a patch would be applied to nothing as if it were the whole session.
-            .Refused("a-base-that-is-not-a-number", Broken(turn, j => j["base"] = "41"));
+            .Refused("a-base-that-is-not-a-number", Broken(turn, j => j["base"] = "41"))
+            .Refused("missing-id", Broken(turn, j => j.Remove("id")));
         f.Record<SubagentsPatch>(Host)
             .Valid("by-id", turn.Subagents!)
             .Valid("one-entry", new SubagentsPatch { Set = [JsonSerializer.SerializeToElement(new { id = "agent-3", status = "ended" })] });
@@ -302,6 +314,7 @@ public static class ProtocolVectors
     {
         f.Record<MachineInfo>(Host)
             .Valid("full", Machine)
+            .Valid("role", Machine with { Role = "builder" })
             .Valid("minimal", new MachineInfo(MachineId, "DEV-MAC", "macos", "0.1.200"));
         f.Record<HelloResult>(Host)
             .Valid("full", new HelloResult(1, Machine, [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsReply, Capabilities.SessionsStop, Capabilities.Push, Capabilities.SessionsAttach, Capabilities.SessionsAttachBlob, Capabilities.SessionsApprove, LaunchProtocol.Capability, UsageProtocol.Capability, UpdateProtocol.Capability]))
@@ -371,7 +384,7 @@ public static class ProtocolVectors
             .Valid("full", FullActivity)
             .Valid("empty", new Activity())
             // Who wrote the latest prompt when it was not the person (#489).
-            .Valid("a-scheduled-prompt", new Activity { UserMessage = "[Scheduled prompt #4] Check CI and report.", UserMessageFrom = UserMessageFrom.Schedule, UserMessageLabel = "4", TurnCount = 3 })
+            .Valid("a-scheduled-prompt", new Activity { Kind = TurnKind.Scheduled, UserMessage = "[Scheduled prompt #4] Check CI and report.", UserMessageFrom = UserMessageFrom.Schedule, UserMessageLabel = "4", TurnCount = 3 })
             .Valid("a-prompt-an-agent-sent", new Activity { UserMessage = "Carry on with the next step.", UserMessageFrom = UserMessageFrom.Agent })
             .Reads("an-unknown-sender-reads-as-other-never-the-person", """{"userMessage":"Carry on.","userMessageFrom":"robot"}""")
             .Refused("a-sender-that-is-not-text", """{"userMessage":"Carry on.","userMessageFrom":4}""");
@@ -913,9 +926,15 @@ public static class ProtocolVectors
 
     static void Update(VectorFileBuilder f)
     {
+        f.Context("release-hints", new
+        {
+            now = T0, hello = new { releaseHint = true },
+            frame = new { t = "release.hint", tag = "v0.1.201", channel = "win", seenAt = T0 },
+        });
         var last = new UpdateResult { Outcome = UpdateOutcome.Updated, From = "0.1.199", To = "0.1.200", Request = Request, At = T0 };
         f.Record<UpdateResult>(Host)
             .Valid("updated", last)
+            .Valid("last-step", last with { Step = "installing" })
             .Valid("refused", new UpdateResult { Outcome = UpdateOutcome.Refused, Reason = "a session is busy", At = T0 })
             // Update now (#1159): how it ended as a code, which a client words itself.
             .Valid("an-update-now-refused-with-a-code", new UpdateResult { Outcome = UpdateOutcome.Refused, Reason = "Update now has used its restarts", Request = Request, Code = UpdateCode.RestartCap, At = T0 })
@@ -945,8 +964,19 @@ public static class ProtocolVectors
             Request = Request, Automatic = true, Last = last,
         };
         var offered = state with { Phase = UpdatePhase.Idle, Progress = null, Request = null, CanUpdateNow = true, Busy = busy };
+        var leaving = new UpdateLeaving("0.1.201", T0, T0.AddMinutes(3));
+        var back = new UpdateBack("0.1.200", "0.1.201", Request, T0.AddMinutes(1));
+        var policy = new UpdatePolicy(UpdatePolicyState.Ok, T0);
+        f.Record<UpdateLeaving>(Host).Valid("leaving", leaving);
+        f.Record<UpdateBack>(Host).Valid("back", back);
+        f.Record<UpdatePolicy>(Host).Valid("checked", policy);
         f.Record<UpdateState>(Host)
             .Valid("downloading", state)
+            .Valid("fleet-facts", new UpdateState
+            {
+                Bytes = 12, Total = 100, Downloaded = false, Installing = T0, Leaving = leaving, Back = back,
+                Mode = UpdateMode.RestartToUpdate, ChecksHeldUntil = T0.AddHours(1), Policy = policy,
+            })
             .Valid("waiting", state with { Phase = UpdatePhase.Waiting, Progress = null, Waiting = "a session is busy" })
             .Valid("no-app", new UpdateState { Unavailable = "the Windows app is not running" })
             .Valid("update-now-offered", offered)
@@ -958,6 +988,7 @@ public static class ProtocolVectors
             .Valid("an-update-now", new UpdateCommand { Now = Signed });
         f.Record<UpdateCommandResult>(Host)
             .Valid("accepted", new UpdateCommandResult(UpdateAck.Accepted) { State = state with { Phase = UpdatePhase.Checking, Progress = null } })
+            .Valid("retry-at", new UpdateCommandResult(UpdateAck.Refused) { Code = "rate-limited", RetryAt = T0.AddMinutes(10) })
             .Valid("refused", new UpdateCommandResult(UpdateAck.Refused, "the machine is read-only"))
             .Valid("an-update-now-refused-with-a-code", new UpdateCommandResult(UpdateAck.Refused, "the release offered here is no longer the one the person was shown") { Code = UpdateCode.ReleaseChanged })
             .Valid("confirm", new UpdateCommandResult(UpdateAck.Confirm, "more is busy here than the confirmation covered") { State = offered })

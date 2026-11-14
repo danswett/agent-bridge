@@ -2,6 +2,9 @@
 // records mirror it and serialize to exactly that JSON with ProtocolJson.Options.
 namespace AgentBridge.Protocol;
 
+[UnknownAs(Unknown)]
+public enum TurnKind { User, Notification, Scheduled, Unknown }
+
 // What a history part is. A client skips a part whose kind it does not know: drawn as some other
 // kind, a newer host's part would be shown as something it is not.
 [UnknownAs(Unknown)]
@@ -83,6 +86,7 @@ public sealed record HistoryStart
 // could not be read; it holds only Id and At.
 public sealed record HistoryTurn
 {
+    public TurnKind? Kind { get; init; }
     [Strict(Strictness.Identity)]
     public required string Id { get; init; }
     public required DateTimeOffset At { get; init; }

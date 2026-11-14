@@ -32,6 +32,27 @@ public class SessionPatchTests
     // As a client receives it: the patch on the wire, read as a host record is.
     static SessionPatch Wire(SessionPatch patch) => Received.Read<SessionPatch>(JsonSerializer.SerializeToElement(patch, ProtocolJson.Options));
 
+    [Fact]
+    public void A_patch_to_a_subscriber_that_asked_for_handles_names_the_session_by_its_handle_and_carries_no_id()
+    {
+        var held = SessionPatches.Json(Base());
+        var now = SessionPatches.Json(Base() with { Title = "Renamed" });
+        var patch = SessionPatches.Next(held, 41, now, 7, handle: 1)!;
+        var wire = JsonSerializer.SerializeToElement(patch, ProtocolJson.Options);
+        Assert.False(wire.TryGetProperty("id", out _));
+        Assert.Equal(1, wire.GetProperty("handle").GetInt32());
+        Assert.True(JsonNode.DeepEquals(now, SessionPatches.Apply(held, 41, Wire(patch), new Dictionary<int, string> { [1] = Base().Id })));
+    }
+
+    [Fact]
+    public void A_patch_with_a_handle_no_snapshot_gave_is_not_applied()
+    {
+        var held = SessionPatches.Json(Base());
+        var patch = SessionPatches.Next(held, 41, SessionPatches.Json(Base() with { Title = "Wrong" }), 7, handle: 1)!;
+        Assert.Equal(SessionPatches.NotOnHeld, Assert.Throws<SessionPatchException>(() => SessionPatches.Apply(held, 41, Wire(patch), new Dictionary<int, string>())).Message);
+        Assert.Equal("Patches", held["title"]!.GetValue<string>());
+    }
+
     static JsonObject Applied(Session start, Session to, out SessionPatch patch)
     {
         var held = SessionPatches.Json(start);

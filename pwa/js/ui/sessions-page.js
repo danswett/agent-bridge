@@ -15,6 +15,8 @@ import { LaunchPanel } from './launch-view.js';
 import { AnswerService } from '../answer-service.js';
 import { TurnClock } from '../turn-clock.js';
 import { ReplyService } from '../reply-service.js';
+import { accountStore } from '../signin.js';
+import { replyAccount } from '../reply-state.js';
 import { StopService } from '../stop-service.js';
 import { LaunchService } from '../launch-service.js';
 import { LaunchOptionsCache } from '../launch-options-cache.js';
@@ -38,6 +40,8 @@ import { HistoryStore } from '../history-store.js';
 import { RowMenu } from './row-menu.js';
 import { phoneMedia } from '../phone-viewport.js';
 import { LoadFeed } from '../load-feed.js';
+import { glyph } from './glyph.js';
+import { whileVisible } from './ticker.js';
 
 // Needs you's answers (Approve once, Deny, Resend) wait as a question's do (ui.md §5.3): any
 // change to the lane can put Approve once under a pointer aimed at something else (an entry
@@ -174,6 +178,7 @@ export class SessionsPage {
   // From Escape's pop until its popstate lands: a second press then would pop past the list.
   #escaping = false;
   #timingTimer = null;
+  #unwatchTimings = null;
   #sortEvents = null;
   #sortPopup = new RowMenu();
   #loads = null;
@@ -200,8 +205,26 @@ export class SessionsPage {
     const accepts = (hostId) => !!hosts.route(hostId);
     this.answers = new AnswerService({ current, accepts, ...timing, marks: 'answer' });
     this.turns = new TurnClock();
-    this.#timingTimer = setInterval(() => { void connection.reportTimings?.(() => this.turns.drain()); }, 60000);
-    this.replies = new ReplyService({ current, accepts, ...timing, blobs, onTap: (e) => this.turns.sent(e.hostId, e.sessionId) });
+    const doc = globalThis.document;
+    let timingPending = false;
+    const flushTimings = () => {
+      timingPending = !connection.ready;
+      if (!timingPending) { void connection.reportTimings?.(() => this.turns.drain()); }
+    };
+    this.#timingTimer = whileVisible(flushTimings, 60000);
+    const hidden = () => { if (doc?.visibilityState === 'hidden') { timingPending = false; } };
+    doc?.addEventListener('visibilitychange', hidden);
+    const unready = connection.on?.('ready', () => {
+      if (timingPending && doc?.visibilityState !== 'hidden') { flushTimings(); }
+    });
+    this.#unwatchTimings = () => {
+      timingPending = false;
+      unready?.();
+      doc?.removeEventListener('visibilitychange', hidden);
+    };
+    const replyScope = replyAccount(accountStore.load(storage));
+    this.replies = new ReplyService({ current, accepts, ...timing, blobs, onTap: (e) => this.turns.sent(e.hostId, e.sessionId),
+      persistence: replyScope ? { storage, account: replyScope } : null });
     this.stops = new StopService({ current, accepts, ...timing });
     this.launches = new LaunchService({ current, accepts, ...timing });
     // Each machine's last launch.options, asked for in the background, so Start a session shows at once (#1527).
@@ -250,7 +273,7 @@ export class SessionsPage {
       stale: (hostId) => hosts.staleOf(hostId),
       heading: () => $('sessions-h'),
     });
-    this.view.onRender = (n) => { this.#drawCount(n); this.#settleSelection(); this.#delegateStep(); };
+    this.view.onRender = (n) => { this.#drawCount(n); this.#drawNeeds(n); this.#settleSelection(); this.#delegateStep(); };
     this.view.onSelect = (card) => card.openFromRow(() => this.#choose(card, true));
     this.view.onBack = () => this.#back();
     this.view.onInspector = () => this.#toggleInspector();
@@ -272,6 +295,17 @@ export class SessionsPage {
       open: (hostId, id) => this.showSession(id, hostId),
       badge,
     });
+    this.needsMark = h('span', { 'aria-hidden': 'true' });
+    this.needsLabel = h('span');
+    this.needsSummary = h('span', { class: 'needs-filter-summary' });
+    this.needsToggle = h('button', {
+      type: 'button', class: 'needs-filter', hidden: true, 'aria-pressed': 'false',
+      'aria-controls': 'session-list', title: 'Pending questions on connected machines',
+      onclick: () => this.view.setNeedsOnly(!this.view.needsOnly),
+    }, this.needsMark, this.needsLabel, this.needsSummary);
+    $('needs-you').before(this.needsToggle);
+    this.needsEmpty = h('p', { class: 'note', hidden: true }, 'Nothing else needs you on connected machines.');
+    this.view.said.after(this.needsEmpty);
     // An agent that needs sign-in (#800): a banner for each machine, agent and account, above the lane.
     this.signIns = $('sign-in-banners') ? new SignInBanners($('sign-in-banners'), hosts, {
       live: $('sign-in-said'),
@@ -779,6 +813,8 @@ export class SessionsPage {
 
   // Everything tied to the signed-in account goes with it.
   clear() {
+    this.needsToggle?.remove();
+    this.needsEmpty?.remove();
     for (const m of [this.wide, this.phone]) { m.removeEventListener?.('change', this.#onResize); }
     this.phone.destroy?.();
     const loads = this.#loads;
@@ -791,8 +827,10 @@ export class SessionsPage {
     this.#sortPopup.close(false);
     this.#sortEvents?.abort();
     this.view.stopRecent();
-    clearInterval(this.#timingTimer);
+    this.#timingTimer?.stop();
     this.#timingTimer = null;
+    this.#unwatchTimings?.();
+    this.#unwatchTimings = null;
     // The account's session is no longer shown: said before the page lets go of what says it.
     try { this.opened(null); } catch (e) { console.error(e); }
     this.#unroute?.();
@@ -932,6 +970,36 @@ export class SessionsPage {
       if (moveFocus) { stripEl.tabIndex = -1; stripEl.focus(); }
     }
     this.#drawCount(hosts.sessions.size);
+  }
+
+  #drawNeeds(total) {
+    if (!this.needsToggle) { return; }
+    const count = this.view.needsCount ?? 0;
+    const on = this.view.needsOnly;
+    const button = this.needsToggle;
+    const hidden = !count && !on;
+    const refocus = hidden && button.ownerDocument.activeElement === button;
+    button.hidden = hidden;
+    button.setAttribute('aria-pressed', String(on));
+    const label = `Needs you \u00b7 ${count}`;
+    button.setAttribute('aria-label', label);
+    this.needsLabel.textContent = label;
+    const mark = count ? 'needs' : 'idle';
+    if (this.needsMark.dataset.glyph !== mark) {
+      this.needsMark.dataset.glyph = mark;
+      this.needsMark.replaceChildren(glyph(mark));
+    }
+    this.needsSummary.hidden = !on;
+    this.needsSummary.textContent = this.hosts.all
+      ? `Showing ${this.view.needsShown ?? 0} of ${total}`
+      : `${this.view.needsShown ?? 0} on ${this.hosts.nameOf(this.hosts.targetId) ?? 'this machine'}`;
+    this.needsSummary.title = this.needsSummary.textContent;
+    this.needsEmpty.hidden = !on || count !== 0 || !!this.view.filter;
+    if (refocus) {
+      const heading = this.$('sessions-h');
+      heading.tabIndex = -1;
+      heading.focus({ preventScroll: true });
+    }
   }
 
   #drawCount(n) {
