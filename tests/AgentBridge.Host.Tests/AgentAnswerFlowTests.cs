@@ -10,7 +10,7 @@ using Xunit;
 // end to end below the channel: fixture sessions read by the real SessionSource, answered by
 // the real AnswerService into a fake injector that plays the agent by writing what it would
 // record. The channel itself is the same for every agent (AnswerFlowTests).
-public sealed class AgentAnswerFlowTests : IAsyncLifetime
+public sealed partial class AgentAnswerFlowTests : IAsyncLifetime
 {
     const string ClaudeId = "c1a0de00-0000-4000-8000-000000000001";
     const string CodexId = "c0de0000-0000-4000-8000-000000000002";
