@@ -138,8 +138,12 @@ and 4 KiB (notes).
 
 These #2229 fields define the wire only; reporters and enforcement ship separately under
 [#2225](../design/updates-fast-fleet-update.md). All are optional and omitted when unknown.
-The Windows app now reports `bytes`, `total` and `downloaded`; `installing`, `leaving`, `back`
-and `step` are not reported yet, and old updaters leave all these facts absent.
+The Windows app reports `bytes`, `total`, `downloaded`, the install-start instant `installing`,
+the observed matching-target return `back`, and failure `last.step` (`downloading`, `installing`,
+`restarting` or `host-start`). Return uses the per-profile attempt preferences, survives restart,
+and is forwarded only when the app and host both run its target. Unreadable preferences mean no
+return fact. `leaving` is not reported yet; a report reply is not proof of a subscriber send.
+Old updaters leave these facts absent.
 Hello's `machine.role` is optional: absent means an old host or unknown role; an empty string
 means explicitly no role. Once role reporting ships, every new host sends it, even when empty.
 The label is display/availability metadata, never an authorization grant.
@@ -158,7 +162,7 @@ the UUID rule. Adding these facts grants no authority and changes no signature o
 | `request` | string? | The press it answers; absent for one the person started at the machine (Restart to update), or an automatic one before #516 |
 | `code` | string? | **#1159, the app's.** For an Update now, as in `UpdateCommandResult` |
 | `at` | time | |
-| `step` | string? | Optional last step reached (`downloading`, `installing`, `restarting`), using the existing short-code syntax. Clients word known steps themselves; an unknown step must not imply success |
+| `step` | string? | Optional last step reached (`downloading`, `installing`, `restarting`, `host-start`), using the existing short-code syntax. Clients word known steps themselves; an unknown step must not imply success |
 
 An install restarts the app and host, so its outcome is reported by the new version: the app
 keeps the press it is carrying out in its preferences when it hands over to the updater, and its

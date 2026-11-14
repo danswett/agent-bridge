@@ -125,6 +125,8 @@ public sealed record AppPreferences
     // The release those failures were of: a different release pending is not held by them.
     public string? UpdateFailedRelease { get; init; }
     public UpdateResult? LastUpdate { get; init; }
+    // The last observed return on the recorded target, kept independently of later press results.
+    public UpdateBack? UpdateReturned { get; init; }
     // The presses from other devices this app has taken on, the latest last: one the host still
     // lists after the app restarts (its report that it took them lost) is not carried out twice.
     public IReadOnlyList<string>? UpdateTaken { get; init; }
