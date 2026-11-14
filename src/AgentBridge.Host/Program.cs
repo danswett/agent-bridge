@@ -56,6 +56,8 @@ using AgentBridge.Transport;
 //                                               profile has taken over agent-ha-bridge's hook
 //                                               spool, its heartbeat, and the hooks' timings
 //                                               (docs/host-hooks.md)
+//   agent-bridge-host audit [--action <action>] [--outcome <outcome>] [--since <time>]
+//                                               read known audit metadata, without changing the profile
 //   agent-bridge-host migrate [--dry-run] | rollback [--dry-run] | migration status
 //                                               move this machine's hooks and settings from
 //                                               agent-ha-bridge to this host, and back
@@ -81,6 +83,11 @@ string? Option(string name)
     return i >= 0 && i + 1 < arguments.Count ? arguments[i + 1] : null;
 }
 bool Flag(string name) => arguments.Contains(name);
+
+if (command == "audit")
+{
+    return AuditCommands.Run(arguments, Identity.DefaultRoot, Console.Out, Console.Error);
+}
 
 // Inventory must return before even intake or device/account identity files are opened.
 if (command == "devices" && arguments.ElementAtOrDefault(1) == "descriptor")
@@ -188,6 +195,11 @@ switch (command)
                 Console.Error.WriteLine($"agent-bridge-host rename: {e.Message}");
                 return 1;
             }
+        }
+    case "agents":
+        {
+            return await AgentCommands.RunWithProfileAsync(arguments, Identity.DefaultRoot,
+                () => Refused("adopt a session or end its adoption"), Console.Out, Console.Error);
         }
     case "watch":
         {
@@ -352,6 +364,7 @@ switch (command)
         Console.Error.WriteLine("       agent-bridge-host rename <session-id> \"<fleet name>\" [--profile <name>] (empty name clears)");
         Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]");
         Console.Error.WriteLine("       " + OwnPeerCommands.Usage);
+        Console.Error.WriteLine("       " + AgentCommands.Usage);
         Console.Error.WriteLine("       " + AgentBridge.Host.Shadow.ShadowCommand.Usage);
         Console.Error.WriteLine("       agent-bridge-host hooks status | hooks install|remove <copilot|claude|codex> [...] [--dry-run]");
         Console.Error.WriteLine("       agent-bridge-host hooks cleanup [--profile <name>]");
@@ -1067,6 +1080,7 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
         WorktreeUsage = new RestoreWorktreeUsage(restore, new AgentWorktreeUsage(new SystemProcessInspector(), options.CopilotHome, options.ClaudeRegistrationRoots, options.CodexRegistrationRoots)),
         Transfers = transfers,
         TransferStaging = transfers.Staging,
+        ProvenanceFile = Path.Combine(serveFolder!, "launch-provenance.json"),
         Journal = journal,
         AgentWorktreeCheck = AgentLaunchWorktreeCheck.Check,
         AgentWorktreeRefusalAudit = (request, principal, reason) => audit.Append(

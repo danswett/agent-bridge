@@ -55,7 +55,7 @@ static partial class SelfTest
             var said = line is null ? "" : Flat(line.Inlines);
             var links = line?.Inlines.OfType<Hyperlink>().Select(l => Flat(l.Inlines)).ToList() ?? [];
             check(head?.Text == "Copilot on Build server needs sign-in · @demo-user" && said == "3 sessions affected: Coordinate the release, Fix the relay reconnect, Review the usage panel"
-                && links.SequenceEqual(["Coordinate the release", "Fix the relay reconnect", "Review the usage panel"]) && AutomationProperties.GetName(Banner()!) == head.Text,
+                && links.SequenceEqual(new[] { "Coordinate the release", "Fix the relay reconnect", "Review the usage panel" }) && AutomationProperties.GetName(Banner()!) == head.Text,
                 $"heads the banner with the machine, agent and account, names the sessions it holds up in its line as links, and is named as shown ({head?.Text} / {said} / {links.Count} links)");
             var verb = Verb()!;
             check(verb.Content as string == "Sign in" && AutomationProperties.GetName(verb) == "Sign in to Copilot on Build server", $"names Sign in for what it signs in, its words first ({AutomationProperties.GetName(verb)})");
@@ -105,9 +105,9 @@ static partial class SelfTest
                 copy!.Focus(FocusState.Keyboard);
                 var onCopy = await Until(() => ReferenceEquals(FocusManager.GetFocusedElement(root), copy), TimeSpan.FromSeconds(2));
                 var keyed = await Enter(() => copies > 0);
-                check(onCopy && copies == 1 && main.SignInSheet is { Copied.Length: > 0 } && Sheet() is not null && remote.SignInLog.SequenceEqual([AuthState.Start]),
+                check(onCopy && copies == 1 && main.SignInSheet is { Copied.Length: > 0 } && Sheet() is not null && remote.SignInLog.SequenceEqual(new[] { AuthState.Start }),
                     $"copies the code on Enter at Copy, the sheet still open and nothing cancelled (by {keyed}: '{main.SignInSheet?.Copied}', {copies} copies, {remote.SignInLog.Count} ops)");
-                check(remote.SignInLog.SequenceEqual([AuthState.Start]), "sends signin.start once, on the press");
+                check(remote.SignInLog.SequenceEqual(new[] { AuthState.Start }), "sends signin.start once, on the press");
                 await Picture(sheet, Path.ChangeExtension(outFile, ".signin-sheet.png"));
                 // A focused button's Enter is its own (Creative 6691577488): on Cancel it cancels the
                 // sign-in, and copies nothing.
