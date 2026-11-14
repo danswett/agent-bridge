@@ -5,8 +5,9 @@ using AgentBridge.Protocol;
 using AgentBridge.Transport;
 using Xunit;
 
-public sealed partial class LaunchFlowTests
+public sealed class LaunchGateAuditTests : LaunchFlowFixture
 {
+    private protected override bool UsesRelay => false;
     string GateProfile => Path.Combine(f.Root, "profile");
     string GateFolder => Path.Combine(GateProfile, AgentAuditLog.FolderName);
 
