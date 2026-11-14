@@ -61,7 +61,8 @@ action. Session/usage inspection and staged-attachment cleanup remain available.
 - **iOS/iPadOS background notifications:** current notices require the app to be
   open. APNs provider, device-token registration, entitlements and lifecycle
   validation are missing. A Windows tray process is not an iOS background
-  transport.
+  transport. The [proposed APNs path](design/ios-push-path.md) reconciles the
+  missing contracts; it implements none of them and is not delivery evidence.
 - **Distribution and self-updates:** signed Mac packages, notarization,
   TestFlight/App Store delivery, Apple self-update policy and bundled host
   installation are deferred by the local-development-build decision. Windows

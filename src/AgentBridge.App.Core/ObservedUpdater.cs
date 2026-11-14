@@ -57,6 +57,9 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     public DateTimeOffset? DiscoveredAt => inner.DiscoveredAt;
     public UpdatePhase Phase => Volatile.Read(ref downloads) > 0 ? UpdatePhase.Downloading : Volatile.Read(ref checks) > 0 ? UpdatePhase.Checking : UpdatePhase.Idle;
     public int? Progress { get; private set; }
+    public long? Bytes { get; private set; }
+    public long? Total { get; private set; }
+    public bool? Downloaded => !inner.ReportsDownloadFacts ? null : Ready is not null ? true : Found is not null ? false : null;
 
     public string? InstalledVersion => inner.InstalledVersion;
     public string? PendingNotes => inner.PendingNotes;
@@ -73,6 +76,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
             var found = await inner.CheckAsync();
             // A check that finished after its source changed answers for the old one.
             if (Bound() != from) { return found; }
+            if (Found != found) { (Bytes, Total) = (null, null); }
             Found = found;
             CheckedAt = time.GetUtcNow();
             FoundAsOf = inner.DiscoveredAt is { } at && at < CheckedAt ? at : CheckedAt;
@@ -99,13 +103,16 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
             held = true;
             // The one waited for downloaded the release the last check found: nothing to do.
             if (inner.Ready is not null) { return; }
-            var from = Bound();
+            var from = Source;
             var release = Found;
+            (Bytes, Total) = (null, null);
             var now = time.GetUtcNow();
             if (failed is { } f && f.Release == release && now - f.At < HoldAfter(f.Times))
             {
                 throw new DownloadHeldException($"downloading {release} failed {Words.Ago(f.At, now)}; trying again soon");
             }
+            var reporting = true;
+            var reportsDownloadFacts = inner.ReportsDownloadFacts;
             try
             {
                 await inner.DownloadAsync(p =>
@@ -113,21 +120,27 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
                     var at = Math.Clamp(p, 0, 100);
                     if (Progress != at) { Progress = at; Raise(); }
                     progress(p);
+                }, (bytes, total) =>
+                {
+                    if (!Volatile.Read(ref reporting) || !reportsDownloadFacts || Source != from || Found != release) { return; }
+                    (Bytes, Total) = (bytes, total);
+                    Raise();
                 });
             }
             catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
             {
                 // Held against this source only: one that changed meanwhile owes it nothing.
-                if (Bound() == from) { failed = (release, time.GetUtcNow(), failed is { } before && before.Release == release ? before.Times + 1 : 1); }
+                if (Source == from) { failed = (release, time.GetUtcNow(), failed is { } before && before.Release == release ? before.Times + 1 : 1); }
                 throw;
             }
+            finally { Volatile.Write(ref reporting, false); }
             failed = null;
         }
         finally
         {
             if (held) { downloading.Release(); }
             // Settings' and the automatic one's may overlap: the progress goes with the last.
-            if (Interlocked.Decrement(ref downloads) == 0) { Progress = null; }
+            if (Interlocked.Decrement(ref downloads) == 0) { Progress = null; (Bytes, Total) = (null, null); }
             Raise();
         }
     }
@@ -150,6 +163,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         FoundAsOf = null;
         CheckSource = null;
         failed = null;
+        (Bytes, Total) = (null, null);
         Raise();
     }
     int changes;
@@ -163,7 +177,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     string Bound()
     {
         var now = inner.Source;
-        if (bound is not null && bound != now) { (Found, CheckedAt, FoundAsOf, CheckSource, failed) = (null, null, null, null, null); }
+        if (bound is not null && bound != now) { (Found, CheckedAt, FoundAsOf, CheckSource, failed, Bytes, Total) = (null, null, null, null, null, null, null); }
         bound = now;
         return now;
     }
