@@ -136,6 +136,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
 {
     public const string Op = "fleet.list";
     public const string FindOp = "fleet.find";
+    internal IScopedFleetRoster? WarningRoster => roster as IScopedFleetRoster;
 
     // Notification only: the required audit append succeeds before this hook or any roster read.
     public Action<string>? AuditFleetList { get; set; }

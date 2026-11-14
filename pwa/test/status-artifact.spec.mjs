@@ -195,6 +195,8 @@ for (const phone of [false, true]) {
       await page.getByRole('button', { name: 'Create group', exact: true }).click();
       const second = row(page, ids[1]);
       await second.locator('.row-main').press('Shift+F10');
+      await motionsDone(page);
+      await expect.poll(() => second.getByRole('menu').evaluate((el, phone) => el.getBoundingClientRect().bottom - (phone ? document.getElementById('nav').getBoundingClientRect().top : window.innerHeight), phone)).toBeLessThanOrEqual(0);
       await page.getByRole('menuitem', { name: 'Move to group', exact: true }).click();
       await page.getByRole('menuitemradio', { name: 'Gutter group', exact: true }).click();
       const heading = page.getByRole('button', { name: /^Gutter group, 2 sessions/ });

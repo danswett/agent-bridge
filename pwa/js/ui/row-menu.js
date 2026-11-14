@@ -73,14 +73,21 @@ export class RowMenu {
     // a tap on Pin lands on the bar instead: it opens upward where there is room above.
     const r = el.getBoundingClientRect();
     const bar = document.getElementById('nav');
-    const fixed = bar && !bar.hidden && getComputedStyle(bar).position === 'fixed';
+    const fixed = bar && !bar.hidden && bar.offsetWidth > 0 && bar.offsetHeight > 0 && getComputedStyle(bar).position === 'fixed';
     const floor = fixed ? bar.getBoundingClientRect().top : window.innerHeight;
     const up = !sheet && r.bottom > floor && anchor.getBoundingClientRect().top - r.height > 0;
     if (up) { el.classList.add('up'); }
+    el.scrollIntoView?.({ block: 'nearest' });
+    // A pending list shift starts next frame; settle its anchor before measuring.
+    requestAnimationFrame(() => {
+      if (sheet || !fixed || this.#el !== el) { return; }
+      anchor.getAnimations?.().filter((a) => /^ab-motion-(shift|reorder)$/.test(a.id)).forEach((a) => a.finish());
+      const overflow = el.getBoundingClientRect().bottom - floor;
+      if (overflow > 0) { Object.assign(el.style, { top: `calc(${el.offsetTop - overflow}px - var(--ab-space-2))`, bottom: 'auto' }); }
+    });
     // Menu (ui.md §5.3): it settles in from its anchor, and is usable as it does.
     enter(el, 'menu', { dy: up ? 1 : -1 });
-    el.scrollIntoView?.({ block: 'nearest' });
-    (buttons.find((b) => !b.disabled && b.getAttribute('aria-disabled') !== 'true') ?? buttons.find((b) => !b.disabled) ?? el).focus?.();
+    (buttons.find((b) => !b.disabled && b.getAttribute('aria-disabled') !== 'true') ?? buttons.find((b) => !b.disabled) ?? el).focus?.({ preventScroll: true });
   }
 
   close(refocus = true) {
