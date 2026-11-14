@@ -54,7 +54,7 @@ async function role(page, name) {
 }
 const style = (locator, prop) => locator.evaluate((e, p) => getComputedStyle(e)[p], prop);
 
-test('a scheduled prompt is not a bubble: a clock and "Scheduled prompt · #4" in agent colour at the column\'s start, then two lines of it and Show prompt', async ({ page }) => {
+test('a scheduled prompt is not a bubble: a clock and "Scheduled · #4" in agent colour at the column\'s start, then two lines of it and Show prompt', async ({ page }) => {
   await openDemo(page);
   await upsert(page, CODEX, scheduled());
   const v = await open(page, CODEX);
@@ -62,7 +62,7 @@ test('a scheduled prompt is not a bubble: a clock and "Scheduled prompt · #4" i
   await expect(p).toBeVisible();
   await expect(v.locator('.user-message')).toBeHidden();
   await expect(p).toHaveAttribute('data-from', 'schedule');
-  await expect(p.locator('.prompt-facts')).toHaveText('Scheduled prompt · #4');
+  await expect(p.locator('.prompt-facts')).toHaveText('Scheduled · #4');
   await expect(p.locator('.prompt-icon svg')).toHaveAttribute('data-icon', 'clock');
   expect(await style(p.locator('.prompt-facts'), 'color')).toBe(await role(page, 'agent-text'));
   expect(await style(p.locator('.prompt-icon'), 'color')).toBe(await role(page, 'agent'));
@@ -79,7 +79,7 @@ test('a scheduled prompt is not a bubble: a clock and "Scheduled prompt · #4" i
   expect((await preview.boundingBox()).height).toBeLessThanOrEqual(line * 2 + 1);
   expect(await style(preview, 'color')).toBe(await role(page, 'text2'));
   await expect(p.locator('.prompt-full')).toBeHidden();
-  const toggle = p.getByRole('button', { name: 'Scheduled prompt 4, Show prompt' });
+  const toggle = p.getByRole('button', { name: 'Scheduled 4, Show prompt' });
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
   await expect(toggle).toHaveText('Show prompt');
 });
@@ -93,7 +93,7 @@ test('Show prompt opens with Enter and closes with Space: the full text in readi
   await toggle.focus();
   await page.keyboard.press('Enter');
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
-  await expect(toggle).toHaveAccessibleName('Scheduled prompt 4, Hide prompt');
+  await expect(toggle).toHaveAccessibleName('Scheduled 4, Hide prompt');
   const full = p.locator('.prompt-full');
   await expect(full).toBeVisible();
   await expect(full.locator('.plain')).toHaveText(MONITOR);
@@ -122,7 +122,7 @@ test('the label is read before the prompt, and nothing presents it as the person
   await expect(p).not.toContainText('Your last message');
   await expect(v.locator('.user-message .plain')).toHaveText('');
   const snapshot = await p.ariaSnapshot();
-  expect(snapshot.indexOf('Scheduled prompt')).toBeLessThan(snapshot.indexOf('Check the deploy pipeline'));
+  expect(snapshot.indexOf('Scheduled')).toBeLessThan(snapshot.indexOf('Check the deploy pipeline'));
 });
 
 test('a schedule firing again with the same words folds to "same as last time" with no preview, and a new prompt starts collapsed', async ({ page }) => {
@@ -136,9 +136,9 @@ test('a schedule firing again with the same words folds to "same as last time" w
   // counts one prompt more.
   const since = later();
   await upsert(page, CODEX, { status: 'working', statusSince: since, updatedAt: since, activity: { userMessage: MONITOR, turnCount: 7 } });
-  await expect(p.locator('.prompt-facts')).toHaveText('Scheduled prompt · #4');
+  await expect(p.locator('.prompt-facts')).toHaveText('Scheduled · #4');
   await upsert(page, CODEX, { status: 'idle', statusSince: later(), updatedAt: later(), activity: { userMessage: MONITOR, turnCount: 8 } });
-  await expect(p.locator('.prompt-facts')).toHaveText('Scheduled prompt · #4 · same as last time');
+  await expect(p.locator('.prompt-facts')).toHaveText('Scheduled · #4 · same as last time');
   await expect(p).toHaveAttribute('data-repeat', '');
   await expect(p.locator('.prompt-preview')).toBeHidden();
   await expect(p.locator('.prompt-toggle')).toHaveAttribute('aria-expanded', 'false');
@@ -146,7 +146,7 @@ test('a schedule firing again with the same words folds to "same as last time" w
   await expect(p.locator('.prompt-age .msg-time')).toHaveCount(0);
   // New words from the same schedule are not a repeat.
   await upsert(page, CODEX, { status: 'working', statusSince: later(), updatedAt: later(), activity: { userMessage: 'Check the relay instead.', turnCount: 8 } });
-  await expect(p.locator('.prompt-facts')).toHaveText('Scheduled prompt · #4');
+  await expect(p.locator('.prompt-facts')).toHaveText('Scheduled · #4');
   await expect(p.locator('.prompt-preview')).toHaveText('Check the relay instead.');
 });
 
@@ -201,12 +201,12 @@ test('a label is text: no markup, no hidden characters, no fact of its own, and 
   const v = await open(page, CODEX);
   const p = v.locator('.prompt-origin:not(.history-turn *)');
   await expect(p.locator('img, script')).toHaveCount(0);
-  await expect(p.locator('.prompt-facts')).toHaveText('Scheduled prompt · \u201c<img src=x onerror=\'window.__xss=1\'>\u201d');
+  await expect(p.locator('.prompt-facts')).toHaveText('Scheduled · \u201c<img src=x onerror=\'window.__xss=1\'>\u201d');
   await expect(p.locator('.prompt-preview')).toHaveText('<script>window.__xss=2</script>\\u200B');
   await upsert(page, CODEX, scheduled({ userMessageLabel: 'Main agent', turnCount: 8, userMessage: 'x' }));
-  await expect(p.locator('.prompt-facts')).toHaveText('Scheduled prompt · \u201cMain agent\u201d');
+  await expect(p.locator('.prompt-facts')).toHaveText('Scheduled · \u201cMain agent\u201d');
   await upsert(page, CODEX, scheduled({ userMessageLabel: '4 · same as last time', turnCount: 9, userMessage: 'y' }));
-  await expect(p.locator('.prompt-facts')).toHaveText('Scheduled prompt · \u201c4 - same as last time\u201d');
+  await expect(p.locator('.prompt-facts')).toHaveText('Scheduled · \u201c4 - same as last time\u201d');
   expect(await page.evaluate(() => window.__xss)).toBeUndefined();
 });
 

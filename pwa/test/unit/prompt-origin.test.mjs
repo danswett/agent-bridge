@@ -18,14 +18,22 @@ test('the person\'s own prompt, and one from a host that doesn\'t say who sent i
   assert.equal(promptOrigin(session({ from: 'schedule', text: null })), null);
 });
 
-test('a schedule\'s prompt is labelled Scheduled prompt with its number, under a clock, and named so aloud', () => {
+test('a schedule\'s prompt is labelled Scheduled with its number, under a clock, and named so aloud', () => {
   const o = promptOrigin(session({ from: 'schedule', label: '4' }));
-  assert.deepEqual([o.from, o.icon, o.facts, o.by, o.spoken], ['schedule', 'clock', ['Scheduled prompt', '#4'], null, 'Scheduled prompt 4']);
-  assert.equal(disclosureName(o, false), 'Scheduled prompt 4, Show prompt');
-  assert.equal(disclosureName(o, true), 'Scheduled prompt 4, Hide prompt');
+  assert.deepEqual([o.from, o.icon, o.facts, o.by, o.spoken], ['schedule', 'clock', ['Scheduled', '#4'], null, 'Scheduled 4']);
+  assert.equal(disclosureName(o, false), 'Scheduled 4, Show prompt');
+  assert.equal(disclosureName(o, true), 'Scheduled 4, Hide prompt');
   // Without a label, the words alone.
   const bare = promptOrigin(session({ from: 'schedule' }));
-  assert.deepEqual([bare.facts, bare.spoken], [['Scheduled prompt'], 'Scheduled prompt']);
+  assert.deepEqual([bare.facts, bare.spoken], [['Scheduled'], 'Scheduled']);
+});
+
+test('host turn kind keeps automatic prompts out of owner bubbles and names their origin exactly', () => {
+  for (const [kind, label] of [['notification', 'Notification'], ['scheduled', 'Scheduled']]) {
+    const s = readSession({ id: 's', activity: { kind, userMessage: 'Automatic' } });
+    assert.deepEqual(promptOrigin(s).facts, [label]);
+    assert.deepEqual(historyPromptOrigin({ text: 'Automatic', from: 'person' }, kind).facts, [label]);
+  }
 });
 
 test('an agent\'s prompt is labelled Sent by an agent under the driven diamond, with the agent driving as secondary text when known', () => {
@@ -52,14 +60,14 @@ test('hidden and bidi characters in a prompt are drawn as escapes, never as noth
 
 test('a label can\'t hide characters, add a fact of its own, read as the main agent, or run past 64 bytes', () => {
   assert.equal(promptFact('4\u202E\u200B\n'), '4');
-  // A middle dot would have drawn "Scheduled prompt · 4 · same as last time" for a prompt that changed.
-  assert.deepEqual(promptOrigin(session({ from: 'schedule', label: '4 \u00b7 same as last time' })).facts, ['Scheduled prompt', '\u201c4 - same as last time\u201d']);
-  assert.deepEqual(promptOrigin(session({ from: 'schedule', label: 'Main agent' })).facts, ['Scheduled prompt', '\u201cMain agent\u201d']);
-  assert.deepEqual(promptOrigin(session({ from: 'schedule', label: 'Main\u201d agent' })).facts, ['Scheduled prompt', '\u201cMain\' agent\u201d']);
+  // A middle dot would have drawn "Scheduled · 4 · same as last time" for a prompt that changed.
+  assert.deepEqual(promptOrigin(session({ from: 'schedule', label: '4 \u00b7 same as last time' })).facts, ['Scheduled', '\u201c4 - same as last time\u201d']);
+  assert.deepEqual(promptOrigin(session({ from: 'schedule', label: 'Main agent' })).facts, ['Scheduled', '\u201cMain agent\u201d']);
+  assert.deepEqual(promptOrigin(session({ from: 'schedule', label: 'Main\u201d agent' })).facts, ['Scheduled', '\u201cMain\' agent\u201d']);
   // Any label but a number is quoted, so a look-alike no check knows still can't read as the line's own words.
-  assert.deepEqual(promptOrigin(session({ from: 'schedule', label: 'rnain agent' })).facts, ['Scheduled prompt', '\u201crnain agent\u201d']);
+  assert.deepEqual(promptOrigin(session({ from: 'schedule', label: 'rnain agent' })).facts, ['Scheduled', '\u201crnain agent\u201d']);
   // Read aloud, a comma of its own would add a part to the button's name.
-  assert.equal(promptOrigin(session({ from: 'schedule', label: 'x, expanded' })).spoken, 'Scheduled prompt \u201cx expanded\u201d');
+  assert.equal(promptOrigin(session({ from: 'schedule', label: 'x, expanded' })).spoken, 'Scheduled \u201cx expanded\u201d');
   const long = promptFact('é'.repeat(100));
   assert.ok(bytes(long) <= LABEL_MAX_BYTES, `${bytes(long)} bytes`);
   assert.ok(long.endsWith('\u2026'));
@@ -79,7 +87,7 @@ test('a schedule\'s prompt that repeats its last one, as seen here, folds to sam
   // Its turn done, the host counts one prompt more: a repeat, dated by when its turn began.
   assert.deepEqual(m.observe(session({ from: 'schedule', label: '4', turns: 4 })), { repeat: true, at: '2026-11-03T19:01:00Z', fresh: true });
   assert.deepEqual(m.observe(session({ from: 'schedule', label: '4', turns: 4 })), { repeat: true, at: '2026-11-03T19:01:00Z', fresh: false });
-  assert.deepEqual(promptOrigin(session({ from: 'schedule', label: '4' }), { repeat: true }).facts, ['Scheduled prompt', '#4', 'same as last time']);
+  assert.deepEqual(promptOrigin(session({ from: 'schedule', label: '4' }), { repeat: true }).facts, ['Scheduled', '#4', 'same as last time']);
 });
 
 test('a turn of the same prompt that no prompt started, such as a delegate reporting back, is not a repeat', () => {
@@ -177,7 +185,7 @@ test('an earlier turn\'s prompt from an agent, a schedule or another source read
   assert.deepEqual([agent.from, agent.icon, agent.facts, agent.by, agent.spoken], ['agent', 'driven', ['Sent by an agent'], null, 'Prompt sent by an agent']);
   assert.equal(agent.preview, 'Check the build. If it is red, look at the failing job and say which test.');
   const schedule = historyPromptOrigin({ text: 'Go', from: 'schedule', label: '4' });
-  assert.deepEqual([schedule.icon, schedule.facts, schedule.repeat], ['clock', ['Scheduled prompt', '#4'], false]);
+  assert.deepEqual([schedule.icon, schedule.facts, schedule.repeat], ['clock', ['Scheduled', '#4'], false]);
   assert.deepEqual(historyPromptOrigin({ text: 'Go', from: 'other' }).facts, ['Automatic prompt']);
 });
 
