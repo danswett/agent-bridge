@@ -6,6 +6,19 @@ use ([host-answers.md](host-answers.md), [host-replies.md](host-replies.md)): th
 worker to type `/exit`, the agent-ha-bridge guard (G5), request memory, and the same
 `DeliveryGate`, so ending a session never types over an answer or a reply.
 
+## Local person command
+
+On Windows, run `agent-bridge-host stop <session> [--profile <name>]` from the person's
+own terminal, outside any agent session. It calls the running local host, not another machine.
+JSON output contains `outcome`, and when relevant `confirm`, `confirmSeconds` or `forced`;
+host diagnostic text is omitted. Exit codes: 0 ended, 3 confirmation needed, 4 refused,
+1 stale/busy/failed or unavailable result, 2 invalid arguments.
+A `confirm` result needs a second invocation with `--confirm <token>` inside the host's
+window. Every invocation is a new press; it never confirms or retries automatically.
+Check the target at this machine after an unavailable result. The host still owns expiry,
+process identity and stop policy; the guarded-idle gap [#2411](design/stop-policy-reconciliation.md)
+and multi-machine qualification are not resolved by this command.
+
 ## What agent-ha-bridge does
 
 From `hooks/daemon-launch.ps1` (`Invoke-PendingStops`, `Test-DaemonStopConfirms`,

@@ -85,6 +85,11 @@ string? Option(string name)
 }
 bool Flag(string name) => arguments.Contains(name);
 
+if (command == "stop")
+{
+    return await StopCommands.RunWithProfileAsync(arguments, Identity.DefaultRoot, () => Refused("end a session"), Console.Out, Console.Error);
+}
+
 SessionSourceOptions? readRoots = null;
 if (Flag("--read-root"))
 {
@@ -379,6 +384,7 @@ switch (command)
         Console.Error.WriteLine("       " + OwnPeerCommands.Usage);
         Console.Error.WriteLine("       " + AgentBridge.Host.Cli.ScriptCredentialCommands.Usage);
         Console.Error.WriteLine("       " + AgentCommands.Usage);
+        Console.Error.WriteLine("       " + StopCommands.Usage);
         Console.Error.WriteLine("       " + AgentBridge.Host.Shadow.ShadowCommand.Usage);
         Console.Error.WriteLine("       agent-bridge-host hooks status | hooks install|remove <copilot|claude|codex> [...] [--dry-run]");
         Console.Error.WriteLine("       agent-bridge-host hooks cleanup [--profile <name>]");
