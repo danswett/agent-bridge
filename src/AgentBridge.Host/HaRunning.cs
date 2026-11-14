@@ -21,7 +21,7 @@ public sealed class HaRunning : IAsyncDisposable
         Func<string?>? agentHaBridge, bool devBuild, string version, Action<string> log, ISessionAnswerer? answers = null,
         Func<HaReply, CancellationToken, Task<AgentBridge.Protocol.ReplyResult>>? reply = null, ISessionStopper? stops = null,
         AgentBridge.Host.Delivery.Launch.ISessionLauncher? launcher = null, IHostUpdates? updates = null, SessionDrivers? drivers = null,
-        HaAuthGuard? auth = null, Func<AgentBridge.Host.Core.Load.ProcessLoadReport?>? load = null)
+        HaAuthGuard? auth = null, Func<AgentBridge.Host.Core.Load.ProcessLoadReport?>? load = null, AgentAuditLog? launchAudit = null)
     {
         foreach (var p in settings.HomeAssistantProblems) { log($"config.json: {p}"); }
         var ha = settings.HomeAssistant;
@@ -66,7 +66,9 @@ public sealed class HaRunning : IAsyncDisposable
         // its one-at-a-time start, its following to registration); whether it offers launching
         // here is its own Available, asked when the connector starts.
         var launch = launcher is null ? null : new HaLauncher(() => launcher.Available, launcher.OptionsAsync,
-            (request, ct) => launcher.LaunchAsync(request, "home-assistant", ct));
+            (request, ct) => launchAudit is null ? launcher.LaunchAsync(request, "home-assistant", ct)
+                : GateLaunchAudit.LaunchAsync(launcher, request, "home-assistant", launchAudit,
+                    new("legacy-ha", "ha-component", "ha-component:local", launchAudit.ControlWriterRun), ct));
         var connector = new HaConnector(new HaConnectorOptions
         {
             MachineName = machine,
