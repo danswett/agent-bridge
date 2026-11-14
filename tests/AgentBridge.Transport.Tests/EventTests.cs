@@ -257,16 +257,16 @@ public class EventTests
     {
         var (relay, host, atHost, atClient) = await ChannelAsync();
         await using var _ = relay;
-        host.Relay.MaxFramesPerSecond = 2;
+        // Hold the window before priming: a pause between a/b must not expire a.
+        // A positive, nonbinding limit counts both without waiting on handshake frames.
+        host.Relay.PaceWindowOverride = TimeSpan.FromHours(1);
+        host.Relay.MaxFramesPerSecond = int.MaxValue;
         await atHost.SendEventAsync("a");
         await atHost.SendEventAsync("b");
+        host.Relay.MaxFramesPerSecond = 2;
 
-        // The pacing window is held full, so this one waits and cannot go however slow the machine
-        // is; cancel it while it waits.
-        host.Relay.PaceWindowOverride = TimeSpan.FromHours(1);
         using var cts = new CancellationTokenSource();
         var cancelled = atHost.SendEventAsync("cancelled", null, cts.Token);
-        await Task.Delay(100);
         Assert.False(cancelled.IsCompleted);
         cts.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
