@@ -260,6 +260,10 @@ public sealed class UpdateService
                 _ = channel.Closed.ContinueWith(_ => Gone(channel), TaskScheduler.Default);
             }
             reported = UpdateProtocol.Fit(report.State);
+            if (reported.Back is { } back && (back.To != HostVersion || back.To != reported.Current))
+            {
+                reported = reported with { Back = null };
+            }
             Volatile.Write(ref carries, report.CarriesUpdateNow);
             foreach (var request in report.Taken ?? [])
             {

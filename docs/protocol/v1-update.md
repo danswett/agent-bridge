@@ -138,8 +138,12 @@ and 4 KiB (notes).
 
 These #2229 fields define the wire only; reporters and enforcement ship separately under
 [#2225](../design/updates-fast-fleet-update.md). All are optional and omitted when unknown.
-The Windows app now reports `bytes`, `total` and `downloaded`; `installing`, `leaving`, `back`
-and `step` are not reported yet, and old updaters leave all these facts absent.
+The Windows app reports `bytes`, `total`, `downloaded`, the install-start instant `installing`,
+the observed matching-target return `back`, and failure `last.step` (`downloading`, `installing`,
+`restarting` or `host-start`). Return uses the per-profile attempt preferences, survives restart,
+and is forwarded only when the app and host both run its target. Unreadable preferences mean no
+return fact. `leaving` is not reported yet; a report reply is not proof of a subscriber send.
+Old updaters leave these facts absent.
 Hello's `machine.role` is optional: absent means an old host or unknown role; an empty string
 means explicitly no role. Once role reporting ships, every new host sends it, even when empty.
 The label is display/availability metadata, never an authorization grant.

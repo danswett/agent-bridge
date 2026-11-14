@@ -1189,6 +1189,11 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     public async Task A_host_that_failed_after_the_update_is_recorded_as_failed_with_its_reason_and_nothing_is_downgraded()
     {
         await StartAsync();
+        updater.Ready = "0.2.0";
+        AutoUpdater.Record(() => prefs, p => prefs = p, updater, Press);
+        AutoUpdater.HandedOver(() => prefs, p => prefs = p)();
+        updater.InstalledVersion = "0.2.0";
+        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, new Toasts(), log.Add, time);
         auto = Watching(HostWatchEnd.Failed);
 
         await auto.WatchHostAsync();
@@ -1196,6 +1201,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         var last = prefs.LastUpdate!;
         Assert.Equal(UpdateOutcome.Failed, last.Outcome);
         Assert.Equal("host-start", last.Step);
+        Assert.Equal(("0.1.0", "0.2.0", Press), (last.From, last.To, last.Request));
         Assert.Contains("3 times", last.Reason);
         Assert.False(updater.Applied);
     }
@@ -2979,17 +2985,43 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     // waits for the same idle as an automatic update.
     const string Press = "3f2a1b4c-5d6e-4f70-8192-a3b4c5d6e7f8";
 
-    [Theory]
-    [InlineData(null, "0.2.0", true)]
-    [InlineData(Press, "0.2.0", true)]
-    [InlineData(Press, "0.3.0", false)]
+    [Fact]
     [Trait("Category", "Network")]
-    public async Task A_return_survives_preferences_only_for_the_recorded_target_and_preserves_a_press(string? request, string current, bool returned)
+    public async Task An_install_refused_before_the_manager_admits_it_has_no_start_instant()
+    {
+        await StartAsync();
+        await auto.TickAsync();
+        var states = new List<UpdateState>();
+        var quitting = false;
+        auto.StateChanged += () =>
+        {
+            var state = auto.State;
+            states.Add(state);
+            if (state.Phase != UpdatePhase.Installing || quitting) { return; }
+            quitting = true;
+            manager.Quit(TimeSpan.FromSeconds(10), log.Add);
+        };
+
+        Assert.NotNull(await auto.RestartToUpdateAsync());
+
+        Assert.True(quitting);
+        Assert.False(updater.Applied);
+        Assert.All(states, state => Assert.Null(state.Installing));
+    }
+
+    [Theory]
+    [InlineData(null, "0.2.0", true, true)]
+    [InlineData(Press, "0.2.0", true, true)]
+    [InlineData(Press, "0.3.0", true, false)]
+    [InlineData(Press, "0.1.0", true, false)]
+    [InlineData(Press, "0.2.0", false, false)]
+    [Trait("Category", "Network")]
+    public async Task A_return_survives_preferences_only_for_the_recorded_target_and_preserves_a_press(string? request, string current, bool handedOver, bool returned)
     {
         await StartAsync();
         updater.Ready = "0.2.0";
         AutoUpdater.Record(() => prefs, p => prefs = p, updater, request);
-        AutoUpdater.HandedOver(() => prefs, p => prefs = p)();
+        if (handedOver) { AutoUpdater.HandedOver(() => prefs, p => prefs = p)(); }
         var path = Path.Combine(app, "preferences.json");
         prefs.Save(path);
         prefs = AppPreferences.Load(path);
@@ -3001,6 +3033,13 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         Assert.Equal(returned ? new UpdateBack("0.1.0", "0.2.0", request, time.GetUtcNow()) : null, auto.State.Back);
         Assert.Equal(current, auto.State.Current);
+        var back = auto.State.Back;
+        time.Advance(TimeSpan.FromMinutes(1));
+        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, new Toasts(), log.Add, time);
+        Assert.Equal(back, auto.State.Back);
+        updater.InstalledVersion = "0.4.0";
+        Assert.Null(auto.State.Back);
+        updater.InstalledVersion = current;
         File.WriteAllText(path, "{");
         prefs = AppPreferences.Load(path);
         Assert.Null(auto.State.Back);
@@ -4111,9 +4150,11 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal("0.3.0-pre.1", auto.Pending);
     }
 
-    [Fact]
+    [Theory]
+    [InlineData(true, "installing")]
+    [InlineData(false, "downloading")]
     [Trait("Category", "Network")]
-    public async Task An_update_from_Settings_that_fails_is_what_the_devices_are_told_at_once()
+    public async Task An_update_from_Settings_that_fails_is_what_the_devices_are_told_at_once(bool recorded, string step)
     {
         prefs = prefs with { AutoUpdate = false };
         shared = new ObservedUpdater(updater, time);
@@ -4121,10 +4162,11 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         var told = new List<UpdateState>();
         auto.StateChanged += () => told.Add(auto.State);
 
-        AutoUpdater.Failed(() => prefs, p => prefs = p, shared, "0.2.0", "the host did not stop", time: time);
+        AutoUpdater.Failed(() => prefs, p => prefs = p, shared, "0.2.0", "the host did not stop", recorded, time);
 
         var last = Assert.Single(told).Last!;
         Assert.Equal((UpdateOutcome.Failed, "0.2.0", "the host did not stop"), (last.Outcome, last.To, last.Reason));
+        Assert.Equal(step, last.Step);
     }
 
     [Fact]
@@ -4159,6 +4201,20 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal("0.2.0", auto.State.Available);
         Assert.Equal((UpdateOutcome.Failed, "the connection was reset"), (auto.State.Last!.Outcome, auto.State.Last.Reason));
         Assert.Equal("downloading", auto.State.Last.Step);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_feed_check_that_fails_did_not_reach_the_download_step()
+    {
+        updater.CheckFails = new IOException("the feed is offline");
+        await StartAsync();
+
+        await AskedAsync(UpdateAskKind.Check);
+
+        Assert.Equal(UpdateOutcome.Failed, auto.State.Last!.Outcome);
+        Assert.Null(auto.State.Last.Step);
+        Assert.Equal(0, updater.Downloads);
     }
 
     [Fact]
