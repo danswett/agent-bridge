@@ -59,6 +59,16 @@ public sealed class SessionService
             FleetNames ?? throw new InvalidOperationException("refused: fleet-name storage is not available on this host"),
             machine.Id, roster, Time, log).RenameAsync(data, closed);
 
+    internal SessionProcess? ProcessForAdoption(string session)
+    {
+        var process = source.ProcessOf(session);
+        if (launcher?.LaunchedSession(session, process) == true)
+        {
+            throw new InvalidOperationException("refused: a session the host launched cannot be adopted");
+        }
+        return process;
+    }
+
     internal Task<LaunchResult>? ReplayAgentLaunch(JsonElement data, string principal)
     {
         if (launcher is null || data.ValueKind != JsonValueKind.Object
