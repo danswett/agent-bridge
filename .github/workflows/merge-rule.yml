@@ -60,6 +60,8 @@ permissions: {}
 # Coalesce cron, dispatch and main sweeps separately: a cron that yields must not displace main.
 # Skipped events must never displace either;
 # the event-table test keeps this eligibility condition identical to evaluate's if below.
+# PR actions share a slot: --pr reads current labels, draft, base and head, not event snapshots.
+# Only a new head cancels its own obsolete admission; the shared writer lock below is unchanged.
 concurrency:
   group: >-
     merge-rule-admit-${{
@@ -70,11 +72,12 @@ concurrency:
       && (github.event_name == 'schedule' && 'backstop'
       || github.event_name == 'workflow_dispatch' && 'dispatch'
       || vars.FLEET_MERGERULE == 'off' && 'sweep'
+      || github.event_name == 'pull_request_target' && github.event.pull_request.number
       || github.event.pull_request.head.sha || github.event.sha
       || github.event.check_suite.head_branch != 'main' && github.event.check_suite.head_sha
       || github.event.workflow_run.head_branch != 'main' && github.event.workflow_run.head_sha
       || 'sweep') || github.run_id }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' && github.event.action == 'synchronize' && vars.FLEET_MERGERULE != 'off' }}
 
 jobs:
   backstop:

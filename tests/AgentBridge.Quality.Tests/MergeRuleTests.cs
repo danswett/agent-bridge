@@ -1301,7 +1301,7 @@ public class MergeRuleTests
         string Scalar(YamlMappingNode node, string key) => node.Children[new YamlScalarNode(key)].ToString();
         var group = Scalar(admission, "group");
         Assert.StartsWith("merge-rule-admit-${{", group, StringComparison.Ordinal);
-        Assert.Equal("false", Scalar(admission, "cancel-in-progress"));
+        Assert.False(IfExpression.Evaluate(Scalar(admission, "cancel-in-progress")[3..^2], github));
         Assert.Equal("merge-rule", Scalar(writer, "group"));
         Assert.Equal("false", Scalar(writer, "cancel-in-progress"));
         Assert.Equal("max", Scalar(writer, "queue"));
@@ -1349,12 +1349,43 @@ public class MergeRuleTests
         Assert.False(IfExpression.EvaluateJob(condition.Replace("!cancelled() && ", "", StringComparison.Ordinal), context));
     }
 
+    [Theory]
+    [InlineData("synchronize", "success")]
+    [InlineData("labeled", "failure")]
+    [InlineData("unlabeled", "success")]
+    [InlineData("ready_for_review", "success")]
+    [InlineData("converted_to_draft", "failure")]
+    [InlineData("edited", null)]
+    public void Coalesced_PR_events_read_current_state_instead_of_the_displaced_event_payload(string action, string? state)
+    {
+        var current = System.Text.Json.Nodes.JsonNode.Parse(GraphQLPullRequest(Older))!;
+        var pr = current["data"]!["repository"]!["pullRequest"]!;
+        if (action == "labeled") { pr["labels"] = new System.Text.Json.Nodes.JsonObject { ["totalCount"] = 1, ["nodes"] = new System.Text.Json.Nodes.JsonArray(new System.Text.Json.Nodes.JsonObject { ["name"] = "hold" }) }; }
+        if (action == "converted_to_draft") { pr["isDraft"] = true; }
+        if (action == "edited") { pr["baseRefName"] = "other"; }
+        var github = new FakeGitHub(current.ToJsonString(), listed: [GraphQLPullRequest(Head, labels: ["hold"])]);
+        var config = WriteConfig();
+        try
+        {
+            var yaml = new YamlStream();
+            yaml.Load(new StringReader(File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), ".github", "workflows", "merge-rule.yml"))));
+            var jobs = (YamlMappingNode)((YamlMappingNode)yaml.Documents[0].RootNode)["jobs"];
+            var steps = (YamlSequenceNode)((YamlMappingNode)jobs["evaluate"])["steps"];
+            Assert.Contains(steps.Cast<YamlMappingNode>(), step => step.Children.TryGetValue("run", out var run) &&
+                run.ToString().Contains("pull_request_target) [ -n \"$PR_NUMBER\" ] && scope=(--pr \"$PR_NUMBER\")", StringComparison.Ordinal));
+            MergeRuleCommand.Run(["--pr", "42", "--config", config, "--post"], new StringWriter(), github, OnMain);
+            if (state is null) { Assert.Empty(github.Posted); }
+            else { Assert.StartsWith($"{Older} {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal); }
+        }
+        finally { File.Delete(config); }
+    }
+
     /// <summary>
     /// Just enough of GitHub's expression language for a job's <c>if</c>: (), !, ==, !=, &amp;&amp;
     /// and ||, over string literals and context values, compared without regard to case as
     /// GitHub does. A value the context doesn't hold is null, which equals no string.
     /// </summary>
-    static class IfExpression
+    internal static class IfExpression
     {
         public static bool Evaluate(string condition, IReadOnlyDictionary<string, string?> context) => Truthy(Value(condition, context));
 
@@ -1366,7 +1397,7 @@ public class MergeRuleTests
 
         public static object? Value(string condition, IReadOnlyDictionary<string, string?> context)
         {
-            var tokens = System.Text.RegularExpressions.Regex.Matches(condition, @"\s*(\(|\)|&&|\|\||==|!=|!|'(?:[^']|'')*'|[A-Za-z_][A-Za-z0-9_.\-]*)\s*")
+            var tokens = System.Text.RegularExpressions.Regex.Matches(condition, @"\s*(\(|\)|,|&&|\|\||==|!=|!|'(?:[^']|'')*'|[A-Za-z_][A-Za-z0-9_.\-]*)\s*")
                 .Select(m => m.Groups[1].Value).ToList();
             Assert.Equal(System.Text.RegularExpressions.Regex.Replace(condition, @"\s", ""), string.Concat(tokens).Replace(" ", "", StringComparison.Ordinal));
             var position = 0;
@@ -1422,6 +1453,17 @@ public class MergeRuleTests
                 }
                 if (token == "!")
                     return !Truthy(Primary());
+                if (token is "true" or "false")
+                    return token == "true";
+                if (token == "format")
+                {
+                    Assert.Equal("(", tokens[position++]);
+                    var format = Assert.IsType<string>(Or());
+                    var args = new List<object?>();
+                    while (tokens[position] == ",") { position++; args.Add(Or()); }
+                    Assert.Equal(")", tokens[position++]);
+                    return string.Format(System.Globalization.CultureInfo.InvariantCulture, format, args.ToArray());
+                }
                 if (token == "cancelled")
                 {
                     Assert.Equal("(", tokens[position++]);
