@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using AgentBridge.Host;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
@@ -29,6 +30,8 @@ public sealed class CliApprovalTests : IAsyncLifetime
     public Task InitializeAsync()
     {
         Directory.CreateDirectory(Path.Combine(root, "default"));
+        var json = new JsonSerializerOptions(ProtocolJson.Options);
+        json.Converters.Add(new ReplyWriter(() => scenario));
         server = LocalServer.Start(LocalEndpoint.For(Path.Combine(root, "default")), (_, op, data) =>
         {
             operations.Add(op);
@@ -41,7 +44,7 @@ public sealed class CliApprovalTests : IAsyncLifetime
                 _ => throw new InvalidOperationException("unexpected operation"),
             };
             return Task.FromResult<object?>(result);
-        });
+        }, json: json);
         return Task.CompletedTask;
     }
 
@@ -147,6 +150,46 @@ public sealed class CliApprovalTests : IAsyncLifetime
         Assert.Empty(operations);
         Assert.Null(sent);
         Assert.NotEqual("", error.ToString());
+    }
+
+    [Theory]
+    [InlineData("missing-ok", 3)]
+    [InlineData("string-ok", 3)]
+    [InlineData("surrogate-outcome", 3)]
+    [InlineData("false-no-error", 3)]
+    [InlineData("host-rejected", 4)]
+    public async Task Cli_approve_distinguishes_malformed_replies_from_explicit_rejection_without_retry(string reply, int exit)
+    {
+        scenario = reply;
+        Assert.Equal(exit, await Run());
+        Assert.NotNull(sent);
+        Assert.Equal([Ops.Hello, Ops.SessionGet, Ops.SessionGet, Ops.SessionAnswer], operations);
+        Assert.Equal(exit == 3 ? "unconfirmed" : "refused: host declined approval", error.ToString().Trim());
+        Assert.DoesNotContain("delivered", output.ToString());
+    }
+
+    sealed class ReplyWriter(Func<string> scenario) : JsonConverter<object>
+    {
+        public override object Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => throw new NotSupportedException();
+
+        public override void Write(Utf8JsonWriter writer, object value, JsonSerializerOptions options)
+        {
+            var envelope = JsonSerializer.SerializeToElement(value, ProtocolJson.Options);
+            var raw = envelope.GetRawText();
+            if (envelope.TryGetProperty("result", out var result) && result.ValueKind == JsonValueKind.Object && result.TryGetProperty("outcome", out _))
+            {
+                raw = scenario() switch
+                {
+                    "missing-ok" => raw.Replace("\"ok\":true,", ""),
+                    "string-ok" => raw.Replace("\"ok\":true", "\"ok\":\"true\""),
+                    "surrogate-outcome" => raw.Replace("\"outcome\":\"delivered\"", "\"outcome\":\"\\uD800\""),
+                    "false-no-error" => JsonSerializer.Serialize(new { re = envelope.GetProperty("re").GetInt64(), ok = false }, ProtocolJson.Options),
+                    "host-rejected" => JsonSerializer.Serialize(new { re = envelope.GetProperty("re").GetInt64(), ok = false, error = "refused" }, ProtocolJson.Options),
+                    _ => raw,
+                };
+            }
+            writer.WriteRawValue(raw);
+        }
     }
 
     public async Task DisposeAsync()

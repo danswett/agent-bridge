@@ -24,6 +24,8 @@ using AgentBridge.Transport;
 //
 //   agent-bridge-host sessions [--compact]      one scan, the SessionList as JSON
 //   agent-bridge-host get <id>                  one session with its tool history
+//   agent-bridge-host approve <session> <question> <request-uuid> <approve|deny> [--profile <name>]
+//                                               answer one ordinary person approval
 //   agent-bridge-host watch [--json]            a line per upsert and removal, until Ctrl+C
 //   agent-bridge-host sign-in --relay <url>     GitHub sign-in through the relay
 //   agent-bridge-host serve [--relay <url>] [--name <name>] [--local-only]
@@ -366,6 +368,7 @@ switch (command)
         }
     default:
         Console.Error.WriteLine("usage: agent-bridge-host sessions [--compact] | get <id> | watch [--json] | usage | sign-in --relay <url> | serve [--relay <url>] [--name <name>] [--local-only] | whoami");
+        Console.Error.WriteLine("       agent-bridge-host approve <session> <question> <request-uuid> <approve|deny> [--profile <name>]");
         Console.Error.WriteLine("       agent-bridge-host rename <session-id> \"<fleet name>\" [--profile <name>] (empty name clears)");
         Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]");
         Console.Error.WriteLine("       " + OwnPeerCommands.Usage);

@@ -48,9 +48,18 @@ public static class ApproveCommands
             if (Answers.Check(shown, answer) is not null) { return Fail(4, "refused: unsupported answer"); }
             if (refused()) { return Fail(4, "refused: person invocation required"); }
             submitted = true;
-            var data = await channel.CallAsync(Ops.SessionAnswer, answer, timeout: TimeSpan.FromSeconds(60));
+            var response = await channel.RequestAsync(Ops.SessionAnswer, answer, timeout: TimeSpan.FromSeconds(60));
+            if (response.ValueKind != JsonValueKind.Object || !response.TryGetProperty("ok", out var ok)) { return Fail(3, "unconfirmed"); }
+            if (ok.ValueKind == JsonValueKind.False && !response.TryGetProperty("result", out _)
+                && response.TryGetProperty("error", out var hostError) && hostError.ValueKind == JsonValueKind.String)
+            {
+                _ = Received.Read<string>(hostError);
+                return Fail(4, "refused: host declined approval");
+            }
+            if (ok.ValueKind != JsonValueKind.True || response.TryGetProperty("error", out _)
+                || !response.TryGetProperty("result", out var data)) { return Fail(3, "unconfirmed"); }
             var result = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("outcome", out var state)
-                && state.ValueKind == JsonValueKind.String ? state.GetString() : null;
+                && state.ValueKind == JsonValueKind.String ? Received.Read<string>(state) : null;
             switch (result)
             {
                 case "delivered": output.WriteLine(result); return 0;
