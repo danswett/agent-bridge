@@ -65,11 +65,14 @@ public sealed partial class AgentAnswerFlowTests
         var request = Request(ClaudeId, "toolu_1", Chosen);
         Assert.Equal(AnswerOutcome.Unconfirmed, (await host.Answer(request)).Outcome);
         await answerer.Swept;
+        Assert.True(File.Exists(Words));
         var typed = injector.Plans.Count;
         Fixture.Append(claude, Recorded());
         if (gone)
         {
             await AskAnotherAsync();
+            // Source notifications dispatch later; Swept may still be the previous pass.
+            await Until(() => !File.Exists(Words));
             await answerer.Swept;
             Assert.Equal("toolu_2", source.Get(ClaudeId)?.Question?.Id);
             Assert.False(File.Exists(Words));
