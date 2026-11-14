@@ -105,20 +105,26 @@ comment at the key's timestamp is read again, and repeats are removed by comment
 comments); each next key is the newest `updated_at` on the page just read. A deleted comment cannot
 shift a later one past the reader, and a comment edited mid-scan moves to the end, where it is read.
 If a full page brings nothing new (more than 100 comments within that second), the key `K` becomes
-a tied bucket: a durable checkpoint (`K`, the pass number and the ids at `K` in the last complete
+a tied bucket: a durable checkpoint (`K`, the pass number and the membership of the last complete
 pass) is committed, and the resume key stays `K` and `C` stays unchanged until the bucket is
 verified. Every pass starts at page 1 under the fixed `K` and reads pages 1, 2, 3 ... until a page
 is short, rebuilding the bucket's whole membership (a deletion can move an unseen comment onto page
-1); items newer than `K` are raised but do not move the key, and a new id is raised when first seen.
-Passes repeat until one pass's membership equals the previous complete pass's: nothing new and
-nothing missing compared with that pass, not with every id ever seen, so a comment deleted for good
-stops blocking once two passes agree. Only then does the key move past `K`: the next
-request starts just after `K` (`since` = `K` plus 1 second if `since` is inclusive, `K` if not; the
-relay records which from a probe, and the soak confirms it), since every comment at `K` is known. A
-crash or takeover restarts the open pass at page 1 and compares it with the checkpoint's last
-complete pass. After 5 unstable passes the feed keeps the checkpoint, sends one feed-health line to
-the Chief of Staff, and tries again next cycle; that line goes once per bucket until it verifies,
-plus one line when it does, not every cycle. Otherwise the scan ends at a short page. Each page is
+1). Bucket pages are read without `If-None-Match`, since a 304 cannot rebuild membership.
+Membership is every id the pass returns with `updated_at` at or below `K`, including any at `K`
+minus 1 second, so an edit or deletion of an earlier comment that shifts a `K` comment onto an
+already-read page changes the membership and makes the pass unstable. Items newer than `K` are
+raised but do not move the key, and a new id is raised when first seen. The page that found the
+bucket is not a pass; at least two complete passes are needed, and passes repeat until one pass's
+membership equals the previous complete pass's: nothing new and nothing missing compared with that
+pass, not with every id ever seen, so a comment deleted for good stops blocking once two passes
+agree. Only then does the key move past `K`: the next request starts just after `K` (`since` = `K`
+plus 1 second if a recorded probe showed `since` is inclusive, otherwise `since` = `K` with repeats
+removed; an ambiguous or missing probe always uses `K`, never `K` plus 1 second; the soak confirms
+the probe), since every comment at `K` is known. A crash or takeover restarts the open pass at page
+1 and compares it with the checkpoint's last complete pass. After 5 unstable passes the feed keeps
+the checkpoint, sends one feed-health line to the Chief of Staff, and tries again next cycle; that
+line goes once per bucket until it verifies, plus one line when it does, not every cycle. Otherwise
+the scan ends at a short page. Each page is
 one state commit: its events (oldest first, so order holds across pages, except that a tied comment
 first found in a later bucket pass is raised after newer ones; order per PR follows what was
 observed), its ETag, its newest `updated_at` and count, and the next key; `C` moves to the last key
@@ -340,7 +346,10 @@ event id and recipient, so a retried send is the same request, and the text carr
     min: one of the first 100 is deleted before page 2, moving the 101st onto page 1, and the runner
     crashes after committing the short page 2: on resume the pass restarts at page 1, the surviving
     101st comment is raised once, and `C` moves past T only after two complete passes agree. A
-    tied comment deleted for good is missing from one pass and the bucket verifies on the next.
+    tied comment deleted for good is missing from one pass and the bucket verifies on the next. A
+    comment at T minus 1 second is edited between page reads in two consecutive passes, each time
+    shifting the 101st comment at T onto an already-read page: both passes are unstable, and the
+    101st is still raised once before `C` moves past T. Bucket pages send no `If-None-Match`.
     Under constant churn in a bucket, the fifth unstable pass sends one Chief line and keeps the
     checkpoint; later cycles send no more lines until the bucket verifies, then one recovery line.
     (The same with a takeover is slice 2's test 5.)
