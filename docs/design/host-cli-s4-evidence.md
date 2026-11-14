@@ -246,6 +246,8 @@ No dashboard write implementation, credential changes or provider probing.
 Size: at most 200 lines. Sensitive: yes (account/person boundary). Depends-on: #2402.
 Acceptance: offline/unknown/stale distinguished; raw local JSON and agent fleet
 metadata are not presented as full person dashboard/action parity.
+The [C10 dashboard read contract](host-cli-dashboard-read-contract.md) maps
+reusable readers, scope/coverage distinctions and review-only output vectors.
 
 ### C11 - Add one guarded person CLI text-reply path before attachments
 
