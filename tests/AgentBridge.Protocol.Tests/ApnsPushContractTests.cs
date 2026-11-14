@@ -87,6 +87,23 @@ public sealed class ApnsPushContractTests
         Assert.Throws<JsonException>(() => ApnsPushRequest.Read(ApnsPushRequest.Subscribe, JsonSerializer.SerializeToElement(data)));
     }
 
+    [Theory]
+    [InlineData("duplicate-key")]
+    [InlineData("oversized-json")]
+    [InlineData("invalid-text")]
+    public void Strict_envelopes_and_nested_keys_cannot_be_read_past(string fault)
+    {
+        var json = Native().GetRawText();
+        json = fault switch
+        {
+            "duplicate-key" => json.Replace("\"keys\":{", "\"keys\":{\"auth\":\"AA\",", StringComparison.Ordinal),
+            "oversized-json" => json.Insert(1, new string(' ', 4096)),
+            _ => json.Insert(1, "\"device\":\"\\ud800\","),
+        };
+        using var doc = JsonDocument.Parse(json);
+        Assert.Throws<JsonException>(() => ApnsPushRequest.Read(ApnsPushRequest.Subscribe, doc.RootElement));
+    }
+
     [Fact]
     public void Native_tokens_never_enter_result_shapes_log_formatting_or_parser_errors()
     {
