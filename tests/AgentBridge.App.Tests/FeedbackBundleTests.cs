@@ -408,6 +408,54 @@ public class FeedbackBundleTests
         Assert.DoesNotContain(gone, FeedbackRedactor.Redact(input));
     }
 
+    // Test the matcher directly: whole-text credential rejection would otherwise mask its leaks.
+    [Theory]
+    [InlineData("run --password \"horse battery staple\" --verbose", "run --password [redacted] --verbose")]
+    [InlineData("run --PaSsWoRd \"horse battery staple\" --verbose", "run --PaSsWoRd [redacted] --verbose")]
+    public void CliFlag_redacts_a_whole_double_quoted_value_with_spaces(string input, string expected)
+        => Assert.Equal(expected, FeedbackRedactor.CliFlag().Replace(input, "$1" + FeedbackRedactor.Mark));
+
+    [Fact]
+    public void CliFlag_redacts_a_whole_single_quoted_value_with_spaces()
+        => Assert.Equal("run --client-secret [redacted] --verbose",
+            FeedbackRedactor.CliFlag().Replace("run --client-secret 'horse battery staple' --verbose", "$1" + FeedbackRedactor.Mark));
+
+    [Theory]
+    [InlineData("run --password \"horse \\\"battery\\\" staple\" --verbose", "run --password [redacted] --verbose")]
+    [InlineData("run --client-secret 'horse \\'battery\\' staple' --verbose", "run --client-secret [redacted] --verbose")]
+    [InlineData("run --token \"horse \\\\ battery staple\" --verbose", "run --token [redacted] --verbose")]
+    [InlineData("run --token 'horse \\\\ battery staple' --verbose", "run --token [redacted] --verbose")]
+    public void CliFlag_redacts_escaped_quotes_inside_a_quoted_value(string input, string expected)
+        => Assert.Equal(expected, FeedbackRedactor.CliFlag().Replace(input, "$1" + FeedbackRedactor.Mark));
+
+    [Theory]
+    [InlineData("run --password \"horse battery staple", "run --password [redacted]")]
+    [InlineData("run --password 'horse battery staple", "run --password [redacted]")]
+    [InlineData("run --password \"horse battery staple\\", "run --password [redacted]")]
+    [InlineData("run --password 'horse battery staple\\", "run --password [redacted]")]
+    [InlineData("run --password \"horse battery staple\nnext line", "run --password [redacted]\nnext line")]
+    [InlineData("run --password 'horse battery staple\r\nnext line", "run --password [redacted]\r\nnext line")]
+    public void CliFlag_redacts_an_unterminated_quoted_value_to_the_end_of_its_line(string input, string expected)
+        => Assert.Equal(expected, FeedbackRedactor.CliFlag().Replace(input, "$1" + FeedbackRedactor.Mark));
+
+    [Theory]
+    [InlineData("run --token abcd1234efgh --verbose", "run --token [redacted] --verbose")]
+    [InlineData("run --password -other-option", "run --password -other-option")]
+    [InlineData("run --token [redacted] --verbose", "run --token [redacted] --verbose")]
+    public void CliFlag_preserves_unquoted_flag_boundaries(string input, string expected)
+        => Assert.Equal(expected, FeedbackRedactor.CliFlag().Replace(input, "$1" + FeedbackRedactor.Mark));
+
+    [Theory]
+    [InlineData("--password [redacted] battery staple\"")]
+    [InlineData("--password [redacted] battery staple'")]
+    [InlineData("--PaSsWoRd [redacted] \\\"battery\\\" staple\"")]
+    public void The_sender_refuses_the_old_partial_CliFlag_redaction(string leaked)
+    {
+        Assert.True(FeedbackRedactor.ContainsSecret(leaked));
+        Assert.True(FeedbackRedactor.BundleHasSecret(JsonSerializer.Serialize(new { note = leaked })));
+        Assert.Equal(FeedbackRedactor.EscapedMark, FeedbackRedactor.Redact(leaked));
+    }
+
     [Fact]
     public void A_secret_in_a_query_string_is_redacted_fail_closed()
     {
