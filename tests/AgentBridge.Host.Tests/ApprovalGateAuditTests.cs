@@ -56,6 +56,55 @@ public sealed partial class AgentAnswerFlowTests
     }
 
     [Fact]
+    public async Task A_late_confirmation_writes_one_terminal_without_typing_again()
+    {
+        var host = new ApprovalAuditFixture(f.Root, source, Answerer());
+        var request = Request(ClaudeId, "toolu_1", Chosen);
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await host.Answer(request)).Outcome);
+        var typed = injector.Plans.Count;
+        Fixture.Append(claude, Recorded());
+        Assert.Equal(AnswerOutcome.Delivered, (await host.Answer(request)).Outcome);
+        Assert.Equal(AnswerOutcome.Delivered, (await host.Answer(request)).Outcome);
+        Assert.Equal(typed, injector.Plans.Count);
+        Assert.Equal(new[] { "intent", "terminal" }, host.Rows().Select(r => r.Gate!.Phase));
+    }
+
+    [Fact]
+    public async Task Nothing_typed_closes_the_intent_as_refused_and_a_fresh_request_can_still_answer()
+    {
+        var host = new ApprovalAuditFixture(f.Root, source, Answerer());
+        var request = Request(ClaudeId, "toolu_1", Chosen);
+        injector.Result = new(InjectionStatus.NothingTyped, "fixture refusal");
+        Assert.Equal(AnswerOutcome.Refused, (await host.Answer(request)).Outcome);
+        Assert.Equal("refused", host.Rows()[1].Outcome);
+        injector.Result = new(InjectionStatus.Typed, "ok");
+        injector.OnInject = _ => Fixture.Append(claude, Recorded());
+        Assert.Equal(AnswerOutcome.Delivered, (await host.Answer(request with { Request = Guid.NewGuid().ToString() })).Outcome);
+        var report = host.QualifiedProjection();
+        Assert.Equal(1, Assert.Single(report.Totals).Successes);
+        Assert.Empty(report.IncompleteReasons);
+        Assert.False(report.Invalidated);
+    }
+
+    [Fact]
+    public async Task A_request_uuid_reused_for_another_question_keeps_the_redirected_operation_binding()
+    {
+        var host = new ApprovalAuditFixture(f.Root, source, Answerer());
+        var request = Request(ClaudeId, "toolu_1", Chosen);
+        injector.OnInject = _ => Fixture.Append(claude, Recorded());
+        Assert.Equal(AnswerOutcome.Delivered, (await host.Answer(request)).Outcome);
+        await AskAnotherAsync();
+        injector.OnInject = _ => Fixture.Append(claude, Claude.Answered("toolu_2", second++,
+            new Dictionary<string, string> { ["Which database?"] = "SQLite", ["Which features?"] = "Auth, Search" }));
+        Assert.Equal(AnswerOutcome.Delivered, (await host.Answer(request with { Question = "toolu_2" })).Outcome);
+        Assert.Equal(2, host.Rows().Select(r => r.Gate!.Operation).Distinct().Count());
+        var report = host.QualifiedProjection();
+        Assert.Equal(2, Assert.Single(report.Totals).Successes);
+        Assert.Empty(report.IncompleteReasons);
+        Assert.False(report.Invalidated);
+    }
+
+    [Fact]
     public async Task An_authenticated_agent_refusal_is_one_credential_attributed_row_without_credit_or_an_unresolved_attempt()
     {
         var credentials = new AgentCredentials(f.Root, "machine1");

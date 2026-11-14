@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Host.Delivery.Staging;
@@ -196,7 +197,7 @@ public sealed class SessionService
     public Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data, Func<HelloResult, HelloResult>? shape) =>
         HandleAsync(channel, op, data, shape, null);
 
-    internal async Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data, Func<HelloResult, HelloResult>? shape, AgentAuditLog? launchAudit)
+    internal async Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data, Func<HelloResult, HelloResult>? shape, AgentAuditLog? actionAudit)
     {
         switch (op)
         {
@@ -214,7 +215,7 @@ public sealed class SessionService
                     return hello;
                 }
             case Ops.SessionAnswer:
-                return await AnswerAsync(channel, data);
+                return await AnswerAsync(channel, data, actionAudit);
             case Ops.SessionReply:
                 return await ReplyAsync(channel, data);
             case Ops.AttachmentStart or Ops.AttachmentChunk or Ops.AttachmentDiscard when attachments is not null:
@@ -243,7 +244,7 @@ public sealed class SessionService
                 var options = await launcher.OptionsAsync();
                 return options.Trust is null ? options : options with { Trust = [.. options.Trust.Select(q => ForPeer(channel, q))] };
             case LaunchProtocol.Launch when launcher is not null:
-                return await LaunchAsync(channel, data, launchAudit);
+                return await LaunchAsync(channel, data, actionAudit);
             // Host to host, through the relay only: another machine of the account asking for a
             // session with a command a person's device signed.
             case TransferProtocol.Op when transfers is not null && channel is SecureChannel secure:
@@ -442,7 +443,7 @@ public sealed class SessionService
         public int FocusCount;
     }
 
-    async Task<AnswerResult> AnswerAsync(IProtocolChannel channel, JsonElement data)
+    async Task<AnswerResult> AnswerAsync(IProtocolChannel channel, JsonElement data, AgentAuditLog? audit)
     {
         // A request without an id, question or request UUID fails as a request; anything
         // that can be read gets an outcome.
@@ -450,11 +451,21 @@ public sealed class SessionService
         var request = data.Deserialize<AnswerRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.answer needs an id, a question and a request");
         var (watch, progress) = Watch(request.Progress);
         if (answers is null) { return new AnswerResult(AnswerOutcome.Refused, "this host does not take answers; answer at the machine"); }
+        Action<AnswerOutcome>? Prepare(Guid operation, Session session, Question question)
+        {
+            if (AnswerGate(session, question, operation, "person-client") is not { } gate) { return null; }
+            var intent = new AgentAuditEntry("local", gate.Operation.ToString(), "person:local", [], Ops.SessionAnswer,
+                gate.Incarnation.ToString(), "attempted", Gate: gate);
+            if (audit is not { } writer || !writer.Append(intent)) { return null; }
+            return outcome => writer.Append(intent with { Outcome = outcome == AnswerOutcome.Delivered ? "delivered" : "refused",
+                Gate = gate with { Phase = "terminal", ReasonCode = outcome == AnswerOutcome.Delivered ? "none" : "refused" } });
+        }
         var takeBack = BeginTakeBack(request.Id, request.Request);
         // A confirmation is checked as coming from the device on the other end of a channel through
         // the relay, and from nowhere else: on this machine's pipe it is none, and refused as such.
         var confirmed = channel is SecureChannel secure && EscapedApprovals is { } escaped ? escaped.For(secure.PeerId, request) : null;
-        var result = await answers.AnswerAsync(request, watch: watch, confirmed: confirmed, sender: channel.PeerId);
+        var result = audit is null ? await answers.AnswerAsync(request, watch: watch, confirmed: confirmed, sender: channel.PeerId)
+            : await answers.AnswerAuditedAsync(request, Prepare, watch: watch, confirmed: confirmed, sender: channel.PeerId);
         // Typed from this device: it needs no notification that the question was answered.
         if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed)
         {
@@ -463,6 +474,27 @@ public sealed class SessionService
         }
         return progress ? result with { Timings = watch.Timings } : result;
     }
+
+    static GateAuditMetadata? AnswerGate(Session session, Question question, Guid operation, string actor)
+    {
+        if (!Guid.TryParse(session.Id, out var incarnation) || incarnation == Guid.Empty) { return null; }
+        var native = session.Agent switch
+        {
+            AgentKind.Codex => CodexApprovalId.Parse(question.Id)?.DecisionId,
+            AgentKind.Copilot when question.Kind == QuestionKind.Approval => CopilotPermissionPrompt.ParseQuestionId(question.Id)?.RequestId,
+            _ => question.Id,
+        };
+        if (string.IsNullOrEmpty(native)) { return null; }
+        var identity = JsonSerializer.SerializeToUtf8Bytes(new[] { "ha-gate-question-v1", session.Agent.ToString().ToLowerInvariant(), incarnation.ToString(), native });
+        var id = new Guid(System.Security.Cryptography.SHA256.HashData(identity).AsSpan(0, 16));
+        return new GateAuditMetadata(1, operation, Guid.Empty, 0, "intent", "local", actor, incarnation, "none", id);
+    }
+
+    internal GateAuditMetadata? RefusedAnswerGate(string target, JsonElement data) =>
+        source?.GetForDelivery(target) is { Question: { } question } session && data.ValueKind == JsonValueKind.Object
+        && data.TryGetProperty("question", out var requested) && requested.ValueKind == JsonValueKind.String && requested.ValueEquals(question.Id)
+        && AnswerGate(session, question, Guid.NewGuid(), "agent") is { } gate
+            ? gate with { Phase = "terminal", ReasonCode = "refused" } : null;
 
     // What a caller of session.reply or session.answer hears as the delivery goes. With progress
     // asked for (and a channel that can carry it), received at once, before any check, and typed

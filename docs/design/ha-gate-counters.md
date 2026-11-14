@@ -127,6 +127,15 @@ Intent target is the request UUID; operation/incarnation use the reserved launch
 UUID; terminal target is the registered session UUID. Restart replay mapping and
 relay/HA trusted ingress remain #2587.
 
+Slice 3 (#2522) audits app/host-CLI answers on the local handler: empty run means
+zero qualifying credit. A flushed intent follows native-question validation and
+precedes keys; authoritative delivery (including denial) closes it once. Question
+identity hashes only version/backend/session UUID/native call or generation;
+permission display digests and all contents are excluded. Credentialed agents
+remain refused: one terminal/refused row for a matching host question, no dispatched
+intent and no credit or unresolved attempt. Other local callers, restart restoration,
+relay and HA context remain deferred; no automatic run provider is added.
+
 At restart rebuild operation mappings, active run and totals from both streams,
 checking supported versions, sequence/link continuity and the #1401 durable head.
 A torn last line, missing tail, unknown outcome,
