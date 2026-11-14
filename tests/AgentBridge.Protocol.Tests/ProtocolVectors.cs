@@ -314,6 +314,7 @@ public static class ProtocolVectors
     {
         f.Record<MachineInfo>(Host)
             .Valid("full", Machine)
+            .Valid("role", Machine with { Role = "builder" })
             .Valid("minimal", new MachineInfo(MachineId, "DEV-MAC", "macos", "0.1.200"));
         f.Record<HelloResult>(Host)
             .Valid("full", new HelloResult(1, Machine, [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsReply, Capabilities.SessionsStop, Capabilities.Push, Capabilities.SessionsAttach, Capabilities.SessionsAttachBlob, Capabilities.SessionsApprove, LaunchProtocol.Capability, UsageProtocol.Capability, UpdateProtocol.Capability]))
@@ -933,6 +934,7 @@ public static class ProtocolVectors
         var last = new UpdateResult { Outcome = UpdateOutcome.Updated, From = "0.1.199", To = "0.1.200", Request = Request, At = T0 };
         f.Record<UpdateResult>(Host)
             .Valid("updated", last)
+            .Valid("last-step", last with { Step = "installing" })
             .Valid("refused", new UpdateResult { Outcome = UpdateOutcome.Refused, Reason = "a session is busy", At = T0 })
             // Update now (#1159): how it ended as a code, which a client words itself.
             .Valid("an-update-now-refused-with-a-code", new UpdateResult { Outcome = UpdateOutcome.Refused, Reason = "Update now has used its restarts", Request = Request, Code = UpdateCode.RestartCap, At = T0 })
@@ -962,8 +964,19 @@ public static class ProtocolVectors
             Request = Request, Automatic = true, Last = last,
         };
         var offered = state with { Phase = UpdatePhase.Idle, Progress = null, Request = null, CanUpdateNow = true, Busy = busy };
+        var leaving = new UpdateLeaving("0.1.201", T0, T0.AddMinutes(3));
+        var back = new UpdateBack("0.1.200", "0.1.201", Request, T0.AddMinutes(1));
+        var policy = new UpdatePolicy(UpdatePolicyState.Ok, T0);
+        f.Record<UpdateLeaving>(Host).Valid("leaving", leaving);
+        f.Record<UpdateBack>(Host).Valid("back", back);
+        f.Record<UpdatePolicy>(Host).Valid("checked", policy);
         f.Record<UpdateState>(Host)
             .Valid("downloading", state)
+            .Valid("fleet-facts", new UpdateState
+            {
+                Bytes = 12, Total = 100, Downloaded = false, Installing = T0, Leaving = leaving, Back = back,
+                Mode = UpdateMode.RestartToUpdate, ChecksHeldUntil = T0.AddHours(1), Policy = policy,
+            })
             .Valid("waiting", state with { Phase = UpdatePhase.Waiting, Progress = null, Waiting = "a session is busy" })
             .Valid("no-app", new UpdateState { Unavailable = "the Windows app is not running" })
             .Valid("update-now-offered", offered)
@@ -975,6 +988,7 @@ public static class ProtocolVectors
             .Valid("an-update-now", new UpdateCommand { Now = Signed });
         f.Record<UpdateCommandResult>(Host)
             .Valid("accepted", new UpdateCommandResult(UpdateAck.Accepted) { State = state with { Phase = UpdatePhase.Checking, Progress = null } })
+            .Valid("retry-at", new UpdateCommandResult(UpdateAck.Refused) { Code = "rate-limited", RetryAt = T0.AddMinutes(10) })
             .Valid("refused", new UpdateCommandResult(UpdateAck.Refused, "the machine is read-only"))
             .Valid("an-update-now-refused-with-a-code", new UpdateCommandResult(UpdateAck.Refused, "the release offered here is no longer the one the person was shown") { Code = UpdateCode.ReleaseChanged })
             .Valid("confirm", new UpdateCommandResult(UpdateAck.Confirm, "more is busy here than the confirmation covered") { State = offered })

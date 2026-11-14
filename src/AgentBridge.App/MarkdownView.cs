@@ -104,7 +104,7 @@ public sealed class MarkdownView : StackPanel
     {
         Children.Clear();
         if (block is null && markdown is null) { return; }
-        IReadOnlyList<MdBlock> blocks = block is not null ? [block] : Approval ? MarkdownModel.Approval(markdown) : MarkdownModel.Parse(markdown);
+        IReadOnlyList<MdBlock> blocks = block is not null ? new[] { block } : Approval ? MarkdownModel.Approval(markdown) : MarkdownModel.Parse(markdown);
         foreach (var b in blocks)
         {
             var element = Draw(b);
@@ -131,7 +131,7 @@ public sealed class MarkdownView : StackPanel
         if (size is { } s) { rich.FontSize = s; }
         if (bold) { rich.FontWeight = FontWeights.SemiBold; }
         var para = new Paragraph();
-        var pieces = LongWords.Pieces([.. inlines.Select(i => i switch { MdText t => t.Text, MdLink l => l.Text, MdBreak => "\n", _ => "" })]);
+        var pieces = LongWords.Pieces(inlines.Select(i => i switch { MdText t => t.Text, MdLink l => l.Text, MdBreak => "\n", _ => "" }).ToArray());
         for (var k = 0; k < inlines.Count; k++) { Inlines(inlines[k], pieces[k], para.Inlines); }
         rich.Blocks.Add(para);
         FitInlineMono(rich);
