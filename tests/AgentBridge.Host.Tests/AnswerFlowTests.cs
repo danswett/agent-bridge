@@ -2875,6 +2875,9 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     [InlineData("unheaded")]
     public async Task Keys_are_held_only_to_the_form_at_the_field_they_are_for(string shows)
     {
+        // Exhaust the wrong-field recheck on the service's clock, not the channel request's wall-clock budget.
+        await using var clock = new PollClock();
+        Serve(Answerer(time: clock));
         var answer = new { first = "b", second = "c" };
         string[] names = ["first", "second"];
         await AskFieldsAsync(new { first = new { type = "string", @enum = new[] { "a", "b", "c" } }, second = new { type = "string", @enum = new[] { "a", "b", "c" } } }, 2, answer);
