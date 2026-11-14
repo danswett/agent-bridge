@@ -221,7 +221,7 @@ public sealed class SessionService
             case Ops.AttachmentStart or Ops.AttachmentChunk or Ops.AttachmentDiscard when attachments is not null:
                 return Attach(channel, op, data);
             case Ops.SessionStop:
-                return await StopAsync(data);
+                return await StopAsync(channel, data, actionAudit);
             case AgentSignIn.Start:
                 return SignInEntrypointApproved && SignIn is not null ? SignIn.Start(channel, data)
                     : new { outcome = "refused", reason = "agent sign-in is not enabled" };
@@ -718,14 +718,17 @@ public sealed class SessionService
         };
     }
 
-    async Task<StopResult> StopAsync(JsonElement data)
+    async Task<StopResult> StopAsync(IProtocolChannel channel, JsonElement data, AgentAuditLog? audit)
     {
         // As for answers: a request without an id or request UUID fails as a request, and
         // anything that can be read gets an outcome.
         if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("session.stop needs an id and a request"); }
         var request = data.Deserialize<StopRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.stop needs an id and a request");
         if (stops is null) { return new StopResult(StopOutcome.Refused, "this host does not end sessions; end it at the machine"); }
-        return await stops.StopAsync(request);
+        return stops is StopService audited && audit is not null
+            ? await StopAudit.StopAsync(audited, source, audit, request, Direct(channel) ? "local" : "relay",
+                Direct(channel) ? "person:local" : $"person:{channel.PeerId}")
+            : await stops.StopAsync(request);
     }
 
 async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data, AgentAuditLog? audit)

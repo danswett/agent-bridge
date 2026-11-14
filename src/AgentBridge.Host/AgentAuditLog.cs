@@ -49,6 +49,7 @@ public sealed class AgentAuditLog
     static readonly string Genesis = new('0', 64);
     readonly object gate = new();
     readonly string profile;
+    internal string Profile => profile;
     readonly TimeProvider time;
     readonly Action<string> log;
     readonly long maxBytes;

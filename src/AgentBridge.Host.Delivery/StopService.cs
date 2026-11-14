@@ -133,13 +133,16 @@ public sealed class StopService : ISessionStopper
     public Func<string, string?>? LaunchHeld { get; set; }
 
     public Task<StopResult> StopAsync(StopRequest request, CancellationToken cancellationToken = default)
+        => StopAuditedAsync(request, null, cancellationToken);
+
+    public Task<StopResult> StopAuditedAsync(StopRequest request, Func<int, DateTimeOffset, bool>? beforeDispatch, CancellationToken cancellationToken = default)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key)) { return Task.FromResult(Refused("request must be a UUID")); }
-        return requests.Once(key, () => EndAsync(request, key), result =>
+        return requests.Once(key, () => EndAsync(request, key, beforeDispatch), result =>
             log($"end {key.ToString()[..8]} for {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Forced == true ? " (terminated)" : "")}{(result.Reason is null ? "" : $" ({result.Reason})")}"));
     }
 
-    async Task<StopResult> EndAsync(StopRequest request, Guid key)
+    async Task<StopResult> EndAsync(StopRequest request, Guid key, Func<int, DateTimeOffset, bool>? beforeDispatch)
     {
         Session session;
         int processId;
@@ -177,7 +180,11 @@ public sealed class StopService : ISessionStopper
 
             if (ConfirmationHint(session) is { } doing)
             {
-                if (!Confirms(session.Id, request.Confirm, processId, startedAt, out var why)) { return AskAgain(session.Id, processId, startedAt, doing, why); }
+                if (!Confirms(session.Id, request.Confirm, processId, startedAt, out var why))
+                {
+                    if (beforeDispatch?.Invoke(processId, startedAt) == false) { return AuditRefused(); }
+                    return AskAgain(session.Id, processId, startedAt, doing, why);
+                }
                 confirmed = true;
             }
             Disarm(session.Id);
@@ -192,7 +199,7 @@ public sealed class StopService : ISessionStopper
         StopResult result;
         try
         {
-            try { result = await EndProcessAsync(session, processId, startedAt, confirmed); }
+            try { result = await EndProcessAsync(session, processId, startedAt, confirmed, beforeDispatch); }
             catch (Exception e)
             {
                 log($"end of {Short(session.Id)} (pid {processId}) failed part way: {e.Message}");
@@ -229,7 +236,7 @@ public sealed class StopService : ISessionStopper
     // that was idle when it arrived is checked again once the typing turn is taken, which can
     // be a while if another session is being typed into: a session that has started working
     // or asking meanwhile needs a second press like any other.
-    async Task<StopResult> EndProcessAsync(Session session, int pid, DateTimeOffset startedAt, bool confirmed)
+    async Task<StopResult> EndProcessAsync(Session session, int pid, DateTimeOffset startedAt, bool confirmed, Func<int, DateTimeOffset, bool>? beforeDispatch)
     {
         var opened = control.Open(pid, startedAt);
         if (opened.Refusal is { } refusal) { return Refused(refusal); }
@@ -248,7 +255,12 @@ public sealed class StopService : ISessionStopper
                 // asking anything, or whose launch here has not seen its window ready, is
                 // terminated without them.
                 var asking = MayBeAsking(now, out var notReady);
-                if (!confirmed && ConfirmationHint(now, asking) is { } doing) { return AskAgain(session.Id, pid, startedAt, doing, "the session is no longer idle"); }
+                if (!confirmed && ConfirmationHint(now, asking) is { } doing)
+                {
+                    if (beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
+                    return AskAgain(session.Id, pid, startedAt, doing, "the session is no longer idle");
+                }
+                if (beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
                 await SetEndingAsync(session.Id, true);
                 if (!asking)
                 {
@@ -373,6 +385,7 @@ public sealed class StopService : ISessionStopper
     static string Short(string id) => id.Length > 8 ? id[..8] : id;
 
     static StopResult Ended(bool forced) => new(StopOutcome.Ended) { Forced = forced ? true : null };
+    static StopResult AuditRefused() => Refused("the host could not record the stop; check at the machine");
     static StopResult Refused(string reason) => new(StopOutcome.Refused, reason);
     static StopResult Stale(string reason) => new(StopOutcome.Stale, reason);
     static StopResult Failed(string reason) => new(StopOutcome.Failed, reason);

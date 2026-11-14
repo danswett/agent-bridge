@@ -136,6 +136,14 @@ remain refused: one terminal/refused row for a matching host question, no dispat
 intent and no credit or unresolved attempt. Other local callers, restart restoration,
 relay and HA context remain deferred; no automatic run provider is added.
 
+Slice 4 wires app/host-CLI, authenticated relay and internal HA stops. Empty run
+still earns no qualifying credit. A flushed intent follows native stop guards
+and precedes confirmation arming or dispatch; refused/busy pre-dispatch results
+have terminal-only evidence, not HA fallback intents. Only `ended` credits the
+process incarnation. Replay uses retained request/principal/incarnation bindings;
+uncertain cache misses refuse effects. No confirmation token is retained, and
+terminal-write failure leaves unresolved intent. A6 continuity remains required.
+
 At restart rebuild operation mappings, active run and totals from both streams,
 checking supported versions, sequence/link continuity and the #1401 durable head.
 A torn last line, missing tail, unknown outcome,
