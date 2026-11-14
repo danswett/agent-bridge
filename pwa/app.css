@@ -344,7 +344,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   body[data-page] .sessions:not([hidden]) { --head-top: 0px; --head-bg: var(--ab-layer); }
   .sessions-head { margin-top: var(--ab-space-5); box-shadow: none; }
   .list-pane { min-height: 0; overflow: auto; padding: 0 var(--ab-space-2) var(--ab-space-4); border-right: 1px solid var(--ab-stroke2); }
-  .list-pane > :not(.session-list, .needs-you) { margin-left: var(--ab-space-3); margin-right: var(--ab-space-3); }
+  .list-pane > :not(.session-list, .needs-you, .needs-filter) { margin-left: var(--ab-space-3); margin-right: var(--ab-space-3); }
   .session-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
   .session-views { flex: 1; min-height: 0; }
   .session-header .icon-button { width: 32px; height: 32px; }
@@ -720,6 +720,24 @@ body[data-conn="busy"] .sessions, body[data-conn="warn"] .sessions, body[data-co
   .appbar .brand, .appbar .online { min-height: var(--tap); }
 }
 .session-list { display: grid; gap: 2px; grid-template-columns: minmax(0, 1fr); }
+.needs-filter {
+  position: relative; display: flex; align-items: center; gap: var(--ab-space-2); width: 100%; min-width: 0;
+  min-height: 44px; margin-bottom: var(--ab-space-2); padding: 0 var(--ab-space-3);
+  border: 0; border-radius: var(--ab-radius-control); background: transparent; color: var(--ab-text);
+  font: inherit; font-variant-numeric: tabular-nums; text-align: left; cursor: pointer;
+}
+.needs-filter > :first-child { display: flex; flex: none; }
+.needs-filter .glyph[data-glyph] { color: inherit; }
+.needs-filter[aria-pressed="true"] { background: var(--ab-selected); font-weight: 600; }
+.needs-filter[aria-pressed="true"]::before {
+  content: ""; position: absolute; left: 0; top: calc(50% - 8px); width: 3px; height: 16px;
+  border-radius: 2px; background: var(--ab-bridge);
+}
+.needs-filter-summary { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ab-text2); font-size: var(--type-meta); font-weight: 400; }
+/* Slice 1 retains the lane, unchanged, except while the filter is active (#2040). */
+.needs-filter[aria-pressed="true"] ~ .needs-you { display: none; }
+@media (min-width: 760px) and (any-pointer: fine) { .needs-filter { min-height: 36px; } }
+@media (forced-colors: active) { .needs-filter[aria-pressed="true"]::before { background: Highlight; forced-color-adjust: none; } }
 
 /* The person's order (ui.md §6.1, #164): Pinned and Sessions headers once anything is pinned,
    then Ended · N, folded. */
