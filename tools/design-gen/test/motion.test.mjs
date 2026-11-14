@@ -68,6 +68,40 @@ test('ui.md\'s motion catalogue and tokens.json\'s list the same motions', () =>
   assert.deepEqual(named, entries);
 });
 
+test('the reorder spec replaces the insertion line with make-room motion without per-frame layout', () => {
+  const section = read('docs/design/ui.md').split('### 5.3 Motion')[1].split('## 6. Surfaces')[0];
+  const reorder = section.split('\n').find((line) => line.startsWith('| Reorder |'));
+  assert.doesNotMatch(reorder, /No other row moves|takes its own new place at once|a line shows where/);
+  assert.match(reorder, /neighbours.*one slot/);
+  assert.match(reorder, /no insertion line/);
+  assert.match(reorder, /`reorder`: standard, standard/);
+  const lift = section.split('**Lift and make room (#592).**')[1].split("Most recent's")[0].replace(/\s+/g, ' ');
+  assert.match(lift, /scale 1\.02/);
+  assert.match(lift, /5% Bridge tint/);
+  assert.match(lift, /layout changes once.*not.*every frame/);
+  assert.match(lift, /no sink, scale, shadow or tint/);
+  assert.match(reorder, /Only the held card follows the pointer/);
+});
+
+test('the moving contract keeps touch scrolling and group hover-open alongside keyboard and menu moves', () => {
+  const moving = read('docs/design/ui.md').split('- **Moving**')[1].split('- **Pins:**')[0].replace(/\s+/g, ' ');
+  for (const rule of [
+    /500 ms on iOS.*400 ms on Android/,
+    /150 ms.*grip/,
+    /touch movement never bypasses the hold/,
+    /10 px.*before.*hold.*scroll/s,
+    /once, unprompted.*Your order.*at least 2/s,
+    /no grip and no reserved column in Most recent or Machine/,
+    /header.*short hold.*opens/s,
+    /Alt\+↑\/↓.*Move up.*Move down/s,
+    /Drop here to unpin/,
+    /order is committed at release/,
+    /press during.*settle.*committed layout/s,
+    /Escape.*pointercancel/s,
+    /ended\. Move cancelled/,
+  ]) { assert.match(moving, rule); }
+});
+
 test('nothing but the glyphs runs longer than 300 ms, in the tokens or in either client', () => {
   const limit = tokens.motion.limitMs;
   assert.equal(limit, 300);

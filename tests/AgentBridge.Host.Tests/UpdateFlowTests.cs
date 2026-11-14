@@ -158,6 +158,26 @@ public sealed class UpdateFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Download_facts_reach_a_phone_without_becoming_ready_before_the_checksum_passes()
+    {
+        var ch = await OpenAsync();
+        Result(await ch.RequestAsync(UpdateProtocol.Subscribe, new { }));
+        foreach (var bytes in new long[] { 3, 10 })
+        {
+            await ReportAsync(Reported with { Phase = UpdatePhase.Downloading, Bytes = bytes, Total = 10, Downloaded = false });
+            var state = Read<UpdateState>((await NextAsync(ch)).Data);
+            Assert.Equal(bytes, state.Bytes);
+            Assert.Equal(10, state.Total);
+            Assert.Equal(false, state.Downloaded);
+        }
+        await ReportAsync(Reported with { Downloaded = true });
+        var ready = Read<UpdateState>((await NextAsync(ch)).Data);
+        Assert.Equal(true, ready.Downloaded);
+        Assert.Null(ready.Bytes);
+        Assert.Null(ready.Total);
+    }
+
+    [Fact]
     public async Task A_subscriber_hears_nothing_more_once_the_machine_becomes_read_only()
     {
         var ch = await OpenAsync();
