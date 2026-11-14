@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
+using AgentBridge.Transport;
 
 namespace AgentBridge.Host;
 
