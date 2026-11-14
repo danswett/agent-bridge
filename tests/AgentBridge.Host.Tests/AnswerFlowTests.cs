@@ -1904,6 +1904,55 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
 
+    [Theory]
+    [InlineData(80, false)]
+    [InlineData(120, false)]
+    [InlineData(200, false)]
+    [InlineData(80, true)]
+    public async Task A_three_field_long_title_colour_boolean_and_text_card_is_delivered_even_after_a_refusal(int columns, bool refuseFirst)
+    {
+        string[] titles =
+        [
+            "Which of these three colors would you prefer for the status indicator light today",
+            "Would you like this status indicator light to remain enabled while the machine is working on the next task in this session",
+            "Please describe anything else you would like us to know before we apply this status indicator preference to the current session",
+        ];
+        string[] names = ["colour", "enabled", "notes"];
+        var answer = new { colour = "Red", enabled = true, notes = "Test" };
+        await AskFieldsAsync(new
+        {
+            colour = new { type = "string", title = titles[0], @enum = new[] { "Red", "Green", "Blue" } },
+            enabled = new { type = "boolean", title = titles[1] },
+            notes = new { type = "string", title = titles[2] },
+        }, 3, answer, "Three preferences.");
+        var ch = await OpenAsync();
+        if (refuseFirst)
+        {
+            injector.Screen = () => ["The form is being redrawn"];
+            Assert.Equal("refused", (await AnswerAsync(ch, answer, question: "q2")).Outcome);
+            Assert.Empty(injector.Attempts);
+            Assert.Equal("q2", source.Get(Id)?.Question?.Id);
+        }
+        injector.Screen = () =>
+        {
+            var rows = FieldsScreen(names, message: "Three preferences.", labels: titles);
+            var at = Array.FindIndex(names, n => rows.Contains($"Field: {n}"));
+            if (at < 0) { return rows; }
+            var bar = Wrapped($"[{titles[at]}]", columns - 8).ToList();
+            var middle = bar.Count / 2;
+            bar[middle] = (at > 0 ? "\u2190 " : "") + bar[middle] + (at < 2 ? " \u2192" : "");
+            var heading = $" {titles[at]}{(at < 2 ? ":" : "")}";
+            return [.. rows.SelectMany(r => r == TabBar(titles, 0, false) ? bar.Select(l => " " + l)
+                : r == heading ? Wrapped(r.TrimStart(' '), columns - 4).Select(l => " " + l)
+                : r == rows[0] ? [new string('\u2500', columns - 2)] : new[] { r })];
+        };
+
+        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(3, Enters());
+    }
+
     // A form taller than its window, as Copilot CLI drew one in a 120 by 30 console on VM3, read
     // with agent-bridge-injector --screen (#1123, #1193): a question of twelve long paragraphs
     // over a list, a Yes/No and a text field. Only the form's bottom shows, its rule on the last
