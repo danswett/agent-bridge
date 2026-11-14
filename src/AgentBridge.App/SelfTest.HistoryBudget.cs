@@ -83,11 +83,11 @@ static partial class SelfTest
                 {
                     Id = $"budget-{n}", At = StoredFrom.AddMinutes(n),
                     Prompt = new HistoryPrompt { Text = $"Demo prompt {n}" },
-                    Parts = [new HistoryPart
+                    Parts = new[] { new HistoryPart
                     {
                         Id = $"budget-{n}-reply", Kind = HistoryPartKind.Response, At = StoredFrom.AddMinutes(n).AddSeconds(3),
                         Text = $"Reply {n} starts here, with a few words of *explanation* before the list.\n\n{items}\n\n```js\n{code}\n```\n\nAnd a closing paragraph for reply {n}, with `inline code` and **bold**.",
-                    }],
+                    } },
                 });
             }
             check(stored.Turns.Count == turns, $"holds all {turns} realistic Markdown turns before opening");
