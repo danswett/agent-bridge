@@ -36,8 +36,8 @@ static partial class SelfTest
         var buttons = Find<Button>(group).Select(b => (Id: AutomationProperties.GetAutomationId(b), Name: FrameworkElementAutomationPeer.CreatePeerForElement(b)?.GetName() ?? "", Button: b)).ToList();
         var words = Find<TextBlock>(group).Where(t => Above<Button>(t, _ => true) is null).Select(t => t.Text).ToList();
         check(peer?.GetAutomationControlType() == AutomationControlType.Group && peer.GetName() == line && AutomationProperties.GetAutomationId(group) == "AgentOffer_copilot"
-            && words.SequenceEqual([$"{line} · Set it up to see its sessions in {Product.Name}"])
-            && buttons.Select(b => $"{b.Id}: {b.Name}").SequenceEqual(["AgentOfferSetUp_copilot: Set up Copilot CLI", "AgentOfferNotNow_copilot: Not now, Copilot CLI"]),
+            && words.SequenceEqual(new[] { $"{line} · Set it up to see its sessions in {Product.Name}" })
+            && buttons.Select(b => $"{b.Id}: {b.Name}").SequenceEqual(new[] { "AgentOfferSetUp_copilot: Set up Copilot CLI", "AgentOfferNotNow_copilot: Not now, Copilot CLI" }),
             $"draws the card for an agent installed later as a group named for its line, with its words and its two buttons named for the agent ({peer?.GetAutomationControlType()} \"{peer?.GetName()}\"; {string.Join(" | ", words)}; {string.Join(" | ", buttons.Select(b => $"{b.Id}: {b.Name}"))})");
 
         // At the top of the page, ahead of the agents it is about, and never taking focus where it appears.
@@ -61,7 +61,7 @@ static partial class SelfTest
         // Said once, politely, while Settings is open.
         await Task.Delay(400);
         result["agentOfferAnnouncements"] = view.OffersAnnounced.ToList();
-        check(view.OffersAnnounced.SequenceEqual([line]) && AutomationProperties.GetLiveSetting(group) == AutomationLiveSetting.Polite,
+        check(view.OffersAnnounced.SequenceEqual(new[] { line }) && AutomationProperties.GetLiveSetting(group) == AutomationLiveSetting.Polite,
             $"raises the card once, as a polite live region ({string.Join(" | ", view.OffersAnnounced)})");
 
         // Pictured wide in both themes, and at the narrowest window, where the words wrap and the buttons

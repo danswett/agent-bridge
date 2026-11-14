@@ -363,6 +363,8 @@ next outcomes), and asks a follow-up question a little after each answer.
 
 ### Replying
 
+Without working local storage or Web Locks, Send shows an error and sends nothing.
+
 Delivered image attachments can retain a sender-only preview on this device (#1802).
 The local account's store holds at most 32 raster images, 8 MiB total, for 24 hours;
 sign-out or forgetting a pairing clears it. Missing bytes or reply bindings (including
@@ -617,6 +619,15 @@ fence lines too. ui.md §6.4 and
 span in a sentence this way, and NEL and the separators in prose.
 
 ## Tests
+
+Groups overlays (#2074) use `openSheet` in `js/ui/sheet.js`: `title`, DOM `content`
+and optional pinned `footer`, `kind` (`sheet`, `menu`, `form`, `alert`) and `anchor`.
+It returns `{ dialog, close }`; Cancel and Escape also close it and restore focus.
+For an alert, pass `cancelLabel: null` and `initialFocus` as its safe footer action.
+`onClose` runs once. Native modality keeps the background inert; the body alone scrolls.
+Phone sheets respect safe areas and the visual viewport; iPad sheets/menus anchor beside
+the list, forms centre at 440px, and alerts centre at 300px. `test/sheet.spec.mjs`
+covers the primitive in both engines; existing group and approval UI is not migrated.
 
 The open delegate detail (#2300) clears its polling timer while the document is hidden.
 On return it redraws ages and fetches once, keeping the last words while the fetch is
