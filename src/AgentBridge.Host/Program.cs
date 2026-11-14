@@ -24,6 +24,8 @@ using AgentBridge.Transport;
 //
 //   agent-bridge-host sessions [--compact]      one scan, the SessionList as JSON
 //   agent-bridge-host get <id>                  one session with its tool history
+//   agent-bridge-host stop <id> [--confirm <token>] [--profile <name>]
+//                                               one local person stop press, with host-owned confirmation
 //   agent-bridge-host watch [--json]            a line per upsert and removal, until Ctrl+C
 //   agent-bridge-host sign-in --relay <url>     GitHub sign-in through the relay
 //   agent-bridge-host serve [--relay <url>] [--name <name>] [--local-only]
@@ -84,6 +86,11 @@ string? Option(string name)
     return i >= 0 && i + 1 < arguments.Count ? arguments[i + 1] : null;
 }
 bool Flag(string name) => arguments.Contains(name);
+
+if (command == "stop")
+{
+    return await StopCommands.RunWithProfileAsync(arguments, Identity.DefaultRoot, () => Refused("end a session"), Console.Out, Console.Error);
+}
 
 SessionSourceOptions? readRoots = null;
 if (Flag("--read-root"))
@@ -379,6 +386,7 @@ switch (command)
         Console.Error.WriteLine("       " + OwnPeerCommands.Usage);
         Console.Error.WriteLine("       " + AgentBridge.Host.Cli.ScriptCredentialCommands.Usage);
         Console.Error.WriteLine("       " + AgentCommands.Usage);
+        Console.Error.WriteLine("       " + StopCommands.Usage);
         Console.Error.WriteLine("       " + AgentBridge.Host.Shadow.ShadowCommand.Usage);
         Console.Error.WriteLine("       agent-bridge-host hooks status | hooks install|remove <copilot|claude|codex> [...] [--dry-run]");
         Console.Error.WriteLine("       agent-bridge-host hooks cleanup [--profile <name>]");

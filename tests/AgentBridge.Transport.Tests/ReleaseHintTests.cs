@@ -169,6 +169,16 @@ public class ReleaseHintTests
         Assert.Equal("v0.1.2", Tag(Assert.Single(host.Hints)));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Disposed_reader_faults_are_ignored_only_after_cancellation(bool cancellationRequested)
+    {
+        var read = Peer.ReadDisposedSocket(cancellationRequested);
+        if (cancellationRequested) { await read; }
+        else { await Assert.ThrowsAsync<ObjectDisposedException>(() => read); }
+    }
+
     static string Tag(byte[] frame) { using var doc = JsonDocument.Parse(frame); return doc.RootElement.GetProperty("tag").GetString()!; }
     static string List(params (string Tag, string Channel)[] entries) => JsonSerializer.Serialize(entries.Select(e =>
         new { tag_name = e.Tag, draft = false, assets = new[] { new { name = $"releases.{e.Channel}.json" } } }));
@@ -220,6 +230,14 @@ public class ReleaseHintTests
             peer.reader = peer.Read();
             return peer;
         }
+        public static async Task ReadDisposedSocket(bool cancellationRequested)
+        {
+            var peer = new Peer();
+            using var cancellation = peer.stop;
+            peer.ws.Dispose();
+            if (cancellationRequested) { cancellation.Cancel(); }
+            await peer.Read();
+        }
         async Task Read()
         {
             try
@@ -231,6 +249,7 @@ public class ReleaseHintTests
                 }
             }
             catch (Exception e) when (e is WebSocketException or OperationCanceledException) { }
+            catch (ObjectDisposedException) when (stop.IsCancellationRequested) { }
         }
         public void Dispose() { stop.Cancel(); ws.Abort(); reader.GetAwaiter().GetResult(); ws.Dispose(); stop.Dispose(); }
     }

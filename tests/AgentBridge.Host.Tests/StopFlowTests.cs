@@ -1,6 +1,7 @@
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
+using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
 using AgentBridge.Transport.Tests;
@@ -35,6 +36,7 @@ public sealed class StopFlowTests : IAsyncLifetime
     Device client = null!;
     string events = "";
     int second = 10;
+    int cliConnections;
 
     public StopFlowTests() => control = new FakeControl(f);
 
@@ -116,6 +118,244 @@ public sealed class StopFlowTests : IAsyncLifetime
     }
 
     static (string, string?) Pair(Outcome o) => (o.Outcome_, o.Reason);
+
+    LocalServer CliServer(CallerKind caller = CallerKind.HostCli, string? response = null)
+    {
+        var handler = LocalApi.Handler(new SessionService(source, new MachineInfo("fixture", "Fixture", "windows", "0.1.0"), stops: Stopper()),
+            null!, new FixedCallerGuard(new Caller(caller, "fixture")));
+        return LocalServer.Start(LocalEndpoint.For(f.Root), (channel, op, data) =>
+            op == Ops.SessionStop && response is not null
+                ? Task.FromResult<object?>(System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(response))
+                : handler(channel, op, data));
+    }
+
+    async Task<(int Exit, string Output, string Error)> CliAsync(string? confirm = null, bool refused = false, string[]? args = null,
+        IClientChannel? channel = null)
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var exit = await StopCommands.RunWithProfileAsync(args ?? ["stop", Id,
+            .. confirm is null ? Array.Empty<string>() : ["--confirm", confirm],
+            "--profile", Path.GetFileName(f.Root)], Path.GetDirectoryName(f.Root)!, () => refused, output, error, async endpoint =>
+            {
+                Interlocked.Increment(ref cliConnections);
+                return channel ?? await LocalClient.ConnectAsync(endpoint);
+            });
+        return (exit, output.ToString(), error.ToString());
+    }
+
+    static StopResult CliResult(string output) =>
+        System.Text.Json.JsonSerializer.Deserialize<StopResult>(output, ProtocolJson.Options)!;
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Cli_stop_idle_session_ends_on_one_press(bool forced)
+    {
+        if (forced) { injector.OnInject = null; }
+        await using var local = CliServer();
+        var result = await CliAsync();
+        Assert.Equal(0, result.Exit);
+        Assert.Equal(StopOutcome.Ended, CliResult(result.Output).Outcome);
+        Assert.Equal(forced, CliResult(result.Output).Forced == true);
+        Assert.Equal("", result.Error);
+        Assert.Single(injector.Plans);
+        Assert.Null(source.Get(Id));
+    }
+
+    [Fact]
+    public async Task Cli_stop_busy_session_arms_then_ends_only_on_a_second_press_with_its_token()
+    {
+        await WorkingAsync();
+        await using var local = CliServer();
+        var first = await CliAsync();
+        Assert.Equal(3, first.Exit);
+        var armed = CliResult(first.Output);
+        Assert.Equal(StopOutcome.Confirm, armed.Outcome);
+        Assert.Equal(10, armed.ConfirmSeconds);
+        Assert.NotEmpty(armed.Confirm!);
+        Assert.Equal(3, (await CliAsync()).Exit);
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
+        var secondPress = await CliAsync(armed.Confirm);
+        Assert.Equal(0, secondPress.Exit);
+        Assert.Equal(StopOutcome.Ended, CliResult(secondPress.Output).Outcome);
+        Assert.Single(injector.Plans);
+    }
+
+    [Fact]
+    public async Task Cli_stop_with_a_stale_confirmation_does_not_end_the_session()
+    {
+        await WorkingAsync();
+        await using var local = CliServer();
+        var first = await CliAsync();
+        Assert.Equal(3, first.Exit);
+        var token = CliResult(first.Output).Confirm;
+        clock.Advance(TimeSpan.FromSeconds(11));
+        var late = await CliAsync(token);
+        Assert.Equal(3, late.Exit);
+        Assert.Equal(StopOutcome.Confirm, CliResult(late.Output).Outcome);
+        Assert.NotEqual(token, CliResult(late.Output).Confirm);
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
+    }
+
+    [Fact]
+    public async Task Cli_stop_from_an_agent_child_is_refused()
+    {
+        await using var local = CliServer(CallerKind.Agent);
+        var early = await CliAsync(refused: true);
+        Assert.Equal(4, early.Exit);
+        Assert.Equal("", early.Output);
+        Assert.Contains("refused", early.Error);
+        Assert.Equal(0, Volatile.Read(ref cliConnections));
+        var hostRefusal = await CliAsync();
+        Assert.Equal(4, hostRefusal.Exit);
+        Assert.Equal("", hostRefusal.Output);
+        Assert.Contains("refused", hostRefusal.Error);
+        Assert.Equal(1, Volatile.Read(ref cliConnections));
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
+    }
+
+    [Theory]
+    [InlineData("stop")]
+    [InlineData("stop", Id, "--profile")]
+    [InlineData("stop", Id, "--profile", "../outside")]
+    [InlineData("stop", Id, "--confirm")]
+    [InlineData("stop", Id, "--confirm", "<invalid>")]
+    [InlineData("stop", Id, "--confirm", "a", "--confirm", "b")]
+    [InlineData("stop", Id, "--unknown", "value")]
+    public async Task Cli_stop_invalid_arguments_never_connect(params string[] args)
+    {
+        await using var local = CliServer();
+        var result = await CliAsync(args: args);
+        Assert.Equal(2, result.Exit);
+        Assert.Equal("", result.Output);
+        Assert.NotEmpty(result.Error);
+        Assert.Equal(0, Volatile.Read(ref cliConnections));
+        Assert.Empty(injector.Plans);
+        Assert.Equal(0, (await CliAsync()).Exit);
+        Assert.Equal(1, Volatile.Read(ref cliConnections));
+    }
+
+    [Fact]
+    public async Task Cli_stop_pipe_admission_refusal_is_redacted_and_exits_four()
+    {
+        const string privateReason = "private-admission-account-and-machine";
+        var stops = 0;
+        await using var local = LocalServer.Start(LocalEndpoint.For(f.Root), async (channel, op, _) =>
+        {
+            if (op == Ops.Hello)
+            {
+                await channel.SendEventAsync(LocalServer.RefusedEvent, new { reason = privateReason });
+                throw new InvalidOperationException(privateReason);
+            }
+            Interlocked.Increment(ref stops);
+            return new StopResult(StopOutcome.Ended);
+        });
+        var result = await CliAsync();
+        Assert.Equal(4, result.Exit);
+        Assert.Equal("", result.Output);
+        Assert.Contains("refused", result.Error);
+        Assert.DoesNotContain(privateReason, result.Error);
+        Assert.Equal(0, Volatile.Read(ref stops));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Cli_stop_waits_past_thirty_seconds_for_a_result_or_connection_failure(bool disconnected)
+    {
+        var pending = new PendingStopChannel(clock);
+        var stopping = CliAsync(channel: pending);
+        clock.Advance(TimeSpan.FromSeconds(31));
+        Assert.False(stopping.IsCompleted);
+        if (disconnected) { pending.Response.SetException(new IOException("private-connection-detail")); }
+        else
+        {
+            pending.Response.SetResult(System.Text.Json.JsonSerializer.SerializeToElement(
+                new { ok = true, result = new StopResult(StopOutcome.Ended) }, ProtocolJson.Options));
+        }
+        var result = await stopping;
+        Assert.Equal(disconnected ? 1 : 0, result.Exit);
+        if (disconnected)
+        {
+            Assert.Equal("", result.Output);
+            Assert.Contains("stop result unavailable", result.Error);
+            Assert.DoesNotContain("private-connection-detail", result.Error);
+        }
+        else { Assert.Equal(StopOutcome.Ended, CliResult(result.Output).Outcome); }
+    }
+
+    sealed class PendingStopChannel(FakeTimeProvider time) : IClientChannel
+    {
+        public readonly TaskCompletionSource<System.Text.Json.JsonElement> Response = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public string PeerId => "fixture";
+        public string PeerName => "Fixture";
+        public string PeerKind => "host";
+        public bool IsOpen => true;
+        public Task Closed => throw new NotSupportedException();
+        public Exception? CloseReason => null;
+        public System.Threading.Channels.ChannelReader<ChannelEvent> Events => throw new NotSupportedException();
+        public Task<System.Text.Json.JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default, Action<System.Text.Json.JsonElement>? progress = null)
+        {
+            if (op == Ops.Hello)
+            {
+                return Task.FromResult(System.Text.Json.JsonSerializer.SerializeToElement(
+                    new { ok = true, result = new HelloResult(1, new MachineInfo("fixture", "Fixture", "windows", "0.1.0"), []) }, ProtocolJson.Options));
+            }
+            Assert.Equal(Ops.SessionStop, op);
+            return Response.Task.WaitAsync(timeout ?? TimeSpan.FromSeconds(15), time, ct);
+        }
+        public Task<(System.Text.Json.JsonElement Response, long EventsBefore)> RequestOrderedAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default, Action<System.Text.Json.JsonElement>? progress = null) => throw new NotSupportedException();
+        public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => throw new NotSupportedException();
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    [Fact]
+    public async Task Cli_stop_refusal_does_not_echo_host_details()
+    {
+        probe.Reason = "private-network-account-and-machine";
+        await using var local = CliServer();
+        var result = await CliAsync();
+        Assert.Equal(4, result.Exit);
+        Assert.Equal(StopOutcome.Refused, CliResult(result.Output).Outcome);
+        Assert.Null(CliResult(result.Output).Reason);
+        Assert.DoesNotContain(probe.Reason, result.Output + result.Error);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("""{"outcome":0}""")]
+    [InlineData("""{"outcome":"unknown"}""")]
+    [InlineData("""{"outcome":"confirm"}""")]
+    [InlineData("""{"outcome":"confirm","confirm":"bad!","confirmSeconds":10}""")]
+    public async Task Cli_stop_unreadable_result_is_never_reported_as_ended(string response)
+    {
+        await using var local = CliServer(response: response);
+        var result = await CliAsync();
+        Assert.Equal(1, result.Exit);
+        Assert.DoesNotContain("ended", result.Output);
+        Assert.NotEmpty(result.Output + result.Error);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task Cli_stop_does_not_end_a_replacement_process()
+    {
+        await WorkingAsync();
+        await using var local = CliServer();
+        var first = await CliAsync();
+        Assert.Equal(3, first.Exit);
+        control.Run(AgentKind.Copilot, Pid, Started.AddMinutes(5));
+        await source.RefreshAsync();
+        var replaced = await CliAsync(CliResult(first.Output).Confirm);
+        Assert.Equal(3, replaced.Exit);
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
+    }
 
     static async Task<string[]> CapabilitiesAsync(SecureChannel ch)
     {

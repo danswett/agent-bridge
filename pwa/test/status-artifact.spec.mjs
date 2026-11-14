@@ -11,11 +11,11 @@ for (const phone of [false, true]) {
       isMobile: phone,
     });
 
-    for (const state of ['idle', 'working', 'pinned']) {
+    for (const state of ['idle', 'working', 'pinned', 'pinned idle']) {
       test(`${state}: returning to the list leaves only the status glyph in its icon area (#1641)`, async ({ page }, info) => {
         await page.goto('?demo=1&static=1');
         await page.waitForSelector('html[data-demo-ready]');
-        const status = state === 'idle' ? 'idle' : 'working';
+        const status = state.includes('idle') ? 'idle' : 'working';
         await page.evaluate(({ id, status }) => {
           const now = new Date().toISOString();
           window.agentBridgeDemo.upsert({
@@ -26,7 +26,7 @@ for (const phone of [false, true]) {
         const item = row(page, ID);
         const button = item.locator('.row-main');
         const icon = item.locator('.row-glyph');
-        if (state === 'pinned') {
+        if (state.startsWith('pinned')) {
           await button.press('Shift+F10');
           await item.getByRole('menuitem', { name: 'Pin', exact: true }).click();
           await expect(item).toHaveAttribute('data-pinned', 'true');
@@ -37,6 +37,33 @@ for (const phone of [false, true]) {
         await info.attach('icon-before', { path: before, contentType: 'image/png' });
         if (phone) { await button.tap(); } else { await button.click(); }
         await expect(view(page, ID)).toBeVisible();
+        await icon.evaluate((el) => {
+          window.statusReturnFrames = [];
+          const sample = () => {
+            const box = el.getBoundingClientRect();
+            if (box.width && box.height) {
+              const area = (other) => {
+                const r = other.getBoundingClientRect();
+                return Math.max(0, Math.min(box.right, r.right) - Math.max(box.left, r.left)) *
+                  Math.max(0, Math.min(box.bottom, r.bottom) - Math.max(box.top, r.top));
+              };
+              const painted = (other) => {
+                const css = getComputedStyle(other);
+                return css.display !== 'none' && css.visibility !== 'hidden' && Number(css.opacity) > 0;
+              };
+              const grip = el.closest('.session').querySelector('.drag-handle');
+              const copies = [...document.body.children].filter((c) =>
+                c.matches('div[aria-hidden="true"]') && c.inert && getComputedStyle(c).position === 'fixed');
+              window.statusReturnFrames.push({
+                grip: painted(grip) ? area(grip) : 0,
+                copies: copies.filter((c) => painted(c) && area(c) > 0).length,
+              });
+            }
+            if (!window.statusReturnSampleDone) { requestAnimationFrame(sample); }
+          };
+          window.statusReturnSampleDone = false;
+          requestAnimationFrame(sample);
+        });
         if (phone) {
           await view(page, ID).locator('.session-bar .back').tap();
         } else {
@@ -44,6 +71,13 @@ for (const phone of [false, true]) {
         }
         await expect(item).toBeVisible();
         await motionsDone(page);
+        const frames = await page.evaluate(() => {
+          window.statusReturnSampleDone = true;
+          return window.statusReturnFrames;
+        });
+        await info.attach('first-return-frames', { body: JSON.stringify(frames), contentType: 'application/json' });
+        expect(frames.length, 'the visible return has sampled frames').toBeGreaterThan(0);
+        expect(frames.filter((f) => f.grip > 0 || f.copies > 0), 'no stray overlay even before return motion settles').toEqual([]);
         // A pointer returning to its row reveals the grip; touch must leave it hidden.
         if (!phone) { await button.hover(); }
         await expect(icon.locator('.glyph')).toHaveAttribute('data-glyph', status);
