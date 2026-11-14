@@ -19,6 +19,7 @@
 import { byActivity } from './sessions-store.js';
 import { groupOf, mergeOrder, nextCounter } from './order-merge.js';
 import { sessionStatus } from './status.js';
+import { validateGroupName } from './groups.js';
 
 const KEY = 'agent-bridge.app.order';
 export const SORTS = Object.freeze(['yours', 'recent', 'machine']);
@@ -132,12 +133,7 @@ export class SessionOrder {
   }
 
   #groupName(name, except = null) {
-    const trimmed = typeof name === 'string' ? name.trim() : '';
-    if (!trimmed || [...trimmed].length > 40) { throw new RangeError('Group name must be 1 to 40 characters.'); }
-    if (this.groups.some((g) => g.id !== except && g.name.toLowerCase() === trimmed.toLowerCase())) {
-      throw new RangeError('A group with that name already exists.');
-    }
-    return trimmed;
+    return validateGroupName(name, this.groups, except);
   }
 
   #requireGroup(id) {

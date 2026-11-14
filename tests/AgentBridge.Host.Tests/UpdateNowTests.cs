@@ -407,8 +407,10 @@ public sealed class UpdateNowTests : IAsyncLifetime
         Assert.Equal(Shared - 1, (await ManageStateAsync(ch)).Restarts.Left);
     }
 
-    [Fact]
-    public async Task An_Update_now_is_refused_when_its_own_slot_is_spent_and_a_remote_restart_and_an_Update_now_took_the_shared_ones()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task At_the_restart_cap_Update_now_is_recorded_once_as_Update_when_idle_without_spending_a_slot(bool busy)
     {
         var (phone, ch) = await OpenAsync();
         await UpdateNowAsync(phone, ch);
@@ -417,13 +419,65 @@ public sealed class UpdateNowTests : IAsyncLifetime
         Compose();
         await RemoteRestartAsync(phone, ch);
 
+        if (busy)
+        {
+            sessions.Set(S(Id(1), SessionStatus.Working));
+            updates.Report(app, new UpdateReport(Reported with
+            {
+                Phase = UpdatePhase.Waiting, Request = Id(2), RequestNow = true, WaitingCode = UpdateWaitingCode.TurnRunning,
+            }, null, true));
+        }
         var state = await StateAsync(ch);
-        var result = await PressAsync(ch, Press(phone));
+        var counters = File.ReadAllText(Path.Combine(folder, ManageService.FileName));
+        var press = Press(phone);
+        var request = RequestOf(press);
+        var result = await PressAsync(ch, press);
 
         Assert.Equal((false, UpdateNowWhy.RestartCap), (state.CanUpdateNow, state.UpdateNowWhy));
         Assert.Equal(Now + ManageService.UpdateNowWindow, state.UpdateNowAt);
-        Assert.Equal((UpdateAck.Refused, UpdateCode.RestartCap), (result.Outcome, result.Code));
+        Assert.Equal(UpdateAck.Accepted, result.Outcome);
+        Assert.Null(result.Code);
+        Assert.Equal(busy ? Id(2) : null, result.State!.Request);
+        var ask = Assert.Single(updates.Asks);
+        Assert.Equal((request, UpdateAskKind.Install), (ask.Request, ask.Kind));
+        Assert.Null(ask.Now);
+        Assert.Equal(UpdateAck.Accepted, (await PressAsync(ch, press)).Outcome);
+        Assert.Single(updates.Asks);
+        Assert.Equal(counters, File.ReadAllText(Path.Combine(folder, ManageService.FileName)));
+        Assert.Equal(state.UpdateNowAt, (await StateAsync(ch)).UpdateNowAt);
+        Assert.Equal((UpdateDepartureOutcome.Refused, ManageReason.Changed), Outcome(await updates.DepartAsync(request)));
+
+        updates.Report(app, new UpdateReport(Reported with { Phase = UpdatePhase.Waiting, Request = request }, [request], true));
+        Assert.Equal(UpdateAck.Accepted, (await PressAsync(ch, press)).Outcome);
         Assert.Empty(updates.Asks);
+        var changed = await PressAsync(ch, Press(phone, release: "0.3.0"));
+        Assert.Equal((UpdateAck.Refused, UpdateCode.ReleaseChanged), (changed.Outcome, changed.Code));
+        Compose();
+        Assert.Equal(UpdateAck.Accepted, (await PressAsync(ch, press)).Outcome);
+        Assert.Empty(updates.Asks);
+        Assert.Equal(counters, File.ReadAllText(Path.Combine(folder, ManageService.FileName)));
+    }
+
+    [Fact]
+    public async Task An_Update_now_past_three_presses_names_when_the_oldest_press_ages_out_and_the_guard_ends_at_that_instant()
+    {
+        sessions.Set(S(Id(1), SessionStatus.Working));
+        var (phone, ch) = await OpenAsync();
+        for (var i = 0; i < 3; i++)
+        {
+            Assert.Equal(UpdateAck.Confirm, (await PressAsync(ch, Press(phone))).Outcome);
+            time.Advance(TimeSpan.FromSeconds(30));
+        }
+
+        var limited = await PressAsync(ch, Press(phone));
+
+        Assert.Equal((UpdateAck.Refused, ManageReason.RateLimited), (limited.Outcome, limited.Code));
+        Assert.Equal(Now + TimeSpan.FromMinutes(10), limited.RetryAt);
+        Assert.Empty(updates.Asks);
+        time.Advance(TimeSpan.FromMinutes(10) - TimeSpan.FromSeconds(90));
+        var allowed = await PressAsync(ch, Press(phone));
+        Assert.Equal(UpdateAck.Confirm, allowed.Outcome);
+        Assert.Null(allowed.RetryAt);
     }
 
     [Fact]

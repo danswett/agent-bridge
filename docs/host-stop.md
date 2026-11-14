@@ -6,6 +6,21 @@ use ([host-answers.md](host-answers.md), [host-replies.md](host-replies.md)): th
 worker to type `/exit`, the agent-ha-bridge guard (G5), request memory, and the same
 `DeliveryGate`, so ending a session never types over an answer or a reply.
 
+## Local person command
+
+On Windows, run `agent-bridge-host stop <session> [--confirm <token>] [--profile <name>]` from the person's
+own terminal, outside any agent session. It calls the running local host, not another machine.
+JSON output contains `outcome`, and when relevant `confirm`, `confirmSeconds` or `forced`;
+host diagnostic text is omitted. Exit codes: 0 ended, 3 confirmation needed, 4 refused,
+1 stale/busy/failed or unavailable result, 2 invalid arguments.
+A `confirm` result needs a second invocation with `--confirm <token>` inside the host's
+window. Every invocation is a new press; it never confirms or retries automatically.
+Once sent, a stop waits for the host's result or connection failure, with no client deadline.
+Closing the terminal does not cancel a stop the host is already carrying out.
+Check the target at this machine after an unavailable result. The host still owns expiry,
+process identity and stop policy; the guarded-idle gap [#2411](design/stop-policy-reconciliation.md)
+and multi-machine qualification are not resolved by this command.
+
 ## What agent-ha-bridge does
 
 From `hooks/daemon-launch.ps1` (`Invoke-PendingStops`, `Test-DaemonStopConfirms`,
@@ -40,7 +55,7 @@ The same rules, with these differences, each deliberate:
 |---|---|---|
 | Confirming | Any second press of the shared button within 10 s | The second press carries the token the first press was given (`confirm`), so a press from another device or a resent first press is never taken for the second |
 | Process identity | pid and start time, read again on the second press | pid and start time, checked on both presses, and then the process is **held open by handle** from just before `/exit` until it has gone, so the id cannot pass to another process in between and termination can only reach the process that was checked |
-| A session asking a question | `/exit` typed into it | Terminated without `/exit`: typed words land in the question's input, and Enter could submit `/exit` as the answer. Asking is read from the session and, for Copilot, from the transcript (a subagent's question is only there). So is a session whose launch here (a restore above all) has not seen its window ready, which may show a folder-trust question that Enter would answer "Yes" (`LaunchService.HeldForReply`, #855) |
+| A session asking a question | `/exit` typed into it | After confirmation, terminated without `/exit`: typed words land in the question's input, and Enter could submit `/exit` as the answer. Asking is read from the session and, for Copilot, from the transcript (a subagent's question is only there); an unreadable transcript means it may be asking. So is a session whose launch here (a restore above all) has not seen its window ready, which may show a folder-trust question that Enter would answer "Yes" (`LaunchService.HeldForReply`, #855). These cases need two presses even when the session reports idle (#2411, Product ruling 2 on #2396). |
 | `/exit` that could not be typed | Waits out the 12 s anyway | Terminates at once |
 | Who it refuses | Whatever `Stop-Process` refuses | Refused before anything is armed: an elevated process (integrity High or above), another user's (token user SID differs), one whose start time cannot be read, and the host's own process |
 | The window or tab | Closes the console the bridge launched | Left open for a terminal the person opened. A session this host launched has a console of its own, which normally closes when the agent exits, since nothing else runs in it |
@@ -58,17 +73,19 @@ The same rules, with these differences, each deliberate:
 4. The process is opened for a moment: still the process that started then (`stale`
    otherwise), not elevated, this user's, not the host (`refused`).
 5. Already `ending` from another press: `busy`.
-6. Not idle, or idle with background work: unless the press carries a token from a first
-   press of this session, within 10 s, against this pid and start time, it arms and answers
-   `confirm` with a fresh token. Confirming spends every waiting arm.
+6. Not idle, idle with background work, or idle but possibly asking (an unreadable Copilot
+   transcript, a launch not ready, or a transcript-only open question): unless the press
+   carries a token from a first press of this session, within 10 s, against this pid and
+   start time, it arms and answers `confirm` with a fresh token. Confirming spends every
+   waiting arm. Plain idle, with none of these cases, still ends on one press.
 7. The session's `DeliveryGate` claim (`busy` if an answer or reply holds it), held until
    the outcome.
 8. The process is opened and held. The single typing turn is taken; agent-ha-bridge again
    (`refused`); the session is read again, and one ended on a single press that has since
-   started working or asking needs a second press after all (`confirm`, "the session is no
-   longer idle"). Only then is it shown as `ending`, and, if nothing is asking, `/exit` and,
-   300 ms later, Enter typed. The host then waits up to 12 s for the process to exit
-   through its handle.
+   started working or may now be asking needs a second press after all (`confirm`, "the
+   session is no longer idle"), including the three idle edge cases in step 6. Only then is
+   it shown as `ending`, and, if nothing may be asking, `/exit` and, 300 ms later, Enter
+   typed. The host then waits up to 12 s for the process to exit through its handle.
 9. Still running: agent-ha-bridge again (`failed` if it has started, nothing terminated),
    then `TerminateProcess` on the handle, and up to 5 s for it to go. Gone: `ended`
    (`forced` if terminated). Still there: `failed`. The terminated process exits with code

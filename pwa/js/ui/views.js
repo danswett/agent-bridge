@@ -57,6 +57,7 @@ export class SessionListView {
   #recentHolds = new Set();
   #recentFocus = null;
   #recentListeners = new AbortController();
+  #needsSeen = new Set();
 
   get drawn() { return this.#drawn; }
 
@@ -122,7 +123,11 @@ export class SessionListView {
   filter = '';
   needsOnly = false;
 
-  setNeedsOnly(on) { this.needsOnly = !!on; this.render(); }
+  setNeedsOnly(on) {
+    this.needsOnly = !!on;
+    if (!this.needsOnly) { this.#needsSeen.clear(); }
+    this.render();
+  }
 
   #matches(hostId, s) {
     if (!this.filter) { return true; }
@@ -158,7 +163,7 @@ export class SessionListView {
   #layout() {
     const entries = this.sessions.list();
     const sort = this.order.sort;
-    const held = this.#recentHolds.size > 0 || !!this.#recentFocus?.isConnected;
+    const held = this.needsOnly || this.#recentHolds.size > 0 || !!this.#recentFocus?.isConnected;
     const arranged = this.#recent.arrange(this.order.arrange(entries, { nameOf: (id) => this.machine(id).name, shows: this.shows, settled: this.settled }), { sort, held });
     clearTimeout(this.#recentTimer);
     if (this.#recent.wait !== null) { this.#recentTimer = setTimeout(() => this.schedule(), this.#recent.wait); }
@@ -175,8 +180,18 @@ export class SessionListView {
     const scrollTop = scroller?.scrollTop;
     const anchor = scroller?.scrollTop > 0 ? [...before.keys()].find((el) => seen(el)) : null;
     const matches = (e) => this.#matches(e.hostId, e.session);
-    const keep = (e) => matches(e) && (!this.needsOnly || sessionStatus(e.session).glyph === 'needs');
-    const grouped = this.order.groupRows(arranged.sessions, { matches, filtered: !!this.filter, needsOnly: this.needsOnly, showEmpty: this.showEmptyGroups() });
+    const current = (e) => { const stale = this.stale(e.hostId); return !stale || stale.grace === true; };
+    const waiting = entries.filter((e) => e.session.question && current(e));
+    this.needsCount = waiting.length;
+    this.needsShown = waiting.filter(matches).length;
+    // Answered rows stay until the filter is released; offline questions never linger.
+    if (this.needsOnly) {
+      for (const e of waiting) { this.#needsSeen.add(SessionListView.key(e.hostId, e.session.id)); }
+    }
+    const keep = (e) => matches(e) && (!this.needsOnly || (current(e) && this.#needsSeen.has(SessionListView.key(e.hostId, e.session.id))));
+    const grouped = this.order.groupRows(arranged.sessions, {
+      matches: keep, filtered: !!this.filter || this.needsOnly, showEmpty: this.showEmptyGroups() && !this.needsOnly,
+    });
     const ended = this.needsOnly ? [] : arranged.ended.filter(keep);
     this.container.dataset.sort = this.order.sort;
     this.container.dataset.filtered = this.filter || this.needsOnly ? 'true' : 'false';
@@ -466,7 +481,7 @@ export class SessionListView {
       hold('touch', true);
     }, { passive: true, signal });
     const focus = (target) => {
-      this.#recentFocus = target && (c.contains(target) || target.closest?.('#needs-you, .reply, .question')) ? target : null;
+      this.#recentFocus = target && (c.contains(target) || target.closest?.('#needs-you, .needs-filter, .reply, .question')) ? target : null;
       if (this.order.sort === 'recent') { this.schedule(); }
     };
     focus(doc.activeElement);
@@ -830,6 +845,7 @@ export class SessionListView {
   // A machine went offline, came back, or sent a whole new list since (#269): its rows say so.
   refreshStale() {
     for (const c of this.#cards.values()) { c.setStale(this.stale(c.hostId)); }
+    this.schedule();
   }
 
   // Whether search is hiding a session's row: it exists, and is not in the list.

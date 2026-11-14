@@ -42,10 +42,27 @@ an already admitted delivery. Unconfirmed/refused/failed delivery ends the episo
 Safe snapshots/logs expose attempt number, time, owner/auto reason and outcome;
 neither raw error text nor the replier's reason is copied.
 
-**Required before runtime enablement:** the #1846 final-effect freshness fence
-must recheck this episode/activity/process after the typing queue and before keys.
-Admission alone is not that fence. Production ownership, timers, owner Retry wiring,
-protocol visibility and staged healing remain follow-up work; #1846 stays open.
+**Final-effect fence (#2126):** each admitted retry carries a host-only
+`ReplyRequest.StillCurrent` callback, ignored by JSON readers and writers. The
+Copilot replier checks it after its typing queue and last awaited screen read,
+then via `KeyPlan.Proceed` after the injector's own queue, before any keys.
+The fence checks the episode, activity, process incarnation, cancellation and
+eligibility again. The replier also rechecks its source, process inspector, G5,
+launch hold, target guard and transcript. A retry must not answer a question,
+trust prompt or permission confirmation; existing screen checks remain in force.
+Ordinary replies carry no fence and keep their existing behavior.
+An invalidated fence reports `stale`, retained as `RetryStop.Changed`, not a generic
+delivery failure. An already cancelled or expired episode keeps that terminal reason.
+
+Observation and availability callbacks run outside the episode lock. They must
+be cheap, fresh and non-reentrant, and tolerate the constructor's two observations.
+Cancellation prevents keys not yet admitted by the fence; it cannot undo keys
+already admitted. The replier must await actual typing completion (including the
+injector's worker handling), not return early on cancellation: the episode keeps
+its in-flight exclusion until that delivery settles.
+
+Nothing enables retries at runtime here. Production ownership, timers, owner Retry
+wiring, protocol visibility and staged healing remain #2127/#1846 follow-up work.
 Existing G5, #67 and replier guards are unchanged.
 
 ## What can be answered
