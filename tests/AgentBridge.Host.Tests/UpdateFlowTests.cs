@@ -158,6 +158,24 @@ public sealed class UpdateFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_return_is_forwarded_only_when_the_host_itself_is_on_the_reported_target()
+    {
+        var ch = await OpenAsync();
+        foreach (var (current, target, returned) in new[]
+        {
+            ("0.4.0", "0.4.0", true),
+            ("0.5.0", "0.5.0", false),
+            ("0.4.0", "0.5.0", false),
+        })
+        {
+            var back = new UpdateBack("0.3.0", target, Id, Now);
+            await ReportAsync(Reported with { Current = current, Back = back });
+            var state = Read<UpdateState>(Result(await ch.RequestAsync(UpdateProtocol.Get, new { })));
+            Assert.Equal(returned ? back : null, state.Back);
+        }
+    }
+
+    [Fact]
     public async Task Download_facts_reach_a_phone_without_becoming_ready_before_the_checksum_passes()
     {
         var ch = await OpenAsync();

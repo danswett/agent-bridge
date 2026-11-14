@@ -2190,8 +2190,13 @@ machine, online ones first, then the account's offline machines (#213):
        counts left out. Open: one session row per session (the §5.1 row: title, state; line 2 "model ·
        effort · context"), the first five, then "Show all N" in place. Not reported: the count from
        line 2 only. "Needs you" rows open the session as in the lane (§6.1).
-       The bounded PWA #2188 disclosure opens **Show sessions** through the existing machine
-       callback; the inline session list is a follow-up. Can run stays absent when unreported.
+       PWA #2206 is a names-only presentation: it lists all titles currently held in the existing
+       per-machine store in a stable order, without the first-five/"Show all N" treatment above.
+       Names are available only for already-held links (All machines or the chosen machine);
+       other machines keep their reported count until selected. It opens no new link or request.
+       Empty or missing data produces no list. Last-reported names stay through the reconnect grace
+       (#950), then a still-stale machine's list is hidden. **View sessions** and **Show sessions**
+       keep the existing machine callback. Can run stays absent when unreported.
     6. **Launch here.** In Actions when the machine is Online and not View only. Opens the New
        session flow with this machine chosen. Offline, View only and "Discovery held" hide it, and a
        line says why in text, not only a tooltip.

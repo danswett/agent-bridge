@@ -65,6 +65,18 @@ Nothing enables retries at runtime here. Production ownership, timers, owner Ret
 wiring, protocol visibility and staged healing remain #2127/#1846 follow-up work.
 Existing G5, #67 and replier guards are unchanged.
 
+## Person CLI: ordinary approval (#2491 C3)
+
+`agent-bridge-host approve <session> <question> <request-uuid> <approve|deny> [--profile <name>]`
+
+Run from the person's own terminal. It displays the actual current prompt and choices before sending one bound answer, never an answer to a replacement question.
+Only existing `LocalClient` `hello`, `session.get` and `session.answer` are used; no provider collectors, device keys, new credentials or arbitrary-operation command.
+Supply a non-nil UUID for this intent; keep it only for that same session/question/choice. The command never retries automatically or retargets a request.
+`AgentAncestry.Inside` checks fresh, complete ancestry before connecting and immediately before submitting. Agent children and unknown/partial ancestry fail closed.
+Only an ordinary main-session Copilot approval's single `decision` choice is supported. Missing, stale, changed, delegated, at-machine, truncated, escaped, trust, form and unsupported shapes/choices are refused.
+Exit 0 means delivered; 3 means unconfirmed (including a lost/malformed post-submit response); 4 means refused/stale/busy/unavailable; 2 means invalid syntax. Raw host reasons are not printed.
+This section states C3's minimum person contract; [S4 cut C1](design/host-cli-s4-evidence.md#c1---reconcile-the-person-cli-action-transport-and-caller-contract) at `0ebc6673898fd1d8b66d98bf7e356a9644a15eeb` is still a proposed follow-up, not a landed contract. Relay-only person-device trust/escaped approval and full S4/live qualification remain separate.
+
 ## What can be answered
 
 | Agent | Question | Answered |

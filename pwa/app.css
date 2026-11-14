@@ -554,6 +554,8 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 }
 .tile-running-toggle .icon { flex: none; margin-inline-start: auto; }
 .tile-running-toggle[aria-expanded="true"] .icon { transform: rotate(90deg); }
+.tile-running-list { list-style: none; margin: 0 0 var(--ab-space-2); padding: 0; overflow-wrap: anywhere; font-size: var(--type-meta); line-height: var(--type-meta-line); }
+.tile-running-list > li + li { margin-block-start: var(--ab-space-2); }
 .tile-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--ab-space-2); }
 .tile-actions-note { grid-column: 1 / -1; }
 .tile-actions .button { min-width: 0; min-height: var(--tap); padding: var(--ab-space-2); white-space: normal; }

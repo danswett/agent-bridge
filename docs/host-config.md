@@ -536,7 +536,9 @@ input. `fleet.find` and `fleet.list` write one local `attempted` record before r
 roster, with target `fleet`; lookup names and answer fields are never logged or hashed.
 These records use the credential's principal and chain and a fresh local attempt UUID.
 An absent log, false append or thrown append returns `auditUnwritable`, with no answer
-dispatch or roster read. Unauthenticated refusals write no record; person paths are unchanged.
+dispatch or roster read. Unauthenticated refusals write no record. Person app/host-CLI
+`session.answer` calls now write an intent before typing and a terminal on confirmed
+delivery in `agents-*.jsonl` (#2522); an unwritable audit log refuses before typing.
 Other action wiring remains in later #1401 slices.
 
 ## Approving a workspace at the machine
