@@ -85,10 +85,11 @@ public sealed class GateAuditTests : IDisposable
         var operation = Guid.NewGuid();
         Append(operation);
         Append(operation, "terminal", previousOutcome ?? "started");
+        if (previousOutcome is "failed" or "refused") { Assert.Equal(0, Assert.Single(Read().Totals).Successes); }
         if (previousOutcome is not null) { operation = Guid.NewGuid(); Append(operation); }
         Append(operation, "terminal", previousOutcome is null ? "failed" : "started");
         var report = Read();
-        Assert.Equal(previousOutcome is null, report.Invalidated);
+        Assert.Equal(previousOutcome is null or "started", report.Invalidated);
         Assert.Equal(previousOutcome is null ? 0 : 1, Assert.Single(report.Totals).Successes);
     }
 
@@ -97,6 +98,7 @@ public sealed class GateAuditTests : IDisposable
     public void Writer_recovers_after_a_pruned_prefix_or_a_mid_file_torn_fragment(bool prune)
     {
         Append(Guid.NewGuid(), action: "session.stop");
+        Append(Guid.NewGuid(), action: "session.stop", gated: false);
         clock.Advance(TimeSpan.FromDays(31));
         Append(Guid.NewGuid());
         Append(Guid.NewGuid());
@@ -105,7 +107,7 @@ public sealed class GateAuditTests : IDisposable
         else
         {
             var lines = File.ReadAllLines(file);
-            File.WriteAllText(file, lines[0] + "\n{\"gate\":\n" + string.Join("\n", lines.Skip(1)) + "\n");
+            File.WriteAllText(file, string.Join("\n", lines[..^1]) + "\n{\"gate\":\n" + lines[^1] + "\n");
         }
         Append(Guid.NewGuid(), action: "session.stop");
         using var last = JsonDocument.Parse(File.ReadAllLines(Directory.GetFiles(Audit, "agents-*.jsonl").Order().Last())[^1]);

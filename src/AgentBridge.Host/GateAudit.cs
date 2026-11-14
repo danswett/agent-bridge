@@ -62,8 +62,11 @@ internal static class GateAuditProjection
             { invalidated = true; continue; }
             if (gate.Phase != "intent" || terminals.Length == 0 || terminals[0].Outcome is "attempted" or "reserved" or "unconfirmed")
             { reasons.Add("unresolved-intent"); continue; }
-            if (terminals[0].Outcome == SuccessFor(first.Action)
-                && identities.Add((first.Action, first.Target, gate.Incarnation, gate.Question))) { totals[key]++; }
+            if (terminals[0].Outcome == SuccessFor(first.Action))
+            {
+                if (!identities.Add((first.Action, first.Target, gate.Incarnation, gate.Question))) { invalidated = true; continue; }
+                totals[key]++;
+            }
         }
         return new(totals.Select(p => new GateAuditTotal(p.Key.Action, p.Key.Path, p.Key.ActorKind, p.Value)).ToArray(),
             reasons.Order(StringComparer.Ordinal).ToArray(), invalidated);
