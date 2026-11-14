@@ -1083,6 +1083,35 @@ public sealed class AuthBackoffCallerTests : AuthBackoffFixture
         Assert.Equal(1, sent);
     }
 
+    [Fact]
+    public async Task A_reservation_handoff_does_not_write_until_it_holds_the_records_exclusive_lock()
+    {
+        var guard = new HaAuthGuard(Record, time);
+        using var reservation = await guard.EnterAsync(guard.Credential(Url, Token));
+        var before = File.ReadAllText(Record);
+        var contended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var held = new FileStream(Record + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        Task handoff = Task.CompletedTask;
+        try
+        {
+            handoff = Task.Run(() => HandOn("another-attempt", () => contended.TrySetResult()));
+            await Task.WhenAny(handoff, contended.Task).WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.True(contended.Task.IsCompletedSuccessfully);
+            Assert.False(handoff.IsCompleted);
+            Assert.Equal(before, File.ReadAllText(Record));
+            Assert.False(File.Exists(Record + ".test"));
+        }
+        finally
+        {
+            held.Dispose();
+            await handoff;
+        }
+
+        var record = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Record))!;
+        Assert.Equal("another-attempt", record["probeBy"]!.GetValue<string>());
+        Assert.Equal(time.GetUtcNow() + TimeSpan.FromSeconds(45), record["probeUntil"]!.GetValue<DateTimeOffset>());
+    }
+
     // One attempt ends without an answer and another process's takes the reservation over: the
     // process still waiting gives the new one its full time, not what was left of the first's.
     [Fact]
@@ -1100,7 +1129,7 @@ public sealed class AuthBackoffCallerTests : AuthBackoffFixture
         await Task.Delay(500);
 
         time.Advance(TimeSpan.FromSeconds(20));
-        HandOn("another-attempt");
+        await HandOn("another-attempt");
         await Task.Delay(500);
         time.Advance(TimeSpan.FromSeconds(30));
         await Task.Delay(500);
@@ -1112,14 +1141,32 @@ public sealed class AuthBackoffCallerTests : AuthBackoffFixture
     }
 
     // Another process's attempt taking over the reservation, as one atomic write of the record.
-    void HandOn(string attempt)
+    async Task HandOn(string attempt, Action? blocked = null)
     {
-        using var held = new FileStream(Record + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-        var record = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Record))!;
-        record["probeBy"] = attempt;
-        record["probeUntil"] = time.GetUtcNow() + TimeSpan.FromSeconds(45);
-        File.WriteAllText(Record + ".test", record.ToJsonString());
-        File.Move(Record + ".test", Record, overwrite: true);
+        // Match the guard's three-second lock budget, not the timing of its next poll.
+        var deadline = Environment.TickCount64 + 3000;
+        FileStream held;
+        while (true)
+        {
+            try
+            {
+                held = new FileStream(Record + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+                break;
+            }
+            catch (IOException) when (Environment.TickCount64 < deadline)
+            {
+                blocked?.Invoke();
+                await Task.Yield();
+            }
+        }
+        using (held)
+        {
+            var record = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Record))!;
+            record["probeBy"] = attempt;
+            record["probeUntil"] = time.GetUtcNow() + TimeSpan.FromSeconds(45);
+            File.WriteAllText(Record + ".test", record.ToJsonString());
+            File.Move(Record + ".test", Record, overwrite: true);
+        }
     }
 
     // During a ban each token has one look, then waits for the scheduled one; however many other
