@@ -293,12 +293,17 @@ public sealed class RetryEpisodeTests
         };
         h.OnObservation = availability ? null : park;
         h.OnAvailability = availability ? park : null;
-        var first = Task.Run(() => h.Episode.TryAsync(1, Guid.NewGuid(), RetryReason.Auto));
+        // Both callbacks block synchronously: their rendezvous must not depend on
+        // thread-pool injection while the rest of the product suite is running.
+        Task<bool> StartAttempt(int expected, RetryReason reason) =>
+            Task.Factory.StartNew(() => h.Episode.TryAsync(expected, Guid.NewGuid(), reason),
+                CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default).Unwrap();
+        var first = StartAttempt(1, RetryReason.Auto);
         Task<bool>? second = null;
         try
         {
             await entered[0].Task.WaitAsync(TimeSpan.FromSeconds(10));
-            second = Task.Run(() => h.Episode.TryAsync(next, Guid.NewGuid(), RetryReason.Owner));
+            second = StartAttempt(next, RetryReason.Owner);
             await entered[1].Task.WaitAsync(TimeSpan.FromSeconds(10));
             releaseFirst.Set();
             await h.Sent.Task.WaitAsync(TimeSpan.FromSeconds(10));
