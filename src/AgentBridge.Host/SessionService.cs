@@ -57,7 +57,15 @@ public sealed class SessionService
     internal object RenameFleetSession(JsonElement data) =>
         (FleetNames ?? throw new InvalidOperationException("refused: fleet-name storage is not available on this host")).Rename(source, data);
 
-    internal SessionProcess? ProcessOf(string id) => source.Get(id) is not null ? source.ProcessOf(id) : null;
+    internal SessionProcess? ProcessForAdoption(string session)
+    {
+        var process = source.ProcessOf(session);
+        if (launcher?.LaunchedSession(session, process) == true)
+        {
+            throw new InvalidOperationException("refused: a session the host launched cannot be adopted");
+        }
+        return process;
+    }
 
     internal Task<LaunchResult>? ReplayAgentLaunch(JsonElement data, string principal)
     {

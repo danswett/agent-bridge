@@ -31,41 +31,47 @@ public static class LocalApi
     static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log, RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet, AgentAuditLog? audit, RefusalAudits refusals) => async (channel, op, data) =>
     {
         credentials?.CheckScriptOperation(channel, op, log);
-        if (op is AgentProtocol.Adopt or AgentProtocol.Revoke)
+        if (op is AgentProtocol.Adopt or AgentProtocol.Revoke or AgentProtocol.Credential)
         {
-            var caller = callers.Classify(channel, fresh: true);
-            if (caller.Kind is not (CallerKind.App or CallerKind.HostCli))
+            if (credentials is null || !OperatingSystem.IsWindows() || channel is not LocalChannel local)
             {
-                throw Refuse(op, caller, "only the app or host command line may adopt or revoke a session", log);
+                throw new InvalidOperationException($"refused: {op} isn't available on this host");
             }
-            if (credentials is null || !OperatingSystem.IsWindows()) { throw new InvalidOperationException($"refused: {op} isn't available on this host"); }
-            if (credentials.Problem is not null) { throw new InvalidOperationException("refused: the credential store is unavailable"); }
-            if (op == AgentProtocol.Revoke)
+            if (op == AgentProtocol.Credential)
             {
-                var request = data.Deserialize<AgentRevokeRequest>(ProtocolJson.Options) ?? throw new ArgumentException("agent.revoke needs a session");
-                var revoked = credentials.Revoke(request.Session, "revoked by a person at this machine");
+                if (credentials.Of(channel) is not null) { throw new InvalidOperationException("refused: this connection already has an agent credential"); }
+                var claim = credentials.Claim(local.Peer?.Ancestry ?? ProcessAncestry.Unknown);
+                if (claim is not { Token: { } token, Credential: { } issued }) { throw new InvalidOperationException($"refused: {claim.Refusal}"); }
+                return new AgentCredentialResult(token, credentials.PrincipalOf(issued), issued.Scope, issued.ExpiresAt);
+            }
+            var person = callers.Classify(channel, fresh: true);
+            if (person.Kind is not (CallerKind.App or CallerKind.HostCli))
+            {
+                throw Refuse(op, person, "adopting a session, or ending its adoption, is for the person at this machine, from the app or the host's own command line", log);
+            }
+            try
+            {
                 if (credentials.Problem is not null) { throw new InvalidOperationException("refused: the credential store is unavailable"); }
-                return new AgentRevokeResult(request.Session, revoked);
+                if (op == AgentProtocol.Revoke)
+                {
+                    var revoke = data.Deserialize<AgentRevokeRequest>(ProtocolJson.Options);
+                    if (string.IsNullOrEmpty(revoke?.Session)) { throw new ArgumentException("agent.revoke needs a session"); }
+                    var revoked = credentials.Revoke(revoke.Session, $"revoked by a person ({person.Description})");
+                    if (credentials.Problem is not null) { throw new InvalidOperationException("refused: the credential store is unavailable"); }
+                    return new AgentRevokeResult(revoke.Session, revoked);
+                }
+                var adopt = data.Deserialize<AgentAdoptRequest>(ProtocolJson.Options);
+                if (string.IsNullOrEmpty(adopt?.Session)) { throw new ArgumentException("agent.adopt needs a session"); }
+                if (sessions.ProcessForAdoption(adopt.Session) is not { Id: > 0, StartedAt: { } started } process)
+                {
+                    throw new InvalidOperationException("refused: the host has no running process for that session to adopt");
+                }
+                var adoption = credentials.Adopt(adopt.Session, process.Id, started, adopt.Scope ?? AgentProtocol.ScopeRead);
+                if (credentials.Problem is not null) { throw new InvalidOperationException("refused: the credential store is unavailable"); }
+                return new AgentAdoptResult(adoption.Session, adoption.Scope, adoption.ExpiresAt);
             }
-            var adopt = data.Deserialize<AgentAdoptRequest>(ProtocolJson.Options) ?? throw new ArgumentException("agent.adopt needs a session");
-            if (adopt.Scope is not (null or AgentProtocol.ScopeRead)) { throw new ArgumentException("adoption is limited to read until an adopted-session policy grant is wired"); }
-            if (sessions.ProcessOf(adopt.Session) is not { Id: > 0, StartedAt: { } started } process) { throw new ArgumentException("the session has no known live process"); }
-            var adoption = credentials.Adopt(adopt.Session, process.Id, started, AgentProtocol.ScopeRead);
-            if (credentials.Problem is not null) { throw new InvalidOperationException("refused: the credential store is unavailable"); }
-            return new AgentAdoptResult(adoption.Session, adoption.Scope, adoption.ExpiresAt);
-        }
-        if (op == AgentProtocol.Credential)
-        {
-            if (credentials?.Of(channel) is not null) { throw new InvalidOperationException("refused: this connection is already credentialed"); }
-            if (credentials is null || !OperatingSystem.IsWindows()) { throw new InvalidOperationException("refused: agent.credential isn't available on this host"); }
-            var claim = credentials.Claim((channel as LocalChannel)?.Peer?.Ancestry ?? ProcessAncestry.Unknown);
-            if (claim.Token is not { } token || claim.Credential is not { } issued)
-            {
-                throw new InvalidOperationException(credentials.Problem is null
-                    ? "refused: no adoption window is available for this caller"
-                    : "refused: the credential store is unavailable");
-            }
-            return new AgentCredentialResult(token, credentials.PrincipalOf(issued), issued.Scope, issued.ExpiresAt);
+            catch (JsonException) { throw new ArgumentException($"{op} needs a session"); }
+            catch (ArgumentException e) { throw new InvalidOperationException($"refused: {e.Message}"); }
         }
         if (op == Fleet.FleetNames.Op)
         {
@@ -173,6 +179,7 @@ public static class LocalApi
         return await sessions.HandleAsync(channel, op, data, hello => callers.Classify(channel).Kind switch
         {
             CallerKind.App => hello with { Capabilities = [.. hello.Capabilities, HostOps.Capability,
+                .. credentials is not null && OperatingSystem.IsWindows() ? new[] { AgentProtocol.AdoptCapability } : [],
                 .. control.HasAgentReadiness ? new[] { HostOps.AgentReadinessCapability } : [],
                 .. control.HasAgentSetup ? new[] { HostOps.AgentSetupCapability } : [],
                 .. control.HasAgentInstall ? new[] { HostOps.AgentInstallCapability } : [],

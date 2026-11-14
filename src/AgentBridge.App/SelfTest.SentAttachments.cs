@@ -62,7 +62,7 @@ static partial class SelfTest
             {
                 Id = "sent-image-history", At = DateTimeOffset.UtcNow.AddMinutes(-1),
                 Prompt = new HistoryPrompt { Text = $"@{image}" },
-                Parts = [new HistoryPart { Id = "sent-image-history-reply", Kind = HistoryPartKind.Response, At = DateTimeOffset.UtcNow.AddMinutes(-1), Text = "An earlier image." }],
+                Parts = new[] { new HistoryPart { Id = "sent-image-history-reply", Kind = HistoryPartKind.Response, At = DateTimeOffset.UtcNow.AddMinutes(-1), Text = "An earlier image." } },
             });
             check(await Until(() => Find<Border>(view).Any(b => b.Name == "HistoryYourMessage"
                 && ById<Image>(b, "SentImage")?.Source is BitmapImage { PixelWidth: > 0 }

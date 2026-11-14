@@ -139,7 +139,8 @@ host, and there is no app there to do it.
 and `rollback` must restart the host to hand agent-ha-bridge's hook spool over and back
 ([migration.md](../migration.md)), and they are run by a person, from a terminal of their own.
 So a caller that is this host's own executable, beside it, with its whole ancestry read and no
-agent in it, may call `host.restart` (and `session.rename`, below), but no other app-only op. It is the same rail as the
+agent in it, may call `host.restart`, `session.rename`, `agent.adopt` and `agent.revoke` (below),
+but no other app-only op. It is the same rail as the
 app's: the same ancestry check refuses it inside an agent session, and the commands themselves
 refuse first, with exit 4, before reading anything. A copy of the program elsewhere, or one whose
 ancestry is read only in part, is anything else of the user's. An agent that starts the program
@@ -201,39 +202,48 @@ then an agent connection is refused the acting ops exactly as before.
 
 ### Adopting a session the host did not launch
 
-`agent.adopt` and `agent.revoke` (a person at the machine) and `agent.credential` (the adopted
-session) have records, `AgentAdoptRequest/Result`, `AgentRevokeRequest/Result` and
-`AgentCredentialResult`, served on the Windows local pipe only, never on a relay channel.
-Adopt/revoke require fresh caller classification as the app or this host's own command line,
-outside every agent session; partial or untraced ancestry is refused.
-The store behind them is in the host:
-an adoption is held in memory for 10 minutes, the session claims it once from inside its own
-process tree (never by `AGENT_BRIDGE_SESSION`), and the credential is then issued as any other.
-Scope is currently limited to `read`; requests for more are refused. The store records
-support `read+reply`, but widening needs the adopted-session policy wiring in a later slice.
-Adopting again, or revoking, ends the earlier credential and its open connections at once.
-Adoption alone never makes a manual session a reply target. Known gap: a session nested inside
-an adopted one is covered by the same adoption and can claim it during the window.
+Windows only, local pipe only: none of these ops is served or offered over the relay.
+The app's hello offers `agent.adopt` when the host has a credential store.
 
 | Op | Data | Result |
 |---|---|---|
-| `agent.adopt` | `{ "session": "<listed session id>", "scope": "read" }` (scope optional) | `{ "session", "scope", "expiresAt" }`; nothing minted yet |
+| `agent.adopt` | `{ "session": "<session id>", "scope": "read" }` | `{ "session", "scope", "expiresAt" }` |
 | `agent.revoke` | `{ "session": "<session id>" }` | `{ "session", "revoked" }` |
-| `agent.credential` | `{}` | `{ "token", "principal", "scope", "expiresAt" }`, once to the proven process tree |
+| `agent.credential` | `{}` | `{ "token", "principal", "scope", "expiresAt" }` |
 
-Claims use only the pipe peer's OS-read ancestry. Missing, partial, unrelated or ambiguous
-ancestry, an expired window and a second claim all fail with
-`refused: no adoption window is available for this caller`. A connection that passed
-`agent.hello` gets `refused: this connection is already credentialed`. Failed persistence
-faults the store and returns `refused: the credential store is unavailable`, never a token.
-Adoption does not advertise any relay capability or change reply eligibility.
+Adopt and revoke require the local app or this host's own CLI, with fresh caller classification.
+Agents, untraced callers and partial ancestry cannot authorize either. Adopt requires the host's
+discovered process id and start time, never a caller-supplied process. Scope defaults to `read`;
+the person may pick `read+reply`, never `read+reply+launch`. Host-launched sessions cannot be adopted.
+The provenance check and adoption use the same captured process, even if discovery changes.
+The profile keeps their registered process ids and exact start times in `launch-provenance.json`,
+independently of credentials, so a surviving process remains ineligible after a host restart,
+including after revocation or a launcher handing the session to a child process. Reused process
+ids do not inherit that provenance. An intent is flushed before starting each agent and bound
+when it registers; unreadable or unfinished provenance refuses adoption rather than guessing.
+The file is local to this host profile, contains no credential, and is bounded to 4 MiB; an
+unreadable or unwritable file (including the size limit) refuses further launches.
+An adoption waits in memory for 10 minutes; a host restart lapses it.
 
-At the machine, a person runs `agent-bridge-host agents adopt <session>` or
-`agent-bridge-host agents revoke <session>`; both refuse inside an agent session (exit 4).
-Inside the adopted session, `agent-bridge-host agents credential` prints only its one-shot
-token to stdout. Keep that secret in the session, never in transcripts or logs.
-All three accept `--profile <name>`, require an already-running host, and exit nonzero
-on refusal; an absent adoption/credential makes the revoke command exit 1.
+`agent.credential` issues once, only when complete pipe ancestry covers exactly one pending
+adoption's still-live process (id and start time). `AGENT_BRIDGE_SESSION` never proves this.
+Outside the window or after a claim: `refused: no adopted session covers this caller`.
+An authenticated connection gets `refused: this connection already has an agent credential`.
+Partial, ambiguous and ended-process claims return the store's refusal without a token.
+The token is returned only to this caller and is never logged.
+Failed credential persistence faults the store; adopt and revoke report refusal, not success.
+
+In a person's terminal at the machine, use `agent-bridge-host agents adopt <session>`
+(`--scope read|read+reply` optional) or `agents revoke <session>`; both refuse inside an agent
+session (exit 4). Inside the adopted session, `agent-bridge-host agents credential` prints
+only the token to stdout, with metadata on stderr. All accept `--profile <name>` and exit
+nonzero on refusal. The host must already be running; these commands create no identity.
+An explicit `--profile` requires one valid value; missing values or repeated flags are rejected before
+the person guard or pipe connection, never silently replaced with `default`.
+
+Adopting again, or revoking, ends the earlier credential and its open connections at once.
+Adoption alone never makes a manual session a reply target. Known gap: a session nested inside
+an adopted one is covered by the same adoption and can claim it during the window.
 
 ### `fleet.list` and `fleet.find`
 

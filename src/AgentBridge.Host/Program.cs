@@ -159,13 +159,6 @@ var pretty = new JsonSerializerOptions(ProtocolJson.Options) { WriteIndented = !
 
 switch (command)
 {
-    case "agents":
-        return await AgentAdoptionCommands.RunAsync(arguments, Refused, async (profile, op, data) =>
-        {
-            await using var local = await LocalClient.ConnectAsync(LocalEndpoint.For(Path.Combine(Identity.DefaultRoot, profile)));
-            await local.HelloAsync();
-            return await local.CallAsync(op, data);
-        }, Console.Out, Console.Error);
     case "sessions":
         {
             await using var source = new SessionSource(options);
@@ -202,6 +195,11 @@ switch (command)
                 Console.Error.WriteLine($"agent-bridge-host rename: {e.Message}");
                 return 1;
             }
+        }
+    case "agents":
+        {
+            return await AgentCommands.RunWithProfileAsync(arguments, Identity.DefaultRoot,
+                () => Refused("adopt a session or end its adoption"), Console.Out, Console.Error);
         }
     case "watch":
         {
@@ -364,9 +362,9 @@ switch (command)
     default:
         Console.Error.WriteLine("usage: agent-bridge-host sessions [--compact] | get <id> | watch [--json] | usage | sign-in --relay <url> | serve [--relay <url>] [--name <name>] [--local-only] | whoami");
         Console.Error.WriteLine("       agent-bridge-host rename <session-id> \"<fleet name>\" [--profile <name>] (empty name clears)");
-        Console.Error.WriteLine("       " + AgentAdoptionCommands.Usage);
         Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]");
         Console.Error.WriteLine("       " + OwnPeerCommands.Usage);
+        Console.Error.WriteLine("       " + AgentCommands.Usage);
         Console.Error.WriteLine("       " + AgentBridge.Host.Shadow.ShadowCommand.Usage);
         Console.Error.WriteLine("       agent-bridge-host hooks status | hooks install|remove <copilot|claude|codex> [...] [--dry-run]");
         Console.Error.WriteLine("       agent-bridge-host hooks cleanup [--profile <name>]");
@@ -1082,6 +1080,7 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
         WorktreeUsage = new RestoreWorktreeUsage(restore, new AgentWorktreeUsage(new SystemProcessInspector(), options.CopilotHome, options.ClaudeRegistrationRoots, options.CodexRegistrationRoots)),
         Transfers = transfers,
         TransferStaging = transfers.Staging,
+        ProvenanceFile = Path.Combine(serveFolder!, "launch-provenance.json"),
         Journal = journal,
         AgentWorktreeCheck = AgentLaunchWorktreeCheck.Check,
         AgentWorktreeRefusalAudit = (request, principal, reason) => audit.Append(

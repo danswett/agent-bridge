@@ -66,6 +66,7 @@ public sealed class AgentAdoptionTests : IDisposable
     }
 
     [Theory]
+    [Trait("Category", "Network")]
     [InlineData(CallerKind.App)]
     [InlineData(CallerKind.HostCli)]
     public async Task Only_a_person_can_open_and_withdraw_an_adoption_for_a_discovered_process(CallerKind kind)
@@ -80,18 +81,21 @@ public sealed class AgentAdoptionTests : IDisposable
         var store = Store();
         var handler = LocalApi.Handler(new SessionService(source, new("machine1", "Fixture", "windows", "0.1.0")),
             null!, new FixedCallerGuard(new Caller(kind, "person")), credentials: store);
-        var channel = new FakeChannel();
-        var adopted = Assert.IsType<AgentAdoptResult>(await handler(channel, AgentProtocol.Adopt, Body(new { session = id })));
+        await using var server = LocalServer.Start(LocalEndpoint.For(root), handler);
+        await using var channel = await LocalClient.ConnectAsync(LocalEndpoint.For(root));
+        var adopted = await channel.CallAsync<AgentAdoptResult>(AgentProtocol.Adopt, new AgentAdoptRequest { Session = id });
         Assert.Equal(AgentProtocol.ScopeRead, adopted.Scope);
         Assert.Equal(0, store.Count);
-        var revoked = Assert.IsType<AgentRevokeResult>(await handler(channel, AgentProtocol.Revoke, Body(new { session = id })));
+        var revoked = await channel.CallAsync<AgentRevokeResult>(AgentProtocol.Revoke, new AgentRevokeRequest { Session = id });
         Assert.True(revoked.Revoked);
-        await Assert.ThrowsAsync<ArgumentException>(() => handler(channel, AgentProtocol.Adopt, Body(new { session = "missing" })));
-        await Assert.ThrowsAsync<ArgumentException>(() => handler(channel, AgentProtocol.Adopt, Body(new { session = id, scope = AgentProtocol.ScopeReadReply })));
-        await Assert.ThrowsAsync<ArgumentException>(() => handler(channel, AgentProtocol.Revoke, Body(new { session = "../invalid" })));
+        await Assert.ThrowsAsync<HostErrorException>(() => channel.CallAsync(AgentProtocol.Adopt, new { session = "missing" }));
+        var wider = await channel.CallAsync<AgentAdoptResult>(AgentProtocol.Adopt, new AgentAdoptRequest { Session = id, Scope = AgentProtocol.ScopeReadReply });
+        Assert.Equal(AgentProtocol.ScopeReadReply, wider.Scope);
+        await Assert.ThrowsAsync<HostErrorException>(() => channel.CallAsync(AgentProtocol.Revoke, new { session = "../invalid" }));
     }
 
     [Theory]
+    [Trait("Category", "Network")]
     [InlineData(AgentProtocol.Adopt)]
     [InlineData(AgentProtocol.Revoke)]
     public async Task Adoption_management_rechecks_callers_and_refuses_agents_and_untraced_processes(string op)
@@ -100,13 +104,16 @@ public sealed class AgentAdoptionTests : IDisposable
         foreach (var kind in new[] { CallerKind.Agent, CallerKind.Other })
         {
             var handler = LocalApi.Handler(null!, null!, new FreshCaller(kind), credentials: store);
-            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => handler(new FakeChannel(), op, Body(new { session = "sess-1" })));
-            Assert.Contains("only the app or host command line", error.Message);
+            await using var server = LocalServer.Start(LocalEndpoint.For(root), handler);
+            await using var channel = await LocalClient.ConnectAsync(LocalEndpoint.For(root));
+            var error = await Assert.ThrowsAsync<HostErrorException>(() => channel.CallAsync(op, new { session = "sess-1" }));
+            Assert.Contains(OperatingSystem.IsWindows() ? "for the person at this machine" : "isn't available", error.Message);
         }
         Assert.Equal(0, store.Count);
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Claims_without_OS_peer_ancestry_or_from_an_authenticated_connection_are_refused()
     {
         var store = Store();
@@ -115,9 +122,14 @@ public sealed class AgentAdoptionTests : IDisposable
         var channel = new FakeChannel();
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, AgentProtocol.Credential, Body(new { })));
         Assert.Contains("refused:", error.Message);
-        store.Accept(channel, store.Claim(Inside()).Credential!);
-        error = await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, AgentProtocol.Credential, Body(new { })));
-        Assert.Contains("already credentialed", error.Message);
+        if (!OperatingSystem.IsWindows()) { Assert.Contains("isn't available", error.Message); return; }
+        using var process = System.Diagnostics.Process.GetCurrentProcess();
+        var token = store.Mint("sess-1", AgentCredentials.AdoptedLaunch, process.Id, process.StartTime.ToUniversalTime(), AgentProtocol.ScopeRead);
+        await using var server = LocalServer.Start(LocalEndpoint.For(root), handler);
+        await using var pipe = await LocalClient.ConnectAsync(LocalEndpoint.For(root));
+        await pipe.CallAsync(AgentProtocol.Hello, new AgentHelloRequest { Token = token });
+        var authenticated = await Assert.ThrowsAsync<HostErrorException>(() => pipe.CallAsync(AgentProtocol.Credential));
+        Assert.Contains("already has an agent credential", authenticated.Message);
     }
 
     [Theory]
@@ -150,12 +162,12 @@ public sealed class AgentAdoptionTests : IDisposable
         Assert.Contains("refused:", refused.Message);
         await channel.CallAsync(AgentProtocol.Hello, new AgentHelloRequest { Token = claim.Token });
         refused = await Assert.ThrowsAsync<HostErrorException>(() => channel.CallAsync(AgentProtocol.Credential));
-        Assert.Contains("already credentialed", refused.Message);
+        Assert.Contains("already has an agent credential", refused.Message);
         store.Revoke("sess-1", "test");
         store.Adopt("sess-1", process.Id, process.StartTime.ToUniversalTime(), AgentProtocol.ScopeRead);
         time.Now += TimeSpan.FromMinutes(AgentProtocol.AdoptionMinutes);
         refused = await Assert.ThrowsAsync<HostErrorException>(() => channel.CallAsync(AgentProtocol.Credential));
-        Assert.Contains("no adoption window", refused.Message);
+        Assert.Contains("no adopted session covers this caller", refused.Message);
         store.Adopt("sess-1", process.Id, process.StartTime.ToUniversalTime(), AgentProtocol.ScopeRead);
         Directory.CreateDirectory(Path.Combine(root, AgentCredentials.FileName + ".tmp"));
         refused = await Assert.ThrowsAsync<HostErrorException>(() => channel.CallAsync(AgentProtocol.Credential));
@@ -165,6 +177,7 @@ public sealed class AgentAdoptionTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_revoke_that_cannot_be_saved_reports_refusal_and_leaves_the_store_faulted()
     {
         if (!OperatingSystem.IsWindows()) { return; }
@@ -173,8 +186,10 @@ public sealed class AgentAdoptionTests : IDisposable
         var token = store.Claim(Inside()).Token!;
         Directory.CreateDirectory(Path.Combine(root, AgentCredentials.FileName + ".tmp"));
         var handler = LocalApi.Handler(null!, null!, new FixedCallerGuard(new(CallerKind.App, "person")), credentials: store);
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            handler(new FakeChannel(), AgentProtocol.Revoke, Body(new { session = "sess-1" })));
+        await using var server = LocalServer.Start(LocalEndpoint.For(root), handler);
+        await using var channel = await LocalClient.ConnectAsync(LocalEndpoint.For(root));
+        var error = await Assert.ThrowsAsync<HostErrorException>(() =>
+            channel.CallAsync(AgentProtocol.Revoke, new { session = "sess-1" }));
         Assert.Equal("refused: the credential store is unavailable", error.Message);
         Assert.NotNull(store.Problem);
         Assert.Null(store.Check(token, Inside()).Accepted);

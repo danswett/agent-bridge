@@ -8,8 +8,9 @@ public static class AgentProtocol
     public const string Hello = "agent.hello";
 
     // Adopting a session someone started by hand (§3.5). Adopt and Revoke are for the person at
-    // the machine; Credential is the adopted session asking for what it was adopted for. All are
-    // served only by the Windows local pipe.
+    // the machine; Credential is the adopted session asking for what it was adopted for. All pipe
+    // only.
+    public const string AdoptCapability = "agent.adopt";
     public const string Adopt = "agent.adopt";
     public const string Revoke = "agent.revoke";
     public const string Credential = "agent.credential";
