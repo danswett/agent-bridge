@@ -395,7 +395,9 @@ public class CiPlanTests
         var jobs = (YamlDotNet.RepresentationModel.YamlMappingNode)((YamlDotNet.RepresentationModel.YamlMappingNode)stream.Documents[0].RootNode)["jobs"];
         var gate = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["quality-gate"];
         var steps = (YamlDotNet.RepresentationModel.YamlSequenceNode)gate["steps"];
-        var check = (YamlDotNet.RepresentationModel.YamlMappingNode)steps.Children[0];
+        // The waiver's steps come first; the check is the one that reads the needs.
+        var check = steps.Children.Cast<YamlDotNet.RepresentationModel.YamlMappingNode>()
+            .Single(step => step.Children.ContainsKey("run") && step["run"].ToString().Contains(".key == \"plan\" or ($all", StringComparison.Ordinal));
         Assert.Contains(".key == \"plan\" or ($all and .key != \"app\" and .key != \"app-installer\") or $plan[.key] == \"true\"",
             check["run"].ToString(), StringComparison.Ordinal);
     }

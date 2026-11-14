@@ -161,6 +161,8 @@ client code; no general arbitrary-operation command or new credential grant.
 Size: at most 200 lines. Sensitive: yes. Depends-on: #2402.
 Acceptance: person/agent-child/unknown-ancestry cases and allowed operation list;
 separate pipe-capable actions from relay-only person-device operations.
+The [C1 person CLI contract](host-cli-person-contract.md) records the source
+inventory, caller/transport boundaries and review-only acceptance vectors.
 
 ### C2 - Expose one local person CLI stop path without changing stop policy
 
@@ -244,6 +246,8 @@ No dashboard write implementation, credential changes or provider probing.
 Size: at most 200 lines. Sensitive: yes (account/person boundary). Depends-on: #2402.
 Acceptance: offline/unknown/stale distinguished; raw local JSON and agent fleet
 metadata are not presented as full person dashboard/action parity.
+The [C10 dashboard read contract](host-cli-dashboard-read-contract.md) maps
+reusable readers, scope/coverage distinctions and review-only output vectors.
 
 ### C11 - Add one guarded person CLI text-reply path before attachments
 
