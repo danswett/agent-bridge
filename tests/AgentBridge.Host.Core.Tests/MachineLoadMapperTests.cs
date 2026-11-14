@@ -21,7 +21,7 @@ public class MachineLoadMapperTests
         Assert.Equal(2000, record.AgeMs);
         Assert.Equal(15000, record.StaleAfterMs);
         Assert.Equal(new MachineLoadCpu(25.5, 4), record.Cpu);
-        Assert.Equal(new MachineLoadMemory(1000, 400), record.Memory);
+        Assert.Equal(new MachineLoadMemory(1000, 400, UsedPercent: 60), record.Memory);
         var session = Assert.Single(record.Sessions);
         Assert.Equal(("session-1", LoadAgentKind.Other, 3, 12.5, 200L, SessionLoadState.Fresh),
             (session.Session, session.Agent, session.Processes, session.CpuPercent, session.WorkingSetBytes, session.State));

@@ -38,7 +38,8 @@ public sealed record MachineLoad
 }
 
 public sealed record MachineLoadCpu(double? Percent = null, int? Cores = null);
-public sealed record MachineLoadMemory(long? TotalBytes = null, long? AvailableBytes = null, double? CommittedPercent = null);
+public sealed record MachineLoadMemory(long? TotalBytes = null, long? AvailableBytes = null,
+    double? CommittedPercent = null, double? UsedPercent = null);
 public sealed record UnattributedLoad(int? Processes = null, long? WorkingSetBytes = null);
 
 public sealed record SessionLoad
