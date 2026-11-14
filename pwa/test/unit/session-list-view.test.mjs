@@ -55,6 +55,28 @@ const SessionListView = vm.runInNewContext(`${source}\nSessionListView`, {
   clearTimeout: (handle) => globalThis.clearTimeout(handle),
 }, { filename: 'views.js' });
 
+const tile = vm.runInNewContext(`${source}\nmachineTile`, {
+  h: (tag, props, ...children) => ({ tag, props, children: children.flat(Infinity).filter((c) => c != null), style: {} }),
+  icon: () => null,
+}, { filename: 'views.js' });
+const elements = (node, tag) => typeof node !== 'object' || node === null ? []
+  : [...(node.tag === tag ? [node] : []), ...(node.children ?? []).flatMap((child) => elements(child, tag))];
+const runningTile = (sessions) => tile({ name: 'Test machine', raw: { sessions: '3 sessions' }, sessions, more: [], expanded: true });
+
+test('the Fleet Running disclosure lists the existing session titles without interpreting them', () => {
+  const titles = ['Build service', '<ready> & tests', ''];
+  const rows = elements(runningTile(titles.map((title, i) => ({ id: `running-${i}`, title }))), 'li');
+  assert.deepEqual(rows.map((row) => row.children.join('')), ['Build service', '<ready> & tests', 'Untitled session']);
+});
+
+for (const [name, sessions] of [['missing', undefined], ['empty', []]]) {
+  test(`the Fleet Running disclosure invents no list or rows when session data is ${name}`, () => {
+    const drawn = runningTile(sessions);
+    assert.equal(elements(drawn, 'ul').length, 0);
+    assert.equal(elements(drawn, 'li').length, 0);
+  });
+}
+
 for (const pinned of [false, true]) {
   test(`same-turn redraws do not restart the selected ${pinned ? 'pinned' : 'unpinned'} row's read dwell`, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] });

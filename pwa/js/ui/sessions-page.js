@@ -1149,6 +1149,7 @@ export class SessionsPage {
       },
       status: (id) => this.status(id),
       facts: this.facts,
+      sessions: (id) => hosts.staleOf(id) ? [] : hosts.link(id)?.store.list() ?? [],
       load: (id) => this.#loads?.load(id) ?? null,
       known: connection.known ?? null,
       forget: this.forget,
