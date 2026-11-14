@@ -196,6 +196,11 @@ switch (command)
                 return 1;
             }
         }
+    case "agents":
+        {
+            return await AgentCommands.RunWithProfileAsync(arguments, Identity.DefaultRoot,
+                () => Refused("adopt a session or end its adoption"), Console.Out, Console.Error);
+        }
     case "watch":
         {
             using var stop = new CancellationTokenSource();
@@ -359,6 +364,7 @@ switch (command)
         Console.Error.WriteLine("       agent-bridge-host rename <session-id> \"<fleet name>\" [--profile <name>] (empty name clears)");
         Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]");
         Console.Error.WriteLine("       " + OwnPeerCommands.Usage);
+        Console.Error.WriteLine("       " + AgentCommands.Usage);
         Console.Error.WriteLine("       " + AgentBridge.Host.Shadow.ShadowCommand.Usage);
         Console.Error.WriteLine("       agent-bridge-host hooks status | hooks install|remove <copilot|claude|codex> [...] [--dry-run]");
         Console.Error.WriteLine("       agent-bridge-host hooks cleanup [--profile <name>]");
@@ -1074,6 +1080,7 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
         WorktreeUsage = new RestoreWorktreeUsage(restore, new AgentWorktreeUsage(new SystemProcessInspector(), options.CopilotHome, options.ClaudeRegistrationRoots, options.CodexRegistrationRoots)),
         Transfers = transfers,
         TransferStaging = transfers.Staging,
+        ProvenanceFile = Path.Combine(serveFolder!, "launch-provenance.json"),
         Journal = journal,
         AgentWorktreeCheck = AgentLaunchWorktreeCheck.Check,
         AgentWorktreeRefusalAudit = (request, principal, reason) => audit.Append(

@@ -31,6 +31,44 @@ public static class LocalApi
     static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log, RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet, AgentAuditLog? audit, RefusalAudits refusals) => async (channel, op, data) =>
     {
         credentials?.CheckScriptOperation(channel, op, log);
+        if (op is AgentProtocol.Adopt or AgentProtocol.Revoke or AgentProtocol.Credential)
+        {
+            if (credentials is null || !OperatingSystem.IsWindows() || channel is not LocalChannel local)
+            {
+                throw new InvalidOperationException($"refused: {op} isn't available on this host");
+            }
+            if (op == AgentProtocol.Credential)
+            {
+                if (credentials.Of(channel) is not null) { throw new InvalidOperationException("refused: this connection already has an agent credential"); }
+                var claim = credentials.Claim(local.Peer?.Ancestry ?? ProcessAncestry.Unknown);
+                if (claim is not { Token: { } token, Credential: { } issued }) { throw new InvalidOperationException($"refused: {claim.Refusal}"); }
+                return new AgentCredentialResult(token, credentials.PrincipalOf(issued), issued.Scope, issued.ExpiresAt);
+            }
+            var person = callers.Classify(channel, fresh: true);
+            if (person.Kind is not (CallerKind.App or CallerKind.HostCli))
+            {
+                throw Refuse(op, person, "adopting a session, or ending its adoption, is for the person at this machine, from the app or the host's own command line", log);
+            }
+            try
+            {
+                if (op == AgentProtocol.Revoke)
+                {
+                    var revoke = data.Deserialize<AgentRevokeRequest>(ProtocolJson.Options);
+                    if (string.IsNullOrEmpty(revoke?.Session)) { throw new ArgumentException("agent.revoke needs a session"); }
+                    return new AgentRevokeResult(revoke.Session, credentials.Revoke(revoke.Session, $"revoked by a person ({person.Description})"));
+                }
+                var adopt = data.Deserialize<AgentAdoptRequest>(ProtocolJson.Options);
+                if (string.IsNullOrEmpty(adopt?.Session)) { throw new ArgumentException("agent.adopt needs a session"); }
+                if (sessions.ProcessForAdoption(adopt.Session) is not { Id: > 0, StartedAt: { } started } process)
+                {
+                    throw new InvalidOperationException("refused: the host has no running process for that session to adopt");
+                }
+                var adoption = credentials.Adopt(adopt.Session, process.Id, started, adopt.Scope ?? AgentProtocol.ScopeRead);
+                return new AgentAdoptResult(adoption.Session, adoption.Scope, adoption.ExpiresAt);
+            }
+            catch (JsonException) { throw new ArgumentException($"{op} needs a session"); }
+            catch (ArgumentException e) { throw new InvalidOperationException($"refused: {e.Message}"); }
+        }
         if (op == Fleet.FleetNames.Op)
         {
             var caller = callers.Classify(channel, fresh: true);
@@ -137,6 +175,7 @@ public static class LocalApi
         return await sessions.HandleAsync(channel, op, data, hello => callers.Classify(channel).Kind switch
         {
             CallerKind.App => hello with { Capabilities = [.. hello.Capabilities, HostOps.Capability,
+                .. credentials is not null && OperatingSystem.IsWindows() ? new[] { AgentProtocol.AdoptCapability } : [],
                 .. control.HasAgentReadiness ? new[] { HostOps.AgentReadinessCapability } : [],
                 .. control.HasAgentSetup ? new[] { HostOps.AgentSetupCapability } : [],
                 .. control.HasAgentInstall ? new[] { HostOps.AgentInstallCapability } : [],

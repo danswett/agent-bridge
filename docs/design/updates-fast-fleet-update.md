@@ -410,6 +410,10 @@ because each ran past 400 lines.
 
 **Slice 8 split.** 8a (#2230) supplies the authoritative file/lock policy cache. 8b (#2234), after 8a and slice 3, adds §4's install/host checks and gates slices 5, 9a and 11. Metadata-cap/null-Body follow-ups are in #2246.
 
+**Slice 6 split (#2279).** Part A reports successful package-write bytes, the same HTTP response's
+size when known, and readiness only after checksum verification. Older updater implementations
+leave these facts absent. Installing, departure, return and failure-step facts are part B.
+
 ## 10. Later designs (pointers, not v1)
 
 **10.1 Fleet coordinator (owner-gated, fleet #22).** Product wants a run that outlives the phone, but

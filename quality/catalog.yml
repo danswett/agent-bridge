@@ -347,6 +347,19 @@ suites:
     where: flake-hunt.yml hunt, classify, report
     status: exists
 
+  - id: arm64-self-test-loop
+    validation_plan: native
+    kind: ui
+    ring: 3
+    select: affected
+    # Manual diagnostic only (#2535): accounted for, never selected by PR/main rings 0-2.
+    platforms: [win-arm64]
+    runner: hosted
+    triggers: [.github/workflows/arm64-self-test-loop.yml]
+    command: see arm64-self-test-loop.yml (manual dispatch only; exact head-sha and loops inputs)
+    where: arm64-self-test-loop.yml loop
+    status: exists
+
   - id: weekly-report
     validation_plan: native
     kind: static

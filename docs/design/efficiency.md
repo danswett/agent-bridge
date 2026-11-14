@@ -365,7 +365,7 @@ of `main` on 2026-11-12 and is **unverified** except where marked. The host part
 | H2 | `Host/SignIn/AgentSignInService.cs:68` | A 250 ms repeating timer from construction, sign-in flow or not: 4 wakeups a second forever | High |
 | H3 | `Host.Core/SessionSource.cs:342`, `:376`; `SessionSourceOptions.cs:34` | Wakes every 1 s with file watchers on, and each timed wake is a discovery pass that lists processes | High |
 | A1 | `App/App.xaml.cs:194-204`; `App.Core/MainViewModel.cs:615` | A 1 s timer from start, never stopped when hidden: `Tick`, timing reports, tray tip; `Tick` appears in #2284's samples | High (desktop) |
-| H4 | `Host.Core/Intake/HookIntake.cs:258` (`SweepInterval`, `:25`) | Spool sweep every 2 s with a watcher on | Medium |
+| H4 | `Host.Core/Intake/HookIntake.cs` (`SweepInterval`) | Watcher plus a 2 s active sweep, backing off to 30 s while idle and settled; unsettled approvals wake or retain the active sweep | Medium |
 | H5 | `Host.Core/Load/ProcessLoad.cs:96-111` (`:51`) | Process sampler every 5 s on thread-pool threads, observed or not | Medium |
 | H6 | `Host.Core/Usage/UsageMonitor.cs:95` (`UsageOptions.cs:52`, `:36`, `:40`) | 15 s tick while the idle probe period is 15 minutes; network probes | Medium (network) |
 | H7 | `Host/UsagePeers.cs:84` (`:46`, `:49`) | 30 s tick; asks each peer every 5 minutes over the relay, so chatter grows with fleet size | Medium (network) |

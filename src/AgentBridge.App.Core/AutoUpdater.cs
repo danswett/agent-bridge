@@ -376,6 +376,9 @@ public sealed class AutoUpdater
                 GitHubQuotaAt = updater.GitHubQuotaAt,
                 Phase = waiting ? UpdatePhase.Waiting : now,
                 Progress = now == UpdatePhase.Downloading ? updater.Progress : null,
+                Bytes = now == UpdatePhase.Downloading ? updater.Bytes : null,
+                Total = now == UpdatePhase.Downloading ? updater.Total : null,
+                Downloaded = updater.Downloaded,
                 // "Needs you" once the update has waited past WaitAtMost (#800), here too while the
                 // phase stays Idle: Waiting would hide the devices' Install, and say it installs.
                 Waiting = fileWait ?? (waiting ? (nowCode is not null ? NowWaits(nowCode) : WaitingFor()) : NeedsYou(time.GetUtcNow())),

@@ -19,7 +19,7 @@ static partial class SelfTest
         try
         {
             check(choices.Items.Count == 2 && choices.SelectedIndex == original
-                && choices.Items.OfType<RadioButton>().Select(AutomationProperties.GetName).SequenceEqual(["New line", "Send"]),
+                && choices.Items.OfType<RadioButton>().Select(AutomationProperties.GetName).SequenceEqual(new[] { "New line", "Send" }),
                 "shows both Return choices and marks the saved choice");
             var id = main.AllCards.FirstOrDefault(c => c.Reply is { Held: false })?.Id;
             var view = id is null ? null : await Choose(window, main, id, "SendReply");

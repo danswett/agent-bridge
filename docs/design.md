@@ -972,7 +972,7 @@ already gives us the per-agent table design):
 | C# project / namespace | Ported from | Notes |
 |---|---|---|
 | `Host.Agents` (`IAgentAdapter`, `ILauncher`, tuning tables) | `daemon-agents.ps1`, `$script:BridgeLaunchers`, `BridgeLauncherTuning`, `claude/hooks/*`, `codex/hooks/*` | One adapter per agent, the same slots (`FindSessions`, `ReadAppend`, `Activity`, `IsWorking`, `AskUserState`, `ApprovalMarker`, flags such as `ExactOtherWalk`) |
-| `Host.Intake` | `daemon-hookspool.ps1`, `copilot-hooks.ps1`, `bridge-native-hook.ps1` | Same spool directory, file format and ordering. FileSystemWatcher plus a 2 s sweep |
+| `Host.Intake` | `daemon-hookspool.ps1`, `copilot-hooks.ps1`, `bridge-native-hook.ps1` | Same spool directory, file format and ordering. FileSystemWatcher plus a 2 s active sweep, backing off to 30 s only while idle and settled |
 | `Host.Discovery` | `daemon-discovery.ps1` | Including incomplete-discovery **holds** (absence-based cleanup waits) and unaccounted-process detection |
 | `Host.Activity` | `daemon-activity.ps1` | Byte-level LF framing before UTF-8 decoding, bounded windows, cursor rules: port exactly, with the transcript-framing tests |
 | `Host.Decisions` | `daemon-decisions.ps1`, `decision-bridge-common.ps1` (parsing/repair) | `ask_user` repair of leaked markup, schema derivation, answer-by-identity baselines |

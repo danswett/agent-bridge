@@ -69,6 +69,9 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         // The feed and pre-release choice, as VelopackUpdater names them; a download's start.
         public string Source { get; set; } = "";
         public Action? OnDownload;
+        public bool ReportsDownloadFacts { get; set; }
+        public Action<Action<int>, Action<long, long?>>? DownloadWithBytes;
+        public TaskCompletionSource? DownloadGate;
         public string? InstalledVersion { get; set; } = "0.1.0";
         public DateTimeOffset? DiscoveredAt { get; set; }
         public string? CheckSource { get; set; }
@@ -84,14 +87,16 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             if (CheckDropsReady) { Ready = null; }
             return Found;
         }
-        public Task DownloadAsync(Action<int> progress)
+        public Task DownloadAsync(Action<int> progress) => DownloadAsync(progress, (_, _) => { });
+        public async Task DownloadAsync(Action<int> progress, Action<long, long?> bytes)
         {
             Downloads++;
             OnDownload?.Invoke();
+            DownloadWithBytes?.Invoke(progress, bytes);
+            if (DownloadGate is { } gate) { await gate.Task; }
             if (DownloadFails is { } e) { throw e; }
             progress(100);
             Ready = Found;
-            return Task.CompletedTask;
         }
         public string? AppliedVersion;
         // As VelopackUpdater: only the release named, while it is the one ready.
@@ -3835,6 +3840,117 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Contains(told, s => s.Phase == UpdatePhase.Checking);
         Assert.Contains(told, s => s.Phase == UpdatePhase.Downloading);
         Assert.Equal(("0.2.0", UpdatePhase.Idle), (auto.State.Available, auto.State.Phase));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Network")]
+    public async Task Real_download_bytes_are_reported_but_only_a_checked_package_is_downloaded(bool badHash)
+    {
+        updater.ReportsDownloadFacts = true;
+        await StartAsync();
+        var during = new List<UpdateState>();
+        updater.DownloadWithBytes = (progress, bytes) =>
+        {
+            bytes(3, 10);
+            during.Add(auto.State);
+            bytes(10, 10);
+            progress(100);
+            during.Add(auto.State);
+        };
+        if (badHash) { updater.DownloadFails = new PackageMismatchException("the package checksum did not match"); }
+
+        await auto.TickAsync();
+
+        Assert.Equal(new long?[] { 3, 10 }, during.Select(s => s.Bytes));
+        Assert.All(during, s =>
+        {
+            Assert.Equal(10, s.Total);
+            Assert.Equal(false, s.Downloaded);
+        });
+        Assert.Equal(!badHash, auto.State.Downloaded);
+        Assert.Null(auto.State.Bytes);
+        Assert.Null(auto.State.Total);
+        Assert.Equal(badHash ? null : "0.2.0", auto.Ready);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_updater_without_download_facts_keeps_them_unknown_even_when_ready()
+    {
+        await StartAsync();
+        await auto.TickAsync();
+
+        Assert.Equal("0.2.0", auto.Ready);
+        Assert.Null(auto.State.Bytes);
+        Assert.Null(auto.State.Total);
+        Assert.Null(auto.State.Downloaded);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Download_counts_from_a_replaced_feed_do_not_belong_to_the_new_feed()
+    {
+        updater.ReportsDownloadFacts = true;
+        shared = new ObservedUpdater(updater, time);
+        await StartAsync();
+        UpdateState? moved = null;
+        updater.DownloadWithBytes = (_, bytes) =>
+        {
+            bytes(3, 10);
+            updater.Source = "another-feed";
+            updater.Ready = null;
+            shared.SourceChanged();
+            bytes(10, 10);
+            moved = auto.State;
+        };
+        updater.DownloadFails = new PackageMismatchException("the old feed did not finish");
+
+        await auto.TickAsync();
+
+        Assert.NotNull(moved);
+        Assert.Null(moved.Bytes);
+        Assert.Null(moved.Total);
+        Assert.Null(moved.Downloaded);
+    }
+
+    [Fact]
+    public async Task Byte_callbacks_queued_by_a_finished_download_cannot_repopulate_its_counts()
+    {
+        updater.ReportsDownloadFacts = true;
+        var observed = new ObservedUpdater(updater, time);
+        Action<long, long?>? queued = null;
+        updater.DownloadWithBytes = (_, bytes) => queued = bytes;
+        await observed.CheckAsync();
+        await observed.DownloadAsync(_ => { });
+
+        Assert.NotNull(queued);
+        queued(10, 10);
+
+        Assert.Null(observed.Bytes);
+        Assert.Null(observed.Total);
+    }
+
+    [Fact]
+    public async Task A_new_release_found_during_a_download_has_none_of_the_old_releases_counts()
+    {
+        updater.ReportsDownloadFacts = true;
+        updater.DownloadGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        updater.DownloadWithBytes = (_, bytes) => bytes(3, 10);
+        var observed = new ObservedUpdater(updater, time);
+        await observed.CheckAsync();
+        var downloading = observed.DownloadAsync(_ => { });
+        Assert.Equal(3, observed.Bytes);
+
+        updater.Found = "0.3.0";
+        await observed.CheckAsync();
+        var counts = (observed.Bytes, observed.Total);
+        updater.DownloadGate.SetResult();
+        await downloading;
+
+        Assert.Equal("0.3.0", observed.Found);
+        Assert.Equal(((long?)null, (long?)null), counts);
     }
 
     // Copilot's review of 8898ae93: a check on the old source, then Include pre-releases changed

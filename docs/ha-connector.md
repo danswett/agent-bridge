@@ -512,9 +512,9 @@ whoever's it is (the daemon does not attribute answers at all; below). Replies a
 the next turn: it is agent-driven if it starts within 600 s (`DriverArmSeconds`), otherwise it
 reads `human`. The host keeps it in
 one record (`SessionDrivers`) for the cards and its own clients alike, so the phone and the app
-show the same edge (`Session.driver`, with `driverPrincipal` `homeassistant:<user id>` for the
-account that pressed), and a person's answer or reply from either takes it back as one on the
-card does.
+show the same edge (`Session.driver`; `driverPrincipal` is `homeassistant:<user id>` for an HA
+account, or a card reply's cleaned, unverified display label), and a person's answer or reply
+from either takes it back as one on the card does.
 
 `HaContract.HomeAssistantPrincipal` in the HA assembly formats that principal from the
 trimmed user id, capped at `Limits.DriverPrincipal` UTF-8 bytes; the stored and wire value is unchanged.

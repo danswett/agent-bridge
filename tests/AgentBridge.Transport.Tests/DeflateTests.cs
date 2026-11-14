@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
@@ -9,6 +10,52 @@ namespace AgentBridge.Transport.Tests;
 // Per-message deflate inside a channel (#603).
 public class DeflateTests
 {
+    [Theory]
+    [InlineData(149)]
+    [InlineData(150)]
+    [InlineData(511)]
+    public async Task Pwa_boundary_messages_round_trip_through_the_host_codec(int bytes)
+    {
+        var plain = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { text = new string('x', bytes - 11) }));
+        Assert.Equal(bytes, plain.Length);
+        var packed = await PwaCodec("pack", plain);
+        Assert.Equal(bytes < 150 ? (byte)'{' : MessageDeflate.Marker, packed[0]);
+        var received = MessageDeflate.Unpack(packed, SecureChannel.MaxMessageBytes);
+        Assert.Equal(plain, received);
+        Assert.Equal(plain, await PwaCodec("unpack", MessageDeflate.Pack(received)));
+    }
+
+    static async Task<byte[]> PwaCodec(string mode, byte[] input)
+    {
+        DirectoryInfo? root = new(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "pwa", "js", "channels.js"))) { root = root.Parent; }
+        Assert.NotNull(root);
+        var module = new Uri(Path.Combine(root.FullName, "pwa", "js", "channels.js")).AbsoluteUri;
+        var start = new ProcessStartInfo("node")
+        {
+            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+            UseShellExecute = false
+        };
+        start.ArgumentList.Add("--input-type=module");
+        start.ArgumentList.Add("--eval");
+        start.ArgumentList.Add("""
+            const codec = await import(process.argv[1]);
+            let input = ''; for await (const chunk of process.stdin) { input += chunk; }
+            process.stdout.write(Buffer.from(await codec[process.argv[2]](Buffer.from(input, 'base64'))).toString('base64'));
+            """);
+        start.ArgumentList.Add(module);
+        start.ArgumentList.Add(mode);
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("The PWA codec could not start.");
+        await process.StandardInput.WriteAsync(Convert.ToBase64String(input));
+        process.StandardInput.Close();
+        var output = process.StandardOutput.ReadToEndAsync();
+        var error = process.StandardError.ReadToEndAsync();
+        try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30)); }
+        finally { if (!process.HasExited) { process.Kill(entireProcessTree: true); } }
+        Assert.True(process.ExitCode == 0, await error);
+        return Convert.FromBase64String(await output);
+    }
+
     // A session list as a host sends it: field names and status words over and over.
     static string Sessions(int n) => JsonSerializer.Serialize(new
     {

@@ -125,4 +125,5 @@ To have gitleaks check each commit for secrets before it is made, run `pre-commi
 - Comments explain *why*, especially what went wrong before; don't restate the code.
 - Update the related `docs/*.md` and protocol specs in the same PR.
 - Show times in Pacific in repository text: docs, issues, PRs and reports. The product UI shows the viewer's local time (decided 2026-11-04, docs/status.md §9).
-- When a merge changes the project's state, update [docs/status.md](docs/status.md) in the same PR or straight after.
+- [docs/status.md](docs/status.md) is a weekly snapshot by Product; updates are
+  not required in each PR.

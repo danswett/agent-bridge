@@ -324,6 +324,13 @@ enough. While nobody is pinned no session's `signInNeeded` attention says `signI
 either, so no device shows a Sign in that would be refused. A roster that can't be read, or is
 stale, pins nobody; a device removed from it loses a sign-in under way at once.
 
+The sign-in scheduler (#2297) is disarmed when there are no live flows or retained
+request receipts. Retained receipts use a one-shot expiry, not an idle polling loop.
+Live flows keep the existing 250 ms safety check for predicates without change events
+(including G5), alongside immediate roster and session-change checks. Flow limits,
+reattachment grace and receipt retention use elapsed time, so UTC changes cannot
+extend them. Codes still expire against their advertised UTC deadline.
+
 The app's Settings lists, under the switch and only while the running host has it on (a change
 applies at the next start, and until then the devices listed can still sign in), **Devices that can sign
 Copilot in**: each by name, with its kind and platform, read-only. It reads "No devices can sign

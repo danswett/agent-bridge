@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Fleet;
@@ -235,8 +236,34 @@ public sealed class FleetFindTests : IDisposable
     {
         if (!OperatingSystem.IsWindows()) { return; }
         await using var relay = await TestRelay.StartAsync();
-        await using var own = await relay.ConnectAsync(relay.TokenFor(1, "own"), "own-host", "host");
-        await using var other = await relay.ConnectAsync(relay.TokenFor(2, "other"), "other-host", "host");
+        var timings = new List<string>();
+        async Task<Device> ConnectObservedAsync(string token, string name)
+        {
+            var started = Stopwatch.GetTimestamp();
+            Task<Device>? connecting = null;
+            try
+            {
+                connecting = relay.ConnectAsync(token, name, "host");
+                return await connecting;
+            }
+            finally
+            {
+                var connected = connecting?.IsCompletedSuccessfully == true;
+                timings.Add($"{name}: connect {(connected ? "completed" : "failed")} after {Stopwatch.GetElapsedTime(started).TotalMilliseconds:F3} ms");
+                if (!connected)
+                {
+                    Console.WriteLine("Relay connection failed; phase is not inferred.");
+                    Console.WriteLine($"Connection timings:{Environment.NewLine}{string.Join(Environment.NewLine, timings)}");
+                    if (connecting?.Exception is { } failure)
+                    {
+                        foreach (var raw in failure.InnerExceptions) { Console.WriteLine(raw.ToString()); }
+                    }
+                    Console.WriteLine($"Relay logs:{Environment.NewLine}{string.Join(Environment.NewLine, relay.Logs)}");
+                }
+            }
+        }
+        await using var own = await ConnectObservedAsync(relay.TokenFor(1, "own"), "own-host");
+        await using var other = await ConnectObservedAsync(relay.TokenFor(2, "other"), "other-host");
         var hex = new string('b', 16);
         await other.Relay.RegistryPutAsync(Body(new
         {
