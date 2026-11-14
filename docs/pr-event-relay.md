@@ -97,19 +97,27 @@ key. A list that fails part way follows the rules below.
 | `commits/<head>/check-runs` and `commits/<head>/statuses` | 60 s while CI runs on the head (drafts too), 3 min for other open non-draft heads, 15 min for other drafts | CI finished, re-runs, `merge-rule`, `independent-review`, `independent-review-2` |
 
 **Comment feeds page by key, not by page number.** Each request is page 1 of the list, oldest
-first, with `since` as the key. The design does not rely on whether GitHub's `since` includes its
-own timestamp (the soak checks it): every request uses `since` = key minus 1 second, so every
+first, with `since` as the key. Ordinary reads do not rely on whether GitHub's `since` includes its
+own timestamp (only leaving a tied bucket does, below): every request uses `since` = key minus 1
+second, so every
 comment at the key's timestamp is read again, and repeats are removed by comment id plus
 `updated_at`. A scan's first key is the committed cursor `C` minus 10 minutes (late-indexed
 comments); each next key is the newest `updated_at` on the page just read. A deleted comment cannot
 shift a later one past the reader, and a comment edited mid-scan moves to the end, where it is read.
-If a full page brings nothing new (more than 100 comments within that second), the scan takes pages
-2, 3 ... of that key until a page is short, then repeats that key's pass until a whole pass finds
-nothing new and nothing missing; a deletion or edit during a pass shows as a missing comment and
-forces another pass. The scan ends at a short page. Each page is one state commit: its events
-(oldest first, so order holds across pages), its ETag, its newest `updated_at` and count, and the
-next key; `C` moves to the last key once a page is short. A crash or failure resumes from the
-committed key. A 304 page is not the end of a scan: the scan follows that page's saved next key, so
+If a full page brings nothing new (more than 100 comments within that second), the key `K` becomes
+a tied bucket: a durable checkpoint (`K`, the pass number and the ids seen at `K`) is committed, and
+the resume key stays `K` and `C` stays unchanged until the bucket is verified. A pass reads pages 2,
+3 ... of `K` until a page is short; items newer than `K` on those pages are raised but do not move
+the key. Passes repeat until a whole pass finds nothing new and nothing missing at `K` (a deletion
+or edit during a pass shows as a missing comment). Only then does the key move past `K`: the next
+request starts just after `K` (`since` = `K` plus 1 second if `since` is inclusive, `K` if not; the
+relay records which from a probe, and the soak confirms it), since every comment at `K` is known. A
+crash resumes the bucket from its checkpoint. After 5 unstable passes the feed keeps the checkpoint,
+sends one feed-health line to the Chief of Staff, and tries again next cycle. Otherwise the scan
+ends at a short page. Each page is one state commit: its events (oldest first, so order holds
+across pages), its ETag, its newest `updated_at` and count, and the next key; `C` moves to the last
+key once a page is short and no bucket is open. A crash or failure resumes from the committed key.
+A 304 page is not the end of a scan: the scan follows that page's saved next key, so
 a comment beyond a full first page is still read, and only a short page ends it. Issue comments are
 kept only on PRs, or on issues when they carry a `[to:team]` tag.
 Reviews are re-read on a timer because GitHub does not promise a dismissal changes the PR's
@@ -225,10 +233,11 @@ event id and recipient, so a retried send is the same request, and the text carr
 - **Rate:** at most 6 messages a minute to one session. Extra events wait in the outbox, in order;
   nothing is summarised away.
 - **Retry:** a definite failure retries at 1, 2 and 5 minutes, with the same request id, so the host
-  keeps one entry: HA refusing the request (an HTTP error status or a refused connection, so nothing
-  was accepted) or the host's busy refusal. A timeout or a reply with no outcome is unknown, not a
-  failure: it follows the `unconfirmed` path and is never retried. After the retries the event is
-  `undeliverable`: the PR's team lead gets it once,
+  keeps one entry. Definite means proof nothing was accepted: a refused connection, a documented
+  rejection from HA or the host (an authentication or validation error), or the host's busy
+  refusal. Any other error, including a 5xx from HA or a proxy, a timeout or a reply with no
+  outcome, is unknown, since it can arrive after dispatch: it follows the `unconfirmed` path and is
+  never retried. After the retries the event is `undeliverable`: the PR's team lead gets it once,
   and if that fails too, the Chief of Staff gets one line. A session not in the roster is not
   retried; its events go to rule 3 or 4.
 - Once an event is delivered, its text is removed from the outbox. The journal keeps event id, kind,
@@ -286,7 +295,9 @@ event id and recipient, so a retried send is the same request, and the text carr
    outage from 09:50 to 11:20 re-reads every comment since 09:40.
 5. Crash after the state write and before the send, then a takeover by another runner, while the
    head moves A to B and then, during the outage, to C: `A->B` and `B->C` are each sent once. A
-   runner that lost the lease cannot commit or send. A `sending` record is never re-sent.
+   runner that lost the lease cannot commit or send. A `sending` record is never re-sent. A partial
+   PR-list scan and a partial comment-feed scan (including an open tied bucket) left by the first
+   runner are resumed by the second exactly as test 16 resumes them after a restart.
 6. A read failing on page 2 (500, rate limit, bad body) commits page 1's events and keeps the
    cursor; a comment feed resumes from page 1's last key, the PR list from page 1. Backs off.
 7. Routing: `Owner-Session:` wins; an "Update branch" commit or another agent's commit does not
@@ -296,7 +307,8 @@ event id and recipient, so a retried send is the same request, and the text carr
 9. A by-id `dropped` notice: one re-send, same id. `unconfirmed`: no re-send, one lead line with the
    event's text after 30 minutes, and the next event for that PR waits until then. `queued` at a
    session in a 45-minute turn: no lead line. Three failed sends: one lead message; lead failing
-   too: one Chief line.
+   too: one Chief line. A refused connection is retried; a 5xx or a timeout is not, and becomes
+   `unconfirmed`.
 10. `unadmitted` for a head without a trusted `[admit]`; none for an admitted head; an outsider's
     `[admit]` changes nothing; earlier admissions learned on start.
 11. A feed failing for 10 minutes sends one Chief line; the journal never holds a comment body.
@@ -318,7 +330,12 @@ event id and recipient, so a retried send is the same request, and the text carr
     (in a second run a page-1 comment is edited, in a third a comment tied with the page-2 boundary
     is deleted); on resume each revision of every surviving comment is raised exactly once, oldest
     first. With 130 comments in the 10-minute lookback, a new comment on the second key page is
-    read although the first page returns 304. (The same with a takeover is slice 2's test 5.)
+    read although the first page returns 304. A tied bucket of 101 comments at T and one at T+20
+    min: one tied comment is deleted before page 2, and the runner crashes after committing the
+    short page 2: on resume the bucket is verified from its checkpoint, the surviving 101st comment
+    is raised once, and `C` moves past T only then. Under constant churn in a bucket, the fifth
+    unstable pass sends one Chief line and keeps the checkpoint. (The same with a takeover is
+    slice 2's test 5.)
 
 ## Live soak (SRE, 24 hours, enrolled disposable nodes)
 The relay sends live only to two disposable sessions and logs every other event dry-run; no watcher
