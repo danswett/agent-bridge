@@ -363,6 +363,11 @@ public sealed class AnswerService : ISessionAnswerer
     // delivery built it. Copilot forms and Claude only; nothing else is read again.
     Func<Task<AnswerResult?>>? Reader(AttemptLedger.Owner by, AttemptLedger.Reread at, AnswerWords.Words words, Guid request)
     {
+        // A sweep must confirm on the admitted timeline, not an unaudited replacement.
+        lock (firstGate)
+        {
+            if (firstAnswers.Values.FirstOrDefault(f => f.Request == request)?.Read is { } read) { return read; }
+        }
         var asked = new AnswerRequest { Id = by.Session, Question = by.Question, Request = request.ToString("D"), Text = words.Text, Fields = words.Fields };
         var timeline = new DeliveryTimeline(options.Time, "answer", request, log);
         switch (at.Agent)

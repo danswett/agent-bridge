@@ -55,18 +55,34 @@ public sealed partial class AgentAnswerFlowTests
         Assert.Empty(injector.Plans);
     }
 
-    [Fact]
-    public async Task A_late_confirmation_writes_one_terminal_without_typing_again()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_late_confirmation_writes_one_terminal_without_typing_again(bool gone)
     {
-        var host = new ApprovalAuditFixture(f.Root, source, Answerer());
+        var answerer = Answerer();
+        var host = new ApprovalAuditFixture(f.Root, source, answerer);
         var request = Request(ClaudeId, "toolu_1", Chosen);
         Assert.Equal(AnswerOutcome.Unconfirmed, (await host.Answer(request)).Outcome);
+        await answerer.Swept;
         var typed = injector.Plans.Count;
         Fixture.Append(claude, Recorded());
+        if (gone)
+        {
+            await AskAnotherAsync();
+            await answerer.Swept;
+            Assert.Equal("toolu_2", source.Get(ClaudeId)?.Question?.Id);
+            Assert.False(File.Exists(Words));
+            Assert.Equal(new[] { "intent", "terminal" }, host.Rows().Select(r => r.Gate!.Phase));
+        }
         Assert.Equal(AnswerOutcome.Delivered, (await host.Answer(request)).Outcome);
         Assert.Equal(AnswerOutcome.Delivered, (await host.Answer(request)).Outcome);
         Assert.Equal(typed, injector.Plans.Count);
         Assert.Equal(new[] { "intent", "terminal" }, host.Rows().Select(r => r.Gate!.Phase));
+        var report = host.QualifiedProjection();
+        Assert.Equal(1, Assert.Single(report.Totals).Successes);
+        Assert.Empty(report.IncompleteReasons);
+        Assert.False(report.Invalidated);
     }
 
     [Fact]
