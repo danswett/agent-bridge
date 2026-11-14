@@ -47,7 +47,8 @@ const decodable = (root) => {
 // (Malformed records), since a patch read past a part would leave the session unlike the host's.
 // set and append are taken as they are; what they hold is applyPatch's to judge.
 export function readPatch(raw) {
-  if (!isObject(raw) || typeof raw.id !== 'string') { return null; }
+  if (!isObject(raw) || (raw.id != null && typeof raw.id !== 'string')) { return null; }
+  if (raw.handle != null && (!Number.isInteger(raw.handle) || raw.handle <= 0 || raw.handle > 2147483647)) { return null; }
   if (![raw.id, raw.set, raw.append, raw.subagents?.set, raw.subagents?.remove, raw.subagents?.order].every(decodable)) { return null; }
   const base = raw.base ?? null;
   if (base !== null && !Number.isSafeInteger(base)) { return null; }
@@ -60,7 +61,7 @@ export function readPatch(raw) {
       if ((subagents[k] ?? null) !== null && !strings(subagents[k])) { return null; }
     }
   }
-  const patch = { id: raw.id };
+  const patch = { ...(raw.id == null ? {} : { id: raw.id }), ...(raw.handle == null ? {} : { handle: raw.handle }) };
   if (base !== null) { patch.base = base; }
   if (typeof raw.revision === 'number' && Number.isSafeInteger(raw.revision)) { patch.revision = raw.revision; }
   if ((raw.set ?? null) !== null) { patch.set = raw.set; }
@@ -72,13 +73,34 @@ export function readPatch(raw) {
   return patch;
 }
 
+export function resolveId(patch, handles = new Map()) {
+  if (patch.handle === undefined && typeof patch.id === 'string') { return patch.id; }
+  if (patch.handle === undefined) { throw new PatchError(PatchReasons.notOnHeld); }
+  const id = handles.get(patch.handle);
+  if (id !== undefined && (patch.id === undefined || patch.id === id)) { return id; }
+  if (id === undefined && patch.base === undefined && typeof patch.id === 'string') { return patch.id; }
+  throw new PatchError(PatchReasons.notOnHeld);
+}
+
+export function readHandles(raw) {
+  const handles = new Map();
+  if (raw == null) { return handles; }
+  if (!isObject(raw) || !decodable(raw)) { throw new PatchError(PatchReasons.notOnHeld); }
+  for (const [id, handle] of Object.entries(raw)) {
+    if (!Number.isInteger(handle) || handle <= 0 || handle > 2147483647 || handles.has(handle)) { throw new PatchError(PatchReasons.notOnHeld); }
+    handles.set(handle, id);
+  }
+  return handles;
+}
+
 // The session a client holds once it has applied the patch to `held`, the JSON it last received
 // of it, from the event numbered heldSeq (held null: it holds none). Held is not changed. Throws
 // PatchError, with the reason, for a patch that cannot be applied.
-export function applyPatch(held, heldSeq, patch) {
+export function applyPatch(held, heldSeq, patch, handles) {
+  const id = resolveId(patch, handles);
   let target;
   if (patch.base !== undefined) {
-    if (!isObject(held) || heldSeq !== patch.base || held.id !== patch.id) { throw new PatchError(PatchReasons.notOnHeld); }
+    if (!isObject(held) || heldSeq !== patch.base || held.id !== id) { throw new PatchError(PatchReasons.notOnHeld); }
     target = structuredClone(held);
   } else {
     target = {};
@@ -87,7 +109,7 @@ export function applyPatch(held, heldSeq, patch) {
   if (patch.subagents !== undefined) { applySubagents(target, patch.subagents); }
   if (patch.append !== undefined) { append(target, mergeOf(patch.append)); }
   // A whole session names itself; one that names another, or none, is not this patch's.
-  if (target.id !== patch.id) { throw new PatchError(PatchReasons.notOnHeld); }
+  if (target.id !== id) { throw new PatchError(PatchReasons.notOnHeld); }
   return target;
 }
 
