@@ -815,6 +815,9 @@ public sealed record ReplyRequest
     // Host-only condition for Lite's Copilot delivery, never accepted from session.reply.
     [JsonIgnore]
     public bool RequireIdle { get; init; }
+    // Host-only final-effect fence; never supplied by a protocol caller.
+    [JsonIgnore]
+    public Func<bool>? StillCurrent { get; init; }
 }
 
 // The same outcomes as an answer, read the same way.
