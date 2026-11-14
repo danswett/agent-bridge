@@ -700,6 +700,7 @@ public sealed record ListRequest(string? Cursor = null);
 public sealed record SubscribeRequest
 {
     public bool? Patch { get; init; }
+    public bool? Handles { get; init; }
     public SubscribeSince? Since { get; init; }
 }
 
@@ -732,6 +733,8 @@ public sealed record SubscribeResult(long Revision, int Count, bool? Resumed = n
 // with an id left out, a session still running would be dropped from the client's list.
 public sealed record SessionsSynced(long Revision, [property: Strict(Strictness.Security)] DiscoveryHeld? DiscoveryHeld = null, [property: Strict(Strictness.Identity)] IReadOnlyList<string>? Live = null)
 {
+    [Strict(Strictness.Identity)]
+    public IReadOnlyDictionary<string, int>? Handles { get; init; }
     // The most of Live a host sends; a host with more sessions sends the whole snapshot instead.
     public const int MaxLiveBytes = 32 * 1024;
 }
@@ -901,6 +904,7 @@ public static class Capabilities
     // sessions.subscribe takes patch (live changes as session.patch) and since (resuming without
     // a whole snapshot): docs/protocol/v1-sessions.md, Patches and Resuming.
     public const string SessionsPatch = "sessions.patch";
+    public const string SessionsHandles = "sessions.handles";
     // hello takes { "changes": true }: the host then sends hello.changed on that channel whenever
     // what hello would say to it changes, and a client needs to ask hello again only rarely
     // (docs/protocol/v1-sessions.md, hello). Apps asked every 10 s, ~36 hellos a minute (#640).
