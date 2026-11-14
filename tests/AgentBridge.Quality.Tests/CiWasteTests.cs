@@ -25,6 +25,8 @@ public class CiWasteTests
             foreach (var entry in snapshot["workflow_runs"]!.AsArray())
             {
                 var run = entry!.AsObject();
+                run["pull_requests"] = new JsonArray(run["pull_requests"]!.AsArray().Select(
+                    p => (JsonNode)new JsonObject { ["number"] = p!.DeepClone() }).ToArray());
                 run["jobs"] = new JsonArray();
                 run["plan"] = JsonNode.Parse("""{"changed_files":["docs/example.md"],"long_jobs":[]}""");
                 if (run["id"]!.GetValue<long>() == 43586721146)
@@ -118,7 +120,15 @@ public class CiWasteTests
             using var process = Process.Start(start) ?? throw new InvalidOperationException("pwsh did not start.");
             var error = process.StandardError.ReadToEndAsync();
             var stdout = process.StandardOutput.ReadToEndAsync();
-            await process.WaitForExitAsync();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+            try { await process.WaitForExitAsync(timeout.Token); }
+            catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+            {
+                try { process.Kill(entireProcessTree: true); }
+                catch (InvalidOperationException) when (process.HasExited) { }
+                await process.WaitForExitAsync();
+                throw new TimeoutException($"CI-waste reporter timed out after 120 s.{await error}{await stdout}");
+            }
             var output = await stdout;
             Assert.True(process.ExitCode == 0, (await error) + output);
             return JsonNode.Parse(output)!.AsObject();

@@ -51,7 +51,7 @@ $rows = @(foreach ($run in $runs) {
         if ($job['name'] -match '^(pwa-ui \(chromium(?: [1-9]\d*/[1-9]\d*)?\)|app(?:-installer)?(?: \([^)]+\))?)$' -and
             $job['status'] -in @('in_progress', 'completed') -and $job['conclusion'] -ne 'skipped' -and
             -not [string]::IsNullOrWhiteSpace([string]$job['started_at'])) {
-            [void][DateTimeOffset]::Parse($job['started_at'])
+            [void][DateTimeOffset]$job['started_at']
             $job['name']
         }
     })
