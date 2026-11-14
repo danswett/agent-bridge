@@ -68,8 +68,12 @@ static partial class SelfTest
             stored.AddLive(StoredTurn(-2) with { Prompt = new HistoryPrompt { Text = "The latest exchange" } });
             Away(window, main);
             await Choose(window, main, id, "Response");
-            check(await Until(() => coldRows.ItemsSourceView?.Count == 1, TimeSpan.FromSeconds(3)),
-                "draws an earlier turn when the newest held prompt is already the live exchange");
+            var liveDuplicate = await Until(() => coldRows.ItemsSourceView?.Count == 1, TimeSpan.FromSeconds(3));
+            var liveDuplicateDrawing = cold.HistoryDrawingTrace();
+            result["historyLiveDuplicateDrawing"] = liveDuplicateDrawing;
+            const string liveDuplicateMessage = "draws an earlier turn when the newest held prompt is already the live exchange";
+            check(liveDuplicate, liveDuplicate ? liveDuplicateMessage
+                : $"{liveDuplicateMessage} (drawing: {JsonSerializer.Serialize(liveDuplicateDrawing)})");
             // Initialise the shared pane before timing another session's open.
             var away = await Choose(window, main, "demo-choice", "Response");
             if (away is null || ConversationScroller(away) is not { } scroll
@@ -188,8 +192,11 @@ static partial class SelfTest
             await CheckPostedInput(window, check, result);
             Away(window, main);
             await Choose(window, main, id, "Response");
+            var pinnedDrawingStart = away.HistoryDrawingTrace();
             var pinned = await Until(() => ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count == turns
                 && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(30));
+            var pinnedDrawing = new { start = pinnedDrawingStart, end = away.HistoryDrawingTrace() };
+            result["historyPinnedDrawing"] = pinnedDrawing;
             var pinnedFill = new { drawn = ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count, offset = scroll.VerticalOffset, extent = scroll.ScrollableHeight, pinned };
             result["historyPinnedFill"] = pinnedFill;
             const string pinnedMessage = "finishes older drawing at the end before focus moves away";
@@ -200,7 +207,7 @@ static partial class SelfTest
             }))
             {
                 check(pinned, pinned ? pinnedMessage
-                    : $"{pinnedMessage} (history: {pinnedFill.drawn}/{turns}; count500: {pinnedFill.drawn == turns}; at-end: {pinnedFill.offset >= pinnedFill.extent - 1.5}; offset: {pinnedFill.offset:0.###}; extent: {pinnedFill.extent:0.###}; {PostedInputTarget(window).Detail})");
+                    : $"{pinnedMessage} (history: {pinnedFill.drawn}/{turns}; count500: {pinnedFill.drawn == turns}; at-end: {pinnedFill.offset >= pinnedFill.extent - 1.5}; offset: {pinnedFill.offset:0.###}; extent: {pinnedFill.extent:0.###}; drawing: {JsonSerializer.Serialize(pinnedDrawing)}; {PostedInputTarget(window).Detail})");
             }
             await Still(scroll);
             if (ById<ItemsRepeater>(away, "History") is { } historyList

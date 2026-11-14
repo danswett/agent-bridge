@@ -55,9 +55,11 @@ static partial class SelfTest
         var rows = view is null ? null : ById<ItemsRepeater>(view, "History");
         int Drawn() => rows?.ItemsSourceView?.Count ?? 0;
         var scroll = view is null ? null : ConversationScroller(view);
+        var drawingStart = view?.HistoryDrawingTrace();
         if (view is null || rows is null || scroll is null || !await Until(() => Drawn() >= 40 && scroll.ScrollableHeight > 2 * scroll.ViewportHeight, TimeSpan.FromSeconds(10)))
         {
-            check(false, $"draws 40 stored turns in a conversation taller than two views ({Drawn()} drawn, {scroll?.ScrollableHeight:0} of {scroll?.ViewportHeight:0} px)");
+            var drawing = System.Text.Json.JsonSerializer.Serialize(new { start = drawingStart, end = view?.HistoryDrawingTrace() });
+            check(false, $"draws 40 stored turns in a conversation taller than two views ({Drawn()} drawn, {scroll?.ScrollableHeight:0} of {scroll?.ViewportHeight:0} px; drawing: {drawing})");
             return;
         }
         await Task.Delay(700);

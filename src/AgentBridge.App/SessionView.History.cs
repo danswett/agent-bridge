@@ -100,6 +100,7 @@ public sealed partial class SessionView
                 historyDraw.Interval = TimeSpan.FromMilliseconds(16);
                 historyDraw.Tick += (_, _) =>
                 {
+                    historyTicks++;
                     if (historyDrawQueued) { return; }
                     var session = shownHistory;
                     historyDrawQueued = DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
@@ -114,6 +115,7 @@ public sealed partial class SessionView
                 // Older work waits for the latest exchange's first frame before competing with input.
                 historyFirstFrame = (_, _) =>
                 {
+                    historyFrameChecks++;
                     if (ConversationScroll is not { } s || pinEnd && s.VerticalOffset < s.ScrollableHeight - 1.5) { return; }
                     CompositionTarget.Rendering -= historyFirstFrame;
                     historyFirstFrame = null;
@@ -127,6 +129,7 @@ public sealed partial class SessionView
 
     void DrawEarlier()
     {
+        historyDrawAttempts++;
         if (!IsLoaded || scrolling && anchoring is null || panning || keyTarget is not null) { return; }
         var turns = history?.Turns ?? [];
         var first = historyShown.FirstOrDefault();
@@ -142,6 +145,7 @@ public sealed partial class SessionView
         var reading = atEnd ? null : ReadingHistory();
         if (atEnd) { anchor = null; }
         for (var i = rows.Count - 1; i >= 0; i--) { historyShown.Insert(0, rows[i]); }
+        historyPrepended += rows.Count;
         historyVisible = turns.Count - from;
         KeepPlace(atEnd, offset, reading, extent);
         if (atEnd) { KeepPlace(true, 0); }
