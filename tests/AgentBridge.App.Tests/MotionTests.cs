@@ -24,7 +24,7 @@ public sealed class MotionTests
     [Fact]
     public void Every_entry_runs_for_its_generated_token_and_none_runs_past_300_ms()
     {
-        Assert.Equal(15, MotionCatalogue.Names.Count);
+        Assert.Equal(18, MotionCatalogue.Names.Count);
         foreach (var name in MotionCatalogue.Names)
         {
             var entry = Catalogue[name];
@@ -56,7 +56,7 @@ public sealed class MotionTests
             }
             if (Catalogue[name].Reduced == MotionReduced.CrossFade) { crossFades.Add(name); }
         }
-        Assert.Equal(["Push", "Pane", "ListItem", "Acknowledge", "Toast", "Sheet"], crossFades);
+        Assert.Equal(["Push", "Pane", "ListItem", "Value", "Acknowledge", "Toast", "Sheet", "Collapse"], crossFades);
         Assert.False(MotionCatalogue.Loops(animations: false));
     }
 
@@ -65,6 +65,19 @@ public sealed class MotionTests
     {
         Assert.Equal(TimeSpan.FromSeconds(1.2), Catalogue.WorkingPeriod);
         Assert.Equal(TimeSpan.FromSeconds(8), Catalogue.DelegatingPeriod);
+    }
+
+    [Fact]
+    public void Rows_shift_on_the_generated_curve_and_reduced_motion_closes_the_gap_without_travel()
+    {
+        var resources = Generated();
+        var shift = Catalogue.Enter("Shift", animations: true);
+        Assert.Equal(TimeSpan.Parse(resources("AbMotionShiftDuration")!, System.Globalization.CultureInfo.InvariantCulture), shift.Duration);
+        Assert.Equal(MotionEase.Parse(resources("AbMotionShiftEase")!), shift.Ease);
+        Assert.Equal(MotionStep.None, Catalogue.Enter("Shift", animations: false));
+        Assert.Equal(Catalogue.CrossFade, Catalogue.Enter("Value", animations: false).Duration);
+        Assert.Equal(Catalogue.CrossFade, Catalogue.Exit("ListItem", animations: false).Duration);
+        Assert.True(Catalogue.Exit("ListItem", animations: true).Duration < shift.Duration);
     }
 
     [Fact]
