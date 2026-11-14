@@ -36,6 +36,7 @@ public sealed class StopFlowTests : IAsyncLifetime
     Device client = null!;
     string events = "";
     int second = 10;
+    int cliConnections;
 
     public StopFlowTests() => control = new FakeControl(f);
 
@@ -128,13 +129,18 @@ public sealed class StopFlowTests : IAsyncLifetime
                 : handler(channel, op, data));
     }
 
-    async Task<(int Exit, string Output, string Error)> CliAsync(string? confirm = null, bool refused = false, string[]? args = null)
+    async Task<(int Exit, string Output, string Error)> CliAsync(string? confirm = null, bool refused = false, string[]? args = null,
+        IClientChannel? channel = null)
     {
         var output = new StringWriter();
         var error = new StringWriter();
         var exit = await StopCommands.RunWithProfileAsync(args ?? ["stop", Id,
             .. confirm is null ? Array.Empty<string>() : ["--confirm", confirm],
-            "--profile", Path.GetFileName(f.Root)], Path.GetDirectoryName(f.Root)!, () => refused, output, error);
+            "--profile", Path.GetFileName(f.Root)], Path.GetDirectoryName(f.Root)!, () => refused, output, error, async endpoint =>
+            {
+                Interlocked.Increment(ref cliConnections);
+                return channel ?? await LocalClient.ConnectAsync(endpoint);
+            });
         return (exit, output.ToString(), error.ToString());
     }
 
@@ -202,11 +208,12 @@ public sealed class StopFlowTests : IAsyncLifetime
         Assert.Equal(4, early.Exit);
         Assert.Equal("", early.Output);
         Assert.Contains("refused", early.Error);
-        Assert.Equal(0, local.Connections);
+        Assert.Equal(0, Volatile.Read(ref cliConnections));
         var hostRefusal = await CliAsync();
         Assert.Equal(4, hostRefusal.Exit);
         Assert.Equal("", hostRefusal.Output);
         Assert.Contains("refused", hostRefusal.Error);
+        Assert.Equal(1, Volatile.Read(ref cliConnections));
         Assert.Empty(injector.Plans);
         Assert.Empty(control.Terminated);
     }
@@ -226,8 +233,84 @@ public sealed class StopFlowTests : IAsyncLifetime
         Assert.Equal(2, result.Exit);
         Assert.Equal("", result.Output);
         Assert.NotEmpty(result.Error);
-        Assert.Equal(0, local.Connections);
+        Assert.Equal(0, Volatile.Read(ref cliConnections));
         Assert.Empty(injector.Plans);
+        Assert.Equal(0, (await CliAsync()).Exit);
+        Assert.Equal(1, Volatile.Read(ref cliConnections));
+    }
+
+    [Fact]
+    public async Task Cli_stop_pipe_admission_refusal_is_redacted_and_exits_four()
+    {
+        const string privateReason = "private-admission-account-and-machine";
+        var stops = 0;
+        await using var local = LocalServer.Start(LocalEndpoint.For(f.Root), async (channel, op, _) =>
+        {
+            if (op == Ops.Hello)
+            {
+                await channel.SendEventAsync(LocalServer.RefusedEvent, new { reason = privateReason });
+                throw new InvalidOperationException(privateReason);
+            }
+            Interlocked.Increment(ref stops);
+            return new StopResult(StopOutcome.Ended);
+        });
+        var result = await CliAsync();
+        Assert.Equal(4, result.Exit);
+        Assert.Equal("", result.Output);
+        Assert.Contains("refused", result.Error);
+        Assert.DoesNotContain(privateReason, result.Error);
+        Assert.Equal(0, Volatile.Read(ref stops));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Cli_stop_waits_past_thirty_seconds_for_a_result_or_connection_failure(bool disconnected)
+    {
+        var pending = new PendingStopChannel(clock);
+        var stopping = CliAsync(channel: pending);
+        clock.Advance(TimeSpan.FromSeconds(31));
+        Assert.False(stopping.IsCompleted);
+        if (disconnected) { pending.Response.SetException(new IOException("private-connection-detail")); }
+        else
+        {
+            pending.Response.SetResult(System.Text.Json.JsonSerializer.SerializeToElement(
+                new { ok = true, result = new StopResult(StopOutcome.Ended) }, ProtocolJson.Options));
+        }
+        var result = await stopping;
+        Assert.Equal(disconnected ? 1 : 0, result.Exit);
+        if (disconnected)
+        {
+            Assert.Equal("", result.Output);
+            Assert.Contains("stop result unavailable", result.Error);
+            Assert.DoesNotContain("private-connection-detail", result.Error);
+        }
+        else { Assert.Equal(StopOutcome.Ended, CliResult(result.Output).Outcome); }
+    }
+
+    sealed class PendingStopChannel(FakeTimeProvider time) : IClientChannel
+    {
+        public readonly TaskCompletionSource<System.Text.Json.JsonElement> Response = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public string PeerId => "fixture";
+        public string PeerName => "Fixture";
+        public string PeerKind => "host";
+        public bool IsOpen => true;
+        public Task Closed => throw new NotSupportedException();
+        public Exception? CloseReason => null;
+        public System.Threading.Channels.ChannelReader<ChannelEvent> Events => throw new NotSupportedException();
+        public Task<System.Text.Json.JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default, Action<System.Text.Json.JsonElement>? progress = null)
+        {
+            if (op == Ops.Hello)
+            {
+                return Task.FromResult(System.Text.Json.JsonSerializer.SerializeToElement(
+                    new { ok = true, result = new HelloResult(1, new MachineInfo("fixture", "Fixture", "windows", "0.1.0"), []) }, ProtocolJson.Options));
+            }
+            Assert.Equal(Ops.SessionStop, op);
+            return Response.Task.WaitAsync(timeout ?? TimeSpan.FromSeconds(15), time, ct);
+        }
+        public Task<(System.Text.Json.JsonElement Response, long EventsBefore)> RequestOrderedAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default, Action<System.Text.Json.JsonElement>? progress = null) => throw new NotSupportedException();
+        public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => throw new NotSupportedException();
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     [Fact]

@@ -8,13 +8,15 @@ worker to type `/exit`, the agent-ha-bridge guard (G5), request memory, and the 
 
 ## Local person command
 
-On Windows, run `agent-bridge-host stop <session> [--profile <name>]` from the person's
+On Windows, run `agent-bridge-host stop <session> [--confirm <token>] [--profile <name>]` from the person's
 own terminal, outside any agent session. It calls the running local host, not another machine.
 JSON output contains `outcome`, and when relevant `confirm`, `confirmSeconds` or `forced`;
 host diagnostic text is omitted. Exit codes: 0 ended, 3 confirmation needed, 4 refused,
 1 stale/busy/failed or unavailable result, 2 invalid arguments.
 A `confirm` result needs a second invocation with `--confirm <token>` inside the host's
 window. Every invocation is a new press; it never confirms or retries automatically.
+Once sent, a stop waits for the host's result or connection failure, with no client deadline.
+Closing the terminal does not cancel a stop the host is already carrying out.
 Check the target at this machine after an unavailable result. The host still owns expiry,
 process identity and stop policy; the guarded-idle gap [#2411](design/stop-policy-reconciliation.md)
 and multi-machine qualification are not resolved by this command.
