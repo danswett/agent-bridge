@@ -305,7 +305,7 @@ export class SessionsPage {
     }, this.needsMark, this.needsLabel, this.needsSummary);
     $('needs-you').before(this.needsToggle);
     this.needsEmpty = h('p', { class: 'note', hidden: true }, 'Nothing else needs you on connected machines.');
-    $('session-list').after(this.needsEmpty);
+    this.view.said.after(this.needsEmpty);
     // An agent that needs sign-in (#800): a banner for each machine, agent and account, above the lane.
     this.signIns = $('sign-in-banners') ? new SignInBanners($('sign-in-banners'), hosts, {
       live: $('sign-in-said'),

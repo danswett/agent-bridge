@@ -77,10 +77,15 @@ export class RowMenu {
     const floor = fixed ? bar.getBoundingClientRect().top : window.innerHeight;
     const up = !sheet && r.bottom > floor && anchor.getBoundingClientRect().top - r.height > 0;
     if (up) { el.classList.add('up'); }
+    el.scrollIntoView?.({ block: 'nearest' });
+    const overflow = !sheet && fixed ? el.getBoundingClientRect().bottom - floor : 0;
+    if (overflow > 0) {
+      el.style.top = `calc(${el.offsetTop - overflow}px - var(--ab-space-2))`;
+      el.style.bottom = 'auto';
+    }
     // Menu (ui.md §5.3): it settles in from its anchor, and is usable as it does.
     enter(el, 'menu', { dy: up ? 1 : -1 });
-    el.scrollIntoView?.({ block: 'nearest' });
-    (buttons.find((b) => !b.disabled && b.getAttribute('aria-disabled') !== 'true') ?? buttons.find((b) => !b.disabled) ?? el).focus?.();
+    (buttons.find((b) => !b.disabled && b.getAttribute('aria-disabled') !== 'true') ?? buttons.find((b) => !b.disabled) ?? el).focus?.({ preventScroll: true });
   }
 
   close(refocus = true) {
