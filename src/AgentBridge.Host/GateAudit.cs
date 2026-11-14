@@ -4,7 +4,7 @@ public sealed record GateAuditMetadata(int V, Guid Operation, Guid Run, long Seq
     string ActorKind, Guid Incarnation, string ReasonCode, Guid? Question = null)
 {
     internal bool Valid(string action, string? target, string outcome) =>
-        V == 1 && Operation != Guid.Empty && Run != Guid.Empty && Sequence > 0
+        V == 1 && Operation != Guid.Empty && (Run != Guid.Empty || action == "session.launch" && Phase != "control") && Sequence > 0
         && Phase is "intent" or "terminal" or "control" && Path is "relay" or "local" or "legacy-ha"
         && ActorKind is "person-client" or "agent" or "ha-component"
         && ReasonCode is "none" or "refused" or "failed" or "unconfirmed" or "busy" or "cancelled"
@@ -40,6 +40,7 @@ internal static class GateAuditProjection
     {
         var (rows, complete) = Load(profile);
         var reasons = new HashSet<string>();
+        if (run == Guid.Empty) { reasons.Add("missing-run-context"); }
         if (!complete) { reasons.Add("audit-incomplete"); }
         var sequences = rows.Where(r => r.Gate is not null).Select(r => r.Gate!.Sequence).Order().ToArray();
         if (sequences.Where((s, i) => s != i + 1L).Any()) { reasons.Add("sequence-break"); }
@@ -52,19 +53,23 @@ internal static class GateAuditProjection
         {
             var first = operation.First();
             var gate = first.Gate!;
+            var launch = first.Action == "session.launch";
+            var binding = launch && first.Target == first.Request;
             var key = (first.Action, gate.Path, gate.ActorKind);
             totals.TryAdd(key, 0);
             var terminals = operation.Where(r => r.Gate!.Phase == "terminal").ToArray();
-            if (operation.Any(r => r.Action != first.Action || r.Target != first.Target || r.Gate is not { } other || other.Path != gate.Path
+            if (launch && !Guid.TryParseExact(first.Request, "D", out _)
+                || operation.Any(r => r.Action != first.Action || launch && r.Request != first.Request
+                || r.Target != first.Target && (!binding || r.Gate?.Phase != "terminal") || r.Gate is not { } other || other.Path != gate.Path
                 || other.ActorKind != gate.ActorKind || other.Incarnation != gate.Incarnation || other.Question != gate.Question)
                 || rows.Any(r => r.Gate is { } other && other.Operation == gate.Operation && other.Run != run)
-                || terminals.Select(r => (r.Outcome, r.Gate!.ReasonCode)).Distinct().Count() > 1)
+                || terminals.Select(r => (r.Outcome, r.Gate!.ReasonCode, r.Target)).Distinct().Count() > 1)
             { invalidated = true; continue; }
             if (gate.Phase != "intent" || terminals.Length == 0 || terminals[0].Outcome is "attempted" or "reserved" or "unconfirmed")
             { reasons.Add("unresolved-intent"); continue; }
-            if (terminals[0].Outcome == SuccessFor(first.Action))
+            if (terminals[0].Outcome == SuccessFor(first.Action) && run != Guid.Empty)
             {
-                if (!identities.Add((first.Action, first.Target, gate.Incarnation, gate.Question))) { invalidated = true; continue; }
+                if (!identities.Add((first.Action, terminals[0].Target, launch ? Guid.Empty : gate.Incarnation, gate.Question))) { invalidated = true; continue; }
                 totals[key]++;
             }
         }

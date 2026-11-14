@@ -39,8 +39,12 @@ public sealed class LaunchGateAuditTests : LaunchFlowFixture
         Assert.Equal(LaunchOutcome.Started, result.Outcome);
         var intent = Assert.Single(beforeStart);
         Assert.Equal("intent", intent.GetProperty("gate").GetProperty("phase").GetString());
+        Assert.Equal("local", intent.GetProperty("gate").GetProperty("path").GetString());
+        Assert.Equal("person-client", intent.GetProperty("gate").GetProperty("actorKind").GetString());
         Assert.Equal(request.ToString(), intent.GetProperty("request").GetString());
         Assert.Equal(request.ToString(), intent.GetProperty("target").GetString());
+        Assert.Equal(result, Assert.IsType<LaunchResult>(await handler(new GateAuditChannel(), LaunchProtocol.Launch, GateLaunch(request))));
+        Assert.Single(starter.Specs);
         var rows = LaunchAuditRows();
         Assert.Equal(2, rows.Length);
         var terminal = Assert.Single(rows, row => row.GetProperty("gate").GetProperty("phase").GetString() == "terminal");
@@ -51,7 +55,10 @@ public sealed class LaunchGateAuditTests : LaunchFlowFixture
         Assert.NotEqual(Guid.Empty, operation);
         Assert.Equal(operation, terminal.GetProperty("gate").GetProperty("operation").GetGuid());
         Assert.Equal(Guid.Empty, intent.GetProperty("gate").GetProperty("run").GetGuid());
-        Assert.Equal(0, GateAuditProjection.Read(GateProfile, Guid.Empty).Totals.Sum(total => total.Successes));
+        var report = GateAuditProjection.Read(GateProfile, Guid.Empty);
+        Assert.False(report.Invalidated);
+        Assert.Contains("missing-run-context", report.IncompleteReasons);
+        Assert.Equal(0, report.Totals.Sum(total => total.Successes));
         Assert.DoesNotContain("private gate prompt", string.Join("\n", rows.Select(row => row.GetRawText())));
     }
 
@@ -80,6 +87,24 @@ public sealed class LaunchGateAuditTests : LaunchFlowFixture
         Assert.Equal(LaunchOutcome.Refused, result.Outcome);
         Assert.Empty(starter.Specs);
         Assert.Equal("blocked", File.ReadAllText(GateFolder));
+    }
+
+    [Fact]
+    public async Task A_failed_terminal_append_keeps_the_confirmed_effect_unresolved()
+    {
+        var held = GateFolder + ".held";
+        starter.BeforeStart = () => { Directory.Move(GateFolder, held); File.WriteAllText(GateFolder, "blocked"); };
+        var handler = AuditedLocalLaunch();
+        LaunchResult result;
+        try { result = Assert.IsType<LaunchResult>(await handler(new GateAuditChannel(), LaunchProtocol.Launch, GateLaunch(Guid.NewGuid()))); }
+        finally
+        {
+            if (File.Exists(GateFolder)) { File.Delete(GateFolder); Directory.Move(held, GateFolder); }
+        }
+        Assert.Equal(LaunchOutcome.Started, result.Outcome);
+        Assert.Equal("intent", Assert.Single(LaunchAuditRows()).GetProperty("gate").GetProperty("phase").GetString());
+        Assert.Contains("unresolved-intent", GateAuditProjection.Read(GateProfile, Guid.Empty).IncompleteReasons);
+        Assert.Contains(logged, line => line.Contains("agent audit log could not write", StringComparison.Ordinal));
     }
 
     sealed class GateAuditChannel : IProtocolChannel

@@ -32,6 +32,29 @@ public sealed class GateAuditTests : IDisposable
 
     GateAuditReport Read() => Assert.IsType<GateAuditReport>(GateAuditProjection.Read(Profile, run));
 
+    [Theory]
+    [InlineData(false), InlineData(true)]
+    public void Launch_binding_requires_the_same_request_and_one_credit_per_resulting_session(bool differentRequest)
+    {
+        var audit = new AgentAuditLog(Profile, clock);
+        void Bind(Guid session, bool foreign)
+        {
+            var request = Guid.NewGuid().ToString();
+            var operation = Guid.NewGuid();
+            var gate = new GateAuditMetadata(1, operation, run, 0, "intent", "relay", "agent", operation, "none");
+            var intent = new AgentAuditEntry("in", request, "agent:machine/session", [], "session.launch", request, "reserved", Gate: gate);
+            Assert.True(audit.Append(intent));
+            Assert.True(audit.Append(intent with { Request = foreign ? Guid.NewGuid().ToString() : request, Target = session.ToString(),
+                Outcome = "started", Gate = gate with { Phase = "terminal" } }));
+        }
+        Bind(target, false);
+        Assert.Equal(1, Assert.Single(Read().Totals).Successes);
+        Bind(differentRequest ? Guid.NewGuid() : target, differentRequest);
+        var report = Read();
+        Assert.True(report.Invalidated);
+        Assert.Equal(1, Assert.Single(report.Totals).Successes);
+    }
+
     [Fact]
     public void Gate_metadata_round_trips_through_the_writer_and_existing_owner_reader_without_text()
     {

@@ -178,7 +178,7 @@ public static class LocalApi
                 .. control.HasAgentSignIn ? new[] { HostOps.AgentSignInCapability } : []] },
             CallerKind.Agent => hello with { Capabilities = [.. hello.Capabilities.Where(AgentCapabilities.Contains)] },
             _ => hello,
-        });
+        }, launchAudit: op == LaunchProtocol.Launch && callers.Classify(channel).Kind is (CallerKind.App or CallerKind.HostCli) ? audit : null);
     };
 
     internal sealed class RefusalAudits(TimeProvider time)
