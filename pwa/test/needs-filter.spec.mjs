@@ -23,7 +23,6 @@ async function ask(page, id) {
 for (const width of [390, 1440]) {
   test.describe(`Needs you filter at ${width}px`, () => {
     test.use({ viewport: { width, height: 900 } });
-
     test('the visible toggle opens a collapsed group, counts its pinned member once and restores collapse after reload', async ({ page }) => {
       await open(page);
       await ask(page, CODEX);
@@ -67,7 +66,6 @@ for (const width of [390, 1440]) {
       await expect(group(page)).toHaveAttribute('aria-expanded', 'false');
       expect(await savedCollapse(page)).toEqual(saved);
     });
-
     test('keyboard activation retains answered rows at zero and returns focus safely when the toggle disappears', async ({ page }) => {
       await open(page);
       await control(page).focus();
@@ -88,7 +86,6 @@ for (const width of [390, 1440]) {
       await expect(page.locator('#sessions-h')).toBeFocused();
       await expect(row(page, CLAUDE)).toBeVisible();
     });
-
     test('search intersects the filter without changing its count and questions arriving join in their own place', async ({ page }) => {
       await open(page);
       await control(page).click();
@@ -107,7 +104,6 @@ for (const width of [390, 1440]) {
       await expect(control(page)).toHaveAttribute('aria-pressed', 'false');
       await expect(page.locator('#session-list > .session')).toHaveCount(4);
     });
-
     test('an offline question leaves the connected count and active rows, even at zero', async ({ page }) => {
       await page.goto('?demo=1&static=1&machines=3');
       await page.waitForSelector('html[data-demo-ready]');
