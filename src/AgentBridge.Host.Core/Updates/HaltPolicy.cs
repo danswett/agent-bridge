@@ -11,12 +11,13 @@ public sealed partial class ReleaseDiscovery
 {
     public static readonly TimeSpan PolicyInterval = TimeSpan.FromHours(1);
     public const string HaltPolicyList = "https://api.github.com/repos/danswett/agent-bridge/releases?per_page=100";
+    const int PolicyLargest = 1024 * 1024;
     internal sealed record HaltPolicyCache(VerifiedHaltPolicy? Policy, DateTimeOffset? At, DateTimeOffset NotBefore, string? ETag,
         DateTimeOffset? AttemptedAt = null, long Attempt = 0, long Verified = 0);
 
     public HaltPolicySnapshot HaltPolicy => PolicyView(memory.HaltPolicy);
     HaltPolicySnapshot PolicyView(HaltPolicyCache? policy) => new(policy?.Policy, policy?.At,
-        !unsaved && policy?.Policy is not null && policy.At is { } at && at <= time.GetUtcNow()
+        !unsaved && policy?.Policy?.Body is not null && policy.At is { } at && at <= time.GetUtcNow()
         && time.GetUtcNow() - at < GithubRevalidateEvery);
     public async Task<HaltPolicySnapshot> ReadHaltPolicyAsync(
         Func<string, CancellationToken, Task<VerifiedHaltPolicy>> verify, CancellationToken cancellationToken = default)
