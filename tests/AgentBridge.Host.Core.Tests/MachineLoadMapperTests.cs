@@ -42,6 +42,84 @@ public class MachineLoadMapperTests
     }
 
     [Theory]
+    [InlineData(3L, 2L, 100d / 3d)]
+    [InlineData(8L, 3L, 62.5)]
+    [InlineData(8L, 8L, 0d)]
+    [InlineData(8L, 0L, 100d)]
+    public void Physical_used_is_serialized_from_the_same_bytes_without_rounding(long total, long available, double expected)
+    {
+        var record = MachineLoadMapper.Map(Report(new(4, 25.5, available, TotalMemoryBytes: total)), Now, Limit);
+        var json = JsonSerializer.SerializeToElement(record, ProtocolJson.Options);
+        var memory = json.GetProperty("memory");
+        Assert.Equal(total, memory.GetProperty("totalBytes").GetInt64());
+        Assert.Equal(available, memory.GetProperty("availableBytes").GetInt64());
+        Assert.False(memory.TryGetProperty("committedPercent", out _));
+        Assert.True(memory.TryGetProperty("usedPercent", out var used), "Valid physical-memory bytes must emit memory.usedPercent.");
+        Assert.Equal(expected, used.GetDouble(), 12);
+    }
+
+    [Fact]
+    public void Physical_used_and_committed_percentages_are_independent_wire_figures()
+    {
+        var mapped = MachineLoadMapper.Map(Report(new(4, 25.5, 2, TotalMemoryBytes: 3)), Now, Limit);
+        // The sampler has no committed figure; seed only the existing wire member.
+        var record = mapped with { Memory = mapped.Memory! with { CommittedPercent = 87.5 } };
+        var json = JsonSerializer.SerializeToElement(record, ProtocolJson.Options);
+        var memory = json.GetProperty("memory");
+        Assert.Equal(87.5, memory.GetProperty("committedPercent").GetDouble());
+        Assert.True(memory.TryGetProperty("usedPercent", out var used), "Physical used must remain distinct from committedPercent.");
+        Assert.Equal(100d / 3d, used.GetDouble(), 12);
+    }
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData(null, 0L)]
+    [InlineData(8L, null)]
+    [InlineData(0L, 0L)]
+    [InlineData(0L, 1L)]
+    [InlineData(8L, 9L)]
+    [InlineData(-1L, 0L)]
+    [InlineData(8L, -1L)]
+    [InlineData(9007199254740992L, 0L)]
+    [InlineData(8L, 9007199254740992L)]
+    public void Missing_or_invalid_memory_bytes_omit_physical_used_instead_of_inventing_zero(long? total, long? available)
+    {
+        var record = MachineLoadMapper.Map(Report(new(4, 25.5, available, TotalMemoryBytes: total)), Now, Limit);
+        var json = JsonSerializer.SerializeToElement(record, ProtocolJson.Options);
+        if (json.TryGetProperty("memory", out var memory))
+            Assert.False(memory.TryGetProperty("usedPercent", out _));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void The_supported_reader_accepts_old_and_additive_memory_payloads(bool includeUsedPercent)
+    {
+        var record = MachineLoadMapper.Map(Report(), Now, Limit);
+        var payload = JsonSerializer.SerializeToNode(record, ProtocolJson.Options)!;
+        var memory = payload["memory"]!.AsObject();
+        memory.Remove("usedPercent");
+        memory["committedPercent"] = 87.5;
+        if (includeUsedPercent) { memory["usedPercent"] = 60d; }
+
+        var read = Received.Read<AgentBridge.Protocol.MachineLoad>(JsonSerializer.SerializeToElement(payload, ProtocolJson.Options));
+        Assert.Equal(MachineLoadState.Fresh, read.State);
+        Assert.Equal(Now.AddSeconds(-2), read.SampledAt);
+        Assert.Equal(2000, read.AgeMs);
+        Assert.Equal(15000, read.StaleAfterMs);
+        Assert.Equal(new MachineLoadCpu(25.5, 4), read.Cpu);
+        Assert.Equal(1000, read.Memory!.TotalBytes);
+        Assert.Equal(400, read.Memory.AvailableBytes);
+        Assert.Equal(87.5, read.Memory.CommittedPercent);
+        Assert.Empty(read.Sessions);
+        if (!includeUsedPercent)
+        {
+            var json = JsonSerializer.SerializeToElement(read, ProtocolJson.Options);
+            Assert.False(json.GetProperty("memory").TryGetProperty("usedPercent", out _));
+        }
+    }
+
+    [Theory]
     [InlineData(0, MachineLoadState.Fresh)]
     [InlineData(15, MachineLoadState.Fresh)]
     [InlineData(16, MachineLoadState.Stale)]
