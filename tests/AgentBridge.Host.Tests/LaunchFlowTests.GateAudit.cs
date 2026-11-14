@@ -42,7 +42,7 @@ public sealed partial class LaunchFlowTests
         Assert.Equal(request.ToString(), intent.GetProperty("target").GetString());
         var rows = LaunchAuditRows();
         Assert.Equal(2, rows.Length);
-        var terminal = Assert.Single(rows.Where(row => row.GetProperty("gate").GetProperty("phase").GetString() == "terminal"));
+        var terminal = Assert.Single(rows, row => row.GetProperty("gate").GetProperty("phase").GetString() == "terminal");
         Assert.Equal("started", terminal.GetProperty("outcome").GetString());
         Assert.Equal(result.Session, terminal.GetProperty("target").GetString());
         Assert.Equal(request.ToString(), terminal.GetProperty("request").GetString());
