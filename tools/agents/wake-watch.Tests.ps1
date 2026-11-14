@@ -31,7 +31,9 @@ Describe 'Wake watcher restart progress' {
             "HTTP/2.0 200`nETag: $etag`n`n$json"
         }
         function Watch([hashtable]$Options = @{}) {
-            $out = (& $watcher -Team watch-test -MaxMinutes 1 -CommentSeconds 0 @Options 6>&1) -join "`n"
+            $parameters = @{ Team = 'watch-test'; MaxMinutes = 1; CommentSeconds = 0 }
+            foreach ($key in $Options.Keys) { $parameters[$key] = $Options[$key] }
+            $out = (& $watcher @parameters 6>&1) -join "`n"
             $global:WakeWatchFixture.exitCode = $LASTEXITCODE
             $out
         }
@@ -52,6 +54,28 @@ Describe 'Wake watcher restart progress' {
     AfterEach {
         Set-Variable HOME -Value $oldHome -Force
         Remove-Variable WakeWatchFixture -Scope Global
+    }
+
+    It 'caps a run without -Async at 60 seconds and says run me async' {
+        $out = Watch @{ MaxMinutes = 120 }
+
+        $out | Should -Match '(?m)^.*run me async.*\r?\nwatching comments'
+        $out | Should -Match 'WAKE timeout after 1 min .*run me async'
+        $out | Should -Not -Match 'timeout after 120 min'
+        $global:WakeWatchFixture.calls.Count | Should -BeLessThan 5
+    }
+
+    It '-Async keeps the full MaxMinutes and prints no warning' {
+        $out = Watch @{ MaxMinutes = 120; Async = $true }
+
+        $out | Should -Match 'WAKE timeout after 120 min'
+        $out | Should -Not -Match 'run me async'
+        $global:WakeWatchFixture.calls.Count | Should -BeGreaterThan 100
+    }
+
+    It 'does not extend a shorter run without -Async' {
+        Watch @{ MaxMinutes = 0 } | Should -Match 'WAKE timeout after 0 min'
+        $global:WakeWatchFixture.calls.Count | Should -Be 0
     }
 
     It 'wakes for a comment arriving between two runs without Since or IgnoreIds' {
