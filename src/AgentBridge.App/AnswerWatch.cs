@@ -134,8 +134,8 @@ sealed class AnswerWatch
             var shown = HolderShown() ? Answers().ToList() : [];
             var chain = Scrollers();
             var look = new AnswerLook(
-                [.. shown.Select(a => { var p = a.TransformToVisual(null).TransformPoint(default); return (p.X, p.Y); })],
-                [.. chain.Select(Look)],
+                shown.Select(a => { var p = a.TransformToVisual(null).TransformPoint(default); return (p.X, p.Y); }).ToArray(),
+                chain.Select(Look).ToArray(),
                 root.Size.Width,
                 root.Size.Height,
                 QuestionBox(chain.FirstOrDefault()),

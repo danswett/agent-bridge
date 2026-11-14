@@ -658,7 +658,7 @@ $('signin-button').onclick = async () => {
     $('verify').textContent = flow.verificationUri.replace(/^https?:\/\//, '');
     $('code-box').hidden = false;
     const account = await flow.wait();
-    accountStore.save(account);
+    await accountStore.save(account);
     $('code-box').hidden = true;
     $('signin').hidden = true;
     begin(account);
@@ -1063,7 +1063,7 @@ function begin(account) {
     // A session's address names this account's machine: the next sign-in, perhaps another
     // account, would otherwise start on it. A link that arrives after this is kept.
     if (shell.route === 'sessions' && shell.rest.length) { shell.go('sessions', { replace: true }); }
-    accountStore.clear();
+    void Promise.resolve(accountStore.clear()).catch((error) => console.error(error));
     dropKeptUsage();
     connection.stop();
     // This account's machines must not go on notifying this device.
@@ -1086,7 +1086,7 @@ function begin(account) {
     reading.stop();
     $('feedback').hidden = true;
     if (feedbackDialog.open) { feedbackDialog.close(); }
-    accountStore.clear();
+    await accountStore.clear();
     connection.stop();
     // Not for long: signing out must not wait on a service worker that isn't running.
     await Promise.race([Promise.all([notices.forget().catch(() => {}), dropKeptUsage()]), new Promise((r) => { setTimeout(r, 2000); })]);
