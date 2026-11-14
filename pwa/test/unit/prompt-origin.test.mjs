@@ -31,8 +31,12 @@ test('a schedule\'s prompt is labelled Scheduled with its number, under a clock,
 test('host turn kind keeps automatic prompts out of owner bubbles and names their origin exactly', () => {
   for (const [kind, label] of [['notification', 'Notification'], ['scheduled', 'Scheduled']]) {
     const s = readSession({ id: 's', activity: { kind, userMessage: 'Automatic' } });
-    assert.deepEqual(promptOrigin(s).facts, [label]);
-    assert.deepEqual(historyPromptOrigin({ text: 'Automatic', from: 'person' }, kind).facts, [label]);
+    const live = promptOrigin(s);
+    const stored = historyPromptOrigin({ text: 'Automatic', from: 'person' }, kind);
+    assert.ok(live);
+    assert.ok(stored);
+    assert.deepEqual(live.facts, [label]);
+    assert.deepEqual(stored.facts, [label]);
   }
 });
 

@@ -138,11 +138,11 @@ export function shownParts(t) {
 
 export function turnView(t, inline = null) {
   if (t.unreadable) { return h('section', { class: 'history-turn', dataset: { turn: t.id } }, h('p', { class: 'history-meta' }, WORDS.unreadable)); }
-  const from = t.prompt?.from ?? 'person';
+  const from = t.kind === 'notification' ? 'notification' : t.kind === 'scheduled' ? 'schedule' : t.prompt?.from ?? 'person';
   const prompt = !t.prompt ? null
     : from === 'person'
       ? h('div', { class: 'history-prompt' }, sentMessage(t.prompt.text ?? '', 'history-bubble'), timeRow(t.at, 'msg-time-owner'))
-      : (() => { const o = historyPromptOrigin(t.prompt); return o ? originView(o, t.at) : null; })();
+      : (() => { const o = historyPromptOrigin(t.prompt, t.kind); return o ? originView(o, t.at) : null; })();
   return h('section', { class: 'history-turn', dataset: { turn: t.id } }, prompt, shownParts(t).map((p) => part(p, inline)), t.truncated ? h('p', { class: 'history-meta history-cut' }, WORDS.cut) : null);
 }
 

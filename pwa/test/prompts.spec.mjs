@@ -122,6 +122,8 @@ test('the label is read before the prompt, and nothing presents it as the person
   await expect(p).not.toContainText('Your last message');
   await expect(v.locator('.user-message .plain')).toHaveText('');
   const snapshot = await p.ariaSnapshot();
+  expect(snapshot).not.toContain('Scheduled prompt');
+  expect(snapshot.indexOf('Scheduled')).toBeGreaterThanOrEqual(0);
   expect(snapshot.indexOf('Scheduled')).toBeLessThan(snapshot.indexOf('Check the deploy pipeline'));
 });
 
