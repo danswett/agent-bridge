@@ -42,6 +42,7 @@ sealed class MergeRuleConfig
         config.MainGreen ??= new();
         config.MainGreen.ExemptLabels ??= [];
         config.MainGreen.Jobs ??= [];
+        config.MainGreen.LegFamilies ??= [];
         config.CopilotWaiver ??= new();
         config.CopilotWaiver.Labels ??= [];
         config.CopilotWaiver.OneReviewPaths ??= [];
@@ -56,6 +57,9 @@ sealed class MergeRuleConfig
         if (string.IsNullOrWhiteSpace(config.MainGreen.Workflow)) missing.Add("main_green.workflow");
         if (config.MainGreen.Jobs.Count == 0 || config.MainGreen.Jobs.Any(string.IsNullOrWhiteSpace))
             missing.Add("main_green.jobs");
+        if (config.MainGreen.LegFamilies.Any(f => f is null || f.Count == 0 || f.Any(string.IsNullOrWhiteSpace)
+            || f.Distinct(StringComparer.Ordinal).Count() != f.Count))
+            missing.Add("valid main_green.leg_families");
         if (config.SensitivePaths.Count == 0) missing.Add("sensitive_paths");
         // With nowhere to read the second review from, one review would stand in for two on a
         // sensitive change, so the config refuses to load rather than guess.
@@ -93,6 +97,7 @@ sealed class MainGreenConfig
     public string Workflow { get; set; } = "";
     public List<string> ExemptLabels { get; set; } = [];
     public List<string> Jobs { get; set; } = [];
+    public List<List<string>> LegFamilies { get; set; } = [];
 }
 
 /// <summary>

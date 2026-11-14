@@ -47,6 +47,24 @@ foreach ($fault in @('none', 'installer-red', 'failure', 'cancelled', 'skipped',
     $expected = if ($fault -in @('none', 'installer-red')) { $head } else { '' }
     if ($got.sha -ne $expected) { throw "candidate fixture failed: $fault" }
 }
+$oldLegs = Run 2 $head
+$newLegs = Run 2 $head
+$newLegs.jobs = @($newLegs.jobs | ForEach-Object {
+    $_.name = $_.name -replace 'webkit ([123])/3', 'webkit $1/5'; $_
+}) + @(4..5 | ForEach-Object { @{ name = "pwa-ui (webkit $_/5)"; head_sha = $head; status = 'completed'; conclusion = 'success' } })
+$manifests = @(@($oldLegs.jobs.name), @($newLegs.jobs.name))
+function FamilyCandidate($run) {
+    function Get-Content { ConvertTo-Json -InputObject $manifests -Compress }
+    & $candidate -Runs @($run)
+}
+foreach ($run in @($oldLegs, $newLegs)) {
+    if ((FamilyCandidate $run).sha -ne $head) { throw 'an exact old or new Pages manifest was refused' }
+    $missingLeg = $run.Clone()
+    $missingLeg.jobs = @($run.jobs | Where-Object name -ne 'pwa-ui (chromium 1/3)')
+    if ((FamilyCandidate $missingLeg).sha) { throw 'a missing leg passed an alternative Pages manifest' }
+    $run.jobs = @($run.jobs) + @(@{ name = 'pwa-ui (webkit 6/6)'; head_sha = $head; status = 'completed'; conclusion = 'success' })
+    if ((FamilyCandidate $run).sha) { throw 'an extra shard passed an alternative Pages manifest' }
+}
 $new = Run 2 $head; $old = Run 1 $live
 if ((& $candidate -Runs @($old, $new)).sha -ne $head) { throw 'newest SHA did not win' }
 if ((& $candidate -Runs @((Run 1 $head), (Run 2 $live))).sha -ne $live) { throw 'SHA lexical order replaced run order' }
