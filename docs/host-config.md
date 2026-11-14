@@ -201,6 +201,22 @@ An unreadable, invalid or newer-schema file also turns relay load sharing off. A
 is not an object, or `load.enabled` that is neither boolean nor null, reports a configuration
 problem and turns sharing off, never defaulting it on.
 
+## Script credentials at the machine
+
+`agent-bridge-host scripts add|revoke <name> [--profile <name>]` is for a person at a Windows terminal.
+The host must already serve that profile at the same elevation. Agent sessions, credentialed
+connections, the relay and other local programs cannot manage script credentials. This is a
+same-user safety rail, not a security boundary ([local pipe](protocol/local-pipe.md#who-may-manage-the-host)).
+Names are 1 to 64 ASCII letters, digits, `.`, `_` or `-`, excluding `.` and `..`.
+
+Add grants `read+reply` for 30 days, at most two live rotations per name, with an owner-only DPAPI-protected file.
+Its stdout JSON contains only id, principal, scope, expiry and file path, never a token.
+Revoke removes both rotations from the running store and persisted hashes and prints
+`{ "name": "...", "revoked": true }`; the protected file may remain but no longer authenticates.
+Unknown names fail revoke. Each admitted add/revoke audits `attempted` before mutation; an unwritable audit refuses it.
+Exit codes: 0 success, 1 host/store refusal or I/O/timeout, 2 invalid arguments/unsupported platform,
+4 agent-session refusal. JSON/cancellation errors are not mapped to exit 1; script ops keep their allow-list.
+
 ## Trusted peers: disposable-host foundation
 
 `permissions.trustedPeers` is **off by default** and read only at startup. This
@@ -462,10 +478,11 @@ Archive, durable chain heads and pruning changes remain separate #1401 A6 slices
 What agents did on this machine is written one JSON line per event to
 `<profile>\audit\agents-YYYY-MM-DD.jsonl` (#1296, design/agent-principals.md §5.6). The folder
 and files are readable by this user alone, like `agent-credentials.json`. Each line has `at`,
-`direction` (`out`, `in` or `local`), `request`, `principal` (`agent:<machine>/<session>`, never
+`direction` (`out`, `in` or `local`), `request`, `principal` (for agent rows: `agent:<machine>/<session>`, never
 the owner), `chain`, `action`, `target`, `outcome`, `reason`, and, when the event carried text,
 `dataSha256` and `textLength`. The text itself is never written; a reason is cut at 200
 characters, every other field at 256, and the chain at 16 entries.
+Person host-CLI management actions use `person:local` with direction `local` in this same stream.
 
 The host keeps at most 30 days and 64 MiB, deleting the oldest day's file first and never the
 file being written. That file is bounded too: once a line would take it past 64 MiB the write
@@ -513,7 +530,7 @@ agent-bridge-host workspace remove Bridge
 use, and `--isolate` outside a git repository. Every command takes `--profile <name>`.
 
 `workspace add` and `remove`, `config set` and `unset`, `ha token set` and `clear`, and
-`sign-in` are for a person. They refuse to run (exit code 4) inside an agent session: when
+`sign-in` and `scripts add|revoke` are for a person. They refuse to run (exit code 4) inside an agent session: when
 anything they run inside is an agent CLI (`copilot`, `claude`, `codex`, `agency`, or Node or Bun
 running one), or when `AGENT_BRIDGE_SESSION` is set, as it is in every session the host
 launches. They refuse too when the process tree they run in cannot be read in full (an
