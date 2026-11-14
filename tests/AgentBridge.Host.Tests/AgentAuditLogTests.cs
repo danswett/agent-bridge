@@ -245,6 +245,7 @@ public sealed class AgentAuditLogTests : IDisposable
         const string prompt = "private launch text \u00e9";
         Assert.True(log.Append(entry, prompt));
         var file = Path.Combine(Audit, "launches-2026-11-08.jsonl");
+        if (torn) { File.AppendAllText(file, "x"); Assert.True(log.Append(entry, prompt)); }
         var line = System.Text.Encoding.UTF8.GetBytes(File.ReadAllLines(file)[^1] + "\n");
         using (var seed = new FileStream(file, FileMode.Create, FileAccess.Write))
         {

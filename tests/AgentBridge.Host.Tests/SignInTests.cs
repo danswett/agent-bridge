@@ -402,9 +402,10 @@ public sealed class SignInTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Authority_is_rechecked_after_source_state_wait_and_at_queued_factory_launch(bool queued)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Authority_is_rechecked_after_source_state_wait_and_at_queued_factory_launch(bool queued, bool sweepBeforeLaunch)
     {
         await using var h = await Harness.CreateAsync();
         h.Factory.QueueStart = queued;
@@ -416,19 +417,28 @@ public sealed class SignInTests
             };
         }
         var phone = h.Phone();
-        await h.Start(phone).Then(phone);
-        if (queued)
+        try
         {
-            await h.Factory.Started.Task.WaitAsync(Patience);
-            h.Authority.Denial = "revoked";
-            h.Factory.ReleaseLaunch.TrySetResult();
-            await h.Factory.Checked.Task.WaitAsync(Patience);
+            await h.Start(phone).Then(phone);
+            if (queued)
+            {
+                await h.Factory.Started.Task.WaitAsync(Patience);
+                h.Authority.Denial = "revoked";
+                if (sweepBeforeLaunch)
+                {
+                    await h.Service.SweepAsync();
+                    Assert.False(h.Service.FlowRunning);
+                }
+                h.Factory.ReleaseLaunch.TrySetResult();
+                Assert.False(await h.Factory.Checked.Task.WaitAsync(Patience));
+            }
+            else { Assert.Equal(0, h.Factory.Starts); }
+            await h.Service.SweepAsync();
+            Assert.Equal(0, h.Factory.Launches);
+            Assert.Equal(0, h.Recovery.Resumes);
+            Assert.Equal(0, h.Service.CodesHeld);
         }
-        else { Assert.Equal(0, h.Factory.Starts); }
-        await h.Service.SweepAsync();
-        Assert.Equal(0, h.Factory.Launches);
-        Assert.Equal(0, h.Recovery.Resumes);
-        Assert.Equal(0, h.Service.CodesHeld);
+        finally { h.Factory.ReleaseLaunch.TrySetResult(); }
     }
 
     [Fact]
@@ -1202,7 +1212,7 @@ public sealed class SignInTests
         public bool QueueStart;
         public int Launches;
         public TaskCompletionSource ReleaseLaunch { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public TaskCompletionSource Checked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<bool> Checked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<IPrivateSignInProcess> Delayed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Process Process { get; } = new();
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1215,9 +1225,12 @@ public sealed class SignInTests
             return LaunchAsync();
             async Task<IPrivateSignInProcess> LaunchAsync()
             {
-                if (QueueStart) { await ReleaseLaunch.Task.WaitAsync(ct); }
-                Checked.TrySetResult();
-                if (!authorize()) { throw new InvalidOperationException("sign-in launch is no longer authorized"); }
+                // The test owns this queue even if a sweep cancels its token: it must
+                // still observe the launch-time authority verdict.
+                if (QueueStart) { await ReleaseLaunch.Task; }
+                var allowed = authorize();
+                Checked.TrySetResult(allowed);
+                if (!allowed) { throw new InvalidOperationException("sign-in launch is no longer authorized"); }
                 ct.ThrowIfCancellationRequested();
                 ++Launches;
                 return Process;

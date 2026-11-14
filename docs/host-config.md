@@ -478,6 +478,23 @@ It is a metadata read, **not a chain-integrity verdict**. A malformed complete r
 unsupported major version or read failure returns nonzero with a content-free error;
 earlier output may be partial. An incomplete final JSON prefix is ignored with a warning.
 Archive, durable chain heads and pruning changes remain separate #1401 A6 slices.
+Optional `gate` metadata is versioned and allow-listed by the same reader. Its host-only
+ids, sequence, route, actor kind and bounded reason code contain no action text or hashes.
+The internal per-run projection reports observed totals and incomplete evidence, never
+a qualifying run or retirement verdict; it creates no profile, writer or lock.
+An unterminated final record also warns on stderr. A malformed record stops the read:
+later evidence is not projected, and control rows do not yet apply run lifecycle state.
+Any append that supplies a missing LF retains `previousTailIncomplete` in the audit metadata.
+Detected gaps or parse faults give INCOMPLETE. Pruning the newest sequence-bearing agents
+files can reuse numbers and escape detection; tail-derived allocation permits new writes,
+not recovery proof or a new run. Durable high-water protection remains deferred to A6.
+Recovered-tail flags keep every profile projection INCOMPLETE until A6's control-aware replay.
+Gate-free streams may be rescanned under lock on each append (up to 64 MiB for agents).
+Retrying a terminal refusal uses a fresh host operation; successful logical identities
+receive credit once. Conflicting terminals, or a successful claim by a second operation
+for an already-successful identity, invalidate the run.
+Durable high-water anchors/cache and the broader cross-run, missing-approval-question and
+writer-refusal regression matrix are deferred to #1401 A6; no qualifying run before that work.
 
 What agents did on this machine is written one JSON line per event to
 `<profile>\audit\agents-YYYY-MM-DD.jsonl` (#1296, design/agent-principals.md §5.6). The folder
