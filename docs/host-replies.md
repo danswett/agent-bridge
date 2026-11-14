@@ -19,8 +19,8 @@ one session at once.
 ## The keys (Copilot)
 
 Ported from agent-ha-bridge (`hooks/decision-inject.ps1`, `Send-CopilotSessionPrompt`):
-the words as one burst, 300 ms, then Enter as a keystroke of its own. The CLI takes a burst
-as a paste, and only a separate Enter submits it.
+the words as one burst, 300 ms, then a submit key of its own. The CLI takes a burst
+as a paste. Enter submits as before; #2468's queue path uses Ctrl+Q while working.
 
 **One line, always.** agent-ha-bridge replaces every control character with a space
 (`Get-CopilotInjectableText`: "it can never submit an extra line into the CLI"), and so does
@@ -30,14 +30,29 @@ own injector notes that a newline inside a paste burst is inserted literally rat
 submitting, which might allow multi-line replies one day, but the bridge never relied on it,
 so neither does this.
 
-**A working session.** agent-ha-bridge types a reply whatever the session is doing; only an
-open question or approval stops it (`Test-DaemonReplyBoxFree`). Copilot CLI accepts a prompt
-typed while it works and records it when it takes it: as a `user.message` with
-`delivery: "steering"` just after the next `assistant.turn_start`, that is once the tools
-running now have finished (239 of the 267 steering prompts in this machine's transcripts sit
-right after a turn start), or `queued` after the turn ends. One typed while idle is recorded
-at once (`delivery: "idle"`). The host therefore waits up to 60 s for the prompt, and frees
-the session for answers as soon as the keys have gone.
+**A working session (#2468).** The protocol and models are defined in slice 1; host
+planning and confirmation follow in slice 2, and sender defaults in slice 3. Until then
+the host keeps Enter and does not advertise `sessions.reply.queue`.
+The request field is `mode`, distinct from the transcript's `delivery`. Absent means
+`steer`, preserving older clients and a person's app/PWA replies. Agent senders explicitly
+request `queue`, except urgent corrections or stops (`steer`), never urgent status or FYI.
+
+For a working Copilot session, `queue` means text, 300 ms, then Ctrl+Q; `steer` keeps
+Enter. All existing screen, shell/vim, 80-column, race and submit-key checks below apply
+to either key. An idle session gets Enter, result `mode: "steer"` and transcript
+`delivery: "idle"`. The host frees the session for answers once the keys have gone.
+Within 5 s of Ctrl+Q it must see the queued prompt in the turn row
+(`CopilotInputBox.TurnSigns`) before reporting interim `queued` progress. If not seen,
+it returns `unconfirmed` under the existing stage rules, never follows with Enter.
+
+Only the matching transcript `user.message` with `delivery: "queued"` confirms a queued
+Copilot reply. Wait 60 s from typing, extended while the same turn that was running
+then still runs, capped at 15 minutes from typing. A later turn never extends it.
+At the cap, a prompt seen queued but not started is `unconfirmed`, `stage: "queued"`;
+a repeat reads again without typing and becomes `delivered` once recorded.
+`steer` still records `delivery: "steering"` when taken. Result `mode` reports what
+actually happened, absent meaning `steer`. An older host must never be shown as having
+queued merely because a session was working ([compatibility](protocol/v1-sessions.md#sessionreply)).
 
 **The input box (#825).** A reply is typed only into Copilot's own input box, read off the
 screen (`Copilot/CopilotInputBox.cs`), and only while that box is empty and outside shell
@@ -107,11 +122,11 @@ the footer must also not have become a running turn's row (Esc's or Ctrl+C's hin
 there that row leaves out the mode labels, so a turn starting after the read would hide
 them, and it is refused as one running at the read is. Anything else in the footer (its
 spinner, its hints) may change. If a check fails, nothing is typed and the reply is `refused` ("input box
-changed just as the reply was to be typed"). The Enter is a send of its own, after
+changed just as the reply was to be typed"). The submit key is a send of its own, after
 Copilot's 300 ms pause, held to the box's bottom edge and to the same footer checks, and
 to the box's first text row not starting with '!' (the frame-off box's shell glyph): if
 any fails (a dialog drawn in the input area's place, Home then '!' while the words were
-typed, Esc), no Enter goes, and the reply is `unconfirmed`, its words left in the box for
+typed, Esc), no submit key goes, and the reply is `unconfirmed`, its words left in the box for
 the person to send or clear. A box that grows down the screen with the words (a short
 screen, a long reply) moves its edge too, and is reported the same way; one that grows up a
 full screen moves its first text row, which then leaves the '!' check to the footer's. What
@@ -148,7 +163,7 @@ there no held attachment is using (all of them at start-up).
 
 **How Copilot gets the file.** Exactly as agent-ha-bridge does it: the staged path as an
 `@<path>` mention for each file, in order, then the words, trimmed, as one line, typed as
-any reply is (one burst, then Enter). Copilot CLI records such a prompt with the mentions
+any reply is (one burst, then the submit key chosen by `mode`). Copilot CLI records such a prompt with the mentions
 in `content` and one `data.attachments` entry (`type: "file"`, `path`, `displayName`,
 `mentionIndex`) for each file it attached, as agent-ha-bridge's replies with images in this
 machine's transcripts show. A mention cannot be quoted, so a path with
@@ -302,7 +317,7 @@ In order, for every reply:
    the attachments kept for another try; a worker that stopped after its first write is
    `unconfirmed`, never retried. Either way once a key may have gone the attachments leave
    memory. The session is released for answers.
-7. Up to 60 s, the transcript after that point is watched for a main-agent `user.message`
+7. Up to 60 s (extended for a queued Copilot reply as above), the transcript after that point is watched for a main-agent `user.message`
    with no `source`, whose content equals the typed words with whitespace runs collapsed.
    Each such prompt confirms one reply (claimed by its line's offset), so two replies of the
    same words need two prompts. `delivered` on one whose `attachments` list every staged
@@ -337,8 +352,9 @@ where they had them (#467), and the exception's text in the host's log only.
 A client that saw `sessions.progress` and sends `"progress": true` hears the reply's stages
 before its result ([v1-sessions.md, Progress](protocol/v1-sessions.md#progress)): `received`
 as `SessionService` takes the request, before step 1, and `typed` once every key of step 6 has
-gone, with `working` when the session was working then (it takes the prompt at its next step,
-as Copilot's `steering`). The result then carries `timings`: `typed`, `recorded` (the agent's
+gone, with `working` when the session was working then (not proof it was queued).
+Queue delivery adds `queued` only after Copilot's turn-row evidence, never as a final
+outcome. The result then carries `timings`: `typed`, `recorded` (the agent's
 own timestamp on the prompt that confirmed it) and `confirmed`, in ms after receipt. A resend
 of a reply still being delivered hears the stages it has reached. Frames are queued without
 waiting, so a slow or closed channel never holds up the typing.
