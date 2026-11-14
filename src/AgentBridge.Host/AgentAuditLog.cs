@@ -110,6 +110,7 @@ public sealed class AgentAuditLog
                     // A crash mid-write can leave a partial line: start on a fresh one so it can't swallow this event.
                     if (torn) { stream.Write("\n"u8); }
                     stream.Write(data);
+                    stream.Flush(flushToDisk: true);
                 }
                 if (OperatingSystem.IsWindows()) { NarrowFileWindows(file); }
                 else { File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite); }

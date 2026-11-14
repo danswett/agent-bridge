@@ -121,6 +121,12 @@ otherwise report INCOMPLETE, never retry a side effect to repair the count.
 An append/flush failure before dispatch refuses the action. Failure after an
 effect leaves uncertain evidence and blocks the gate, even if a client saw success.
 
+Slice A (#2521) wires app/host-CLI launches through the local handler. Without a
+trusted run context, `run` is the empty UUID: `missing-run-context`, never credit.
+Intent target is the request UUID; operation/incarnation use the reserved launch
+UUID; terminal target is the registered session UUID. Restart replay mapping and
+relay/HA trusted ingress remain #2587.
+
 At restart rebuild operation mappings, active run and totals from both streams,
 checking supported versions, sequence/link continuity and the #1401 durable head.
 A torn last line, missing tail, unknown outcome,
