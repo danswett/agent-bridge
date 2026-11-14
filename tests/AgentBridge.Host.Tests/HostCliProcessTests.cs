@@ -18,6 +18,11 @@ public sealed class HostCliProcessTests(ITestOutputHelper output)
         using var agent = StartFixtureAgent(fixture);
         try
         {
+            var ready = await agent.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            if (ready != "ready")
+            {
+                throw new InvalidOperationException($"Fixture agent did not become ready: {await agent.StandardError.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(10))}");
+            }
             Fixture.Append(fixture.CopilotSession(Id, agent.Id, "Fixture CLI session", DateTimeOffset.UtcNow),
                 Copilot.User("Fixture request", 1), Copilot.Assistant("Fixture response", 2), Copilot.TurnEnd(3));
             var observation = new SystemProcessInspector().Observe(AgentKind.Copilot);
@@ -111,10 +116,10 @@ public sealed class HostCliProcessTests(ITestOutputHelper output)
 
     static Process StartFixtureAgent(Fixture fixture)
     {
-        // A renamed native sleeper, not a provider CLI: discovery needs a live matching pid.
+        // A renamed native shell blocked on our stdin keeps discovery's matching pid alive.
         var executable = Path.Combine(fixture.Root, OperatingSystem.IsWindows() ? "copilot.exe" : "copilot");
         File.Copy(OperatingSystem.IsWindows() ? Path.Combine(Environment.SystemDirectory, "cmd.exe")
-            : Path.Combine(Path.DirectorySeparatorChar.ToString(), "bin", "sleep"), executable);
+            : Path.Combine(Path.DirectorySeparatorChar.ToString(), "bin", "sh"), executable);
         if (!OperatingSystem.IsWindows())
         {
             File.SetUnixFileMode(executable, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
@@ -124,7 +129,8 @@ public sealed class HostCliProcessTests(ITestOutputHelper output)
             UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
         };
-        foreach (var argument in OperatingSystem.IsWindows() ? new[] { "/d", "/q", "/c", "set /p fixture=ready" } : ["120"])
+        foreach (var argument in OperatingSystem.IsWindows() ? new[] { "/d", "/q", "/c", "echo ready&set /p fixture=" }
+            : ["-c", "printf 'ready\\n'; read fixture"])
         { start.ArgumentList.Add(argument); }
         return Process.Start(start)!;
     }
