@@ -462,7 +462,7 @@ public sealed partial class SessionsPage : UserControl
         // session): every tab stays in the bar, out of sight, until its SizeChanged arranges them.
         // Returning instead left the bar empty or stale for whatever reads it meanwhile.
         MachineTabSplit split;
-        if (room <= 0 || choices.Count == 0) { split = new([.. Enumerable.Range(0, choices.Count)], []); }
+        if (room <= 0 || choices.Count == 0) { split = new(Enumerable.Range(0, choices.Count).ToArray(), []); }
         else
         {
             ObserveTabChrome();
