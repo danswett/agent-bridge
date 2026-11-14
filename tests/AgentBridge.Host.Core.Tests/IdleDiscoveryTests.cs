@@ -80,23 +80,19 @@ public class IdleDiscoveryTests
         var time = new CountingClock { StepUtc = true };
         var queries = 0;
         f.Processes.Queried = _ => Interlocked.Increment(ref queries);
-        var source = Source(f, time);
-        try
-        {
-            await source.StartAsync();
-            Assert.Equal(TimeSpan.FromSeconds(15), await time.NextTimer());
-            var startup = queries;
-            time.UtcOffset = TimeSpan.FromDays(2);
-            time.Advance(TimeSpan.FromSeconds(14));
-            Assert.Equal(startup, Volatile.Read(ref queries));
-            Assert.Equal(0, time.Callbacks);
-            time.UtcOffset = TimeSpan.FromDays(-2);
-            time.Advance(TimeSpan.FromSeconds(1));
-            Assert.Equal(TimeSpan.FromSeconds(15), await time.NextTimer());
-            Assert.Equal(startup * 2, Volatile.Read(ref queries));
-            Assert.Equal(1, time.Callbacks);
-        }
-        finally { await source.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1)); }
+        await using var source = Source(f, time);
+        await source.StartAsync();
+        Assert.Equal(TimeSpan.FromSeconds(15), await time.NextTimer());
+        var startup = queries;
+        time.UtcOffset = TimeSpan.FromDays(2);
+        time.Advance(TimeSpan.FromSeconds(14));
+        Assert.Equal(startup, Volatile.Read(ref queries));
+        Assert.Equal(0, time.Callbacks);
+        time.UtcOffset = TimeSpan.FromDays(-2);
+        time.Advance(TimeSpan.FromSeconds(1));
+        Assert.Equal(TimeSpan.FromSeconds(15), await time.NextTimer());
+        Assert.Equal(startup * 2, Volatile.Read(ref queries));
+        Assert.Equal(1, time.Callbacks);
     }
 
     [Fact]
