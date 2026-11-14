@@ -34,6 +34,8 @@ public sealed class HostConnection : IAsyncDisposable
     readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> refusedKinds = new(StringComparer.Ordinal);
 
     sealed record Current(IClientChannel Channel, string? Instance);
+    sealed record PatchSnapshot(IClientChannel Channel, TaskCompletionSource<long> Answer);
+    PatchSnapshot? patchSnapshot;
 
     public HostConnection(Func<CancellationToken, Task<LocalChannel>> connect, IUiDispatcher ui, Action<string>? log = null)
         : this(async ct => (IClientChannel)await connect(ct), ui, log) { }
@@ -443,11 +445,20 @@ public sealed class HostConnection : IAsyncDisposable
         // the resumed snapshot ends (SessionStore.Finish), which then asks again in full.
         var patch = hello.Capabilities.Contains(AgentBridge.Protocol.Capabilities.SessionsPatch);
         var instance = hello.Machine.Instance;
-        var request = patch ? new SubscribeRequest { Patch = true, Since = Sessions.ResumeFrom(instance) } : null;
+        var request = patch ? new SubscribeRequest { Patch = true, Handles = hello.Capabilities.Contains(AgentBridge.Protocol.Capabilities.SessionsHandles) ? true : null, Since = Sessions.ResumeFrom(instance) } : null;
         PostSessions(ch, () => Sessions.BeginSnapshot(ch, patch ? instance : null));
         // Its result is read loosely, only for resumed: read strictly, a result the app could not
         // read ended the connection, and every reconnect asked again (#446).
-        var (result, before) = await ch.CallOrderedAsync(Ops.SessionsSubscribe, request, ct: ct);
+        var snapshot = new PatchSnapshot(ch, new(TaskCreationOptions.RunContinuationsAsynchronously));
+        Volatile.Write(ref patchSnapshot, snapshot);
+        (JsonElement result, long before) response;
+        try
+        {
+            response = await ch.CallOrderedAsync(Ops.SessionsSubscribe, request, ct: ct);
+            snapshot.Answer.TrySetResult(response.before);
+        }
+        finally { snapshot.Answer.TrySetResult(long.MaxValue); }
+        var (result, before) = response;
         var resumed = request?.Since is not null && result.ValueKind == JsonValueKind.Object
             && result.TryGetProperty("resumed", out var r) && r.ValueKind == JsonValueKind.True;
         var asked = request?.Since is not null;
@@ -544,6 +555,8 @@ public sealed class HostConnection : IAsyncDisposable
         // alone. A patch's base names one event of this channel, so an entry from an earlier
         // subscription on it is never mistaken for the one a later patch is on.
         var held = new Dictionary<string, (long Seq, JsonObject Json)>(StringComparer.Ordinal);
+        var handles = new Dictionary<int, string>();
+        PatchSnapshot? cleared = null;
         try
         {
             await foreach (var ev in ch.Events.ReadAllAsync(ct))
@@ -562,7 +575,13 @@ public sealed class HostConnection : IAsyncDisposable
                     Resubscribe(ch, ev.Seq, gaps);
                 }
                 last = ev.Seq;
-                Apply(ch, ev, held, gaps);
+                var snapshot = Volatile.Read(ref patchSnapshot);
+                if (snapshot is not null && snapshot != cleared && ReferenceEquals(snapshot.Channel, ch))
+                {
+                    var before = await snapshot.Answer.Task.WaitAsync(ct);
+                    if (ev.Seq > before) { held.Clear(); handles.Clear(); cleared = snapshot; }
+                }
+                Apply(ch, ev, held, handles, gaps);
             }
         }
         catch (OperationCanceledException) { }
@@ -583,9 +602,9 @@ public sealed class HostConnection : IAsyncDisposable
     // JsonException ended the pump and the connection with it, and the snapshot after the
     // reconnect sent the same record again: one malformed session kept the app reconnecting for
     // good, its other sessions frozen. Logged once per kind of event, without the record itself.
-    void Apply(IClientChannel ch, ChannelEvent ev, Dictionary<string, (long Seq, JsonObject Json)> held, SemaphoreSlim gaps)
+    void Apply(IClientChannel ch, ChannelEvent ev, Dictionary<string, (long Seq, JsonObject Json)> held, Dictionary<int, string> handles, SemaphoreSlim gaps)
     {
-        try { ApplyOne(ch, ev, held, gaps); }
+        try { ApplyOne(ch, ev, held, handles, gaps); }
         catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException or NotSupportedException) { Refused(ev.Name, e); }
     }
 
@@ -639,7 +658,7 @@ public sealed class HostConnection : IAsyncDisposable
     // Host records are read as the spec says (Received): a field that cannot be read is absent,
     // unless the record is filed or decided on by it. The host's own status, a local-pipe record
     // the app alone reads, stays strict: its process id and start say which host it is.
-    void ApplyOne(IClientChannel ch, ChannelEvent ev, Dictionary<string, (long Seq, JsonObject Json)> held, SemaphoreSlim gaps)
+    void ApplyOne(IClientChannel ch, ChannelEvent ev, Dictionary<string, (long Seq, JsonObject Json)> held, Dictionary<int, string> handles, SemaphoreSlim gaps)
     {
         switch (ev.Name)
         {
@@ -655,12 +674,14 @@ public sealed class HostConnection : IAsyncDisposable
             case Events.SessionPatch:
                 {
                     SessionPatch p;
+                    string id;
                     JsonObject json;
                     try
                     {
                         p = Received.Read<SessionPatch>(ev.Data);
-                        var had = held.TryGetValue(p.Id, out var h);
-                        json = SessionPatches.Apply(had ? h.Json : null, had ? h.Seq : null, p);
+                        id = SessionPatches.ResolveId(p, handles);
+                        var had = held.TryGetValue(id, out var h);
+                        json = SessionPatches.Apply(had ? h.Json : null, had ? h.Seq : null, p, handles);
                     }
                     catch (Exception e) when (e is JsonException or SessionPatchException or InvalidOperationException)
                     {
@@ -672,7 +693,8 @@ public sealed class HostConnection : IAsyncDisposable
                         Resubscribe(ch, ev.Seq, gaps);
                         break;
                     }
-                    held[p.Id] = (ev.Seq, json);
+                    if (p.Handle is { } handle) { handles[handle] = id; }
+                    held[id] = (ev.Seq, json);
                     // Read exactly as an upsert of the same moment would be.
                     Upserted(ch, JsonSerializer.SerializeToElement(json), ev.Seq, p.Revision);
                     break;
@@ -703,7 +725,20 @@ public sealed class HostConnection : IAsyncDisposable
                     // for again in full: its live set is what drops the sessions that ended.
                     var seq = ev.Seq;
                     SessionsSynced synced;
-                    try { synced = Received.Read<SessionsSynced>(ev.Data); }
+                    try
+                    {
+                        synced = Received.Read<SessionsSynced>(ev.Data);
+                        var next = SessionPatches.ReadHandles(synced.Handles);
+                        handles.Clear();
+                        foreach (var (handle, id) in next) { handles.Add(handle, id); }
+                    }
+                    catch (Exception e) when (e is SessionPatchException || e is JsonException && ev.Data.TryGetProperty("handles", out _))
+                    {
+                        Refused(ev.Name, e);
+                        RefuseOn(ch);
+                        Resubscribe(ch, seq, gaps);
+                        break;
+                    }
                     catch (JsonException)
                     {
                         PostSessions(ch, () => Sessions.RefuseSynced(ch, seq));

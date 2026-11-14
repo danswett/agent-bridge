@@ -1680,6 +1680,9 @@ export class SessionCard {
       this.#follow.after(!this.#placed);
       if (full.phase !== 'loading' || full.turns.length) { this.#placed = true; }
     }
+    // Replacement can move the question after the history anchor aimed its smooth scroll.
+    const reveal = this.#revealing;
+    if (reveal?.view.isConnected) { reveal.view.scrollIntoView({ block: 'nearest', behavior: reveal.behavior }); }
   }
 
   // A stored latest turn with questions supplies their order, including after reload. Only words
@@ -2013,19 +2016,24 @@ export class SessionCard {
     const ended = this.#scrollEnd = new AbortController();
     const { signal } = ended;
     let settle = 0;
-    this.#revealing = { view, behavior };
+    const reveal = this.#revealing = { view, behavior };
     const done = (still) => {
       clearTimeout(settle);
-      ended.abort();
+      sc.removeEventListener('scroll', step);
       release();
-      if (still !== true && this.#revealing?.view === view) { this.#revealing = null; }
+      // Quiet stops the guard's steps, not the reader's right to cancel the retained reveal.
+      if (still !== true) {
+        ended.abort();
+        if (this.#revealing === reveal) { this.#revealing = null; }
+      }
     };
-    sc.addEventListener('scroll', () => {
+    const step = () => {
       this.#guard();
       clearTimeout(settle);
       // Stopped for now (a slow frame looks like that): the question is still being brought, until scrollend.
       settle = setTimeout(() => done(true), SCROLL_SETTLED_MS);
-    }, { signal, passive: true });
+    };
+    sc.addEventListener('scroll', step, { signal, passive: true });
     sc.addEventListener('scrollend', () => { this.#guard(); done(); }, { signal });
     for (const type of ['wheel', 'touchstart', 'touchmove', 'pointerdown', 'keydown']) { this.view.addEventListener(type, () => done(), { signal, passive: true, capture: true }); }
     setTimeout(() => done(), 3 * QUESTION_ARRIVAL_GUARD_MS);

@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Console;
 
 namespace AgentBridge.Relay;
@@ -23,6 +24,9 @@ public static class RelayApp
         configure?.Invoke(options);
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton<Tokens>();
+        builder.Services.TryAddSingleton(TimeProvider.System);
+        builder.Services.AddSingleton<ReleaseHintWatcher>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<ReleaseHintWatcher>());
         // The connections gauge reads this app's hub, never the service provider: a collection
         // can run while the provider is being disposed (an exporter at shutdown, or a listener
         // on another app's meter in the same process), and resolving then threw
@@ -79,6 +83,11 @@ public static class RelayApp
             // HttpClientFactory logs every request URL at Information, and a push endpoint is a
             // bearer capability: anyone holding it can send that phone notifications.
             .RemoveAllLoggers();
+        builder.Services.AddHttpClient("release-hints", c =>
+        {
+            c.Timeout = TimeSpan.FromSeconds(10);
+            c.MaxResponseContentBufferSize = 4 * 1024 * 1024;
+        }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false }).RemoveAllLoggers();
         builder.Services.AddHttpClient("github", c =>
         {
             c.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("agent-bridge-relay", "0.1"));
