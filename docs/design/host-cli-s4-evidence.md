@@ -161,6 +161,8 @@ client code; no general arbitrary-operation command or new credential grant.
 Size: at most 200 lines. Sensitive: yes. Depends-on: #2402.
 Acceptance: person/agent-child/unknown-ancestry cases and allowed operation list;
 separate pipe-capable actions from relay-only person-device operations.
+The [C1 person CLI contract](host-cli-person-contract.md) records the source
+inventory, caller/transport boundaries and review-only acceptance vectors.
 
 ### C2 - Expose one local person CLI stop path without changing stop policy
 
