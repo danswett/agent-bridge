@@ -46,14 +46,19 @@ function Test-Arm64Foreground {
     } finally { $form.Dispose() }
 }
 
+function Test-Arm64AccountPopup($owner) {
+    return ($owner.Process -eq 'WWAHost' -and $owner.Class -eq 'Windows.UI.Core.CoreWindow' -and $owner.Title -eq 'Microsoft account')
+}
+
 function Invoke-Arm64PopupDismiss {
     $ErrorActionPreference = 'Stop'
     $before = Get-Arm64Foreground
     Write-Host "foreground before: $before"
-    $popup = $before.Process -eq 'WWAHost' -and $before.Class -eq 'Windows.UI.Core.CoreWindow' -and $before.Title -eq 'Microsoft account'
+    $popup = Test-Arm64AccountPopup $before
     if ($popup) { Close-Arm64Popup $before.Handle } else { Write-Host 'No Microsoft account popup; no dismissal input sent.' }
     $after = Get-Arm64Foreground
     Write-Host "foreground after: $after"
+    if ($popup -and $after.Handle -eq $before.Handle -and (Test-Arm64AccountPopup $after)) { throw "Microsoft account popup still owns foreground after dismissal. foreground before: $before; foreground after: $after" }
     $ok = Test-Arm64Foreground
     if ($popup -and -not $ok) { throw "Arm64 foreground probe failed after popup dismissal. foreground before: $before; foreground after: $after" }
     if (-not $ok) { Write-Warning 'Foreground probe failed without the popup; continuing under the #2027 ruling, with native checks unchanged.' }

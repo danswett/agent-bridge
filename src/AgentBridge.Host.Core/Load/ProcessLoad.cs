@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Threading.Channels;
 
 namespace AgentBridge.Host.Core.Load;
 
@@ -33,7 +34,7 @@ public sealed record SessionLoad(LoadState State, int Processes, double? CpuPerc
 // Machine totals. CpuPercent is the readable processes' CPU over the interval, as a percentage of
 // the machine's capacity: processes that exited between samples, and ones the host may not read,
 // are not in it, so it can only under-state a saturated machine.
-// The Window fields are over the last two samples (10 s) for the fleet feed: the mean and the
+// The Window fields are over the last two samples (10 s while active) for the fleet feed: the mean and the
 // highest single CPU sample, and the Processor Queue Length now, its mean and its highest. Null
 // is unknown, never 0.
 public sealed record MachineLoad(int Processors, double? CpuPercent, long? AvailableMemoryBytes,
@@ -49,6 +50,7 @@ public sealed record ProcessLoadReport(DateTimeOffset SampledAt, MachineLoad Mac
 public sealed class ProcessLoadSampler : IAsyncDisposable
 {
     public static readonly TimeSpan DefaultInterval = TimeSpan.FromSeconds(5);
+    public static readonly TimeSpan IdleInterval = TimeSpan.FromSeconds(60);
     // Two 5 s samples make the 10 s window.
     const int WindowSamples = 2;
 
@@ -66,9 +68,15 @@ public sealed class ProcessLoadSampler : IAsyncDisposable
     // The previous sample's counters, replaced whole each time so nothing for a gone process stays.
     Dictionary<(int Id, long Start), TimeSpan> previousCpu = [];
     DateTimeOffset? previousAt;
+    long? previousTimestamp;
     ProcessLoadReport? current;
     CancellationTokenSource? stop;
     Task? loop;
+    int consumerDemand;
+    readonly Channel<bool> demandChanged = Channel.CreateBounded<bool>(new BoundedChannelOptions(1)
+    {
+        FullMode = BoundedChannelFullMode.DropWrite, SingleReader = true,
+    });
 
     public ProcessLoadSampler(ISessionSource source, IProcessTable table, TimeProvider? time = null, int? processors = null,
         Func<long?>? availableMemory = null, TimeSpan? interval = null, Func<int?>? runQueue = null, Func<long?>? totalMemory = null)
@@ -88,35 +96,82 @@ public sealed class ProcessLoadSampler : IAsyncDisposable
     // Raised on the sampler's own thread after each pass.
     public event Action<ProcessLoadReport>? Sampled;
 
+    public void SetConsumerDemand(bool required)
+    {
+        if (Interlocked.Exchange(ref consumerDemand, required ? 1 : 0) != (required ? 1 : 0))
+        {
+            demandChanged.Writer.TryWrite(true);
+        }
+    }
+
+    void SessionsChanged(object? sender, SessionChange change) => demandChanged.Writer.TryWrite(true);
+    bool HasDemand() => Volatile.Read(ref consumerDemand) != 0 || source.Snapshot().Count != 0;
+
     public void Start()
     {
         if (loop is not null) { return; }
         stop = new CancellationTokenSource();
         var token = stop.Token;
+        source.Changed += SessionsChanged;
         loop = Task.Factory.StartNew(() => RunAsync(token), token, TaskCreationOptions.LongRunning, TaskScheduler.Default).Unwrap();
     }
 
     async Task RunAsync(CancellationToken ct)
     {
         try { Thread.CurrentThread.Priority = ThreadPriority.BelowNormal; } catch (Exception e) when (e is PlatformNotSupportedException or InvalidOperationException) { }
-        using var timer = new PeriodicTimer(interval, time);
+        var active = HasDemand();
+        var timer = new PeriodicTimer(active ? interval : IdleInterval, time);
+        void TakeSample()
+        {
+            try { Sample(); }
+            // One failed pass (or a faulty subscriber) must not end the sampler; the next one tries again.
+            catch (Exception e) when (e is not OperationCanceledException) { }
+        }
         try
         {
-            do
+            TakeSample();
+            var tick = timer.WaitForNextTickAsync(ct).AsTask();
+            var changed = demandChanged.Reader.WaitToReadAsync(ct).AsTask();
+            while (true)
             {
-                try { Sample(); }
-                // One failed pass (or a faulty subscriber) must not end the sampler; the next one tries again.
-                catch (Exception e) when (e is not OperationCanceledException) { }
+                await Task.WhenAny(tick, changed).ConfigureAwait(false);
+                ct.ThrowIfCancellationRequested();
+                if (changed.IsCompleted)
+                {
+                    await changed.ConfigureAwait(false);
+                    while (demandChanged.Reader.TryRead(out _)) { }
+                    var needed = HasDemand();
+                    if (needed != active)
+                    {
+                        active = needed;
+                        timer.Dispose();
+                        timer = new PeriodicTimer(active ? interval : IdleInterval, time);
+                        if (active)
+                        {
+                            // A minute-old interval is not a fresh five-second CPU window.
+                            lock (gate) { previousCpu.Clear(); previousAt = null; previousTimestamp = null; window.Clear(); }
+                            TakeSample();
+                        }
+                        tick = timer.WaitForNextTickAsync(ct).AsTask();
+                    }
+                    changed = demandChanged.Reader.WaitToReadAsync(ct).AsTask();
+                }
+                if (tick.IsCompleted && await tick.ConfigureAwait(false))
+                {
+                    TakeSample();
+                    tick = timer.WaitForNextTickAsync(ct).AsTask();
+                }
             }
-            while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false));
         }
         catch (OperationCanceledException) { }
+        finally { timer.Dispose(); }
     }
 
     // One pass. Public so a test drives it with a fake clock and table.
     public ProcessLoadReport Sample()
     {
         var now = time.GetUtcNow();
+        var timestamp = time.GetTimestamp();
         var readings = table.Read();
         var machineMemory = availableMemory();
         int? queue = null;
@@ -131,7 +186,7 @@ public sealed class ProcessLoadSampler : IAsyncDisposable
         ProcessLoadReport report;
         lock (gate)
         {
-            var elapsed = previousAt is { } at ? (now - at).TotalSeconds : 0;
+            var elapsed = previousTimestamp is { } before ? time.GetElapsedTime(before, timestamp).TotalSeconds : 0;
             var nextCpu = new Dictionary<(int, long), TimeSpan>();
             if (readings is null)
             {
@@ -180,6 +235,7 @@ public sealed class ProcessLoadSampler : IAsyncDisposable
             }
             previousCpu = nextCpu;
             previousAt = now;
+            previousTimestamp = timestamp;
             current = report;
         }
         try { Sampled?.Invoke(report); } catch (Exception) { }
@@ -251,6 +307,7 @@ public sealed class ProcessLoadSampler : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (stop is null) { return; }
+        source.Changed -= SessionsChanged;
         await stop.CancelAsync().ConfigureAwait(false);
         try { if (loop is not null) { await loop.ConfigureAwait(false); } } catch (Exception) { }
         stop.Dispose();
