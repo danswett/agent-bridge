@@ -560,8 +560,17 @@ test.describe('notifications', () => {
     const sent = () => host.answers.filter((a) => ids.includes(a.id));
 
     test.beforeEach(async ({ page }) => {
+      const authRequests = [];
+      page.on('request', (request) => {
+        if (request.url().startsWith(`${relayUrl}/v1/auth/`)) { authRequests.push(request.url()); }
+      });
       for (const id of ids) { await host.upsert(asking(id, 'q-early', 'Approve the startup change?')); }
-      await signIn(page);
+      // These cases start with a remembered account, not five more device flows.
+      await page.goto(`${appUrl}?demo=1&static=1`);
+      await page.evaluate(async (account) => {
+        const { accountStore } = await import('./js/signin.js');
+        await accountStore.save(account);
+      }, host.account);
       await page.addInitScript(() => {
         const get = IDBObjectStore.prototype.get;
         IDBObjectStore.prototype.get = function (key) {
@@ -578,6 +587,7 @@ test.describe('notifications', () => {
       await page.goto(appUrl);
       await page.waitForFunction(() => typeof window.releaseDevice === 'function');
       expect(await page.evaluate(() => !!window.agentBridge)).toBe(false);
+      expect(authRequests, 'remembered-account startup must not spend the shared sign-in budget').toEqual([]);
     });
 
     test.afterEach(async () => {
