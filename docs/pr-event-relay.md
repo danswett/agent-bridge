@@ -118,9 +118,13 @@ bucket is not a pass; at least two complete passes are needed, and passes repeat
 membership equals the previous complete pass's: nothing new and nothing missing compared with that
 pass, not with every id ever seen, so a comment deleted for good stops blocking once two passes
 agree. Only then does the key move past `K`: the next request starts just after `K` (`since` = `K`
-plus 1 second if a recorded probe showed `since` is inclusive, otherwise `since` = `K` with repeats
-removed; an ambiguous or missing probe always uses `K`, never `K` plus 1 second; the soak confirms
-the probe), since every comment at `K` is known. A crash or takeover restarts the open pass at page
+plus 1 second if `since` is known to be inclusive, otherwise `since` = `K` with repeats removed).
+The exit read is itself the probe: if a `since` = `K` read returns any comment at `K`, `since` is
+inclusive; the relay records that and repeats the read at `K` plus 1 second. It never assumes
+`K` plus 1 second without that evidence; the soak confirms the recorded result. A verified bucket
+(`K` and its membership) is kept while `K` is inside the 10-minute lookback: a later full page at
+`K` whose ids all belong to it does not reopen the bucket, and the read moves past `K` as above; a
+new or missing id at `K` reopens it. A crash or takeover restarts the open pass at page
 1 and compares it with the checkpoint's last complete pass. After 5 unstable passes the feed keeps
 the checkpoint, sends one feed-health line to the Chief of Staff, and tries again next cycle; that
 line goes once per bucket until it verifies, plus one line when it does, not every cycle. Otherwise
@@ -153,7 +157,11 @@ ends); a finished head's 3-minute reads mostly 304. With 8 PRs in CI that is abo
 the hour's projection passes the ceiling it cuts, in this order: finished heads to 15 minutes,
 review-thread comments to 5 minutes, statuses of running heads read only when their check runs
 change, running heads to 2 minutes. It honours `Retry-After` and secondary limits (backs off 1, 2,
-4 ... up to 15 minutes). Below 1,000 calls left it keeps only the first page of the PR list (the
+4 ... up to 15 minutes). Bucket pages always count: a bucket of n comments costs about n/100 + 1
+calls a pass, at least two passes and at most five a cycle; bucket passes are capped at 20 an hour
+per feed (about 40 calls for a 101-comment bucket) inside the ceiling, and a capped bucket waits,
+keeping `C`, under its one Chief line. Below 1,000 calls left it keeps only the first page of the
+PR list (the
 watermark rule above applies) and the checks and statuses of open heads; comment and review reads
 pause and later resume from their cursors. Below 300 it stops reading until the reset and tells the
 Chief of Staff once. A fine-grained token would share its
@@ -352,6 +360,10 @@ event id and recipient, so a retried send is the same request, and the text carr
     101st is still raised once before `C` moves past T. Bucket pages send no `If-None-Match`.
     Under constant churn in a bucket, the fifth unstable pass sends one Chief line and keeps the
     checkpoint; later cycles send no more lines until the bucket verifies, then one recovery line.
+    With no recorded probe and an inclusive `since`, a verified bucket of 101 at T exits: the
+    `since` = T read returns comments at T, records `since` as inclusive and moves to T plus 1
+    second; the next scan, whose lookback covers T, does not reopen the bucket and moves past T.
+    The 21st bucket pass in an hour waits for the next hour, keeping `C`.
     (The same with a takeover is slice 2's test 5.)
 
 ## Live soak (SRE, 24 hours, enrolled disposable nodes)
