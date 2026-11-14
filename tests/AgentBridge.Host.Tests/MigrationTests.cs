@@ -1945,6 +1945,41 @@ public sealed class MigrationTasksHooksAndSettingsTests : MigrationFixture
     }
 
     [Fact]
+    public async Task A_migration_fixture_waits_for_each_process_to_be_ready_before_starting_the_next()
+    {
+        var firstReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new List<string>();
+        var startup = MigrationProcessStartup.StartAsync(["supervisor", "daemon", "stranger"], async role =>
+        {
+            started.Add(role);
+            if (role == "supervisor") { await firstReady.Task; }
+        });
+        try
+        {
+            Assert.Equal(["supervisor"], started);
+        }
+        finally
+        {
+            firstReady.SetResult();
+            await startup;
+        }
+        Assert.Equal(["supervisor", "daemon", "stranger"], started);
+    }
+
+    [Fact]
+    public async Task A_migration_fixture_does_not_start_more_processes_after_startup_fails()
+    {
+        var started = new List<string>();
+        await Assert.ThrowsAsync<IOException>(() => MigrationProcessStartup.StartAsync(
+            ["supervisor", "daemon", "stranger"], role =>
+            {
+                started.Add(role);
+                return role == "supervisor" ? Task.FromException(new IOException("fixture startup failed")) : Task.CompletedTask;
+            }));
+        Assert.Equal(["supervisor"], started);
+    }
+
+    [Fact]
     [Trait("Category", "Process")]
     public async Task Stopping_takes_only_this_installations_own_processes_and_honours_their_receipts()
     {
@@ -1966,32 +2001,38 @@ public sealed class MigrationTasksHooksAndSettingsTests : MigrationFixture
             foreach (var a in new[] { "-NoProfile", "-NonInteractive", "-File", script }) { start.ArgumentList.Add(a); }
             return System.Diagnostics.Process.Start(start)!;
         }
-        using var supervisor = Start(Path.Combine(_f.HooksDir, "agent-bridge-supervisor.ps1"));
-        using var daemon = Start(Path.Combine(_f.HooksDir, "agent-bridge-daemon.ps1"));
-        using var stranger = Start(other);
-        async Task Stop()
-        {
-            try { new WindowsAgentHaBridgeRuntime().Stop(install); }
-            catch (IOException error) when (error.Message.Contains($"daemon (process {daemon.Id}) did not stop", StringComparison.Ordinal))
-            {
-                var failedAt = DateTimeOffset.UtcNow;
-                var observation = System.Diagnostics.Stopwatch.StartNew();
-                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                try { await daemon.WaitForExitAsync(timeout.Token); }
-                catch (OperationCanceledException) when (timeout.IsCancellationRequested) { }
-                var state = daemon.HasExited
-                    ? $"exited at {daemon.ExitTime.ToUniversalTime():O}, exit code {daemon.ExitCode}"
-                    : $"still running at {DateTimeOffset.UtcNow:O}";
-                Assert.Fail($"{error}{Environment.NewLine}Stop failed at {failedAt:O}; daemon {daemon.Id} {state}; observed for {observation.Elapsed.TotalSeconds:F3} seconds after failure.");
-            }
-        }
+        var processes = new List<System.Diagnostics.Process>();
         try
         {
             // Readiness, not elapsed startup time: a loaded runner may still be starting pwsh.
             using var readyTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            var ready = await Task.WhenAll(new[] { supervisor, daemon, stranger }
-                .Select(p => p.StandardOutput.ReadLineAsync(readyTimeout.Token).AsTask()));
-            Assert.All(ready, signal => Assert.Equal("ready", signal));
+            await MigrationProcessStartup.StartAsync(
+                [Path.Combine(_f.HooksDir, "agent-bridge-supervisor.ps1"), Path.Combine(_f.HooksDir, "agent-bridge-daemon.ps1"), other],
+                async script =>
+                {
+                    var process = Start(script);
+                    processes.Add(process);
+                    Assert.Equal("ready", await process.StandardOutput.ReadLineAsync(readyTimeout.Token));
+                });
+            var supervisor = processes[0];
+            var daemon = processes[1];
+            var stranger = processes[2];
+            async Task Stop()
+            {
+                try { new WindowsAgentHaBridgeRuntime().Stop(install); }
+                catch (IOException error) when (error.Message.Contains($"daemon (process {daemon.Id}) did not stop", StringComparison.Ordinal))
+                {
+                    var failedAt = DateTimeOffset.UtcNow;
+                    var observation = System.Diagnostics.Stopwatch.StartNew();
+                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                    try { await daemon.WaitForExitAsync(timeout.Token); }
+                    catch (OperationCanceledException) when (timeout.IsCancellationRequested) { }
+                    var state = daemon.HasExited
+                        ? $"exited at {daemon.ExitTime.ToUniversalTime():O}, exit code {daemon.ExitCode}"
+                        : $"still running at {DateTimeOffset.UtcNow:O}";
+                    Assert.Fail($"{error}{Environment.NewLine}Stop failed at {failedAt:O}; daemon {daemon.Id} {state}; observed for {observation.Elapsed.TotalSeconds:F3} seconds after failure.");
+                }
+            }
             // A receipt naming the daemon's process id with another start time: a reused id.
             File.WriteAllText(Path.Combine(_f.Runtime, "daemon.process.json"), $"{{\"pid\":{daemon.Id},\"installationId\":\"{FakeAgentHaBridge.Id}\",\"executable\":\"{pwsh.Replace("\\", "\\\\")}\",\"startedUtcTicks\":1}}");
 
@@ -2009,7 +2050,10 @@ public sealed class MigrationTasksHooksAndSettingsTests : MigrationFixture
         }
         finally
         {
-            foreach (var p in new[] { supervisor, daemon, stranger }) { if (!p.HasExited) { p.Kill(); } }
+            foreach (var p in processes)
+            {
+                using (p) { if (!p.HasExited) { p.Kill(); } }
+            }
         }
     }
 
