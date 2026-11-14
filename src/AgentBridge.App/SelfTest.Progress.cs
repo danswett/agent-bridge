@@ -91,7 +91,7 @@ static partial class SelfTest
             Kind = QuestionKind.Form,
             Message = "Which should come first?",
             AskedAt = DateTimeOffset.UtcNow,
-            Fields = [new Field { Name = "answer", Type = FieldType.Choice, Options = [new Option("fixes", "Fixes first"), new Option("docs", "Docs first")] }],
+            Fields = new[] { new Field { Name = "answer", Type = FieldType.Choice, Options = new[] { new Option("fixes", "Fixes first"), new Option("docs", "Docs first") } } },
         };
 
         // The colours of a button's in-flight ring, its ink and its fill, as drawn now.
@@ -237,7 +237,7 @@ static partial class SelfTest
                 Kind = QuestionKind.Form,
                 Message = "Fill in the release.",
                 AskedAt = now,
-                Fields = [new Field { Name = "version", Title = "Version", Type = FieldType.Text, Required = true }, new Field { Name = "notes", Title = "Notes", Type = FieldType.Text }],
+                Fields = new[] { new Field { Name = "version", Title = "Version", Type = FieldType.Text, Required = true }, new Field { Name = "notes", Title = "Notes", Type = FieldType.Text } },
             }, "SendAnswer", (q, _) => { q.Fields[0].Text = "0.2.0"; q.Fields[1].Text = "Quieter receipts."; q.Send(); }, "You answered");
         }
         finally
