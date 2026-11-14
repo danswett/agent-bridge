@@ -18,7 +18,7 @@ static partial class SelfTest
         stored.AddLive(new HistoryTurn
         {
             Id = "message-clock", At = sent, Prompt = new HistoryPrompt { Text = "A stored clock fixture" },
-            Parts = [new HistoryPart { Id = "message-clock-reply", Kind = HistoryPartKind.Response, At = sent, Text = "A dated reply." }],
+            Parts = new[] { new HistoryPart { Id = "message-clock-reply", Kind = HistoryPartKind.Response, At = sent, Text = "A dated reply." } },
         });
         MessageTimeView? time = null;
         await Until(() => (time = Find<MessageTimeView>(view).FirstOrDefault(t => t.Stamp?.At == sent)) is not null, TimeSpan.FromSeconds(5));

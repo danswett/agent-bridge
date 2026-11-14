@@ -110,7 +110,7 @@ static partial class SelfTest
                     Kind = QuestionKind.Form,
                     Message = "Which store should the sessions use?",
                     AskedAt = DateTimeOffset.UtcNow,
-                    Fields = [new Field { Name = "answer", Type = FieldType.Choice, AllowOther = true, Options = [new Option("pg", "PostgreSQL"), new Option("sqlite", "SQLite")] }],
+                    Fields = new[] { new Field { Name = "answer", Type = FieldType.Choice, AllowOther = true, Options = new[] { new Option("pg", "PostgreSQL"), new Option("sqlite", "SQLite") } } },
                 },
             });
             var offered = await Until(() => ById<ToggleButton>(view, "Other") is { ActualWidth: > 0 } && view.QuestionShown is { IsHitTestVisible: true }, TimeSpan.FromSeconds(5));
@@ -179,7 +179,7 @@ static partial class SelfTest
                     Kind = QuestionKind.Form,
                     Message = "Which store should the sessions use?",
                     AskedAt = DateTimeOffset.UtcNow,
-                    Fields = [new Field { Name = "answer", Type = FieldType.Choice, OtherUnavailable = AnswerReasons.OtherNotSendable, Options = [new Option("pg", "PostgreSQL"), new Option("sqlite", "SQLite")] }],
+                    Fields = new[] { new Field { Name = "answer", Type = FieldType.Choice, OtherUnavailable = AnswerReasons.OtherNotSendable, Options = new[] { new Option("pg", "PostgreSQL"), new Option("sqlite", "SQLite") } } },
                 },
             });
             var why = AnswerReasons.Text(AnswerReasons.OtherNotSendable);
@@ -215,7 +215,7 @@ static partial class SelfTest
                     Kind = QuestionKind.Form,
                     Message = "Name the store and its host.",
                     AskedAt = DateTimeOffset.UtcNow,
-                    Fields = [new Field { Name = "store", Title = "Store", Type = FieldType.Text, Required = true }, new Field { Name = "host", Title = "Host", Type = FieldType.Text, Required = true }],
+                    Fields = new[] { new Field { Name = "store", Title = "Store", Type = FieldType.Text, Required = true }, new Field { Name = "host", Title = "Host", Type = FieldType.Text, Required = true } },
                 },
             });
             var formed = await Until(() => ById<Button>(view, "SendAnswer") is { ActualWidth: > 0 } && view.QuestionShown is { IsHitTestVisible: true }, TimeSpan.FromSeconds(5));
