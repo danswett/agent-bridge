@@ -140,9 +140,9 @@ static partial class SelfTest
                 : keys;
             if (SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<KeyInput>()) == inputs.Length) { return "SendInput"; }
         }
-        if (shift) { Shifted(true); }
-        var (to, _) = PostedTarget(window);
-        PostKey(to, key, extended);
+        if (shift) { PrepareNativeInput(window); Shifted(true); }
+        try { PostKey(window, key, extended); }
+        catch (InvalidOperationException) { if (shift) { Shifted(false); } throw; }
         return "PostMessage";
     }
 
