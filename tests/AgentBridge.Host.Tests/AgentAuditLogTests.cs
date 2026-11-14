@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text.Json;
@@ -21,13 +22,94 @@ public sealed class AgentAuditLogTests : IDisposable
         new("local", "req-1", "agent:m1/s1", ["agent:m1/s1"], action, "m2/s2", outcome, "fine");
 
     [Fact]
+    public void A_second_writer_is_refused_while_the_folder_lock_is_held_and_can_retry_after_release()
+    {
+        var second = Log();
+        Assert.True(Log().Append(Entry()));
+        var file = Path.Combine(Audit, "agents-2026-11-08.jsonl");
+        var before = File.ReadAllBytes(file);
+        using (new FileStream(Path.Combine(profile, "audit.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.False(second.Append(Entry("lookup")));
+            Assert.Equal(before, File.ReadAllBytes(file));
+        }
+        Assert.True(second.Append(Entry("lookup")));
+        Assert.Equal(3, File.ReadAllLines(file).Length);
+        Assert.Equal((true, false), Log().Verify());
+    }
+    [Theory]
+    [InlineData(false, false, false), InlineData(false, false, true)]
+    [InlineData(false, true, false), InlineData(false, true, true)]
+    [InlineData(true, false, false), InlineData(true, false, true)]
+    [InlineData(true, true, false), InlineData(true, true, true)]
+    public void An_edited_or_missing_interior_day_breaks_verification_across_retained_days(bool launch, bool missing, bool tornHeader)
+    {
+        for (var day = 0; day < 3; day++)
+        {
+            if (day == 2 && tornHeader) { File.WriteAllText(Path.Combine(Audit, $"{(launch ? "launches" : "agents")}-{clock.GetUtcNow():yyyy-MM-dd}.jsonl"), "{\"v\":"); }
+            Assert.True(Log().Append(Entry(launch ? "session.launch" : "send")));
+            clock.Advance(TimeSpan.FromDays(1));
+        }
+        var back = new AgentAuditLog(profile, new FakeTimeProvider(clock.GetUtcNow().AddDays(-2)), said.Add);
+        Assert.False(back.Append(Entry(launch ? "session.launch" : "send")));
+        Assert.Equal((true, false), Log().Verify(launch));
+        Assert.True(Log().Append(Entry(launch ? "send" : "session.launch")));
+        var middle = Path.Combine(Audit, $"{(launch ? "launches" : "agents")}-2026-11-09.jsonl");
+        if (missing) { File.Delete(middle); }
+        else { File.WriteAllText(middle, File.ReadAllText(middle).Replace("\"fine\"", "\"evil\"")); }
+        Assert.False(Log().Verify(launch).Intact);
+        Assert.True(Log().Verify(!launch).Intact);
+    }
+    [Theory]
+    [InlineData(false, false, false), InlineData(false, false, true)]
+    [InlineData(false, true, false), InlineData(false, true, true)]
+    [InlineData(true, false, false), InlineData(true, false, true)]
+    [InlineData(true, true, false), InlineData(true, true, true)]
+    public void A_deleted_header_or_record_in_header_position_breaks_verification(bool launch, bool later, bool replaced)
+    {
+        var action = launch ? "session.launch" : "send";
+        Assert.True(Log().Append(Entry(action)));
+        if (later)
+        {
+            clock.Advance(TimeSpan.FromDays(1));
+            Assert.True(Log().Append(Entry(action)));
+        }
+        Assert.Equal((true, false), Log().Verify(launch));
+        var file = Path.Combine(Audit, $"{(launch ? "launches" : "agents")}-{clock.GetUtcNow():yyyy-MM-dd}.jsonl");
+        var lines = File.ReadAllLines(file);
+        using var header = JsonDocument.Parse(lines[0]);
+        using var record = JsonDocument.Parse(lines[1]);
+        // A forged first record keeps the prior-day link, isolating the header-position guard.
+        var first = replaced ? lines[1].Replace(record.RootElement.GetProperty("previousSha256").GetString()!,
+            header.RootElement.GetProperty("previousSha256").GetString()!) : lines[1];
+        File.WriteAllText(file, first + "\n");
+        Assert.False(Log().Verify(launch).Intact);
+    }
+
+    [Theory]
+    [InlineData("{\"torn\":", true)]
+    [InlineData("not-json", false)]
+    public void Verification_reports_a_legacy_prefix_recovers_only_a_torn_JSON_prefix_and_refuses_newer_versions(string tail, bool recoverable)
+    {
+        Directory.CreateDirectory(Audit);
+        var file = Path.Combine(Audit, "agents-2026-11-08.jsonl");
+        File.WriteAllText(file, "{\"action\":\"send\"}\n");
+        Assert.True(Log().Append(Entry()));
+        File.AppendAllText(file, tail);
+        Assert.Equal((true, true), Log().Verify());
+        Assert.True(Log().Append(Entry()));
+        Assert.Equal((recoverable, true), Log().Verify());
+        File.WriteAllText(file, File.ReadAllText(file).Replace("\"v\":1", "\"v\":2"));
+        Assert.False(Log().Verify().Intact);
+    }
+    [Fact]
     public void An_event_is_one_json_line_in_the_days_file_with_its_principal_and_outcome()
     {
         var log = Log();
         Assert.True(log.Append(Entry()));
         log.Append(Entry("launch", "refused"));
 
-        var lines = File.ReadAllLines(Path.Combine(Audit, "agents-2026-11-08.jsonl"));
+        var lines = File.ReadAllLines(Path.Combine(Audit, "agents-2026-11-08.jsonl")).Skip(1).ToArray();
         Assert.Equal(2, lines.Length);
         using var doc = JsonDocument.Parse(lines[1]);
         Assert.Equal("agent:m1/s1", doc.RootElement.GetProperty("principal").GetString());
@@ -42,7 +124,7 @@ public sealed class AgentAuditLogTests : IDisposable
         var log = new AgentAuditLog(profile, midnight, said.Add);
         Assert.True(log.Append(Entry("session.launch")));
         var file = Path.Combine(Audit, "launches-2026-11-08.jsonl");
-        using var doc = JsonDocument.Parse(File.ReadAllText(file));
+        using var doc = JsonDocument.Parse(File.ReadAllLines(file)[^1]);
         Assert.Equal("session.launch", doc.RootElement.GetProperty("action").GetString());
         Assert.Equal("agent:m1/s1", doc.RootElement.GetProperty("principal").GetString());
         Assert.Equal(8, doc.RootElement.GetProperty("at").GetDateTimeOffset().Day);
@@ -65,6 +147,92 @@ public sealed class AgentAuditLogTests : IDisposable
     }
 
     [Theory]
+    [InlineData(false, false, false), InlineData(false, false, true)]
+    [InlineData(false, true, false), InlineData(false, true, true)]
+    [InlineData(true, false, false), InlineData(true, false, true)]
+    [InlineData(true, true, false), InlineData(true, true, true)]
+    public void A_complete_tail_recovers_in_the_current_day_or_refuses_an_unfinished_prior_header(bool launch, bool header, bool nextDay)
+    {
+        var action = launch ? "session.launch" : "send";
+        var prefix = launch ? "launches" : "agents";
+        Assert.True(Log().Append(Entry(action)));
+        clock.Advance(TimeSpan.FromDays(1));
+        Assert.True(Log().Append(Entry(action)));
+        var file = Path.Combine(Audit, $"{prefix}-{clock.GetUtcNow():yyyy-MM-dd}.jsonl");
+        var lines = File.ReadAllLines(file);
+        File.WriteAllText(file, header ? lines[0] : string.Join("\n", lines));
+        var before = File.ReadAllBytes(file);
+        if (nextDay) { clock.Advance(TimeSpan.FromDays(1)); }
+        var canRecover = !header || !nextDay;
+        Assert.Equal(canRecover, Log().Append(Entry(action)));
+        if (!canRecover)
+        {
+            Assert.Equal(before, File.ReadAllBytes(file));
+            Assert.False(File.Exists(Path.Combine(Audit, $"{prefix}-{clock.GetUtcNow():yyyy-MM-dd}.jsonl")));
+        }
+        Assert.Equal((canRecover, false), Log().Verify(launch));
+    }
+
+    [Theory]
+    [InlineData(false, false, false), InlineData(false, false, true)]
+    [InlineData(false, true, false), InlineData(false, true, true)]
+    [InlineData(true, false, false), InlineData(true, false, true)]
+    [InlineData(true, true, false), InlineData(true, true, true)]
+    public void Interrupted_torn_tail_recovery_cannot_extend_a_broken_day(bool launch, bool header, bool nextDay)
+    {
+        var action = launch ? "session.launch" : "send";
+        Assert.True(Log().Append(Entry(action)));
+        clock.Advance(TimeSpan.FromDays(1));
+        Assert.True(Log().Append(Entry(action)));
+        var file = Path.Combine(Audit, $"{(launch ? "launches" : "agents")}-2026-11-09.jsonl");
+        File.WriteAllText(file, (header ? "" : File.ReadAllText(file)) + "{\"v\":\n");
+        var before = File.ReadAllBytes(file);
+        if (nextDay) { clock.Advance(TimeSpan.FromDays(1)); }
+        Assert.False(Log().Append(Entry(action)));
+        Assert.Equal(before, File.ReadAllBytes(file));
+        Assert.False(File.Exists(Path.Combine(Audit, $"{(launch ? "launches" : "agents")}-2026-11-10.jsonl")));
+        Assert.Contains("could not write", Assert.Single(said));
+    }
+
+    [Theory]
+    [InlineData("fa-IR", false), InlineData("fa-IR", true)]
+    [InlineData("th-TH", false), InlineData("th-TH", true)]
+    public void Daily_audit_names_remain_Gregorian_UTC_under_non_Gregorian_cultures(string culture, bool launch)
+    {
+        var previous = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo(culture);
+            var localClock = new FakeTimeProvider(new DateTimeOffset(2026, 5, 20, 12, 0, 0, TimeSpan.Zero));
+            var log = new AgentAuditLog(profile, localClock, said.Add);
+            Assert.True(log.Append(Entry(launch ? "session.launch" : "send")));
+            Assert.True(File.Exists(Path.Combine(Audit, $"{(launch ? "launches" : "agents")}-2026-05-20.jsonl")));
+            localClock.Advance(TimeSpan.FromDays(1));
+            Assert.True(log.Append(Entry(launch ? "session.launch" : "send")));
+            Assert.True(File.Exists(Path.Combine(Audit, $"{(launch ? "launches" : "agents")}-2026-05-21.jsonl")));
+            Assert.Equal((true, false), log.Verify(launch));
+        }
+        finally { CultureInfo.CurrentCulture = previous; }
+    }
+
+    [Theory]
+    [InlineData(false), InlineData(true)]
+    public void An_unparseable_daily_name_is_reported_and_refused_without_writing(bool launch)
+    {
+        Assert.True(Log().Append(Entry(launch ? "session.launch" : "send")));
+        var file = Path.Combine(Audit, $"{(launch ? "launches" : "agents")}-2026-11-08.jsonl");
+        var invalid = Path.Combine(Audit, $"{(launch ? "launches" : "agents")}-1405-02-31.jsonl");
+        File.Move(file, invalid);
+        var before = File.ReadAllBytes(invalid);
+        Assert.False(Log().Verify(launch).Intact);
+        Assert.False(Log().Append(Entry(launch ? "session.launch" : "send")));
+        Assert.Equal(before, File.ReadAllBytes(invalid));
+        Assert.False(File.Exists(file));
+        Assert.Contains(said, message => message.Contains("could not be verified", StringComparison.Ordinal));
+        Assert.Contains(said, message => message.Contains("could not write", StringComparison.Ordinal));
+    }
+
+    [Theory]
     [InlineData(false, 0)]
     [InlineData(false, 1)]
     [InlineData(true, 0)]
@@ -77,12 +245,15 @@ public sealed class AgentAuditLogTests : IDisposable
         const string prompt = "private launch text \u00e9";
         Assert.True(log.Append(entry, prompt));
         var file = Path.Combine(Audit, "launches-2026-11-08.jsonl");
-        var line = File.ReadAllBytes(Assert.Single(Directory.GetFiles(Audit)));
+        var line = System.Text.Encoding.UTF8.GetBytes(File.ReadAllLines(file)[^1] + "\n");
         using (var seed = new FileStream(file, FileMode.Create, FileAccess.Write))
         {
+            seed.Write(line);
             seed.SetLength(quota - line.Length - (torn ? 1 : 0) + over);
-            seed.Position = seed.Length - 1;
-            seed.WriteByte(torn ? (byte)'x' : (byte)'\n');
+            seed.Position = seed.Length - line.Length - 1 - (torn ? 1 : 0);
+            seed.Write("\n"u8);
+            seed.Write(line);
+            if (torn) { seed.WriteByte((byte)'x'); }
         }
         var before = new FileInfo(file).Length;
         Assert.Equal(over == 0, log.Append(entry, prompt));
@@ -96,7 +267,10 @@ public sealed class AgentAuditLogTests : IDisposable
                 if (torn) { Assert.Equal('\n', read.ReadByte()); }
                 var appended = new byte[line.Length];
                 read.ReadExactly(appended);
-                Assert.Equal(line, appended);
+                using var expected = JsonDocument.Parse(line);
+                using var actual = JsonDocument.Parse(appended);
+                Assert.Equal(expected.RootElement.EnumerateObject().Where(p => p.Name != "previousSha256").Select(p => p.ToString()),
+                    actual.RootElement.EnumerateObject().Where(p => p.Name != "previousSha256").Select(p => p.ToString()));
             }
         }
         Assert.False(log.Append(entry, prompt));
@@ -112,11 +286,13 @@ public sealed class AgentAuditLogTests : IDisposable
         var log = Log(max: 700);
         Assert.True(log.Append(Entry("session.launch")));
         var earlier = Path.Combine(Audit, "launches-2026-11-08.jsonl");
+        var line = System.Text.Encoding.UTF8.GetBytes(File.ReadAllLines(earlier)[^1] + "\n");
         using (var seed = new FileStream(earlier, FileMode.Create, FileAccess.Write))
         {
             seed.SetLength(16L * 1024 * 1024);
-            seed.Position = seed.Length - 1;
-            seed.WriteByte((byte)'\n');
+            seed.Position = seed.Length - line.Length - 1;
+            seed.Write("\n"u8);
+            seed.Write(line);
         }
         clock.Advance(TimeSpan.FromDays(1));
         Assert.False(new AgentAuditLog(profile, clock, said.Add).Append(Entry("session.launch")));
@@ -154,12 +330,13 @@ public sealed class AgentAuditLogTests : IDisposable
         Assert.DoesNotContain("agents-2026-11-08.jsonl", names);
         Assert.Contains("agents-2026-12-07.jsonl", names);
         Assert.Contains("agents-2026-12-09.jsonl", names);
+        Assert.True(Log().Verify().Intact);
     }
 
     [Fact]
     public void Past_the_size_limit_the_oldest_files_go_first_and_never_the_current_one()
     {
-        var log = Log(max: 700);
+        var log = Log(max: 1000);
         for (var i = 0; i < 3; i++) { log.Append(Entry(), new string('x', 10)); clock.Advance(TimeSpan.FromDays(1)); }
         log.Append(Entry(outcome: new string('o', 2000)) with { Reason = new string('r', 2000) });
 
@@ -195,7 +372,7 @@ public sealed class AgentAuditLogTests : IDisposable
     public void A_long_reason_is_cut()
     {
         Log().Append(Entry() with { Reason = new string('r', 5000) });
-        using var doc = JsonDocument.Parse(File.ReadAllLines(Directory.GetFiles(Audit)[0])[0]);
+        using var doc = JsonDocument.Parse(File.ReadAllLines(Directory.GetFiles(Audit)[0])[^1]);
         Assert.Equal(AgentAuditLog.MaxReason, doc.RootElement.GetProperty("reason").GetString()!.Length);
     }
 
@@ -204,7 +381,7 @@ public sealed class AgentAuditLogTests : IDisposable
     {
         var big = new string('z', 100_000);
         Log().Append(new AgentAuditEntry(big, big, big, Enumerable.Repeat(big, 1000).ToArray(), big, big, big, big));
-        var text = File.ReadAllLines(Directory.GetFiles(Audit)[0])[0];
+        var text = File.ReadAllLines(Directory.GetFiles(Audit)[0])[^1];
         Assert.True(text.Length < 10_000);
         using var doc = JsonDocument.Parse(text);
         Assert.Equal(AgentAuditLog.MaxChain, doc.RootElement.GetProperty("chain").GetArrayLength());
@@ -219,9 +396,10 @@ public sealed class AgentAuditLogTests : IDisposable
         Assert.True(Log().Append(Entry()));
 
         var lines = File.ReadAllLines(file);
-        Assert.Equal(2, lines.Length);
-        using var doc = JsonDocument.Parse(lines[1]);
+        Assert.Equal(3, lines.Length);
+        using var doc = JsonDocument.Parse(lines[2]);
         Assert.Equal("send", doc.RootElement.GetProperty("action").GetString());
+        Assert.Equal((true, false), Log().Verify());
     }
 
     [Fact]
@@ -232,6 +410,8 @@ public sealed class AgentAuditLogTests : IDisposable
         clock.Advance(TimeSpan.FromDays(3650));
         log.Append(Entry());
         Assert.Equal(2, Directory.GetFiles(Audit).Length);
+        // Remove the future tail before exercising age pruning: backdated chain writes are refused.
+        File.Delete(Path.Combine(Audit, $"agents-{clock.GetUtcNow():yyyy-MM-dd}.jsonl"));
 
         var back = new FakeTimeProvider(new DateTimeOffset(2026, 12, 8, 12, 0, 0, TimeSpan.Zero));
         var fixedLog = new AgentAuditLog(profile, back, said.Add);
@@ -253,7 +433,7 @@ public sealed class AgentAuditLogTests : IDisposable
         if (!OperatingSystem.IsWindows()) { return; }
         using (new FileStream(oldest, FileMode.Open, FileAccess.Read, FileShare.None))
         {
-            Assert.True(Log(max: 400).Append(Entry()));
+            Assert.True(Log(max: 600).Append(Entry()));
             Assert.Contains("could not trim old files", Assert.Single(said));
             Assert.Equal(3, Directory.GetFiles(Audit).Length);
             Assert.All(Directory.GetFiles(Audit), file => Assert.True(new FileInfo(file).Length > 0));
@@ -303,25 +483,27 @@ public sealed class AgentAuditLogTests : IDisposable
         }
     }
 
+    long headerBytes;
     long OneLine()
     {
         Assert.True(Log().Append(Entry()));
         var file = Path.Combine(Audit, "agents-2026-11-08.jsonl");
         var length = new FileInfo(file).Length;
+        headerBytes = System.Text.Encoding.UTF8.GetByteCount(File.ReadAllLines(file)[0] + "\n");
         File.Delete(file);
-        return length;
+        return length - headerBytes;
     }
 
     [Fact]
     public void The_days_file_may_reach_exactly_the_size_limit_and_not_one_byte_past()
     {
         var one = OneLine();
-        var log = Log(max: one * 2);
+        var log = Log(max: headerBytes + one * 2);
         Assert.True(log.Append(Entry()));
         Assert.True(log.Append(Entry()));
-        Assert.Equal(one * 2, new FileInfo(Path.Combine(Audit, "agents-2026-11-08.jsonl")).Length);
+        Assert.Equal(headerBytes + one * 2, new FileInfo(Path.Combine(Audit, "agents-2026-11-08.jsonl")).Length);
         Assert.False(log.Append(Entry()));
-        Assert.Equal(one * 2, new FileInfo(Path.Combine(Audit, "agents-2026-11-08.jsonl")).Length);
+        Assert.Equal(headerBytes + one * 2, new FileInfo(Path.Combine(Audit, "agents-2026-11-08.jsonl")).Length);
 
         File.Delete(Path.Combine(Audit, "agents-2026-11-08.jsonl"));
         Assert.False(Log(max: one - 1).Append(Entry()));
@@ -331,10 +513,10 @@ public sealed class AgentAuditLogTests : IDisposable
     public void A_looping_agent_cannot_grow_the_days_file_past_the_limit()
     {
         var one = OneLine();
-        var log = Log(max: one * 3);
+        var log = Log(max: headerBytes + one * 3);
         var written = Enumerable.Range(0, 50).Count(_ => log.Append(Entry()));
         Assert.Equal(3, written);
-        Assert.True(Directory.GetFiles(Audit).Sum(f => new FileInfo(f).Length) <= one * 3);
+        Assert.True(Directory.GetFiles(Audit).Sum(f => new FileInfo(f).Length) <= headerBytes + one * 3);
     }
     [Fact]
     public void A_huge_future_dated_file_does_not_wipe_the_real_days()
@@ -343,7 +525,7 @@ public sealed class AgentAuditLogTests : IDisposable
         log.Append(Entry());
         clock.Advance(TimeSpan.FromDays(1));
         File.WriteAllBytes(Path.Combine(Audit, "agents-2031-01-01.jsonl"), new byte[5000]);
-        Assert.True(log.Append(Entry()));
+        Assert.False(log.Append(Entry()));
         var names = Directory.GetFiles(Audit).Select(Path.GetFileName).ToArray();
         Assert.Contains("agents-2026-11-08.jsonl", names);
         Assert.Contains("agents-2031-01-01.jsonl", names);

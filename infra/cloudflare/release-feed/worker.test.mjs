@@ -226,3 +226,129 @@ for (const [label, env, seconds] of [
     assert.equal(calls.length, 2, 'revalidation is cached');
   });
 }
+
+test('a token 401 without a cached copy can serve an anonymous list', async (t) => {
+  reset(t);
+  const env = { GITHUB_TOKEN: 'expired-worker-token' };
+  upstream = [{ status: 401, body: '{}' }, ok('[]')];
+  const response = await get(`${P}?per_page=10&page=2`, { authorization: 'Bearer client-token' }, env);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), '[]');
+  assert.equal(response.headers.get('age'), '0');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, calls[1].url);
+  assert.equal(calls[1].headers.get('authorization'), null);
+  assert.equal(calls[1].headers.get('if-none-match'), null);
+  assert.doesNotMatch([...response.headers.values()].join('\n'), /expired-worker-token|client-token/);
+});
+
+test('a token 401 retries once anonymously and caches the answer for 300 seconds', async (t) => {
+  const advance = reset(t);
+  const env = { GITHUB_TOKEN: 'expired-worker-token' };
+  upstream = [{ ...ok('[{"tag_name":"v0.1.1"}]'), headers: { etag: '"authenticated-list"' } }];
+  const first = await get(P, {}, env);
+  advance(60);
+  const body = '[{"tag_name":"v0.1.2"}]';
+  upstream = [
+    { status: 401, body: '{}' },
+    { ...ok(body), headers: { etag: '"anonymous-list"', authorization: env.GITHUB_TOKEN } },
+  ];
+  const recovered = await get(P, { 'if-none-match': first.headers.get('etag') }, env);
+  assert.equal(calls.length, 3);
+  assert.equal(calls[1].headers.get('authorization'), `Bearer ${env.GITHUB_TOKEN}`);
+  assert.equal(calls[1].headers.get('if-none-match'), '"authenticated-list"');
+  assert.equal(calls[2].url, calls[1].url);
+  assert.equal(calls[2].headers.get('authorization'), null);
+  assert.equal(calls[2].headers.get('if-none-match'), null);
+  assert.equal(recovered.status, 200);
+  assert.equal(await recovered.text(), body);
+  assert.notEqual(recovered.headers.get('etag'), first.headers.get('etag'));
+  assert.equal(recovered.headers.get('age'), '0');
+  assert.doesNotMatch([...recovered.headers.values()].join('\n'), /expired-worker-token|authenticated-list|anonymous-list/);
+  advance(299);
+  const hit = await get(P, { 'if-none-match': recovered.headers.get('etag') }, env);
+  assert.equal(hit.status, 304);
+  assert.equal(hit.headers.get('age'), '299');
+  assert.equal(calls.length, 3, 'anonymous freshness survives a later request with the secret still set');
+  advance(1);
+  upstream = [{ ...ok(body), headers: { etag: '"renewed-authenticated-list"' } }];
+  const renewed = await get(P, {}, env);
+  assert.equal(renewed.headers.get('age'), '0');
+  assert.equal(calls.length, 4, 'anonymous answer expires at 300 seconds');
+  advance(60);
+  upstream = [{ status: 304, body: null }];
+  const authenticated = await get(P, { 'if-none-match': renewed.headers.get('etag') }, env);
+  assert.equal(authenticated.status, 304);
+  assert.equal(authenticated.headers.get('age'), '0');
+  assert.equal(calls.length, 5, 'a successful authenticated refresh restores 60-second freshness');
+});
+
+for (const [label, retry] of [
+  ['401', { status: 401, body: '{}' }],
+  ['403', { status: 403, body: '{}' }],
+  ['500', { status: 500, body: 'unavailable' }],
+  ['network error', new Error('network')],
+  ['invalid list', ok('{}')],
+  ['body read error', { bodyError: true }],
+  ['unconditional 304', { status: 304, body: null }],
+]) {
+  test(`an anonymous retry with ${label} keeps real stale Age or returns 502 without another retry`, async (t) => {
+    const advance = reset(t);
+    const env = { GITHUB_TOKEN: 'expired-worker-token' };
+    const body = '[{"tag_name":"v0.1.1"}]';
+    upstream = [{ ...ok(body), headers: { etag: '"authenticated-list"' } }];
+    const first = await get(P, {}, env);
+    const etag = first.headers.get('etag');
+    advance(60);
+    for (const [age, headers, status] of [[60, {}, 200], [3601, { 'if-none-match': etag }, 304]]) {
+      const before = calls.length;
+      upstream = [{ status: 401, body: '{}' }, retry];
+      const stale = await get(P, headers, env);
+      assert.equal(calls.length, before + 2, 'only one retry per request');
+      assert.equal(calls.at(-1).headers.get('authorization'), null);
+      assert.equal(calls.at(-1).headers.get('if-none-match'), null);
+      assert.equal(stale.status, status);
+      assert.equal(await stale.text(), status === 200 ? body : '');
+      assert.equal(stale.headers.get('etag'), etag);
+      assert.equal(stale.headers.get('age'), String(age));
+      advance(3541);
+    }
+    store.clear();
+    const before = calls.length;
+    upstream = [{ status: 401, body: '{}' }, retry];
+    const unavailable = await get(P, {}, env);
+    assert.equal(unavailable.status, 502);
+    assert.equal(unavailable.headers.get('cache-control'), 'no-store');
+    assert.equal(calls.length, before + 2);
+    assert.equal(store.size, 0, 'a failed retry never caches an error');
+    for (const response of [first, unavailable]) {
+      assert.equal(response.headers.get('authorization'), null);
+      assert.equal(response.headers.get('x-upstream-etag'), null);
+      assert.doesNotMatch([...response.headers.values()].join('\n'), /expired-worker-token|authenticated-list/);
+    }
+  });
+}
+
+for (const [label, failure, env] of [
+  ['403', { status: 403, body: '{}' }, { GITHUB_TOKEN: 'worker-only-token' }],
+  ['500', { status: 500, body: 'unavailable' }, { GITHUB_TOKEN: 'worker-only-token' }],
+  ['network error', new Error('network'), { GITHUB_TOKEN: 'worker-only-token' }],
+  ['401 without a token', { status: 401, body: '{}' }, {}],
+]) {
+  test(`a ${label} makes no anonymous retry`, async (t) => {
+    const advance = reset(t);
+    const body = '[{"tag_name":"v0.1.1"}]';
+    upstream = [ok(body)];
+    await get(P, {}, env);
+    advance(300);
+    upstream = [failure];
+    const stale = await get(P, {}, env);
+    assert.equal(await stale.text(), body);
+    assert.equal(stale.headers.get('age'), '300');
+    assert.equal(calls.length, 2);
+    store.clear();
+    upstream = [failure];
+    assert.equal((await get(P, {}, env)).status, 502);
+    assert.equal(calls.length, 3);
+  });
+}

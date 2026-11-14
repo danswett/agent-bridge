@@ -17,6 +17,8 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
 {
     static readonly TimeSpan TranscriptSearchCache = TimeSpan.FromSeconds(30);
     static readonly TimeSpan WakeDebounce = TimeSpan.FromMilliseconds(50);
+    static readonly TimeSpan IdleRecovery = TimeSpan.FromSeconds(15);
+    static readonly TimeSpan ActiveAfterEvent = TimeSpan.FromSeconds(30);
 
     readonly SessionSourceOptions _options;
     readonly IProcessInspector _processes;
@@ -49,7 +51,9 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     Task? _loop;
     long _revision;
     volatile bool _discoverRequested;
-    DateTimeOffset _nextDiscovery;
+    // Monotonic discovery and activity timestamps, under _gate.
+    long? _lastDiscovery;
+    long? _lastActivity;
     // Under _gate.
     DiscoveryHeld? _held;
     // Only on the pass, under _pass.
@@ -181,7 +185,14 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         lock (_gate) { return _entries.TryGetValue(id, out var e) ? e.GuardForm : null; }
     }
 
-    public void AnswerAttemptsChanged() => _wake.Writer.TryWrite(true);
+    public void AnswerAttemptsChanged() => Wake(activity: true);
+
+    void Wake(bool activity)
+    {
+        // Record activity before coalescing: a queued reschedule must not hide a data wake.
+        if (activity) { lock (_gate) { _lastActivity = _time.GetTimestamp(); } }
+        _wake.Writer.TryWrite(activity);
+    }
 
     public Session? GetUnbudgeted(string id)
     {
@@ -322,7 +333,12 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
         await _pass.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try { Pass(discover: true); }
+        try
+        {
+            var before = DiscoveryDelay();
+            Pass(discover: true);
+            if (_loop is not null && DiscoveryDelay() < before) { Wake(activity: false); }
+        }
         finally { _pass.Release(); }
     }
 
@@ -339,13 +355,12 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         while (!token.IsCancellationRequested)
         {
             var woke = false;
-            using (var timeout = new CancellationTokenSource(_options.PollInterval, _time))
+            using (var timeout = new CancellationTokenSource(DiscoveryDelay(), _time))
             using (var linked = CancellationTokenSource.CreateLinkedTokenSource(token, timeout.Token))
             {
                 try
                 {
-                    await _wake.Reader.ReadAsync(linked.Token).ConfigureAwait(false);
-                    woke = true;
+                    woke = await _wake.Reader.ReadAsync(linked.Token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
                 catch (OperationCanceledException) { return; }
@@ -356,9 +371,8 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
                 if (woke) { await Task.Delay(WakeDebounce, _time, token).ConfigureAwait(false); }
                 // Discovery lists processes, which costs more than tailing: a file change
                 // only re-reads the transcripts unless it was a lock or registration.
-                var discover = DiscoveryDue(woke);
                 await _pass.WaitAsync(token).ConfigureAwait(false);
-                try { Pass(discover); }
+                try { Pass(DiscoveryDue(woke)); }
                 finally { _pass.Release(); }
             }
             catch (OperationCanceledException) { return; }
@@ -369,17 +383,32 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         }
     }
 
-    // Discovery runs on a fixed deadline as well as when a watcher saw a lock or
-    // registration change. Without the deadline, transcript writes arriving faster than
-    // the poll interval kept every pass a tail-only one, so a session that ended without
-    // touching its lock stayed listed and a missed creation event was never recovered.
+    TimeSpan DiscoveryDelay()
+    {
+        lock (_gate) { return DiscoveryDelay(_time.GetTimestamp()); }
+    }
+
+    // Under _gate. File wakes never postpone reconciliation, even when events keep arriving.
+    TimeSpan DiscoveryDelay(long now)
+    {
+        if (_lastDiscovery is not { } last) { return TimeSpan.Zero; }
+        var active = _entries.Count > 0 || _held is not null ||
+            (_lastActivity is { } activity && _time.GetElapsedTime(activity, now) < ActiveAfterEvent);
+        var remaining = (active ? _options.PollInterval : IdleRecovery) - _time.GetElapsedTime(last, now);
+        return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+    }
+
     internal bool DiscoveryDue(bool woke)
     {
-        var now = _time.GetUtcNow();
-        var due = !woke || _discoverRequested || now >= _nextDiscovery;
-        _discoverRequested = false;
-        if (due) { _nextDiscovery = now + _options.PollInterval; }
-        return due;
+        lock (_gate)
+        {
+            var now = _time.GetTimestamp();
+            if (woke) { _lastActivity = now; }
+            var due = _discoverRequested || DiscoveryDelay(now) == TimeSpan.Zero;
+            _discoverRequested = false;
+            if (due) { _lastDiscovery = now; }
+            return due;
+        }
     }
 
     void Pass(bool discover)
@@ -389,6 +418,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         DiscoveryHeld? held = null;
         if (discover)
         {
+            lock (_gate) { _lastDiscovery = _time.GetTimestamp(); }
             // What the host listed when it last ran, read once, for the first discovery pass
             // (Discover's accounting and Restore).
             if (!_restored && _options.StateFile is { } state) { _remembered = Load(state); }
@@ -1244,6 +1274,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         lock (_gate)
         {
             if (!_entries.Remove(id, out var entry)) { return; }
+            _lastActivity = _time.GetTimestamp();
             _ending.Remove(id);
             _recovery.Remove(id);
             _restoreMarks.Remove(id);
@@ -1300,7 +1331,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             watcher.Created += OnFileEvent;
             watcher.Deleted += OnFileEvent;
             watcher.Renamed += OnFileEvent;
-            watcher.Error += (_, _) => { _discoverRequested = true; _wake.Writer.TryWrite(true); };
+            watcher.Error += (_, _) => { _discoverRequested = true; Wake(activity: true); };
             watcher.EnableRaisingEvents = true;
             lock (_gate) { _watchers.Add(watcher); }
         }
@@ -1309,6 +1340,8 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
 
     void OnFileEvent(object sender, FileSystemEventArgs e)
     {
+        // A transcript can be the first evidence of a newly started session.
+        lock (_gate) { if (_entries.Count == 0) { _discoverRequested = true; } }
         // Appends to a transcript need only a re-read; anything else (a lock appearing, a
         // registration written, a folder made) can mean a session started or ended.
         if (!e.FullPath.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase)) { _discoverRequested = true; }
@@ -1318,7 +1351,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             try { TranscriptWritten?.Invoke(e.FullPath); }
             catch (Exception) { }
         }
-        _wake.Writer.TryWrite(true);
+        Wake(activity: true);
     }
 
     // A transcript (a .jsonl under the agents' folders) was written to, as the file watcher heard

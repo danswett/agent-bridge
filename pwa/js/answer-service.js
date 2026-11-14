@@ -116,23 +116,29 @@ export class AnswerService {
   // a second tap never sends twice. Null, with nothing sent, for a host that takes nothing now.
   // request: the UUID it goes as, when something was already signed for it (an escaped approval's
   // confirmation names its answer's request, #803); otherwise a fresh one.
-  submit({ hostId, sessionId, questionId, answer, request = null }) {
+  submit(data) { return this.#submit(data); }
+
+  #submit({ hostId, sessionId, questionId, answer, request = null, firstSentAt = null, restored = false, outcome = null, reason = null }) {
     const key = AnswerService.key(hostId, sessionId, questionId);
     const existing = this.#entries.get(key);
-    if (existing && (existing.state === 'sending' || existing.state === 'waiting')) { return this.#snapshot(existing); }
-    if (existing && existing.state === 'done' && this.final(existing)) { return this.#snapshot(existing); }
-    if (!this.accepts(hostId)) { return null; }
+    if (!restored && existing && (existing.state === 'sending' || existing.state === 'waiting')) { return this.#snapshot(existing); }
+    if (!restored && existing && existing.state === 'done' && this.final(existing)) { return this.#snapshot(existing); }
+    if (restored && existing) { clearTimeout(existing.timer); existing.token++; }
+    if (!restored && !this.accepts(hostId)) { return null; }
     const entry = {
-      key, hostId, sessionId, questionId, answer,
+      key, hostId, sessionId, questionId, answer, restored,
       request: request ?? this.uuid(), state: 'sending', outcome: null, reason: null, progress: null, stage: null,
-      firstSentAt: null, attempts: 0, busyResends: 0, timer: null, token: 0,
+      firstSentAt, attempts: 0, busyResends: 0, timer: null, token: 0,
     };
     this.#entries.set(key, entry);
-    if (this.marks) { tapped(this.marks, entry.request); }
+    if (this.marks && !restored) { tapped(this.marks, entry.request); }
     this.onTap?.(entry);
-    this.#attempt(entry);
+    if (restored) { this.#set(entry, { state: outcome ? 'done' : 'waiting', outcome, reason: reason ?? 'not connected' }); }
+    else { this.#attempt(entry); }
     return this.#snapshot(entry);
   }
+
+  restore(entry) { return this.#submit({ ...entry, restored: true }); }
 
   // After 'failed': the same request again, so the host still types it at most once.
   resend(hostId, sessionId, questionId) {

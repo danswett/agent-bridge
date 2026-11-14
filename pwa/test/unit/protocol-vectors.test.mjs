@@ -47,13 +47,15 @@ const PATCHES = 'session-patches.json';
 const NOISE = 'noise-ik-p256.json';
 // The signed agent-command envelope's vectors (#722) are not records either; C# replays them.
 const ENVELOPE = 'agent-envelope.json';
+// Registry signature bytes are not records; C# replays them now, and the PWA follows in #2379.
+const FLEET_SIGNING = 'fleet-registry-signing.json';
 // The device roster's encoding, not records: test/unit/roster-vectors.test.mjs replays it.
 const ROSTER = 'roster.json';
 // The roster's acceptance-rule scenarios, not records: test/unit/roster-state.test.mjs replays them.
 const ROSTER_STATE = 'roster-state.json';
 // The roster's vetoes, person commands and attestations: test/unit/roster-commands.test.mjs replays them.
 const ROSTER_COMMANDS = 'roster-commands.json';
-const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED && f !== PATCHES && f !== NOISE && f !== ENVELOPE && f !== ROSTER && f !== ROSTER_STATE && f !== ROSTER_COMMANDS).sort().map((f) => [f, load(f)]);
+const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED && f !== PATCHES && f !== NOISE && f !== ENVELOPE && f !== FLEET_SIGNING && f !== ROSTER && f !== ROSTER_STATE && f !== ROSTER_COMMANDS).sort().map((f) => [f, load(f)]);
 const records = new Map(files.flatMap(([file, json]) => Object.entries(json.records).map(([name, r]) => [name, { ...r, file, contexts: json.contexts }])));
 const known = new Map(files.flatMap(([, json]) => json.knownDifferences).filter((d) => d.differs === 'pwa').map((d) => [`${d.vector}:${d.step}`, d]));
 
@@ -163,7 +165,7 @@ const READS = {
   MachineLoadCpu: { read: (j) => loadReaders.readMachineLoadCpu(j), exact: true },
   MachineLoadMemory: { read: (j) => loadReaders.readMachineLoadMemory(j), exact: true },
   UnattributedLoad: { read: (j) => loadReaders.readUnattributedLoad(j), exact: true },
-  MachineInfo: { read: (j) => readHello({ protocol: 1, machine: j, capabilities: [] }).machine },
+  MachineInfo: { read: (j) => readHello({ protocol: 1, machine: j, capabilities: [] }).machine, unread: ['role'] },
   HelloResult: { read: readHello },
   ToolCall: { read: readTool },
   Option: { read: (j) => readQuestion({ fields: [{ name: 'f', type: 'choice', options: [j] }] }).fields[0].options[0] ?? null },
@@ -266,9 +268,9 @@ const READS = {
   TrustQuestion: { read: readTrustQuestion },
   TrustAnswerResult: { read: readTrustResult },
   // Update now's fields (#1159) are read from its client slice (3) on.
-  UpdateState: { read: readUpdateState },
-  UpdateResult: { read: (j) => readUpdateState({ last: j }).last },
-  UpdateCommandResult: { read: readUpdateCommandResult },
+  UpdateState: { read: readUpdateState, unread: ['bytes', 'total', 'downloaded', 'installing', 'leaving', 'back', 'mode', 'checksHeldUntil', 'policy', 'last.step'] },
+  UpdateResult: { read: (j) => readUpdateState({ last: j }).last, unread: ['step'] },
+  UpdateCommandResult: { read: readUpdateCommandResult, unread: ['retryAt', 'state.bytes', 'state.total', 'state.downloaded', 'state.installing', 'state.leaving', 'state.back', 'state.mode', 'state.checksHeldUntil', 'state.policy', 'state.last.step'] },
   // What Update now would go over, and one session of it (#1159), as a confirmation shows them.
   UpdateBusy: { read: readBusy },
   UpdateBusySession: { read: (j) => readBusy({ working: 1, waiting: 0, sessions: [j] }).sessions[0] ?? null },
@@ -470,6 +472,9 @@ const NOT_REPLAYED = {
   TransferRequest: 'host to host: no client sends it',
   TransferResult: 'host to host: no client reads it',
   UpdateCommand: 'built inside UpdateControl from a fresh request, or an Update now\'s signed press (its args replayed as UpdateNowArgs, its signing in update.test.mjs)',
+  UpdateLeaving: 'optional update fact; the PWA progress slice of #2225 will read it',
+  UpdateBack: 'optional update fact; the PWA progress slice of #2225 will read it',
+  UpdatePolicy: 'optional update fact; the PWA batch slice of #2225 will read it',
   // #801 slice A is the host's half; the PWA's controls wait for ui.md's spec.
   ManageCommand: 'the PWA does not manage machines yet (#801)',
   ManageRepairArgs: 'the PWA does not manage machines yet (#801)',

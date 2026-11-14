@@ -310,7 +310,18 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
     }
 
     // For a request with no stages to report (a stop, a launch).
-    public Task<T> Once(Guid key, Func<Task<T>> deliver, Action<T> settled) => Run(key, null, null, _ => deliver(), settled);
+    public Task<T> Once(Guid key, Func<Task<T>> deliver, Action<T> settled, object? owner = null, Func<Task<T>>? foreign = null) =>
+        Run(key, null, null, _ => deliver(), settled, owner: owner, foreign: foreign);
+
+    public Task<T>? Read(Guid key, object owner)
+    {
+        lock (gate)
+        {
+            Forget();
+            return requests.TryGetValue(key, out var entry) && Equals(entry.Owner, owner)
+                ? entry.Rechecked ?? entry.Outcome.Task : null;
+        }
+    }
 
     // The known outcome for a repeat; otherwise runs deliver once, off the caller's channel:
     // a channel that closes mid-delivery must not cut it short, and a resend on the next

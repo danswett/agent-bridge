@@ -10,7 +10,8 @@ namespace AgentBridge.Host.Fleet;
 
 // One machine of the caller's own account, as the relay's session registry reports it.
 // Verified stays false until hostSign exists (design "Signing"); Truncated is the record's own cap flag.
-public sealed record FleetMachine(string Id, bool Online, IReadOnlyList<FleetSession> Sessions, bool Truncated = false, bool Verified = false, string? Name = null);
+public sealed record FleetMachine(string Id, bool Online, IReadOnlyList<FleetSession> Sessions, bool Truncated = false, bool Verified = false, string? Name = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? LastSeen = null);
 
 public sealed record FleetSession(string Node, string? Name, string State, DateTimeOffset Since, string? Id = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Model = null);
@@ -41,17 +42,27 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     {
         var current = Volatile.Read(ref relay) ?? throw new InvalidOperationException("refused: this host isn't connected to the relay");
         if (string.IsNullOrWhiteSpace(current.AccountId)) { throw new InvalidOperationException("refused: the fleet connection has no authenticated account scope"); }
-        var frames = await current.RegistryGetAsync(ct);
+        var frames = await current.RegistryGetAsync(includeKnown: true, ct: ct);
         if (!ReferenceEquals(current, Volatile.Read(ref relay))) { throw new InvalidOperationException("refused: the fleet connection changed during lookup"); }
         return new(current.AccountId, Parse(frames));
     }
 
-    // A machine with no fresh record (offline or quiet) has no sessions to list; a frame without a machine is skipped.
+    // Known-only machines have no sessions; registry liveness and supplied metadata take precedence.
     public static IReadOnlyList<FleetMachine> Parse(IEnumerable<JsonElement> frames)
     {
         var machines = new List<FleetMachine>();
+        var known = new List<FleetMachine>();
         foreach (var f in frames)
         {
+            if (f.TryGetProperty("known", out var k) && k.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var entry in k.EnumerateArray())
+                {
+                    if (!entry.TryGetProperty("machine", out var km) || km.GetString() is not { } knownId) { continue; }
+                    known.Add(new FleetMachine(knownId, entry.TryGetProperty("online", out var knownOnline) && knownOnline.ValueKind == JsonValueKind.True, [],
+                        Name: MachineName(entry), LastSeen: LastSeen(entry)));
+                }
+            }
             if (!f.TryGetProperty("machine", out var m) || m.GetString() is not { } id) { continue; }
             var name = MachineName(f);
             var sessions = new List<FleetSession>();
@@ -66,10 +77,28 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
                         s.TryGetProperty("model", out var model) && model.ValueKind == JsonValueKind.String ? model.GetString() : null));
                 }
             }
-            machines.Add(new FleetMachine(id, f.TryGetProperty("online", out var on) && on.ValueKind == JsonValueKind.True, sessions, truncated, Name: name));
+            machines.Add(new FleetMachine(id, f.TryGetProperty("online", out var on) && on.ValueKind == JsonValueKind.True, sessions, truncated, Name: name, LastSeen: LastSeen(f)));
+        }
+        foreach (var entry in known)
+        {
+            var index = machines.FindIndex(m => m.Id == entry.Id);
+            if (index < 0) { machines.Add(entry); }
+            else
+            {
+                var machine = machines[index];
+                // A fallback name must not change legacy session or find replies.
+                machines[index] = machine with
+                {
+                    Name = machine.Name ?? (machine.Sessions.Count == 0 ? entry.Name : null),
+                    LastSeen = machine.LastSeen ?? entry.LastSeen,
+                };
+            }
         }
         return machines;
     }
+
+    static DateTimeOffset? LastSeen(JsonElement frame) =>
+        frame.TryGetProperty("lastSeen", out var value) && value.ValueKind != JsonValueKind.Null ? value.GetDateTimeOffset() : null;
 
     static string? MachineName(JsonElement frame)
     {
@@ -96,6 +125,10 @@ public sealed record FleetListSession(string Machine, string Node, string State,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Name,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MachineName = null);
 
+public sealed record FleetListMachine(string Machine, string State,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MachineName,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? LastSeen);
+
 // The fleet.list pipe op (#1412, design/fleet-session-registry.md slice 4): an agent that passed
 // agent.hello lists its own account's sessions. The reply is built field by field from
 // FleetListSession, so nothing else the registry or a session holds can reach the agent.
@@ -115,7 +148,9 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         var withNames = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("include", out var inc) && inc.ValueKind == JsonValueKind.String && inc.GetString() == "content";
         LocalApi.AuditAgentAction(credentials!, caller, Op, "fleet", "attempted", auditLog ?? audit);
         AuditFleetList?.Invoke(credentials!.PrincipalOf(caller));
-        return new { sessions = await ListAsync(withNames, ct) };
+        var result = await ListAsync(withNames, ct);
+        credentials!.CompleteFleetRead(caller, result);
+        return result;
     }
 
     // fleet.find (#1399, design "Names and lookup"): a filter over the same roster. The name is
@@ -142,6 +177,14 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         var snapshot = await scoped.ReadScopedAsync(ct);
         var fleetScope = snapshot.FleetScope;
         if (string.IsNullOrWhiteSpace(fleetScope)) { throw new InvalidOperationException("refused: fleet.find has no authenticated account scope"); }
+        var result = Find(snapshot, name, machine);
+        credentials!.CompleteFleetRead(caller, result);
+        return result;
+    }
+
+    static object Find(FleetRosterSnapshot snapshot, string name, string? machine)
+    {
+        var fleetScope = snapshot.FleetScope;
         var scope = snapshot.Machines.Where(x => machine is null || x.Id == machine).ToList();
         var incomplete = scope.Where(x => x.Online && x.Truncated).Select(x => x.Id).ToList();
         if (incomplete.Count > 0) { return new { result = "incomplete", fleetScope, machines = incomplete }; }
@@ -170,6 +213,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
 
     AgentCredential Authorize(IProtocolChannel channel, string op)
     {
+        credentials?.CheckScriptOperation(channel, op);
         if (credentials is null || !OperatingSystem.IsWindows()) { throw new InvalidOperationException($"refused: {op} isn't available on this host"); }
         if (credentials.Of(channel) is not { } caller)
         {
@@ -183,10 +227,16 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         return caller;
     }
 
-    async Task<List<FleetListSession>> ListAsync(bool withNames, CancellationToken ct)
+    async Task<object> ListAsync(bool withNames, CancellationToken ct)
     {
         var now = (time ?? TimeProvider.System).GetUtcNow();
-        return (await roster!.ReadAsync(ct)).SelectMany(m => m.Sessions.Select(s => new FleetListSession(
-            m.Id, s.Node, s.State, s.Since, Math.Max(0, (long)(now - s.Since).TotalSeconds), m.Online, withNames ? s.Name : null, m.Name))).ToList();
+        var machines = await roster!.ReadAsync(ct);
+        return new
+        {
+            sessions = machines.SelectMany(m => m.Sessions.Select(s => new FleetListSession(
+                m.Id, s.Node, s.State, s.Since, Math.Max(0, (long)(now - s.Since).TotalSeconds), m.Online, withNames ? s.Name : null, m.Name))).ToList(),
+            machines = machines.OrderBy(m => m.Id, StringComparer.Ordinal).Select(m => new FleetListMachine(
+                m.Id, m.Online ? "online" : "offline", m.Name, m.LastSeen)).ToList(),
+        };
     }
 }

@@ -204,7 +204,7 @@ socket (`RelayHub.cs:245-250`). So no frame may ever be built from "all machines
 | One snapshot (`record`) | 16,384 bytes (16 KiB) | Entries plus about 500 bytes of header and signature fit |
 | One relay frame | 24,576 bytes (24 KiB), always one machine | Under 40% of 65,561 |
 | Machines per account | 32 (`RelayOptions.cs:16`) | At most 32 machine frames plus one `known` frame |
-| `known` frame | 32 entries of about 150 bytes, under 8 KiB | Offline machines, no sessions |
+| `known` frame | 32 entries of about 150 bytes, under 8 KiB | Known-machine metadata with socket liveness, no sessions |
 | `registry-get` | one in 2 s per socket; sooner is refused `slow-down` | A get returns up to 33 frames |
 
 * **One machine per frame.** A `registry-get` is answered with one `registry` frame per machine,
@@ -233,7 +233,7 @@ any   -> {"t":"registry-get","id":3}                    reply: one "registry" fr
 any   -> {"t":"registry-subscribe"}                     start receiving registry-changed (until the socket closes)
 relay -> {"t":"registry","id":3,"part":1,"of":3,"machine":"…","name":"…","online":true,
           "lastSeen":"…","record":{…}}
-relay -> {"t":"registry","id":3,"part":3,"of":3,"known":[{"machine":"…","name":"…","lastSeen":"…"}]}
+relay -> {"t":"registry","id":3,"part":3,"of":3,"known":[{"machine":"…","name":"…","lastSeen":"…","online":false}]}
 relay -> {"t":"registry-changed","machine":"…","online":true,"record":{…}}   one machine, on change
 relay -> {"t":"registry-changed","machine":"…","removed":true}   machine forgotten or revoked
 ```
@@ -245,7 +245,8 @@ relay -> {"t":"registry-changed","machine":"…","removed":true}   machine forgo
   that does not exist.)
 * The relay validates shape, allow-list and size, keeps the newest accepted record per machine in
   memory, and forwards. It does not interpret names or states.
-* `known` carries offline machines with last-seen time and **no sessions** (see "Offline").
+* `known` carries same-account machine metadata, last-seen time and socket `online` state,
+  with **no sessions**. A machine's registry frame takes precedence over this metadata.
 
 ## Freshness and replay (5 s and 60 s)
 
@@ -253,9 +254,11 @@ relay -> {"t":"registry-changed","machine":"…","removed":true}   machine forgo
   plus a heartbeat every 20 s even if nothing changed. A heartbeat is a new snapshot: `seq` rises
   and `at` is the current time. The relay pushes each accepted change at once. Expected lag:
   under 3 s, with a hard target of 5 s.
-* The relay marks a machine offline the moment its host socket closes, and sets `online: false`
+* The relay marks a machine's held session record offline when its host socket closes, and sets `online: false`
   after at most 60 s without a heartbeat for half-open sockets. The row then shows offline within
   1 minute.
+* A connected host without a registry record is online from its `known` socket state, with no
+  sessions. This never overrides an expired registry frame's offline state.
 * **One staleness rule, used everywhere.** A reader treats a record as live only when its `at` is
   within 60 s of the reader's own clock (earlier or later) **and** the relay says the machine is
   online. Anything else is stale: its sessions are shown as "last seen at …" and never returned as
@@ -283,7 +286,8 @@ relay -> {"t":"registry-changed","machine":"…","removed":true}   machine forgo
 
 An offline machine appears in the list (name, `online: false`, last seen) so a reader can say
 "machine is off". Its sessions are not served as live: the relay drops them from memory when the
-host goes offline. A host that reconnects sends a full snapshot first.
+host goes offline. A reconnecting host can appear online before its full snapshot arrives;
+no sessions are invented in that interval.
 
 A reader may keep its last copy of a machine's record as a **cache**, with a maximum age of 24 h
 (then deleted). Cached records are always marked `stale: true` and `online: false` in `fleet.list`

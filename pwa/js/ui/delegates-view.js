@@ -310,6 +310,13 @@ export class DelegateDetail {
   #known = new Map();
   // The time the view last drew with, so a fetch coming back draws to the same clock as the rest.
   #now = null;
+  #visibility = () => {
+    if (!this.#id) { return; }
+    this.#stop();
+    if (document.hidden) { this.#state.skipped = true; return; }
+    this.refreshTimes();
+    this.#tick();
+  };
 
   // fetchDelegate(agentId) -> Promise<Subagent|null>, or null. onOpen(id): a nested delegate
   // pressed. onAsk(text): "Ask main agent to stop it". onBack(): back to the list, where the
@@ -339,6 +346,7 @@ export class DelegateDetail {
     e.ask = h('button', { type: 'button', class: 'button secondary delegate-ask', hidden: true, onclick: () => { const text = this.#a ? askToStopText(this.#a) : null; if (text) { this.onAsk(text); } } }, 'Ask main agent to stop it');
     this.element = h('section', { class: 'delegate-pane', 'aria-labelledby': `${idBase}-label ${idBase}-title`, hidden: true },
       e.back, e.label, e.title, e.props, e.status, e.taskBlock, e.latestBlock, e.reasoning, e.toolsBlock, e.nestedBlock, e.ask);
+    document.addEventListener('visibilitychange', this.#visibility);
   }
 
   get id() { return this.#id; }
@@ -508,6 +516,7 @@ export class DelegateDetail {
 
   dispose() {
     this.#stop();
+    document.removeEventListener('visibilitychange', this.#visibility);
     this.#id = null;
     this.#known.clear();
   }
@@ -520,6 +529,7 @@ export class DelegateDetail {
 
   // A fetch in ms, unless one is due sooner.
   #schedule(ms) {
+    if (document.hidden) { this.#state.skipped = true; return; }
     const due = Date.now() + ms;
     if (this.#state.timer && this.#state.due <= due) { return; }
     clearTimeout(this.#state.timer);
@@ -528,11 +538,12 @@ export class DelegateDetail {
   }
 
   // Nothing is fetched for a delegate nobody can see: its session left, its pane hidden, or the
-  // app in the background. It is looked at again later, and fetched once it shows.
+  // app in the background. Visibility or shown() wakes it, without a hidden polling timer.
   #tick() {
+    clearTimeout(this.#state.timer);
     this.#state.timer = null;
     if (!this.#id) { return; }
-    if (document.hidden || this.element.getClientRects().length === 0) { this.#state.skipped = true; this.#schedule(POLL_MS); return; }
+    if (document.hidden || this.element.getClientRects().length === 0) { this.#state.skipped = true; return; }
     this.#state.skipped = false;
     this.#load();
   }
@@ -575,7 +586,7 @@ export class DelegateDetail {
     if (gen !== this.#state.gen || !this.#id) { return; }
     if (this.#state.again) {
       this.#state.again = false;
-      this.#load();
+      this.#tick();
     } else if (failed || (this.#a && (this.#a.status === 'working' || this.#a.status === 'waiting'))) {
       // A failed fetch (a reconnect, say) is tried again, finished delegate or not.
       this.#schedule(POLL_MS);

@@ -193,6 +193,14 @@ The credential replaces `AGENT_HA_AGENT_TOKEN`, as design.md:495 planned.
 
 ### 3.4 Local agent → host authentication
 
+**Script caller slice (#2346, Windows).** A registered script uses the same hashed token store
+but authenticates as `script:<machine>/<name>`, without a session/process binding. Its complete,
+traceable ancestry must contain no named or host-known agent process. Only `fleet.list` and
+`fleet.find` are enabled, with the host's own account scope; unsigned results stay `unverified`.
+The connection retains its script restriction after expiry, record removal or a store fault,
+so it never falls back to person authority. See [script-credentials.md](script-credentials.md)
+for protected files, expiry and successful-read rotation. Session binding below is unchanged.
+
 The agent's tools (the MCP server of #45, or `agent-bridge-host agent …` for scripts) connect to
 the pipe and open with a new op:
 
@@ -3134,6 +3142,8 @@ exactly one purpose, and each verifier checks it.
 | `F("agent-bridge roster entry v1" / "roster cosign v1" / "person command v1" / "presence v1" / "roster head v1", …)` | #391 | — |
 | `F("agent-bridge agent command v1", body)`, host `hostSign` key (roster v2, §8.10) | Agent envelopes (§4.3) | A roster entry or person command: a different label, and those verifiers require a person kind (#391 §3.2, §7.2) |
 | `F("agent-bridge host key binding v1", account, generation, dh)`, by `hostSign` | The `hostSignProof` in a v2 host add (§8.10, V1) | Anything else. It proves possession of `hostSign`, not of `dh`, which is why carrier binding (V4) is also required |
+| `F("agent-bridge fleet registry v1", canonicalRecordBytes)`, by `hostSign` | A host's own registry record (#2370; [encoding and vectors](../protocol/devices.md#fleet-registry-signatures-2370)) | Agent commands, link attestations, roster entries/cosignatures, person commands, key bindings or verifier-support evidence |
+| `F("agent-bridge enroll capSign v1", account, generation, h, nA, nN, D)` | Proposed v3 person-enrollment transcript hash T3; exact frozen descriptor D ([design](../protocol/devices.md#enrollment-transcript-and-domains), #2385) | Never v1 T, a signature or evidence; all existing purpose labels stay distinct |
 | `F("agent-bridge session instance v1", …)` | A hash, not a signature (§3.1) | — |
 | `F("agent-bridge link v1", …)`, per-link key | Link codes and peer host statements (§7.3) | Anything in the peer's own roster |
 | `F("agent-bridge link-attest v1", statement)`, by an attester: a host's `hostSign` off the custodian's machine, or a revoker device's key | An attester's co-signature of its side's peer host statement (§7.3) | An entry, cosign or person command, adding a host, or rotating `linkKey`. It only keeps an already-confirmed statement fresh |

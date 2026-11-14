@@ -16,6 +16,7 @@ public static partial class LiteAgentSend
 
     public static async Task<object?> HandleAsync(AgentCredentials? credentials, ILiteSender? sender, IProtocolChannel channel, JsonElement data, CancellationToken ct = default, bool? windows = null, Func<AgentAuditEntry, string?, bool>? appendAttempt = null)
     {
+        credentials?.CheckScriptOperation(channel, Op);
         if (credentials is null || !(windows ?? OperatingSystem.IsWindows()))
         {
             throw new InvalidOperationException("refused: agent.send isn't available on this host");

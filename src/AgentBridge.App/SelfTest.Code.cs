@@ -77,7 +77,7 @@ static partial class SelfTest
                 ((IInvokeProvider)new ButtonAutomationPeer(buttons[0]).GetPattern(PatternInterface.Invoke)).Invoke();
                 ((IInvokeProvider)new ButtonAutomationPeer(buttons[1]).GetPattern(PatternInterface.Invoke)).Invoke();
                 await Until(() => copied.Count == 2, TimeSpan.FromSeconds(2));
-                check(copied.SequenceEqual([LongCommand, "git status\ngit log -1"]), "copies each code block's text exactly, a wrapped command as the one line it is");
+                check(copied.SequenceEqual(new[] { LongCommand, "git status\ngit log -1" }), "copies each code block's text exactly, a wrapped command as the one line it is");
                 var said = Find<TextBlock>(buttons[0]).Select(t => t.Text).ToList();
                 check(said.Contains(CodeCopy.Done), $"says Copied on the button once copied ({string.Join(", ", said)})");
             }
@@ -102,7 +102,7 @@ static partial class SelfTest
                 ((IInvokeProvider)new ButtonAutomationPeer(copyChat).GetPattern(PatternInterface.Invoke)).Invoke();
                 await Until(() => copied.Count == 1, TimeSpan.FromSeconds(2));
             }
-            check(chatCode?.Text == BareReturnRevealed && copied.SequenceEqual([BareReturnRevealed]),
+            check(chatCode?.Text == BareReturnRevealed && copied.SequenceEqual(new[] { BareReturnRevealed }),
                 $"draws a bare carriage return in a conversation's block as an escape on its line, and copies it so ({chatCode?.Text})");
             var promotedCode = ById<TextBlock>(promoted, "CodeText");
             var promotedCopy = ById<Button>(promoted, "CopyCode");
@@ -115,7 +115,7 @@ static partial class SelfTest
                 copied.Clear();
                 ((IInvokeProvider)new ButtonAutomationPeer(promotedCopy).GetPattern(PatternInterface.Invoke)).Invoke();
                 await Until(() => copied.Count == 1, TimeSpan.FromSeconds(2));
-                check(copied.SequenceEqual([LongCommand]), "copies a promoted conversation command exactly, without its backticks or wrap breaks");
+                check(copied.SequenceEqual(new[] { LongCommand }), "copies a promoted conversation command exactly, without its backticks or wrap breaks");
             }
             if (ById<Button>(question, "CopyCode") is { } questionCopy)
             {
@@ -125,7 +125,7 @@ static partial class SelfTest
             }
             var questionText = $"{IsolatedRevealed} {RightToLeftRevealed}";
             check(ById<TextBlock>(question, "CodeText") is { FlowDirection: FlowDirection.LeftToRight, TextReadingOrder: TextReadingOrder.UseFlowDirection } questionCode
-                && questionCode.Text == questionText && copied.SequenceEqual([questionText])
+                && questionCode.Text == questionText && copied.SequenceEqual(new[] { questionText })
                 && ById<TextBlock>(question, "CodeHidden") is not null && ById<TextBlock>(question, "CodeRightToLeft") is not null,
                 "a promoted question span draws and copies the shared hidden-character and right-to-left escapes with their notes");
             check(ById<Button>(inlineApproval, "CopyCode") is null && ById<TextBlock>(inlineApproval, "CodeText")?.Text == "`git status`"

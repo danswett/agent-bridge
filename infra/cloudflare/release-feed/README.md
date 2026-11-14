@@ -12,6 +12,10 @@ unauthenticated GitHub rate limit. It serves one route only:
   returns 304 with no body and the same `ETag` and real `Age`, including when serving stale.
 - Expired copies are revalidated with GitHub's own ETag when available. GitHub's 304 renews freshness;
   a failed refresh does not. Only authenticated GitHub 304s are exempt from its primary quota.
+- If GitHub rejects the Worker token with 401, the Worker retries once without Authorization or the
+  upstream ETag. A successful anonymous list is cached for 300 seconds, even while the secret remains
+  set. A failed retry keeps the stale copy's real Age, or returns 502 without a copy. Other statuses
+  and network errors do not trigger this retry.
 - If the GitHub refresh fails, a copy up to 24 hours old is served with its real `Age`. With no copy, the
   answer is 502. A failed refresh never returns an empty list as a success.
 - Packages and `releases.<channel>.json` are not proxied. Clients get them from GitHub download URLs, which

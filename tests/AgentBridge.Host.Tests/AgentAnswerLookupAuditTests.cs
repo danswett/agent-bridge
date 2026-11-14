@@ -41,7 +41,7 @@ public sealed class AgentAnswerLookupAuditTests : IDisposable
     {
         if (!OperatingSystem.IsWindows()) { return; }
         JsonElement[] Lines() => Directory.GetFiles(Path.Combine(root, AgentAuditLog.FolderName), "agents-*.jsonl")
-            .SelectMany(File.ReadAllLines).Select(line => JsonSerializer.Deserialize<JsonElement>(line)).ToArray();
+            .SelectMany(f => File.ReadAllLines(f).Skip(1)).Select(line => JsonSerializer.Deserialize<JsonElement>(line)).ToArray();
         roster.BeforeRead = () => Assert.Single(Lines());
         var handle = Handler(new AgentAuditLog(root), CallerKind.Other);
         if (op == Ops.SessionAnswer)
@@ -104,7 +104,7 @@ public sealed class AgentAnswerLookupAuditTests : IDisposable
         var body = JsonDocument.Parse(json).RootElement;
         await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(new AgentAuditLog(root))(channel, Ops.SessionAnswer, body));
         var entry = JsonSerializer.Deserialize<JsonElement>(Assert.Single(File.ReadAllLines(
-            Assert.Single(Directory.GetFiles(Path.Combine(root, AgentAuditLog.FolderName), "agents-*.jsonl")))));
+            Assert.Single(Directory.GetFiles(Path.Combine(root, AgentAuditLog.FolderName), "agents-*.jsonl"))).Skip(1)));
         Assert.Equal("unknown", entry.GetProperty("target").GetString());
         Assert.DoesNotContain("private", entry.GetRawText());
     }

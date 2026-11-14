@@ -124,9 +124,29 @@ review, Low). A client sends it only to a machine whose state says `canUpdateNow
 | `busy` | `UpdateBusy`? | **#1159, the host's.** Only with `canUpdateNow`: what Update now would go over, from the host's own session snapshot ([What the phone sees](#what-the-phone-sees-before-the-press)); sent again when a session changes, at most every 2 s |
 | `requestNow` | bool | **#1159, the app's.** The press in `request` is an Update now |
 | `waitingCode` | string? | **#1159, the app's.** With phase `waiting`: why, as a code a client words itself (`turn-running`, `question-waiting`, `unknown`, `usage-check`), never showing `waiting`'s text ([The confirmation](#the-confirmation)) |
+| `bytes`, `total` | long? | Optional real download byte counts, each non-negative; absent means unknown. Never infer bytes from elapsed time |
+| `downloaded` | bool? | `true` only after the package checksum passed; absence is unknown, not false |
+| `installing` | time? | When installation started, reported by the updater |
+| `leaving` | `UpdateLeaving`? | `{to, at, backBy}`: target release, departure instant, expected return (3 minutes after `at`). Channel closure after this fact permits a client's restarting inference; it is not itself proof of return |
+| `back` | `UpdateBack`? | `{from, to, request?, at}`: observed return on `to`, correlated to the press when one exists. A client confirms only when `current` equals `to` and the request matches |
+| `mode` | `restartToUpdate` `installBetweenTurns` `asSoonAsReady`? | Read-only configured mode; unknown values read as `restartToUpdate`. Defining a value does not enable its installation behavior |
+| `checksHeldUntil` | time? | End of the updater's background-check hold, a UTC instant, never a local time-of-day string |
+| `policy` | `UpdatePolicy`? | `{state: ok \| stale \| unreadable, at?}`: availability of authoritative bad-release protection. `at` is the last authoritative check, not a relay hint. Unknown state reads as `unreadable`; absence never means `ok` |
 
 An unknown `phase` reads as `idle`. Text fields are cut to 64 bytes (versions), 512 (reasons)
 and 4 KiB (notes).
+
+These #2229 fields define the wire only; reporters and enforcement ship separately under
+[#2225](../design/updates-fast-fleet-update.md). All are optional and omitted when unknown.
+The Windows app now reports `bytes`, `total` and `downloaded`; `installing`, `leaving`, `back`
+and `step` are not reported yet, and old updaters leave all these facts absent.
+Hello's `machine.role` is optional: absent means an old host or unknown role; an empty string
+means explicitly no role. Once role reporting ships, every new host sends it, even when empty.
+The label is display/availability metadata, never an authorization grant.
+Old readers ignore them; new readers facing an old host retain `phase` and the existing 90-second
+restart inference. Every time, including nested times, serializes as UTC with milliseconds and `Z`.
+`UpdateLeaving` and `UpdateBack` versions obey the existing 64-byte limit; `back.request` obeys
+the UUID rule. Adding these facts grants no authority and changes no signature or install check.
 
 ### `UpdateResult`
 
@@ -138,6 +158,7 @@ and 4 KiB (notes).
 | `request` | string? | The press it answers; absent for one the person started at the machine (Restart to update), or an automatic one before #516 |
 | `code` | string? | **#1159, the app's.** For an Update now, as in `UpdateCommandResult` |
 | `at` | time | |
+| `step` | string? | Optional last step reached (`downloading`, `installing`, `restarting`), using the existing short-code syntax. Clients word known steps themselves; an unknown step must not imply success |
 
 An install restarts the app and host, so its outcome is reported by the new version: the app
 keeps the press it is carrying out in its preferences when it hands over to the updater, and its
@@ -158,6 +179,7 @@ again": an install pressed hours before must not go ahead on sessions never watc
 | `reason` | string? | Why it was refused |
 | `state` | `UpdateState`? | The state as the press found it |
 | `code` | string? | **#1159.** Only for a press with `now`: why it was refused or needs confirming, as a code: `manage.*`'s reason codes (`ManageReason`) and Update now's own (`release-changed`, `other-profile`, `old-app`, `restart-cap`, `sign-in`, `usage-check`). Clients word it themselves ([What the person sees](#what-the-person-sees)); `reason` stays for the log and older clients. An unknown code reads as a refusal |
+| `retryAt` | time? | Optional UTC retry instant with `code: rate-limited`; render in the viewer's time. Older hosts omit it, so clients retain their generic retry wording. It grants no retry or cap exemption |
 
 The host refuses a device that is not connected to the relay now, one that is not a person's,
 and a press with no app to carry it out. The app's refusals (another profile running, the host

@@ -42,7 +42,7 @@ static partial class SelfTest
             ((IInvokeProvider)new ButtonAutomationPeer(button).GetPattern(PatternInterface.Invoke)).Invoke();
             ContentDialog? Dialog() => VisualTreeHelper.GetOpenPopupsForXamlRoot(window.RootElement.XamlRoot)
                 .Select(p => p.Child).Where(c => c is not null)
-                .SelectMany(c => c is ContentDialog d ? (IEnumerable<ContentDialog>)[d] : Find<ContentDialog>(c)).FirstOrDefault();
+                .SelectMany(c => c is ContentDialog d ? (IEnumerable<ContentDialog>)new[] { d } : Find<ContentDialog>(c)).FirstOrDefault();
             var asked = await Until(() => Dialog() is not null, TimeSpan.FromSeconds(5));
             var dialog = Dialog();
             check(asked && dialog is { Title: "Restart to update now?", PrimaryButtonText: "Restart to update", CloseButtonText: "Not now", DefaultButton: ContentDialogButton.Close }

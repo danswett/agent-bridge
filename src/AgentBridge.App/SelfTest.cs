@@ -731,7 +731,7 @@ static partial class SelfTest
     {
         ContentDialog? Dialog() => VisualTreeHelper.GetOpenPopupsForXamlRoot(window.RootElement.XamlRoot)
             .Select(p => p.Child).OfType<UIElement>()
-            .SelectMany(c => c is ContentDialog d ? (IEnumerable<ContentDialog>)[d] : Find<ContentDialog>(c))
+            .SelectMany(c => c is ContentDialog d ? (IEnumerable<ContentDialog>)new[] { d } : Find<ContentDialog>(c))
             .FirstOrDefault(d => AutomationProperties.GetAutomationId(d) == "FeedbackUnavailable");
         async Task Unavailable(string from)
         {
@@ -788,7 +788,7 @@ static partial class SelfTest
 
         var rail = window.Rail;
         var tags = rail.MenuItems.Concat(rail.FooterMenuItems).OfType<NavigationViewItem>().Select(i => i.Tag as string).ToList();
-        check(rail.PaneDisplayMode == NavigationViewPaneDisplayMode.LeftCompact && tags.SequenceEqual(["sessions", "machines", "launch", "usage", "settings"])
+        check(rail.PaneDisplayMode == NavigationViewPaneDisplayMode.LeftCompact && tags.SequenceEqual(new[] { "sessions", "machines", "launch", "usage", "settings" })
             && rail.FooterMenuItems.OfType<NavigationViewItem>().Single().Tag as string == "settings",
             $"has a compact rail of Sessions, Machines, Launch and Usage, with Settings at its foot ({string.Join(", ", tags)})");
         // NavigationView draws the pages' layer with the radius in its left modes, not in its top mode.

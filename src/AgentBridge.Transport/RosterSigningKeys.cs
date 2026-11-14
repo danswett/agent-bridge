@@ -73,6 +73,18 @@ public static class RosterSigningKeys
         return LoadOrCreateLocked(folder, prefer);
     }
 
+    [SupportedOSPlatform("windows")]
+    public static RosterSigningKey OpenExisting(string folder)
+    {
+        var r = JsonSerializer.Deserialize<KeyRef>(File.ReadAllText(Path.Combine(folder, RefFile))) ?? throw new InvalidDataException(RefFile);
+        return r.Storage switch
+        {
+            "tpm" => new(new ECDsaCng(CngKey.Open(r.Name!, TpmP256Signing.Provider)), KeyStorage.Tpm, r.Name),
+            "dpapi" => new(LoadDpapi(folder), KeyStorage.Dpapi, null),
+            _ => throw new PlatformNotSupportedException($"a {r.Storage} signing key cannot be opened here"),
+        };
+    }
+
     static FileStream Lock(string path)
     {
         var deadline = DateTime.UtcNow.AddSeconds(30);
@@ -90,13 +102,7 @@ public static class RosterSigningKeys
         var refPath = Path.Combine(folder, RefFile);
         if (File.Exists(refPath))
         {
-            var r = JsonSerializer.Deserialize<KeyRef>(File.ReadAllText(refPath)) ?? throw new InvalidDataException(RefFile);
-            return r.Storage switch
-            {
-                "tpm" => new(new ECDsaCng(CngKey.Open(r.Name!, TpmP256Signing.Provider)), KeyStorage.Tpm, r.Name),
-                "dpapi" => new(LoadDpapi(folder), KeyStorage.Dpapi, null),
-                _ => throw new PlatformNotSupportedException($"a {r.Storage} signing key cannot be opened here"),
-            };
+            return OpenExisting(folder);
         }
 
         var storage = prefer ?? (TpmP256.IsAvailable(out _, TpmP256Signing.Algorithm) ? KeyStorage.Tpm : KeyStorage.Dpapi);

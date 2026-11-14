@@ -16,11 +16,8 @@ export const HISTORY = Object.freeze({
   defaultTurns: 20,
   maxTurns: 50,
   // What the first page of an open asks for (#1622): few enough to draw in one frame, so the pane
-  // scrolls at once. Older pages come in the background at the page size.
+  // scrolls at once. At most one older page fills a view that does not yet scroll.
   firstTurns: 5,
-  // The background fill stops once this many turns are held: a long history is not all drawn,
-  // since every turn drawn costs each later layout, and a hidden view's most of all.
-  fillTurns: 100,
   // The newest turns of a session a host serves, and so about what a client keeps (H3, H6).
   kept: 500,
   maxCursorBytes: 256,

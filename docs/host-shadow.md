@@ -360,6 +360,12 @@ Codex session always reports none). So Copilot's background shells and agents sl
 75 seconds, long enough to be sampled: a background agent that finished in six seconds, between
 two 15-second samples, was never seen.
 
+The driver's transport-neutral turn settling is in `TurnCompletion.cs`, covered by offline
+clock fixtures: progress must precede 15 seconds of idle (45 for background work), and a quiet
+compaction becomes eligible after one minute. An open question or renewed work resets settling.
+HA reads, answers, launch/end actions and timeouts remain in `SoakDriver`; this extraction
+does not change the HA rehearsal or retire any check (#527).
+
 What it cannot do: answer at the terminal (it has no console), or answer the folder-trust and
 Bypass-permissions prompts a fresh agent install shows (sign the agents in and trust the
 workspace first). An agent whose sign-in has lapsed shows as a session that never answers.

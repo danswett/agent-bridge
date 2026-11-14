@@ -8,7 +8,8 @@ using AgentBridge.Protocol;
 namespace AgentBridge.Host.Fleet;
 
 // Keep one instance for the host's lifetime, including across relay reconnects.
-public sealed class FleetPublisher(ISessionSource source, string machine, Func<string, string?>? name = null, TimeProvider? time = null)
+public sealed class FleetPublisher(ISessionSource source, string machine, Func<string, string?>? name = null, TimeProvider? time = null,
+    Func<JsonElement, JsonElement>? sign = null)
 {
     readonly TimeProvider clock = time ?? TimeProvider.System;
     readonly string epoch = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8));
@@ -54,6 +55,7 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
             {
                 v = 1, machine, epoch, seq = ++sequence, at = clock.GetUtcNow(), truncated, total, sessions,
             }, ProtocolJson.Options);
+            record = sign?.Invoke(record) ?? record;
             if (Encoding.UTF8.GetByteCount(record.GetRawText()) > 16 * 1024)
             {
                 throw new InvalidDataException("registry publication exceeds the 16 KiB record limit");

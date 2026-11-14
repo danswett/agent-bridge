@@ -11,7 +11,7 @@ for (const width of [390, 820]) {
         const { HostClient } = await import('/js/host-client.js');
         const { prepareAttachment } = await import('/js/attachments.js');
         const { accountStore } = await import('/js/signin.js');
-        accountStore.save({ accountId: 'image-test', token: 'test-only' });
+        await accountStore.save({ accountId: 'image-test', token: 'test-only' });
         const refs = [1, 2].map((n) => `@/demo/attachments/${String(n).repeat(32)}-same.png`);
         const transport = { send(m) { queueMicrotask(() => this.onmessage({ re: m.id, ok: true, result: m.op === 'attachment.start' ? { received: 100000, complete: true } : { outcome: 'delivered', attachments: [{ id: m.data.attachments[0].id, ref: refs.shift() }] } })); } };
         const client = new HostClient(transport);
@@ -27,7 +27,7 @@ for (const width of [390, 820]) {
       });
       await page.reload();
       const render = async (target) => target.evaluate(async () => {
-        const { accountStore } = await import('/js/signin.js'); accountStore.save({ accountId: 'image-test', token: 'test-only' });
+        const { accountStore } = await import('/js/signin.js'); await accountStore.save({ accountId: 'image-test', token: 'test-only' });
         const { sentMessage } = await import('/js/ui/sent-message.js');
         const refs = [1, 2, 3].map((n) => `@/demo/attachments/${String(n).repeat(32)}-same.png`).join(' ');
         const bubble = sentMessage(refs, 'test-sent'); document.body.append(bubble);

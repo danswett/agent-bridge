@@ -11,6 +11,15 @@ Until the app has a settings screen, it is edited with the host's own commands, 
 machine (below), or by hand. The app will edit the same file; this page is the schema both
 follow.
 
+## Host enrollment descriptor (dormant)
+
+`agent-bridge-host devices descriptor` is reserved for a person at the machine.
+It currently exits 3 with only `no-switch` on stderr, before opening identity or
+hostSign custody. There is no config setting, environment override, automatic
+enrollment, scheduled task or deployment. #2367 and verified-reader host wiring
+are follow-ups; enabling the switch alone will not activate this verb.
+HostSign key provisioning is separate (#2369).
+
 ## Schema, version 1
 
 
@@ -315,6 +324,13 @@ enough. While nobody is pinned no session's `signInNeeded` attention says `signI
 either, so no device shows a Sign in that would be refused. A roster that can't be read, or is
 stale, pins nobody; a device removed from it loses a sign-in under way at once.
 
+The sign-in scheduler (#2297) is disarmed when there are no live flows or retained
+request receipts. Retained receipts use a one-shot expiry, not an idle polling loop.
+Live flows keep the existing 250 ms safety check for predicates without change events
+(including G5), alongside immediate roster and session-change checks. Flow limits,
+reattachment grace and receipt retention use elapsed time, so UTC changes cannot
+extend them. Codes still expire against their advertised UTC deadline.
+
 The app's Settings lists, under the switch and only while the running host has it on (a change
 applies at the next start, and until then the devices listed can still sign in), **Devices that can sign
 Copilot in**: each by name, with its kind and platform, read-only. It reads "No devices can sign
@@ -431,6 +447,18 @@ whole id.
 
 ## The agent audit log
 
+Read the retained audit metadata locally with `agent-bridge-host audit [--profile <name>]`
+and optional `--action <action>`, `--outcome <outcome>` and
+`--since <ISO timestamp with explicit offset or Z>`, for example
+`audit --action session.launch --outcome started --since 2026-11-10T16:00:00-08:00`.
+Filters combine and include both streams across UTC day boundaries. Output is JSON lines
+with Pacific timestamps and only known audit fields; unknown fields are never echoed.
+The command does not create profiles or load identity, configuration or session data.
+It is a metadata read, **not a chain-integrity verdict**. A malformed complete record,
+unsupported major version or read failure returns nonzero with a content-free error;
+earlier output may be partial. An incomplete final JSON prefix is ignored with a warning.
+Archive, durable chain heads and pruning changes remain separate #1401 A6 slices.
+
 What agents did on this machine is written one JSON line per event to
 `<profile>\audit\agents-YYYY-MM-DD.jsonl` (#1296, design/agent-principals.md §5.6). The folder
 and files are readable by this user alone, like `agent-credentials.json`. Each line has `at`,
@@ -543,7 +571,11 @@ instead of as a task of its own:
   have a stop already pending), then every `devBox.intervalMinutes`. The occurrence exists only from
   the last session leaving until one grace period later, and the grace is never under 60 minutes,
   so a pass every 15 minutes sees it four times; 30 is the most that still sees it twice. Turned on
-  from the app, a pass runs at once.
+  from the app, a pass runs at once. No scheduler or timer runs while keep-awake is off or on a
+  machine without the Dev Box agent. Turning it off releases the pending wait; turning it back
+  on starts a pass immediately. Unusable settings on an installed Dev Box still get scheduled
+  retries. The scheduler awaits its timer, re-checks the due time after it fires, and cancels
+  promptly at host shutdown; normal clock movement never recreates timers.
 * **One at a time.** A pass takes `%LOCALAPPDATA%\AgentBridge\devbox-keepawake.lock` without
   waiting, so two profiles' hosts never move the schedule together, and holds the mutex each of
   agent-ha-bridge's keep-awake passes takes (`Local\<its task name>`) for every such task registered
