@@ -5,14 +5,7 @@ using AgentBridge.Transport;
 
 namespace AgentBridge.Host;
 
-// What the local pipe serves: the sessions ops exactly as the relay's channels get them, and
-// the host's management ops, which only the pipe reaches. Who may do what (CallerGuard):
-//   * the Agent Bridge app: everything, the management ops included;
-//   * anything inside an agent session: reading sessions and usage, nothing else. Not managing
-//     the host, and not answering, replying, ending or launching sessions as if it were the
-//     person, until agents have a principal of their own (design §5.5);
-//   * anything else of the user's: the sessions ops as before, and the host's status, but not
-//     managing it.
+// CallerGuard and scoped credentials govern pipe ops; script management is host-CLI-only (docs/protocol/local-pipe.md).
 public static class LocalApi
 {
     // Management ops that only read.
@@ -31,6 +24,8 @@ public static class LocalApi
     static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log, RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet, AgentAuditLog? audit, RefusalAudits refusals) => async (channel, op, data) =>
     {
         credentials?.CheckScriptOperation(channel, op, log);
+        if (op is "scripts.add" or "scripts.revoke")
+        { return Cli.ScriptCredentialCommands.Handle(channel, op, data, callers, credentials, audit); }
         if (op is AgentProtocol.Adopt or AgentProtocol.Revoke or AgentProtocol.Credential)
         {
             if (credentials is null || !OperatingSystem.IsWindows() || channel is not LocalChannel local)

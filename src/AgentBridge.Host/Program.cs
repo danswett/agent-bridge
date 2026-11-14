@@ -45,6 +45,7 @@ using AgentBridge.Transport;
 //                                               other devices, approved here at the machine
 //   agent-bridge-host config show|set|unset     the rest of the profile's config.json
 //                                               (docs/host-config.md, docs/host-launch.md)
+//   agent-bridge-host scripts add|revoke <name> person-only script credential management
 //   agent-bridge-host ha status|token set|token clear|shadow [--json] [--window <seconds>]
 //                                               the Home Assistant connector (docs/ha-connector.md):
 //                                               whether serve would run it, and its token, which is
@@ -326,6 +327,9 @@ switch (command)
             if (ConfigCommands.Writes(rest) && Refused("change the host's config")) { return 4; }
             return ConfigCommands.Run(rest, LoadIdentity().Folder, Console.Out, Console.Error);
         }
+    case "scripts":
+        if (Refused("change script credentials")) { return 4; }
+        return await AgentBridge.Host.Cli.ScriptCredentialCommands.RunAsync(arguments, Identity.DefaultRoot, Console.Out, Console.Error);
     case "peers":
         {
             // AP5-lite pinned own-peers: at the machine only, never from an agent session.
@@ -373,6 +377,7 @@ switch (command)
         Console.Error.WriteLine("       agent-bridge-host rename <session-id> \"<fleet name>\" [--profile <name>] (empty name clears)");
         Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]");
         Console.Error.WriteLine("       " + OwnPeerCommands.Usage);
+        Console.Error.WriteLine("       " + AgentBridge.Host.Cli.ScriptCredentialCommands.Usage);
         Console.Error.WriteLine("       " + AgentCommands.Usage);
         Console.Error.WriteLine("       " + AgentBridge.Host.Shadow.ShadowCommand.Usage);
         Console.Error.WriteLine("       agent-bridge-host hooks status | hooks install|remove <copilot|claude|codex> [...] [--dry-run]");
