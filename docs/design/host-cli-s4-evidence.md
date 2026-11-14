@@ -141,11 +141,17 @@ implementation; an inability to notify is a gap, not an automatic row exemption.
 Scope: fixture-isolated product executable checks for `sessions` and missing
 `get` first. Reuse an existing process fixture if available; do not run provider
 collectors or live roots.
-Size: at most 250 changed lines. Sensitive: no. Depends-on: #2402.
+Size: at most 250 changed lines. Sensitive: yes (read-root seam). Depends-on: #2402.
 Acceptance: capture stdout/stderr/exit and unchanged fixture roots; distinguish
 product host executable tests from the rehearsal parser's tests.
 Remaining: JSON `watch` startup/cancellation and unknown-verb exit proof in
 dependent process-evidence cuts, each within the same 250-line ceiling.
+
+The #2488 process fixture starts `agent-bridge-host.dll`, not the rehearsal parser.
+Its `sessions`/`get`-only `--read-root` derives agent, registration and probe roots;
+profile intake is skipped so migration state cannot redirect reads outside it.
+Invalid or conflicting roots are refused before discovery; defaults stay unchanged.
+Fixture fingerprints check directory entries, file content and write times.
 
 ### C1 - Reconcile the person CLI action transport and caller contract
 
@@ -155,6 +161,8 @@ client code; no general arbitrary-operation command or new credential grant.
 Size: at most 200 lines. Sensitive: yes. Depends-on: #2402.
 Acceptance: person/agent-child/unknown-ancestry cases and allowed operation list;
 separate pipe-capable actions from relay-only person-device operations.
+The [C1 person CLI contract](host-cli-person-contract.md) records the source
+inventory, caller/transport boundaries and review-only acceptance vectors.
 
 ### C2 - Expose one local person CLI stop path without changing stop policy
 
@@ -238,6 +246,8 @@ No dashboard write implementation, credential changes or provider probing.
 Size: at most 200 lines. Sensitive: yes (account/person boundary). Depends-on: #2402.
 Acceptance: offline/unknown/stale distinguished; raw local JSON and agent fleet
 metadata are not presented as full person dashboard/action parity.
+The [C10 dashboard read contract](host-cli-dashboard-read-contract.md) maps
+reusable readers, scope/coverage distinctions and review-only output vectors.
 
 ### C11 - Add one guarded person CLI text-reply path before attachments
 
