@@ -54,7 +54,7 @@ public sealed class CliApprovalTests : IAsyncLifetime
             Id = scenario == "wrong-session" ? "another-session" : Id,
             Agent = scenario == "other-adapter" ? AgentKind.Codex : AgentKind.Copilot,
             Status = SessionStatus.Waiting, StatusSince = DateTimeOffset.UnixEpoch, UpdatedAt = DateTimeOffset.UnixEpoch, Activity = new(),
-            Question = scenario == "changed" && reads > 1 ? question with { Message = "A different operation" } : question,
+            Question = scenario == "missing" ? null : scenario == "changed" && reads > 1 ? question with { Message = "A different operation" } : question,
         };
     }
 
@@ -64,18 +64,23 @@ public sealed class CliApprovalTests : IAsyncLifetime
         return new(outcome, "private-sentinel: do not print raw host reasons");
     }
 
-    Task<int> Run(string input = "1", Func<bool>? refused = null) =>
-        ApproveCommands.RunAsync(["approve", Id, QuestionId, "--request", Request], root, refused ?? (() => false), new StringReader(input), output, error);
+    Task<int> Run(string choice = "approve", Func<bool>? refused = null)
+    {
+        string[] args = ["approve", Id, QuestionId, scenario == "bad-request" ? "invalid" : Request, choice];
+        if (scenario == "bad-profile") { args = [.. args, "--profile", ".."]; }
+        return ApproveCommands.RunAsync(args, root, refused ?? (() => false), output, error);
+    }
 
     [Theory]
-    [InlineData("1", "approve", AnswerOutcome.Delivered, 0)]
-    [InlineData("2", "deny", AnswerOutcome.Unconfirmed, 3)]
-    [InlineData("1", "approve", AnswerOutcome.Refused, 4)]
-    public async Task Cli_approve_sends_the_current_single_choice_bound_to_session_question_and_request(string input, string choice, AnswerOutcome result, int exit)
+    [InlineData("approve", AnswerOutcome.Delivered, 0)]
+    [InlineData("deny", AnswerOutcome.Unconfirmed, 3)]
+    [InlineData("approve", AnswerOutcome.Refused, 4)]
+    [InlineData("approve", (AnswerOutcome)int.MaxValue, 3)]
+    public async Task Cli_approve_sends_the_current_single_choice_bound_to_session_question_and_request(string choice, AnswerOutcome result, int exit)
     {
         outcome = result;
         var guards = 0;
-        Assert.Equal(exit, await Run(input, () => { guards++; return false; }));
+        Assert.Equal(exit, await Run(choice, () => { guards++; return false; }));
         Assert.Equal(2, guards);
         Assert.Equal([Ops.Hello, Ops.SessionGet, Ops.SessionGet, Ops.SessionAnswer], operations);
         Assert.NotNull(sent);
@@ -91,11 +96,17 @@ public sealed class CliApprovalTests : IAsyncLifetime
 
     [Theory]
     [InlineData("stale")]
+    [InlineData("missing")]
+    [InlineData("delegated")]
+    [InlineData("bad-request")]
+    [InlineData("bad-profile")]
     [InlineData("at-machine")]
     [InlineData("truncated")]
     [InlineData("escaped")]
     [InlineData("form")]
     [InlineData("multiple")]
+    [InlineData("hidden")]
+    [InlineData("field-text")]
     [InlineData("wrong-session")]
     [InlineData("other-adapter")]
     [InlineData("changed")]
@@ -108,18 +119,22 @@ public sealed class CliApprovalTests : IAsyncLifetime
         question = reason switch
         {
             "stale" => question with { Id = "replaced" },
+            "delegated" => question with { Agent = "delegate" },
             "at-machine" => question with { AnswerAtMachine = true },
             "truncated" => question with { Truncated = true },
             "escaped" => question with { Escaped = new() { Shown = "shown", Marks = [[0, 6]], Approve = EscapedApproval.Confirm } },
             "form" => question with { Kind = QuestionKind.Form },
             "multiple" => question with { Fields = [.. question.Fields, question.Fields[0] with { Name = "another" }] },
+            "hidden" => question with { Message = "\u001b[2JHidden operation" },
+            "field-text" => question with { Fields = [question.Fields[0] with { Description = "Unrendered instruction" }] },
             _ => question,
         };
         var guards = 0;
-        Assert.Equal(4, await Run(reason == "invalid-choice" ? "3" : "1", () => ++guards > 1 && reason == "person-lost"));
+        Assert.Equal(reason is "bad-request" or "bad-profile" ? 2 : 4, await Run(reason == "invalid-choice" ? "3" : "approve", () => ++guards > 1 && reason == "person-lost"));
         Assert.Null(sent);
         Assert.DoesNotContain(Ops.SessionAnswer, operations);
         Assert.NotEqual("", error.ToString());
+        Assert.DoesNotContain("\u001b", output.ToString());
     }
 
     [Theory]

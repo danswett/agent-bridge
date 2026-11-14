@@ -91,7 +91,7 @@ if (command == "audit")
 
 if (command == "approve")
 {
-    return await ApproveCommands.RunAsync(args, Identity.DefaultRoot, () => Refused("approving a question"), Console.In, Console.Out, Console.Error);
+    return await ApproveCommands.RunAsync(args, Identity.DefaultRoot, () => Refused("approving a question"), Console.Out, Console.Error);
 }
 
 // Inventory must return before even intake or device/account identity files are opened.
