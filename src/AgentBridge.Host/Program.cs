@@ -479,9 +479,8 @@ async Task<int> ServeAsync(HostHandover handover)
     var attempts = new AttemptLedger(Path.Combine(identity.Folder, "answer-attempts.json"), log: Log);
     await using var source = new SessionSource(options, processes, drivers: drivers, answerAttempted: attempts.IsClaimed);
     attempts.Changed += source.AnswerAttemptsChanged;
-    // Per-session process CPU and working set, one shared snapshot every 5 s (#1150).
-    // Relay load reads reuse it; host.log gets a line at most once a minute.
-    await using var load = new AgentBridge.Host.Core.Load.ProcessLoadSampler(source, new AgentBridge.Host.Core.Load.SystemProcessTable());
+    // Five-second samples for sessions or feeds; otherwise only the minute host-log cadence.
+    await using var load = HostLoadSampling.Create(settings, source, new AgentBridge.Host.Core.Load.SystemProcessTable(), relay: !localOnly);
     var lastLoadLog = DateTimeOffset.MinValue;
     load.Sampled += report =>
     {
@@ -641,6 +640,7 @@ async Task<int> ServeAsync(HostHandover handover)
     var haAuth = new AgentBridge.HomeAssistant.HaAuthGuard(AgentBridge.HomeAssistant.HaAuthGuard.FileFor(identity.Folder), log: Log);
     await using var homeAssistant = HaRunning.Start(settings, identity.Folder, source, usageMonitor, haActive, IsDevBuild(), HostVersion(), Log, answers,
         HaReplies.For(replies, attachments), stops, launcher, hostUpdates, drivers, haAuth, () => load.Current);
+    load.SetConsumerDemand((!localOnly && settings.LoadEnabled) || homeAssistant is not null);
     // What takes answering, replying, ending and launching away while it runs (design G5).
     // Asked afresh by what acts on it (updates, the readiness checks, the app's status).
     string? ServeReadOnly() => ReadOnlyReason() ?? g5.Active();
