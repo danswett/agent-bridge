@@ -400,6 +400,54 @@ test.describe('load bars', () => {
     });
   }, { load, online, available });
 
+  test('host memory wins on screen while CPU and memory round only their displayed labels', async ({ page }) => {
+    await openDemo(page);
+    await go(page, 'machines');
+    const load = { ...full, memory: { totalBytes: 32e9, availableBytes: 20e9, usedPercent: 61.2345, committedPercent: 91 } };
+    await draw(page, load);
+    const tile = page.locator('#load-fixture-list .machine-tile');
+    const cpu = tile.getByRole('meter', { name: 'CPU', exact: true });
+    const memory = tile.getByRole('meter', { name: 'Memory', exact: true });
+    await expect(memory).toHaveAttribute('aria-valuenow', '61.2345');
+    await expect(cpu).toHaveAttribute('aria-valuenow', '37.543');
+    await expect(tile.locator('.machine-load-value')).toHaveText(['38%', '61%']);
+    expect(await cpu.locator('.machine-load-fill').evaluate((e) => e.style.width)).toBe('37.543%');
+    expect(await memory.locator('.machine-load-fill').evaluate((e) => e.style.width)).toBe('61.2345%');
+    await expect(tile.getByText('20 GB free of 32 GB', { exact: true })).toBeVisible();
+    await draw(page, { ...load, ageMs: 20000 });
+    await expect(tile.locator('.machine-load-state')).toHaveText(['\u25cf Fresh', '\u25cf Fresh']);
+    await expect(tile.locator('.tile-measured')).toHaveText('Updated 20 s ago');
+    await expect(memory).toHaveAttribute('aria-valuenow', '61.2345');
+    await expect(tile.locator('.tile-health-word')).toHaveText('Not measured yet');
+    for (const [usedPercent, availableBytes] of [[0, 32e9], [100, 0]]) {
+      await draw(page, { ...load, memory: { totalBytes: 32e9, availableBytes, usedPercent } });
+      await expect(memory).toHaveAttribute('aria-valuenow', String(usedPercent));
+      await expect(tile.locator('.machine-load-value')).toHaveText(['38%', `${usedPercent}%`]);
+    }
+  });
+
+  test('old or invalid host figures show Not measured but valid free and total bytes remain visible', async ({ page }) => {
+    await openDemo(page);
+    await go(page, 'machines');
+    const tile = page.locator('#load-fixture-list .machine-tile');
+    for (const usedPercent of [undefined, null, NaN, Infinity, -0.1, 100.1]) {
+      const memory = { totalBytes: 32.06e9, availableBytes: 20.04e9, committedPercent: 91,
+        ...(usedPercent === undefined ? {} : { usedPercent }) };
+      await draw(page, { ...full, memory });
+      await expect(tile.getByRole('meter', { name: 'Memory', exact: true })).toHaveCount(0);
+      await expect(tile.locator('.machine-load-value')).toHaveText(['38%', 'Not measured']);
+      await expect(tile.getByText('20 GB free of 32.1 GB', { exact: true })).toBeVisible();
+      await expect(tile.locator('.machine-load-state')).toHaveText(['\u25cf Fresh', '\u25cf Fresh']);
+      await expect(tile.locator('.tile-health-word')).toHaveText('Not measured yet');
+    }
+    for (const memory of [{ totalBytes: 0, availableBytes: 0 }, { totalBytes: 32e9, availableBytes: 33e9 },
+      { totalBytes: 32e9, availableBytes: -1 }, { totalBytes: Infinity, availableBytes: 20e9 }]) {
+      await draw(page, { ...full, memory });
+      await expect(tile.getByText(/GB free/)).toHaveCount(0);
+      await expect(tile.getByRole('meter', { name: 'Memory', exact: true })).toHaveCount(0);
+    }
+  });
+
   for (const [word, load, online, glyph] of [
     ['Fresh', full, true, '\u25cf'],
     ['Partial', { ...full, state: 'partial', cpu: undefined }, true, '\u25d0'],

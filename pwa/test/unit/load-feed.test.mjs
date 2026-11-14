@@ -25,6 +25,32 @@ async function fake(t, { capabilities = ['load'], hold = [], result = sample() }
     update: (data) => transport.onmessage({ ev: 'load.update', seq: ++seq, data }) };
 }
 const flush = () => new Promise((resolve) => setImmediate(resolve));
+test('the guarded feed keeps host memory figures and words through snapshots and updates', async (t) => {
+  for (const usedPercent of [25.3456789012345, 0, 100]) {
+    const availableBytes = usedPercent === 0 ? 100 : usedPercent === 100 ? 0 : 25;
+    const raw = sample({ ageMs: 20000, cpu: { percent: 37.543 },
+      memory: { totalBytes: 100, availableBytes, usedPercent } });
+    const a = await fake(t, { result: raw }), feed = new LoadFeed();
+    await feed.attach('a', a.client);
+    assert.deepEqual(feed.load('a'), raw);
+    assert.deepEqual(a.ops(), ['load.get', 'load.subscribe']);
+    const update = { ...raw, memory: { ...raw.memory, usedPercent: 61.2345 } };
+    a.update(update);
+    assert.deepEqual(feed.load('a'), update);
+  }
+});
+
+test('the guarded feed omits invalid host percentages without losing bytes or changing state', async (t) => {
+  for (const usedPercent of [undefined, null, NaN, Infinity, -Infinity, -0.1, 100.1, '0']) {
+    const raw = sample({ memory: { totalBytes: 100, availableBytes: 25, usedPercent, committedPercent: 92 } });
+    const a = await fake(t, { result: raw }), feed = new LoadFeed();
+    await feed.attach('a', a.client);
+    assert.deepEqual(feed.load('a'), sample());
+    assert.equal(loadBars(feed.load('a')).state, 'fresh');
+    assert.equal(loadBars(feed.load('a')).memory.percent, null);
+  }
+});
+
 test('the shared capped MachineLoad vector feeds partial bars without exposing session rows', async (t) => {
   const vectors = JSON.parse(readFileSync(new URL('../../../docs/protocol/vectors/machine-load.json', import.meta.url), 'utf8'));
   const vector = vectors.records.MachineLoad.valid.find((v) => v.name === 'over-200-sessions');

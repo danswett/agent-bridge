@@ -15,6 +15,36 @@ const noFigures = (v) => {
   assert.equal(v.memory.text, 'no figure');
 };
 
+test('memory uses only the full-precision host percentage, including real zero and one hundred', () => {
+  for (const [usedPercent, availableBytes] of [[25.3456789012345, 25], [0, 100], [100, 0]]) {
+    const v = loadBars(sample({ memory: { totalBytes: 100, availableBytes, committedPercent: 92, usedPercent } }));
+    assert.equal(v.memory.percent, usedPercent);
+    assert.equal(v.cpu.percent, 37.5);
+  }
+});
+
+test('a missing or invalid memory figure never becomes a byte ratio, committed figure or zero', () => {
+  for (const usedPercent of [undefined, null, NaN, Infinity, -Infinity, -0.1, 100.1, '0']) {
+    const memory = { totalBytes: 100, availableBytes: 25, committedPercent: 92,
+      ...(usedPercent === undefined ? {} : { usedPercent }) };
+    const v = loadBars(sample({ memory }));
+    assert.equal(v.memory.percent, null);
+    assert.equal(v.state, 'fresh');
+    assert.equal(v.cpu.percent, 37.5);
+  }
+});
+
+test('host freshness and raw CPU survive a conflicting age limit and absent memory figure', () => {
+  for (const state of ['fresh', 'partial']) {
+    const v = loadBars(sample({ state, ageMs: 20000, cpu: { percent: 37.543 }, memory: undefined }));
+    assert.equal(v.state, state);
+    assert.equal(v.word, state === 'fresh' ? 'Fresh' : 'Partial');
+    assert.equal(v.ageMs, 20000);
+    assert.equal(v.cpu.percent, 37.543);
+    assert.equal(v.memory.percent, null);
+  }
+});
+
 test('bars show the exact whole-machine CPU and used memory share, not committed memory', () => {
   const v = loadBars(sample());
   assert.equal(v.state, 'fresh');
