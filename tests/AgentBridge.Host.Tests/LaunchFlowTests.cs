@@ -1217,7 +1217,14 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Serve(Config(c => c with { Workspaces = [new("App", app, true)], WorktreeLimit = 1 }), usage: new NoSessions());
         var ch = await OpenAsync();
 
-        Assert.Equal("started", (await LaunchAsync(ch, new { prompt = "go" })).Outcome_);
+        var firstLaunch = await LaunchAsync(ch, new { prompt = "go" });
+        try { Assert.Equal("started", firstLaunch.Outcome_); }
+        catch (Xunit.Sdk.EqualException failure)
+        {
+            throw new Xunit.Sdk.XunitException(
+                $"{failure.Message}{Environment.NewLine}First launch reason: {firstLaunch.Reason}{Environment.NewLine}"
+                + $"Fixture log:{Environment.NewLine}{string.Join(Environment.NewLine, logged)}");
+        }
         var first = starter.Specs[0].WorkingDirectory;
         await WaitAsync(() => Task.FromResult(!File.Exists(Path.Combine(Worktrees.AdminFolder(first)!, "locked"))));
         // Its session has ended and it has sat idle past launch.worktrees.idleHours.
