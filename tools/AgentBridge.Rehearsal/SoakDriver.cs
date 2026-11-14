@@ -402,14 +402,12 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
     {
         var until = now() + options.TurnTimeout + (turn.Background ? TimeSpan.FromMinutes(6) : TimeSpan.Zero);
         var launchTurn = marker is null;
-        var moved = false;
-        DateTimeOffset? idleSince = null;
         var seen = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         var asked = false;
-        var sawWork = false;
         var sawCard = false;
         string? lastStatus = null;
         var begun = now();
+        var completion = new TurnCompletion(turn.Compact, turn.Background, marker, begun);
         while (now() < until)
         {
             await wait(TimeSpan.FromSeconds(3), ct);
@@ -422,19 +420,15 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
                 record.Problems.Add($"the session went ({status}) during turn {record.Turns}");
                 return true;
             }
-            if (status is "working" or "waiting" or "agents" or "shell") { sawWork = true; }
             if (status != lastStatus) { Log($"  status {status}"); lastStatus = status; }
             var current = await MarkerAsync(node, ct);
-            // A launch's turn is measured from the card as first seen (a resumed session's shows
-            // what it said last time); a later turn's from just before its prompt was sent.
-            marker ??= current;
-            if (current != marker) { moved = true; }
+            completion.Observe(status, current);
             // A new session's first reply, if the turn was over before the first look.
             var replied = freshLaunch && launchTurn && Attr(await ha.StateAsync($"sensor.{node}_activity", ct), "response") is { Length: > 0 };
             var q = CardQuestion.Read(await ha.StateAsync($"select.{node}_decision", ct));
             if (q is not null && !handled.Contains(q.DecisionId))
             {
-                idleSince = null;
+                completion.Question();
                 if (!seen.TryGetValue(q.DecisionId, out var first))
                 {
                     seen[q.DecisionId] = first = now();
@@ -458,26 +452,13 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
                 asked = true;
                 continue;
             }
-            // A launched session reads idle for a moment before it starts, so a turn is over once
-            // it has been seen working, its response has moved on, or a new session has replied.
             // Not while the card still shows the question just answered: agent-ha-bridge resets
             // the reply box when it clears the card, and a prompt typed before that is wiped,
             // leaving its Send armed to take the prompt after it (seen on VM-M, 2026-11-02).
-            // A /compact can be over before the first look and leave no response behind: Copilot's
-            // left the card idle and unchanged, and the turn waited out its timeout (VM-M,
-            // 2026-11-02), so it is over after a minute idle.
-            var quietCompact = turn.Compact && now() - begun >= TimeSpan.FromMinutes(1);
-            if (status == "idle" && q is null && (asked || sawWork || moved || replied || quietCompact))
-            {
-                idleSince ??= now();
-                // Idle for a while: a background shell's end, a woken agent or a question can
-                // start the session working again moments after.
-                if (now() - idleSince >= TimeSpan.FromSeconds(turn.Background ? 45 : 15)) { return false; }
-            }
-            else { idleSince = null; }
+            if (completion.Complete(status, q is not null, asked, replied, now())) { return false; }
         }
         record.Problems.Add($"turn {record.Turns} did not end in time");
-        Log($"  turn {record.Turns} timed out: status {lastStatus}, seen working {sawWork}, response moved {moved}, card {(CardQuestion.Read(await ha.StateAsync($"select.{node}_decision", ct)) is { } open ? "asks " + open.DecisionId : "clear")}");
+        Log($"  turn {record.Turns} timed out: status {lastStatus}, seen working {completion.SawWork}, response moved {completion.Moved}, card {(CardQuestion.Read(await ha.StateAsync($"select.{node}_decision", ct)) is { } open ? "asks " + open.DecisionId : "clear")}");
         return false;
     }
 

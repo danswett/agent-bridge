@@ -29,14 +29,14 @@ static partial class SelfTest
             Kind = QuestionKind.Approval,
             Message = EscapedMessage,
             AskedAt = DateTimeOffset.UtcNow,
-            Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")] }],
-            Escaped = EscapedApproval.For(EscapedMessage, [(at, 6)], EscapedApproval.Confirm),
+            Fields = new[] { new Field { Name = "decision", Type = FieldType.Choice, Options = new[] { new Option("approve", "Approve once"), new Option("deny", "Deny") } } },
+            Escaped = EscapedApproval.For(EscapedMessage, new[] { (at, 6) }, EscapedApproval.Confirm),
         };
         var ui = new QueueDispatcher(root.DispatcherQueue);
         Func<CancellationToken, Task<IClientChannel>> never = _ => Task.FromException<IClientChannel>(new IOException("the self-test's sheet sends nothing"));
         var deliveries = new Deliveries(new HostConnection(never, ui), ui) { Hold = _ => "Demo machine isn't connected now" };
         var vm = new QuestionViewModel(question, "demo-escaped", AgentKind.Copilot,
-            [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, EscapedApproval.Capability], deliveries, "Demo machine")
+            new[] { Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, EscapedApproval.Capability }, deliveries, "Demo machine")
         {
             SignEscaped = (_, _, _, _, _) => new SignedCommand { Body = "c2VsZi10ZXN0", By = "c2VsZi10ZXN0", Mac = "c2VsZi10ZXN0" },
             SessionTitle = "Run the app's tests",

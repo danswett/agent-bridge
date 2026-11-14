@@ -15,6 +15,8 @@ import { LaunchPanel } from './launch-view.js';
 import { AnswerService } from '../answer-service.js';
 import { TurnClock } from '../turn-clock.js';
 import { ReplyService } from '../reply-service.js';
+import { accountStore } from '../signin.js';
+import { replyAccount } from '../reply-state.js';
 import { StopService } from '../stop-service.js';
 import { LaunchService } from '../launch-service.js';
 import { LaunchOptionsCache } from '../launch-options-cache.js';
@@ -220,7 +222,9 @@ export class SessionsPage {
       unready?.();
       doc?.removeEventListener('visibilitychange', hidden);
     };
-    this.replies = new ReplyService({ current, accepts, ...timing, blobs, onTap: (e) => this.turns.sent(e.hostId, e.sessionId) });
+    const replyScope = replyAccount(accountStore.load(storage));
+    this.replies = new ReplyService({ current, accepts, ...timing, blobs, onTap: (e) => this.turns.sent(e.hostId, e.sessionId),
+      persistence: replyScope ? { storage, account: replyScope } : null });
     this.stops = new StopService({ current, accepts, ...timing });
     this.launches = new LaunchService({ current, accepts, ...timing });
     // Each machine's last launch.options, asked for in the background, so Start a session shows at once (#1527).
