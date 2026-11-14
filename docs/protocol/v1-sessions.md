@@ -2138,9 +2138,9 @@ session left under an agent's control still says so while it is idle. It says so
   §5.5; the pipe refuses them anything but reading, #44), so today the only agent principal a host
   sees is a press, answer, reply or launch on its Home Assistant cards made by an account listed
   in `homeAssistant.agentUserIds` ([ha-connector.md](../ha-connector.md)), or a reply-card publish
-  that names `driver: agent`. `driverPrincipal` is then `homeassistant:<user id>` for the account
-  (absent for a publish, which names no account). Once agents have their own principal (#45), it
-  is set from theirs the same way.
+  that names `driver: agent`. `driverPrincipal` is `homeassistant:<user id>` for the account,
+  or the publish's cleaned, unverified `sender` display label (not proof of identity). Once agents
+  have their own principal (#45), it is set from theirs the same way.
 * It is kept in memory, as agent-ha-bridge keeps it: a host that restarts, and a session that goes
   and comes back, starts again as the person's.
 * A change of driver is something a client shows, so it moves `updatedAt` and sends an upsert. It
