@@ -1089,17 +1089,30 @@ public sealed class AuthBackoffCallerTests : AuthBackoffFixture
         var guard = new HaAuthGuard(Record, time);
         using var reservation = await guard.EnterAsync(guard.Credential(Url, Token));
         var before = File.ReadAllText(Record);
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var contended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var held = new FileStream(Record + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         Task handoff = Task.CompletedTask;
         try
         {
-            handoff = Task.Run(() => HandOn("another-attempt", () => contended.TrySetResult()));
-            await Task.WhenAny(handoff, contended.Task).WaitAsync(TimeSpan.FromSeconds(3));
+            handoff = Task.Run(async () =>
+            {
+                await start.Task;
+                await HandOn("another-attempt", () =>
+                {
+                    try
+                    {
+                        Assert.False(handoff.IsCompleted);
+                        Assert.Equal(before, File.ReadAllText(Record));
+                        Assert.False(File.Exists(Record + ".test"));
+                        contended.TrySetResult();
+                    }
+                    finally { held.Dispose(); }
+                });
+            });
+            start.SetResult();
+            await handoff.WaitAsync(TimeSpan.FromSeconds(30));
             Assert.True(contended.Task.IsCompletedSuccessfully);
-            Assert.False(handoff.IsCompleted);
-            Assert.Equal(before, File.ReadAllText(Record));
-            Assert.False(File.Exists(Record + ".test"));
         }
         finally
         {
@@ -1156,7 +1169,7 @@ public sealed class AuthBackoffCallerTests : AuthBackoffFixture
             catch (IOException) when (Environment.TickCount64 < deadline)
             {
                 blocked?.Invoke();
-                await Task.Yield();
+                await Task.Delay(20);
             }
         }
         using (held)
