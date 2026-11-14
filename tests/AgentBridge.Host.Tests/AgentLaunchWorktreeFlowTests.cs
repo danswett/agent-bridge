@@ -16,7 +16,7 @@ public sealed class AgentLaunchWorktreeFlowTests : LaunchFlowFixture
         return Launcher(Config(c => c with
         {
             Workspaces = [new("App", workspaceDirectory ?? app, isolated)], WorktreeLimit = limit,
-        }), wait: TimeSpan.FromSeconds(5), follow: TimeSpan.FromSeconds(10),
+        }),
             agentWorktreeCheck: check ?? AgentLaunchWorktreeCheck.Check,
             agentWorktreeRefusalAudit: (request, principal, reason) => audit.Append(
                 new("local", request.ToString("D"), principal, [], LaunchProtocol.Launch, "local", "refused", reason)));
