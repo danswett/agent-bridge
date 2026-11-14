@@ -40,6 +40,7 @@ public sealed partial class SessionView : UserControl
         InitializeComponent();
         ReplyBox.TextCompositionStarted += (_, _) => replyComposing = true;
         ReplyBox.TextCompositionEnded += (_, _) => replyComposing = false;
+        InitializeLatest();
         HistoryRows.ItemsSource = historyShown;
         Loaded += (_, _) =>
         {
@@ -218,6 +219,7 @@ public sealed partial class SessionView : UserControl
 
     void OnCard(SessionCardViewModel? old, SessionCardViewModel? card)
     {
+        ResetLatest();
         if (attached && old is not null) { old.PropertyChanged -= OnCardChanged; old.Delegates.ReplyWanted -= OnReplyWanted; old.Delegates.PropertyChanged -= OnDelegatesChanged; }
         // The box the person is typing in now belongs to the next session: the last one is no longer
         // being edited, which would otherwise keep holding its list's order (MainViewModel.Rearrange).
@@ -616,6 +618,7 @@ public sealed partial class SessionView : UserControl
 
     void OnQuestionBar(object sender, RoutedEventArgs e)
     {
+        ReleaseFocusPin();
         QuestionCard.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = true });
     }
 

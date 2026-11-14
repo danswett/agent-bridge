@@ -80,7 +80,7 @@ public sealed partial class SessionView
         var line = history is null ? null : HistoryDraw.Line(history.State, rows.Count, !string.IsNullOrEmpty(Card?.UserMessage), history.Start);
         var scroll = ConversationScroll;
         // Measured before the rows change: the pane collapsing under the view must not read as scrolled back.
-        var atEnd = pinEnd || !panning && !scrolling && keyTarget is null && scroll is { ScrollableHeight: > 0 } && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack;
+        var atEnd = latestUsed ? latestPinned : pinEnd || !panning && !scrolling && keyTarget is null && scroll is { ScrollableHeight: > 0 } && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack;
         var offset = scroll?.VerticalOffset ?? 0;
         var reading = atEnd ? null : ReadingHistory();
         var changed = HistoryRowSync.Apply(historyShown, rows);
@@ -136,7 +136,7 @@ public sealed partial class SessionView
         var from = Math.Max(0, end - 2);
         var rows = HistoryDraw.Rows(turns.Skip(from).Take(end - from).ToArray(), null, openPrompts);
         var scroll = ConversationScroll;
-        var atEnd = pinEnd || scroll is { ScrollableHeight: > 0 } && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack;
+        var atEnd = latestUsed ? latestPinned : pinEnd || scroll is { ScrollableHeight: > 0 } && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack;
         var offset = scroll?.VerticalOffset ?? 0;
         var extent = scroll?.ScrollableHeight ?? 0;
         var reading = atEnd ? null : ReadingHistory();
@@ -188,6 +188,7 @@ public sealed partial class SessionView
     // Skipped if another session was opened, or the person took the view, meanwhile.
     void KeepPlace(bool atEnd, double offset, (string Id, double Top)? reading = null, double? earlierExtent = null)
     {
+        if (latestUsed) { atEnd = latestPinned; }
         var (session, releases) = (shownHistory, pinReleases);
         void Restore()
         {
@@ -203,7 +204,7 @@ public sealed partial class SessionView
                     target = Math.Clamp(scroll.VerticalOffset + Top(row, scroll) - kept.Top, 0, scroll.ScrollableHeight);
                 }
             }
-            var off = reading is not null || atEnd || pinEnd ? Math.Abs(scroll.VerticalOffset - target) > 0.5 : scroll.VerticalOffset < target - 0.5;
+            var off = reading is not null || atEnd || pinEnd || latestUsed ? Math.Abs(scroll.VerticalOffset - target) > 0.5 : scroll.VerticalOffset < target - 0.5;
             if (off) { Anchoring(scroll, target); }
         }
         // Compensate a prepend before input can land between insertion and correction.

@@ -10,7 +10,7 @@ namespace AgentBridge.App;
 
 static partial class SelfTest
 {
-    static async Task CheckEarlierHistory(MainWindow window, MainViewModel main, Action<bool, string> check)
+    static async Task CheckEarlierHistory(MainWindow window, MainViewModel main, Action<bool, string> check, bool latest = false)
     {
         var view = await Choose(window, main, "demo-approval", "Response");
         if (view is null) { check(false, "opens a conversation to check earlier messages"); return; }
@@ -47,6 +47,20 @@ static partial class SelfTest
             await Until(() => history.Turns.Count == 20 && rows.ItemsSourceView.Count == 20, TimeSpan.FromSeconds(10));
             await Task.Delay(700);
             var scroll = ConversationScroller(view)!;
+            if (latest)
+            {
+                var tabStop = scroll.IsTabStop;
+                try
+                {
+                    scroll.IsTabStop = true;
+                    await LatestJump(window, view, scroll, check);
+                    var end = scroll.VerticalOffset;
+                    check(await LatestInput(window, scroll, "wheel", up: true), "latest: native wheel releases the hatch before earlier paging");
+                    check(await Until(() => scroll.VerticalOffset < end - 1.5, TimeSpan.FromSeconds(3)), "latest: wheel moves away from the end before earlier paging");
+                    await Still(scroll);
+                }
+                finally { scroll.IsTabStop = tabStop; }
+            }
             async Task Page(bool button, int count)
             {
                 var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -121,7 +121,7 @@ static partial class SelfTest
     // A key pressed as the keyboard presses it, with Shift held about it when asked. Posted, the key
     // carries no Shift of its own: the app reads modifiers from this thread's keyboard state, which
     // only input read from the queue sets, so Shift is set down there until Unshift (after the key is seen).
-    static string Press(nint window, VirtualKey key, bool foreground, bool extended = true, bool shift = false)
+    static string Press(nint window, VirtualKey key, bool foreground, bool extended = true, bool shift = false, bool nativeOnly = false)
     {
         var vk = (ushort)key;
         var scan = (ushort)MapVirtualKeyW(vk, 0);
@@ -140,6 +140,7 @@ static partial class SelfTest
                 : keys;
             if (SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<KeyInput>()) == inputs.Length) { return "SendInput"; }
         }
+        if (nativeOnly) { throw new InvalidOperationException("keyboard: native input needs a foreground target and successful SendInput"); }
         if (shift) { Shifted(true); }
         var (to, _) = PostedTarget(window);
         PostKey(to, key, extended);

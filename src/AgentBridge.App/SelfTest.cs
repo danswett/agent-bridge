@@ -10,6 +10,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Windows.Graphics.Imaging;
 using Windows.Storage.Streams;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace AgentBridge.App;
 
@@ -24,8 +25,26 @@ static partial class SelfTest
         var result = new Dictionary<string, object?>();
         var checks = new List<string>();
         var failures = new List<string>();
+        var clock = Stopwatch.StartNew();
+        var section = "";
+        var sectionAt = TimeSpan.Zero;
+        var checkedAt = TimeSpan.Zero;
+        void LatestBoundary(string next)
+        {
+            var now = clock.Elapsed;
+            if (section.Length > 0) { AppLog.Write($"latest section end: name={section}, seconds={(now - sectionAt).TotalSeconds:0.000}, selfTestSeconds={now.TotalSeconds:0.000}"); }
+            section = next;
+            sectionAt = checkedAt = now;
+            if (section.Length > 0) { AppLog.Write($"latest section begin: name={section}, selfTestSeconds={now.TotalSeconds:0.000}"); }
+        }
         void Check(bool ok, string what)
         {
+            if (section.Length > 0)
+            {
+                var now = clock.Elapsed;
+                AppLog.Write($"latest check: section={section}, seconds={(now - checkedAt).TotalSeconds:0.000}, sectionSeconds={(now - sectionAt).TotalSeconds:0.000}, selfTestSeconds={now.TotalSeconds:0.000}, passed={ok}, name={what}");
+                checkedAt = now;
+            }
             (ok ? checks : failures).Add(what);
             if (!ok) { AppLog.Write($"self-test: failed: {what}"); }
         }
@@ -60,6 +79,9 @@ static partial class SelfTest
             var remoteFacts = rows.FirstOrDefault(r => r.Card?.Id == "demo-remote-codex") is { } rc ? ById<TextBlock>(rc, "RowFacts") : null;
             Check(remoteFacts is not null && Text(remoteFacts).EndsWith(" · " + remote.MachineName, StringComparison.Ordinal), $"names the machine on another machine's row ({(remoteFacts is null ? "none" : Text(remoteFacts))})");
             await CheckEarlierHistory(window, main, Check);
+            LatestBoundary("latest earlier history");
+            try { await CheckEarlierHistory(window, main, Check, latest: true); }
+            finally { LatestBoundary(""); }
             await CheckRowAnatomy(rows, Check);
             CheckRowNames(window, rows, Check);
             await CheckSelectionBar(window, Check, outFile);
@@ -290,6 +312,7 @@ static partial class SelfTest
             await CheckSessionDetails(window, main, demo, Check, outFile);
             await CheckAnswerMoves(window, main, Check, outFile);
             await CheckHistoryScroll(window, main, Check);
+            await CheckLatest(window, main, Check, LatestBoundary);
             await CheckHistoryYourMessages(window, main, Check);
             await CheckMessageTimes(window, main, Check);
             await CheckHistoryScrollBudget(window, main, demo, Check, result);
