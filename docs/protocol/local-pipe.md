@@ -151,7 +151,7 @@ host-management op it gains.
 
 | Op | Data | Result |
 |---|---|---|
-| `session.rename` | `{ "id": "<listed session id>", "name": "<fleet name>" }` | `{ "id", "name" }`, after saving; empty/blank name clears |
+| `session.rename` | `{ "id": "<listed session id>", "name": "<fleet name>" }` | `{ "id", "name", "duplicateStatus": "present" \| "absent" \| "unknown" }`, after saving; empty/blank name clears |
 
 Pipe only, local Windows app or host CLI only, with fresh caller classification on every call.
 Agents (including their MCP children), untraced/partial-ancestry processes and relay channels
@@ -160,6 +160,18 @@ After trimming, nonempty names must be 1 to 64 ASCII characters of `A-Za-z0-9 sp
 The host durably saves `fleet-names.json` in its profile, keyed by session id; unreadable state
 is an error, never an empty store. Titles, transcripts, `workspace.yaml` and folders are not sources.
 This is the same-user host-state safety rail, not tamper-proof identity.
+
+After caller and input validation, the host privately checks live local host-owned names and
+its account-scoped registry before one durable save. Only its own machine/session pair is
+excluded; normalized names match exactly and case-sensitively. A match is `present`; complete
+views without a match are `absent`. Missing scope/registry, truncated live records, held local
+discovery or an unreadable/timed-out check give `unknown`, never false absence. A known match
+still gives `present`. The registry read has a monotonic two-second deadline, is cancelled
+on timeout or caller disconnect, and late completion cannot change the result. Disconnect
+during the check prevents saving. `unknown` does not prevent saving, but a failed save returns
+the normal error, not a saved result or warning. No other session's name or identity is returned.
+Older hosts omit `duplicateStatus`; clients must show that as unknown, not absent.
+The App/CLI disclosure and visible warning are follow-on #2519 work; lookup remains unverified.
 
 At the Windows machine, open your own terminal (not an agent session), use
 `agent-bridge-host sessions --compact` to find the running session's full id, then run:

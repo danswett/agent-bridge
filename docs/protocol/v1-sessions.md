@@ -1218,17 +1218,21 @@ Ends a session, as agent-ha-bridge's End session button does. Request `data`:
 | `request` | A fresh UUID per press, with exactly `session.answer`'s semantics: every outcome is remembered for at least 10 minutes and returned for a repeat, which does nothing more; a repeat of a press still being acted on waits for it |
 | `confirm` | Only on a second press: the token the first press's `confirm` outcome gave. At most 64 characters of `A–Z a–z 0–9 - _` |
 
-**Two presses when the session is not idle, enforced by the host.** A session that is
+**Two presses when the session is not safely idle, enforced by the host.** A session that is
 `working`, `waiting`, or `idle` with `activity.background` (delegating) has a turn or work in
-flight that ending it would throw away. The first press only arms: the host answers
-`confirm` with a token, and ends nothing. A second press within the window (10 s, measured on
+flight that ending it would throw away. An idle-reported session also needs two presses
+when its Copilot transcript cannot be read, its launch has not been seen ready, or an open
+question is seen only in the transcript (#2411, Product ruling 2 on #2396).
+The first press only arms: the host answers `confirm` with a token, and ends nothing.
+A second press within the window (10 s, measured on
 the host from when it armed) carrying that token ends it, if the session's process is still
 the very one the first press saw, by id and start time. Anything short of that (no token, a
 lapsed or unknown one, one from another session, a process that has been replaced) is
 another first press: a new `confirm` and token, and nothing ended. Every device and client
 can send `session.stop`, so this is the host's rule, never only a client's. An `idle` session
-with nothing in the background ends on one press; a token sent for one is ignored. The host
-checks the session again immediately before it acts, and one that has started working or
+with nothing in the background and none of those edge states ends on one press; a token
+sent for one is ignored. The host checks the session again immediately before it acts,
+and one that has started working or
 asking since the press arrived needs a second press after all (`confirm`). Several
 first presses can be waiting at once (two devices); any one confirms, and confirming spends
 them all.
@@ -1252,8 +1256,10 @@ A client treats an outcome it doesn't know as `failed`, never as `ended` or `con
 agent's own input, so the CLI writes its transcript and releases its lock, and the session
 stays resumable. If it has not exited within 12 s, the agent's process alone (never its
 tree) is terminated. A session asking anything, in what the host reports or in its
-transcript, is terminated without `/exit`, which would land in the question's input. From
-the moment it starts until the outcome, the session is upserted as `ending`, and the host
+transcript, is terminated without `/exit`, which would land in the question's input.
+An unreadable Copilot transcript or a launch not ready is treated as possibly asking:
+after the confirmed second press, the host terminates without typing `/exit`.
+From the moment it starts until the outcome, the session is upserted as `ending`, and the host
 holds it against answers and replies (`busy`), which share the per-session serialization.
 The terminal window or tab the agent ran in is left open: the person may have other work in
 it.
@@ -2098,9 +2104,9 @@ session left under an agent's control still says so while it is idle. It says so
   §5.5; the pipe refuses them anything but reading, #44), so today the only agent principal a host
   sees is a press, answer, reply or launch on its Home Assistant cards made by an account listed
   in `homeAssistant.agentUserIds` ([ha-connector.md](../ha-connector.md)), or a reply-card publish
-  that names `driver: agent`. `driverPrincipal` is then `homeassistant:<user id>` for the account
-  (absent for a publish, which names no account). Once agents have their own principal (#45), it
-  is set from theirs the same way.
+  that names `driver: agent`. `driverPrincipal` is `homeassistant:<user id>` for the account,
+  or the publish's cleaned, unverified `sender` display label (not proof of identity). Once agents
+  have their own principal (#45), it is set from theirs the same way.
 * It is kept in memory, as agent-ha-bridge keeps it: a host that restarts, and a session that goes
   and comes back, starts again as the person's.
 * A change of driver is something a client shows, so it moves `updatedAt` and sends an upsert. It
