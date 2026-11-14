@@ -95,6 +95,10 @@ public sealed partial class LaunchFlowTests
         var (launching, other, _) = await ServeWithRepliesAsync(Config(c => c with { RemoteFolderTrust = fromDevices, RemoteFolderTrustDevices = approved ? ["a-device"] : [] }), readyWait: TimeSpan.FromMilliseconds(200));
         var unknown = await LaunchAsync(launching, new { agent = "copilot", workspace = "App" });
         Assert.Equal("unconfirmed", unknown.Outcome_);
+        // The launch's budget can expire before its follow first runs discovery. This case is
+        // about a registered session's blank window, not a session that has not appeared yet.
+        await source.RefreshAsync();
+        Assert.NotNull(source.Get(unknown.Session!));
 
         var reply = await ReplyFromAsync(other, unknown.Session!, "hello from the phone");
 
