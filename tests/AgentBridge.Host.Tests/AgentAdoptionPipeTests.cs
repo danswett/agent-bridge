@@ -139,6 +139,15 @@ public sealed class AgentAdoptionPipeTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_invalid_profile_is_rejected_before_the_person_guard_or_connection()
+    {
+        var error = new StringWriter();
+        Assert.Equal(2, await AgentCommands.RunWithProfileAsync(["agents", "adopt", Session, "--profile", "..\\outside"], root,
+            () => throw new InvalidOperationException("must not check"), TextWriter.Null, error));
+        Assert.Contains("--profile requires one valid profile name", error.ToString());
+    }
+
+    [Fact]
     public void Adoption_never_returns_a_new_process_that_appeared_after_the_guard_ran()
     {
         var original = source.ProcessOf(Session)!;
@@ -182,6 +191,19 @@ public sealed class AgentAdoptionPipeTests : IAsyncLifetime
         Assert.Equal(0, await AgentCommands.RunWithProfileAsync(["agents", "revoke", Session, "--profile", Path.GetFileName(root)], Path.GetDirectoryName(root)!, () => false, output, error));
         Assert.Contains("no longer acts", output.ToString());
         Assert.Equal("", error.ToString());
+    }
+
+    [Fact]
+    public async Task The_cli_treats_an_absent_revocation_as_a_successful_no_op()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        callers.Kind = CallerKind.HostCli;
+        var output = new StringWriter();
+        var error = new StringWriter();
+        Assert.Equal(0, await AgentCommands.RunAsync(["agents", "revoke", Session], root, () => false, output, error));
+        Assert.Contains("had no adoption or credential", output.ToString());
+        Assert.Equal("", error.ToString());
+        Assert.True(callers.Fresh);
     }
 
     [Theory]

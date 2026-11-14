@@ -254,6 +254,7 @@ Outside the window or after a claim: `refused: no adopted session covers this ca
 An authenticated connection gets `refused: this connection already has an agent credential`.
 Partial, ambiguous and ended-process claims return the store's refusal without a token.
 The token is returned only to this caller and is never logged.
+Failed credential persistence faults the store; adopt and revoke report refusal, not success.
 
 In a person's terminal at the machine, use `agent-bridge-host agents adopt <session>`
 (`--scope read|read+reply` optional) or `agents revoke <session>`; both refuse inside an agent

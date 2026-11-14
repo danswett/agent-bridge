@@ -46,11 +46,14 @@ public static class LocalApi
             }
             try
             {
+                if (credentials.Problem is not null) { throw new InvalidOperationException("refused: the credential store is unavailable"); }
                 if (op == AgentProtocol.Revoke)
                 {
                     var revoke = data.Deserialize<AgentRevokeRequest>(ProtocolJson.Options);
                     if (string.IsNullOrEmpty(revoke?.Session)) { throw new ArgumentException("agent.revoke needs a session"); }
-                    return new AgentRevokeResult(revoke.Session, credentials.Revoke(revoke.Session, $"revoked by a person ({person.Description})"));
+                    var revoked = credentials.Revoke(revoke.Session, $"revoked by a person ({person.Description})");
+                    if (credentials.Problem is not null) { throw new InvalidOperationException("refused: the credential store is unavailable"); }
+                    return new AgentRevokeResult(revoke.Session, revoked);
                 }
                 var adopt = data.Deserialize<AgentAdoptRequest>(ProtocolJson.Options);
                 if (string.IsNullOrEmpty(adopt?.Session)) { throw new ArgumentException("agent.adopt needs a session"); }
@@ -59,6 +62,7 @@ public static class LocalApi
                     throw new InvalidOperationException("refused: the host has no running process for that session to adopt");
                 }
                 var adoption = credentials.Adopt(adopt.Session, process.Id, started, adopt.Scope ?? AgentProtocol.ScopeRead);
+                if (credentials.Problem is not null) { throw new InvalidOperationException("refused: the credential store is unavailable"); }
                 return new AgentAdoptResult(adoption.Session, adoption.Scope, adoption.ExpiresAt);
             }
             catch (JsonException) { throw new ArgumentException($"{op} needs a session"); }
