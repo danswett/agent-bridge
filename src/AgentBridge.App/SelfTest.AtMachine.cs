@@ -18,7 +18,7 @@ static partial class SelfTest
         {
             Id = "legacy-887", Kind = QuestionKind.Form, Message = "Keep the old witness format?",
             AskedAt = DateTimeOffset.UtcNow, AnswerAtMachine = true, AnswerAtMachineReason = "shape",
-            Fields = [new Field { Name = "answer", Type = FieldType.Choice, Options = [new("Yes"), new("No")], AllowOther = true, Required = true }],
+            Fields = new[] { new Field { Name = "answer", Type = FieldType.Choice, Options = new Option[] { new("Yes"), new("No") }, AllowOther = true, Required = true } },
         };
         try
         {
