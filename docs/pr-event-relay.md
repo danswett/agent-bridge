@@ -26,7 +26,10 @@ everything else, the rule of at most one conditional check per 10 minutes stays.
 - Targets, measured per kind in the soak: a PR state, comment or submitted review reaches its owner
   within 2 minutes of GitHub showing it; a `gate` within 2 minutes while CI runs and 4 minutes on a
   finished head; a review dismissal within 4 minutes; `ci` within 5 minutes of the last check
-  finishing, 9 after a re-run on a finished head.
+  finishing, 9 after a re-run on a finished head. On a draft PR, state, comment and submitted review
+  targets are the same; a dismissal and a `gate` arrive within 16 minutes and `ci` within 18 (a
+  draft's reviews and head checks and statuses are read every 15 minutes, then every 60 s while its
+  checks run; `ci` is raised at once when the last `completed_at` is already 3 minutes old).
 - Fewer than 300 counted REST calls an hour when quiet, about 500 with 8 PRs in CI (see Rate), on a
   budget of its own.
 - No silent loss: every event the relay observes is delivered, or journaled as undeliverable and
@@ -67,40 +70,99 @@ Owner rule (contributor-workflow, "nothing tied to a machine"), answered:
 **Fencing and where a send is admitted.** Every state commit is a write conditioned on the blob's
 ETag (`If-Match`) under the current lease; a runner whose write fails has lost the lease and stops.
 The admission point for a send is its own `sending` commit: a send runs only after that commit
-succeeds, and nobody ever sends a `sending` record again. Neither the host nor HA checks lease
+succeeds. Every attempt, including a retry and the one re-send after `dropped`, is a new `sending`
+commit with its attempt number and the same request id; an attempt whose outcome is unknown is never
+sent again. Neither the host nor HA checks lease
 generations, so runners can overlap in time: one that pauses after its commit may resume after a
 takeover and finish that one send. The guarantees are: a stale runner completes only sends it had
 already committed, at most one per recipient and PR (the order barrier below), and its next commit fails;
 no event goes out twice, since the new runner never re-sends a `sending` record and the host keeps
 one entry per request id; per-PR order holds, since later events wait behind the open record. As a
-local guard, a runner also abandons a send whose `sending` commit is more than 30 s old.
+local guard, a runner also abandons a send whose `sending` commit is more than 30 s old, before
+calling `reply-session.ps1`. If it still holds the lease it commits that attempt as `not sent`
+(proof nothing went out) and makes a new attempt; if it cannot commit, the open record is an
+unknown outcome to the next runner and follows the `unconfirmed` path (Sending and the outbox).
 
 ## What it reads
 All reads use `gh api -i` with `If-None-Match`; an authorized 304 does not count against the primary
-rate limit. Lists use `per_page=100` and follow `Link: next`; a list that fails part way is retried
-whole and raises nothing.
+rate limit. Lists use `per_page=100`. The PR list follows `Link: next`; the comment feeds page by
+key. A list that fails part way follows the rules below.
 
 | Read | Every | Gives |
 |---|---|---|
 | `pulls?state=all&sort=updated&direction=desc`, pages until `updated_at` is older than the cursor | 30 s | opened, head moved, draft or ready, labels, closed, merged |
-| `issues/comments?sort=updated&direction=desc&since=<since>`, pages until the cursor | 30 s | PR comments, `[to:team]` tags on PRs and hub issues, `[admit]` lines |
-| `pulls/comments?sort=updated&direction=desc&since=<since>`, pages until the cursor | 60 s | review-thread comments |
-| `pulls/<n>/reviews` | when the PR's `updated_at` changes, and every 3 min for open non-draft PRs | reviews submitted or dismissed |
-| `commits/<head>/check-runs` and `commits/<head>/statuses` | 60 s while CI runs on the head, 3 min for other open non-draft heads, 15 min for drafts | CI finished, re-runs, `merge-rule`, `independent-review`, `independent-review-2` |
+| `issues/comments?sort=updated&direction=asc&since=<since>`, one page per request (see below) | 30 s | PR comments, `[to:team]` tags on PRs and hub issues, `[admit]` lines |
+| `pulls/comments?sort=updated&direction=asc&since=<since>`, one page per request | 60 s | review-thread comments |
+| `pulls/<n>/reviews` | when the PR's `updated_at` changes, and every 3 min for open non-draft PRs, 15 min for drafts | reviews submitted or dismissed |
+| `commits/<head>/check-runs` and `commits/<head>/statuses` | 60 s while CI runs on the head (drafts too), 3 min for other open non-draft heads, 15 min for other drafts | CI finished, re-runs, `merge-rule`, `independent-review`, `independent-review-2` |
 
-Comment lists are newest first, so a 304 on page 1 means nothing changed; each read's new items are
-sorted oldest first before the state commit. `<since>` is the earlier of the start of the current hour
-minus 10 minutes and the last fully successful read minus 10 minutes, so the URL and its ETag
-normally stay the same for an hour, and an outage across an hour boundary re-reads from where the
-relay stopped. Duplicates are removed by comment id plus `updated_at`. Issue comments are kept only
-on PRs, or on issues when they carry a `[to:team]` tag. Reviews are re-read on a timer because GitHub
-does not promise a dismissal changes the PR's `updated_at`; checks and statuses likewise, as a
-re-run, a receipt or `merge-rule` can change without it.
+**Comment feeds page by key, not by page number.** Each request is page 1 of the list, oldest
+first, with `since` as the key. Ordinary reads do not rely on whether GitHub's `since` includes its
+own timestamp (only leaving a tied bucket does, below): every request uses `since` = key minus 1
+second, so every
+comment at the key's timestamp is read again, and repeats are removed by comment id plus
+`updated_at`. A scan's first key is the committed cursor `C` minus 10 minutes (late-indexed
+comments); each next key is the newest `updated_at` on the page just read. A deleted comment cannot
+shift a later one past the reader, and a comment edited mid-scan moves to the end, where it is read.
+If a full page brings nothing new (more than 100 comments within that second), the key `K` becomes
+a tied bucket: a durable checkpoint (`K`, the pass number and the membership of the last complete
+pass) is committed, and the resume key stays `K` and `C` stays unchanged until the bucket is
+verified. Every pass starts at page 1 under the fixed `K` and reads pages 1, 2, 3 ... until a page
+is short, rebuilding the bucket's whole membership (a deletion can move an unseen comment onto page
+1). Bucket pages are read without `If-None-Match`, since a 304 cannot rebuild membership.
+Membership is every id the pass returns with `updated_at` at or below `K`, including any at `K`
+minus 1 second, so an edit or deletion of an earlier comment that shifts a `K` comment onto an
+already-read page changes the membership and makes the pass unstable. Items newer than `K` are
+raised but do not move the key, and a new id is raised when first seen. The page that found the
+bucket is not a pass; at least two complete passes are needed, and passes repeat until one pass's
+membership equals the previous complete pass's: nothing new and nothing missing compared with that
+pass, not with every id ever seen, so a comment deleted for good stops blocking once two passes
+agree. Only then does the key move past `K`: the next request starts just after `K` (`since` = `K`
+plus 1 second if `since` is known to be inclusive, otherwise `since` = `K` with repeats removed).
+The exit read is itself the probe: if a `since` = `K` read returns any comment at `K`, `since` is
+inclusive; the relay records that and repeats the read at `K` plus 1 second. It never assumes
+`K` plus 1 second without that evidence; the soak confirms the recorded result. A verified bucket
+(`K`, its membership and its recheck times) is kept in the state blob, so a restart keeps it (an
+open recheck restarts at page 1). A page alone cannot show a late-indexed comment at `K`, which
+sorts after the known ones, and one pass matching the kept membership proves nothing (a deletion
+can shift a late comment onto a page already read). So a recheck is a fresh verification: complete
+passes from page 1 under the fixed `K` until two consecutive passes agree, as above. If they equal
+the kept membership, or differ from it (a new id, raised once, or one deleted for good), their
+membership replaces the kept one and the read moves past `K`. Late indexing is a clock effect, so
+the schedule follows the clock, not `C`: one interim recheck about 5 minutes after `K`, and one
+final recheck once `K` is more than 10 minutes old; an interim recheck the cap would exceed is
+skipped, not waited for. The final recheck is a precondition: no commit moves `C` so far that `C`
+minus 10 minutes passes `K` until it verifies, and if the cap holds, `C` stays. After it the bucket
+is retired: its membership is kept only to recognise it, so while a quiet feed's lookback still
+covers `K`, a full page at `K` whose ids are all known moves past `K` with no recheck (a new or
+missing id reopens it), and it is dropped once `C` minus 10 minutes passes `K`. Between rechecks the
+scan moves past `K`. Rechecks count against the cap below. A crash or takeover restarts the open
+pass at page
+1 and compares it with the checkpoint's last complete pass. After 5 unstable passes the feed keeps
+the checkpoint, sends one feed-health line to the Chief of Staff, and tries again next cycle; that
+line goes once per bucket until it verifies, plus one line when it does, not every cycle. Otherwise
+the scan ends at a short page. Each page is
+one state commit: its events (oldest first, so order holds across pages, except that a tied comment
+first found in a later bucket pass is raised after newer ones; order per PR follows what was
+observed), its ETag, its newest `updated_at` and count, and the next key; `C` moves to the last key
+once a page is short and no bucket is open. A crash or failure resumes from the committed key.
+A 304 page is not the end of a scan: the scan follows that page's saved next key, so
+a comment beyond a full first page is still read, and only a short page ends it. Issue comments are
+kept only on PRs, or on issues when they carry a `[to:team]` tag.
+Reviews are re-read on a timer because GitHub does not promise a dismissal changes the PR's
+`updated_at`; checks and statuses likewise, as a re-run, a receipt or `merge-rule` can change
+without it.
 
-**PR-list watermark.** The PR-list cursor advances only when a scan reaches the old cursor or the
-last page. A partial scan (throttled, failed or cut short) keeps the old cursor and records the
-page it reached; the next cycle with quota pages on from there to the cursor, even when page 1 is a
-304, so a PR pushed to page 2 by more than 100 changes is still seen once.
+**PR-list scans and the watermark.** The PR list has no `since`, so it is read newest first until
+an `updated_at` older than its committed cursor `C`. A scan notes page 1's newest `updated_at` as
+its pending top `T`; each page is one state commit of its events, its ETag, its oldest `updated_at`
+and `T`, so a 304 page can still be judged against `C`. `C` becomes `T` only when one scan, from
+page 1, reaches `C` or the last page. A partial scan (throttled, failed, cut short or
+a restart) keeps `C`, and the next scan starts again from page 1: staged events are already in the
+outbox and repeats are removed by event id, so a later page 1 304 cannot hide them and nothing on a
+later page is skipped. Each event is about one PR, so order across pages does not matter (per-PR
+order is kept by transition numbers). **Limit:** a PR GitHub deletes (spam) during a scan can
+shift one PR past the reader; its next change is still seen.
 
 **Rate.** Only 200 responses count, so cost follows changes, not cadence. Estimate: the comment and
 PR feeds about 150 an hour; a CI run about 45 (a check-run list changes when a check starts or
@@ -108,7 +170,17 @@ ends); a finished head's 3-minute reads mostly 304. With 8 PRs in CI that is abo
 the hour's projection passes the ceiling it cuts, in this order: finished heads to 15 minutes,
 review-thread comments to 5 minutes, statuses of running heads read only when their check runs
 change, running heads to 2 minutes. It honours `Retry-After` and secondary limits (backs off 1, 2,
-4 ... up to 15 minutes). Below 1,000 calls left it keeps only the first page of the PR list (the
+4 ... up to 15 minutes). Bucket pages always count: a pass costs about n/100 + 1 calls, where n is
+every comment from `K` minus 1 second to the newest (a pass reads to a short page), with at least
+two passes and at most five a cycle; bucket passes and rechecks are capped at 20 per feed in any
+rolling 60 minutes (about 40 calls for a 101-comment bucket) inside the ceiling, and a capped bucket
+waits, keeping `C`, under its one Chief line. One bucket uses 6 of those 20 passes when nothing
+changes (2 to verify, 2 for the interim recheck, 2 for the final), and up to 15 if each of the
+three runs to 5 unstable passes; the count does not grow while a feed is quiet, because the
+schedule follows the clock. Two buckets in an hour on a feed fit; a third, or churn, can hit the
+cap. **Limit:** while the cap holds, every newer comment on
+that feed waits with it, up to about an hour against the 2-minute target. Below 1,000 calls left it
+keeps only the first page of the PR list (the
 watermark rule above applies) and the checks and statuses of open heads; comment and review reads
 pause and later resume from their cursors. Below 300 it stops reading until the reset and tells the
 Chief of Staff once. A fine-grained token would share its
@@ -164,7 +236,8 @@ account, so the relay cannot tell which session wrote a comment and delivers eve
 the writer's own included. Each recipient gets an event at most once, even when two rules name it.
 
 ## Admission
-Quality admits exact SHAs by message, and from PR 2584 on also as a PR comment `[admit] <full sha>`.
+Quality admits exact SHAs by message and, as its adopted practice, records each admission as a PR
+comment `[admit] <full sha>`.
 The relay raises `unadmitted` when a head has no trusted admission, which would have caught PR 2573
 at 18:25 PT, not 23:04. On start it reads the open PRs' comments once to learn earlier admissions.
 **Limit:** sessions share one account, so a trusted `[admit]` line shows which account wrote it, not
@@ -198,8 +271,12 @@ event id and recipient, so a retried send is the same request, and the text carr
   An event that falls back to a lead is marked `late (observed <time>)`. Different PRs do not wait.
 - **Rate:** at most 6 messages a minute to one session. Extra events wait in the outbox, in order;
   nothing is summarised away.
-- **Retry:** an HA error or a busy refusal retries at 1, 2 and 5 minutes, with the same request id,
-  so the host keeps one entry. Then the event is `undeliverable`: the PR's team lead gets it once,
+- **Retry:** a definite failure retries at 1, 2 and 5 minutes, with the same request id, so the host
+  keeps one entry. Definite means proof nothing was accepted: a refused connection, a documented
+  rejection from HA or the host (an authentication or validation error), or the host's busy
+  refusal. Any other error, including a 5xx from HA or a proxy, a timeout or a reply with no
+  outcome, is unknown, since it can arrive after dispatch: it follows the `unconfirmed` path and is
+  never retried. After the retries the event is `undeliverable`: the PR's team lead gets it once,
   and if that fails too, the Chief of Staff gets one line. A session not in the roster is not
   retried; its events go to rule 3 or 4.
 - Once an event is delivered, its text is removed from the outbox. The journal keeps event id, kind,
@@ -222,7 +299,8 @@ event id and recipient, so a retried send is the same request, and the text carr
 ## Restart and health
 - **Takeover or restart:** the new leaseholder loads the blob, checks the journal for every outbox
   entry (anything already delivered is closed, not re-sent), treats `sending` records as described
-  above, sends the rest, then reads from the saved cursors.
+  above, sends the rest, then reads from the saved cursors, comment-feed keys and the PR list's
+  committed cursor (a partial PR-list scan starts again from page 1).
 - **State loss:** if the blob is lost, a new one (new epoch) is made and the relay re-reads the last 24
   hours. If the journal survived, each re-raised event is checked against it by its key without the
   epoch (comment, review, gate and `ci` keys are unique on their own), and a head or state change only
@@ -250,12 +328,17 @@ event id and recipient, so a retried send is the same request, and the text carr
 2. Head move, CI finish with two failures, merge: three events, in order, one message each.
 3. A head moved A to B to A, and a CI re-run on the same SHA: each raises a new event. A check run
    created after the others finished delays `ci` until it finishes.
-4. Comments across two pages, one edited later: each revision raised once, oldest first, none
-   repeated at rollover. An outage from 09:50 to 11:20 re-reads every comment since 09:40.
+4. Comments across two pages, one edited later: each revision raised once, oldest first across the
+   pages, none repeated at the page boundary. Two comments share the boundary timestamp, one on
+   each page: both are raised, also when one is deleted or edited before the next page is read. An
+   outage from 09:50 to 11:20 re-reads every comment since 09:40.
 5. Crash after the state write and before the send, then a takeover by another runner, while the
    head moves A to B and then, during the outage, to C: `A->B` and `B->C` are each sent once. A
-   runner that lost the lease cannot commit or send. A `sending` record is never re-sent.
-6. A read failing on page 2 (500, rate limit, bad body) raises nothing, saves no cursor, backs off.
+   runner that lost the lease cannot commit or send. A `sending` record is never re-sent. A partial
+   PR-list scan and a partial comment-feed scan (including an open tied bucket) left by the first
+   runner are resumed by the second exactly as test 16 resumes them after a restart.
+6. A read failing on page 2 (500, rate limit, bad body) commits page 1's events and keeps the
+   cursor; a comment feed resumes from page 1's last key, the PR list from page 1. Backs off.
 7. Routing: `Owner-Session:` wins; an "Update branch" commit or another agent's commit does not
    move ownership; a gone session falls to the lead; no owner goes to Quality as `owner unknown`.
 8. 20 events on one PR in a minute: all 20 sent, 6 a minute, in order; a later event waits behind a
@@ -263,7 +346,8 @@ event id and recipient, so a retried send is the same request, and the text carr
 9. A by-id `dropped` notice: one re-send, same id. `unconfirmed`: no re-send, one lead line with the
    event's text after 30 minutes, and the next event for that PR waits until then. `queued` at a
    session in a 45-minute turn: no lead line. Three failed sends: one lead message; lead failing
-   too: one Chief line.
+   too: one Chief line. A refused connection is retried; a 5xx or a timeout is not, and becomes
+   `unconfirmed`.
 10. `unadmitted` for a head without a trusted `[admit]`; none for an admitted head; an outsider's
     `[admit]` changes nothing; earlier admissions learned on start.
 11. A feed failing for 10 minutes sends one Chief line; the journal never holds a comment body.
@@ -278,19 +362,60 @@ event id and recipient, so a retried send is the same request, and the text carr
     runner paused before its commit sends nothing.
 15. While throttled, 130 PRs change and one on page 2 closes: after recovery the `closed` event is
     raised once, though page 1 returns 304.
+16. Page 1 of the PR list holds 100 changed PRs, page 2 fails, and the runner restarts: page 1 then
+    returns 304, yet each page 1 and page 2 event is sent exactly once and the cursor moves only
+    after one scan reaches it. The same with 150 new changes before the resume. For both comment
+    feeds: pages 1 and 2 are committed, the read of page 3 fails, then a page-2 comment is deleted
+    (in a second run a page-1 comment is edited, in a third a comment tied with the page-2 boundary
+    is deleted); on resume each revision of every surviving comment is raised exactly once, oldest
+    first. With 130 comments in the 10-minute lookback, a new comment on the second key page is
+    read although the first page returns 304. A tied bucket of 101 comments at T and one at T+20
+    min: one of the first 100 is deleted before page 2, moving the 101st onto page 1, and the runner
+    crashes after committing the short page 2: on resume the pass restarts at page 1, the surviving
+    101st comment is raised once, and `C` moves past T only after two complete passes agree. A
+    tied comment deleted for good is missing from one pass and the bucket verifies on the next. A
+    comment at T minus 1 second is edited between page reads in two consecutive passes, each time
+    shifting the 101st comment at T onto an already-read page: both passes are unstable, and the
+    101st is still raised once before `C` moves past T. Bucket pages send no `If-None-Match`.
+    Under constant churn in a bucket, the fifth unstable pass sends one Chief line and keeps the
+    checkpoint; later cycles send no more lines until the bucket verifies, then one recovery line.
+    With no recorded probe and an inclusive `since`, a verified bucket of 101 at T exits: the
+    `since` = T read returns comments at T, records `since` as inclusive and moves to T plus 1
+    second; later scans whose lookback covers T move past the kept bucket, and its interim
+    recheck finds it unchanged. A 102nd comment at T, indexed late, then appears inside the
+    lookback, sorting after the others: the final recheck raises it once and replaces the kept
+    membership, and `C` minus 10 minutes passes T only after that.
+    A kept bucket of 200 at K with a late X sorting 201st: during the final recheck a page-1 id
+    is deleted before page 3, shifting X onto the read page 2, and page 3 holds only a newer Y.
+    That pass still equals the kept set, but the next pass differs, so the recheck continues; X
+    is raised once, and `C` minus 10 minutes passes K only after two passes agree. A bucket is the
+    newest thing on a feed that then stays quiet for an hour: it uses 6 passes (verify, one
+    interim, one final), later scans meet the retired bucket and move past it with no recheck,
+    and no cap or Chief line follows.
+    A bucket pass or final recheck that would be the 21st pass in 60 minutes waits, keeping `C`;
+    an interim recheck there is skipped.
+    (The same with a takeover is slice 2's test 5.)
 
 ## Live soak (SRE, 24 hours, enrolled disposable nodes)
 The relay sends live only to two disposable sessions and logs every other event dry-run; no watcher
-runs beside it. Baseline: at the end, one read of each PR's timeline for the soak window, under the
-App's budget, as an approved part of the soak (**Ask (Chief):** approve it), compared with the
-relay's journal: no event missing, none twice. Measured: counted calls an hour, and time from
-GitHub to message for each kind against the targets in Goal.
+runs beside it. Baseline: once, after the window ends, a read of the soak window's evidence, as an
+approved part of the soak (**Ask (Chief):** approve it), compared with the relay's journal: no
+event missing, none twice. Evidence per kind: state, head, PR comments and reviews from each PR's
+`issues/<n>/timeline`; review-thread comments from `pulls/comments` for the window; `ci` and `gate`
+from `check-runs?filter=all` and statuses of each head SHA in those timelines (their completion
+times); hub `[to:team]` tags from the hub issues' comments for the window. Cost: one call per 100
+timeline entries per PR, per 100 check runs and per 100 statuses per head SHA, per 100
+review-thread comments and per 100 comments per hub issue; for 40 PRs with about 4 heads each,
+about 400 counted calls, paid from the App's budget, or without the App from the 600-an-hour
+ceiling in hours after the soak while the relay is stopped. The soak also confirms whether `since`
+includes its own timestamp. Measured: counted calls an hour, and time from GitHub to message for
+each kind against the targets in Goal.
 
 ## Slices (docs first; each at most 250 changed lines)
 | Slice | Content |
 |---|---|
 | 0 | This document. |
-| 1 | Reader, paging, trust filter, state commit, outbox and journal against a fake store; dry-run log only. Tests 1-4, 6, 12, 15. |
+| 1 | Reader, paging, trust filter, state commit, outbox and journal against a fake store; dry-run log only. Tests 1-4, 6, 12, 15, 16. |
 | 2 | Store client, lease, fencing, takeover and state loss (needs the Engineering store). Tests 5, 13, 14. |
 | 3 | Routing, team file, sending, outcomes, order, rate and retry (needs #2568 slice 4). Tests 7-9. |
 | 4 | `unadmitted`, heartbeat, feed health, daily line, onboarding §5. Tests 10-11. |
@@ -309,7 +434,7 @@ GitHub to message for each kind against the targets in Goal.
 1. Owner: a read-only GitHub App installation for the relay (its own budget), and which fleet nodes
    to enrol as runners.
 2. Chief, for the owner: record the relay as the one sanctioned PR-event reader, and approve the
-   soak's one end-of-window timeline read.
+   soak's one end-of-window evidence read (Live soak).
 3. Engineering: the protected per-component store with lease in the relay service (Shape, point 3).
 4. SRE: run the 24-hour soak. Engineering (or the Chief while it is away): accept this design and
    name who builds slices 1-4.
