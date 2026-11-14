@@ -701,8 +701,13 @@ async Task<int> ServeAsync(HostHandover handover)
     // (#51, docs/protocol/v1-update.md). A read-only machine serves none, as #112 withdrew Home
     // Assistant's Install there. Update now (#1159) passes remote management's signed-command gate
     // and counts its restarts with it; busy is read from this host's own sessions.
+    using var haltDiscovery = new AgentBridge.Host.Core.Updates.ReleaseDiscovery(
+        Path.Combine(Path.GetDirectoryName(identity.Folder) ?? Identity.DefaultRoot, "app"), log: Log);
+    using var haltHttp = new HttpClient();
+    var haltSource = new GitHubHaltListSource(haltHttp, haltDiscovery);
     var updates = new UpdateService(HostVersion(), Log)
     {
+        ReadHaltPolicy = haltSource.ReadSnapshotAsync,
         ReadOnly = ServeReadOnly,
         OfferedReadOnly = OfferedReadOnly,
         Now = composed.UpdateNow(source, identity.Folder),

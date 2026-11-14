@@ -84,9 +84,12 @@ public sealed class GitHubHaltListSource(HttpClient http, ReleaseDiscovery disco
     public HaltPolicySnapshot Snapshot => discovery.HaltPolicy;
     public IReadOnlyCollection<string> KnownHalts => Snapshot.Policy?.Halted ?? [];
 
+    public Task<HaltPolicySnapshot> ReadSnapshotAsync(CancellationToken cancellationToken) =>
+        discovery.ReadHaltPolicyAsync(Verify, cancellationToken);
+
     public async Task<byte[]> ReadAsync(CancellationToken cancellationToken)
     {
-        var snapshot = await discovery.ReadHaltPolicyAsync(Verify, cancellationToken).ConfigureAwait(false);
+        var snapshot = await ReadSnapshotAsync(cancellationToken).ConfigureAwait(false);
         if (!snapshot.Fresh || snapshot.Policy is null) { throw new IOException("halt policy stale or unavailable"); }
         return Encoding.UTF8.GetBytes(snapshot.Policy.Body);
     }

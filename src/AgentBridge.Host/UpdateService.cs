@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AgentBridge.Host.Core.Updates;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -79,7 +80,9 @@ public sealed class UpdateService
     bool busyPushPending;
     DateTimeOffset busyPushedAt;
 
-    sealed record NowPress(SignedPress Signed, string Release, UpdateBusy? Accept);
+    sealed record NowPress(SignedPress Signed, string Release, UpdateBusy? Accept, bool Batch, bool Unchecked);
+    readonly SemaphoreSlim policyTurn = new(1, 1);
+    HaltPolicySnapshot policy = new(null, null, false);
 
     public UpdateService(string hostVersion, Action<string>? log = null, TimeProvider? time = null)
     {
@@ -94,6 +97,8 @@ public sealed class UpdateService
     // The same, perhaps a moment old (SharedAgentHaBridgeProbe), for what hello offers only:
     // everything that acts on an update asks ReadOnly. ReadOnly where not set.
     public Func<string?>? OfferedReadOnly { get; init; }
+    internal Func<CancellationToken, Task<HaltPolicySnapshot>> ReadHaltPolicy { get; init; } =
+        _ => Task.FromResult(new HaltPolicySnapshot(null, null, false));
     // Raised when the asks change, so the host's status (which the app follows) is sent again.
     public event Action? AsksChanged;
 
@@ -296,19 +301,19 @@ public sealed class UpdateService
         {
             UpdateProtocol.Get => Task.FromResult<object?>(State()),
             UpdateProtocol.Subscribe => Task.FromResult<object?>(Subscribe(channel)),
-            UpdateProtocol.Check => Task.FromResult<object?>(Ask(secure.PeerId, UpdateAskKind.Check, data)),
-            UpdateProtocol.Install => Task.FromResult<object?>(Ask(secure.PeerId, UpdateAskKind.Install, data)),
+            UpdateProtocol.Check => AskAsync(secure.PeerId, UpdateAskKind.Check, data),
+            UpdateProtocol.Install => AskAsync(secure.PeerId, UpdateAskKind.Install, data),
             _ => Task.FromResult<object?>(null),
         };
     }
 
-    UpdateCommandResult Ask(string peer, UpdateAskKind kind, JsonElement data)
+    async Task<object?> AskAsync(string peer, UpdateAskKind kind, JsonElement data)
     {
         UpdateCommand? command = null;
         try { command = data.ValueKind == JsonValueKind.Object ? data.Deserialize<UpdateCommand>(ProtocolJson.Options) : null; }
         catch (JsonException) { }
         var name = kind == UpdateAskKind.Install ? UpdateProtocol.Install : UpdateProtocol.Check;
-        if (kind == UpdateAskKind.Install && command?.Now is { } signed) { return AskNow(peer, command, signed); }
+        if (kind == UpdateAskKind.Install && command?.Now is { } signed) { return await AskNowAsync(peer, command, signed); }
         if (!UpdateProtocol.IsRequest(command?.Request)) { throw new ArgumentException($"{name} needs a request (a UUID)"); }
         var request = Guid.Parse(command!.Request!).ToString();
         var who = Volatile.Read(ref presence) is { } devices ? devices().FirstOrDefault(d => d.Id == peer) : null;
@@ -392,7 +397,7 @@ public sealed class UpdateService
     // Update now's own rate limit; then, recorded before anything else, its args, the switch, the
     // app, a sign-in, another Update now, the restart slots, the release shown, and what is busy
     // against what the person confirmed. Only then is the app asked.
-    UpdateCommandResult AskNow(string peer, UpdateCommand command, SignedCommand signed)
+    async Task<UpdateCommandResult> AskNowAsync(string peer, UpdateCommand command, SignedCommand signed)
     {
         if (now is not { } parts || record is null) { return RefusedNow(peer, ManageReason.Unavailable, "this machine's host does not offer Update now"); }
         // A client never sends both (security review, Low): one that did is caught here, rather than
@@ -429,7 +434,7 @@ public sealed class UpdateService
             return RefusedNow(peer, ManageReason.RateLimited, $"too many presses of Update now from this device just now; try again {AgainIn(retryAt)}") with { RetryAt = retryAt };
         }
         if (!knows) { return RefusedNow(peer, ManageReason.Unavailable, "this machine could not record the press, so it was not acted on"); }
-        var result = DecideNow(peer, parts, press, signed);
+        var result = await DecideNowAsync(peer, parts, press, signed);
         lock (gate) { record.Answer(press.Request, result.Outcome.ToString().ToLowerInvariant(), result.Code, result.Reason); }
         return result;
     }
@@ -448,7 +453,7 @@ public sealed class UpdateService
         return new(Enum.TryParse<UpdateAck>(e.Outcome, ignoreCase: true, out var outcome) ? outcome : UpdateAck.Refused, e.Reason) { Code = e.Code, State = State() };
     }
 
-    UpdateCommandResult DecideNow(string peer, UpdateNowParts parts, SignedPress press, SignedCommand signed)
+    async Task<UpdateCommandResult> DecideNowAsync(string peer, UpdateNowParts parts, SignedPress press, SignedCommand signed)
     {
         var (args, problem) = UpdateNowRules.Read(press.Body);
         if (args is null) { return RefusedNow(peer, ManageReason.BadArgs, problem!); }
@@ -473,6 +478,11 @@ public sealed class UpdateService
         if (state.Available != args.Release)
         {
             return RefusedNow(peer, UpdateCode.ReleaseChanged, "the release offered here is no longer the one the person was shown");
+        }
+        var protection = await RefreshPolicyAsync();
+        if (PolicyCode(protection, args.Release!, args.Batch == true, args.Unchecked == true) is { } blocked)
+        {
+            return RefusedNow(peer, blocked, blocked == "halted" ? "this release has been halted" : "bad-release protection is stale or unreadable");
         }
         // The early answer, from the snapshot now: the same comparison is made again when the
         // host acts, with the lease held (DepartAsync).
@@ -500,6 +510,7 @@ public sealed class UpdateService
             }
         }
         if (refused is not null) { return RefusedNow(peer, ManageReason.Busy, refused); }
+        if (!Fresh(protection)) { log("update now: Bad-release protection could not be checked on this machine"); }
         log($"update {(whenIdle ? "when idle" : "now")} asked for by {press.By}{(press.Name.Length > 0 ? $" \"{press.Name}\"" : "")} for {args.Release}");
         AsksChanged?.Invoke();
         return new UpdateCommandResult(UpdateAck.Accepted) { State = State() };
@@ -545,7 +556,7 @@ public sealed class UpdateService
             // sent back to waiting is given back, and if that can't be recorded it stays spent
             // (the update is offered again for a new press).
             if (!record.Consume(request)) { return UpdateDeparture.Refused(ManageReason.Unavailable); }
-            result = await LeaveAsync(parts, new NowPress(signed, args.Release!, args.Accept), cancellationToken);
+            result = await LeaveAsync(parts, new NowPress(signed, args.Release!, args.Accept, args.Batch == true, args.Unchecked == true), cancellationToken);
             if (result.Outcome == UpdateDepartureOutcome.Waiting && !record.Restore(request))
             {
                 result = UpdateDeparture.Refused(ManageReason.Unavailable);
@@ -584,6 +595,8 @@ public sealed class UpdateService
         bool Lapsed() => time.GetUtcNow() >= ends;
         // Its 15 minutes over: dropped before any lease, cap slot or sign-in is touched.
         if (Lapsed()) { return UpdateDeparture.Refused(ManageReason.Expired); }
+        var protection = await RefreshPolicyAsync(cancellationToken);
+        if (PolicyCode(protection, press.Release, press.Batch, press.Unchecked) is { } blocked) { return UpdateDeparture.Refused(blocked); }
         UpdateState state;
         lock (gate) { state = StateLocked(); }
         if (state.Available != press.Release) { return UpdateDeparture.Refused(UpdateCode.ReleaseChanged); }
@@ -613,6 +626,7 @@ public sealed class UpdateService
             // Outside the fence: read-only may probe processes, and other profiles' hosts are listed.
             // Before the last look at what is busy and at the press's life, so neither can change
             // unseen while these run.
+            protection = await RefreshPolicyAsync(cancellationToken);
             parts.Eligibility.Refresh();
             parts.OtherHosts.Refresh();
             UpdateDeparture? late = null;
@@ -631,6 +645,11 @@ public sealed class UpdateService
                     return null;
                 }
                 BeforeCommit?.Invoke();
+                if (PolicyCode(protection, press.Release, press.Batch, press.Unchecked) is { } changed)
+                {
+                    late = UpdateDeparture.Refused(changed);
+                    return null;
+                }
                 return parts.Lifecycle.CommitDeparture(held);
             });
             if (late is not null) { return late; }
@@ -660,6 +679,30 @@ public sealed class UpdateService
             if (!committed) { held.Dispose(); }
         }
     }
+
+    async Task<HaltPolicySnapshot> RefreshPolicyAsync(CancellationToken cancellationToken = default)
+    {
+        await policyTurn.WaitAsync(cancellationToken);
+        try
+        {
+            try { return policy = await ReadHaltPolicy(cancellationToken); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or HttpRequestException
+                or JsonException or InvalidOperationException or ReleaseDiscoveryException)
+            {
+                log($"update policy: stored protection could not be read ({e.GetType().Name}); known halts retained");
+                return policy = policy with { Fresh = false };
+            }
+        }
+        finally { policyTurn.Release(); }
+    }
+
+    bool Fresh(HaltPolicySnapshot snapshot) =>
+        snapshot.Fresh && snapshot.Policy is { Body.Length: > 0 } && snapshot.At is { } at
+        && at <= time.GetUtcNow() && time.GetUtcNow() - at < ReleaseDiscovery.GithubRevalidateEvery;
+
+    string? PolicyCode(HaltPolicySnapshot snapshot, string release, bool batch, bool uncheckedPolicy) =>
+        snapshot.Policy?.Halted?.Contains(release, StringComparer.Ordinal) == true ? "halted"
+        : !Fresh(snapshot) && (batch || !uncheckedPolicy) ? UpdateCode.PolicyUnreadable : null;
 
     // The Update purpose's eligibility read now, as the press's code: the switch, read-only (the
     // acting answer) and a sign-in; null while eligible.
