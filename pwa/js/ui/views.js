@@ -1278,10 +1278,12 @@ function machineHealth(bars) {
 
 // A machine's tile (#1147 S1), its sections in one order: Health, Can run, Running, Actions. Only
 // what a host reports is shown; freshness is not a health diagnosis.
-function machineTile({ name, raw, bars, onSelect, onLaunch, more, expanded = false }) {
+function machineTile({ name, raw, bars, sessions = [], onSelect, onLaunch, more, expanded = false }) {
   const why = raw?.held ? `Discovery is held: ${raw.held}` : raw?.readOnly ? `This machine is view only: ${raw.readOnly}` : null;
   const running = !raw?.sessions ? 'Not reported yet' : raw.sessions.startsWith('0 ') ? 'No sessions running' : raw.sessions;
   const contents = h('div', { hidden: !expanded },
+    sessions.length ? h('ul', { class: 'tile-running-list', role: 'list', 'aria-label': `Running sessions on ${name}` },
+      sessions.map((session) => h('li', null, session.title || 'Untitled session'))) : null,
     h('button', { type: 'button', class: 'button secondary small machine-running-view', 'aria-label': `View sessions on ${name}`, onclick: onSelect }, 'View sessions'));
   const toggle = h('button', { type: 'button', class: 'tile-running-toggle', 'aria-label': `Running, ${running} on ${name}`, 'aria-expanded': String(expanded), onclick: () => {
     contents.hidden = !contents.hidden;
@@ -1327,8 +1329,12 @@ function machineRow({ id, name, select = null, selected = false, facts, state, o
   return h('li', { class: `machine${offline ? ' offline' : ''}${selected ? ' selected' : ''}`, dataset: { deviceId: id, deviceName: name } }, block, errors, tile);
 }
 
-export function renderMachines(list, { presence, me, current, onSelect, onLaunch = () => {}, status = () => '', facts = null, load = () => null, known = null, forget = null, updates = null, signInDevices = null, diagnose = null, now = Date.now() }) {
+export function renderMachines(list, { presence, me, current, onSelect, onLaunch = () => {}, status = () => '', facts = null, sessions = () => [], load = () => null, known = null, forget = null, updates = null, signInDevices = null, diagnose = null, now = Date.now() }) {
   const hosts = presence.filter((d) => d.id !== me && d.kind === 'host');
+  // Activity reorders the store, but must not replace a tile's controls mid-press.
+  const runningSessions = new Map(hosts.map((d) => [
+    d.id, [...sessions(d.id)].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  ]));
   const all = current === ALL;
   const offline = offlineMachines({ presence, known, me });
   // The accessor may retain a record after its machine leaves; presence, not the record, is online truth.
@@ -1365,7 +1371,8 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
   // Drawn again only when something in it changes. It is asked to redraw on every session
   // update of every machine shown, and a button replaced between a tap's touch and its release
   // takes no click: a tap at startup, with every machine sending its sessions, was lost.
-  const key = JSON.stringify([current, hosts.map((d) => [d.id, d.name, lines.get(d.id).key, rows.get(d.id).key, signInRows.get(d.id).key, diagnoses.get(d.id).key]),
+  const key = JSON.stringify([current, hosts.map((d) => [d.id, d.name, lines.get(d.id).key, rows.get(d.id).key, signInRows.get(d.id).key, diagnoses.get(d.id).key,
+    runningSessions.get(d.id).map((session) => [session.id, session.title])]),
     // lastSeen itself, not only how it reads: Forget sends it, to tell a machine that came back.
     offline.map((k) => [k.id, k.name, k.lastSeen, k.start ?? null, ago(k.lastSeen, now), forget?.stateOf(k.id) ?? null]), !!forget, [...restarting]]);
   const loadKey = JSON.stringify([...loads].map(([id, bars]) => [id, bars?.state, bars?.cpu, bars?.memory, measurementAge(bars)]));
@@ -1397,7 +1404,7 @@ export function renderMachines(list, { presence, me, current, onSelect, onLaunch
       id: d.id, name: d.name, select: () => onSelect(d.id), selected,
       facts: lines.get(d.id).el, state: selected ? 'Viewing' : 'Online',
       tile: machineTile({
-        name: d.name, raw: facts?.(d.id) ?? null, bars: loads.get(d.id), onSelect: () => onSelect(d.id), onLaunch: () => onLaunch(d.id),
+        name: d.name, raw: facts?.(d.id) ?? null, bars: loads.get(d.id), sessions: runningSessions.get(d.id), onSelect: () => onSelect(d.id), onLaunch: () => onLaunch(d.id),
         more: [rows.get(d.id).el, signInRows.get(d.id).el, diagnoses.get(d.id).el], expanded: expanded.has(d.id),
       }),
     });
