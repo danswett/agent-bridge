@@ -17,7 +17,7 @@ non-urgent text is no longer steered into a working session.
 - **#2538 / PR 2546 (merged)** records the sender principal on the HA reply (`DriverOf`,
   `PrincipalOf`); reused as the sender source. App rendering stays with #2538.
 - **#2468 / PR 2469 (open)** adds a strict `queue|steer` request mode (`Protocol/ReplyMode.cs`).
-  Slice 2 uses that type and defines none of its own. **Ask:** whether 2469 lands first (preferred).
+  Slice 2 uses that type and defines none of its own. Order: hotfix, then 2469, then slice 2.
 - **Host-typing hotfix (SG Builder 2568 Host Typing Hotfix GPT):** agent messages sent with ctrl+q
   behind a default-off setting, in `KeyPlan.cs`, `CopilotReply.cs`, `Injector/Program.cs`. Slice 1
   waits for it if it touches `ReplyService.cs` or `HaReplies.cs`; slice 2 reuses its ctrl+q key.
@@ -59,11 +59,11 @@ non-urgent text is no longer steered into a working session.
   as a refusal).
 
 ## Priority authority (slice 3) and hygiene (slice 4), as ruled
-- **Priority:** `-Priority urgent -Reason '<text>'`; class decides. An agent's urgent without a reason is
-  refused by name; over 3 per principal per hour is demoted to normal. Each request, grant and
-  demotion is journaled with sender, reason and time, and the ack says which. The quota keys on
-  the authenticated principal, never the label. **Ask:** on the HA path every agent shares one agent
-  token, so its quota is per token until host-signed principals (#519) name the session.
+- **Priority:** `-Priority urgent -Reason '<text>'`; class decides. An agent's urgent without a reason
+  is refused by name; over 3 per principal per hour is demoted to normal (owner lane: no quota). Each
+  request, grant and demotion is journaled and shown on the status surface, never paged; the ack says
+  which. The quota keys on the authenticated principal. **Known limit:** every HA agent shares one
+  token, so the quota is per token until host-signed principals exist (follow-up to be filed).
 - **Hygiene:** `-Topic` supersedes an unsent item from the same principal and topic. TTL: fyi 30 minutes,
   normal 4 hours, urgent none. Each delivery carries one summary line (`q=3 Quality 2, SRE 1`).
 
