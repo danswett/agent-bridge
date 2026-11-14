@@ -78,8 +78,13 @@ static partial class SelfTest
         await Picture(window.RootElement, Path.ChangeExtension(outFile, ".resize.png"));
         var moved = list is null || anchored is null ? "measured: the response not drawn" : await Anchored(list, anchored, outFile);
         check(moved is null, $"keeps the block at the top of the conversation where it was through a live resize, drawn alike before and after{Not(moved)}");
-        var (unkeyed, pressedBy) = list is null ? ("measured: the response not drawn", "none") : await Keyed(window, list);
-        check(unkeyed is null, $"scrolls the conversation's text with Page Down and Down pressed on a link in it, focus left where it was and nothing selected ({pressedBy}){Not(unkeyed)}");
+        var (unkeyed, pressedBy, postedInputMissing) = list is null ? ("measured: the response not drawn", "none", false) : await Keyed(window, list);
+        var keyDetails = new { problem = unkeyed, method = pressedBy, postedInputMissing };
+        result["conversationKeys"] = keyDetails;
+        if (!postedInputMissing || !QuarantinePostedInput(result, check, "Page Down and Down on a conversation link", keyDetails))
+        {
+            check(unkeyed is null, $"scrolls the conversation's text with Page Down and Down pressed on a link in it, focus left where it was and nothing selected ({pressedBy}){Not(unkeyed)}");
+        }
         var untabbed = list is null ? "measured: the response not drawn" : await Tabbed(list);
         check(untabbed is null, $"takes Tab from the last link or Copy button the conversation has drawn to the first in the next block with one, which it realises, inside the block and not onto it{Not(untabbed)}");
         var (unplaced, placedPressedBy) = list is null ? ("measured: the response not drawn", "none") : await TabbedInView(window, list);

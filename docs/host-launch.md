@@ -20,6 +20,31 @@ for a real scan, so the host validates every launch. Each call logs one line of 
 (launcher lookup, profiles, resumable) and each scan one line (count or timed out, milliseconds):
 counts and milliseconds only.
 
+## Agent launch readback and cap tuning (#2173, staged C1)
+
+An authenticated local agent repeats the same `session.launch` request, including its
+original settings, to read its own remembered outcome. This only reads: a new request,
+changed content or another principal's request still meets the existing refusal path.
+No new launch operation or agent launch authority is enabled here. Outcomes remain
+in memory for 25 minutes after settling; durable caps and results belong to C2.
+Readback removes working-directory, resume, transfer, profile and trust-question data.
+A reason outside the fixed safe list becomes a generic sentence; host paths stay private.
+A busy startup question is never answered, and its details are not disclosed.
+
+An agent's `launch.options` exposes only installed agents from `agents.inbound.local.launch`
+and isolated, approved workspace labels in that grant. It retains offered models,
+efforts and contexts, but no paths, resumable sessions, profiles or trust questions.
+The read scope is sufficient; missing or revoked credentials cannot read these choices.
+
+Only the person at the machine changes `agents.limits` in the host's config.
+The hourly defaults and ceilings are 3 launches per agent, 10 per machine and 20
+attempts per agent; they may be lowered, never made unlimited. The gate reads changes
+on its next check and records `rate-limited` refusals with the retry delay and caps in
+force. Watch refusal counts and retry delays in the launch audit before and after a
+change. Refusal audit records share the pipe's per-principal windowing: 60 per hour,
+then counted summaries at most once a minute. Live limits, idle ending, restart durability
+and temporary raises are C2 work, not guarantees of this staged readback.
+
 ## What agent-ha-bridge does
 
 From `hooks/daemon-launch.ps1` (`Use-DaemonLaunchRequest`, `Resolve-DaemonRequestedLaunch`,
@@ -188,6 +213,31 @@ For a workspace with `isolate: true`, each new session (never a resume):
 Worktrees are under `launch.worktrees.root`, by default `~/repos/wt`, the same root
 agent-ha-bridge uses: shared with other sessions and other repositories. This host never
 sweeps it, and never touches a worktree it did not create.
+
+### Agent-created worktree check (#2285, #1447 W2)
+
+For a host-supplied `agent:` principal, the launcher checks only the result of this
+launch's `Worktrees.Create`, immediately after creation and before reservation, credentials
+or process start. Existing trees, resumes and transfers cannot take this path. W1's check
+requires isolation, host provenance, the approved repository/subdirectory, detached HEAD
+and clean state, and refuses Claude project configuration or links. Only Claude's list is
+confirmed; other agents fail closed. A missing or thrown check also refuses.
+
+A refusal removes only the new tree, using an in-memory creation receipt bound to this
+request and the immutable creation commit, using protected, nonrecursive removal.
+Before adding it, the host binds the unused target to its physical parent and snapshots the
+repository's worktree administration. Before writing a marker or issuing a receipt, it requires
+that exact nonlinked target and a new administration folder pointing back to it. A relocated
+or substituted root is refused and retained without cleanup, never marked or adopted as owned.
+A pre-existing or copied result
+cannot authorize deletion. New commits (including checkout-hook commits), changed, linked,
+ignored or otherwise unsafe data are retained with a readable cleanup reason, never
+force-deleted. The refusal writes one agent audit
+record; an unavailable audit is reported explicitly. Repeating the request returns its
+remembered result without another tree or audit, and a removed tree spends no worktree slot.
+The start turn is released on refusal. Hourly caps and pipe activation remain separate work:
+the local pipe still refuses agent launches. Person launches and folder-trust handling are
+unchanged; user-profile agent settings still apply.
 
 ## Reclaiming finished worktrees
 

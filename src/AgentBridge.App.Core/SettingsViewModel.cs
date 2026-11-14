@@ -21,6 +21,8 @@ public interface IUpdater
     // The release notes of the release the last check found, when it has any.
     string? PendingNotes => null;
     Task DownloadAsync(Action<int> progress);
+    bool ReportsDownloadFacts => false;
+    Task DownloadAsync(Action<int> progress, Action<long, long?> bytes) => DownloadAsync(progress);
     // The release downloaded and ready to apply: the one the last check found, once downloaded.
     // Null when a later check (or a change of feed) has found another since, or none.
     string? Ready { get; }

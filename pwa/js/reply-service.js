@@ -14,6 +14,8 @@
 import { AnswerService, sent } from './answer-service.js';
 import { uploadAttachment } from './attachments.js';
 import { sentImages } from './sent-images.js';
+import { ReplyState, REPLY_MEMORY_MS, replyAccount } from './reply-state.js';
+import { accountStore } from './signin.js';
 
 // Where an answer's entry keeps its question, a reply's keeps this.
 const REPLY = '';
@@ -25,19 +27,32 @@ export class ReplyService extends AnswerService {
   #blobs;
   // The attempt sending each session's files now, by entry key: aborting it cancels the reply.
   #sending = new Map();
+  #state;
+  #restoring = Promise.resolve();
+  #expiry = new Map();
 
   // blobs(): the blob store through the current relay connection (blobs.js RelayBlobs), or null.
   constructor(options) {
     const images = options.images ?? sentImages, retention = new WeakMap();
+    const state = options.persistence ? new ReplyState({
+      ...options.persistence, now: options.now ?? Date.now,
+      active: () => replyAccount(accountStore.load(options.persistence.storage)) === options.persistence.account,
+    }) : null;
     super({
       ...options,
+      current: (hostId) => !state || state.active() ? options.current(hostId) : null,
+      ...(state ? { giveUpMs: REPLY_MEMORY_MS } : {}),
       onTap: (entry) => {
         const account = images.account;
         // A retry must not acquire permission to restore bytes cleared after the original tap.
         retention.set(entry.answer, { account, generation: images.generation, stamp: entry.answer.attachments.length && account ? images.stamp?.() : null });
-        options.onTap?.(entry);
+        if (!entry.restored) { options.onTap?.(entry); }
       },
       send: async (client, data, entry, progress, stage) => {
+        if (state) {
+          try { await state.check(entry); }
+          catch (error) { return { outcome: 'unconfirmed', reason: `The first reply may have arrived. ${error.message}` }; }
+        }
         const files = entry?.answer?.attachments ?? [];
         const { account, generation, stamp } = retention.get(entry.answer);
         const retainedStamp = files.length && account ? await stamp : null;
@@ -57,6 +72,10 @@ export class ReplyService extends AnswerService {
           this.#sending.delete(entry.key);
           if (files.length) { progress({ sent: total, total, phase: 'reply' }); }
           // Its files' time is the tap's to sent, not the machine's.
+          if (state) {
+            try { await state.check(entry); }
+            catch (error) { return { outcome: 'unconfirmed', reason: `The first reply may have arrived. ${error.message}` }; }
+          }
           const result = await client.reply(data, { onProgress: stage, onSent: sent(entry) });
           if (result.outcome === 'delivered' && result.attachments?.length && images.account === account && images.generation === generation) { await images.remember(result.attachments, files, account, retainedStamp); }
           return result;
@@ -76,6 +95,46 @@ export class ReplyService extends AnswerService {
     });
     this.#current = options.current;
     this.#blobs = options.blobs;
+    this.#state = state;
+    if (state) {
+      this.onAny((entry) => {
+        if (entry.state === 'done' || entry.state === 'failed') { void state.settle(entry); }
+        if (entry.state === 'failed' || (entry.state === 'done' && entry.outcome !== 'unconfirmed')) { clearTimeout(this.#expiry.get(entry.key)); this.#expiry.delete(entry.key); }
+      });
+      for (const record of state.records()) { this.#recover(record); }
+    }
+  }
+
+  #recover(record, late = false) {
+    let reason = this.#state.expired(record) ? 'The first reply may have arrived. Check the conversation before sending again.'
+      : record.attachments.length ? 'An attachment is missing after reload. The first reply may have arrived; attach it again before a new send.' : null;
+    if (reason && late) { reason += ` Unconfirmed reply: ${record.text}`; }
+    const entry = super.restore({
+      ...record, answer: { text: record.text, attachments: [] },
+      outcome: reason ? 'unconfirmed' : null, reason,
+    });
+    if (reason) { this.#restoring = this.#state.settle(entry, true); }
+    else { this.#keep(record, entry); }
+    return entry;
+  }
+
+  #keep(record, entry) {
+    if (!entry) { return; }
+    clearTimeout(this.#expiry.get(entry.key));
+    this.#expiry.set(entry.key, setTimeout(() => {
+      if (this.get(record.hostId, record.sessionId)?.request === record.request) { this.#recover(record); }
+    }, Math.max(0, record.firstSentAt + REPLY_MEMORY_MS - this.now()) + 1));
+  }
+
+  clear() {
+    for (const timer of this.#expiry.values()) { clearTimeout(timer); }
+    this.#expiry.clear();
+    super.clear();
+  }
+
+  ready(hostId = null) {
+    if (!this.#state) { return super.ready(hostId); }
+    return this.#restoring.then(() => super.ready(hostId));
   }
 
   get(hostId, sessionId) { return super.get(hostId, sessionId, REPLY); }
@@ -86,10 +145,28 @@ export class ReplyService extends AnswerService {
   // Sends a reply, with any prepared files. While one to this session is on its way it is
   // returned as is, and nothing more is sent.
   submit({ hostId, sessionId, text, attachments = [] }) {
+    if (this.#state) {
+      return this.#state.claim({ hostId, sessionId, text, attachments }, this.uuid).then((record) => {
+        if (!this.#state.active()) { throw new Error('The account changed. Nothing was sent.'); }
+        if (this.#state.expired(record) || record.attachments.some((id, i) => attachments[i]?.id !== id) || record.attachments.length !== attachments.length) {
+          return this.#recover(record, true);
+        }
+        const entry = super.submit({
+          hostId, sessionId, questionId: REPLY, answer: { text: record.text, attachments },
+          request: record.request, firstSentAt: record.firstSentAt,
+        });
+        this.#keep(record, entry);
+        return entry;
+      });
+    }
     return super.submit({ hostId, sessionId, questionId: REPLY, answer: { text, attachments } });
   }
 
-  resend(hostId, sessionId) { return super.resend(hostId, sessionId, REPLY); }
+  resend(hostId, sessionId) {
+    const entry = this.get(hostId, sessionId);
+    return this.#state && entry?.state === 'failed'
+      ? this.submit({ hostId, sessionId, ...entry.answer }) : super.resend(hostId, sessionId, REPLY);
+  }
 
   // Whether the session's reply is still sending its files, and so can be cancelled.
   cancellable(hostId, sessionId) { return this.#sending.has(AnswerService.key(hostId, sessionId, REPLY)); }
