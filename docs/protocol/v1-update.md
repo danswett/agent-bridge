@@ -162,7 +162,7 @@ the UUID rule. Adding these facts grants no authority and changes no signature o
 | `request` | string? | The press it answers; absent for one the person started at the machine (Restart to update), or an automatic one before #516 |
 | `code` | string? | **#1159, the app's.** For an Update now, as in `UpdateCommandResult` |
 | `at` | time | |
-| `step` | string? | Optional last step reached (`downloading`, `installing`, `restarting`), using the existing short-code syntax. Clients word known steps themselves; an unknown step must not imply success |
+| `step` | string? | Optional last step reached (`downloading`, `installing`, `restarting`, `host-start`), using the existing short-code syntax. Clients word known steps themselves; an unknown step must not imply success |
 
 An install restarts the app and host, so its outcome is reported by the new version: the app
 keeps the press it is carrying out in its preferences when it hands over to the updater, and its

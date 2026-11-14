@@ -4217,6 +4217,28 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal(0, updater.Downloads);
     }
 
+    [Theory]
+    [InlineData(UpdateOutcome.Updated, null)]
+    [InlineData(UpdateOutcome.Failed, Press)]
+    [Trait("Category", "Network")]
+    public async Task A_background_download_failure_and_its_retry_preserve_the_unseen_update_or_press_outcome(UpdateOutcome outcome, string? request)
+    {
+        var last = new UpdateResult { Outcome = outcome, From = "0.0.9", To = "0.1.0", Request = request, At = time.GetUtcNow() };
+        prefs = prefs with { LastUpdate = last };
+        updater.DownloadFails = new IOException("the connection was reset");
+        await StartAsync();
+
+        await auto.TickAsync();
+
+        Assert.Equal(1, updater.Downloads);
+        Assert.Equal(last, auto.State.Last);
+        time.Advance(ObservedUpdater.DownloadAgainAfter);
+        await auto.TickAsync();
+        Assert.Equal(2, updater.Downloads);
+        Assert.Equal(last, auto.State.Last);
+        Assert.Contains(log, line => line.Contains("the connection was reset", StringComparison.Ordinal));
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task A_check_pressed_while_another_runs_gets_a_check_of_its_own()

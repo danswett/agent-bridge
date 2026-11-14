@@ -1021,7 +1021,6 @@ public sealed class AutoUpdater
         {
             Finish(ref checkRequest, check, UpdateOutcome.Failed, e.Message, to, step: "downloading");
             Finish(ref installRequest, install, UpdateOutcome.Failed, e.Message, to, step: "downloading");
-            if (check is null && install is null) { Remember(UpdateOutcome.Failed, e.Message, to, null, step: "downloading"); }
             throw;
         }
     }
