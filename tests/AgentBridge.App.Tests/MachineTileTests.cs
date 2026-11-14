@@ -105,6 +105,51 @@ public sealed class MachineTileTests
     public void Fleet_summary_counts_machines_and_online_only(int total, int online, string want) =>
         Assert.Equal(want, MachineTile.Fleet(total, online));
 
+    static string? Id(XElement e) => (string?)e.Attribute("AutomationProperties.AutomationId");
+    static XElement MachinesPane() => MainWindow().Descendants().Single(e => Id(e) == "MachinesPane");
+    static XElement Tile() => MachinesPane().Descendants().Single(e => Id(e) == "MachineRow");
+
+    // #2604: every machine is an expanded card in an equal-width wrapping grid that fills the page.
+    [Fact]
+    public void Fleet_cards_fill_the_page_in_a_wrapping_grid_not_one_capped_column()
+    {
+        var pane = MachinesPane();
+        var list = pane.Descendants().Single(e => Id(e) == "MachineList");
+
+        Assert.DoesNotContain(list.Ancestors().TakeWhile(e => e != pane), e => e.Attribute("MaxWidth") is not null);
+        Assert.Contains(list.Elements(), e =>
+            e.Name.LocalName.EndsWith(".ItemsPanel", StringComparison.Ordinal) ||
+            e.Name.LocalName.EndsWith(".Layout", StringComparison.Ordinal));
+    }
+
+    // #2604: two bar rows, CPU then Memory, inside the tile after Health and before Running.
+    [Fact]
+    public void Tile_draws_CPU_then_Memory_bars_after_Health_and_before_Running()
+    {
+        var order = Tile().Descendants().ToList();
+        var health = order.FindIndex(e => Id(e) == "MachineHealth");
+        var cpu = order.FindIndex(e => (string?)e.Attribute("Text") == "CPU");
+        var memory = order.FindIndex(e => (string?)e.Attribute("Text") == "Memory");
+        var running = order.FindIndex(e => Id(e) == "MachineRunning");
+
+        Assert.True(health >= 0 && cpu > health && memory > cpu && running > memory,
+            $"Health {health}, CPU {cpu}, Memory {memory}, Running {running}");
+    }
+
+    // #2604: each bar row keeps fixed label, bar and value columns, so refreshed figures never move it.
+    [Theory]
+    [InlineData("CPU")]
+    [InlineData("Memory")]
+    public void Each_bar_row_keeps_fixed_label_bar_and_value_columns(string label)
+    {
+        var text = Tile().Descendants().SingleOrDefault(e => (string?)e.Attribute("Text") == label);
+
+        Assert.NotNull(text);
+        var row = text.Parent!;
+        Assert.Equal("Grid", row.Name.LocalName);
+        Assert.Equal(3, row.Elements(row.Name.Namespace + "Grid.ColumnDefinitions").Elements().Count());
+    }
+
     [Theory]
     [InlineData(899, false)]
     [InlineData(900, true)]
