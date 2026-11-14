@@ -70,10 +70,10 @@ public sealed class StopOptions
 // Ends a session the way agent-ha-bridge's End session does (hooks/daemon-launch.ps1,
 // Invoke-PendingStops; hooks/session-launch.ps1, Stop-BridgeCopilotSession):
 //   * A session that is not idle (working, waiting on you, or idle with background work it
-//     started) takes two presses. The first only arms, and says so; the second, within
-//     ConfirmWindow and against the same process, ends it. Enforced here, not by a client,
-//     because every client and every device can send session.stop. An idle session ends on
-//     one press.
+//     started), or may be asking despite reporting idle, takes two presses. The first only
+//     arms, and says so; the second, within ConfirmWindow and against the same process, ends
+//     it. Enforced here, not by a client, because every client and every device can send
+//     session.stop. An otherwise idle session ends on one press.
 //   * Graceful first: /exit typed into the agent's console, as a reply would be, so the CLI
 //     writes its transcript and releases its lock, and the session stays resumable. If it is
 //     still running after Grace, the process alone is terminated, never its tree.
@@ -175,7 +175,7 @@ public sealed class StopService : ISessionStopper
             // Another press is ending it already.
             if (session.Status == SessionStatus.Ending) { return Busy(); }
 
-            if (Doing(session) is { } doing)
+            if (ConfirmationHint(session) is { } doing)
             {
                 if (!Confirms(session.Id, request.Confirm, processId, startedAt, out var why)) { return AskAgain(session.Id, processId, startedAt, doing, why); }
                 confirmed = true;
@@ -244,13 +244,12 @@ public sealed class StopService : ISessionStopper
                 if (probe.Active() is { } active) { return Refused(active); }
                 // Read before the session is shown as ending, which would hide its own status.
                 if (source.Get(session.Id) is not { } now) { return Stale("the session has ended"); }
-                if (!confirmed && Doing(now) is { } doing) { return AskAgain(session.Id, pid, startedAt, doing, "the session is no longer idle"); }
-                await SetEndingAsync(session.Id, true);
                 // Typed words would answer a question, and Enter accept it: a session that is
                 // asking anything, or whose launch here has not seen its window ready, is
                 // terminated without them.
-                var notReady = LaunchHeld?.Invoke(session.Id);
-                var asking = now.Question is not null || notReady is not null || CopilotAsking(session);
+                var asking = MayBeAsking(now, out var notReady);
+                if (!confirmed && ConfirmationHint(now, asking) is { } doing) { return AskAgain(session.Id, pid, startedAt, doing, "the session is no longer idle"); }
+                await SetEndingAsync(session.Id, true);
                 if (!asking)
                 {
                     InjectionResult typing;
@@ -295,6 +294,15 @@ public sealed class StopService : ISessionStopper
         var state = CopilotPrompts.Before(Path.Combine(options.CopilotHome, "session-state", session.Id, "events.jsonl"));
         return !state.Readable || state.Asking;
     }
+
+    bool MayBeAsking(Session session, out string? notReady)
+    {
+        notReady = LaunchHeld?.Invoke(session.Id);
+        return session.Question is not null || notReady is not null || CopilotAsking(session);
+    }
+
+    string? ConfirmationHint(Session session, bool? asking = null) =>
+        Doing(session) ?? ((asking ?? MayBeAsking(session, out _)) ? "this session may be asking a question" : null);
 
     async Task SetEndingAsync(string id, bool ending)
     {

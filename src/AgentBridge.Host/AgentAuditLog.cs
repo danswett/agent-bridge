@@ -10,15 +10,16 @@ using AgentBridge.Host.Delivery.Staging;
 
 namespace AgentBridge.Host;
 
-// One thing an agent did, or was refused (design/agent-principals.md §5.6). Direction is "out"
+// One agent action or person host-CLI management action (design/agent-principals.md §5.6). Direction is "out"
 // (an agent here acted on another machine), "in" (an agent elsewhere acted here) or "local".
-// Principal is "agent:<machine>/<session>", never the owner. Reason says why in words and
+// Principal is "agent:<machine>/<session>" for agent rows, never the owner, or "person:local"
+// (direction "local") for person host-CLI management. Reason says why in words and
 // holds no prompt text, path or token: callers pass a short reason, and the log cuts it at
 // MaxReason as well.
 public sealed record AgentAuditEntry(string Direction, string Request, string Principal, string[] Chain, string Action,
-    string Target, string Outcome, string Reason = "");
+    string Target, string Outcome, string Reason = "", GateAuditMetadata? Gate = null);
 
-// The trail of what agents did, one JSON line per event in <profile>\audit\agents-YYYY-MM-DD.jsonl
+// Agent actions and person host-CLI management, one JSON line per event in <profile>\audit\agents-YYYY-MM-DD.jsonl
 // or launches-YYYY-MM-DD.jsonl for session.launch, with a separate 16 MiB launch-history quota,
 // in a folder only this user can open. It keeps the SHA-256 and length of any text an event
 // carried and never the text, so reading the log leaks nothing a prompt held. Agent files keep at
@@ -41,7 +42,9 @@ public sealed class AgentAuditLog
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { DefaultIgnoreCondition = JsonIgnoreCondition.Never };
 
     sealed record Line(DateTimeOffset At, string Direction, string Request, string Principal, string[] Chain, string Action,
-        string Target, string Outcome, string Reason, string? DataSha256, int? TextLength, int V = 1, string PreviousSha256 = "");
+        string Target, string Outcome, string Reason, string? DataSha256, int? TextLength, int V = 1, string PreviousSha256 = "",
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] GateAuditMetadata? Gate = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool PreviousTailIncomplete = false);
 
     static readonly string Genesis = new('0', 64);
     readonly object gate = new();
@@ -66,7 +69,7 @@ public sealed class AgentAuditLog
         var now = time.GetUtcNow();
         try
         {
-            var bytes = text is null ? null : Encoding.UTF8.GetBytes(text);
+            var bytes = text is null || entry.Gate is not null ? null : Encoding.UTF8.GetBytes(text);
             var chain = (entry.Chain ?? []).Take(MaxChain).Select(c => Cap(c, MaxField)).ToArray();
             var line = new Line(now, Cap(entry.Direction, MaxField), Cap(entry.Request, MaxField), Cap(entry.Principal, MaxField), chain,
                 Cap(entry.Action, MaxField), Cap(entry.Target, MaxField), Cap(entry.Outcome, MaxField), Cap(entry.Reason, MaxReason),
@@ -75,6 +78,12 @@ public sealed class AgentAuditLog
             {
                 var folder = PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded");
                 using var folderLock = Lock(folder);
+                if (entry.Gate is { } metadata)
+                {
+                    metadata = metadata with { Sequence = checked(Math.Max(LastGateSequence(folder, false), LastGateSequence(folder, true)) + 1) };
+                    if (!metadata.Valid(entry.Action, entry.Target, entry.Outcome)) { throw new IOException("invalid gate audit metadata"); }
+                    line = line with { Gate = metadata, Reason = metadata.ReasonCode, DataSha256 = null, TextLength = null };
+                }
                 var launch = entry.Action == "session.launch";
                 var file = Path.Combine(folder, FileFor(now, launch));
                 if (Files(folder, launch).Any(f => StringComparer.Ordinal.Compare(f, file) > 0)) { throw new IOException("the agent audit clock moved backwards"); }
@@ -85,11 +94,12 @@ public sealed class AgentAuditLog
                 var predecessor = TailHash(previousFile);
                 if (previousFile is not null && !predecessor.HasLine) { throw new IOException("the previous agent audit day has no complete line"); }
                 var previous = tail.HasLine ? tail.Hash : predecessor.Hash;
+                var torn = length > 0 && EndsWithoutNewline(file);
+                line = line with { PreviousTailIncomplete = torn };
                 var header = tail.HasLine ? "" : JsonSerializer.Serialize(new { v = 1, previousSha256 = previous }, Json) + "\n";
                 line = line with { PreviousSha256 = header.Length == 0 ? previous : Hash(Encoding.UTF8.GetBytes(header[..^1])) };
                 var data = Encoding.UTF8.GetBytes(header + JsonSerializer.Serialize(line, Json) + "\n");
                 // Include a separator after a torn line, and refuse before creating or changing any file.
-                var torn = length > 0 && EndsWithoutNewline(file);
                 var used = launch ? new DirectoryInfo(folder).EnumerateFiles("launches-*.jsonl").Sum(f => f.Length) : length;
                 var limit = launch ? MaxLaunchBytes : maxBytes;
                 if (used > limit - data.Length - (torn ? 1 : 0)) { throw new IOException("the agent audit quota is full"); }
@@ -100,6 +110,7 @@ public sealed class AgentAuditLog
                     // A crash mid-write can leave a partial line: start on a fresh one so it can't swallow this event.
                     if (torn) { stream.Write("\n"u8); }
                     stream.Write(data);
+                    stream.Flush(flushToDisk: true);
                 }
                 if (OperatingSystem.IsWindows()) { NarrowFileWindows(file); }
                 else { File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite); }
@@ -185,6 +196,36 @@ public sealed class AgentAuditLog
         Directory.EnumerateFiles(folder, $"{(launch ? "launches" : "agents")}-*.jsonl")
             .Select(f => TryDay(Path.GetFileName(f).Replace("launches-", "agents-", StringComparison.Ordinal), out _)
                 ? f : throw new IOException("the agent audit folder contains an invalid day name")).Order(StringComparer.Ordinal);
+
+    long LastGateSequence(string folder, bool launch)
+    {
+        var warned = false;
+        foreach (var file in Files(folder, launch).Reverse())
+        {
+            using var stream = File.OpenRead(file);
+            var end = stream.Length;
+            while (end > 0)
+            {
+                var start = PreviousNewline(stream, end - 1) + 1;
+                var bytes = new byte[checked((int)(end - start))];
+                stream.Position = start;
+                stream.ReadExactly(bytes);
+                end = start;
+                try
+                {
+                    using var doc = JsonDocument.Parse(bytes);
+                    if (doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("gate", out var gate)
+                        && gate.ValueKind == JsonValueKind.Object && gate.TryGetProperty("sequence", out var sequence)
+                        && sequence.ValueKind == JsonValueKind.Number && sequence.TryGetInt64(out var value) && value > 0) { return value; }
+                }
+                catch (JsonException)
+                {
+                    if (!warned) { warned = true; log("gate audit sequence scan skipped a malformed record; evidence remains incomplete"); }
+                }
+            }
+        }
+        return 0;
+    }
     static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
     static bool CompleteObject(byte[] bytes)
     {

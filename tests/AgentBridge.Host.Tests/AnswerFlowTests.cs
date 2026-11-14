@@ -114,7 +114,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Contains(Capabilities.SessionsApprove, offered);
 
         probe.Reason = "agent-ha-bridge is running for this user";
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.SessionsHandles, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
 
         probe.Reason = null;
         Assert.Contains(Capabilities.SessionsAnswer, await CapabilitiesAsync(ch));
@@ -152,7 +152,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Serve(new UnsupportedPlatformAnswerer());
         var ch = await OpenAsync();
 
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.SessionsHandles, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
         var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
         Assert.Equal(("refused", true), (outcome, reason!.Contains("platform")));
 
@@ -2875,6 +2875,9 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     [InlineData("unheaded")]
     public async Task Keys_are_held_only_to_the_form_at_the_field_they_are_for(string shows)
     {
+        // Exhaust the wrong-field recheck on the service's clock, not the channel request's wall-clock budget.
+        await using var clock = new PollClock();
+        Serve(Answerer(time: clock));
         var answer = new { first = "b", second = "c" };
         string[] names = ["first", "second"];
         await AskFieldsAsync(new { first = new { type = "string", @enum = new[] { "a", "b", "c" } }, second = new { type = "string", @enum = new[] { "a", "b", "c" } } }, 2, answer);

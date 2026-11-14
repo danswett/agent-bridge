@@ -141,7 +141,8 @@ public sealed class TestRelay : IAsyncDisposable
     // Plays a hostile relay: rewrites (from, to) of each forwarded frame; null leaves it.
     public Func<string, string, (string, string)?>? Route { get; set; }
 
-    public static async Task<TestRelay> StartAsync(Action<RelayOptions>? configure = null)
+    public static async Task<TestRelay> StartAsync(Action<RelayOptions>? configure = null,
+        HttpMessageHandler? releaseFeed = null, TimeProvider? releaseTime = null)
     {
         var github = new FakeGitHub();
         var ghApp = await github.StartAsync();
@@ -169,6 +170,8 @@ public sealed class TestRelay : IAsyncDisposable
             b.WebHost.UseUrls("http://127.0.0.1:0");
             b.Logging.ClearProviders();
             b.Logging.AddProvider(new CaptureLogger(logs));
+            b.Services.AddSingleton(releaseTime ?? TimeProvider.System);
+            b.Services.AddHttpClient("release-hints").ConfigurePrimaryHttpMessageHandler(() => releaseFeed ?? new EmptyReleaseFeed());
         });
         await app.StartAsync();
         self = new TestRelay { App = app, Url = new Uri(app.Urls.First()), GitHub = github, PushService = push, VapidKey = vapid, Taps = taps, Logs = logs };
@@ -180,6 +183,12 @@ public sealed class TestRelay : IAsyncDisposable
     // An account token as the relay issues after sign-in, without the device flow.
     public string TokenFor(long id, string login) =>
         App.Services.GetRequiredService<Tokens>().Issue(new Account(id.ToString(), login)).Token;
+
+    sealed class EmptyReleaseFeed : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.NotModified));
+    }
 
     public Task<SignInResult> SignInAsync(GitHubUser user) =>
         SignIn.DeviceFlowAsync(Http, Url, (code, _) => GitHub.Approve(code, user));

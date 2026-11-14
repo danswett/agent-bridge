@@ -15,7 +15,9 @@ namespace AgentBridge.Protocol;
 public sealed record SessionPatch
 {
     [Strict(Strictness.Identity)]
-    public required string Id { get; init; }
+    public string? Id { get; init; }
+    [Strict(Strictness.Identity)]
+    public int? Handle { get; init; }
     [Strict(Strictness.Identity)]
     public long? Base { get; init; }
     public long? Revision { get; init; }
@@ -66,6 +68,9 @@ public static class SessionPatches
         // patch only to measure it doubled the cost of every change.
         return ProtocolJson.ByteCount(patch) < ProtocolJson.ByteCount(now) ? patch : Whole(now, revision);
     }
+
+    public static SessionPatch? Next(JsonObject? sent, long sentSeq, JsonObject now, long? revision, int? handle) =>
+        Next(sent, sentSeq, now, revision) is { } p ? p with { Id = handle is null ? p.Id : null, Handle = handle } : null;
 
     // The whole session, applied to nothing.
     public static SessionPatch Whole(JsonObject session, long? revision = null) => new()
@@ -201,16 +206,38 @@ public static class SessionPatches
         return ids;
     }
 
+    public static string ResolveId(SessionPatch patch, IReadOnlyDictionary<int, string>? handles = null)
+    {
+        if (patch.Handle is not { } h) { return patch.Id ?? throw new SessionPatchException(NotOnHeld); }
+        if (h <= 0) { throw new SessionPatchException(NotOnHeld); }
+        if (handles?.TryGetValue(h, out var id) == true)
+        {
+            return patch.Id is null || patch.Id == id ? id : throw new SessionPatchException(NotOnHeld);
+        }
+        return patch.Base is null && patch.Id is { } introduced ? introduced : throw new SessionPatchException(NotOnHeld);
+    }
+
+    public static Dictionary<int, string> ReadHandles(IReadOnlyDictionary<string, int>? offered)
+    {
+        var handles = new Dictionary<int, string>();
+        foreach (var (id, handle) in offered ?? new Dictionary<string, int>())
+        {
+            if (handle <= 0 || !handles.TryAdd(handle, id)) { throw new SessionPatchException(NotOnHeld); }
+        }
+        return handles;
+    }
+
     // The session a client holds once it has applied the patch to `held`, the JSON it last
     // received of it, from the event numbered heldSeq (null: it holds none). Held is not changed.
     // Throws SessionPatchException, with the reason, for a patch that cannot be applied; nothing of
     // it is applied then.
-    public static JsonObject Apply(JsonObject? held, long? heldSeq, SessionPatch patch)
+    public static JsonObject Apply(JsonObject? held, long? heldSeq, SessionPatch patch, IReadOnlyDictionary<int, string>? handles = null)
     {
+        var patchId = ResolveId(patch, handles);
         JsonObject target;
         if (patch.Base is { } at)
         {
-            if (held is null || heldSeq != at || held[IdKey] is not JsonValue hv || !hv.TryGetValue<string>(out var heldId) || heldId != patch.Id)
+            if (held is null || heldSeq != at || held[IdKey] is not JsonValue hv || !hv.TryGetValue<string>(out var heldId) || heldId != patchId)
             {
                 throw new SessionPatchException(NotOnHeld);
             }
@@ -221,7 +248,7 @@ public static class SessionPatches
         if (patch.Subagents is { } subagents) { ApplySubagents(target, subagents); }
         if (patch.Append is { } append) { Append(target, Object(append)); }
         // A whole session names itself; one that names another, or none, is not this patch's.
-        if (target[IdKey] is not JsonValue id || !id.TryGetValue<string>(out var name) || name != patch.Id) { throw new SessionPatchException(NotOnHeld); }
+        if (target[IdKey] is not JsonValue id || !id.TryGetValue<string>(out var name) || name != patchId) { throw new SessionPatchException(NotOnHeld); }
         return target;
     }
 
