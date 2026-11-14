@@ -122,14 +122,17 @@ plus 1 second if `since` is known to be inclusive, otherwise `since` = `K` with 
 The exit read is itself the probe: if a `since` = `K` read returns any comment at `K`, `since` is
 inclusive; the relay records that and repeats the read at `K` plus 1 second. It never assumes
 `K` plus 1 second without that evidence; the soak confirms the recorded result. A verified bucket
-(`K` and its membership) is kept while `K` is inside the 10-minute lookback. When a lookback scan
-meets it, a page alone cannot show a late-indexed comment at `K`, which sorts after the known ones:
-the relay reads the whole bucket once, paging under the fixed `K` until a page is short, and
-compares it with the kept membership. Equal means the read moves past `K` as above; a new id is
-raised and, like a missing id, reopens the bucket. That recheck runs at most every 2 minutes per
-kept bucket and once more as `K` leaves the lookback (between rechecks the scan moves past `K`), and
-it counts as a pass against the cap below.
-A crash or takeover restarts the open pass at page
+(`K`, its membership and its last recheck time) is kept in the state blob while `K` is inside the
+10-minute lookback, so a restart keeps it (an open recheck restarts at page 1). When a lookback
+scan meets it, a page alone cannot show a late-indexed comment at `K`, which sorts after the known
+ones, and one pass matching the kept membership proves nothing (a deletion can shift a late comment
+onto a page already read). So a recheck is a fresh verification: complete passes from page 1 under
+the fixed `K` until two consecutive passes agree, as above. If they equal the kept membership the
+read moves past `K`; any new id is raised and the new membership is kept. Rechecks run at most
+every 5 minutes per kept bucket, plus a final one as `K` leaves the lookback. That final recheck is
+a precondition: no commit moves `C` so far that `C` minus 10 minutes passes `K` until it verifies,
+and if the cap holds, `C` stays. Between rechecks the scan moves past `K`. Rechecks count against
+the cap below. A crash or takeover restarts the open pass at page
 1 and compares it with the checkpoint's last complete pass. After 5 unstable passes the feed keeps
 the checkpoint, sends one feed-health line to the Chief of Staff, and tries again next cycle; that
 line goes once per bucket until it verifies, plus one line when it does, not every cycle. Otherwise
@@ -166,7 +169,9 @@ change, running heads to 2 minutes. It honours `Retry-After` and secondary limit
 every comment from `K` minus 1 second to the newest (a pass reads to a short page), with at least
 two passes and at most five a cycle; bucket passes and rechecks are capped at 20 per feed in any
 rolling 60 minutes (about 40 calls for a 101-comment bucket) inside the ceiling, and a capped bucket
-waits, keeping `C`, under its one Chief line. **Limit:** while the cap holds, every newer comment on
+waits, keeping `C`, under its one Chief line. One bucket uses about 6 to 8 of those 20 passes (2 to
+verify, then 2 for each recheck: one interim and the final), so a third bucket in an hour on a feed
+can hit the cap. **Limit:** while the cap holds, every newer comment on
 that feed waits with it, up to about an hour against the 2-minute target. Below 1,000 calls left it
 keeps only the first page of the PR list (the
 watermark rule above applies) and the checks and statuses of open heads; comment and review reads
@@ -372,6 +377,10 @@ event id and recipient, so a retried send is the same request, and the text carr
     second; the next scan, whose lookback covers T, rechecks the whole bucket, finds it unchanged and
     moves past T. A 102nd comment at T, indexed late, then appears inside the lookback, sorting
     after the others: the next recheck raises it once, and the scan moves past T only after that.
+    A kept bucket of 200 at K with a late X sorting 201st: during the final recheck a page-1 id
+    is deleted before page 3, shifting X onto the read page 2, and page 3 holds only a newer Y.
+    That pass still equals the kept set, but the next pass differs, so the recheck continues; X
+    is raised once, and `C` minus 10 minutes passes K only after two passes agree.
     The 21st bucket pass or recheck in 60 minutes waits, keeping `C`.
     (The same with a takeover is slice 2's test 5.)
 
