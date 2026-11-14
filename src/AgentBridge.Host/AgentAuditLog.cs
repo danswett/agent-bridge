@@ -10,15 +10,16 @@ using AgentBridge.Host.Delivery.Staging;
 
 namespace AgentBridge.Host;
 
-// One thing an agent did, or was refused (design/agent-principals.md §5.6). Direction is "out"
+// One agent action or person host-CLI management action (design/agent-principals.md §5.6). Direction is "out"
 // (an agent here acted on another machine), "in" (an agent elsewhere acted here) or "local".
-// Principal is "agent:<machine>/<session>", never the owner. Reason says why in words and
+// Principal is "agent:<machine>/<session>" for agent rows, never the owner, or "person:local"
+// (direction "local") for person host-CLI management. Reason says why in words and
 // holds no prompt text, path or token: callers pass a short reason, and the log cuts it at
 // MaxReason as well.
 public sealed record AgentAuditEntry(string Direction, string Request, string Principal, string[] Chain, string Action,
     string Target, string Outcome, string Reason = "", GateAuditMetadata? Gate = null);
 
-// The trail of what agents did, one JSON line per event in <profile>\audit\agents-YYYY-MM-DD.jsonl
+// Agent actions and person host-CLI management, one JSON line per event in <profile>\audit\agents-YYYY-MM-DD.jsonl
 // or launches-YYYY-MM-DD.jsonl for session.launch, with a separate 16 MiB launch-history quota,
 // in a folder only this user can open. It keeps the SHA-256 and length of any text an event
 // carried and never the text, so reading the log leaks nothing a prompt held. Agent files keep at
