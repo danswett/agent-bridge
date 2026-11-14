@@ -265,3 +265,70 @@ for (const width of [1440, 390]) {
     });
   });
 }
+
+const DELEGATING = '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35';
+const groupState = (page) => page.locator('#session-list > *').evaluateAll((els) => {
+  const state = { pinned: [], groups: [], sessions: [] };
+  let target = state.sessions;
+  for (const el of els) {
+    if (el.matches('.session-group-toggle')) {
+      const group = { name: el.querySelector('.group-name').textContent, ids: [] };
+      state.groups.push(group);
+      target = group.ids;
+    } else if (el.dataset.group === 'pinned') { target = state.pinned; }
+    else if (el.dataset.group === 'sessions') { target = state.sessions; }
+    else if (el.matches('.session')) { target.push(el.dataset.id); }
+  }
+  return state;
+});
+
+for (const { name, id, key, expected } of [
+  { name: 'Alt+ArrowDown on the last row of a group moves it to the top of the next group', id: COPILOT, key: 'Alt+ArrowDown', expected: [[], [COPILOT, CLAUDE], [DELEGATING]] },
+  { name: 'Alt+ArrowUp on the first row of a group moves it to the foot of the previous group', id: CLAUDE, key: 'Alt+ArrowUp', expected: [[COPILOT, CLAUDE], [], [DELEGATING]] },
+  { name: 'Alt+ArrowDown on the last group enters the top of Sessions', id: CLAUDE, key: 'Alt+ArrowDown', expected: [[COPILOT], [], [CLAUDE, DELEGATING]] },
+  { name: 'Alt+ArrowUp on the first Sessions row enters the foot of the last group', id: DELEGATING, key: 'Alt+ArrowUp', expected: [[COPILOT], [CLAUDE, DELEGATING], []] },
+]) {
+  test(`${name} and keeps membership and order after reload`, async ({ page }) => {
+    await setup(page);
+    await page.evaluate((id) => {
+      const d = window.agentBridgeDemo;
+      d.page.order.setGroup(`demo\n${id}`, d.page.order.createGroup('Personal'));
+      d.page.view.render();
+    }, CLAUDE);
+    const button = row(page, id).locator('.row-main');
+    await button.press(key);
+    await expect(button).toBeFocused();
+    const expectedState = { pinned: [CODEX], groups: [{ name: 'Team', ids: expected[0] }, { name: 'Personal', ids: expected[1] }], sessions: expected[2] };
+    await expect.poll(() => groupState(page)).toEqual(expectedState);
+    await page.reload();
+    await page.waitForSelector('html[data-demo-ready]');
+    await expect.poll(() => groupState(page)).toEqual(expectedState);
+  });
+}
+
+test('Alt keys skip a collapsed group, preserve focus and stop at Pinned and Sessions edges', async ({ page }) => {
+  await setup(page);
+  await page.evaluate((id) => {
+    const d = window.agentBridgeDemo, o = d.page.order;
+    const personal = o.createGroup('Personal');
+    o.setGroup(`demo\n${id}`, personal);
+    o.setGroupCollapsed(personal, true);
+    d.page.view.render();
+  }, CLAUDE);
+  const moving = row(page, COPILOT).locator('.row-main');
+  await moving.press('Alt+ArrowDown');
+  await expect(moving).toBeFocused();
+  await expect.poll(async () => (await groupState(page)).sessions).toEqual([COPILOT, DELEGATING]);
+  await moving.press('Alt+ArrowUp');
+  await expect(moving).toBeFocused();
+  const before = await groupState(page);
+  for (const [id, key] of [[COPILOT, 'Alt+ArrowUp'], [DELEGATING, 'Alt+ArrowDown'], [CODEX, 'Alt+ArrowUp'], [CODEX, 'Alt+ArrowDown']]) {
+    const button = row(page, id).locator('.row-main');
+    await button.press(key);
+    await expect(button).toBeFocused();
+    expect(await groupState(page)).toEqual(before);
+  }
+  await page.reload();
+  await page.waitForSelector('html[data-demo-ready]');
+  expect(await groupState(page)).toEqual(before);
+});
