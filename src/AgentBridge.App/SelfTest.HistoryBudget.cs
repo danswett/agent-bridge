@@ -17,7 +17,11 @@ static partial class SelfTest
         var result = new Dictionary<string, object?>();
         var passed = new List<string>();
         var failed = new List<string>();
-        void Check(bool ok, string what) => (ok ? passed : failed).Add(what);
+        void Check(bool ok, string what)
+        {
+            (ok ? passed : failed).Add(what);
+            if (!ok) { AppLog.Write($"self-test: failed: {what}; {ForegroundOwner()}"); }
+        }
         try
         {
             if (!await Until(() => window.RootElement.XamlRoot is not null && main.AllCards.Any(c => c.Id == "demo-approval"), TimeSpan.FromSeconds(10))) { throw new InvalidOperationException("The demo conversation window did not load."); }
@@ -123,7 +127,8 @@ static partial class SelfTest
                 openedAtBottom = true;
                 if (!list.Focus(FocusState.Programmatic)) { return; }
                 from = scroll.VerticalOffset;
-                method = Press(window.Handle, VirtualKey.PageUp, foreground: false);
+                try { method = Press(window.Handle, VirtualKey.PageUp, foreground: false); }
+                catch (InvalidOperationException e) { done.TrySetException(e); }
             };
             scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
             scroll.ViewChanged += Changed;
@@ -133,6 +138,7 @@ static partial class SelfTest
                 timer.Start();
                 window.Sessions.Rows.SelectedItem = card;
                 await Task.WhenAny(done.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+                if (done.Task.IsFaulted) { await done.Task; }
                 if (done.Task.IsCompleted && ById<ItemsRepeater>(away, "History") is { } historyRows)
                 {
                     check(await Until(() => !moving, TimeSpan.FromSeconds(2)), "finishes the first native scroll");
@@ -378,8 +384,7 @@ static partial class SelfTest
         var scale = list.XamlRoot.RasterizationScale;
         var mouse = new WheelPoint { X = (int)(point.X * scale), Y = (int)(point.Y * scale) };
         if (ClientToScreen(window.Handle, ref mouse) == 0) { throw new InvalidOperationException("The wheel target could not be located."); }
-        var (target, _) = PostedTarget(window.Handle);
-        if (!PostMessageW(target, 0x020A, (nint)(120 << 16), (mouse.Y << 16) | (mouse.X & 0xffff))) { throw new InvalidOperationException("The native wheel message could not be posted."); }
+        if (!PostNativeInput(window.Handle, 0x020A, (nint)(120 << 16), (mouse.Y << 16) | (mouse.X & 0xffff))) { throw new InvalidOperationException("The native wheel message could not be posted."); }
     }
 
     struct WheelPoint { public int X, Y; }
