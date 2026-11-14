@@ -19,7 +19,7 @@ const EMPTY = new Uint8Array(0);
 // plaintext is JSON, which starts with '{', or MARKER and raw DEFLATE. Each message on its own,
 // compressed and then encrypted, and only to a host whose introduction said it inflates.
 export const MARKER = 1;
-export const MIN_DEFLATE = 512;
+export const MIN_DEFLATE = 150;
 // What a sender may send uncompressed (a Noise message less its tag), and so the most a deflated
 // one may inflate to.
 const MAX_MESSAGE = 65535 - 16;

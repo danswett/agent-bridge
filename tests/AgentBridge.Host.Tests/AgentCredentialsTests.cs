@@ -200,7 +200,7 @@ public sealed class AgentCredentialsTests : IDisposable
         {
             var token = Encoding.ASCII.GetString(clear);
             Assert.True(token.Length == AgentProtocol.TokenLength && token.StartsWith(AgentProtocol.TokenPrefix, StringComparison.Ordinal));
-            Assert.Null(store.Check(token, Inside()).Accepted);
+            Assert.Null(store.Check(token, new([new PeerProcess(100, Started, "copilot.exe")], true)).Accepted);
             var saved = File.ReadAllText(Path.Combine(root, AgentCredentials.FileName));
             Assert.True(saved.Contains(Convert.ToHexString(SHA256.HashData(clear)), StringComparison.Ordinal));
             Assert.False(saved.Contains(token, StringComparison.Ordinal));
@@ -297,7 +297,7 @@ public sealed class AgentCredentialsTests : IDisposable
     [Theory]
     [InlineData(1)]
     [InlineData(30)]
-    public void A_script_record_survives_reload_with_its_own_principal_but_cannot_authenticate_yet(int days)
+    public void A_script_record_survives_reload_with_its_own_principal_but_refuses_agent_ancestry(int days)
     {
         var (token, credential) = ScriptRecord();
         credential["expiresAt"] = Started.AddDays(days);
@@ -308,7 +308,7 @@ public sealed class AgentCredentialsTests : IDisposable
         var record = System.Text.Json.JsonSerializer.Deserialize<AgentCredential>(credential.ToJsonString(),
             new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!;
         Assert.Equal("script:machine1/pump-wake", store.PrincipalOf(record));
-        Assert.Null(store.Check(token, Inside()).Accepted);
+        Assert.Null(store.Check(token, new([new PeerProcess(100, Started, "copilot.exe")], true)).Accepted);
     }
 
     [Theory]
