@@ -227,8 +227,8 @@ and `pwa/test/unit/channels.test.mjs` count them. Interop vectors: [`vectors/noi
 
 ### Deflate
 
-Each message above is one Noise transport message whose plaintext is its JSON. From #603 a
-larger one may go deflated instead: the byte `0x01`, then the JSON as raw DEFLATE (RFC 1951, no
+Each message above is one Noise transport message whose plaintext is its JSON. From #603 one
+may go deflated instead: the byte `0x01`, then the JSON as raw DEFLATE (RFC 1951, no
 zlib header; `CompressionStream("deflate-raw")` in a browser). It is compressed first and then
 encrypted, each message on its own with no dictionary carried over from another. Session JSON
 deflates to well under half.
@@ -236,8 +236,8 @@ deflates to well under half.
 * A peer says it inflates in its handshake introduction, `"deflate": true`, beside `name` and
   `kind`. A message goes deflated only to a peer that said so. Older peers say nothing, and get
   JSON as before.
-* A sender deflates only messages of 512 bytes or more, and sends the deflated form only when it
-  is smaller.
+* A sender deflates only messages of 150 bytes or more (#2171; previously 512), and sends the
+  deflated form, including its marker, only when it is smaller. Smaller messages stay plain.
 * The limit on a message is unchanged: its JSON must fit one transport message, deflated or not.
   A receiver refuses one that inflates past that. It also refuses one that does not inflate at
   all, and either ends the channel, as a frame that fails to decrypt does.
@@ -464,15 +464,16 @@ its tool history moved, say). An `append` is used only where the old text is all
 start of the new: a `response` cut to its last 16 KiB has moved, and is `set`. Hosts choose
 freely between a patch and a whole session; a client applies either.
 
-**Measured wire cost (#1334).** `WireBytesTests` replays 40 s of changes through the real host to a
+**Measured wire cost (#1334, #2171).** `WireBytesTests` replays 40 s of changes through the real host to a
 subscriber that asked for `patch`, sent `sessions.focus` and negotiated deflate: one focused
 session changing every second and four quiet ones changing every 250 ms. It counts each event as
 the `MessageDeflate.Pack` length of its `{ev, seq, data}` envelope plus 42 bytes (16 AEAD tag, 9
-channel header, 17 relay data frame). Result: **13,140 bytes**, all 53 of them `session.patch`
-(none a whole upsert), against #597's goal of 5 KB, so the goal is **not met**: 8,020 bytes over.
-The focused session's 40 patches are about 9.5 KB of it, each a ~240-byte message that is too
-small for deflate (under 512 bytes) and carries 42 of overhead. The test's budget is 14,500 bytes
-(the measurement plus about 10%) so that a regression fails; it is not a claim that 5 KB is met.
+channel header, 17 relay data frame). With the 150-byte deflate floor, the result is **10,155
+bytes**, all 53 events `session.patch` (none a whole upsert). Lowering only the floor from 512
+bytes saves **2,985 bytes** from #1334's 13,140-byte baseline, closing 37.2% of the 8,020-byte gap
+to #597's 5,120-byte goal. The goal is **not met**: 5,035 bytes remain. The workload and patch
+JSON are unchanged. The test's budget drops from 14,500 to **11,200 bytes** (1,045 bytes, or
+10.3%, of margin) so that a regression fails; it is not a claim that 5 KB is met.
 
 #### Resuming without a snapshot
 
@@ -1192,8 +1193,10 @@ With `sessions.attach.blob`, a file over 256 KiB goes through the relay's blob s
    bytes the host has opened, for progress.
 
 A blob that does not open, does not match its SHA-256 or cannot be fetched fails the next
-`attachment.start` for it once, with the reason, and is dropped; the client seals and
-uploads it again under a new id. A host that has no relay with a blob store just then
+`attachment.start` for it once, with a fixed safe reason, and is dropped; the client seals
+and uploads it again under a new id. A reply naming the failed attachment is refused
+with that same safe reason, never blob-fetch exception text, paths or URLs.
+A host that has no relay with a blob store just then
 fails `attachment.start` with a `blob` and stops offering `sessions.attach.blob`.
 `attachment.chunk` for an attachment started with a `blob` fails.
 
@@ -2095,15 +2098,28 @@ session left under an agent's control still says so while it is idle. It says so
   §5.5; the pipe refuses them anything but reading, #44), so today the only agent principal a host
   sees is a press, answer, reply or launch on its Home Assistant cards made by an account listed
   in `homeAssistant.agentUserIds` ([ha-connector.md](../ha-connector.md)), or a reply-card publish
-  that names `driver: agent`. `driverPrincipal` is then `homeassistant:<user id>` for the account
-  (absent for a publish, which names no account). Once agents have their own principal (#45), it
-  is set from theirs the same way.
+  that names `driver: agent`. `driverPrincipal` is `homeassistant:<user id>` for the account,
+  or the publish's cleaned, unverified `sender` display label (not proof of identity). Once agents
+  have their own principal (#45), it is set from theirs the same way.
 * It is kept in memory, as agent-ha-bridge keeps it: a host that restarts, and a session that goes
   and comes back, starts again as the person's.
 * A change of driver is something a client shows, so it moves `updatedAt` and sends an upsert. It
   is never trimmed by the session budget.
 
 ### Activity
+
+**Turn attribution (#2145).** `kind` optionally marks the current prompt as `user` or
+`scheduled`. `notice` optionally carries the latest system-notification turn in the
+[history Turn format](v1-history.md#turn), with its own `id`, `kind: notification`,
+prompt and latest nonempty response part. Its text never replaces `response`,
+`own.response` or `responseTurn`. Empty/tool-only messages leave notice text intact.
+A queued owner prompt changes `turn`, but the assistant cycle already running keeps
+its reply target until the next `assistant.turn_start`. Older clients ignore these
+additions. If the session budget cannot carry notice text, it retains the notice's
+id, time and kind with `truncated: true`; clients fetch that turn from stored history.
+After unread transcript bytes, an unattributed reply is carried separately as
+`notice.kind: unknown`, with its own record id and `truncated: true`, never guessed
+to be the owner's answer. The next known assistant cycle reestablishes attribution.
 
 | Field | Type | Notes |
 |---|---|---|

@@ -89,11 +89,12 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
         return change is null ? config : change(config);
     }
 
-    private protected LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null, IntakeState.AgentHomes? homes = null, ILaunchCredentials? credentials = null, ILaunchAccount? account = null, IDiagnosticsJournal? journal = null)
+    private protected LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null, IntakeState.AgentHomes? homes = null, ILaunchCredentials? credentials = null, ILaunchAccount? account = null, IDiagnosticsJournal? journal = null,
+        Func<WorkspaceConfig, WorktreeResult, string, string?>? agentWorktreeCheck = null, Func<Guid, string, string, bool>? agentWorktreeRefusalAudit = null, ISessionSource? discovery = null)
     {
         // A test that names a budget is about it running out.
         if (wait is not null || readyWait is not null || trustConfirm is not null || follow is not null) { clock.Run(); }
-        return new(source, gate ?? probe, screens, starter,         locator, new AgencyCatalog(agency, log: logged.Enqueue), new LaunchServiceOptions
+        return new(discovery ?? source, gate ?? probe, screens, starter,         locator, new AgencyCatalog(agency, log: logged.Enqueue), new LaunchServiceOptions
         {
             MachineName = machineName,
             Time = clock,
@@ -118,7 +119,10 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
             LocalNow = now ?? (() => DateTime.Now),
             Transfers = fetcher ?? transfers,
             TransferStaging = transfers?.Staging ?? Path.Combine(f.Root, "profile", "transfers"),
+            ProvenanceFile = Path.Combine(f.Root, "profile", "launch-provenance.json"),
             Journal = journal,
+            AgentWorktreeCheck = agentWorktreeCheck,
+            AgentWorktreeRefusalAudit = agentWorktreeRefusalAudit,
         }, log: logged.Enqueue, attachments: attachments, credentials: credentials, account: account);
     }
 
@@ -303,15 +307,20 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Equal(["alpha", "githubiq"], Denied(args));
     }
 
-    [Fact]
-    public async Task A_role_not_in_the_map_gets_no_servers_and_a_similar_role_name_is_not_matched()
+    [Theory]
+    [InlineData("review-2")]
+    [InlineData("default")]
+    public async Task A_role_not_in_the_map_gets_no_servers_and_a_similar_role_name_is_not_matched(string role)
     {
         OwnerMcp("alpha");
-        var request = new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App", Role = "review-2" };
+        var request = new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App", Role = role };
 
+        Assert.Null(LaunchProtocol.Check(request));
         await Launcher(Config(c => c with { WorkerMcp = new Dictionary<string, IReadOnlyList<string>> { ["review"] = ["alpha"] } })).LaunchAsync(request, "phone");
 
-        Assert.Equal(["alpha"], Denied(Assert.Single(starter.Specs).Arguments));
+        var args = Assert.Single(starter.Specs).Arguments;
+        Assert.Equal(["alpha"], Denied(args));
+        Assert.Contains("--disable-builtin-mcps", args);
     }
 
     [Fact]
@@ -1208,7 +1217,14 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Serve(Config(c => c with { Workspaces = [new("App", app, true)], WorktreeLimit = 1 }), usage: new NoSessions());
         var ch = await OpenAsync();
 
-        Assert.Equal("started", (await LaunchAsync(ch, new { prompt = "go" })).Outcome_);
+        var firstLaunch = await LaunchAsync(ch, new { prompt = "go" });
+        try { Assert.Equal("started", firstLaunch.Outcome_); }
+        catch (Xunit.Sdk.EqualException failure)
+        {
+            throw new Xunit.Sdk.XunitException(
+                $"{failure.Message}{Environment.NewLine}First launch reason: {firstLaunch.Reason}{Environment.NewLine}"
+                + $"Fixture log:{Environment.NewLine}{string.Join(Environment.NewLine, logged)}");
+        }
         var first = starter.Specs[0].WorkingDirectory;
         await WaitAsync(() => Task.FromResult(!File.Exists(Path.Combine(Worktrees.AdminFolder(first)!, "locked"))));
         // Its session has ended and it has sat idle past launch.worktrees.idleHours.
@@ -1240,13 +1256,114 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
     public async Task Codex_is_launched_only_with_a_first_message_and_its_launch_is_bound_to_the_session_it_chose()
     {
         locator.Installed["codex"] = @"C:\fake\codex.cmd";
+        starter.Registers = false;
+        var launcher = Launcher(Config());
+        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", machineName, "windows", "0.1.0"), launcher: launcher).HandleAsync;
         var ch = await OpenAsync();
         Assert.Equal(("refused", "Codex starts its session only on a first message; give it a prompt"), Pair(await LaunchAsync(ch, new { agent = "codex" })));
 
-        var o = await LaunchAsync(ch, new { agent = "codex", prompt = "add pagination" });
+        var launching = LaunchAsync(ch, new { agent = "codex", prompt = "add pagination" });
+        await WaitAsync(() => Task.FromResult(starter.Pids.Count == 1));
+        starter.RegisterCodex(starter.Specs[0], starter.Pids[0], 7001, starter.CodexId);
+        var o = await launching;
         Assert.Equal("started", o.Outcome_);
         Assert.Equal(starter.CodexId, o.Session);
         Assert.Equal(["--no-daemon", "-c", "model_reasoning_summary=detailed", "--", "add pagination"], starter.Specs[0].Arguments);
+        Assert.NotEqual(starter.Pids[0], source.ProcessOf(starter.CodexId)!.Id);
+        Assert.True(launcher.LaunchedSession(starter.CodexId, source.ProcessOf(starter.CodexId)));
+        starter.Exit(starter.Pids[0]);
+        starter.Registers = true;
+        Assert.Equal("started", (await LaunchAsync(ch, new { prompt = "another session" })).Outcome_);
+        Assert.True(launcher.LaunchedSession(starter.CodexId, source.ProcessOf(starter.CodexId)));
+        Assert.True(Launcher(Config()).LaunchedSession(starter.CodexId, source.ProcessOf(starter.CodexId)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_restart_keeps_a_surviving_launch_unadoptable_without_credentials(bool revoked)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var folder = Path.Combine(f.Root, "profile");
+        var credentials = new AgentCredentials(folder, "host-id", rootAlive: (_, _) => true);
+        var launcher = Launcher(Config(), credentials: revoked ? credentials : null);
+        var machine = new MachineInfo("host-id", machineName, "windows", "0.1.0");
+        host.Hub.Handler = new SessionService(source, machine, launcher: launcher).HandleAsync;
+        var ch = await OpenAsync();
+        var launched = await LaunchAsync(ch, new { prompt = "go" });
+        Assert.Equal("started", launched.Outcome_);
+        var session = launched.Session!;
+        if (revoked) { Assert.True(credentials.Revoke(session, "fixture")); }
+        else { Assert.False(File.Exists(Path.Combine(folder, AgentCredentials.FileName))); }
+        var reopened = new AgentCredentials(folder, "host-id", rootAlive: (_, _) => true);
+        Assert.Equal(0, reopened.Count);
+        await using var rediscovered = new SessionSource(f.Options(), f.Processes);
+        await rediscovered.RefreshAsync();
+        var restarted = new SessionService(rediscovered, machine, launcher: Launcher(Config(), credentials: reopened, discovery: rediscovered));
+        var refusal = Assert.Throws<InvalidOperationException>(() => restarted.ProcessForAdoption(session));
+        Assert.Contains("host launched", refusal.Message);
+        var process = rediscovered.ProcessOf(session)!;
+        var provenance = new LaunchProvenance(Path.Combine(folder, "launch-provenance.json"), logged.Enqueue);
+        Assert.True(provenance.Contains(session.ToUpperInvariant(), process));
+        Assert.False(provenance.Contains(session, process with { Id = process.Id + 1 }));
+        Assert.False(provenance.Contains(session, process with { StartedAt = process.StartedAt!.Value.AddHours(1) }));
+    }
+
+    [Theory]
+    [InlineData("not-json", true)]
+    [InlineData("null", true)]
+    [InlineData("{\"11111111-1111-4111-8111-111111111111\":{\"session\":null,\"process\":null}}", true)]
+    [InlineData("oversized", true)]
+    [InlineData("{\"11111111-1111-4111-8111-111111111111\":{\"session\":\"\",\"process\":null}}", false)]
+    public void Corrupt_or_unfinished_launch_provenance_never_allows_adoption(string json, bool corrupt)
+    {
+        var folder = Directory.CreateDirectory(Path.Combine(f.Root, "profile")).FullName;
+        File.WriteAllText(Path.Combine(folder, "launch-provenance.json"), json == "oversized" ? new string(' ', 4 * 1024 * 1024 + 1) : json);
+        var restarted = Launcher(Config());
+        Assert.Throws<InvalidOperationException>(() => restarted.LaunchedSession(starter.CodexId, null));
+        if (corrupt) { Assert.Contains(logged, line => line.Contains("launch provenance could not be read")); }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_provenance_write_failure_preserves_credential_cleanup_or_the_registered_session(bool cannotStart)
+    {
+        var file = Path.Combine(f.Root, "profile", "launch-provenance.json");
+        var saved = file + ".saved";
+        starter.BeforeStart = () => { File.Move(file, saved); Directory.CreateDirectory(file); };
+        starter.Throws = cannotStart ? new IOException("start failed") : null;
+        var credentials = new RecordedCredentials();
+        var launcher = Launcher(Config(), credentials: credentials);
+        var noted = false;
+        launcher.SessionStarted += (_, _) => noted = true;
+
+        var result = await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "phone");
+
+        if (cannotStart) { Assert.Contains(credentials.Calls, call => call.StartsWith("abandon ", StringComparison.Ordinal)); }
+        else { Assert.Equal(LaunchOutcome.Started, result.Outcome); Assert.True(noted); }
+        Assert.Contains(logged, line => line.Contains("launch provenance could not be saved"));
+        Assert.Throws<InvalidOperationException>(() => launcher.LaunchedSession(starter.CodexId, null));
+        Directory.Delete(file);
+        File.Move(saved, file);
+        var restarted = new LaunchProvenance(file, logged.Enqueue);
+        Assert.Throws<InvalidOperationException>(() => restarted.Contains(credentials.Calls[0].Split(' ')[1], null));
+    }
+
+    [Fact]
+    public void A_failed_process_binding_keeps_the_durable_launch_intent_after_restart()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var file = Path.Combine(f.Root, "profile", "launch-provenance.json");
+        var provenance = new LaunchProvenance(file, logged.Enqueue);
+        var request = Guid.NewGuid();
+        provenance.Preparing(request);
+        using (var locked = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            Assert.Throws<InvalidOperationException>(() => provenance.Bound(request, starter.CodexId, new SessionProcess(1234, DateTimeOffset.UtcNow)));
+        }
+        var restarted = new LaunchProvenance(file, logged.Enqueue);
+        Assert.Throws<InvalidOperationException>(() => restarted.Contains(starter.CodexId, new SessionProcess(1234, DateTimeOffset.UtcNow)));
     }
 
     [Fact]
@@ -1571,6 +1688,7 @@ public abstract partial class LaunchFlowFixture
         public bool ExitsAtOnce;
         // Starting the agent fails with this.
         public Exception? Throws;
+        public Action? BeforeStart;
         // The launcher hands its session to a process of its own (its pid + 3000) and exits.
         public bool HandsOn;
         public readonly string CodexId = "66666666-6666-4666-8666-666666666666";
@@ -1585,6 +1703,7 @@ public abstract partial class LaunchFlowFixture
 
         public Started Start(StartSpec spec)
         {
+            BeforeStart?.Invoke();
             if (Throws is { } broken) { throw broken; }
             int pid;
             lock (Specs) { Specs.Add(spec); pid = ++next; Pids.Add(pid); if (!ExitsAtOnce) { running.Add(pid); } if (HandsOn) { running.Add(pid + 3000); } }

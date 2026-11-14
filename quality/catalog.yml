@@ -347,6 +347,19 @@ suites:
     where: flake-hunt.yml hunt, classify, report
     status: exists
 
+  - id: arm64-self-test-loop
+    validation_plan: native
+    kind: ui
+    ring: 3
+    select: affected
+    # Manual diagnostic only (#2535): accounted for, never selected by PR/main rings 0-2.
+    platforms: [win-arm64]
+    runner: hosted
+    triggers: [.github/workflows/arm64-self-test-loop.yml]
+    command: see arm64-self-test-loop.yml (manual dispatch only; exact head-sha and loops inputs)
+    where: arm64-self-test-loop.yml loop
+    status: exists
+
   - id: weekly-report
     validation_plan: native
     kind: static
@@ -375,7 +388,7 @@ suites:
     platforms: [linux-x64]
     runner: hosted
     command: see merge-rule.yml (a dry run of the same verdict, posting nothing - dotnet run --project tools/AgentBridge.Quality -c Release -- merge-rule --pr N)
-    where: merge-rule.yml evaluate; merge-rule-review.yml relay
+    where: merge-rule.yml backstop, evaluate; merge-rule-review.yml relay
     status: exists
 
   - id: mac-host

@@ -181,6 +181,11 @@ public static class SessionBudget
     {
         bool Fits(Session x) => ProtocolJson.ByteCount(x) <= maxBytes;
         if (Fits(s)) { return s; }
+        if (s.Activity.Notice is { } notice)
+        {
+            s = s with { Activity = s.Activity with { Notice = new HistoryTurn { Id = notice.Id, At = notice.At, Kind = notice.Kind, Truncated = true } } };
+            if (Fits(s)) { return s; }
+        }
 
         s = Subagents(s, a => a.Where(e => !e.Finished));
         if (!Fits(s)) { s = Subagents(s, a => a.Select(e => e with { Line = null })); }
@@ -301,7 +306,7 @@ public enum DriverKind { Person, Agent }
 // Who wrote activity.userMessage (#489). A value a client does not know is Other, never the
 // person's: a prompt is shown as the person's own only when nothing says it was not.
 [UnknownAs(Other)]
-public enum UserMessageFrom { Person, Schedule, Agent, Other }
+public enum UserMessageFrom { Person, Schedule, Agent, Other, Notification }
 
 [UnknownAs(Done)]
 public enum ToolStatus { Running, Done, Failed }
@@ -360,7 +365,7 @@ public enum NotificationClass { NeedsYou, Done, Fyi }
 // DiagnosticsReason: why this channel is not offered diagnostics (#1921); absent when offered
 // or from a host without a diagnostics service. Never an authorization grant.
 public sealed record MachineInfo([property: Strict(Strictness.Identity)] string Id, string Name, string Os, string HostVersion, bool? Dev = null, int? Sessions = null, string? ReadOnly = null, string? Instance = null,
-    RestoreNotice? Restore = null, string? DiagnosticsReason = null);
+    RestoreNotice? Restore = null, string? DiagnosticsReason = null, string? Role = null);
 
 public sealed record HelloResult([property: Strict(Strictness.Identity)] int Protocol, MachineInfo Machine, IReadOnlyList<string> Capabilities);
 
@@ -391,8 +396,8 @@ public sealed record Session
     // replied to it, and nobody has taken it back since with an answer, a reply or input at the
     // machine. Null (absent) for the person.
     public DriverKind? Driver { get; init; }
-    // With Driver Agent, which agent, when the host knows (within Limits.DriverPrincipal):
-    // "homeassistant:<user id>" for a press by one of homeAssistant.agentUserIds.
+    // With Driver Agent, display text only (within Limits.DriverPrincipal):
+    // "homeassistant:<user id>" for an agent account press, or an unverified card sender label.
     public string? DriverPrincipal { get; init; }
     // The sub-agents this session started, at any depth (docs/design/subagents.md): running
     // ones first, then the most recently finished. Absent when there are none. Older clients
@@ -454,6 +459,8 @@ public sealed record Attention
 
 public sealed record Activity
 {
+    public TurnKind? Kind { get; init; }
+    public HistoryTurn? Notice { get; init; }
     public string? Response { get; init; }
     public bool? ResponseTruncated { get; init; }
     public string? Reasoning { get; init; }

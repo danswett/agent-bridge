@@ -155,9 +155,9 @@ a Project-permission failure is not an empty queue or a completed migration.
 
 In any question or message to the owner, put every command or code line in its own
 fenced block (three backticks, one block per command) so the PWA card shows a Copy
-button. The Windows app shows the same Copy button on fenced blocks. Inline
-backticks and plain paragraphs get no Copy button, and nothing detects commands
-automatically.
+button. The Windows app and PWA also show that Copy button for a paragraph holding
+only one inline code span. Inline code within a sentence, multiple spans and plain
+paragraphs get no Copy button, and nothing detects commands automatically.
 
 ````text
 ```powershell

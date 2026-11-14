@@ -48,6 +48,9 @@ public static class KnownDifferences
 
     public static readonly IReadOnlyList<KnownDifference> All =
     [
+        new("Activity/a-scheduled-prompt", 2146, "pwa", "read",
+            "keeps kind=scheduled alongside the scheduled sender",
+            "drops activity.kind until the client attribution slice"),
         .. StrictFields.Select(v => new KnownDifference(v, 446, "pwa", "read",
             "refuses the record: the field is strict (v1-sessions.md, Malformed records)",
             "reads it, the field absent or its default")),

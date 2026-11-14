@@ -26,6 +26,7 @@ class Element {
   contains() { return false; }
   closest() { return null; }
   querySelectorAll() { return this.children; }
+  getClientRects() { return []; }
   after() {}
   addEventListener() {}
   setAttribute() {}
@@ -49,6 +50,7 @@ const source = readFileSync(new URL('../../js/ui/views.js', import.meta.url), 'u
 const SessionListView = vm.runInNewContext(`${source}\nSessionListView`, {
   h: () => new Element(), SessionCard: Card, RowMenu: class {}, SessionOrder, RecentOrder, ReadDwell,
   whileVisible() {}, document, queueMicrotask, AbortController,
+  flip: (_container, mutate) => mutate(),
   setTimeout: (...args) => globalThis.setTimeout(...args),
   clearTimeout: (handle) => globalThis.clearTimeout(handle),
 }, { filename: 'views.js' });

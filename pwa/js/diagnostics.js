@@ -14,6 +14,7 @@
 // they are counted and never named. Anything else is left out and counted.
 import { BRAND } from './brand.js';
 import { copyText } from './markdown.js';
+import { isProtocolTime as isTime } from './protocol-time.js';
 
 export const DIAGNOSTICS = Object.freeze({ capability: 'diagnostics', get: 'diagnostics.get', schema: 1, entries: 100, minIntervalMs: 2000 });
 
@@ -54,8 +55,6 @@ const MAX_FRAMES = 16;
 // prerelease words, and nothing else.
 const VERSION = /^\d{1,9}(\.\d{1,9}){1,3}(-(alpha|beta|rc|preview|dev|ci)(\.\d{1,9}){0,3})?$/;
 const MAX_VERSION = 64;
-// An ISO time as .NET writes one, and nothing else.
-const TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d{1,7})?(Z|[+-](\d{2}):(\d{2}))$/;
 const UNRECOGNIZED = '<unrecognized>';
 // The runtime's exception types the journal names (JournalIdentifiers.RuntimeExceptions, by full
 // name; test/unit/diagnostics.test.mjs keeps the two lists the same). The product's own types are
@@ -85,17 +84,6 @@ const need = (ok) => { if (!ok) { throw new Bad(); } };
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const section = (v) => { need(isObj(v)); return v; };
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
-// A required time, or (nullable) a required time or null; a malformed one is never shown. Each
-// component is checked as .NET checks it: Date.parse would turn 2025-02-30 into March 1.
-const isTime = (v) => {
-  const m = typeof v === 'string' ? TIME.exec(v) : null;
-  if (!m) { return false; }
-  const [year, month, day, hour, minute, second] = m.slice(1, 7).map(Number);
-  const days = [31, year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  if (year < 1 || month < 1 || month > 12 || day < 1 || day > days[month - 1] || hour > 23 || minute > 59 || second > 59) { return false; }
-  if (m[8] !== 'Z' && (Number(m[10]) > 59 || Number(m[9]) * 60 + Number(m[10]) > 14 * 60)) { return false; }
-  return !Number.isNaN(Date.parse(v));
-};
 const at = (v) => { need(isTime(v)); return v; };
 const atOrNull = (o, k) => { need(has(o, k)); need(o[k] === null || isTime(o[k])); return o[k]; };
 const int = (v) => { need(Number.isSafeInteger(v)); return v; };

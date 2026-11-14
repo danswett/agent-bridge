@@ -49,6 +49,7 @@
               "updatedAt": "2026-10-28T04:00:03.000Z",
               "processId": 100,
               "activity": {
+                "kind": "user",
                 "currentTool": {
                   "id": "fixture-tool",
                   "name": "powershell",
@@ -89,6 +90,7 @@
           "updatedAt": "2026-10-28T04:00:03.000Z",
           "processId": 100,
           "activity": {
+            "kind": "user",
             "currentTool": {
               "id": "fixture-tool",
               "name": "powershell",
@@ -183,6 +185,7 @@
             "updatedAt": "2026-10-28T04:00:03.000Z",
             "processId": 100,
             "activity": {
+              "kind": "user",
               "currentTool": {
                 "id": "fixture-tool",
                 "name": "powershell",

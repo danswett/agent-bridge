@@ -125,23 +125,25 @@ export function readUpdateState(raw) {
   };
 }
 
-// Product's secondary discovery detail (#927); quota is a past observation, not an allowance now.
+// Old hosts put a machine-local clock in this reason. Recognise the hold, never parse its time.
+const checkHoldReason = (s) => !s?.last?.code && ['failed', 'refused'].includes(s?.last?.outcome)
+  && (s.last.reason === 'checking again soon' || s.last.reason?.startsWith("the release feed's rate limit refused the check"));
+export const checkHeld = (s) => checkHoldReason(s) && !(Date.parse(s.checkedAt) > Date.parse(s.last.at));
+
+// The card's quiet age; historical source and quota are not an allowance to check now (#2187).
 export function updateDetails(s, now = Date.now()) {
   const age = (value) => {
     const at = timestamp(value);
     return at ? Math.max(0, Math.floor((now - Date.parse(at)) / 60000)) : null;
   };
   const words = (minutes) => minutes < 1 ? 'under a minute' : minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h`;
-  const source = s?.checkSource === 'cdn' ? 'the release feed' : s?.checkSource === 'github' ? 'GitHub' : null;
   const checked = age(s?.checkedAt);
-  const remaining = quota(s?.gitHubRemaining);
-  const observed = age(s?.gitHubQuotaAt);
-  const lines = [];
-  if (source && checked !== null) { lines.push(`Update list from ${source}, ${words(checked)} old`); }
-  if (remaining !== null && observed !== null) {
-    lines.push(`When last asked, GitHub allowed ${remaining === 0 ? 'no more checks' : `${remaining} more check${remaining === 1 ? '' : 's'}`} (${words(observed)} ago)`);
+  if (checkHeld(s)) {
+    const when = checked === null ? 'Not checked yet' : checked < 1 ? 'Checked just now'
+      : `Checked ${checked} minute${checked === 1 ? '' : 's'} ago`;
+    return [`${when} \u00b7 checking again soon`];
   }
-  return lines;
+  return checked === null ? [] : [`Checked ${words(checked)} ago`];
 }
 
 // update.check's and update.install's result. An unknown outcome reads as refused.
@@ -285,6 +287,7 @@ export function updateLine(s, now = Date.now()) {
 export function lastLine(s, now = Date.now(), { updateNow = false } = {}) {
   const l = s?.last;
   if (!l) { return null; }
+  if (!updateNow && checkHoldReason(s)) { return checkHeld(s) ? 'Checking again soon.' : null; }
   if (updateNow || l.code) {
     switch (l.outcome) {
       case 'updated': return `Updated to ${l.to ?? 'the new release'}.`;
@@ -294,7 +297,7 @@ export function lastLine(s, now = Date.now(), { updateNow = false } = {}) {
     }
   }
   switch (l.outcome) {
-    case 'updated': return `Updated from ${l.from ?? 'an older release'} to ${l.to ?? 'a newer one'} ${ago(l.at, now)}.`;
+    case 'updated': return `Updated to ${l.to ?? 'the new release'}.`;
     case 'current': return `Already up to date when asked ${ago(l.at, now)}.`;
     case 'refused': return `Not updated: ${sentence(l.reason ?? 'refused')}`;
     default: return `The update failed: ${sentence(l.reason ?? 'no reason given')}`;
