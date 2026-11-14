@@ -53,6 +53,7 @@ public sealed class ApnsPushRequest
             });
         }
         catch (CryptographicException) { throw Bad(); }
+        catch (PlatformNotSupportedException) { throw Bad(); }
         string? device = null;
         if (data.TryGetProperty("device", out var name) && name.ValueKind != JsonValueKind.Null)
         {
