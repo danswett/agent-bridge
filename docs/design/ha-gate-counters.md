@@ -149,6 +149,29 @@ same-user program able to rewrite all evidence and its anchors.
 A6 continuity (slice 9) is required before starting a qualifying run. Missing
 restart proof makes evidence incomplete; retained observations cannot earn credit.
 
+### 4.1. Engineering clarification v1 (2026-11-14, #2524 / 9A)
+
+A complete record missing only its final LF continues through existing framing
+recovery, including gated appends, regardless of record age or actor. Keep
+`audit-incomplete` visible across restart: no continuity certification or qualifying
+credit. This does not change genuine partial-JSON ordinary crash recovery.
+Deleted run-evidence days/records are established coverage loss: visibly INVALIDATE
+the run with `coverage-break`, retain observed totals, and allow zero eligible
+credit. Diagnostic appends may continue with monotonic sequences only if the
+fault remains durably detectable across restart; actual append/flush failure
+refuses the action. Never silently reanchor into a healthy suffix.
+Reads change no bytes; permitted appends may extend files, not rewrite pre-existing
+fault evidence. 9A detects/retains faults only: no truncation, erasure, recreation
+of missing evidence, clean suffix, automatic reset/start, new store/journal or
+repair command. Repair/reset execution remains outside 9A; reset alone does not
+restore evidence health. Archive/retention work remains 9B; neither cut completes
+#2524 alone or admits a qualifying run.
+
+This explicitly clarifies previously unspecified append policy, based on section 4
+lines 119-122 / 139-146 and section 6 lines 203-204 at frozen head
+`020a2144705fce430a0d6a309373285f977ad3f6`, section 5's void-run/admission rules,
+and section 6's INCOMPLETE torn-tail versus FAIL coverage-break table.
+
 ## 5. Continuous run and reset
 
 The person-class control entry points are `start`, `pause`, `reset` and `seal`.

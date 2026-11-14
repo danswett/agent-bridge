@@ -62,8 +62,8 @@ public sealed class AuditContinuityTests : IDisposable
     [InlineData(false, "tail-record"), InlineData(true, "tail-record")]
     [InlineData(false, "tail-day"), InlineData(true, "tail-day")]
     [InlineData(false, "root-day"), InlineData(true, "root-day")]
-    [InlineData(false, "torn"), InlineData(true, "torn")]
-    public void Restart_and_owner_reads_refuse_removed_or_torn_evidence_without_reanchoring_a_suffix(bool launch, string fault)
+    [InlineData(false, "missing-lf"), InlineData(true, "missing-lf")]
+    public void Restart_retains_coverage_loss_or_framing_uncertainty_without_repairing_evidence(bool launch, string fault)
     {
         Pair(false);
         Pair(true);
@@ -73,18 +73,41 @@ public sealed class AuditContinuityTests : IDisposable
         var day = fault == "root-day" ? "2026-11-14" : "2026-11-15";
         var file = Path.Combine(Audit, $"{(launch ? "launches" : "agents")}-{day}.jsonl");
         if (fault == "tail-record") { File.WriteAllText(file, string.Join("\n", File.ReadAllLines(file)[..^1]) + "\n"); }
-        else if (fault == "torn") { File.WriteAllText(file, File.ReadAllText(file).TrimEnd('\n')); }
+        else if (fault == "missing-lf") { File.WriteAllText(file, File.ReadAllText(file).TrimEnd('\n')); }
         else { File.Delete(file); }
         var before = Snapshot();
-
-        Assert.False(Writer().Verify(launch).Intact);
-        var error = new StringWriter();
-        var code = AuditCommands.Run(["audit"], root, TextWriter.Null, error);
-        Assert.True(code != 0 || error.ToString().Length > 0);
-        Assert.DoesNotContain(Profile, error.ToString());
-        var report = GateAuditProjection.Read(Profile, run);
-        Assert.True(report.Invalidated || report.IncompleteReasons.Count > 0);
-        Assert.False(Writer().Append(Entry(launch, Guid.NewGuid(), "intent", "reserved")));
-        Unchanged(before);
+        var framing = fault == "missing-lf";
+        for (var restart = 0; restart < 2; restart++)
+        {
+            var readOnly = Snapshot();
+            if (!framing || restart == 0) { Assert.False(Writer().Verify(launch).Intact); }
+            var error = new StringWriter();
+            var code = AuditCommands.Run(["audit"], root, TextWriter.Null, error);
+            Assert.True(code != 0 || error.ToString().Length > 0);
+            Assert.Contains(framing ? "incomplete" : "coverage", error.ToString(), StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(Profile, error.ToString());
+            var report = GateAuditProjection.Read(Profile, run);
+            Assert.NotEmpty(report.IncompleteReasons);
+            Assert.Contains(framing ? "audit-incomplete" : "coverage-break", report.IncompleteReasons);
+            if (!framing)
+            {
+                Assert.True(report.Invalidated);
+            }
+            Assert.Equal((framing ? 4 : 3) + restart, report.Totals.Sum(total => total.Successes));
+            Unchanged(readOnly);
+            if (restart != 0) { continue; }
+            if (!framing) { clock.Advance(TimeSpan.FromDays(1)); }
+            var operation = Guid.NewGuid();
+            Assert.True(Writer().Append(Entry(launch, operation, "intent", "reserved")));
+            Assert.True(Writer().Append(Entry(launch, operation, "terminal", launch ? "started" : "ended")));
+            Assert.Equal(new long[] { 9, 10 }, GateAuditProjection.Load(Profile).Rows
+                .Where(row => row.Gate?.Operation == operation).Select(row => row.Gate!.Sequence));
+            foreach (var (path, bytes) in before.Where(pair => pair.Key.EndsWith(".jsonl", StringComparison.Ordinal)))
+            {
+                var after = File.ReadAllBytes(path);
+                Assert.Equal(bytes, framing ? after.Take(bytes.Length).ToArray() : after);
+            }
+            if (fault is "tail-day" or "root-day") { Assert.False(File.Exists(file)); }
+        }
     }
 }
