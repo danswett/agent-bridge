@@ -16,7 +16,7 @@ param(
 $ErrorActionPreference = 'Stop'
 # The only expiry, computed here so the waiver stops by itself; 2026-11-20 00:00 PT.
 $expiry = [DateTimeOffset]::Parse('2026-11-20T08:00:00Z', [cultureinfo]::InvariantCulture)
-$waivable = @('app (win-arm64)', 'app-installer (win-arm64)')
+$waivable = @('app (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)')
 $ids = @()
 $lines = @()
 try {
