@@ -62,10 +62,10 @@ public sealed class QuarantineTests
                 Assert.Contains("QUARANTINE_LISTED_RED", passing.Output, StringComparison.Ordinal);
                 var redTrx = File.ReadAllText(passing.Trx);
                 var results = XDocument.Parse(redTrx).Descendants().Where(e => e.Name.LocalName == "UnitTestResult");
-                var listed = Assert.Single(results.Where(e => (string?)e.Attribute("testName") == Name));
+                var listed = Assert.Single(results, e => (string?)e.Attribute("testName") == Name);
                 Assert.Equal("Failed", (string?)listed.Attribute("outcome"));
                 Assert.Contains("QUARANTINE_LISTED_RED", listed.ToString(), StringComparison.Ordinal);
-                var healthy = Assert.Single(results.Where(e => (string?)e.Attribute("testName") == "HealthyTests.Passes"));
+                var healthy = Assert.Single(results, e => (string?)e.Attribute("testName") == "HealthyTests.Passes");
                 Assert.Equal("Passed", (string?)healthy.Attribute("outcome"));
                 var evidence = Path.Combine(Root, "TestResults", "QuarantineContract");
                 Directory.CreateDirectory(evidence);
