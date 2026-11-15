@@ -120,6 +120,16 @@ if (command == "devices" && arguments.ElementAtOrDefault(1) == "descriptor")
     return 3;
 }
 
+if (command == "host-sign")
+{
+    if (Refused("initialize host signing", stateOnly: true)) { return 4; }
+    var callers = new CallerGuard(() => KnownAgents.Running(new SystemProcessInspector()), null,
+        hostImage: OperatingSystem.IsWindows() ? Environment.ProcessPath : null);
+    return HostSignCommands.Run(arguments, Identity.DefaultRoot,
+        () => callers.Classify(ProcessChain.Read(Environment.ProcessId)),
+        !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AGENT_BRIDGE_TOKEN")), Console.Out, Console.Error);
+}
+
 if (command == "ha" && HaCommands.TryInventoryCommand(arguments, Identity.DefaultRoot, Console.Out, Console.Error) is { } inventoryExit)
 {
     return inventoryExit;
@@ -390,6 +400,7 @@ switch (command)
         Console.Error.WriteLine("usage: agent-bridge-host sessions [--compact] | get <id> | watch [--json] | usage | sign-in --relay <url> | serve [--relay <url>] [--name <name>] [--local-only] | whoami");
         Console.Error.WriteLine("       agent-bridge-host approve <session> <question> <request-uuid> <approve|deny> [--profile <name>]");
         Console.Error.WriteLine("       agent-bridge-host rename <session-id> \"<fleet name>\" [--profile <name>] (empty name clears)");
+        Console.Error.WriteLine("       agent-bridge-host host-sign init [--profile <name>]");
         Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]");
         Console.Error.WriteLine("       " + OwnPeerCommands.Usage);
         Console.Error.WriteLine("       " + AgentBridge.Host.Cli.ScriptCredentialCommands.Usage);
@@ -422,11 +433,11 @@ static string? ReadMaskedPassword()
 
 // What may only be done by a person never runs inside an agent session (§6.3 invariant 13): the
 // host's own command line refuses it there, as the pipe does.
-static bool Refused(string what)
+static bool Refused(string what, bool stateOnly = false)
 {
     var inside = AgentAncestry.Inside(Environment.GetEnvironmentVariable(Launchers.SessionVariable), ProcessChain.Read(Environment.ProcessId), () => KnownAgents.Running(new SystemProcessInspector()));
     if (inside is null) { return false; }
-    Console.Error.WriteLine($"agent-bridge-host: refused to {what}: this is running {inside}. That is for a person to do, in a terminal of their own or from the {Product.App}.");
+    Console.Error.WriteLine(stateOnly ? "{\"state\":\"refused\"}" : $"agent-bridge-host: refused to {what}: this is running {inside}. That is for a person to do, in a terminal of their own or from the {Product.App}.");
     return true;
 }
 

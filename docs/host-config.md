@@ -18,7 +18,18 @@ It currently exits 3 with only `no-switch` on stderr, before opening identity or
 hostSign custody. There is no config setting, environment override, automatic
 enrollment, scheduled task or deployment. #2367 and verified-reader host wiring
 are follow-ups; enabling the switch alone will not activate this verb.
-HostSign key provisioning is separate (#2369).
+HostSign key provisioning is separate:
+
+## Explicit hostSign key initialization
+
+On Windows, a person at the machine runs `agent-bridge-host host-sign init [--profile <name>]`.
+This creates protected hostSign custody once. Repeating it reports `existing` with the same
+`keyId`, without rotating or rewriting the key. Output contains only `state` (`created`,
+`existing` or `missing-key`) and `keyId` when available. Agent/script credentials and
+non-person callers are refused. Damaged or incomplete custody is not repaired: it stays
+`missing-key` and unsigned. Creating the key does **not** enable signing or acceptance
+of hostSign; enabling remains gated by #2366/#2367. Status, enrollment and publishing
+never create the key.
 
 ## Schema, version 1
 
@@ -552,8 +563,9 @@ agent-bridge-host workspace remove Bridge
 `add` refuses a folder that does not exist, a system folder, one already approved, a label in
 use, and `--isolate` outside a git repository. Every command takes `--profile <name>`.
 
-`workspace add` and `remove`, `config set` and `unset`, `ha token set` and `clear`, and
-`sign-in` and `scripts add|revoke` are for a person. They refuse to run (exit code 4) inside an agent session: when
+`workspace add` and `remove`, `config set` and `unset`, `ha token set` and `clear`,
+`sign-in`, `scripts add|revoke` and `host-sign init` are for a person. They refuse to run
+(exit code 4) inside an agent session: when
 anything they run inside is an agent CLI (`copilot`, `claude`, `codex`, `agency`, or Node or Bun
 running one), or when `AGENT_BRIDGE_SESSION` is set, as it is in every session the host
 launches. They refuse too when the process tree they run in cannot be read in full (an
