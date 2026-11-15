@@ -63,16 +63,43 @@ public class UsageReadTests
         var copilot = Assert.Single(report.Agents, agent => agent.Agent == AgentKind.Copilot);
         Assert.Equal(42, Assert.Single(copilot.Windows).Percent);
         Assert.Equal(peer, copilot.ReadBy);
+        Assert.Equal(Later, copilot.MeasuredAt);
+        Assert.Equal("newer failure", copilot.Error);
         Assert.Equal(31, Assert.Single(Assert.Single(report.Agents, agent => agent.Agent == AgentKind.Codex).Windows).Percent);
         var claude = Assert.Single(report.Agents, agent => agent.Agent == AgentKind.Claude);
         Assert.Empty(claude.Windows);
         Assert.Equal("not signed in", claude.Error);
     }
 
-    [Fact]
-    public async Task A_pipe_error_is_reported_with_a_nonzero_exit_code()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_local_keyed_keyless_transition_keeps_only_the_apps_current_reading(bool keyed)
     {
-        var pipe = new FakePipe(UsageReport.Empty, UsageReport.Empty, "usage unavailable");
+        var old = Reading(AgentKind.Codex, "prior", 10, Earlier) with { Account = keyed ? null : "prior" };
+        var current = Reading(AgentKind.Codex, "current", 25, Later) with { Account = keyed ? "current" : null };
+        var signOut = old with { Windows = [], Error = "signed out" };
+        var pipe = new FakePipe(new UsageReport([old, current, signOut]), UsageReport.Empty);
+        using var output = new StringWriter();
+
+        Assert.Equal(0, await UsageRead.RunAsync([], pipe, output, CancellationToken.None));
+
+        var report = JsonSerializer.Deserialize<UsageReport>(output.ToString(), ProtocolJson.Options)!;
+        var row = Assert.Single(report.Agents);
+        Assert.Equal(current.Account, row.Account);
+        Assert.Equal(25, Assert.Single(row.Windows).Percent);
+        Assert.Equal(new string('0', 32), row.ReadBy?.Id);
+        Assert.Null(row.Error);
+    }
+
+    [Theory]
+    [InlineData("host")]
+    [InlineData("io")]
+    [InlineData("timeout")]
+    public async Task A_pipe_error_is_reported_with_a_nonzero_exit_code(string kind)
+    {
+        var failure = kind switch { "io" => new IOException("usage unavailable"), "timeout" => new TimeoutException("usage unavailable"), _ => (Exception?)null };
+        var pipe = new FakePipe(UsageReport.Empty, UsageReport.Empty, "usage unavailable", failure);
         using var output = new StringWriter();
 
         var exitCode = await UsageRead.RunAsync(Cli.Parse(["usage-read"]).Args, pipe, output, CancellationToken.None);
@@ -81,7 +108,7 @@ public class UsageReadTests
         Assert.Contains("usage unavailable", output.ToString(), StringComparison.Ordinal);
     }
 
-    sealed class FakePipe(UsageReport shared, UsageReport localOnly, string? usageError = null) : IClientChannel
+    sealed class FakePipe(UsageReport shared, UsageReport localOnly, string? usageError = null, Exception? failure = null) : IClientChannel
     {
         readonly Channel<ChannelEvent> events = Channel.CreateUnbounded<ChannelEvent>();
         public List<(string Operation, object? Data)> Calls { get; } = [];
@@ -103,6 +130,7 @@ public class UsageReadTests
             }
             if (op == UsageProtocol.Get && usageError is not null)
             {
+                if (failure is not null) { throw failure; }
                 return Task.FromResult(JsonSerializer.SerializeToElement(new { ok = false, error = usageError }, ProtocolJson.Options));
             }
             if (op == UsageProtocol.Get)
