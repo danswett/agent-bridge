@@ -389,6 +389,13 @@ host sends:
    * `discovery.changed`, with `{ "discoveryHeld": {…} }` when the host's discovery becomes
      held or what holds it changes, and `{}` when it clears. Sent once per change.
 
+Every `Session` in the snapshot and live changes is scoped to the sending host. Its `machine`
+is that host's `hello.machine.id`; this is a read of live host state, not a second registry or
+cross-host aggregation. `owner`, `pr` and `finished` carry explicit evidence states: unknown
+owner is not no owner, unknown PR is not confirmed none, and unknown finished is neither false
+nor complete. `idle` is not work-finished, a merged PR does not end a session, and a
+closed-unmerged PR is not success.
+
 A session can change while the snapshot is being sent; its upsert then simply arrives
 again. When a channel closes, the client subscribes again on the new channel.
 
@@ -1798,6 +1805,9 @@ is for disposable evaluation, not production service enrollment.
 | Field | Type | Notes |
 |---|---|---|
 | `id` | string | The agent's own session id: the Copilot session-state folder name, or the Claude or Codex session id |
+| `machine` | string | This host's `hello.machine.id` |
+| `owner` | object | `{"state":"unknown"}` until known; otherwise `{"state":"known","principal":"…"}` |
+| `pr` | object | `{"state":"unknown"}`, confirmed `{"state":"none"}`, or `{"state":"known","number":…}` |
 | `agent` | `"copilot"` \| `"claude"` \| `"codex"` | Hosts send only these. A client reads anything else as `unknown` |
 | `title` | string? | The session's name if it has one (Copilot's `workspace.yaml` `name`). Otherwise the first user message, cut to 240 bytes |
 | `cwd` | string? | Working directory |
@@ -1807,8 +1817,9 @@ is for disposable evaluation, not production service enrollment.
 | `effort` | string? | The agent's own effort option id for the running session (as in `v1-launch.md` `efforts`), when the host knows it: at most 64 characters, plain text. Absent rather than empty or too long; older hosts send none, and older clients ignore it (#1327). Absent means unknown, never a guess; a host with nothing to report leaves it out, and a patch changing only `effort` is a normal `session.patch` |
 | `context` | string? | The agent's own context option id (as in `v1-launch.md` `contexts`, e.g. `1000000` or `long_context`), under the same rules as `effort`. Clients show it in Details after Model; a bare number is left out of the row, and a size such as `1M` reads `1M tokens` |
 | `status` | `"working"` \| `"waiting"` \| `"idle"` \| `"ending"` | `waiting` exactly when `question` is present, unless `ending`. `ending`: the host is ending the session (`session.stop`); it is removed once its process has gone, or shows its own status again if that fails. A client that does not know `ending` reads it as `idle` |
+| `finished` | object | `{"state":"unknown"}` until known; otherwise `{"state":"known","value":true\|false}` |
 | `statusSince` | time | When `status` last changed |
-| `startedAt` | time? | |
+| `startedAt` | time? | The start time of a positively bound host process. Stable across a host restart for the same live session; renewed on resume or replacement. Omitted when unproven. Never use `statusSince` or a `since` cursor as its substitute |
 | `updatedAt` | time | When something a client shows last changed. Events that change nothing visible (hook runs, usage records, model internals) do **not** move it, so they never cause an upsert |
 | `processId` | number? | The agent's process, when known |
 | `activity` | Activity | |
