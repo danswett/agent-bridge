@@ -25,7 +25,8 @@ static partial class SelfTest
         try
         {
             if (!await Until(() => window.RootElement.XamlRoot is not null && main.AllCards.Any(c => c.Id == "demo-approval"), TimeSpan.FromSeconds(10))) { throw new InvalidOperationException("The demo conversation window did not load."); }
-            await CheckHistoryScrollBudget(window, main, demo, Check, result);
+            CheckGrowthObserverDiagnostics(Check);
+            await CheckHistoryScrollBudget(window, main, demo, Check, result, observerDiagnostics: true);
         }
         catch (Exception e) { Check(false, $"history budget crashed: {e}"); }
         await Write(outFile, result, passed, failed, null);
@@ -33,7 +34,7 @@ static partial class SelfTest
     }
 
     static async Task CheckHistoryScrollBudget(MainWindow window, MainViewModel main, DemoHost demo,
-        Action<bool, string> check, Dictionary<string, object?> result)
+        Action<bool, string> check, Dictionary<string, object?> result, bool observerDiagnostics = false)
     {
         CheckHistoryHeaderGrowthDiagnostics(check);
         const string id = "demo-scroll-budget";
@@ -228,26 +229,77 @@ static partial class SelfTest
             }
             else { check(false, "has the newest historical code block for the focus-away growth check"); }
             Away(window, main);
-            await Choose(window, main, id, "Response");
+            var growthView = await Choose(window, main, id, "Response");
             var followed = await Until(() => scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
-            if (ById<Button>(away, "HeaderPin") is { } pin && ById<Button>(away, "Details") is { } details
-                && pin.Focus(FocusState.Programmatic) && ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(pin.XamlRoot), pin))
+            var pin = ById<Button>(away, "HeaderPin");
+            var details = ById<Button>(away, "Details");
+            var observer = new GrowthObserver(growthView, scroll, pin, details);
+            result["historyHeaderGrowthObserver"] = observer.Trace;
+            void GrowthChanged(object? sender, ScrollViewerViewChangedEventArgs e)
             {
-                Press(window.Handle, VirtualKey.Tab, foreground: false, extended: false);
-                var tabbed = await Until(() => ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(pin.XamlRoot), details), TimeSpan.FromSeconds(3));
-                var response = card.Response + "\n\n" + string.Join("\n\n", Enumerable.Repeat("An arriving paragraph while header focus moves.", 20));
-                await demo.PutAsync(fixture with { Activity = fixture.Activity with { Response = response } });
-                var arrived = await Until(() => card.Response == response, TimeSpan.FromSeconds(3));
-                await Task.Delay(350);
-                ReportHistoryHeaderGrowth(followed, tabbed, arrived, scroll.VerticalOffset, scroll.ScrollableHeight, check, AppLog.Write, result);
+                observer.Trace.Callbacks++;
+                double eventOffset, eventExtent;
+                bool intermediate;
+                try { eventOffset = scroll.VerticalOffset; eventExtent = scroll.ScrollableHeight; intermediate = e.IsIntermediate; }
+                catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException) { observer.Trace.Mark(GrowthGap.EventRead); return; }
+                observer.Trace.Event(eventOffset, eventExtent, intermediate);
             }
-            else { check(false, "focuses the header pin before Tab to Details"); }
+            GrowthSubscription? growthSubscription = null;
+            try
+            {
+                growthSubscription = new GrowthSubscription(() => scroll.ViewChanged += GrowthChanged, () => scroll.ViewChanged -= GrowthChanged);
+                observer.Trace.Xaml(growthSubscription.Attach, GrowthGap.Subscription);
+                observer.Observe(GrowthStage.BeforeFocus);
+                if (pin is not null && details is not null
+                    && pin.Focus(FocusState.Programmatic) && ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(pin.XamlRoot), pin))
+                {
+                    Press(window.Handle, VirtualKey.Tab, foreground: false, extended: false);
+                    var tabbed = await Until(() => ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(pin.XamlRoot), details), TimeSpan.FromSeconds(3));
+                    observer.Observe(GrowthStage.AfterTab);
+                    var response = card.Response + "\n\n" + string.Join("\n\n", Enumerable.Repeat("An arriving paragraph while header focus moves.", 20));
+                    await demo.PutAsync(fixture with { Activity = fixture.Activity with { Response = response } });
+                    var arrived = await Until(() => card.Response == response, TimeSpan.FromSeconds(3));
+                    observer.Observe(GrowthStage.AfterArrival);
+                    await Task.Delay(350);
+                    var offset = scroll.VerticalOffset;
+                    var extent = scroll.ScrollableHeight;
+                    observer.Observe(GrowthStage.Sample, offset, extent);
+                    ReportHistoryHeaderGrowth(followed, tabbed, arrived, offset, extent, check, AppLog.Write, result);
+                }
+                else { check(false, "focuses the header pin before Tab to Details"); }
+            }
+            finally
+            {
+                if (growthSubscription is not null) { observer.Trace.Xaml(growthSubscription.Dispose, GrowthGap.Subscription); }
+                if (observer.Trace.Snapshots.Count != 4) { observer.Trace.Mark(GrowthGap.Incomplete); }
+                var resultSerialized = true;
+                try { result["historyHeaderGrowthObserver"] = JsonSerializer.SerializeToElement(observer.Trace); }
+                catch (Exception e) when (e is NotSupportedException or JsonException or InvalidOperationException) { resultSerialized = false; result["historyHeaderGrowthObserver"] = "observer serialization unavailable"; }
+                string record;
+                try
+                {
+                    record = JsonSerializer.Serialize(new { snapshots = observer.Trace.Snapshots, gaps = observer.Trace.Gaps.ToString(), observer.Trace.Overflow, observer.Trace.Callbacks, resultSerialized });
+                }
+                catch (Exception e) when (e is NotSupportedException or JsonException or InvalidOperationException) { record = "serialization unavailable"; }
+                result["historyHeaderGrowthObserverLog"] = record;
+                try { AppLog.Write($"self-test: history header growth observer {record}"); }
+                catch (System.Security.SecurityException) { result["historyHeaderGrowthObserverLogWrite"] = "denied"; }
+            }
+            GrowthCleanupProbe? normalCleanup = null, exceptionalCleanup = null;
+            var callbacksAfterDispose = observer.Trace.Callbacks;
+            if (observerDiagnostics)
+            {
+                CheckGrowthObserverIntegration(growthView, scroll, pin, details, observer, result, check);
+                normalCleanup = GrowthCleanupProbe.Create(scroll, false, check);
+                exceptionalCleanup = GrowthCleanupProbe.Create(scroll, true, check);
+            }
             Away(window, main);
             await Choose(window, main, id, "Response");
             int WheelHistoryCount() => ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count ?? 0;
             int? wheelReceivedCount = null;
             var wheelMoving = false;
-            void WheelChanged(object? sender, ScrollViewerViewChangedEventArgs e) => wheelMoving = e.IsIntermediate;
+            var wheelEvents = 0;
+            void WheelChanged(object? sender, ScrollViewerViewChangedEventArgs e) { wheelMoving = e.IsIntermediate; if (observerDiagnostics) { wheelEvents++; } }
             var heardWheel = new PointerEventHandler((_, _) => wheelReceivedCount ??= WheelHistoryCount());
             scroll.ViewChanged += WheelChanged;
             scroll.AddHandler(UIElement.PointerWheelChangedEvent, heardWheel, true);
@@ -303,6 +355,15 @@ static partial class SelfTest
                     offset = snapshot.Offset, extent = snapshot.Extent, stable = snapshot.Stable,
                     target = wheelTarget,
                 };
+                if (observerDiagnostics)
+                {
+                    result["historyHeaderGrowthObserverCleanup"] = new { wheelEvents, normal = normalCleanup?.Calls, normalAtDetach = normalCleanup?.AtDetach, exceptional = exceptionalCleanup?.Calls, exceptionalAtDetach = exceptionalCleanup?.AtDetach, observer = observer.Trace.Callbacks, callbacksAfterDispose };
+                    if (wheelEvents > 0 && normalCleanup is not null && exceptionalCleanup is not null)
+                    {
+                        check(normalCleanup.Calls == normalCleanup.AtDetach && exceptionalCleanup.Calls == exceptionalCleanup.AtDetach && observer.Trace.Callbacks == callbacksAfterDispose,
+                            "real ViewChanged callbacks remain detached after normal and exceptional cleanup");
+                    }
+                }
                 if (!quarantined)
                 {
                     check(wheelReady && wheeled, wheelReady && wheeled ? tookMessage
@@ -384,6 +445,301 @@ static partial class SelfTest
                 && gated.Count == 1 && gated[0] == gates
                 && evidence.GetProperty("historyHeaderGrowth").GetProperty("atBottom").GetBoolean() == (status == "INFO"),
                 $"reports the growing-reply offset as {status} and preserves prerequisite gating");
+        }
+    }
+
+    static void CheckGrowthObserverDiagnostics(Action<bool, string> check)
+    {
+        var fixture = new GrowthReadFixture(false);
+        var gaps = GrowthGap.None;
+        var present = GrowthField(typeof(GrowthReadFixture), "value", typeof(bool));
+        var missing = GrowthField(typeof(GrowthReadFixture), "missing", typeof(bool));
+        var value = GrowthValue<bool>(fixture, present, ref gaps, GrowthGap.Pin);
+        var absent = GrowthValue<bool>(fixture, missing, ref gaps, GrowthGap.Follow);
+        check(fixture.Value == false && value == false && absent is null && gaps == GrowthGap.Follow,
+            "distinguishes a false observer field from a missing field");
+
+        var trace = new GrowthTrace();
+        for (var i = 0; i < 25; i++) { trace.Event(i, i, false); }
+        check(trace.Events.Count == 24 && trace.Overflow == 1
+            && trace.Events.Select(e => e.Sequence).SequenceEqual(Enumerable.Range(0, 24))
+            && trace.Gaps.HasFlag(GrowthGap.Overflow),
+            "bounds the observer event sequence and reports overflow");
+
+        var ordered = new GrowthTrace();
+        ordered.Snapshot(GrowthStage.BeforeFocus, 1, 2, false, 0, true, null, false, GrowthFocus.None);
+        ordered.Event(2, 3, true);
+        ordered.Snapshot(GrowthStage.AfterTab, 2, 3, false, 1, true, null, false, GrowthFocus.Details);
+        check(ordered.Snapshots[0].Sequence == 0 && ordered.Events[0].Sequence == 1 && ordered.Snapshots[1].Sequence == 2
+            && ordered.Snapshots[0].PinEnd == false && ordered.Snapshots[0].PinReleasesDelta == 0
+            && ordered.Events[0].ElapsedMs >= ordered.Snapshots[0].ElapsedMs
+            && ordered.Snapshots[1].ElapsedMs >= ordered.Events[0].ElapsedMs,
+            "orders observer snapshots and events while retaining false state");
+
+        foreach (var exceptional in new[] { false, true })
+        {
+            Action? source = null;
+            var received = 0;
+            Action handler = () => received++;
+            try
+            {
+                var subscription = new GrowthSubscription(() => source += handler, () => source -= handler);
+                try
+                {
+                    subscription.Attach();
+                    source?.Invoke();
+                    if (exceptional) { throw new InvalidOperationException("fixture"); }
+                }
+                finally { subscription.Dispose(); }
+            }
+            catch (InvalidOperationException) when (exceptional) { }
+            source?.Invoke();
+            check(received == 1, $"unsubscribes the growth observer after {(exceptional ? "an exception" : "normal completion")}");
+        }
+    }
+
+    static void CheckGrowthObserverIntegration(SessionView? view, ScrollViewer scroll, Button? pin, Button? details,
+        GrowthObserver? actual, Dictionary<string, object?> result, Action<bool, string> check)
+    {
+        var probe = new GrowthObserver(view, scroll, pin, details);
+        probe.Observe(GrowthStage.BeforeFocus);
+        var gaps = GrowthGap.None;
+        var expectedPin = GrowthValue<bool>(view, GrowthField(typeof(SessionView), "pinEnd", typeof(bool)), ref gaps, GrowthGap.Pin);
+        var expectedReleases = GrowthValue<int>(view, GrowthField(typeof(SessionView), "pinReleases", typeof(int)), ref gaps, GrowthGap.Releases);
+        var expectedFollow = GrowthRead(view, GrowthField(typeof(SessionView), "follow", typeof(ConversationFollow)), ref gaps, GrowthGap.Follow) as ConversationFollow;
+        var expectedAnchor = GrowthRead(view, GrowthField(typeof(SessionView), "anchoring", typeof(double?)), ref gaps, GrowthGap.Anchor, allowNull: true);
+        var expectedScrolling = GrowthValue<bool>(view, GrowthField(typeof(SessionView), "scrolling", typeof(bool)), ref gaps, GrowthGap.Scrolling);
+        if (expectedAnchor is double number && !double.IsFinite(number)) { expectedAnchor = null; gaps |= GrowthGap.Anchor; }
+        var shot = probe.Trace.Snapshots.SingleOrDefault();
+        const GrowthGap fields = GrowthGap.Pin | GrowthGap.Releases | GrowthGap.Follow | GrowthGap.Anchor | GrowthGap.Scrolling;
+        check(view is not null && ReferenceEquals(ConversationScroller(view), scroll) && shot is not null
+            && !probe.Trace.Gaps.HasFlag(GrowthGap.View) && (probe.Trace.Gaps & fields) == gaps
+            && shot.PinEnd == expectedPin && shot.PinReleasesDelta == (expectedReleases is null ? null : 0)
+            && shot.FollowAtEnd == expectedFollow?.AtEnd && Equals(shot.Anchoring, expectedAnchor) && shot.Scrolling == expectedScrolling,
+            "captures reflected fields from the selected SessionView and its scroller");
+
+        var missing = new GrowthObserver(view, scroll, pin, details, missingFields: true);
+        missing.Observe(GrowthStage.BeforeFocus);
+        var absent = missing.Trace.Snapshots.SingleOrDefault();
+        check((missing.Trace.Gaps & fields) == fields && absent is not null && absent.PinEnd is null
+            && absent.PinReleasesDelta is null && absent.FollowAtEnd is null && absent.Anchoring is null && absent.Scrolling is null,
+            "records unavailable observer members as gaps rather than false values");
+
+        var mismatch = new GrowthObserver(view, new ScrollViewer(), pin, details);
+        mismatch.Observe(GrowthStage.BeforeFocus);
+        check(mismatch.Trace.Gaps.HasFlag(GrowthGap.View) && mismatch.Trace.Gaps.HasFlag(GrowthGap.Pin)
+            && mismatch.Trace.Snapshots.SingleOrDefault() is { PinEnd: null },
+            "reports a mismatched SessionView and scroller");
+
+        for (var i = 0; i < 25; i++) { probe.Trace.Event(i, i, false); }
+        check(probe.Trace.Events.Count == 24 && probe.Trace.Overflow == 1 && probe.Trace.Gaps.HasFlag(GrowthGap.Overflow),
+            "reports overflow on an actual observer trace");
+        probe.Trace.Xaml(() => throw new System.Runtime.InteropServices.COMException("XAML fixture"), GrowthGap.Subscription);
+        check(probe.Trace.Gaps.HasFlag(GrowthGap.Subscription), "records expected XAML failures as gaps");
+        var cancelled = false;
+        try { probe.Trace.Xaml(() => throw new OperationCanceledException(), GrowthGap.Subscription); }
+        catch (OperationCanceledException) { cancelled = true; }
+        check(cancelled, "does not swallow observer cancellation");
+
+        var serialized = JsonSerializer.SerializeToElement(result, new JsonSerializerOptions { WriteIndented = true });
+        var logText = serialized.GetProperty("historyHeaderGrowthObserverLog").GetString();
+        using var logRecord = JsonDocument.Parse(logText ?? "{}");
+        check(actual is not null && actual.Trace.Snapshots.Select(s => s.Stage).SequenceEqual(
+                new[] { GrowthStage.BeforeFocus, GrowthStage.AfterTab, GrowthStage.AfterArrival, GrowthStage.Sample })
+            && serialized.TryGetProperty("historyHeaderGrowthObserver", out var evidence)
+            && evidence.GetProperty("Snapshots").GetArrayLength() == actual.Trace.Snapshots.Count
+            && evidence.GetProperty("Gaps").GetInt32() == (int)actual.Trace.Gaps
+            && evidence.GetProperty("Events").GetArrayLength() == actual.Trace.Events.Count
+            && logRecord.RootElement.GetProperty("snapshots").GetArrayLength() == actual.Trace.Snapshots.Count
+            && logRecord.RootElement.GetProperty("gaps").GetString() == actual.Trace.Gaps.ToString(),
+            "serializes the actual history header observer and compact log record");
+    }
+
+    sealed class GrowthCleanupProbe
+    {
+        public int Calls { get; private set; }
+        public int AtDetach { get; private set; }
+        void Changed(object? sender, ScrollViewerViewChangedEventArgs e) => Calls++;
+
+        public static GrowthCleanupProbe? Create(ScrollViewer scroll, bool exceptional, Action<bool, string> check)
+        {
+            var probe = new GrowthCleanupProbe();
+            var subscription = new GrowthSubscription(() => scroll.ViewChanged += probe.Changed, () => scroll.ViewChanged -= probe.Changed);
+            var attached = false;
+            try
+            {
+                try
+                {
+                    subscription.Attach();
+                    attached = subscription.Active;
+                    if (exceptional) { throw new GrowthProbeException(); }
+                }
+                finally { subscription.Dispose(); }
+            }
+            catch (GrowthProbeException) when (exceptional) { }
+            catch (Exception e) when (e is InvalidOperationException or System.Runtime.InteropServices.COMException)
+            {
+                check(false, $"real ViewChanged cleanup diagnostic failed: {e.GetType().Name}");
+                return null;
+            }
+            probe.AtDetach = probe.Calls;
+            check(attached && !subscription.Active, $"detaches real ViewChanged after {(exceptional ? "an exception" : "normal completion")}");
+            return probe;
+        }
+    }
+
+    sealed class GrowthProbeException : Exception { }
+
+    sealed class GrowthReadFixture
+    {
+        readonly bool value;
+        public GrowthReadFixture(bool value) => this.value = value;
+        public bool Value => value;
+    }
+
+    [Flags]
+    enum GrowthGap { None = 0, View = 1, Pin = 2, Releases = 4, Follow = 8, Anchor = 16, Scrolling = 32, Focus = 64, Subscription = 128, Overflow = 256, Incomplete = 512, EventRead = 1024, SnapshotRead = 4096 }
+    enum GrowthStage { BeforeFocus, AfterTab, AfterArrival, Sample }
+    enum GrowthFocus { Unknown, None, Pin, Details, Other }
+    sealed record GrowthSnapshot(int Sequence, double ElapsedMs, GrowthStage Stage, double Offset, double Extent,
+        bool? PinEnd, int? PinReleasesDelta, bool? FollowAtEnd, double? Anchoring, bool? Scrolling, GrowthFocus Focus);
+    sealed record GrowthEvent(int Sequence, double ElapsedMs, double Offset, double Extent, bool Intermediate);
+
+    sealed class GrowthTrace
+    {
+        readonly Stopwatch clock = Stopwatch.StartNew();
+        int sequence;
+        public List<GrowthSnapshot> Snapshots { get; } = [];
+        public List<GrowthEvent> Events { get; } = [];
+        public GrowthGap Gaps { get; private set; }
+        public int Overflow { get; private set; }
+        public int Callbacks { get; set; }
+        public void Mark(GrowthGap gap) => Gaps |= gap;
+        public void Xaml(Action action, GrowthGap gap)
+        {
+            try { action(); }
+            catch (Exception e) when (e is InvalidOperationException or System.Runtime.InteropServices.COMException) { Mark(gap); }
+        }
+        public void Snapshot(GrowthStage stage, double offset, double extent, bool? pin, int? releases,
+            bool? follow, double? anchor, bool? scrolling, GrowthFocus focus) =>
+            Snapshots.Add(new(sequence++, clock.Elapsed.TotalMilliseconds, stage, offset, extent, pin, releases, follow, anchor, scrolling, focus));
+        public void Event(double offset, double extent, bool intermediate)
+        {
+            if (!double.IsFinite(offset) || !double.IsFinite(extent)) { Mark(GrowthGap.EventRead); return; }
+            var next = sequence++;
+            if (Events.Count == 24) { Overflow++; Mark(GrowthGap.Overflow); return; }
+            Events.Add(new(next, clock.Elapsed.TotalMilliseconds, offset, extent, intermediate));
+        }
+    }
+
+    sealed class GrowthSubscription : IDisposable
+    {
+        readonly Action attach;
+        readonly Action detach;
+        public bool Active { get; private set; }
+        public GrowthSubscription(Action attach, Action detach) { this.attach = attach; this.detach = detach; }
+        public void Attach() { attach(); Active = true; }
+        public void Dispose() { detach(); Active = false; }
+    }
+
+    static System.Reflection.FieldInfo? GrowthField(Type type, string name, Type expected)
+    {
+        try
+        {
+            var field = type.GetField(name, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            return field?.FieldType == expected ? field : null;
+        }
+        catch (Exception e) when (e is System.Reflection.AmbiguousMatchException or System.Security.SecurityException or NotSupportedException) { return null; }
+    }
+
+    static object? GrowthRead(object? target, System.Reflection.FieldInfo? field, ref GrowthGap gaps, GrowthGap gap, bool allowNull = false)
+    {
+        if (target is null || field is null) { gaps |= gap; return null; }
+        try
+        {
+            var value = field.GetValue(target);
+            if (value is null && !allowNull) { gaps |= gap; }
+            return value;
+        }
+        catch (Exception e) when (e is ArgumentException or System.Reflection.TargetException or MemberAccessException or System.Security.SecurityException or NotSupportedException)
+        {
+            gaps |= gap;
+            return null;
+        }
+    }
+
+    static T? GrowthValue<T>(object? target, System.Reflection.FieldInfo? field, ref GrowthGap gaps, GrowthGap gap) where T : struct
+    {
+        var value = GrowthRead(target, field, ref gaps, gap);
+        if (value is T found) { return found; }
+        gaps |= gap;
+        return null;
+    }
+
+    sealed class GrowthObserver
+    {
+        readonly SessionView? view;
+        readonly ScrollViewer scroll;
+        readonly Button? pin;
+        readonly Button? details;
+        readonly System.Reflection.FieldInfo? pinField = GrowthField(typeof(SessionView), "pinEnd", typeof(bool));
+        readonly System.Reflection.FieldInfo? releasesField = GrowthField(typeof(SessionView), "pinReleases", typeof(int));
+        readonly System.Reflection.FieldInfo? followField = GrowthField(typeof(SessionView), "follow", typeof(ConversationFollow));
+        readonly System.Reflection.FieldInfo? anchorField = GrowthField(typeof(SessionView), "anchoring", typeof(double?));
+        readonly System.Reflection.FieldInfo? scrollingField = GrowthField(typeof(SessionView), "scrolling", typeof(bool));
+        int? baseline;
+        public GrowthTrace Trace { get; } = new();
+
+        public GrowthObserver(SessionView? view, ScrollViewer scroll, Button? pin, Button? details, bool missingFields = false)
+        {
+            this.scroll = scroll;
+            this.pin = pin;
+            this.details = details;
+            if (missingFields) { pinField = releasesField = followField = anchorField = scrollingField = null; }
+            try
+            {
+                if (view is not null && ReferenceEquals(ConversationScroller(view), scroll)) { this.view = view; }
+                else { Trace.Mark(GrowthGap.View); }
+            }
+            catch (Exception e) when (e is InvalidOperationException or System.Runtime.InteropServices.COMException) { Trace.Mark(GrowthGap.View); }
+        }
+
+        public void Observe(GrowthStage stage)
+        {
+            double offset, extent;
+            try { offset = scroll.VerticalOffset; extent = scroll.ScrollableHeight; }
+            catch (Exception e) when (e is InvalidOperationException or System.Runtime.InteropServices.COMException) { Trace.Mark(GrowthGap.SnapshotRead); return; }
+            Snapshot(stage, offset, extent);
+        }
+        public void Observe(GrowthStage stage, double offset, double extent) => Snapshot(stage, offset, extent);
+
+        public void Snapshot(GrowthStage stage, double offset, double extent)
+        {
+            if (!double.IsFinite(offset) || !double.IsFinite(extent)) { Trace.Mark(GrowthGap.SnapshotRead); return; }
+            var gaps = GrowthGap.None;
+            var pinned = GrowthValue<bool>(view, pinField, ref gaps, GrowthGap.Pin);
+            var releases = GrowthValue<int>(view, releasesField, ref gaps, GrowthGap.Releases);
+            if (stage == GrowthStage.BeforeFocus) { baseline = releases; }
+            var follow = GrowthRead(view, followField, ref gaps, GrowthGap.Follow) as ConversationFollow;
+            var anchor = GrowthRead(view, anchorField, ref gaps, GrowthGap.Anchor, allowNull: true);
+            if (anchor is not null && anchor is not double) { gaps |= GrowthGap.Anchor; }
+            if (anchor is double number && !double.IsFinite(number)) { gaps |= GrowthGap.Anchor; anchor = null; }
+            var scrolling = GrowthValue<bool>(view, scrollingField, ref gaps, GrowthGap.Scrolling);
+            var focus = GrowthFocus.Unknown;
+            try
+            {
+                if (scroll.XamlRoot is { } root)
+                {
+                    var focused = Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(root);
+                    focus = focused is null ? GrowthFocus.None : ReferenceEquals(focused, pin) ? GrowthFocus.Pin
+                        : ReferenceEquals(focused, details) ? GrowthFocus.Details : GrowthFocus.Other;
+                }
+                else { gaps |= GrowthGap.Focus; }
+            }
+            catch (Exception e) when (e is InvalidOperationException or ArgumentException or System.Runtime.InteropServices.COMException) { gaps |= GrowthGap.Focus; }
+            Trace.Mark(gaps);
+            Trace.Snapshot(stage, offset, extent, pinned, releases is { } count && baseline is { } start ? count - start : null,
+                follow?.AtEnd, anchor as double?, scrolling, focus);
         }
     }
 
