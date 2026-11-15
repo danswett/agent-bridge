@@ -10,7 +10,8 @@ public static class Words
 
     internal static string ReadOnlyReason(string reason) =>
         reason.Contains("delivery.readOnly", StringComparison.OrdinalIgnoreCase) ? "view-only mode is turned on in this bridge's settings"
-        : reason.Contains("agent-ha-bridge", StringComparison.OrdinalIgnoreCase) ? "the older bridge is running for this user"
+        : reason.StartsWith("agent-ha-bridge is running for this user", StringComparison.OrdinalIgnoreCase) ? "the older bridge is running for this user"
+        : reason.Equals("whether agent-ha-bridge is running for this user could not be checked; answer at the machine", StringComparison.OrdinalIgnoreCase) ? "this bridge couldn't check whether the older bridge is running"
         : reason;
 
     public static string Ago(DateTimeOffset at, DateTimeOffset now)
