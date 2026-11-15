@@ -57,6 +57,16 @@ codeql:
 # left out: the merge rule's own, which are running while it judges.
 ignore_workflows: [Merge rule]
 
+# Temporary owner-approved exception (#2564/#2565); exact failures only, never publishing.
+# OFF by default; only the owner enables the repository variable. Expires Nov 20, 00:00 PT.
+arm64_waiver:
+  jobs:
+    - app (win-arm64)
+    - app-installer (win-arm64)
+    - product (windows-11-arm)
+  until: 2026-11-20T08:00:00Z
+  switch: ARM64_WAIVER
+
 # Main must be green. GitHub's auto-merge doesn't pause while main's CI is red, and would keep
 # landing pull requests on a broken main, each making the breakage harder to untangle. So while
 # any named job below isn't completed successfully at its latest attempt in main's latest push

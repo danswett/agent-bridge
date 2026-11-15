@@ -24,6 +24,7 @@ public interface ISessionLauncher
         Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "This launcher cannot write durable launch evidence."));
 
     Task<LaunchResult>? ReplayAsync(LaunchRequest request, string principal) => null;
+    Task<LaunchResult>? ReplayAuditedAsync(LaunchRequest request, string peer) => null;
 
     Task<LaunchResult> LaunchVerificationAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) =>
         Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "This launcher cannot guarantee standard permissions for verification."));
@@ -717,15 +718,20 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     sealed record LaunchOwner(string Principal, string Hash);
 
+    public static string RequestBinding(LaunchRequest request) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(
+            request with { Request = Guid.Parse(request.Request).ToString("D") }, ProtocolJson.Options)));
+
     static LaunchOwner? Owner(LaunchRequest request, string peer) =>
-        peer.StartsWith("agent:", StringComparison.Ordinal)
-            ? new(peer, Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
-                System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(
-                    request with { Request = Guid.Parse(request.Request).ToString("D") }, ProtocolJson.Options)))) : null;
+        peer.StartsWith("agent:", StringComparison.Ordinal) ? new(peer, RequestBinding(request)) : null;
 
     public Task<LaunchResult>? ReplayAsync(LaunchRequest request, string principal) =>
         Guid.TryParseExact(request.Request, "D", out var key) && Owner(request, principal) is { } owner
             && requests.Read(key, owner) is { } remembered ? AgentResultAsync(remembered) : null;
+
+    public Task<LaunchResult>? ReplayAuditedAsync(LaunchRequest request, string peer) =>
+        Guid.TryParseExact(request.Request, "D", out var key)
+            ? requests.Read(key, new LaunchOwner(peer, RequestBinding(request))) : null;
 
     static async Task<LaunchResult> AgentResultAsync(Task<LaunchResult> remembered)
     {
@@ -764,7 +770,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         return requests.Once(key, () => request.FleetName is null ? RunAsync(request, key, peer, prepare: prepare)
             : NamedLaunch is { } policy ? policy(request, peer, () => RunAsync(request, key, peer, prepare: prepare))
             : Task.FromResult(Refused("fleetName is not supported by this host")), result =>
-            Settled(request, result, $"launch {Short(key)}"), owner: Owner(request, peer),
+            Settled(request, result, $"launch {Short(key)}"),
+            owner: prepare is null ? Owner(request, peer) : new LaunchOwner(peer, RequestBinding(request)),
             foreign: () => Task.FromResult(Refused("request is not a repeat owned by this caller")));
     }
 
