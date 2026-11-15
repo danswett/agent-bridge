@@ -431,6 +431,7 @@ public sealed class TrustTests : IAsyncLifetime
     [InlineData("agent-ha-bridge is running for this user", false, "the older bridge is running for this user")]
     [InlineData("agent-ha-bridge is running for this user", true, "the older bridge is running for this user")]
     [InlineData("this is a read-only comparison host (delivery.readOnly in its config); answer at the machine", false, "view-only mode is turned on in this bridge's settings")]
+    [InlineData("whether agent-ha-bridge is running for this user could not be checked; answer at the machine", false, "this bridge couldn't check whether the older bridge is running")]
     public async Task The_banner_explains_both_read_only_causes_and_where_approvals_can_still_be_given(string reason, bool legacy, string plain)
     {
         localHost.Status = FakeHost.StatusOf(agentHaBridge: legacy ? reason : null) with { ReadOnly = legacy ? null : reason };
@@ -450,6 +451,7 @@ public sealed class TrustTests : IAsyncLifetime
     [Theory]
     [InlineData("agent-ha-bridge is running for this user", "the older bridge is running for this user")]
     [InlineData("this is a read-only comparison host (delivery.readOnly in its config); answer at the machine", "view-only mode is turned on in this bridge's settings")]
+    [InlineData("whether agent-ha-bridge is running for this user could not be checked; answer at the machine", "this bridge couldn't check whether the older bridge is running")]
     public async Task A_machine_that_takes_nothing_from_devices_now_is_listed_only_to_show_its_question_read_only(string reason, string plain)
     {
         remoteReadOnly = reason;
