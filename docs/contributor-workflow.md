@@ -19,8 +19,10 @@ Outside contributors (pull requests only, no fleet access) start with
 | [#170 root/index](https://github.com/danswett/agent-bridge/issues/170), after verified cutover | Current roles, operating rules and links; not a repeated whole-project inventory or per-PR queue |
 | Repository docs and approved designs | Durable architecture, roadmap and decisions; not a minute-by-minute activity log |
 
-[Product, #696](https://github.com/danswett/agent-bridge/issues/696), owns the order
-of work; SG Chief of Staff records its priority decisions on canonical issues and
+[Product, #696](https://github.com/danswett/agent-bridge/issues/696), is the interim
+home of the ONE ordered backlog in agent-bridge, managed and reordered by Product.
+Reconcile Project 1 to that order; Fleet #251 is a pointer, not a second backlog.
+Docs-only PRs use Quality's fast lane. SG Chief of Staff records priority decisions on canonical issues and
 owns issue triage, deduplication, routing and escalation.
 Keep cross-track dependencies on their canonical issues. Put readiness and
 merge/rebase requests on the PR for Quality. Public issue and PR updates work
@@ -77,11 +79,13 @@ receipts are the gate. This page does not
 maintain a second merge checklist. A ready packet is not a merge grant.
 
 Every head change needs fresh head-specific evidence under those requirements;
-neither old CI nor an old receipt is inherited. Only an **independent**
-review may use a bounded delta: the previously reviewed commit must be a proved
-ancestor of the new head, and the independent reviewer must explicitly clear that
-delta at the new head. A rebase without that ancestry needs a full independent
-review. Safety, trust, security and required checks remain gates.
+neither old CI nor a commit status is automatically inherited. Quality may bind
+eligible CI/review evidence under the [guarded rules](../quality/README.md#independent-review-depth),
+recording old/new heads, ancestry, file blobs and input/path comparisons.
+Independent delta reads require a proved reviewed ancestor and explicit new-head
+clearance. Unpublished work may rebase; published heads use plain children/main merges,
+never rebase or force-push. Holds, trust, safety and required checks remain binding.
+Quality alone opens PRs, edits bodies, gates and arms; authors submit packets.
 Quality's [operating receipt](https://github.com/danswett/agent-bridge/issues/170#issuecomment-6617409924)
 allows ready PRs while main CI is pending; AGENTS.md defines the main-red gate and
 the coordinator-controlled fix-forward exception.
@@ -197,8 +201,8 @@ links coordinator check-ins and blocker acknowledgments to the existing
 [private Project](https://github.com/users/danswett/projects/1).
 Shiproom owns coordination, Project health, deadlines and escalation only.
 The then-current triage role retained issue triage, deduplication and the single
-collector; implementation, design and Quality retain their existing authorities. Authors may still arm
-their own exact-head auto-merge under AGENTS.md. Shiproom is not a merge grant,
+collector; implementation, design and Quality retain their existing authorities.
+Only Quality arms exact-head auto-merge under AGENTS.md. Shiproom is not a merge grant,
 a second implementation coordinator or completion of the #170 index cutover.
 
 Active agent coordinators explicitly acknowledge the protocol and post a first

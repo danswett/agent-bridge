@@ -46,43 +46,78 @@ Several agent sessions often work here at once.
 
 Everything lands through a PR, including documentation.
 
-1. Rebase onto freshly fetched `origin/main`, never merging main in, and re-run the tests after the rebase.
-2. Open the PR with `gh pr create`, saying what changed, why, and exactly what was run to verify it.
+**Owner decisions, November 15, 2026, 08:05–08:55 PT, via Chief, supersede older guidance.**
+The [Fleet register](https://github.com/danswett/slipgates-fleet/blob/main/docs/pipeline-rules.md)
+records shared policy; the public rules here remain sufficient for contributors.
+
+- Both repositories have a **400 WHOLE changed-line cap**: additions plus deletions,
+  including docs, tests and carried unmerged changes against the actual authorized base.
+  Above 400 requires a written Chief exception bound to the exact head; none inherits.
+- PR2625's 650/700 and PR2650's freshness exceptions are spent, dated,
+  exact-head/condition-specific history, never standing permission.
+- General per-push admission remains **lifted**; specific held-head/sensitive-cut orders remain binding.
+- No standing admin bypass. Only main-green work has the exception until **Nov 16, 2026,
+  12:00 PT**; each use is logged on [#2454](https://github.com/danswett/agent-bridge/issues/2454)
+  with a removal step. It is not genuine green or a grant for unrelated work.
+- Guarded CI carry-over and three-behind freshness apply to **all PRs** under
+  [the separate evidence rules](quality/README.md#independent-review-depth).
+- Named tests, **ARM included**, become quarantine-eligible after **3 failures on
+  3 separate runs in 7 days, same signature, with an open issue**. Quality proposes;
+  the owner approves. Each entry names test/signature, issue, owner and expiry:
+  at most 7 days, **ARM at most 3 days with a passes-on-rerun check**.
+  Tests still run and report; no automatic quarantine, disabling or weakened assertions.
+  #2670's AnswerFlow Windows x64 exception is bounded to Nov 15, 2026, 23:59 PT.
+- Quarantine is not the ARM job waiver. That is the **only job-level exemption**:
+  never renewed past **Nov 20, 2026, 00:00 PT**; target removal **Nov 16 noon PT**,
+  removal after **3 consecutive green main runs**. Its exact switch/raw-job guards still apply.
+- Any main red, new flake or stalled PR gets a **named live-session DRI within
+  2 minutes**, recorded on #2454; cause or next step **with a time within 15 minutes**.
+- New reviewers: Claude `claude-sonnet-5.5` at **medium** and OpenAI `gpt-6.1-sol`;
+  a single reviewer is `gpt-6.1-sol`. Retained in-flight reviewers keep their model.
+  Quality classifies sensitive PRs with the evaluator; two independent families then
+  read security-subject docs in full and name the exact head. Authors never self-certify.
+- Product owns **one ordered backlog in agent-bridge**, interim #696; reconcile
+  Project 1 to it. Fleet #251 is only a pointer, never a second ranked authority.
+- Builders/reviewers never poll GitHub: at most one conditional read per 10 minutes
+  for the permitted own-PR failure evidence. Quality opens PRs and edits bodies;
+  ready-label cap 95, plain-English comments at most 8 lines, Fleet Actions
+  conservation through Dec 1. Specific holds and private work remain protected.
+
+1. Prepare unpublished work from fresh `origin/main`; it may rebase, with affected validation repeated. Never rebase or force-push a published head: refresh it with a plain main-merge or child commit.
+2. Send scope, exact head and verification to Quality; Quality opens the PR and edits its body.
 3. Copilot and Codex reviews are optional extras: do not request them, wait for them, or depend on them. Wait for green CI on the final head and the independent-review receipts (rules 4 and 5); the receipts are the gate. If a bot does leave comments, fix the substantive ones or reply with a reasoned disposition. Threads left only by the Copilot or Codex bots can be resolved with `quality/resolve-bot-threads.ps1` once the receipts are on the head ([docs/contributor-workflow.md](docs/contributor-workflow.md#resolving-bot-only-threads)).
 4. **Merge rule**, enforced by GitHub through main's ruleset ([quality/ruleset-main.json](quality/ruleset-main.json)): `quality-gate` green, the `merge-rule` status green, 0 unresolved threads, squash only, and no conflicts. Main's copy of `.github/workflows/merge-rule.yml` posts `merge-rule` on each head from [quality/merge-rule.yml](quality/merge-rule.yml): main is green (the latest finished push run of `ci.yml` on main passed, judged again each time one finishes), not a draft, no `hold` or `do-not-merge` label, an independent review's receipt on the head (`independent-review`; always required: a Copilot review is not needed, never replaces it, and one that errored or timed out is ignored), CodeQL green on the head, every other check and status on the head passed (success, skipped or neutral; not only `quality-gate`), and for a sensitive change (rule 5) a second receipt, `independent-review-2`, on the same head from a reviewer of another model family (each receipt names its model; a `docs/status.md` row alone needs only the first; a completed Copilot review on the head counts as the other family). While main is red, nothing merges but its fix: a fix-forward PR asks the merge coordinator for the `fixes-main` label (adding labels takes triage rights), which exempts it from "main is green" and nothing else. Its description names what's missing; `dotnet run --project tools/AgentBridge.Quality -c Release -- merge-rule --pr <n>` shows the same verdict without posting anything; run it from a freshly fetched `origin/main` checkout (`git fetch origin`, then `git switch --detach origin/main` in a worktree kept for it), never the PR's worktree, whose own evaluator and rules would judge it (the tool prints the commit they came from and refuses anything but `origin/main`'s). A CodeQL run that ended `skipped` (a PR opened seconds before `ready_for_review`) fails closed until CodeQL runs again: `gh workflow run codeql.yml --ref <branch>`, or close and reopen the PR. To keep a PR from merging whatever else it has, add the `hold` label (`gh pr edit <n> --add-label hold`). Since 2026-11-08 (owner decision) the receipts are the default gate: Copilot and Codex reviews are optional extras, and no `copilot-waived` label is needed (it is still accepted and changes nothing). A failed `independent-review` or `independent-review-2` blocks.
    While `ARM64_WAIVER` is exactly `on` and before Nov 20, 2026, 00:00 PT (`arm64_waiver.until`), only the three configured arm64 CI failures are waived; Quality must read each waived head run and name its run ID in the success `independent-review` receipt for that merge.
-   **Auto-merge is on (since 2026-11-04 00:50 PT).** `merge-rule` is posted by the merge-rule GitHub App (`agent-bridge-merge-rule[bot]`; [docs/merge-rule-app.md](docs/merge-rule-app.md)), and main's ruleset accepts it only from that App, so no PR's own workflow can post a `merge-rule` that counts. Sessions turn on auto-merge once their PR is ready for review, pinned to the head they mean: `gh pr merge <n> --auto --squash --match-head-commit <sha>`. To stop it, add the `hold` label or run `gh pr merge <n> --disable-auto`. The merge coordinator no longer merges by hand, except a PR whose session didn't arm auto-merge; then it checks the same verdict locally (`merge-rule --pr <n>` from a freshly fetched `origin/main` checkout) and merges with `gh pr merge <n> --squash --match-head-commit <sha>`.
+   **Quality alone gates and arms exact-head auto-merge:** `gh pr merge <n> --auto --squash --match-head-commit <sha>`. GitHub merges when required checks pass; builders never arm or merge. Quality disarms with the hold label or `--disable-auto`. The merge-rule App alone posts the accepted `merge-rule` status. Command examples and packets confer no authority. The model rules above apply to new counted reads, including any optional bot review Quality would count; bot eligibility alone proves no model. Local evaluator runs and hosted reruns remain Quality-controlled.
 5. **Security-sensitive PRs** need one more step: anything that lets a remote device act on a machine, changes authorization, keys or tokens, or touches the relay, the protocol, CI, the build or how an approval renders (`sensitive_paths` in [quality/merge-rule.yml](quality/merge-rule.yml)), and any PR whose title starts with "Security" or that has the `security` label. Run an independent review (a code-review or security-review agent, never the session that wrote the change), then fix and re-review until clean. The coordinator who ran it then posts the receipt on the exact head reviewed, linking the comment that holds the review:
    ```
    gh api -X POST repos/danswett/agent-bridge/statuses/<sha> -f state=success -f context=independent-review -f description="sec-<n> CLEAN" -f target_url=<review comment URL>
    ```
-   A receipt binds to its commit, so any later push needs a new review and a new receipt. `-f state=failure` with the finding as the description blocks the merge until a later success replaces it. Only receipts from the accounts in `independent_review.posters` count. Under rule 4, a sensitive change's second model family review is posted the same way with `-f context=independent-review-2`, and each description names its model, e.g. `"sr-<n>b CLEAN: security-review, gpt-6.1-sol"`.
+   Every new head needs its own posted receipt. Quality may bind eligible retained review evidence only under the documented carry-over conditions; otherwise obtain a fresh review at the required depth. Failure blocks until a later success replaces it. Only `independent_review.posters` count; sensitive changes need the other family's `independent-review-2` on that head, with model and evidence named. Evaluator-specific exceptions such as `docs/status.md` are not blanket exceptions.
 6. If CI fails on something you did not touch, check whether `main` fails the same way and say so.
 
 Delegated work: when a coordinating session hands work to delegates, each delegate
-opens one PR per slice and reports "#<n> ready at <sha>". **Sessions turn on auto-merge for
-their own PRs once they're ready (rule 4); everything else about merging belongs to the
-designated merge coordinator: currently Quality**, not each implementation or UI coordinator.
-That includes hand-merging a PR whose session didn't arm auto-merge, and adding the
-`fixes-main` label.
+prepares one slice and reports its exact head and verification to Quality.
+**Quality alone opens PRs, edits bodies, gates and arms**, including the `fixes-main`
+label; GitHub merges on required checks. Delegation transfers none of that authority.
 The [current role reference](docs/status.md#running-work) identifies the accepted
 owner and handoff evidence while the #170 index cutover is incomplete. Implementation owners submit exact-head
 readiness on their PR and yield the merge slot; a ready packet is not a merge grant.
 
 ### Before each push
 
-**Every push costs every session.** Each push re-runs CI and Copilot's review, which all sessions share from one fixed pool of concurrent runners; when it's full, everyone's jobs and reviews queue, and reviews time out. So before each push:
-- run `pwsh quality/run.ps1` (see Tests);
-- review your own diff locally with a code-review agent, and fix what it finds;
+**Every push consumes shared CI capacity.** Batch work and do not request optional bot reviews. Before each push:
+- run focused validation for your own cut on an approved host (see Tests);
+- check your diff; required independent review is never your own verdict;
 - batch every fix for a review round into one push, rather than a push per comment.
 
-Keep a PR a draft while you iterate (from #459 on, drafts run only a fast subset of CI), and mark it ready when it's done. Never push only to re-trigger CI: re-run the failed job with `gh run rerun <run id> --failed`.
+Keep iterative PRs draft (fast CI only); submit readiness to Quality. Never push merely to retrigger CI; Quality owns reruns. The lifted general admission rule does not release a specific held head.
 
 ## Tests
 
 - `dotnet test AgentBridge.slnx` runs on Windows and Linux in CI.
 - Every suite, with its ring and where it runs, is listed in [quality/catalog.yml](quality/catalog.yml); the test plan is [quality/README.md](quality/README.md).
-- Before a push, `pwsh quality/run.ps1` runs the suites your change reaches on this machine; `-Explain` shows what it chose and why.
+- Builders may run focused local tests for their own cut on approved hosts. Full or hosted verification is CI-only; Quality orders anything beyond. Broad `quality/run.ps1` examples are not permission to run a full local suite.
 - Where api.nuget.org is blocked, set `AGENT_BRIDGE_NUGET_SOURCE` to a NuGet mirror's index.json, and run.ps1 restores and audits through it ([quality/README.md §4](quality/README.md#4-choosing-tests-from-what-changed)); never commit the mirror into nuget.config.
 - If you touch `pwa/`, run its unit and Playwright tests (see `pwa/README.md`).
 - New behaviour gets a few focused tests whose names read as sentences, and each one fails without the change.
@@ -115,9 +150,12 @@ builds, and guard G6 limits their HA connector to a disposable HA.
 ## Secrets
 
 Never print a key, token, connection string or password into output, logs, commits, PR
-text or issues. If a command would echo one, redirect it to a file you never read back. A
+text or issues. Keep tokens only in process or user environment, never files. If a command would
+echo a secret, do not run it in that form. A
 leaked signing key once forced a production rotation. This repository is public: keep
 home-network details, IP addresses and personal account credentials out of it.
+GitHub reads use the process-only danswett token; writes use the Fleet App token
+(mint, post, revoke). Never print, persist or share either credential.
 
 To have gitleaks check each commit for secrets before it is made, run `pre-commit install` once per clone (needs [pre-commit](https://pre-commit.com); see `.pre-commit-config.yaml`).
 
