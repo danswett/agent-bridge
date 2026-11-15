@@ -124,8 +124,14 @@ effect leaves uncertain evidence and blocks the gate, even if a client saw succe
 Slice A (#2521) wires app/host-CLI launches through the local handler. Without a
 trusted run context, `run` is the empty UUID: `missing-run-context`, never credit.
 Intent target is the request UUID; operation/incarnation use the reserved launch
-UUID; terminal target is the registered session UUID. Restart replay mapping and
-relay/HA trusted ingress remain #2587.
+UUID; terminal target is the registered session UUID. Slice B (#2587) restores
+fresh-launch request bindings from these same records: confirmed readbacks reuse
+the session, unresolved intents never start another process, and conflicts refuse.
+The opaque launch binding reuses native launch-request hashing, never answer hashing.
+Program's authorized relay entry and HaRunning assign relay/person-client and
+legacy-ha/ha-component respectively; the pipe stays local. Only an explicitly
+assigned control-writer run context supplies a run; there is no automatic provider.
+The run-control writer remains a later slice; this adds only its nullable context seam.
 
 Slice 3 (#2522) audits app/host-CLI answers on the local handler: empty run means
 zero qualifying credit. A flushed intent follows native-question validation and

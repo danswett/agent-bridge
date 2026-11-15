@@ -7,7 +7,8 @@
 // What comes out keeps the wire's own names, so the shared vectors (docs/protocol/vectors/history.json)
 // hold against it as they are, with the fields a view needs but the wire leaves out filled in
 // (false, 0, null) rather than absent.
-import { Ops, Capabilities, readQuestion, readSubagentKind, readSubagentOutcome, readTool, readUserMessageFrom } from './protocol.js';
+import { Ops, Capabilities, NO_TIME, readQuestion, readSubagentKind, readSubagentOutcome, readTool, readTurnHeader } from './protocol.js';
+export { NO_TIME, readPrompt } from './protocol.js';
 
 export const HISTORY = Object.freeze({
   op: Ops.sessionHistory,
@@ -22,9 +23,6 @@ export const HISTORY = Object.freeze({
   kept: 500,
   maxCursorBytes: 256,
 });
-
-// The time a required one that is missing or unreadable reads as (Malformed records rule 1).
-export const NO_TIME = '0001-01-01T00:00:00.000Z';
 
 // History and a local receipt can name the same question. Deduplicate before limiting,
 // using the stored question's time when available; equal times keep their source order.
@@ -61,13 +59,6 @@ export function checkHistoryRequest(data) {
     if (bytes < 1 || bytes > HISTORY.maxCursorBytes) { return `a cursor is 1 to ${HISTORY.maxCursorBytes} bytes`; }
   }
   return null;
-}
-
-// What started a turn, or null when the record is refused: a sender that is not text (strict, security).
-export function readPrompt(raw) {
-  const p = obj(raw);
-  if (!p || (present(p.from) && typeof p.from !== 'string')) { return null; }
-  return { text: str(p.text) ?? '', truncated: p.truncated === true, from: readUserMessageFrom(p.from), label: str(p.label) };
 }
 
 // One of the main agent's own delegates starting or reporting back, or null when it names no
@@ -116,23 +107,8 @@ export function readPart(raw) {
 // A prompt and everything until the next prompt, or null when it has no id as text or its prompt's
 // sender is not text: left out of its page, the turns around it kept (rule 2).
 export function readTurn(raw) {
-  const t = obj(raw);
-  if (!t || typeof t.id !== 'string' || t.id === '') { return null; }
-  let prompt = null;
-  if (present(t.prompt)) {
-    // Strict (security): a prompt that is not a record refuses the turn, as one whose sender is not text does.
-    prompt = readPrompt(t.prompt);
-    if (prompt === null) { return null; }
-  }
-  return {
-    id: t.id,
-    at: str(t.at) ?? NO_TIME,
-    prompt,
-    parts: Array.isArray(t.parts) ? t.parts.map(readPart).filter(Boolean) : [],
-    partsMore: Number.isSafeInteger(t.partsMore) && t.partsMore > 0 ? t.partsMore : 0,
-    truncated: t.truncated === true,
-    unreadable: t.unreadable === true,
-  };
+  const t = readTurnHeader(raw);
+  return t ? { ...t, parts: Array.isArray(raw.parts) ? raw.parts.map(readPart).filter(Boolean) : [] } : null;
 }
 
 // Where the history a host serves begins: { at } the session's first record, { limited } the host

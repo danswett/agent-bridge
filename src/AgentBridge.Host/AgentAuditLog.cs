@@ -12,8 +12,9 @@ namespace AgentBridge.Host;
 
 // One agent action or person host-CLI management action (design/agent-principals.md §5.6). Direction is "out"
 // (an agent here acted on another machine), "in" (an agent elsewhere acted here) or "local".
-// Principal is "agent:<machine>/<session>" for agent rows, never the owner, or "person:local"
-// (direction "local") for person host-CLI management. Reason says why in words and
+// Principal is "agent:<machine>/<session>" for agent rows, never the owner; person ingress uses
+// "person:local" or "person:<device id>", and the private connector uses "ha-component:local".
+// Reason says why in words and
 // holds no prompt text, path or token: callers pass a short reason, and the log cuts it at
 // MaxReason as well.
 public sealed record AgentAuditEntry(string Direction, string Request, string Principal, string[] Chain, string Action,
@@ -49,6 +50,13 @@ public sealed class AgentAuditLog
     static readonly string Genesis = new('0', 64);
     readonly object gate = new();
     readonly string profile;
+    internal string Profile => profile;
+    GateRunContext? controlWriterRun;
+    internal GateRunContext? ControlWriterRun
+    {
+        get => Volatile.Read(ref controlWriterRun);
+        set => Volatile.Write(ref controlWriterRun, value);
+    }
     readonly TimeProvider time;
     readonly Action<string> log;
     readonly long maxBytes;
@@ -83,6 +91,12 @@ public sealed class AgentAuditLog
                     metadata = metadata with { Sequence = checked(new[] { LastGateSequence(folder, false), LastGateSequence(folder, true),
                         ReadHead(folder, false)?.Sequence ?? 0, ReadHead(folder, true)?.Sequence ?? 0 }.Max() + 1) };
                     if (!metadata.Valid(entry.Action, entry.Target, entry.Outcome)) { throw new IOException("invalid gate audit metadata"); }
+                    if (entry.Action == "session.launch" && metadata is { Phase: "intent", LaunchBinding: not null })
+                    {
+                        var prior = GateAuditProjection.Load(profile);
+                        if (!prior.Complete || prior.Rows.Any(r => r.Action == entry.Action && r.Request == entry.Request))
+                        { throw new IOException("the launch request is already audited or its evidence is incomplete"); }
+                    }
                     line = line with { Gate = metadata, Reason = metadata.ReasonCode, DataSha256 = null, TextLength = null };
                 }
                 var launch = entry.Action == "session.launch";

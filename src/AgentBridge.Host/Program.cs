@@ -24,6 +24,8 @@ using AgentBridge.Transport;
 //
 //   agent-bridge-host sessions [--compact]      one scan, the SessionList as JSON
 //   agent-bridge-host get <id>                  one session with its tool history
+//   agent-bridge-host approve <session> <question> <request-uuid> <approve|deny> [--profile <name>]
+//                                               answer one ordinary person approval
 //   agent-bridge-host stop <id> [--confirm <token>] [--profile <name>]
 //                                               one local person stop press, with host-owned confirmation
 //   agent-bridge-host watch [--json]            a line per upsert and removal, until Ctrl+C
@@ -103,6 +105,11 @@ var isolatedRead = Flag("--read-root");
 if (command == "audit")
 {
     return AuditCommands.Run(arguments, Identity.DefaultRoot, Console.Out, Console.Error);
+}
+
+if (command == "approve")
+{
+    return await ApproveCommands.RunAsync(args, Identity.DefaultRoot, () => Refused("approving a question"), Console.Out, Console.Error);
 }
 
 // Inventory must return before even intake or device/account identity files are opened.
@@ -381,6 +388,7 @@ switch (command)
         }
     default:
         Console.Error.WriteLine("usage: agent-bridge-host sessions [--compact] | get <id> | watch [--json] | usage | sign-in --relay <url> | serve [--relay <url>] [--name <name>] [--local-only] | whoami");
+        Console.Error.WriteLine("       agent-bridge-host approve <session> <question> <request-uuid> <approve|deny> [--profile <name>]");
         Console.Error.WriteLine("       agent-bridge-host rename <session-id> \"<fleet name>\" [--profile <name>] (empty name clears)");
         Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]");
         Console.Error.WriteLine("       " + OwnPeerCommands.Usage);
@@ -647,7 +655,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // rejected token is never repeated into a ban (#227); the app shows what it says.
     var haAuth = new AgentBridge.HomeAssistant.HaAuthGuard(AgentBridge.HomeAssistant.HaAuthGuard.FileFor(identity.Folder), log: Log);
     await using var homeAssistant = HaRunning.Start(settings, identity.Folder, source, usageMonitor, haActive, IsDevBuild(), HostVersion(), Log, answers,
-        HaReplies.For(replies, attachments), stops, launcher, hostUpdates, drivers, haAuth, () => load.Current);
+        HaReplies.For(replies, attachments), stops, launcher, hostUpdates, drivers, haAuth, () => load.Current, launchAudit: agentAudit);
     load.SetConsumerDemand((!localOnly && settings.LoadEnabled) || homeAssistant is not null);
     // What takes answering, replying, ending and launching away while it runs (design G5).
     // Asked afresh by what acts on it (updates, the readiness checks, the app's status).
@@ -972,7 +980,7 @@ async Task<int> ServeAsync(HostHandover handover)
             var hub = new ChannelHub(relay, identity.Key, name, "host", trustedPeers.Allows)
             {
                 JsonOptions = ProtocolJson.Options,
-                Handler = trustedPeers.Handler(service),
+                Handler = trustedPeers.Handler(service, agentAudit),
                 // Answered from an IK first message (#603), which a relay can replay: hello only
                 // reads, so running it again changes nothing.
                 EarlyOps = [Ops.Hello],
