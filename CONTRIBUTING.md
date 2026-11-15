@@ -30,11 +30,11 @@ do not copy a coordinator's timer, delegate count or machine access.
 Use the existing patterns and add focused tests for changed behavior. Update related
 documentation in the same PR. [quality/README.md](quality/README.md) explains the
 test harness and [quality/catalog.yml](quality/catalog.yml) lists suites.
-Run focused tests for your own cut on approved hosts under
-[AGENTS.md](AGENTS.md#tests). Full verification is CI-only; beyond the focused
-local cut needs Quality's written order and SRE clearance. Preserve specific holds;
-report skipped or unavailable checks;
-a local result is not hosted proof.
+Focused local tests for the builder's OWN cut on APPROVED hosts need NO SRE
+clearance under [AGENTS.md](AGENTS.md#tests). ANYTHING BEYOND (full suites,
+CI-equivalent verification, serving hosts) needs a WRITTEN QUALITY ORDER
+CLEARED WITH SRE. Preserve explicit case holds, report skipped/unavailable
+checks, and never describe local results as hosted proof.
 
 If a prerequisite is missing, report exactly what failed and what you need; do not
 change host setup, permissions or credentials without the person's approval.

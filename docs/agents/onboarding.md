@@ -11,8 +11,10 @@ published rebase advice, freezes and watcher/polling instructions are superseded
 Use [AGENTS.md](../../AGENTS.md) and [contributor workflow](../contributor-workflow.md):
 optional bots, evaluator-classified independent exact-head receipts, Quality-only
 PR creation/body edits/gating/arming, and no builder/reviewer polling.
-Focused own-cut local tests may run on approved hosts; full verification is CI-only,
-and Quality orders anything beyond. New model rules do not replace retained
+Focused local tests for the builder's OWN cut on APPROVED hosts need NO SRE
+clearance. ANYTHING BEYOND (full suites, CI-equivalent verification, serving hosts)
+needs a WRITTEN QUALITY ORDER CLEARED WITH SRE; explicit case holds stay binding.
+New model rules do not replace retained
 in-flight reviewers. The historical snapshot grants no source, launch, execution,
 push or merge permission and creates no timer or reporting obligation.
 

@@ -576,8 +576,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      `gpt-6.1-sol`; a single read uses `gpt-6.1-sol`. Retained in-flight reviewers keep
      their model. These owner rules supersede older fallback model lists below. A sensitive
      file in `copilot_waiver.one_review_paths` (`docs/status.md`, whose row the receipt checks
-     against its decision) doesn't call for the second. A completed Copilot review on the head is
-     still the other family when present, but never replaces the first receipt; a Copilot error or timeout review is ignored. A failed
+     against its decision) doesn't call for the second. Copilot is optional and NEVER
+     counts as a reader family; optional bots never substitute for required independent,
+     model-verified exact-head receipts. A failed
      receipt from a poster blocks. The `copilot-waived` label is still accepted and changes
      nothing. Bot-only threads, which would still block the ruleset's 0-unresolved-threads
      requirement, are resolved with `quality/resolve-bot-threads.ps1`.
@@ -604,8 +605,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      reads that checkout's evaluator and `quality/merge-rule.yml`, so a pull request's own would
      judge it. It prints the commit they came from, and refuses unless that's `origin/main`'s
      with no local changes to them (`--allow-non-main` judges anyway, with a warning).
-     This example is not execution permission: evaluator work and anything beyond
-     focused own-cut tests on an approved host need Quality's written order/SRE clearance.
+     Focused local tests for the builder's OWN cut on APPROVED hosts need NO SRE
+     clearance. ANYTHING BEYOND (full suites, CI-equivalent verification, serving hosts)
+     needs a WRITTEN QUALITY ORDER CLEARED WITH SRE. Preserve explicit case holds.
    - A head whose facts can't be read gets `error`, which fails the required check like failure,
      so an earlier success doesn't stand; a hold label, read with the open list, still fails it.
      When the open list itself stops partway, no head gets success from that run: a held pull
@@ -682,8 +684,9 @@ pwsh quality/run.ps1 -Explain   # the selection and why, without running
 pwsh quality/run.ps1 -Suite pwa-ui,host
 ```
 
-Builders may run focused local tests for their own cut on approved hosts.
-Full or hosted verification is CI-only; beyond that needs Quality's written order/SRE clearance.
+Focused local tests for the builder's OWN cut on APPROVED hosts need NO SRE clearance.
+ANYTHING BEYOND (full suites, CI-equivalent verification, serving hosts) needs a
+WRITTEN QUALITY ORDER CLEARED WITH SRE. Preserve explicit case holds.
 The broad commands above illustrate tooling, not permission for full local runs.
 Unavailable tools and CI-only/planned suites are reported explicitly.
 
