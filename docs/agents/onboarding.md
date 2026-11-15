@@ -12,8 +12,10 @@ Use [AGENTS.md](../../AGENTS.md) and [contributor workflow](../contributor-workf
 optional bots, evaluator-classified independent exact-head receipts, Quality-only
 PR creation/body edits/gating/arming, and no builder/reviewer polling.
 Focused local tests for the builder's OWN cut on APPROVED hosts need NO SRE
-clearance. ANYTHING BEYOND (full suites, CI-equivalent verification, serving hosts)
-needs a WRITTEN QUALITY ORDER CLEARED WITH SRE; explicit case holds stay binding.
+clearance. Full or hosted verification remains CI-only. ANYTHING BEYOND
+(full suites, CI-equivalent verification, serving hosts) needs a WRITTEN QUALITY
+ORDER CLEARED WITH SRE; that order does not grant local full-suite permission.
+Explicit case holds stay binding.
 New model rules do not replace retained
 in-flight reviewers. The historical snapshot grants no source, launch, execution,
 push or merge permission and creates no timer or reporting obligation.

@@ -606,8 +606,10 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      judge it. It prints the commit they came from, and refuses unless that's `origin/main`'s
      with no local changes to them (`--allow-non-main` judges anyway, with a warning).
      Focused local tests for the builder's OWN cut on APPROVED hosts need NO SRE
-     clearance. ANYTHING BEYOND (full suites, CI-equivalent verification, serving hosts)
-     needs a WRITTEN QUALITY ORDER CLEARED WITH SRE. Preserve explicit case holds.
+     clearance. Full or hosted verification remains CI-only. ANYTHING BEYOND
+     (full suites, CI-equivalent verification, serving hosts) needs a WRITTEN QUALITY
+     ORDER CLEARED WITH SRE; that order does not grant local full-suite permission.
+     Preserve explicit case holds.
    - A head whose facts can't be read gets `error`, which fails the required check like failure,
      so an earlier success doesn't stand; a hold label, read with the open list, still fails it.
      When the open list itself stops partway, no head gets success from that run: a held pull
@@ -685,8 +687,10 @@ pwsh quality/run.ps1 -Suite pwa-ui,host
 ```
 
 Focused local tests for the builder's OWN cut on APPROVED hosts need NO SRE clearance.
+Full or hosted verification remains CI-only.
 ANYTHING BEYOND (full suites, CI-equivalent verification, serving hosts) needs a
-WRITTEN QUALITY ORDER CLEARED WITH SRE. Preserve explicit case holds.
+WRITTEN QUALITY ORDER CLEARED WITH SRE; that order does not grant local full-suite
+permission. Preserve explicit case holds.
 The broad commands above illustrate tooling, not permission for full local runs.
 Unavailable tools and CI-only/planned suites are reported explicitly.
 

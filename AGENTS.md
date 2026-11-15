@@ -90,7 +90,7 @@ Keep iterative PRs draft (fast CI only); submit readiness to Quality. Never push
 
 - `dotnet test AgentBridge.slnx` runs on Windows and Linux in CI.
 - Every suite, with its ring and where it runs, is listed in [quality/catalog.yml](quality/catalog.yml); the test plan is [quality/README.md](quality/README.md).
-- Focused local tests for the builder's OWN cut on APPROVED hosts need NO SRE clearance. ANYTHING BEYOND (full suites, CI-equivalent verification, serving hosts) needs a WRITTEN QUALITY ORDER CLEARED WITH SRE. Preserve explicit case holds; broad `quality/run.ps1` examples grant no execution permission.
+- Focused local tests for the builder's OWN cut on APPROVED hosts need NO SRE clearance. Full or hosted verification remains CI-only. ANYTHING BEYOND (full suites, CI-equivalent verification, serving hosts) needs a WRITTEN QUALITY ORDER CLEARED WITH SRE; that order does not grant local full-suite permission. Preserve explicit case holds; broad `quality/run.ps1` examples grant no execution permission.
 - Where api.nuget.org is blocked, set `AGENT_BRIDGE_NUGET_SOURCE` to a NuGet mirror's index.json, and run.ps1 restores and audits through it ([quality/README.md §4](quality/README.md#4-choosing-tests-from-what-changed)); never commit the mirror into nuget.config.
 - If you touch `pwa/`, run its unit and Playwright tests (see `pwa/README.md`).
 - New behaviour gets a few focused tests whose names read as sentences, and each one fails without the change.
