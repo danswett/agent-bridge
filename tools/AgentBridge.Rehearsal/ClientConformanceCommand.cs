@@ -15,7 +15,7 @@ internal static class ClientConformanceCommand
     public static int Run(Parsed p, TextWriter output, WindowsConformanceCallback? windowsClient = null)
     {
         var runs = ReadArray<ConformanceRun>(p.Option("--runs")!);
-        var capabilities = ReadArray<ConformanceCapability>(p.Option("--capabilities")!);
+        IReadOnlyList<ConformanceCapability> capabilities = ReadArray<ConformanceCapability>(p.Option("--capabilities")!);
         var client = p.Option("--client")!;
         if (!runs.Any(run => run.Client == client))
             throw new UsageException($"No required run for client '{client}'.");

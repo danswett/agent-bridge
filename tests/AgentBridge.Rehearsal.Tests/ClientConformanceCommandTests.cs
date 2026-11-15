@@ -107,7 +107,7 @@ public class ClientConformanceCommandTests
             Assert.Equal(Windows.RunId, record.RunId);
             Assert.Equal("pass", record.Verdict);
             Assert.Equal("stub passed", record.Reason);
-            Assert.Equal(Link.AbsoluteUri, record.Evidence);
+            Assert.Equal("https://example.test/runs/windows-stub", record.Evidence);
         });
     }
 
