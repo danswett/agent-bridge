@@ -1780,12 +1780,12 @@ public class MergeRuleTests
         arm64_waiver:
           switch: ARM64_WAIVER
           until: 2026-11-20T08:00:00Z
-          jobs: [app (win-arm64), app-installer (win-arm64)]
+          jobs: [app (win-arm64), app-installer (win-arm64), product (windows-11-arm)]
         """;
     static readonly DateTimeOffset WaiverExpiry = new(2026, 11, 20, 8, 0, 0, TimeSpan.Zero);
 
     [Fact]
-    public void The_two_job_waiver_config_loads_and_allows_only_its_exact_failures()
+    public void The_three_job_waiver_config_loads_and_allows_only_its_exact_failures()
     {
         var path = WriteConfig(arm64Waiver: true);
         try
@@ -1795,10 +1795,10 @@ public class MergeRuleTests
             var error = Record.Exception(() => config = MergeRuleConfig.Parse(yaml));
             Assert.Null(error);
             Assert.NotNull(config);
-            Assert.Equal(["app (win-arm64)", "app-installer (win-arm64)"], config.Arm64Waiver!.Jobs);
+            Assert.Equal(["app (win-arm64)", "app-installer (win-arm64)", "product (windows-11-arm)"], config.Arm64Waiver!.Jobs);
             Assert.True(config.Arm64Waiver.Allows("app (win-arm64)", "failure"));
             Assert.True(config.Arm64Waiver.Allows("app-installer (win-arm64)", "failure"));
-            Assert.False(config.Arm64Waiver.Allows("product (windows-11-arm)", "failure"));
+            Assert.True(config.Arm64Waiver.Allows("product (windows-11-arm)", "failure"));
         }
         finally { File.Delete(path); }
     }
@@ -1848,7 +1848,7 @@ public class MergeRuleTests
     [Theory]
     [InlineData("app (win-arm64)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "success")]
     [InlineData("app-installer (win-arm64)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "success")]
-    [InlineData("product (windows-11-arm)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
+    [InlineData("product (windows-11-arm)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "success")]
     [InlineData("app (win-x64)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
     [InlineData("app-installer (win-x64)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
     [InlineData("product (ubuntu-latest)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
@@ -1928,7 +1928,7 @@ public class MergeRuleTests
 
     [Theory]
     [InlineData("app (win-arm64)", -1, "success")]
-    [InlineData("product (windows-11-arm)", -1, "failure")]
+    [InlineData("product (windows-11-arm)", -1, "success")]
     [InlineData("app (win-x64)", -1, "failure")]
     [InlineData("product (windows-latest)", -1, "failure")]
     [InlineData("app (win-arm64)", 0, "failure")]
