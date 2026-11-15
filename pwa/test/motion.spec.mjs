@@ -705,7 +705,7 @@ test('opening reasoning at the bottom stays put, but subsequent response growth 
   await expect.poll(() => scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThanOrEqual(4);
 });
 
-test('a question stays in sight when late history lands during its reveal with native scroll events', async ({ page }) => {
+async function lateHistoryDuringReveal(page, { pendingReaderScroll = false } = {}) {
   await openDemo(page, { height: 600 });
   await page.evaluate((id) => {
     const client = window.agentBridgeDemo.client;
@@ -738,17 +738,29 @@ test('a question stays in sight when late history lands during its reveal with n
   const v = await open(page, CODEX);
   const scroller = v.locator('.stream-scroll');
   await expect.poll(() => page.evaluate(() => window.__historyPrepared)).toBe(true);
-  await scroller.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  await scroller.evaluate((el, pending) => { el.scrollTop = pending ? 0 : el.scrollHeight; }, pendingReaderScroll);
   await atRest(page, scroller);
-  await page.evaluate((id) => {
+  await page.evaluate(({ id, pendingReaderScroll }) => {
     const d = window.agentBridgeDemo;
     const question = { id: 'q-late-history', kind: 'form', message: 'Carry on?', askedAt: new Date().toISOString(), fields: [] };
+    if (pendingReaderScroll) {
+      const sc = document.querySelector(`.session-view[data-id="${id}"] .stream-scroll`);
+      sc.scrollTop = sc.scrollHeight;
+    }
     d.upsert({ ...d.host.get(id), question, status: 'waiting', updatedAt: new Date(Date.now() + 3000).toISOString() });
-  }, CODEX);
+  }, { id: CODEX, pendingReaderScroll });
   await expect.poll(() => page.evaluate(() => window.__historyReveal)).toEqual({ behavior: 'smooth', turns: 0, outside: true });
   await expect(v.locator('.history-turn')).toHaveCount(2);
   await atRest(page, scroller);
   await expect(v.locator('.question-slot .question:not(.resolved)')).toBeInViewport();
+}
+
+test('a question stays in sight when late history lands during its reveal with native scroll events', async ({ page }) => {
+  await lateHistoryDuringReveal(page);
+});
+
+test('late history during a native question reveal preserves visibility after a same-task reader scroll and upsert', async ({ page }) => {
+  await lateHistoryDuringReveal(page, { pendingReaderScroll: true });
 });
 
 test('where the reader is is read when a question comes, though the scroll that took them there has yet to send its event', async ({ page }) => {
@@ -757,13 +769,22 @@ test('where the reader is is read when a question comes, though the scroll that 
   await upsert(page, CODEX, { activity: { response: long, reasoning: null, userMessage: null, currentTool: null }, question: null, updatedAt: later() });
   const v = await open(page, CODEX);
   const scroller = v.locator('.stream-scroll');
+  await conversationReady(v);
   const settle = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-  // A scroll's event comes at the browser's next frame: held back here, as if it hadn't come yet.
-  await page.evaluate(() => {
-    for (const type of ['scroll', 'scrollend']) { document.addEventListener(type, (e) => e.stopPropagation(), true); }
-  });
   const ask = (id, top, ms) => page.evaluate(({ id, top, ms }) => {
     const el = document.querySelector('.session-view[data-id="019a1b2c-codex-example"] .stream-scroll');
+    // Demo delivery is asynchronous. Hold only this reader's pending events until the
+    // matching question is drawn, then let native app-scroll completion through.
+    const pending = new AbortController();
+    const arrived = new MutationObserver(() => {
+      if (el.querySelector('.question-slot .question:not(.resolved)')?.dataset.question !== id) { return; }
+      pending.abort();
+      arrived.disconnect();
+    });
+    arrived.observe(el, { childList: true, subtree: true });
+    for (const type of ['scroll', 'scrollend']) {
+      document.addEventListener(type, (e) => { if (e.target === el) { e.stopPropagation(); } }, { capture: true, signal: pending.signal });
+    }
     el.scrollTop = top === 'end' ? el.scrollHeight : top;
     const d = window.agentBridgeDemo;
     const question = { id, kind: 'form', message: 'Carry on?', askedAt: new Date().toISOString(), fields: [] };
@@ -776,6 +797,7 @@ test('where the reader is is read when a question comes, though the scroll that 
   await expect(scroller).toContainText('One more.');
   await ask('q-race-end', 'end', 3000);
   await expect(v.locator('.question-slot .question:not(.resolved)')).toBeInViewport();
+  await expect(v.locator('.question-slot .question[data-arriving]')).toHaveCount(0);
   // At the end when last measured; back at the top, just now, when a question comes: left there.
   await clear(4000);
   await expect(v.locator('.question-slot .question:not(.resolved)')).toHaveCount(0);
