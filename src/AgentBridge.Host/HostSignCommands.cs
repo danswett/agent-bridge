@@ -27,7 +27,7 @@ internal static class HostSignCommands
             using (HostSignKey.LoadOrCreate(folder)) { }
             status = HostSignCustody.Read(folder);
         }
-        catch (InvalidDataException e) when (e.Message == "missing-key")
+        catch (InvalidDataException)
         {
             status = new("missing-key");
         }
