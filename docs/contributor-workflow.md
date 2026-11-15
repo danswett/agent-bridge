@@ -90,8 +90,8 @@ owner exceptions and spent records belong only in Fleet's register.
 
 ### Staged rule 17
 
-Authority: current Chief relay in this assignment, **Nov 15, 2026, 09:30 PT**;
-not a claim that the earlier answered-owner file already contains this rule.
+Authority: current Chief-recorded owner rule 17, Nov 15, 2026; its 09:30 PT
+label is not evidence of receipt chronology.
 Adopt all three below, with **NO ROLLOUT BEFORE MAIN-GREEN IS DONE**:
 
 1. Agent messages have one kind: ASSIGN, ACCEPT, REPORT, BLOCKER, DECISION, ASK or ACK;
@@ -99,8 +99,10 @@ Adopt all three below, with **NO ROLLOUT BEFORE MAIN-GREEN IS DONE**:
    short body. Free text belongs only in the body. The helper validates/refuses
    malformed envelopes; SRE designs validation after green (not implemented here).
 2. Every custody hold, region reservation and task claim has an owner and expiry
-   date, with explicit renewal/release. Missing expiry is NEVER implied release;
-   preserve existing held work. Fleet Ops owns roster/claim-expiry reconciliation.
+   date, with explicit renewal/release. After-green adjudication: a hold with no
+   owner AND no date is void; holder silence for 5 minutes on an adjudication
+   question counts as no objection. Missing expiry alone never implies release
+   of existing held/private work or a source grant. Fleet Ops owns expiry reconciliation.
 3. AGENTS stays small/nonstandard-only, with detail loaded on demand; one designated
    Engineering writer proposes changes through normal PRs, never direct-main agent edits.
    Fleet Quality remains sole Fleet source writer. SRE owns the after-green
