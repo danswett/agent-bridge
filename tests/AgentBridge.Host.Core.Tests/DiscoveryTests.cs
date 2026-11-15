@@ -87,6 +87,62 @@ public class DiscoveryTests
     }
 
     [Fact]
+    public async Task A_Copilot_startedAt_uses_a_directly_named_process_start()
+    {
+        using var f = new Fixture();
+        var startedAt = Fixture.T0.AddMinutes(-5);
+        var events = f.CopilotSession(A, lockPid: null);
+        Fixture.Append(events, Copilot.User("resumed", 1));
+        f.Processes.Run(AgentKind.Copilot, 300, $"copilot --resume --session-id {A}", startedAt);
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Equal(startedAt, Assert.Single(source.Snapshot()).StartedAt);
+    }
+
+    [Fact]
+    public async Task A_Copilot_session_found_only_by_its_lock_has_no_claimable_startedAt()
+    {
+        using var f = new Fixture();
+        var startedAt = Fixture.T0.AddMinutes(-5);
+        f.CopilotSession(A, lockPid: 301);
+        f.Processes.Run(AgentKind.Copilot, 301, startedAt: startedAt);
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Null(Assert.Single(source.Snapshot()).StartedAt);
+    }
+
+    [Fact]
+    public async Task A_Copilot_process_returning_to_a_session_does_not_reuse_its_old_startedAt()
+    {
+        using var f = new Fixture();
+        var started = Fixture.T0.AddMinutes(-10);
+        var a = f.CopilotSession(A, lockPid: 400, lockWrite: started.AddSeconds(1));
+        Fixture.Append(a, Copilot.User("first", 1));
+        File.SetLastWriteTimeUtc(a, started.AddSeconds(2).UtcDateTime);
+        f.Processes.Run(AgentKind.Copilot, 400, $"copilot --session-id={A}", started);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+
+        var b = f.CopilotSession(B, lockPid: 400, lockWrite: started.AddMinutes(1));
+        Fixture.Append(b, Copilot.User("second", 2));
+        File.SetLastWriteTimeUtc(b, started.AddMinutes(5).UtcDateTime);
+        await source.RefreshAsync();
+        Assert.Equal(B, Assert.Single(source.Snapshot()).Id);
+
+        Fixture.Append(a, Copilot.User("returned", 3));
+        File.SetLastWriteTimeUtc(a, started.AddMinutes(10).UtcDateTime);
+        await source.RefreshAsync();
+
+        var resumed = Assert.Single(source.Snapshot());
+        Assert.Equal(A, resumed.Id);
+        Assert.Null(resumed.StartedAt);
+    }
+
+    [Fact]
     public async Task A_process_that_resumed_another_session_from_inside_the_CLI_is_shown_in_the_session_it_moved_to()
     {
         using var f = new Fixture();
