@@ -1780,7 +1780,7 @@ public class MergeRuleTests
         arm64_waiver:
           switch: ARM64_WAIVER
           until: 2026-11-20T08:00:00Z
-          jobs: [app (win-arm64), app-installer (win-arm64), product (windows-11-arm)]
+          jobs: [app (win-arm64), app-installer (win-arm64)]
         """;
     static readonly DateTimeOffset WaiverExpiry = new(2026, 11, 20, 8, 0, 0, TimeSpan.Zero);
 
@@ -1790,9 +1790,7 @@ public class MergeRuleTests
         var path = WriteConfig(arm64Waiver: true);
         try
         {
-            var yaml = File.ReadAllText(path).Replace(
-                "jobs: [app (win-arm64), app-installer (win-arm64), product (windows-11-arm)]",
-                "jobs: [app (win-arm64), app-installer (win-arm64)]", StringComparison.Ordinal);
+            var yaml = File.ReadAllText(path);
             MergeRuleConfig? config = null;
             var error = Record.Exception(() => config = MergeRuleConfig.Parse(yaml));
             Assert.Null(error);

@@ -69,9 +69,9 @@ sealed class MergeRuleConfig
         if (missing.Count > 0)
             throw new FormatException($"quality/merge-rule.yml has no {string.Join(", ", missing)}.");
         if (config.Arm64Waiver is { } arm64 && (arm64.Switch != "ARM64_WAIVER" || arm64.Until == default
-            || arm64.Jobs is null || arm64.Jobs.Count != 3 || arm64.Jobs.Distinct(StringComparer.Ordinal).Count() != 3
+            || arm64.Jobs is null || arm64.Jobs.Count != 2 || arm64.Jobs.Distinct(StringComparer.Ordinal).Count() != 2
             || !arm64.Jobs.All(name => arm64.Allows(name, "failure"))))
-            throw new FormatException("arm64_waiver needs ARM64_WAIVER, an expiry and exactly the three arm64 jobs.");
+            throw new FormatException("arm64_waiver needs ARM64_WAIVER, an expiry and exactly the two arm64 jobs.");
         return config;
     }
 
@@ -114,7 +114,7 @@ sealed class Arm64WaiverConfig
     public bool Active(DateTimeOffset now, string? value) => Switch == "ARM64_WAIVER" && value == "on" && now < Until;
 
     public bool Allows(string name, string? conclusion) => conclusion == "failure"
-        && (name is "app (win-arm64)" or "app-installer (win-arm64)" or "product (windows-11-arm)")
+        && (name is "app (win-arm64)" or "app-installer (win-arm64)")
         && Jobs is not null && Jobs.Contains(name, StringComparer.Ordinal);
 }
 
