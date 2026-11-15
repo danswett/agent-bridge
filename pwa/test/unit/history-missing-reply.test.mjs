@@ -24,6 +24,17 @@ async function setup() {
 }
 const settle = () => new Promise(setImmediate);
 
+test('capped turns replace moved reply ids whole without overriding host budget drops', async () => {
+  const { store, serve } = await setup();
+  for (const [heldCut, cut, more] of [[false, true, 3], [true, false, 0], [false, false, 3]]) {
+    serve([{ ...A, truncated: heldCut }]); await store.open('h', 's');
+    const page = { ...A, truncated: cut, partsMore: more, parts: [{ ...A.parts[3], id: 'moved' }] };
+    serve([page]); await store.open('h', 's');
+    assert.deepEqual(store.get('h', 's').turns, readHistoryResult({ turns: [page] }).turns);
+    assert.deepEqual(words(store), ['Question A', 'Answer A']);
+  }
+});
+
 test('the sanitized 26-event order keeps both notice replies and the queued owners own answer', async () => {
   const { store, serve } = await setup();
   // Client projections of CopilotNoticeTests' prelude and zero-based checkpoints 3/13/21,

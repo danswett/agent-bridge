@@ -57,7 +57,7 @@ function mergeParts(held, incoming) {
 }
 const adopt = (page, held) => ({
   ...page, ...(held.live ? { live: held.live } : {}),
-  parts: mergeParts(held.parts.filter((p) => p.kind === 'response' && p.text), page.parts),
+  parts: page.truncated || held.truncated || page.partsMore || held.partsMore ? page.parts : mergeParts(held.parts.filter((p) => p.kind === 'response' && p.text), page.parts),
   ...(held.carried ? { carried: true, prompt: page.prompt ?? held.prompt, kind: page.kind ?? held.kind } : {}),
 });
 
