@@ -27,13 +27,13 @@ internal static class GateAuditProjection
         "session.launch" => "started", "session.answer" => "delivered", "session.stop" => "ended", _ => null
     };
 
-    internal static (List<AuditCommands.Row> Rows, bool Complete) Load(string profile, Action<string>? fault = null)
+    internal static (List<AuditCommands.Row> Rows, bool Complete) Load(string profile, Action<string>? fault = null, bool alreadyLocked = false)
     {
         profile = System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(profile));
         var rows = new List<AuditCommands.Row>();
         var error = new StringWriter();
         var code = AuditCommands.Read(["audit", "--profile", System.IO.Path.GetFileName(profile)],
-            System.IO.Path.GetDirectoryName(profile)!, TextWriter.Null, error, rows.Add, fault);
+            System.IO.Path.GetDirectoryName(profile)!, TextWriter.Null, error, rows.Add, fault, alreadyLocked);
         return (rows, code == 0 && error.GetStringBuilder().Length == 0);
     }
 

@@ -93,7 +93,7 @@ public sealed class AgentAuditLog
                     if (!metadata.Valid(entry.Action, entry.Target, entry.Outcome)) { throw new IOException("invalid gate audit metadata"); }
                     if (entry.Action == "session.launch" && metadata is { Phase: "intent", LaunchBinding: not null })
                     {
-                        var prior = GateAuditProjection.Load(profile);
+                        var prior = GateAuditProjection.Load(profile, alreadyLocked: true);
                         if (!prior.Complete || prior.Rows.Any(r => r.Action == entry.Action && r.Request == entry.Request))
                         { throw new IOException("the launch request is already audited or its evidence is incomplete"); }
                     }

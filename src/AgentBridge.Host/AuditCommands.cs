@@ -20,7 +20,7 @@ public static class AuditCommands
     public static int Run(IReadOnlyList<string> args, string profileRoot, TextWriter output, TextWriter error) =>
         Read(args, profileRoot, output, error, null);
 
-    internal static int Read(IReadOnlyList<string> args, string profileRoot, TextWriter output, TextWriter error, Action<Row>? receive, Action<string>? fault = null)
+    internal static int Read(IReadOnlyList<string> args, string profileRoot, TextWriter output, TextWriter error, Action<Row>? receive, Action<string>? fault = null, bool alreadyLocked = false)
     {
         var options = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var i = 1; i < args.Count; i += 2)
@@ -47,7 +47,7 @@ public static class AuditCommands
             try { if ((File.GetAttributes(folder) & FileAttributes.Directory) == 0) { throw new IOException(); } }
             catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return 0; }
             var anchored = AgentAuditLog.HasHeads(folder);
-            using var auditLock = anchored ? new FileStream(folder + ".lock", FileMode.Open, FileAccess.Read, FileShare.Read) : null;
+            using var auditLock = anchored && !alreadyLocked ? new FileStream(folder + ".lock", FileMode.Open, FileAccess.Read, FileShare.Read) : null;
             foreach (var launch in anchored ? new[] { false, true } : Array.Empty<bool>())
             {
                 var status = AgentAuditLog.Continuity(Path.Combine(profileRoot, profile), launch, error.WriteLine);
