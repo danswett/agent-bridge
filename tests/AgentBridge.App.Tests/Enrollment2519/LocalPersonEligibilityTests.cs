@@ -25,15 +25,32 @@ public sealed class LocalPersonEligibilityTests
             EnrollmentOrigin.Remote, AgentKind.Copilot, EnrollmentCaller.App, readOnly: false));
     }
 
-    [Theory]
-    [InlineData(EnrollmentCaller.Agent)]
-    [InlineData(EnrollmentCaller.Other)]
-    [InlineData(EnrollmentCaller.HostCli)]
-    [InlineData(EnrollmentCaller.Unknown)]
-    public void NonAppCallerIsRefused(EnrollmentCaller caller)
+    [Fact]
+    public void AgentCallerIsRefused()
     {
         Assert.False(LocalPersonEligibility.CanEnroll(
-            EnrollmentOrigin.Local, AgentKind.Copilot, caller, readOnly: false));
+            EnrollmentOrigin.Local, AgentKind.Copilot, EnrollmentCaller.Agent, readOnly: false));
+    }
+
+    [Fact]
+    public void OtherCallerIsRefused()
+    {
+        Assert.False(LocalPersonEligibility.CanEnroll(
+            EnrollmentOrigin.Local, AgentKind.Copilot, EnrollmentCaller.Other, readOnly: false));
+    }
+
+    [Fact]
+    public void HostCliCallerIsRefused()
+    {
+        Assert.False(LocalPersonEligibility.CanEnroll(
+            EnrollmentOrigin.Local, AgentKind.Copilot, EnrollmentCaller.HostCli, readOnly: false));
+    }
+
+    [Fact]
+    public void UnknownCallerIsRefused()
+    {
+        Assert.False(LocalPersonEligibility.CanEnroll(
+            EnrollmentOrigin.Local, AgentKind.Copilot, EnrollmentCaller.Unknown, readOnly: false));
     }
 
     [Fact]
@@ -43,14 +60,26 @@ public sealed class LocalPersonEligibilityTests
             EnrollmentOrigin.Local, AgentKind.Copilot, EnrollmentCaller.App, readOnly: true));
     }
 
-    [Theory]
-    [InlineData(AgentKind.Copilot)]
-    [InlineData(AgentKind.Claude)]
-    [InlineData(AgentKind.Codex)]
-    [InlineData(AgentKind.Unknown)]
-    public void EveryAgentKindIsExplicitlyRefusedByTheInertEntry(AgentKind sessionKind)
+    [Fact]
+    public void UnknownAgentKindIsRefused()
     {
         Assert.False(LocalPersonEligibility.CanEnroll(
+            EnrollmentOrigin.Local, AgentKind.Unknown, EnrollmentCaller.App, readOnly: false));
+    }
+
+    [Fact]
+    public void UnsupportedAgentKindIsRefused()
+    {
+        Assert.False(LocalPersonEligibility.CanEnroll(
+            EnrollmentOrigin.Local, (AgentKind)int.MaxValue, EnrollmentCaller.App, readOnly: false));
+    }
+
+    [Theory]
+    [InlineData(AgentKind.Claude)]
+    [InlineData(AgentKind.Codex)]
+    public void OtherSupportedAgentKindsAreAllowed(AgentKind sessionKind)
+    {
+        Assert.True(LocalPersonEligibility.CanEnroll(
             EnrollmentOrigin.Local, sessionKind, EnrollmentCaller.App, readOnly: false));
     }
 }
