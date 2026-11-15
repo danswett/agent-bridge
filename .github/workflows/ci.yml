@@ -363,7 +363,7 @@ jobs:
           $settings.DtdProcessing = [Xml.DtdProcessing]::Prohibit
           $settings.XmlResolver = $null
           $index = 0
-          foreach ($file in Get-ChildItem TestResults -Recurse -File -Filter 'Sequence_*.xml' -ErrorAction SilentlyContinue) {
+          foreach ($file in Get-ChildItem TestResults -Recurse -File -Filter '*_Sequence.xml' -ErrorAction SilentlyContinue) {
             if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked sequence input refused' }
             for ($item = $file.Directory; $null -ne $item; $item = $item.Parent) {
               if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked sequence directory refused' }
@@ -377,7 +377,7 @@ jobs:
                   @($xml.DocumentElement.ChildNodes | Where-Object { $_ -is [Xml.XmlElement] -and $_.Name -ne 'Test' }).Count) {
                 throw 'Unexpected execution sequence format'
               }
-              $xml.Save((Join-Path $out "sequence-$($index++).xml"))
+              $xml.Save((Join-Path $out "sequence-$(($index++)).xml"))
             }
             finally { $reader.Dispose() }
           }
