@@ -188,20 +188,59 @@ static partial class SelfTest
             check(Selected(list) is null, "keeps conversation blocks unselected after scrolling while older history draws");
             await CheckPostedInput(window, check, result);
             Away(window, main);
-            await Choose(window, main, id, "Response");
-            var pinned = await Until(() => ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count == turns
-                && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(30));
-            var pinnedFill = new { drawn = ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count, offset = scroll.VerticalOffset, extent = scroll.ScrollableHeight, pinned };
-            result["historyPinnedFill"] = pinnedFill;
-            const string pinnedMessage = "finishes older drawing at the end before focus moves away";
-            if (!QuarantinePostedInput(result, check, pinnedMessage, new
+            var pinnedView = await Choose(window, main, id, "Response");
+            Button? pinnedPin = null, pinnedDetails = null;
+            var controlsUnavailable = false;
+            try { pinnedPin = ById<Button>(away, "HeaderPin"); pinnedDetails = ById<Button>(away, "Details"); }
+            catch (Exception e) when (e is InvalidOperationException or System.Runtime.InteropServices.COMException) { controlsUnavailable = true; }
+            var pinnedObserver = new GrowthObserver(pinnedView, scroll, pinnedPin, pinnedDetails, retainEdges: true);
+            if (controlsUnavailable || pinnedPin is null || pinnedDetails is null) { pinnedObserver.Trace.Mark(GrowthGap.Focus); }
+            var pinnedSamples = new List<PinnedSample>();
+            void PinnedChanged(object? sender, ScrollViewerViewChangedEventArgs e)
             {
-                outcome = pinnedFill,
-                causeLimit = "posts no input: Chief runner-cohort exception, not a proven delivery cause",
-            }))
+                pinnedObserver.Trace.Callbacks++;
+                double eventOffset, eventExtent;
+                bool intermediate;
+                try { eventOffset = scroll.VerticalOffset; eventExtent = scroll.ScrollableHeight; intermediate = e.IsIntermediate; }
+                catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException) { pinnedObserver.Trace.Mark(GrowthGap.EventRead); return; }
+                pinnedObserver.Trace.Event(eventOffset, eventExtent, intermediate);
+            }
+            GrowthSubscription? pinnedSubscription = null;
+            try
             {
-                check(pinned, pinned ? pinnedMessage
-                    : $"{pinnedMessage} (history: {pinnedFill.drawn}/{turns}; count500: {pinnedFill.drawn == turns}; at-end: {pinnedFill.offset >= pinnedFill.extent - 1.5}; offset: {pinnedFill.offset:0.###}; extent: {pinnedFill.extent:0.###}; {PostedInputTarget(window).Detail})");
+                pinnedSubscription = new GrowthSubscription(() => scroll.ViewChanged += PinnedChanged, () => scroll.ViewChanged -= PinnedChanged);
+                pinnedObserver.Trace.Xaml(pinnedSubscription.Attach, GrowthGap.Subscription);
+                int? drawnBefore = null;
+                pinnedObserver.Trace.Xaml(() => drawnBefore = ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count, GrowthGap.Drawn);
+                ObservePinned(pinnedObserver, pinnedSamples, GrowthStage.PinnedBefore, drawnBefore, null);
+                var pinned = await Until(() => ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count == turns
+                    && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(30));
+                var pinnedFill = new { drawn = ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count, offset = scroll.VerticalOffset, extent = scroll.ScrollableHeight, pinned };
+                ObservePinned(pinnedObserver, pinnedSamples, GrowthStage.PinnedAfter, pinnedFill.drawn, pinned, pinnedFill.offset, pinnedFill.extent);
+                result["historyPinnedFill"] = pinnedFill;
+                const string pinnedMessage = "finishes older drawing at the end before focus moves away";
+                if (!QuarantinePostedInput(result, check, pinnedMessage, new
+                {
+                    outcome = pinnedFill,
+                    causeLimit = "posts no input: Chief runner-cohort exception, not a proven delivery cause",
+                }))
+                {
+                    check(pinned, pinned ? pinnedMessage
+                        : $"{pinnedMessage} (history: {pinnedFill.drawn}/{turns}; count500: {pinnedFill.drawn == turns}; at-end: {pinnedFill.offset >= pinnedFill.extent - 1.5}; offset: {pinnedFill.offset:0.###}; extent: {pinnedFill.extent:0.###}; {PostedInputTarget(window).Detail})");
+                }
+            }
+            finally
+            {
+                if (pinnedSubscription is not null) { pinnedObserver.Trace.Xaml(pinnedSubscription.Dispose, GrowthGap.Subscription); }
+                FinishPinnedObserver(pinnedObserver, pinnedSamples, result);
+            }
+            var pinnedCallbacksAfter = pinnedObserver.Trace.Callbacks;
+            GrowthCleanupProbe? pinnedNormal = null, pinnedExceptional = null;
+            if (observerDiagnostics)
+            {
+                CheckPinnedObserverIntegration(pinnedView, scroll, pinnedPin, pinnedDetails, pinnedObserver, pinnedSamples, result, check);
+                pinnedNormal = GrowthCleanupProbe.Create(scroll, false, check);
+                pinnedExceptional = GrowthCleanupProbe.Create(scroll, true, check);
             }
             await Still(scroll);
             if (ById<ItemsRepeater>(away, "History") is { } historyList
@@ -290,6 +329,12 @@ static partial class SelfTest
             if (observerDiagnostics)
             {
                 CheckGrowthObserverIntegration(growthView, scroll, pin, details, observer, result, check);
+                result["historyPinnedObserverCleanup"] = new { witness = observer.Trace.Callbacks, pinnedCallbacksAfter, pinnedCallbacks = pinnedObserver.Trace.Callbacks, normal = pinnedNormal?.Calls, exceptional = pinnedExceptional?.Calls };
+                if (observer.Trace.Callbacks > 0 && pinnedNormal is not null && pinnedExceptional is not null)
+                {
+                    check(pinnedObserver.Trace.Callbacks == pinnedCallbacksAfter && pinnedNormal.Calls == pinnedNormal.AtDetach && pinnedExceptional.Calls == pinnedExceptional.AtDetach,
+                        "older-fill observer and real ViewChanged probes remain detached after witnessed events");
+                }
                 normalCleanup = GrowthCleanupProbe.Create(scroll, false, check);
                 exceptionalCleanup = GrowthCleanupProbe.Create(scroll, true, check);
             }
@@ -466,6 +511,12 @@ static partial class SelfTest
             && trace.Gaps.HasFlag(GrowthGap.Overflow),
             "bounds the observer event sequence and reports overflow");
 
+        var edges = new GrowthTrace(retainEdges: true);
+        for (var i = 0; i < 27; i++) { edges.Event(i, i, false); }
+        check(edges.Overflow == 3 && edges.Gaps.HasFlag(GrowthGap.Overflow)
+            && edges.Events.Select(e => e.Sequence).SequenceEqual(Enumerable.Range(0, 12).Concat(Enumerable.Range(15, 12))),
+            "retains the first and latest older-fill events in order");
+
         var ordered = new GrowthTrace();
         ordered.Snapshot(GrowthStage.BeforeFocus, 1, 2, false, 0, true, null, false, GrowthFocus.None);
         ordered.Event(2, 3, true);
@@ -496,6 +547,67 @@ static partial class SelfTest
             source?.Invoke();
             check(received == 1, $"unsubscribes the growth observer after {(exceptional ? "an exception" : "normal completion")}");
         }
+    }
+
+    static void ObservePinned(GrowthObserver observer, List<PinnedSample> samples, GrowthStage stage,
+        int? drawn, bool? pinned, double? offset = null, double? extent = null)
+    {
+        var count = observer.Trace.Snapshots.Count;
+        if (offset is { } value && extent is { } height) { observer.Observe(stage, value, height); }
+        else { observer.Observe(stage); }
+        var gaps = observer.LastGaps | (observer.Trace.Gaps & GrowthGap.Focus);
+        if (drawn is null) { gaps |= GrowthGap.Drawn; observer.Trace.Mark(GrowthGap.Drawn); }
+        samples.Add(new(stage, drawn, pinned, observer.Trace.Snapshots.Count > count ? observer.Trace.Snapshots[count].Sequence : null, gaps));
+    }
+
+    static void FinishPinnedObserver(GrowthObserver observer, List<PinnedSample> samples, Dictionary<string, object?> result)
+    {
+        if (samples.Count != 2 || observer.Trace.Snapshots.Count != 2) { observer.Trace.Mark(GrowthGap.Incomplete); }
+        var resultSerialized = true;
+        try { result["historyPinnedFillObserver"] = JsonSerializer.SerializeToElement(new { beforeSubscriptionGap = true, samples, trace = observer.Trace }); }
+        catch (Exception e) when (e is NotSupportedException or JsonException or InvalidOperationException) { resultSerialized = false; result["historyPinnedFillObserver"] = "observer serialization unavailable"; }
+        string record;
+        try { record = JsonSerializer.Serialize(new { beforeSubscriptionGap = true, samples, snapshots = observer.Trace.Snapshots, events = observer.Trace.Events, gaps = observer.Trace.Gaps.ToString(), observer.Trace.Overflow, observer.Trace.Callbacks, resultSerialized }); }
+        catch (Exception e) when (e is NotSupportedException or JsonException or InvalidOperationException) { record = "serialization unavailable"; }
+        result["historyPinnedFillObserverLog"] = record;
+        try { AppLog.Write($"self-test: history pinned fill observer {record}"); }
+        catch (System.Security.SecurityException) { result["historyPinnedFillObserverLogWrite"] = "denied"; }
+    }
+
+    static void CheckPinnedObserverIntegration(SessionView? view, ScrollViewer scroll, Button? pin, Button? details,
+        GrowthObserver actual, List<PinnedSample> samples, Dictionary<string, object?> result, Action<bool, string> check)
+    {
+        var serialized = JsonSerializer.SerializeToElement(result);
+        var evidence = serialized.GetProperty("historyPinnedFillObserver");
+        using var log = JsonDocument.Parse(serialized.GetProperty("historyPinnedFillObserverLog").GetString() ?? "{}");
+        var trace = evidence.GetProperty("trace");
+        var fill = serialized.GetProperty("historyPinnedFill");
+        var last = actual.Trace.Snapshots.LastOrDefault();
+        check(view is not null && ReferenceEquals(ConversationScroller(view), scroll)
+            && samples.Select(s => s.Stage).SequenceEqual(new[] { GrowthStage.PinnedBefore, GrowthStage.PinnedAfter })
+            && samples.Select(s => s.SnapshotSequence).SequenceEqual(actual.Trace.Snapshots.Select(s => (int?)s.Sequence))
+            && samples[1].Drawn == (fill.GetProperty("drawn").ValueKind == JsonValueKind.Null ? null : fill.GetProperty("drawn").GetInt32())
+            && samples[1].Pinned == fill.GetProperty("pinned").GetBoolean()
+            && last is not null && last.Offset == fill.GetProperty("offset").GetDouble() && last.Extent == fill.GetProperty("extent").GetDouble()
+            && evidence.GetProperty("beforeSubscriptionGap").GetBoolean()
+            && trace.GetProperty("Snapshots").GetArrayLength() == 2
+            && trace.GetProperty("Gaps").GetInt32() == (int)actual.Trace.Gaps
+            && log.RootElement.GetProperty("samples").GetArrayLength() == 2
+            && log.RootElement.GetProperty("events").GetArrayLength() == actual.Trace.Events.Count
+            && log.RootElement.GetProperty("gaps").GetString() == actual.Trace.Gaps.ToString(),
+            "serializes both older-fill samples from the selected view and scroller");
+
+        var missing = new GrowthObserver(view, scroll, pin, details, missingFields: true, retainEdges: true);
+        var absent = new List<PinnedSample>();
+        ObservePinned(missing, absent, GrowthStage.PinnedBefore, null, null);
+        const GrowthGap fields = GrowthGap.Pin | GrowthGap.Releases | GrowthGap.Follow | GrowthGap.Anchor | GrowthGap.Scrolling | GrowthGap.Drawn;
+        check((absent[0].Gaps & fields) == fields && absent[0].Drawn is null,
+            "records missing older-fill members and row count as sample gaps");
+        var mismatch = new GrowthObserver(view, new ScrollViewer(), pin, details, retainEdges: true);
+        var mismatched = new List<PinnedSample>();
+        ObservePinned(mismatch, mismatched, GrowthStage.PinnedBefore, 1, null);
+        check(mismatched[0].Gaps.HasFlag(GrowthGap.View) && mismatched[0].Gaps.HasFlag(GrowthGap.Pin),
+            "records an older-fill view mismatch as a sample gap");
     }
 
     static void CheckGrowthObserverIntegration(SessionView? view, ScrollViewer scroll, Button? pin, Button? details,
@@ -598,17 +710,20 @@ static partial class SelfTest
     }
 
     [Flags]
-    enum GrowthGap { None = 0, View = 1, Pin = 2, Releases = 4, Follow = 8, Anchor = 16, Scrolling = 32, Focus = 64, Subscription = 128, Overflow = 256, Incomplete = 512, EventRead = 1024, SnapshotRead = 4096 }
-    enum GrowthStage { BeforeFocus, AfterTab, AfterArrival, Sample }
+    enum GrowthGap { None = 0, View = 1, Pin = 2, Releases = 4, Follow = 8, Anchor = 16, Scrolling = 32, Focus = 64, Subscription = 128, Overflow = 256, Incomplete = 512, EventRead = 1024, SnapshotRead = 4096, Drawn = 8192 }
+    enum GrowthStage { BeforeFocus, AfterTab, AfterArrival, Sample, PinnedBefore, PinnedAfter }
     enum GrowthFocus { Unknown, None, Pin, Details, Other }
     sealed record GrowthSnapshot(int Sequence, double ElapsedMs, GrowthStage Stage, double Offset, double Extent,
         bool? PinEnd, int? PinReleasesDelta, bool? FollowAtEnd, double? Anchoring, bool? Scrolling, GrowthFocus Focus);
     sealed record GrowthEvent(int Sequence, double ElapsedMs, double Offset, double Extent, bool Intermediate);
+    sealed record PinnedSample(GrowthStage Stage, int? Drawn, bool? Pinned, int? SnapshotSequence, GrowthGap Gaps);
 
     sealed class GrowthTrace
     {
         readonly Stopwatch clock = Stopwatch.StartNew();
+        readonly bool retainEdges;
         int sequence;
+        public GrowthTrace(bool retainEdges = false) => this.retainEdges = retainEdges;
         public List<GrowthSnapshot> Snapshots { get; } = [];
         public List<GrowthEvent> Events { get; } = [];
         public GrowthGap Gaps { get; private set; }
@@ -627,7 +742,7 @@ static partial class SelfTest
         {
             if (!double.IsFinite(offset) || !double.IsFinite(extent)) { Mark(GrowthGap.EventRead); return; }
             var next = sequence++;
-            if (Events.Count == 24) { Overflow++; Mark(GrowthGap.Overflow); return; }
+            if (Events.Count == 24) { Overflow++; Mark(GrowthGap.Overflow); if (!retainEdges) { return; } Events.RemoveAt(12); }
             Events.Add(new(next, clock.Elapsed.TotalMilliseconds, offset, extent, intermediate));
         }
     }
@@ -688,10 +803,12 @@ static partial class SelfTest
         readonly System.Reflection.FieldInfo? anchorField = GrowthField(typeof(SessionView), "anchoring", typeof(double?));
         readonly System.Reflection.FieldInfo? scrollingField = GrowthField(typeof(SessionView), "scrolling", typeof(bool));
         int? baseline;
-        public GrowthTrace Trace { get; } = new();
+        public GrowthTrace Trace { get; }
+        public GrowthGap LastGaps { get; private set; }
 
-        public GrowthObserver(SessionView? view, ScrollViewer scroll, Button? pin, Button? details, bool missingFields = false)
+        public GrowthObserver(SessionView? view, ScrollViewer scroll, Button? pin, Button? details, bool missingFields = false, bool retainEdges = false)
         {
+            Trace = new GrowthTrace(retainEdges);
             this.scroll = scroll;
             this.pin = pin;
             this.details = details;
@@ -708,18 +825,19 @@ static partial class SelfTest
         {
             double offset, extent;
             try { offset = scroll.VerticalOffset; extent = scroll.ScrollableHeight; }
-            catch (Exception e) when (e is InvalidOperationException or System.Runtime.InteropServices.COMException) { Trace.Mark(GrowthGap.SnapshotRead); return; }
+            catch (Exception e) when (e is InvalidOperationException or System.Runtime.InteropServices.COMException) { LastGaps = GrowthGap.SnapshotRead; Trace.Mark(LastGaps); return; }
             Snapshot(stage, offset, extent);
         }
         public void Observe(GrowthStage stage, double offset, double extent) => Snapshot(stage, offset, extent);
 
         public void Snapshot(GrowthStage stage, double offset, double extent)
         {
-            if (!double.IsFinite(offset) || !double.IsFinite(extent)) { Trace.Mark(GrowthGap.SnapshotRead); return; }
-            var gaps = GrowthGap.None;
+            if (!double.IsFinite(offset) || !double.IsFinite(extent)) { LastGaps = GrowthGap.SnapshotRead; Trace.Mark(LastGaps); return; }
+            var gaps = view is null ? GrowthGap.View : GrowthGap.None;
             var pinned = GrowthValue<bool>(view, pinField, ref gaps, GrowthGap.Pin);
             var releases = GrowthValue<int>(view, releasesField, ref gaps, GrowthGap.Releases);
-            if (stage == GrowthStage.BeforeFocus) { baseline = releases; }
+            if (stage is GrowthStage.BeforeFocus or GrowthStage.PinnedBefore) { baseline = releases; }
+            if (baseline is null) { gaps |= GrowthGap.Releases; }
             var follow = GrowthRead(view, followField, ref gaps, GrowthGap.Follow) as ConversationFollow;
             var anchor = GrowthRead(view, anchorField, ref gaps, GrowthGap.Anchor, allowNull: true);
             if (anchor is not null && anchor is not double) { gaps |= GrowthGap.Anchor; }
@@ -737,6 +855,7 @@ static partial class SelfTest
                 else { gaps |= GrowthGap.Focus; }
             }
             catch (Exception e) when (e is InvalidOperationException or ArgumentException or System.Runtime.InteropServices.COMException) { gaps |= GrowthGap.Focus; }
+            LastGaps = gaps;
             Trace.Mark(gaps);
             Trace.Snapshot(stage, offset, extent, pinned, releases is { } count && baseline is { } start ? count - start : null,
                 follow?.AtEnd, anchor as double?, scrolling, focus);
