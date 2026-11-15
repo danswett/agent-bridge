@@ -827,11 +827,15 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
 - **Flakes:** a test that passes and fails on the same code is flaky. It's reported, never
   silently retried to green. The one exception is the pwa-ui WebKit shards, which retry a failed
   test once in CI (Chromium none): a pass on retry is listed on the run's summary and as a
-  warning by `pwa/tools/flaky-report.mjs`, so it is reported, not hidden. A test that flakes more
-  than twice in a week is quarantined with an issue: `test.skip` with the issue number and a
-  restore-by date 3 days out, the `quarantined` label, an owner, as in #1493. The flake record is
-  the `flaky` label and its issues, one per test,
-  each with its run links and counts.
+  warning by `pwa/tools/flaky-report.mjs`, so it is reported, not hidden.
+  The [Fleet register's quarantine rule](https://github.com/danswett/slipgates-fleet/blob/main/docs/pipeline-rules.md)
+  governs eligibility: a named test, ARM included, needs three failures on three
+  separate runs in seven days, with the same signature and an open issue.
+  Quality proposes; the owner approves. Record the issue, owner and expiry:
+  at most seven days, or three days for ARM with a passes-on-rerun check.
+  Tests still run and report; there is no automatic skip or quarantine.
+  This guidance approves no active quarantine. The flake record is the `flaky`
+  label and its issues, one per test, each with its run links and counts.
   - **The nightly flake hunt** (`flake-hunt`, ring 3, [flake-hunt.yml](../.github/workflows/flake-hunt.yml),
     #509) finds them before they turn a pull request or `main` red. At about 02:30 PT it runs
     every .NET test project 10 times on `ubuntu-latest`, `windows-latest` and `windows-11-arm`.
@@ -934,6 +938,13 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   `main`'s and nightly runs, keeps the time series (coverage, durations, flakes, benchmarks,
   selection misses). It's rendered at `https://danswett.github.io/agent-bridge/quality/` by
   the existing Pages workflow. Generated data never lands in `main`, so it causes no churn.
+  Owner decision (Nov 15, 2026, 13:07 PT): process dumps and other dump content must
+  never be published as artifacts in this public repository; derived text, such as
+  stack analysis, is allowed only if size-capped and scrubbed of paths and secret-like
+  strings, while private channels require a separate owner decision.
+  The existing cdb crash-analysis text for #2685 is the sole dated exception to the
+  size-cap and scrubbing requirements, valid until the dump-hardening follow-up to
+  #2683 merges or Nov 18, 2026, 00:00 PT, whichever is first.
 - **Release-readiness report:** ring 4 generates one page per candidate. It lists each
   suite's last result on that build, the lab runs, the soak gate, perf against baseline, open
   `flaky` and `security` issues, and the manual checklists signed off. It's attached to the
