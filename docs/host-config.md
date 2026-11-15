@@ -18,7 +18,18 @@ It currently exits 3 with only `no-switch` on stderr, before opening identity or
 hostSign custody. There is no config setting, environment override, automatic
 enrollment, scheduled task or deployment. #2367 and verified-reader host wiring
 are follow-ups; enabling the switch alone will not activate this verb.
-HostSign key provisioning is separate (#2369).
+HostSign key provisioning is separate:
+
+## Explicit hostSign key initialization
+
+On Windows, a person at the machine runs `agent-bridge-host host-sign init [--profile <name>]`.
+This creates protected hostSign custody once. Repeating it reports `existing` with the same
+`keyId`, without rotating or rewriting the key. Output contains only `state` (`created`,
+`existing` or `missing-key`) and `keyId` when available. Agent/script credentials and
+non-person callers are refused. Damaged or incomplete custody is not repaired: it stays
+`missing-key` and unsigned. Creating the key does **not** enable signing or acceptance
+of hostSign; enabling remains gated by #2366/#2367. Status, enrollment and publishing
+never create the key.
 
 ## Schema, version 1
 
