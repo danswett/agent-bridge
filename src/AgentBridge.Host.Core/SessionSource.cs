@@ -1129,6 +1129,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             }
         }
         var shown = entry.Touched is { } touched && touched > full.UpdatedAt ? full with { UpdatedAt = touched } : full;
+        shown = shown with { StartedAt = null };
         lock (_gate)
         {
             if (_recovery.TryGetValue(full.Id, out var recovery))
