@@ -197,7 +197,8 @@ public sealed class SessionService
     public Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data, Func<HelloResult, HelloResult>? shape) =>
         HandleAsync(channel, op, data, shape, null);
 
-    internal async Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data, Func<HelloResult, HelloResult>? shape, AgentAuditLog? actionAudit)
+    internal async Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data, Func<HelloResult, HelloResult>? shape,
+        AgentAuditLog? actionAudit, GateLaunchIngress? launchIngress = null)
     {
         switch (op)
         {
@@ -244,7 +245,7 @@ public sealed class SessionService
                 var options = await launcher.OptionsAsync();
                 return options.Trust is null ? options : options with { Trust = [.. options.Trust.Select(q => ForPeer(channel, q))] };
             case LaunchProtocol.Launch when launcher is not null:
-                return await LaunchAsync(channel, data, actionAudit);
+                return await LaunchAsync(channel, data, actionAudit, launchIngress);
             // Host to host, through the relay only: another machine of the account asking for a
             // session with a command a person's device signed.
             case TransferProtocol.Op when transfers is not null && channel is SecureChannel secure:
@@ -728,7 +729,7 @@ public sealed class SessionService
         return await stops.StopAsync(request);
     }
 
-async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data, AgentAuditLog? audit)
+async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data, AgentAuditLog? audit, GateLaunchIngress? ingress)
     {
         // As for answers: a request without a request UUID fails as a request, and anything
         // that can be read gets an outcome. The whole request is bounded, prompt and all.
@@ -741,17 +742,9 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data,
         {
             return new LaunchResult(LaunchOutcome.Refused, $"a session from another machine is brought in through the relay, from {Product.Name}");
         }
-        Action<string>? Prepare(Guid operation)
-        {
-            var id = Guid.Parse(request.Request).ToString();
-            var gate = new GateAuditMetadata(1, operation, Guid.Empty, 0, "intent", "local", "person-client", operation, "none");
-            var intent = new AgentAuditEntry("local", id, "person:local", [], "session.launch", id, "reserved", Gate: gate);
-            if (audit is not { } writer || !writer.Append(intent)) { return null; }
-            // A failed terminal leaves the intent unresolved; an effect cannot be refused afterwards.
-            return session => { writer.Append(intent with { Target = session, Outcome = "started", Gate = gate with { Phase = "terminal" } }); };
-        }
         var result = audit is null ? await launcher!.LaunchAsync(request, channel.PeerId)
-            : await launcher!.LaunchAuditedAsync(request, channel.PeerId, Prepare);
+            : await GateLaunchAudit.LaunchAsync(launcher!, request, channel.PeerId, audit,
+                ingress ?? new("local", "person-client", "person:local", audit.ControlWriterRun));
         return result.Trust is null ? result : result with { Trust = ForPeer(channel, result.Trust) };
     }
 

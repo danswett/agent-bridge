@@ -665,7 +665,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // rejected token is never repeated into a ban (#227); the app shows what it says.
     var haAuth = new AgentBridge.HomeAssistant.HaAuthGuard(AgentBridge.HomeAssistant.HaAuthGuard.FileFor(identity.Folder), log: Log);
     await using var homeAssistant = HaRunning.Start(settings, identity.Folder, source, usageMonitor, haActive, IsDevBuild(), HostVersion(), Log, answers,
-        HaReplies.For(replies, attachments), stops, launcher, hostUpdates, drivers, haAuth, () => load.Current);
+        HaReplies.For(replies, attachments), stops, launcher, hostUpdates, drivers, haAuth, () => load.Current, launchAudit: agentAudit);
     load.SetConsumerDemand((!localOnly && settings.LoadEnabled) || homeAssistant is not null);
     // What takes answering, replying, ending and launching away while it runs (design G5).
     // Asked afresh by what acts on it (updates, the readiness checks, the app's status).
@@ -990,7 +990,7 @@ async Task<int> ServeAsync(HostHandover handover)
             var hub = new ChannelHub(relay, identity.Key, name, "host", trustedPeers.Allows)
             {
                 JsonOptions = ProtocolJson.Options,
-                Handler = trustedPeers.Handler(service),
+                Handler = trustedPeers.Handler(service, agentAudit),
                 // Answered from an IK first message (#603), which a relay can replay: hello only
                 // reads, so running it again changes nothing.
                 EarlyOps = [Ops.Hello],

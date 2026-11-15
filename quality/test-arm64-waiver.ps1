@@ -24,7 +24,7 @@ $appFailed = @{ app = @{ result = 'failure' } }
 $arm64Red = Pages @((Leg 'app (win-x64)' 'success'), (Leg 'app (win-arm64)' 'failure'))
 try {
     Check 'a failed app (win-arm64) is waived while the switch is on and before expiry' ((Waived $appFailed $arm64Red) -eq 'app')
-    Check 'a failed product (windows-11-arm) is waived' ((Waived @{ product = @{ result = 'failure' } } (Pages @((Leg 'product (ubuntu-latest)' 'success'), (Leg 'product (windows-11-arm)' 'failure')))) -eq 'product')
+    Check 'a failed product (windows-11-arm) is not waived' ((Waived @{ product = @{ result = 'failure' } } (Pages @((Leg 'product (ubuntu-latest)' 'success'), (Leg 'product (windows-11-arm)' 'failure')))) -eq '')
     $all = Pages @((Leg 'app (win-arm64)' 'failure'), (Leg 'app-installer (win-arm64)' 'failure'), (Leg 'app-installer (win-x64)' 'success'))
     Check 'app-installer (win-arm64) is waived and only the job that failed' ((Waived ([ordered]@{ app = @{ result = 'failure' }; 'app-installer' = @{ result = 'failure' } }) $all) -eq 'app,app-installer')
     Check 'a job id is not matched by another job whose name starts with it' ((Waived @{ app = @{ result = 'failure' } } (Pages @((Leg 'app-installer (win-arm64)' 'failure')))) -eq '')
@@ -59,10 +59,11 @@ try {
 
     $ci = Get-Content -Raw (Join-Path $PSScriptRoot '..' '.github' 'workflows' 'ci.yml')
     $code = Get-Content -Raw $script
-    foreach ($name in 'app (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)') {
+    foreach ($name in 'app (win-arm64)', 'app-installer (win-arm64)') {
         Check "the waived name '$name' is in the script" ($code.Contains("'$name'"))
     }
-    Check 'ci.yml still names the legs the script waives' ($ci.Contains('name: app (${{ matrix.runtime }})') -and $ci.Contains('name: app-installer (${{ matrix.runtime }})') -and $ci.Contains('runtime: win-arm64') -and $ci.Contains('"windows-11-arm"'))
+    Check 'the product ARM leg is absent from the helper allow-list' (-not $code.Contains("'product (windows-11-arm)'"))
+    Check 'ci.yml retains both Arm64 jobs and the non-waivable product ARM leg' ($ci.Contains('name: app (${{ matrix.runtime }})') -and $ci.Contains('name: app-installer (${{ matrix.runtime }})') -and $ci.Contains('runtime: win-arm64') -and $ci.Contains('"windows-11-arm"'))
 } finally {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
