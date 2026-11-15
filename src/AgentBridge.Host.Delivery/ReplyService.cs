@@ -374,6 +374,14 @@ public sealed class ReplyService : ISessionReplier
     // KeysWent: some or all of the reply may have reached the session, whatever the result.
     sealed record Attempt(ReplyResult? Result, Typed? Typed, bool KeysWent = false);
 
+    // Unwired #2568 planning entry: no authenticated lane or console capability reaches
+    // this boundary yet, so it must not authorize keys or fall back to Enter.
+    internal static bool TryPlanCopilotSubmit(SessionStatus status, string text, IReadOnlyList<string> rows, out KeyPlan? plan)
+    {
+        plan = null;
+        return false;
+    }
+
     async Task<Attempt> CopilotAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline, bool requireIdle, Func<bool>? stillCurrent)
     {
         // The session id names a folder; only the agent's own id shape is accepted.

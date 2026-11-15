@@ -3,6 +3,7 @@ using AgentBridge.Relay;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
+using AgentBridge.Host.Delivery.Copilot;
 using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -408,6 +409,42 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Equal(100, pid);
         // The line, then, after Copilot's pause, its Enter alone.
         Assert.Equal([("Looks good. Now open the PR – please 🚀", false, 300), ("", true, 0)], plan.Sends.Select(s => (s.Text, s.Enter, s.Enter ? s.EnterDelayMs : s.PauseAfterMs)));
+    }
+
+    [Fact]
+    public void A_queue_submit_without_console_capability_can_plan_Enter_once_idle_with_an_empty_safe_box()
+    {
+        var planned = ReplyService.TryPlanCopilotSubmit(SessionStatus.Idle, "next task", CopilotIdle, out var plan);
+
+        Assert.True(planned);
+        Assert.NotNull(plan);
+        var box = CopilotInputBoxReader.Read(CopilotIdle).Box!;
+        Assert.Collection(plan.Sends,
+            words =>
+            {
+                Assert.Equal(("next task", false), (words.Text, words.Enter));
+                Assert.Equal(box.Rows, words.Expect);
+            },
+            submit =>
+            {
+                Assert.Equal(("", true), (submit.Text, submit.Enter));
+                Assert.Equal([box.Rows[^1]], submit.Expect);
+            });
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    public void A_queue_submit_without_console_capability_has_no_plan_while_working_or_with_owner_input(bool working, bool draft)
+    {
+        var status = working ? SessionStatus.Working : SessionStatus.Idle;
+        var rows = working
+            ? Working(80, " \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue", draft ? "owner input" : "")
+            : CopilotBox("owner input");
+
+        Assert.False(ReplyService.TryPlanCopilotSubmit(status, "next task", rows, out var plan));
+        Assert.Null(plan);
     }
 
     [Theory]
