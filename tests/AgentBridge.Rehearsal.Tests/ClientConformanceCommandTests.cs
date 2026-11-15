@@ -86,6 +86,20 @@ public class ClientConformanceCommandTests
     }
 
     [Fact]
+    public void Windows_without_a_callback_preserves_the_existing_recorded_result_path()
+    {
+        using var s = new Scratch();
+        using var output = new StringWriter();
+        var pass = new ConformanceResult(Windows, "reply", ConformanceVerdict.Pass, "recorded", Link);
+
+        Assert.Equal(0, ClientConformanceCommand.Run(Input(s, Lines(pass), "Windows"), output));
+
+        var record = Assert.Single(Records(output.ToString()));
+        Assert.Equal(("Windows", "reply", "pass", Link.AbsoluteUri),
+            (record.Client, record.Capability, record.Verdict, record.Evidence));
+    }
+
+    [Fact]
     public void Windows_command_records_the_required_inventory_and_exits_zero_only_when_all_stub_rows_pass()
     {
         using var s = new Scratch();

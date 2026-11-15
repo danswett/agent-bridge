@@ -21,7 +21,7 @@ internal static class ClientConformanceCommand
             throw new UsageException($"No required run for client '{client}'.");
         var results = File.ReadLines(p.Option("--results")!).Where(line => !string.IsNullOrWhiteSpace(line))
             .Select(Read<ConformanceResult>).ToArray();
-        if (client == "Windows")
+        if (client == "Windows" && windowsClient is not null)
         {
             capabilities = ConformanceInventory.ForClient(client);
             var windowsResults = runs.Where(run => run.Client == client)

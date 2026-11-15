@@ -40,4 +40,17 @@ public class WindowsConformanceDriverTests
             Assert.Equal(ConformanceVerdict.Pass, result.Verdict);
         });
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void The_driver_refuses_callback_results_outside_the_required_run_or_inventory(bool wrongRun)
+    {
+        var required = ConformanceInventory.ForClient("Windows");
+        ConformanceResult? Invalid(ConformanceRun run, ConformanceCapability capability)
+            => new(wrongRun ? run with { RunId = "another-run" } : run,
+                wrongRun ? capability.Name : "unknown-capability", ConformanceVerdict.Fail, "invalid stub result");
+
+        Assert.Throws<ArgumentException>(() => WindowsConformanceDriver.Run(Windows, required, Invalid));
+    }
 }
