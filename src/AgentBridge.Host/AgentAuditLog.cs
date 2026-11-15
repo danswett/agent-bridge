@@ -23,8 +23,10 @@ public sealed record AgentAuditEntry(string Direction, string Request, string Pr
 // Agent actions and person host-CLI management, one JSON line per event in <profile>\audit\agents-YYYY-MM-DD.jsonl
 // or launches-YYYY-MM-DD.jsonl for session.launch, with a separate 16 MiB launch-history quota,
 // in a folder only this user can open. It keeps the SHA-256 and length of any text an event
-// carried and never the text, so reading the log leaks nothing a prompt held. Agent files keep at
-// most 30 days and 64 MiB, oldest files going first, and never the day's file being written.
+// carried and never the text, so reading the log leaks nothing a prompt held. Agent files target
+// 30 days and 64 MiB, oldest files first, never deleting the day's file being written.
+// Retention skips coverage-break or unverified roots/chains with a host-log warning,
+// but not audit-incomplete alone; blocked pruning can exceed the target.
 //
 // An unwritable log refuses the action (the #1401 row in design/agent-launch-scope.md): Append
 // returns false and never throws, and the caller must then refuse the action it was auditing
@@ -482,7 +484,9 @@ public sealed class AgentAuditLog
     void Retain(string folder, DateTimeOffset now)
     {
         var expected = ReadHead(folder, false);
-        if (expected is not null && Continuity(profile, false, log) != "none") { return; }
+        if (expected is not null && (HeadFault(folder, false) == "coverage-break"
+            || !VerifyProfile(profile, false, log, chainOnly: true).Intact))
+        { log("agent audit retention skipped: coverage-break or unverifiable chain"); return; }
         var today = now.UtcDateTime.Date;
         var files = new List<(DateTime Day, FileInfo Info)>();
         foreach (var f in new DirectoryInfo(folder).EnumerateFiles("agents-*.jsonl"))
@@ -503,8 +507,9 @@ public sealed class AgentAuditLog
             if (expected is not null)
             {
                 var next = files.First(f => f.Day > day).Info;
+                var removed = LastGateSequence(folder, false, info.FullName);
                 expected = expected with { Root = next.Name, RootSha256 = Hash(Encoding.UTF8.GetBytes(File.ReadLines(next.FullName).First())),
-                    RetiringRoot = info.Name, RetainedThrough = Math.Max(expected.RetainedThrough, LastGateSequence(folder, false, info.FullName)) };
+                    RetiringRoot = info.Name, RetainedThrough = Math.Max(expected.RetainedThrough, removed), Sequence = Math.Max(expected.Sequence, removed) };
                 // Commit the exact authorized deletion before removing evidence; a crash may leave this one file present.
                 SaveHead(folder, false, expected);
             }

@@ -185,17 +185,23 @@ a second journal. Neither diagnostic appends nor framing recovery clear faults.
 ### 4.2. Corrective retention and upgrade rules (2026-11-15, Q12 / #2625)
 
 Ordinary agents-file retention is the sole root-advance exception: under the writer
-lock, verify clean continuity first, then atomically checkpoint the successor root
+lock, verify the retained root and chain, then atomically checkpoint the successor root
 and hash BEFORE deleting the exact old file. Optional v1 `retiringRoot` identifies
 only that authorized deletion across a crash; `retainedThrough` persists the highest
-removed gate sequence. Preserve tail, length and sequence. A failed deletion may
+removed gate sequence. Preserve tail/length; never lower sequence, advancing it if a
+flushed retiring row was ahead of its checkpoint. A failed deletion may
 leave that one old file present, not authorize losing any other file. Never advance
-a faulted root. External root/interior loss remains `coverage-break`.
+a root with coverage loss or an unverifiable chain. External loss remains `coverage-break`.
 Physical continuity after authorized retention permits ordinary launches, including
 sequence gaps at or below the retained watermark; duplicates and later gaps still
 refuse. Gate run reports conservatively INVALIDATE after gated evidence is pruned,
 retain observed totals and award no eligible credit. This is not active-run archival
 or permission to certify a passing suffix; qualifying runs remain blocked on 9B.
+
+Sticky `audit-incomplete` alone does not block retention and remains in advanced
+heads. Coverage breaks or unverifiable roots/chains skip pruning with a host-log
+warning; history may then exceed its retention target. Sticky `audit-incomplete`
+still refuses launches until evidence health is repaired; 9A provides no repair.
 
 Upgrade bootstrap is an explicit writer operation before launch preflight, also used
 by gated append: only with NO heads, verify both existing chains before checkpointing
