@@ -20,6 +20,8 @@ Follow [AGENTS.md](https://github.com/danswett/agent-bridge/blob/main/AGENTS.md#
 Link required independent review evidence on the exact head, if applicable.
 Template completion does not waive any check or grant merge authority.
 
+- [ ] If arm64 failures are waived, Quality read each waived head run and its success `independent-review` receipt names each run ID.
+
 ## Handoff / next action
 
 State the next action, blocker and needed responder, or say none. If ownership changes,

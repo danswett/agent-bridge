@@ -1,12 +1,13 @@
 namespace AgentBridge.Host;
 
 public sealed record GateAuditMetadata(int V, Guid Operation, Guid Run, long Sequence, string Phase, string Path,
-    string ActorKind, Guid Incarnation, string ReasonCode, Guid? Question = null)
+    string ActorKind, Guid Incarnation, string ReasonCode, Guid? Question = null, string? LaunchBinding = null)
 {
     internal bool Valid(string action, string? target, string outcome) =>
         V == 1 && Operation != Guid.Empty && (Run != Guid.Empty || action is ("session.launch" or "session.answer") && Phase != "control") && Sequence > 0
         && Phase is "intent" or "terminal" or "control" && Path is "relay" or "local" or "legacy-ha"
         && ActorKind is "person-client" or "agent" or "ha-component"
+        && (LaunchBinding is null || action == "session.launch" && LaunchBinding.Length == 64 && LaunchBinding.All(char.IsAsciiHexDigit))
         && ReasonCode is "none" or "refused" or "failed" or "unconfirmed" or "busy" or "cancelled"
         && (Phase == "control" ? target == "profile" && (action is "gate.start" or "gate.pause" or "gate.reset" or "gate.seal")
             && (outcome is "prepared" or "paused" or "reset" or "sealed" or "invalidated")
@@ -39,12 +40,18 @@ internal static class GateAuditProjection
     internal static GateAuditReport Read(string profile, Guid run)
     {
         var (rows, complete) = Load(profile);
+        return Project(rows, complete, run);
+    }
+
+    internal static GateAuditReport Project(IReadOnlyList<AuditCommands.Row> rows, bool complete, Guid run, Guid? onlyOperation = null)
+    {
         var reasons = new HashSet<string>();
         if (run == Guid.Empty) { reasons.Add("missing-run-context"); }
         if (!complete) { reasons.Add("audit-incomplete"); }
         var sequences = rows.Where(r => r.Gate is not null).Select(r => r.Gate!.Sequence).Order().ToArray();
         if (sequences.Where((s, i) => s != i + 1L).Any()) { reasons.Add("sequence-break"); }
-        var selected = rows.Where(r => r.Gate is { } g && g.Run == run && g.Phase != "control").OrderBy(r => r.Gate!.Sequence).ToArray();
+        var selected = rows.Where(r => r.Gate is { } g && g.Run == run && g.Phase != "control"
+            && (onlyOperation is null || g.Operation == onlyOperation)).OrderBy(r => r.Gate!.Sequence).ToArray();
         if (selected.Length == 0) { reasons.Add("missing-run-evidence"); }
         var totals = new Dictionary<(string Action, string Path, string ActorKind), int>();
         var identities = new HashSet<(string Action, string? Target, Guid Incarnation, Guid? Question)>();
@@ -61,7 +68,8 @@ internal static class GateAuditProjection
             if (launch && !Guid.TryParseExact(first.Request, "D", out _)
                 || operation.Any(r => r.Action != first.Action || launch && r.Request != first.Request
                 || r.Target != first.Target && (!binding || r.Gate?.Phase != "terminal") || r.Gate is not { } other || other.Path != gate.Path
-                || other.ActorKind != gate.ActorKind || other.Incarnation != gate.Incarnation || other.Question != gate.Question)
+                || other.ActorKind != gate.ActorKind || other.Incarnation != gate.Incarnation || other.Question != gate.Question
+                || other.LaunchBinding != gate.LaunchBinding)
                 || rows.Any(r => r.Gate is { } other && other.Operation == gate.Operation && other.Run != run)
                 || terminals.Select(r => (r.Outcome, r.Gate!.ReasonCode, r.Target)).Distinct().Count() > 1)
             { invalidated = true; continue; }
