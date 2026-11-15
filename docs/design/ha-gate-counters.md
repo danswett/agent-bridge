@@ -172,6 +172,10 @@ lines 119-122 / 139-146 and section 6 lines 203-204 at frozen head
 `020a2144705fce430a0d6a309373285f977ad3f6`, section 5's void-run/admission rules,
 and section 6's INCOMPLETE torn-tail versus FAIL coverage-break table.
 
+9A uses v1 checkpoint metadata in `audit\agents.head` / `audit\launches.head`:
+original root, flushed tail, highest sequence and sticky fault, never totals or
+a second journal. Neither diagnostic appends nor framing recovery clear faults.
+
 ## 5. Continuous run and reset
 
 The person-class control entry points are `start`, `pause`, `reset` and `seal`.

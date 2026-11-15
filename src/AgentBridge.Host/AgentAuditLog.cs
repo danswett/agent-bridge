@@ -80,12 +80,18 @@ public sealed class AgentAuditLog
                 using var folderLock = Lock(folder);
                 if (entry.Gate is { } metadata)
                 {
-                    metadata = metadata with { Sequence = checked(Math.Max(LastGateSequence(folder, false), LastGateSequence(folder, true)) + 1) };
+                    metadata = metadata with { Sequence = checked(new[] { LastGateSequence(folder, false), LastGateSequence(folder, true),
+                        ReadHead(folder, false)?.Sequence ?? 0, ReadHead(folder, true)?.Sequence ?? 0 }.Max() + 1) };
                     if (!metadata.Valid(entry.Action, entry.Target, entry.Outcome)) { throw new IOException("invalid gate audit metadata"); }
                     line = line with { Gate = metadata, Reason = metadata.ReasonCode, DataSha256 = null, TextLength = null };
                 }
                 var launch = entry.Action == "session.launch";
+                var anchored = entry.Gate is not null || HasHeads(folder);
+                var expected = ReadHead(folder, launch);
+                string[] faults = anchored ? new[] { Continuity(profile, false, log), Continuity(profile, true, log) } : [];
+                var fault = faults.Contains("coverage-break") ? "coverage-break" : faults.FirstOrDefault(f => f != "none") ?? "none";
                 var file = Path.Combine(folder, FileFor(now, launch));
+                if (!File.Exists(file) && Path.GetFileName(file) == expected?.Tail) { throw new IOException("missing audit evidence must not be recreated"); }
                 if (Files(folder, launch).Any(f => StringComparer.Ordinal.Compare(f, file) > 0)) { throw new IOException("the agent audit clock moved backwards"); }
                 var length = File.Exists(file) ? new FileInfo(file).Length : 0;
                 // Only this file receives a separator; predecessor tails still require LF.
@@ -114,6 +120,7 @@ public sealed class AgentAuditLog
                 }
                 if (OperatingSystem.IsWindows()) { NarrowFileWindows(file); }
                 else { File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite); }
+                if (anchored) { WriteHead(folder, launch, expected, line.Gate?.Sequence ?? expected?.Sequence ?? 0, fault); }
                 if (failing) { failing = false; log("agent audit log is writing again"); }
                 // The line is already written: a retention fault is its own problem, not a lost event.
                 try { if (!launch) { Retain(folder, now); retentionFailing = false; } }
@@ -135,16 +142,22 @@ public sealed class AgentAuditLog
         }
     }
 
-    // The oldest retained header is the pruning anchor. A6 adds a durable head to detect terminal truncation.
     public (bool Intact, bool LegacyPrefix) Verify(bool launch = false)
+    {
+        lock (gate) { return VerifyProfile(profile, launch, log, synchronize: true); }
+    }
+
+    static (bool Intact, bool LegacyPrefix) VerifyProfile(string profile, bool launch, Action<string> log,
+        bool synchronize = false, bool chainOnly = false)
     {
         var legacy = false;
         try
         {
-            lock (gate)
+            var folder = synchronize ? PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded")
+                : Path.Combine(profile, FolderName);
+            using (var folderLock = synchronize ? Lock(folder) : null)
             {
-                var folder = PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded");
-                using var folderLock = Lock(folder);
+                var gated = false;
                 string? previous = null;
                 var chained = false;
                 foreach (var file in Files(folder, launch))
@@ -159,6 +172,7 @@ public sealed class AgentAuditLog
                         if (doc is null) { if (fragment) { return (false, legacy); } fragment = true; continue; }
                         if (reader.Read() || reader.BytesConsumed != Encoding.UTF8.GetByteCount(raw)) { return (false, legacy); }
                         var root = doc.RootElement;
+                        if (root.TryGetProperty("gate", out var metadata) && metadata.ValueKind != JsonValueKind.Null) { gated = true; }
                         if (!root.TryGetProperty("v", out var version))
                         {
                             if (chained || fragment) { return (false, legacy); }
@@ -178,11 +192,69 @@ public sealed class AgentAuditLog
                     }
                     if (index == 0 || fragment) { return (false, legacy); }
                 }
-                return (true, legacy);
+                return ((!gated || ReadHead(folder, launch) is { Sequence: > 0 }) && (chainOnly || HeadFault(folder, launch) == "none"), legacy);
             }
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
         { log($"agent audit chain could not be verified: {e.GetType().Name}"); return (false, legacy); }
+    }
+
+    sealed record Head([property: JsonRequired] int V,
+        [property: JsonRequired] string Root, [property: JsonRequired] string RootSha256,
+        [property: JsonRequired] string Tail, [property: JsonRequired] string TailSha256,
+        [property: JsonRequired] long Length, [property: JsonRequired] long Sequence = 0,
+        [property: JsonRequired] string Fault = "none");
+    static string HeadFile(string folder, bool launch) => Path.Combine(folder, launch ? "launches.head" : "agents.head");
+    internal static bool HasHeads(string folder) => File.Exists(HeadFile(folder, false)) || File.Exists(HeadFile(folder, true));
+    static Head? ReadHead(string folder, bool launch)
+    {
+        try { return JsonSerializer.Deserialize<Head>(File.ReadAllText(HeadFile(folder, launch)), Json) is
+                { V: 1, Root: not null, RootSha256: not null, Tail: not null, TailSha256: not null,
+                    Length: > 0, Sequence: >= 0, Fault: "none" or "audit-incomplete" or "coverage-break" } head
+                ? head : throw new IOException("invalid audit head"); }
+        catch (FileNotFoundException) { return null; }
+    }
+    static Head CaptureHead(string folder, bool launch)
+    {
+        var files = Files(folder, launch).ToArray();
+        return new(1, Path.GetFileName(files.First()), Hash(Encoding.UTF8.GetBytes(File.ReadLines(files.First()).First())),
+            Path.GetFileName(files.Last()), TailHash(files.Last(), promoteTail: true).Hash, new FileInfo(files.Last()).Length);
+    }
+    static string HeadFault(string folder, bool launch)
+    {
+        var expected = ReadHead(folder, launch);
+        if (expected is null) { return "none"; }
+        if (expected.Fault == "coverage-break" || !Files(folder, launch).Any()
+            || Files(folder, launch).Any(f => new FileInfo(f).Length == 0)) { return "coverage-break"; }
+        var actual = CaptureHead(folder, launch);
+        if (actual.Root != expected.Root || actual.RootSha256 != expected.RootSha256 || actual.Tail != expected.Tail) { return "coverage-break"; }
+        if (actual.TailSha256 != expected.TailSha256) { return "coverage-break"; }
+        if (actual.Length == expected.Length) { return expected.Fault; }
+        // Losing only LF does not prove that the complete JSON record's contents vanished.
+        return actual.Length > expected.Length || actual.Length == expected.Length - 1
+            && EndsWithoutNewline(Path.Combine(folder, actual.Tail)) ? "audit-incomplete" : "coverage-break";
+    }
+    internal static string Continuity(string profile, bool launch, Action<string> log)
+    {
+        try
+        {
+            var folder = Path.Combine(profile, FolderName);
+            var fault = HeadFault(folder, launch);
+            return VerifyProfile(profile, launch, log, chainOnly: true).Intact ? fault
+                : ReadHead(folder, launch) is null ? "audit-incomplete" : "coverage-break";
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
+        { log($"agent audit continuity unavailable: {e.GetType().Name}"); return "audit-incomplete"; }
+    }
+    static void WriteHead(string folder, bool launch, Head? previous, long sequence, string fault)
+    {
+        var head = CaptureHead(folder, launch);
+        // Advancing the head must not bless a suffix after its original root was lost.
+        head = head with { Root = previous?.Root ?? head.Root, RootSha256 = previous?.RootSha256 ?? head.RootSha256, Sequence = sequence, Fault = fault };
+        var file = HeadFile(folder, launch);
+        using (var stream = PrivateFolder.CreateNew(file + ".new"))
+        { stream.Write(JsonSerializer.SerializeToUtf8Bytes(head, Json)); stream.Flush(flushToDisk: true); }
+        File.Move(file + ".new", file, overwrite: true);
     }
 
     static FileStream Lock(string folder)

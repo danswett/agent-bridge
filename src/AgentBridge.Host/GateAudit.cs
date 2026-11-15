@@ -26,29 +26,31 @@ internal static class GateAuditProjection
         "session.launch" => "started", "session.answer" => "delivered", "session.stop" => "ended", _ => null
     };
 
-    internal static (List<AuditCommands.Row> Rows, bool Complete) Load(string profile)
+    internal static (List<AuditCommands.Row> Rows, bool Complete) Load(string profile, Action<string>? fault = null)
     {
         profile = System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(profile));
         var rows = new List<AuditCommands.Row>();
         var error = new StringWriter();
         var code = AuditCommands.Read(["audit", "--profile", System.IO.Path.GetFileName(profile)],
-            System.IO.Path.GetDirectoryName(profile)!, TextWriter.Null, error, rows.Add);
+            System.IO.Path.GetDirectoryName(profile)!, TextWriter.Null, error, rows.Add, fault);
         return (rows, code == 0 && error.GetStringBuilder().Length == 0);
     }
 
     internal static GateAuditReport Read(string profile, Guid run)
     {
-        var (rows, complete) = Load(profile);
+        var coverage = false;
+        var (rows, complete) = Load(profile, fault => coverage |= fault == "coverage-break");
         var reasons = new HashSet<string>();
         if (run == Guid.Empty) { reasons.Add("missing-run-context"); }
         if (!complete) { reasons.Add("audit-incomplete"); }
+        if (coverage) { reasons.Add("coverage-break"); }
         var sequences = rows.Where(r => r.Gate is not null).Select(r => r.Gate!.Sequence).Order().ToArray();
         if (sequences.Where((s, i) => s != i + 1L).Any()) { reasons.Add("sequence-break"); }
         var selected = rows.Where(r => r.Gate is { } g && g.Run == run && g.Phase != "control").OrderBy(r => r.Gate!.Sequence).ToArray();
         if (selected.Length == 0) { reasons.Add("missing-run-evidence"); }
         var totals = new Dictionary<(string Action, string Path, string ActorKind), int>();
         var identities = new HashSet<(string Action, string? Target, Guid Incarnation, Guid? Question)>();
-        var invalidated = false;
+        var invalidated = coverage;
         foreach (var operation in selected.GroupBy(r => r.Gate!.Operation))
         {
             var first = operation.First();
