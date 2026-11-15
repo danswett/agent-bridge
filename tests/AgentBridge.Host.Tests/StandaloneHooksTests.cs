@@ -1197,22 +1197,19 @@ public sealed class StandaloneHooksTests : IDisposable
         for (var run = 0; run < 50; run++)
         {
             var start = elapsed.Elapsed;
-            TimeSpan created, bodyFinished;
-            using (var fixture = new StandaloneHooksTests())
+            using var fixture = new StandaloneHooksTests();
+            var created = elapsed.Elapsed;
+            try
             {
-                created = elapsed.Elapsed;
-                try
-                {
-                    await fixture.Refresh_replaces_the_Windows_hook_while_its_previous_image_is_running();
-                    bodyFinished = elapsed.Elapsed;
-                }
-                catch (TimeoutException error)
-                {
-                    throw new TimeoutException($"Refresh iteration {run}: create={created - start}, body={elapsed.Elapsed - created}; "
-                        + $"completed: {string.Join("; ", completed)}; {TestTimeoutDiagnostics.Describe()}", error);
-                }
+                await fixture.Refresh_replaces_the_Windows_hook_while_its_previous_image_is_running();
+                completed.Add($"{run}: create={created - start}, body={elapsed.Elapsed - created}");
             }
-            completed.Add($"{run}: create={created - start}, body={bodyFinished - created}, dispose={elapsed.Elapsed - bodyFinished}");
+            catch (TimeoutException)
+            {
+                Console.Error.WriteLine($"Refresh iteration {run}: create={created - start}, body={elapsed.Elapsed - created}; "
+                    + $"completed: {string.Join("; ", completed)}; {TestTimeoutDiagnostics.Describe()}");
+                throw;
+            }
         }
     }
 
