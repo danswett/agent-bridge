@@ -43,6 +43,7 @@ internal static class Cli
 
     public static readonly CommandSpec[] Commands =
     [
+        new("usage-read", Usage: "usage-read: print the host's shared usage report as one figure per allowance"),
         new("conformance", Options: ["--client", "--runs", "--capabilities", "--results"],
             Required: ["--client", "--runs", "--capabilities", "--results"],
             Usage: "conformance --client <name> --runs <json> --capabilities <json> --results <jsonl>: print the named client's recorded conformance matrix; non-passing required rows exit 1"),
