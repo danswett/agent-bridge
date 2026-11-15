@@ -46,7 +46,6 @@
               "title": "Connector fixture",
               "status": "working",
               "statusSince": "2026-10-28T04:00:01.000Z",
-              "startedAt": "2026-10-28T03:00:00.000Z",
               "updatedAt": "2026-10-28T04:00:03.000Z",
               "processId": 100,
               "activity": {
@@ -87,7 +86,6 @@
           "title": "Connector fixture",
           "status": "working",
           "statusSince": "2026-10-28T04:00:01.000Z",
-          "startedAt": "2026-10-28T03:00:00.000Z",
           "updatedAt": "2026-10-28T04:00:03.000Z",
           "processId": 100,
           "activity": {
@@ -182,7 +180,6 @@
             "title": "Connector fixture",
             "status": "working",
             "statusSince": "2026-10-28T04:00:01.000Z",
-            "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:03.000Z",
             "processId": 100,
             "activity": {
