@@ -10,7 +10,7 @@ public class SourceTests
     static List<SessionEvent> Drain(SessionSubscription s) => DiscoveryTests.Drain(s);
 
     [Fact]
-    public async Task A_host_restart_preserves_a_proven_startedAt_and_a_replacement_renews_it()
+    public async Task An_unbound_start_stays_unknown_across_an_unobserved_return_host_restart_and_replacement()
     {
         using var f = new Fixture();
         var stateFile = Path.Combine(f.Root, "host-state.json");
@@ -18,6 +18,7 @@ public class SourceTests
         Fixture.Append(events, Copilot.User("first", 1));
         var firstStart = Fixture.T0.AddMinutes(-5);
         var replacementStart = Fixture.T0.AddMinutes(-1);
+        File.SetLastWriteTimeUtc(events, firstStart.AddMinutes(1).UtcDateTime);
         f.Processes.Run(AgentKind.Copilot, 100, $"copilot --resume --session-id {Id}", firstStart);
         DateTimeOffset? beforeRestart;
         await using (var source = f.Source(stateFile: stateFile))
@@ -26,6 +27,11 @@ public class SourceTests
             beforeRestart = source.Get(Id)!.StartedAt;
         }
 
+        var other = f.CopilotSession("99999999-9999-4999-8999-999999999999", 100, lockWrite: firstStart.AddMinutes(2));
+        Fixture.Append(other, Copilot.User("switched", 2));
+        File.SetLastWriteTimeUtc(other, firstStart.AddMinutes(3).UtcDateTime);
+        Fixture.Append(events, Copilot.User("returned", 3));
+        File.SetLastWriteTimeUtc(events, firstStart.AddMinutes(4).UtcDateTime);
         await using var restarted = f.Source(stateFile: stateFile);
         await restarted.RefreshAsync();
         var afterRestart = restarted.Get(Id)!.StartedAt;
@@ -33,12 +39,13 @@ public class SourceTests
         f.Processes.Run(AgentKind.Copilot, 101, $"copilot --resume --session-id {Id}", replacementStart);
         await restarted.RefreshAsync();
 
-        Assert.Equal((firstStart, firstStart, replacementStart),
-            (beforeRestart, afterRestart, restarted.Get(Id)!.StartedAt));
+        Assert.Null(beforeRestart);
+        Assert.Null(afterRestart);
+        Assert.Null(restarted.Get(Id)!.StartedAt);
     }
 
     [Fact]
-    public async Task A_queued_session_upsert_keeps_its_startedAt_when_process_binding_changes()
+    public async Task Queued_unbound_upserts_keep_their_own_process_and_no_startedAt()
     {
         using var f = new Fixture();
         var events = f.CopilotSession(Id, lockPid: null);
@@ -56,10 +63,11 @@ public class SourceTests
         await source.RefreshAsync();
         f.Time.Advance(TimeSpan.FromSeconds(1));
 
-        var starts = Drain(subscription)
+        var sessions = Drain(subscription)
             .Where(e => e.Name == Events.SessionUpsert)
-            .Select(e => ((Session)e.Data).StartedAt);
-        Assert.Equal([firstStart, replacementStart], starts);
+            .Select(e => (Session)e.Data).ToArray();
+        Assert.Equal(new int?[] { 200, 201 }, sessions.Select(s => s.ProcessId));
+        Assert.All(sessions, s => Assert.Null(s.StartedAt));
     }
 
     [Fact]

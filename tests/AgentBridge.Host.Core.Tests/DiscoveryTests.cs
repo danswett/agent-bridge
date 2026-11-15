@@ -56,7 +56,7 @@ public class DiscoveryTests
         Assert.Equal("octo/repo", s.Repository);
         Assert.Equal("main", s.Branch);
         Assert.Equal(100, s.ProcessId);
-        Assert.Equal(DateTimeOffset.Parse("2026-10-28T03:00:00Z"), s.StartedAt);
+        Assert.Null(s.StartedAt);
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public class DiscoveryTests
     }
 
     [Fact]
-    public async Task A_Copilot_startedAt_uses_a_directly_named_process_start()
+    public async Task A_Copilot_named_on_a_command_line_has_no_claimable_startedAt()
     {
         using var f = new Fixture();
         var startedAt = Fixture.T0.AddMinutes(-5);
@@ -98,7 +98,7 @@ public class DiscoveryTests
 
         await source.RefreshAsync();
 
-        Assert.Equal(startedAt, Assert.Single(source.Snapshot()).StartedAt);
+        Assert.Null(Assert.Single(source.Snapshot()).StartedAt);
     }
 
     [Fact]
