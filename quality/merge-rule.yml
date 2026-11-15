@@ -63,6 +63,7 @@ arm64_waiver:
   jobs:
     - app (win-arm64)
     - app-installer (win-arm64)
+    - product (windows-11-arm)
   until: 2026-11-20T08:00:00Z
   switch: ARM64_WAIVER
 

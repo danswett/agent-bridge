@@ -1225,7 +1225,7 @@ jobs:
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'red-minutes-script')) }}
         shell: pwsh
         run: pwsh -NoProfile -File quality/test-red-minutes.ps1
-      - name: The win-arm64 waiver waives only the two named legs, only before it expires
+      - name: "The waiver covers three named jobs: app (win-arm64), app-installer (win-arm64), product (windows-11-arm), only before expiry"
         # Fixed needs and jobs JSON: nothing reaches GitHub.
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'arm64-waiver-script')) }}
         shell: pwsh
@@ -1650,9 +1650,9 @@ jobs:
     steps:
       # Time-boxed win-arm64 waiver (#2564, owner decision 2026-11-13; quality/README.md §4.7):
       # while the repository variable ARM64_WAIVER is exactly "on" and before 2026-11-20 00:00 PT
-      # (08:00 UTC, checked in the script), only app (win-arm64) and app-installer (win-arm64)
-      # failures count as success below, on main and PRs. Raw jobs stay red; product failures,
-      # any API error or other failed job waive nothing.
+      # (08:00 UTC, checked in the script), only app (win-arm64), app-installer (win-arm64) and
+      # product (windows-11-arm) failures count as success below, on main and PRs. Raw jobs stay red.
+      # Publishing refuses raw app failures; x64, every other failure and any API error block.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ vars.ARM64_WAIVER == 'on' && contains(needs.*.result, 'failure') }}
         with:
