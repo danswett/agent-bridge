@@ -46,42 +46,15 @@ Several agent sessions often work here at once.
 
 Everything lands through a PR, including documentation.
 
-**Owner decisions, November 15, 2026, 08:05–08:55 PT, via Chief, supersede older guidance.**
+Keep this entry point small and nonstandard-only; load detailed policy on demand.
+The [current owner policy](docs/contributor-workflow.md#current-owner-policy)
+supersedes older guidance: 400 WHOLE lines in both repos, Quality-only PR custody
+and arming, guarded evidence, optional bots and protected held work.
 The [Fleet register](https://github.com/danswett/slipgates-fleet/blob/main/docs/pipeline-rules.md)
-records shared policy; the public rules here remain sufficient for contributors.
-
-- Both repositories have a **400 WHOLE changed-line cap**: additions plus deletions,
-  including docs, tests and carried unmerged changes against the actual authorized base.
-  Above 400 requires a written Chief exception bound to the exact head; none inherits.
-- PR2625's 650/700 and PR2650's freshness exceptions are spent, dated,
-  exact-head/condition-specific history, never standing permission.
-- General per-push admission remains **lifted**; specific held-head/sensitive-cut orders remain binding.
-- No standing admin bypass. Only main-green work has the exception until **Nov 16, 2026,
-  12:00 PT**; each use is logged on [#2454](https://github.com/danswett/agent-bridge/issues/2454)
-  with a removal step. It is not genuine green or a grant for unrelated work.
-- Guarded CI carry-over and three-behind freshness apply to **all PRs** under
-  [the separate evidence rules](quality/README.md#independent-review-depth).
-- Named tests, **ARM included**, become quarantine-eligible after **3 failures on
-  3 separate runs in 7 days, same signature, with an open issue**. Quality proposes;
-  the owner approves. Each entry names test/signature, issue, owner and expiry:
-  at most 7 days, **ARM at most 3 days with a passes-on-rerun check**.
-  Tests still run and report; no automatic quarantine, disabling or weakened assertions.
-  #2670's AnswerFlow Windows x64 exception is bounded to Nov 15, 2026, 23:59 PT.
-- Quarantine is not the ARM job waiver. That is the **only job-level exemption**:
-  never renewed past **Nov 20, 2026, 00:00 PT**; target removal **Nov 16 noon PT**,
-  removal after **3 consecutive green main runs**. Its exact switch/raw-job guards still apply.
-- Any main red, new flake or stalled PR gets a **named live-session DRI within
-  2 minutes**, recorded on #2454; cause or next step **with a time within 15 minutes**.
-- New reviewers: Claude `claude-sonnet-5.5` at **medium** and OpenAI `gpt-6.1-sol`;
-  a single reviewer is `gpt-6.1-sol`. Retained in-flight reviewers keep their model.
-  Quality classifies sensitive PRs with the evaluator; two independent families then
-  read security-subject docs in full and name the exact head. Authors never self-certify.
-- Product owns **one ordered backlog in agent-bridge**, interim #696; reconcile
-  Project 1 to it. Fleet #251 is only a pointer, never a second ranked authority.
-- Builders/reviewers never poll GitHub: at most one conditional read per 10 minutes
-  for the permitted own-PR failure evidence. Quality opens PRs and edits bodies;
-  ready-label cap 95, plain-English comments at most 8 lines, Fleet Actions
-  conservation through Dec 1. Specific holds and private work remain protected.
+is the sole standing decision/exception register, not a second register here.
+One designated Engineering writer proposes AGENTS changes through normal PRs,
+never direct-main agent edits. [Rule 17](docs/contributor-workflow.md#staged-rule-17)
+is adopted policy, but has **NO ROLLOUT BEFORE MAIN-GREEN IS DONE**.
 
 1. Prepare unpublished work from fresh `origin/main`; it may rebase, with affected validation repeated. Never rebase or force-push a published head: refresh it with a plain main-merge or child commit.
 2. Send scope, exact head and verification to Quality; Quality opens the PR and edits its body.
@@ -117,7 +90,7 @@ Keep iterative PRs draft (fast CI only); submit readiness to Quality. Never push
 
 - `dotnet test AgentBridge.slnx` runs on Windows and Linux in CI.
 - Every suite, with its ring and where it runs, is listed in [quality/catalog.yml](quality/catalog.yml); the test plan is [quality/README.md](quality/README.md).
-- Builders may run focused local tests for their own cut on approved hosts. Full or hosted verification is CI-only; Quality orders anything beyond. Broad `quality/run.ps1` examples are not permission to run a full local suite.
+- Builders may run focused local tests for their own cut on approved hosts. Full or hosted verification is CI-only; anything beyond needs Quality's written order and SRE clearance. Specific holds stay binding; broad `quality/run.ps1` examples are not full-local-run permission.
 - Where api.nuget.org is blocked, set `AGENT_BRIDGE_NUGET_SOURCE` to a NuGet mirror's index.json, and run.ps1 restores and audits through it ([quality/README.md §4](quality/README.md#4-choosing-tests-from-what-changed)); never commit the mirror into nuget.config.
 - If you touch `pwa/`, run its unit and Playwright tests (see `pwa/README.md`).
 - New behaviour gets a few focused tests whose names read as sentences, and each one fails without the change.

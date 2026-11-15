@@ -31,8 +31,9 @@ Use the existing patterns and add focused tests for changed behavior. Update rel
 documentation in the same PR. [quality/README.md](quality/README.md) explains the
 test harness and [quality/catalog.yml](quality/catalog.yml) lists suites.
 Run focused tests for your own cut on approved hosts under
-[AGENTS.md](AGENTS.md#tests). Full verification is CI-only; Quality orders
-anything beyond the focused local cut. Report skipped or unavailable checks;
+[AGENTS.md](AGENTS.md#tests). Full verification is CI-only; beyond the focused
+local cut needs Quality's written order and SRE clearance. Preserve specific holds;
+report skipped or unavailable checks;
 a local result is not hosted proof.
 
 If a prerequisite is missing, report exactly what failed and what you need; do not

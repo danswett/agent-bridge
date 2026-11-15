@@ -512,9 +512,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
 9. **The merge rule, enforced (#452):** main's ruleset ([`ruleset-main.json`](ruleset-main.json))
    requires `quality-gate` from GitHub Actions and `merge-rule` from the merge-rule GitHub App,
    plus resolved threads, squash merges and no force pushes or deletion. No standing
-   bypass exists; only AGENTS.md's bounded main-green owner exception applies.
+   bypass exists; only the Fleet register's bounded main-green owner exception applies.
    Copilot is optional. Quality alone gates and arms auto-merge pinned to the exact
    head; GitHub merges when required checks pass. Builders never arm or merge.
+   The [single Fleet pipeline register](https://github.com/danswett/slipgates-fleet/blob/main/docs/pipeline-rules.md)
+   owns standing decisions/exceptions; this section describes Bridge operations only.
    - `merge-rule` is a commit status that main's copy of `.github/workflows/merge-rule.yml` posts
      on each open pull request's head, from `agent-bridge-quality merge-rule` (`MergeRule.cs`) and
      the rules in [`merge-rule.yml`](merge-rule.yml): main green, that is its newest completed
@@ -602,8 +604,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      reads that checkout's evaluator and `quality/merge-rule.yml`, so a pull request's own would
      judge it. It prints the commit they came from, and refuses unless that's `origin/main`'s
      with no local changes to them (`--allow-non-main` judges anyway, with a warning).
-     This example is not execution permission: Quality orders evaluator work and
-     anything beyond a builder's focused local tests on an approved host.
+     This example is not execution permission: evaluator work and anything beyond
+     focused own-cut tests on an approved host need Quality's written order/SRE clearance.
    - A head whose facts can't be read gets `error`, which fails the required check like failure,
      so an earlier success doesn't stand; a hold label, read with the open list, still fails it.
      When the open list itself stops partway, no head gets success from that run: a held pull
@@ -681,7 +683,7 @@ pwsh quality/run.ps1 -Suite pwa-ui,host
 ```
 
 Builders may run focused local tests for their own cut on approved hosts.
-Full or hosted verification is CI-only; Quality orders anything beyond.
+Full or hosted verification is CI-only; beyond that needs Quality's written order/SRE clearance.
 The broad commands above illustrate tooling, not permission for full local runs.
 Unavailable tools and CI-only/planned suites are reported explicitly.
 

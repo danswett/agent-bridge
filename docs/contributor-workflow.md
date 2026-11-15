@@ -20,7 +20,7 @@ Outside contributors (pull requests only, no fleet access) start with
 | Repository docs and approved designs | Durable architecture, roadmap and decisions; not a minute-by-minute activity log |
 
 [Product, #696](https://github.com/danswett/agent-bridge/issues/696), is the interim
-home of the ONE ordered backlog in agent-bridge, managed and reordered by Product.
+home of the ONE ordered backlog in agent-bridge pending its repo file, managed and reordered by Product.
 Reconcile Project 1 to that order; Fleet #251 is a pointer, not a second backlog.
 Docs-only PRs use Quality's fast lane. SG Chief of Staff records priority decisions on canonical issues and
 owns issue triage, deduplication, routing and escalation.
@@ -70,6 +70,42 @@ Delegation does not transfer the contributor's permissions to the agent.
 [Shiproom protocol](#running-shiproom); do not infer enrollment from a repository
 visit or a coding assignment. Existing active coordinators retain their accepted
 obligations until an explicit handoff or stand-down.
+
+## Current owner policy
+
+The [Fleet register](https://github.com/danswett/slipgates-fleet/blob/main/docs/pipeline-rules.md)
+is the single standing pipeline register; its dated owner-decisions companion
+retains quotes/provenance. Do not copy its exception/decision register into Bridge.
+Operationally: 400 WHOLE changed lines in either repo includes docs, tests and
+carried changes; larger cuts need written exact-head Chief authority.
+Quality opens PRs/edits bodies, alone gates/arms; GitHub merges on required checks.
+General per-push admission is lifted, not specific held-head/sensitive-cut orders.
+Builders/reviewers never poll: at most one conditional own-PR failure-evidence read
+per 10 minutes. Ready cap 95, plain-English comments <=8 lines; conserve Fleet
+Actions until Dec 1. Do not infer quarantine/waiver approval or runtime switch state.
+Any red main/new flake/stalled PR gets a live-session DRI within 2 minutes on
+agent-bridge #2454, cause or next step with a time within 15 minutes.
+Apply [guarded evidence rules](../quality/README.md#independent-review-depth);
+owner exceptions and spent records belong only in Fleet's register.
+
+### Staged rule 17
+
+Authority: current Chief relay in this assignment, **Nov 15, 2026, 09:30 PT**;
+not a claim that the earlier answered-owner file already contains this rule.
+Adopt all three below, with **NO ROLLOUT BEFORE MAIN-GREEN IS DONE**:
+
+1. Agent messages have one kind: ASSIGN, ACCEPT, REPORT, BLOCKER, DECISION, ASK or ACK;
+   fixed fields `subjectid`, `owner`, `duePT`, `evidencepath/link`, `state`, plus a
+   short body. Free text belongs only in the body. The helper validates/refuses
+   malformed envelopes; SRE designs validation after green (not implemented here).
+2. Every custody hold, region reservation and task claim has an owner and expiry
+   date, with explicit renewal/release. Missing expiry is NEVER implied release;
+   preserve existing held work. Fleet Ops owns roster/claim-expiry reconciliation.
+3. AGENTS stays small/nonstandard-only, with detail loaded on demand; one designated
+   Engineering writer proposes changes through normal PRs, never direct-main agent edits.
+   Fleet Quality remains sole Fleet source writer. SRE owns the after-green
+   registry/resolver design due 10:30 PT. Until rollout, retain current transport,
+   messaging and custody protections; this is not a helper implementation or launch grant.
 
 ## Readiness and review evidence
 
