@@ -1192,10 +1192,27 @@ public sealed class StandaloneHooksTests : IDisposable
     public async Task Refresh_replaces_the_running_Windows_hook_fifty_consecutive_times()
     {
         if (!OperatingSystem.IsWindows()) { return; }
+        var elapsed = Stopwatch.StartNew();
+        var completed = new List<string>();
         for (var run = 0; run < 50; run++)
         {
-            using var fixture = new StandaloneHooksTests();
-            await fixture.Refresh_replaces_the_Windows_hook_while_its_previous_image_is_running();
+            var start = elapsed.Elapsed;
+            TimeSpan created, bodyFinished;
+            using (var fixture = new StandaloneHooksTests())
+            {
+                created = elapsed.Elapsed;
+                try
+                {
+                    await fixture.Refresh_replaces_the_Windows_hook_while_its_previous_image_is_running();
+                    bodyFinished = elapsed.Elapsed;
+                }
+                catch (TimeoutException error)
+                {
+                    throw new TimeoutException($"Refresh iteration {run}: create={created - start}, body={elapsed.Elapsed - created}; "
+                        + $"completed: {string.Join("; ", completed)}; {TestTimeoutDiagnostics.Describe()}", error);
+                }
+            }
+            completed.Add($"{run}: create={created - start}, body={bodyFinished - created}, dispose={elapsed.Elapsed - bodyFinished}");
         }
     }
 

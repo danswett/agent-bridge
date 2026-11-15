@@ -609,30 +609,46 @@ public sealed class SignInTests(ITestOutputHelper output)
     [InlineData(true)]
     public async Task Terminal_delivery_and_receipt_replay_cancel_the_underlying_send_on_deadline(bool replay)
     {
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        void Mark(string phase) => output.WriteLine($"{elapsed.Elapsed}: {phase}");
         await using var h = await Harness.CreateAsync();
+        Mark("harness created");
         var phone = h.Phone();
         var request = Guid.NewGuid();
         await h.Start(phone, request).Then(phone);
         await h.Factory.Started.Task.WaitAsync(Patience);
+        Mark("process started");
         h.Factory.Process.OutputPipe.Put(Frame(h.Time));
         await phone.Code.Task.WaitAsync(Patience);
+        Mark("code delivered");
         Task? replaying = null;
         try
         {
             phone.BlockSends = !replay;
             h.Factory.Process.Complete();
+            Mark("process completed");
             if (replay)
             {
                 await phone.Done.Task.WaitAsync(Patience);
+                Mark("terminal event delivered");
                 phone.BlockSends = true;
                 replaying = h.Start(phone, request).Then(phone);
             }
             await phone.SendBlocked.Task.WaitAsync(Patience);
+            Mark("send blocked");
             h.Time.Advance(h.Service.CheckLimit + TimeSpan.FromSeconds(1));
             await phone.SendFinished.Task.WaitAsync(Patience);
+            Mark("send finished");
             if (replaying is not null) { await replaying.WaitAsync(Patience); }
             Assert.True(phone.HeldToken.IsCancellationRequested);
             Assert.Equal(0, phone.PendingSends);
+        }
+        catch (TimeoutException)
+        {
+            output.WriteLine($"{elapsed.Elapsed}: done={phone.Done.Task.IsCompleted}; disposing={h.Factory.Process.Disposing.Task.IsCompleted}; "
+                + $"blocked={phone.SendBlocked.Task.IsCompleted}; finished={phone.SendFinished.Task.IsCompleted}; "
+                + TestTimeoutDiagnostics.Describe());
+            throw;
         }
         finally { phone.ReleaseSends.TrySetResult(); }
     }
