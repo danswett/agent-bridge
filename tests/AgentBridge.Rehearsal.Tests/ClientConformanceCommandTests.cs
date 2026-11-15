@@ -23,12 +23,12 @@ public class ClientConformanceCommandTests
             using var json = JsonDocument.Parse(line);
             var root = json.RootElement;
             var run = root.GetProperty("run");
-            var evidence = root.GetProperty("evidence");
+            var hasEvidence = root.TryGetProperty("evidence", out var evidence);
             return (run.GetProperty("client").GetString()!, run.GetProperty("version").GetString()!,
                 run.GetProperty("protocolVersion").GetInt32(), run.GetProperty("implementationHead").GetString()!,
                 run.GetProperty("runId").GetString()!, root.GetProperty("capability").GetString()!,
                 root.GetProperty("verdict").GetString()!, root.GetProperty("reason").GetString()!,
-                evidence.ValueKind == JsonValueKind.Null ? null : evidence.GetString());
+                !hasEvidence || evidence.ValueKind == JsonValueKind.Null ? null : evidence.GetString());
         }).ToArray();
 
     [Theory]
