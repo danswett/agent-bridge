@@ -790,6 +790,9 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   restore-by date 3 days out, the `quarantined` label, an owner, as in #1493. The flake record is
   the `flaky` label and its issues, one per test,
   each with its run links and counts.
+  #2670 temporarily excludes its named AnswerFlow test only from the unfiltered Windows x64
+  product gate until Nov 15, 23:59 PT; a separate run records its result, while missing evidence
+  and every other failure remain gating. After expiry the test gates normally.
   - **The nightly flake hunt** (`flake-hunt`, ring 3, [flake-hunt.yml](../.github/workflows/flake-hunt.yml),
     #509) finds them before they turn a pull request or `main` red. At about 02:30 PT it runs
     every .NET test project 10 times on `ubuntu-latest`, `windows-latest` and `windows-11-arm`.

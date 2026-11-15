@@ -319,14 +319,59 @@ jobs:
       # (quality/README.md §5): nothing here fails the run but the tests themselves. TEST_FILTER is
       # ring 0's in-process filter on a draft (the fast ring), and empty otherwise: every test runs.
       - name: dotnet test, with coverage and per-test times
+        id: product-test
         if: env.DOTNET_TARGET != ''
         shell: pwsh
         run: |
-          $filter = if ($env:TEST_FILTER) { " --filter `"$env:TEST_FILTER`"" } else { '' }
+          $filterText = $env:TEST_FILTER
+          $quarantineError = $null
+          $quarantineActive = $false
+          if ($env:MATRIX_OS -eq 'windows-latest' -and $env:RUNNER_ARCH -eq 'X64' -and -not $filterText) {
+            try {
+              $hostSelected = $env:WHOLE_SOLUTION -eq 'true' -or
+                @($env:TEST_PROJECTS | ConvertFrom-Json | ForEach-Object { $_ -replace '\\', '/' }) -contains 'tests/AgentBridge.Host.Tests'
+              if ($hostSelected) {
+                $plan = & pwsh -NoProfile -File quality/quarantine-filter.ps1 -Mode Plan -Manifest quality/quarantine.json | ConvertFrom-Json
+                if ($LASTEXITCODE -ne 0 -or $null -eq $plan.active) { throw 'Quarantine plan failed.' }
+                if ($plan.active) {
+                  $discovery = Join-Path $env:RUNNER_TEMP 'quarantine-discovery.txt'
+                  dotnet test tests/AgentBridge.Host.Tests -c Release --no-build --nologo --list-tests | Tee-Object -FilePath $discovery
+                  if ($LASTEXITCODE -ne 0) { throw 'Quarantine test discovery failed.' }
+                  & pwsh -NoProfile -File quality/quarantine-filter.ps1 -Mode Discovery -Evidence $discovery -Name $plan.name
+                  if ($LASTEXITCODE -ne 0) { throw 'Quarantine test discovery did not match exactly once.' }
+                  "quarantine_name=$($plan.name)" | Add-Content $env:GITHUB_OUTPUT -ErrorAction Stop
+                  $filterText = $plan.gateFilter
+                  $quarantineActive = $true
+                }
+              }
+            } catch {
+              $quarantineError = $_.Exception.Message
+              Write-Warning "Quarantine unavailable; all selected tests remain gating: $quarantineError"
+            }
+          }
+          $filter = if ($filterText) { " --filter `"$filterText`"" } else { '' }
           dotnet tool run dotnet-coverage collect --nologo -s build/coverage.settings.xml -f cobertura -o TestResults/coverage.cobertura.xml "dotnet test $env:DOTNET_TARGET -c Release --no-build --nologo --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini --results-directory TestResults --logger trx$filter"
+          $testExit = $LASTEXITCODE
+          if ($quarantineActive) {
+            & pwsh -NoProfile -File quality/quarantine-filter.ps1 -Mode Gate -Evidence TestResults
+            if ($LASTEXITCODE -ne 0) { $quarantineError = 'The gate produced no valid executed-test evidence.' }
+          }
+          if ($testExit -ne 0) { exit $testExit }
+          if ($quarantineError) { exit 1 }
         timeout-minutes: 20
         env:
           DOTNET_COVERAGE_TELEMETRY_OPTOUT: '1'
+          MATRIX_OS: ${{ matrix.os }}
+      - name: Report the quarantined AnswerFlow test
+        if: (success() || failure()) && steps.product-test.outputs.quarantine_name != ''
+        shell: pwsh
+        env:
+          QUARANTINE_NAME: ${{ steps.product-test.outputs.quarantine_name }}
+        run: |
+          dotnet test tests/AgentBridge.Host.Tests -c Release --no-build --nologo --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini --results-directory TestResults/Quarantine --logger "console;verbosity=normal" --logger "trx;LogFileName=quarantine.trx" --filter "FullyQualifiedName=$env:QUARANTINE_NAME"
+          $testExit = $LASTEXITCODE
+          & pwsh -NoProfile -File quality/quarantine-filter.ps1 -Mode Report -Evidence TestResults/Quarantine/quarantine.trx -Name $env:QUARANTINE_NAME -TestExit $testExit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Coverage and timing report
         # Also after a failure: the slowest tests are most useful then. A fault in the report
         # itself must not fail the build, since nothing is gated on coverage yet.
