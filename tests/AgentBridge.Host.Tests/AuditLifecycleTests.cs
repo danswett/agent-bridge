@@ -115,7 +115,7 @@ public sealed class AuditLifecycleTests : LaunchFlowFixture
         {
             if (release)
             {
-                Assert.False(pending.Wait(TimeSpan.FromMilliseconds(100)));
+                Assert.NotSame(pending, await Task.WhenAny(pending, Task.Delay(TimeSpan.FromMilliseconds(100))));
                 held.Dispose();
             }
             Assert.Equal(release, await pending.WaitAsync(TimeSpan.FromSeconds(5)));
