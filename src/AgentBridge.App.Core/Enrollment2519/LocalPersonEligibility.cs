@@ -22,12 +22,10 @@ internal enum EnrollmentCaller
 internal static class LocalPersonEligibility
 {
     internal static bool CanEnroll(EnrollmentOrigin origin, AgentKind sessionKind, EnrollmentCaller caller, bool readOnly)
-    {
-        if (origin != EnrollmentOrigin.Local || !IsSupportedSessionKind(sessionKind) || caller != EnrollmentCaller.App || readOnly)
-            return false;
-
-        return false;
-    }
+        => origin == EnrollmentOrigin.Local
+            && IsSupportedSessionKind(sessionKind)
+            && caller == EnrollmentCaller.App
+            && !readOnly;
 
     static bool IsSupportedSessionKind(AgentKind sessionKind) => sessionKind switch
     {
