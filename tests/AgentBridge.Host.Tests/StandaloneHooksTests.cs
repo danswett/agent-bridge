@@ -1193,23 +1193,14 @@ public sealed class StandaloneHooksTests : IDisposable
     {
         if (!OperatingSystem.IsWindows()) { return; }
         var elapsed = Stopwatch.StartNew();
-        var completed = new List<string>();
         for (var run = 0; run < 50; run++)
         {
             var start = elapsed.Elapsed;
             using var fixture = new StandaloneHooksTests();
             var created = elapsed.Elapsed;
-            try
-            {
-                await fixture.Refresh_replaces_the_Windows_hook_while_its_previous_image_is_running();
-                completed.Add($"{run}: create={created - start}, body={elapsed.Elapsed - created}");
-            }
-            catch (TimeoutException)
-            {
-                Console.Error.WriteLine($"Refresh iteration {run}: create={created - start}, body={elapsed.Elapsed - created}; "
-                    + $"completed: {string.Join("; ", completed)}; {TestTimeoutDiagnostics.Describe()}");
-                throw;
-            }
+            Console.Error.WriteLine($"Refresh iteration {run}: create={created - start}; body starting at {created}");
+            await fixture.Refresh_replaces_the_Windows_hook_while_its_previous_image_is_running();
+            Console.Error.WriteLine($"Refresh iteration {run}: body={elapsed.Elapsed - created}");
         }
     }
 
