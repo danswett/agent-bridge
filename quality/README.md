@@ -509,7 +509,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    failure, a nightly job asks whether ring 1's selection for that PR would have included
    the failing test. A **selection miss** is a bug in the catalog. It gets an issue, and the
    rate is a tracked metric (target: zero).
-9. **The merge rule, enforced (#452):** main's ruleset ([`ruleset-main.json`](ruleset-main.json))
+9. **Merge policy and current enforcement (#452):** main's ruleset ([`ruleset-main.json`](ruleset-main.json))
    requires `quality-gate` from GitHub Actions and `merge-rule` from the merge-rule GitHub App,
    plus resolved threads, squash merges and no force pushes or deletion. No standing
    bypass exists; only the Fleet register's bounded main-green owner exception applies.
@@ -517,6 +517,17 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    head; GitHub merges when required checks pass. Builders never arm or merge.
    The [single Fleet pipeline register](https://github.com/danswett/slipgates-fleet/blob/main/docs/pipeline-rules.md)
    owns standing decisions/exceptions; this section describes Bridge operations only.
+   **Reader enforcement is STALE:** the current evaluator/config can accept one
+   independent receipt plus completed Copilot instead of the required second family.
+   Before arming or permitting merge, Quality MUST manually verify authorized
+   posters and Quality-only posting; actual approved model/effort (or approved
+   retained continuity); successful receipts backed by linked CLEAN review verdicts explicitly
+   naming the PR's current full head SHA; reviewer independence/non-authorship;
+   and completed required whole/security reads. Ordinary PRs need one required
+   independent receipt (new single reads: `gpt-6.1-sol`); sensitive/two-family heads
+   need BOTH independent, distinct-family receipts. Copilot NEVER counts.
+   Green evaluator/bot credit is insufficient; missing proof holds the PR.
+   Reader requirements below describe policy, not complete technical enforcement.
    - `merge-rule` is a commit status that main's copy of `.github/workflows/merge-rule.yml` posts
      on each open pull request's head, from `agent-bridge-quality merge-rule` (`MergeRule.cs`) and
      the rules in [`merge-rule.yml`](merge-rule.yml): main green, that is its newest completed
@@ -562,7 +573,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      pending; the evaluator prints them as non-gating jobs for Quality's main-red log.
      Unreadable history, plan or product data fails closed without fallback. No usable run in
      the bounded history also holds with an explicit reason. The fix itself gets the `fixes-main`
-     label (`main_green.exempt_labels`) from the merge coordinator, since labels take triage
+     label (`main_green.exempt_labels`) from Quality, since labels take triage
      rights: it skips this check and nothing else, the independent review included. CI finishing
      on main starts a run, so verdicts follow main to red and back.
    - The standing rule (owner decision 2026-11-08, replacing the 2026-11-05 label of #955):

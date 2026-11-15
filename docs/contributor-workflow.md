@@ -6,8 +6,11 @@ Start with [CONTRIBUTING.md](../CONTRIBUTING.md).
 this page does not create exceptions to them.
 Current role holders and their acceptance links live in
 [status: running work](status.md#running-work), not in this procedure.
-Outside contributors (pull requests only, no fleet access) start with
-[outside-contributors.md](outside-contributors.md).
+Outside contributors (pull requests only, no fleet access) may use
+[outside-contributors.md](outside-contributors.md) for background. Where it
+conflicts, that guide is historical/superseded, not a source of permission:
+current AGENTS and the Fleet register control; published heads never rebase or
+force-push, and Quality controls PR/body custody, receipt posting and arming.
 
 ## Operational sources of truth
 
@@ -126,7 +129,7 @@ never rebase or force-push. Holds, trust, safety and required checks remain bind
 Quality alone opens PRs, edits bodies, gates and arms; authors submit packets.
 Quality's [operating receipt](https://github.com/danswett/agent-bridge/issues/170#issuecomment-6617409924)
 allows ready PRs while main CI is pending; AGENTS.md defines the main-red gate and
-the coordinator-controlled fix-forward exception.
+the Quality-controlled fix-forward exception.
 
 On the PR, report:
 
