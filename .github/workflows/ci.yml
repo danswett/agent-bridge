@@ -765,6 +765,10 @@ jobs:
           Write-AppDistributionEvidence -Publish "$env:RUNNER_TEMP/installer-input/publish" -Releases '${{ matrix.out }}/releases' -Version $env:APP_VERSION -Runtime '${{ matrix.runtime }}' -Installed "$root/current" -Out "$logs/distribution-evidence.json"
           ./build/app-self-test.ps1 -Exe "$root/current/AgentBridge.exe" -Result "$logs/result.json" -TimeoutSeconds 720
           exit $LASTEXITCODE
+      - name: A failed installed self-test includes the app process exit cause
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: ./build/test-app-self-test-cause.ps1 -Evidence "$env:RUNNER_TEMP/selftest/installed/app-exit-cause.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
