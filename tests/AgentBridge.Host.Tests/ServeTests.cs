@@ -195,6 +195,46 @@ public sealed partial class ServeTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Subscribing_sends_host_roster_metadata_and_keeps_unknown_outcomes_unknown()
+    {
+        var processStartedAt = Fixture.T0.AddMinutes(-5);
+        f.Processes.Run(AgentKind.Copilot, 100, startedAt: processStartedAt);
+        await source.RefreshAsync();
+        var ch = await OpenAsync();
+        var machine = Result(await ch.RequestAsync(Ops.Hello, new { }))
+            .GetProperty("machine").GetProperty("id").GetString()
+            ?? throw new InvalidOperationException("The host hello omitted its machine id.");
+
+        Result(await ch.RequestAsync(Ops.SessionsSubscribe, new { }));
+        var snapshot = await SnapshotAsync(ch);
+        Assert.Equal([Events.SessionUpsert, Events.SessionsSynced], snapshot.Select(e => e.Name));
+        Assert.Equal("working", snapshot[0].Data.GetProperty("status").GetString());
+        AssertRosterRow(snapshot[0].Data, machine, processStartedAt);
+
+        await ChangeAsync("finished this turn", 4);
+        var live = await NextAsync(ch);
+        Assert.Equal(Events.SessionUpsert, live.Name);
+        Assert.Equal("idle", live.Data.GetProperty("status").GetString());
+        AssertRosterRow(live.Data, machine, processStartedAt);
+        Assert.Equal(snapshot[^1].Seq + 1, live.Seq);
+    }
+
+    static void AssertRosterRow(JsonElement row, string machine, DateTimeOffset processStartedAt)
+    {
+        var missing = new[] { "machine", "owner", "pr", "finished", "startedAt" }
+            .Where(name => !row.TryGetProperty(name, out _)).ToArray();
+        Assert.Empty(missing);
+        Assert.Equal(machine, row.GetProperty("machine").GetString());
+        Assert.Equal(processStartedAt, row.GetProperty("startedAt").GetDateTimeOffset());
+        foreach (var name in new[] { "owner", "pr", "finished" })
+        {
+            var evidence = row.GetProperty(name);
+            Assert.Equal(JsonValueKind.Object, evidence.ValueKind);
+            Assert.Equal("unknown", evidence.GetProperty("state").GetString());
+        }
+    }
+
+    [Fact]
     public async Task Subscribing_again_replaces_the_subscription_resends_the_snapshot_and_continues_seq()
     {
         var ch = await OpenAsync();
