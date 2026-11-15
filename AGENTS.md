@@ -129,7 +129,10 @@ text or issues. Keep tokens only in process or user environment, never files. If
 echo a secret, do not run it in that form. A
 leaked signing key once forced a production rotation. This repository is public: keep
 home-network details, IP addresses and personal account credentials out of it.
-GitHub reads use the process-only danswett token; writes use the Fleet App token
+GitHub reads use the process-only danswett token. Quality posts PR comments, commit
+statuses, reruns and arming on this repository with the same `danswett` account, a
+per-command process-only token from the `gh` keyring (owner decision, Nov 15, 2026, no
+expiry); other writes (issue creation and edits, public pulses) use the Fleet App token
 (mint, post, revoke). Never print, persist or share either credential.
 
 To have gitleaks check each commit for secrets before it is made, run `pre-commit install` once per clone (needs [pre-commit](https://pre-commit.com); see `.pre-commit-config.yaml`).
