@@ -516,8 +516,12 @@ the owner), `chain`, `action`, `target`, `outcome`, `reason`, and, when the even
 characters, every other field at 256, and the chain at 16 entries.
 Person host-CLI management actions use `person:local` with direction `local` in this same stream.
 
-The host keeps at most 30 days and 64 MiB, deleting the oldest day's file first and never the
-file being written. That file is bounded too: once a line would take it past 64 MiB the write
+The host normally targets 30 days and 64 MiB, deleting the oldest day's file first and never
+the file being written. Sticky `audit-incomplete` does not stop retention; coverage breaks
+or unverifiable roots/chains do, with a host-log warning. While pruning is blocked, total
+history can exceed the target. Sticky `audit-incomplete` still refuses launches until
+evidence health is repaired; 9A provides no repair command. The current day's file is
+bounded too: once a line would take it past 64 MiB the write
 returns false and the audited action is refused until the next day. A future-dated file (a clock
 stepped back) does not count toward the size. Age pruning never trusts a clock that has jumped ahead of the newest earlier
 file, and size pruning stops at a file it cannot delete. A line torn by a crash is not joined to
