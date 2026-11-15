@@ -12,7 +12,7 @@ internal static class ClientConformanceCommand
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
     };
 
-    public static int Run(Parsed p, TextWriter output)
+    public static int Run(Parsed p, TextWriter output, WindowsConformanceCallback? windowsClient = null)
     {
         var runs = ReadArray<ConformanceRun>(p.Option("--runs")!);
         var capabilities = ReadArray<ConformanceCapability>(p.Option("--capabilities")!);
@@ -21,6 +21,13 @@ internal static class ClientConformanceCommand
             throw new UsageException($"No required run for client '{client}'.");
         var results = File.ReadLines(p.Option("--results")!).Where(line => !string.IsNullOrWhiteSpace(line))
             .Select(Read<ConformanceResult>).ToArray();
+        if (client == "Windows")
+        {
+            capabilities = ConformanceInventory.ForClient(client);
+            var windowsResults = runs.Where(run => run.Client == client)
+                .SelectMany(run => WindowsConformanceDriver.Run(run, capabilities, windowsClient));
+            results = results.Where(result => result.Run.Client != client).Concat(windowsResults).ToArray();
+        }
         var rows = ClientConformance.Build(runs, capabilities, results).Where(row => row.Run.Client == client).ToArray();
         foreach (var line in ClientConformance.JsonLines(rows))
             output.WriteLine(line);
