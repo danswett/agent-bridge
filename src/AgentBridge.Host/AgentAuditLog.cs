@@ -86,6 +86,7 @@ public sealed class AgentAuditLog
             {
                 var folder = PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded");
                 using var folderLock = Lock(folder);
+                if (entry.Gate is not null) { Bootstrap(folder); }
                 if (entry.Gate is { } metadata)
                 {
                     metadata = metadata with { Sequence = checked(new[] { LastGateSequence(folder, false), LastGateSequence(folder, true),
@@ -161,6 +162,47 @@ public sealed class AgentAuditLog
         lock (gate) { return VerifyProfile(profile, launch, log, synchronize: true); }
     }
 
+    internal bool Bootstrap()
+    {
+        try
+        {
+            lock (gate)
+            {
+                var folder = PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded");
+                using var held = Lock(folder);
+                Bootstrap(folder);
+            }
+            return true;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
+        { log($"agent audit bootstrap refused: {e.GetType().Name}"); return false; }
+    }
+
+    void Bootstrap(string folder)
+    {
+        if (HasHeads(folder)) { return; }
+        var streams = new[] { false, true }.Where(launch => Files(folder, launch).Any()).ToArray();
+        var candidates = new List<(bool Launch, string Fault)>();
+        foreach (var launch in streams)
+        {
+            var verified = VerifyProfile(profile, launch, log, chainOnly: true);
+            if (!verified.Intact) { throw new IOException("unanchored audit chain is broken"); }
+            var fault = Files(folder, launch).Any(EndsWithoutNewline) ? "audit-incomplete" : "none";
+            foreach (var raw in Files(folder, launch).SelectMany(File.ReadLines))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(raw);
+                    if (doc.RootElement.TryGetProperty("previousTailIncomplete", out var incomplete) && incomplete.GetBoolean())
+                    { fault = "audit-incomplete"; }
+                }
+                catch (JsonException) { fault = "audit-incomplete"; }
+            }
+            candidates.Add((launch, fault));
+        }
+        foreach (var (launch, fault) in candidates) { WriteHead(folder, launch, null, LastGateSequence(folder, launch), fault, adopted: true); }
+    }
+
     static (bool Intact, bool LegacyPrefix) VerifyProfile(string profile, bool launch, Action<string> log,
         bool synchronize = false, bool chainOnly = false)
     {
@@ -206,7 +248,7 @@ public sealed class AgentAuditLog
                     }
                     if (index == 0 || fragment) { return (false, legacy); }
                 }
-                return ((!gated || ReadHead(folder, launch) is { Sequence: > 0 }) && (chainOnly || HeadFault(folder, launch) == "none"), legacy);
+                return ((chainOnly || !gated || ReadHead(folder, launch) is { Sequence: > 0 }) && (chainOnly || HeadFault(folder, launch) == "none"), legacy);
             }
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
@@ -217,20 +259,24 @@ public sealed class AgentAuditLog
         [property: JsonRequired] string Root, [property: JsonRequired] string RootSha256,
         [property: JsonRequired] string Tail, [property: JsonRequired] string TailSha256,
         [property: JsonRequired] long Length, [property: JsonRequired] long Sequence = 0,
-        [property: JsonRequired] string Fault = "none");
+        [property: JsonRequired] string Fault = "none", long RetainedThrough = 0, string? RetiringRoot = null, bool Adopted = false);
     static string HeadFile(string folder, bool launch) => Path.Combine(folder, launch ? "launches.head" : "agents.head");
     internal static bool HasHeads(string folder) => File.Exists(HeadFile(folder, false)) || File.Exists(HeadFile(folder, true));
     static Head? ReadHead(string folder, bool launch)
     {
         try { return JsonSerializer.Deserialize<Head>(File.ReadAllText(HeadFile(folder, launch)), Json) is
                 { V: 1, Root: not null, RootSha256: not null, Tail: not null, TailSha256: not null,
-                    Length: > 0, Sequence: >= 0, Fault: "none" or "audit-incomplete" or "coverage-break" } head
+                    Length: > 0, Sequence: >= 0, RetainedThrough: >= 0, Fault: "none" or "audit-incomplete" or "coverage-break" } head
+                && head.RetainedThrough <= head.Sequence && (head.RetiringRoot is null
+                    || !launch && TryDay(head.RetiringRoot, out _) && StringComparer.Ordinal.Compare(head.RetiringRoot, head.Root) < 0)
                 ? head : throw new IOException("invalid audit head"); }
         catch (FileNotFoundException) { return null; }
     }
-    static Head CaptureHead(string folder, bool launch)
+    internal static long RetainedThrough(string folder) => ReadHead(folder, false)?.RetainedThrough ?? 0;
+    internal static bool Adopted(string folder) => ReadHead(folder, false)?.Adopted == true || ReadHead(folder, true)?.Adopted == true;
+    static Head CaptureHead(string folder, bool launch, string? retiringRoot = null)
     {
-        var files = Files(folder, launch).ToArray();
+        var files = Files(folder, launch).Where(f => Path.GetFileName(f) != retiringRoot).ToArray();
         return new(1, Path.GetFileName(files.First()), Hash(Encoding.UTF8.GetBytes(File.ReadLines(files.First()).First())),
             Path.GetFileName(files.Last()), TailHash(files.Last(), promoteTail: true).Hash, new FileInfo(files.Last()).Length);
     }
@@ -238,15 +284,33 @@ public sealed class AgentAuditLog
     {
         var expected = ReadHead(folder, launch);
         if (expected is null) { return "none"; }
-        if (expected.Fault == "coverage-break" || !Files(folder, launch).Any()
+        if (expected.Fault == "coverage-break" || !File.Exists(Path.Combine(folder, expected.Root))
+            || !File.Exists(Path.Combine(folder, expected.Tail)) || !Files(folder, launch).Any()
             || Files(folder, launch).Any(f => new FileInfo(f).Length == 0)) { return "coverage-break"; }
-        var actual = CaptureHead(folder, launch);
-        if (actual.Root != expected.Root || actual.RootSha256 != expected.RootSha256 || actual.Tail != expected.Tail) { return "coverage-break"; }
+        var actual = CaptureHead(folder, launch, expected.RetiringRoot);
+        if (actual.Root != expected.Root || actual.RootSha256 != expected.RootSha256) { return "coverage-break"; }
+        var oldTail = Path.Combine(folder, expected.Tail);
+        if ((actual.Tail != expected.Tail || actual.Length > expected.Length)
+            && File.Exists(oldTail) && PrefixIntact(oldTail, expected)) { return "audit-incomplete"; }
+        if (actual.Tail != expected.Tail) { return "coverage-break"; }
         if (actual.TailSha256 != expected.TailSha256) { return "coverage-break"; }
         if (actual.Length == expected.Length) { return expected.Fault; }
         // Losing only LF does not prove that the complete JSON record's contents vanished.
         return actual.Length > expected.Length || actual.Length == expected.Length - 1
             && EndsWithoutNewline(Path.Combine(folder, actual.Tail)) ? "audit-incomplete" : "coverage-break";
+    }
+    static bool PrefixIntact(string file, Head expected)
+    {
+        using var stream = File.OpenRead(file);
+        if (stream.Length < expected.Length) { return false; }
+        var end = expected.Length - 1;
+        stream.Position = end;
+        if (stream.ReadByte() != '\n') { end++; }
+        var start = PreviousNewline(stream, end) + 1;
+        var bytes = new byte[checked((int)(end - start))];
+        stream.Position = start;
+        stream.ReadExactly(bytes);
+        return Hash(bytes) == expected.TailSha256;
     }
     internal static string Continuity(string profile, bool launch, Action<string> log)
     {
@@ -254,28 +318,45 @@ public sealed class AgentAuditLog
         {
             var folder = Path.Combine(profile, FolderName);
             var fault = HeadFault(folder, launch);
+            if (ReadHead(folder, launch) is null && Files(folder, launch).SelectMany(File.ReadLines).Any(raw =>
+                JsonSerializer.Deserialize<JsonElement>(raw, Json).TryGetProperty("gate", out var gate) && gate.ValueKind != JsonValueKind.Null))
+            { return "audit-incomplete"; }
             return VerifyProfile(profile, launch, log, chainOnly: true).Intact ? fault
                 : ReadHead(folder, launch) is null ? "audit-incomplete" : "coverage-break";
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
         { log($"agent audit continuity unavailable: {e.GetType().Name}"); return "audit-incomplete"; }
     }
-    static void WriteHead(string folder, bool launch, Head? previous, long sequence, string fault)
+    static void WriteHead(string folder, bool launch, Head? previous, long sequence, string fault, bool adopted = false)
     {
         var head = CaptureHead(folder, launch);
         // Advancing the head must not bless a suffix after its original root was lost.
-        head = head with { Root = previous?.Root ?? head.Root, RootSha256 = previous?.RootSha256 ?? head.RootSha256, Sequence = sequence, Fault = fault };
+        head = head with { Root = previous?.Root ?? head.Root, RootSha256 = previous?.RootSha256 ?? head.RootSha256,
+            Sequence = sequence, Fault = fault, RetainedThrough = previous?.RetainedThrough ?? 0,
+            RetiringRoot = previous?.RetiringRoot, Adopted = previous?.Adopted ?? adopted };
+        SaveHead(folder, launch, head);
+    }
+    static void SaveHead(string folder, bool launch, Head head)
+    {
         var file = HeadFile(folder, launch);
+        File.Delete(file + ".new");
         using (var stream = PrivateFolder.CreateNew(file + ".new"))
         { stream.Write(JsonSerializer.SerializeToUtf8Bytes(head, Json)); stream.Flush(flushToDisk: true); }
         File.Move(file + ".new", file, overwrite: true);
     }
 
-    static FileStream Lock(string folder)
+    internal static FileStream Lock(string folder, bool read = false)
     {
-        var options = new FileStreamOptions { Mode = FileMode.OpenOrCreate, Access = FileAccess.ReadWrite, Share = FileShare.None };
-        if (!OperatingSystem.IsWindows()) { options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite; }
-        return new FileStream(folder + ".lock", options);
+        var options = new FileStreamOptions { Mode = read ? FileMode.Open : FileMode.OpenOrCreate,
+            Access = read ? FileAccess.Read : FileAccess.ReadWrite, Share = read ? FileShare.Read : FileShare.None };
+        if (!read && !OperatingSystem.IsWindows()) { options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite; }
+        var deadline = Environment.TickCount64 + 2000;
+        while (true)
+        {
+            try { return new FileStream(folder + ".lock", options); }
+            catch (IOException e) when ((OperatingSystem.IsWindows() ? (e.HResult & 0xffff) is 32 or 33 : e.HResult is 11 or 35)
+                && Environment.TickCount64 < deadline) { Thread.Sleep(20); }
+        }
     }
 
     static IEnumerable<string> Files(string folder, bool launch) =>
@@ -283,10 +364,11 @@ public sealed class AgentAuditLog
             .Select(f => TryDay(Path.GetFileName(f).Replace("launches-", "agents-", StringComparison.Ordinal), out _)
                 ? f : throw new IOException("the agent audit folder contains an invalid day name")).Order(StringComparer.Ordinal);
 
-    long LastGateSequence(string folder, bool launch)
+    long LastGateSequence(string folder, bool launch, string? onlyFile = null)
     {
         var warned = false;
-        foreach (var file in Files(folder, launch).Reverse())
+        IEnumerable<string> selected = onlyFile is { } path ? new[] { path } : Files(folder, launch).Reverse();
+        foreach (var file in selected)
         {
             using var stream = File.OpenRead(file);
             var end = stream.Length;
@@ -399,6 +481,8 @@ public sealed class AgentAuditLog
     // at the first file that can't be deleted, so newer days are never lost while an older one stays.
     void Retain(string folder, DateTimeOffset now)
     {
+        var expected = ReadHead(folder, false);
+        if (expected is not null && Continuity(profile, false, log) != "none") { return; }
         var today = now.UtcDateTime.Date;
         var files = new List<(DateTime Day, FileInfo Info)>();
         foreach (var f in new DirectoryInfo(folder).EnumerateFiles("agents-*.jsonl"))
@@ -416,7 +500,16 @@ public sealed class AgentAuditLog
             if (day >= today) { break; }
             if (day > anchor.AddDays(-KeepDays) && total <= maxBytes) { break; }
             var size = info.Length;
+            if (expected is not null)
+            {
+                var next = files.First(f => f.Day > day).Info;
+                expected = expected with { Root = next.Name, RootSha256 = Hash(Encoding.UTF8.GetBytes(File.ReadLines(next.FullName).First())),
+                    RetiringRoot = info.Name, RetainedThrough = Math.Max(expected.RetainedThrough, LastGateSequence(folder, false, info.FullName)) };
+                // Commit the exact authorized deletion before removing evidence; a crash may leave this one file present.
+                SaveHead(folder, false, expected);
+            }
             info.Delete();
+            if (expected is not null) { expected = expected with { RetiringRoot = null }; SaveHead(folder, false, expected); }
             total -= size;
         }
     }

@@ -13,10 +13,13 @@ internal static class GateLaunchAudit
         AgentAuditLog audit, GateLaunchIngress ingress, CancellationToken ct = default)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var id)) { return Refused("request must be a UUID"); }
-        var (rows, complete) = GateAuditProjection.Load(audit.Profile);
+        if (!audit.Bootstrap()) { return Refused("the launch audit could not establish its existing evidence"); }
+        long retained = 0;
+        var (rows, complete) = GateAuditProjection.Load(audit.Profile, boundary: (floor, _) => retained = floor);
         var matching = rows.Where(r => r.Action == "session.launch" && r.Request == id.ToString()).ToArray();
         var first = matching.FirstOrDefault();
-        var report = GateAuditProjection.Project(rows, complete, first?.Gate?.Run ?? ingress.Run?.Run ?? Guid.Empty, first?.Gate?.Operation);
+        var report = GateAuditProjection.Project(rows, complete, first?.Gate?.Run ?? ingress.Run?.Run ?? Guid.Empty, first?.Gate?.Operation,
+            retainedThrough: retained);
         if (!complete || (first is not null && report.Invalidated) || report.IncompleteReasons.Contains("sequence-break")
             || !audit.Verify().Intact || !audit.Verify(launch: true).Intact)
         { return Refused("the launch audit is incomplete; check for an existing launch at the machine"); }

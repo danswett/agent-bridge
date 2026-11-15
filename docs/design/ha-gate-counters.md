@@ -170,8 +170,8 @@ Reads change no bytes; permitted appends may extend files, not rewrite pre-exist
 fault evidence. 9A detects/retains faults only: no truncation, erasure, recreation
 of missing evidence, clean suffix, automatic reset/start, new store/journal or
 repair command. Repair/reset execution remains outside 9A; reset alone does not
-restore evidence health. Archive/retention work remains 9B; neither cut completes
-#2524 alone or admits a qualifying run.
+restore evidence health. Archive enumeration and active-run preservation remain
+9B; neither cut completes #2524 alone or admits a qualifying run.
 
 This explicitly clarifies previously unspecified append policy, based on section 4
 lines 119-122 / 139-146 and section 6 lines 203-204 at frozen head
@@ -179,8 +179,38 @@ lines 119-122 / 139-146 and section 6 lines 203-204 at frozen head
 and section 6's INCOMPLETE torn-tail versus FAIL coverage-break table.
 
 9A uses v1 checkpoint metadata in `audit\agents.head` / `audit\launches.head`:
-original root, flushed tail, highest sequence and sticky fault, never totals or
+retained root, flushed tail, highest sequence and sticky fault, never totals or
 a second journal. Neither diagnostic appends nor framing recovery clear faults.
+
+### 4.2. Corrective retention and upgrade rules (2026-11-15, Q12 / #2625)
+
+Ordinary agents-file retention is the sole root-advance exception: under the writer
+lock, verify clean continuity first, then atomically checkpoint the successor root
+and hash BEFORE deleting the exact old file. Optional v1 `retiringRoot` identifies
+only that authorized deletion across a crash; `retainedThrough` persists the highest
+removed gate sequence. Preserve tail, length and sequence. A failed deletion may
+leave that one old file present, not authorize losing any other file. Never advance
+a faulted root. External root/interior loss remains `coverage-break`.
+Physical continuity after authorized retention permits ordinary launches, including
+sequence gaps at or below the retained watermark; duplicates and later gaps still
+refuse. Gate run reports conservatively INVALIDATE after gated evidence is pruned,
+retain observed totals and award no eligible credit. This is not active-run archival
+or permission to certify a passing suffix; qualifying runs remain blocked on 9B.
+
+Upgrade bootstrap is an explicit writer operation before launch preflight, also used
+by gated append: only with NO heads, verify both existing chains before checkpointing
+their present roots/tails and sequence cursors. It adopts retained history, cannot
+prove pre-upgrade completeness or detect prior deletion, and earns no historical
+qualifying proof. Existing heads/faults are never reset; partial head loss stays
+incomplete. Recovered fragments or missing LF remain durably `audit-incomplete`.
+The optional sticky `adopted` marker keeps run projections INCOMPLETE even when
+physical replay is healthy; a later writer cannot silently certify old coverage.
+Read-only inspection never bootstraps. Same-user removal of both heads is
+indistinguishable from first adoption, within the existing filesystem trust limit.
+Both lock opens retry sharing contention for about two seconds, then refuse.
+A flushed extension with the anchored prefix intact is `audit-incomplete`, not
+coverage loss; a shortened/changed prefix still fails. Replace stale `.head.new`
+only under the writer lock; checkpoint replacement remains atomic and flushed.
 
 ## 5. Continuous run and reset
 
