@@ -4,6 +4,22 @@ Read this first if you are an agent session joining agent-bridge, whatever team 
 the agents here work together. [AGENTS.md](../../AGENTS.md) holds the engineering rules, and this page doesn't
 repeat them, so read both.
 
+**Historical-policy notice (owner reconciliation, Nov 15, 2026).** The team
+snapshot and procedures below are archived context, not current operational
+instructions. Their Copilot requirement, author arming, Engineering-only receipts,
+published rebase advice, freezes and watcher/polling instructions are superseded.
+Use [AGENTS.md](../../AGENTS.md) and [contributor workflow](../contributor-workflow.md):
+optional bots, evaluator-classified independent exact-head receipts, Quality-only
+PR creation/body edits/gating/arming, and no builder/reviewer polling.
+Focused local tests for the builder's OWN cut on APPROVED hosts need NO SRE
+clearance. Full or hosted verification remains CI-only. ANYTHING BEYOND
+(full suites, CI-equivalent verification, serving hosts) needs a WRITTEN QUALITY
+ORDER CLEARED WITH SRE; that order does not grant local full-suite permission.
+Explicit case holds stay binding.
+New model rules do not replace retained
+in-flight reviewers. The historical snapshot grants no source, launch, execution,
+push or merge permission and creates no timer or reporting obligation.
+
 This page is for sessions the owner or a lead has assigned to a team. An ordinary contributor's
 agent follows [the participation rules](../contributor-workflow.md#participation) instead: it does not run
 the wake watcher or any other poller, and does not become a standing coordinator, unless a lead assigns it that role.
