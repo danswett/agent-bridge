@@ -12,7 +12,6 @@ const removed = [
   'design/fonts/SlipgatesMono-Medium.woff2',
   'design/fonts/SlipgatesMono-MediumItalic.woff2',
   'design/brand.js',
-  'fixtures/sessions-list.json',
 ];
 const shell = () => [...new Set(shellFiles(readFileSync(path.join(pwa, 'sw.js'), 'utf8')).map((f) => f || 'index.html'))];
 const fontFamilies = JSON.parse(readFileSync(path.join(repo, 'design', 'tokens.json'), 'utf8')).type;
@@ -25,7 +24,7 @@ const withoutComments = (source, loader = 'js') => {
   return transformSync(source, { loader, legalComments: 'none' }).code;
 };
 
-test('the offline shell excludes unused medium faces and bundled or demo-only files', (t) => {
+test('the offline shell excludes unused medium faces and the bundled brand module', (t) => {
   const after = shell();
   const before = [...new Set([...after, ...removed])];
   const bytes = (files) => files.reduce((total, file) => total + statSync(sourceFile(file)).size, 0);
@@ -38,6 +37,7 @@ test('the offline shell excludes unused medium faces and bundled or demo-only fi
     files: after,
   }));
   assert.deepEqual(after.filter((file) => removed.includes(file)), [], 'removed precache entries returned');
+  assert.ok(after.includes('fixtures/sessions-list.json'), 'the first worker-controlled demo reload needs its fixture precached');
   const fonts = after.filter((file) => file.endsWith('.woff2'));
   assert.deepEqual(fonts.map((file) => path.basename(file)).sort(), [
     'SlipgatesMono-Bold.woff2', 'SlipgatesMono-BoldItalic.woff2',
@@ -77,7 +77,7 @@ test('PWA rules and inline styles never request the uncached medium weight, incl
   assert.doesNotMatch(readFileSync(path.join(pwa, 'index.html'), 'utf8'), /\bstyle\s*=/i, 'the page has no inline style outside this guard');
 });
 
-test('the removed brand module is a bundled import and the removed fixture is fetched only by the demo', () => {
+test('the brand module is a bundled import and the sessions fixture is fetched only by the demo', () => {
   const references = (needle) => scripts.filter((file) => withoutComments(scriptSource(file)).includes(needle));
   assert.deepEqual(references('design/brand.js'), ['brand.js']);
   assert.match(withoutComments(scriptSource('brand.js')), /import\s*\{\s*BRAND\s*\}\s*from\s*["']\.\.\/design\/brand\.js["']/);

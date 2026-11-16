@@ -31,6 +31,8 @@ const SHELL = [
   './icons/maskable-192.png', './icons/maskable-512.png', './icons/monochrome-192.png', './icons/monochrome-512.png',
   './icons/apple-touch-icon.png', './icons/badge-96.png',
   './text-size-boot.js',
+  // The demo's initial fetch can precede worker control: keep its next load off the network.
+  './fixtures/sessions-list.json',
   ...BUNDLE,
 ];
 
