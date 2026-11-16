@@ -2,6 +2,7 @@ using AgentBridge.App.Core;
 using AgentBridge.Protocol;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media;
 
 namespace AgentBridge.App;
@@ -10,8 +11,15 @@ static partial class SelfTest
 {
     static async Task CheckHistoryScrollPreserve(MainWindow window, MainViewModel main, DemoHost demo, Action<bool, string> check)
     {
-        const string id = "demo-history-scroll-preserve";
-        const int turns = 40;
+        await CheckHistoryScrollPreserveCase(window, main, demo, check, 40);
+        await CheckHistoryScrollPreserveCase(window, main, demo, check, 1146);
+    }
+
+    static async Task CheckHistoryScrollPreserveCase(MainWindow window, MainViewModel main, DemoHost demo, Action<bool, string> report, int turns)
+    {
+        void Check(bool ok, string text) => report(ok, $"{text} [fixture requested turns {turns}]");
+        Action<bool, string> check = Check;
+        var id = $"demo-history-scroll-preserve-{turns}";
         var fixture = new Session
         {
             Id = id, Agent = AgentKind.Copilot, Title = "Preserve the transcript reading position",
@@ -33,11 +41,13 @@ static partial class SelfTest
                 check(false, "scroll-preserve setup: opens the conversation, history and scroller");
                 return;
             }
-            for (var n = 1; n <= turns; n++) { stored.AddLive(StoredTurn(n)); }
-            var drawn = await Until(() => stored.State != HistoryLoad.Loading && scroll.ViewportHeight > 0 && rows.ItemsSourceView?.Count >= turns
+            var seeded = 0;
+            for (var n = 1; n <= turns; n++) { if (stored.AddLive(StoredTurn(n))) { seeded++; } }
+            var supported = Math.Min(turns, HistoryLimits.Kept);
+            var drawn = await Until(() => stored.State != HistoryLoad.Loading && scroll.ViewportHeight > 0 && rows.ItemsSourceView?.Count >= supported
                 && scroll.ScrollableHeight > 3 * scroll.ViewportHeight, TimeSpan.FromSeconds(10));
-            check(drawn, "scroll-preserve setup: draws a transcript taller than three viewports");
-            if (!drawn) { return; }
+            check(drawn && seeded == turns, $"scroll-preserve setup: draws a transcript taller than three viewports after seeding {seeded} of {turns} logical turns");
+            if (!drawn || seeded != turns) { return; }
 
             view.ReleasePin();
             var chosen = Math.Round(scroll.ScrollableHeight / 2);
@@ -71,20 +81,82 @@ static partial class SelfTest
                 }
                 return -1;
             }
+            HistoryRow[] ReadRows()
+            {
+                var items = rows.ItemsSourceView;
+                return items is null ? [] : Enumerable.Range(0, items.Count).Select(i => items.GetAt(i)).OfType<HistoryRow>().ToArray();
+            }
+            static (string? Prompt, string Response) Words(HistoryRow row) =>
+                (row.Prompt, string.Join("\n\n", row.Blocks.Select(block => block.Text)));
+            var originals = ReadRows();
+            var floor = originals.Length;
+            var required = originals.Select(row => (row.Id, Words: Words(row))).ToArray();
+            bool OnScreen(FrameworkElement element)
+            {
+                if (!element.IsLoaded || element.ActualHeight <= 0 || element.ActualWidth <= 0
+                    || Top(element) >= scroll.ViewportHeight || Top(element) + element.ActualHeight <= 0) { return false; }
+                for (DependencyObject? node = element; node is not null; node = VisualTreeHelper.GetParent(node))
+                {
+                    if (node is UIElement ui && (ui.Visibility != Visibility.Visible || ui.Opacity <= 0)) { return false; }
+                }
+                return true;
+            }
+            int Visible()
+            {
+                var items = rows.ItemsSourceView;
+                var count = 0;
+                for (var i = 0; items is not null && i < items.Count; i++)
+                {
+                    if (items.GetAt(i) is not HistoryRow row || rows.TryGetElement(i) is not FrameworkElement element || !OnScreen(element)) { continue; }
+                    if (!required.Any(old => old.Id == row.Id && Words(row) == old.Words)) { continue; }
+                    var prompt = Find<TextBlock>(element).Any(text => OnScreen(text) && !string.IsNullOrWhiteSpace(text.Text) && text.Text == row.Prompt);
+                    var response = Find<RichTextBlock>(element).Any(text => OnScreen(text) && text.Blocks.OfType<Paragraph>().Any(p =>
+                        row.Blocks.Any(block => !string.IsNullOrWhiteSpace(block.Text) && block.Text == string.Concat(p.Inlines.OfType<Run>().Select(run => run.Text)))));
+                    if (prompt || response) { count++; }
+                }
+                return count;
+            }
+            string Metrics() => $"seeded {seeded}, retained {stored.Turns.Count}, items {rows.ItemsSourceView?.Count ?? 0}, visible {Visible()}, "
+                + $"viewport {scroll.ViewportHeight:0.###}, offset {scroll.VerticalOffset:0.###}, extent {scroll.ExtentHeight:0.###}, scrollable {scroll.ScrollableHeight:0.###}";
+            var ready = floor >= supported && floor == stored.Turns.Count && (turns != 40 || floor + 3 <= HistoryLimits.Kept)
+                && originals.Select(row => row.Id).Distinct().Count() == floor
+                && originals.All(row => !string.IsNullOrWhiteSpace(row.Prompt) && row.Blocks.Any(block => !string.IsNullOrWhiteSpace(block.Text))) && Visible() > 0;
+            check(ready, $"scroll-preserve setup: captures original stable ids and actual prompt/response text with rendered content; {Metrics()}");
+            if (!ready) { return; }
             var frames = 0;
             var minimum = before;
             var drift = 0.0;
             var rowsKept = true;
+            var countKept = true;
+            var contentKept = true;
+            var renderedKept = true;
+            var extentKept = true;
+            var rangeKept = true;
+            var minimumRows = floor;
+            var minimumVisible = Visible();
+            var minimumExtent = scroll.ExtentHeight;
             void Offset()
             {
                 minimum = Math.Min(minimum, scroll.VerticalOffset);
                 drift = Math.Max(drift, Math.Abs(scroll.VerticalOffset - before));
+                var visible = Visible();
+                minimumVisible = Math.Min(minimumVisible, visible);
+                minimumExtent = Math.Min(minimumExtent, scroll.ExtentHeight);
+                renderedKept &= visible > 0;
+                extentKept &= double.IsFinite(scroll.ExtentHeight) && scroll.ExtentHeight > 2 * scroll.ViewportHeight;
+                rangeKept &= double.IsFinite(scroll.VerticalOffset) && double.IsFinite(scroll.ScrollableHeight)
+                    && scroll.ViewportHeight > 0 && scroll.VerticalOffset >= 0 && scroll.VerticalOffset <= scroll.ScrollableHeight;
             }
             void Changed(object? sender, ScrollViewerViewChangedEventArgs args) => Offset();
             void Frame(object? sender, object args)
             {
                 frames++;
                 Offset();
+                var current = ReadRows();
+                var byId = current.ToLookup(row => row.Id);
+                minimumRows = Math.Min(minimumRows, current.Length);
+                countKept &= current.Length >= floor;
+                contentKept &= required.All(old => byId[old.Id].Any(row => Words(row) == old.Words));
                 foreach (var kept in retained)
                 {
                     var index = RowIndex(kept.Id);
@@ -97,8 +169,19 @@ static partial class SelfTest
             CompositionTarget.Rendering += Frame;
             try
             {
+                var settled = await Until(() => frames >= 2, TimeSpan.FromSeconds(5));
+                var baseline = settled && drift <= 1.5 && countKept && contentKept && renderedKept && extentKept && rangeKept;
+                check(baseline, $"scroll-preserve setup: chosen NONZERO middle and original content stay stable across two frames BEFORE received updates; {Metrics()}");
+                if (!baseline) { return; }
                 for (var update = 1; update <= 3; update++)
                 {
+                    var prior = ReadRows();
+                    floor = Math.Max(prior.Length, Math.Min(HistoryLimits.Kept, originals.Length + update - 1));
+                    // Only the supported long case may evict oldest turns when this new notice arrives.
+                    var evicted = stored.Turns.Take(turns > HistoryLimits.Kept ? 1 : 0).Select(item => item.Id).ToHashSet();
+                    // Never recapture corrupted original words as a new passing baseline.
+                    required = required.Concat(prior.Select(row => (row.Id, Words: Words(row))))
+                        .DistinctBy(row => row.Id).Where(row => !evicted.Contains(row.Id)).ToArray();
                     var turn = StoredTurn(turns + update);
                     var response = $"Received message update {update}.";
                     // The notice appends history through the received session update, not a direct UI mutation.
@@ -115,9 +198,18 @@ static partial class SelfTest
                     var rendered = await Until(() => frames >= firstFrame + 2, TimeSpan.FromSeconds(5));
                     check(rendered, $"scroll-preserve driver: renders frames after message update {update}");
                     if (!rendered) { return; }
-                    check(minimum > 1.5 && drift <= 1.5,
-                        $"scroll-preserve behavior: update {update} preserves pre-update offset {before:0.###}, never resets to zero (now {scroll.VerticalOffset:0.###}, minimum {minimum:0.###}, maximum drift {drift:0.###} px)");
-                    check(rowsKept, $"scroll-preserve behavior: update {update} retains unchanged visible rows and their positions; added history and edited live reply are excluded");
+                    if (turns == 40)
+                    {
+                        check(minimum > 1.5 && drift <= 1.5,
+                            $"scroll-preserve behavior: update {update} preserves pre-update offset {before:0.###}, never resets to zero (now {scroll.VerticalOffset:0.###}, minimum {minimum:0.###}, maximum drift {drift:0.###} px)");
+                        check(rowsKept, $"scroll-preserve behavior: update {update} retains unchanged visible rows and their positions; added history and edited live reply are excluded");
+                    }
+                    else { check(minimum > 1.5, $"scroll-preserve offset-reset: long-history update {update} never resets to zero (minimum {minimum:0.###} px); oldest eviction may shift absolute offset"); }
+                    check(countKept, $"scroll-preserve model-count: update {update} never drops below the pre-update row count in rendered frames (minimum items {minimumRows}); {Metrics()}");
+                    check(contentKept, $"scroll-preserve model-content: update {update} preserves every required original id/prompt/response; intended additions, live edits and permitted oldest eviction are separate; {Metrics()}");
+                    check(renderedKept, $"scroll-preserve rendered-empty: update {update} never loses actual visible prompt/response content (minimum visible rows {minimumVisible}); {Metrics()}");
+                    check(extentKept, $"scroll-preserve extent-collapse: update {update} never collapses toward zero (minimum extent {minimumExtent:0.###} px); {Metrics()}");
+                    check(rangeKept, $"scroll-preserve offset-range: update {update} stays inside the current scrollable extent; {Metrics()}");
                 }
             }
             finally
