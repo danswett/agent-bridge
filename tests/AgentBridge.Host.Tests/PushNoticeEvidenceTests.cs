@@ -9,7 +9,7 @@ using Xunit;
 namespace AgentBridge.Host.Tests;
 
 // #2649: what the host learns about each question notice it pushes to a phone, so the answer-away evidence can say
-// the notice arrived and not only that an answer did.
+// the push service took the notice (delivered means accepted by the push service, not received by the phone).
 public sealed class PushNoticeEvidenceTests : IDisposable
 {
     const string Account = "1";
@@ -87,9 +87,9 @@ public sealed class PushNoticeEvidenceTests : IDisposable
         time.Advance(TimeSpan.FromSeconds(3));
         await notifier.PumpAsync();
 
-        Assert.True(sender.Pushes >= 3);
-        Assert.All(outcomes, o => Assert.Equal(NoticeKind.Question, o.Kind));
-        Assert.Equal(2, outcomes.Count);
+        Assert.Equal(3, sender.Pushes);
+        Assert.Equal(new PushNoticeOutcome(Phone, "s2", "q2", NoticeKind.Question, "delivered"), Assert.Single(outcomes));
+        Assert.DoesNotContain(outcomes, o => o.Question == "q3" || o.Session == "s1");
     }
 
     sealed class Source : ISessionSource
