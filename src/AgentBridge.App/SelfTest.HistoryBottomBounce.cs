@@ -33,15 +33,39 @@ static partial class SelfTest
             { check(false, "bottom bounce setup: has the conversation scroller and history"); return; }
             var wheelSteps = 0;
             var moving = false;
-            void Changed(object? sender, ScrollViewerViewChangedEventArgs e) => moving = e.IsIntermediate;
-            void Record() => trace.Add(new
+            var monitorArrival = false;
+            var arrived = false;
+            var peakOffset = 0.0;
+            var worstRetreat = 0.0;
+            var arrivalGap = 0.0;
+            void Changed(object? sender, ScrollViewerViewChangedEventArgs e)
             {
-                ms = clock.ElapsedMilliseconds, phase, offset = scroll.VerticalOffset,
-                extent = scroll.ScrollableHeight, viewport = scroll.ViewportHeight,
-                width = scroll.ViewportWidth, contentHeight = scroll.ExtentHeight,
-                firstBlock = (list.ItemsPanelRoot as ItemsStackPanel)?.FirstVisibleIndex,
-                moving, wheelSteps, rows = rows.ItemsSourceView?.Count,
-            });
+                moving = e.IsIntermediate;
+                Record("view-changed");
+            }
+            void Record(string kind = "render")
+            {
+                var offset = scroll.VerticalOffset;
+                if (monitorArrival)
+                {
+                    if (!arrived && Gap() <= 1.5) { arrived = true; peakOffset = offset; }
+                    if (arrived)
+                    {
+                        peakOffset = Math.Max(peakOffset, offset);
+                        worstRetreat = Math.Max(worstRetreat, peakOffset - offset);
+                        arrivalGap = Math.Max(arrivalGap, Gap());
+                    }
+                }
+                trace.Add(new
+                {
+                    ms = clock.ElapsedMilliseconds, phase, kind, offset,
+                    extent = scroll.ScrollableHeight, viewport = scroll.ViewportHeight,
+                    width = scroll.ViewportWidth, contentHeight = scroll.ExtentHeight,
+                    firstBlock = (list.ItemsPanelRoot as ItemsStackPanel)?.FirstVisibleIndex,
+                    moving, requestIndex = wheelSteps, arrived, worstRetreat, arrivalGap,
+                    rows = rows.ItemsSourceView?.Count,
+                });
+            }
             async Task Frame()
             {
                 var drawn = new TaskCompletionSource<bool>();
@@ -52,15 +76,21 @@ static partial class SelfTest
                 Record();
             }
             double Gap() => scroll.ScrollableHeight - scroll.VerticalOffset;
-            void Wheel(int delta)
+            void WheelTo(double requestedTarget)
             {
                 // Control-level wheel transition, not physical input: the routed handler releases
-                // the end pin and the ScrollViewer moves relative to its current offset.
+                // the end pin; a ChangeView request or return is not evidence of actual movement.
                 view.ReleasePin();
                 wheelSteps++;
-                var target = Math.Clamp(scroll.VerticalOffset - delta / 120.0 * 3 * ConversationKeyboard.Line, 0, scroll.ScrollableHeight);
-                scroll.ChangeView(null, target, null, disableAnimation: false);
+                var target = Math.Clamp(requestedTarget, 0, scroll.ScrollableHeight);
+                var changed = scroll.ChangeView(null, target, null, disableAnimation: false);
+                trace.Add(new
+                {
+                    ms = clock.ElapsedMilliseconds, phase, kind = "request",
+                    requestIndex = wheelSteps, requestedTarget, target, changeViewReturned = changed,
+                });
             }
+            void Wheel(int delta) => WheelTo(scroll.VerticalOffset - delta / 120.0 * 3 * ConversationKeyboard.Line);
             scroll.ViewChanged += Changed;
             try
             {
@@ -86,15 +116,29 @@ static partial class SelfTest
                 }
                 check(stored.Turns.Count == startCount + 64, "bottom bounce control: feeds eight update bursts while scrolling");
                 check(scroll.ScrollableHeight > startExtent + 1.5, "bottom bounce control: updates really grow the extent without cache eviction");
-                phase = "control-wheel:reach-bottom";
-                // A fixed input budget, with no retry or programmatic jump to the end.
-                for (var n = 0; n < 240; n++)
+                phase = "control-wheel:rapid-burst";
+                var entryGap = Gap();
+                check(entryGap > 1.5, $"bottom bounce rapid setup: starts actually away from end (gap {entryGap:0.##})");
+                if (entryGap <= 1.5) { return; }
+                monitorArrival = true;
+                Record("burst-entry");
+                var requested = scroll.VerticalOffset;
+                var endRequests = 0;
+                // Accumulate intent, rather than retargeting every request from the same drawn offset.
+                for (var frame = 0; frame < 32; frame++)
                 {
-                    if (n % 6 == 0) { Wheel(-120); }
+                    for (var n = 0; n < 8; n++)
+                    {
+                        requested += 3 * ConversationKeyboard.Line;
+                        if (requested >= scroll.ScrollableHeight) { endRequests++; }
+                        WheelTo(requested);
+                    }
                     await Frame();
-                    if (!moving && Gap() <= 1.5) { break; }
                 }
-                check(!moving && Gap() <= 1.5, $"bottom bounce control: reaches bottom within the wheel-step budget ({scroll.VerticalOffset:0.##}/{scroll.ScrollableHeight:0.##})");
+                phase = "control-wheel:input-free-tail";
+                for (var n = 0; n < 120; n++) { await Frame(); }
+                check(endRequests > 1, $"bottom bounce request-budget coverage: continues endpoint requests ({endRequests}), not proof of accepted movement");
+                check(arrived && !moving && Gap() <= 1.5, $"bottom bounce control reach: reaches bottom within the fixed input-and-tail budget ({scroll.VerticalOffset:0.##}/{scroll.ScrollableHeight:0.##}, arrived {arrived})");
                 phase = "control-wheel:quiet";
                 var worst = 0.0;
                 var minOffset = scroll.VerticalOffset;
@@ -112,6 +156,9 @@ static partial class SelfTest
                 }
                 check(worst <= 1.5 && maxOffset - minOffset <= 1.5 && maxExtent - minExtent <= 1.5,
                     $"bottom bounce control: stays settled without extent feedback (gap {worst:0.##}, travel {maxOffset - minOffset:0.##}, extent change {maxExtent - minExtent:0.##} DIP)");
+                check(arrived && worstRetreat <= 1.5 && arrivalGap <= 1.5, arrived
+                    ? $"bottom bounce post-arrival: no reversal through remaining input, tail or quiet (retreat {worstRetreat:0.##}, gap {arrivalGap:0.##} DIP)"
+                    : "bottom bounce post-arrival coverage: no actual arrival observed; reversal remains unproven");
                 check(Selected(list) is null, "bottom bounce control: wheel transitions do not select conversation items");
             }
             finally
