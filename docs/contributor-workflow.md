@@ -153,6 +153,13 @@ workflow application, not a second register or permission to release held work.
     putting node IDs in the public handover. Registry lookups for copies use
     node IDs, never friendly names. Existing launch, custody and ending holds
     still apply.
+12. **No fleet dependency on OneDrive.** Fleet procedures, rules, state, tooling
+    and scripts live in the repositories, never in or dependent on OneDrive.
+    OneDrive is only for temporary sharing of logs, videos, screenshots and
+    similar artifacts. A document, handover or prompt pointing to a OneDrive
+    path is a defect: move the content into the appropriate repository,
+    sanitized and without secrets. This records the storage rule; it does not
+    authorize acquiring private artifacts or expanding an assigned edit.
 
 ### Staged rule 17
 

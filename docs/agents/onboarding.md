@@ -5,7 +5,7 @@ or a lead, not a second policy register. Ordinary contributors and their agents
 follow [participation](../contributor-workflow.md#participation); an assignment
 does not automatically make a session a standing coordinator.
 
-Apply the [eleven standing coordination policies](../contributor-workflow.md#standing-coordinator-operation).
+Apply the [twelve standing coordination policies](../contributor-workflow.md#standing-coordinator-operation).
 
 ## Read before starting
 
