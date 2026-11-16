@@ -40,9 +40,10 @@ static partial class SelfTest
             Resize(window, 1000, 700);
             var view = await Choose(window, main, id, "Response");
             if (view is null || view.Card is not { Stored: { } stored } card || ConversationScroller(view) is not { } scroll
-                || ById<ItemsRepeater>(view, "History") is not { } rows)
+                || ById<ItemsRepeater>(view, "History") is not { } rows
+                || ById<ListView>(view, "Conversation") is not { } parent)
             {
-                check(false, "scroll-preserve setup: opens the conversation, history and scroller");
+                check(false, "scroll-preserve setup: opens the conversation list, history and scroller");
                 return;
             }
             var seeded = 0;
@@ -59,7 +60,6 @@ static partial class SelfTest
             string? lastLayout = null;
             UIElement? lastAnchor = null;
             long? sourceToken = null;
-            var parent = ById<ListView>(view, "ConversationList");
             var identities = new List<object>();
             long? parentToken = null;
             int Identity(object? value)
@@ -92,8 +92,8 @@ static partial class SelfTest
                 Record($"ViewChanging proposed next {args.NextView.VerticalOffset:R}, final {args.FinalView.VerticalOffset:R}, inertial {args.IsInertial}; production ChangeView caller UNKNOWN unless present in observed stack\n{Environment.StackTrace}");
             void ObservedChanged(object? sender, ScrollViewerViewChangedEventArgs args) =>
                 Record($"ViewChanged actual, intermediate {args.IsIntermediate}\nObserved managed stack:\n{Environment.StackTrace}");
-            void AnchorRequested(object? sender, ScrollViewerAnchorRequestedEventArgs args) =>
-                Record($"AnchorRequested proposed {Element(args.AnchorElement)}; not proof of chosen anchor or restore target\nObserved managed stack:\n{Environment.StackTrace}");
+            void AnchorRequested(object? sender, AnchorRequestedEventArgs args) =>
+                Record($"AnchorRequested proposed {Element(args.Anchor)}; not proof of chosen anchor or restore target\nObserved managed stack:\n{Environment.StackTrace}");
             void Clearing(object? sender, ItemsRepeaterElementClearingEventArgs args) =>
                 Record($"container clearing, index {rows.GetElementIndex(args.Element)}, element {Element(args.Element)}\nObserved managed stack:\n{Environment.StackTrace}");
             void Layout(object? sender, object args)
