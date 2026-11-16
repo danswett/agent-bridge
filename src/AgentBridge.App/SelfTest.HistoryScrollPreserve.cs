@@ -20,8 +20,12 @@ static partial class SelfTest
     {
         var trace = new List<string>();
         Action? detachTrace = null;
+        int CountObserved(string marker) => trace.Count(entry => entry.Contains(marker, StringComparison.Ordinal));
         void Check(bool ok, string text) => report(ok, $"{text} [fixture requested turns {turns}]"
-            + (ok ? "" : "\nObserved diagnostic sequence:\n" + (trace.Count == 0 ? "Observers not yet attached; cause UNKNOWN." : string.Join("\n", trace))));
+            + (ok ? "" : $"\nRecorded bound outer ViewChanged callbacks (cumulative) {CountObserved(": ViewChanged actual,")}; "
+                + $"test-issued outer ChangeView requests {CountObserved(": test-owned ChangeView request vertical ")}; production/private ChangeView calls UNKNOWN.\n"
+                + "Observed diagnostic sequence:\n"
+                + (trace.Count == 0 ? "Observers not yet attached; cause UNKNOWN." : string.Join("\n", trace))));
         Action<bool, string> check = Check;
         var id = $"demo-history-scroll-preserve-{turns}";
         var fixture = new Session
