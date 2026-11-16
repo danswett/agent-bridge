@@ -1987,19 +1987,19 @@ public sealed class MigrationTasksHooksAndSettingsTests : MigrationFixture
         }
         try
         {
-            // Readiness, not elapsed startup time: a loaded runner can take longer than any fixed read
-            // to start pwsh (a 30 s read was cancelled on main before Stop ran, #1930). Wait for the
-            // line the script writes; process exit ends the wait too, with what the child did.
-            async Task<string?> Ready(System.Diagnostics.Process p, string name)
+            // Readiness, not elapsed startup time: three concurrent pwsh children can take longer than
+            // a 30 s read on a loaded runner (cancelled on main before Stop ran, #1930). Wait for the
+            // line the script writes, or its exit. The 120 s is only a failure bound so a child that
+            // does neither fails with a diagnosis instead of hanging the job; it never passes a test.
+            async Task Ready(System.Diagnostics.Process p, string name)
             {
                 var line = p.StandardOutput.ReadLineAsync().AsTask();
-                await Task.WhenAny(line, p.WaitForExitAsync());
-                var signal = await line;
+                await Task.WhenAny(line, p.WaitForExitAsync(), Task.Delay(TimeSpan.FromSeconds(120)));
+                var signal = line.IsCompleted ? await line : null;
                 if (signal != "ready")
                 {
-                    Assert.Fail($"{name} (process {p.Id}) {(p.HasExited ? $"exited with code {p.ExitCode}" : "is still running")} and wrote {signal ?? "nothing"} instead of ready");
+                    Assert.Fail($"{name} (process {p.Id}) {(p.HasExited ? $"exited with code {p.ExitCode}" : "was still running")} and wrote {signal ?? "nothing"} instead of ready");
                 }
-                return signal;
             }
             await Task.WhenAll(Ready(supervisor, "supervisor"), Ready(daemon, "daemon"), Ready(stranger, "stranger"));
             // A receipt naming the daemon's process id with another start time: a reused id.
