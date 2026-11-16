@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -8,8 +9,9 @@ using AgentBridge.Protocol;
 using AgentBridge.Transport;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
+using Xunit.Abstractions;
 
-public sealed class SignInTests
+public sealed class SignInTests(ITestOutputHelper output)
 {
     const string Id = "88888888-8888-4888-8888-888888888888";
     const string OtherId = "99999999-9999-4999-8999-999999999999";
@@ -29,33 +31,93 @@ public sealed class SignInTests
         Assert.Equal(0, h.Clock.Repeating);
     }
 
+    [Fact]
+    public void Clock_observations_distinguish_timer_fire_from_other_armed_timers()
+    {
+        var time = new FakeTimeProvider();
+        var clock = new CountingClock(time);
+        var observations = new List<TimerObservation>();
+        clock.Observed = observations.Add;
+        TimerObservation? firing = null;
+        using var first = clock.CreateTimer(_ => firing = observations.LastOrDefault(), null,
+            TimeSpan.FromSeconds(1), Timeout.InfiniteTimeSpan);
+        using var second = clock.CreateTimer(_ => { }, null, TimeSpan.FromSeconds(2), Timeout.InfiniteTimeSpan);
+        var registrations = observations.Where(o => o.Operation == "change").ToArray();
+        Assert.Equal(2, registrations.Length);
+        Assert.NotEqual(registrations[0].Timer, registrations[1].Timer);
+
+        time.Advance(TimeSpan.FromSeconds(1));
+        var fired = Assert.IsType<TimerObservation>(firing);
+        Assert.Equal(("fire", registrations[0].Timer, 1, 1),
+            (fired.Operation, fired.Timer, fired.Armed, fired.Fired));
+        second.Dispose();
+        var disposed = observations.Last();
+        Assert.Equal(("dispose", registrations[1].Timer, 0, 1),
+            (disposed.Operation, disposed.Timer, disposed.Armed, disposed.Fired));
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-3600)]
     [InlineData(3600)]
     public async Task Last_flow_and_request_expiry_disarm_the_sign_in_scheduler(int jump)
     {
-        await using var h = await Harness.CreateAsync();
-        h.Recovery.ModelEvidence = true;
-        h.Recovery.HoldResume = true;
-        var phone = h.Phone();
-        var start = h.Start(phone);
-        await start.Then(phone);
-        await h.Recovery.ResumeEntered.Task.WaitAsync(Patience);
-        var flow = Json(start.Result).GetProperty("flow").GetString();
-        var retained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        h.Clock.Changed = due => { if (due == h.Service.Kept) { retained.TrySetResult(); } };
-        await h.Service.CancelAsync(phone, Json(new { flow }));
-        await retained.Task.WaitAsync(Patience);
-        Assert.Equal(1, h.Clock.Armed);
-        h.Clock.UtcOffset = TimeSpan.FromSeconds(jump);
-        h.Time.Advance(h.Service.Kept + TimeSpan.FromTicks(1));
-        Assert.Equal(0, h.Clock.Armed);
-        Assert.Equal(1, h.Clock.Fired);
-        var fired = h.Clock.Fired;
-        h.Time.Advance(TimeSpan.FromHours(1));
-        Assert.Equal(fired, h.Clock.Fired);
-        Assert.Equal(0, h.Clock.Repeating);
+        Harness? harness = null;
+        var observations = new ConcurrentQueue<TimerObservation>();
+        var phase = "create harness";
+        try
+        {
+            await using var h = await Harness.CreateAsync();
+            harness = h;
+            h.Clock.Observed = observations.Enqueue;
+            phase = "start";
+            h.Recovery.ModelEvidence = true;
+            h.Recovery.HoldResume = true;
+            var phone = h.Phone();
+            var start = h.Start(phone);
+            await start.Then(phone);
+            phase = "wait for recovery";
+            await h.Recovery.ResumeEntered.Task.WaitAsync(Patience);
+            var flow = Json(start.Result).GetProperty("flow").GetString();
+            var retained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            h.Clock.Changed = due => { if (due == h.Service.Kept) { retained.TrySetResult(); } };
+            phase = "cancel";
+            await h.Service.CancelAsync(phone, Json(new { flow }));
+            phase = "wait for retention timer";
+            await retained.Task.WaitAsync(Patience);
+            phase = "assert retention armed";
+            Assert.Equal(1, h.Clock.Armed);
+            h.Clock.UtcOffset = TimeSpan.FromSeconds(jump);
+            phase = "advance past retention expiry";
+            h.Time.Advance(h.Service.Kept + TimeSpan.FromTicks(1));
+            phase = "assert expiry disarmed";
+            Assert.Equal(0, h.Clock.Armed);
+            Assert.Equal(1, h.Clock.Fired);
+            var fired = h.Clock.Fired;
+            phase = "advance idle hour";
+            h.Time.Advance(TimeSpan.FromHours(1));
+            phase = "assert no further fires or repeating timers";
+            Assert.Equal(fired, h.Clock.Fired);
+            Assert.Equal(0, h.Clock.Repeating);
+            phase = "dispose harness";
+        }
+        catch (Exception error) when (error is Xunit.Sdk.XunitException or TimeoutException)
+        {
+            output.WriteLine(error.ToString());
+            throw;
+        }
+        finally
+        {
+            output.WriteLine($"jump={jump}; phase={phase}");
+            if (harness is not null)
+            {
+                var clock = harness.Clock;
+                clock.Observed = null;
+                output.WriteLine($"appliedUtcOffset={clock.UtcOffset}; timestamp={clock.GetTimestamp()}; frequency={clock.TimestampFrequency}");
+                output.WriteLine($"After disposal attempt; adjacent, non-atomic observations: armed={Volatile.Read(ref clock.Armed)}; fired={Volatile.Read(ref clock.Fired)}; repeating={Volatile.Read(ref clock.Repeating)}");
+            }
+            foreach (var observation in observations) { output.WriteLine(observation.ToString()); }
+        }
     }
 
     [Theory]
@@ -402,9 +464,10 @@ public sealed class SignInTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Authority_is_rechecked_after_source_state_wait_and_at_queued_factory_launch(bool queued)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Authority_is_rechecked_after_source_state_wait_and_at_queued_factory_launch(bool queued, bool sweepBeforeLaunch)
     {
         await using var h = await Harness.CreateAsync();
         h.Factory.QueueStart = queued;
@@ -416,19 +479,28 @@ public sealed class SignInTests
             };
         }
         var phone = h.Phone();
-        await h.Start(phone).Then(phone);
-        if (queued)
+        try
         {
-            await h.Factory.Started.Task.WaitAsync(Patience);
-            h.Authority.Denial = "revoked";
-            h.Factory.ReleaseLaunch.TrySetResult();
-            await h.Factory.Checked.Task.WaitAsync(Patience);
+            await h.Start(phone).Then(phone);
+            if (queued)
+            {
+                await h.Factory.Started.Task.WaitAsync(Patience);
+                h.Authority.Denial = "revoked";
+                if (sweepBeforeLaunch)
+                {
+                    await h.Service.SweepAsync();
+                    Assert.False(h.Service.FlowRunning);
+                }
+                h.Factory.ReleaseLaunch.TrySetResult();
+                Assert.False(await h.Factory.Checked.Task.WaitAsync(Patience));
+            }
+            else { Assert.Equal(0, h.Factory.Starts); }
+            await h.Service.SweepAsync();
+            Assert.Equal(0, h.Factory.Launches);
+            Assert.Equal(0, h.Recovery.Resumes);
+            Assert.Equal(0, h.Service.CodesHeld);
         }
-        else { Assert.Equal(0, h.Factory.Starts); }
-        await h.Service.SweepAsync();
-        Assert.Equal(0, h.Factory.Launches);
-        Assert.Equal(0, h.Recovery.Resumes);
-        Assert.Equal(0, h.Service.CodesHeld);
+        finally { h.Factory.ReleaseLaunch.TrySetResult(); }
     }
 
     [Fact]
@@ -537,30 +609,46 @@ public sealed class SignInTests
     [InlineData(true)]
     public async Task Terminal_delivery_and_receipt_replay_cancel_the_underlying_send_on_deadline(bool replay)
     {
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        void Mark(string phase) => output.WriteLine($"{elapsed.Elapsed}: {phase}");
         await using var h = await Harness.CreateAsync();
+        Mark("harness created");
         var phone = h.Phone();
         var request = Guid.NewGuid();
         await h.Start(phone, request).Then(phone);
         await h.Factory.Started.Task.WaitAsync(Patience);
+        Mark("process started");
         h.Factory.Process.OutputPipe.Put(Frame(h.Time));
         await phone.Code.Task.WaitAsync(Patience);
+        Mark("code delivered");
         Task? replaying = null;
         try
         {
             phone.BlockSends = !replay;
             h.Factory.Process.Complete();
+            Mark("process completed");
             if (replay)
             {
                 await phone.Done.Task.WaitAsync(Patience);
+                Mark("terminal event delivered");
                 phone.BlockSends = true;
                 replaying = h.Start(phone, request).Then(phone);
             }
             await phone.SendBlocked.Task.WaitAsync(Patience);
+            Mark("send blocked");
             h.Time.Advance(h.Service.CheckLimit + TimeSpan.FromSeconds(1));
             await phone.SendFinished.Task.WaitAsync(Patience);
+            Mark("send finished");
             if (replaying is not null) { await replaying.WaitAsync(Patience); }
             Assert.True(phone.HeldToken.IsCancellationRequested);
             Assert.Equal(0, phone.PendingSends);
+        }
+        catch (TimeoutException)
+        {
+            output.WriteLine($"{elapsed.Elapsed}: done={phone.Done.Task.IsCompleted}; disposing={h.Factory.Process.Disposing.Task.IsCompleted}; "
+                + $"blocked={phone.SendBlocked.Task.IsCompleted}; finished={phone.SendFinished.Task.IsCompleted}; "
+                + TestTimeoutDiagnostics.Describe());
+            throw;
         }
         finally { phone.ReleaseSends.TrySetResult(); }
     }
@@ -1150,6 +1238,9 @@ public sealed class SignInTests
             public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
     }
+    sealed record TimerObservation(int Timer, string Operation, TimeSpan? Due, TimeSpan? Period,
+        long Timestamp, int Armed, int Fired, int Repeating);
+
     sealed class CountingClock(FakeTimeProvider inner) : TimeProvider
     {
         public int Armed;
@@ -1157,22 +1248,29 @@ public sealed class SignInTests
         public int Repeating;
         public TimeSpan UtcOffset;
         public Action<TimeSpan>? Changed;
+        public Action<TimerObservation>? Observed;
+        int nextTimer;
         public override DateTimeOffset GetUtcNow() => inner.GetUtcNow() + UtcOffset;
         public override long GetTimestamp() => inner.GetTimestamp();
         public override long TimestampFrequency => inner.TimestampFrequency;
+        void Record(int timer, string operation, TimeSpan? due = null, TimeSpan? period = null) =>
+            Observed?.Invoke(new(timer, operation, due, period, GetTimestamp(),
+                Volatile.Read(ref Armed), Volatile.Read(ref Fired), Volatile.Read(ref Repeating)));
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
-            var timer = new CountedTimer(this);
+            var id = Interlocked.Increment(ref nextTimer);
+            var timer = new CountedTimer(this, id);
             timer.Inner = inner.CreateTimer(_ =>
             {
                 if (timer.Period == Timeout.InfiniteTimeSpan) { timer.SetArmed(false); }
                 Interlocked.Increment(ref Fired);
+                Record(id, "fire");
                 callback(state);
             }, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
             timer.Change(dueTime, period);
             return timer;
         }
-        sealed class CountedTimer(CountingClock clock) : ITimer
+        sealed class CountedTimer(CountingClock clock, int id) : ITimer
         {
             public ITimer Inner = null!;
             public TimeSpan Period;
@@ -1187,11 +1285,13 @@ public sealed class SignInTests
                 if (period != Timeout.InfiniteTimeSpan) { Interlocked.Increment(ref clock.Repeating); }
                 Period = period;
                 SetArmed(dueTime != Timeout.InfiniteTimeSpan);
+                clock.Record(id, "change requested", dueTime, period);
                 var changed = Inner.Change(dueTime, period);
+                clock.Record(id, changed ? "change" : "change rejected", dueTime, period);
                 if (changed) { clock.Changed?.Invoke(dueTime); }
                 return changed;
             }
-            public void Dispose() { SetArmed(false); Inner.Dispose(); }
+            public void Dispose() { SetArmed(false); Inner.Dispose(); clock.Record(id, "dispose"); }
             public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
         }
     }
@@ -1202,7 +1302,7 @@ public sealed class SignInTests
         public bool QueueStart;
         public int Launches;
         public TaskCompletionSource ReleaseLaunch { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public TaskCompletionSource Checked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<bool> Checked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<IPrivateSignInProcess> Delayed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Process Process { get; } = new();
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1215,9 +1315,12 @@ public sealed class SignInTests
             return LaunchAsync();
             async Task<IPrivateSignInProcess> LaunchAsync()
             {
-                if (QueueStart) { await ReleaseLaunch.Task.WaitAsync(ct); }
-                Checked.TrySetResult();
-                if (!authorize()) { throw new InvalidOperationException("sign-in launch is no longer authorized"); }
+                // The test owns this queue even if a sweep cancels its token: it must
+                // still observe the launch-time authority verdict.
+                if (QueueStart) { await ReleaseLaunch.Task; }
+                var allowed = authorize();
+                Checked.TrySetResult(allowed);
+                if (!allowed) { throw new InvalidOperationException("sign-in launch is no longer authorized"); }
                 ct.ThrowIfCancellationRequested();
                 ++Launches;
                 return Process;

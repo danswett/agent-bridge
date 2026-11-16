@@ -6,7 +6,7 @@
 // app that is an end-to-end Noise channel (channels.js); in demo mode and the unit tests
 // it is an in-process fake. Nothing here knows which.
 import { Capabilities, Events, Ops, readAnswerResult, readReplyResult, readAttachmentState, readDiscoveryHeld, readHello, readProgress, readSession, readStopResult, readSubagent } from './protocol.js';
-import { PatchError, applyPatch, readPatch } from './session-patch.js';
+import { PatchError, applyPatch, readPatch, readHandles, resolveId } from './session-patch.js';
 import { USAGE, readUsage } from './usage.js';
 import { UPDATE, readUpdateState } from './update.js';
 import { LAUNCH, TRUST, readLaunchOptions, readLaunchResult, readTrustResult } from './launch.js';
@@ -58,6 +58,7 @@ export class HostClient {
   // a session.patch applies to. A new subscription starts afresh, since its patches are on its own
   // events.
   #raw = new Map();
+  #handles = new Map();
   // Whether anything was dropped since the latest subscribe was answered: a snapshot with a session
   // it could not read is not the whole list, and nothing resumes from it.
   #dropped = false;
@@ -282,6 +283,7 @@ export class HostClient {
     const since = this.#patch ? this.store?.resumeFrom?.(this.#instance) ?? null : null;
     this.#askedSince = since !== null;
     const data = this.#patch ? { patch: true, ...(since ? { since } : {}) } : {};
+    if (this.#patch && this.capabilities.includes(Capabilities.sessionsHandles)) { data.handles = true; }
     const { id, done } = this.#request(Ops.sessionsSubscribe, data);
     this.#subscribing = id;
     try {
@@ -406,6 +408,7 @@ export class HostClient {
           this.#snapshot = new Set();
           this.#resumed = m.result?.resumed === true;
           this.#raw.clear();
+          this.#handles.clear();
           this.#dropped = false;
         }
       }
@@ -468,7 +471,15 @@ export class HostClient {
         this.#raw.delete(data.id);
         this.#advance(data.revision);
         break;
-      case Events.sessionsSynced:
+      case Events.sessionsSynced: {
+        try { this.#handles = readHandles(data.handles); }
+        catch (e) {
+          if (!(e instanceof PatchError)) { throw e; }
+          this.#tracking = false;
+          this.#lost();
+          this.#resubscribe(m.seq);
+          break;
+        }
         if (this.#snapshot) {
           const snapshot = this.#snapshot;
           const keep = this.#kept(snapshot, data.live);
@@ -496,6 +507,7 @@ export class HostClient {
           this.#emit('synced', data);
         }
         break;
+      }
       case Events.discoveryChanged:
         this.store?.setHeld(readDiscoveryHeld(data.discoveryHeld));
         break;
@@ -524,8 +536,10 @@ export class HostClient {
     const patch = readPatch(data);
     let applied = null;
     if (patch) {
-      const held = this.#raw.get(patch.id);
-      try { applied = applyPatch(held?.json ?? null, held?.seq ?? null, patch); }
+      try {
+        const held = this.#raw.get(resolveId(patch, this.#handles));
+        applied = applyPatch(held?.json ?? null, held?.seq ?? null, patch, this.#handles);
+      }
       catch (e) { if (!(e instanceof PatchError)) { throw e; } }
     }
     const s = applied ? (this.store ? this.store.upsert(applied, { snapshot: this.#snapshot !== null }) : readSession(applied)) : null;
@@ -535,6 +549,7 @@ export class HostClient {
       this.#resubscribe(seq);
       return;
     }
+    if (patch.handle !== undefined) { this.#handles.set(patch.handle, s.id); }
     this.#raw.set(s.id, { json: applied, seq });
     this.#snapshot?.add(s.id);
     this.#advance(patch.revision);

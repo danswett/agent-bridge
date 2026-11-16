@@ -23,7 +23,7 @@ public sealed partial class LaunchFlowTests
     }
 
     // newest first: App (checked), API (the stuck one when hold), App (older).
-    async Task<(LaunchService Service, FakeTimeProvider Time, Held Held)> BudgetedAsync(bool hold)
+    async Task<(LaunchService Service, FakeTimeProvider Time, Held Held)> BudgetedAsync(bool hold, Action? onHeld = null)
     {
         var now = DateTimeOffset.UtcNow;
         Resumable(Newest, app, "Newest", now.AddHours(-1));
@@ -48,6 +48,7 @@ public sealed partial class LaunchFlowTests
                 if (hold && folder == api)
                 {
                     held.Reached.TrySetResult();
+                    onHeld?.Invoke();
                     // A stuck git cannot be cancelled mid-call, so this does not watch the token either.
                     held.Release.Wait();
                 }
@@ -109,17 +110,25 @@ public sealed partial class LaunchFlowTests
     [Fact]
     public async Task The_callers_own_cancellation_still_throws_and_is_not_a_partial_list()
     {
-        var (service, _, held) = await BudgetedAsync(hold: true);
         using var cancel = new CancellationTokenSource();
+        // Cancel at the held check, not from a continuation competing with its blocked worker.
+        var (service, _, held) = await BudgetedAsync(hold: true, onHeld: cancel.Cancel);
         try
         {
+            Assert.False(cancel.IsCancellationRequested);
             var call = service.OptionsResolvedAsync(cancel.Token);
-            await held.Reached.Task.WaitAsync(Patience);
-
-            cancel.Cancel();
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => call.WaitAsync(Patience));
+            Assert.True(held.Reached.Task.IsCompletedSuccessfully);
+            Assert.True(cancel.IsCancellationRequested);
+            Assert.False(held.Release.IsSet);
+            Assert.False(held.Ended.Task.IsCompleted);
         }
-        finally { held.Release.Set(); }
+        finally
+        {
+            held.Release.Set();
+            cancel.Cancel();
+            if (held.Reached.Task.IsCompletedSuccessfully) { await held.Ended.Task.WaitAsync(Patience); }
+        }
     }
 }

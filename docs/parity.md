@@ -22,6 +22,7 @@ reason.
 | Status | Meaning |
 |---|---|
 | `Verified` | A test **and** a recorded live run |
+| `Verified (historical)` | An earlier observation, not current all-platform or foreground, background and locked-screen proof |
 | `Implemented, untested live` | Code and tests, no live run yet. Live runs are tracked by #39 ([parity-checklist.md](parity-checklist.md)) |
 | `Partial` | Some of it; the gap column says what is missing |
 | `Missing` | Not built; an issue is linked |
@@ -35,10 +36,11 @@ Agents: **Cp** Copilot CLI, **Cl** Claude Code, **Cx** Codex, **All**.
 
 | Status | Rows |
 |---|---|
-| `Verified` | 48 |
-| `Implemented, untested live` | 53 |
-| `Partial` | 1 |
-| `Missing` | 10 |
+| `Verified` | 43 |
+| `Verified (historical)` | 5 |
+| `Implemented, untested live` | 54 |
+| `Partial` | 2 |
+| `Missing` | 8 |
 | `Intentionally different` | 20 |
 | `N/A` | 12 |
 | `In flight (…)` | 6: Claude/Codex live 6 |
@@ -185,14 +187,18 @@ Of the 15 §6.3 invariants: 8 `Verified`, 6 `Implemented, untested live`, 1 `Par
 
 ## 10. Notifications
 
+The `Verified (historical)` entries below do not establish current browser, OS or
+foreground, background and locked-screen evidence. Rows 16 and 28 of the S4 inventory
+remain subject to the [PWA push rehearsal](design/pwa-push-lifecycle.md) for #2397.
+
 | Feature / behaviour | Agents | agent-ha-bridge | Status | Evidence in agent-bridge | Gap / validation |
 |---|---|---|---|---|---|
-| A question reaches the phone; a tap opens it | All | `daemon-decision-notify.ps1`; `notify.mobile_app_*` | `Verified` | `PushFlowTests.A_question_reaches_the_phone_encrypted_through_the_relay_and_is_replaced_once_answered_at_the_machine`. Live: Progress › Push | |
-| A finished turn notifies with the response's start | All | `Send-BridgeResponseNotification` | `Verified` | `PushNotifierTests.A_finished_turn_is_notified_with_the_start_of_its_response_after_it_stays_idle`. Live: Progress › Push ("finished") | |
-| Answered anywhere withdraws the notice; a stale tap is refused | All | README "Answering from the notification" | `Verified` | `PushNotifierTests.An_answered_question_is_replaced_quietly_where_it_was_shown_but_not_on_the_device_that_answered`. Live: Progress › Push (cleared) | |
-| One notification per session (tags); several sessions at once | All | Per-session tags | `Verified` | `PushNoticeTests.Each_session_has_one_topic_a_push_service_accepts_and_one_tag`, `pwa/test/push.spec.mjs`. Live: Progress › Push | |
+| A question reaches the phone; a tap opens it | All | `daemon-decision-notify.ps1`; `notify.mobile_app_*` | `Verified (historical)` | `PushFlowTests.A_question_reaches_the_phone_encrypted_through_the_relay_and_is_replaced_once_answered_at_the_machine`. Live: Progress › Push | |
+| A finished turn notifies with the response's start | All | `Send-BridgeResponseNotification` | `Verified (historical)` | `PushNotifierTests.A_finished_turn_is_notified_with_the_start_of_its_response_after_it_stays_idle`. Live: Progress › Push ("finished") | |
+| Answered anywhere withdraws the notice; a stale tap is refused | All | README "Answering from the notification" | `Verified (historical)` | `PushNotifierTests.An_answered_question_is_replaced_quietly_where_it_was_shown_but_not_on_the_device_that_answered`. Live: Progress › Push (cleared) | |
+| One notification per session (tags); several sessions at once | All | Per-session tags | `Verified (historical)` | `PushNoticeTests.Each_session_has_one_topic_a_push_service_accepts_and_one_tag`, `pwa/test/push.spec.mjs`. Live: Progress › Push | |
 | Option buttons and "Type an answer" on the phone notification | All | `answerButtons.*` | `Intentionally different` | Web Push on iOS has no action buttons or text inputs; a tap opens the card | Design §8 (S5). The old buttons return for migrated machines through the HA connector's stage 5b ([ha-connector.md](ha-connector.md#stage-5b-phone-notifications); `NotifyTests`, live in the `ha-integration` job) |
-| Desktop notifications with option buttons and a text box | All | — (HA only) | `Verified` | `ToastTests` (11). Live: Progress › Windows app (answered from a toast button; withdrawn once answered) | Beyond parity |
+| Desktop notifications with option buttons and a text box | All | — (HA only) | `Verified (historical)` | `ToastTests` (11). Live: Progress › Windows app (answered from a toast button; withdrawn once answered) | Beyond parity |
 | Notification styling (icon, colour, interruption level) | All | `answerButtons.icon`, `.color`, `.interruptionLevel` | `N/A` | HA companion-app specific | Carried for the HA connector's answer buttons (`homeAssistant.answerButtons.*`) |
 
 ## 11. Transfer and cross-machine resume

@@ -18,7 +18,18 @@ It currently exits 3 with only `no-switch` on stderr, before opening identity or
 hostSign custody. There is no config setting, environment override, automatic
 enrollment, scheduled task or deployment. #2367 and verified-reader host wiring
 are follow-ups; enabling the switch alone will not activate this verb.
-HostSign key provisioning is separate (#2369).
+HostSign key provisioning is separate:
+
+## Explicit hostSign key initialization
+
+On Windows, a person at the machine runs `agent-bridge-host host-sign init [--profile <name>]`.
+This creates protected hostSign custody once. Repeating it reports `existing` with the same
+`keyId`, without rotating or rewriting the key. Output contains only `state` (`created`,
+`existing` or `missing-key`) and `keyId` when available. Agent/script credentials and
+non-person callers are refused. Damaged or incomplete custody is not repaired: it stays
+`missing-key` and unsigned. Creating the key does **not** enable signing or acceptance
+of hostSign; enabling remains gated by #2366/#2367. Status, enrollment and publishing
+never create the key.
 
 ## Schema, version 1
 
@@ -201,6 +212,22 @@ An unreadable, invalid or newer-schema file also turns relay load sharing off. A
 is not an object, or `load.enabled` that is neither boolean nor null, reports a configuration
 problem and turns sharing off, never defaulting it on.
 
+## Script credentials at the machine
+
+`agent-bridge-host scripts add|revoke <name> [--profile <name>]` is for a person at a Windows terminal.
+The host must already serve that profile at the same elevation. Agent sessions, credentialed
+connections, the relay and other local programs cannot manage script credentials. This is a
+same-user safety rail, not a security boundary ([local pipe](protocol/local-pipe.md#who-may-manage-the-host)).
+Names are 1 to 64 ASCII letters, digits, `.`, `_` or `-`, excluding `.` and `..`.
+
+Add grants `read+reply` for 30 days, at most two live rotations per name, with an owner-only DPAPI-protected file.
+Its stdout JSON contains only id, principal, scope, expiry and file path, never a token.
+Revoke removes both rotations from the running store and persisted hashes and prints
+`{ "name": "...", "revoked": true }`; the protected file may remain but no longer authenticates.
+Unknown names fail revoke. Each admitted add/revoke audits `attempted` before mutation; an unwritable audit refuses it.
+Exit codes: 0 success, 1 host/store refusal or I/O/timeout, 2 invalid arguments/unsupported platform,
+4 agent-session refusal. JSON/cancellation errors are not mapped to exit 1; script ops keep their allow-list.
+
 ## Trusted peers: disposable-host foundation
 
 `permissions.trustedPeers` is **off by default** and read only at startup. This
@@ -359,7 +386,11 @@ Devices cannot change it yet; that waits for #801's settings path.
 ## Machine and session load in the log
 
 So a saturated machine is visible (#1150), the host takes one shared snapshot of the machine's
-processes every 5 seconds and writes a line to `logs\host.log` at most once a minute:
+processes every 5 seconds while sessions, relay load sharing or the HA connector need it, and
+writes a line to `logs\host.log` at most once a minute. With no sessions or feeds it samples
+every 60 seconds for that log alone. `load.enabled=false` disables relay sharing, not HA or local
+session collection. A newly active consumer gets a fresh baseline immediately; CPU stays
+unknown until the next sample, rather than reusing the idle interval as a fresh load window:
 
 ```
 load: machine cpu 92% of 8 cores, 310 MiB memory available; sessions: 3f2a9c1d cpu 41% working set 880 MiB 6 procs; 9be0aa12 cpu 7% working set 420 MiB 3 procs
@@ -368,7 +399,7 @@ load: machine cpu 92% of 8 cores, 310 MiB memory available; sessions: 3f2a9c1d c
 - Each session's figure covers its process and everything below it, found through the process
   the host already records for the session (id plus start time, so a reused id is not counted).
 - `cpu` is the processor time used between two snapshots, as a share of the whole machine, so
-  it is a rate over the last 5 seconds, not a point reading. The first snapshot has no earlier
+  it is a rate over the sampling interval (5 seconds active, 60 seconds idle), not a point reading. The first snapshot has no earlier
   one, so it reads `unknown`.
 - `working set` is the memory resident in RAM. Pages shared between processes count once per
   process, so the sum can overstate.
@@ -458,17 +489,39 @@ It is a metadata read, **not a chain-integrity verdict**. A malformed complete r
 unsupported major version or read failure returns nonzero with a content-free error;
 earlier output may be partial. An incomplete final JSON prefix is ignored with a warning.
 Archive, durable chain heads and pruning changes remain separate #1401 A6 slices.
+Optional `gate` metadata is versioned and allow-listed by the same reader. Its host-only
+ids, sequence, route, actor kind and bounded reason code contain no action text or hashes.
+The internal per-run projection reports observed totals and incomplete evidence, never
+a qualifying run or retirement verdict; it creates no profile, writer or lock.
+An unterminated final record also warns on stderr. A malformed record stops the read:
+later evidence is not projected, and control rows do not yet apply run lifecycle state.
+Any append that supplies a missing LF retains `previousTailIncomplete` in the audit metadata.
+Detected gaps or parse faults give INCOMPLETE. Pruning the newest sequence-bearing agents
+files can reuse numbers and escape detection; tail-derived allocation permits new writes,
+not recovery proof or a new run. Durable high-water protection remains deferred to A6.
+Recovered-tail flags keep every profile projection INCOMPLETE until A6's control-aware replay.
+Gate-free streams may be rescanned under lock on each append (up to 64 MiB for agents).
+Retrying a terminal refusal uses a fresh host operation; successful logical identities
+receive credit once. Conflicting terminals, or a successful claim by a second operation
+for an already-successful identity, invalidate the run.
+Durable high-water anchors/cache and the broader cross-run, missing-approval-question and
+writer-refusal regression matrix are deferred to #1401 A6; no qualifying run before that work.
 
 What agents did on this machine is written one JSON line per event to
 `<profile>\audit\agents-YYYY-MM-DD.jsonl` (#1296, design/agent-principals.md §5.6). The folder
 and files are readable by this user alone, like `agent-credentials.json`. Each line has `at`,
-`direction` (`out`, `in` or `local`), `request`, `principal` (`agent:<machine>/<session>`, never
+`direction` (`out`, `in` or `local`), `request`, `principal` (for agent rows: `agent:<machine>/<session>`, never
 the owner), `chain`, `action`, `target`, `outcome`, `reason`, and, when the event carried text,
 `dataSha256` and `textLength`. The text itself is never written; a reason is cut at 200
 characters, every other field at 256, and the chain at 16 entries.
+Person host-CLI management actions use `person:local` with direction `local` in this same stream.
 
-The host keeps at most 30 days and 64 MiB, deleting the oldest day's file first and never the
-file being written. That file is bounded too: once a line would take it past 64 MiB the write
+The host normally targets 30 days and 64 MiB, deleting the oldest day's file first and never
+the file being written. Sticky `audit-incomplete` does not stop retention; coverage breaks
+or unverifiable roots/chains do, with a host-log warning. While pruning is blocked, total
+history can exceed the target. Sticky `audit-incomplete` still refuses launches until
+evidence health is repaired; 9A provides no repair command. The current day's file is
+bounded too: once a line would take it past 64 MiB the write
 returns false and the audited action is refused until the next day. A future-dated file (a clock
 stepped back) does not count toward the size. Age pruning never trusts a clock that has jumped ahead of the newest earlier
 file, and size pruning stops at a file it cannot delete. A line torn by a crash is not joined to
@@ -498,7 +551,9 @@ input. `fleet.find` and `fleet.list` write one local `attempted` record before r
 roster, with target `fleet`; lookup names and answer fields are never logged or hashed.
 These records use the credential's principal and chain and a fresh local attempt UUID.
 An absent log, false append or thrown append returns `auditUnwritable`, with no answer
-dispatch or roster read. Unauthenticated refusals write no record; person paths are unchanged.
+dispatch or roster read. Unauthenticated refusals write no record. Person app/host-CLI
+`session.answer` calls now write an intent before typing and a terminal on confirmed
+delivery in `agents-*.jsonl` (#2522); an unwritable audit log refuses before typing.
 Other action wiring remains in later #1401 slices.
 
 ## Approving a workspace at the machine
@@ -512,8 +567,9 @@ agent-bridge-host workspace remove Bridge
 `add` refuses a folder that does not exist, a system folder, one already approved, a label in
 use, and `--isolate` outside a git repository. Every command takes `--profile <name>`.
 
-`workspace add` and `remove`, `config set` and `unset`, `ha token set` and `clear`, and
-`sign-in` are for a person. They refuse to run (exit code 4) inside an agent session: when
+`workspace add` and `remove`, `config set` and `unset`, `ha token set` and `clear`,
+`sign-in`, `scripts add|revoke` and `host-sign init` are for a person. They refuse to run
+(exit code 4) inside an agent session: when
 anything they run inside is an agent CLI (`copilot`, `claude`, `codex`, `agency`, or Node or Bun
 running one), or when `AGENT_BRIDGE_SESSION` is set, as it is in every session the host
 launches. They refuse too when the process tree they run in cannot be read in full (an

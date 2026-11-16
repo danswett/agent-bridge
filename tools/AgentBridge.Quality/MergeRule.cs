@@ -20,6 +20,7 @@ sealed class MergeRuleConfig
     public CodeQlConfig Codeql { get; set; } = new();
     public List<string> IgnoreWorkflows { get; set; } = [];
     public MainGreenConfig MainGreen { get; set; } = new();
+    public Arm64WaiverConfig? Arm64Waiver { get; set; }
     public CopilotWaiverConfig CopilotWaiver { get; set; } = new();
     public List<string> SensitivePaths { get; set; } = [];
 
@@ -42,6 +43,7 @@ sealed class MergeRuleConfig
         config.MainGreen ??= new();
         config.MainGreen.ExemptLabels ??= [];
         config.MainGreen.Jobs ??= [];
+        config.MainGreen.LegFamilies ??= [];
         config.CopilotWaiver ??= new();
         config.CopilotWaiver.Labels ??= [];
         config.CopilotWaiver.OneReviewPaths ??= [];
@@ -56,6 +58,9 @@ sealed class MergeRuleConfig
         if (string.IsNullOrWhiteSpace(config.MainGreen.Workflow)) missing.Add("main_green.workflow");
         if (config.MainGreen.Jobs.Count == 0 || config.MainGreen.Jobs.Any(string.IsNullOrWhiteSpace))
             missing.Add("main_green.jobs");
+        if (config.MainGreen.LegFamilies.Any(f => f is null || f.Count == 0 || f.Any(string.IsNullOrWhiteSpace)
+            || f.Distinct(StringComparer.Ordinal).Count() != f.Count))
+            missing.Add("valid main_green.leg_families");
         if (config.SensitivePaths.Count == 0) missing.Add("sensitive_paths");
         // With nowhere to read the second review from, one review would stand in for two on a
         // sensitive change, so the config refuses to load rather than guess.
@@ -63,6 +68,10 @@ sealed class MergeRuleConfig
             missing.Add("copilot_waiver.second_review");
         if (missing.Count > 0)
             throw new FormatException($"quality/merge-rule.yml has no {string.Join(", ", missing)}.");
+        if (config.Arm64Waiver is { } arm64 && (arm64.Switch != "ARM64_WAIVER" || arm64.Until == default
+            || arm64.Jobs is null || arm64.Jobs.Count != 3 || arm64.Jobs.Distinct(StringComparer.Ordinal).Count() != 3
+            || !arm64.Jobs.All(name => arm64.Allows(name, "failure"))))
+            throw new FormatException("arm64_waiver needs ARM64_WAIVER, an expiry and exactly the three arm64 jobs.");
         return config;
     }
 
@@ -93,6 +102,20 @@ sealed class MainGreenConfig
     public string Workflow { get; set; } = "";
     public List<string> ExemptLabels { get; set; } = [];
     public List<string> Jobs { get; set; } = [];
+    public List<List<string>> LegFamilies { get; set; } = [];
+}
+
+sealed class Arm64WaiverConfig
+{
+    public List<string> Jobs { get; set; } = [];
+    public DateTimeOffset Until { get; set; }
+    public string Switch { get; set; } = "";
+
+    public bool Active(DateTimeOffset now, string? value) => Switch == "ARM64_WAIVER" && value == "on" && now < Until;
+
+    public bool Allows(string name, string? conclusion) => conclusion == "failure"
+        && (name is "app (win-arm64)" or "app-installer (win-arm64)" or "product (windows-11-arm)")
+        && Jobs is not null && Jobs.Contains(name, StringComparer.Ordinal);
 }
 
 /// <summary>
@@ -134,7 +157,7 @@ sealed record ReviewFact(string Author, bool IsBot, string State, string? Commit
 sealed record RunFact(string Status, string? Conclusion);
 
 /// <summary>A check run or status on the head: success, pending or failure, and GitHub's word for it.</summary>
-sealed record CheckFact(string Name, string State, string? Detail);
+sealed record CheckFact(string Name, string State, string? Detail, long? WaivedRunId = null);
 
 sealed record PullRequestFacts(
     int Number,
@@ -284,6 +307,9 @@ static class MergeRule
             failures.Add($"the independent review of {sha} failed: {receipt.Description}");
         else if (needsReceipt && receipt?.State != "success")
             failures.Add($"needs an independent review of {sha}: {what}");
+        foreach (var runId in pr.Checks.Where(c => c.WaivedRunId is not null).Select(c => c.WaivedRunId).Distinct())
+            if (receipt?.State != "success" || !Regex.IsMatch(receipt.Description ?? "", $@"(?<!\d){runId}(?!\d)"))
+                failures.Add($"the independent review receipt must name waived CI run {runId}");
         if (second is { State: "failure" or "error" })
             failures.Add($"the second review of {sha} failed: {second.Description}");
 
