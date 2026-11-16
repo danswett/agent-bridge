@@ -184,7 +184,7 @@ public static class LocalApi
                 .. control.HasAgentSignIn ? new[] { HostOps.AgentSignInCapability } : []] },
             CallerKind.Agent => hello with { Capabilities = [.. hello.Capabilities.Where(AgentCapabilities.Contains)] },
             _ => hello,
-        }, actionAudit: op is (LaunchProtocol.Launch or Ops.SessionAnswer)
+        }, actionAudit: op is (LaunchProtocol.Launch or Ops.SessionAnswer or Ops.SessionStop)
             && callers.Classify(channel).Kind is (CallerKind.App or CallerKind.HostCli) ? audit : null);
     };
 

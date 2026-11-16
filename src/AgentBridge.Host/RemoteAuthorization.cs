@@ -89,7 +89,7 @@ public sealed class RemoteAuthorization : IDisposable
     {
         var audit = op == LaunchProtocol.Launch ? launchAudit : null;
         var ingress = audit is null ? null : new GateLaunchIngress("relay", "person-client", $"person:{channel.PeerId}", audit.ControlWriterRun);
-        if (!Enabled) { return await sessions.HandleAsync(channel, op, data, hello => DiagnosticsFor(channel, hello), audit, ingress); }
+        if (!Enabled) { return await sessions.HandleAsync(channel, op, data, hello => DiagnosticsFor(channel, hello), op == Ops.SessionStop ? launchAudit : audit, ingress); }
         if (!Allows(channel) || !leases.TryGetValue(channel, out var lease)) { throw new InvalidOperationException("the peer is not authorized"); }
         var operations = lease.Role switch
         {
@@ -99,7 +99,7 @@ public sealed class RemoteAuthorization : IDisposable
             _ => throw new InvalidOperationException("the peer role is not authorized"),
         };
         if (!operations.Contains(op)) { throw new InvalidOperationException("the peer role does not allow this operation"); }
-        return await sessions.HandleAsync(channel, op, data, hello => Shape(channel, hello), audit, ingress);
+        return await sessions.HandleAsync(channel, op, data, hello => Shape(channel, hello), op == Ops.SessionStop ? launchAudit : audit, ingress);
     };
 
     // What the peer's role lets its hello say. Also what hello.changed compares at each later look
