@@ -13,16 +13,27 @@ internal sealed record PhoneApprovalEvidenceReport(IReadOnlyList<PhoneClientEvid
 // Reads the gate audit log for per-client evidence that approvals are answered from each phone (#2649).
 // The audit log records the answer, not the push notice that preceded it, so this shows a client can
 // answer, not that its notice arrived. It only reads: no audit writer or authorization path changes.
+// Today no writer emits the person:<device> relay answers it counts (the host audits answers as person:local),
+// so against real logs it reports every expected client missing until that writer exists.
 internal static class PhoneApprovalEvidence
 {
     internal static PhoneApprovalEvidenceReport Read(string profile, IReadOnlyCollection<string> expectedClients)
     {
-        var (rows, complete) = GateAuditProjection.Load(profile);
-        return Project(rows, complete, expectedClients);
+        var coverage = false;
+        var adopted = false;
+        long retained = 0;
+        var (rows, complete) = GateAuditProjection.Load(profile, fault => coverage |= fault == "coverage-break",
+            boundary: (floor, unproven) => { retained = floor; adopted = unproven; });
+        return Project(rows, complete, expectedClients, adopted, coverage, retained);
     }
 
-    internal static PhoneApprovalEvidenceReport Project(IReadOnlyList<AuditCommands.Row> rows, bool complete, IReadOnlyCollection<string> expectedClients)
+    // The same soundness checks as GateAuditProjection.Read: an adopted, trimmed or coverage-broken log, or one
+    // with a repeated or missing sequence, may lack rows, so it is never complete.
+    internal static PhoneApprovalEvidenceReport Project(IReadOnlyList<AuditCommands.Row> rows, bool complete, IReadOnlyCollection<string> expectedClients,
+        bool adopted = false, bool coverage = false, long retainedThrough = 0)
     {
+        complete = complete && !adopted && !coverage && retainedThrough == 0
+            && !GateAuditProjection.Project(rows, complete, Guid.NewGuid(), retainedThrough: retainedThrough).IncompleteReasons.Contains("sequence-break");
         var perClient = rows
             .Where(r => r.Action == "session.answer" && r.Gate is { ActorKind: "person-client", Phase: not "control" }
                 && r.Principal.StartsWith("person:", StringComparison.Ordinal) && r.Principal != "person:local")
