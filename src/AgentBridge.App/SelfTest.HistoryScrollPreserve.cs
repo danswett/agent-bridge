@@ -19,14 +19,33 @@ static partial class SelfTest
     static async Task CheckHistoryScrollPreserveCase(MainWindow window, MainViewModel main, DemoHost demo, Action<bool, string> report, int turns)
     {
         var trace = new List<string>();
+        var phase = "setup";
+        var application = Application.Current;
+        var layoutUpdated = 0;
+        var sizeChanged = 0;
+        var layoutObserversAttached = false;
+        string? sampledLayoutPhase = null;
         Action? detachTrace = null;
         int CountObserved(string marker) => trace.Count(entry => entry.Contains(marker, StringComparison.Ordinal));
+        string DiagnosticSnapshot() => $"\nRecorded bound outer ViewChanged callbacks (cumulative) {CountObserved(": ViewChanged actual,")}; "
+            + $"test-issued outer ChangeView requests {CountObserved(": test-owned ChangeView request vertical ")}; production/private ChangeView calls UNKNOWN.\n"
+            + (layoutObserversAttached
+                ? $"Recorded bound outer LayoutUpdated callbacks {layoutUpdated}; outer SizeChanged callbacks {sizeChanged}; cumulative since attachment, phase {phase}.\n"
+                    + "LayoutUpdated is not proof of outer geometry changes; SizeChanged covers only outer size. Request/render records bound per-update deltas; no quiet-tail phase is present.\n"
+                : "LayoutUpdated/SizeChanged callback counts UNKNOWN: observers not yet attached.\n")
+            + "Observed diagnostic sequence:\n"
+            + (trace.Count == 0 ? "Observers not yet attached; cause UNKNOWN." : string.Join("\n", trace));
         void Check(bool ok, string text) => report(ok, $"{text} [fixture requested turns {turns}]"
-            + (ok ? "" : $"\nRecorded bound outer ViewChanged callbacks (cumulative) {CountObserved(": ViewChanged actual,")}; "
-                + $"test-issued outer ChangeView requests {CountObserved(": test-owned ChangeView request vertical ")}; production/private ChangeView calls UNKNOWN.\n"
-                + "Observed diagnostic sequence:\n"
-                + (trace.Count == 0 ? "Observers not yet attached; cause UNKNOWN." : string.Join("\n", trace))));
+            + (ok ? "" : DiagnosticSnapshot()));
         Action<bool, string> check = Check;
+        void XamlException(object? sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs args)
+        {
+            var detail = args.Exception is { } exception
+                ? $"exception type {exception.GetType().FullName}; message {exception.Message}; managed HRESULT 0x{exception.HResult:X8}\n{exception}"
+                : "Managed exception data UNKNOWN (not supplied).";
+            report(false, $"application XAML exception while scroll-preserve fixture {turns} is active; phase {phase}; handled at observer {args.Handled}; "
+                + $"event message {args.Message}; {detail}{DiagnosticSnapshot()}");
+        }
         var id = $"demo-history-scroll-preserve-{turns}";
         var fixture = new Session
         {
@@ -34,9 +53,10 @@ static partial class SelfTest
             Status = SessionStatus.Idle, StatusSince = StoredFrom, UpdatedAt = StoredFrom,
             Activity = new Activity { UserMessage = "The live exchange", Response = "Initial latest reply.", TurnCount = turns },
         };
-        await demo.PutAsync(fixture);
         try
         {
+            application.UnhandledException += XamlException;
+            await demo.PutAsync(fixture);
             var received = await Until(() => main.AllCards.Any(c => c.Id == id), TimeSpan.FromSeconds(10));
             check(received, "scroll-preserve setup: receives the dedicated demo session");
             if (!received) { return; }
@@ -60,7 +80,6 @@ static partial class SelfTest
 
             ItemsSourceView? observedSource = null;
             var sourceEpoch = 0;
-            var phase = "setup";
             string? lastLayout = null;
             UIElement? lastAnchor = null;
             long? sourceToken = null;
@@ -77,6 +96,7 @@ static partial class SelfTest
             static string Ids(System.Collections.IList? items) => items is null ? "<unavailable>" :
                 string.Join(",", items.Cast<object?>().Select(item => item is HistoryRow row ? row.Id : item?.GetType().Name ?? "<null>"));
             void Record(string reason) => trace.Add($"{trace.Count}: {phase}, actual offset {scroll.VerticalOffset:R}, extent {scroll.ExtentHeight:R}, "
+                + $"attached cumulative LayoutUpdated {layoutUpdated}, outer SizeChanged {sizeChanged}, "
                 + $"viewport {scroll.ViewportHeight:R}, inner epoch {sourceEpoch}/ref {Identity(rows.ItemsSourceView)}, outer source ref {Identity(parent?.ItemsSource)}/count {parent?.Items.Count}, Card ref {Identity(view.Card)}/session {view.Card?.Id ?? "<null>"}, "
                 + $"inner count {rows.ItemsSourceView?.Count.ToString() ?? "<no source>"}, loaded {rows.IsLoaded}, size {rows.ActualWidth:R}x{rows.ActualHeight:R}, anchor {Element(scroll.CurrentAnchor)}: {reason}");
             void Collection(object? sender, NotifyCollectionChangedEventArgs args) =>
@@ -109,8 +129,20 @@ static partial class SelfTest
                 lastAnchor = scroll.CurrentAnchor;
                 Record($"layout/render geometry or current anchor changed: {geometry}");
             }
+            void ObservedLayoutUpdated(object? sender, object args)
+            {
+                layoutUpdated++;
+                if (sampledLayoutPhase != phase)
+                {
+                    sampledLayoutPhase = phase;
+                    Record($"first actual LayoutUpdated callback in phase; UpdateLayout/Restore invocations UNKNOWN unless explicitly present in this sampled managed stack\n{Environment.StackTrace}");
+                }
+                Layout(sender, args);
+            }
+            void ObservedSizeChanged(object? sender, SizeChangedEventArgs args) => sizeChanged++;
             detachTrace = () =>
             {
+                layoutObserversAttached = false;
                 if (sourceToken is { } token) { rows.UnregisterPropertyChangedCallback(ItemsRepeater.ItemsSourceProperty, token); }
                 if (parent is not null && parentToken is { } outerToken) { parent.UnregisterPropertyChangedCallback(ListView.ItemsSourceProperty, outerToken); }
                 if (parent is not null) { parent.Items.VectorChanged -= OuterCollection; }
@@ -118,7 +150,8 @@ static partial class SelfTest
                 scroll.ViewChanging -= Changing;
                 scroll.ViewChanged -= ObservedChanged;
                 scroll.AnchorRequested -= AnchorRequested;
-                scroll.LayoutUpdated -= Layout;
+                scroll.LayoutUpdated -= ObservedLayoutUpdated;
+                scroll.SizeChanged -= ObservedSizeChanged;
                 rows.ElementClearing -= Clearing;
             };
             sourceToken = rows.RegisterPropertyChangedCallback(ItemsRepeater.ItemsSourceProperty, (_, _) =>
@@ -129,7 +162,9 @@ static partial class SelfTest
             scroll.ViewChanging += Changing;
             scroll.ViewChanged += ObservedChanged;
             scroll.AnchorRequested += AnchorRequested;
-            scroll.LayoutUpdated += Layout;
+            scroll.LayoutUpdated += ObservedLayoutUpdated;
+            scroll.SizeChanged += ObservedSizeChanged;
+            layoutObserversAttached = true;
             rows.ElementClearing += Clearing;
             if (parent is not null)
             {
@@ -315,6 +350,7 @@ static partial class SelfTest
         }
         finally
         {
+            application.UnhandledException -= XamlException;
             detachTrace?.Invoke();
             Away(window, main);
             await demo.RemoveSessionAsync(id);
