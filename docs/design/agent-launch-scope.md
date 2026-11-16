@@ -6,10 +6,10 @@ Home Assistant retirement epic (#1396). It decides what slices 2b (#1404), 2c (#
 for the first version; where the two disagree for v1, this note wins, and agent-principals.md
 stays the long-term design. Times are Pacific.
 
-**Prerequisite cut (#2357 / #1472):** scope, accounting, audit compatibility and
-restore requirements only. The complete pending-record/card contract follows in a
-separate reviewed cut. All pending behavior remains disabled under §13's gates;
-references to the companion's §13.x sections below do not authorize partial code.
+**Pending-launch extension (#2357 / #1472):** §13 proposes the pre-session Needs-you
+record and typed `needsPerson` result. It is docs only, not a new permission grant;
+its host and client code slices wait on #1413 C1 and §13's repair/restore gates.
+All pending behavior remains disabled until those gates are met. The earlier scope rules remain.
 
 ## Owner summary (one page)
 
@@ -124,8 +124,10 @@ exception, never Answer/Dismiss. The gate runs, in order, refusing at the first 
 
 0. a `request` this principal has used before never starts a second launch. The gate checks the
    launch service's memory (`LaunchServiceOptions.RememberFor`, 25 minutes) **and** the set of
-   requests rebuilt from today's/yesterday's audit **and every unresolved journal of any
-   age**, including its origin binding/hash. An unresolved request never ages out of dedup.
+   requests rebuilt from today's/yesterday's audit **and every unresolved journal and
+   pending audit reservation of any age**, even without a journal (§13.1), with known
+   origin/hash evidence. Missing private binding never authorizes a start.
+   An unresolved request never ages out of dedup.
    Missing/unreadable evidence refuses launches (§6). Identity uses `requestSha256` (§6), the
    SHA-256 of the request's normalised launch fields, prompt included, recorded on each line;
    the prompt itself is never recorded. A repeat with the same hash gets the recorded outcome
@@ -330,7 +332,8 @@ memory only as [agent-principals.md](agent-principals.md) §5.5 allowed for mess
 evidence (on each machine, 5 started and a sixth refused during the acceptance run, §10) must
 survive a restart.
 * **Cap/request fold:** today's/yesterday's audit in full; caps use its last hour.
-  Request ids also fold every unresolved journal, regardless of age (§2 step 0).
+  Request ids also fold every unresolved journal and pending audit reservation at any age,
+  even without a journal (§2 step 0).
   Separately, §6 preflights all retained versions and unresolved journals.
 * **Clock:** the window is judged on each line's wall-clock `at`. A line dated in the future (the
   clock stepped back) counts as if dated now, so a clock jump can neither open nor close the cap.
@@ -364,7 +367,12 @@ gate rest on.
   of KB an hour, well under its own **16 MiB** quota for 30 days; refusals are already limited
   (§5).
 * **Pruning:** whole daily files, oldest first, at host start and once a day, never per append;
-  never a file that holds a line from the last two hours; a prune that fails warns in
+  never a file that holds a line from the last two hours or unresolved pending reservation,
+  even without a journal. Prune/archive cannot remove its required fold evidence until
+  §13.5 proof resolves it; quota pressure never evicts it. Keep resolution proof while
+  any reservation copy remains retained, including in files pinned by another launch.
+  Prune proof only after, or atomically with, the last reservation copy,
+  also respecting §13.1 readback retention. A prune that fails warns in
   `host.status` and never blocks a launch. A day over the quota on its own keeps that day and
   warns.
 * **A person may archive** the log (`agent-bridge-host audit archive`, at the machine); the
@@ -387,6 +395,7 @@ gate rest on.
   blocks old-host startup. Once §13's gates are met, **all session.launch, person-app included**,
   is blocked as pendingStorageUnavailable; persist manualRecoveryRequired=true, no retryAfter.
   This sticky fault is not timed capRebuilding; even readable files do not auto-clear it.
+  An unresolved audit reservation with a missing journal also latches this fault (§13.1).
   **Owner recovery:** local App `launch.pending.repair` journal-restore mode (§13.4 gate),
   bound to profile/journal digest when record IDs are unreadable. Keep original bytes/hash
   in non-destructive quarantine; audit intent and old/new digest binding before restore, result after.
@@ -398,8 +407,8 @@ gate rest on.
   ships before pending writes, not as a later fix.
   After validated restore/rebuild, the new copy is authoritative; the original is forensic-only,
   excluded from runtime readability checks but still pins the marker, never authorizing rollback.
-  Missing identity or incomplete evidence keeps the manual block. Nothing is deleted or
-  force-cleared (§13.7).
+  Unresolved missing identity or incomplete evidence keeps the manual block; §13.1 defines
+  audit-only repair. Nothing is deleted or force-cleared (§13.7).
   **Proposed quarantine bound, separate from pending storage:** four originals, 256 KiB/profile
   including metadata. At saturation/oversize retain the original in place, refuse allocations/
   repair, never copy beyond the budget or evict evidence. No automatic expiry; retained originals
@@ -619,13 +628,12 @@ Each has a recommended default; the summary's list is the same.
    configuration in the worktree, with the user's own agent settings still applying
    **(recommended)**; or wait for AP8's provably forced-ask launch before any agent launch.
 
-## 13. Pending behavior is disabled pending the companion design
+## 13. Pending launches and Needs you (#2357 / #1472)
 
-This cut is not the pending implementation contract. Identity/state/outcome/readback,
-person actions, closure/race tables and the approved Needs-you card follow in the
-companion under #2357/#1472; §13.x references above name those deferred sections.
-No partial pending behavior or new permission is authorized.
+**Proposed, not implemented:** host-owned unready/pre-session launches; distinct #149
+kinds and ask-only/person trust stay. No alerts/HA fallback/live/setup/credential changes.
 
+**Enablement gate:** no partial pending behavior or new permission is authorized.
 Pending-journal writes, pending-major events and the sticky person-app launch block
 ship only with or after the complete reviewed design, #1413 C1 and the protected local
 repair gateway with verified restore support. Require `enforce`, an approved presence-
@@ -640,3 +648,342 @@ Before enabling, align agent-principals' child scopes/caps/audit/script rights a
 the closed pending person actions to the device-approval/protocol contracts. Product
 must approve quarantine bounds/retention and file the linked #2357 irrecoverable data-loss
 override decision; no override, deletion or force-clear is authorized here.
+
+### 13.1 Placement, identity and bounds
+
+Each host owns truth under its [profile lock](client-protocol.md#placement-and-state);
+no fleet owner/transfer/relay proof. Lost host means unavailable, not closed.
+
+Reserve the pending UUID in the audit; flush private journal before start. Key `(relayAccount, stable origin,
+request)` plus §2 hash; tenancy is roster, not provider login (`CheckAccount`).
+Separate host-derived binding pins private issuance generation and session/process or
+script identity. Rotation/resume keeps dedup key but refuses adoption/relaunch; changed
+bytes are requestReused. Protect like credentials; encrypt snapshots. Workspace/fleet
+git/relay metadata/client caches aren't authority.
+
+**Audit-only recovery:** fold unresolved pending reservations from all retained audit
+files/archives at any age, not just today/yesterday. Until durable §13.5 readiness or
+no-start/closure proof, each holds its pending slot and any applicable live reservation.
+Missing journal means internal reconciliationRequired and sticky pendingStorageUnavailable,
+manualRecoveryRequired=true, no retryAfter; repeat R is unconfirmed/fault, never a new start.
+Never recreate the private binding from audit fields. Only §13.4 person repair bound to
+the reservation/audit digest may record §13.5 positive proof and a durable terminal
+resolution; then a complete all-age rebuild must pass before manual fault clearing.
+Insufficient proof stays blocked. Ordinary rebuild, age and journal absence clear nothing.
+
+| Stored field | Meaning |
+|---|---|
+| `v`, `pending`, `request`, `requestSha256` | Journal version, host-generated pending UUID, original launch UUID and normalized request hash |
+| `relayAccount`, `origin`, `originBinding`, `machine` | Stable principal kind/id; separate immutable private credential issuance generation, session UUID/root PID/start or script principal; local device, never display-name routing |
+| `agent`, `workspace`, `startedAt`, `expiresAt`, `clockFloorUtc` | Settled labels; UTC launch time, current answer deadline and durable clock high-water mark |
+| `state`, `revision`, `startClaim`, `processStarted`, `readyEvidence`, `closed` | State enum (§13.2); monotonic revision; durable start phase; sticky positive start; `ready`/`neverReady`/`unknown` history; verified process closure, not terminality |
+| `question` | UUID, kind, observation time, full-screen digest, exact safe warning/choices and full trust folder/root scope; never approving truncated text |
+| `process`, `session` | Private PID/start, pre-bound complete owned-attempt set and boot identity, provisional/ready session; no process details to origins |
+| `action` | Action UUID, verified actor, question/revision/choice digest, durable claim and result; no secret, credential or raw answer |
+
+Starting isn't a question; positive observation gives needsPerson, not readiness.
+Ready becomes started; §13.5 terminates no-start/exit. **Expiry never kills:**
+retain expired/closed-false card/reservation until readiness or proven closure.
+
+**Existing:** 10-minute ordinary/30-minute remote-trust follow anchors at launch `p.At`;
+Trust-to-Bypass can drop to 10 from that same anchor; expiry removes the in-memory entry.
+60-second wait isn't a sign-in deadline; first-question 120-second busy isn't HooksReview.
+**Proposed:** first deadline = startedAt (launch anchor) + period; new complete question/
+kind/scope uses observation + new 10/30 period, possibly shortening. Cursor/selection/time,
+rereads/retries/refusals never renew; old ids expire. This changes renewal, not busy;
+resolve v1's "newest" busy wording before code.
+
+**New `PendingLaunchOwner`**, tied to host lifetime, owns the journal beyond
+`FollowAsync`. Launch/follow/process/readiness events and post-expiry/restart observation
+(30 s, 10 s/pass) detect late readiness, new questions and exit until §13.5 terminal.
+This support is missing, not a detached fleet watcher; storage failure permits no effect.
+
+**Proposed bounds, not policy:** four shared unresolved records; 8 KiB each/32 KiB
+payload, 64 KiB protected file including headers. Starting/expired/closing/uncertain
+counts in the proper agent/fleet six-live bucket (not person-origin). Ready converts
+without double count; §13.5 releases pending/live slots. Only pre-start busy/refused
+refunds hourly charge; failed/interrupted counts. Shared slots block both kinds, no
+eviction/migration; quarantine account changes until reconciled.
+At most 16 choices of 256 UTF-8 bytes, scope 4 KiB, warning 2 KiB, **also** within 8 KiB.
+Oversize/incomplete/secret-bearing text keeps safe identity/digests and fixed read-only
+reason, never truncated approval, passwords, tokens or device codes.
+
+Separate replay store: proposed 256 entries/512 KiB, 2 KiB/result plus bounded durable
+[nonce/floor state](../protocol/devices.md#vetoes-person-commands-and-head-attestations).
+Prune only when freshness **and** durable floor reject replay; saturation refuses effects.
+Terminal identity/readback lasts at least 24 h; unresolved identity outlives audit pruning.
+Persist `max(nowUtc, clockFloorUtc)` before claims; rollback never reopens an answer,
+but restoring **all** same-user protected state defeats local high-water marks.
+§6's audit budget is separate. Without safe headroom refuse starts/effects and report,
+never prune unresolved identity or current cap/replay evidence.
+
+### 13.2 Typed result and origin behavior
+
+Only positive blocking-question detection produces `needsPerson`, not timeout/`None`.
+Trust/HooksReview/Bypass map to folderTrust/hookReview/permission (bypass only).
+Sign-in, other permission and unknown need versioned positive-detector fixtures;
+without them use `unconfirmed`, never generic text-matching authority.
+**Origin schema:** request/pending UUIDs, authenticated machine id, optional validated
+machineName; integer revision, state/outcome, optional fixed code, boolean closed and
+readyEvidence (`ready|neverReady|unknown`). Optional
+observed question UUID/kind (`folderTrust|signIn|permission|hookReview|unknown`) and
+expiresAt carry no answer authority. No question is invented for `starting`.
+**Outcome enum:** `started|unconfirmed|needsPerson|busy|refused|failed`; state enum and
+legal pairs below. Slash separates outcome/code, not a new enum value.
+
+| State | Outcome / fixed code | Closed; terminal for pending lifecycle |
+|---|---|---|
+| `starting` (also waiting without a detected question) | `unconfirmed / launchStarting` | false; no |
+| `needsPerson`, `answering`, `expired` | `needsPerson / startupQuestion`; requires retained positive question | false; no |
+| `closing`, `reconciliationRequired` | `needsPerson` if a question is retained, else `unconfirmed`; code `closing`, `pendingReconciliation` or audit-gap `interrupted` | false; no |
+| `started` | `started`, no code; real session id required, readyEvidence=ready | false; yes, convert to live session |
+| `notStarted` | original `busy|refused|failed` and code; proven no-start crash is `failed / interrupted` | true; yes, neverReady |
+| `exited` | `failed / startupExited` | true; yes, neverReady |
+| `dismissed`, `withdrawn` | `failed / launchDismissed`, `failed / launchWithdrawn` respectively | true; yes, neverReady |
+| `closedUnconfirmed` | `unconfirmed / closedUnconfirmed` | true; yes, unknown history, no retry |
+
+`reserved`/`interrupted` are audit outcomes, not projection enums. Invalid projection pairs are
+protocol errors: no effects/reassignment, never an assumed terminal result.
+**Fault shapes/codes, not states:** proven-fresh refusal before allocation is `refused/code`,
+without a pending record. Unreadable existing/uncertain readback is `unconfirmed/code`,
+omitting unavailable lifecycle fields, not inventing a projection. Action refusal is
+`refused/code` plus safely known pending/revision; it never rewrites the launch or charge.
+
+| Fixed code | Result meaning; never closes an existing pending launch |
+|---|---|
+| `pendingLimit` | Proven-fresh launch refused before allocation; existing records/slots unchanged |
+| `pendingStorageUnavailable`, `auditUnwritable` | Journal/audit unavailable: before allocation, proven-fresh launch refused; otherwise unconfirmed fault when committed state is unavailable. Actions refused; no inferred closure/refund |
+| `repairBlocked` | Local repair refused without sufficient evidence; reconciliationRequired/slot remain. This is an action code, never a state or terminal launch outcome |
+
+**Readback vectors:** independent fixtures use symbolic request R/pending P/machine M;
+revisions increase within each sequence. Repeat R reads current state, terminal repeats
+stay identical, never another start. Question Q includes kind/deadline; absent means omitted.
+
+| Evidence/readback | State; outcome/code; closed; history; question/session |
+|---|---|
+| Reserved/journaled, no question | starting; unconfirmed/launchStarting; false; unknown; neither |
+| Positive Q, then deadline passes | needsPerson then expired; needsPerson/startupQuestion; false; unknown; Q |
+| Reserved audit, journal absent after crash | Internal reconciliationRequired; readback unconfirmed/pendingStorageUnavailable, manualRecoveryRequired true, no retryAfter; omit unavailable lifecycle fields; no question/session; audit identity/slot remain pinned (§13.1) |
+| Proven pre-start busy/refused/failure | notStarted; original outcome/code; true; neverReady; neither |
+| Native exit with never-ready proof | exited; failed/startupExited; true; neverReady; neither |
+| Cancel with never-ready proof | dismissed; failed/launchDismissed; true; neverReady; neither |
+| Withdraw with never-ready proof | withdrawn; failed/launchWithdrawn; true; neverReady; neither |
+| All gone, history unknown | closedUnconfirmed; unconfirmed/closedUnconfirmed; true; unknown; neither |
+| Ready, including after expiry | started; started/no code; false; ready; real session S, no question |
+| Repair lacks proof, Q retained | Action refused/repairBlocked; readback remains reconciliationRequired, needsPerson/pendingReconciliation, closed false, unknown, Q |
+| Fresh R at pending ceiling | Launch refused/pendingLimit, no pending/state; all existing reservations unchanged |
+| Journal/audit unreadable on repeat R | unconfirmed/pendingStorageUnavailable or auditUnwritable; no fabricated state/closed; action refusal uses the same code |
+
+Validate [machine names](../protocol/agent-operations.md); no name-based routing/pins.
+Origins get only own IDs/kind/state/deadline, no question/scope/choices/process/other
+records. Machine identity helps fleet routing, not cross-machine agent permission.
+Busy keeps its existing timing/reason; capacity failure is `pendingLimit`.
+**Behavior change:** negotiated pending clients repeat for current durable state, not
+v1's remembered outcome; legacy peers retain v1 behavior, never a second process.
+`RememberFor` is 25 min; v1's 10 is a minimum, host-launch's 15 stale. Pin capability/
+cache/result vectors and align those docs before enabling. Expiry grants no retry/refund.
+
+**Unresolved means no retry**, Enter/answer/bypass/impersonation/trust change.
+Proposed withdraw binds request/pending/revision to the original issuance:
+session needs live bound `read+reply+launch` and local grant; script needs exact principal/
+generation, complete agent-free ancestry and `launch:fleet`; person needs approved identity.
+Rotation/resume/revocation/expiry cannot transfer ownership; wait for person Cancel.
+Base scripts/services/other origins refuse. New allow-list wiring is required.
+Withdraw shares unready-close, not ready-session stop. Only §13.5 closed **and**
+no-start/never-ready proof allows a linked fresh target/request; unknown-ready closure
+frees slots, not retry authority. No migration/automatic cycling or hourly refund.
+Unknown delivery/offline/expiry/file deletion is no proof. Without close/grant support
+wait; cross-machine agents still wait on §9/#55.
+**Proposed ops:** origin readback repeats `session.launch`; bound origin withdrawal is
+`launch.pending.withdraw`. Person Answer/Cancel follow §13.4; `launch.pending.repair`
+is **local validated-App only**, never an origin, script or relay operation.
+
+### 13.3 Common client card
+
+Proposed `launch.pending` capability: common bounded person snapshot via
+`launch.options.pending` and `launch.pending.subscribe`/snapshot-and-change events;
+`launch.pending.repair` is local validated-App only (§13.4), never offered on the relay.
+Authorize **before** building any projection; reconnect/gaps require a fresh snapshot.
+Pin vectors before use. Never insert a fake session into `sessions.list`.
+One card per pending UUID in **Needs you**, before registration.
+Example: remote-answerable folder trust, 30-minute window anchored at 2:10 PM:
+
+```text
+<Kind title>
+<Machine> · <Agent>
+<Exact safe question, or fixed read-only reason>
+Started 2:10 PM · Answer by 2:40 PM
+The launch stays open on the machine until you cancel it.
+[Answer]  [Cancel launch]
+Stops this launch. It does not answer the question.
+```
+
+Titles: "Folder trust question", "Sign-in needed", "Permission confirmation",
+"Hook review", "Question waiting", never protocol status labels. Viewer-local times
+(Pacific sample) use actual host deadline, not fixed 15 minutes. Only authorized
+**Answer** cards show "Answer by". Expiry keeps kind/card/Cancel; replace time with
+"Started 2:10 PM · Time to answer ended 2:40 PM" and Answer with
+"This can no longer be answered here. Answer it at the machine, or cancel the launch."
+**See details** cards show "Started 2:10 PM" alone, no Answer-by/ended sentence;
+details remain read-only after expiry. A genuinely new question resyncs kind/actions/time.
+
+**Answer** opens authorized relay folder trust: protected exact warning/full scope/
+worded choice buttons, no send on open/preselection/shortening/Markdown approval.
+Others use **See details**: "Answer this at the machine." plus fixed reason, no credential
+entry/new permission channel. Unsafe: "Can't show this question safely. Answer it at the machine."
+Offline: "Can't reach <Machine>. Showing the last known state." Disable effects;
+local hide is not cancelled. Ready replaces pending with the actual session.
+
+Cancel: "Cancelling…" plus progress, counted; failure "Couldn't cancel. Try again.", never
+host text. No removal before closure/readiness; disable absent close support with reason.
+Needs mark **and word**, amber; only Answer primary/teal; Cancel secondary, not red;
+no green pending status. Wrap/escape labels (not commands/links/routes), accessible
+focus/names/state and narrow layout. Old peers stay read-only, no fallback/parity claim.
+
+### 13.4 Person boundary, delivery and audit
+
+Recheck tenancy/person/device/policy per snapshot/event/effect. Sign-in, claimed kind,
+HA token or host key is not person authority. Origin readback/withdraw is separate;
+agents/scripts/services get neither protected person text nor Answer/Dismiss.
+
+**New gate:** add actions to `LocalApi.Acts` and validated-App-only text/action/subscription
+gates. Fresh ancestry/credential checks refuse Agent/script/Other/service before lookup;
+never fall through as person. Strip pending from agent/script options and every event.
+Withdraw alone has §13.2's scoped exception after script checks. This is a
+[pipe safety rail](../protocol/local-pipe.md), not a same-user boundary (§1.3 of
+[agent-principals.md](agent-principals.md)); its old numeric API citations are not authority.
+
+**Local:** pipe trust stays `answerable: false`; even App `launch.pending.answer` refuses.
+See details directs native-window answering. New pipe `launch.pending.dismiss` requires
+fresh App **plus** remote-equivalent person envelope/gateway and protected confirmation,
+bound action/pending/question/revision. No unsigned/legacy-MAC fallback; missing signer/
+gateway disables Cancel. Native close follows §13.5.
+
+**Remote Answer/Cancel:** equal-strength approved same-roster person-device envelope,
+fresh explicit host/pending/question/revision choice and durable replay/nonce/floor checks.
+Pin both closed verbs/vectors: devices.md has no dismiss today; trust MAC alone is weaker.
+Then require default-off remote trust, individual device approval, exact choice signature
+and screen guards before every key/injector slot. Reuse delivery, not generic answers.
+Old v1 is not silently upgraded; absent gateway stays read-only. No reply/legacy-MAC/
+remote Bypass fallback.
+
+**Required new ownership/close support:** WindowsProcessControl.Open(pid,start) holds one
+validated process; starter/launcher has no group-close API. Before starter entry, flush
+audit/journal startClaim and recoverable owned-attempt reference; creation/fencing must
+prove no-claim vs claimed/unbound recovery. Refuse start without that support.
+Rebind/hold the complete exact process set, interlock readiness (not merely sample it),
+terminate without keys and prove all gone. Unknown set/identity means `closed: false`,
+no PID/name/guessed-child/other-window kill or worktree reclaim. Pre-start cancellation
+is not this reviewed/tested post-start close; don't advertise until support exists.
+
+One launch lock; flush audit/claim before effect. Same action UUID reads durable result;
+changed bytes refuse. In-flight answer blocks close until reconciled; expiry/policy/
+screen rechecked before keys. New question gets fresh id/revision/deadline, not old keys.
+Ready wins, never stopped by late close. §6 audits observation/action/refusal/result/
+expiry/reconciliation with digests, no raw question/answer/secret/path; refused actions
+never change charges/slots without verified state transition.
+
+Storage/audit failure blocks starts/runtime effects, retains evidence, reports fixed
+`auditUnwritable`/`pendingStorageUnavailable`. Reconcile 30 s/10 s passes; after 5 min
+mark reconciliationRequired and stop effect retries; read-only observation continues.
+**New local `launch.pending.repair`:** add to `LocalApi.Acts`; same fresh validated-App,
+protected person confirmation and person-envelope gateway as local Cancel; bind pending/revision,
+the reservation/audit digest for §13.1's audit-only repair, or profile/journal digest for §6's
+restore mode. Refuse Agent/script/Other/service/remote before lookup; no CLI, unsigned flag or
+legacy-MAC fallback. This missing gate/signer and verified restore must ship no later than
+pending writes/events or the person-app launch block, under §13's enablement gate;
+they are prerequisites, not a current grant.
+Record repair may bypass the quarantined-claim wait, never authority/storage checks: fence old
+start/injector claims, then a 10 s observation pass, no keys/start/replay/termination.
+With writable stores commit only §13.5 proof, including closedUnconfirmed for unknown
+history; otherwise an action refusal with code repairBlocked keeps reconciliationRequired
+and its slot, and directs the person to restore
+storage/use a compatible host and close the owned window or reboot, then retry.
+Never force-clear/refund or guess empty. Status/readback expose the fault, no paging.
+
+### 13.5 Failure and race contract
+
+**Closure evidence before slot release:** window/root disappearance or host restart
+does not prove all gone. Fence old claims; complete owned PID/start set or proven new
+boot, never clock guess. Unknown readiness is not never-ready.
+
+| Case | Positive evidence and terminal record |
+|---|---|
+| Crash after reserved audit, before journal flush | §5 charge stays; §13.1 pins the audit-only identity and pending/live reservation at every age. Internal reconciliationRequired; sticky pendingStorageUnavailable/manualRecoveryRequired, no retryAfter; readback omits unavailable lifecycle fields. Missing journal is not no-start proof; only person repair with §13.5 proof resolves it |
+| Busy/refused/failed before start, after journal exists | Starter was never entered; `notStarted, closed: true`, original outcome/code. Release pending/live reservation; only busy/refused refunds hourly charge |
+| Crash between journal creation and start claim | Intact journal/audit show no claim; fenced old host cannot start: `notStarted, failed, closed: true` |
+| Crash after claim, before process identity saved | Recoverable owned-attempt proof shows none started: notStarted; if all gone but history uncertain: `closedUnconfirmed, unconfirmed, closed: true`. If proof missing, reconcile, no guessed release |
+| Person closes native window / unready process exits | Complete owned set gone and never-ready proof: state exited, outcome failed, code startupExited, closed true; unknown history gives closedUnconfirmed. Host audit actor, never infer a person principal |
+| Explicit Cancel / origin withdraw | Complete owned set gone, never-ready history and readiness interlocked: dismissed/failed/launchDismissed or withdrawn/failed/launchWithdrawn, closed true. Unknown history gives closedUnconfirmed |
+| Positively ready | `started` with real session; release pending slot, convert live reservation; later session exit does not rewrite the launch or allow reassignment |
+
+Commit terminal result, archive bounded readback/dedup, remove card/active slot.
+Unknown history can free resources without retry authority; repair uses this table,
+not a permanent normal-lifecycle hold.
+
+| Case | Required result |
+|---|---|
+| Host restarts pending / interrupted action | Restore binding/deadline/claim, positively rebind and reread; no blind replay. Missing identity is reconciliationRequired, closed false |
+| Target/client offline | No closure. Host ends answerability at deadline without a client; reconnect snapshots current state |
+| Expiry, including answer arriving late / clock rollback | Refuse new/late answer claims at deadline, persist expired state, keep process/card/slot. No automatic kill; new genuine question alone renews |
+| Expiry audit fails | Close answer gate from durable deadline/floor; quarantine, report storage failure, reconcile within the bounded retry contract, never fabricate a committed expiry or release |
+| Duplicate answer / two persons or clients answer | Same UUID reads result; changed bytes refuse. Only first valid question/revision claim acts; loser gets alreadyHandled/stale, never another key |
+| Answer races Cancel/withdraw/expiry/ready | One claim/lock; in-flight effect reconciles first. Expiry prevents new keys, never undoes delivered keys; ready cannot be stopped |
+| Delivered answer, lost acknowledgement | Readback/reconcile; never resend. Next question is not evidence that the previous answer failed |
+
+### 13.6 Bounded implementation cuts
+
+**Host: blocked on #1413 C1/vectors.** Size scoped journal/clock/replay/cap/live,
+binding/observer/start-claim/detector/person-gateway/close helpers in reviewed <=400-line
+prerequisites, then wire delivery. Withdraw all-in ~300 estimate; partial isn't parity.
+Pending writes/events and the person-app block also wait on §13's enforce-mode,
+presence-proven repair/restore gateway. Test disabled `off`/`observe`/presence-none/
+missing-gateway installs and no downgrade of existing unresolved evidence.
+
+Failing-first: state/outcome/readback vectors, all closure-table cases, audit-before-journal crash,
+person-only repair/fencing/blocked proof and fault-code vectors;
+**rollbackPendingOlderThanTwoDays:** expired folder-trust record at 72 h, absent
+from today's/yesterday's audit: same bound origin/request returns its pending UUID,
+no start; incompatible old host refuses startup. Clearing is refused while either
+unresolved journals or retained new-format evidence remains; only a compatible locked
+all-age scan proving neither remains permits clearing, never age alone;
+**auditOnlyPendingOlderThanTwoDays:** reserved R/P at 72 h, no journal and outside
+today's/yesterday's audit: restart still dedups R, holds its pending/applicable live slot
+and retains the audit/fold evidence against prune/archive/quota. Repeat R cannot start;
+missing journal latches the same sticky fault and typed readback as §13.1.
+Only person repair with positive terminal proof plus full rebuild may clear it;
+**auditProofPinnedAcrossDays:** R/U share day 0; U remains unresolved and pins the file,
+R resolves on day 1. Past readback/pruning windows, retain R's resolution proof while
+any R reservation copy remains. Restart keeps R terminal with no new storage fault
+or slot; U still holds its slot;
+surviving child/claim crash/unknown readiness;
+expiry observer and one-count live conversion; pipe Answer refusal and signed Cancel/
+missing-signer refusal; negotiated current vs legacy readback, generation/changed-byte
+refusal; Trust/Hooks/Bypass and fixtured other kinds, not None; renewal vs unchanged busy;
+byte/record/replay/refusal bounds; tenancy/grant/allow-list and App-only, zero protected
+agent/script fields; refused actions keep charges; journal/audit/expiry failure, sticky all-launch block/verified restore;
+duplicate/two-person/screen/late/lost-ack/close-ready races never replay, expiry never
+kills, no unproven replacement or unrelated/ready stop. Never omit support for line budget.
+
+**Client: blocked on C1/host vectors.** Tested PWA/Windows projection/protected details/
+actions/resync cuts <=400; split adapters, Creative checks own head. Separate macOS
+adapter uses same encrypted fixtures, initially read-only; actions wait on renderer/
+gateway/tests. No UI-implied host or macOS host launch/close/script support/parity.
+
+Failing-first: pre-session/expired/closing counts; exact title/escaped labels/full scope/
+fixed wording; relay-only Answer, no open-send/preselection, Started-only See details;
+actual 10/30 anchors/renewal, expired Answer not Cancel; closing/failure stays until proof,
+ready replaces; absent capability read-only; gap/reconnect/two-client resync and
+keyboard/screen-reader/narrow protected rendering on each client.
+
+### 13.7 Open choices before code
+
+Approve proposed shared capacity/reserves, byte/replay/repair budgets and renewal.
+Whether person-app launches share the four pending slots remains an explicit capacity decision.
+Resolve newest/first busy wording. Confirm origin withdrawal vs person-only cancel.
+Per-item ceiling/backoff is open: recommend one replacement then typed blocked; keep
+unattended reassignment off until both are approved. Pin verbs/detectors/proof and size helpers;
+rollback requires §6's guard and readable unresolved journals/major evidence, never deletion.
+**Product** must file a linked tracking issue under #2357 for the open irrecoverable
+data-loss override decision before any override code; this note authorizes none.
+Creative text isn't an unbuilt-UI receipt. No automatic kill/new sign-in/permission channel.
