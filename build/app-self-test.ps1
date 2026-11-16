@@ -28,11 +28,28 @@ if (-not $Logs) { $Logs = Split-Path $Result }
 $Logs = [IO.Path]::GetFullPath($Logs)
 New-Item -ItemType Directory -Force (Split-Path $Result), $Logs | Out-Null
 $appLog = [IO.Path]::Combine($env:LOCALAPPDATA, 'AgentBridge', 'app', 'app.log')
-# A crash's minidump, kept by Windows Error Reporting beside the logs: the event alone names no
+# A crash's minidump, kept by Windows Error Reporting outside published results: the event names no
 # module for a fail fast ("unknown"), and the stack that found #240 came only from a dump. On CI's
 # throwaway runner only, where HKLM is writable; never on a developer's machine.
-$dumps = Join-Path $Logs 'dumps'
+$dumps = $null
+$wer = $null
 if ($env:GITHUB_ACTIONS -eq 'true') {
+    $dumps = [IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP "agent-bridge-wer-$([guid]::NewGuid().ToString('N'))"))
+    for ($dir = [IO.DirectoryInfo]::new($dumps); $null -ne $dir; $dir = $dir.Parent) {
+        if ($dir.Exists -and ($dir.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw 'Linked WER scratch directory refused'
+        }
+    }
+    # Cleanup can be interrupted. Isolation, not deletion, keeps dumps out of artifact roots.
+    foreach ($root in @($Logs, (Split-Path $Result), $env:GITHUB_WORKSPACE,
+            (Join-Path $env:RUNNER_TEMP 'selftest'), (Join-Path $env:RUNNER_TEMP 'arm64-loop'))) {
+        if (-not $root) { continue }
+        $root = [IO.Path]::GetFullPath($root).TrimEnd('\', '/')
+        if ($dumps.Equals($root, [StringComparison]::OrdinalIgnoreCase) -or
+            $dumps.StartsWith("$root\", [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'WER scratch must be outside published results and workspace'
+        }
+    }
     $wer = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\$(Split-Path $Exe -Leaf)"
     try {
         New-Item -ItemType Directory -Force $dumps | Out-Null
@@ -41,7 +58,9 @@ if ($env:GITHUB_ACTIONS -eq 'true') {
         Set-ItemProperty -Path $wer -Name DumpType -Value 1 -Type DWord
     }
     catch { Write-Output "no crash dumps: $($_.Exception.Message)" }
+    Write-Output 'WER dumps are isolated from publication inputs, including if cleanup is interrupted'
 }
+try {
 $started = Get-Date
 $stderrPath = Join-Path $Logs 'app.stderr.log'
 $evidencePath = Join-Path $Logs 'app-exit-cause.json'
@@ -129,16 +148,16 @@ $evidence | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $evidencePath
 # The crashing thread's stack from the dump, by the runner's own cdb when it has one (the Windows
 # SDK's Debugging Tools), with Microsoft's public symbols. Bounded: a slow symbol server costs at
 # most two minutes of a run that has already failed.
-$dump = Get-ChildItem $dumps -Filter *.dmp -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -ge $started } | Select-Object -First 1
+$dump = if ($dumps) { Get-ChildItem $dumps -Filter *.dmp -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -ge $started } | Select-Object -First 1 }
 $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
 $cdb = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\Debuggers\$arch\cdb.exe"
 if ($dump -and (Test-Path $cdb)) {
     Write-Output "--- the crash, from $($dump.Name)"
-    $symbols = Join-Path $Logs 'symbols'
-    $analysis = Join-Path $Logs "$($dump.BaseName).txt"
+    $symbols = Join-Path $dumps 'symbols'
+    $analysis = Join-Path $Logs 'app-crash-analysis.txt'
     try {
         $cdbRun = Start-Process $cdb -ArgumentList '-z', "`"$($dump.FullName)`"", '-y', "`"srv*$symbols*https://msdl.microsoft.com/download/symbols`"", '-c', '"!analyze -v; q"' -RedirectStandardOutput $analysis -NoNewWindow -PassThru
-        if (-not $cdbRun.WaitForExit(120000)) { Stop-Process -Id $cdbRun.Id -Force; Write-Output 'cdb took too long; the dump is in the artifact' }
+        if (-not $cdbRun.WaitForExit(120000)) { Stop-Process -Id $cdbRun.Id -Force; Write-Output 'cdb took too long; only partial text analysis may be published' }
         $text = @(Get-Content $analysis -ErrorAction SilentlyContinue)
         $text | Where-Object { $_ -match '^(FAILURE_BUCKET_ID|SYMBOL_NAME|EXCEPTION_CODE_STR|IMAGE_NAME):' }
         $stack = [Array]::IndexOf($text, ($text | Where-Object { $_ -like 'STACK_TEXT:*' } | Select-Object -First 1))
@@ -147,5 +166,21 @@ if ($dump -and (Test-Path $cdb)) {
     catch { Write-Output "cdb did not run: $($_.Exception.Message)" }
     Remove-Item $symbols -Recurse -Force -ErrorAction SilentlyContinue
 }
-elseif ($dump) { Write-Output "--- the crash's dump is in the artifact: $($dump.Name)" }
+elseif ($dump) { Write-Output "--- no debugger available; the process dump will not be published" }
+}
+finally {
+    try {
+        if ($wer -and (Test-Path -LiteralPath $wer) -and
+            (Get-ItemPropertyValue -Path $wer -Name DumpFolder -ErrorAction Stop) -eq $dumps) {
+            Remove-Item -LiteralPath $wer -Force -ErrorAction Stop
+        }
+    }
+    catch { Write-Warning 'WER registration cleanup failed; dump scratch remains outside publication inputs' }
+    try {
+        if ($dumps -and (Test-Path -LiteralPath $dumps)) {
+            Remove-Item -LiteralPath $dumps -Recurse -Force -ErrorAction Stop
+        }
+    }
+    catch { Write-Warning 'WER dump cleanup failed; isolated scratch must never be published' }
+}
 exit $(if ($null -eq $code -or $code -eq 0) { 1 } else { $code })
