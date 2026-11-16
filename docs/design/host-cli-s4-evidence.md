@@ -226,6 +226,7 @@ behavior; record background/locked limitations. No owner paging or alerting work
 Size: at most 250 lines. Sensitive: yes. Depends-on: #2402.
 Acceptance: no claimed background receipt from stdout, no agent focus assertion,
 and an explicit Engineering/Product disposition for remaining notification gaps.
+The [C8 lifecycle contract](host-cli-lifecycle-contract.md) records the separate watch/terminal/notifying-client boundaries, identities and review-only event vectors.
 
 ### C9 - Add read-only exact-question target validation for a person CLI
 
