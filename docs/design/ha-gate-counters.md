@@ -1,7 +1,8 @@
 # HA retirement gate counters
 
 Design for [#2384](https://github.com/danswett/agent-bridge/issues/2384), S4-2 of
-[#1396](https://github.com/danswett/agent-bridge/issues/1396). Proposed, not shipped.
+[#1396](https://github.com/danswett/agent-bridge/issues/1396). Source instrumentation
+is staged; qualifying runs remain held.
 This measures item 2 of fleet `docs/ha-retirement-parity.md` section 3:
 one continuous run with at least 500 messages, 50 launches, 30 approvals and
 20 stops, and zero HA fallbacks. It does not approve retirement or replace
@@ -92,7 +93,7 @@ and run-control markers use `agents-*.jsonl`. Totals are a reproducible projecti
 Keep existing audit semantics: `attempted` or `reserved` does not become success.
 The existing fleet message evidence remains its named source, not a new store.
 
-Proposed versioned metadata: host-generated `operation`, `run`, monotonic
+Versioned metadata: host-generated `operation`, `run`, monotonic
 per-profile `sequence`, `phase` (intent/terminal/control), `path`, `actorKind`,
 action, validated target/incarnation, outcome and bounded reason code.
 Record a question identity for approval dedupe, never its title or fields.
@@ -144,11 +145,13 @@ relay and HA context remain deferred; no automatic run provider is added.
 
 Slice 4 wires app/host-CLI, authenticated relay and internal HA stops. Empty run
 still earns no qualifying credit. A flushed intent follows native stop guards
-and precedes confirmation arming or dispatch; refused/busy pre-dispatch results
-have terminal-only evidence, not HA fallback intents. Only `ended` credits the
-process incarnation. Replay uses retained request/principal/incarnation bindings;
-uncertain cache misses refuse effects. No confirmation token is retained, and
-terminal-write failure leaves unresolved intent. A6 continuity remains required.
+and precedes confirmation arming or dispatch; refused/busy/failed pre-dispatch
+results have terminal-only evidence only when the process incarnation is known,
+not HA fallback intents. Only `ended` credits the process incarnation. Replay
+uses retained request/principal/incarnation bindings; changed incarnations and
+uncertain cache misses after restart refuse effects. No confirmation token is
+retained, and terminal-write failure leaves unresolved intent. A6 continuity
+remains required.
 
 At restart rebuild operation mappings, active run and totals from both streams,
 checking supported versions, sequence/link continuity and the #1401 durable head.

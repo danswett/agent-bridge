@@ -31,6 +31,7 @@ internal static class StopAudit
 
         AgentAuditEntry? intent = null;
         var attempted = false;
+        var conflict = false;
         AgentAuditEntry Entry(Guid identity, string phase, string outcome, string reason) =>
             new(path == "relay" ? "in" : "local", key.ToString(), principal, [], Ops.SessionStop, target.ToString(), outcome,
                 Gate: new GateAuditMetadata(1, Guid.NewGuid(), Guid.Empty, 0, phase, path,
@@ -45,7 +46,9 @@ internal static class StopAudit
             intent = null;
             return false;
         }
-        var result = await stops.StopAuditedAsync(request, Prepare, ct);
+        var result = await stops.StopAuditedAsync(request, Prepare, ct,
+            principal: principal, onConflict: () => conflict = true);
+        if (conflict) { return result; }
         var outcome = result.Outcome.ToString().ToLowerInvariant();
         if (intent is { Gate: { } gate })
         {

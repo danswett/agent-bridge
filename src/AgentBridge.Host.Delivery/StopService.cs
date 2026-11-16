@@ -135,11 +135,17 @@ public sealed class StopService : ISessionStopper
     public Task<StopResult> StopAsync(StopRequest request, CancellationToken cancellationToken = default)
         => StopAuditedAsync(request, null, cancellationToken);
 
-    public Task<StopResult> StopAuditedAsync(StopRequest request, Func<int, DateTimeOffset, bool>? beforeDispatch, CancellationToken cancellationToken = default)
+    public Task<StopResult> StopAuditedAsync(StopRequest request, Func<int, DateTimeOffset, bool>? beforeDispatch,
+        CancellationToken cancellationToken = default, string? principal = null, Action? onConflict = null)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key)) { return Task.FromResult(Refused("request must be a UUID")); }
         return requests.Once(key, () => EndAsync(request, key, beforeDispatch), result =>
-            log($"end {key.ToString()[..8]} for {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Forced == true ? " (terminated)" : "")}{(result.Reason is null ? "" : $" ({result.Reason})")}"));
+            log($"end {key.ToString()[..8]} for {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Forced == true ? " (terminated)" : "")}{(result.Reason is null ? "" : $" ({result.Reason})")}"),
+            owner: (principal, request.Id), foreign: () =>
+            {
+                onConflict?.Invoke();
+                return Task.FromResult(Refused("the stop request belongs to another operation"));
+            });
     }
 
     async Task<StopResult> EndAsync(StopRequest request, Guid key, Func<int, DateTimeOffset, bool>? beforeDispatch)
