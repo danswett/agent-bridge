@@ -1944,9 +1944,10 @@ public sealed class MigrationTasksHooksAndSettingsTests : MigrationFixture
         Assert.Equal(mine, Text(hostConfig));
     }
 
-    static async Task AwaitReady(string name, Task<string?> line, Task exited, Task bound, Func<string> state)
+    static async Task AwaitReady(string name, Task<string?> line, Task bound, Func<string> state)
     {
-        await Task.WhenAny(line, exited, bound);
+        // The line read ends on the ready line or at end of output when the child exits; the bound only fails.
+        await Task.WhenAny(line, bound);
         var signal = line.IsCompletedSuccessfully ? line.Result : null;
         if (signal != "ready")
         {
@@ -1960,7 +1961,7 @@ public sealed class MigrationTasksHooksAndSettingsTests : MigrationFixture
         var never = new TaskCompletionSource().Task;
         var early = new TaskCompletionSource<string?>();
         var late = new TaskCompletionSource<string?>();
-        var all = Task.WhenAll(AwaitReady("early", early.Task, never, never, () => "running"), AwaitReady("late", late.Task, never, never, () => "running"));
+        var all = Task.WhenAll(AwaitReady("early", early.Task, never, () => "running"), AwaitReady("late", late.Task, never, () => "running"));
         early.SetResult("ready");
         Assert.False(all.IsCompleted);
         late.SetResult("ready");
@@ -1971,8 +1972,7 @@ public sealed class MigrationTasksHooksAndSettingsTests : MigrationFixture
     public async Task Readiness_is_not_lost_when_a_child_exits_right_after_writing_ready()
     {
         var line = new TaskCompletionSource<string?>();
-        var exited = Task.CompletedTask;
-        var pending = AwaitReady("child", line.Task, exited, new TaskCompletionSource().Task, () => "exited with code 0");
+        var pending = AwaitReady("child", line.Task, new TaskCompletionSource().Task, () => "exited with code 0");
         line.SetResult("ready");
         await pending;
     }
@@ -1983,9 +1983,9 @@ public sealed class MigrationTasksHooksAndSettingsTests : MigrationFixture
         var never = new TaskCompletionSource().Task;
         var eof = new TaskCompletionSource<string?>();
         eof.SetResult(null);
-        var exitedFailure = await Assert.ThrowsAsync<Xunit.Sdk.FailException>(() => AwaitReady("early", eof.Task, Task.CompletedTask, never, () => "exited with code 3"));
+        var exitedFailure = await Assert.ThrowsAsync<Xunit.Sdk.FailException>(() => AwaitReady("early", eof.Task, never, () => "exited with code 3"));
         Assert.Contains("early (exited with code 3) wrote nothing instead of ready", exitedFailure.Message);
-        var boundFailure = await Assert.ThrowsAsync<Xunit.Sdk.FailException>(() => AwaitReady("slow", new TaskCompletionSource<string?>().Task, never, Task.CompletedTask, () => "was still running"));
+        var boundFailure = await Assert.ThrowsAsync<Xunit.Sdk.FailException>(() => AwaitReady("slow", new TaskCompletionSource<string?>().Task, Task.CompletedTask, () => "was still running"));
         Assert.Contains("slow (was still running)", boundFailure.Message);
     }
 
@@ -2041,7 +2041,7 @@ public sealed class MigrationTasksHooksAndSettingsTests : MigrationFixture
             // does neither fails with a diagnosis instead of hanging the job; it never passes a test.
             var bound = Task.Delay(TimeSpan.FromSeconds(120));
             Task Ready(System.Diagnostics.Process p, string name) =>
-                AwaitReady(name, p.StandardOutput.ReadLineAsync(), p.WaitForExitAsync(), bound, () => $"process {p.Id} {(p.HasExited ? $"exited with code {p.ExitCode}" : "was still running")}");
+                AwaitReady(name, p.StandardOutput.ReadLineAsync(), bound, () => $"process {p.Id} {(p.HasExited ? $"exited with code {p.ExitCode}" : "was still running")}");
             await Task.WhenAll(Ready(supervisor, "supervisor"), Ready(daemon, "daemon"), Ready(stranger, "stranger"));
             // A receipt naming the daemon's process id with another start time: a reused id.
             File.WriteAllText(Path.Combine(_f.Runtime, "daemon.process.json"), $"{{\"pid\":{daemon.Id},\"installationId\":\"{FakeAgentHaBridge.Id}\",\"executable\":\"{pwsh.Replace("\\", "\\\\")}\",\"startedUtcTicks\":1}}");
