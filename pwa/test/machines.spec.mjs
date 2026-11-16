@@ -245,7 +245,7 @@ const launchHere = async (page) => {
 
 test.describe('live load wiring', () => {
   const sample = { state: 'fresh', ageMs: 2000, staleAfterMs: 15000,
-    cpu: { percent: 37.5 }, memory: { totalBytes: 16000, availableBytes: 10000 } };
+    cpu: { percent: 37.5 }, memory: { totalBytes: 16000, availableBytes: 10000, usedPercent: 37.5 } };
   const tile = (page, id = LAPTOP) => page.locator(`#machine-list [data-device-id="${id}"]`);
   const ops = (page) => page.evaluate(() => window.loadOps);
   const attach = (page, refuse = null) => page.evaluate(async ({ sample, refuse, id }) => {
@@ -275,7 +275,7 @@ test.describe('live load wiring', () => {
     await expect(tile(page, SHADOW).locator('.machine-load-value')).toHaveText(['No figure', 'No figure']);
     await page.evaluate(({ sample, id }) => {
       for (const t of window.agentBridgeDemo.machines[id].transports) {
-        if (t.loadSubscribed) { t.deliver({ ev: 'load.update', seq: ++t.seq, data: { ...sample, ageMs: 15001 } }); }
+        if (t.loadSubscribed) { t.deliver({ ev: 'load.update', seq: ++t.seq, data: { ...sample, state: 'stale' } }); }
       }
     }, { sample, id: LAPTOP });
     await expect(tile(page).getByRole('meter')).toHaveCount(0);
@@ -379,7 +379,7 @@ test.describe('live load wiring', () => {
 });
 
 test.describe('load bars', () => {
-  const full = { state: 'fresh', ageMs: 2000, staleAfterMs: 15000, cpu: { percent: 37.543 }, memory: { totalBytes: 16000, availableBytes: 10000, committedPercent: 91 } };
+  const full = { state: 'fresh', ageMs: 2000, staleAfterMs: 15000, cpu: { percent: 37.543 }, memory: { totalBytes: 16000, availableBytes: 10000, committedPercent: 91, usedPercent: 37.5 } };
   const draw = (page, load, online = true, available = null) => page.evaluate(async ({ load, online, available }) => {
     const { renderMachines } = await import('/js/ui/views.js');
     let list = document.getElementById('load-fixture-list');
@@ -483,7 +483,7 @@ test.describe('load bars', () => {
     const word = page.locator('#load-fixture-list .tile-health-word');
     for (const [load, expected] of [
       [full, 'Fresh'], [{ ...full, state: 'partial' }, 'Partial'],
-      [{ ...full, ageMs: 15001 }, 'Stale'], [{ ...full, state: 'future' }, 'Unavailable'],
+      [{ ...full, ageMs: 15001 }, 'Fresh'], [{ ...full, state: 'future' }, 'Unavailable'],
       [null, 'Not measured'],
     ]) {
       await draw(page, load);
@@ -533,7 +533,7 @@ test.describe('load bars', () => {
           expect(await meter.evaluate((e) => getComputedStyle(e.firstElementChild).backgroundColor))
             .not.toBe(await meter.evaluate((e) => getComputedStyle(e).backgroundColor));
         }
-        await draw(page, { ...full, cpu: { percent: 0 }, memory: { totalBytes: 16000, availableBytes: 16000 } });
+        await draw(page, { ...full, cpu: { percent: 0 }, memory: { totalBytes: 16000, availableBytes: 16000, usedPercent: 0 } });
         await expect(cpu).toHaveAttribute('aria-valuenow', '0');
         await expect(memory).toHaveAttribute('aria-valuenow', '0');
         await expect(tile.locator('.machine-load-value')).toHaveText(['0%', '0%']);
@@ -543,7 +543,7 @@ test.describe('load bars', () => {
         await expect(memory).toHaveAttribute('aria-valuenow', '37.5');
         await expect(tile.locator('.machine-load-value')).toHaveText(['No figure', '38%']);
         await expect(tile.locator('.machine-load-track').first()).toHaveCSS('border-top-style', 'dashed');
-        for (const [load, word] of [[null, 'Not measured'], [{ ...full, state: 'stale' }, 'Stale'], [{ ...full, ageMs: 15001 }, 'Stale'], [{ ...full, state: 'unavailable' }, 'Unavailable']]) {
+        for (const [load, word] of [[null, 'Not measured'], [{ ...full, state: 'stale' }, 'Stale'], [{ ...full, state: 'unavailable' }, 'Unavailable']]) {
           await draw(page, load);
           await expect(tile.locator('.tile-health-word')).toHaveText('Not measured yet');
           await expect(tile.locator('.machine-load-state').first()).toContainText(word === 'Not measured' ? 'Unavailable' : word);
@@ -641,7 +641,7 @@ test.describe('approved Fleet card structure', () => {
           facts: () => ({ sessions: '2 sessions', version }),
           load: (id) => ({ state, ageMs: state === 'fresh' ? 12000 : 240000, staleAfterMs: 15000,
             cpu: { percent: id === hosts[0].id ? 7.2 : 97.6 },
-            memory: { totalBytes: 32e9, availableBytes: id === hosts[0].id ? 20e9 : 1e9 } }),
+            memory: { totalBytes: 32e9, availableBytes: id === hosts[0].id ? 20e9 : 1e9, usedPercent: id === hosts[0].id ? 37.5 : 96.875 } }),
           onSelect: (id) => window.structureCalls.push(id), onLaunch() {},
         });
         window.drawStructure();
@@ -671,8 +671,8 @@ test.describe('approved Fleet card structure', () => {
       }
       await expect(cards.first().locator('.machine-load-value')).toHaveText(['7%', '38%']);
       await expect(cards.last().locator('.machine-load-value')).toHaveText(['98%', '97%']);
-      await expect(cards.first().getByText('20 GB free', { exact: true })).toBeVisible();
-      await expect(cards.last().getByText('1 GB free', { exact: true })).toBeVisible();
+      await expect(cards.first().getByText('20 GB free of 32 GB', { exact: true })).toBeVisible();
+      await expect(cards.last().getByText('1 GB free of 32 GB', { exact: true })).toBeVisible();
       const bars = await page.locator('#structure-fixture .machine-load-track').evaluateAll((els) => els.map((el) => {
         const r = el.getBoundingClientRect(), card = el.closest('.machine').getBoundingClientRect();
         return { left: r.left - card.left, right: card.right - r.right };
