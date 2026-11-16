@@ -51,6 +51,20 @@ public sealed class AgentAdoptionTests : IDisposable
         Assert.Null(store.Claim(Inside()).Token);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("../invalid")]
+    public void Unmatched_revoke_identifiers_leave_credentials_and_pending_adoptions_unchanged(string session)
+    {
+        var store = Store();
+        store.Adopt("sess-1", 100, Started, AgentProtocol.ScopeRead);
+        var token = store.Claim(Inside()).Token!;
+        store.Adopt("sess-2", 200, Started, AgentProtocol.ScopeRead);
+        Assert.False(store.Revoke(session, "not a matching session"));
+        Assert.NotNull(store.Check(token, Inside()).Accepted);
+        Assert.NotNull(store.Claim(Inside(200)).Token);
+    }
+
     [Fact]
     public void A_save_failure_refuses_the_claim_and_faults_the_store_without_retaining_a_credential()
     {
@@ -91,7 +105,11 @@ public sealed class AgentAdoptionTests : IDisposable
         await Assert.ThrowsAsync<HostErrorException>(() => channel.CallAsync(AgentProtocol.Adopt, new { session = "missing" }));
         var wider = await channel.CallAsync<AgentAdoptResult>(AgentProtocol.Adopt, new AgentAdoptRequest { Session = id, Scope = AgentProtocol.ScopeReadReply });
         Assert.Equal(AgentProtocol.ScopeReadReply, wider.Scope);
-        await Assert.ThrowsAsync<HostErrorException>(() => channel.CallAsync(AgentProtocol.Revoke, new { session = "../invalid" }));
+        foreach (var invalid in new[] { "../invalid", "", new string('a', 37) })
+        {
+            var error = await Assert.ThrowsAsync<HostErrorException>(() => channel.CallAsync(AgentProtocol.Revoke, new { session = invalid }));
+            Assert.Contains("refused:", error.Message);
+        }
     }
 
     [Theory]

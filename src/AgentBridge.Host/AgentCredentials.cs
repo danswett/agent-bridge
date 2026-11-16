@@ -181,7 +181,6 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     // The person withdraws an adoption or the credential it gave. True when anything was there.
     public bool Revoke(string session, string why)
     {
-        if (!ValidSession(session)) { throw new ArgumentException("a revocation is for a session id", nameof(session)); }
         lock (gate)
         {
             var waiting = pending.RemoveAll(p => p.Session == session) > 0;
@@ -554,5 +553,5 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-');
 
     // A session id is at most 36 characters (a UUID).
-    static bool ValidSession(string? s) => s is { Length: > 0 and <= 36 } && s.All(c => char.IsAsciiLetterOrDigit(c) || c == '-');
+    internal static bool ValidSession(string? s) => s is { Length: > 0 and <= 36 } && s.All(c => char.IsAsciiLetterOrDigit(c) || c == '-');
 }

@@ -50,7 +50,8 @@ public static class LocalApi
                 if (op == AgentProtocol.Revoke)
                 {
                     var revoke = data.Deserialize<AgentRevokeRequest>(ProtocolJson.Options);
-                    if (string.IsNullOrEmpty(revoke?.Session)) { throw new ArgumentException("agent.revoke needs a session"); }
+                    if (string.IsNullOrEmpty(revoke?.Session) || !AgentCredentials.ValidSession(revoke.Session))
+                    { throw new ArgumentException("agent.revoke needs a valid session"); }
                     var revoked = credentials.Revoke(revoke.Session, $"revoked by a person ({person.Description})");
                     if (credentials.Problem is not null) { throw new InvalidOperationException("refused: the credential store is unavailable"); }
                     return new AgentRevokeResult(revoke.Session, revoked);
