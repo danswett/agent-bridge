@@ -430,7 +430,7 @@ for (const attempt of ['retry', 'start']) {
     await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);
     await page.evaluate(() => window.agentBridgeDemo.delayCancels(1500));
     if (attempt === 'retry') { await retry.click(); }
-    else { await page.keyboard.press('Escape'); await signIn(page).click(); }
+    else { await page.keyboard.press('Escape'); await expect(sheet(page)).toBeHidden(); await signIn(page).click(); }
     await expect(sheet(page).locator('.sign-in-starting')).toBeVisible();
     await page.evaluate(() => {
       const h = window.agentBridgeDemo.host;
@@ -445,8 +445,9 @@ for (const attempt of ['retry', 'start']) {
       const s = d.host.get('signin-1');
       d.upsert({ ...s, attention: { ...s.attention, signIn: 'unknown', since: new Date().toISOString() } });
     });
-    await page.clock.runFor(1600);
-    await expect(sheet(page)).toBeHidden({ timeout: 5000 });
+    // The cancel's reply hops through timers the fake clock only fires when advanced, so advance it
+    // until the sheet closes rather than waiting in real time on a clock that is paused.
+    await expect.poll(async () => { await page.clock.runFor(100); return sheet(page).isHidden(); }, { timeout: 20000 }).toBe(true);
     expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(0);
     await page.clock.runFor(10000);
     expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(0);
