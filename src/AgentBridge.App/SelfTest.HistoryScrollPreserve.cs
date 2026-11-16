@@ -1,3 +1,4 @@
+using System.Collections.Specialized;
 using AgentBridge.App.Core;
 using AgentBridge.Protocol;
 using Microsoft.UI.Xaml;
@@ -17,7 +18,10 @@ static partial class SelfTest
 
     static async Task CheckHistoryScrollPreserveCase(MainWindow window, MainViewModel main, DemoHost demo, Action<bool, string> report, int turns)
     {
-        void Check(bool ok, string text) => report(ok, $"{text} [fixture requested turns {turns}]");
+        var trace = new List<string>();
+        Action? detachTrace = null;
+        void Check(bool ok, string text) => report(ok, $"{text} [fixture requested turns {turns}]"
+            + (ok ? "" : "\nObserved diagnostic sequence:\n" + (trace.Count == 0 ? "Observers not yet attached; cause UNKNOWN." : string.Join("\n", trace))));
         Action<bool, string> check = Check;
         var id = $"demo-history-scroll-preserve-{turns}";
         var fixture = new Session
@@ -49,8 +53,90 @@ static partial class SelfTest
             check(drawn && seeded == turns, $"scroll-preserve setup: draws a transcript taller than three viewports after seeding {seeded} of {turns} logical turns");
             if (!drawn || seeded != turns) { return; }
 
+            ItemsSourceView? observedSource = null;
+            var sourceEpoch = 0;
+            var phase = "setup";
+            string? lastLayout = null;
+            UIElement? lastAnchor = null;
+            long? sourceToken = null;
+            var parent = ById<ListView>(view, "ConversationList");
+            var identities = new List<object>();
+            long? parentToken = null;
+            int Identity(object? value)
+            {
+                if (value is null) { return 0; }
+                var index = identities.FindIndex(old => ReferenceEquals(old, value));
+                if (index < 0) { index = identities.Count; identities.Add(value); }
+                return index + 1;
+            }
+            static string Element(UIElement? element) => element is FrameworkElement { DataContext: HistoryRow row } ? row.Id : element?.GetType().Name ?? "<none>";
+            static string Ids(System.Collections.IList? items) => items is null ? "<unavailable>" :
+                string.Join(",", items.Cast<object?>().Select(item => item is HistoryRow row ? row.Id : item?.GetType().Name ?? "<null>"));
+            void Record(string reason) => trace.Add($"{trace.Count}: {phase}, actual offset {scroll.VerticalOffset:R}, extent {scroll.ExtentHeight:R}, "
+                + $"viewport {scroll.ViewportHeight:R}, inner epoch {sourceEpoch}/ref {Identity(rows.ItemsSourceView)}, outer source ref {Identity(parent?.ItemsSource)}/count {parent?.Items.Count}, Card ref {Identity(view.Card)}/session {view.Card?.Id ?? "<null>"}, "
+                + $"inner count {rows.ItemsSourceView?.Count.ToString() ?? "<no source>"}, loaded {rows.IsLoaded}, size {rows.ActualWidth:R}x{rows.ActualHeight:R}, anchor {Element(scroll.CurrentAnchor)}: {reason}");
+            void Collection(object? sender, NotifyCollectionChangedEventArgs args) =>
+                Record($"collection {args.Action}, old index {args.OldStartingIndex}, new index {args.NewStartingIndex}, old [{Ids(args.OldItems)}], new [{Ids(args.NewItems)}]\nObserved managed stack:\n{Environment.StackTrace}");
+            void OuterCollection(object? sender, Windows.Foundation.Collections.IVectorChangedEventArgs args) =>
+                Record($"OUTER vector {args.CollectionChange}, index {args.Index}, count {parent?.Items.Count}; old/new blocks not supplied by vector event\nObserved managed stack:\n{Environment.StackTrace}");
+            void WatchSource()
+            {
+                if (ReferenceEquals(observedSource, rows.ItemsSourceView)) { return; }
+                if (observedSource is not null) { observedSource.CollectionChanged -= Collection; }
+                observedSource = rows.ItemsSourceView;
+                sourceEpoch++;
+                if (observedSource is not null) { observedSource.CollectionChanged += Collection; }
+                Record($"ItemsSourceView {(sourceEpoch == 1 ? "initial attachment" : "reference replacement witnessed")}; null {observedSource is null}");
+            }
+            void Changing(object? sender, ScrollViewerViewChangingEventArgs args) =>
+                Record($"ViewChanging proposed next {args.NextView.VerticalOffset:R}, final {args.FinalView.VerticalOffset:R}, inertial {args.IsInertial}; production ChangeView caller UNKNOWN unless present in observed stack\n{Environment.StackTrace}");
+            void ObservedChanged(object? sender, ScrollViewerViewChangedEventArgs args) =>
+                Record($"ViewChanged actual, intermediate {args.IsIntermediate}\nObserved managed stack:\n{Environment.StackTrace}");
+            void AnchorRequested(object? sender, ScrollViewerAnchorRequestedEventArgs args) =>
+                Record($"AnchorRequested proposed {Element(args.AnchorElement)}; not proof of chosen anchor or restore target\nObserved managed stack:\n{Environment.StackTrace}");
+            void Clearing(object? sender, ItemsRepeaterElementClearingEventArgs args) =>
+                Record($"container clearing, index {rows.GetElementIndex(args.Element)}, element {Element(args.Element)}\nObserved managed stack:\n{Environment.StackTrace}");
+            void Layout(object? sender, object args)
+            {
+                WatchSource();
+                var geometry = $"{scroll.VerticalOffset:R}/{scroll.ExtentHeight:R}/{scroll.ViewportHeight:R}/{rows.ActualHeight:R}/{rows.ActualWidth:R}/{Identity(parent?.ItemsSource)}/{Identity(view.Card)}";
+                if (geometry == lastLayout && ReferenceEquals(lastAnchor, scroll.CurrentAnchor)) { return; }
+                lastLayout = geometry;
+                lastAnchor = scroll.CurrentAnchor;
+                Record($"layout/render geometry or current anchor changed: {geometry}");
+            }
+            detachTrace = () =>
+            {
+                if (sourceToken is { } token) { rows.UnregisterPropertyChangedCallback(ItemsRepeater.ItemsSourceProperty, token); }
+                if (parent is not null && parentToken is { } outerToken) { parent.UnregisterPropertyChangedCallback(ListView.ItemsSourceProperty, outerToken); }
+                if (parent is not null) { parent.Items.VectorChanged -= OuterCollection; }
+                if (observedSource is not null) { observedSource.CollectionChanged -= Collection; }
+                scroll.ViewChanging -= Changing;
+                scroll.ViewChanged -= ObservedChanged;
+                scroll.AnchorRequested -= AnchorRequested;
+                scroll.LayoutUpdated -= Layout;
+                rows.ElementClearing -= Clearing;
+            };
+            sourceToken = rows.RegisterPropertyChangedCallback(ItemsRepeater.ItemsSourceProperty, (_, _) =>
+            {
+                Record($"ItemsSource property changed; source identity checked separately\nObserved managed stack:\n{Environment.StackTrace}");
+                WatchSource();
+            });
+            scroll.ViewChanging += Changing;
+            scroll.ViewChanged += ObservedChanged;
+            scroll.AnchorRequested += AnchorRequested;
+            scroll.LayoutUpdated += Layout;
+            rows.ElementClearing += Clearing;
+            if (parent is not null)
+            {
+                parentToken = parent.RegisterPropertyChangedCallback(ListView.ItemsSourceProperty, (_, _) => Record($"OUTER ItemsSource property notification; compare observed reference IDs\n{Environment.StackTrace}"));
+                parent.Items.VectorChanged += OuterCollection;
+            }
+            Record($"Observers attached; earlier setup interval unobserved, cause UNKNOWN. Outer list available {parent is not null}; reference IDs are local ReferenceEquals ordinals, not hashes.");
+            WatchSource();
             view.ReleasePin();
             var chosen = Math.Round(scroll.ScrollableHeight / 2);
+            Record($"test-owned ChangeView request vertical {chosen:R}, disableAnimation true; request is not an observed offset");
             scroll.ChangeView(null, chosen, null, disableAnimation: true);
             var reached = await Until(() => Math.Abs(scroll.VerticalOffset - chosen) <= 1.5, TimeSpan.FromSeconds(5));
             var before = scroll.VerticalOffset;
@@ -164,6 +250,8 @@ static partial class SelfTest
                         && kept.Element.IsLoaded
                         && Math.Abs(Top(kept.Element) - kept.Top) <= 1.5;
                 }
+                Layout(sender, args);
+                Record($"render {frames}, minimum offset {minimum:R}, drift {drift:R}, rows {rowsKept}, count {countKept}, content {contentKept}, visible {renderedKept}, extent {extentKept}, range {rangeKept}");
             }
             scroll.ViewChanged += Changed;
             CompositionTarget.Rendering += Frame;
@@ -190,6 +278,9 @@ static partial class SelfTest
                         UpdatedAt = StoredFrom.AddHours(update),
                         Activity = new Activity { UserMessage = "The live exchange", Response = response, TurnCount = turns + update, Notice = turn },
                     };
+                    phase = $"received update {update}";
+                    Record($"test-owned received-session request, notice {turn.Id}, test baseline {before:R}, original visible [{string.Join(",", retained.Select(kept => $"{kept.Id}@{kept.Top:R}:index{RowIndex(kept.Id)}"))}]; "
+                        + "production saved anchor/offset, layout-call boundaries, restore targets, OnCard invocations, pinReleases and skipped-restore reasons UNKNOWN unless directly exposed by observed stacks");
                     await demo.PutAsync(fixture);
                     var delivered = await Until(() => card.Response == response && RowIndex(turn.Id) >= 0, TimeSpan.FromSeconds(5));
                     check(delivered, $"scroll-preserve driver: receives message update {update} and its appended history turn");
@@ -220,6 +311,7 @@ static partial class SelfTest
         }
         finally
         {
+            detachTrace?.Invoke();
             Away(window, main);
             await demo.RemoveSessionAsync(id);
         }
