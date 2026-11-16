@@ -52,6 +52,8 @@ static partial class SelfTest
             var watchingSettle = false;
             var streaming = false;
             var recovering = false;
+            UnhandledExceptionEventHandler xamlFailed = (_, e) => check(false,
+                $"bottom bounce {phase}: XAML dispatcher exception 0x{e.Exception.HResult:X8}: {e.Exception}");
             ScrollViewer? outer = null;
             for (var parent = VisualTreeHelper.GetParent(scroll); parent is not null; parent = VisualTreeHelper.GetParent(parent))
             {
@@ -157,9 +159,11 @@ static partial class SelfTest
             {
                 var drawn = new TaskCompletionSource<bool>();
                 EventHandler<object> rendered = (_, _) => drawn.TrySetResult(true);
-                CompositionTarget.Rendering += rendered;
+                if (!view.DispatcherQueue.TryEnqueue(() => { if (!drawn.Task.IsCompleted) { CompositionTarget.Rendering += rendered; } }))
+                { throw new InvalidOperationException($"bottom bounce {phase}: dispatcher rejected the rendered-frame responsiveness probe"); }
+
                 try { await drawn.Task.WaitAsync(TimeSpan.FromSeconds(3)); }
-                finally { CompositionTarget.Rendering -= rendered; }
+                finally { drawn.TrySetCanceled(); CompositionTarget.Rendering -= rendered; }
                 Record();
             }
             double Gap() => scroll.ScrollableHeight - scroll.VerticalOffset;
@@ -179,6 +183,7 @@ static partial class SelfTest
             }
             void Wheel(int delta) => WheelTo(scroll.VerticalOffset - delta / 120.0 * 3 * ConversationKeyboard.Line);
             scroll.ViewChanged += Changed;
+            Application.Current.UnhandledException += xamlFailed;
             if (outer is not null) { outer.ViewChanged += OuterChanged; }
             try
             {
@@ -285,6 +290,7 @@ static partial class SelfTest
                     if (scroll.ScrollableHeight > previousExtent + 1.5) { drawnGrowths++; previousExtent = scroll.ScrollableHeight; awaitingEnd = true; }
                     if (awaitingEnd && Gap() <= 1.5 && !invalidSurface) { followedGrowths++; awaitingEnd = false; }
                 } while (clock.ElapsedMilliseconds - growthStarted < 10_000);
+                check(App.ExitCode == 0, $"bottom bounce growth: no unhandled XAML/layout exception (application exit code {App.ExitCode})");
                 check(updates >= 30 && drawnGrowths >= 20 && followedGrowths >= 20 && card.Response == response && !invalidSurface,
                     $"bottom bounce streaming setup: several drawn growths per second while attached for 10s (updates {updates}, drawn growths {drawnGrowths}, followed growths {followedGrowths}, ms {clock.ElapsedMilliseconds - growthStarted}, invalid surface {invalidSurface})");
                 phase = "live-response:first-settle";
@@ -363,6 +369,7 @@ static partial class SelfTest
             finally
             {
                 scroll.ViewChanged -= Changed;
+                Application.Current.UnhandledException -= xamlFailed;
                 if (outer is not null) { outer.ViewChanged -= OuterChanged; }
             }
         }
