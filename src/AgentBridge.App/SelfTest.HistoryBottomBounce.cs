@@ -55,7 +55,7 @@ static partial class SelfTest
             var watchingSettle = false;
             var streaming = false;
             var recovering = false;
-            UnhandledExceptionEventHandler xamlFailed = (_, e) => check(false,
+            void xamlFailed(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e) => check(false,
                 $"bottom bounce {phase}: XAML dispatcher exception 0x{e.Exception.HResult:X8}: {e.Exception}");
             ScrollViewer? outer = null;
             for (var parent = VisualTreeHelper.GetParent(scroll); parent is not null; parent = VisualTreeHelper.GetParent(parent))
