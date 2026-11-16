@@ -28,15 +28,24 @@ internal static class PhoneApprovalEvidence
     }
 
     // The same soundness checks as GateAuditProjection.Read: an adopted, trimmed or coverage-broken log, or one
-    // with a repeated or missing sequence, may lack rows, so it is never complete.
+    // with a repeated or missing sequence, may lack rows, so it is never complete. Each contributing run also goes
+    // through the real operation-coherence validation, so an operation with conflicting terminals or a changed
+    // path, target, incarnation or question is invalidated rather than counted.
     internal static PhoneApprovalEvidenceReport Project(IReadOnlyList<AuditCommands.Row> rows, bool complete, IReadOnlyCollection<string> expectedClients,
         bool adopted = false, bool coverage = false, long retainedThrough = 0)
     {
-        complete = complete && !adopted && !coverage && retainedThrough == 0
-            && !GateAuditProjection.Project(rows, complete, Guid.NewGuid(), retainedThrough: retainedThrough).IncompleteReasons.Contains("sequence-break");
-        var perClient = rows
+        var answers = rows
             .Where(r => r.Action == "session.answer" && r.Gate is { ActorKind: "person-client", Phase: not "control" }
                 && r.Principal.StartsWith("person:", StringComparison.Ordinal) && r.Principal != "person:local")
+            .ToArray();
+        var unsound = false;
+        foreach (var run in answers.Select(r => r.Gate!.Run).Distinct().DefaultIfEmpty(Guid.NewGuid()))
+        {
+            var check = GateAuditProjection.Project(rows, complete, run, retainedThrough: retainedThrough);
+            unsound |= check.Invalidated || check.IncompleteReasons.Contains("sequence-break");
+        }
+        complete = complete && !adopted && !coverage && retainedThrough == 0 && !unsound;
+        var perClient = answers
             .GroupBy(r => r.Principal["person:".Length..])
             .ToDictionary(g => g.Key, g => g.GroupBy(r => r.Gate!.Operation).Select(op =>
             {
