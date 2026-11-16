@@ -51,7 +51,8 @@ A queued prompt seen in the turn row within 5 s of Ctrl+Q
 (`CopilotInputBox.TurnSigns`) permits interim `queued` progress. If not seen, omit
 that progress and continue the transcript wait: absence never decides the result.
 Never follow Ctrl+Q with Enter. A prompt taken within 5 s can be `delivered` without
-ever showing a queued row.
+ever showing a queued screen row, but still needs transcript `delivery: "queued"`
+and result `mode: "queue"`.
 
 Only the matching transcript `user.message` with `delivery: "queued"` confirms a queued
 Copilot reply. Wait 60 s from typing, extended while the same turn that was running
@@ -61,8 +62,17 @@ At the cap, a queued screen hint without a matching transcript record gives
 [reply stage table](protocol/v1-sessions.md#reply-stages). A repeat reads again
 without typing and becomes `delivered` once confirmed.
 `steer` still records `delivery: "steering"` when taken. Result `mode` reports what
-actually happened, absent meaning `steer`. An older host must never be shown as having
-queued merely because a session was working ([compatibility](protocol/v1-sessions.md#sessionreply)).
+actually happened, absent meaning `steer`. A `queue` request taken on the idle Enter
+path is confirmed by `delivery: "idle"` and reports `mode: "steer"`, not queued.
+`delivery: "steering"` confirms only an actual `steer` path, with `mode: "steer"`;
+neither `steering` nor `idle` confirms a selected queue path.
+An older host must never be shown as having queued merely because a session was
+working ([compatibility](protocol/v1-sessions.md#sessionreply)).
+
+The 15-minute confirmation cap runs from typing; the separate 15-minute request
+memory runs from the first settled outcome, including `unconfirmed`. In-flight
+repeats wait for that attempt. Read-only rechecks do not restart the memory window,
+so a full confirmation wait does not use up the later outcome-lookup window.
 
 **The input box (#825).** A reply is typed only into Copilot's own input box, read off the
 screen (`Copilot/CopilotInputBox.cs`), and only while that box is empty and outside shell
@@ -277,7 +287,8 @@ In order, for every reply:
    a leading `/` or `!`, more than 10 attachments or a malformed one).
 2. The session is live (`stale` otherwise) and is a Copilot, Claude Code or Codex session (`refused` otherwise).
 3. One delivery per session (`busy`), shared with answers. Every request's outcome is
-   remembered for 15 minutes and returned for a resend, which types nothing.
+   remembered for 15 minutes from its first settled outcome and returned for a
+   resend, which types nothing; an in-flight repeat waits for the same attempt.
 4. No question or permission prompt in the session as reported (`refused`: "answer that
    first", or, for one marked `answerAtMachine`, "answer it there first"). Its attachments
    are held, complete, for this device (`refused` otherwise), and are reserved for this

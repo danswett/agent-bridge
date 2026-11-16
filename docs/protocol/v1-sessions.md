@@ -736,7 +736,7 @@ reads the session's record of that same question again, typing nothing: an answe
 since (submitted at the machine, or recorded late) comes back `delivered`, and from then on
 stays so, and one recorded differently comes back `recorded`. It never answers a newer
 question. A client may therefore send the same request again after a reconnect, within the
-10 minutes the host remembers it, to learn what came of a `typed` answer.
+15 minutes the host remembers it, to learn what came of a `typed` answer.
 
 Typing into a live session is a single writer's job, and the host serializes it: one
 answer or reply per session at a time (`busy` otherwise), checked against the transcript
@@ -1094,7 +1094,20 @@ For Copilot, a queued prompt seen in the turn row within 5 s of Ctrl+Q
 withholds that progress: it never ends the transcript wait or decides the result.
 There is **no Enter fallback**. Only the matching transcript `user.message` with
 `delivery: "queued"` confirms a queued reply, with its attachments as above.
-Copilot may take it within those 5 s and yield `delivered` without a queued row.
+Copilot may take it within those 5 s and yield `delivered` without a queued screen
+row; that rapid case still requires transcript `delivery: "queued"` and result
+`mode: "queue"`.
+
+The request's `mode` alone never proves which path was used:
+
+| Copilot path actually used | Matching transcript `delivery` | Result `mode` |
+|---|---|---|
+| Queue while working | `queued` | `queue` |
+| Enter while idle, including a request for `queue` | `idle` | `steer` |
+| Enter steering a working session | `steering` | `steer` |
+
+Only the first row confirms queueing. The other rows can confirm a reply on the
+actual `steer` path, never a selected queue path; `steering` never proves queued.
 
 The confirmation wait is 60 s from typing, extended while **the same turn that was
 running at typing** still runs, with a hard cap of 15 minutes from typing. A later
@@ -1107,6 +1120,13 @@ transcript again, typing nothing, and becomes `delivered` when recorded, as for 
 unconfirmed answer, within the request-memory window. A final outcome or stage a
 client does not know is handled conservatively: unknown outcome is `unconfirmed`,
 unknown stage is `typed`; neither proves delivery.
+
+The confirmation cap starts at typing. The separate 15-minute request-memory
+window starts when the first outcome settles (including `unconfirmed`), not when
+typing starts. An in-flight request is not forgotten by that settled-outcome
+window; a repeat waits for the same attempt. Read-only rechecks do not restart
+the memory window. A full 15-minute confirmation wait therefore does not consume
+the 15-minute window for asking what came of it.
 
 A reply is never typed while the session is asking anything, which a host checks both in
 what it reports and, immediately before typing, in the transcript itself. The per-session
@@ -1302,7 +1322,7 @@ Ends a session, as agent-ha-bridge's End session button does. Request `data`:
 | Field | Notes |
 |---|---|
 | `id` | The session |
-| `request` | A fresh UUID per press, with exactly `session.answer`'s semantics: every outcome is remembered for at least 10 minutes and returned for a repeat, which does nothing more; a repeat of a press still being acted on waits for it |
+| `request` | A fresh UUID per press, with exactly `session.answer`'s semantics: every outcome is remembered for 15 minutes and returned for a repeat, which does nothing more; a repeat of a press still being acted on waits for it |
 | `confirm` | Only on a second press: the token the first press's `confirm` outcome gave. At most 64 characters of `A–Z a–z 0–9 - _` |
 
 **Two presses when the session is not safely idle, enforced by the host.** A session that is
