@@ -52,7 +52,7 @@ supersedes older guidance: 400 WHOLE lines in both repos, Quality-only PR custod
 and arming, guarded evidence, optional bots and protected held work.
 The [Fleet register](https://github.com/danswett/slipgates-fleet/blob/main/docs/pipeline-rules.md)
 is the sole standing decision/exception register, not a second register here.
-One designated Engineering writer proposes AGENTS changes through normal PRs,
+One designated Engineering writer uses the Fleet register for AGENTS proposals via PRs,
 never direct-main agent edits. [Rule 17](docs/contributor-workflow.md#staged-rule-17)
 is adopted policy, but has **NO ROLLOUT BEFORE MAIN-GREEN IS DONE**.
 

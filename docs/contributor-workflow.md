@@ -91,6 +91,62 @@ agent-bridge #2454, cause or next step with a time within 15 minutes.
 Apply [guarded evidence rules](../quality/README.md#independent-review-depth);
 owner exceptions and spent records belong only in Fleet's register.
 
+### Standing coordinator operation
+
+Owner standing policies relayed by Engineering, 2026-11-16 (Pacific).
+These apply to explicitly assigned team sessions, not ordinary contributors.
+The Fleet register remains the decision/exception register; this is Bridge's
+workflow application, not a second register or permission to release held work.
+
+1. **One fresh builder per new PR.** Request the builder through SRE; never reuse
+   or lease a builder for another PR. SRE ends it only after that PR merges or
+   closes, with nothing unpushed and no private-work or open-owned-PR holds.
+   The builder does not end itself.
+2. **Full load, nothing waits.** Dispatch authorized ready work promptly rather
+   than waiting for unrelated work or optional bots. Missing prerequisites still
+   block the affected work; full load does not waive placement, source, execution
+   or publication holds.
+3. **Real-time, two-way messaging.** Keep communication live in both directions.
+   Retry a failed send once with the same request ID (`rid`), then escalate a
+   remaining failure; never count a failed or uncertain send as delivery.
+   Use the current transport, not the staged rule 17 helper design.
+4. **Delegate recurring work.** Every recurring check, refresh and report runs
+   through a delegate or script, never in the coordinator's main turn.
+   Keep that turn free for communication and decisions. This grants no helper
+   launch, timer, polling or runtime-enablement authority.
+5. **One-message dispatch.** Send the complete assignment, bindings, exclusions,
+   validation and next recipient together in one whole message; do not split
+   or truncate the dispatch.
+6. **More reviewers on demand.** Ask Quality for additional independent
+   reviewers when needed, through the authorized SRE launch path. More readers
+   do not replace the required families, depth or exact-head receipts in
+   [review evidence](#readiness-and-review-evidence).
+7. **A DRI within two minutes.** Apply the existing
+   [named-live-session DRI rule](#current-owner-policy), including its record
+   and next-step deadline; a role name or registration alone is not a DRI.
+8. **Owner P0 class.** Treat stable transcript rendering and scrolling
+   ([#1739](https://github.com/danswett/agent-bridge/issues/1739),
+   [#1756](https://github.com/danswett/agent-bridge/issues/1756)), missing replies
+   ([#1927](https://github.com/danswett/agent-bridge/issues/1927)) and crash/hang
+   recovery and reporting
+   ([#2726](https://github.com/danswett/agent-bridge/issues/2726)) as the owner P0
+   class. Product retains the [single ordered backlog](#operational-sources-of-truth);
+   this is not a competing priority list or a release of their holds.
+9. **Living handover.** Each coordinator role keeps ONE up-to-date, sanitized
+   handover comment on its standing issue titled `Handover: <role>` in
+   `danswett/slipgates-fleet`. Edit that comment in place, never add replacement
+   posts. Include open commitments, in-flight PRs and builders by name, holds,
+   pending asks, waiters and the last-edit time in Pacific. Exclude node IDs,
+   tokens and private paths. A delegate or script refreshes it on every material
+   state change and at least hourly, never the main turn. A coordinator successor
+   is launched pointing to that comment; the outgoing seat adds only a short
+   delta note before serialized transfer. A comment or launch alone does not
+   transfer custody or release preservation holds.
+10. **Recycle coordinators at about eight compactions.** Plan early, before
+    saturation, using the living handover above. This supersedes older
+    coordinator compaction targets, not SRE's launch/ending authority or any
+    open-work hold.
+
 ### Staged rule 17
 
 Authority: current Chief-recorded owner rule 17, Nov 15, 2026; its 09:30 PT
