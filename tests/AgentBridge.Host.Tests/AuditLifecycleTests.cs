@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json.Nodes;
 using AgentBridge.Host;
 using AgentBridge.Protocol;
@@ -126,6 +127,26 @@ public sealed class AuditLifecycleTests : LaunchFlowFixture
             held.Dispose();
             Assert.True(reader ? GateAuditProjection.Load(Profile).Complete : Writer().Append(Ordinary()));
         }
+    }
+
+    [Theory]
+    [InlineData(false), InlineData(true)]
+    public void Default_reader_and_writer_wait_before_refusing_and_recover_after_release(bool reader)
+    {
+        Pair();
+        var before = Evidence();
+        using (var held = new FileStream(Audit + ".lock", FileMode.Open,
+            reader ? FileAccess.ReadWrite : FileAccess.Read, reader ? FileShare.None : FileShare.Read))
+        {
+            var elapsed = Stopwatch.StartNew();
+            var result = reader ? GateAuditProjection.Load(Profile).Complete : Writer().Append(Ordinary());
+            elapsed.Stop();
+            Assert.False(result);
+            Assert.True(elapsed.Elapsed >= TimeSpan.FromMilliseconds(1500),
+                $"The default audit lock refused after {elapsed.Elapsed}; expected at least 1.5 seconds.");
+            foreach (var (file, bytes) in before) { Assert.Equal(bytes, File.ReadAllBytes(file)); }
+        }
+        Assert.True(reader ? GateAuditProjection.Load(Profile).Complete : Writer().Append(Ordinary()));
     }
 
     [Theory]
