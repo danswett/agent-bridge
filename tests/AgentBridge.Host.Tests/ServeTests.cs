@@ -211,7 +211,8 @@ public sealed partial class ServeTests : IAsyncLifetime
         Assert.Equal("working", snapshot[0].Data.GetProperty("status").GetString());
         AssertRosterRow(snapshot[0].Data, machine, processStartedAt);
 
-        await ChangeAsync("finished this turn", 4);
+        Fixture.Append(events, Copilot.ToolDone("c1", 4), Copilot.Assistant("finished this turn", 5), Copilot.TurnEnd(6));
+        await source.RefreshAsync();
         var live = await NextAsync(ch);
         Assert.Equal(Events.SessionUpsert, live.Name);
         Assert.Equal("idle", live.Data.GetProperty("status").GetString());
