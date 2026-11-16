@@ -13,7 +13,7 @@ public sealed class AuditLifecycleTests : LaunchFlowFixture
     string Profile => Path.Combine(f.Root, "audit-lifecycle", "default");
     string Audit => Path.Combine(Profile, "audit");
     string Head(bool launch) => Path.Combine(Audit, launch ? "launches.head" : "agents.head");
-    AgentAuditLog Writer() => new(Profile, auditClock, logged.Enqueue);
+    AgentAuditLog Writer(AuditLockTiming? lockTiming = null) => new(Profile, auditClock, logged.Enqueue) { LockTiming = lockTiming };
     AgentAuditEntry Ordinary() => new("local", "fixture", "person:local", [], "lookup", "fixture", "ok");
     AgentAuditEntry Intent(bool launch)
     {
@@ -98,34 +98,55 @@ public sealed class AuditLifecycleTests : LaunchFlowFixture
     [Theory]
     [InlineData(false, false), InlineData(false, true)]
     [InlineData(true, false), InlineData(true, true)]
-    public async Task Reader_and_writer_wait_for_contention_but_refuse_after_the_bound(bool reader, bool release)
+    public void Reader_and_writer_wait_for_contention_but_refuse_after_the_bound(bool reader, bool release)
     {
         Pair();
+        var before = Evidence();
         using var held = new FileStream(Audit + ".lock", FileMode.Open,
             reader ? FileAccess.ReadWrite : FileAccess.Read, reader ? FileShare.None : FileShare.Read);
-        using var entered = new ManualResetEventSlim();
-        var elapsed = Stopwatch.StartNew();
-        var pending = Task.Run(() =>
+        long elapsed = 0;
+        var waits = 0;
+        var timing = new AuditLockTiming(() => 10_000 + elapsed, () =>
         {
-            entered.Set();
-            return reader ? GateAuditProjection.Load(Profile).Complete : Writer().Append(Ordinary());
+            // Advance only after a real sharing violation, on the lock's own thread.
+            // A stalled runner cannot exhaust the budget before this releases the file.
+            waits++;
+            if (waits > 100) { throw new InvalidOperationException("The audit lock exceeded its retry budget."); }
+            elapsed += 20;
+            if (release && elapsed == 100) { held.Dispose(); }
         });
-        Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
-        try
+        var result = reader ? GateAuditProjection.Load(Profile, lockTiming: timing).Complete
+            : Writer(timing).Append(Ordinary());
+        Assert.Equal(release, result);
+        Assert.Equal(release ? 5 : 100, waits);
+        Assert.Equal(release ? 100L : 2000L, elapsed);
+        if (!release)
         {
-            if (release)
-            {
-                Assert.NotSame(pending, await Task.WhenAny(pending, Task.Delay(TimeSpan.FromMilliseconds(100))));
-                held.Dispose();
-            }
-            Assert.Equal(release, await pending.WaitAsync(TimeSpan.FromSeconds(5)));
-            if (!release) { Assert.InRange(elapsed.Elapsed.TotalSeconds, 1.5, 5); }
-        }
-        finally
-        {
+            Assert.InRange(TimeSpan.FromMilliseconds(elapsed).TotalSeconds, 1.5, 5);
+            foreach (var (file, bytes) in before) { Assert.Equal(bytes, File.ReadAllBytes(file)); }
             held.Dispose();
-            await pending.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(reader ? GateAuditProjection.Load(Profile).Complete : Writer().Append(Ordinary()));
         }
+    }
+
+    [Theory]
+    [InlineData(false), InlineData(true)]
+    public void Default_reader_and_writer_wait_before_refusing_and_recover_after_release(bool reader)
+    {
+        Pair();
+        var before = Evidence();
+        using (var held = new FileStream(Audit + ".lock", FileMode.Open,
+            reader ? FileAccess.ReadWrite : FileAccess.Read, reader ? FileShare.None : FileShare.Read))
+        {
+            var elapsed = Stopwatch.StartNew();
+            var result = reader ? GateAuditProjection.Load(Profile).Complete : Writer().Append(Ordinary());
+            elapsed.Stop();
+            Assert.False(result);
+            Assert.True(elapsed.Elapsed >= TimeSpan.FromMilliseconds(1500),
+                $"The default audit lock refused after {elapsed.Elapsed}; expected at least 1.5 seconds.");
+            foreach (var (file, bytes) in before) { Assert.Equal(bytes, File.ReadAllBytes(file)); }
+        }
+        Assert.True(reader ? GateAuditProjection.Load(Profile).Complete : Writer().Append(Ordinary()));
     }
 
     [Theory]
