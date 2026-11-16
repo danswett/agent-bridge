@@ -1,6 +1,7 @@
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
+using AgentBridge.Protocol;
 using Xunit;
 
 public sealed class PhoneApprovalEvidenceTests

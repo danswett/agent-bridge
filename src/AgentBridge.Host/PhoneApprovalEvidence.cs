@@ -14,7 +14,7 @@ internal sealed record PhoneApprovalEvidenceReport(IReadOnlyList<PhoneClientEvid
 // The audit log records the answer, not the push notice that preceded it, so this shows a client can
 // answer, not that its notice arrived. It only reads: no audit writer or authorization path changes.
 // Today no writer emits the person:<device> relay answers it counts (the host audits answers as person:local),
-// so against real logs it reports every expected client missing until that writer exists.
+// so against real logs it reports every expected client missing until that writer exists (#2723).
 internal static class PhoneApprovalEvidence
 {
     internal static PhoneApprovalEvidenceReport Read(string profile, IReadOnlyCollection<string> expectedClients)
