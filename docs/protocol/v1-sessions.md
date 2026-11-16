@@ -29,8 +29,11 @@ clients restart paging without `before` and merge by turn id.
   bytes of text. Clients must read both forms.
 * **Clients ignore fields and enum values they don't know.** An unknown value reads as:
   `agent` → `unknown` (shown generically), `status` → `idle`, tool `status` → `done`,
-  question `kind` → `form`, field `type` → `text`, `driver` → `person`; an unknown `class` reads as absent. Hosts never remove or rename a field
-  within a protocol version.
+  question `kind` → `form`, field `type` → `text`, `driver` → `person`,
+  answer/reply `outcome` → `unconfirmed`, reply result `mode` → `steer`, reply result
+  `stage` → `typed`; an unknown `class` reads as absent. Unknown progress stages are
+  ignored. Request `mode` is strict, not subject to these result-side fallbacks.
+  Hosts never remove or rename a field within a protocol version.
 * Times are UTC with milliseconds and a `Z`, always in this exact form:
   `2026-10-28T04:22:43.182Z`. Clients can compare them as strings.
 * **Sizes are UTF-8 bytes of the JSON as sent.** No single message exceeds **48 KiB**, so
@@ -978,10 +981,10 @@ the session is idle or still working. Request `data`:
 | Field | Notes |
 |---|---|
 | `id` | The session |
-| `request` | A fresh UUID per reply the person sends, with exactly `session.answer`'s semantics: every outcome is remembered for at least 10 minutes and returned for a repeat, which types nothing; a repeat of a reply still being delivered waits for it |
+| `request` | A fresh UUID per reply the person sends, with exactly `session.answer`'s semantics: every outcome is remembered for 15 minutes and returned for a repeat, which types nothing; a repeat of a reply still being delivered waits for it |
 | `text` | The prompt: at most 16 KiB of UTF-8. Not blank, unless the reply has attachments |
 | `attachments` | Optional. Files and images for the agent, in order: `[{ "id": "<attachment>" }]`, at most 10, each sent whole by **this device** with `attachment.start` and `attachment.chunk` first ([Attachments](#attachments)). Absent, `null` and `[]` mean none. A host without `sessions.attach` refuses a reply that has any |
-| `mode` | Optional: `queue` (a new turn after the running one) or `steer` (join the running turn). Absent or `null` means `steer`, today's behaviour; an unknown value or wrong type is refused, never defaulted. Agent senders explicitly send `queue` unless marked urgent, then `steer`. A person's app or PWA reply stays `steer` by leaving it absent |
+| `mode` | Optional: `queue` (a new turn after the running one) or `steer` (join the running turn). Absent or `null` means `steer`, today's behaviour; an unknown value or wrong type is a request error (`ok: false`, nothing typed), never defaulted. Agent senders using the extension below explicitly send `queue` unless marked urgent, then `steer`. A person's app or PWA reply stays `steer` by leaving it absent |
 | `progress` | Optional, as for `session.answer` ([Progress](#progress)) |
 
 **Compatibility (#2468).** These fields are additive within v1. A sender asks `hello`
@@ -993,6 +996,18 @@ The result's `mode` is the mode actually used, not an echo: absent reads as `ste
 even if hello was stale. A host implementing queue delivery supplies it on every result.
 Slice 1 defines the contract and models only; hosts must not advertise queue support
 until the delivery path implements it.
+
+**Agent-sender version boundary.** Queue-reply extension **v1** (protocol 1 with
+`sessions.reply.queue`, [#2468](https://github.com/danswett/agent-bridge/issues/2468))
+supersedes the base-v1 agent rule "nothing queued; working-session reply refused
+`notIdle`" in [agent-principals §5.2 and Q35](../design/agent-principals.md#52-allowed-actions).
+This applies to authorized agent senders using the mode-capable `session.reply` path;
+all other agent guards remain. Hosts without that capability retain the old rule and
+may refuse `notIdle`; a sender reports that refusal, not delivery. AP5-lite (#1353)
+is a separate profile: its idle-only, no-queue/no-retry contract is unchanged.
+
+Some shipped clients still label `typed` plus `working` as Queued. That legacy UI
+is not queue evidence; updating those receipts belongs to later #2468 client work.
 
 **Line breaks become spaces.** Every control character, line breaks and tabs included,
 and the Unicode line and paragraph separators are typed as spaces, so a reply always
@@ -1016,8 +1031,9 @@ those characters, with no attachments, is `refused` as empty.
 Result: `{ "outcome", "reason", "mode", "stage"? }`, the outcomes of `session.answer`,
 with `timings` for a request that asked for progress, and optional `attachments`.
 `mode` is `queue` or `steer` (absent or unknown reads as `steer`).
-`stage` is present only on `unconfirmed`: `typed`, `recorded`, or `queued` below;
-unknown reads as `typed`, never as delivery:
+Hosts emit `stage` only on `unconfirmed`: `typed`, `recorded`, or `queued` below;
+unknown reads as `typed`, never as delivery. Tolerant records may retain a stage on
+another outcome; clients ignore it there rather than override the outcome.
 
 `attachments: [{ "id": "<client attachment UUID>", "ref": "@<staged absolute path>" }]`
 binds each attachment to exactly the reference token in the recorded prompt, in the
@@ -1042,31 +1058,50 @@ appear in the transcript; this field carries no file bytes or fetch authority.
 | `busy` | An answer or another reply to this session is being typed | No |
 | `refused` | The host will not type it: an invalid reply (above), **a question or permission prompt pending in the session** (the words would answer it, and Enter accept it; answer it first, at the machine for one marked `answerAtMachine`), a transcript the host cannot read to rule that out, an attachment the host does not hold (expired, removed, sent by another device, still arriving, or gone with an earlier reply) or cannot hand over, an elevated or otherwise unreachable session, an agent or platform without delivery yet, or agent-ha-bridge active for this user | No |
 
+#### Reply stages
+
+These are reply diagnostics (`ReplyStage`), not answer stages (`AnswerStage`).
+They never confirm delivery or authorize another typing attempt.
+
+| Unconfirmed `stage` | Evidence reached | May next reach, on the same admitted reply |
+|---|---|---|
+| `typed` | Keys went; no matching recorded prompt or queued screen hint yet | `queued`, `recorded`, or `delivered` |
+| `recorded` | The matching prompt is recorded, but not every required attachment is confirmed | `delivered` |
+| `queued` | Copilot's queued screen hint was seen, but the matching transcript record is still missing | `recorded` or `delivered` |
+
+A stage may stay unchanged. `typed` may go directly to `delivered`, including when
+Copilot takes the prompt before a queued row is seen. `recorded` never regresses to
+`queued`. Only transcript confirmation (and all attachments) makes the outcome
+`delivered`; a repeat rechecks evidence without typing again.
+
 Copilot CLI, Claude Code and Codex sessions take replies. A Claude Code or Codex reply is
 typed only into the agent's input box as its screen shows it, since without
 agent-ha-bridge's hooks a host cannot otherwise see their permission prompts and questions;
 it is `refused` when that box is not on screen, or for Codex already has words in it. Codex takes only
 images as attachments; a Codex reply with any other file is `refused`.
 
-**Queue confirmation (Copilot).** On a working session, `queue` types the text then
-Ctrl+Q under every existing input-box check, including the 80-column rule; `steer`
+**Queue confirmation contract (#2468 slice 2).** On a working Copilot session,
+`queue` types the text then Ctrl+Q under every existing input-box check, including
+the 80-column rule; `steer`
 keeps Enter. An idle session gets Enter and result `mode: "steer"`, with transcript
 `delivery: "idle"`. A working Claude Code session already queues on Enter and reports
-`mode: "queue"`; its delivery path is unchanged. Codex keeps Enter and reports
-`mode: "steer"` even when `queue` was requested; a sender says it was not queued.
+`mode: "queue"`; an idle Claude session reports `steer`. Its delivery path is
+unchanged. Codex keeps Enter and reports `mode: "steer"` even when `queue` was
+requested; a sender says it was not queued.
 
-For Copilot, the host must see the queued prompt in the turn row within 5 s of
-Ctrl+Q (`CopilotInputBox.TurnSigns`), then sends interim `queued` progress. If it
-does not, the result is `unconfirmed` with the existing stage rules, and **no Enter
-fallback**: the host never submits the prompt twice. Screen evidence is not final
-delivery: `delivered` requires that exact prompt recorded with `delivery: "queued"`,
-and its attachments as above.
+For Copilot, a queued prompt seen in the turn row within 5 s of Ctrl+Q
+(`CopilotInputBox.TurnSigns`) permits interim `queued` progress. Its absence only
+withholds that progress: it never ends the transcript wait or decides the result.
+There is **no Enter fallback**. Only the matching transcript `user.message` with
+`delivery: "queued"` confirms a queued reply, with its attachments as above.
+Copilot may take it within those 5 s and yield `delivered` without a queued row.
 
 The confirmation wait is 60 s from typing, extended while **the same turn that was
 running at typing** still runs, with a hard cap of 15 minutes from typing. A later
 turn does not extend it. A prompt recorded after 60 s within that wait is `delivered`,
-not `unconfirmed` just because the original turn ran long. At the cap, if the host saw
-it queued but never saw it start, the result is `unconfirmed`, `stage: "queued"`.
+not `unconfirmed` just because the original turn ran long. At the cap, a queued screen
+hint without the matching transcript record gives `unconfirmed`, `stage: "queued"`;
+otherwise the evidence selects `typed` or `recorded` as in the reply stage table.
 `queued` is never a final outcome. A repeat of that unconfirmed request reads the
 transcript again, typing nothing, and becomes `delivered` when recorded, as for an
 unconfirmed answer, within the request-memory window. A final outcome or stage a

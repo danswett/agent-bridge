@@ -34,22 +34,32 @@ so neither does this.
 planning and confirmation follow in slice 2, and sender defaults in slice 3. Until then
 the host keeps Enter and does not advertise `sessions.reply.queue`.
 The request field is `mode`, distinct from the transcript's `delivery`. Absent means
-`steer`, preserving older clients and a person's app/PWA replies. Agent senders explicitly
-request `queue`, except urgent corrections or stops (`steer`), never urgent status or FYI.
+`steer`, preserving older clients and a person's app/PWA replies. Agent senders on the
+mode-capable path request `queue` unless marked urgent, then `steer`; sender defaults
+follow in slice 3.
+
+Queue-reply extension **v1** (protocol 1 plus `sessions.reply.queue`, #2468) explicitly
+supersedes the base-v1 agent "nothing queued; working reply refused `notIdle`" rule
+in [§5.2 and Q35](design/agent-principals.md#52-allowed-actions), on that path only.
+All other agent guards remain; the separate AP5-lite profile below is unchanged.
 
 For a working Copilot session, `queue` means text, 300 ms, then Ctrl+Q; `steer` keeps
 Enter. All existing screen, shell/vim, 80-column, race and submit-key checks below apply
 to either key. An idle session gets Enter, result `mode: "steer"` and transcript
 `delivery: "idle"`. The host frees the session for answers once the keys have gone.
-Within 5 s of Ctrl+Q it must see the queued prompt in the turn row
-(`CopilotInputBox.TurnSigns`) before reporting interim `queued` progress. If not seen,
-it returns `unconfirmed` under the existing stage rules, never follows with Enter.
+A queued prompt seen in the turn row within 5 s of Ctrl+Q
+(`CopilotInputBox.TurnSigns`) permits interim `queued` progress. If not seen, omit
+that progress and continue the transcript wait: absence never decides the result.
+Never follow Ctrl+Q with Enter. A prompt taken within 5 s can be `delivered` without
+ever showing a queued row.
 
 Only the matching transcript `user.message` with `delivery: "queued"` confirms a queued
 Copilot reply. Wait 60 s from typing, extended while the same turn that was running
 then still runs, capped at 15 minutes from typing. A later turn never extends it.
-At the cap, a prompt seen queued but not started is `unconfirmed`, `stage: "queued"`;
-a repeat reads again without typing and becomes `delivered` once recorded.
+At the cap, a queued screen hint without a matching transcript record gives
+`unconfirmed`, `stage: "queued"`; otherwise use `typed` or `recorded` as in the
+[reply stage table](protocol/v1-sessions.md#reply-stages). A repeat reads again
+without typing and becomes `delivered` once confirmed.
 `steer` still records `delivery: "steering"` when taken. Result `mode` reports what
 actually happened, absent meaning `steer`. An older host must never be shown as having
 queued merely because a session was working ([compatibility](protocol/v1-sessions.md#sessionreply)).
@@ -418,6 +428,9 @@ reported apart.
 ## Messages from other own-agents (AP5-lite, #1353)
 
 `LiteDeliver` types a verified lite message into one idle Copilot session behind a one-line provenance marker (sender machine, session, request id). It refuses, typing nothing, with `notReplyTarget` (not launched here in forced-ask mode; allow-all only while `agentMessaging.allowAllTargets` is on; text unbound, empty, over 4096 characters or with a request id that is not a UUID), `busy` (not idle, or over 6 messages a minute per session), `composerNotEmpty` or `noSuchSession`. Its host-only `RequireIdle` condition makes `ReplyService` re-check idle after taking the typing slot; a session that became busy while waiting is refused as `busy`, so the sender falls back to HA. A person's reply can still reach a working session. There is no queue and no retry. Gates (`IReplyTargetGate`) are OR-composed in `LiteComposition`; the log line carries sender, target, request id and outcome, never the text.
+
+That is the unchanged AP5-lite contract, not the mode-capable queue-reply v1 path.
+#2468's Q35 supersession does not remove `RequireIdle` or add queueing to Lite.
 
 
 ## Agent replies (#720 slice 4, #1335)
