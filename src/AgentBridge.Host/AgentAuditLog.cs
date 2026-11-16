@@ -20,6 +20,8 @@ namespace AgentBridge.Host;
 public sealed record AgentAuditEntry(string Direction, string Request, string Principal, string[] Chain, string Action,
     string Target, string Outcome, string Reason = "", GateAuditMetadata? Gate = null);
 
+internal sealed record AuditLockTiming(Func<long> TickCount, Action Wait);
+
 // Agent actions and person host-CLI management, one JSON line per event in <profile>\audit\agents-YYYY-MM-DD.jsonl
 // or launches-YYYY-MM-DD.jsonl for session.launch, with a separate 16 MiB launch-history quota,
 // in a folder only this user can open. It keeps the SHA-256 and length of any text an event
@@ -62,6 +64,7 @@ public sealed class AgentAuditLog
     readonly TimeProvider time;
     readonly Action<string> log;
     readonly long maxBytes;
+    internal AuditLockTiming? LockTiming { get; init; }
     bool failing;
     bool retentionFailing;
 
@@ -87,7 +90,7 @@ public sealed class AgentAuditLog
             lock (gate)
             {
                 var folder = PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded");
-                using var folderLock = Lock(folder);
+                using var folderLock = Lock(folder, timing: LockTiming);
                 if (entry.Gate is not null) { Bootstrap(folder); }
                 if (entry.Gate is { } metadata)
                 {
@@ -347,17 +350,21 @@ public sealed class AgentAuditLog
         File.Move(file + ".new", file, overwrite: true);
     }
 
-    internal static FileStream Lock(string folder, bool read = false)
+    internal static FileStream Lock(string folder, bool read = false, AuditLockTiming? timing = null)
     {
         var options = new FileStreamOptions { Mode = read ? FileMode.Open : FileMode.OpenOrCreate,
             Access = read ? FileAccess.Read : FileAccess.ReadWrite, Share = read ? FileShare.Read : FileShare.None };
         if (!read && !OperatingSystem.IsWindows()) { options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite; }
-        var deadline = Environment.TickCount64 + 2000;
+        var deadline = (timing?.TickCount() ?? Environment.TickCount64) + 2000;
         while (true)
         {
             try { return new FileStream(folder + ".lock", options); }
             catch (IOException e) when ((OperatingSystem.IsWindows() ? (e.HResult & 0xffff) is 32 or 33 : e.HResult is 11 or 35)
-                && Environment.TickCount64 < deadline) { Thread.Sleep(20); }
+                && (timing?.TickCount() ?? Environment.TickCount64) < deadline)
+            {
+                if (timing is null) { Thread.Sleep(20); }
+                else { timing.Wait(); }
+            }
         }
     }
 
