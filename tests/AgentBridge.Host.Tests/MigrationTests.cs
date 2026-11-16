@@ -1952,14 +1952,17 @@ public sealed class MigrationTasksHooksAndSettingsTests : MigrationFixture
         var pwsh = Environment.GetEnvironmentVariable("PATH")!.Split(Path.PathSeparator).Select(d => Path.Combine(d, "pwsh.exe")).FirstOrDefault(File.Exists);
         if (pwsh is null) { return; }
         var install = AgentHaBridgeInstall.Read(_f.BridgeHome).Install!;
+        // The children must outlive the 120 s readiness bound below, or an early child can exit while a
+        // slow sibling is still starting; the test kills all three itself.
+        const string ChildScript = "Write-Output ready\r\nStart-Sleep -Seconds 600\r\n";
         foreach (var script in new[] { "agent-bridge-daemon.ps1", "agent-bridge-supervisor.ps1" })
         {
-            File.WriteAllText(Path.Combine(_f.HooksDir, script), "Write-Output ready\r\nStart-Sleep -Seconds 120\r\n");
+            File.WriteAllText(Path.Combine(_f.HooksDir, script), ChildScript);
         }
         // Another installation's daemon, under another home: never this migration's to stop.
         var other = Path.Combine(_f.Home, "other", "hooks", "agent-bridge-daemon.ps1");
         Directory.CreateDirectory(Path.GetDirectoryName(other)!);
-        File.WriteAllText(other, "Write-Output ready\r\nStart-Sleep -Seconds 120\r\n");
+        File.WriteAllText(other, ChildScript);
         System.Diagnostics.Process Start(string script)
         {
             var start = new System.Diagnostics.ProcessStartInfo(pwsh) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
