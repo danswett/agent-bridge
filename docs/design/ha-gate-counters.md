@@ -121,6 +121,27 @@ otherwise report INCOMPLETE, never retry a side effect to repair the count.
 An append/flush failure before dispatch refuses the action. Failure after an
 effect leaves uncertain evidence and blocks the gate, even if a client saw success.
 
+Slice A (#2521) wires app/host-CLI launches through the local handler. Without a
+trusted run context, `run` is the empty UUID: `missing-run-context`, never credit.
+Intent target is the request UUID; operation/incarnation use the reserved launch
+UUID; terminal target is the registered session UUID. Slice B (#2587) restores
+fresh-launch request bindings from these same records: confirmed readbacks reuse
+the session, unresolved intents never start another process, and conflicts refuse.
+The opaque launch binding reuses native launch-request hashing, never answer hashing.
+Program's authorized relay entry and HaRunning assign relay/person-client and
+legacy-ha/ha-component respectively; the pipe stays local. Only an explicitly
+assigned control-writer run context supplies a run; there is no automatic provider.
+The run-control writer remains a later slice; this adds only its nullable context seam.
+
+Slice 3 (#2522) audits app/host-CLI answers on the local handler: empty run means
+zero qualifying credit. A flushed intent follows native-question validation and
+precedes keys; authoritative delivery (including denial) closes it once. Question
+identity hashes only version/backend/session UUID/native call or generation;
+permission display digests and all contents are excluded. Credentialed agents
+remain refused: one terminal/refused row for a matching host question, no dispatched
+intent and no credit or unresolved attempt. Other local callers, restart restoration,
+relay and HA context remain deferred; no automatic run provider is added.
+
 At restart rebuild operation mappings, active run and totals from both streams,
 checking supported versions, sequence/link continuity and the #1401 durable head.
 A torn last line, missing tail, unknown outcome,
@@ -133,6 +154,69 @@ The host's same-user filesystem trust limit remains: hashes cannot defeat a
 same-user program able to rewrite all evidence and its anchors.
 A6 continuity (slice 9) is required before starting a qualifying run. Missing
 restart proof makes evidence incomplete; retained observations cannot earn credit.
+
+### 4.1. Engineering clarification v1 (2026-11-14, #2524 / 9A)
+
+A complete record missing only its final LF continues through existing framing
+recovery, including gated appends, regardless of record age or actor. Keep
+`audit-incomplete` visible across restart: no continuity certification or qualifying
+credit. This does not change genuine partial-JSON ordinary crash recovery.
+Deleted run-evidence days/records are established coverage loss: visibly INVALIDATE
+the run with `coverage-break`, retain observed totals, and allow zero eligible
+credit. Diagnostic appends may continue with monotonic sequences only if the
+fault remains durably detectable across restart; actual append/flush failure
+refuses the action. Never silently reanchor into a healthy suffix.
+Reads change no bytes; permitted appends may extend files, not rewrite pre-existing
+fault evidence. 9A detects/retains faults only: no truncation, erasure, recreation
+of missing evidence, clean suffix, automatic reset/start, new store/journal or
+repair command. Repair/reset execution remains outside 9A; reset alone does not
+restore evidence health. Archive enumeration and active-run preservation remain
+9B; neither cut completes #2524 alone or admits a qualifying run.
+
+This explicitly clarifies previously unspecified append policy, based on section 4
+lines 119-122 / 139-146 and section 6 lines 203-204 at frozen head
+`020a2144705fce430a0d6a309373285f977ad3f6`, section 5's void-run/admission rules,
+and section 6's INCOMPLETE torn-tail versus FAIL coverage-break table.
+
+9A uses v1 checkpoint metadata in `audit\agents.head` / `audit\launches.head`:
+retained root, flushed tail, highest sequence and sticky fault, never totals or
+a second journal. Neither diagnostic appends nor framing recovery clear faults.
+
+### 4.2. Corrective retention and upgrade rules (2026-11-15, Q12 / #2625)
+
+Ordinary agents-file retention is the sole root-advance exception: under the writer
+lock, verify the retained root and chain, then atomically checkpoint the successor root
+and hash BEFORE deleting the exact old file. Optional v1 `retiringRoot` identifies
+only that authorized deletion across a crash; `retainedThrough` persists the highest
+removed gate sequence. Preserve tail/length; never lower sequence, advancing it if a
+flushed retiring row was ahead of its checkpoint. A failed deletion may
+leave that one old file present, not authorize losing any other file. Never advance
+a root with coverage loss or an unverifiable chain. External loss remains `coverage-break`.
+Physical continuity after authorized retention permits ordinary launches, including
+sequence gaps at or below the retained watermark; duplicates and later gaps still
+refuse. Gate run reports conservatively INVALIDATE after gated evidence is pruned,
+retain observed totals and award no eligible credit. This is not active-run archival
+or permission to certify a passing suffix; qualifying runs remain blocked on 9B.
+
+Sticky `audit-incomplete` alone does not block retention and remains in advanced
+heads. Coverage breaks or unverifiable roots/chains skip pruning with a host-log
+warning; history may then exceed its retention target. Sticky `audit-incomplete`
+still refuses launches until evidence health is repaired; 9A provides no repair.
+
+Upgrade bootstrap is an explicit writer operation before launch preflight, also used
+by gated append: only with NO heads, verify both existing chains before checkpointing
+their present roots/tails and sequence cursors. It adopts retained history, cannot
+prove pre-upgrade completeness or detect prior deletion, and earns no historical
+qualifying proof. Existing heads/faults are never reset; partial head loss stays
+incomplete. Recovered fragments or missing LF remain durably `audit-incomplete`.
+The optional sticky `adopted` marker keeps run projections INCOMPLETE even when
+physical replay is healthy; a later writer cannot silently certify old coverage.
+Read-only inspection never bootstraps. Same-user removal of both heads is
+indistinguishable from first adoption, within the existing filesystem trust limit.
+Both lock opens retry sharing contention for about two seconds, then refuse.
+A flushed extension with the anchored prefix intact is `audit-incomplete`, not
+coverage loss; a shortened/changed prefix still fails. Replace stale `.head.new`
+only under the writer lock; checkpoint replacement remains atomic and flushed.
 
 ## 5. Continuous run and reset
 

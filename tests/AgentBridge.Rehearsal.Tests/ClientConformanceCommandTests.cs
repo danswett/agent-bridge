@@ -16,6 +16,21 @@ public class ClientConformanceCommandTests
 
     static string Lines(params ConformanceResult[] rows) => string.Join("\n", ClientConformance.JsonLines(rows));
 
+    static (string Client, string Version, int ProtocolVersion, string ImplementationHead, string RunId,
+        string Capability, string Verdict, string Reason, string? Evidence)[] Records(string output)
+        => output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line =>
+        {
+            using var json = JsonDocument.Parse(line);
+            var root = json.RootElement;
+            var run = root.GetProperty("run");
+            var hasEvidence = root.TryGetProperty("evidence", out var evidence);
+            return (run.GetProperty("client").GetString()!, run.GetProperty("version").GetString()!,
+                run.GetProperty("protocolVersion").GetInt32(), run.GetProperty("implementationHead").GetString()!,
+                run.GetProperty("runId").GetString()!, root.GetProperty("capability").GetString()!,
+                root.GetProperty("verdict").GetString()!, root.GetProperty("reason").GetString()!,
+                !hasEvidence || evidence.ValueKind == JsonValueKind.Null ? null : evidence.GetString());
+        }).ToArray();
+
     [Theory]
     [InlineData((int)ConformanceVerdict.Pass, "pass", 0)]
     [InlineData((int)ConformanceVerdict.Fail, "fail", 1)]
@@ -68,5 +83,61 @@ public class ClientConformanceCommandTests
         Assert.Throws<ArgumentException>(() => ClientConformanceCommand.Run(Input(s, Lines(pass, pass)), output));
         Assert.Throws<UsageException>(() => ClientConformanceCommand.Run(Input(s, "", "unknown"), output));
         Assert.Equal("", output.ToString());
+    }
+
+    [Fact]
+    public void Windows_without_a_callback_preserves_the_existing_recorded_result_path()
+    {
+        using var s = new Scratch();
+        using var output = new StringWriter();
+        var pass = new ConformanceResult(Windows, "reply", ConformanceVerdict.Pass, "recorded", Link);
+
+        Assert.Equal(0, ClientConformanceCommand.Run(Input(s, Lines(pass), "Windows"), output));
+
+        var record = Assert.Single(Records(output.ToString()));
+        Assert.Equal(("Windows", "reply", "pass", Link.AbsoluteUri),
+            (record.Client, record.Capability, record.Verdict, record.Evidence));
+    }
+
+    [Fact]
+    public void Windows_command_records_the_required_inventory_and_exits_zero_only_when_all_stub_rows_pass()
+    {
+        using var s = new Scratch();
+        using var output = new StringWriter();
+        var required = ConformanceInventory.ForClient("Windows");
+        var stub = new WindowsConformanceStub();
+
+        Assert.Equal(0, ClientConformanceCommand.Run(Input(s, "", "Windows"), output, stub.Run));
+
+        Assert.Equal(required.Select(capability => capability.Name), stub.Calls);
+        var records = Records(output.ToString());
+        Assert.Equal(required.Select(capability => capability.Name), records.Select(record => record.Capability));
+        Assert.All(records, record =>
+        {
+            Assert.Equal("Windows", record.Client);
+            Assert.Equal(Windows.Version, record.Version);
+            Assert.Equal(Windows.ProtocolVersion, record.ProtocolVersion);
+            Assert.Equal(Windows.ImplementationHead, record.ImplementationHead);
+            Assert.Equal(Windows.RunId, record.RunId);
+            Assert.Equal("pass", record.Verdict);
+            Assert.Equal("stub passed", record.Reason);
+            Assert.Equal("https://example.test/runs/windows-stub", record.Evidence);
+        });
+    }
+
+    [Fact]
+    public void Windows_command_exits_nonzero_and_preserves_omitted_and_failing_stub_rows()
+    {
+        using var s = new Scratch();
+        using var output = new StringWriter();
+        var required = ConformanceInventory.ForClient("Windows");
+        var stub = new WindowsConformanceStub(omittedCapability: "reply", failingCapability: "session-stop");
+
+        Assert.Equal(1, ClientConformanceCommand.Run(Input(s, "", "Windows"), output, stub.Run));
+
+        var records = Records(output.ToString()).ToDictionary(record => record.Capability);
+        Assert.Equal(required.Count, records.Count);
+        Assert.Equal(("missing", "No result recorded."), (records["reply"].Verdict, records["reply"].Reason));
+        Assert.Equal(("fail", "stub failure"), (records["session-stop"].Verdict, records["session-stop"].Reason));
     }
 }

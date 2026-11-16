@@ -25,14 +25,61 @@ const flush = () => new Promise((r) => setImmediate(r));
 const session = (id, extra = {}) => ({ id, agent: 'copilot', status: 'idle', statusSince: '2026-10-28T04:00:00.000Z', updatedAt: '2026-10-28T04:00:00.000Z', activity: {}, ...extra });
 
 // A client subscribed for patches to the run "run-1", its snapshot under way.
-async function subscribed(t, store, result = { revision: 1, count: 0 }) {
+async function subscribed(t, store, result = { revision: 1, count: 0 }, capabilities = []) {
   const client = new HostClient(t, { store, timeoutMs: 500 });
+  client.capabilities = capabilities;
   const p = client.subscribe({ patch: true, instance: 'run-1' });
   await flush();
   t.host({ re: t.lastRequest('sessions.subscribe').id, ok: true, result });
   await p;
   return client;
 }
+
+test('a patch naming a session by handle applies to the session the snapshot gave that handle', async () => {
+  const t = fakeTransport(), store = new SessionsStore();
+  const client = await subscribed(t, store, { revision: 1, count: 1 }, ['sessions.handles']);
+  assert.equal(t.lastRequest('sessions.subscribe').data.handles, true);
+  t.host({ ev: 'session.upsert', seq: 1, data: session('s1', { title: 'Before' }) });
+  t.host({ ev: 'sessions.synced', seq: 2, data: { revision: 1, handles: { s1: 1 } } });
+  t.host({ ev: 'session.patch', seq: 3, data: { handle: 1, base: 1, revision: 2, set: { title: 'After' } } });
+  assert.equal(store.get('s1').title, 'After');
+  // A resumed subscription reissues its map, even for a session not sent again.
+  const again = client.subscribe();
+  await flush();
+  t.host({ re: t.lastRequest('sessions.subscribe').id, ok: true, result: { revision: 2, count: 0, resumed: true } });
+  await again;
+  t.host({ ev: 'sessions.synced', seq: 4, data: { revision: 2, live: ['s1'], handles: { s1: 2 } } });
+  t.host({ ev: 'session.patch', seq: 5, data: { handle: 2, revision: 3, set: session('s1', { title: 'Resumed' }) } });
+  assert.equal(store.get('s1').title, 'Resumed');
+  t.host({ ev: 'session.patch', seq: 6, data: { id: 's2', handle: 3, revision: 4, set: session('s2') } });
+  t.host({ ev: 'session.patch', seq: 7, data: { handle: 3, base: 6, revision: 5, set: { title: 'New session' } } });
+  assert.equal(store.get('s2').title, 'New session');
+  t.host({ ev: 'session.patch', seq: 8, data: { handle: 1, revision: 6, set: session('s1', { title: 'Old subscription' }) } });
+  await flush();
+  assert.equal(store.get('s1').title, 'Resumed');
+  assert.deepEqual(t.lastRequest('sessions.subscribe').data, { patch: true, handles: true });
+  client.close();
+});
+
+test('a patch with a handle the snapshot never gave is dropped whole and the list is subscribed again', async () => {
+  const t = fakeTransport(), store = new SessionsStore();
+  const client = await subscribed(t, store, { revision: 1, count: 1 }, ['sessions.handles']);
+  t.host({ ev: 'session.upsert', seq: 1, data: session('s1', { title: 'Before' }) });
+  t.host({ ev: 'sessions.synced', seq: 2, data: { revision: 1, handles: { s1: 1 } } });
+  t.host({ ev: 'session.patch', seq: 3, data: { handle: 9, base: 1, revision: 2, set: { title: 'Wrong' } } });
+  await flush();
+  assert.equal(store.get('s1').title, 'Before');
+  assert.equal(client.synced, false);
+  assert.deepEqual(t.lastRequest('sessions.subscribe').data, { patch: true, handles: true });
+  client.close();
+});
+
+test('a host that offers no handles is never asked for them', async () => {
+  const t = fakeTransport();
+  const client = await subscribed(t, new SessionsStore());
+  assert.deepEqual(t.lastRequest('sessions.subscribe').data, { patch: true });
+  client.close();
+});
 
 test('a patch on the session as the channel last gave it shows what the host has, and moves the revision resumed from', async () => {
   const t = fakeTransport();

@@ -94,6 +94,10 @@ operations; group headers and move menus follow in G2/G3. Pinning keeps membersh
 separate, and membership expires after 30 days without listing the session. This runs only in the
 client: a host leaving does not delete the record. Nothing syncs yet, and no host holds group state.
 
+The groups redesign's G1 (#2073) adds `groups.js` helpers over that same `SessionOrder`:
+non-mutating name validation, shared with create/rename, and counts of current unpinned live
+rows. It adds no storage key or membership record; edits still use the existing order API.
+
 G2 (#1615) draws those groups between Pinned and Sessions. Collapse is kept only in the device's
 local order, outside the group registers. Collapsed groups retain visible needs-you rows; search
 and Needs you temporarily expand matching groups without changing the saved collapse.

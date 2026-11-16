@@ -23,6 +23,7 @@ using Xunit;
 public abstract partial class LaunchFlowFixture : IAsyncLifetime
 {
     private protected static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
+    private protected virtual bool UsesRelay => true;
 
     private protected readonly Fixture f = new();
     // Time stands still for a launch unless a test gives it a short budget to run out (see PollClock).
@@ -61,6 +62,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
             CoalesceInterval = TimeSpan.Zero,
         }, f.Processes, TimeProvider.System);
         await source.RefreshAsync();
+        if (!UsesRelay) { return; }
         // With the in-process blob store, which a session transfer goes through.
         relay = await TestRelay.StartAsync(o => o.Blobs.Backend = "local");
         var token = relay.TokenFor(1, "octo");
@@ -72,7 +74,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        await relay.DisposeAsync();
+        if (relay is not null) { await relay.DisposeAsync(); }
         await source.DisposeAsync();
         await clock.DisposeAsync();
         foreach (var file in Directory.EnumerateFiles(f.Root, "*", SearchOption.AllDirectories)) { File.SetAttributes(file, FileAttributes.Normal); }

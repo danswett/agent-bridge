@@ -154,11 +154,12 @@ static class MergeRuleCommand
         """;
 
     /// <summary>One run's reads: what it cost, and each head's files, which never change, read once.</summary>
-    sealed class Session(IGitHub github, MergeRuleConfig config, string slug)
+    sealed class Session(IGitHub github, MergeRuleConfig config, string slug, bool arm64Waiver)
     {
         public IGitHub GitHub { get; } = github;
         public MergeRuleConfig Config { get; } = config;
         public string Slug { get; } = slug;
+        public bool Arm64Waiver { get; } = arm64Waiver;
         public int GraphQLPoints { get; private set; }
         public int? GraphQLRemaining { get; private set; }
         public int RestCalls { get; private set; }
@@ -215,7 +216,8 @@ static class MergeRuleCommand
         return new(head, baseCommit, dirty, otherRules);
     }
 
-    public static int Run(IReadOnlyList<string> args, TextWriter output, IGitHub github, Func<string, CheckoutFacts>? checkout = null)
+    public static int Run(IReadOnlyList<string> args, TextWriter output, IGitHub github, Func<string, CheckoutFacts>? checkout = null,
+        Func<DateTimeOffset>? utcNow = null, Func<string, string?>? variable = null)
     {
         var options = ParseOptions(args);
         var modes = new[] { "pr", "sha", "all" }.Count(options.ContainsKey);
@@ -241,7 +243,9 @@ static class MergeRuleCommand
         }
         var slug = options.GetValueOrDefault("slug") ?? Environment.GetEnvironmentVariable("GITHUB_REPOSITORY") ?? "danswett/agent-bridge";
         var post = options.ContainsKey("post");
-        var session = new Session(github, config, slug);
+        var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
+        var switchValue = (variable ?? Environment.GetEnvironmentVariable)("ARM64_WAIVER");
+        var session = new Session(github, config, slug, config.Arm64Waiver?.Active(now, switchValue) == true);
         var problems = 0;
 
         session.Main = ReadMain(session, out var mainLog);
@@ -440,7 +444,9 @@ static class MergeRuleCommand
             var planGreen = latest.TryGetValue("plan", out var plan)
                 && plan.GetProperty("status").GetString() == "completed" && plan.GetProperty("conclusion").GetString() == "success";
             bool Green(JsonElement job) => job.GetProperty("status").GetString() == "completed"
-                && job.GetProperty("conclusion").GetString() is "success" or "skipped";
+                && (job.GetProperty("conclusion").GetString() is "success" or "skipped"
+                    || (session.Arm64Waiver && config.Arm64Waiver?.Allows(job.GetProperty("name").GetString() ?? "",
+                        job.GetProperty("conclusion").GetString()) == true));
             bool Passed(string name)
             {
                 if (!name.Contains(" (", StringComparison.Ordinal))
@@ -457,10 +463,34 @@ static class MergeRuleCommand
                     && j.Value.GetProperty("status").GetString() == "completed" && j.Value.GetProperty("conclusion").GetString() == "skipped");
             }
             var held = planGreen ? config.MainGreen.Jobs.Where(name => !Passed(name)).ToList() : ["plan"];
+            var families = config.MainGreen.LegFamilies;
+            var legs = families.SelectMany(f => f).ToHashSet(StringComparer.Ordinal);
+            var stems = legs.Select(n => n.Split(" (", StringSplitOptions.None)[0]).ToHashSet(StringComparer.Ordinal);
+            var present = latest.Keys.Where(n => stems.Contains(n.Split(" (", StringSplitOptions.None)[0]))
+                .ToHashSet(StringComparer.Ordinal);
+            if (families.Count > 0)
+            {
+                var exact = families.Where(f => present.SetEquals(f)).ToList();
+                var possible = families.Where(f => present.IsSubsetOf(f)).ToList();
+                var unexpected = present.Except(legs, StringComparer.Ordinal).ToList();
+                if (present.Count == 0)
+                    held.Add("no leg family");
+                else if (unexpected.Count > 0)
+                    held.Add($"unexpected leg {string.Join(", ", unexpected)}");
+                else if (exact.Count == 1)
+                    held.AddRange(exact[0].Where(n => latest[n].GetProperty("status").GetString() != "completed"
+                        || latest[n].GetProperty("conclusion").GetString() != "success"));
+                else if (exact.Count > 1)
+                    held.Add("mixed or ambiguous leg families");
+                else if (possible.Count > 0)
+                    held.AddRange(possible.SelectMany(f => f).Except(present, StringComparer.Ordinal));
+                else
+                    held.Add("mixed leg families");
+            }
             log = $"Main: {config.MainGreen.Workflow} run {id} (attempt {attempt}) on {MergeRule.Short(sha!)}; "
                 + (held.Count == 0 ? "named jobs passed." : $"named jobs not green: {string.Join(", ", held)}.")
                 + "\n" + string.Join("\n", latest.OrderBy(j => j.Key, StringComparer.Ordinal).Select(j =>
-                    $"Main job [{(j.Key == "plan" || config.MainGreen.Jobs.Any(n => n == j.Key || (!n.Contains(" (", StringComparison.Ordinal) && j.Key.StartsWith($"{n} (", StringComparison.Ordinal))) ? "required" : "non-gating")}]: {j.Key}: {j.Value.GetProperty("status").GetString()}/{j.Value.GetProperty("conclusion").GetString() ?? "pending"} (attempt {RunAttempt(j.Value)})."));
+                    $"Main job [{(j.Key == "plan" || present.Contains(j.Key) || config.MainGreen.Jobs.Any(n => n == j.Key || (!n.Contains(" (", StringComparison.Ordinal) && j.Key.StartsWith($"{n} (", StringComparison.Ordinal))) ? "required" : "non-gating")}]: {j.Key}: {j.Value.GetProperty("status").GetString()}/{j.Value.GetProperty("conclusion").GetString() ?? "pending"} (attempt {RunAttempt(j.Value)})."));
             return held.Count == 0
                 ? new("success", $"{config.Base}'s CI {MergeRule.Short(sha!)} named jobs passed")
                 : new("failure", $"{config.Base} is red (CI {MergeRule.Short(sha!)}): named job {held[0]} is not green");
@@ -521,7 +551,8 @@ static class MergeRuleCommand
                 if (product.Any(j => Incomplete(j.Value)
                     || j.Value.GetProperty("conclusion").GetString() is "cancelled" or "skipped"))
                     continue;
-                if (latest.Any(j => config.MainGreen.Jobs.Any(n => n.Split(" (", StringSplitOptions.None)[0] == j.Key.Split(" (", StringSplitOptions.None)[0])
+                if (latest.Any(j => (config.MainGreen.Jobs.Any(n => n.Split(" (", StringSplitOptions.None)[0] == j.Key.Split(" (", StringSplitOptions.None)[0])
+                    || config.MainGreen.LegFamilies.Any(f => f.Contains(j.Key, StringComparer.Ordinal)))
                     && (Incomplete(j.Value) || j.Value.GetProperty("conclusion").GetString() == "cancelled")))
                     continue;
                 return (run.Clone(), latest);
@@ -570,7 +601,7 @@ static class MergeRuleCommand
         var node = doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest");
         if (node.ValueKind != JsonValueKind.Object)
             throw new InvalidOperationException($"{session.Slug} has no pull request #{number}.");
-        var facts = ParseFacts(node, session.Config);
+        var facts = ParseFacts(node, session.Config, session.Arm64Waiver);
         return history ? WithReceiptHistory(session, facts) : facts;
     }
 
@@ -696,7 +727,7 @@ static class MergeRuleCommand
     /// One pull request's facts from the GraphQL fragment above. Its files come from FetchFull;
     /// read without checks, it's marked not fully read, which can fail it but never pass it.
     /// </summary>
-    internal static PullRequestFacts ParseFacts(JsonElement pr, MergeRuleConfig config)
+    internal static PullRequestFacts ParseFacts(JsonElement pr, MergeRuleConfig config, bool arm64Waiver = false)
     {
         var head = pr.GetProperty("headRefOid").GetString()!;
         var reviews = pr.GetProperty("reviews").GetProperty("nodes").EnumerateArray()
@@ -729,7 +760,7 @@ static class MergeRuleCommand
                     .ToList();
             checksRead = commit.TryGetProperty("checkSuites", out var suites);
             if (checksRead)
-                (run, codeScanning, checks) = ReadChecks(suites, config);
+                (run, codeScanning, checks) = ReadChecks(suites, config, arm64Waiver);
             // Every other status counts like a check; merge-rule is this verdict, and the receipts
             // are judged on their own terms above.
             var receiptContexts = ReceiptContexts(config);
@@ -767,7 +798,7 @@ static class MergeRuleCommand
     /// rule's own workflows are left out (they're running while it judges), and CodeQL's workflow
     /// and code scanning's check are read apart, for their own messages.
     /// </summary>
-    static (RunFact? CodeQlRun, RunFact? CodeQlCheck, List<CheckFact> Checks) ReadChecks(JsonElement connection, MergeRuleConfig config)
+    static (RunFact? CodeQlRun, RunFact? CodeQlCheck, List<CheckFact> Checks) ReadChecks(JsonElement connection, MergeRuleConfig config, bool arm64Waiver)
     {
         var suites = connection.GetProperty("nodes");
         RunFact? codeqlRun = null, codeqlCheck = null;
@@ -823,7 +854,7 @@ static class MergeRuleCommand
         var checks = new List<CheckFact>();
         if (Truncated(connection, suites.GetArrayLength()))
             checks.Add(new CheckFact("the head's checks", "failure", "more than the rule reads"));
-        foreach (var (_, suite) in latestRun.Values)
+        foreach (var (id, suite) in latestRun.Values)
         {
             var workflow = suite.GetProperty("workflowRun").GetProperty("workflow").GetProperty("name").GetString() ?? "";
             var status = suite.GetProperty("status").GetString();
@@ -835,17 +866,25 @@ static class MergeRuleCommand
             // that needs the others) hasn't started yet.
             if (status != "COMPLETED")
                 checks.Add(new CheckFact(workflow, "pending", status?.ToLowerInvariant()));
-            if (runs.Count > 0)
-                checks.AddRange(runs
-                    .GroupBy(cr => cr.GetProperty("name").GetString() ?? "")
-                    .Select(g => Classify(g.Key, g.MaxBy(cr => cr.GetProperty("databaseId").GetInt64()))));
+            var jobs = runs.GroupBy(cr => cr.GetProperty("name").GetString() ?? "")
+                .Select(g => Classify(g.Key, g.MaxBy(cr => cr.GetProperty("databaseId").GetInt64())))
+                .Select(c => arm64Waiver && id > 0 && workflow == "CI"
+                    && suite.GetProperty("app") is { ValueKind: JsonValueKind.Object } source
+                    && source.GetProperty("slug").GetString() == "github-actions"
+                    && c.State == "failure" && config.Arm64Waiver?.Allows(c.Name, c.Detail) == true
+                        ? c with { State = "success", WaivedRunId = id } : c).ToList();
+            checks.AddRange(jobs);
+            var waivedFailure = conclusion == "FAILURE" && jobs.Any(c => c.WaivedRunId is not null)
+                && jobs.All(c => c.State == "success")
+                && jobs.Any(c => c.Name == "quality-gate" && c.Detail == "success")
+                && !Truncated(suite.GetProperty("checkRuns"), runs.Count);
             // The run's own result counts too, jobs or none: one cancelled between jobs, or failed
             // expanding a later matrix, ends red with every job it made green; one that ended
             // before any job (a workflow file that doesn't parse) is startup_failure. GitHub
             // updates it when failed jobs are rerun, so a green retry clears it. Not
             // action_required: a run waiting for approval, as the review relay's do when Copilot's
             // review starts them.
-            if (status == "COMPLETED" && conclusion is "STARTUP_FAILURE" or "FAILURE" or "TIMED_OUT" or "CANCELLED")
+            if (status == "COMPLETED" && conclusion is ("STARTUP_FAILURE" or "FAILURE" or "TIMED_OUT" or "CANCELLED") && !waivedFailure)
                 checks.Add(new CheckFact(workflow, "failure", conclusion.ToLowerInvariant()));
         }
         checks.AddRange(otherApps.Values.Select(v => v.Check));

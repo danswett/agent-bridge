@@ -85,6 +85,16 @@ public class PatchReplayTests(ITestOutputHelper output)
             }
             sequences.Add(new JsonObject { ["name"] = name, ["recording"] = recording, ["events"] = events });
         }
+        var before = new JsonObject { ["id"] = "s1", ["title"] = "Before" };
+        var after = new JsonObject { ["id"] = "s1", ["title"] = "After" };
+        sequences.Add(new JsonObject
+        {
+            ["name"] = "negotiated-handle", ["recording"] = "synthetic",
+            ["events"] = new JsonArray(
+                new JsonObject { ["seq"] = 1, ["upsert"] = before },
+                new JsonObject { ["seq"] = 2, ["synced"] = new JsonObject { ["revision"] = 1, ["handles"] = new JsonObject { ["s1"] = 1 } } },
+                new JsonObject { ["seq"] = 3, ["patch"] = JsonSerializer.SerializeToNode(SessionPatches.Next(before, 1, after, 2, handle: 1), ProtocolJson.Options), ["session"] = after }),
+        });
         return new JsonObject
         {
             ["about"] = "Recorded sessions as a subscriber that asked for patches is sent them, a change every 250 ms at most: the snapshot's upsert, then session.patch events, each with the session the client then holds.",
