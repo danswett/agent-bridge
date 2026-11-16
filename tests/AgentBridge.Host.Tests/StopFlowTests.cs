@@ -288,28 +288,42 @@ public sealed class StopFlowTests : IAsyncLifetime
     [InlineData(Other, "person:local")]
     [InlineData(Id, "person:other")]
     [InlineData(Other, "person:other")]
-    public async Task Overlapping_stop_requests_cannot_join_another_target_or_principal(string target, string principal)
+    [InlineData(Id, "person:local")]
+    public async Task Overlapping_stop_requests_keep_one_operation_and_refuse_foreign_joins(string target, string principal)
     {
+        var sameOwner = target == Id && principal == "person:local";
+        if (sameOwner)
+        {
+            injector.OnInject = null;
+            control.TerminateWorks = false;
+        }
         var stopper = Stopper();
         var request = Guid.NewGuid().ToString();
         await gate.WaitToTypeAsync();
         gate.TypingQueued = new(TaskCreationOptions.RunContinuationsAsynchronously);
         var first = AuditStopAsync(stopper, request: request);
-        Task<StopResult> conflicting;
+        Task<StopResult> overlapping;
         try
         {
             await gate.TypingQueued.Task.WaitAsync(Patience);
             Assert.Empty(StopRows());
-            conflicting = AuditStopAsync(stopper, target, request, principal: principal);
+            overlapping = AuditStopAsync(stopper, target, request, principal: principal);
         }
         finally { gate.DoneTyping(); }
-        Assert.Equal(StopOutcome.Ended, (await first.WaitAsync(Patience)).Outcome);
-        Assert.Equal(StopOutcome.Refused, (await conflicting.WaitAsync(Patience)).Outcome);
-        Assert.Equal(StopOutcome.Refused, (await AuditStopAsync(stopper, target, request, principal: principal)).Outcome);
-        Assert.Equal(StopOutcome.Ended, (await AuditStopAsync(stopper, request: request)).Outcome);
+        var firstResult = await first.WaitAsync(Patience);
+        Assert.Equal(sameOwner ? StopOutcome.Failed : StopOutcome.Ended, firstResult.Outcome);
+        Assert.Equal(sameOwner ? StopOutcome.Failed : StopOutcome.Refused, (await overlapping.WaitAsync(Patience)).Outcome);
+        var third = await AuditStopAsync(stopper, target, request, principal: principal);
+        Assert.Equal(sameOwner ? StopOutcome.Failed : StopOutcome.Refused, third.Outcome);
+        if (sameOwner)
+        {
+            Assert.Equal(firstResult, third);
+        }
+        Assert.Equal(sameOwner ? StopOutcome.Failed : StopOutcome.Ended, (await AuditStopAsync(stopper, request: request)).Outcome);
         Assert.Equal(2, StopRows().Count);
+        Assert.Single(StopRows().Select(row => row.Gate!.Operation).Distinct());
         Assert.Single(injector.Plans);
-        Assert.Empty(control.Terminated);
+        Assert.Equal(sameOwner ? new[] { Pid } : Array.Empty<int>(), control.Terminated);
     }
 
     [Theory]

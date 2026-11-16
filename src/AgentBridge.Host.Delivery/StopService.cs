@@ -136,7 +136,8 @@ public sealed class StopService : ISessionStopper
         => StopAuditedAsync(request, null, cancellationToken);
 
     public Task<StopResult> StopAuditedAsync(StopRequest request, Func<int, DateTimeOffset, bool>? beforeDispatch,
-        CancellationToken cancellationToken = default, string? principal = null, Action? onConflict = null)
+        CancellationToken cancellationToken = default, string? principal = null, Action? onConflict = null,
+        Action? onReplay = null)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key)) { return Task.FromResult(Refused("request must be a UUID")); }
         return requests.Once(key, () => EndAsync(request, key, beforeDispatch), result =>
@@ -145,7 +146,7 @@ public sealed class StopService : ISessionStopper
             {
                 onConflict?.Invoke();
                 return Task.FromResult(Refused("the stop request belongs to another operation"));
-            });
+            }, repeated: onReplay is null ? null : result => { onReplay(); return result; });
     }
 
     async Task<StopResult> EndAsync(StopRequest request, Guid key, Func<int, DateTimeOffset, bool>? beforeDispatch)
