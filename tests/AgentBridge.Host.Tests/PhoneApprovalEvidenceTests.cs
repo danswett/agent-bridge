@@ -15,15 +15,21 @@ public sealed class PhoneApprovalEvidenceTests
         PhoneApprovalEvidence.Project([.. rows.Select((r, i) => r with { Gate = r.Gate! with { Sequence = retainedThrough + i + 1 } })],
             complete, expected, adopted, coverage, retainedThrough);
 
-    static AuditCommands.Row Row(string device, string phase, string outcome, Guid operation, string path = "relay") =>
-        new(At, $"person:{device}", "session.answer", outcome, Direction: path == "relay" ? "in" : "local", Request: operation.ToString(),
-            Target: Guid.Empty.ToString("D"),
-            Gate: new GateAuditMetadata(1, operation, Guid.NewGuid(), 1, phase, path, "person-client", Guid.NewGuid(), "none", Question: Guid.NewGuid()));
+    // Every row of one operation shares its run, target, incarnation and question, as the real writer's rows do.
+    sealed record Op(Guid Id, Guid Run, Guid Incarnation, Guid Question, Guid Target)
+    {
+        public static Op New() => new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+    }
+
+    static AuditCommands.Row Row(string device, string phase, string outcome, Op op, string path = "relay") =>
+        new(At, $"person:{device}", "session.answer", outcome, Direction: path == "relay" ? "in" : "local", Request: op.Id.ToString(),
+            Target: op.Target.ToString("D"),
+            Gate: new GateAuditMetadata(1, op.Id, op.Run, 1, phase, path, "person-client", op.Incarnation, "none", Question: op.Question));
 
     static IReadOnlyList<AuditCommands.Row> Answered(string device, string path = "relay")
     {
-        var operation = Guid.NewGuid();
-        return [Row(device, "intent", "attempted", operation, path), Row(device, "terminal", "delivered", operation, path)];
+        var op = Op.New();
+        return [Row(device, "intent", "attempted", op, path), Row(device, "terminal", "delivered", op, path)];
     }
 
     [Fact]
@@ -47,8 +53,8 @@ public sealed class PhoneApprovalEvidenceTests
     [Fact]
     public void An_answer_the_host_refused_is_asked_but_never_counted_as_answered()
     {
-        var operation = Guid.NewGuid();
-        var report = Check([Row("phone-a", "intent", "attempted", operation), Row("phone-a", "terminal", "refused", operation)], true, ["phone-a"]);
+        var op = Op.New();
+        var report = Check([Row("phone-a", "intent", "attempted", op), Row("phone-a", "terminal", "refused", op)], true, ["phone-a"]);
         var client = Assert.Single(report.Clients);
         Assert.Equal((1, 0), (client.Asked, client.Answered));
         Assert.Equal(["phone-a"], report.Missing);
@@ -78,6 +84,24 @@ public sealed class PhoneApprovalEvidenceTests
     {
         var report = Check(Answered("phone-a"), true, ["phone-a"], adopted, coverage, retainedThrough);
         Assert.Empty(report.Missing);
+        Assert.False(report.Passed);
+    }
+
+    [Fact]
+    public void An_operation_with_both_a_delivered_and_a_refused_terminal_never_passes()
+    {
+        var op = Op.New();
+        var report = Check([Row("phone-a", "intent", "attempted", op), Row("phone-a", "terminal", "delivered", op),
+            Row("phone-a", "terminal", "refused", op)], true, ["phone-a"]);
+        Assert.False(report.Passed);
+    }
+
+    [Fact]
+    public void An_operation_whose_path_changes_between_its_rows_never_counts_as_an_answer_away()
+    {
+        var op = Op.New();
+        var report = Check([Row("phone-a", "intent", "attempted", op, "relay"), Row("phone-a", "terminal", "delivered", op, "local")],
+            true, ["phone-a"]);
         Assert.False(report.Passed);
     }
 
