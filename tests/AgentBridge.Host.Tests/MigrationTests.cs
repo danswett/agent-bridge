@@ -1987,11 +1987,21 @@ public sealed class MigrationTasksHooksAndSettingsTests : MigrationFixture
         }
         try
         {
-            // Readiness, not elapsed startup time: a loaded runner may still be starting pwsh.
-            using var readyTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            var ready = await Task.WhenAll(new[] { supervisor, daemon, stranger }
-                .Select(p => p.StandardOutput.ReadLineAsync(readyTimeout.Token).AsTask()));
-            Assert.All(ready, signal => Assert.Equal("ready", signal));
+            // Readiness, not elapsed startup time: a loaded runner can take longer than any fixed read
+            // to start pwsh (a 30 s read was cancelled on main before Stop ran, #1930). Wait for the
+            // line the script writes; process exit ends the wait too, with what the child did.
+            async Task<string?> Ready(System.Diagnostics.Process p, string name)
+            {
+                var line = p.StandardOutput.ReadLineAsync().AsTask();
+                await Task.WhenAny(line, p.WaitForExitAsync());
+                var signal = await line;
+                if (signal != "ready")
+                {
+                    Assert.Fail($"{name} (process {p.Id}) {(p.HasExited ? $"exited with code {p.ExitCode}" : "is still running")} and wrote {signal ?? "nothing"} instead of ready");
+                }
+                return signal;
+            }
+            await Task.WhenAll(Ready(supervisor, "supervisor"), Ready(daemon, "daemon"), Ready(stranger, "stranger"));
             // A receipt naming the daemon's process id with another start time: a reused id.
             File.WriteAllText(Path.Combine(_f.Runtime, "daemon.process.json"), $"{{\"pid\":{daemon.Id},\"installationId\":\"{FakeAgentHaBridge.Id}\",\"executable\":\"{pwsh.Replace("\\", "\\\\")}\",\"startedUtcTicks\":1}}");
 
