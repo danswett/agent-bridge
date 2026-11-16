@@ -16,6 +16,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="AgentBridge.Roster.Tests" />
     <InternalsVisibleTo Include="AgentBridge.AgentEnvelope.Tests" />
+    <InternalsVisibleTo Include="agent-bridge-host" />
   </ItemGroup>
 
 </Project>

@@ -205,7 +205,10 @@ for (const { state, sort, filter, needsOnly, only } of [
       for (const id of ids) { window.agentBridgeDemo.remove(id); }
     }, only ? FIRST : []);
     const pending = 'demo-pending-snapshot';
-    await upsert(page, pending, { agent: 'copilot', title: 'Loading session', status: needsOnly ? 'waiting' : 'idle', startedAt: later(), updatedAt: later() });
+    const question = needsOnly ? await page.evaluate((id) => ({
+      ...window.agentBridgeDemo.host.get(id).question, id: 'pending-snapshot-question',
+    }), COPILOT) : null;
+    await upsert(page, pending, { agent: 'copilot', title: 'Loading session', status: needsOnly ? 'waiting' : 'idle', question, startedAt: later(), updatedAt: later() });
     await expect.poll(() => order(page)).toEqual([pending, ...(only ? [] : FIRST)]);
     if (sort) { await selectSort(page, sort); }
     if (filter) { await page.locator('#search').fill(filter); }

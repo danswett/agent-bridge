@@ -1083,6 +1083,79 @@ public sealed class AuthBackoffCallerTests : AuthBackoffFixture
         Assert.Equal(1, sent);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_failed_handoff_observation_is_not_hidden_by_faulted_or_stalled_cleanup(bool stalled)
+    {
+        using var watchdog = new CancellationTokenSource();
+        var pending = new TaskCompletionSource();
+        var primary = new Xunit.Sdk.XunitException("the observation failed");
+        var released = false;
+        try
+        {
+            var observed = Xunit.Record.ExceptionAsync(() => ObserveHandoff(
+                () => Task.FromException(primary),
+                () =>
+                {
+                    released = true;
+                    watchdog.Cancel();
+                    return stalled ? pending.Task : Task.FromException(new IOException("cleanup failed"));
+                }, watchdog.Token));
+            Assert.True(observed.IsCompleted, "Cleanup ignored its cancelled watchdog.");
+            Assert.Same(primary, await observed);
+            Assert.True(released);
+            if (stalled) { Assert.IsAssignableFrom<OperationCanceledException>(primary.Data["Handoff cleanup failure"]); }
+            else { Assert.IsType<IOException>(primary.Data["Handoff cleanup failure"]); }
+        }
+        finally { pending.TrySetResult(); }
+    }
+
+    [Fact]
+    public async Task A_reservation_handoff_does_not_write_until_it_holds_the_records_exclusive_lock()
+    {
+        var guard = new HaAuthGuard(Record, time);
+        using var reservation = await guard.EnterAsync(guard.Credential(Url, Token));
+        var before = File.ReadAllText(Record);
+        var contended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var held = new FileStream(Record + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        using var watchdog = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var stop = watchdog.Token;
+        Task handoff = Task.CompletedTask;
+        await ObserveHandoff(async () =>
+        {
+            handoff = Task.Run(() => HandOn("another-attempt", () =>
+            {
+                contended.TrySetResult();
+                return resume.Task;
+            }, stop), stop);
+            await Task.WhenAny(handoff, contended.Task).WaitAsync(stop);
+            Assert.True(contended.Task.IsCompletedSuccessfully);
+            Assert.False(handoff.IsCompleted);
+            Assert.Equal(before, File.ReadAllText(Record));
+            Assert.False(File.Exists(Record + ".test"));
+        }, () =>
+        {
+            try { held.Dispose(); }
+            finally { resume.TrySetResult(); }
+            return handoff;
+        }, stop);
+
+        var record = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Record))!;
+        Assert.Equal("another-attempt", record["probeBy"]!.GetValue<string>());
+        Assert.Equal(time.GetUtcNow() + TimeSpan.FromSeconds(45), record["probeUntil"]!.GetValue<DateTimeOffset>());
+    }
+
+    static async Task ObserveHandoff(Func<Task> observe, Func<Task> release, CancellationToken watchdog)
+    {
+        var primary = await Xunit.Record.ExceptionAsync(observe);
+        var cleanup = await Xunit.Record.ExceptionAsync(() => release().WaitAsync(watchdog));
+        if (primary is not null && cleanup is not null) { primary.Data["Handoff cleanup failure"] = cleanup; }
+        var failure = primary ?? cleanup;
+        if (failure is not null) { System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw(); }
+    }
+
     // One attempt ends without an answer and another process's takes the reservation over: the
     // process still waiting gives the new one its full time, not what was left of the first's.
     [Fact]
@@ -1100,7 +1173,7 @@ public sealed class AuthBackoffCallerTests : AuthBackoffFixture
         await Task.Delay(500);
 
         time.Advance(TimeSpan.FromSeconds(20));
-        HandOn("another-attempt");
+        await HandOn("another-attempt");
         await Task.Delay(500);
         time.Advance(TimeSpan.FromSeconds(30));
         await Task.Delay(500);
@@ -1112,14 +1185,34 @@ public sealed class AuthBackoffCallerTests : AuthBackoffFixture
     }
 
     // Another process's attempt taking over the reservation, as one atomic write of the record.
-    void HandOn(string attempt)
+    async Task HandOn(string attempt, Func<Task>? blocked = null, CancellationToken cancellationToken = default)
     {
-        using var held = new FileStream(Record + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-        var record = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Record))!;
-        record["probeBy"] = attempt;
-        record["probeUntil"] = time.GetUtcNow() + TimeSpan.FromSeconds(45);
-        File.WriteAllText(Record + ".test", record.ToJsonString());
-        File.Move(Record + ".test", Record, overwrite: true);
+        // Match the guard's three-second lock budget, not the timing of its next poll.
+        var deadline = Environment.TickCount64 + 3000;
+        FileStream held;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                held = new FileStream(Record + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+                break;
+            }
+            catch (IOException) when (Environment.TickCount64 < deadline)
+            {
+                if (blocked is not null) { await blocked().WaitAsync(cancellationToken); }
+                await Task.Delay(20, cancellationToken);
+            }
+        }
+        using (held)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var record = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Record))!;
+            record["probeBy"] = attempt;
+            record["probeUntil"] = time.GetUtcNow() + TimeSpan.FromSeconds(45);
+            File.WriteAllText(Record + ".test", record.ToJsonString());
+            File.Move(Record + ".test", Record, overwrite: true);
+        }
     }
 
     // During a ban each token has one look, then waits for the scheduled one; however many other

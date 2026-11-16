@@ -108,6 +108,7 @@ public static class UpdateCode
     public const string RestartCap = "restart-cap";
     public const string SignIn = "sign-in";
     public const string UsageCheck = "usage-check";
+    public const string PolicyUnreadable = "policy-unreadable";
 }
 
 // Why an Update now waits (UpdateState.WaitingCode, with phase waiting).

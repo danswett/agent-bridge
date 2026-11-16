@@ -45,7 +45,11 @@ internal static class Program
         {
             outcome = Outcome.Error(e.Message);
         }
-        if (p.Name == "conformance")
+        if (p.Name == "usage-read")
+        {
+            if (outcome.Verdict == Verdict.Error && outcome.Detail.Length > 0) { Console.Error.WriteLine(outcome.Detail); }
+        }
+        else if (p.Name == "conformance")
         {
             if (outcome.Verdict == Verdict.Error) { Console.Error.WriteLine(outcome.Detail); }
         }
@@ -75,6 +79,17 @@ internal static class Program
 
         switch (p.Name)
         {
+            case "usage-read":
+                {
+                    await using var channel = await LocalClient.ConnectAsync(LocalEndpoint.For(profileFolder), TimeSpan.FromSeconds(5), ct);
+                    var exitCode = await UsageRead.RunAsync(p.Args, channel, Console.Out, ct);
+                    return exitCode switch
+                    {
+                        0 => Outcome.Pass(""),
+                        1 => Outcome.Fail(""),
+                        _ => Outcome.Error(""),
+                    };
+                }
             case "conformance":
                 return ClientConformanceCommand.Run(p, Console.Out) == 0
                     ? Outcome.Pass("Every required row passed for the named client.")

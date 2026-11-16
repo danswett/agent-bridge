@@ -81,13 +81,14 @@ public class ReplyTests
     }
 
     [Fact]
-    public void The_host_only_idle_condition_does_not_change_the_reply_wire_contract()
+    public void The_host_only_reply_conditions_do_not_change_the_reply_wire_contract()
     {
         var request = Reply("go on");
         Assert.Equal(JsonSerializer.Serialize(request, ProtocolJson.Options),
-            JsonSerializer.Serialize(request with { RequireIdle = true }, ProtocolJson.Options));
+            JsonSerializer.Serialize(request with { RequireIdle = true, StillCurrent = () => false }, ProtocolJson.Options));
         var read = JsonSerializer.Deserialize<ReplyRequest>(
-            """{"id":"s1","request":"r","text":"go on","requireIdle":true}""", ProtocolJson.Options)!;
+            """{"id":"s1","request":"r","text":"go on","requireIdle":true,"stillCurrent":{"forged":true}}""", ProtocolJson.Options)!;
         Assert.False(read.RequireIdle);
+        Assert.Null(read.StillCurrent);
     }
 }
