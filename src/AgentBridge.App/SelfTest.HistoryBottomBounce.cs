@@ -48,7 +48,10 @@ static partial class SelfTest
             var extentFloor = 0.0;
             var invalidSurface = false;
             var viewChanges = (Inner: 0, Outer: 0);
-            (int Inner, int Outer, int Calls)? settled = null;
+            var layoutEvents = (Updated: 0, Sized: 0);
+            (int Inner, int Outer, int Calls, int Layouts, int Sizes)? settled = null;
+            EventHandler<object> layoutUpdated = (_, _) => layoutEvents.Updated++;
+            SizeChangedEventHandler sizeChanged = (_, _) => layoutEvents.Sized++;
             var watchingSettle = false;
             var streaming = false;
             var recovering = false;
@@ -61,7 +64,8 @@ static partial class SelfTest
             }
             trace.Add(new { kind = "counter-scope", inner = "Conversation/ListView/ScrollViewer",
                 outer = outer is null ? "no ancestor ScrollViewer" : "ancestor ScrollViewer",
-                productionChangeViewCalls = (int?)null, productionCallCoverage = "UNKNOWN: no diagnostic seam" });
+                productionChangeViewCalls = (int?)null, productionCallCoverage = "UNKNOWN: no diagnostic seam",
+                layoutUpdatedScope = "SessionView event receipt, not layout origin", sizeChangedScope = "inner ScrollViewer" });
             (bool Valid, int DrawnHistory, int VisibleHistory, int VisibleResponse) Surface()
             {
                 bool Drawn(FrameworkElement row) => row.IsLoaded && row.Opacity > 0 && Shown(row, view);
@@ -121,6 +125,8 @@ static partial class SelfTest
                 if (settled is not { } at) { check(false, $"bottom bounce {phase}: quiescence coverage lacks a first valid settle"); return; }
                 check(viewChanges.Inner == at.Inner && viewChanges.Outer == at.Outer && wheelSteps == at.Calls,
                     $"bottom bounce {phase}: no observed view events or fixture ChangeView calls after first settle (inner {viewChanges.Inner - at.Inner}, outer {(outer is null ? "unobserved" : (viewChanges.Outer - at.Outer).ToString())}, fixture calls {wheelSteps - at.Calls}; production calls UNKNOWN)");
+                check(layoutEvents.Updated - at.Layouts <= 2 && layoutEvents.Sized == at.Sizes,
+                    $"bottom bounce {phase}: bounded quiet layout receipts after first settle (SessionView LayoutUpdated {layoutEvents.Updated - at.Layouts}/2, inner ScrollViewer SizeChanged {layoutEvents.Sized - at.Sizes}/0; receipts are not causal attribution)");
             }
             void Record(string kind = "render")
             {
@@ -131,7 +137,7 @@ static partial class SelfTest
                     invalidSurface |= !surface.Valid;
                     if (!invalidSurface && !arrived && Gap() <= 1.5) { arrived = true; peakOffset = offset; }
                     if (watchingSettle && settled is null && !invalidSurface && arrived && !moving && Gap() <= 1.5)
-                    { settled = (viewChanges.Inner, viewChanges.Outer, wheelSteps); }
+                    { settled = (viewChanges.Inner, viewChanges.Outer, wheelSteps, layoutEvents.Updated, layoutEvents.Sized); }
                     if (!invalidSurface && arrived && !recovering)
                     {
                         peakOffset = Math.Max(peakOffset, offset);
@@ -147,6 +153,7 @@ static partial class SelfTest
                     firstBlock = (list.ItemsPanelRoot as ItemsStackPanel)?.FirstVisibleIndex,
                     moving, requestIndex = wheelSteps, arrived, worstRetreat, arrivalGap,
                     innerViewChanged = viewChanges.Inner, outerViewChanged = outer is null ? (int?)null : viewChanges.Outer,
+                    sessionLayoutUpdated = layoutEvents.Updated, innerSizeChanged = layoutEvents.Sized,
                     outerOffset = outer?.VerticalOffset, outerExtent = outer?.ScrollableHeight,
                     fixtureChangeViewCalls = wheelSteps, productionChangeViewCalls = (int?)null, settledAtInner = settled?.Inner,
                     watchingSettle, streaming, recovering,
@@ -155,6 +162,20 @@ static partial class SelfTest
                     drawnHistory = surface.DrawnHistory, visibleHistory = surface.VisibleHistory, visibleResponse = surface.VisibleResponse,
                 });
             }
+            async Task IndependentDeadline(Task signal, string requestedPhase, long started, int uiThread)
+            {
+                try { await signal.WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false); }
+                catch (TimeoutException error)
+                {
+                    var failure = $"bottom bounce {requestedPhase}: dispatcher/render progress exceeded 3000ms";
+                    await File.WriteAllTextAsync(Path.ChangeExtension(outFile, ".history-bottom-bounce-heartbeat.json"),
+                        JsonSerializer.Serialize(new { failed = new[] { failure }, requestedPhase, deadlineMs = 3000,
+                            elapsedMs = clock.ElapsedMilliseconds - started, uiThread, failureThread = Environment.CurrentManagedThreadId }))
+                        .ConfigureAwait(false);
+                    throw new TimeoutException(failure, error);
+                }
+            }
+
             async Task Frame()
             {
                 var drawn = new TaskCompletionSource<bool>();
@@ -162,7 +183,7 @@ static partial class SelfTest
                 if (!view.DispatcherQueue.TryEnqueue(() => { if (!drawn.Task.IsCompleted) { CompositionTarget.Rendering += rendered; } }))
                 { throw new InvalidOperationException($"bottom bounce {phase}: dispatcher rejected the rendered-frame responsiveness probe"); }
 
-                try { await drawn.Task.WaitAsync(TimeSpan.FromSeconds(3)); }
+                try { await IndependentDeadline(drawn.Task, phase, clock.ElapsedMilliseconds, Environment.CurrentManagedThreadId); }
                 finally { drawn.TrySetCanceled(); CompositionTarget.Rendering -= rendered; }
                 Record();
             }
@@ -184,6 +205,8 @@ static partial class SelfTest
             void Wheel(int delta) => WheelTo(scroll.VerticalOffset - delta / 120.0 * 3 * ConversationKeyboard.Line);
             scroll.ViewChanged += Changed;
             Application.Current.UnhandledException += xamlFailed;
+            view.LayoutUpdated += layoutUpdated;
+            scroll.SizeChanged += sizeChanged;
             if (outer is not null) { outer.ViewChanged += OuterChanged; }
             try
             {
@@ -278,15 +301,17 @@ static partial class SelfTest
                 var previousExtent = scroll.ScrollableHeight;
                 do
                 {
+                    Task? armedFrame = null;
                     if (clock.ElapsedMilliseconds >= nextGrowth)
                     {
                         response += $"\n\nBottom bounce live update {++updates}: the growing reply remains readable.";
                         var update = card.Session with { UpdatedAt = DateTimeOffset.UtcNow, Activity = card.Session.Activity with { Response = response } };
                         await demo.PutAsync(update);
+                        armedFrame = Frame();
                         card.Update(update);
                         nextGrowth = clock.ElapsedMilliseconds + 250;
                     }
-                    await Frame();
+                    await (armedFrame ?? Frame());
                     if (scroll.ScrollableHeight > previousExtent + 1.5) { drawnGrowths++; previousExtent = scroll.ScrollableHeight; awaitingEnd = true; }
                     if (awaitingEnd && Gap() <= 1.5 && !invalidSurface) { followedGrowths++; awaitingEnd = false; }
                 } while (clock.ElapsedMilliseconds - growthStarted < 10_000);
@@ -370,6 +395,8 @@ static partial class SelfTest
             {
                 scroll.ViewChanged -= Changed;
                 Application.Current.UnhandledException -= xamlFailed;
+                view.LayoutUpdated -= layoutUpdated;
+                scroll.SizeChanged -= sizeChanged;
                 if (outer is not null) { outer.ViewChanged -= OuterChanged; }
             }
         }
