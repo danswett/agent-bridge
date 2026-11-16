@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Host.Delivery.Staging;
@@ -54,8 +55,10 @@ public sealed class SessionService
     public Func<bool> LoadEnabled { get; init; } = () => true;
     public LoadService? Load { get; init; }
 
-    internal object RenameFleetSession(JsonElement data) =>
-        (FleetNames ?? throw new InvalidOperationException("refused: fleet-name storage is not available on this host")).Rename(source, data);
+    internal Task<object> RenameFleetSessionAsync(JsonElement data, Fleet.IScopedFleetRoster? roster, Task closed) =>
+        new Fleet.FleetNameEnrollment(source,
+            FleetNames ?? throw new InvalidOperationException("refused: fleet-name storage is not available on this host"),
+            machine.Id, roster, Time, log).RenameAsync(data, closed);
 
     internal SessionProcess? ProcessForAdoption(string session)
     {
@@ -191,7 +194,11 @@ public sealed class SessionService
     // shape: what the caller's role (RemoteAuthorization) or kind (LocalApi) lets this channel's
     // hello say. hello.changed compares what was shaped, so a channel hears only of a change it
     // can see; compared unshaped, a Service peer heard of update coming and going (#651).
-    public async Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data, Func<HelloResult, HelloResult>? shape)
+    public Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data, Func<HelloResult, HelloResult>? shape) =>
+        HandleAsync(channel, op, data, shape, null);
+
+    internal async Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data, Func<HelloResult, HelloResult>? shape,
+        AgentAuditLog? actionAudit, GateLaunchIngress? launchIngress = null)
     {
         switch (op)
         {
@@ -209,7 +216,7 @@ public sealed class SessionService
                     return hello;
                 }
             case Ops.SessionAnswer:
-                return await AnswerAsync(channel, data);
+                return await AnswerAsync(channel, data, actionAudit);
             case Ops.SessionReply:
                 return await ReplyAsync(channel, data);
             case Ops.AttachmentStart or Ops.AttachmentChunk or Ops.AttachmentDiscard when attachments is not null:
@@ -238,7 +245,7 @@ public sealed class SessionService
                 var options = await launcher.OptionsAsync();
                 return options.Trust is null ? options : options with { Trust = [.. options.Trust.Select(q => ForPeer(channel, q))] };
             case LaunchProtocol.Launch when launcher is not null:
-                return await LaunchAsync(channel, data);
+                return await LaunchAsync(channel, data, actionAudit, launchIngress);
             // Host to host, through the relay only: another machine of the account asking for a
             // session with a command a person's device signed.
             case TransferProtocol.Op when transfers is not null && channel is SecureChannel secure:
@@ -315,7 +322,7 @@ public sealed class SessionService
                 await old.StopAsync();
             }
             if (!channel.IsOpen) { throw new IOException("the channel is closed"); }
-            var feed = new Feed(source.Subscribe(since), request.Patch == true, state, Time, QuietInterval);
+            var feed = new Feed(source.Subscribe(since), request.Patch == true, state, Time, QuietInterval, request.Handles == true);
             state.Feed = feed;
             FeedCreated?.Invoke(feed);
             // The snapshot waits until the response has gone (ChannelReply), so the client
@@ -437,7 +444,7 @@ public sealed class SessionService
         public int FocusCount;
     }
 
-    async Task<AnswerResult> AnswerAsync(IProtocolChannel channel, JsonElement data)
+    async Task<AnswerResult> AnswerAsync(IProtocolChannel channel, JsonElement data, AgentAuditLog? audit)
     {
         // A request without an id, question or request UUID fails as a request; anything
         // that can be read gets an outcome.
@@ -445,11 +452,21 @@ public sealed class SessionService
         var request = data.Deserialize<AnswerRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.answer needs an id, a question and a request");
         var (watch, progress) = Watch(request.Progress);
         if (answers is null) { return new AnswerResult(AnswerOutcome.Refused, "this host does not take answers; answer at the machine"); }
+        Action<AnswerOutcome>? Prepare(Guid operation, Session session, Question question)
+        {
+            if (AnswerGate(session, question, operation, "person-client") is not { } gate) { return null; }
+            var intent = new AgentAuditEntry("local", gate.Operation.ToString(), "person:local", [], Ops.SessionAnswer,
+                gate.Incarnation.ToString(), "attempted", Gate: gate);
+            if (audit is not { } writer || !writer.Append(intent)) { return null; }
+            return outcome => writer.Append(intent with { Outcome = outcome == AnswerOutcome.Delivered ? "delivered" : "refused",
+                Gate = gate with { Phase = "terminal", ReasonCode = outcome == AnswerOutcome.Delivered ? "none" : "refused" } });
+        }
         var takeBack = BeginTakeBack(request.Id, request.Request);
         // A confirmation is checked as coming from the device on the other end of a channel through
         // the relay, and from nowhere else: on this machine's pipe it is none, and refused as such.
         var confirmed = channel is SecureChannel secure && EscapedApprovals is { } escaped ? escaped.For(secure.PeerId, request) : null;
-        var result = await answers.AnswerAsync(request, watch: watch, confirmed: confirmed, sender: channel.PeerId);
+        var result = audit is null ? await answers.AnswerAsync(request, watch: watch, confirmed: confirmed, sender: channel.PeerId)
+            : await answers.AnswerAuditedAsync(request, Prepare, watch: watch, confirmed: confirmed, sender: channel.PeerId);
         // Typed from this device: it needs no notification that the question was answered.
         if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed)
         {
@@ -458,6 +475,27 @@ public sealed class SessionService
         }
         return progress ? result with { Timings = watch.Timings } : result;
     }
+
+    static GateAuditMetadata? AnswerGate(Session session, Question question, Guid operation, string actor)
+    {
+        if (!Guid.TryParse(session.Id, out var incarnation) || incarnation == Guid.Empty) { return null; }
+        var native = session.Agent switch
+        {
+            AgentKind.Codex => CodexApprovalId.Parse(question.Id)?.DecisionId,
+            AgentKind.Copilot when question.Kind == QuestionKind.Approval => CopilotPermissionPrompt.ParseQuestionId(question.Id)?.RequestId,
+            _ => question.Id,
+        };
+        if (string.IsNullOrEmpty(native)) { return null; }
+        var identity = JsonSerializer.SerializeToUtf8Bytes(new[] { "ha-gate-question-v1", session.Agent.ToString().ToLowerInvariant(), incarnation.ToString(), native });
+        var id = new Guid(System.Security.Cryptography.SHA256.HashData(identity).AsSpan(0, 16));
+        return new GateAuditMetadata(1, operation, Guid.Empty, 0, "intent", "local", actor, incarnation, "none", id);
+    }
+
+    internal GateAuditMetadata? RefusedAnswerGate(string target, JsonElement data) =>
+        source?.GetForDelivery(target) is { Question: { } question } session && data.ValueKind == JsonValueKind.Object
+        && data.TryGetProperty("question", out var requested) && requested.ValueKind == JsonValueKind.String && requested.ValueEquals(question.Id)
+        && AnswerGate(session, question, Guid.NewGuid(), "agent") is { } gate
+            ? gate with { Phase = "terminal", ReasonCode = "refused" } : null;
 
     // What a caller of session.reply or session.answer hears as the delivery goes. With progress
     // asked for (and a channel that can carry it), received at once, before any check, and typed
@@ -610,7 +648,7 @@ public sealed class SessionService
 
     List<string> Offered(IProtocolChannel channel)
     {
-        List<string> offered = [Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus];
+        List<string> offered = [Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.SessionsHandles, Capabilities.HelloChanged, Capabilities.SessionsFocus];
         if (SignInEntrypointApproved && SignIn?.Offered(channel) == true) { offered.Add(AgentSignIn.Capability); }
         if (DevicesOffered(channel)) { offered.Add(AgentSignIn.DevicesCapability); }
         // Who may read history is narrowed by the channel's caller (LocalApi, RemoteAuthorization).
@@ -691,7 +729,7 @@ public sealed class SessionService
         return await stops.StopAsync(request);
     }
 
-async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
+async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data, AgentAuditLog? audit, GateLaunchIngress? ingress)
     {
         // As for answers: a request without a request UUID fails as a request, and anything
         // that can be read gets an outcome. The whole request is bounded, prompt and all.
@@ -704,7 +742,9 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
         {
             return new LaunchResult(LaunchOutcome.Refused, $"a session from another machine is brought in through the relay, from {Product.Name}");
         }
-        var result = await launcher!.LaunchAsync(request, channel.PeerId);
+        var result = audit is null ? await launcher!.LaunchAsync(request, channel.PeerId)
+            : await GateLaunchAudit.LaunchAsync(launcher!, request, channel.PeerId, audit,
+                ingress ?? new("local", "person-client", "person:local", audit.ControlWriterRun));
         return result.Trust is null ? result : result with { Trust = ForPeer(channel, result.Trust) };
     }
 
@@ -734,7 +774,7 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
     static string? String(JsonElement data, string name) =>
         data.ValueKind == JsonValueKind.Object && data.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
-    internal sealed class Feed(SessionSubscription subscription, bool patch, Subscriber state, TimeProvider time, TimeSpan quiet)
+    internal sealed class Feed(SessionSubscription subscription, bool patch, Subscriber state, TimeProvider time, TimeSpan quiet, bool useHandles = false)
     {
         // Put in the subscription's own queue, so what was held goes in order with everything else:
         // Tick when the quiet interval is up, Refocused when the client shows another session.
@@ -745,6 +785,10 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
         // got through: an event that could not be sent leaves the client on the one before, which
         // the next patch then goes on from.
         readonly Dictionary<string, (long Seq, JsonObject Json)> sent = new(StringComparer.Ordinal);
+        readonly Dictionary<string, int> handles = new(StringComparer.Ordinal);
+        int nextHandle;
+
+        int Handle(string id) => handles.TryGetValue(id, out var handle) ? handle : handles[id] = checked(++nextHandle);
         // With focus: the latest change of each session the client does not show, until the quiet
         // interval is up, and the latest revision read before its first held change (Floor). That
         // change was made after Floor, so nothing sent meanwhile says a later revision: a client
@@ -914,17 +958,28 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
             {
                 case Session session:
                     var json = SessionPatches.Json(session);
+                    var known = handles.ContainsKey(session.Id);
+                    var handle = useHandles ? Handle(session.Id) : (int?)null;
                     if (!live) { return (ev.Name, ev.Data, session.Id, json); }
-                    var next = sent.TryGetValue(session.Id, out var last)
-                        ? SessionPatches.Next(last.Json, last.Seq, json, ev.Revision)
-                        : SessionPatches.Whole(json, ev.Revision);
+                    var next = (!useHandles || known) && sent.TryGetValue(session.Id, out var last)
+                        ? SessionPatches.Next(last.Json, last.Seq, json, ev.Revision, handle)
+                        : SessionPatches.Next(null, 0, json, ev.Revision, known ? handle : null);
+                    if (next is not null && useHandles && !known) { next = next with { Handle = handle }; }
                     return next is null ? (null, ev.Data, null, null) : (Events.SessionPatch, next, session.Id, json);
                 case SessionRemoved removed:
                     sent.Remove(removed.Id);
                     return (ev.Name, removed with { Revision = ev.Revision }, null, null);
-                case SessionsSynced:
+                case SessionsSynced synced:
                     live = true;
-                    return (ev.Name, ev.Data, null, null);
+                    if (useHandles)
+                    {
+                        foreach (var id in synced.Live ?? []) { Handle(id); }
+                        var mapped = synced with { Handles = new Dictionary<string, int>(handles) };
+                        if (ProtocolJson.ByteCount(mapped) > ProtocolJson.MaxMessageBytes - 1024)
+                        { handles.Clear(); mapped = synced with { Handles = new Dictionary<string, int>() }; }
+                        return (ev.Name, mapped, null, null);
+                    }
+                    return (ev.Name, synced, null, null);
                 default:
                     return (ev.Name, ev.Data, null, null);
             }

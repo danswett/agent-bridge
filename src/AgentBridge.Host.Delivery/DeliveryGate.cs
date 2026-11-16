@@ -79,6 +79,8 @@ public sealed class DeliveryGate
     // Test hook: runs right after a delivery's admission is released, so a test can assert
     // the outcome had already completed (a quiet grant could otherwise overtake it).
     internal Action? AdmissionReleased;
+    // Tests distinguish an actual queued wait from an earlier screen read.
+    internal TaskCompletionSource? TypingQueued;
 
     internal void Complete<T>(IDisposable admission, TaskCompletionSource<T> outcome, T result, Exception? error = null) =>
         ((Delivery)admission).Complete(outcome, result, error);
@@ -257,7 +259,9 @@ public sealed class DeliveryGate
     // The one typing slot. Whoever holds it makes its last checks, types, and lets go.
     public async Task WaitToTypeAsync()
     {
-        await typing.WaitAsync();
+        var wait = typing.WaitAsync();
+        if (!wait.IsCompleted) { TypingQueued?.TrySetResult(); }
+        await wait;
         lock (state)
         {
             Expire();

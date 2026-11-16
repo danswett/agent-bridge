@@ -427,17 +427,44 @@ public sealed class TrustTests : IAsyncLifetime
         Assert.Equal("Build server no longer lists this question as waiting.", card.AtMachine);
     }
 
-    [Fact]
-    public async Task A_machine_that_takes_nothing_from_devices_now_is_listed_only_to_show_its_question_read_only()
+    [Theory]
+    [InlineData("agent-ha-bridge is running for this user", false, "the older bridge is running for this user")]
+    [InlineData("agent-ha-bridge is running for this user", true, "the older bridge is running for this user")]
+    [InlineData("this is a read-only comparison host (delivery.readOnly in its config); answer at the machine", false, "view-only mode is turned on in this bridge's settings")]
+    [InlineData("whether agent-ha-bridge is running for this user could not be checked; answer at the machine", false, "this bridge couldn't check whether the older bridge is running")]
+    public async Task The_banner_explains_both_read_only_causes_and_where_approvals_can_still_be_given(string reason, bool legacy, string plain)
     {
-        remoteReadOnly = "agent-ha-bridge is running for this user";
-        remoteTrust = [Question(answerable: false, atMachine: "Answer at the machine: agent-ha-bridge is running for this user.")];
+        localHost.Status = FakeHost.StatusOf(agentHaBridge: legacy ? reason : null) with { ReadOnly = legacy ? null : reason };
+        await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        await Wait.UntilAsync(() => main.ReadOnlyWhy is not null, "the read-only banner");
+
+        Assert.StartsWith($"Answering, replying and ending sessions are off: {plain}.", main.Banner);
+        Assert.Contains("Home Assistant card or phone notification if available, not in this app.", main.Banner);
+        Assert.Contains("Approve at the machine", main.Banner);
+        Assert.Contains("Sessions started another way on this machine may need approval there too.", main.Banner);
+
+        localHost.Status = FakeHost.StatusOf();
+        await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        await Wait.UntilAsync(() => main.ReadOnlyWhy is null, "the machine no longer read-only");
+    }
+
+    [Theory]
+    [InlineData("agent-ha-bridge is running for this user", "the older bridge is running for this user")]
+    [InlineData("this is a read-only comparison host (delivery.readOnly in its config); answer at the machine", "view-only mode is turned on in this bridge's settings")]
+    [InlineData("whether agent-ha-bridge is running for this user could not be checked; answer at the machine", "this bridge couldn't check whether the older bridge is running")]
+    public async Task A_machine_that_takes_nothing_from_devices_now_is_listed_only_to_show_its_question_read_only(string reason, string plain)
+    {
+        remoteReadOnly = reason;
+        remoteTrust = [Question(answerable: false, atMachine: $"Answer at the machine: {reason}.")];
         var (page, card) = await OnRemoteAsync();
         Assert.Equal("Waiting on Build server", page.Title);
         Assert.False(page.ShowForm);
         Assert.False(page.CanLaunch);
-        Assert.Equal("Sessions can't be started on Build server now: agent-ha-bridge is running for this user.", page.Note);
-        Assert.Equal("Answer at the machine: agent-ha-bridge is running for this user.", card.AtMachine);
+        Assert.StartsWith($"Sessions can't be started on Build server now: {plain}.", page.Note);
+        Assert.Contains("Home Assistant card or phone notification if available, not in this app.", page.Note);
+        Assert.Contains("Approve at the machine", page.Note);
+        Assert.Contains("Sessions started another way on this machine may need approval there too.", page.Note);
+        Assert.Equal($"Answer at the machine: {reason}.", card.AtMachine);
         Assert.False(card.CanAnswer);
 
         // Answered at the machine since: Check again lists it again, and it is gone.

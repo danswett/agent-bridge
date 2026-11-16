@@ -16,7 +16,7 @@ public sealed class SettingsTests : IAsyncLifetime
     readonly FakeProcesses processes = new();
     readonly Updater updater = new();
     readonly AtSignIn atSignIn = new();
-    readonly LockedDispatcher ui = new();
+    readonly HoldingDispatcher ui = new();
     readonly string app = Path.Combine(Path.GetTempPath(), "abs-" + Guid.NewGuid().ToString("N")[..8]);
     AppPreferences prefs = new();
     HostConnection connection = null!;
@@ -1597,19 +1597,39 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.True(settings.Agents.Single(a => a.Id == "copilot").ShowSetUp);
     }
 
-    [Fact]
-    public async Task An_agent_whose_connection_the_person_removed_is_not_offered_back_at_that_version()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_agent_whose_connection_the_person_removed_is_not_offered_back_at_that_version(bool holdStatus)
     {
         await WithAgents([Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: RecordIntakeOn)]);
+        Assert.False(settings.Agents.Single().ShowSetUp);
+        var removed = new AgentReadinessReport(Make.T0, [NeverSetUp("claude", "Claude Code")]);
         host.On(HostOps.AgentsSetup, _ =>
         {
-            host.Status = host.Status with { Agents = new(DateTimeOffset.UtcNow, [NeverSetUp("claude", "Claude Code")]) };
+            host.Status = host.Status with { Agents = removed };
             return new AgentSetupResult(true, "Removed this installation's hooks. Existing sessions keep theirs until they end.", true);
         });
-        host.On(HostOps.AgentsRefresh, _ => host.Status.Agents);
+        // Follow ConnectedWith's possibly still pending status with the scan's newer evidence.
+        host.On(HostOps.AgentsRefresh, _ => new AgentBridge.Transport.ChannelReply(host.Status.Agents!,
+            ch => host.SendAsync(HostOps.StatusEvent, host.Status)));
 
-        await settings.SetUpAgentAsync("claude", remove: true);
+        if (holdStatus) { ui.Hold(); }
+        try
+        {
+            await settings.SetUpAgentAsync("claude", remove: true);
+            Assert.False(settings.HasError);
+            if (holdStatus)
+            {
+                Assert.True(ui.QueuedCount > 0);
+                Assert.NotEqual(removed.CheckedAt, connection.Status?.Agents?.CheckedAt);
+            }
+        }
+        finally { ui.Release(); }
 
+        // A completed request only posts its status; wait for that report, not the assertion.
+        await Wait.UntilAsync(() => connection.Status?.Agents?.CheckedAt == removed.CheckedAt, "the removal's readiness on the UI",
+            why: () => $"seen {connection.Status?.Agents?.CheckedAt:O}, expected {removed.CheckedAt:O}");
         Assert.Empty(settings.AgentOffers);
         Assert.True(settings.Agents.Single().ShowSetUp);
     }

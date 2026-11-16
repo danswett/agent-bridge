@@ -250,6 +250,8 @@ public sealed class ReplyService : ISessionReplier
             {
                 return Refused($"replying is not supported for {session.Agent.ToString().ToLowerInvariant()} yet; reply at the machine");
             }
+            if (request.StillCurrent is not null && session.Agent != AgentKind.Copilot)
+            { return Refused("retry fencing is supported only for Copilot"); }
             if (!gate.TryClaim(session.Id, key)) { return Busy(); }
             Claim? claim = null;
             var keysWent = false;
@@ -263,7 +265,7 @@ public sealed class ReplyService : ISessionReplier
                     if (problem is not null) { return Refused(problem); }
                 }
                 var outcome = session.Agent == AgentKind.Copilot
-                    ? await CopilotAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle)
+                    ? await CopilotAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent)
                     : await AgentAsync(session, request.Text ?? "", claim, timeline);
                 keysWent = outcome.KeysWent;
                 if (outcome.Result is { } result) { return result; }
@@ -372,12 +374,13 @@ public sealed class ReplyService : ISessionReplier
     // KeysWent: some or all of the reply may have reached the session, whatever the result.
     sealed record Attempt(ReplyResult? Result, Typed? Typed, bool KeysWent = false);
 
-    async Task<Attempt> CopilotAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline, bool requireIdle)
+    async Task<Attempt> CopilotAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline, bool requireIdle, Func<bool>? stillCurrent)
     {
         // The session id names a folder; only the agent's own id shape is accepted.
         if (!Guid.TryParseExact(session.Id, "D", out _)) { return Done(Refused("the session's id is not a Copilot session id")); }
         var transcript = Path.Combine(options.CopilotHome, "session-state", session.Id, "events.jsonl");
         if (session.ProcessId is not { } pid) { return Done(Refused("the session's process is not known; reply at the machine")); }
+        var process = stillCurrent is null ? null : source.ProcessOf(session.Id);
         if (!processes.GetAgentProcesses(AgentKind.Copilot).Any(p => p.Id == pid)) { return Done(Stale("the session's process has ended")); }
         if (guard.Refuse(pid) is { } refused) { return Done(Refused(refused)); }
         IReadOnlyList<string> staged = [];
@@ -413,8 +416,11 @@ public sealed class ReplyService : ISessionReplier
         long from;
         InjectionResult result;
         bool working;
+        const string retryChangedReason = "the retry is no longer current, so nothing was typed";
+        var retryChanged = false;
         try
         {
+            if (stillCurrent is not null && !stillCurrent()) { return Done(Stale(retryChangedReason)); }
             if (probe.Active() is { } active) { return Done(Refused(active)); }
             var now = source.Get(session.Id);
             if (now is null) { return Done(Stale("the session has ended")); }
@@ -487,6 +493,24 @@ public sealed class ReplyService : ISessionReplier
                 line with { Enter = false, EnterDelayMs = 0, PauseAfterMs = line.EnterDelayMs, Expect = box.Rows, Checks = mode },
                 new KeySend("", true, 0, line.PauseAfterMs, [box.Rows[^1]], [.. mode, new(box.Rows[1].Row, ScreenCheck.NotStartingWith, CopilotInputBoxReader.Bang)]),
             ]);
+            if (stillCurrent is not null)
+            {
+                string? FinalEffect()
+                {
+                    if (probe.Active() is not null || LaunchHeld?.Invoke(session.Id) is not null || guard.Refuse(pid) is not null)
+                        return Changed();
+                    if (source.Get(session.Id) is not { Agent: AgentKind.Copilot, Status: SessionStatus.Idle, Question: null } live
+                        || live.ProcessId != pid || process is not { StartedAt: not null } || source.ProcessOf(session.Id) != process
+                        || !processes.GetAgentProcesses(AgentKind.Copilot).Any(p => p.Id == pid && p.StartedAt == process.StartedAt))
+                        return Changed();
+                    var latest = input.Read();
+                    if (!latest.Readable || latest.Asking || latest.Resumed) return Changed();
+                    return stillCurrent() ? null : Changed();
+                    string Changed() { retryChanged = true; return retryChangedReason; }
+                }
+                keys = keys with { Proceed = FinalEffect };
+                if (FinalEffect() is { } changed) { return Done(Stale(changed)); }
+            }
 
             timeline.InjectStart();
             try { result = await injector.InjectAsync(pid, keys); }
@@ -503,6 +527,7 @@ public sealed class ReplyService : ISessionReplier
         log($"typed a reply into {Short(session.Id)} (pid {pid}){(staged.Count > 0 ? $" with {staged.Count} attachment(s)" : "")}: {keys.Describe()} -> {result.Status} {result.Detail}");
         return result.Status switch
         {
+            InjectionStatus.NothingTyped when retryChanged => Done(Stale(retryChangedReason)),
             InjectionStatus.NothingTyped => Done(Refused(result.Detail == WorkerInjector.ScreenChanged
                 ? "Copilot's input box changed just as the reply was to be typed, so nothing was typed; try again, or reply at the machine"
                 : DeliveryReasons.Of(result.Detail))),

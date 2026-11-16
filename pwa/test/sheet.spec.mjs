@@ -149,11 +149,15 @@ for (const [layout, viewport] of [
     });
 
     test('resizing keeps the open sheet inside the visible viewport', async ({ page }) => {
-      await open(page, { kind: 'form' });
+      const dialog = await open(page, { kind: 'form' });
       await page.setViewportSize({ width: viewport.width, height: 360 });
-      const box = await page.getByRole('dialog').boundingBox();
+      // The visual viewport resize can reach the sheet after setViewportSize returns.
+      await expect.poll(async () => {
+        const box = await dialog.boundingBox();
+        return box.y + box.height;
+      }).toBeLessThanOrEqual(360);
+      const box = await dialog.boundingBox();
       expect(box.y).toBeGreaterThanOrEqual(0);
-      expect(box.y + box.height).toBeLessThanOrEqual(360);
       expect(box.height).toBeLessThanOrEqual(252);
     });
 

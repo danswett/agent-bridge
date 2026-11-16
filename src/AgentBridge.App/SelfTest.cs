@@ -27,7 +27,7 @@ static partial class SelfTest
         void Check(bool ok, string what)
         {
             (ok ? checks : failures).Add(what);
-            if (!ok) { AppLog.Write($"self-test: failed: {what}"); }
+            if (!ok) { AppLog.Write($"self-test: failed: {what}; {ForegroundOwner()}"); }
         }
         // A ThemeResource or StaticResource that resolves to nothing, in any theme: logged, and a
         // failure, since an installed app may die of it with nothing but 0xC000027B.
