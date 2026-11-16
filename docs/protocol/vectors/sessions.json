@@ -7592,7 +7592,8 @@
               }
             }
           },
-          "refusedBy": "parse"
+          "refusedBy": "SessionPatches.Apply",
+          "reason": "the patch is not on the session as held"
         },
         {
           "name": "wrong-type-id",
@@ -9644,14 +9645,6 @@
     }
   },
   "knownDifferences": [
-    {
-      "vector": "Activity/a-scheduled-prompt",
-      "issue": 2146,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "keeps kind=scheduled alongside the scheduled sender",
-      "pwa": "drops activity.kind until the client attribution slice"
-    },
     {
       "vector": "ActivitySource/wrong-type-response",
       "issue": 446,

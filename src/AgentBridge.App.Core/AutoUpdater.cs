@@ -87,7 +87,8 @@ public sealed class AutoUpdater
         if (result.End != HostWatchEnd.Failed) { return; }
         hostFailed = true;
         log($"update: the host failed after the update: {result.Reason}");
-        Remember(UpdateOutcome.Failed, result.Reason, null, null);
+        var back = Returned;
+        Remember(UpdateOutcome.Failed, result.Reason, back?.To, back?.Request, step: "host-start", from: back?.From);
     }
     // How long the host must have been idle, seen at every tick and every session change, before
     // an Install pressed on another device goes ahead: long past the moment a snapshot is replaced
@@ -218,6 +219,7 @@ public sealed class AutoUpdater
     volatile bool checkNow;
     // From stopping the host for an install until it fails (success ends the app).
     volatile bool installing;
+    DateTimeOffset? installingAt;
     // Update now (#1159, docs/protocol/v1-update.md): the install press is one, with its terms (the
     // release shown, what was confirmed, the end of its life) and who pressed it; null for a plain
     // Install. Why it waits (UpdateWaitingCode); since when its usage-check hold has run, kept when a
@@ -337,6 +339,9 @@ public sealed class AutoUpdater
 
     public const string NotInstalled = "this copy of the app was not installed by its updater, so it cannot update";
 
+    UpdateBack? Returned => prefs().UpdateReturned is { From.Length: > 0, To.Length: > 0 } back
+        && back.To == updater.InstalledVersion ? back : null;
+
     // What this machine's updater is doing, for the account's other devices.
     public UpdateState State
     {
@@ -379,6 +384,8 @@ public sealed class AutoUpdater
                 Bytes = now == UpdatePhase.Downloading ? updater.Bytes : null,
                 Total = now == UpdatePhase.Downloading ? updater.Total : null,
                 Downloaded = updater.Downloaded,
+                Installing = installing ? installingAt : null,
+                Back = Returned,
                 // "Needs you" once the update has waited past WaitAtMost (#800), here too while the
                 // phase stays Idle: Waiting would hide the devices' Install, and say it installs.
                 Waiting = fileWait ?? (waiting ? (nowCode is not null ? NowWaits(nowCode) : WaitingFor()) : NeedsYou(time.GetUtcNow())),
@@ -574,7 +581,7 @@ public sealed class AutoUpdater
     // for the next tick): how it went, kept for the devices, and across the restart an update makes.
     // code: for an Update now, why, as a code the devices word themselves (UpdateResult.Code); a
     // plain Install or Check carries none.
-    void Finish(ref string? field, string? request, UpdateOutcome outcome, string? reason, string? to = null, string? code = null)
+    void Finish(ref string? field, string? request, UpdateOutcome outcome, string? reason, string? to = null, string? code = null, string? step = null)
     {
         if (request is null) { return; }
         var now = false;
@@ -590,14 +597,14 @@ public sealed class AutoUpdater
         }
         Keep();
         log($"update: asked {outcome.ToString().ToLowerInvariant()}{(reason is null ? "" : $": {reason}")}{(now && code is not null ? $" ({code})" : "")}");
-        Remember(outcome, reason, to, request, now ? code : null);
+        Remember(outcome, reason, to, request, now ? code : null, step);
     }
 
-    void Remember(UpdateOutcome outcome, string? reason, string? to, string? request, string? code = null)
+    void Remember(UpdateOutcome outcome, string? reason, string? to, string? request, string? code = null, string? step = null, string? from = null)
     {
         save(prefs() with
         {
-            LastUpdate = new UpdateResult { Outcome = outcome, From = updater.InstalledVersion, To = to, Reason = reason, Request = request, Code = code, At = time.GetUtcNow() },
+            LastUpdate = new UpdateResult { Outcome = outcome, From = from ?? updater.InstalledVersion, To = to, Reason = reason, Request = request, Code = code, Step = step, At = time.GetUtcNow() },
         });
         Changed();
     }
@@ -826,7 +833,7 @@ public sealed class AutoUpdater
             // rather than at the next check, without asking the feed again (#530).
             else if (updater.Found is { } found && updater.Ready != found && updater.RetryAt is { } retry && now >= retry)
             {
-                await updater.DownloadAsync(_ => { });
+                await DownloadAsync(Asked(UpdateAskKind.Check), Asked(UpdateAskKind.Install));
                 if (updater.Ready == found) { Downloaded(found); }
                 Changed();
             }
@@ -979,7 +986,7 @@ public sealed class AutoUpdater
                 (lastCheckAt, lastCheckFailed, lastCheckSource) = (now, null, from);
             }
             // Not again for a while after it failed, from here or Settings (ObservedUpdater).
-            if (found is not null && updater.Ready != found) { await updater.DownloadAsync(_ => { }); }
+            if (found is not null && updater.Ready != found) { await DownloadAsync(check, install); }
         }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
@@ -1004,6 +1011,18 @@ public sealed class AutoUpdater
             Keep();
         }
         Changed();
+    }
+
+    async Task DownloadAsync(string? check, string? install)
+    {
+        var to = updater.Found;
+        try { await updater.DownloadAsync(_ => { }); }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        {
+            Finish(ref checkRequest, check, UpdateOutcome.Failed, e.Message, to, step: "downloading");
+            Finish(ref installRequest, install, UpdateOutcome.Failed, e.Message, to, step: "downloading");
+            throw;
+        }
     }
 
     // Why the host may not be stopped for the install yet, or null. Only an older host's "unknown
@@ -1457,6 +1476,7 @@ public sealed class AutoUpdater
             else { await manager.CheckInstallationFilesAsync(preflight, new InstallationFiles.Budget(time)); }
             Validate();
             updatingIn = open ? to : null;
+            installingAt = null;
             installing = true;
             Changed();
             log($"auto-update: installing {to}, as {because}");
@@ -1464,6 +1484,8 @@ public sealed class AutoUpdater
             {
                 Validate();
                 Record(prefs, save, updater, request, open);
+                installingAt = time.GetUtcNow();
+                Changed();
             }, () =>
             {
                 // Settings' checks and downloads do not wait for this one: one may have replaced the
@@ -1513,6 +1535,7 @@ public sealed class AutoUpdater
         {
             // Still this version: nothing to announce. Still offered while the updater has it
             // downloaded, for the person to try again when they choose; never tried again by itself.
+            var step = prefs().UpdateHandedOver ? "restarting" : "installing";
             save(prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null, UpdateWindowOpen = false, UpdateHandedOver = false });
             if (updater.Ready != to) { Pending = null; }
             checkedAt = time.GetUtcNow();
@@ -1522,8 +1545,8 @@ public sealed class AutoUpdater
             Changed();
             // Kept for the devices whether a device asked for it or the person here did: the old
             // release still runs, and no later start would say so.
-            if (request is null) { Remember(UpdateOutcome.Failed, e.Message, to, null); }
-            else { End(UpdateOutcome.Failed, e.Message); }
+            if (request is null) { Remember(UpdateOutcome.Failed, e.Message, to, null, step: step); }
+            else { End(UpdateOutcome.Failed, e.Message, step: step); }
             return $"installing {to} failed: {e.Message}";
         }
 
@@ -1543,15 +1566,15 @@ public sealed class AutoUpdater
 
         // How the press this answered ended: the one being carried out, or the Update now the host
         // left for, kept for its device even should a newer press have replaced it since.
-        void End(UpdateOutcome outcome, string reason, string? code = null)
+        void End(UpdateOutcome outcome, string reason, string? code = null, string? step = null)
         {
             if (departed is not null && Asked(UpdateAskKind.Install) != departed)
             {
                 log($"update: asked {outcome.ToString().ToLowerInvariant()}: {reason} ({code ?? "no code"})");
-                Remember(outcome, reason, to, departed, code);
+                Remember(outcome, reason, to, departed, code, step);
                 return;
             }
-            Finish(ref installRequest, request, outcome, reason, to, code);
+            Finish(ref installRequest, request, outcome, reason, to, code, step);
         }
     }
 
@@ -1567,6 +1590,7 @@ public sealed class AutoUpdater
             UpdateRequest = request ?? prefs().UpdateInstallAsked,
             UpdateWindowOpen = windowOpen,
             UpdateHandedOver = false,
+            UpdateReturned = null,
         });
 
     // Once Update.exe has started (IUpdater.ApplyAndRestart's handedOver): an install was attempted,
@@ -1582,7 +1606,8 @@ public sealed class AutoUpdater
     public static void Failed(Func<AppPreferences> prefs, Action<AppPreferences> save, IUpdater updater, string? to, string reason, bool recorded = true,
         TimeProvider? time = null)
     {
-        var result = new UpdateResult { Outcome = UpdateOutcome.Failed, From = updater.InstalledVersion, To = to, Reason = reason, At = (time ?? TimeProvider.System).GetUtcNow() };
+        var step = !recorded ? "downloading" : prefs().UpdateHandedOver ? "restarting" : "installing";
+        var result = new UpdateResult { Outcome = UpdateOutcome.Failed, From = updater.InstalledVersion, To = to, Reason = reason, Step = step, At = (time ?? TimeProvider.System).GetUtcNow() };
         save(recorded ? prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null, UpdateWindowOpen = false, UpdateHandedOver = false, LastUpdate = result } : prefs() with { LastUpdate = result });
         (updater as ObservedUpdater)?.Noted();
     }
@@ -1614,6 +1639,8 @@ public sealed class AutoUpdater
             UpdateRequest = null,
             UpdateWindowOpen = false,
             UpdateHandedOver = false,
+            UpdateReturned = took && handedOver && now is { } target && target == attempted
+                ? UpdateProtocol.Fit(new UpdateState { Back = new UpdateBack(from, target, prefs().UpdateRequest, at) }).Back : null,
             LastUpdate = new UpdateResult
             {
                 Outcome = took ? UpdateOutcome.Updated : UpdateOutcome.Failed,
@@ -1621,6 +1648,7 @@ public sealed class AutoUpdater
                 To = now,
                 Reason = took ? null : aborted ? "the update was not handed to the installer: the app ended first" : $"the update did not take: still {now ?? "not installed"}",
                 Request = prefs().UpdateRequest,
+                Step = took ? null : handedOver ? "restarting" : "installing",
                 At = at,
             },
         });

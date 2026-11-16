@@ -8,6 +8,8 @@ using AgentBridge.Protocol;
 using AgentBridge.Transport;
 using AgentBridge.Transport.Tests;
 using Microsoft.Extensions.Time.Testing;
+using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using Xunit;
 
@@ -28,6 +30,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     readonly FakeInjector injector = new();
     readonly DeliveryGate gate = new();
     readonly SessionDrivers drivers = new();
+    readonly ConcurrentQueue<string> channelRejections = new();
     TestRelay relay = null!;
     SessionSource source = null!;
     Device host = null!;
@@ -48,6 +51,8 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         host = await relay.ConnectAsync(token, "Test host", "host");
         host.Hub.JsonOptions = ProtocolJson.Options;
         client = await relay.ConnectAsync(token, "Phone", "pwa");
+        host.Hub.Rejected += (_, error) => channelRejections.Enqueue($"host {error.GetType().Name}: {Brief(error.Message)}");
+        client.Hub.Rejected += (_, error) => channelRejections.Enqueue($"client {error.GetType().Name}: {Brief(error.Message)}");
         Serve(Answerer(), Replier());
         // By default the session takes whatever is typed as a prompt of the person's.
         injector.OnInject = plan => Fixture.Append(events, Prompt(plan.Sends[0].Text));
@@ -96,11 +101,32 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         requestedSchema = new { properties = new { pick = new { type = "string", @enum = new[] { "a", "b" } } }, required = new[] { "pick" } },
     }, s);
 
-    async Task<SecureChannel> OpenAsync()
+    Task<SecureChannel> OpenAsync() => ReplyChannel.OpenAsync(
+        () => client.Relay.WaitForPeerAsync(p => p.Id == host.Id, Patience),
+        () => host.Relay.WaitForPeerAsync(p => p.Id == client.Id, Patience),
+        () => client.Hub.OpenAsync(host.Id),
+        DescribeHandshake);
+
+    string DescribeHandshake()
     {
-        await client.Relay.WaitForPeerAsync(p => p.Id == host.Id, Patience);
-        return await client.Hub.OpenAsync(host.Id);
+        var frames = relay.Taps.ToArray();
+        return $"client [{DescribePeer(client, host)}]; host [{DescribePeer(host, client)}]; "
+            + $"forwarded frames {frames.Length} [{string.Join(", ", frames.TakeLast(8).Select(DescribeFrame))}]; "
+            + $"rejections [{string.Join("; ", channelRejections.TakeLast(8))}]; "
+            + $"relay log [{string.Join("; ", relay.Logs.TakeLast(8).Select(Brief))}]; "
+            + TestTimeoutDiagnostics.Describe();
     }
+
+    static string DescribePeer(Device local, Device peer) =>
+        $"sees peer {local.Relay.Presence.Any(p => p.Id == peer.Id)}, relay {local.Relay.Completion.Status}, "
+        + $"close {local.Relay.CloseStatus}, channels {local.Hub.ChannelCount}";
+
+    // Only the public channel header is observed, never the encrypted body or keys.
+    static string DescribeFrame(byte[] frame) => frame.Length < Wire.ChannelHeader
+        ? $"short frame ({frame.Length})"
+        : $"{(ChannelKind)frame[0]}@{BinaryPrimitives.ReadUInt64BigEndian(frame.AsSpan(1, 8)):x16} ({frame.Length})";
+
+    static string Brief(string text) => text.Length <= 240 ? text : text[..240] + "...";
 
     static async Task<(string Outcome, string? Reason)> ReplyAsync(SecureChannel ch, string text, string? request = null, string id = Id, object? attachments = null)
     {
@@ -220,14 +246,14 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Contains(Capabilities.SessionsReply, await CapabilitiesAsync(ch));
 
         probe.Reason = "agent-ha-bridge is running for this user";
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.SessionsHandles, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
         probe.Reason = null;
 
         Serve(null, new UnsupportedPlatformReplier());
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.SessionsHandles, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
         Assert.Equal(("refused", "replying is not supported on this platform yet; reply at the machine"), await ReplyAsync(ch, "hello"));
         Serve(null, Replier(platform: false));
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.SessionsHandles, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
         Assert.Equal("refused", (await ReplyAsync(ch, "hello")).Outcome);
         Serve(null, null);
         Assert.Equal(("refused", "this host does not take replies; reply at the machine"), await ReplyAsync(ch, "hello"));
@@ -1188,7 +1214,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Contains(Capabilities.SessionsAttach, offered);
 
         probe.Reason = "agent-ha-bridge is running for this user";
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.SessionsHandles, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability, Capabilities.Load], await CapabilitiesAsync(ch));
         probe.Reason = null;
 
         // Without a store the ops are unknown, as on a host that predates them.

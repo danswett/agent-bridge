@@ -5,8 +5,10 @@ $tokens = $null; $errors = $null
 if ($errors) { throw ($errors | Out-String) }
 . $file
 # Replace every desktop boundary: this test must never send input or show a window.
+$script:retained = $false
 function Get-Arm64Foreground {
-    [pscustomobject]@{ Handle = [IntPtr]1; Class = 'Windows.UI.Core.CoreWindow'; Title = 'Microsoft account'; Process = $(if ($script:popup) { 'WWAHost' } else { 'explorer' }) }
+    $cleared = $script:dismissed -gt 0 -and -not $script:retained
+    [pscustomobject]@{ Handle = [IntPtr]$(if ($cleared) { 2 } else { 1 }); Class = 'Windows.UI.Core.CoreWindow'; Title = 'Microsoft account'; Process = $(if ($script:popup -and -not $cleared) { 'WWAHost' } else { 'explorer' }) }
 }
 function Close-Arm64Popup { $script:dismissed++ }
 function Test-Arm64Foreground { $script:probed++; Write-Host "probe=$script:success"; return $script:success }
@@ -23,4 +25,11 @@ foreach ($popup in $false, $true) {
         }
     }
 }
-'PASS: script parsing, no-popup non-fatal paths, popup failure and popup success (desktop calls replaced).'
+$script:popup = $script:success = $script:retained = $true
+$script:dismissed = $script:probed = 0; $failed = $false
+try { Invoke-Arm64PopupDismiss } catch {
+    $failed = $true
+    if ($_.Exception.Message -notmatch 'popup still owns foreground.*foreground before:.*foreground after:') { throw }
+}
+if (-not $failed -or $script:probed -ne 0 -or $script:dismissed -ne 1) { throw 'A retained popup must fail before the probe.' }
+'PASS: script parsing, no-popup paths, dismissed and retained popups (desktop calls replaced).'

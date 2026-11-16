@@ -26,15 +26,7 @@ async function openDemo(page) {
 
 // The page's clock held from here, and the app shown again.
 async function comeBack(page) {
-  await page.clock.install();
-  await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
-  await page.evaluate(() => new Promise((resolve) => {
-    const grace = window.agentBridgeDemo.grace;
-    const stop = grace.onChange(() => {
-      if (grace.active) { stop(); resolve(); }
-    });
-    document.dispatchEvent(new Event('visibilitychange'));
-  }));
+  await observeAwayReturn(page);
 }
 
 async function observeAwayReturn(page, rowId = IDLE) {
@@ -59,7 +51,8 @@ async function observeAwayReturn(page, rowId = IDLE) {
             count: document.querySelectorAll('#needs-you .needs-entry[data-host-id="demo-laptop"]').length,
             heading: document.querySelector('#needs-you .needs-you-head')?.textContent,
           },
-          strip: { hidden: strip?.hidden, text: strip?.textContent },
+          strip: { hidden: strip?.hidden, text: strip?.textContent, focused: document.activeElement === strip },
+          focus: { id: document.activeElement?.id, tag: document.activeElement?.tagName },
           slot: document.querySelector('#return-slot')?.textContent,
           hostStateHidden: document.querySelector('#host-state')?.hidden,
         },
@@ -68,9 +61,8 @@ async function observeAwayReturn(page, rowId = IDLE) {
       return state;
     };
     trace.record = record;
-    let accepting = true;
     grace.onChange(() => {
-      if (accepting && grace.active && document.visibilityState === 'visible') { trace.acceptedSince = grace.since; }
+      if (trace.acceptedSince === null && grace.active && document.visibilityState === 'visible') { trace.acceptedSince = grace.since; }
       record('grace.change');
     });
     document.addEventListener('visibilitychange', (event) => record(event.type, { trusted: event.isTrusted }), true);
@@ -78,13 +70,24 @@ async function observeAwayReturn(page, rowId = IDLE) {
       window.addEventListener(name, (event) => record(event.type, { persisted: event.persisted, trusted: event.isTrusted }), true);
     }
     record('setup.before');
-    document.dispatchEvent(new Event('visibilitychange'));
-    accepting = false;
-    record('setup.after');
-    if (trace.acceptedSince === null || trace.acceptedSince !== grace.since || document.visibilityState !== 'visible') {
-      throw new Error('Return setup: visibilitychange did not produce an observed visible grace start');
-    }
   }, rowId);
+  await page.bringToFront();
+  await expect.poll(() => page.evaluate(() => document.visibilityState)).toBe('visible');
+  await page.evaluate(() => {
+    window.awayReturnTrace.record('setup.visible');
+    document.dispatchEvent(new Event('visibilitychange'));
+    window.awayReturnTrace.record('setup.after');
+  });
+  await expect.poll(() => page.evaluate(() => {
+    const { grace } = window.agentBridgeDemo;
+    const trace = window.awayReturnTrace;
+    return {
+      visible: document.visibilityState === 'visible',
+      active: grace.active,
+      accepted: trace.acceptedSince !== null && trace.acceptedSince === grace.since,
+    };
+  })).toEqual({ visible: true, active: true, accepted: true });
+  await page.evaluate(() => window.awayReturnTrace.record('setup.accepted'));
 }
 
 async function advanceAwayClock(page, ms) {
@@ -106,8 +109,8 @@ test.use({ viewport: { width: 1440, height: 900 }, hasTouch: false });
 
 test.afterEach(async ({ page }, info) => {
   const attachment = info.title === AWAY_RETURN ? 'away-return-state.json'
-    : info.title === HELD_QUESTION_RETURN ? 'held-question-return-state.json' : null;
-  if (!attachment || info.status === info.expectedStatus) { return; }
+    : info.title === HELD_QUESTION_RETURN ? 'held-question-return-state.json' : 'return-state.json';
+  if (info.status === info.expectedStatus) { return; }
   const report = await page.evaluate(() => {
     const trace = window.awayReturnTrace;
     if (!trace) { return { setup: 'not installed', visibility: document.visibilityState, demoReady: !!window.agentBridgeDemo }; }
@@ -126,6 +129,32 @@ test('return_setup_refuses_to_advance_before_grace_starts', async ({ page }) => 
   await expect(advanceAwayClock(page, 1)).rejects.toThrow(
     'Return setup: refusing to advance fake time before a visible grace start is observed');
   expect(await page.evaluate(() => Date.now())).toBe(before);
+});
+
+test('return_setup_waits_for_visibility_before_accepting_grace', async ({ page }) => {
+  await openDemo(page);
+  await page.evaluate(() => {
+    window.returnSetupVisibility = 'hidden';
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true, get: () => window.returnSetupVisibility,
+    });
+  });
+  await Promise.all([
+    observeAwayReturn(page),
+    (async () => {
+      await expect.poll(() => page.evaluate(() => !!window.awayReturnTrace)).toBe(true);
+      const before = await page.evaluate(() => Date.now());
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      expect(await page.evaluate(() => window.awayReturnTrace.acceptedSince)).toBeNull();
+      expect(await page.evaluate(() => Date.now())).toBe(before);
+      await page.evaluate(() => {
+        window.returnSetupVisibility = 'visible';
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+    })(),
+  ]);
+  expect(await page.evaluate(() => window.awayReturnTrace.events.some((event) => event.event === 'setup.accepted'))).toBe(true);
+  await advanceAwayClock(page, 1);
 });
 
 // Quarantined (#1493, #1474): the historical WebKit grace failure remains unreproduced.
@@ -200,9 +229,9 @@ test('the relay link down when the grace ends puts a strip in the title row at i
   const height = (await head.boundingBox()).height;
   await comeBack(page);
   await page.evaluate(() => { window.agentBridgeDemo.connection.ready = false; window.agentBridgeDemo.page.refresh(); });
-  await page.clock.runFor(2500);
+  await advanceAwayClock(page, 2500);
   await expect(page.locator('#connection-strip')).toBeHidden();
-  await page.clock.runFor(600);
+  await advanceAwayClock(page, 600);
   const strip = page.locator('#connection-strip');
   await expect(strip).toBeVisible();
   await expect(strip).toHaveAttribute('role', 'status');
@@ -249,10 +278,12 @@ test('End session held for a return is aria-disabled at once, a press says Updat
 
 test('focus on the sort control when the strip takes the title row goes to the strip, never to the page', async ({ page }) => {
   await openDemo(page);
-  await page.locator('#session-sort').focus();
+  const sort = page.locator('#session-sort');
+  await sort.focus();
+  await expect(sort).toBeFocused();
   await comeBack(page);
   await page.evaluate(() => { window.agentBridgeDemo.connection.ready = false; window.agentBridgeDemo.page.refresh(); });
-  await page.clock.runFor(3100);
+  await advanceAwayClock(page, 3100);
   await expect(page.locator('#connection-strip')).toBeVisible();
   await expect(page.locator('#connection-strip')).toBeFocused();
 });
