@@ -7,6 +7,13 @@ a limit moved in one of them fails in the others. The specs ([v1-sessions.md](..
 and the other `v1-*.md` files) stay the contract. These files are its worked examples, and they
 are generated.
 
+**#2468 coverage gap:** `sessions.json` still has the legacy reply vectors. The
+new request/result `mode`, reply `stage` and interim `queued` progress are covered
+by C# `ReplyModeTests`, not new shared vectors or PWA replay coverage. Adding their
+shared cases requires changing `ProtocolVectors.cs`, regenerating and replaying both
+implementations; it remains a #2468 follow-up, outside the doc-only correction.
+Do not hand-edit `sessions.json`: the generator-equality test would reject it.
+
 | File | Records |
 |---|---|
 | `sessions.json` | `hello`, sessions and their parts, `sessions.list`, `sessions.subscribe` and its events (`session.patch` included), answers, replies, `session.stop` |

@@ -774,7 +774,14 @@ usually "Yes". An agent controls the text and the timing, can steer the target i
 permission, and can retry. So, for every reply whose principal is an agent (and for a future
 connector `act` profile, Q26):
 
-1. **Idle only.** It is delivered only while the target is `idle` with no turn running
+**Version boundary:** queue-reply extension **v1** (protocol 1 plus
+`sessions.reply.queue`, [#2468](https://github.com/danswett/agent-bridge/issues/2468))
+supersedes the idle-only/`notIdle`/no-queue rule below, §5.3's working-only exclusion,
+and AP1's idle-only exit criterion for authorized agent senders on that path (Q35).
+The other guards still apply to the chosen submit key, Enter or Ctrl+Q.
+Hosts without the capability, and the separate AP5-lite profile, retain the old rule.
+
+1. **Base v1: idle only.** It is delivered only while the target is `idle` with no turn running
    (`status: idle`, no `activity.background`, no question). That is re-checked immediately before
    the Enter (step 3). A target that isn't idle gets `refused` with `code: "notIdle"`, and nothing
    is typed.
@@ -782,7 +789,8 @@ connector `act` profile, Q26):
      (v1-sessions.md:454).
    * `code` is an **additive field** on reply results, a protocol change to v1-sessions.md's
      outcome table. A client that doesn't know a code shows `refused` with its `reason`.
-   * Nothing is queued in v1 (Q35). The agent retries after the turn ends, within its rate limits.
+   * Nothing is queued in base v1; queue-reply v1 supersedes this rule as stated in Q35.
+     Without that extension the agent retries after the turn ends, within its rate limits.
    * **Claude:** its permission prompts and `AskUserQuestion` aren't in the transcript until
      they're answered (v1-sessions.md:1026). So for Claude the transcript can't show a prompt is
      pending, and **its safety rests on the screen guard** below. The same holds for any agent
@@ -803,7 +811,8 @@ connector `act` profile, Q26):
      as Claude's and Codex's first send already do, host-replies.md:108-110).
    * **Before the Enter**, the host reads the screen again. It requires the **complete composer
      to equal exactly the authorized message**: prefix and words, nothing before or after, normal
-     mode, the session still idle. Only then does the Enter go, held to those rows.
+     mode, and the session still idle under base v1 (the mode-specific rule above replaces
+     that last condition for queue-reply v1). Only then does the submit key go, held to those rows.
    * If anything differs, the Enter isn't pressed, the host clears what it typed if it can, and
      the outcome is `unconfirmed` (never retried).
    * This is required for **every agent kind, including Copilot**, which has no screen guard for
@@ -1038,8 +1047,10 @@ launch:
   file or `.claude/` directory, a plugin change, and `/skills reload`, each making the session
   `unknown` (§11.2).
 The other hard-coded exclusions:
-* A session that is **working** or asking anything: replies are `refused` with
-  `code: "notIdle"` (§5.2).
+* **Base v1:** a session that is **working** or asking anything: replies are `refused`
+  with `code: "notIdle"` (§5.2). Queue-reply v1 supersedes the working-only exclusion
+  for its mode-capable path (Q35). A pending question or permission prompt still
+  refuses a reply in every mode.
 * A session that is **excluded** (`inbound.exclude`).
 * The **sender itself** (no self-reply loop through the bridge).
 * A session **elevated** or another user's (existing delivery refusals, design.md:498-501).
@@ -3883,7 +3894,7 @@ Decisions the reviews of `f3559996` asked to make explicit:
     * **(S) Sandboxed allow-all**: **decided for immediately after AP9** (AP10, Q50). It is not a
       prerequisite for reads or federation, and doesn't remove the gate without separately
       demonstrated boundaries.
-35. **Q35. Replies into working sessions.** **Recommended:** refused as `notIdle`, idle only
+35. **Q35. Replies into working sessions.** **Base-v1 rule:** refused as `notIdle`, idle only
     (§5.2), re-checked before Enter. That is a new additive refusal code, since `busy` already
     means an answer or reply is being typed (v1-sessions.md:454).
     A **direct** reply into a forced-ask session is not queued. A message **held by the gate**
@@ -3891,6 +3902,13 @@ Decisions the reviews of `f3559996` asked to make explicit:
     approval doesn't restart the clock, the person's own input cancels it, and everything is
     rechecked at delivery (§5.7 G). That bounds the "context changed" risk a general queue would
     have.
+    **Superseded for mode-capable agent senders from queue-reply extension v1**
+    (protocol 1 plus `sessions.reply.queue`, [#2468](https://github.com/danswett/agent-bridge/issues/2468)):
+    "nothing queued; working-session reply refused `notIdle`" no longer governs that
+    path. The [mode-specific contract](../protocol/v1-sessions.md#sessionreply) applies,
+    with every other §5.2 guard retained. Gate holds keep their §5.7 G approval and
+    expiry rules. Older hosts and AP5-lite remain idle-only;
+    this is not a grant to bypass authorization or to answer an approval.
 36. **Q36. Agent launches with `permissions` or `profile` absent.** **Recommended:** refuse.
     `permissions` must be explicit, never filled from the machine's defaults: `ask` for an
     unattended launch, or `allowAll` only as a new gated launch approved with presence (§5.7 G). `agent` and
