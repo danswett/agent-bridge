@@ -146,6 +146,13 @@ workflow application, not a second register or permission to release held work.
     saturation, using the living handover above. This supersedes older
     coordinator compaction targets, not SRE's launch/ending authority or any
     open-work hold.
+11. **Lead and coordinator transfers are peer-to-peer.** The outgoing lead and
+    its successor perform the recycle using the living handover comment.
+    The Chief is not a gate: no per-transfer Chief approval is required.
+    Inform the Chief afterwards by node ID through live messaging, not by
+    putting node IDs in the public handover. Registry lookups for copies use
+    node IDs, never friendly names. Existing launch, custody and ending holds
+    still apply.
 
 ### Staged rule 17
 
