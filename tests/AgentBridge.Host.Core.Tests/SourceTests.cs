@@ -10,6 +10,67 @@ public class SourceTests
     static List<SessionEvent> Drain(SessionSubscription s) => DiscoveryTests.Drain(s);
 
     [Fact]
+    public async Task An_unbound_start_stays_unknown_across_an_unobserved_return_host_restart_and_replacement()
+    {
+        using var f = new Fixture();
+        var stateFile = Path.Combine(f.Root, "host-state.json");
+        var events = f.CopilotSession(Id, lockPid: null);
+        Fixture.Append(events, Copilot.User("first", 1));
+        var firstStart = Fixture.T0.AddMinutes(-5);
+        var replacementStart = Fixture.T0.AddMinutes(-1);
+        File.SetLastWriteTimeUtc(events, firstStart.AddMinutes(1).UtcDateTime);
+        f.Processes.Run(AgentKind.Copilot, 100, $"copilot --resume --session-id {Id}", firstStart);
+        DateTimeOffset? beforeRestart;
+        await using (var source = f.Source(stateFile: stateFile))
+        {
+            await source.RefreshAsync();
+            beforeRestart = source.Get(Id)!.StartedAt;
+        }
+
+        var other = f.CopilotSession("99999999-9999-4999-8999-999999999999", 100, lockWrite: firstStart.AddMinutes(2));
+        Fixture.Append(other, Copilot.User("switched", 2));
+        File.SetLastWriteTimeUtc(other, firstStart.AddMinutes(3).UtcDateTime);
+        Fixture.Append(events, Copilot.User("returned", 3));
+        File.SetLastWriteTimeUtc(events, firstStart.AddMinutes(4).UtcDateTime);
+        await using var restarted = f.Source(stateFile: stateFile);
+        await restarted.RefreshAsync();
+        var afterRestart = restarted.Get(Id)!.StartedAt;
+        f.Processes.Exit(AgentKind.Copilot, 100);
+        f.Processes.Run(AgentKind.Copilot, 101, $"copilot --resume --session-id {Id}", replacementStart);
+        await restarted.RefreshAsync();
+
+        Assert.Null(beforeRestart);
+        Assert.Null(afterRestart);
+        Assert.Null(restarted.Get(Id)!.StartedAt);
+    }
+
+    [Fact]
+    public async Task Queued_unbound_upserts_keep_their_own_process_and_no_startedAt()
+    {
+        using var f = new Fixture();
+        var events = f.CopilotSession(Id, lockPid: null);
+        Fixture.Append(events, Copilot.User("first", 1));
+        var firstStart = Fixture.T0.AddMinutes(-5);
+        var replacementStart = Fixture.T0.AddMinutes(-1);
+        f.Processes.Run(AgentKind.Copilot, 200, $"copilot --resume --session-id {Id}", firstStart);
+        await using var source = f.Source();
+        using var subscription = source.Subscribe();
+        Drain(subscription);
+
+        await source.RefreshAsync();
+        f.Processes.Exit(AgentKind.Copilot, 200);
+        f.Processes.Run(AgentKind.Copilot, 201, $"copilot --resume --session-id {Id}", replacementStart);
+        await source.RefreshAsync();
+        f.Time.Advance(TimeSpan.FromSeconds(1));
+
+        var sessions = Drain(subscription)
+            .Where(e => e.Name == Events.SessionUpsert)
+            .Select(e => (Session)e.Data).ToArray();
+        Assert.Equal(new int?[] { 200, 201 }, sessions.Select(s => s.ProcessId));
+        Assert.All(sessions, s => Assert.Null(s.StartedAt));
+    }
+
+    [Fact]
     public async Task A_session_shown_as_ending_stays_so_as_its_transcript_moves_and_shows_its_own_status_again_if_ending_fails()
     {
         using var f = new Fixture();

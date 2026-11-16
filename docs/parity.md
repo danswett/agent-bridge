@@ -22,6 +22,7 @@ reason.
 | Status | Meaning |
 |---|---|
 | `Verified` | A test **and** a recorded live run |
+| `Verified (historical)` | An earlier observation, not current all-platform or foreground, background and locked-screen proof |
 | `Implemented, untested live` | Code and tests, no live run yet. Live runs are tracked by #39 ([parity-checklist.md](parity-checklist.md)) |
 | `Partial` | Some of it; the gap column says what is missing |
 | `Missing` | Not built; an issue is linked |
@@ -35,10 +36,11 @@ Agents: **Cp** Copilot CLI, **Cl** Claude Code, **Cx** Codex, **All**.
 
 | Status | Rows |
 |---|---|
-| `Verified` | 48 |
-| `Implemented, untested live` | 53 |
-| `Partial` | 1 |
-| `Missing` | 10 |
+| `Verified` | 43 |
+| `Verified (historical)` | 5 |
+| `Implemented, untested live` | 54 |
+| `Partial` | 2 |
+| `Missing` | 8 |
 | `Intentionally different` | 20 |
 | `N/A` | 12 |
 | `In flight (…)` | 6: Claude/Codex live 6 |
@@ -107,9 +109,9 @@ Of the 15 §6.3 invariants: 8 `Verified`, 6 `Implemented, untested live`, 1 `Par
 | Feature / behaviour | Agents | agent-ha-bridge | Status | Evidence in agent-bridge | Gap / validation |
 |---|---|---|---|---|---|
 | Reply to a session, typed as one line then Enter, confirmed in the transcript | Cp | `Send-CopilotSessionPrompt`; `tests/test-daemon-replies.ps1` | `Verified` | `ReplyFlowTests.A_reply_the_transcript_then_records_as_the_persons_prompt_is_delivered_typed_as_one_line_then_Enter`. Live: Progress › Replies | |
-| Reply to a working session (steering or queued) | Cp | `Test-DaemonReplyBoxFree` | `Verified` | `ReplyFlowTests.A_reply_to_a_working_session_is_delivered_once_copilot_takes_it_at_its_next_step`. Live: Progress › Steering | |
+| Reply to a working session (Enter steering) | Cp | `Test-DaemonReplyBoxFree` | `Verified` | `ReplyFlowTests.A_reply_to_a_working_session_is_delivered_once_copilot_takes_it_at_its_next_step`. Live: Progress › Steering | Verified for steering only. A legacy Queued label means typed while working, not queue-mode evidence; explicit `queue`/Ctrl+Q delivery needs slice-2 proof from transcript `delivery: "queued"` (#2468) |
 | A Copilot reply is typed only into its empty input box, outside shell mode | Cp | None: typed without reading the screen | `Implemented, untested live` | `ReplyFlowTests.A_reply_to_Copilot_whose_input_box_holds_a_draft_is_refused_with_the_draft_shown_and_nothing_typed`, `A_reply_to_Copilot_in_shell_mode_is_refused_and_nothing_is_typed`, `A_Copilot_input_box_that_changes_after_it_was_read_gets_none_of_the_reply`, `A_footer_that_changes_after_the_box_was_read_gets_none_of_the_reply`, `A_footer_or_box_that_changes_before_the_Enter_gets_no_Enter`; `InjectorIntegrationTests.A_reply_to_a_real_console_whose_Copilot_input_box_holds_a_draft_types_nothing`; screens from the captured one and CLI 1.0.105's rendering code (`CopilotInputBoxTests`) | #825; not yet seen against a live CLI's draft or shell mode |
-| Replies to Claude and Codex | Cl, Cx | `Invoke-DaemonReply`, `Confirm-DaemonClaudeSubmit` | `Verified` | Typed only into the empty input box seen on screen, confirmed by identity, Enter again only while the box holds the reply (`AgentReplyFlowTests`; live on the VM, #41) | Without hooks, a question or permission prompt is seen only on screen ([host-replies.md](host-replies.md#claude-code-and-codex)) |
+| Replies to Claude and Codex | Cl, Cx | `Invoke-DaemonReply`, `Confirm-DaemonClaudeSubmit` | `Verified` | Typed only into the empty input box seen on screen, confirmed by identity, Enter again only while the box holds the reply (`AgentReplyFlowTests`; live on the VM, #41) | #2468 slice 1 adds models and docs only, not host mode reporting or new live proof. Slice 2's contract keeps Enter: working Claude will report `queue`, idle Claude and Codex `steer`; before that, absent mode reads as `steer`. Installed Codex 0.167.1 `codex queue --help`, read 2026-11-13 (Pacific): "Queue a message for an existing session", `codex queue [OPTIONS] --thread <THREAD> --message <TEXT>`. This is a separate command, not an input-box key; top-level help lists no queue key. A thread-queue path is a possible follow-up, not implemented or live-tested here. Without hooks, a question or permission prompt is seen only on screen ([host-replies.md](host-replies.md#claude-code-and-codex)) |
 | A leading `/` or `!` is refused | All | `hooks/daemon-replies.ps1` | `Verified` | `ReplyTests.A_slash_or_bang_command_is_refused_wherever_leading_space_or_control_characters_hide_it`. Live: Progress › Replies (`/help` refused) | |
 | A reply waits while a question or permission prompt is open | All | `Test-DaemonReplyBoxFree` | `Verified` | `ReplyFlowTests.While_the_session_asks_a_question_a_reply_is_refused_untyped_even_before_the_host_has_read_it`, `CopilotPermissionFlowTests.A_reply_waits_while_a_permission_prompt_that_can_be_answered_is_pending`. Live: Progress › Replies | |
 | Ctrl/Cmd+Enter sends; Enter is a new line; text is kept until it is consumed | All | Reply card | `Implemented, untested live` | `pwa/test/reply.spec.mjs: "Ctrl+Enter or Cmd+Enter sends…"`, `"words typed while a reply is on its way stay in the box…"`, `CardTests.A_reply_goes_with_its_files_sent_first_in_chunks_and_leaves_what_was_typed_meanwhile` | #39 |
@@ -185,14 +187,18 @@ Of the 15 §6.3 invariants: 8 `Verified`, 6 `Implemented, untested live`, 1 `Par
 
 ## 10. Notifications
 
+The `Verified (historical)` entries below do not establish current browser, OS or
+foreground, background and locked-screen evidence. Rows 16 and 28 of the S4 inventory
+remain subject to the [PWA push rehearsal](design/pwa-push-lifecycle.md) for #2397.
+
 | Feature / behaviour | Agents | agent-ha-bridge | Status | Evidence in agent-bridge | Gap / validation |
 |---|---|---|---|---|---|
-| A question reaches the phone; a tap opens it | All | `daemon-decision-notify.ps1`; `notify.mobile_app_*` | `Verified` | `PushFlowTests.A_question_reaches_the_phone_encrypted_through_the_relay_and_is_replaced_once_answered_at_the_machine`. Live: Progress › Push | |
-| A finished turn notifies with the response's start | All | `Send-BridgeResponseNotification` | `Verified` | `PushNotifierTests.A_finished_turn_is_notified_with_the_start_of_its_response_after_it_stays_idle`. Live: Progress › Push ("finished") | |
-| Answered anywhere withdraws the notice; a stale tap is refused | All | README "Answering from the notification" | `Verified` | `PushNotifierTests.An_answered_question_is_replaced_quietly_where_it_was_shown_but_not_on_the_device_that_answered`. Live: Progress › Push (cleared) | |
-| One notification per session (tags); several sessions at once | All | Per-session tags | `Verified` | `PushNoticeTests.Each_session_has_one_topic_a_push_service_accepts_and_one_tag`, `pwa/test/push.spec.mjs`. Live: Progress › Push | |
+| A question reaches the phone; a tap opens it | All | `daemon-decision-notify.ps1`; `notify.mobile_app_*` | `Verified (historical)` | `PushFlowTests.A_question_reaches_the_phone_encrypted_through_the_relay_and_is_replaced_once_answered_at_the_machine`. Live: Progress › Push | |
+| A finished turn notifies with the response's start | All | `Send-BridgeResponseNotification` | `Verified (historical)` | `PushNotifierTests.A_finished_turn_is_notified_with_the_start_of_its_response_after_it_stays_idle`. Live: Progress › Push ("finished") | |
+| Answered anywhere withdraws the notice; a stale tap is refused | All | README "Answering from the notification" | `Verified (historical)` | `PushNotifierTests.An_answered_question_is_replaced_quietly_where_it_was_shown_but_not_on_the_device_that_answered`. Live: Progress › Push (cleared) | |
+| One notification per session (tags); several sessions at once | All | Per-session tags | `Verified (historical)` | `PushNoticeTests.Each_session_has_one_topic_a_push_service_accepts_and_one_tag`, `pwa/test/push.spec.mjs`. Live: Progress › Push | |
 | Option buttons and "Type an answer" on the phone notification | All | `answerButtons.*` | `Intentionally different` | Web Push on iOS has no action buttons or text inputs; a tap opens the card | Design §8 (S5). The old buttons return for migrated machines through the HA connector's stage 5b ([ha-connector.md](ha-connector.md#stage-5b-phone-notifications); `NotifyTests`, live in the `ha-integration` job) |
-| Desktop notifications with option buttons and a text box | All | — (HA only) | `Verified` | `ToastTests` (11). Live: Progress › Windows app (answered from a toast button; withdrawn once answered) | Beyond parity |
+| Desktop notifications with option buttons and a text box | All | — (HA only) | `Verified (historical)` | `ToastTests` (11). Live: Progress › Windows app (answered from a toast button; withdrawn once answered) | Beyond parity |
 | Notification styling (icon, colour, interruption level) | All | `answerButtons.icon`, `.color`, `.interruptionLevel` | `N/A` | HA companion-app specific | Carried for the HA connector's answer buttons (`homeAssistant.answerButtons.*`) |
 
 ## 11. Transfer and cross-machine resume

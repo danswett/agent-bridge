@@ -61,7 +61,9 @@ public sealed class HaRunning : IAsyncDisposable
         Func<AgentBridge.Protocol.AnswerRequest, CancellationToken, Task<AgentBridge.Protocol.AnswerResult>>? answer =
             answers is null or UnsupportedPlatformAnswerer ? null : (request, ct) => answers.AnswerAsync(request, ct, sender: "home-assistant");
         Func<AgentBridge.Protocol.StopRequest, CancellationToken, Task<AgentBridge.Protocol.StopResult>>? stop =
-            stops is null or UnsupportedPlatformStopper ? null : stops.StopAsync;
+            stops is null or UnsupportedPlatformStopper ? null : stops is StopService audited && launchAudit is not null
+                ? (request, ct) => StopAudit.StopAsync(audited, source, launchAudit, request, "legacy-ha", "ha:connector", ct)
+                : stops.StopAsync;
         // Launches from the card go through the host's own launcher, as an app's do (its checks,
         // its one-at-a-time start, its following to registration); whether it offers launching
         // here is its own Available, asked when the connector starts.

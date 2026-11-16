@@ -44,6 +44,9 @@ case "$*" in
     if [ -n "${APT_EXPECT_INDEX:-}" ] && [ "$(cat "$PLAYWRIGHT_APT_LISTS"/*_Packages)" != "$APT_EXPECT_INDEX" ]; then
       echo 'E: package candidates do not match the cached archives' >&2; exit 100
     fi
+    if [ -n "${APT_NEW_VERSION:-}" ] && [ ! -f "$PLAYWRIGHT_APT_ARCHIVES/libgtk-4-1_${APT_NEW_VERSION}_amd64.deb" ]; then
+      echo "E: Unable to fetch libgtk-4-1=$APT_NEW_VERSION from the cached archives" >&2; exit 100
+    fi
     [ -z "${APT_CACHE_ERROR:-}" ] || printf '%s\n' "$APT_CACHE_ERROR" >&2
     exit "${APT_CACHE_EXIT:-0}" ;;
   update)
@@ -62,6 +65,9 @@ case "$*" in
       if [ "${APT_AZURE_ONLY:-}" != true ] || grep -q 'azure\.archive\.ubuntu\.com' "$PLAYWRIGHT_APT_ETC/apt-mirrors.txt"; then
         printf '%s\n' "$APT_ERROR" >&2; exit 100
       fi
+    fi
+    if [ "${APT_DOWNLOAD_EXIT:-0}" -eq 0 ] && [ -n "${APT_NEW_VERSION:-}" ]; then
+      : > "$PLAYWRIGHT_APT_ARCHIVES/libgtk-4-1_${APT_NEW_VERSION}_amd64.deb"
     fi
     [ -z "${APT_GETS:-}" ] || printf '%s\n' "$APT_GETS"
     exit "${APT_DOWNLOAD_EXIT:-0}" ;;
@@ -103,7 +109,7 @@ reset() {
   unset APT_SLOW APT_UPDATE_SLOW APT_UPDATE_EXIT APT_DOWNLOAD_EXIT APT_GETS PLAYWRIGHT_APT_FORCE_FALLBACK CHECK_BROWSERS
   unset APT_ERROR APT_FAIL_COUNT APT_AZURE_ONLY
   unset APT_DNS_EXIT APT_DNS_OUTPUT APT_UPDATE_ERROR
-  unset DEBS_CACHE_HIT APT_CACHE_ERROR APT_CACHE_EXIT APT_TIMEOUT_EXIT PLAYWRIGHT_APT_UPDATE_BUDGET APT_EXPECT_INDEX
+  unset DEBS_CACHE_HIT APT_CACHE_ERROR APT_CACHE_EXIT APT_TIMEOUT_EXIT PLAYWRIGHT_APT_UPDATE_BUDGET APT_EXPECT_INDEX APT_NEW_VERSION
 }
 # check <name> <expected exit> <expected apt-get calls, one per line> [expected mirror list lines...]
 # download.sh is given CHECK_BROWSERS, chromium and webkit unless set.
@@ -259,13 +265,20 @@ check "a new invocation on a Canonical-only list recovers on its third download 
 [ "$(cat "$SLEEP_LOG")" = $'5\n20' ] \
   || { echo "FAIL: Canonical-only download did not use 5/20 second backoff"; failures=$((failures + 1)); }
 reset "$azure" "$canonical"; export DEBS_CACHE_HIT=true APT_EXPECT_INDEX=image
-check "a cache hit installs offline without downloading packages again" \
-  0 "$(printf 'update\n%s' "$cached")" "$azure" "$canonical"
+check "a cache hit with a successful update refreshes missing debs before installing offline" \
+  0 "$(printf 'update\n%s' "$download")" "$azure" "$canonical"
 [ "$(cat "$HOME/.cache/playwright-apt-lists/cache_Packages")" = cached ] && [ ! -s "$GITHUB_OUTPUT" ] \
   || { echo "FAIL: a successful warm update replaced the cached snapshot or authorized saving"; failures=$((failures + 1)); }
+reset "$azure" "$canonical"; export DEBS_CACHE_HIT=true APT_EXPECT_INDEX=2 APT_NEW_VERSION=2
+echo 2 > "$PLAYWRIGHT_APT_LISTS/image_Packages"; echo 1 > "$HOME/.cache/playwright-apt-lists/cache_Packages"
+mv "$HOME/.cache/playwright-apt-debs/cached.deb" "$HOME/.cache/playwright-apt-debs/libgtk-4-1_1_amd64.deb"
+cp "$HOME/.cache/playwright-apt-debs/libgtk-4-1_1_amd64.deb" "$PLAYWRIGHT_APT_ARCHIVES/"
+check "a fresh index selecting version two downloads it when only version one is cached" \
+  0 "$(printf 'update\n%s' "$download")" "$azure" "$canonical"
+[ ! -s "$GITHUB_OUTPUT" ] || { echo "FAIL: refreshing a hit authorized replacing its immutable cache"; failures=$((failures + 1)); }
 reset "$azure" "$canonical"; export DEBS_CACHE_HIT=true APT_CACHE_EXIT=100 APT_CACHE_ERROR='E: Hash Sum mismatch'
-check "a corrupt cached package fails without another update or download" \
-  100 "$(printf 'update\n%s' "$cached")" "$azure" "$canonical"
+check "a cached install failure after fresh download fails without network fallback" \
+  100 "$(printf 'update\n%s\n%s' "$download" "$cached")" "$azure" "$canonical"
 reset "$azure" "$canonical"; export DEBS_CACHE_HIT=true PLAYWRIGHT_APT_FORCE_FALLBACK=true CHECK_BROWSERS=chromium
 check "the forced proof downloads despite a cache hit" \
   0 "$(printf 'update\n%s' "$download")" "$canonical"

@@ -4,16 +4,16 @@ public sealed record GateAuditMetadata(int V, Guid Operation, Guid Run, long Seq
     string ActorKind, Guid Incarnation, string ReasonCode, Guid? Question = null, string? LaunchBinding = null)
 {
     internal bool Valid(string action, string? target, string outcome) =>
-        V == 1 && Operation != Guid.Empty && (Run != Guid.Empty || action is ("session.launch" or "session.answer") && Phase != "control") && Sequence > 0
+        V == 1 && Operation != Guid.Empty && (Run != Guid.Empty || action is ("session.launch" or "session.answer" or "session.stop") && Phase != "control") && Sequence > 0
         && Phase is "intent" or "terminal" or "control" && Path is "relay" or "local" or "legacy-ha"
         && ActorKind is "person-client" or "agent" or "ha-component"
         && (LaunchBinding is null || action == "session.launch" && LaunchBinding.Length == 64 && LaunchBinding.All(char.IsAsciiHexDigit))
-        && ReasonCode is "none" or "refused" or "failed" or "unconfirmed" or "busy" or "cancelled"
+        && ReasonCode is "none" or "refused" or "failed" or "unconfirmed" or "busy" or "cancelled" or "forced"
         && (Phase == "control" ? target == "profile" && (action is "gate.start" or "gate.pause" or "gate.reset" or "gate.seal")
             && (outcome is "prepared" or "paused" or "reset" or "sealed" or "invalidated")
             : Incarnation != Guid.Empty && Guid.TryParse(target, out var id) && id != Guid.Empty && target == id.ToString()
             && GateAuditProjection.SuccessFor(action) is { } success
-            && (outcome == success || outcome is "attempted" or "reserved" or "refused" or "failed" or "unconfirmed")
+            && (outcome == success || outcome is "attempted" or "reserved" or "refused" or "failed" or "unconfirmed" || action == "session.stop" && outcome is "confirm" or "busy")
             && (action == "session.answer" ? Question is { } question && question != Guid.Empty : Question is null));
 }
 
@@ -27,13 +27,13 @@ internal static class GateAuditProjection
         "session.launch" => "started", "session.answer" => "delivered", "session.stop" => "ended", _ => null
     };
 
-    internal static (List<AuditCommands.Row> Rows, bool Complete) Load(string profile, Action<string>? fault = null, bool alreadyLocked = false, Action<long, bool>? boundary = null)
+    internal static (List<AuditCommands.Row> Rows, bool Complete) Load(string profile, Action<string>? fault = null, bool alreadyLocked = false, Action<long, bool>? boundary = null, AuditLockTiming? lockTiming = null)
     {
         profile = System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(profile));
         var rows = new List<AuditCommands.Row>();
         var error = new StringWriter();
         var code = AuditCommands.Read(["audit", "--profile", System.IO.Path.GetFileName(profile)],
-            System.IO.Path.GetDirectoryName(profile)!, TextWriter.Null, error, rows.Add, fault, alreadyLocked, boundary);
+            System.IO.Path.GetDirectoryName(profile)!, TextWriter.Null, error, rows.Add, fault, alreadyLocked, boundary, lockTiming);
         return (rows, code == 0 && error.GetStringBuilder().Length == 0);
     }
 
@@ -79,8 +79,9 @@ internal static class GateAuditProjection
                 || rows.Any(r => r.Gate is { } other && other.Operation == gate.Operation && other.Run != run)
                 || terminals.Select(r => (r.Outcome, r.Gate!.ReasonCode, r.Target)).Distinct().Count() > 1)
             { invalidated = true; continue; }
-            if (first.Action == "session.answer" && gate.Phase == "terminal"
-                && operation.All(r => r.Gate is { Phase: "terminal", ReasonCode: "refused" } && r.Outcome == "refused")) { continue; }
+            if (gate.Phase == "terminal" && operation.All(r => r.Gate is { Phase: "terminal" }
+                && (first.Action == "session.answer" && r.Gate.ReasonCode == "refused" && r.Outcome == "refused"
+                    || first.Action == "session.stop" && r.Outcome is "refused" or "busy" or "failed"))) { continue; }
             if (gate.Phase != "intent" || terminals.Length == 0 || terminals[0].Outcome is "attempted" or "reserved" or "unconfirmed")
             { reasons.Add("unresolved-intent"); continue; }
             if (terminals[0].Outcome == SuccessFor(first.Action) && run != Guid.Empty)

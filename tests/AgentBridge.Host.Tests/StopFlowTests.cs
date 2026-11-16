@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
@@ -181,6 +182,244 @@ public sealed class StopFlowTests : IAsyncLifetime
 
     static StopResult CliResult(string output) =>
         System.Text.Json.JsonSerializer.Deserialize<StopResult>(output, ProtocolJson.Options)!;
+
+    LocalServer AuditedStops(string profile)
+    {
+        var audit = new AgentAuditLog(profile, clock, logged.Enqueue);
+        var service = new SessionService(source, new MachineInfo("fixture", "Fixture", "windows", "0.1.0"), stops: Stopper());
+        host.Hub.Handler = (channel, op, data) => service.HandleAsync(channel, op, data, null, audit);
+        return LocalServer.Start(LocalEndpoint.For(f.Root), LocalApi.Handler(service, null!,
+            new FixedCallerGuard(new Caller(CallerKind.App, "fixture")), audit: audit));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Stop_gate_evidence_precedes_dispatch_and_credits_one_ended_incarnation_not_replays(bool relayPath, bool forced)
+    {
+        var profile = Path.Combine(f.Root, "gate");
+        List<AuditCommands.Row> Rows() => GateAuditProjection.Load(profile).Rows;
+        var before = -1;
+        injector.OnInject = forced ? null : (pid, _) => { before = Rows().Count; control.Exit(pid); };
+        await using var local = AuditedStops(profile);
+        await using var pipe = await LocalClient.ConnectAsync(LocalEndpoint.For(f.Root));
+        IClientChannel channel = relayPath ? new RelayClientChannel(client.Hub, await OpenAsync()) : pipe;
+        async Task<StopResult> Send(string request)
+        {
+            var response = await channel.RequestAsync(Ops.SessionStop, new
+            {
+                id = Id, request, run = Guid.NewGuid(), path = relayPath ? "local" : "relay",
+                actorKind = "ha-component", reason = "private stop prompt and path",
+            });
+            Assert.True(response.GetProperty("ok").GetBoolean(), response.GetRawText());
+            return response.GetProperty("result").Deserialize<StopResult>(ProtocolJson.Options)!;
+        }
+        var request = Guid.NewGuid().ToString();
+        var result = await Send(request);
+        Assert.Equal(StopOutcome.Ended, result.Outcome);
+        Assert.Equal(forced, result.Forced == true);
+        if (!forced) { Assert.Equal(1, before); }
+        Assert.Equal(result, await Send(request));
+        Assert.Equal(StopOutcome.Stale, (await Send(Guid.NewGuid().ToString())).Outcome);
+        Assert.Single(injector.Plans);
+        var rows = Rows();
+        Assert.Equal(new[] { "intent", "terminal" }, rows.Select(r => r.Gate!.Phase));
+        Assert.Equal("ended", rows[1].Outcome);
+        Assert.All(rows, r =>
+        {
+            Assert.Equal(Ops.SessionStop, r.Action);
+            Assert.Equal(Id, r.Target);
+            Assert.Equal(relayPath ? "relay" : "local", r.Gate!.Path);
+            Assert.Equal("person-client", r.Gate.ActorKind);
+            Assert.Equal(Guid.Empty, r.Gate.Run);
+            Assert.Null(r.DataSha256);
+            Assert.Null(r.TextLength);
+        });
+        Assert.NotEqual(Guid.Empty, rows[0].Gate!.Incarnation);
+        Assert.Equal(rows[0].Gate!.Operation, rows[1].Gate!.Operation);
+        Assert.Equal(rows[0].Gate!.Incarnation, rows[1].Gate!.Incarnation);
+        Assert.DoesNotContain("private", string.Concat(Directory.GetFiles(Path.Combine(profile, "audit")).Select(File.ReadAllText)));
+        var run = Guid.NewGuid();
+        var qualified = Path.Combine(f.Root, "qualified");
+        foreach (var row in rows)
+        {
+            Assert.True(new AgentAuditLog(qualified).Append(new AgentAuditEntry(row.Direction!, row.Request!, row.Principal,
+                row.Chain!, row.Action, row.Target!, row.Outcome, Gate: row.Gate! with { Run = run })));
+        }
+        var report = GateAuditProjection.Read(qualified, run);
+        Assert.Equal(1, Assert.Single(report.Totals).Successes);
+        Assert.False(report.Invalidated);
+        Assert.Empty(report.IncompleteReasons);
+    }
+
+    [Fact]
+    public async Task An_unwritable_stop_intent_refuses_before_any_fake_process_effect()
+    {
+        var profile = Path.Combine(f.Root, "gate");
+        Directory.CreateDirectory(profile);
+        File.WriteAllText(Path.Combine(profile, "audit"), "blocked");
+        await using var local = AuditedStops(profile);
+        await using var channel = await LocalClient.ConnectAsync(LocalEndpoint.For(f.Root));
+        var response = await channel.RequestAsync(Ops.SessionStop, new { id = Id, request = Guid.NewGuid().ToString() });
+        Assert.Equal("refused", response.GetProperty("result").GetProperty("outcome").GetString());
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
+        Assert.Equal(SessionStatus.Idle, source.Get(Id)!.Status);
+    }
+
+    string StopAuditProfile => Path.Combine(f.Root, "gate");
+    List<AuditCommands.Row> StopRows() => GateAuditProjection.Load(StopAuditProfile).Rows;
+    Task<StopResult> AuditStopAsync(StopService stopper, string id = Id, string? request = null, string? confirm = null,
+        string path = "local", string? principal = null) =>
+        StopAudit.StopAsync(stopper, source, new AgentAuditLog(StopAuditProfile, clock, logged.Enqueue),
+            new StopRequest { Id = id, Request = request ?? Guid.NewGuid().ToString(), Confirm = confirm },
+            path, principal ?? (path == "legacy-ha" ? "ha:connector" : "person:local"));
+
+    GateAuditReport QualifiedStopReport()
+    {
+        var (rows, complete) = GateAuditProjection.Load(StopAuditProfile);
+        var run = Guid.NewGuid();
+        return GateAuditProjection.Project(rows.Select(row => row with { Gate = row.Gate! with { Run = run } }).ToArray(), complete, run);
+    }
+
+    [Theory]
+    [InlineData(Other, "person:local")]
+    [InlineData(Id, "person:other")]
+    [InlineData(Other, "person:other")]
+    [InlineData(Id, "person:local")]
+    public async Task Overlapping_stop_requests_keep_one_operation_and_refuse_foreign_joins(string target, string principal)
+    {
+        var sameOwner = target == Id && principal == "person:local";
+        if (sameOwner)
+        {
+            injector.OnInject = null;
+            control.TerminateWorks = false;
+        }
+        var stopper = Stopper();
+        var request = Guid.NewGuid().ToString();
+        await gate.WaitToTypeAsync();
+        gate.TypingQueued = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = AuditStopAsync(stopper, request: request);
+        Task<StopResult> overlapping;
+        try
+        {
+            await gate.TypingQueued.Task.WaitAsync(Patience);
+            Assert.Empty(StopRows());
+            overlapping = AuditStopAsync(stopper, target, request, principal: principal);
+        }
+        finally { gate.DoneTyping(); }
+        var firstResult = await first.WaitAsync(Patience);
+        Assert.Equal(sameOwner ? StopOutcome.Failed : StopOutcome.Ended, firstResult.Outcome);
+        Assert.Equal(sameOwner ? StopOutcome.Failed : StopOutcome.Refused, (await overlapping.WaitAsync(Patience)).Outcome);
+        var third = await AuditStopAsync(stopper, target, request, principal: principal);
+        Assert.Equal(sameOwner ? StopOutcome.Failed : StopOutcome.Refused, third.Outcome);
+        if (sameOwner)
+        {
+            Assert.Equal(firstResult, third);
+        }
+        Assert.Equal(sameOwner ? StopOutcome.Failed : StopOutcome.Ended, (await AuditStopAsync(stopper, request: request)).Outcome);
+        Assert.Equal(2, StopRows().Count);
+        Assert.Single(StopRows().Select(row => row.Gate!.Operation).Distinct());
+        Assert.Single(injector.Plans);
+        Assert.Equal(sameOwner ? new[] { Pid } : Array.Empty<int>(), control.Terminated);
+    }
+
+    [Theory]
+    [InlineData("local", true)]
+    [InlineData("local", false)]
+    [InlineData("legacy-ha", true)]
+    [InlineData("legacy-ha", false)]
+    public async Task Stop_confirmation_records_intent_and_confirm_but_credits_only_one_confirmed_end(string path, bool working)
+    {
+        var stopper = Stopper();
+        if (working) { await WorkingAsync(); }
+        else { stopper.LaunchHeld = _ => "fixture launch is not ready"; }
+        var arm = await AuditStopAsync(stopper, path: path);
+        Assert.Equal(StopOutcome.Confirm, arm.Outcome);
+        Assert.NotEmpty(arm.Confirm!);
+        var rows = StopRows();
+        Assert.Equal(new[] { "intent", "terminal" }, rows.Select(row => row.Gate!.Phase));
+        Assert.Equal("confirm", rows[1].Outcome);
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
+        Assert.Equal(0, Assert.Single(QualifiedStopReport().Totals).Successes);
+        Assert.Empty(QualifiedStopReport().IncompleteReasons);
+        var request = Guid.NewGuid().ToString();
+        var ended = await AuditStopAsync(stopper, request: request, confirm: arm.Confirm, path: path);
+        Assert.Equal(StopOutcome.Ended, ended.Outcome);
+        Assert.Equal(!working, ended.Forced == true);
+        Assert.Equal(ended, await AuditStopAsync(stopper, request: request, confirm: arm.Confirm, path: path));
+        Assert.Equal(1, injector.Plans.Count + control.Terminated.Count);
+        Assert.Equal(new[] { "confirm", "ended" }, StopRows().Where(row => row.Gate!.Phase == "terminal").Select(row => row.Outcome));
+        Assert.All(StopRows(), row => Assert.Equal((path, path == "legacy-ha" ? "ha-component" : "person-client"),
+            (row.Gate!.Path, row.Gate.ActorKind)));
+        var report = QualifiedStopReport();
+        Assert.Equal(1, Assert.Single(report.Totals).Successes);
+        Assert.Empty(report.IncompleteReasons);
+        Assert.False(report.Invalidated);
+    }
+
+    [Theory]
+    [InlineData("local", false)]
+    [InlineData("local", true)]
+    [InlineData("legacy-ha", false)]
+    [InlineData("legacy-ha", true)]
+    public async Task Terminal_only_stop_refusals_and_busy_results_are_neither_credit_nor_unresolved(string path, bool busy)
+    {
+        var claim = Guid.NewGuid();
+        if (busy) { Assert.True(gate.TryClaim(Id, claim)); }
+        else { control.Refusal = "fixture process refuses access"; }
+        StopResult result;
+        try { result = await AuditStopAsync(Stopper(), path: path); }
+        finally { gate.Release(Id, claim); }
+        Assert.Equal(busy ? StopOutcome.Busy : StopOutcome.Refused, result.Outcome);
+        Assert.Equal("terminal", Assert.Single(StopRows()).Gate!.Phase);
+        var report = QualifiedStopReport();
+        Assert.Equal(0, Assert.Single(report.Totals).Successes);
+        Assert.Empty(report.IncompleteReasons);
+        Assert.False(report.Invalidated);
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
+    }
+
+    [Fact]
+    public async Task Reconstructing_stop_admission_refuses_a_recorded_confirmation_without_another_effect()
+    {
+        await WorkingAsync();
+        var request = Guid.NewGuid().ToString();
+        Assert.Equal(StopOutcome.Confirm, (await AuditStopAsync(Stopper(), request: request)).Outcome);
+        var before = StopRows().ToArray();
+        Assert.Equal(StopOutcome.Refused, (await AuditStopAsync(Stopper(), request: request)).Outcome);
+        Assert.Equal(before, StopRows().ToArray());
+        Assert.Equal(0, Assert.Single(QualifiedStopReport().Totals).Successes);
+        Assert.Empty(QualifiedStopReport().IncompleteReasons);
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
+    }
+
+    [Fact]
+    public async Task A_failed_stop_terminal_write_leaves_the_confirmed_effect_unresolved()
+    {
+        var folder = Path.Combine(StopAuditProfile, AgentAuditLog.FolderName);
+        var held = folder + ".held";
+        injector.OnInject = (pid, _) => { Directory.Move(folder, held); File.WriteAllText(folder, "blocked"); control.Exit(pid); };
+        StopResult result;
+        try { result = await AuditStopAsync(Stopper()); }
+        finally
+        {
+            if (File.Exists(folder)) { File.Delete(folder); Directory.Move(held, folder); }
+        }
+        Assert.Equal(StopOutcome.Ended, result.Outcome);
+        Assert.Single(injector.Plans);
+        Assert.Equal("intent", Assert.Single(StopRows()).Gate!.Phase);
+        var report = QualifiedStopReport();
+        Assert.Equal(0, Assert.Single(report.Totals).Successes);
+        Assert.Contains("unresolved-intent", report.IncompleteReasons);
+        Assert.False(report.Invalidated);
+        Assert.Contains(logged, line => line.Contains("agent audit log could not write", StringComparison.Ordinal));
+    }
 
     [Theory]
     [InlineData(false)]

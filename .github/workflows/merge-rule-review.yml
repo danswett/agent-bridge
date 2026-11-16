@@ -4,13 +4,18 @@ name: Merge rule review relay
 # but pull_request_review runs the pull request's own copy of a workflow, which mustn't be what
 # posts the pull request's status. So this run does nothing but finish: its completion starts
 # merge-rule.yml's workflow_run trigger, which runs main's copy with main's evaluator and reads
-# the review from the API. It has no permissions and reads nothing from the event.
+# the review from the API. It has no permissions and runs no event-supplied code.
 
 on:
   pull_request_review:
     types: [submitted, dismissed]
 
 permissions: {}
+
+# Only echo runs here; the surviving completion causes a fresh read of every current review.
+concurrency:
+  group: merge-rule-review-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_review' }}
 
 jobs:
   relay:

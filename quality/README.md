@@ -509,12 +509,25 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    failure, a nightly job asks whether ring 1's selection for that PR would have included
    the failing test. A **selection miss** is a bug in the catalog. It gets an issue, and the
    rate is a tracked metric (target: zero).
-9. **The merge rule, enforced (#452):** main's ruleset ([`ruleset-main.json`](ruleset-main.json))
+9. **Merge policy and current enforcement (#452):** main's ruleset ([`ruleset-main.json`](ruleset-main.json))
    requires `quality-gate` from GitHub Actions and `merge-rule` from the merge-rule GitHub App,
-   plus resolved threads, squash merges and no force pushes or deletion, with no bypass, and asks
-   Copilot to review each push. Auto-merge has been on since 2026-11-04 00:50 PT: sessions turn
-   it on once their pull request is ready, pinned to its head, and GitHub merges when both are
-   green.
+   plus resolved threads, squash merges and no force pushes or deletion. No standing
+   bypass exists; only the Fleet register's bounded main-green owner exception applies.
+   Copilot is optional. Quality alone gates and arms auto-merge pinned to the exact
+   head; GitHub merges when required checks pass. Builders never arm or merge.
+   The [single Fleet pipeline register](https://github.com/danswett/slipgates-fleet/blob/main/docs/pipeline-rules.md)
+   owns standing decisions/exceptions; this section describes Bridge operations only.
+   **Reader enforcement is STALE:** the current evaluator/config can accept one
+   independent receipt plus completed Copilot instead of the required second family.
+   Before arming or permitting merge, Quality MUST manually verify authorized
+   posters and Quality-only posting; actual approved model/effort (or approved
+   retained continuity); successful receipts backed by linked CLEAN review verdicts explicitly
+   naming the PR's current full head SHA; reviewer independence/non-authorship;
+   and completed required whole/security reads. Ordinary PRs need one required
+   independent receipt (new single reads: `gpt-6.1-sol`); sensitive/two-family heads
+   need BOTH independent, distinct-family receipts. Copilot NEVER counts.
+   Green evaluator/bot credit is insufficient; missing proof holds the PR.
+   Reader requirements below describe policy, not complete technical enforcement.
    - `merge-rule` is a commit status that main's copy of `.github/workflows/merge-rule.yml` posts
      on each open pull request's head, from `agent-bridge-quality merge-rule` (`MergeRule.cs`) and
      the rules in [`merge-rule.yml`](merge-rule.yml): main green, that is its newest completed
@@ -529,7 +542,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      title starts with `Security` or the `security` label is on, an `independent-review` status
      on the head whose latest from a listed poster is success. The files are those of the exact
      commit judged (`compare/main...<sha>`), not the pull request's latest. Pending while
-     Copilot, CodeQL or a check is on its way, failure otherwise, with the missing piece named in
+     CodeQL or a required check is on its way, failure otherwise, with the missing piece named in
      its description and the run's summary. Pull requests that
      share a head get the worst of their verdicts, since a status belongs to the commit.
    - Main must be green, since auto-merge doesn't pause while main's CI is red and would keep
@@ -560,7 +573,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      pending; the evaluator prints them as non-gating jobs for Quality's main-red log.
      Unreadable history, plan or product data fails closed without fallback. No usable run in
      the bounded history also holds with an explicit reason. The fix itself gets the `fixes-main`
-     label (`main_green.exempt_labels`) from the merge coordinator, since labels take triage
+     label (`main_green.exempt_labels`) from Quality, since labels take triage
      rights: it skips this check and nothing else, the independent review included. CI finishing
      on main starts a run, so verdicts follow main to red and back.
    - The standing rule (owner decision 2026-11-08, replacing the 2026-11-05 label of #955):
@@ -570,10 +583,13 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      that needs that receipt (a sensitive path, a security mark, or an incomplete file list) also
      needs a second success receipt, `copilot_waiver.second_review` (`independent-review-2`), from
      a listed poster on the same head, and the two receipts' descriptions must each name a model
-     whose family the other doesn't share (`claude-opus-5.5` and `gpt-6.1-sol`, say). A sensitive
+     whose family the other doesn't share. New reads use `claude-sonnet-5.5` medium and
+     `gpt-6.1-sol`; a single read uses `gpt-6.1-sol`. Retained in-flight reviewers keep
+     their model. These owner rules supersede older fallback model lists below. A sensitive
      file in `copilot_waiver.one_review_paths` (`docs/status.md`, whose row the receipt checks
-     against its decision) doesn't call for the second. A completed Copilot review on the head is
-     still the other family when present, but never replaces the first receipt; a Copilot error or timeout review is ignored. A failed
+     against its decision) doesn't call for the second. Copilot is optional and NEVER
+     counts as a reader family; optional bots never substitute for required independent,
+     model-verified exact-head receipts. A failed
      receipt from a poster blocks. The `copilot-waived` label is still accepted and changes
      nothing. Bot-only threads, which would still block the ruleset's 0-unresolved-threads
      requirement, are resolved with `quality/resolve-bot-threads.ps1`.
@@ -600,6 +616,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      reads that checkout's evaluator and `quality/merge-rule.yml`, so a pull request's own would
      judge it. It prints the commit they came from, and refuses unless that's `origin/main`'s
      with no local changes to them (`--allow-non-main` judges anyway, with a warning).
+     Focused local tests for the builder's OWN cut on APPROVED hosts need NO SRE
+     clearance. Full or hosted verification remains CI-only. ANYTHING BEYOND
+     (full suites, CI-equivalent verification, serving hosts) needs a WRITTEN QUALITY
+     ORDER CLEARED WITH SRE; that order does not grant local full-suite permission.
+     Preserve explicit case holds.
    - A head whose facts can't be read gets `error`, which fails the required check like failure,
      so an earlier success doesn't stand; a hold label, read with the open list, still fails it.
      When the open list itself stops partway, no head gets success from that run: a held pull
@@ -613,8 +634,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    - Fast path (#1251): an event about one pull request or head judges only that head
      (`--pr N` for `pull_request_target`, `--sha` for `status`, `check_suite` and `workflow_run`),
      with no 45 second wait and no build: the evaluator is restored from a cache keyed by a hash of
-     its source, and built (then saved) only when main changed it. Admission coalesces events per
-     head, separately from main sweeps, cron and dispatch (#1922, #2130); skipped events have unique admission keys.
+     its source, and built (then saved) only when main changed it. With `FLEET_MERGERULE`
+     not `off`, `pull_request_target` admission in `.github/workflows/merge-rule.yml`
+     is per pull request, and a new head cancels that pull request's in-progress run (#2577).
+     Other scoped events coalesce per head, separately from main sweeps, cron and dispatch
+     (#1922, #2130); skipped events have unique admission keys.
      Before joining the writer queue, cron checks for other queued, pending or waiting scoped
      evaluations. It yields only to a positively identified fresh scoped job; a queue at least
      30 minutes old, unreadable/incomplete API data, or an unknown queued job name lets it run
@@ -629,10 +653,13 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      This adds one short read-only job per cron, four paginated active-run lists plus job lists;
      a proposed deferral also reads one page of ten completed cron runs and at most ten job lists,
      stopping when recent writer evidence is found, otherwise warning and proceeding.
-     It is not a resolver job per event. Event cancellation and all triggers stay
-     unchanged; event-admission coalescing remains a follow-up.
-     Every admitted writer then waits in the shared `merge-rule` job group with `queue: max`,
-     reading main only after taking that lock. A scoped event cannot displace a sweep or another
+     It is not a resolver job per event. The PR dry run in
+     `.github/workflows/weekly-report.yml` and the review relay in
+     `.github/workflows/merge-rule-review.yml` also cancel in-progress runs per pull request
+     (#2577). All triggers stay unchanged.
+     Every admitted writer still waits in the shared `merge-rule` job group with
+     `cancel-in-progress: false` and `queue: max`, reading main only after taking that lock.
+     A scoped event cannot displace a sweep or another
      head; a newer sweep replaces only a pending sweep, and still judges every open PR. A scoped run that finds main not
      green judges every open pull request, as `--all` does, so a sweep displaced while main turns
      red can't leave another pull request's success standing (about 15 points, only while main is
@@ -676,9 +703,13 @@ pwsh quality/run.ps1 -Explain   # the selection and why, without running
 pwsh quality/run.ps1 -Suite pwa-ui,host
 ```
 
-People and agents follow the same loop: AGENTS.md's Tests section says to run
-`pwsh quality/run.ps1` before a push. It skips, with a note, suites that only CI can run, suites
-that are planned, and suites whose tool (Node, Swift) isn't installed.
+Focused local tests for the builder's OWN cut on APPROVED hosts need NO SRE clearance.
+Full or hosted verification remains CI-only.
+ANYTHING BEYOND (full suites, CI-equivalent verification, serving hosts) needs a
+WRITTEN QUALITY ORDER CLEARED WITH SRE; that order does not grant local full-suite
+permission. Preserve explicit case holds.
+The broad commands above illustrate tooling, not permission for full local runs.
+Unavailable tools and CI-only/planned suites are reported explicitly.
 
 **Behind a firewall that blocks api.nuget.org**, set `AGENT_BRIDGE_NUGET_SOURCE` to a NuGet
 mirror's `index.json` before running it:
@@ -707,16 +738,33 @@ sets review depth by risk, effective 2026-11-05 12:27 PT:
 | A re-push after a CLEAN review | **Delta:** the diff since the last CLEAN head, plus a whole read of only the files touched since |
 | A test-only or docs-only re-push | Delta only |
 
-A rebase may retain its independent review when `git range-diff` shows that the
-PR's own commits are unchanged; the receipt cites that range-diff. Otherwise,
+A rebase of unpublished work may retain evidence when `git range-diff` shows its
+commits unchanged; published heads never rebase or force-push. Cite that proof. Otherwise,
 a carried delta needs a proved previously reviewed ancestor and an explicit
 review of the delta at the new head.
 
-Reduced read depth does not carry CI, Copilot's review or a commit status to a new
-head. The new head still needs fresh CI, a completed Copilot review at that head,
-all substantive findings disposed of, no unresolved threads and, where required,
-an independent-review receipt at that exact head. Retained review evidence belongs
-in that receipt; neither a rebase nor a delta clears a hold or admits the PR.
+Reduced depth alone carries neither CI nor a commit status. Copilot and Codex
+are optional everywhere; never request, wait for or depend on them.
+Every head needs the required CI/checks, finding dispositions, resolved threads and
+its own posted independent receipts. Retained evidence belongs in those receipts.
+Quality classifies sensitivity with the evaluator: one ordinary family, two sensitive
+families; both read security-subject docs in full and verdicts name the exact head.
+
+Owner, Nov 15, 2026, 08:05–08:55 PT: guarded CI carry-over applies to ALL PRs.
+The new head must be a plain no-ff main-merge child of the previously read head and
+main, with identical PR-file blobs, no overlapping main change and no resolved conflict.
+Intervening changes to CI workflows, quality/merge-rule config, shared build props,
+`global.json` or shared test infrastructure used by the PR prohibit carry-over.
+Quality records old/new heads, parents, blob proof and the actual dependency/path
+comparison. Unknown or failed proof means no carry-over and normal required CI.
+This reuses approved hosted CI evidence only; it fabricates no head status and
+changes no evaluator, ruleset or required checks. Review carry-over is separate.
+
+ALL PRs may be at most three commits behind main only with no file or same-project
+overlap, a fail-closed comparison and the existing exclusions: never gate, wheel,
+scroll, input or reply-delivery PRs, or a missing-main window with `fixes-main`.
+There is NO Nov 20 expiry on freshness. Unknown comparison fails closed.
+Neither freshness nor CI/review carry-over releases a held phase or admits a PR.
 Changes to `merge-rule.yml` are themselves ENTIRE-review changes. The existing
 merge rule and its other gates remain in force; this table does not change the
 App, ruleset or allowed receipt posters.
@@ -785,11 +833,15 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
 - **Flakes:** a test that passes and fails on the same code is flaky. It's reported, never
   silently retried to green. The one exception is the pwa-ui WebKit shards, which retry a failed
   test once in CI (Chromium none): a pass on retry is listed on the run's summary and as a
-  warning by `pwa/tools/flaky-report.mjs`, so it is reported, not hidden. A test that flakes more
-  than twice in a week is quarantined with an issue: `test.skip` with the issue number and a
-  restore-by date 3 days out, the `quarantined` label, an owner, as in #1493. The flake record is
-  the `flaky` label and its issues, one per test,
-  each with its run links and counts.
+  warning by `pwa/tools/flaky-report.mjs`, so it is reported, not hidden.
+  The [Fleet register's quarantine rule](https://github.com/danswett/slipgates-fleet/blob/main/docs/pipeline-rules.md)
+  governs eligibility: a named test, ARM included, needs three failures on three
+  separate runs in seven days, with the same signature and an open issue.
+  Quality proposes; the owner approves. Record the issue, owner and expiry:
+  at most seven days, or three days for ARM with a passes-on-rerun check.
+  Tests still run and report; there is no automatic skip or quarantine.
+  This guidance approves no active quarantine. The flake record is the `flaky`
+  label and its issues, one per test, each with its run links and counts.
   - **The nightly flake hunt** (`flake-hunt`, ring 3, [flake-hunt.yml](../.github/workflows/flake-hunt.yml),
     #509) finds them before they turn a pull request or `main` red. At about 02:30 PT it runs
     every .NET test project 10 times on `ubuntu-latest`, `windows-latest` and `windows-11-arm`.
@@ -892,6 +944,13 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   `main`'s and nightly runs, keeps the time series (coverage, durations, flakes, benchmarks,
   selection misses). It's rendered at `https://danswett.github.io/agent-bridge/quality/` by
   the existing Pages workflow. Generated data never lands in `main`, so it causes no churn.
+  Owner decision (Nov 15, 2026, 13:07 PT): process dumps and other dump content must
+  never be published as artifacts in this public repository; derived text, such as
+  stack analysis, is allowed only if size-capped and scrubbed of paths and secret-like
+  strings, while private channels require a separate owner decision.
+  The existing cdb crash-analysis text for #2685 is the sole dated exception to the
+  size-cap and scrubbing requirements, valid until the dump-hardening follow-up to
+  #2683 merges or Nov 18, 2026, 00:00 PT, whichever is first.
 - **Release-readiness report:** ring 4 generates one page per candidate. It lists each
   suite's last result on that build, the lab runs, the soak gate, perf against baseline, open
   `flaky` and `security` issues, and the manual checklists signed off. It's attached to the
