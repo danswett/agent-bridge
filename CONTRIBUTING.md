@@ -30,10 +30,13 @@ do not copy a coordinator's timer, delegate count or machine access.
 Use the existing patterns and add focused tests for changed behavior. Update related
 documentation in the same PR. [quality/README.md](quality/README.md) explains the
 test harness and [quality/catalog.yml](quality/catalog.yml) lists suites.
-Run `pwsh quality/run.ps1 -Explain` to see the selection, then
-`pwsh quality/run.ps1` before pushing, as required by
-[AGENTS.md](AGENTS.md#before-each-push). Its local result is not a substitute for CI:
-report skipped or unavailable checks explicitly.
+Focused local tests for the builder's OWN cut on APPROVED hosts need NO SRE
+clearance under [AGENTS.md](AGENTS.md#tests). Full or hosted verification remains
+CI-only. ANYTHING BEYOND (full suites,
+CI-equivalent verification, serving hosts) needs a WRITTEN QUALITY ORDER
+CLEARED WITH SRE; that order does not grant local full-suite permission.
+Preserve explicit case holds, report skipped/unavailable
+checks, and never describe local results as hosted proof.
 
 If a prerequisite is missing, report exactly what failed and what you need; do not
 change host setup, permissions or credentials without the person's approval.
@@ -50,8 +53,8 @@ Codex reviews are optional extras: don't request, wait for, or depend on them. T
 independent-review receipts are the gate.
 
 Keep scope and dependencies on the issue, and head-specific evidence on the PR.
-Submit readiness to the designated merge coordinator. Only arm exact-head auto-merge
-where AGENTS.md permits it; readiness is not a grant to hand-merge.
+Submit readiness to Quality, which opens PRs, edits bodies and alone gates and
+arms exact-head auto-merge. GitHub merges on required checks; builders never arm or merge.
 If you cannot set a label, post a receipt or enable auto-merge, ask the coordinator
 on the PR rather than changing credentials or finding a bypass.
 

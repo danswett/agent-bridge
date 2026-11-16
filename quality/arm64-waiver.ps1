@@ -1,6 +1,6 @@
 # quality-gate's time-boxed win-arm64 waiver (#2564, owner decision 2026-11-13). Reads the needs
 # JSON and this run's jobs (GitHub's jobs API, paginated and slurped) and writes to -OutFile the ids
-# of the needed jobs whose failures are only the three Arm64 legs named below; ci.yml then reads
+# of the needed jobs whose failures are only the three waived jobs named below; ci.yml then reads
 # those as success. A matrix collapses to one result per job id in needs, so the legs can only be
 # told apart through the API. Anything doubtful waives nothing: the switch not exactly "on", the
 # expiry reached, an API answer of an unexpected shape, or any other job that did not succeed.
@@ -70,7 +70,7 @@ try {
 ConvertTo-Json -InputObject @($ids) -Compress | Set-Content -LiteralPath $OutFile
 if ($ids.Count -gt 0) {
     $lines += 'The waiver ends 2026-11-20 00:00 PT (08:00 UTC); the Arm64 jobs still run and stay red.'
-    foreach ($line in $lines | Where-Object { $_ -like 'Waived:*' }) { "::warning title=quality-gate win-arm64 waiver::$line" }
+    foreach ($line in $lines | Where-Object { $_ -like 'Waived:*' }) { "::warning title=quality-gate win-arm64 waiver::$line; expires 2026-11-20 00:00 PT (08:00 UTC)" }
 }
 $lines
 if ($SummaryFile) { Add-Content -LiteralPath $SummaryFile -Value (@('### quality-gate: win-arm64 waiver (#2564)') + ($lines | ForEach-Object { "- $_" })) }

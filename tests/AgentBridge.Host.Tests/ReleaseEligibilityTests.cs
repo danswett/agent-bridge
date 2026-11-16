@@ -26,7 +26,7 @@ public sealed class ReleaseEligibilityTests : IDisposable
     }
 
     [Fact]
-    public async Task Repeated_policy_checks_share_the_publishers_100_release_window_and_one_GitHub_read()
+    public async Task Repeated_policy_checks_share_a_realistic_100_release_window_and_one_GitHub_read()
     {
         var body = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2349"]}""");
         var empty = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
@@ -34,11 +34,56 @@ public sealed class ReleaseEligibilityTests : IDisposable
         {
             if (uri.Host != "api.github.com") { return uri.AbsolutePath.Contains("/v0.1.2349/") ? body : empty; }
             var releases = Enumerable.Repeat(Metadata("1", empty), 99).Append(Metadata("2349", body))
-                .Select(json => Encoding.UTF8.GetString(json)[1..^1]);
+                .Select(json => Encoding.UTF8.GetString(json)[1..^1].PadRight(28_350));
             return Encoding.UTF8.GetBytes("[" + string.Join(",", uri.Query.Contains("per_page=100", StringComparison.Ordinal) ? releases : releases.Take(10)) + "]");
         });
         for (var i = 0; i < 3; i++) { Assert.Equal(new HaltCheck(true), await new ReleaseEligibility(Policy(handler)).IsHalted("0.1.2349")); }
         Assert.Equal(1, handler.Requests.Count(uri => uri.Host == "api.github.com"));
+    }
+
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(1, true)]
+    [InlineData(0, false)]
+    [InlineData(1, false)]
+    public async Task Policy_metadata_is_bounded_to_four_MiB_with_or_without_ContentLength(int excess, bool lengthKnown)
+    {
+        var body = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
+        var metadata = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(Metadata("2349", body)).PadRight(4 * 1024 * 1024 + excess));
+        var handler = new ReplyHandler(request => new(HttpStatusCode.OK)
+        {
+            Content = request.RequestUri!.AbsoluteUri == GitHubHaltListSource.Releases
+                ? new MetadataContent(metadata, lengthKnown) : new ByteArrayContent(body),
+        });
+        var eligibility = new ReleaseEligibility(Policy(handler));
+        Assert.Equal(excess == 0 ? new HaltCheck(false) : new HaltCheck(null, ReleaseBlockedReason.HaltListUnavailable),
+            await eligibility.IsHalted("0.1.2349"));
+        Assert.Equal(excess == 0 ? 2 : 1, handler.Requests.Count);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_null_or_missing_cached_policy_body_keeps_known_halts_and_blocks_other_versions(bool missing)
+    {
+        var body = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2349"]}""");
+        var handler = ByteReplies(uri => uri.AbsoluteUri == GitHubHaltListSource.Releases ? Metadata("2349", body) : body);
+        await Policy(handler).ReadAsync(default);
+        var path = Path.Combine(folder, ReleaseDiscovery.FileName);
+        var state = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
+        var policy = state["haltPolicy"]!["policy"]!.AsObject();
+        if (missing) { policy.Remove("body"); }
+        else { policy["body"] = null; }
+        File.WriteAllText(path, state.ToJsonString());
+
+        var source = Policy(handler);
+        var eligibility = new ReleaseEligibility(source);
+        Assert.Equal(new HaltCheck(true), await eligibility.IsHalted("0.1.2349"));
+        Assert.Equal(new HaltCheck(null, ReleaseBlockedReason.HaltListUnavailable), await eligibility.IsHalted("0.1.2350"));
+        Assert.False(source.Snapshot.Fresh);
+        Assert.Equal(new ReleaseEligibilityResult(false, ReleaseBlockedReason.Halted), await eligibility.Evaluate("0.1.2349", "0.1.999"));
+        Assert.Equal(new ReleaseEligibilityResult(false, ReleaseBlockedReason.HaltListUnavailable), await eligibility.Evaluate("0.1.2350", "0.1.999"));
+        Assert.Equal(2, handler.Requests.Count);
     }
 
     [Theory]
@@ -328,6 +373,12 @@ public sealed class ReleaseEligibilityTests : IDisposable
     }
 
     static ReplyHandler ByteReplies(Func<Uri, byte[]> read) => new(request => new(HttpStatusCode.OK) { Content = new ByteArrayContent(read(request.RequestUri!)) });
+
+    sealed class MetadataContent(byte[] bytes, bool lengthKnown) : HttpContent
+    {
+        protected override bool TryComputeLength(out long length) { length = bytes.Length; return lengthKnown; }
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) => stream.WriteAsync(bytes).AsTask();
+    }
 
     sealed class Handler(Func<Uri, byte[]> read) : HttpMessageHandler
     {

@@ -15,6 +15,7 @@ using Xunit;
 
 public sealed class StandaloneHooksTests : IDisposable
 {
+    readonly Xunit.Abstractions.ITestOutputHelper output;
     readonly string root = Path.Combine(Path.GetTempPath(), "ab-hooks-" + Guid.NewGuid().ToString("N"));
     readonly CodexRunner codex = new();
     readonly Locator locator = new();
@@ -35,8 +36,9 @@ public sealed class StandaloneHooksTests : IDisposable
     };
     StandaloneHooks Setup => new(Profile, Homes, Source, Legacy, () => active, locator, codex);
 
-    public StandaloneHooksTests()
+    public StandaloneHooksTests(Xunit.Abstractions.ITestOutputHelper output)
     {
+        this.output = output;
         Directory.CreateDirectory(root);
         File.WriteAllText(Source, "native hook fixture");
         codex.Root = Path.Combine(Profile, "hooks", "codex");
@@ -1157,7 +1159,7 @@ public sealed class StandaloneHooksTests : IDisposable
     public async Task Cleanup_waits_for_a_replaced_Windows_hook_that_outlives_the_test_body()
     {
         if (!OperatingSystem.IsWindows()) { return; }
-        var fixture = new StandaloneHooksTests();
+        var fixture = new StandaloneHooksTests(output);
         File.Copy(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"), fixture.Source, overwrite: true);
         await fixture.Setup.InstallAsync("copilot", false, TextWriter.Null);
         using var running = Process.Start(new ProcessStartInfo(fixture.Hook, "/d /c set /p answer=ready")
@@ -1192,10 +1194,15 @@ public sealed class StandaloneHooksTests : IDisposable
     public async Task Refresh_replaces_the_running_Windows_hook_fifty_consecutive_times()
     {
         if (!OperatingSystem.IsWindows()) { return; }
+        var elapsed = Stopwatch.StartNew();
         for (var run = 0; run < 50; run++)
         {
-            using var fixture = new StandaloneHooksTests();
+            var start = elapsed.Elapsed;
+            using var fixture = new StandaloneHooksTests(output);
+            var created = elapsed.Elapsed;
+            output.WriteLine($"Refresh iteration {run}: create={created - start}; body starting at {created}");
             await fixture.Refresh_replaces_the_Windows_hook_while_its_previous_image_is_running();
+            output.WriteLine($"Refresh iteration {run}: body={elapsed.Elapsed - created}");
         }
     }
 

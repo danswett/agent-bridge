@@ -1379,6 +1379,21 @@ Check 'Packages cannot substitute metadata, omit declared terms or escape their 
     }
 }
 
+Check 'The Windows SDK package pin has matching reviewed notice material' {
+    . (Join-Path $PSScriptRoot 'app-notices.ps1')
+    $root = Join-Path $PSScriptRoot '..'
+    $project = [xml](Get-Content -LiteralPath (Join-Path $root 'src' 'AgentBridge.App' 'AgentBridge.App.csproj') -Raw)
+    $pins = @($project.SelectNodes('/Project/PropertyGroup/WindowsSdkPackageVersion'))
+    Assert ($pins.Count -eq 1) 'the app must pin exactly one Windows SDK package version'
+    $version = $pins[0].InnerText
+    Assert ($version -cmatch '^[0-9]+(\.[0-9]+)+$') 'the Windows SDK package pin is not a version'
+    $provenancePath = Get-AppNoticePath $root "build/notices/microsoft.windows.sdk.net.ref/$version/provenance.json"
+    $provenance = Get-Content -LiteralPath $provenancePath -Raw | ConvertFrom-Json -AsHashtable
+    Assert ($provenance.packageId -ceq 'Microsoft.Windows.SDK.NET.Ref' -and $provenance.packageVersion -ceq $version) 'the SDK package pin and notice provenance differ'
+    $notice = Get-AppNoticePath (Split-Path $provenancePath) $provenance.noticeFile
+    Assert ($provenance.noticeSha256 -cmatch '^[0-9a-f]{64}$' -and (Get-FileHash -LiteralPath $notice -Algorithm SHA256).Hash.ToLowerInvariant() -ceq $provenance.noticeSha256) 'the pinned SDK notice does not match its provenance'
+}
+
 Check 'Offline upstream notices preserve exact bytes and refuse unpinned packages, metadata or notice material' {
     foreach ($case in 'valid', 'archive', 'metadata', 'notice', 'version', 'unreviewed',
         'url-valid', 'url-metadata', 'url-source', 'url-copyright', 'url-expression') {

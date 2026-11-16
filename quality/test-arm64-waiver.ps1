@@ -62,7 +62,7 @@ try {
     foreach ($name in 'app (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)') {
         Check "the waived name '$name' is in the script" ($code.Contains("'$name'"))
     }
-    Check 'ci.yml still names the legs the script waives' ($ci.Contains('name: app (${{ matrix.runtime }})') -and $ci.Contains('name: app-installer (${{ matrix.runtime }})') -and $ci.Contains('runtime: win-arm64') -and $ci.Contains('"windows-11-arm"'))
+    Check 'ci.yml retains all three Arm64 jobs' ($ci.Contains('name: app (${{ matrix.runtime }})') -and $ci.Contains('name: app-installer (${{ matrix.runtime }})') -and $ci.Contains('runtime: win-arm64') -and $ci.Contains('"windows-11-arm"'))
 } finally {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }

@@ -558,11 +558,15 @@ signed support evidence remain separate reviewed slices.
 
 ### Signed verifier-support evidence (#2372 design; #2366 implementation)
 
-**Design contract, not implemented or permission to transition.** This section
+**Design contract; not permission to transition.** This section
 chooses the capability mechanism deferred by the transition note. No setting,
 environment variable, command flag, relay claim or authenticated channel enables
 support. `CheckAcceptHostSign` still ends in `unsupported-verifier`; the positive
 transition (#2288 slice 2b-2) is separate.
+
+#2366's host primitive parses and verifies against a trusted local view only.
+#2381 owns outstanding challenges, consumed replay and snapshot persistence.
+This supplies no statement signer, person-key enrollment or aggregate switch.
 
 **Signer and enrollment.** Each verifier signs its own statement, never for another
 device. A host uses only `hostSign` from its exact, active, person-approved v2 add,
@@ -647,8 +651,7 @@ roster signature, registry signature, key-binding proof, presence proof or perso
 command; signatures made under any other domain must fail here and vice versa.
 The four new labels in the framing table must be mirrored verbatim in
 agent-principals.md section 8.5 by the prerequisite label-registry slice before
-capability code ships. #2370 must also pin the registry-record signature label;
-until then its cross-domain vector is pending, not a guessed label or passing test.
+capability code ships. #2370 pins `agent-bridge fleet registry v1`; its cross-domain vector must fail here.
 
 **Consent binding and signing, never a generic signing oracle.** The host presents
 the exact proposed person-command body to each signer.
@@ -757,7 +760,7 @@ the positive transition unreachable in this slice.
 | Re-sign one statement for another account, generation or genesis | unsupported |
 | Re-sign for a different active-set digest, enrollment add or target | unsupported |
 | Flip a body byte without re-signing; alter `sig`; wrong key; high-S signature | unsupported |
-| Sign under roster-entry, person-command, `agent-bridge agent command v1`, `agent-bridge link-attest v1`, host/capability key-binding, or #2370's pending registry domain | unsupported; pending label must be pinned first |
+| Sign under roster-entry, person-command, `agent-bridge agent command v1`, `agent-bridge link-attest v1`, host/capability key-binding, or `agent-bridge fleet registry v1` | unsupported |
 | P signs with generic `sign`; H signs with DH or AP5-lite; unenrolled key | unsupported |
 | H is v1/DH-only; P lacks enrolled `capSign` | unsupported; neither member omitted |
 | P signs `versions: [1]`; H alone advertises `[1,2]` | unsupported |

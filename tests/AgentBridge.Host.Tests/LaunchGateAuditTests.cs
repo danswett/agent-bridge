@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.Host;
+using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -16,8 +17,8 @@ public sealed class LaunchGateAuditTests : LaunchFlowFixture
             .Select(line => JsonSerializer.Deserialize<JsonElement>(line)).Where(row => row.TryGetProperty("action", out _)).ToArray()
         : [];
 
-    Func<IProtocolChannel, string, JsonElement, Task<object?>> AuditedLocalLaunch(ISessionLauncher? launcher = null) =>
-        LocalApi.Handler(new SessionService(source, new MachineInfo("host-id", machineName, "windows", "0.1.0"),
+    Func<IProtocolChannel, string, JsonElement, Task<object?>> AuditedLocalLaunch(ISessionLauncher? launcher = null, ISessionSource? discovery = null) =>
+        LocalApi.Handler(new SessionService(discovery ?? source, new MachineInfo("host-id", machineName, "windows", "0.1.0"),
             launcher: launcher ?? Launcher(Config())), null!, new FixedCallerGuard(new Caller(CallerKind.App, "fixture")),
             audit: new AgentAuditLog(GateProfile, clock, logged.Enqueue));
 
@@ -73,6 +74,42 @@ public sealed class LaunchGateAuditTests : LaunchFlowFixture
         Assert.Equal("intent", Assert.Single(LaunchAuditRows()).GetProperty("gate").GetProperty("phase").GetString());
         var report = GateAuditProjection.Read(GateProfile, Guid.Empty);
         Assert.Contains("unresolved-intent", report.IncompleteReasons);
+        Assert.Equal(0, report.Totals.Sum(total => total.Successes));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Replaying_a_launch_after_reconstructing_the_host_starts_no_second_process(bool confirmed)
+    {
+        starter.Registers = confirmed;
+        var data = GateLaunch(Guid.NewGuid());
+        LaunchService NewLauncher(ISessionSource discovery) => confirmed
+            ? Launcher(Config(), discovery: discovery)
+            : Launcher(Config(), wait: TimeSpan.FromMilliseconds(100), follow: TimeSpan.FromMilliseconds(200), discovery: discovery);
+        var firstHandler = AuditedLocalLaunch(NewLauncher(source));
+        var first = Assert.IsType<LaunchResult>(await firstHandler(new GateAuditChannel(), LaunchProtocol.Launch, data));
+        Assert.Equal(confirmed ? LaunchOutcome.Started : LaunchOutcome.Unconfirmed, first.Outcome);
+        Assert.Single(starter.Specs);
+        var before = LaunchAuditRows().Select(row => row.GetRawText()).ToArray();
+
+        await using var rediscovered = new SessionSource(f.Options(), f.Processes, TimeProvider.System);
+        await rediscovered.RefreshAsync();
+        var reconstructed = AuditedLocalLaunch(NewLauncher(rediscovered), rediscovered);
+        var replay = Assert.IsType<LaunchResult>(await reconstructed(new GateAuditChannel(), LaunchProtocol.Launch, data));
+
+        Assert.Single(starter.Specs);
+        if (confirmed)
+        {
+            Assert.Equal(LaunchOutcome.Started, replay.Outcome);
+            Assert.Equal(first.Session, replay.Session);
+        }
+        else { Assert.NotEqual(LaunchOutcome.Started, replay.Outcome); }
+        Assert.Equal(before, LaunchAuditRows().Select(row => row.GetRawText()).ToArray());
+        var report = GateAuditProjection.Read(GateProfile, Guid.Empty);
+        Assert.False(report.Invalidated);
+        Assert.Equal(!confirmed, report.IncompleteReasons.Contains("unresolved-intent"));
+        Assert.Contains("missing-run-context", report.IncompleteReasons);
         Assert.Equal(0, report.Totals.Sum(total => total.Successes));
     }
 

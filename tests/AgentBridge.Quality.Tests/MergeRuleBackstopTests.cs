@@ -21,7 +21,8 @@ public class MergeRuleBackstopTests
         Assert.Equal("github.event_name == 'schedule'", backstop["if"].ToString());
         Assert.Contains("!cancelled()", evaluate["if"].ToString());
         Assert.Contains("github.event_name != 'schedule' || needs.backstop.outputs.proceed != 'false'", evaluate["if"].ToString());
-        Assert.Equal("false", ((YamlMappingNode)document["concurrency"])["cancel-in-progress"].ToString());
+        Assert.False(MergeRuleTests.IfExpression.Evaluate(((YamlMappingNode)document["concurrency"])["cancel-in-progress"].ToString()[3..^2],
+            new Dictionary<string, string?> { ["github.event_name"] = "schedule" }));
         Assert.Equal("false", ((YamlMappingNode)evaluate["concurrency"])["cancel-in-progress"].ToString());
     }
 
