@@ -209,7 +209,8 @@ function bundle(out) {
 }
 // An installed PWA that stays open runs its old code until a new service worker takes
 // over, and a browser installs one only when sw.js itself changes. So sw.js carries a
-// hash of every other file served, and any change to the app or its relay is an update.
+// hash of every file served, including its pre-stamp template: a shell-only change must
+// get a fresh cache too, rather than keep removed entries in the existing one.
 function stampWorker(out) {
   const files = [];
   const walk = (dir) => {
@@ -221,7 +222,7 @@ function stampWorker(out) {
   walk(out);
   const sw = path.join(out, 'sw.js');
   const hash = createHash('sha256');
-  for (const f of files.filter((f) => f !== sw).sort()) {
+  for (const f of files.sort()) {
     hash.update(path.relative(out, f).split(path.sep).join('/')).update('\0').update(readFileSync(f)).update('\0');
   }
   const placeholder = "const VERSION = 'dev';";

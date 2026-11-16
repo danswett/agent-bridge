@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { cpSync, existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildSite, builtAt, contentSecurityPolicy } from '../../tools/build-site.mjs';
+import { buildSite, builtAt, contentSecurityPolicy, shellFiles } from '../../tools/build-site.mjs';
 
 const pwa = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const scratch = path.join(pwa, '.site', 'unit-build');
@@ -36,6 +36,18 @@ test('the service worker changes whenever anything the site serves changes', () 
   writeFileSync(path.join(root, 'js', 'demo.js'), `${readFileSync(path.join(root, 'js', 'demo.js'), 'utf8')}\n// changed\n`);
   const js = buildSite({ root, out: out('js'), relay: 'https://relay.example' });
   assert.notEqual(sw(js), sw(css), 'a script change is a new version');
+
+  const worker = path.join(root, 'sw.js');
+  const template = readFileSync(worker, 'utf8');
+  const changed = template.replace("'./icons/maskable-512.png', ", '');
+  assert.notEqual(changed, template, 'the fixture changes only the worker SHELL list');
+  writeFileSync(worker, changed);
+  const shell = buildSite({ root, out: out('shell'), relay: 'https://relay.example' });
+  const sameShell = buildSite({ root, out: out('same-shell'), relay: 'https://relay.example' });
+  const version = (dir) => /const VERSION = '([^']+)';/.exec(sw(dir))[1];
+  assert.notEqual(version(shell), version(js), 'a worker-only SHELL edit must get a fresh cache, not retain removed entries');
+  assert.equal(version(shell), version(sameShell), 'the hash uses the pre-stamp template, not its own substituted output');
+  assert.equal(sw(shell), sw(sameShell), 'identical worker inputs produce identical releases');
   rmSync(scratch, { recursive: true, force: true });
 });
 
@@ -46,6 +58,10 @@ test('the page loads the app as one minified bundle without the demo, preloads w
   assert.equal(scripts.length, 1);
   assert.match(scripts[0], /^bundle\/main-\w+\.js$/, 'the entry, under a name that carries its content\'s hash');
   const files = readdirSync(path.join(site, 'bundle')).map((f) => `bundle/${f}`);
+  assert.ok(!html.includes('design/brand.js') && !html.includes('fixtures/sessions-list.json'));
+  for (const file of files) {
+    assert.ok(!readFileSync(path.join(site, file), 'utf8').includes('design/brand.js'), 'the source brand import is bundled, never fetched separately');
+  }
   const shell = new Set([...sw(site).matchAll(/'\.\/([^']+)'/g)].map((m) => m[1]));
   const demo = files.filter((f) => /^bundle\/demo-\w+\.js$/.test(f));
   assert.equal(demo.length, 1, 'the demo is a chunk of its own, fetched only when the demo starts');
@@ -94,16 +110,23 @@ test('the built PWA publishes only validated feedback recipient configuration an
   rmSync(scratch, { recursive: true, force: true });
 });
 
-test('the built site carries both families\' WOFF2s and each one\'s OFL licence, and keeps every shell file offline', () => {
+test('the built site carries both families\' WOFF2s and each one\'s OFL licence, and keeps every shell file offline', (t) => {
   const site = buildSite({ out: out('fonts') });
   const fonts = readdirSync(path.join(site, 'design', 'fonts')).sort();
   // Slipgates Sans' variable pair, and Slipgates Mono's four weights, each with an italic.
   assert.equal(fonts.filter((f) => f.endsWith('.woff2')).length, 10);
   assert.deepEqual(fonts.filter((f) => f.endsWith('.txt')), ['SlipgatesMono-OFL.txt', 'SlipgatesSans-OFL.txt'], 'each licence travels with its fonts');
   const shell = [...sw(site).matchAll(/'\.\/([^']*)'/g)].map((m) => m[1]).filter(Boolean);
+  const after = [...new Set(shellFiles(sw(site)).map((file) => file || 'index.html'))];
+  const before = [...new Set([...after,
+    'design/fonts/SlipgatesMono-Medium.woff2', 'design/fonts/SlipgatesMono-MediumItalic.woff2',
+    'design/brand.js', 'fixtures/sessions-list.json',
+  ])];
+  const bytes = (files) => files.reduce((total, file) => total + statSync(path.join(site, file)).size, 0);
+  t.diagnostic(JSON.stringify({ measurement: 'built file-size sum; unique shell; not HTTP bytes', before: bytes(before), after: bytes(after), saved: bytes(before) - bytes(after) }));
   // A shell file the site lacks fails the worker's install, so the app never works offline.
   assert.deepEqual(shell.filter((f) => !existsSync(path.join(site, f))), []);
-  assert.deepEqual(fonts.filter((f) => f.endsWith('.woff2') && !shell.includes(`design/fonts/${f}`)), []);
+  assert.deepEqual(fonts.filter((f) => f.endsWith('.woff2') && !shell.includes(`design/fonts/${f}`)), ['SlipgatesMono-Medium.woff2', 'SlipgatesMono-MediumItalic.woff2']);
   // Every face tokens.css asks for is there.
   const css = readFileSync(path.join(site, 'design', 'tokens.css'), 'utf8');
   const faces = [...css.matchAll(/url\("(fonts\/[^"]+)"\)/g)].map((m) => m[1]);
