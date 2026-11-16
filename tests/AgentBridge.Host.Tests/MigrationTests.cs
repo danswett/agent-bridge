@@ -1993,7 +1993,7 @@ public sealed class MigrationTasksHooksAndSettingsTests : MigrationFixture
             // does neither fails with a diagnosis instead of hanging the job; it never passes a test.
             async Task Ready(System.Diagnostics.Process p, string name)
             {
-                var line = p.StandardOutput.ReadLineAsync().AsTask();
+                var line = p.StandardOutput.ReadLineAsync();
                 await Task.WhenAny(line, p.WaitForExitAsync(), Task.Delay(TimeSpan.FromSeconds(120)));
                 var signal = line.IsCompleted ? await line : null;
                 if (signal != "ready")
