@@ -133,11 +133,19 @@ jobs:
           Write-Output $summary
           $summary >> $env:GITHUB_STEP_SUMMARY
           if ($failed -gt 0 -or $completed -lt $requested) { exit 1 }
-      - name: Keep every loop's logs and receipts
+      - name: Keep each loop's named text results, logs and receipts
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: arm64-self-test-loops-${{ inputs.head-sha }}
-          path: ${{ runner.temp }}/arm64-loop
+          path: |
+            ${{ runner.temp }}/arm64-loop/summary.txt
+            ${{ runner.temp }}/arm64-loop/run-*/result.json
+            ${{ runner.temp }}/arm64-loop/run-*/app-exit-cause.json
+            ${{ runner.temp }}/arm64-loop/run-*/app.stderr.log
+            ${{ runner.temp }}/arm64-loop/run-*/app.log
+            ${{ runner.temp }}/arm64-loop/run-*/app-crash-analysis.txt
+            ${{ runner.temp }}/arm64-loop/run-*/self-test.log
+            ${{ runner.temp }}/arm64-loop/run-*/receipt.txt
           if-no-files-found: error
           retention-days: 14
